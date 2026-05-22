@@ -44,7 +44,7 @@ The Phase 0.5 spikes hand off concrete shopping lists to Phase 1:
 |-------------|--------|--------|
 | Schema generator (libslic3r option introspection → typed Rust) | ✅ done | [PR-1-1](phase-1/PR-1-1%20Schema%20generator.md) |
 | TOML cascade loader + parser + load-time validation | ✅ done | [PR-1-2](phase-1/PR-1-2%20Cascade%20loader%20and%20parser.md) |
-| Rule resolver (authored cascade — specificity + source order) | ❌ open | [PR-1-3](phase-1/PR-1-3%20Rule%20resolver%20authored%20cascade.md) |
+| Rule resolver (authored cascade — specificity + source order) | ✅ done | [PR-1-3](phase-1/PR-1-3%20Rule%20resolver%20authored%20cascade.md) |
 | Override tiers (user + project, !important-style) | ❌ open | [PR-1-4](phase-1/PR-1-4%20Override%20tiers.md) |
 | Trace tooling | ❌ open | [PR-1-5](phase-1/PR-1-5%20Trace%20tooling.md) |
 | Translation adapter + manifest | ❌ open | [PR-1-6](phase-1/PR-1-6%20Translation%20adapter%20and%20manifest.md) |

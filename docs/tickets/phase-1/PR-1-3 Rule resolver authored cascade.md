@@ -1,6 +1,6 @@
 # PR-1-3 — Rule resolver (authored cascade)
 
-Status: ❌ open.
+Status: ✅ done (authored cascade only — override tiers come in PR-1-4). `src-tauri/src/core/cascade/resolver.rs` ships `Context` trait + `MapContext` impl, `Resolved`/`ResolvedValue` types with full matching-rules retention for PR-1-5 traces, and `resolve()` with specificity-ascending + source-order tiebreaks. Cross-file same-specificity tie emits a `tracing::warn!`. 7 unit tests including a tracing-capture assertion for the warning. Predicate operators today: scalar equality and array set-membership; numeric range / negation deferred to a later iteration as documented in the ticket.
 
 **Scope.** Production resolver for the authored-cascade tier
 (phase 1 of the two-phase resolution described in

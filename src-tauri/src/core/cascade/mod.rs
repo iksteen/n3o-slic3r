@@ -21,10 +21,12 @@
 //! PR-1-3..-5 work.
 
 pub mod loader;
+pub mod resolver;
 pub mod types;
 pub mod validate;
 
 pub use loader::{load_cascade, CascadeLoadError};
+pub use resolver::{resolve, Context, MapContext, MatchingRule, Resolved, ResolvedValue};
 pub use types::{Cascade, Condition, ConditionValue, Predicate, Rule, SourceLocation};
 pub use validate::{default_known_dimensions, validate_cascade, KnownDimensions};
 
