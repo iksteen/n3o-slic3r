@@ -1,6 +1,6 @@
 # PR-1-2 — TOML cascade loader + parser + load-time validation
 
-Status: ❌ open.
+Status: ✅ done. `src-tauri/src/core/cascade/{types,loader,validate}.rs` parses all three syntactic forms (top-level keys, `[section.shorthand]`, `[[rule]]`) into a typed IR and validates `set.*` keys against the PR-1-1 schema with Levenshtein-distance suggestions. 18 unit tests (12 loader + 6 validate). Predicate-dimension validation accepts a `KnownDimensions` parameter for future PR-1-7 integration; `default_known_dimensions()` provides the canonical set for tests + early consumers.
 
 **Scope.** Production cascade loader living in
 `src-tauri/src/core/cascade/`. Parses TOML cascade files (one or

@@ -22,9 +22,11 @@
 
 pub mod loader;
 pub mod types;
+pub mod validate;
 
 pub use loader::{load_cascade, CascadeLoadError};
 pub use types::{Cascade, Condition, ConditionValue, Predicate, Rule, SourceLocation};
+pub use validate::{default_known_dimensions, validate_cascade, KnownDimensions};
 
 use serde::Serialize;
 use slic3r_ffi::{option_defs, version};
