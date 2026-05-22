@@ -22,6 +22,7 @@
 pub mod build_plate;
 pub mod commands;
 pub mod events;
+pub mod loaders;
 pub mod state;
 pub mod transform;
 

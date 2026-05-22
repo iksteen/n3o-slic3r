@@ -1,6 +1,6 @@
 # PR-2-3 — STL + OBJ loaders
 
-Status: ❌ open.
+Status: ⚠️ partial. `src-tauri/src/core/scene/loaders/{mod,stl,obj}.rs` ship STL (binary + ASCII, via `stl_io`) and OBJ (via `tobj`) loaders, plus shared `compute_vertex_normals` (area-weighted, smooth-shading-friendly) and `compute_bounding_box` helpers. `scene_load_mesh_from_path` Tauri command dispatches by file extension. 8 unit tests against tiny inline fixtures (ASCII STL, binary STL byte slice, simple OBJ, OBJ with explicit normals, empty-input rejection per format, + the two normals + bbox unit tests). The 47 MB Stormtrooper Helmet perf fixture is **not yet staged** in `examples/perf-fixture/` — needs license-NOTICE work + ~47 MB git commit at PR-2-12's smoke implementation time.
 
 **Scope.** Mesh loaders for the two most common file formats. STL
 is ubiquitous; OBJ shows up frequently when users export from CAD

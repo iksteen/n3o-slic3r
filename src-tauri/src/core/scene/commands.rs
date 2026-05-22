@@ -209,12 +209,9 @@ fn op_err_to_string(e: SceneOpError) -> String {
     e.to_string()
 }
 
-// Mesh-loading commands (PR-2-3 / PR-2-4 own the actual loaders;
-// scene_load_mesh is wired here so PR-2-2 ships the surface even
-// when the loaders haven't landed). Placeholder until PR-2-3 plugs
-// in real STL/OBJ paths — for now, the only producers of `Mesh`
-// values are the unit tests and (eventually) PR-2-7's procedural
-// primitives.
+// Mesh-loading commands. scene_load_mesh takes a pre-built Mesh
+// (for tests + the future procedural-primitive path in PR-2-7);
+// scene_load_mesh_from_path dispatches to PR-2-3's loaders.
 #[tauri::command]
 #[tracing::instrument(skip(state, window, mesh))]
 pub fn scene_load_mesh(
@@ -222,6 +219,24 @@ pub fn scene_load_mesh(
     window: Window,
     state: State<Mutex<SceneState>>,
 ) -> Result<(MeshId, ObjectId), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let (mesh_id, obj_id, events) = s.load_mesh(mesh);
+    drop(s);
+    emit_all(&window, &events);
+    Ok((mesh_id, obj_id))
+}
+
+/// Load a mesh from a file path (STL or OBJ) and register it as a
+/// scene object at origin.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_load_mesh_from_path(
+    path: String,
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<(MeshId, ObjectId), String> {
+    let mesh = super::loaders::load_mesh_from_path(std::path::Path::new(&path))
+        .map_err(|e| e.to_string())?;
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let (mesh_id, obj_id, events) = s.load_mesh(mesh);
     drop(s);
