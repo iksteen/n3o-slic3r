@@ -8,9 +8,23 @@
 //! specificity-and-source-order, then `!important`-style user / project /
 //! object override tiers.
 //!
-//! Owns FR-CAS-1 through FR-CAS-13 (PRD §6.1). For Phase 0, only the
-//! option-introspection commands (which the resolver and the UI both
-//! need) live here; the resolver itself is Phase 1 work.
+//! Owns FR-CAS-1 through FR-CAS-13 (PRD §6.1). The submodules:
+//!
+//! - **`types`** (PR-1-2): the typed cascade IR — `Cascade`, `Rule`,
+//!   `Predicate`, `SourceLocation`. Sharable across resolver, adapter,
+//!   trace tooling, and the Tauri command surface.
+//! - **`loader`** (PR-1-2): TOML parser that desugars the three
+//!   authoring forms (top-level keys, `[section.shorthand]`, `[[rule]]`)
+//!   into the IR and load-validates against the PR-1-1 schema.
+//!
+//! Resolver, override tiers, and trace tooling land in subsequent
+//! PR-1-3..-5 work.
+
+pub mod loader;
+pub mod types;
+
+pub use loader::{load_cascade, CascadeLoadError};
+pub use types::{Cascade, Condition, ConditionValue, Predicate, Rule, SourceLocation};
 
 use serde::Serialize;
 use slic3r_ffi::{option_defs, version};
