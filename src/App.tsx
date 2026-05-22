@@ -39,7 +39,8 @@ function App() {
 
   return (
     <main style={{ padding: 16, fontFamily: "system-ui, sans-serif" }}>
-      <h1>n3o-slic3r</h1>
+      {/* Tailwind smoke — proves the pipeline is wired. Phase 4 restyles the UI properly. */}
+      <h1 className="text-2xl font-semibold tracking-tight">n3o-slic3r</h1>
       {info ? (
         <p style={{ opacity: 0.7, fontSize: 13 }}>
           {info.version} · {info.option_count} options registered
