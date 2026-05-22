@@ -1,6 +1,6 @@
 # PR-1-1 — Schema generator (libslic3r → typed Rust)
 
-Status: ❌ open.
+Status: ✅ done. `src-tauri/src/core/schema/mod.rs` ships an `OptionSchema` cache built from `slic3r_ffi::option_defs()`, with `DimensionalKind::BedTempPerPlate` tagging the 12 per-plate-temp keys. 7 unit tests green; full workspace at 23 passing.
 
 **Scope.** Read libslic3r's option definitions via the existing
 FFI introspection (`option_defs()`, `OptionDef`) and emit a typed

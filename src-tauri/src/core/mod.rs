@@ -15,5 +15,6 @@ pub mod plugin;
 pub mod printer;
 pub mod project;
 pub mod scene;
+pub mod schema;
 pub mod slice;
 pub mod threemf;
