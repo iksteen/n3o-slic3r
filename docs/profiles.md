@@ -453,6 +453,17 @@ format looks like:
   `Print::apply`; the same kind of normalization extends to anything
   else libslic3r expects to be set up by its GUI/CLI's pre-slice
   hooks.
+- **The `Print::validate()` consistency rules.** libslic3r refuses
+  to slice when certain option pairs disagree — for example
+  `use_relative_e_distances=1` without a `G92 E0` in `layer_gcode`
+  is rejected before any work happens. FullPrintConfig defaults
+  trip this, so any "minimum viable config" approach is dead on
+  arrival. The adapter must produce a config that already passes
+  validate — which in practice means starting from a real device
+  profile (the OrcaSlicer JSONs in `external/OrcaSlicer/resources/
+  profiles/`) and never from `Config::new()` + a small handful of
+  overrides. Phase 0.5 / Spike 1 is the place this gets exercised
+  end-to-end for the first time.
 
 The cascade and the adapter live entirely *above* this boundary.
 

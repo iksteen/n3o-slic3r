@@ -217,10 +217,16 @@ the libslic3r submodule bump, the cargo toolchain bump, etc.
      prints "OrcaSlicer libslic3r_ffi v0" and "total options: 737"
      (or N if upstream changed).
   5. `cargo run -p slic3r-ffi --release --example slice -- <test
-     STL> /tmp/out.gcode` — produces a non-empty gcode file.
+     STL> /tmp/out.gcode` — example *runs* and surfaces libslic3r's
+     `Print::validate()` rejection of the FullPrintConfig defaults
+     ("Relative extruder addressing requires resetting the extruder
+     position at each layer ... Add 'G92 E0' to layer_gcode"). A
+     successful slice with non-empty gcode is **Phase 0.5 / Spike 1**
+     work; Phase 0 only verifies the FFI link reaches `Print::apply`.
   6. `npm install && npm run tauri dev` — app window launches,
-     header shows the libslic3r version + option count, slice form
-     works against a known test 3MF.
+     header shows the libslic3r version + option count. The Slice
+     form surfaces the same validate gap as step 5; that is the
+     expected Phase 0 result.
 - The smoke procedure runs cleanly from a clean checkout. Any
   divergence from the documented expected output is recorded as a
   bug or a documentation update.
@@ -263,3 +269,15 @@ design. Spike 4 (coEnums) is already done; the other four
 (cascade adapter end-to-end, mixed-nozzle-size slice, A1 mini AMS
 slice, platecycler portability) are real Phase 0.5 work. Tickets
 for those should be created when Phase 0 wraps.
+
+**Spike 1 constraint discovered during P0-5.** The slice example
+currently fails `Print::validate()` against FullPrintConfig defaults
+(use_relative_e_distances=1 with empty layer_gcode). Spike 1 — the
+end-to-end cascade adapter slice — must therefore drive its first
+successful gcode-out from a real **OrcaSlicer device profile** (e.g.,
+the Bambu A1 mini or Snapmaker U1 JSON shipped in `external/OrcaSlicer/
+resources/profiles/`), converted into our cascade format. Hand-rolled
+"minimum viable config" shortcuts are not allowed — the whole point
+of Phase 0.5 is to validate that real device profiles route through
+our adapter cleanly, including all the dispatch-quirk normalizations
+listed in `docs/profiles.md` "What stays libslic3r-shaped".
