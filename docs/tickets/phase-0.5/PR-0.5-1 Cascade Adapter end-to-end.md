@@ -1,6 +1,6 @@
 # PR-0.5-1 — Cascade adapter end-to-end
 
-Status: ❌ open.
+Status: ✅ done. Finding doc: `docs/spikes/spike-1-cascade-adapter.md`.
 
 **Scope.** The walking-skeleton of the Phase 1 architecture: a real
 OrcaSlicer device profile, converted into our cascade format, fed
