@@ -80,6 +80,38 @@ fn option_def_unknown_returns_unknown_key() {
 }
 
 #[test]
+fn coenums_have_default_values() {
+    // libslic3r's standard serializer crashes on coEnums defaults (null
+    // keys_map on the cloned default value). The shim works around it via
+    // a reverse-lookup using the def's enum_keys_map. Every coEnums option
+    // should have a non-empty default that resolves to one of its enum
+    // values.
+    ensure_init();
+    let enums: Vec<_> = option_defs()
+        .into_iter()
+        .filter(|d| d.ty == OptType::Enums)
+        .collect();
+    assert!(!enums.is_empty(), "no coEnums options registered");
+    for d in &enums {
+        let default = d.default_serialized.as_deref().unwrap_or("");
+        assert!(
+            !default.is_empty(),
+            "{} (coEnums) has no default_serialized",
+            d.key
+        );
+        // The default should be a comma-separated list of values that
+        // all appear in enum_values (the def's curated set).
+        for part in default.split(',') {
+            assert!(
+                d.enum_values.iter().any(|v| v == part),
+                "{}: default {:?} contains {:?} which is not in enum_values {:?}",
+                d.key, default, part, d.enum_values,
+            );
+        }
+    }
+}
+
+#[test]
 fn config_set_get_roundtrip() {
     ensure_init();
     let mut cfg = Config::new().expect("Config::new");

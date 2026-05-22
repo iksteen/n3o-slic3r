@@ -78,6 +78,37 @@ slic3r_opt_mode map_mode(ConfigOptionMode m) {
     }
 }
 
+// Serialize the default value of a coEnums (vector-of-enums) option.
+//
+// libslic3r's ConfigOptionEnumsGenericTempl::serialize() segfaults on a
+// null keys_map. The standard set_default_value() path clones the default
+// option without propagating the def's enum_keys_map pointer, so every
+// coEnums default lands with a null map and can't be serialized through
+// the normal route. Mirror what the option's serializer would do, but
+// pull the reverse-lookup map from the def instead of the option itself.
+std::string serialize_coenums_default(const ConfigOptionDef& d) {
+    if (!d.default_value || !d.enum_keys_map) return {};
+    const auto* opt = dynamic_cast<const ConfigOptionVector<int>*>(d.default_value.get());
+    if (!opt) return {};
+
+    std::string out;
+    bool first = true;
+    for (int v : opt->values) {
+        if (!first) out += ',';
+        first = false;
+        bool found = false;
+        for (const auto& kvp : *d.enum_keys_map) {
+            if (kvp.second == v) {
+                out += kvp.first;
+                found = true;
+                break;
+            }
+        }
+        if (!found) out += '?';  // unknown index — make it visible
+    }
+    return out;
+}
+
 // Process-lifetime snapshot of print_config_def. Holds owned strings so the
 // pointers we hand out remain valid even if libslic3r's storage moves.
 struct DefCache {
@@ -115,15 +146,18 @@ struct DefCache {
             e->tooltip            = d.tooltip;
             e->category           = d.category;
             e->sidetext           = d.sidetext;
-            // coEnums (vector-of-enums) default values can't be safely
-            // serialized: ConfigOptionEnumsGeneric::serialize() reads a
-            // keys_map member that's null on the def's cloned default. The
-            // def's enum_keys_map carries the same mapping, but the serializer
-            // doesn't consult it. Leave the default empty for these and let
-            // the consumer reconstruct it from enum_values / enum_labels.
-            if (d.default_value && d.type != coEnums) {
-                try { e->default_serialized = d.default_value->serialize(); }
-                catch (...) { e->default_serialized.clear(); }
+            // coEnums defaults can't go through the option's own
+            // serialize() — its keys_map member is null on the cloned
+            // default. serialize_coenums_default() does the reverse-lookup
+            // using the def's enum_keys_map instead.
+            if (d.default_value) {
+                try {
+                    e->default_serialized = (d.type == coEnums)
+                        ? serialize_coenums_default(d)
+                        : d.default_value->serialize();
+                } catch (...) {
+                    e->default_serialized.clear();
+                }
             }
             e->enum_values        = d.enum_values;
             e->enum_labels        = d.enum_labels;
