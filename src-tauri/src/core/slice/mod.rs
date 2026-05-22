@@ -26,6 +26,7 @@ pub struct SliceResult {
 /// Phase 0 surface — single call, blocks the calling thread. Progress
 /// reporting and off-UI-thread execution come in Phase 3.
 #[tauri::command]
+#[tracing::instrument]
 pub fn slicer_slice(model_path: String, out_path: String) -> SliceResult {
     let do_it = || -> Result<(), slic3r_ffi::Error> {
         let mut model = Model::new()?;
@@ -35,7 +36,13 @@ pub fn slicer_slice(model_path: String, out_path: String) -> SliceResult {
         Ok(())
     };
     match do_it() {
-        Ok(()) => SliceResult { ok: true, out_path, error: None },
-        Err(e) => SliceResult { ok: false, out_path, error: Some(format!("{e}")) },
+        Ok(()) => {
+            tracing::info!(out = %out_path, "slice ok");
+            SliceResult { ok: true, out_path, error: None }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "slice failed");
+            SliceResult { ok: false, out_path, error: Some(format!("{e}")) }
+        }
     }
 }

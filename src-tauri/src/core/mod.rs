@@ -10,6 +10,7 @@ pub mod cascade;
 pub mod cascade_adapter;
 pub mod filament;
 pub mod gcode;
+pub mod logging;
 pub mod plugin;
 pub mod printer;
 pub mod project;

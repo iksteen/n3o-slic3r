@@ -24,11 +24,14 @@ pub struct SlicerInfo {
 /// Banner: libslic3r version + count of options registered.
 /// Drives the UI's connection-confirmation header.
 #[tauri::command]
+#[tracing::instrument]
 pub fn slicer_info() -> SlicerInfo {
-    SlicerInfo {
+    let info = SlicerInfo {
         version: version(),
         option_count: option_defs().len(),
-    }
+    };
+    tracing::info!(version = %info.version, options = info.option_count, "slicer_info");
+    info
 }
 
 #[derive(Serialize)]
@@ -43,9 +46,10 @@ pub struct OptionSummary {
 /// Filtered option introspection. The filter matches against the
 /// canonical key and the display label, case-insensitively.
 #[tauri::command]
+#[tracing::instrument]
 pub fn slicer_options(filter: Option<String>) -> Vec<OptionSummary> {
     let needle = filter.unwrap_or_default().to_lowercase();
-    option_defs()
+    let out: Vec<OptionSummary> = option_defs()
         .into_iter()
         .filter(|d| {
             if needle.is_empty() {
@@ -62,5 +66,7 @@ pub fn slicer_options(filter: Option<String>) -> Vec<OptionSummary> {
             category: d.category,
             default_value: d.default_serialized,
         })
-        .collect()
+        .collect();
+    tracing::info!(matched = out.len(), "slicer_options");
+    out
 }
