@@ -1,36 +1,20 @@
 // src-tauri/build.rs
 //
-// In addition to running Tauri's own build step, set an rpath on the produced
-// binary so it can find libslic3r_ffi.so.0 at runtime.
-//
-// Why this lives here (and not in slic3r-ffi's build.rs): Cargo's
-// `rustc-link-arg` build-script instruction only applies to binaries/cdylibs
-// produced by the build script's OWN package — it does NOT propagate to
-// downstream consumers. The library's build.rs gets `rustc-link-search` and
-// `rustc-link-lib` propagated (so linking succeeds), but rpath does not. So
-// the consumer that produces the binary has to set its own rpath.
+// Set an rpath on the produced binary so it can find libslic3r_ffi.so.0 at
+// runtime. Cargo's `rustc-link-arg` does NOT propagate through the dependency
+// graph, so the binary-producing crate has to emit it itself. We pick up the
+// library path from the slic3r-ffi crate's build-script metadata: that crate
+// declares `links = "slic3r_ffi"` and emits `cargo:metadata=LIB_DIR=...`,
+// which Cargo surfaces as DEP_SLIC3R_FFI_LIB_DIR in our environment here.
 
 use std::env;
-use std::path::PathBuf;
 
 fn main() {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let lib_dir = env::var("DEP_SLIC3R_FFI_LIB_DIR")
+        .expect("DEP_SLIC3R_FFI_LIB_DIR not set — is slic3r-ffi a dependency?");
 
-    // Default: <repo>/build/ffi/RelWithDebInfo (cmake output for the vendored
-    // slic3r_ffi target).
-    let lib_dir = env::var("SLIC3R_FFI_LIB_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            manifest_dir
-                .join("..")
-                .join("build")
-                .join("ffi")
-                .join("RelWithDebInfo")
-        });
-    let lib_dir = lib_dir.canonicalize().unwrap_or(lib_dir);
-
-    println!("cargo:rerun-if-env-changed=SLIC3R_FFI_LIB_DIR");
-    println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
+    println!("cargo:rerun-if-env-changed=DEP_SLIC3R_FFI_LIB_DIR");
+    println!("cargo:rustc-link-arg=-Wl,-rpath,{lib_dir}");
 
     tauri_build::build()
 }

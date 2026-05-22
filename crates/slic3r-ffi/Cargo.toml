@@ -2,8 +2,11 @@
 name = "slic3r-ffi"
 version = "0.1.0"
 edition = "2021"
-description = "Rust bindings for libslic3r via the OrcaSlicer FFI shim"
+description = "Rust bindings for libslic3r via the OrcaSlicer FFI shim. Owns the cmake build of libslic3r_ffi.so."
 license = "AGPL-3.0-or-later"
+# `links` makes this the "owner" of the native libslic3r_ffi library and
+# enables passing metadata to downstream crates via DEP_SLIC3R_FFI_* env vars.
+links = "slic3r_ffi"
 
 [lib]
 name = "slic3r_ffi"

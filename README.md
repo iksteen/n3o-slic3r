@@ -1,8 +1,8 @@
 # n3o-slic3r
 
 A modern desktop slicer UI built on Tauri 2 + React + TypeScript, driving
-OrcaSlicer's `libslic3r` engine through a vendored C/Rust FFI shim
-(`ffi/` + `bindings/rust/`).
+OrcaSlicer's `libslic3r` engine through a vendored Rust+C FFI shim
+(`crates/slic3r-ffi/`).
 
 The goal is to use libslic3r as a slicing engine (well-tested, ~600 settings,
 calibration features) without inheriting OrcaSlicer's preset/profile system,
@@ -36,14 +36,16 @@ No 3D viewer, no preset model, no calibration tools yet — that's the work.
 │  Rust backend  (src-tauri/)                             │
 │  - Tauri commands  (slicer_info, slicer_options, …)     │
 └──────────────────────┬──────────────────────────────────┘
-                       │  Rust path dep
+                       │  workspace dep
 ┌──────────────────────▼──────────────────────────────────┐
-│  slic3r-ffi  (bindings/rust/)                           │
-│  - bindgen + safe wrapper over slic3r_ffi.h             │
+│  slic3r-ffi  (crates/slic3r-ffi/)                       │
+│  - safe Rust wrapper + raw bindgen module               │
+│  - build.rs invokes cmake to build libslic3r_ffi.so     │
+│  - links = "slic3r_ffi"; emits DEP_SLIC3R_FFI_LIB_DIR   │
 └──────────────────────┬──────────────────────────────────┘
-                       │  Rust → C FFI
+                       │  C++ shim (ffi/ inside the crate)
 ┌──────────────────────▼──────────────────────────────────┐
-│  libslic3r_ffi.so  (ffi/, built via cmake)              │
+│  libslic3r_ffi.so   (cmake target, dynamic)             │
 │  - flat C API over libslic3r                            │
 └──────────────────────┬──────────────────────────────────┘
                        │  static link
@@ -52,10 +54,11 @@ No 3D viewer, no preset model, no calibration tools yet — that's the work.
 └─────────────────────────────────────────────────────────┘
 ```
 
-The FFI layer (`ffi/`, `bindings/rust/`) is vendored into this repo rather
-than referenced as an external crate. We're patching it heavily and
-opinionatedly while figuring out what shape it wants to be; an external crate
-would be premature. Once the API stabilizes it can move back to its own repo.
+The FFI is vendored as a workspace member (`crates/slic3r-ffi/`) rather
+than an external crate. We're patching it heavily and opinionatedly while
+figuring out what shape it wants to be; an external crate would be
+premature. Once the API stabilizes, the crate can move back to its own
+repo unchanged.
 
 ## Build
 
@@ -84,27 +87,20 @@ git submodule update --init --recursive
 
 This brings in `external/OrcaSlicer` pinned at a specific upstream commit.
 
-### 3. Build the FFI .so
+### 3. Build OrcaSlicer's dependency tree
 
-OrcaSlicer's dependency tree (Boost, CGAL, OCCT, TBB, OpenVDB, etc.) must
-be built first; then libslic3r and the shim.
+OrcaSlicer's deps (Boost, CGAL, OCCT, TBB, OpenVDB, etc.) are built once
+into `external/OrcaSlicer/deps/build/`. Takes ~17 min, idempotent.
 
 ```bash
-# One-time, ~30 minutes: builds OrcaSlicer's deps tree under
-# external/OrcaSlicer/deps/build/. Skip if already done.
 ./scripts/build.sh deps
-
-# Build libslic3r_ffi.so (~15 min cold, fast incremental):
-./scripts/build.sh build
 ```
 
-Output:
-```
-build/ffi/RelWithDebInfo/libslic3r_ffi.so
-```
-
-`bindings/rust/build.rs` and `src-tauri/build.rs` both default to that path
-and set the binary's rpath accordingly.
+Everything beyond this point is driven by `cargo build`. The `slic3r-ffi`
+crate's `build.rs` invokes cmake to build `libslic3r_ffi.so` (and
+libslic3r transitively) on first build; cmake's own caching keeps
+incrementals to a few seconds. Output lands at
+`build/slic3r-ffi/RelWithDebInfo/libslic3r_ffi.so`.
 
 ### 4. Install JS deps + run the dev server
 
@@ -113,9 +109,11 @@ npm install
 npm run tauri dev
 ```
 
-First build of `src-tauri` is slow (~5 min) because Cargo compiles the
-Tauri stack and `slic3r-ffi` runs `bindgen` over the C header. Incremental
-rebuilds are fast.
+First build is slow (~15 min for libslic3r + a few min for Tauri/bindgen).
+Subsequent builds are incremental and fast. The Tauri binary's `RUNPATH`
+is set automatically via `DEP_SLIC3R_FFI_LIB_DIR` (the slic3r-ffi crate
+declares `links = "slic3r_ffi"` and emits `cargo:LIB_DIR=...` for
+downstream consumers).
 
 ### 5. Smoke test
 
@@ -128,8 +126,7 @@ In the running app:
 
 For headless slicing without the UI:
 ```bash
-cd bindings/rust
-cargo run --release --example slice -- <model> /tmp/out.gcode
+cargo run -p slic3r-ffi --release --example slice -- <model> /tmp/out.gcode
 ```
 
 ## Production build

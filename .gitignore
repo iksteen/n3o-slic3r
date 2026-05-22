@@ -12,8 +12,10 @@ dist
 dist-ssr
 *.local
 
-# cmake output for the FFI .so
+# cmake output for the FFI .so (driven by crates/slic3r-ffi/build.rs)
 /build/
+# cargo workspace target
+/target/
 
 # Editor directories and files
 .vscode/*
