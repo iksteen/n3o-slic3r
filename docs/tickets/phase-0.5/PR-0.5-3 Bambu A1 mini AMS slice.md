@@ -1,6 +1,6 @@
 # PR-0.5-3 — Bambu A1 mini AMS slice
 
-Status: ❌ open.
+Status: ⚠️ mostly done. Finding doc: `docs/spikes/spike-3-bambu-ams.md`. AMS slice + tool-change emission + filament-aggregate metadata confirmed; Bambu Studio reference comparison deferred (dev machine lacks BBS install).
 
 **Scope.** Slice a 4-color test model with the A1 mini profile + AMS
 multi-color, and characterize the gaps between libslic3r's output

@@ -38,3 +38,7 @@ path = "examples/spike1.rs"
 name = "spike2"
 path = "examples/spike2.rs"
 
+[[example]]
+name = "spike3"
+path = "examples/spike3.rs"
+

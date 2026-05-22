@@ -1,6 +1,6 @@
 # PR-0.5-2 — Mixed-nozzle-size slice (Prusa XL)
 
-Status: ⚠️ partial. Finding doc: `docs/spikes/spike-2-mixed-nozzle.md`. Mixed-nozzle config validated; toolchange-emission criterion deferred to PR-0.5-3 (its 4-color fixture covers both spikes' needs).
+Status: ✅ done. Finding doc: `docs/spikes/spike-2-mixed-nozzle.md`. Mixed-nozzle config validated here; toolchange-emission criterion was deferred to and confirmed by PR-0.5-3 (76 mid-print tool changes in its 4-color slice).
 
 **Scope.** Validate libslic3r's per-toolhead independence claim —
 specifically, that we can drive a Prusa XL profile with 0.4mm on
