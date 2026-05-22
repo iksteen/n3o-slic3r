@@ -64,11 +64,15 @@ struct SliceResult {
 
 #[tauri::command]
 fn slicer_slice(model_path: String, out_path: String) -> SliceResult {
-    // Construct model + default config inline; v0 doesn't persist them.
+    // Seed config with FullPrintConfig defaults, then let the file's
+    // embedded settings override (3MF carries a full printer profile in
+    // Metadata/project_settings.config). For STL/OBJ/STEP this just slices
+    // with defaults — fine for a smoke test but the result won't match
+    // any specific printer.
     let do_it = || -> Result<(), slic3r_ffi::Error> {
         let mut model = Model::new()?;
-        model.load(PathBuf::from(&model_path))?;
-        let config = Config::new()?;
+        let mut config = Config::new()?;
+        model.load_with_config(PathBuf::from(&model_path), &mut config)?;
         slice(&model, &config, PathBuf::from(&out_path))?;
         Ok(())
     };
