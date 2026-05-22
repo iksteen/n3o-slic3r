@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# cmake output for the FFI .so
+/build/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

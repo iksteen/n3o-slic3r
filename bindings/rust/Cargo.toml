@@ -1,0 +1,25 @@
+[package]
+name = "slic3r-ffi"
+version = "0.1.0"
+edition = "2021"
+description = "Rust bindings for libslic3r via the OrcaSlicer FFI shim"
+license = "AGPL-3.0-or-later"
+
+[lib]
+name = "slic3r_ffi"
+path = "src/lib.rs"
+
+[build-dependencies]
+bindgen = "0.69"
+
+[[example]]
+name = "introspect"
+path = "examples/introspect.rs"
+
+[[example]]
+name = "slice"
+path = "examples/slice.rs"
+
+[[example]]
+name = "probe"
+path = "examples/probe.rs"

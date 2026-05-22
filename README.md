@@ -1,8 +1,8 @@
 # n3o-slic3r
 
 A modern desktop slicer UI built on Tauri 2 + React + TypeScript, driving
-OrcaSlicer's `libslic3r` engine through the
-[`orca-slicer-ffi`](https://github.com/iksteen/orca-slicer-ffi) C/Rust shim.
+OrcaSlicer's `libslic3r` engine through a vendored C/Rust FFI shim
+(`ffi/` + `bindings/rust/`).
 
 The goal is to use libslic3r as a slicing engine (well-tested, ~600 settings,
 calibration features) without inheriting OrcaSlicer's preset/profile system,
@@ -18,6 +18,11 @@ calls into the C shim, which drives libslic3r:
   category, default)
 - `slicer_slice(model_path, out_path)` — load STL/3MF/OBJ/STEP and emit G-code
 
+Bambu A1 mini 3MFs slice end to end and produce gcode safe to send to the
+printer (real Bambu start/end sequences — `M1002`, `G29 A1`, `M620` AMS
+load/unload, `M983`/`M984` extrusion calibration). Other printer profiles
+should work similarly; only A1 mini has been smoke-tested.
+
 No 3D viewer, no preset model, no calibration tools yet — that's the work.
 
 ## Architecture
@@ -30,72 +35,76 @@ No 3D viewer, no preset model, no calibration tools yet — that's the work.
 ┌──────────────────────▼──────────────────────────────────┐
 │  Rust backend  (src-tauri/)                             │
 │  - Tauri commands  (slicer_info, slicer_options, …)     │
-│  - depends on slic3r-ffi (path)                         │
+└──────────────────────┬──────────────────────────────────┘
+                       │  Rust path dep
+┌──────────────────────▼──────────────────────────────────┐
+│  slic3r-ffi  (bindings/rust/)                           │
+│  - bindgen + safe wrapper over slic3r_ffi.h             │
 └──────────────────────┬──────────────────────────────────┘
                        │  Rust → C FFI
 ┌──────────────────────▼──────────────────────────────────┐
-│  libslic3r_ffi.so  (orca-slicer-ffi submodule)          │
+│  libslic3r_ffi.so  (ffi/, built via cmake)              │
 │  - flat C API over libslic3r                            │
 └──────────────────────┬──────────────────────────────────┘
                        │  static link
 ┌──────────────────────▼──────────────────────────────────┐
-│  libslic3r (OrcaSlicer submodule, pinned to a commit)   │
+│  libslic3r (external/OrcaSlicer submodule, pinned)      │
 └─────────────────────────────────────────────────────────┘
 ```
+
+The FFI layer (`ffi/`, `bindings/rust/`) is vendored into this repo rather
+than referenced as an external crate. We're patching it heavily and
+opinionatedly while figuring out what shape it wants to be; an external crate
+would be premature. Once the API stabilizes it can move back to its own repo.
 
 ## Build
 
 Tested on Linux (Arch). macOS should work with minor CMake adjustments;
-Windows needs symbol-visibility annotations on the C API.
+Windows would need symbol-visibility annotations on the C API.
 
 ### 1. System prerequisites
 
 - `cmake` (4.x ok), `ninja`
 - A C/C++ toolchain (gcc or clang)
-- OrcaSlicer's Linux deps: see `external/orca-slicer-ffi/external/OrcaSlicer/scripts/linux.d/` for the per-distro list (`gtk3`, `dbus`, `webkit2gtk`, `mesa`, …)
+- OrcaSlicer's Linux deps: see `external/OrcaSlicer/scripts/linux.d/` for the
+  per-distro list (`gtk3`, `dbus`, `webkit2gtk`, `mesa`, …)
 - Rust toolchain (stable) and Node 20+
 
-On Arch, the relevant packages are:
+On Arch:
 ```bash
 sudo pacman -S cmake ninja gcc gtk3 webkit2gtk dbus mesa wayland-protocols \
                extra-cmake-modules curl pkgconf
 ```
 
-### 2. Pull the submodules
+### 2. Pull the submodule
 
 ```bash
 git submodule update --init --recursive
 ```
 
-This brings in `external/orca-slicer-ffi` and, nested under it,
-`external/orca-slicer-ffi/external/OrcaSlicer` (pinned to a specific upstream
-commit).
+This brings in `external/OrcaSlicer` pinned at a specific upstream commit.
 
-### 3. Build orca-slicer-ffi
+### 3. Build the FFI .so
 
-The slicer engine has a heavy dependency tree (Boost, CGAL, OCCT, TBB,
-OpenVDB, etc.) that must be built first.
+OrcaSlicer's dependency tree (Boost, CGAL, OCCT, TBB, OpenVDB, etc.) must
+be built first; then libslic3r and the shim.
 
 ```bash
-cd external/orca-slicer-ffi
-
 # One-time, ~30 minutes: builds OrcaSlicer's deps tree under
-# external/OrcaSlicer/deps/build/. Skip if you've already done this.
+# external/OrcaSlicer/deps/build/. Skip if already done.
 ./scripts/build.sh deps
 
 # Build libslic3r_ffi.so (~15 min cold, fast incremental):
 ./scripts/build.sh build
-
-cd ../..
 ```
 
-Verify the output exists:
+Output:
 ```
-external/orca-slicer-ffi/build/ffi/RelWithDebInfo/libslic3r_ffi.so
+build/ffi/RelWithDebInfo/libslic3r_ffi.so
 ```
 
-The Rust crate's `build.rs` (in `external/orca-slicer-ffi/bindings/rust/`)
-locates this automatically when `src-tauri` builds.
+`bindings/rust/build.rs` and `src-tauri/build.rs` both default to that path
+and set the binary's rpath accordingly.
 
 ### 4. Install JS deps + run the dev server
 
@@ -105,15 +114,23 @@ npm run tauri dev
 ```
 
 First build of `src-tauri` is slow (~5 min) because Cargo compiles the
-Tauri stack and the `slic3r-ffi` crate runs `bindgen` over the C header.
-Incremental rebuilds are fast.
+Tauri stack and `slic3r-ffi` runs `bindgen` over the C header. Incremental
+rebuilds are fast.
 
 ### 5. Smoke test
 
 In the running app:
 1. The header should show `OrcaSlicer libslic3r_ffi v0 · 737 options registered`.
 2. Type `perimeter` in the search box → table of perimeter-related options.
-3. Paste a path to an STL file into the slicer panel (e.g. `external/orca-slicer-ffi/external/OrcaSlicer/tests/data/test_stl/ASCII/20mmbox-LF.stl`), click Slice. You should see `wrote /tmp/n3o-out.gcode`.
+3. Paste a path to a model file into the slicer panel and click Slice. For
+   a quick verify use the bundled test STL:
+   `external/OrcaSlicer/tests/data/test_stl/ASCII/20mmbox-LF.stl`.
+
+For headless slicing without the UI:
+```bash
+cd bindings/rust
+cargo run --release --example slice -- <model> /tmp/out.gcode
+```
 
 ## Production build
 
@@ -121,23 +138,27 @@ In the running app:
 npm run tauri build
 ```
 
-Note: the produced binary dynamically links against `libslic3r_ffi.so.0` via
-rpath. For distribution you'll want to either bundle the `.so` next to the
-binary or install it to a standard system location; the current `build.rs`
-uses a dev-convenience rpath pointing into the build tree.
+The produced binary dynamically links against `libslic3r_ffi.so.0` via rpath
+to the build tree (dev convenience). For distribution, bundle the `.so` next
+to the binary or install it to a system library path; the current `build.rs`
+rpath is not portable.
 
-## Upgrading orca-slicer-ffi
+## Upgrading OrcaSlicer
 
 ```bash
-cd external/orca-slicer-ffi
+cd external/OrcaSlicer
 git fetch
 git checkout <tag-or-commit>
-git submodule update --init --recursive   # if OrcaSlicer pin moved too
-cd ../..
-./external/orca-slicer-ffi/scripts/build.sh build
-git add external/orca-slicer-ffi
-git commit -m "Bump orca-slicer-ffi to <ref>"
+cd ..
+./scripts/build.sh build
+git add external/OrcaSlicer
+git commit -m "Bump OrcaSlicer to <ref>"
 ```
+
+Bumps that touch the libslic3r tool-ordering or config setup may require
+matching changes in `ffi/slic3r_ffi.cpp` — see the comments there for the
+specific pre-`apply` normalization the shim does to work around upstream's
+GUI-side assumptions.
 
 ## License
 

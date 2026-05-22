@@ -16,14 +16,13 @@ use std::path::PathBuf;
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
 
-    // Same default as slic3r-ffi's build.rs: <repo>/external/orca-slicer-ffi/build/ffi/RelWithDebInfo
+    // Default: <repo>/build/ffi/RelWithDebInfo (cmake output for the vendored
+    // slic3r_ffi target).
     let lib_dir = env::var("SLIC3R_FFI_LIB_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             manifest_dir
                 .join("..")
-                .join("external")
-                .join("orca-slicer-ffi")
                 .join("build")
                 .join("ffi")
                 .join("RelWithDebInfo")
