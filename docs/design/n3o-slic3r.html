@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>n3o-slic3r — a 3D printer slicer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="styles.css"/>
+<style>
+  @keyframes progress {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(170%); }
+  }
+</style>
+</head>
+<body>
+<template id="__bundler_thumbnail" data-bg-color="#FBFBFC">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <!-- ground / build plate -->
+    <g transform="translate(600 460)">
+      <!-- plate -->
+      <path d="M -300 60 L 0 120 L 300 60 L 0 0 Z" fill="#15181D"/>
+      <path d="M -300 60 L 0 120 L 300 60 L 0 0 Z" fill="none" stroke="#2A6FDB" stroke-width="2" opacity="0.7"/>
+      <!-- grid lines on the plate -->
+      <g stroke="#3a4151" stroke-width="1" opacity="0.55">
+        <path d="M -200 40 L 100 100"/>
+        <path d="M -100 20 L 200 80"/>
+        <path d="M 0 0 L 300 60"/>
+        <path d="M -300 60 L 0 0"/>
+        <path d="M -200 80 L 100 20"/>
+        <path d="M -100 100 L 200 40"/>
+      </g>
+      <!-- cube object -->
+      <g transform="translate(-20 -120)">
+        <path d="M -90 60 L 0 100 L 90 60 L 0 20 Z" fill="#7AA2D9"/>
+        <path d="M -90 60 L -90 -10 L 0 -50 L 0 20 Z" fill="#5b88c4"/>
+        <path d="M 0 20 L 90 -20 L 90 60 L 0 100 Z" fill="#3a679f"/>
+      </g>
+    </g>
+    <!-- wordmark -->
+    <g transform="translate(600 680)" text-anchor="middle" font-family="ui-monospace, monospace" font-weight="600" font-size="38" fill="#0F1115">
+      <text>n3o-slic3r</text>
+    </g>
+  </svg>
+</template>
+<div id="app"></div>
+
+<!-- React + Babel -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<!-- three.js -->
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+
+<!-- App scripts (order matters) -->
+<script type="text/babel" src="data.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="BuildPlate.jsx"></script>
+<script type="text/babel" src="ObjectsPanel.jsx"></script>
+<script type="text/babel" src="SettingsPanel.jsx"></script>
+<script type="text/babel" src="TopBar.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+</body>
+</html>

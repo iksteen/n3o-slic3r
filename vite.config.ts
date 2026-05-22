@@ -25,8 +25,18 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // Skip large/irrelevant trees so chokidar doesn't crawl them at
+      // startup. The renderer only lives in src/ + public/ + index.html;
+      // everything else is C++/Rust/build state.
+      ignored: [
+        "**/src-tauri/**",     // Rust backend
+        "**/external/**",      // OrcaSlicer submodule (~750 MB, tens of thousands of files)
+        "**/crates/**",        // slic3r-ffi crate (Rust + C++ shim)
+        "**/build/**",         // cmake output
+        "**/target/**",        // cargo output
+        "**/docs/**",          // design docs
+        "**/scripts/**",       // shell helpers
+      ],
     },
   },
 }));

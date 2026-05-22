@@ -17,6 +17,11 @@ dist-ssr
 # cargo workspace target
 /target/
 
+# local environment overrides loaded by `npm run tauri dev` via dotenv-cli
+.env
+.env.local
+.env.*.local
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

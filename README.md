@@ -140,6 +140,53 @@ to the build tree (dev convenience). For distribution, bundle the `.so` next
 to the binary or install it to a system library path; the current `build.rs`
 rpath is not portable.
 
+## Development gotchas
+
+A few traps that aren't obvious from the toolchain alone.
+
+- **cmake stores absolute source paths.** Moving the project directory on
+  disk (or renaming an ancestor directory) invalidates the cmake build
+  cache — `cargo build` from the new location refuses with "The source
+  directory does not match the source directory that has been set up
+  before." The previously-built binary at `target/<profile>/n3o-slic3r`
+  also has the old absolute rpath baked in and won't find the .so.
+  Recovery is `rm -rf build/ target/` followed by `cargo build`. The
+  OrcaSlicer deps tree under `external/OrcaSlicer/deps/build/` survives
+  the move (its cmake config files mostly use relative `_IMPORT_PREFIX`),
+  so a full deps rebuild isn't needed.
+
+- **Cargo's `rustc-link-arg` doesn't propagate through the dep graph.**
+  The slic3r-ffi crate emits its own rpath via `rustc-link-arg`, but
+  that only applies when slic3r-ffi itself produces a binary (its
+  examples and tests). For downstream binaries like the Tauri app,
+  rpath has to be set by the binary-producing crate. We use Cargo's
+  `links = "slic3r_ffi"` + `cargo:LIB_DIR=...` metadata channel:
+  slic3r-ffi's `build.rs` emits the lib directory, Cargo surfaces it
+  as `DEP_SLIC3R_FFI_LIB_DIR` in `src-tauri/build.rs`'s env, and
+  src-tauri sets its own rpath from there. If you add another binary
+  crate to the workspace that depends on slic3r-ffi, repeat that
+  pattern in its `build.rs` — the rpath isn't inherited.
+
+- **Vite watches everything by default.** The dev server's chokidar
+  watcher recursively walks the project root on startup. With
+  `external/OrcaSlicer/` containing ~750 MB and tens of thousands of
+  files, an unconfigured watcher hits `inotify` limits and falls back
+  to polling — `npm run tauri dev` startup grinds to a minute+.
+  `vite.config.ts` excludes `external/`, `crates/`, `build/`,
+  `target/`, `docs/`, `scripts/` from the watch tree. Re-scaffolding
+  the Tauri side without preserving those exclusions reintroduces
+  the symptom.
+
+- **libslic3r workarounds in the FFI shim.** `crates/slic3r-ffi/ffi/
+  slic3r_ffi.cpp` applies several pre-`apply` and post-`apply`
+  normalizations to compensate for libslic3r's headless-mode quirks
+  (temp dir defaulting to filesystem root, missing `LoadStrategy::
+  LoadModel`, uninitialized `is_BBL_printer`, filament_map
+  normalization, coEnums serialization). Read
+  `docs/libslic3r-workarounds.md` before bumping the OrcaSlicer
+  submodule — removing one of these without confirming upstream
+  fixed the root cause silently reintroduces hard-to-debug failures.
+
 ## Upgrading OrcaSlicer
 
 ```bash
