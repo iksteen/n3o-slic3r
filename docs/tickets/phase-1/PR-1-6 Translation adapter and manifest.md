@@ -1,6 +1,6 @@
 # PR-1-6 — Translation adapter + manifest
 
-Status: ❌ open.
+Status: ⚠️ partial. `src-tauri/src/core/cascade_adapter/{manifest,adapter}.rs` ships identity mapping for all schema-known keys, drop list of 67 BBL + 13 Prusa OrcaSlicer-only keys (from PR-0.5-1 + PR-0.5-2 findings), 4 Orca typo remappings, broadcast bed_temp expansion across the 12 per-plate-temp keys, and `curr_bed_type` derivation from `Context.plate.type`. 8 tests cover identity, drop, remap, expansion, curr_bed_type, unknown-key event. The production "resolve per hypothetical plate context" form of dimensional expansion (vs broadcast) is deferred — current broadcast is libslic3r-correct since `curr_bed_type` selects which plate-temp key the engine reads, but the per-plate values won't differ until the full form lands. Real-world test against the spike1 cascade comes in PR-1-11.
 
 **Scope.** Production adapter living in
 `src-tauri/src/core/cascade_adapter/`. Converts resolved logical

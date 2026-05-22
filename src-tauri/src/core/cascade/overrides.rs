@@ -14,7 +14,7 @@
 //! rather than getting silently treated as the authored-cascade form.
 
 use super::loader::CascadeLoadError;
-use super::resolver::{resolve, Context, MatchingRule, Resolved, ResolvedValue};
+use super::resolver::{resolve, Context, MatchingRule, ResolvedValue};
 use super::types::{Cascade, SourceLocation};
 use serde::Serialize;
 use std::collections::BTreeMap;

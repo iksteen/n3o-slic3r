@@ -12,4 +12,13 @@
 //! See `docs/libslic3r-workarounds.md` for the current set of quirks the
 //! shim already compensates for; this module inherits the contract.
 //!
-//! Implementation lands in Phase 1.
+//! Submodules:
+//! - **`manifest`** — drop list + typo remap from Phase 0.5 findings.
+//! - **`adapter`** — `adapt()` / `adapt_with_overrides()` that build a
+//!   `slic3r_ffi::Config` from a `Resolved` (or `ResolvedOverrides`).
+
+pub mod adapter;
+pub mod manifest;
+
+pub use adapter::{adapt, adapt_with_overrides, AdaptError, AdaptEvent, AdaptResult};
+pub use manifest::Manifest;
