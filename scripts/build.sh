@@ -22,7 +22,10 @@ case "${1:-deps}" in
             exit 0
         fi
         echo "deps: building OrcaSlicer's deps tree (one-time, ~17 min)..."
-        (cd "${ORCA_DIR}" && ./build_linux.sh -d)
+        # `-r` skips OrcaSlicer's >=10G RAM precheck. The check is a
+        # conservative heuristic; GitHub-hosted runners have ~7G RAM +
+        # swap and complete the build successfully, just slower.
+        (cd "${ORCA_DIR}" && ./build_linux.sh -d -r)
         ;;
     *)
         echo "usage: $0 deps" >&2
