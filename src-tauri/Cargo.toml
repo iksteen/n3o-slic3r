@@ -34,3 +34,7 @@ toml = "0.8"
 name = "spike1"
 path = "examples/spike1.rs"
 
+[[example]]
+name = "spike2"
+path = "examples/spike2.rs"
+

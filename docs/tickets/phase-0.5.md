@@ -22,7 +22,7 @@ the index plus phase-level status and notes.
 | Spike | Status | Ticket |
 |-------|--------|--------|
 | Cascade adapter end-to-end | ✅ done | [PR-0.5-1](phase-0.5/PR-0.5-1%20Cascade%20Adapter%20end-to-end.md) (finding: `docs/spikes/spike-1-cascade-adapter.md`) |
-| Mixed-nozzle-size slice (Prusa XL) | ❌ open | [PR-0.5-2](phase-0.5/PR-0.5-2%20Mixed-nozzle-size%20slice.md) |
+| Mixed-nozzle-size slice (Prusa XL) | ⚠️ partial | [PR-0.5-2](phase-0.5/PR-0.5-2%20Mixed-nozzle-size%20slice.md) (finding: `docs/spikes/spike-2-mixed-nozzle.md`; toolchange criterion deferred to PR-0.5-3's 4-color fixture) |
 | Bambu A1 mini AMS slice | ❌ open | [PR-0.5-3](phase-0.5/PR-0.5-3%20Bambu%20A1%20mini%20AMS%20slice.md) |
 | coEnums known limitation impact | ✅ done | — (surfaced via `1bb3503`; documented in `docs/libslic3r-workarounds.md` §5) |
 | platecycler portability | ❌ open | [PR-0.5-5](phase-0.5/PR-0.5-5%20platecycler%20portability.md) |
