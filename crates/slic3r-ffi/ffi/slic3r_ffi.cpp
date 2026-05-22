@@ -24,6 +24,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace Slic3r;
@@ -130,12 +131,28 @@ struct DefCache {
         int multiline;
         double min;
         double max;
+        unsigned int scope;
     };
 
     std::vector<std::unique_ptr<Entry>> entries; // unique_ptr so c_str() pointers don't move on grow
     std::unordered_map<std::string, size_t> by_key;
 
     void build() {
+        // Scope is encoded structurally in libslic3r — by which static
+        // config class declares each option. Pre-collect each class's key
+        // set (via the cache populated by print_config_static_initializer)
+        // so we can mask every option's scope in one pass.
+        auto to_set = [](const t_config_option_keys& v) {
+            return std::unordered_set<std::string>(v.begin(), v.end());
+        };
+        const auto keys_object       = to_set(PrintObjectConfig().keys());
+        const auto keys_region       = to_set(PrintRegionConfig().keys());
+        const auto keys_print        = to_set(PrintConfig().keys());
+        const auto keys_sla_object   = to_set(SLAPrintObjectConfig().keys());
+        const auto keys_sla_print    = to_set(SLAPrintConfig().keys());
+        const auto keys_sla_material = to_set(SLAMaterialConfig().keys());
+        const auto keys_sla_printer  = to_set(SLAPrinterConfig().keys());
+
         entries.reserve(print_config_def.options.size());
         for (const auto& kv : print_config_def.options) {
             auto e = std::make_unique<Entry>();
@@ -170,6 +187,15 @@ struct DefCache {
             for (const auto& s : e->enum_values) e->enum_value_ptrs.push_back(s.c_str());
             for (const auto& s : e->enum_labels) e->enum_label_ptrs.push_back(s.c_str());
 
+            e->scope = 0;
+            if (keys_print.count(kv.first))        e->scope |= SLIC3R_SCOPE_PRINT;
+            if (keys_object.count(kv.first))       e->scope |= SLIC3R_SCOPE_OBJECT;
+            if (keys_region.count(kv.first))       e->scope |= SLIC3R_SCOPE_REGION;
+            if (keys_sla_print.count(kv.first))    e->scope |= SLIC3R_SCOPE_SLA_PRINT;
+            if (keys_sla_object.count(kv.first))   e->scope |= SLIC3R_SCOPE_SLA_OBJECT;
+            if (keys_sla_material.count(kv.first)) e->scope |= SLIC3R_SCOPE_SLA_MATERIAL;
+            if (keys_sla_printer.count(kv.first))  e->scope |= SLIC3R_SCOPE_SLA_PRINTER;
+
             by_key.emplace(e->key, entries.size());
             entries.push_back(std::move(e));
         }
@@ -193,6 +219,7 @@ struct DefCache {
         out->enum_value_count   = e.enum_value_ptrs.size();
         out->min                = e.min;
         out->max                = e.max;
+        out->scope              = e.scope;
     }
 };
 

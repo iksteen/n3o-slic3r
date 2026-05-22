@@ -192,6 +192,48 @@ impl OptMode {
     }
 }
 
+/// Bitmask of the scopes (libslic3r config classes) an option can be set at.
+///
+/// Mirrors `slic3r_opt_scope`. An option may belong to multiple scopes — most
+/// commonly when an FFF and an SLA class both declare the same key (e.g.
+/// `layer_height` lives in both `PrintObjectConfig` and `SLAPrintObjectConfig`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OptScope(pub u32);
+
+impl OptScope {
+    pub const PRINT: Self        = Self(sys::SLIC3R_SCOPE_PRINT as u32);
+    pub const OBJECT: Self       = Self(sys::SLIC3R_SCOPE_OBJECT as u32);
+    pub const REGION: Self       = Self(sys::SLIC3R_SCOPE_REGION as u32);
+    pub const SLA_PRINT: Self    = Self(sys::SLIC3R_SCOPE_SLA_PRINT as u32);
+    pub const SLA_OBJECT: Self   = Self(sys::SLIC3R_SCOPE_SLA_OBJECT as u32);
+    pub const SLA_MATERIAL: Self = Self(sys::SLIC3R_SCOPE_SLA_MATERIAL as u32);
+    pub const SLA_PRINTER: Self  = Self(sys::SLIC3R_SCOPE_SLA_PRINTER as u32);
+
+    /// True if `other`'s bits are all set on `self`.
+    pub fn contains(self, other: Self) -> bool {
+        (self.0 & other.0) == other.0 && other.0 != 0
+    }
+
+    pub fn is_print(self)        -> bool { self.contains(Self::PRINT) }
+    pub fn is_object(self)       -> bool { self.contains(Self::OBJECT) }
+    pub fn is_region(self)       -> bool { self.contains(Self::REGION) }
+    pub fn is_sla_print(self)    -> bool { self.contains(Self::SLA_PRINT) }
+    pub fn is_sla_object(self)   -> bool { self.contains(Self::SLA_OBJECT) }
+    pub fn is_sla_material(self) -> bool { self.contains(Self::SLA_MATERIAL) }
+    pub fn is_sla_printer(self)  -> bool { self.contains(Self::SLA_PRINTER) }
+
+    /// True for any FFF scope (Print / Object / Region).
+    pub fn is_fff(self) -> bool {
+        self.0 & (Self::PRINT.0 | Self::OBJECT.0 | Self::REGION.0) != 0
+    }
+
+    /// True for any SLA scope.
+    pub fn is_sla(self) -> bool {
+        self.0 & (Self::SLA_PRINT.0 | Self::SLA_OBJECT.0
+                | Self::SLA_MATERIAL.0 | Self::SLA_PRINTER.0) != 0
+    }
+}
+
 /// An owned, allocated copy of a `slic3r_option_def_t` view, decoded into Rust types.
 /// The original C struct's strings are process-lifetime so we _could_ borrow them,
 /// but copying keeps the consumer ergonomics simple.
@@ -212,6 +254,7 @@ pub struct OptionDef {
     pub enum_labels: Vec<String>,
     pub min: f64,
     pub max: f64,
+    pub scope: OptScope,
 }
 
 unsafe fn maybe_cstr(p: *const c_char) -> Option<String> {
@@ -252,6 +295,7 @@ impl OptionDef {
                 enum_labels,
                 min: raw.min,
                 max: raw.max,
+                scope: OptScope(raw.scope),
             }
         }
     }

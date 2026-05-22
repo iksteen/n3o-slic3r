@@ -8,7 +8,7 @@
 //! First run is slow because `cargo test` triggers the crate's build.rs
 //! and cmake builds libslic3r and the shim. Subsequent runs are fast.
 
-use slic3r_ffi::{init, option_def, option_defs, version, Config, ErrorKind, Model, OptType};
+use slic3r_ffi::{init, option_def, option_defs, version, Config, ErrorKind, Model, OptScope, OptType};
 use std::path::PathBuf;
 use std::sync::Once;
 
@@ -77,6 +77,70 @@ fn option_def_unknown_returns_unknown_key() {
     ensure_init();
     let err = option_def("definitely_not_a_real_setting_12345").unwrap_err();
     assert_eq!(err.kind, ErrorKind::UnknownKey);
+}
+
+#[test]
+fn option_scope_classifies_known_keys() {
+    ensure_init();
+    // layer_height is declared in PrintObjectConfig (FFF per-object) AND in
+    // SLAPrintObjectConfig — bitmask should reflect both.
+    let lh = option_def("layer_height").expect("layer_height");
+    assert!(lh.scope.is_object(),
+        "layer_height should be OBJECT-scoped, got {:?}", lh.scope);
+
+    // wall_filament is in PrintRegionConfig.
+    let wf = option_def("wall_filament").expect("wall_filament");
+    assert!(wf.scope.is_region(),
+        "wall_filament should be REGION-scoped, got {:?}", wf.scope);
+    assert!(!wf.scope.is_object(),
+        "wall_filament should NOT be OBJECT-scoped, got {:?}", wf.scope);
+
+    // gcode_flavor is in GCodeConfig, which is a parent of PrintConfig.
+    let gf = option_def("gcode_flavor").expect("gcode_flavor");
+    assert!(gf.scope.is_print(),
+        "gcode_flavor should be PRINT-scoped, got {:?}", gf.scope);
+    assert!(!gf.scope.is_object(),
+        "gcode_flavor should NOT be OBJECT-scoped, got {:?}", gf.scope);
+    assert!(!gf.scope.is_region(),
+        "gcode_flavor should NOT be REGION-scoped, got {:?}", gf.scope);
+
+    // SLA-only example.
+    let exp = option_def("exposure_time").expect("exposure_time");
+    assert!(exp.scope.is_sla_material(),
+        "exposure_time should be SLA_MATERIAL-scoped, got {:?}", exp.scope);
+    assert!(exp.scope.is_sla(),
+        "exposure_time should report is_sla()");
+    assert!(!exp.scope.is_fff(),
+        "exposure_time should NOT report is_fff()");
+}
+
+#[test]
+fn most_options_have_a_scope() {
+    // Some options are present in print_config_def for preset-bundle /
+    // host-integration / UI metadata reasons but aren't declared by any
+    // of the static config classes used by slicing (`compatible_printers`,
+    // `bbl_use_printhost`, etc.). Those legitimately report scope == 0.
+    //
+    // For real slicing settings, scope should be non-zero. A jump in the
+    // unscoped count suggests either upstream added a new static class we
+    // haven't wired up, or moved real options out of the static classes.
+    ensure_init();
+    let defs = option_defs();
+    let scoped = defs.iter().filter(|d| d.scope.0 != 0).count();
+    let unscoped = defs.len() - scoped;
+    // Today: ~666 scoped / ~71 unscoped out of ~737. Bound generously so
+    // option churn doesn't flake the test, but tight enough to catch a
+    // missing class wiring (which would push the unscoped count into the
+    // hundreds).
+    assert!(
+        scoped > 500,
+        "only {scoped}/{} options have a scope — did a static class wiring break?",
+        defs.len()
+    );
+    assert!(
+        unscoped < 150,
+        "{unscoped} options have no scope (max 150 expected for preset/metadata) — did a class get unwired?"
+    );
 }
 
 #[test]

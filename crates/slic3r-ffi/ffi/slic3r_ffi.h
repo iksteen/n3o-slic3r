@@ -62,6 +62,33 @@ typedef enum {
     SLIC3R_MODE_DEVELOP  = 3
 } slic3r_opt_mode;
 
+/* Bitmask of the scopes an option can be set at. Scope is encoded
+ * structurally in libslic3r by which static config class declares the
+ * option (PrintObjectConfig, PrintRegionConfig, PrintConfig, the SLA
+ * variants); we surface that as a bitmask so consumers can validate
+ * "can this override be applied per-object" / "where does this value
+ * go in the DynamicPrintConfig adapter layer" without grepping headers.
+ *
+ * An option can belong to multiple scopes (most commonly when an FFF
+ * and an SLA class both declare the same key).
+ *
+ *   PRINT      project-level (PrintConfig + its parents
+ *              MachineEnvelopeConfig and GCodeConfig).
+ *   OBJECT     per-object (PrintObjectConfig); set via
+ *              ModelObject::config.
+ *   REGION     per-region/volume (PrintRegionConfig); set via
+ *              ModelVolume::config or inherited from object scope.
+ *   SLA_*      same idea for SLA workflows. */
+typedef enum {
+    SLIC3R_SCOPE_PRINT        = 1u << 0,
+    SLIC3R_SCOPE_OBJECT       = 1u << 1,
+    SLIC3R_SCOPE_REGION       = 1u << 2,
+    SLIC3R_SCOPE_SLA_PRINT    = 1u << 3,
+    SLIC3R_SCOPE_SLA_OBJECT   = 1u << 4,
+    SLIC3R_SCOPE_SLA_MATERIAL = 1u << 5,
+    SLIC3R_SCOPE_SLA_PRINTER  = 1u << 6
+} slic3r_opt_scope;
+
 /* Borrowed view over a single ConfigOptionDef. All pointers point into
  * process-lifetime storage owned by libslic3r (the global print_config_def).
  * Strings are NUL-terminated UTF-8; nullable fields are NULL when absent. */
@@ -88,6 +115,10 @@ typedef struct {
      * == 0.0 as "no range declared". */
     double              min;
     double              max;
+    /* Bitmask of slic3r_opt_scope values. Zero means the option isn't
+     * declared by any known static config class — currently unreachable
+     * for keys in print_config_def but defensible as a default. */
+    unsigned int        scope;
 } slic3r_option_def_t;
 
 /* ---- Library lifecycle ---- */
