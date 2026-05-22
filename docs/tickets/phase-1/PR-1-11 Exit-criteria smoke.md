@@ -1,6 +1,6 @@
 # PR-1-11 — Phase 1 exit-criteria smoke
 
-Status: ❌ open.
+Status: ⚠️ partial. `cargo run -p n3o-slic3r --release --example phase1_smoke` drives PR-1-1 through PR-1-8 end-to-end against the reference profiles; `docs/phase-1-smoke.md` documents the procedure. The validation-errors companion example, the bench wiring (PR-1-10), and the CI hook are deferred — the unit + integration tests already gate cascade behavior in CI, so the user-facing smoke binary is the primary remaining gap.
 
 **Scope.** End-to-end smoke procedure that exercises Phase 1's
 exit criteria as a single repeatable test. Mirrors PR-0-5's

@@ -40,3 +40,7 @@ path = "examples/spike2.rs"
 name = "spike3"
 path = "examples/spike3.rs"
 
+[[example]]
+name = "phase1_smoke"
+path = "examples/phase1_smoke.rs"
+
