@@ -1,0 +1,3 @@
+[submodule "external/orca-slicer-ffi"]
+	path = external/orca-slicer-ffi
+	url = https://github.com/iksteen/orca-slicer-ffi.git
