@@ -20,6 +20,7 @@
 //! Resolver, override tiers, and trace tooling land in subsequent
 //! PR-1-3..-5 work.
 
+pub mod commands;
 pub mod loader;
 pub mod overrides;
 pub mod resolver;
@@ -27,6 +28,10 @@ pub mod trace;
 pub mod types;
 pub mod validate;
 
+pub use commands::{
+    cascade_context_dimensions, cascade_load, cascade_resolve, cascade_trace, CascadeHandle,
+    CascadeRegistry, ContextJson, OverrideFileSpec, ResolvedEntryJson, ResolvedJson,
+};
 pub use loader::{load_cascade, CascadeLoadError};
 pub use overrides::{
     load_override_file, parse_override_str, resolve_with_overrides, FlatOverrides,

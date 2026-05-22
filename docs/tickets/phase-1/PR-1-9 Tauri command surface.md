@@ -1,6 +1,6 @@
 # PR-1-9 — Tauri command surface for cascade + adapter
 
-Status: ❌ open.
+Status: ⚠️ partial. `src-tauri/src/core/cascade/commands.rs` ships `CascadeRegistry` in Tauri State + four commands: `cascade_load`, `cascade_resolve`, `cascade_trace`, `cascade_context_dimensions`. `ContextJson` carries the printer/plate/filaments/overrides shape the frontend builds per call. `cascade_apply` (returning a ConfigHandle) is deferred — the existing `slicer_slice` command takes a model path and config directly; cascade-into-Config wiring lands when `slicer_slice` grows a `from_cascade_handle` variant. 3 unit tests cover load + resolve + trace via the registry, the canonical dimensions list, and the unknown-handle path.
 
 **Scope.** The frontend-facing commands the Phase 4 Settings UI
 (and the Phase 1 CLI test harness in PR-1-11) need to drive the

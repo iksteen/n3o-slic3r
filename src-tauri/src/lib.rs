@@ -19,6 +19,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(std::sync::Mutex::new(core::cascade::CascadeRegistry::new()))
         .setup(|_app| {
             // Resources dir is only needed for STEP / font embossing; STL
             // and 3MF load without it. Log level 3 = warning, matching
@@ -30,6 +31,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             core::cascade::slicer_info,
             core::cascade::slicer_options,
+            core::cascade::commands::cascade_load,
+            core::cascade::commands::cascade_resolve,
+            core::cascade::commands::cascade_trace,
+            core::cascade::commands::cascade_context_dimensions,
             core::slice::slicer_slice,
         ])
         .run(tauri::generate_context!())
