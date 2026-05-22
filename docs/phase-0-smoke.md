@@ -104,7 +104,7 @@ combine `use_relative_e_distances=1` with an empty `layer_gcode`. The
 FFI link is healthy — we reach `Print::apply`, the engine reads our
 config, and validation runs end-to-end. What's missing is a real
 device-shaped configuration, which is **Phase 0.5 / Spike 1** work
-(see `docs/phase-0-tickets.md` "Phase 0.5 reminder"). The first
+(see `docs/tickets/phase-0.md` "Phase 0.5 reminder"). The first
 successful gcode-out is gated on the cascade adapter consuming a
 converted OrcaSlicer device profile, not on patching the slice
 example.
