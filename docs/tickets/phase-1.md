@@ -48,7 +48,7 @@ The Phase 0.5 spikes hand off concrete shopping lists to Phase 1:
 | Override tiers (user + project, !important-style) | ✅ done | [PR-1-4](phase-1/PR-1-4%20Override%20tiers.md) |
 | Trace tooling | ✅ done | [PR-1-5](phase-1/PR-1-5%20Trace%20tooling.md) |
 | Translation adapter + manifest | ⚠️ partial | [PR-1-6](phase-1/PR-1-6%20Translation%20adapter%20and%20manifest.md) (identity + drop list + typo remap + bed_temp broadcast; per-plate-resolution form deferred) |
-| Context-state structures (printer / build plate / filament) | ❌ open | [PR-1-7](phase-1/PR-1-7%20Context-state%20structures.md) |
+| Context-state structures (printer / build plate / filament) | ✅ done | [PR-1-7](phase-1/PR-1-7%20Context-state%20structures.md) |
 | Reference profiles (A1 mini, U1, plates, filaments) | ❌ open | [PR-1-8](phase-1/PR-1-8%20Reference%20profiles.md) |
 | Tauri command surface | ❌ open | [PR-1-9](phase-1/PR-1-9%20Tauri%20command%20surface.md) |
 | Resolver benchmarks | ❌ open | [PR-1-10](phase-1/PR-1-10%20Resolver%20benchmarks.md) |

@@ -7,5 +7,11 @@
 //! color), and emits the right sync-on-send metadata for each printer
 //! driver.
 //!
-//! Owns FR-FS-1 through FR-FS-14 (PRD §6.8). Implementation lands in
-//! Phase 7.
+//! Owns FR-FS-1 through FR-FS-14 (PRD §6.8). Live sync + driver wiring
+//! land in Phase 7. Phase 1 ships only the declarative
+//! `FilamentProfile` descriptor the cascade resolver reads via
+//! `Context::predicate_value`.
+
+pub mod profile;
+
+pub use profile::FilamentProfile;

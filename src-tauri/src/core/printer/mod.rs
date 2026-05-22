@@ -8,4 +8,7 @@
 //! its capabilities, no shared-code changes (PRD §8.2 note).
 
 pub mod bambu;
+pub mod profile;
 pub mod snapmaker;
+
+pub use profile::{BoundingBox, PrinterProfile, Toolhead};

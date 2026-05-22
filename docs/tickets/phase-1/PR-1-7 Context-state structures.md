@@ -1,6 +1,6 @@
 # PR-1-7 — Context-state structures
 
-Status: ❌ open.
+Status: ✅ done. Three new modules: `core/printer/profile.rs` (PrinterProfile + Toolhead + BoundingBox), `core/scene/build_plate.rs` (BuildPlate + SurfaceKind), `core/filament/profile.rs` (FilamentProfile). Plus `core/project/context.rs` (SlicingContext) composes them and implements `cascade::Context` so the resolver can read predicate values via dotted dimensions (`printer.model`, `filament.type`, `plate.type`, `filament.name`, `filament.vendor`, `filament.color`). All round-trip JSON cleanly. 8 unit tests (1 PrinterProfile + 1 BuildPlate + 2 FilamentProfile + 4 SlicingContext including an end-to-end resolve via the production Context).
 
 **Scope.** Typed Rust shapes for the three context-state objects
 the resolver consumes: **printer profile** (slot_count, supported

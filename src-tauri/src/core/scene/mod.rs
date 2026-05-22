@@ -14,3 +14,11 @@
 //!
 //! Implementation lands in Phase 2. Performance contract: state ops
 //! ≤5ms p99 on 1000-object scenes (PRD AD-8).
+//!
+//! Phase 1 ships only the `BuildPlate` descriptor here — the cascade
+//! adapter (PR-1-6) needs it for `curr_bed_type`, and the Phase 2
+//! renderer will extend it with mesh + adhesion + visuals.
+
+pub mod build_plate;
+
+pub use build_plate::{BuildPlate, SurfaceKind};
