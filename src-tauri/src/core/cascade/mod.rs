@@ -21,11 +21,16 @@
 //! PR-1-3..-5 work.
 
 pub mod loader;
+pub mod overrides;
 pub mod resolver;
 pub mod types;
 pub mod validate;
 
 pub use loader::{load_cascade, CascadeLoadError};
+pub use overrides::{
+    load_override_file, parse_override_str, resolve_with_overrides, FlatOverrides,
+    OverrideTier, OverrideTiers, OverrideTraceEntry, ResolvedOverrides, ResolvedWithTrace,
+};
 pub use resolver::{resolve, Context, MapContext, MatchingRule, Resolved, ResolvedValue};
 pub use types::{Cascade, Condition, ConditionValue, Predicate, Rule, SourceLocation};
 pub use validate::{default_known_dimensions, validate_cascade, KnownDimensions};

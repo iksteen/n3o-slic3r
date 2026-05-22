@@ -1,6 +1,6 @@
 # PR-1-4 — Override tiers (user + project, `!important` style)
 
-Status: ❌ open.
+Status: ✅ done. `src-tauri/src/core/cascade/overrides.rs` ships `OverrideTiers`, `FlatOverrides`, stricter override-file loader (rejects `[[rule]]` and `[section]` headers with file:line errors), and `resolve_with_overrides()` that applies user → project tiers on top of the authored cascade. `cascade_fallback` retained per overridden key. 8 unit tests covering project-beats-spec-2, user-vs-project tiering, override-only keys, both rejection paths.
 
 **Scope.** Phase 2 of the two-phase resolution: user profile and
 project file applied as absolute-override tiers that win over the
