@@ -1,75 +1,59 @@
 # PR-2-11 — Perf stress test + Three.js vs wgpu pivot decision
 
-Status: ❌ open.
+Status: 📅 deferred (post-Phase-2 evaluation, not a Phase 2 gate).
 
-**Scope.** Validate Phase 2's two performance budgets against real
-workloads. If we hit the targets, ship Three.js. If we don't,
-schedule the pivot to wgpu and budget the work into Phase 3 or
-Phase 4 (whichever has slack).
+**Scope.** *Originally framed as a Phase 2 deliverable that decides
+between shipping Three.js or pivoting to wgpu against measured FPS
+budgets.* Post-Phase-1 review reframed this as a **post-MVP
+evaluation**, not a Phase 2 exit-gate:
 
-This is the **decision point** PRD §10 calls out as a risk — Three.js
-on integrated GPUs at 20M triangles is uncertain; the AD-8
-separation exists precisely so the pivot doesn't blow the schedule.
+- The schedule is **comfortably ahead** — burning ~3 days on a
+  pivot decision in Phase 2 is premature.
+- The dev rig is a high-end Nvidia 5070 Ti — the original
+  "integrated GPU laptop" framing doesn't match the realistic test
+  environment. Real perf-on-modest-hardware evaluation needs to
+  happen on actual modest hardware, which is a Phase 9 (release
+  prep) concern.
+- The AD-8 architectural separation (PR-2-1 / PR-2-2 state-vs-
+  renderer) is the load-bearing guarantee that lets us swap
+  renderers later; as long as that's intact, the pivot remains
+  cheap whenever we need it.
 
-**Two budgets to validate:**
+**New plan: ship Three.js, measure later.**
 
-1. **20M-triangle scene at ≥30 fps on integrated-GPU laptop.**
-   Geometry render-side perf — Three.js draw calls + GPU
-   throughput. Test fixture: 100 copies of a 200k-triangle model
-   (or 1000 copies of a 20k-triangle model) on a single plate.
+- Phase 2 ships with **Three.js + WebGL**. No FPS gate. No formal
+  budget assertion. Visual smoke-test sufficiency is "looks
+  smooth on the dev rig" for the duration of Phase 2 work.
+- The **5 ms p99 state-ops budget on a 1000-object scene** stays
+  — that's a Rust-side regression gate independent of the
+  renderer choice, similar to PR-1-10's resolver perf gates.
+  Implementer ships it as `src-tauri/tests/scene_state_perf.rs`
+  with the same Instant-based timing pattern as PR-1-10.
+- The renderer-side FPS measurement lands as a **Phase 9 release-
+  prep task**: actual-modest-hardware testing, FPS measurement
+  on the lowest-spec laptop on the test rig, decision to ship
+  Three.js or pivot.
 
-2. **5 ms p99 state ops on a 1000-object scene.** Rust scene-state
-   side. Selection / transform / diff computation must stay under
-   the budget so the event loop never blocks the renderer's frame
-   pacing.
+**Reduced Phase 2 deliverables.**
 
-**Acceptance criteria.**
-
-- **`src/viewport/__test__/perf_20m_triangles.tsx`** — interactive
-  perf harness loading a programmatically-generated 20M-triangle
-  scene; reports FPS during a scripted orbit. Run with `npm run
-  tauri dev` + manual inspection (or via a headless puppeteer
-  setup if Phase 4 ships one). Records FPS over 30 seconds; the
-  budget assertion is ≥30 fps p10 (the slowest 10% of frames).
-
-- **`src-tauri/tests/scene_state_perf.rs`** — Rust integration
-  perf test (same pattern as PR-1-10's `cascade_perf`). Builds a
-  1000-object scene; measures:
+- `src-tauri/tests/scene_state_perf.rs` — Rust integration perf
+  test. Builds a 1000-object scene; measures + asserts:
   - Single-object transform (translate, rotate, scale): mean +
     p99 < 5 ms.
   - Selection toggle of 100 objects: mean + p99 < 5 ms.
-  - Full `scene_snapshot()` serialization: < 50 ms (this is the
-    reconnect path, less frequent than per-interaction ops).
+  - Full `scene_snapshot()` serialization: < 50 ms (reconnect
+    path, less frequent than per-interaction ops).
 
-- **Pivot decision document** at `docs/phase-2-renderer-decision.md`:
-  - Records measured FPS at 20M triangles and the test
-    configuration.
-  - Reports the Rust-side perf numbers.
-  - Recommends **Three.js (ship)** or **wgpu (pivot)** with a
-    one-page rationale.
-  - If pivot: scopes the work (new renderer crate + GPU pipeline
-    + scene-event reconciler) and slots it into Phase 3 / Phase 4
-    with a target landing date.
+**Deferred to Phase 9 (release prep).**
 
-- The 5 ms scene-state budget must pass regardless of the
-  renderer-side outcome — the pivot doesn't help if the state
-  side is the bottleneck.
+- 20M-triangle FPS measurement on a target modest-hardware rig.
+- `docs/phase-2-renderer-decision.md` pivot decision doc.
+- Three.js ↔ wgpu pivot scoping if needed.
 
-**Effort.** ~3 days. The 20M-triangle fixture + perf measurement is
-~1 day; the Rust-side test is ~1 day; analysis + decision-doc
-authoring is ~1 day.
+**Effort.** ~1 day for the Rust-side perf test (was ~3 days
+including the Three.js measurement + decision doc).
 
-**Dependencies.** PR-2-9 (renderer to test). The Rust-side test can
-run earlier if PR-2-1/PR-2-2/PR-2-5 are done — useful to know the
-budget passes before investing more renderer time.
+**Dependencies.** PR-2-1 / PR-2-2 / PR-2-5 (scene state + ops the
+perf test exercises).
 
-**Out of scope.** Actual pivot to wgpu — if the decision is "ship
-Three.js," none. If the decision is "pivot," that's a separate
-work item with its own ticket (PR-3-X or PR-4-X, TBD by scheduling).
-GPU profiling beyond FPS averages — Phase 9 if release-perf
-regressions surface.
-
-**Notes.** Don't optimize prematurely. If Three.js scrapes by at
-32 fps on the test rig, ship it. The 30 fps bar is intentionally
-forgiving — perfect smoothness isn't the bar; "doesn't feel awful"
-is.
+**Out of scope.** Everything Phase-9-shaped above.

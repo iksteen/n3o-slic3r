@@ -33,7 +33,7 @@ index plus phase-level status and notes.
 | Auto-arrange | ❌ open | [PR-2-8](phase-2/PR-2-8%20Auto-arrange.md) |
 | Three.js renderer (scene + orbit + camera modes) | ❌ open | [PR-2-9](phase-2/PR-2-9%20Three.js%20renderer.md) |
 | Three.js gizmo (move / rotate / scale) | ❌ open | [PR-2-10](phase-2/PR-2-10%20Three.js%20gizmo.md) |
-| Perf stress test + Three.js vs wgpu pivot decision | ❌ open | [PR-2-11](phase-2/PR-2-11%20Perf%20and%20pivot.md) |
+| Rust scene-state perf gate (renderer-side FPS + Three.js↔wgpu pivot deferred to Phase 9) | ⚠️ scoped down | [PR-2-11](phase-2/PR-2-11%20Perf%20and%20pivot.md) |
 | Phase 2 exit-criteria smoke | ❌ open | [PR-2-12](phase-2/PR-2-12%20Exit-criteria%20smoke.md) |
 
 ## Architecture invariant (AD-8 / FR-3D-7)
@@ -54,6 +54,15 @@ The **state-vs-renderer separation** is non-negotiable:
 - **Performance budget on the state side: ≤5 ms p99 for selection,
   transform, diff computation on a 1000-object scene** (per AD-8).
   Validated in PR-2-11.
+
+- **Renderer-side FPS** (20M-triangle scene, ≥30 fps) is
+  *deferred to Phase 9* — Phase 2 ships Three.js + WebGL without
+  a formal FPS gate, since the dev rig (Nvidia 5070 Ti) is too
+  far from "modest hardware" to make a meaningful Phase 2
+  decision. Real perf evaluation needs modest test hardware,
+  which lives with Phase 9 release prep. The state-vs-renderer
+  separation is the load-bearing guarantee that lets us pivot
+  later if Phase 9 surfaces a problem.
 
 Resist the urge to let the frontend hold authoritative state, even
 "just for this one case." Every exception erodes the swap-out

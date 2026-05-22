@@ -17,8 +17,12 @@ CI hook.
      gates from PR-2-11.
   2. `npm run tauri dev` — app window opens, viewport renders the
      bed mesh + grid + exclusion zones for the active printer.
-  3. Drop a 50 MB STL onto the viewport (or use a file-picker
-     command); the mesh loads in < 3 s and appears at origin.
+  3. Drop the 47 MB Stormtrooper Helmet fixture
+     (`examples/perf-fixture/stormtrooper-helmet.3mf`, staged at
+     PR-2-3 implementation time per its NOTICE) onto the viewport
+     — mesh loads in < 3 s and appears at origin. Same fixture
+     re-saved as STL round-trips through PR-2-3's STL loader within
+     the same budget.
   4. Drag-select the object, drag with the translate gizmo —
      position updates in real time.
   5. Open a Bambu-Studio-authored `.3mf` (e.g.
@@ -29,8 +33,12 @@ CI hook.
   7. Click `Frame All` — camera frames every visible object.
   8. Restart the app; on reconnect the scene snapshot rebuilds the
      viewport correctly (state survives renderer disconnect).
-  9. PR-2-11's perf decision is recorded in
-     `docs/phase-2-renderer-decision.md`.
+  9. PR-2-11's Rust-side scene-state perf gates pass via
+     `cargo test --workspace --release`. The renderer-side FPS
+     measurement + Three.js/wgpu pivot decision is **deferred to
+     Phase 9 release prep** (per the PR-2-11 reframe — dev rig is
+     a high-end GPU; real perf-on-modest-hardware lives with
+     release testing).
 
 - CI hook (extend `.github/workflows/build.yml`):
   - The Rust scene-state perf test

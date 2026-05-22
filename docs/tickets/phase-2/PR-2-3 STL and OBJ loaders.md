@@ -31,8 +31,17 @@ the file's header).
     adapter (PR-1-6) doesn't yet support per-volume extruder
     assignment from OBJ groups. (3MF carries that — PR-2-4.)
 
-- 50 MB STL test fixture loads in < 3 seconds on the project lead's
-  laptop (per Phase 2 exit criteria).
+- 50 MB-class test fixture loads in < 3 seconds on the project
+  lead's machine (per Phase 2 exit criteria). Source fixture: the
+  47 MB "Stormtrooper Helmet (one piece)" by GianfLab from
+  MakerWorld (CC BY-NC-SA) — staged into the repo at
+  `examples/perf-fixture/stormtrooper-helmet.3mf` *at PR-2-3
+  implementation time*, with the same attribution-NOTICE pattern
+  as `examples/spike3/NOTICE.md`. License source page:
+  <https://makerworld.com/en/models/1870571-stormtrooper-helmet-one-piece>.
+  The 3MF is multi-volume; PR-2-3 extracts one mesh and re-exports
+  as STL for the STL bench, PR-2-4 reads the project file directly
+  for its own bench.
 
 - Loader errors (truncated file, NaN coordinates, malformed face
   index) surface as typed `LoadError` variants with file:line where

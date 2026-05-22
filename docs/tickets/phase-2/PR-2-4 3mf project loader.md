@@ -72,3 +72,16 @@ commands + events), PR-2-3 (shared mesh loader infrastructure).
 Phase 5 / Phase 7. Phase 3 3MF *writer* — that's Phase 3 work
 (FR-GP-* + .3mf I/O). Slicing the loaded project — that's Phase 3
 too.
+
+**PrusaSlicer 3MF flavor explicitly not supported in MVP.**
+PrusaSlicer writes a slightly different metadata schema
+(`Slic3r_PE_model.config` vs `model_settings.config`,
+`Slic3r_PE_print_config.config` vs `project_settings.config`).
+Since BBS and OrcaSlicer are forks of PrusaSlicer and OrcaSlicer
+already supports Prusa devices, users migrating *from*
+PrusaSlicer typically re-export via OrcaSlicer first. Adding
+direct PrusaSlicer 3MF support is a half-day of XML reading + a
+test fixture; pick it up if a real user asks. Phase 2 just
+documents the gap in the loader's error message
+("PrusaSlicer-flavor 3MF detected — re-save through OrcaSlicer
+for full project metadata support").

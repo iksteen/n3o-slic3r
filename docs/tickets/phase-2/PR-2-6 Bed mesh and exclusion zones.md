@@ -5,12 +5,19 @@ Status: ❌ open.
 **Scope.** The build-plate visualization the renderer paints
 beneath the scene: bed grid, origin marker, A1 mini's exclusion
 zone (the AMS-feed area near origin where prints can't reach), and
-U1's toolhead parking bay markers. Drives both the visual
-representation and the "out of bounds" collision check that PR-2-5
-emits warnings against.
+(eventually) U1's toolhead parking bay markers. Drives both the
+visual representation and the "out of bounds" collision check that
+PR-2-5 emits warnings against.
 
 Data lives in `core/scene/`; rendering is the renderer's
 responsibility (PR-2-9) — this ticket ships the Rust side.
+
+**MVP scope is A1-mini-only.** U1 bed + parking-bay visualization
+is deferred to Phase 5 hardware validation (when we own a U1 and
+can verify the specs against the real machine). Implementer can
+research U1 specs online (build volume, toolhead parking
+coordinates, ship-standard plate set) closer to that work — no
+point baking in numbers without hardware in hand.
 
 **Acceptance criteria.**
 
