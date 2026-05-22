@@ -1,6 +1,6 @@
 # PR-1-8 — Reference profiles (A1 mini, U1, plates, filaments)
 
-Status: ❌ open.
+Status: ⚠️ partial. Minimum reference set shipped under `profiles/` (workspace root): `printers/bambu-a1-mini.toml`, `plates/textured-pei.toml`, `filaments/generic-pla.toml`, `cascades/bambu-a1-mini-default.toml`. All TOML, all serde-round-trippable. Integration test at `src-tauri/tests/reference_profiles.rs` loads + validates + resolves PLA on Textured PEI through the production resolver and asserts the expected effective values. U1 + additional plates + additional filaments deferred to follow-up tickets (per the Execution Plan cut candidate "Reference profiles beyond a minimum set").
 
 **Scope.** Author the cascade content (TOML files) and
 context-state files (JSON / TOML) for the two MVP printers + their
@@ -12,28 +12,30 @@ app; users override via the `!important` tiers from PR-1-4.
 
 **Acceptance criteria.**
 
-- `profiles/printers/bambu-a1-mini.json` — PrinterProfile JSON
-  with slot_count=4 (AMS Lite), single 0.4mm hotend, supported
-  plates [Cool, Textured PEI, Smooth PEI, Engineering,
-  SuperTack].
+All profile + cascade files are TOML — single format across the
+project (printers + plates + filaments + cascades + override files).
 
-- `profiles/printers/snapmaker-u1.json` — PrinterProfile JSON
-  with slot_count=4 (toolchanger), 4 per-toolhead configs each
-  with their own nozzle diameter / hotend / max temp,
-  ship-standard plate set.
+- `profiles/printers/bambu-a1-mini.toml` — PrinterProfile with
+  slot_count=4 (AMS Lite), single 0.4mm hotend, supported plates
+  [Cool, Textured PEI, Smooth PEI, Engineering, SuperTack].
 
-- `profiles/plates/*.json` — one per build plate type the two
+- `profiles/printers/snapmaker-u1.toml` — PrinterProfile with
+  slot_count=4 (toolchanger), 4 per-toolhead configs each with
+  their own nozzle diameter / hotend / max temp, ship-standard
+  plate set.
+
+- `profiles/plates/*.toml` — one per build plate type the two
   printers share or unique to each:
-  - `cool-plate.json`, `textured-pei.json`, `smooth-pei.json`,
-    `engineering-plate.json`, `supertack-plate.json` (Bambu);
+  - `cool-plate.toml`, `textured-pei.toml`, `smooth-pei.toml`,
+    `engineering-plate.toml`, `supertack-plate.toml` (Bambu);
   - whatever U1 ships with on Day 1 (TBD — confirm with the
     Snapmaker manual before ticket scheduling).
 
-- `profiles/filaments/*.json` — at minimum:
-  - `generic-pla.json` with bed-temp rules across all 5 Bambu
+- `profiles/filaments/*.toml` — at minimum:
+  - `generic-pla.toml` with bed-temp rules across all 5 Bambu
     plate types (PLA on Cool=35, on Textured PEI=65, on SuperTack
     rejected) and any U1 plate variants.
-  - `generic-petg.json` with the same plate coverage.
+  - `generic-petg.toml` with the same plate coverage.
 
 - `profiles/cascades/bambu-a1-mini-default.toml` and
   `profiles/cascades/snapmaker-u1-default.toml` — the default

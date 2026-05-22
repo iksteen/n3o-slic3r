@@ -92,10 +92,10 @@ mod tests {
     }
 
     #[test]
-    fn a1_mini_shape_round_trips_json() {
+    fn a1_mini_shape_round_trips_toml() {
         let p = bambu_a1_mini();
-        let json = serde_json::to_string(&p).expect("serialize");
-        let parsed: PrinterProfile = serde_json::from_str(&json).expect("deserialize");
+        let text = toml::to_string(&p).expect("serialize");
+        let parsed: PrinterProfile = toml::from_str(&text).expect("deserialize");
         assert_eq!(parsed.model, "Bambu A1 mini");
         assert_eq!(parsed.slot_count, 4);
         assert_eq!(parsed.toolheads.len(), 1);

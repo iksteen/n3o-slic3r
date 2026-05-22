@@ -33,15 +33,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn round_trip_json_with_optional_fields() {
+    fn round_trip_toml_with_optional_fields() {
         let f = FilamentProfile {
             identity: "Bambu PLA Basic Cyan".into(),
             base_type: "PLA".into(),
             vendor: Some("Bambu Lab".into()),
             color: Some("#0A2989".into()),
         };
-        let j = serde_json::to_string(&f).expect("serialize");
-        let parsed: FilamentProfile = serde_json::from_str(&j).expect("deserialize");
+        let text = toml::to_string(&f).expect("serialize");
+        let parsed: FilamentProfile = toml::from_str(&text).expect("deserialize");
         assert_eq!(parsed.identity, "Bambu PLA Basic Cyan");
         assert_eq!(parsed.base_type, "PLA");
         assert_eq!(parsed.vendor.as_deref(), Some("Bambu Lab"));
@@ -55,8 +55,8 @@ mod tests {
             vendor: None,
             color: None,
         };
-        let j = serde_json::to_string(&f).expect("serialize");
-        let parsed: FilamentProfile = serde_json::from_str(&j).expect("deserialize");
+        let text = toml::to_string(&f).expect("serialize");
+        let parsed: FilamentProfile = toml::from_str(&text).expect("deserialize");
         assert!(parsed.vendor.is_none());
         assert!(parsed.color.is_none());
     }

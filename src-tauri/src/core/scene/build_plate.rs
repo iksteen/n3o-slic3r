@@ -37,14 +37,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn round_trip_json() {
+    fn round_trip_toml() {
         let p = BuildPlate {
             identity: "Textured PEI".into(),
             libslic3r_curr_bed_type: "Textured PEI Plate".into(),
             surface_kind: SurfaceKind::PEI,
         };
-        let j = serde_json::to_string(&p).expect("serialize");
-        let parsed: BuildPlate = serde_json::from_str(&j).expect("deserialize");
+        let text = toml::to_string(&p).expect("serialize");
+        let parsed: BuildPlate = toml::from_str(&text).expect("deserialize");
         assert_eq!(parsed.identity, "Textured PEI");
         assert_eq!(parsed.libslic3r_curr_bed_type, "Textured PEI Plate");
         assert_eq!(parsed.surface_kind, SurfaceKind::PEI);

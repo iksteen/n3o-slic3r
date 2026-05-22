@@ -72,6 +72,23 @@ pub enum DimensionalKind {
     BedTempPerPlate,
 }
 
+/// Cascade-side logical keys — names the *resolver* understands that
+/// the *libslic3r option universe* doesn't. The cascade adapter
+/// (PR-1-6) expands each logical key into one or more libslic3r keys.
+///
+/// Currently just `bed_temp` → `BedTempPerPlate` family. Validators
+/// (PR-1-2) check against this list as a sibling to `schema_by_key`
+/// so cascades that author `set.bed_temp = "65"` pass validation
+/// while typos like `set.bd_temp` still fail.
+pub const LOGICAL_KEYS: &[&str] = &["bed_temp"];
+
+/// True iff `key` is either a libslic3r option (per
+/// [`schema_by_key`]) or a recognized cascade-side logical key (per
+/// [`LOGICAL_KEYS`]).
+pub fn is_known_cascade_key(key: &str) -> bool {
+    schema_by_key(key).is_some() || LOGICAL_KEYS.contains(&key)
+}
+
 /// The 12 libslic3r keys in the `BedTempPerPlate` family, as declared
 /// in `external/OrcaSlicer/src/libslic3r/PrintConfig.cpp` (all
 /// `coInts`). 6 plate types × {steady, initial_layer}. Kept in sync

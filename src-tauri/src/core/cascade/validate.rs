@@ -24,7 +24,7 @@
 
 use super::types::{Cascade, ConditionValue};
 use crate::core::cascade::loader::CascadeLoadError;
-use crate::core::schema::schema_by_key;
+use crate::core::schema::{is_known_cascade_key, schema_by_key};
 
 /// Predicate dimensions the cascade can use, scoped to a project's
 /// active context layout. Populated by PR-1-7 once context-state
@@ -112,7 +112,7 @@ pub fn validate_cascade(
         }
 
         for key in rule.set.keys() {
-            if schema_by_key(key).is_none() {
+            if !is_known_cascade_key(key) {
                 let suggestion = suggest_set_key(key);
                 let suggest_hint = suggestion
                     .map(|s| format!(" (did you mean `{s}`?)"))
