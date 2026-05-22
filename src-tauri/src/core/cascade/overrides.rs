@@ -82,7 +82,7 @@ pub struct ResolvedWithTrace {
     pub cascade_fallback: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct OverrideTraceEntry {
     pub tier: OverrideTier,
     pub source: SourceLocation,

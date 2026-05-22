@@ -23,6 +23,7 @@
 pub mod loader;
 pub mod overrides;
 pub mod resolver;
+pub mod trace;
 pub mod types;
 pub mod validate;
 
@@ -31,7 +32,10 @@ pub use overrides::{
     load_override_file, parse_override_str, resolve_with_overrides, FlatOverrides,
     OverrideTier, OverrideTiers, OverrideTraceEntry, ResolvedOverrides, ResolvedWithTrace,
 };
-pub use resolver::{resolve, Context, MapContext, MatchingRule, Resolved, ResolvedValue};
+pub use resolver::{
+    format_when, resolve, Context, MapContext, MatchingRule, Resolved, ResolvedValue,
+};
+pub use trace::{trace, Trace, TraceRule, TraceSource};
 pub use types::{Cascade, Condition, ConditionValue, Predicate, Rule, SourceLocation};
 pub use validate::{default_known_dimensions, validate_cascade, KnownDimensions};
 

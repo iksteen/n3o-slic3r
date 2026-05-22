@@ -10,8 +10,9 @@
 //! Trace tooling (PR-1-5) builds the structured "why is X = 55?"
 //! report from the matching-rules list this resolver retains.
 
-use super::types::{Cascade, ConditionValue, Rule, SourceLocation};
+use super::types::{Cascade, Condition, ConditionValue, Rule, SourceLocation};
 use std::collections::BTreeMap;
+use std::fmt::Write;
 
 /// What the resolver needs to know about the active slice context.
 ///
@@ -78,6 +79,33 @@ pub struct MatchingRule {
     pub source: SourceLocation,
     pub specificity: usize,
     pub value: String,
+    /// Human-readable summary of the rule's `when` predicate for trace
+    /// rendering. Empty string for the unconditional default rule;
+    /// otherwise `<dim> = "<value>"` segments joined by ` + `.
+    pub when_summary: String,
+}
+
+/// Render a rule's `when` predicate as a single human-readable string.
+/// E.g. `filament.type = "PLA" + plate.type = "PEI"` for a 2-predicate
+/// rule, or `""` (empty) for the unconditional default.
+pub fn format_when(conditions: &[Condition]) -> String {
+    let mut out = String::new();
+    for (i, cond) in conditions.iter().enumerate() {
+        if i > 0 {
+            out.push_str(" + ");
+        }
+        match &cond.value {
+            ConditionValue::Scalar(s) => {
+                let _ = write!(out, "{} = \"{}\"", cond.dimension, s);
+            }
+            ConditionValue::Array(items) => {
+                let quoted: Vec<String> =
+                    items.iter().map(|s| format!("\"{s}\"")).collect();
+                let _ = write!(out, "{} in [{}]", cond.dimension, quoted.join(", "));
+            }
+        }
+    }
+    out
 }
 
 /// Flat map from libslic3r option key (dotted form) to its resolved
@@ -107,11 +135,13 @@ pub fn resolve(cascade: &Cascade, ctx: &dyn Context) -> Resolved {
 
     let mut resolved: Resolved = BTreeMap::new();
     for (_, rule) in &matching {
+        let when_summary = format_when(&rule.when.conditions);
         for (key, value) in &rule.set {
             let new_entry = MatchingRule {
                 source: rule.source.clone(),
                 specificity: rule.specificity(),
                 value: value.clone(),
+                when_summary: when_summary.clone(),
             };
             match resolved.get_mut(key) {
                 Some(prior) => {

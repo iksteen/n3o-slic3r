@@ -1,6 +1,6 @@
 # PR-1-5 — Trace tooling
 
-Status: ❌ open.
+Status: ✅ done. `src-tauri/src/core/cascade/trace.rs` ships `Trace`, `TraceRule`, `TraceSource` types and a `trace(resolved, key)` lookup that converts the resolver's matching-rules list into a winner/losers structure with override metadata. `Display` impl renders rustc-style annotations for CLI debug + the future Tauri debug command. Resolver's `MatchingRule` extended with `when_summary` so trace rendering doesn't need to re-walk the `Cascade`. 6 unit tests cover 3-rule ladder, override + cascade_fallback, override-only key, missing key, default rule rendering, pretty-print smoke.
 
 **Scope.** "Why is `bed_temp` = 55?" — given a resolved key,
 return a structured trace covering winner, matching-but-losing
