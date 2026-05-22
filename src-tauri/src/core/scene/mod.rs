@@ -20,10 +20,13 @@
 //! renderer will extend it with mesh + adhesion + visuals.
 
 pub mod build_plate;
+pub mod commands;
+pub mod events;
 pub mod state;
 pub mod transform;
 
 pub use build_plate::{BuildPlate, SurfaceKind};
+pub use events::{SceneEvent, SceneOpError, SelectMode};
 pub use state::{
     ActivePlate, CameraState, ExclusionZone, GizmoMode, GizmoState, Mesh, MeshId,
     MeshProvenance, ObjectId, ProjectionMode, SceneObject, SceneState,

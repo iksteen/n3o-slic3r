@@ -20,6 +20,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(std::sync::Mutex::new(core::cascade::CascadeRegistry::new()))
+        .manage(std::sync::Mutex::new(core::scene::SceneState::new()))
         .setup(|_app| {
             // Resources dir is only needed for STEP / font embossing; STL
             // and 3MF load without it. Log level 3 = warning, matching
@@ -35,6 +36,18 @@ pub fn run() {
             core::cascade::commands::cascade_resolve,
             core::cascade::commands::cascade_trace,
             core::cascade::commands::cascade_context_dimensions,
+            core::scene::commands::scene_snapshot,
+            core::scene::commands::scene_select,
+            core::scene::commands::scene_deselect,
+            core::scene::commands::scene_load_mesh,
+            core::scene::commands::scene_object_translate,
+            core::scene::commands::scene_object_rotate,
+            core::scene::commands::scene_object_scale,
+            core::scene::commands::scene_object_set_transform,
+            core::scene::commands::scene_object_delete,
+            core::scene::commands::scene_object_duplicate,
+            core::scene::commands::scene_gizmo_set,
+            core::scene::commands::scene_camera_set,
             core::slice::slicer_slice,
         ])
         .run(tauri::generate_context!())

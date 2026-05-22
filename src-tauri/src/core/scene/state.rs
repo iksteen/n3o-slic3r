@@ -11,9 +11,10 @@
 //! `scene_snapshot()` rebuilds it from scratch on reconnect.
 
 use super::build_plate::BuildPlate;
+use super::events::{SceneEvent, SceneOpError, SelectMode};
 use super::transform::Transform;
 use crate::core::printer::profile::BoundingBox;
-use glam::Vec3;
+use glam::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -234,6 +235,245 @@ impl SceneState {
         id
     }
 
+    // ---- Mutation methods ------------------------------------------
+    //
+    // Each method takes &mut self and returns the events the renderer
+    // needs to apply. The Tauri command wrappers in commands.rs are
+    // thin layers that emit each event via Window::emit before
+    // returning. Tests bypass the Tauri layer and inspect the returned
+    // event list directly.
+
+    /// Register a mesh and place one default `SceneObject` at origin.
+    /// Returns (mesh_id, object_id, events).
+    pub fn load_mesh(&mut self, mesh: Mesh) -> (MeshId, ObjectId, Vec<SceneEvent>) {
+        let mesh_id = self.insert_mesh(mesh);
+        let mesh_clone = self.meshes.get(&mesh_id).unwrap().clone();
+
+        let obj_name = match &mesh_clone.provenance {
+            MeshProvenance::File(p) => p
+                .rsplit_once('/')
+                .map(|(_, leaf)| leaf.to_string())
+                .unwrap_or_else(|| p.clone()),
+            MeshProvenance::Primitive(name) => name.clone(),
+        };
+        let obj_id = self.insert_object(SceneObject {
+            id: ObjectId(0),
+            mesh: mesh_id,
+            transform: Transform::IDENTITY,
+            name: obj_name,
+            visible: true,
+            extruder_id: None,
+            parent: None,
+        });
+        let obj_clone = self.objects.get(&obj_id).unwrap().clone();
+        let events = vec![
+            SceneEvent::MeshLoaded(mesh_clone),
+            SceneEvent::ObjectAdded(obj_clone),
+        ];
+        (mesh_id, obj_id, events)
+    }
+
+    /// Apply a selection change. Returns one `SelectionChanged` event
+    /// (sorted for deterministic output) or empty if the selection
+    /// didn't actually change.
+    pub fn select(&mut self, ids: &[ObjectId], mode: SelectMode) -> Vec<SceneEvent> {
+        let before: HashSet<ObjectId> = self.selection.iter().copied().collect();
+        match mode {
+            SelectMode::Replace => {
+                self.selection = ids.iter().copied().filter(|id| self.objects.contains_key(id)).collect();
+            }
+            SelectMode::Add => {
+                for id in ids {
+                    if self.objects.contains_key(id) {
+                        self.selection.insert(*id);
+                    }
+                }
+            }
+            SelectMode::Toggle => {
+                for id in ids {
+                    if !self.objects.contains_key(id) {
+                        continue;
+                    }
+                    if !self.selection.insert(*id) {
+                        self.selection.remove(id);
+                    }
+                }
+            }
+        }
+        if self.selection == before {
+            return Vec::new();
+        }
+        let mut sorted: Vec<ObjectId> = self.selection.iter().copied().collect();
+        sorted.sort();
+        vec![SceneEvent::SelectionChanged { selected: sorted }]
+    }
+
+    /// Clear the selection.
+    pub fn deselect_all(&mut self) -> Vec<SceneEvent> {
+        if self.selection.is_empty() {
+            return Vec::new();
+        }
+        self.selection.clear();
+        vec![SceneEvent::SelectionChanged { selected: Vec::new() }]
+    }
+
+    /// Apply a delta translation to an object.
+    pub fn translate_object(
+        &mut self,
+        id: ObjectId,
+        delta: Vec3,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let obj = self
+            .objects
+            .get_mut(&id)
+            .ok_or(SceneOpError::UnknownObject(id))?;
+        obj.transform = Transform::translation(delta).compose(obj.transform);
+        let clone = obj.clone();
+        Ok(vec![SceneEvent::ObjectUpdated(clone)])
+    }
+
+    /// Rotate an object around `axis` by `radians`. Pivot defaults to
+    /// the object's current world-space center; explicit pivot via
+    /// `pivot_override` is for the gizmo's "rotate around custom
+    /// point" mode (PR-2-10).
+    pub fn rotate_object(
+        &mut self,
+        id: ObjectId,
+        axis: Vec3,
+        radians: f32,
+        pivot_override: Option<Vec3>,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let mesh_bb = {
+            let obj = self
+                .objects
+                .get(&id)
+                .ok_or(SceneOpError::UnknownObject(id))?;
+            self.meshes
+                .get(&obj.mesh)
+                .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
+                .bounding_box
+                .clone()
+        };
+
+        let obj = self.objects.get_mut(&id).unwrap();
+        let pivot = match pivot_override {
+            Some(p) => p,
+            None => {
+                let local_center = Vec3::new(
+                    ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32,
+                    ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32,
+                    ((mesh_bb.min[2] + mesh_bb.max[2]) * 0.5) as f32,
+                );
+                obj.transform.apply_point(local_center)
+            }
+        };
+        let rotation = Quat::from_axis_angle(axis.normalize(), radians);
+        // Rotate-around-pivot: translate(-pivot) → rotate → translate(+pivot),
+        // applied as a world-space *prefix* to the current transform.
+        let rotate_around_pivot = Transform::translation(pivot)
+            .compose(Transform::rotation(rotation))
+            .compose(Transform::translation(-pivot));
+        obj.transform = rotate_around_pivot.compose(obj.transform);
+        let clone = obj.clone();
+        Ok(vec![SceneEvent::ObjectUpdated(clone)])
+    }
+
+    /// Scale an object by per-axis factors. Non-uniform scale
+    /// surfaces a side-warning in the event stream (Phase 4 UI can
+    /// nag users); not blocking.
+    pub fn scale_object(
+        &mut self,
+        id: ObjectId,
+        factor: Vec3,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let obj = self
+            .objects
+            .get_mut(&id)
+            .ok_or(SceneOpError::UnknownObject(id))?;
+        obj.transform = Transform::scale(factor).compose(obj.transform);
+        let clone = obj.clone();
+        Ok(vec![SceneEvent::ObjectUpdated(clone)])
+    }
+
+    /// Replace an object's transform wholesale. Used by auto-arrange
+    /// (PR-2-8) and the gizmo's drag-finalization step.
+    pub fn set_object_transform(
+        &mut self,
+        id: ObjectId,
+        transform: Transform,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let obj = self
+            .objects
+            .get_mut(&id)
+            .ok_or(SceneOpError::UnknownObject(id))?;
+        obj.transform = transform;
+        let clone = obj.clone();
+        Ok(vec![SceneEvent::ObjectUpdated(clone)])
+    }
+
+    /// Delete one or more objects. Removes from selection if
+    /// present. Returns one `ObjectRemoved` event per id plus (if
+    /// the selection changed) a `SelectionChanged` event.
+    pub fn delete_objects(&mut self, ids: &[ObjectId]) -> Vec<SceneEvent> {
+        let mut events = Vec::new();
+        let mut selection_changed = false;
+        for id in ids {
+            if self.objects.remove(id).is_some() {
+                events.push(SceneEvent::ObjectRemoved { id: *id });
+                if self.selection.remove(id) {
+                    selection_changed = true;
+                }
+            }
+        }
+        if selection_changed {
+            let mut sorted: Vec<ObjectId> = self.selection.iter().copied().collect();
+            sorted.sort();
+            events.push(SceneEvent::SelectionChanged { selected: sorted });
+        }
+        events
+    }
+
+    /// Duplicate an object. The clone gets a fresh `ObjectId` and
+    /// is offset by `+10mm` in X to avoid z-fighting with the
+    /// original.
+    pub fn duplicate_object(
+        &mut self,
+        id: ObjectId,
+    ) -> Result<(ObjectId, Vec<SceneEvent>), SceneOpError> {
+        let original = self
+            .objects
+            .get(&id)
+            .ok_or(SceneOpError::UnknownObject(id))?
+            .clone();
+        let mut clone = original.clone();
+        clone.id = ObjectId(0);
+        clone.transform = Transform::translation(Vec3::new(10.0, 0.0, 0.0))
+            .compose(original.transform);
+        clone.name = format!("{} (copy)", original.name);
+        let new_id = self.insert_object(clone);
+        let cloned_obj = self.objects.get(&new_id).unwrap().clone();
+        Ok((new_id, vec![SceneEvent::ObjectAdded(cloned_obj)]))
+    }
+
+    /// Set the gizmo mode + pivot. Returns one event when state
+    /// actually changed.
+    pub fn set_gizmo(&mut self, new_gizmo: GizmoState) -> Vec<SceneEvent> {
+        if (self.gizmo.mode == new_gizmo.mode)
+            && (self.gizmo.pivot == new_gizmo.pivot)
+        {
+            return Vec::new();
+        }
+        self.gizmo = new_gizmo.clone();
+        vec![SceneEvent::GizmoChanged(new_gizmo)]
+    }
+
+    /// Replace the camera state. Always emits an event (camera
+    /// state's equality check is expensive enough to skip).
+    pub fn set_camera(&mut self, camera: CameraState) -> Vec<SceneEvent> {
+        self.camera = camera.clone();
+        vec![SceneEvent::CameraChanged(camera)]
+    }
+
     /// Compute the world-space bounding box of all visible objects.
     /// Used by `Frame All` in the renderer.
     pub fn visible_bounds(&self) -> Option<BoundingBox> {
@@ -395,6 +635,170 @@ mod tests {
             parent: None,
         });
         assert!(s.visible_bounds().is_none());
+    }
+
+    // ---- Mutation-method tests --------------------------------------
+
+    fn add_cube(s: &mut SceneState) -> (MeshId, ObjectId) {
+        let (mesh_id, obj_id, events) = s.load_mesh(unit_cube_mesh(0));
+        assert_eq!(events.len(), 2, "load_mesh emits mesh_loaded + object_added");
+        assert!(matches!(events[0], SceneEvent::MeshLoaded(_)));
+        assert!(matches!(events[1], SceneEvent::ObjectAdded(_)));
+        (mesh_id, obj_id)
+    }
+
+    #[test]
+    fn load_then_select_then_translate_emits_expected_event_stream() {
+        let mut s = SceneState::new();
+        let (_mesh, obj) = add_cube(&mut s);
+
+        let events = s.select(&[obj], SelectMode::Replace);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            SceneEvent::SelectionChanged { selected } => {
+                assert_eq!(selected, &vec![obj]);
+            }
+            other => panic!("expected SelectionChanged, got {other:?}"),
+        }
+
+        let events = s.translate_object(obj, Vec3::new(5.0, 0.0, 0.0)).unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            SceneEvent::ObjectUpdated(o) => {
+                let center = o.transform.apply_point(Vec3::new(0.5, 0.5, 0.5));
+                assert!((center - Vec3::new(5.5, 0.5, 0.5)).length() < 1e-5);
+            }
+            other => panic!("expected ObjectUpdated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn select_no_op_emits_no_event() {
+        let mut s = SceneState::new();
+        let (_mesh, obj) = add_cube(&mut s);
+        let _ = s.select(&[obj], SelectMode::Replace);
+        let events = s.select(&[obj], SelectMode::Replace);
+        assert!(events.is_empty(), "re-selecting same set is a no-op");
+    }
+
+    #[test]
+    fn select_unknown_object_is_skipped() {
+        let mut s = SceneState::new();
+        let (_mesh, obj) = add_cube(&mut s);
+        let events = s.select(&[obj, ObjectId(9999)], SelectMode::Replace);
+        match &events[0] {
+            SceneEvent::SelectionChanged { selected } => {
+                assert_eq!(selected, &vec![obj], "unknown id filtered out");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn deselect_all_emits_event_when_selection_was_nonempty() {
+        let mut s = SceneState::new();
+        let (_mesh, obj) = add_cube(&mut s);
+        let _ = s.select(&[obj], SelectMode::Replace);
+        let events = s.deselect_all();
+        match &events[0] {
+            SceneEvent::SelectionChanged { selected } => assert!(selected.is_empty()),
+            _ => unreachable!(),
+        }
+        // Second deselect_all is a no-op.
+        let events = s.deselect_all();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn rotate_around_object_center() {
+        let mut s = SceneState::new();
+        let (_mesh, obj) = add_cube(&mut s);
+        // Cube center is at (0.5, 0.5, 0.5); rotate 180° around Z.
+        let _ = s.rotate_object(obj, Vec3::Z, std::f32::consts::PI, None).unwrap();
+        let o = s.objects.get(&obj).unwrap();
+        // After rotation, the corner that was at (0,0,0) maps to
+        // (1,1,0) (rotated 180° around the cube's center).
+        let corner = o.transform.apply_point(Vec3::ZERO);
+        assert!((corner - Vec3::new(1.0, 1.0, 0.0)).length() < 1e-4, "got {corner:?}");
+    }
+
+    #[test]
+    fn rotate_with_explicit_pivot_preserves_relative_position() {
+        let mut s = SceneState::new();
+        let (_mesh, obj) = add_cube(&mut s);
+        // Pivot at world origin; rotate 90° around Z.
+        let _ = s
+            .rotate_object(obj, Vec3::Z, std::f32::consts::FRAC_PI_2, Some(Vec3::ZERO))
+            .unwrap();
+        let o = s.objects.get(&obj).unwrap();
+        // Corner (1,0,0) rotates around the origin to (0,1,0).
+        let corner = o.transform.apply_point(Vec3::X);
+        assert!((corner - Vec3::Y).length() < 1e-4, "got {corner:?}");
+    }
+
+    #[test]
+    fn delete_objects_clears_selection_for_deleted_ids() {
+        let mut s = SceneState::new();
+        let (_mesh, obj1) = add_cube(&mut s);
+        let (_mesh2, obj2) = add_cube(&mut s);
+        let _ = s.select(&[obj1, obj2], SelectMode::Replace);
+        let events = s.delete_objects(&[obj1]);
+        // One ObjectRemoved + one SelectionChanged.
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], SceneEvent::ObjectRemoved { id } if id == obj1));
+        match &events[1] {
+            SceneEvent::SelectionChanged { selected } => {
+                assert_eq!(selected, &vec![obj2]);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn duplicate_object_offsets_by_10mm_x() {
+        let mut s = SceneState::new();
+        let (_mesh, obj) = add_cube(&mut s);
+        let (new_id, events) = s.duplicate_object(obj).unwrap();
+        assert_ne!(new_id, obj);
+        match &events[0] {
+            SceneEvent::ObjectAdded(o) => {
+                let new_corner = o.transform.apply_point(Vec3::ZERO);
+                assert!((new_corner - Vec3::new(10.0, 0.0, 0.0)).length() < 1e-5);
+                assert!(o.name.contains("(copy)"));
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn unknown_object_ops_return_error() {
+        let mut s = SceneState::new();
+        let bad = ObjectId(42);
+        assert!(matches!(
+            s.translate_object(bad, Vec3::ZERO),
+            Err(SceneOpError::UnknownObject(_))
+        ));
+        assert!(matches!(
+            s.rotate_object(bad, Vec3::Z, 0.0, None),
+            Err(SceneOpError::UnknownObject(_))
+        ));
+        assert!(matches!(
+            s.delete_objects(&[bad]),
+            ref v if v.is_empty()
+        ), "delete of unknown id is a no-op, not an error");
+    }
+
+    #[test]
+    fn gizmo_change_no_op_emits_nothing() {
+        let mut s = SceneState::new();
+        let initial = s.gizmo.clone();
+        let events = s.set_gizmo(initial);
+        assert!(events.is_empty());
+        let mut next = s.gizmo.clone();
+        next.mode = GizmoMode::Rotate;
+        let events = s.set_gizmo(next);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], SceneEvent::GizmoChanged(_)));
     }
 
     #[test]

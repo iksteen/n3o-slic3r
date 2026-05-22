@@ -1,6 +1,6 @@
 # PR-2-2 — Scene Tauri command + event surface
 
-Status: ❌ open.
+Status: ✅ done. `src-tauri/src/core/scene/{events,commands}.rs` ship the full surface: 8 SceneEvent variants (MeshLoaded / ObjectAdded / ObjectUpdated / ObjectRemoved / SelectionChanged / GizmoChanged / CameraChanged / BedChanged), 13 Tauri commands wired in `lib.rs`. Mutation methods on `SceneState` are *pure* — they return `Vec<SceneEvent>`; the Tauri layer emits each via `Window::emit` before returning. Tests bypass the Tauri runtime by exercising the pure methods directly: 10 mutation-method tests cover load→select→translate, no-op short-circuits, unknown-id handling, rotate around object center / explicit pivot, delete-clears-selection, duplicate offset, gizmo no-op, full state JSON round-trip.
 
 **Scope.** The mutation interface the frontend uses to drive the
 scene + the event interface the renderer subscribes to. Every state

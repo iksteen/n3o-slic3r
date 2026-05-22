@@ -24,7 +24,7 @@ index plus phase-level status and notes.
 | Deliverable | Status | Ticket |
 |-------------|--------|--------|
 | Scene state types (Rust authoritative) | ✅ done | [PR-2-1](phase-2/PR-2-1%20Scene%20state%20types.md) |
-| Scene Tauri command + event surface | ❌ open | [PR-2-2](phase-2/PR-2-2%20Scene%20command%20event%20surface.md) |
+| Scene Tauri command + event surface | ✅ done | [PR-2-2](phase-2/PR-2-2%20Scene%20command%20event%20surface.md) |
 | STL + OBJ loaders | ❌ open | [PR-2-3](phase-2/PR-2-3%20STL%20and%20OBJ%20loaders.md) |
 | `.3mf` project loader | ❌ open | [PR-2-4](phase-2/PR-2-4%203mf%20project%20loader.md) |
 | Object transform operations | ❌ open | [PR-2-5](phase-2/PR-2-5%20Object%20transform%20operations.md) |
