@@ -133,7 +133,7 @@ between loading and apply (`OrcaSlicer.cpp:5953-5964`):
   resolve it (no positive extruder found in any layer), and downstream
   consumers dereference what becomes the `(unsigned)-1` sentinel.
 
-**Fix.** `slic3r_ffi.cpp:445-490` — apply the normalization on a
+**Fix.** `slic3r_ffi.cpp:445-475` — apply the normalization on a
 temporary copy of the caller's config before `Print::apply`:
 
 ```cpp
@@ -148,17 +148,25 @@ if (extruder_count == 1) for (size_t i = 0; i < filament_count; ++i) filament_ma
 if (!cfg.has("nozzle_volume_type"))
     cfg.option<ConfigOptionEnumsGeneric>("nozzle_volume_type", true)
         ->values.resize(extruder_count, nvtStandard);
-
-for (const char* key : {"wall_filament", "sparse_infill_filament",
-                        "solid_infill_filament", "support_filament",
-                        "support_interface_filament"}) {
-    if (auto* opt = cfg.option<ConfigOptionInt>(key); opt && opt->value == 0)
-        opt->value = 1;
-}
 ```
 
 The temporary-copy approach means the caller's config remains
 untouched.
+
+**Update during PR-0.5-3.** An additional zero-coerce block for
+the `wall_filament` / `sparse_infill_filament` / `solid_infill_filament`
+/ `support_filament` / `support_interface_filament` selectors was
+originally part of this workaround. Investigation in PR-0.5-3
+confirmed the coerce is **redundant** once the `filament_map`
+normalization above is in place — removing it keeps all 16 api
+tests green and leaves the slice path unchanged (`Config::get`
+reports the source's 0 end-to-end through `Print::full_print_config`
+and `PrintObject::config`). The coerce block was kept removed
+since it was vestigial and was being mistaken for the cause of
+PR-0.5-3's tool-change-count disparity (it isn't — see
+`docs/spikes/spike-3-bambu-ams.md`). If a future regression
+surfaces a per-region filament-selector zero-related crash, the
+coerce can be reintroduced.
 
 ---
 

@@ -238,12 +238,90 @@ n3o-slic3r without tool-change minimization would deliver 3× longer
 prints and ~2.5× more material consumption for multi-color jobs.
 This must be addressed before Phase 5 hardware validation; treat
 as a hard prerequisite for the Bambu driver going to a real
-printer. Filed as a Phase 0.5 spike-followup question: "How does
-Bambu Studio reduce 76 tool changes to 7 on the same input?"
-Concrete next step: diff the two `.gcode.3mf`s'
-`project_settings.config` byte-by-byte to spot the missing knob,
-or instrument libslic3r's `Print::apply` to see which extruder
-assignment it derives per part.
+printer.
+
+### Investigation so far (still open)
+
+Refined comparison after also slicing the same input through
+OrcaSlicer-app (v2.4.0-dev): **OrcaSlicer's libslic3r emits 7 tool
+changes too**, matching BBS exactly (1h 3m print, 14 g filament).
+That isolates the disparity to *how our FFI invokes libslic3r* —
+the engine itself can do the right thing on this input.
+
+Per-feature inspection of our 76-change run shows the redundant
+transitions are all `Tband → T0` *for support material* (and back
+to `Tband` after). Bodies print fine with the per-part extruder;
+supports are the problem. So we suspected the FFI shim's
+zero-coerce of `wall_filament` / `sparse_infill_filament` /
+`solid_infill_filament` / `support_filament` /
+`support_interface_filament` (added during PR-0.5-1's libslic3r
+workarounds for the `filament_map` undersize crash) was forcing
+supports onto filament 1. The user's hypothesis was that the
+coerce became redundant once the filament_map normalization is in
+place.
+
+Tested by deleting the coerce block from
+`crates/slic3r-ffi/ffi/slic3r_ffi.cpp:477-489`. Re-ran spike3:
+
+- `Config::get` reports the 3MF's intended `support_filament=0`
+  before slicing — the shim isn't upgrading.
+- Explicit `Config::set("support_filament", "0")` right before
+  slicing also stays at "0".
+- Instrumented post-`Print::apply`:
+  - `Print::full_print_config().support_filament` = **0** ✓
+  - `Print::full_print_config().support_interface_filament` = **0** ✓
+  - 1 `PrintObject`, `config().support_filament` = **0** ✓
+  - 5 `PrintRegion`s — four with `wall/sparse/solid_infill_filament`
+    set to 1, 2, 3, 4 (one per Z-band-extruder), **one with all
+    three set to 0**. Region 0 is the suspect — it's the
+    "untyped" region.
+- But the *gcode body* still uses T0 for every support segment in
+  bands 2/3/4 (76 mid-print changes; OrcaSlicer-app on the same
+  input would use the part's body extruder).
+- The gcode header's CONFIG_BLOCK dump shows `support_filament = 1`
+  even though `Print::full_print_config()` returns 0 — likely a
+  serialization quirk of the dump path (it reads from somewhere
+  other than `m_config`, possibly per-region or per-object), not
+  the actual control value.
+
+So the in-memory config is *correct end-to-end* but the slice still
+mis-assigns supports. The bug is downstream of `Print::apply` —
+likely in `GCode.cpp:4794-4820`, the "support don't care"
+resolution:
+
+```cpp
+unsigned int dontcare_extruder = first_extruder_id;  // = layer_tools.extruders.front()
+... // soluble / interface filtering
+if (support_dontcare)
+    support_extruder = dontcare_extruder;
+```
+
+`first_extruder_id` is the *layer's first extruder*, which inherits
+from the previous layer's last extruder. For our 8-Z-band model
+with `print_sequence = "by layer"` and `enable_prime_tower = 0`,
+this picks up T0 (carried from band 1's last layer) instead of
+the current band's body extruder. OrcaSlicer's flow must populate
+something earlier — `wiping_extrusions.get_support_extruder_overrides`
+maybe, or per-volume `support_filament` overrides — that the FFI
+doesn't replicate.
+
+Coerce was removed in this investigation but reverted (kept the
+PR-0.5-1 workaround intact) since removing it alone doesn't fix
+the bug. Phase 5's investigation needs to find the additional
+pre-`apply` setup OrcaSlicer's GUI/CLI does that the FFI is
+missing. Concrete next steps when picked up:
+
+1. Diff `WipingExtrusions` state between OrcaSlicer CLI and our
+   FFI right before `GCode::process_layer` runs.
+2. Check whether OrcaSlicer CLI calls a `set_support_extruder_overrides`
+   or similar method post-apply that we'd need to mirror.
+3. If neither, instrument `GCode.cpp:4794` to log
+   `first_extruder_id` and `layer_tools.extruders` per layer in
+   both runs and compare.
+
+This is real engine plumbing, not a config knob, so the fix likely
+lives in a PR-0.5-1-style libslic3r workaround documented in
+`docs/libslic3r-workarounds.md`.
 
 Other than the tool-change disparity, the gcode bodies are
 structurally similar — same `; CHANGE_LAYER` / `WIPE_START` /

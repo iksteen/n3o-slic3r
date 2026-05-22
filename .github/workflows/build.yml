@@ -130,6 +130,12 @@ jobs:
         run: npm ci
 
       - name: cargo test (workspace, release)
+        # CARGO_BUILD_JOBS=2 keeps rustc + linker memory under the
+        # ubuntu-latest runner's ~7 G RAM ceiling. The previous run
+        # (26306143107) got SIGTERM'd mid-Tauri dep compile at default
+        # parallelism = 4 jobs.
+        env:
+          CARGO_BUILD_JOBS: 2
         run: cargo test --workspace --release
 
       - name: TypeScript typecheck

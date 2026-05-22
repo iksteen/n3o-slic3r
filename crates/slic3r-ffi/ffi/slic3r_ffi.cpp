@@ -474,20 +474,6 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
             cfg.option<ConfigOptionEnumsGeneric>("nozzle_volume_type", true)
                 ->values.resize(extruder_count, nvtStandard);
 
-        // Per-region filament selectors carry "0 = use default" in 3MF
-        // configs, but the headless slicing entry calls ToolOrdering with
-        // first_extruder == -1, and handle_dontcare_extruder(-1) only
-        // promotes zeros if it can find any non-zero extruder in the layer
-        // tools — which it can't, because they're all zero. The sentinel
-        // leaks through and crashes tool ordering downstream. Coerce
-        // each zero to 1 so PrintRegion picks up a real filament index.
-        for (const char* key : {"wall_filament", "sparse_infill_filament",
-                                "solid_infill_filament", "support_filament",
-                                "support_interface_filament"}) {
-            if (auto* opt = cfg.option<ConfigOptionInt>(key); opt && opt->value == 0)
-                opt->value = 1;
-        }
-
         Print print;
         print.apply(model->model, cfg);
 
