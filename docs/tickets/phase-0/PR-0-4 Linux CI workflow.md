@@ -45,9 +45,27 @@ to accept pushes (already true; remote at
 non-goal for MVP). Release-artifact upload (flatpak build) — Phase 9.
 GUI smoke tests with xvfb — also post-MVP.
 
-**Known follow-ups.** OrcaSlicer's `build_linux.sh -d` enforces a
-≥10G RAM precheck; GitHub-hosted runners advertise ~7G. Worked
-around in `scripts/build.sh` by passing `-r` to skip the precheck
-(commit `5b4128f`). If the deps build OOMs at link time, follow up
-by lowering ninja parallelism (`NINJA_STATUS=…`, `-j2`) or by
-splitting deps into stages.
+**Known follow-ups.**
+
+- OrcaSlicer's `build_linux.sh -d` enforces a ≥10G RAM precheck;
+  GitHub-hosted runners advertise ~7G. Worked around in
+  `scripts/build.sh` by passing `-r` to skip the precheck (commit
+  `5b4128f`). If the deps build OOMs at link time, follow up by
+  lowering ninja parallelism (`NINJA_STATUS=…`, `-j2`) or by
+  splitting deps into stages.
+
+- libslic3r cmake build tree is cached at `build/slic3r-ffi/`
+  (commit `bb31fac`). Footprint on disk is ~5G raw, expected
+  ~1.5–2G compressed in GH Actions cache. GH Actions enforces a
+  10G total cache budget per repo with LRU eviction. With three
+  caches today (deps tree ~700M raw, libslic3r build ~5G raw,
+  cargo `target/` ~1G raw), we're comfortably under the limit on
+  a single branch but could churn once feature branches start
+  populating their own keys. If eviction starts hitting the
+  libslic3r cache regularly, the lever is excluding intermediate
+  object files — `build/slic3r-ffi/external_OrcaSlicer/src/**/*.o`
+  is the bulk of the size. Dropping those keeps incremental
+  rebuilds possible only for the FFI shim itself (which is what
+  ninja recompiles on shim-source edits anyway); libslic3r itself
+  would rebuild cold on a miss, costing the ~15 min back. Worth
+  it only if the cache hit rate drops materially.
