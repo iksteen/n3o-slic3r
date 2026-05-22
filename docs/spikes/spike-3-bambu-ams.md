@@ -50,9 +50,15 @@ tool-change semantics and the per-filament metadata Bambu Studio's
 
 ## Result
 
-**PASS.** Slice produced `/tmp/spike3.gcode` — 5 015 526 bytes / 278
-layers / model printing time 2h 55m 21s. All four AMS slots get
-used (with the source model's color regions exercising all of them).
+**PARTIAL PASS.** Slice produced `/tmp/spike3.gcode` — 5 015 526
+bytes / 278 layers / model printing time 2h 55m 21s. All four AMS
+slots get used. *Per the BBS reference comparison below,
+libslic3r-FFI emits ~10× more tool changes than Bambu Studio for
+the same input — a Phase 5 prerequisite, not an FFI gap*. Engine
+plumbing, AMS bindings, tool-change G-code emission, and metadata
+shape are all validated; the gap is around BBS's tool-change
+minimization, which appears to happen above libslic3r in BBS's own
+code.
 
 ### Tool-change distribution — PASS
 
@@ -181,19 +187,75 @@ Spike 3's job is to characterize the inputs, not to test the
 printer's tolerance — that's the Phase 5 hardware-validation
 phase.
 
-### Bambu Studio reference comparison — not done in this spike
+### Bambu Studio reference comparison — done
 
-PR-0.5-3's original scope included slicing the same input with
-Bambu Studio and diffing the resulting `.gcode.3mf`. Skipped here
-because the dev machine doesn't have Bambu Studio installed (would
-require a GUI session and a Bambu account login). The reference
-artifact at `examples/spike3/bambu-studio-reference.gcode.3mf`
-is **not** produced; this is a follow-up that should land before
-Phase 5 starts. The blocking-vs-cosmetic table above is informed
-by the source 3MF's inventory (which IS a Bambu Studio output, so
-serves as the reference for structure) plus Bambu Studio's
-published `.gcode.3mf` spec — but per-field byte-exact verification
-needs the real reference.
+Bambu Studio is installed locally as the
+`com.bambulab.BambuStudio` flatpak (v02.06.00.51). It exposes
+headless slicing via:
+
+```
+flatpak run com.bambulab.BambuStudio --slice 0 \
+    --export-3mf output.gcode.3mf \
+    --outputdir ~/spike3-bbs ~/spike3-bbs/fourcolor.3mf
+```
+
+(Flatpak's sandbox has filesystem=home so `/tmp` paths don't work
+— stage under `~`.) Output `.gcode.3mf` is 2.6 MB. Its
+`Metadata/` inventory matches the "blocking" + "probably blocking"
++ "cosmetic" rows of the wrapping-gap table above exactly — no
+surprise files.
+
+**Tool-change count is wildly different.** BBS produces 7
+mid-print tool changes (`T0×1 + T1×2 + T2×2 + T3×2`, total 7) and
+a 1h 3m 22s print time. Our libslic3r-FFI slice of the *same input*
+produces 76 mid-print tool changes (`T0×36 + T1×19 + T2×19 + T3×2`)
+and a 2h 55m 21s print time — almost 3× longer. Per-filament
+material use also differs (BBS: 3.20 + 4.21 + 3.82 + 2.77 g; ours:
+8.39 + 9.84 + 8.73 + 2.77 g — ~2.5× more material, mostly purge).
+
+The model has 8 vertically-stacked parts, each assigned to one of
+extruders 1–4 in rotation (see `Metadata/model_settings.config`
+in the source). BBS correctly detects that each Z-band has a
+single extruder assignment and emits one tool change per band
+boundary; libslic3r-FFI does much more work, oscillating
+`T1↔T0↔T1↔T0` within each band. Cause not isolated in this spike
+— possibilities include:
+
+1. BBS runs a pre-slice optimization pass above libslic3r that
+   merges contiguous same-extruder parts into single print
+   sessions; the engine library doesn't do this on its own.
+2. A config knob we're missing — both runs report
+   `print_sequence = "by layer"`, `enable_prime_tower = 0`,
+   `filament_map_mode = "Auto For Flush"` post-slice, but BBS may
+   set other flags we haven't enumerated.
+3. The 3MF's `assemble` section (the
+   `Metadata/model_settings.config`'s `<assemble>` block) might
+   carry print-order hints that BBS reads but libslic3r ignores at
+   the FFI surface.
+
+Whatever the cause, the impact for Phase 5 is direct: shipping
+n3o-slic3r without tool-change minimization would deliver 3× longer
+prints and ~2.5× more material consumption for multi-color jobs.
+This must be addressed before Phase 5 hardware validation; treat
+as a hard prerequisite for the Bambu driver going to a real
+printer. Filed as a Phase 0.5 spike-followup question: "How does
+Bambu Studio reduce 76 tool changes to 7 on the same input?"
+Concrete next step: diff the two `.gcode.3mf`s'
+`project_settings.config` byte-by-byte to spot the missing knob,
+or instrument libslic3r's `Print::apply` to see which extruder
+assignment it derives per part.
+
+Other than the tool-change disparity, the gcode bodies are
+structurally similar — same `; CHANGE_LAYER` / `WIPE_START` /
+`WIPE_END` / `FLUSH_START` / `FLUSH_END` markers, same
+`change_filament_gcode` template expansion, same filament-aggregate
+comment block.
+
+The BBS reference artifacts (`~/spike3-bbs/output.gcode.3mf` and
+`~/spike3-bbs/result.json`) are not checked in because of the
+licensing chain (the input 3MF is CC BY-NC and the wrapped output
+inherits that constraint). Regenerate locally with the command
+above.
 
 ## FFI surface gaps discovered
 
@@ -227,11 +289,22 @@ PR-0.5-2's mixed-nozzle override.
   existing `when.<dim> = <value>` predicate vocabulary — no new
   semantic.
 
-- **Phase 5 (Multi-printer + drivers).** This finding is the
-  largest input to the Bambu driver's `.gcode.3mf` wrapper. The
-  Blocking/Probably-Blocking/Cosmetic table is the shopping list.
-  The wrapper lives above the FFI: parse gcode header → aggregate
-  into typed models → emit JSON + zip. ~1 person-week.
+- **Phase 5 (Multi-printer + drivers).** Two distinct workstreams:
+  - **`.gcode.3mf` wrapper** (~1 person-week). The
+    Blocking/Probably-Blocking/Cosmetic table is the shopping list.
+    The wrapper lives above the FFI: parse gcode header → aggregate
+    into typed models → emit JSON + zip. The BBS reference at
+    `~/spike3-bbs/output.gcode.3mf` documents exact field shapes.
+  - **Tool-change minimization** (effort unbounded, must precede
+    hardware validation). libslic3r-FFI as it stands emits 10× more
+    tool changes than BBS for the same multi-color input,
+    triplicating print time and over-consuming filament. Whatever
+    BBS does to reduce 76 tool changes to 7 has to be replicated
+    above the engine — either as a model-rewrite pass that merges
+    contiguous same-extruder parts, a config-flag we haven't
+    enumerated, or an FFI extension surfacing libslic3r's
+    print-sequence internals. Investigate before committing to a
+    Phase 5 schedule.
 
 - **Phase 6 (G-code preview).** The labelled blocks
   (`HEADER_BLOCK`/`CONFIG_BLOCK`/`EXECUTABLE_BLOCK`) and the
@@ -260,5 +333,9 @@ No spike-failure plan-revision needed.
 - `/tmp/spike3.gcode` — 5 015 526 bytes, 278 layers, 76 real
   tool-changes. Not checked in.
 - libslic3r submodule pin: `956fcea7e2`.
-- Bambu Studio reference `.gcode.3mf`: **not produced** in this
-  spike (see "Bambu Studio reference comparison" above).
+- Bambu Studio reference: regenerate locally via
+  `flatpak run com.bambulab.BambuStudio --slice 0 --export-3mf
+  output.gcode.3mf --outputdir ~/spike3-bbs ~/spike3-bbs/fourcolor.3mf`
+  (BBS v02.06.00.51). The wrapped `.gcode.3mf` is not checked in
+  because the input is CC BY-NC and the output inherits that
+  constraint.

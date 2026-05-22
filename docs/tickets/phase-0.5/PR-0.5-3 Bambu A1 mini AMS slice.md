@@ -1,6 +1,6 @@
 # PR-0.5-3 — Bambu A1 mini AMS slice
 
-Status: ⚠️ mostly done. Finding doc: `docs/spikes/spike-3-bambu-ams.md`. AMS slice + tool-change emission + filament-aggregate metadata confirmed; Bambu Studio reference comparison deferred (dev machine lacks BBS install).
+Status: ⚠️ done with Phase 5 prerequisite. Finding doc: `docs/spikes/spike-3-bambu-ams.md`. AMS slice + tool-change emission + filament-aggregate metadata + `.gcode.3mf` shape all confirmed. BBS comparison (via flatpak) surfaces a major issue: libslic3r-FFI emits 76 tool changes / 2h 55m print time vs BBS's 7 tool changes / 1h 3m on the *same input*. Must be solved before Phase 5 hardware validation.
 
 **Scope.** Slice a 4-color test model with the A1 mini profile + AMS
 multi-color, and characterize the gaps between libslic3r's output
