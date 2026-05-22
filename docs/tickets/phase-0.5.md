@@ -25,7 +25,7 @@ the index plus phase-level status and notes.
 | Mixed-nozzle-size slice (Prusa XL) | ✅ done | [PR-0.5-2](phase-0.5/PR-0.5-2%20Mixed-nozzle-size%20slice.md) (finding: `docs/spikes/spike-2-mixed-nozzle.md`; toolchange criterion confirmed by PR-0.5-3) |
 | Bambu A1 mini AMS slice | ⚠️ done with Phase-5 prerequisite | [PR-0.5-3](phase-0.5/PR-0.5-3%20Bambu%20A1%20mini%20AMS%20slice.md) (finding: `docs/spikes/spike-3-bambu-ams.md`; BBS comparison surfaces ~10× more tool-changes than BBS — Phase 5 must solve before hardware validation) |
 | coEnums known limitation impact | ✅ done | — (surfaced via `1bb3503`; documented in `docs/libslic3r-workarounds.md` §5) |
-| platecycler portability | ❌ open | [PR-0.5-5](phase-0.5/PR-0.5-5%20platecycler%20portability.md) |
+| platecycler portability | ✅ done | [PR-0.5-5](phase-0.5/PR-0.5-5%20platecycler%20portability.md) (finding: `docs/spikes/spike-5-platecycler.md`) |
 
 Findings docs land at `docs/spikes/spike-<n>-<slug>.md`. The Spike 4
 finding is inline in `docs/libslic3r-workarounds.md`; the others

@@ -1,6 +1,6 @@
 # PR-0.5-5 — platecycler portability
 
-Status: ❌ open.
+Status: ✅ done. Finding doc: `docs/spikes/spike-5-platecycler.md`. Platecycler operates on libslic3r-emitted gcode bodies; the transform pipeline is dialect-agnostic at the gcode level. Phase 5's .gcode.3mf wrapper just needs to emit BBS-shaped metadata.
 
 **Scope.** Confirm that the existing platecycler Python tool — the
 G-code-transform pipeline that drives the compose-hook plugin in
