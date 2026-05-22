@@ -33,6 +33,12 @@ set(BUILD_TESTS            OFF CACHE BOOL "" FORCE)
 set(ORCA_TOOLS             OFF CACHE BOOL "" FORCE)
 set(ORCA_BUILD_FFI         OFF CACHE BOOL "" FORCE)
 
+# Note: OrcaSlicer's CMakeLists.txt:947 hardcodes
+# `set(CPACK_RESOURCE_FILE_LICENSE ${CMAKE_SOURCE_DIR}/LICENSE.txt)`
+# inside the add_subdirectory scope, which overrides any parent-scope
+# value. We work around this with a symlink LICENSE.txt → ../../LICENSE.txt
+# at this directory so CPack finds the file without duplication.
+
 # Pull in OrcaSlicer's tree. EXCLUDE_FROM_ALL means only what slic3r_ffi
 # transitively requires gets built — libslic3r, not the OrcaSlicer binary.
 add_subdirectory("${ORCA_DIR}" "${CMAKE_BINARY_DIR}/external_OrcaSlicer" EXCLUDE_FROM_ALL)

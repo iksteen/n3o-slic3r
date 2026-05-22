@@ -22,7 +22,3 @@ path = "examples/introspect.rs"
 [[example]]
 name = "slice"
 path = "examples/slice.rs"
-
-[[example]]
-name = "probe"
-path = "examples/probe.rs"
