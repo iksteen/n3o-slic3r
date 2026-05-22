@@ -12,10 +12,13 @@ them.
 
 **Acceptance criteria.**
 
-- Test model: a 4-color 3MF (e.g., a calibration cube with 4 color
-  regions, or one of OrcaSlicer's AMS calibration fixtures —
-  document the choice and provenance). Lives at
-  `examples/spike3/fourcolor.3mf`.
+- Test model: a 4-color 3MF painted and exported from OrcaSlicer
+  itself (open a base mesh in OrcaSlicer, use its color-paint
+  tooling to assign 4 filaments to distinct regions, save as
+  `.3mf`). Using OrcaSlicer as the source — rather than Bambu
+  Studio or a hand-authored 3MF — keeps the file format and
+  metadata consistent with what libslic3r expects to consume.
+  Lives at `examples/spike3/fourcolor.3mf`.
 - A1 mini machine profile (`Bambu Lab A1 mini.json` + 0.4mm nozzle
   variant) loaded via PR-0.5-1's adapter (or directly if PR-0.5-1's
   adapter doesn't yet handle the AMS keys — note which).
@@ -42,8 +45,9 @@ the slice itself.
 
 **Dependencies.** PR-0.5-1 (cascade adapter handles at least the
 non-AMS A1 mini keys). A Bambu Studio install on the developer's
-machine — confirm before scheduling. The 4-color test model needs
-to be picked.
+machine — confirm before scheduling. An OrcaSlicer install with
+the AMS color-paint workflow — needed to produce the test
+fixture.
 
 **Out of scope.** Actually sending the print to a real A1 mini —
 Phase 5 hardware validation. AMS calibration G-code emission —

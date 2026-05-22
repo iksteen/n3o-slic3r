@@ -9,9 +9,9 @@ Bambu Studio output it was originally validated on).
 
 **Acceptance criteria.**
 
-- Locate the platecycler tool. **Open question:** where does it
-  live? Local path, a separate GitHub repo, a Gist? Confirmed
-  location goes in the finding doc.
+- Clone platecycler from `https://github.com/iksteen/platecycler/`
+  and run its install/setup steps. Record the exact commit used in
+  the finding doc.
 - Pick one G-code file from PR-0.5-3 (`/tmp/spike3.gcode`) and run
   platecycler against it end-to-end. Compare the transform output
   against platecycler's expected output (either by re-running
@@ -30,8 +30,7 @@ Bambu Studio output it was originally validated on).
 
 **Effort.** 1 day.
 
-**Dependencies.** PR-0.5-3 produces the test gcode. Platecycler
-tool location must be confirmed.
+**Dependencies.** PR-0.5-3 produces the test gcode.
 
 **Out of scope.** Re-implementing platecycler in Lua / Rust —
 Phase 8. Adding compose-hook support to the slicer — Phase 8.
