@@ -130,12 +130,17 @@ jobs:
         run: npm ci
 
       - name: cargo test (workspace, release)
-        # CARGO_BUILD_JOBS=2 keeps rustc + linker memory under the
-        # ubuntu-latest runner's ~7 G RAM ceiling. The previous run
-        # (26306143107) got SIGTERM'd mid-Tauri dep compile at default
-        # parallelism = 4 jobs.
+        # Serial compile (CARGO_BUILD_JOBS=1) + codegen-units=1 to fit
+        # under the ubuntu-latest runner's ~7 G RAM ceiling. Two earlier
+        # runs (26306143107, 26313140866) got SIGTERM'd at default 4
+        # jobs and then at 2 jobs — Tauri's dep tree
+        # (webkit2gtk + soup3 + wry + zvariant + serde-derive) blows
+        # memory when too many heavy rustc invocations overlap. The
+        # libslic3r + deps caches absorb the long pole; serial Rust
+        # compile is acceptable on top.
         env:
-          CARGO_BUILD_JOBS: 2
+          CARGO_BUILD_JOBS: 1
+          CARGO_INCREMENTAL: 0
         run: cargo test --workspace --release
 
       - name: TypeScript typecheck
