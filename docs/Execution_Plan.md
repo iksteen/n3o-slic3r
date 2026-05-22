@@ -162,11 +162,13 @@ Goal: functional 3D scene with model load, transform operations, and bed visuali
 
 ### Deliverables
 
-- Three.js scene with orbit controls, perspective + ortho toggle, gizmo for move/rotate/scale.
+- **Renderer-agnostic scene state in Rust (FR-3D-7 / AD-8).** Build this before the Three.js layer — it's the foundation the renderer sits on. Scope: typed scene model (mesh registry, per-object transforms and metadata, hierarchy, selection, gizmo state, camera state, exclusion-zone data); Tauri command surface for mutations (`scene_select`, `object_translate`, `object_set_transform`, `gizmo_set`, `camera_*`, etc.); Tauri event surface for state diffs the renderer applies. Lives in `core/scene/` per PRD §8.2. Unit tests cover the command/event contract without any renderer present.
 
-- Load STL, OBJ, and .3mf (project format): geometry, object positions, and as much project metadata as the file carries. Bambu Studio, OrcaSlicer, and Snapmaker Orca all save projects as .3mf — this is the migration path for users.
+- Three.js scene with orbit controls, perspective + ortho toggle, gizmo for move/rotate/scale. The renderer is a *view*: it subscribes to scene events, applies them to its local mirror, and emits user-intent through the command surface. It does not hold authoritative state.
 
-- Object operations: move, rotate, scale, mirror, lay flat, duplicate, delete.
+- Load STL, OBJ, and .3mf (project format): geometry, object positions, and as much project metadata as the file carries. Loader runs in Rust, populates the scene state directly; the renderer learns of new meshes via the standard event flow. Bambu Studio, OrcaSlicer, and Snapmaker Orca all save projects as .3mf — this is the migration path for users.
+
+- Object operations: move, rotate, scale, mirror, lay flat, duplicate, delete. Each is a Tauri command operating on the Rust scene state. The renderer reflects the resulting state diff; it does not compute transforms itself.
 
 - Object library / scaffolding panel (FR-UI-10): left side of viewport, sections for Primitives (cube/cylinder/sphere/cone/torus), Calibration (calibration cube, temperature tower, generic flow test), and Imported (user-loaded files this session). Clicking an item adds it to the active plate.
 
@@ -174,13 +176,17 @@ Goal: functional 3D scene with model load, transform operations, and bed visuali
 
 - Bed mesh with grid, origin marker, A1 mini exclusion zone, U1 toolhead parking bay visualization.
 
-- Performance stress test: 20M-triangle scene runs at >=30fps on integrated GPU laptop. Decision point: continue with Three.js or pivot to wgpu native window.
+- Performance stress test: 20M-triangle scene runs at >=30fps on integrated GPU laptop. Decision point: continue with Three.js or pivot to wgpu native window. The state-vs-renderer separation (AD-8) keeps the pivot cost bounded to the renderer layer — see PRD §10 risk row.
+
+- Renderer-side performance: applying scene diffs at 60 Hz worst-case interaction rates (orbit, drag) without dropping below the 30fps render target. Tested with a 1000-object scene to validate the state-side budget (≤5ms p99 for selection / transform / diff computation, per AD-8).
 
 ### Exit criteria
 
 - Load a 50MB STL and a Bambu-Studio-authored .3mf, manipulate them, save and reload position.
 
 - Performance target met or pivot decision made and scheduled.
+
+- Scene-state Rust module's command/event surface is fully covered by tests that run without any renderer attached. Swapping in a stub viewer that just logs events produces sensible output for typical interaction sequences (load → select → transform → deselect).
 
 ### Cut candidates
 

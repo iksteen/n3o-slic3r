@@ -45,6 +45,36 @@ If any of these contradicts something the conversation infers from
 code or upstream, the document wins until corrected — then update the
 document, don't just nod and move on (PRD §11.3).
 
+## Architecture principles
+
+These are load-bearing rules. Violating one usually means a phase
+later costs more than it had to.
+
+- **3D scene state lives in Rust, not in the renderer.** The
+  authoritative scene model (objects, transforms, mesh data,
+  selection, gizmo, camera) is a renderer-agnostic data structure in
+  `core/scene/`. Three.js is a read-only consumer that reflects state
+  events into pixels. All scene mutations go through Tauri commands;
+  the renderer never owns state. This is so we can swap renderers
+  (Phase 2 risk: if webview 3D performance is insufficient, we
+  switch to wgpu in a native window) without rewriting state
+  management. See PRD FR-3D-7 and AD-8 for the full design.
+
+- **Configs are pure data.** No embedded code, no expressions, no
+  template strings. The rule cascade (PRD §6.1, docs/profiles.md)
+  handles conditional values declaratively. Lua exists for G-code
+  post-processing plugins, not for configs.
+
+- **Adapter layer owns libslic3r's vocabulary.** Above the adapter,
+  the system speaks in our logical settings; below the adapter,
+  libslic3r's flat `DynamicPrintConfig` and dispatch quirks
+  (`curr_bed_type`, `wipe_tower`, dimensional key explosions) live
+  contained. New libslic3r-specific quirks land in
+  `docs/libslic3r-workarounds.md` and the shim, not in higher layers.
+
+- **Standalone at runtime.** The app must complete every workflow
+  with no other slicer installed. UX principle from PRD §5.
+
 ## Facts that have already been corrected
 
 These came up during planning and prior implementation sessions. Don't

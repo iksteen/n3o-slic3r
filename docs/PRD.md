@@ -244,6 +244,8 @@ Presentation vs mechanism. The UI presents the cascade as values-by-source-file 
 
 - **FR-3D-6.** Basic supports: auto-generate, on/off toggle per object. Paint-on supports are out of MVP scope.
 
+- **FR-3D-7.** Scene state lives in Rust in a renderer-agnostic structure (objects, transforms, mesh data, selections, gizmo state). The renderer (Three.js for MVP, possibly wgpu later) is a read-only consumer that reflects state changes pushed via Tauri events. All scene mutations go through Tauri commands; the renderer never owns authoritative state. This rule exists so switching renderers does not require touching the state model. See AD-8 for the design rationale and consequences.
+
 ## 6.5 Slicing pipeline
 
 - **FR-SL-1.** Slice is invoked per plate. Multi-plate slice runs sequentially with overall progress.
@@ -429,6 +431,8 @@ Model materials are abstract extruder indices (1..N) assigned to objects, paint 
 
 - **core/project.** Project model, plate/printer binding, plate metadata (cycle counts), material bindings, persistence.
 
+- **core/scene.** Renderer-agnostic 3D scene state per AD-8 / FR-3D-7. Owns mesh registry, per-object transforms and metadata, selection and gizmo state, camera state, exclusion-zone data. Exposes Tauri commands for mutations and emits typed events for view sync. The frontend renderer (Three.js for MVP) consumes events; it does not hold authoritative state.
+
 - **core/slice.** FFI wrapper, slice orchestration, progress events.
 
 - **core/gcode.** Typed G-code model, parser, serializer. Shared by preview and plugins.
@@ -553,6 +557,34 @@ Decision (acknowledged limitation): the U1 driver targets Snapmaker's HTTP wrapp
 
 - **Resolves:** U1 firmware updates that change Snapmaker's API are tracked; Klipper firmware changes upstream do not directly affect us. A future Voron/RatRig user gets a Moonraker driver, not a 'U1-compatible' driver.
 
+### AD-8: 3D scene state lives in Rust, not in the renderer
+
+Decision: the authoritative 3D scene model (objects with mesh handles, transforms, hierarchy, selection state, gizmo state, camera state, exclusion-zone data) lives in Rust as a renderer-agnostic data structure. The frontend renderer (Three.js for the MVP) is a read-only view that reflects state into pixels. State mutations flow renderer → Tauri command → Rust state update → Tauri event → renderer re-render. The renderer never holds authoritative state and never mutates state directly.
+
+- **Why now, not when we hit the wall.** Phase 2 carries an explicit risk (PRD §10) that webview 3D performance is insufficient for our target scene sizes, with the documented mitigation "switch to wgpu in a native Tauri window." That mitigation is only cheap if the renderer is a swappable view. If Three.js owns scene state, switching it out means rewriting state management at the same time — a much harder cut. The separation cost is small upfront (a clean API boundary) and dwarfs the cost of unwinding it later.
+
+- **What the state model contains:**
+  - Scene graph: per-plate object list with parent/child relationships (modifier meshes, paint volumes nested under their parent object).
+  - Per-object: mesh handle (id into a mesh registry; the actual triangle data is owned by Rust), transform (translation/rotation/scale matrices), filament binding, per-object setting overrides, visibility flag, lock flag.
+  - Selection: which objects are selected on the active plate.
+  - Gizmo: active gizmo kind (move/rotate/scale/mirror/none), target object(s), local-vs-world space, snap settings.
+  - Camera: position, look-at, projection mode (perspective/ortho), zoom level.
+  - Bed visualization data: per-printer bed bounds, exclusion zones, origin marker location — pulled from the active plate's printer profile.
+  - Mesh registry: Rust-side store of triangle data, indexed by mesh handle. The renderer requests mesh bytes for a handle when it needs to upload to GPU; the renderer's GPU buffers are a derived view of the registry, not the source of truth.
+
+- **What flows over the IPC boundary:**
+  - Renderer → backend (Tauri commands): user intent — `scene_select(ids)`, `object_translate(id, delta)`, `gizmo_set(kind, ids)`, `camera_orbit(yaw, pitch)`, etc. Commands return updated state.
+  - Backend → renderer (Tauri events): authoritative state changes — `scene_changed(diff)`, `selection_changed(ids)`, `mesh_uploaded(handle, bytes)`. The renderer applies the diff to its local mirror.
+  - Mesh data crosses once per upload (Rust → renderer); transforms and selections cross every frame at human interaction rates (~60 Hz worst case for orbit, much less for object drag).
+
+- **Where this lives in the module layout:** a new `core/scene` module in PRD §8.2's `core/` tree, distinct from `core/project` (which owns plate/printer binding, persistence) and from the renderer (which is `ui/`'s concern). `core/scene` exposes typed Tauri commands and emits typed events; `ui/` consumes them via a thin Rust→TS type-share layer (Tauri's `specta`/`tauri-specta` is a reasonable choice).
+
+- **Performance contract:** the Rust state model must support ≥1000 objects in a scene without state operations exceeding 5ms p99 (selection, transform application, scene-diff computation). The renderer's frame budget (FR-3D-5: 30fps on 20M-tri scene) is a *renderer* concern; state-side budget is separate.
+
+- **What this is *not*:** it is not a ban on the renderer caching derived data. Three.js's scene graph, GPU buffers, BVH for picking — all fine as renderer-internal caches keyed off the authoritative state. The rule is about *ownership of the truth*, not about avoiding caches.
+
+- **Out-of-scope for MVP but architecturally enabled:** scriptable scene operations (Lua plugins inspecting/mutating scene state via the same command surface the renderer uses), headless rendering for thumbnails, alternate renderers (a side-by-side wgpu viewport, an SVG top-down view for plate previews) — all become tractable when state is renderer-agnostic.
+
 ## 9.3 Known gaps accepted for MVP
 
 - **Mid-edit printer state changes.** If a user changes loaded filament on the printer mid-edit, the app polls and updates on the next cycle. There is no 'attention!' animation drawing the eye to the change. Users notice via the filament panel. Post-MVP enhancement.
@@ -583,7 +615,7 @@ These are listed to confirm the architecture generalizes, not as commitments to 
 
 | **Risk** | **Likelihood** | **Impact** | **Mitigation** |
 | --- | --- | --- | --- |
-| Webview 3D performance ceiling exceeded by large meshes | Medium | High | Prototype viewport in week 2 with stress test models. If insufficient, switch to wgpu in native Tauri window (adds 4–6 weeks). |
+| Webview 3D performance ceiling exceeded by large meshes | Medium | High | Prototype viewport in week 2 with stress test models. If insufficient, switch to wgpu in native Tauri window. Cost is bounded because scene state lives in Rust independent of the renderer (AD-8 / FR-3D-7); only the rendering layer changes. Estimate 2–3 weeks for the swap given the separation, down from 4–6 weeks if state and renderer were entangled. |
 | Snapmaker U1 toolchange G-code edge cases | High | Medium | Build U1 profile from Snapmaker Orca's published profile as starting point. libslic3r already supports toolchanger-style multi-material G-code (Prusa XL pattern). Print test models early. |
 | Bambu MQTT protocol changes | Low | Medium | Use community libraries as reference, pin protocol version, document fallbacks. |
 | OrcaSlicer submodule churn breaks FFI on bump | Medium | Low | Pin submodule, bump deliberately, not on every upstream commit. |
