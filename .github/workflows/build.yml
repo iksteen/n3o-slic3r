@@ -1,0 +1,122 @@
+# Linux CI for n3o-slic3r.
+#
+# Build matrix is intentionally Linux-only (PRD §3.2 — Windows/macOS are
+# explicit non-goals for the MVP). The long pole is OrcaSlicer's deps
+# tree (~17 min cold); we cache it keyed by the submodule SHA plus the
+# contents of the wrapper that drives the build, so it only rebuilds
+# when upstream OrcaSlicer moves or our build script changes.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-flight runs of the same ref to save CI minutes — fine here
+# because every job is a full build, no partial-state risk.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux build & test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Record OrcaSlicer submodule SHA
+        id: orca
+        run: |
+          sha=$(git -C external/OrcaSlicer rev-parse HEAD)
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkgconf \
+            clang \
+            lld \
+            file \
+            gettext \
+            git \
+            wget \
+            texinfo \
+            m4 \
+            extra-cmake-modules \
+            eglexternalplatform-dev \
+            libgtk-3-dev \
+            gstreamer1.0-gtk3 \
+            libgstreamerd-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libssl-dev \
+            libcurl4-openssl-dev \
+            libdbus-1-dev \
+            libudev-dev \
+            libglew-dev \
+            libmspack-dev \
+            libsecret-1-dev \
+            libspnav-dev \
+            libtool \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            libgles2-mesa-dev \
+            libxkbcommon-dev
+
+      - name: Cache OrcaSlicer deps prefix
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: external/OrcaSlicer/deps/build/OrcaSlicer_dep
+          key: orca-deps-${{ runner.os }}-${{ steps.orca.outputs.sha }}-${{ hashFiles('scripts/build.sh', 'external/OrcaSlicer/deps/CMakeLists.txt') }}
+
+      - name: Build OrcaSlicer deps (cache miss only)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: ./scripts/build.sh deps
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ steps.orca.outputs.sha }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ steps.orca.outputs.sha }}-
+
+      - name: Install Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: npm ci
+        run: npm ci
+
+      - name: cargo test (workspace, release)
+        run: cargo test --workspace --release
+
+      - name: TypeScript typecheck
+        run: npx tsc --noEmit
+
+      - name: Vite production build
+        run: npm run build

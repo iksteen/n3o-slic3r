@@ -1,5 +1,7 @@
 # n3o-slic3r
 
+[![build](https://github.com/iksteen/n3o-slic3r/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/iksteen/n3o-slic3r/actions/workflows/build.yml)
+
 A modern desktop slicer UI built on Tauri 2 + React + TypeScript, driving
 OrcaSlicer's `libslic3r` engine through a vendored Rust+C FFI shim
 (`crates/slic3r-ffi/`).
