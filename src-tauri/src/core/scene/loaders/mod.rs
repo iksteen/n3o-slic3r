@@ -9,7 +9,7 @@
 pub mod obj;
 pub mod stl;
 
-use super::state::Mesh;
+use super::state::NewMesh;
 use crate::core::printer::profile::BoundingBox;
 use std::fmt;
 use std::path::Path;
@@ -58,8 +58,8 @@ impl std::error::Error for LoadError {
 }
 
 /// Dispatch a load by file extension. Surface used by
-/// `scene_load_mesh` (PR-2-2).
-pub fn load_mesh_from_path(path: &Path) -> Result<Mesh, LoadError> {
+/// `scene_load_mesh_from_path` (PR-2-2).
+pub fn load_mesh_from_path(path: &Path) -> Result<NewMesh, LoadError> {
     let ext = path
         .extension()
         .and_then(|s| s.to_str())

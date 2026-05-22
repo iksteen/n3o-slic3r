@@ -7,10 +7,15 @@
 //! this file only validates the Tauri plumbing.
 
 use super::events::{SceneEvent, SceneOpError, SelectMode};
-use super::state::{CameraState, GizmoState, MeshId, ObjectId, SceneState};
+use super::state::{
+    ActivePlate, CameraState, ExclusionZone, GizmoState, MeshHeader, MeshId, ObjectId,
+    SceneObject, SceneState,
+};
 use super::transform::Transform;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Mutex;
+use tauri::ipc::Response;
 use tauri::{Emitter, State, Window};
 
 /// Emit each event on the given window. Errors are dropped — a
@@ -27,13 +32,66 @@ fn emit_all(window: &Window, events: &[SceneEvent]) {
     }
 }
 
-/// Snapshot of the full scene state. Frontend calls this on
-/// startup / reconnect to rebuild its local mirror from scratch.
+/// JSON-friendly snapshot of the scene. Mesh buffers are *not*
+/// included — only their headers; the frontend fetches the buffers
+/// per-mesh via `scene_mesh_buffers` (see PR-2-2's mesh-transport
+/// refactor).
+#[derive(Debug, Clone, Serialize)]
+pub struct SceneSnapshot {
+    pub meshes: Vec<MeshHeader>,
+    pub objects: Vec<SceneObject>,
+    pub selection: Vec<ObjectId>,
+    pub camera: CameraState,
+    pub gizmo: GizmoState,
+    pub plate: Option<ActivePlate>,
+    pub exclusion_zones: Vec<ExclusionZone>,
+}
+
+/// Snapshot of the scene state. Frontend calls this on startup /
+/// reconnect to rebuild its local mirror from scratch. Heavy mesh
+/// buffers are *not* included here — the renderer follows up with
+/// `scene_mesh_buffers(mesh_id)` per mesh to fetch the binary data.
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub fn scene_snapshot(state: State<Mutex<SceneState>>) -> Result<SceneState, String> {
+pub fn scene_snapshot(state: State<Mutex<SceneState>>) -> Result<SceneSnapshot, String> {
     let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    Ok(s.clone())
+    let meshes = s.meshes.values().map(|m| m.header()).collect();
+    let objects = s.objects.values().cloned().collect();
+    let selection: Vec<ObjectId> = {
+        let mut v: Vec<ObjectId> = s.selection.iter().copied().collect();
+        v.sort();
+        v
+    };
+    let _ = HashSet::<ObjectId>::new(); // silence unused-import on certain feature builds
+    Ok(SceneSnapshot {
+        meshes,
+        objects,
+        selection,
+        camera: s.camera.clone(),
+        gizmo: s.gizmo.clone(),
+        plate: s.plate.clone(),
+        exclusion_zones: s.exclusion_zones.clone(),
+    })
+}
+
+/// Return the binary vertex/normal/index buffers for one mesh.
+/// Sequential layout: `[vertices_f32 ...][normals_f32 ...][indices_u32 ...]`
+/// in little-endian. Lengths derive from the matching `MeshHeader`.
+/// Sent as a binary `Response` to skip the JSON-array-of-floats
+/// stringification entirely (47 MB STL → 36 MB binary, vs ~100 MB
+/// JSON).
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub fn scene_mesh_buffers(
+    mesh_id: MeshId,
+    state: State<Mutex<SceneState>>,
+) -> Result<Response, String> {
+    let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let mesh = s
+        .meshes
+        .get(&mesh_id)
+        .ok_or_else(|| format!("unknown mesh id {mesh_id:?}"))?;
+    Ok(Response::new(mesh.pack_buffers()))
 }
 
 /// Replace / add / toggle the selection.
@@ -209,25 +267,12 @@ fn op_err_to_string(e: SceneOpError) -> String {
     e.to_string()
 }
 
-// Mesh-loading commands. scene_load_mesh takes a pre-built Mesh
-// (for tests + the future procedural-primitive path in PR-2-7);
-// scene_load_mesh_from_path dispatches to PR-2-3's loaders.
-#[tauri::command]
-#[tracing::instrument(skip(state, window, mesh))]
-pub fn scene_load_mesh(
-    mesh: super::state::Mesh,
-    window: Window,
-    state: State<Mutex<SceneState>>,
-) -> Result<(MeshId, ObjectId), String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let (mesh_id, obj_id, events) = s.load_mesh(mesh);
-    drop(s);
-    emit_all(&window, &events);
-    Ok((mesh_id, obj_id))
-}
-
 /// Load a mesh from a file path (STL or OBJ) and register it as a
-/// scene object at origin.
+/// scene object at origin. The path-based form is the only public
+/// load surface — caller-built mesh data (PR-2-7's procedural
+/// primitives) reaches the registry through the same path once
+/// PR-2-7 lands a `library_*` command set that emits to the loader
+/// pipeline.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_load_mesh_from_path(
@@ -235,10 +280,10 @@ pub fn scene_load_mesh_from_path(
     window: Window,
     state: State<Mutex<SceneState>>,
 ) -> Result<(MeshId, ObjectId), String> {
-    let mesh = super::loaders::load_mesh_from_path(std::path::Path::new(&path))
+    let new_mesh = super::loaders::load_mesh_from_path(std::path::Path::new(&path))
         .map_err(|e| e.to_string())?;
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let (mesh_id, obj_id, events) = s.load_mesh(mesh);
+    let (mesh_id, obj_id, events) = s.load_mesh(new_mesh);
     drop(s);
     emit_all(&window, &events);
     Ok((mesh_id, obj_id))

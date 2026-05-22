@@ -37,24 +37,80 @@ pub struct ObjectId(pub u64);
 
 /// Loaded mesh data + provenance.
 ///
-/// Vertex / index arrays are kept in their loaded form; the renderer
-/// builds GPU buffers from these via the `scene:mesh_loaded` event
-/// payload. For multi-volume objects (3MF), each volume is its own
-/// `Mesh` and the source 3MF spawns one `SceneObject` per volume.
+/// The vertex / normal / index buffers live on the Rust side; they
+/// reach the renderer via the dedicated `scene_mesh_buffers` Tauri
+/// command (binary IPC), NOT the JSON event/snapshot path. The
+/// `#[serde(skip)]` annotations enforce that — sending a 47 MB mesh
+/// as JSON arrays would be ~100 MB of stringified floats and
+/// gigabytes of JS-side parse work.
+///
+/// Wire-side consumers see [`MeshHeader`] (lightweight metadata) and
+/// fetch the buffers separately.
+///
+/// For multi-volume objects (3MF), each volume is its own `Mesh`
+/// and the source 3MF spawns one `SceneObject` per volume.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mesh {
     pub id: MeshId,
-    /// Flat `[x0, y0, z0, x1, y1, z1, ...]` packed vertices.
+    /// Flat `[x0, y0, z0, x1, y1, z1, ...]` packed vertices. Not
+    /// serialized — fetched via `scene_mesh_buffers`.
+    #[serde(skip, default)]
     pub vertices: Vec<f32>,
     /// Flat `[x, y, z, ...]` per-vertex normals; same length as
-    /// `vertices`. Computed at load time if the file only has
-    /// per-face normals.
+    /// `vertices`. Not serialized.
+    #[serde(skip, default)]
     pub normals: Vec<f32>,
-    /// Triangle vertex indices (3 per triangle).
+    /// Triangle vertex indices (3 per triangle). Not serialized.
+    #[serde(skip, default)]
     pub indices: Vec<u32>,
     pub bounding_box: BoundingBox,
-    /// File path or in-app catalog handle the mesh came from. Used
-    /// for round-trip + the trace UI.
+    /// File path or in-app catalog handle the mesh came from.
+    pub provenance: MeshProvenance,
+}
+
+impl Mesh {
+    /// Lightweight metadata for the JSON wire (events + snapshots).
+    pub fn header(&self) -> MeshHeader {
+        MeshHeader {
+            id: self.id,
+            vertex_count: self.vertices.len() / 3,
+            index_count: self.indices.len(),
+            bounding_box: self.bounding_box,
+            provenance: self.provenance.clone(),
+        }
+    }
+
+    /// Encode vertex / normal / index buffers into one concatenated
+    /// little-endian byte sequence: `[vertices_f32...][normals_f32...][indices_u32...]`.
+    /// The frontend slices it by lengths from the matching `MeshHeader`.
+    pub fn pack_buffers(&self) -> Vec<u8> {
+        let vert_bytes = self.vertices.len() * std::mem::size_of::<f32>();
+        let norm_bytes = self.normals.len() * std::mem::size_of::<f32>();
+        let idx_bytes = self.indices.len() * std::mem::size_of::<u32>();
+        let mut out = Vec::with_capacity(vert_bytes + norm_bytes + idx_bytes);
+        for f in &self.vertices {
+            out.extend_from_slice(&f.to_le_bytes());
+        }
+        for f in &self.normals {
+            out.extend_from_slice(&f.to_le_bytes());
+        }
+        for i in &self.indices {
+            out.extend_from_slice(&i.to_le_bytes());
+        }
+        out
+    }
+}
+
+/// JSON-wire shape of a `Mesh` — everything except the heavy buffers.
+/// `scene:mesh_loaded` events and `scene_snapshot` carry this; the
+/// frontend follows up with `scene_mesh_buffers(id)` to fetch the
+/// binary blob.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeshHeader {
+    pub id: MeshId,
+    pub vertex_count: usize,
+    pub index_count: usize,
+    pub bounding_box: BoundingBox,
     pub provenance: MeshProvenance,
 }
 
@@ -87,6 +143,45 @@ pub struct SceneObject {
     /// grouping (Phase 5 multi-plate) builds on this.
     #[serde(default)]
     pub parent: Option<ObjectId>,
+}
+
+/// Caller-builds-this shape for inserting a fresh mesh. No `id`
+/// field — the `SceneState` allocates it. Use for loaders + the
+/// procedural-primitive path.
+#[derive(Debug, Clone)]
+pub struct NewMesh {
+    pub vertices: Vec<f32>,
+    pub normals: Vec<f32>,
+    pub indices: Vec<u32>,
+    pub bounding_box: BoundingBox,
+    pub provenance: MeshProvenance,
+}
+
+/// Caller-builds-this shape for inserting a fresh scene object. No
+/// `id` field — `SceneState` allocates it.
+#[derive(Debug, Clone)]
+pub struct NewSceneObject {
+    pub mesh: MeshId,
+    pub transform: Transform,
+    pub name: String,
+    pub visible: bool,
+    pub extruder_id: Option<u8>,
+    pub parent: Option<ObjectId>,
+}
+
+impl NewSceneObject {
+    /// Default scene-object: visible, no parent, no extruder, named
+    /// after its mesh.
+    pub fn at_origin(mesh: MeshId, name: impl Into<String>) -> Self {
+        Self {
+            mesh,
+            transform: Transform::IDENTITY,
+            name: name.into(),
+            visible: true,
+            extruder_id: None,
+            parent: None,
+        }
+    }
 }
 
 fn default_visible() -> bool {
@@ -197,9 +292,7 @@ impl SceneState {
         Self::default()
     }
 
-    /// Allocate the next monotonic `MeshId`. IDs start at 1; `MeshId(0)`
-    /// is reserved as the "unset" sentinel for `insert_mesh` / serde
-    /// defaults.
+    /// Allocate the next monotonic `MeshId`. IDs start at 1.
     pub fn next_mesh_id(&mut self) -> MeshId {
         self.next_mesh_id = self.next_mesh_id.wrapping_add(1);
         MeshId(self.next_mesh_id)
@@ -211,27 +304,40 @@ impl SceneState {
         ObjectId(self.next_object_id)
     }
 
-    /// Insert a mesh; returns its allocated id. If `mesh.id` is
-    /// `MeshId(0)` (the unset sentinel), allocates a fresh id.
-    /// Otherwise inserts with the caller's id (overwriting any
-    /// existing entry — caller's responsibility).
-    pub fn insert_mesh(&mut self, mut mesh: Mesh) -> MeshId {
-        if mesh.id == MeshId(0) {
-            mesh.id = self.next_mesh_id();
-        }
-        let id = mesh.id;
-        self.meshes.insert(id, mesh);
+    /// Register a mesh. Always allocates a fresh `MeshId`; the
+    /// caller hands in a `NewMesh` (no id field) so there's no
+    /// possibility of an ID collision or sentinel ambiguity.
+    pub fn register_mesh(&mut self, new_mesh: NewMesh) -> MeshId {
+        let id = self.next_mesh_id();
+        self.meshes.insert(
+            id,
+            Mesh {
+                id,
+                vertices: new_mesh.vertices,
+                normals: new_mesh.normals,
+                indices: new_mesh.indices,
+                bounding_box: new_mesh.bounding_box,
+                provenance: new_mesh.provenance,
+            },
+        );
         id
     }
 
-    /// Insert an object; allocates a fresh id when `obj.id` is the
-    /// `ObjectId(0)` sentinel.
-    pub fn insert_object(&mut self, mut obj: SceneObject) -> ObjectId {
-        if obj.id == ObjectId(0) {
-            obj.id = self.next_object_id();
-        }
-        let id = obj.id;
-        self.objects.insert(id, obj);
+    /// Register a scene object. Always allocates a fresh `ObjectId`.
+    pub fn register_object(&mut self, new_obj: NewSceneObject) -> ObjectId {
+        let id = self.next_object_id();
+        self.objects.insert(
+            id,
+            SceneObject {
+                id,
+                mesh: new_obj.mesh,
+                transform: new_obj.transform,
+                name: new_obj.name,
+                visible: new_obj.visible,
+                extruder_id: new_obj.extruder_id,
+                parent: new_obj.parent,
+            },
+        );
         id
     }
 
@@ -245,29 +351,21 @@ impl SceneState {
 
     /// Register a mesh and place one default `SceneObject` at origin.
     /// Returns (mesh_id, object_id, events).
-    pub fn load_mesh(&mut self, mesh: Mesh) -> (MeshId, ObjectId, Vec<SceneEvent>) {
-        let mesh_id = self.insert_mesh(mesh);
-        let mesh_clone = self.meshes.get(&mesh_id).unwrap().clone();
-
-        let obj_name = match &mesh_clone.provenance {
+    pub fn load_mesh(&mut self, new_mesh: NewMesh) -> (MeshId, ObjectId, Vec<SceneEvent>) {
+        let obj_name = match &new_mesh.provenance {
             MeshProvenance::File(p) => p
                 .rsplit_once('/')
                 .map(|(_, leaf)| leaf.to_string())
                 .unwrap_or_else(|| p.clone()),
             MeshProvenance::Primitive(name) => name.clone(),
         };
-        let obj_id = self.insert_object(SceneObject {
-            id: ObjectId(0),
-            mesh: mesh_id,
-            transform: Transform::IDENTITY,
-            name: obj_name,
-            visible: true,
-            extruder_id: None,
-            parent: None,
-        });
+        let mesh_id = self.register_mesh(new_mesh);
+        let obj_id = self.register_object(NewSceneObject::at_origin(mesh_id, obj_name));
+
+        let mesh_header = self.meshes.get(&mesh_id).unwrap().header();
         let obj_clone = self.objects.get(&obj_id).unwrap().clone();
         let events = vec![
-            SceneEvent::MeshLoaded(mesh_clone),
+            SceneEvent::MeshLoaded(mesh_header),
             SceneEvent::ObjectAdded(obj_clone),
         ];
         (mesh_id, obj_id, events)
@@ -445,12 +543,15 @@ impl SceneState {
             .get(&id)
             .ok_or(SceneOpError::UnknownObject(id))?
             .clone();
-        let mut clone = original.clone();
-        clone.id = ObjectId(0);
-        clone.transform = Transform::translation(Vec3::new(10.0, 0.0, 0.0))
-            .compose(original.transform);
-        clone.name = format!("{} (copy)", original.name);
-        let new_id = self.insert_object(clone);
+        let new_id = self.register_object(NewSceneObject {
+            mesh: original.mesh,
+            transform: Transform::translation(Vec3::new(10.0, 0.0, 0.0))
+                .compose(original.transform),
+            name: format!("{} (copy)", original.name),
+            visible: original.visible,
+            extruder_id: original.extruder_id,
+            parent: original.parent,
+        });
         let cloned_obj = self.objects.get(&new_id).unwrap().clone();
         Ok((new_id, vec![SceneEvent::ObjectAdded(cloned_obj)]))
     }
@@ -517,11 +618,11 @@ impl SceneState {
 mod tests {
     use super::*;
 
-    fn unit_cube_mesh(id: u64) -> Mesh {
-        // 8-corner cube with flat-shaded normals — enough geometry
-        // for tests that don't care about visual quality.
-        Mesh {
-            id: MeshId(id),
+    fn unit_cube_mesh() -> NewMesh {
+        // 8-corner cube — enough geometry for tests that don't care
+        // about visual quality. Normals left zeroed since the
+        // mutation-method tests don't shade.
+        NewMesh {
             vertices: vec![
                 0.0, 0.0, 0.0, //
                 1.0, 0.0, 0.0, //
@@ -562,7 +663,7 @@ mod tests {
         let b = s.next_mesh_id();
         let c = s.next_object_id();
         let d = s.next_object_id();
-        // IDs start at 1 (0 is the unset sentinel).
+        // IDs start at 1.
         assert_eq!(a, MeshId(1));
         assert_eq!(b, MeshId(2));
         assert_eq!(c, ObjectId(1));
@@ -570,53 +671,27 @@ mod tests {
     }
 
     #[test]
-    fn insert_mesh_allocates_when_id_is_unset() {
+    fn register_mesh_allocates_monotonically() {
         let mut s = SceneState::new();
-        let m = unit_cube_mesh(0);
-        let id = s.insert_mesh(m);
-        // First allocation is 1; never reuses 0.
+        let id = s.register_mesh(unit_cube_mesh());
         assert_eq!(id, MeshId(1));
-        let m2 = unit_cube_mesh(0);
-        let id2 = s.insert_mesh(m2);
+        let id2 = s.register_mesh(unit_cube_mesh());
         assert_eq!(id2, MeshId(2));
-    }
-
-    #[test]
-    fn insert_mesh_honors_caller_supplied_id() {
-        let mut s = SceneState::new();
-        let m = unit_cube_mesh(42);
-        let id = s.insert_mesh(m);
-        assert_eq!(id, MeshId(42));
-        // next_mesh_id counter is unaffected by external IDs.
-        assert_eq!(s.next_mesh_id(), MeshId(1));
+        assert_ne!(id, id2);
     }
 
     #[test]
     fn visible_bounds_unions_objects() {
         let mut s = SceneState::new();
-        let mesh_id = s.insert_mesh(unit_cube_mesh(0));
-        let _ = s.insert_object(SceneObject {
-            id: ObjectId(0),
-            mesh: mesh_id,
-            transform: Transform::IDENTITY,
-            name: "cube0".into(),
-            visible: true,
-            extruder_id: None,
-            parent: None,
-        });
-        let _ = s.insert_object(SceneObject {
-            id: ObjectId(0),
-            mesh: mesh_id,
+        let mesh_id = s.register_mesh(unit_cube_mesh());
+        let _ = s.register_object(NewSceneObject::at_origin(mesh_id, "cube0"));
+        let _ = s.register_object(NewSceneObject {
             transform: Transform::translation(Vec3::new(10.0, 0.0, 0.0)),
             name: "cube1".into(),
-            visible: true,
-            extruder_id: None,
-            parent: None,
+            ..NewSceneObject::at_origin(mesh_id, "cube1")
         });
 
         let bb = s.visible_bounds().expect("two visible objects");
-        // First cube spans [0..1]³; second spans [10..11]×[0..1]×[0..1].
-        // Union: [0..11]×[0..1]×[0..1].
         assert_eq!(bb.min, [0.0, 0.0, 0.0]);
         assert!((bb.max[0] - 11.0).abs() < 1e-3, "got {bb:?}");
     }
@@ -624,15 +699,11 @@ mod tests {
     #[test]
     fn invisible_objects_skipped_in_bounds() {
         let mut s = SceneState::new();
-        let mesh_id = s.insert_mesh(unit_cube_mesh(0));
-        let _ = s.insert_object(SceneObject {
-            id: ObjectId(0),
-            mesh: mesh_id,
-            transform: Transform::translation(Vec3::new(100.0, 0.0, 0.0)),
-            name: "hidden".into(),
+        let mesh_id = s.register_mesh(unit_cube_mesh());
+        let _ = s.register_object(NewSceneObject {
             visible: false,
-            extruder_id: None,
-            parent: None,
+            transform: Transform::translation(Vec3::new(100.0, 0.0, 0.0)),
+            ..NewSceneObject::at_origin(mesh_id, "hidden")
         });
         assert!(s.visible_bounds().is_none());
     }
@@ -640,7 +711,7 @@ mod tests {
     // ---- Mutation-method tests --------------------------------------
 
     fn add_cube(s: &mut SceneState) -> (MeshId, ObjectId) {
-        let (mesh_id, obj_id, events) = s.load_mesh(unit_cube_mesh(0));
+        let (mesh_id, obj_id, events) = s.load_mesh(unit_cube_mesh());
         assert_eq!(events.len(), 2, "load_mesh emits mesh_loaded + object_added");
         assert!(matches!(events[0], SceneEvent::MeshLoaded(_)));
         assert!(matches!(events[1], SceneEvent::ObjectAdded(_)));
@@ -804,9 +875,8 @@ mod tests {
     #[test]
     fn full_state_round_trips_via_json() {
         let mut s = SceneState::new();
-        let mesh_id = s.insert_mesh(unit_cube_mesh(0));
-        let _ = s.insert_object(SceneObject {
-            id: ObjectId(0),
+        let mesh_id = s.register_mesh(unit_cube_mesh());
+        let _ = s.register_object(NewSceneObject {
             mesh: mesh_id,
             transform: Transform::translation(Vec3::new(5.0, 5.0, 0.0)),
             name: "test-cube".into(),

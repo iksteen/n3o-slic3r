@@ -11,7 +11,7 @@
 //! (PR-2-9) matches on these to update the local mirror.
 
 use super::state::{
-    CameraState, ExclusionZone, GizmoState, Mesh, MeshId, ObjectId, SceneObject,
+    CameraState, ExclusionZone, GizmoState, MeshHeader, MeshId, ObjectId, SceneObject,
 };
 use serde::Serialize;
 
@@ -19,7 +19,7 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum SceneEvent {
-    MeshLoaded(Mesh),
+    MeshLoaded(MeshHeader),
     ObjectAdded(SceneObject),
     /// Full updated object — simpler than diff compression for MVP.
     /// PR-2-9 / PR-2-11 can introduce per-field diffs later if the

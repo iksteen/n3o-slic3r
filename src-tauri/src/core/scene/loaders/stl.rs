@@ -8,12 +8,12 @@
 //! variants internally.
 
 use super::{compute_bounding_box, compute_vertex_normals, LoadError};
-use crate::core::scene::state::{Mesh, MeshId, MeshProvenance};
+use crate::core::scene::state::{MeshProvenance, NewMesh};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-pub fn load(path: &Path) -> Result<Mesh, LoadError> {
+pub fn load(path: &Path) -> Result<NewMesh, LoadError> {
     let file = File::open(path).map_err(|e| LoadError::Io {
         path: path.into(),
         source: e,
@@ -49,8 +49,7 @@ pub fn load(path: &Path) -> Result<Mesh, LoadError> {
     let normals = compute_vertex_normals(&vertices, &indices);
     let bounding_box = compute_bounding_box(&vertices);
 
-    Ok(Mesh {
-        id: MeshId(0),
+    Ok(NewMesh {
         vertices,
         normals,
         indices,
@@ -100,6 +99,9 @@ endsolid triangle
         assert_eq!(mesh.bounding_box.max, [1.0, 1.0, 0.0]);
         assert!(matches!(mesh.provenance, MeshProvenance::File(_)));
     }
+
+    // Note: NewMesh has no `id` field; loaders return NewMesh and
+    // the SceneState allocates the id at register time.
 
     #[test]
     fn binary_stl_loads_one_triangle() {

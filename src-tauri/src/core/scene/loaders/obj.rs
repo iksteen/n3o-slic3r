@@ -7,10 +7,10 @@
 //! re-introduce them when the renderer cares about textures.
 
 use super::{compute_bounding_box, compute_vertex_normals, LoadError};
-use crate::core::scene::state::{Mesh, MeshId, MeshProvenance};
+use crate::core::scene::state::{MeshProvenance, NewMesh};
 use std::path::Path;
 
-pub fn load(path: &Path) -> Result<Mesh, LoadError> {
+pub fn load(path: &Path) -> Result<NewMesh, LoadError> {
     let load_opts = tobj::LoadOptions {
         triangulate: true,
         single_index: true,
@@ -64,8 +64,7 @@ pub fn load(path: &Path) -> Result<Mesh, LoadError> {
     };
     let bounding_box = compute_bounding_box(&vertices);
 
-    Ok(Mesh {
-        id: MeshId(0),
+    Ok(NewMesh {
         vertices,
         normals,
         indices,
