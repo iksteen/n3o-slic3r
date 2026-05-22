@@ -20,5 +20,12 @@
 //! renderer will extend it with mesh + adhesion + visuals.
 
 pub mod build_plate;
+pub mod state;
+pub mod transform;
 
 pub use build_plate::{BuildPlate, SurfaceKind};
+pub use state::{
+    ActivePlate, CameraState, ExclusionZone, GizmoMode, GizmoState, Mesh, MeshId,
+    MeshProvenance, ObjectId, ProjectionMode, SceneObject, SceneState,
+};
+pub use transform::Transform;

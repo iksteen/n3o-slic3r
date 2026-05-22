@@ -1,6 +1,6 @@
 # PR-2-1 — Scene state types (Rust authoritative)
 
-Status: ❌ open.
+Status: ✅ done. `src-tauri/src/core/scene/{transform,state}.rs` ship the typed scene model: `MeshId`/`ObjectId` opaque newtypes (0 = unset sentinel, 1+ allocated monotonically), `Mesh` + `SceneObject` with serde-round-trippable provenance + transforms + per-object extruder, `SceneState` with mesh + object registries + selection + camera + gizmo + active-plate + exclusion zones, and `Transform` wrapped over `glam::Mat4` with column-major `[f32; 16]` JSON shape (Three.js's `Matrix4.fromArray` ingests it directly). 13 unit tests: 6 transform (identity, translate, rotate, compose, point/vector application, serde) + 7 state (visible_bounds union, invisible-skip, ID allocation, JSON round-trip, caller-supplied ID honored).
 
 **Scope.** Typed Rust data model for the 3D scene under `core/scene/`.
 This is the foundation everything else in Phase 2 sits on. Every
