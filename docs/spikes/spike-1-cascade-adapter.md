@@ -67,11 +67,20 @@ the example with a hand-rolled minimum config.
 
 Cascade-level numbers:
 
-- 3 rules parsed (1 default with 338 sets, 1 filament rule with 6
-  sets, 1 plate rule with 2 sets).
+- 338 top-level keys (the unconditional default — specificity 0)
+  + 2 `[[rule]]` blocks (filament rule with 6 sets, plate rule with
+  2 sets) parsed from the cascade.
 - 346 distinct keys resolved against the test context.
 - Specificity ordering observed correctly: defaults applied first,
   filament + plate overrides applied on top.
+
+(The cascade was originally emitted with three `[[rule]]` blocks,
+including a 338-set unconditional default. Mid-spike, the format
+gained top-level-keys-as-default sugar documented in
+`docs/profiles.md` "three equivalent forms"; the converter and
+resolver were updated to emit / consume the new shape. Resolver
+behavior is identical — top-level keys desugar to a virtual
+`[[rule]] when = {}` at source position 0.)
 
 Adapter-level numbers:
 

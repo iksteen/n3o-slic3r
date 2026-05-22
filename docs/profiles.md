@@ -104,10 +104,10 @@ setting picks the value from the rule with the highest specificity.
 ### Syntax — TOML
 
 ```toml
-# Default — always applies (specificity 0)
-[[rule]]
-set.bed_temp = 50
-set.layer_height = 0.2
+# Top-level keys = the unconditional default rule (specificity 0).
+# Must appear before any [section] or [[rule]] header (TOML rule).
+bed_temp = 50
+layer_height = 0.2
 
 # Single-condition override (specificity 1)
 [[rule]]
@@ -140,6 +140,36 @@ when.plate.type    = "SuperTack"
 set.bed_temp = 45
 ```
 
+### Syntax — three equivalent forms for unconditional defaults
+
+The default rule (specificity 0, no `when` predicates) carries the
+bulk of most cascades. Three forms are accepted, in order of
+preference:
+
+```toml
+# Form 1 — top-level keys (recommended for the unconditional default)
+bed_temp = 50
+layer_height = 0.2
+
+# Form 2 — explicit unconditional [[rule]] (useful when you want to
+# group several defaults together as a named block, or place them
+# after some [[rule]] sections for source-order purposes)
+[[rule]]
+when = {}
+set.bed_temp = 50
+set.layer_height = 0.2
+
+# Form 3 — explicit [[rule]] with no `when` at all (equivalent to
+# Form 2; the resolver treats absent `when` as `when = {}`)
+[[rule]]
+set.bed_temp = 50
+set.layer_height = 0.2
+```
+
+All three desugar to the same specificity-0 rule. Form 1 is the
+canonical shape for hand-authored cascades and is what the
+OrcaSlicer-profile converter emits.
+
 ### Syntax — section shorthand (sugar)
 
 For the common single-condition case:
@@ -156,10 +186,18 @@ set.bed_temp = 45
 set.first_layer_bed_temp = 50
 ```
 
-The desugaring: any section name matching `<context_dim>.<value>`
-becomes an implicit `when.<context_dim> = <value>` rule, with the
-section body as `set.*` entries. Compound conditions require the
-explicit `[[rule]]` form.
+The desugaring chain across all syntactic sugars:
+
+- Top-level `key = value` → implicit `[[rule]] when = {}` block at
+  source position 0.
+- `[context_dim.value]` headers → implicit `[[rule]] when.<dim> =
+  "<value>"` block, with the section body as `set.*` entries.
+- `[[rule]]` blocks are the canonical form; compound conditions
+  (multiple `when.*` clauses) require this form.
+
+Source order is preserved across the desugaring: the top-level
+unconditional block always sits at position 0, then sections and
+`[[rule]]` blocks appear in their authored order.
 
 ### Resolution semantics — two phases
 

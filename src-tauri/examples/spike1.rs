@@ -18,9 +18,14 @@ use slic3r_ffi::{init, slice, Config, Error, ErrorKind, Model};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize)]
+/// Cascade file shape. Top-level keys are the unconditional default
+/// rule (see docs/profiles.md "three equivalent forms"); the `[[rule]]`
+/// array holds conditional rules.
+#[derive(Debug)]
 struct Cascade {
-    #[serde(rename = "rule")]
+    /// Specificity-0 rule built from the file's top-level keys. May be
+    /// empty if the file uses only `[[rule]]` blocks.
+    top_level: BTreeMap<String, String>,
     rules: Vec<Rule>,
 }
 
@@ -33,6 +38,38 @@ struct Rule {
 
 fn empty_value() -> toml::Value {
     toml::Value::Table(toml::map::Map::new())
+}
+
+fn parse_cascade(src: &str) -> Result<Cascade, Box<dyn std::error::Error>> {
+    // Two-pass parse: first as a generic table to harvest top-level
+    // keys (everything that isn't the `rule` array), then deserialize
+    // the `rule` array into typed Rules.
+    let root: toml::Table = src.parse()?;
+    let mut top_level = BTreeMap::new();
+    let mut rules_value: Option<toml::Value> = None;
+    for (k, v) in root {
+        if k == "rule" {
+            rules_value = Some(v);
+            continue;
+        }
+        match v {
+            toml::Value::String(s) => {
+                top_level.insert(k, s);
+            }
+            other => {
+                return Err(format!(
+                    "top-level key {k:?} must be a string (got {other:?}); use \
+                     [[rule]] for conditionals"
+                )
+                .into());
+            }
+        }
+    }
+    let rules: Vec<Rule> = match rules_value {
+        Some(v) => v.try_into()?,
+        None => Vec::new(),
+    };
+    Ok(Cascade { top_level, rules })
 }
 
 /// Flat dotted-key context (e.g. "filament.type" -> "PLA").
@@ -78,15 +115,25 @@ fn rule_matches(rule: &Rule, ctx: &Context) -> bool {
 /// source order (later rule wins). This implements the authored-cascade
 /// half of the two-phase resolution in docs/profiles.md; the spike
 /// doesn't model the `!important` override tiers.
+///
+/// Top-level keys count as a single specificity-0 rule at source
+/// position 0, applied before any `[[rule]]` blocks (so an explicit
+/// later unconditional rule overrides top-level keys by source order).
 fn resolve(cascade: &Cascade, ctx: &Context) -> Context {
+    let mut resolved = Context::new();
+    // Specificity-0 from the top-level keys, source position 0.
+    for (k, v) in &cascade.top_level {
+        resolved.insert(k.clone(), v.clone());
+    }
     let mut matching: Vec<(usize, usize, &Rule)> = cascade
         .rules
         .iter()
         .enumerate()
         .filter_map(|(idx, r)| rule_matches(r, ctx).then_some((rule_specificity(r), idx, r)))
         .collect();
+    // Stable sort by (specificity, source-index) — both ascending —
+    // so later same-specificity rules overwrite earlier ones.
     matching.sort_by_key(|(spec, idx, _)| (*spec, *idx));
-    let mut resolved = Context::new();
     for (_, _, rule) in &matching {
         for (k, v) in &rule.set {
             resolved.insert(k.clone(), v.clone());
@@ -178,8 +225,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("out:     {}\n", out_path.display());
 
     let cascade_src = std::fs::read_to_string(&cascade_path)?;
-    let cascade: Cascade = toml::from_str(&cascade_src)?;
-    eprintln!("rules in cascade: {}", cascade.rules.len());
+    let cascade = parse_cascade(&cascade_src)?;
+    eprintln!(
+        "cascade: {} top-level default keys + {} [[rule]] blocks",
+        cascade.top_level.len(),
+        cascade.rules.len()
+    );
 
     let ctx: Context = [("filament.type", "PLA"), ("plate.type", "Textured PEI")]
         .into_iter()
