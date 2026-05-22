@@ -92,6 +92,23 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache libslic3r cmake build tree
+        # The FFI crate's build.rs drives cmake under build/slic3r-ffi/
+        # — that's where libslic3r.a, libslic3r_ffi.so, and all the
+        # .o files for compiling libslic3r itself land (~5G raw,
+        # ~1-2G compressed). Without this cache, every CI run pays
+        # the ~15 min cold libslic3r build even with the OrcaSlicer
+        # deps tree cached. Key invalidates when the submodule moves
+        # or when the shim sources / CMakeLists / build.rs change;
+        # the restore-keys fallback lets ninja do an incremental
+        # rebuild on shim-source edits.
+        uses: actions/cache@v4
+        with:
+          path: build/slic3r-ffi
+          key: slic3r-ffi-${{ runner.os }}-${{ steps.orca.outputs.sha }}-${{ hashFiles('crates/slic3r-ffi/ffi/**', 'crates/slic3r-ffi/CMakeLists.txt', 'crates/slic3r-ffi/build.rs') }}
+          restore-keys: |
+            slic3r-ffi-${{ runner.os }}-${{ steps.orca.outputs.sha }}-
+
       - name: Cache cargo registry and target
         uses: actions/cache@v4
         with:
