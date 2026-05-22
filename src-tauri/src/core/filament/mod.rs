@@ -1,0 +1,11 @@
+//! Filament profile library and printer-state-to-profile resolution.
+//!
+//! Reads live filament state from each connected printer (AMS lite
+//! via MQTT on Bambu; per-toolhead loaded filament via HTTP on U1),
+//! resolves model material → physical slot bindings per (plate,
+//! printer), detects mismatches (material family, temperature range,
+//! color), and emits the right sync-on-send metadata for each printer
+//! driver.
+//!
+//! Owns FR-FS-1 through FR-FS-14 (PRD §6.8). Implementation lands in
+//! Phase 7.

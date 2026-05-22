@@ -1,102 +1,30 @@
-// Tauri commands bridging the renderer to libslic3r via orca-slicer-ffi.
-//
-// init runs once at app startup; the FFI crate's Once guard means re-calls are
-// no-ops. For v0 we expose introspection + one-shot slicing; persistent
-// Config/Model handles can come later as a state-owning struct in
-// tauri::State.
+//! Tauri application entry point.
+//!
+//! Wires the backend's module tree (`core::*`) into the Tauri runtime,
+//! initializes the libslic3r FFI once at startup, and registers the
+//! command surface the frontend talks to. Business logic lives in
+//! `core::*` — this file is just the seam between Tauri's runtime and
+//! our module tree.
 
-use serde::Serialize;
-use slic3r_ffi::{init, option_defs, slice, version, Config, Model};
-use std::path::PathBuf;
+pub mod core;
 
-#[derive(Serialize)]
-struct SlicerInfo {
-    version: String,
-    option_count: usize,
-}
-
-#[tauri::command]
-fn slicer_info() -> SlicerInfo {
-    SlicerInfo {
-        version: version(),
-        option_count: option_defs().len(),
-    }
-}
-
-#[derive(Serialize)]
-struct OptionSummary {
-    key: String,
-    ty: String,
-    label: Option<String>,
-    category: Option<String>,
-    default_value: Option<String>,
-}
-
-#[tauri::command]
-fn slicer_options(filter: Option<String>) -> Vec<OptionSummary> {
-    let needle = filter.unwrap_or_default().to_lowercase();
-    option_defs()
-        .into_iter()
-        .filter(|d| {
-            if needle.is_empty() {
-                true
-            } else {
-                d.key.to_lowercase().contains(&needle)
-                    || d.label.as_deref().map_or(false, |s| s.to_lowercase().contains(&needle))
-            }
-        })
-        .map(|d| OptionSummary {
-            key: d.key,
-            ty: format!("{:?}", d.ty),
-            label: d.label,
-            category: d.category,
-            default_value: d.default_serialized,
-        })
-        .collect()
-}
-
-#[derive(Serialize)]
-struct SliceResult {
-    ok: bool,
-    out_path: String,
-    error: Option<String>,
-}
-
-#[tauri::command]
-fn slicer_slice(model_path: String, out_path: String) -> SliceResult {
-    // Seed config with FullPrintConfig defaults, then let the file's
-    // embedded settings override (3MF carries a full printer profile in
-    // Metadata/project_settings.config). For STL/OBJ/STEP this just slices
-    // with defaults — fine for a smoke test but the result won't match
-    // any specific printer.
-    let do_it = || -> Result<(), slic3r_ffi::Error> {
-        let mut model = Model::new()?;
-        let mut config = Config::new()?;
-        model.load_with_config(PathBuf::from(&model_path), &mut config)?;
-        slice(&model, &config, PathBuf::from(&out_path))?;
-        Ok(())
-    };
-    match do_it() {
-        Ok(()) => SliceResult { ok: true, out_path, error: None },
-        Err(e) => SliceResult { ok: false, out_path, error: Some(format!("{e}")) },
-    }
-}
+use slic3r_ffi::init;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|_app| {
-            // Resources dir is only needed for STEP / font embossing; STL & 3MF
-            // load without it. Log level 3 = warning (matches OrcaSlicer's CLI
-            // default).
+            // Resources dir is only needed for STEP / font embossing; STL
+            // and 3MF load without it. Log level 3 = warning, matching
+            // OrcaSlicer's CLI default.
             init(None, 3).expect("libslic3r init failed");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            slicer_info,
-            slicer_options,
-            slicer_slice,
+            core::cascade::slicer_info,
+            core::cascade::slicer_options,
+            core::slice::slicer_slice,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
