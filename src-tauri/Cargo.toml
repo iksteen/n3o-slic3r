@@ -27,3 +27,10 @@ slic3r-ffi = { path = "../crates/slic3r-ffi" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 
+[dev-dependencies]
+toml = "0.8"
+
+[[example]]
+name = "spike1"
+path = "examples/spike1.rs"
+
