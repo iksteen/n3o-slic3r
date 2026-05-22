@@ -51,7 +51,7 @@ The Phase 0.5 spikes hand off concrete shopping lists to Phase 1:
 | Context-state structures (printer / build plate / filament) | ✅ done | [PR-1-7](phase-1/PR-1-7%20Context-state%20structures.md) |
 | Reference profiles (A1 mini, U1, plates, filaments) | ⚠️ partial | [PR-1-8](phase-1/PR-1-8%20Reference%20profiles.md) (cut to minimum: A1 mini + Textured PEI + Generic PLA + one hand-authored cascade; U1 + more filaments / plates deferred) |
 | Tauri command surface | ⚠️ partial | [PR-1-9](phase-1/PR-1-9%20Tauri%20command%20surface.md) (cascade_load + resolve + trace + context_dimensions wired; cascade_apply → ConfigHandle deferred until slicer_slice grows cascade integration) |
-| Resolver benchmarks | ❌ open | [PR-1-10](phase-1/PR-1-10%20Resolver%20benchmarks.md) |
+| Resolver benchmarks | ✅ done | [PR-1-10](phase-1/PR-1-10%20Resolver%20benchmarks.md) |
 | Phase 1 exit-criteria smoke | ⚠️ partial | [PR-1-11](phase-1/PR-1-11%20Exit-criteria%20smoke.md) (smoke binary + docs/phase-1-smoke.md; validation-errors example + CI hook + benchmark wiring deferred) |
 | Tool-change minimization investigation (carried from PR-0.5-3) | ❌ open | [PR-1-12](phase-1/PR-1-12%20Tool-change%20minimization%20investigation.md) |
 
