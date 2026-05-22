@@ -319,9 +319,24 @@ missing. Concrete next steps when picked up:
    `first_extruder_id` and `layer_tools.extruders` per layer in
    both runs and compare.
 
-This is real engine plumbing, not a config knob, so the fix likely
-lives in a PR-0.5-1-style libslic3r workaround documented in
-`docs/libslic3r-workarounds.md`.
+The fix is on *our* side of the FFI — replicate the missing
+pre-`apply` step OrcaSlicer's CLI/GUI does. Likely lives in
+`core/cascade_adapter` (or as a pre-`Print::apply` normalization in
+the FFI shim, alongside the existing PR-0.5-1-discovered
+normalizations). It is **not** a libslic3r patch — both Orca and
+BBS produce correct output on the same input using the same
+engine code, so the engine isn't the variable.
+
+**Investigation scheduled for early Phase 3.** PR-1-12 was
+originally framed as Phase 1 work; Phase 1's close-out review
+deferred it because Phase 3 ships the typed G-code parser
+(FR-GP-*) + 3MF reader/writer the investigation needs — without
+those, the diff work is grep + stares. With them, "extruders
+per layer N" + per-layer-per-tool A/B comparison vs Orca's
+reference output becomes a one-liner. The Phase-5-hardware-
+validation prerequisite still holds; the schedule between now
+and then is the open variable. See PR-1-12 "Deferral rationale"
+for the full reasoning.
 
 Other than the tool-change disparity, the gcode bodies are
 structurally similar — same `; CHANGE_LAYER` / `WIPE_START` /

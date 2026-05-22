@@ -6,15 +6,61 @@ Status: ❌ open (carried from PR-0.5-3).
 on the 4-color Benchy AMS input, our FFI-driven slice emits 76
 mid-print tool changes (2h 55m print, ~25 g filament) while
 OrcaSlicer-app and Bambu Studio both emit 7 (1h 3m print, ~14 g)
-using the same engine code. The cause is in *how we invoke
-libslic3r*, not the engine itself — see
-`docs/spikes/spike-3-bambu-ams.md` for the full chain.
+**using the same engine code**. Both Orca and BBS link the same
+libslic3r the FFI shim links — so the gap is on *our* side of the
+FFI, in pre-`apply` setup OrcaSlicer's CLI / GUI does that we
+skip, not in libslic3r itself. See `docs/spikes/spike-3-bambu-ams.md`
+for the diagnostic chain.
+
+**This is not "deep libslic3r work."** The investigation is in
+`external/OrcaSlicer/src/OrcaSlicer.cpp` (CLI main) and
+`external/OrcaSlicer/src/slic3r/GUI/Plater.cpp` (GUI slice path):
+the delta is whatever they call between `Model::read_from_file`
+and `print.apply`. Likely candidates from the spike-3 finding:
+`WipingExtrusions::set_support_extruder_overrides()`, per-volume
+`extruder` config propagation, or a normalization our shim
+doesn't replicate.
 
 **Why a Phase 1 ticket** (not Phase 5): the adapter (PR-1-6) is
 the right place to apply whatever pre-`apply` setup is missing.
 Touching adapter code with the investigation still cold risks
 re-introducing the gap. Land the fix while the spike context is
 fresh.
+
+### Deferral rationale (after Phase 1 close-out review)
+
+PR-1-12 is **deferred from Phase 1 to early Phase 3 (or as a hard
+Phase 5 prerequisite)**, not because the bug got less important —
+it's still the Phase 5 hardware-validation gate — but because
+**Phase 3 is where the investigation gets cheap**.
+
+Phase 3 ships:
+- **Typed G-code parser** (FR-GP-*). Today we'd diff `spike3.gcode`
+  vs OrcaSlicer's reference by `grep '^T'` + manual stares. With
+  the parser, "extruders used per layer N", "feature type per
+  move", and "tool changes per Z band" become queryable data. A
+  per-layer-per-tool diff between our output and Orca's would be
+  a one-liner.
+- **3MF reader/writer.** PR-0.5-5's "frankenswap" hand-rebuilt a
+  `.gcode.3mf` to test platecycler portability. Phase 3 makes that
+  mechanical, so spinning up A/B comparisons across different
+  pre-`apply` setups is fast.
+- **Closed slice loop** (model → slice → gcode → parse → write
+  .gcode.3mf). The investigation needs to instrument every step of
+  this loop; Phase 3 is when we own the full shape.
+
+Spike-3 context (finding doc, BBS reference artifacts at
+`~/spike3-bbs/`, the comparison numbers) is checked in and
+stays valid — picking the thread up after Phase 3 costs maybe
+an hour to re-orient, vs the multiple days of build-our-own-
+diffing-tools the investigation would need today.
+
+**Schedule:** plan to land PR-1-12's investigation in early Phase 3
+(after the parser ships) and the *fix* alongside PR-1-6's
+adapter-touch in Phase 3's slice-loop closing. **Phase 5 cannot
+start hardware validation until this is resolved** — the
+prerequisite framing from `docs/spikes/spike-3-bambu-ams.md`
+holds.
 
 **Acceptance criteria.**
 

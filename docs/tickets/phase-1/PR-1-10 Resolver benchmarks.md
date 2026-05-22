@@ -1,6 +1,6 @@
 # PR-1-10 — Resolver benchmarks
 
-Status: ❌ open.
+Status: ✅ done. `src-tauri/tests/cascade_perf.rs` ships three perf gates as plain `#[test]`s — kept inside `cargo test --release` rather than wired through `criterion`, so CI gets the regression gate for free. Each test runs N=100 iterations with warm-up, asserts mean latency under the FR-CAS-11 budget: resolve A1 mini PLA/PEI < 10 ms; resolve 4-slot synthetic < 15 ms; resolve + adapter expansion < 100 ms. Today's small reference cascade resolves in microseconds — the budget is a regression gate, not a real target. If Phase 4's UI surfaces the resolver as a hot path, swap in criterion for statistical-quality numbers.
 
 **Scope.** Performance budget for the resolver + adapter pipeline,
 per FR-CAS-11: full 4-slot resolution under 10 ms, plus adapter
