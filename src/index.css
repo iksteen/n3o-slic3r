@@ -580,6 +580,135 @@
     background: var(--surface-3);
     color: var(--text);
   }
+
+  /* ─────────── Autosave recovery dialog (PR-5-10 UI) ─────────── */
+  .autosave-recovery-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: color-mix(in oklch, var(--text) 35%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+  }
+  .autosave-recovery-dialog {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    box-shadow: var(--shadow-lg);
+    max-width: 520px;
+    width: 100%;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .autosave-recovery-head {
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .autosave-recovery-title {
+    margin: 0 0 4px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .autosave-recovery-sub {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .autosave-recovery-list-error {
+    margin: 8px 20px 0;
+    padding: 8px 10px;
+    background: var(--danger-soft);
+    border: 1px solid color-mix(in oklch, var(--danger) 35%, transparent);
+    border-radius: 6px;
+    color: oklch(0.40 0.18 25);
+    font-size: 11.5px;
+  }
+  .autosave-recovery-list {
+    margin: 0;
+    padding: 8px 12px 12px;
+    list-style: none;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .autosave-recovery-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+  }
+  .autosave-recovery-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+  }
+  .autosave-recovery-time {
+    font-size: 12.5px;
+    color: var(--text);
+    font-weight: 500;
+  }
+  .autosave-recovery-size {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .autosave-recovery-uuid {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-dim);
+    margin-left: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .autosave-recovery-actions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .autosave-recovery-btn {
+    padding: 4px 10px;
+    font-size: 11.5px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text);
+  }
+  .autosave-recovery-btn:hover:not(:disabled) {
+    background: var(--surface-3);
+  }
+  .autosave-recovery-btn:disabled {
+    opacity: 0.5;
+  }
+  .autosave-recovery-btn.primary {
+    background: var(--accent);
+    color: white;
+    border-color: transparent;
+  }
+  .autosave-recovery-btn.primary:hover:not(:disabled) {
+    background: oklch(from var(--accent) calc(l - 0.05) c h);
+  }
+  .autosave-recovery-btn.danger {
+    color: oklch(0.50 0.18 25);
+  }
+  .autosave-recovery-btn.danger:hover:not(:disabled) {
+    background: var(--danger-soft);
+  }
+  .autosave-recovery-row-error {
+    grid-column: 1 / -1;
+    font-size: 11px;
+    color: oklch(0.50 0.18 25);
+  }
   .sp-header {
     border-bottom: 1px solid var(--hairline);
     background: var(--surface);

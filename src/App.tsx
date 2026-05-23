@@ -5,6 +5,11 @@ import { SlicePanel } from "./slice/SlicePanel";
 import { PlateTabs } from "./plates/PlateTabs";
 import { useProjectSession } from "./project/useProjectSession";
 import {
+  AutosaveRecoveryDialog,
+  useAutosaveRecoveryGate,
+} from "./project/AutosaveRecoveryDialog";
+import { autosaveEnable } from "./project/autosaveCommands";
+import {
   SettingsPanelHost,
   useSettingsPanelVisible,
 } from "./settings/SettingsPanelHost";
@@ -17,6 +22,7 @@ function App() {
   const [showDebug, setShowDebug] = useState(false);
   const [panelVisible, setPanelVisible] = useSettingsPanelVisible();
   const session = useProjectSession();
+  const recovery = useAutosaveRecoveryGate();
 
   useEffect(() => {
     invoke<SlicerInfo>("slicer_info")
@@ -24,8 +30,21 @@ function App() {
       .catch(() => undefined);
   }, []);
 
+  // Enable the autosave worker on launch. Safe to fire before the
+  // recovery dialog resolves — the worker writes to the new
+  // session's per-uuid file, which never collides with a still-
+  // unresolved recovery candidate (different uuid).
+  useEffect(() => {
+    void autosaveEnable().catch((err) =>
+      console.error("[autosave] enable failed", err),
+    );
+  }, []);
+
   return (
     <div className="app">
+      {!recovery.resolved && (
+        <AutosaveRecoveryDialog onResolved={recovery.markResolved} />
+      )}
       <header className="topbar">
         <span className="brand">
           <span className="brand-mark" aria-hidden />
