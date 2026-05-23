@@ -76,6 +76,13 @@ const MAX_HEADER_LINES: usize = 4096;
 /// comment patterns to typed fields. Reading stops at the first
 /// non-comment line or EOF, whichever comes first — production
 /// G-code emits the entire header in a contiguous comment block.
+///
+/// Use this for foreign-gcode header scanning where you want a
+/// bounded read on possibly-pathological input (Phase 6 preview
+/// drag-drop). For libslic3r-output where the slice-summary
+/// metadata lives in the trailing CONFIG_BLOCK, the caller must
+/// pre-collect comments + use [`parse_all_metadata`] instead — see
+/// `core::slice::summary::build_summary` for that path.
 pub fn parse_header<R: BufRead>(input: R) -> HeaderMetadata {
     let mut meta = HeaderMetadata::default();
     let mut count = 0;
@@ -96,15 +103,7 @@ pub fn parse_header<R: BufRead>(input: R) -> HeaderMetadata {
         if !trimmed.starts_with(';') && !trimmed.starts_with('(') {
             break;
         }
-        // Strip the delimiter for pattern matching.
-        let content = if let Some(rest) = trimmed.strip_prefix(';') {
-            rest.trim()
-        } else if let Some(rest) = trimmed.strip_prefix('(') {
-            rest.trim_end_matches(')').trim()
-        } else {
-            trimmed
-        };
-        dispatch(content, &mut meta);
+        dispatch_line(trimmed, &mut meta);
     }
     meta
 }
@@ -112,6 +111,51 @@ pub fn parse_header<R: BufRead>(input: R) -> HeaderMetadata {
 /// Convenience wrapper for in-memory strings.
 pub fn parse_header_str(src: &str) -> HeaderMetadata {
     parse_header(src.as_bytes())
+}
+
+/// Walk every comment-prefixed line in `input` (no line cap, no
+/// early bail on non-comment lines) and dispatch the typed fields.
+/// Built for the libslic3r-output summary path: the slice-summary
+/// metadata (`total layers count`, `estimated printing time`,
+/// `filament used`) lives in the trailing CONFIG_BLOCK that
+/// [`parse_header`] never reaches.
+///
+/// Caller is expected to have pre-filtered to comment lines (so
+/// non-comments are tolerated as a no-op rather than terminating
+/// the walk) — see `core::slice::summary::collect_comment_lines`.
+pub fn parse_all_metadata<R: BufRead>(input: R) -> HeaderMetadata {
+    let mut meta = HeaderMetadata::default();
+    for line_result in input.lines() {
+        let Ok(line) = line_result else {
+            break;
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !trimmed.starts_with(';') && !trimmed.starts_with('(') {
+            // Non-comment lines are tolerated (e.g. interleaved
+            // gcode commands the caller forgot to filter) — just
+            // skip and keep walking.
+            continue;
+        }
+        dispatch_line(trimmed, &mut meta);
+    }
+    meta
+}
+
+/// Strip the leading `;` / `(`-`)` delimiter from a comment-line
+/// and pass the inner content to [`dispatch`]. Shared by
+/// [`parse_header`] and [`parse_all_metadata`].
+fn dispatch_line(trimmed: &str, meta: &mut HeaderMetadata) {
+    let content = if let Some(rest) = trimmed.strip_prefix(';') {
+        rest.trim()
+    } else if let Some(rest) = trimmed.strip_prefix('(') {
+        rest.trim_end_matches(')').trim()
+    } else {
+        trimmed
+    };
+    dispatch(content, meta);
 }
 
 fn dispatch(content: &str, meta: &mut HeaderMetadata) {

@@ -19,5 +19,8 @@ pub use model::{
     MoveCommand, MoveParam, Other, Position, SemanticComment, ToolChange,
 };
 pub use parser::{parse_lines, parse_str, parse_with_feature_context, ParseError, ParseErrorKind};
-pub use header::{parse_header, parse_header_str, FilamentUsage, HeaderMetadata, SlicerOrigin};
+pub use header::{
+    parse_all_metadata, parse_header, parse_header_str, FilamentUsage,
+    HeaderMetadata, SlicerOrigin,
+};
 pub use serializer::{to_string, write_lines};
