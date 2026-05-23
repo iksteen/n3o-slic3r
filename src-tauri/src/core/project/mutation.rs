@@ -172,12 +172,55 @@ impl Project {
     ) -> (PlateId, Vec<SceneEvent>) {
         let id = self.next_plate_id();
         let position = (self.plates.len() + 1) as u32;
-        let plate = match printer {
-            Some(p) => Plate::with_printer(id, p, position),
+
+        // Auto-bind precedence (mirrors the auto-bind-materials
+        // pattern from PR-5-6):
+        //   1. Caller-supplied `printer` wins outright.
+        //   2. Otherwise inherit from the currently-active plate
+        //      (the tab the user clicked "+ New plate" from — most
+        //      multi-plate workflows want every plate on the same
+        //      printer).
+        //   3. Otherwise fall back to the bundled-catalog default
+        //      (fresh project case — first launch).
+        let binding = printer
+            .or_else(|| {
+                self.plates
+                    .get(self.active_plate)
+                    .and_then(|p| p.printer.clone())
+            })
+            .or_else(crate::core::printer::default_binding);
+
+        let mut plate = match &binding {
+            Some(b) => Plate::with_printer(id, b.clone(), position),
             None => Plate::new(id, position),
         };
+        // Populate the bed visualization so the viewport renders
+        // immediately on plate switch — set_plate_printer would
+        // otherwise be the only path setting plate.scene.bed, but
+        // it's only called by the explicit picker flow.
+        if let Some(b) = &binding {
+            if let Some(profile) = crate::core::printer::lookup(&b.printer_identity) {
+                let bed = crate::core::scene::bed::bed_for_printer(&profile);
+                plate.scene.exclusion_zones = bed.exclusion_zones.clone();
+                plate.scene.bed = Some(bed);
+            }
+        }
         self.plates.push(plate);
-        (id, vec![SceneEvent::PlateAdded { plate_id: id }])
+
+        // PlateAdded triggers the frontend's snapshot refetch which
+        // pulls bed + binding back in one go. BedChanged is emitted
+        // for symmetry with the other bed-setting paths so any
+        // listener (e.g. the per-plate scene mirror) sees a single
+        // canonical "bed for plate N is X" event.
+        let mut events = vec![SceneEvent::PlateAdded { plate_id: id }];
+        let new_plate = self.plates.last().expect("plate just pushed");
+        if let Some(bed) = &new_plate.scene.bed {
+            events.push(SceneEvent::BedChanged {
+                plate_id: id,
+                bed: Some(bed.clone()),
+            });
+        }
+        (id, events)
     }
 
     /// Drop a plate by id. Errors when:
@@ -2046,6 +2089,10 @@ mod tests {
     #[test]
     fn transform_op_with_no_bed_emits_no_oob_event() {
         let mut p = Project::default();
+        // Project::default now auto-binds the bundled printer + its
+        // bed. This test pins the no-bed code path explicitly, so
+        // clear it before the move.
+        p.plates[0].scene.bed = None;
         let (_, obj) = add_cube(&mut p);
         let events = p
             .translate_object(obj, Vec3::new(500.0, 0.0, 0.0))
@@ -2121,10 +2168,79 @@ mod tests {
         assert_eq!(new_id, PlateId(2));
         assert_eq!(p.plates.len(), 2);
         assert_eq!(p.active_plate, 0, "active plate unchanged");
-        assert!(matches!(
-            events.as_slice(),
-            [SceneEvent::PlateAdded { plate_id }] if *plate_id == new_id,
-        ));
+        // PlateAdded + BedChanged: the auto-bind branch (default
+        // binding inherits from active plate) populates the new
+        // plate's bed in the same mutation, so the renderer sees
+        // both events.
+        assert!(matches!(events.first(), Some(SceneEvent::PlateAdded { plate_id }) if *plate_id == new_id));
+        assert!(events.iter().any(|e| matches!(e, SceneEvent::BedChanged { plate_id, .. } if *plate_id == new_id)));
+    }
+
+    #[test]
+    fn add_plate_inherits_printer_from_active_plate() {
+        use crate::core::project::binding::PrinterBinding;
+        let mut p = Project::default();
+        // Override the bootstrap plate's binding so we can tell the
+        // inheritance apart from the bundled-default fallback.
+        p.plates[0].printer = Some(PrinterBinding {
+            printer_identity: "snapmaker-u1".into(),
+            build_plate_identity: "Magnetic".into(),
+        });
+        let (new_id, _) = p.add_plate(None);
+        let new_plate = p.plate(new_id).unwrap();
+        assert_eq!(
+            new_plate.printer.as_ref().map(|b| b.printer_identity.as_str()),
+            Some("snapmaker-u1"),
+            "inherits from active plate",
+        );
+        assert_eq!(
+            new_plate.printer.as_ref().map(|b| b.build_plate_identity.as_str()),
+            Some("Magnetic"),
+        );
+    }
+
+    #[test]
+    fn add_plate_falls_back_to_default_binding_when_active_unbound() {
+        let mut p = Project::default();
+        // Clear the bootstrap binding so the fallback can fire.
+        p.plates[0].printer = None;
+        p.plates[0].scene.bed = None;
+        let (new_id, _) = p.add_plate(None);
+        let new_plate = p.plate(new_id).unwrap();
+        assert!(
+            new_plate.printer.is_some(),
+            "fallback to bundled-default binding",
+        );
+    }
+
+    #[test]
+    fn add_plate_respects_explicit_binding() {
+        use crate::core::project::binding::PrinterBinding;
+        let mut p = Project::default();
+        let explicit = PrinterBinding {
+            printer_identity: "snapmaker-u1".into(),
+            build_plate_identity: "Magnetic".into(),
+        };
+        let (new_id, _) = p.add_plate(Some(explicit.clone()));
+        let new_plate = p.plate(new_id).unwrap();
+        assert_eq!(
+            new_plate.printer.as_ref().map(|b| b.printer_identity.as_str()),
+            Some("snapmaker-u1"),
+            "explicit binding wins over inheritance",
+        );
+    }
+
+    #[test]
+    fn project_default_bootstraps_with_bundled_printer() {
+        let p = Project::default();
+        assert!(
+            p.plates[0].printer.is_some(),
+            "default project's first plate is auto-bound",
+        );
+        assert!(
+            p.plates[0].scene.bed.is_some(),
+            "auto-bind also populates the bed visualization",
+        );
     }
 
     #[test]
@@ -2535,10 +2651,15 @@ mod tests {
     #[test]
     fn set_plate_printer_targets_specific_plate() {
         let mut p = Project::default();
+        // Project::default + add_plate both auto-populate the bed;
+        // clear both so the assertion below pins set_plate_printer's
+        // targeting (only the named plate's bed flips).
+        p.plates[0].scene.bed = None;
         let (id_b, _) = p.add_plate(None);
+        p.plates[1].scene.bed = None;
         p.set_plate_printer(id_b, Some(&a1_mini_for_test())).unwrap();
-        assert!(p.plates[0].scene.bed.is_none());
-        assert!(p.plates[1].scene.bed.is_some());
+        assert!(p.plates[0].scene.bed.is_none(), "plate 0 bed untouched");
+        assert!(p.plates[1].scene.bed.is_some(), "plate 1 bed set");
         assert_eq!(p.active_plate, 0);
     }
 
@@ -2574,6 +2695,12 @@ mod tests {
         use crate::core::project::PrinterBinding;
         use crate::core::scene::events::SceneEvent;
         let mut p = Project::default();
+        // Clear the bootstrap auto-bind so this test pins the
+        // rebinding-from-unbound case explicitly (previous_printer
+        // = None). The rebind-from-bound case is covered by
+        // `rebind_plate_printer_records_previous_printer`.
+        p.plates[0].printer = None;
+        p.plates[0].scene.bed = None;
         let profile = a1_mini_for_test();
         let binding = PrinterBinding {
             printer_identity: "bambu-a1-mini".into(),
@@ -2624,6 +2751,10 @@ mod tests {
     fn rebind_plate_printer_rejects_unsupported_build_plate() {
         use crate::core::project::PrinterBinding;
         let mut p = Project::default();
+        // Clear the bootstrap auto-bind so the "binding NOT updated"
+        // assertion below isn't conflated with the default binding.
+        p.plates[0].printer = None;
+        p.plates[0].scene.bed = None;
         let profile = a1_mini_for_test();
         let err = p
             .rebind_plate_printer(

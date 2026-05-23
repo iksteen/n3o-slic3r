@@ -13,4 +13,4 @@ pub mod registry;
 pub mod snapmaker;
 
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
-pub use registry::{bundled_catalog, lookup, CatalogEntry};
+pub use registry::{bundled_catalog, default_binding, lookup, CatalogEntry};

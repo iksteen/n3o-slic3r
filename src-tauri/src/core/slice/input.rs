@@ -523,9 +523,12 @@ mod tests {
     fn unbound_printer_errors() {
         let mut project = Project::default();
         project.cascade_handle = Some(1u64);
+        // Project::default now auto-binds; clear it so this test
+        // pins the genuinely-unbound error path.
+        project.plates[0].printer = None;
+        project.plates[0].scene.bed = None;
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
-        // Don't bind a printer.
         let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
             .expect_err("no printer bound");
         assert!(matches!(

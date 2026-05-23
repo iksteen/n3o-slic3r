@@ -25,6 +25,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::profile::PrinterProfile;
+use crate::core::project::binding::PrinterBinding;
 
 /// One bundled printer profile: identity slug + the embedded TOML
 /// body. Identity is the stable string the frontend passes to
@@ -110,6 +111,29 @@ pub fn lookup(identity: &str) -> Option<PrinterProfile> {
 
 fn parse(toml: &str) -> Result<PrinterProfile, toml::de::Error> {
     toml::from_str::<PrinterProfile>(toml)
+}
+
+/// Best-guess default printer binding for fresh projects + newly-
+/// added plates whose caller didn't pick a printer. Mirrors the
+/// auto-bind-materials pattern: the user gets a sensible starting
+/// state and changes it explicitly via the picker if it doesn't
+/// match their actual printer.
+///
+/// Picks the first bundled printer + its first supported build
+/// plate. Returns `None` only if the bundled catalog is empty or
+/// the first printer ships with no build plates (neither happens
+/// today — both are compile-time-enforced by the embedded TOML).
+pub fn default_binding() -> Option<PrinterBinding> {
+    let entry = bundled_catalog().into_iter().next()?;
+    let build_plate_identity = entry
+        .profile
+        .supported_build_plates
+        .into_iter()
+        .next()?;
+    Some(PrinterBinding {
+        printer_identity: entry.identity,
+        build_plate_identity,
+    })
 }
 
 #[cfg(test)]

@@ -181,9 +181,16 @@ pub struct Plate {
 
 impl Default for Project {
     fn default() -> Self {
+        // Mirror the auto-bind-materials pattern (PR-5-6 follow-up):
+        // the bootstrap plate inherits the bundled-catalog default
+        // printer so first-launch slicing works without the user
+        // having to open the picker first. Override via the picker
+        // (PR-5-4) when the actual printer differs.
+        let mut plate = Plate::new(PlateId(1), 1);
+        bind_default_printer_in_place(&mut plate);
         Self {
             uuid: Uuid::new_v4(),
-            plates: vec![Plate::new(PlateId(1), 1)],
+            plates: vec![plate],
             active_plate: 0,
             cascade_handle: None,
             user_overrides: HashMap::new(),
@@ -195,6 +202,25 @@ impl Default for Project {
             next_object_id: 0,
         }
     }
+}
+
+/// Bind `plate.printer` + populate `plate.scene.bed` from the
+/// bundled default printer. Silent no-op when the bundled catalog
+/// is empty (compile-time-enforced not to happen today) or the
+/// printer registry can't resolve the chosen identity (likewise
+/// shouldn't happen for bundled entries — defense in depth).
+fn bind_default_printer_in_place(plate: &mut Plate) {
+    let Some(binding) = crate::core::printer::default_binding() else {
+        return;
+    };
+    let Some(profile) = crate::core::printer::lookup(&binding.printer_identity)
+    else {
+        return;
+    };
+    let bed = crate::core::scene::bed::bed_for_printer(&profile);
+    plate.scene.exclusion_zones = bed.exclusion_zones.clone();
+    plate.scene.bed = Some(bed);
+    plate.printer = Some(binding);
 }
 
 impl Project {
@@ -365,12 +391,16 @@ mod tests {
     }
 
     #[test]
-    fn default_project_has_one_empty_plate_no_cascade() {
+    fn default_project_has_one_plate_no_cascade() {
         let p = Project::default();
         assert_eq!(p.plates.len(), 1);
         assert_eq!(p.plates[0].id, PlateId(1));
         assert_eq!(p.plates[0].name, "Plate 1");
-        assert_eq!(p.plates[0].printer, None, "empty plate has no printer");
+        // Project::default auto-binds the bootstrap plate to the
+        // bundled-default printer (mirrors the auto-bind-materials
+        // pattern). The actual binding identity is exercised in
+        // `project_default_bootstraps_with_bundled_printer`.
+        assert!(p.plates[0].printer.is_some(), "auto-bound to bundled default");
         assert_eq!(p.active_plate, 0);
         assert_eq!(p.cascade_handle, None, "no cascade loaded at startup");
         assert!(p.meshes.is_empty());
