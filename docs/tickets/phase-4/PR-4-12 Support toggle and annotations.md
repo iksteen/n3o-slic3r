@@ -1,6 +1,6 @@
 # PR-4-12 — Support toggle per object + first ~30 "why this matters" annotations
 
-Status: ❌ open.
+Status: ✅ shipped — `src/settings/SupportToggle.tsx` ships the FR-3D-6 on/off switch (maps to libslic3r's `enable_support` bool via the per-object override store) with the visual + textual rule-of-thumb the mockup specifies ("Auto-generated supports using current cascade settings" / "No supports on this object"). `src/settings/annotations/data.ts` carries 30 high-impact entries spanning Quality / Layers / Walls / Strength / Speed / Support / Adhesion / Bed / Filament / Retraction / Wall / Wipe-tower categories. Each entry is mechanical + brand-agnostic per the authoring guidance, capped at ~500 chars to keep tooltips readable. 3 new vitest cases (85 → 88 frontend tests): annotation count floor, length cap, canonical-key coverage.
 
 **Scope.** Two related but independently-scoped deliverables that
 naturally pair (both are user-facing-content work that doesn't
