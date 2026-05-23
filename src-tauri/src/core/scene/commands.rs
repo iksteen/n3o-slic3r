@@ -7,10 +7,12 @@
 //! this file only validates the Tauri plumbing.
 
 use super::events::{MirrorAxis, SceneEvent, SceneOpError, SelectMode};
+use super::bed::BedMesh;
 use super::state::{
     ActivePlate, CameraState, ExclusionZone, GizmoState, MeshHeader, MeshId, ObjectId,
     SceneObject, SceneState,
 };
+use crate::core::printer::profile::PrinterProfile;
 use super::transform::Transform;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -45,6 +47,9 @@ pub struct SceneSnapshot {
     pub gizmo: GizmoState,
     pub plate: Option<ActivePlate>,
     pub exclusion_zones: Vec<ExclusionZone>,
+    /// Active bed visualization + bounds. `None` until the user
+    /// selects a printer.
+    pub bed: Option<BedMesh>,
 }
 
 /// Snapshot of the scene state. Frontend calls this on startup /
@@ -71,7 +76,24 @@ pub fn scene_snapshot(state: State<Mutex<SceneState>>) -> Result<SceneSnapshot, 
         gizmo: s.gizmo.clone(),
         plate: s.plate.clone(),
         exclusion_zones: s.exclusion_zones.clone(),
+        bed: s.bed.clone(),
     })
+}
+
+/// Install the active printer's bed visualization + bounds. Pass
+/// `None` to clear (project closed / no printer selected).
+#[tauri::command]
+#[tracing::instrument(skip(state, window, printer))]
+pub fn scene_set_active_printer(
+    printer: Option<PrinterProfile>,
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s.set_active_printer(printer.as_ref());
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
 }
 
 /// Return the binary vertex/normal/index buffers for one mesh.

@@ -10,8 +10,9 @@
 //! `scene:object_updated`). The frontend's `eventBridge.ts`
 //! (PR-2-9) matches on these to update the local mirror.
 
+use super::bed::{BedMesh, OutOfBoundsReason};
 use super::state::{
-    CameraState, ExclusionZone, GizmoState, MeshHeader, MeshId, ObjectId, SceneObject,
+    CameraState, GizmoState, MeshHeader, MeshId, ObjectId, SceneObject,
 };
 use serde::Serialize;
 
@@ -33,10 +34,18 @@ pub enum SceneEvent {
     },
     GizmoChanged(GizmoState),
     CameraChanged(CameraState),
-    /// Active plate / exclusion zones updated. Renderer redraws bed
-    /// + zone wireframes.
-    BedChanged {
-        zones: Vec<ExclusionZone>,
+    /// Active bed payload changed (printer switch). Renderer
+    /// redraws the grid + origin marker + exclusion-zone overlays
+    /// from this. None means "no active printer / clear the bed".
+    BedChanged(Option<BedMesh>),
+    /// Object is currently out of bounds. Non-blocking; the user
+    /// fixes it or accepts. Empty `reasons` is impossible (the
+    /// scene only emits this on actual violations) but the field
+    /// is plural since multiple reasons can apply (off-bed *and*
+    /// below z=0).
+    ObjectOutOfBounds {
+        id: ObjectId,
+        reasons: Vec<OutOfBoundsReason>,
     },
     /// Non-uniform scale was just applied (factor components differ).
     /// Non-blocking — the renderer pairs this with the ObjectUpdated
@@ -61,7 +70,8 @@ impl SceneEvent {
             Self::SelectionChanged { .. } => "scene:selection_changed",
             Self::GizmoChanged(_) => "scene:gizmo_changed",
             Self::CameraChanged(_) => "scene:camera_changed",
-            Self::BedChanged { .. } => "scene:bed_changed",
+            Self::BedChanged(_) => "scene:bed_changed",
+            Self::ObjectOutOfBounds { .. } => "scene:object_out_of_bounds",
             Self::NonUniformScale { .. } => "scene:non_uniform_scale",
         }
     }

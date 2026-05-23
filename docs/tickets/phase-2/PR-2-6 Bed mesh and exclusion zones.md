@@ -1,6 +1,6 @@
 # PR-2-6 — Bed mesh + exclusion zones
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** The build-plate visualization the renderer paints
 beneath the scene: bed grid, origin marker, A1 mini's exclusion

@@ -52,6 +52,7 @@ pub fn run() {
             core::scene::commands::scene_object_lay_flat,
             core::scene::commands::scene_gizmo_set,
             core::scene::commands::scene_camera_set,
+            core::scene::commands::scene_set_active_printer,
             core::slice::slicer_slice,
         ])
         .run(tauri::generate_context!())

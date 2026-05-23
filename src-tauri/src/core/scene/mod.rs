@@ -19,6 +19,7 @@
 //! adapter (PR-1-6) needs it for `curr_bed_type`, and the Phase 2
 //! renderer will extend it with mesh + adhesion + visuals.
 
+pub mod bed;
 pub mod build_plate;
 pub mod commands;
 pub mod events;
@@ -26,8 +27,9 @@ pub mod loaders;
 pub mod state;
 pub mod transform;
 
+pub use bed::{bed_for_printer, object_out_of_bounds, BedMesh, BoundsAxis, OutOfBoundsReason};
 pub use build_plate::{BuildPlate, SurfaceKind};
-pub use events::{SceneEvent, SceneOpError, SelectMode};
+pub use events::{MirrorAxis, SceneEvent, SceneOpError, SelectMode};
 pub use state::{
     ActivePlate, CameraState, ExclusionZone, GizmoMode, GizmoState, Mesh, MeshId,
     MeshProvenance, ObjectId, ProjectionMode, SceneObject, SceneState,

@@ -283,6 +283,11 @@ pub struct SceneState {
     pub gizmo: GizmoState,
     pub plate: Option<ActivePlate>,
     pub exclusion_zones: Vec<ExclusionZone>,
+    /// Active bed visualization + bounds (PR-2-6). `None` when no
+    /// printer is selected yet — the scene is still usable for
+    /// loading meshes, just without the out-of-bounds check or grid.
+    #[serde(default)]
+    pub bed: Option<super::bed::BedMesh>,
     next_mesh_id: u64,
     next_object_id: u64,
 }
@@ -427,7 +432,9 @@ impl SceneState {
             .ok_or(SceneOpError::UnknownObject(id))?;
         obj.transform = Transform::translation(delta).compose(obj.transform);
         let clone = obj.clone();
-        Ok(vec![SceneEvent::ObjectUpdated(clone)])
+        let mut events = vec![SceneEvent::ObjectUpdated(clone)];
+        events.extend(self.out_of_bounds_event(id));
+        Ok(events)
     }
 
     /// Rotate an object around `axis` by `radians`. Pivot defaults to
@@ -473,7 +480,9 @@ impl SceneState {
             .compose(Transform::translation(-pivot));
         obj.transform = rotate_around_pivot.compose(obj.transform);
         let clone = obj.clone();
-        Ok(vec![SceneEvent::ObjectUpdated(clone)])
+        let mut events = vec![SceneEvent::ObjectUpdated(clone)];
+        events.extend(self.out_of_bounds_event(id));
+        Ok(events)
     }
 
     /// Scale an object by per-axis factors. Non-uniform scale emits
@@ -496,6 +505,7 @@ impl SceneState {
         if is_non_uniform(factor) {
             events.push(SceneEvent::NonUniformScale { id });
         }
+        events.extend(self.out_of_bounds_event(id));
         Ok(events)
     }
 
@@ -521,7 +531,9 @@ impl SceneState {
         let obj = self.objects.get_mut(&id).unwrap();
         obj.transform = mirror_around_center.compose(obj.transform);
         let clone = obj.clone();
-        Ok(vec![SceneEvent::ObjectUpdated(clone)])
+        let mut events = vec![SceneEvent::ObjectUpdated(clone)];
+        events.extend(self.out_of_bounds_event(id));
+        Ok(events)
     }
 
     /// Lay-flat heuristic: re-orient the object to minimize its
@@ -613,7 +625,9 @@ impl SceneState {
         obj.transform = Transform::from_mat4(final_xform);
 
         let clone = obj.clone();
-        Ok(vec![SceneEvent::ObjectUpdated(clone)])
+        let mut events = vec![SceneEvent::ObjectUpdated(clone)];
+        events.extend(self.out_of_bounds_event(id));
+        Ok(events)
     }
 
     /// World-space center of an object's mesh bounding box. Pulled
@@ -650,7 +664,9 @@ impl SceneState {
             .ok_or(SceneOpError::UnknownObject(id))?;
         obj.transform = transform;
         let clone = obj.clone();
-        Ok(vec![SceneEvent::ObjectUpdated(clone)])
+        let mut events = vec![SceneEvent::ObjectUpdated(clone)];
+        events.extend(self.out_of_bounds_event(id));
+        Ok(events)
     }
 
     /// Delete one or more objects. Removes from selection if
@@ -717,6 +733,48 @@ impl SceneState {
     pub fn set_camera(&mut self, camera: CameraState) -> Vec<SceneEvent> {
         self.camera = camera.clone();
         vec![SceneEvent::CameraChanged(camera)]
+    }
+
+    /// Install the active printer's bed. Recomputes the bed
+    /// visualization, caches it on the scene state, and emits a
+    /// `BedChanged` event the renderer subscribes to. Pass `None`
+    /// to clear the bed (e.g., when the user closes the project).
+    pub fn set_active_printer(
+        &mut self,
+        printer: Option<&crate::core::printer::profile::PrinterProfile>,
+    ) -> Vec<SceneEvent> {
+        let new_bed = printer.map(super::bed::bed_for_printer);
+        // Mirror exclusion zones onto the scene's flat field for
+        // consumers that read them directly (the snapshot wire
+        // format keeps both — `bed.exclusion_zones` is the
+        // authoritative copy, and `exclusion_zones` here is the
+        // legacy view PR-2-2's snapshot already exposes).
+        self.exclusion_zones = new_bed
+            .as_ref()
+            .map(|b| b.exclusion_zones.clone())
+            .unwrap_or_default();
+        self.bed = new_bed.clone();
+        vec![SceneEvent::BedChanged(new_bed)]
+    }
+
+    /// Check `object_id` against the active bed and emit warnings
+    /// for every reason it's out of bounds. No bed = no check
+    /// (silently). Designed to be called by every transform op so
+    /// the UI can flash a non-blocking warning the instant the
+    /// user nudges an object off the plate.
+    fn out_of_bounds_event(&self, object_id: ObjectId) -> Option<SceneEvent> {
+        let bed = self.bed.as_ref()?;
+        let obj = self.objects.get(&object_id)?;
+        let mesh = self.meshes.get(&obj.mesh)?;
+        let reasons = super::bed::object_out_of_bounds(obj, mesh, bed);
+        if reasons.is_empty() {
+            None
+        } else {
+            Some(SceneEvent::ObjectOutOfBounds {
+                id: object_id,
+                reasons,
+            })
+        }
     }
 
     /// Compute the world-space bounding box of all visible objects.
@@ -1192,6 +1250,90 @@ mod tests {
         assert!(
             (max_z - 1.0).abs() < 1e-4,
             "expected extent 1, got max_z={max_z}"
+        );
+    }
+
+    #[test]
+    fn transform_op_with_no_bed_emits_no_oob_event() {
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        let events = s.translate_object(obj, Vec3::new(500.0, 0.0, 0.0)).unwrap();
+        // Without an active printer, the bed is None so OOB is silent.
+        assert!(events
+            .iter()
+            .all(|e| !matches!(e, SceneEvent::ObjectOutOfBounds { .. })));
+    }
+
+    fn a1_mini_for_test() -> crate::core::printer::profile::PrinterProfile {
+        use crate::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
+        PrinterProfile {
+            model: "Bambu A1 mini".into(),
+            slot_count: 4,
+            supported_build_plates: vec!["Textured PEI".into()],
+            toolheads: vec![Toolhead {
+                nozzle_diameter: 0.4,
+                hotend_type: "stainless_steel".into(),
+                max_temp: 300.0,
+                slot_indices: vec![0, 1, 2, 3],
+            }],
+            build_volume: BoundingBox {
+                min: [0.0, 0.0, 0.0],
+                max: [180.0, 180.0, 180.0],
+            },
+            exclusion_zones: vec![],
+        }
+    }
+
+    #[test]
+    fn translate_off_plate_emits_oob_warning_after_active_printer_set() {
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        let bed_events = s.set_active_printer(Some(&a1_mini_for_test()));
+        assert!(matches!(bed_events[0], SceneEvent::BedChanged(Some(_))));
+
+        // 50 mm in: still inside the 180x180x180 build volume.
+        let events = s.translate_object(obj, Vec3::new(50.0, 0.0, 0.0)).unwrap();
+        assert!(events
+            .iter()
+            .all(|e| !matches!(e, SceneEvent::ObjectOutOfBounds { .. })));
+
+        // Another 200 mm in X: now off the bed.
+        let events = s.translate_object(obj, Vec3::new(200.0, 0.0, 0.0)).unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            SceneEvent::ObjectOutOfBounds { id, reasons } if *id == obj && !reasons.is_empty()
+        )));
+    }
+
+    #[test]
+    fn rotate_around_explicit_pivot_below_plate_emits_below_plate_reason() {
+        use super::super::bed::OutOfBoundsReason;
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        s.set_active_printer(Some(&a1_mini_for_test()));
+        // Cube starts at world [0..1, 0..1, 0..1]. Rotate 180° around
+        // the X-axis through the origin (explicit pivot at (0,0,0))
+        // — that's a Y-and-Z flip about origin, so cube ends up at
+        // [0..1, -1..0, -1..0]. min_z = -1 → BelowBuildPlate.
+        let events = s
+            .rotate_object(
+                obj,
+                Vec3::X,
+                std::f32::consts::PI,
+                Some(Vec3::new(0.0, 0.0, 0.0)),
+            )
+            .unwrap();
+        let oob = events
+            .iter()
+            .find_map(|e| match e {
+                SceneEvent::ObjectOutOfBounds { reasons, .. } => Some(reasons),
+                _ => None,
+            })
+            .expect("expected OOB event");
+        assert!(
+            oob.iter()
+                .any(|r| matches!(r, OutOfBoundsReason::BelowBuildPlate)),
+            "expected BelowBuildPlate among {oob:?}",
         );
     }
 
