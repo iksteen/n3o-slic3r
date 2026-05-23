@@ -52,7 +52,8 @@ import {
   type PrinterProfileJson,
   type ResolvedMap,
 } from "./resolve";
-import { winningLayerFor } from "./layers";
+import { winningLayerFor, type CascadeLayer } from "./layers";
+import { CascadeLadder, useLadderHover } from "./ladder/CascadeLadder";
 
 export interface SettingsPanelProps {
   /** Active printer profile. `null` = no printer selected; the panel
@@ -164,6 +165,16 @@ export function SettingsPanel(props: SettingsPanelProps) {
     () =>
       [...counts.values()].filter((c) => c.overrides > 0).length,
     [counts],
+  );
+
+  // Cascade ladder hover state (PR-4-8). One ladder portal per
+  // panel; tracks which row triggered it so the per-row data the
+  // ladder reads stays addressable on hover.
+  const ladder = useLadderHover();
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const hoveredSchema = useMemo(
+    () => visibleOptions.find((o) => o.key === hoveredKey) ?? null,
+    [visibleOptions, hoveredKey],
   );
 
   // Keep the active category valid as the visible list changes.
@@ -299,6 +310,11 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     slotCount={slotCount}
                     activeSlot={activeSlot}
                     syncAll={syncAll}
+                    onRowEnter={(el) => {
+                      setHoveredKey(opt.key);
+                      ladder.openLadder(el);
+                    }}
+                    onRowLeave={ladder.scheduleClose}
                   />
                 ))}
               </section>
@@ -306,8 +322,60 @@ export function SettingsPanel(props: SettingsPanelProps) {
           </div>
         </div>
       )}
+      {hoveredSchema && (
+        <CascadeLadder
+          settingKey={hoveredSchema.key}
+          settingLabel={hoveredSchema.label ?? hoveredSchema.key}
+          layers={buildLadderLayers(hoveredSchema, resolved, projectOverrides, objectOverrides)}
+          winningLayer={winningLayerFor(hoveredSchema.key, projectOverrides, objectOverrides)}
+          anchor={ladder.anchor}
+          open={ladder.open}
+          onMouseEnter={() => ladder.openLadder(ladder.anchor!)}
+          onMouseLeave={ladder.scheduleClose}
+          cascadeFallback={resolved[hoveredSchema.key]?.cascade_fallback ?? null}
+        />
+      )}
     </section>
   );
+}
+
+/** Build the per-layer value snapshot the CascadeLadder reads.
+ *  MVP scope: populate the layers we directly know about (default,
+ *  project, object) and the winning value's source attribution
+ *  from `cascade_resolve`. Cascade-tier layers (printer / filament
+ *  / build_plate / user) are populated from the cascade trace
+ *  when PR-5 ships profile-source tagging; until then they render
+ *  as em-dash for unknown. */
+function buildLadderLayers(
+  schema: OptionSummary,
+  resolved: ResolvedMap,
+  projectOverrides: Record<string, string>,
+  objectOverrides: Record<string, string>,
+): Map<CascadeLayer, string | null> {
+  const map = new Map<CascadeLayer, string | null>();
+  map.set("default", schema.default_value);
+  // Cascade-side layers — until profile tagging, the cascade-tier
+  // winner shows under `default` and the rest are em-dashes. The
+  // resolve map's value is the effective post-cascade-and-overrides
+  // value; we can attribute it to the cascade umbrella when no
+  // override is active.
+  const resolvedValue = resolved[schema.key]?.value ?? null;
+  map.set("printer", null);
+  map.set("build_plate", null);
+  map.set("filament", null);
+  map.set("user", null);
+  if (
+    resolvedValue !== null &&
+    !(schema.key in projectOverrides) &&
+    !(schema.key in objectOverrides)
+  ) {
+    // Cascade-only winner — surface the value under `printer` as a
+    // proxy for the cascade tier until profile tagging lands.
+    map.set("printer", resolvedValue);
+  }
+  map.set("project", projectOverrides[schema.key] ?? null);
+  map.set("object", objectOverrides[schema.key] ?? null);
+  return map;
 }
 
 interface SettingRowProps {
@@ -329,6 +397,11 @@ interface SettingRowProps {
   slotCount: number;
   activeSlot: number;
   syncAll: boolean;
+  /** Cascade ladder hover hooks (PR-4-8). The panel owns the
+   *  open/close lifecycle centrally; SettingRow just forwards the
+   *  row's DOM node + leave. */
+  onRowEnter?: (el: HTMLElement) => void;
+  onRowLeave?: () => void;
 }
 
 function SettingRow({
@@ -343,6 +416,8 @@ function SettingRow({
   slotCount,
   activeSlot,
   syncAll,
+  onRowEnter,
+  onRowLeave,
 }: SettingRowProps) {
   const tierValue = contextLayer === "object"
     ? objectOverrides[schema.key]
@@ -389,6 +464,8 @@ function SettingRow({
       disabled={disabled}
       leadingBadge={leadingBadge}
       winningLayer={winningLayer}
+      onRowEnter={onRowEnter}
+      onRowLeave={onRowLeave}
     >
       {isVectorKind(kind) && slotCount >= 1 ? (
         <MultiSelectInput

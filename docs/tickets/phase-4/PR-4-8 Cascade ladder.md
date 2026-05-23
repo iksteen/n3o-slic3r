@@ -1,6 +1,6 @@
 # PR-4-8 — Hover cascade ladder (portal-rendered)
 
-Status: ❌ open.
+Status: ✅ shipped — `src/settings/ladder/CascadeLadder.tsx` ships the portal-rendered popover with the six-layer list (object section appended separately), 120ms close delay matching the mockup, left-of-row default position with right-fallback when row is near viewport edge, `useLadderHover()` lifecycle hook with cancel-on-re-enter so the cursor can travel from row to ladder without losing it. The SettingsPanel mounts one CascadeLadder centrally and threads `onRowEnter/onRowLeave` callbacks through Field; per-row data is read at render time from the hovered key. `buildLadderLayers` populates: defaults from `schema.default_value`, project/object from override maps, cascade-tier value attributed to `printer` as a proxy until profile-source tagging lands in Phase 5. `cascade_fallback` rows surface the authored-cascade value when an override is active.
 
 **Scope.** The contextual disclosure surface that shows the full
 cascade for a single setting on hover. Renders every layer (not

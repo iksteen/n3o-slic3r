@@ -1,0 +1,258 @@
+// Hover cascade ladder (PR-4-8) — FR-CAS-7.
+//
+// Renders every cascade layer for the hovered setting in a portal
+// at body level so the SettingsPanel's overflow scroll doesn't
+// clip the popover. Pattern lifted from
+// docs/design/SettingsPanel.jsx:39-107 (CascadeLadder function):
+//
+// - Auto-position left of the row, fall back right if not enough
+//   space.
+// - 120 ms close delay so the cursor can travel from row to
+//   ladder without losing it (matches mockup line 217).
+// - Per-layer row with `.l-dot` + `.l-name` + `.l-val`; winner
+//   gets `winner` modifier; defined-but-losing layers get
+//   `overridden`.
+// - Per-object section appended when the hovered setting has
+//   object-tier overrides anywhere on the plate (PR-4-9 will fill
+//   the per-object list; PR-4-8 ships the section header + an
+//   empty body when no objects override).
+
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import {
+  LAYER_HUE,
+  type CascadeLayer,
+} from "../layers";
+
+/** Per-layer value snapshot for the ladder. `value === null` =
+ *  layer didn't define a value (rendered as em-dash). */
+export type LadderLayer = {
+  id: CascadeLayer;
+  label: string;
+  value: string | null;
+};
+
+/** The seven layers in priority order (low → high), matching
+ *  docs/design/data.jsx. The `object` layer is elided from the main
+ *  list and rendered in its own per-object section below. */
+const LAYER_ORDER: ReadonlyArray<{ id: CascadeLayer; label: string }> = [
+  { id: "default", label: "Defaults" },
+  { id: "printer", label: "Printer" },
+  { id: "build_plate", label: "Build plate" },
+  { id: "filament", label: "Filament" },
+  { id: "user", label: "Profile" },
+  { id: "project", label: "Project" },
+];
+
+export interface ObjectOverrideEntry {
+  /** Object id (or any stable identifier the host uses). */
+  id: number | string;
+  /** Display name shown next to the swatch. */
+  name: string;
+  /** Filament color for the swatch dot. */
+  color?: string | null;
+  /** The overridden value (formatted). */
+  value: string;
+}
+
+export interface CascadeLadderProps {
+  /** Setting key — drives the popover header. */
+  settingKey: string;
+  settingLabel: string;
+  /** Per-layer value snapshot. Missing layers render as em-dash. */
+  layers: ReadonlyMap<CascadeLayer, string | null>;
+  /** The winning layer (for the highlight). */
+  winningLayer: CascadeLayer;
+  /** Anchor element — the popover positions relative to its rect. */
+  anchor: HTMLElement | null;
+  /** Whether the popover should be visible. The caller manages
+   *  hover open/close via the schedule helpers below. */
+  open: boolean;
+  /** Callback fired when the mouse enters the ladder body — used
+   *  by the parent's close-schedule to cancel the pending close so
+   *  the cursor can travel to the ladder without losing it. */
+  onMouseEnter?: () => void;
+  /** Callback fired when the mouse leaves the ladder body —
+   *  re-schedules the close. */
+  onMouseLeave?: () => void;
+  /** When the override is from project / object / user tier, the
+   *  authored cascade would otherwise resolve to this value. Shown
+   *  as a `cascade fallback` separator + value below the main
+   *  layer list. `null` when no override is active. */
+  cascadeFallback?: string | null;
+  /** Objects on the plate that override this setting. Empty when
+   *  no per-object overrides (or PR-4-9 hasn't populated yet). */
+  objectOverrides?: readonly ObjectOverrideEntry[];
+}
+
+const LADDER_WIDTH = 250;
+const VIEWPORT_PAD = 8;
+
+export function CascadeLadder({
+  settingKey,
+  settingLabel,
+  layers,
+  winningLayer,
+  anchor,
+  open,
+  onMouseEnter,
+  onMouseLeave,
+  cascadeFallback = null,
+  objectOverrides = [],
+}: CascadeLadderProps) {
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open || !anchor) {
+      setPosition(null);
+      return;
+    }
+    const rect = anchor.getBoundingClientRect();
+    // Default: to the left of the row, vertically centered.
+    let left = rect.left - LADDER_WIDTH - 10;
+    if (left < VIEWPORT_PAD) {
+      // Flip to the right side when the row is near the left edge.
+      left = Math.min(
+        window.innerWidth - LADDER_WIDTH - VIEWPORT_PAD,
+        rect.right + 10,
+      );
+    }
+    const top = Math.max(
+      VIEWPORT_PAD,
+      Math.min(rect.top + rect.height / 2, window.innerHeight - VIEWPORT_PAD),
+    );
+    setPosition({ top, left });
+  }, [open, anchor]);
+
+  if (!open || !position) return null;
+
+  const body = (
+    <div
+      className="cascade-ladder fixed bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 shadow-lg rounded p-2 text-xs"
+      style={{
+        position: "fixed",
+        top: position.top,
+        left: position.left,
+        transform: "translateY(-50%)",
+        width: LADDER_WIDTH,
+      }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      role="tooltip"
+      aria-label={`Cascade for ${settingLabel}`}
+    >
+      <div className="ladder-title text-xs text-neutral-500 dark:text-neutral-400 mb-1 truncate">
+        Cascade · {settingLabel || settingKey}
+      </div>
+      {LAYER_ORDER.map(({ id, label }) => {
+        const v = layers.get(id) ?? null;
+        const defined = v !== null;
+        const isWinner = id === winningLayer;
+        return (
+          <div
+            key={id}
+            className={`ladder-row flex items-center gap-2 py-0.5 ${
+              isWinner
+                ? "font-semibold text-neutral-900 dark:text-neutral-100"
+                : defined
+                  ? "text-neutral-700 dark:text-neutral-300"
+                  : "text-neutral-400 dark:text-neutral-600"
+            }`}
+            data-layer={id}
+            style={{ ["--row-hue" as string]: String(LAYER_HUE[id]) }}
+          >
+            <span
+              className="l-dot inline-block w-2 h-2 rounded-full"
+              style={{
+                background: defined
+                  ? `hsl(${LAYER_HUE[id]} 70% 55%)`
+                  : "transparent",
+                border: defined ? "none" : "1px dashed currentColor",
+              }}
+              aria-hidden
+            />
+            <span className="l-name flex-1 truncate">{label}</span>
+            <span className={`l-val font-mono ${defined ? "" : "italic"}`}>
+              {defined ? v : "—"}
+            </span>
+            {isWinner && <span aria-hidden>✓</span>}
+          </div>
+        );
+      })}
+
+      {cascadeFallback !== null && (
+        <>
+          <div className="ladder-fallback-sep mt-1 pt-1 border-t border-dashed border-neutral-300 dark:border-neutral-700 text-[10px] uppercase tracking-wider text-neutral-500">
+            cascade fallback
+          </div>
+          <div className="ladder-row flex items-center gap-2 py-0.5 text-neutral-600 dark:text-neutral-400">
+            <span
+              className="l-dot inline-block w-2 h-2 rounded-full opacity-50"
+              style={{ background: `hsl(${LAYER_HUE.cascade} 0% 50%)` }}
+              aria-hidden
+            />
+            <span className="l-name flex-1">reverts to</span>
+            <span className="l-val font-mono">{cascadeFallback}</span>
+          </div>
+        </>
+      )}
+
+      {objectOverrides.length > 0 && (
+        <>
+          <div className="ladder-objects-sep mt-1 pt-1 border-t border-dashed border-neutral-300 dark:border-neutral-700 text-[10px] uppercase tracking-wider text-neutral-500">
+            {objectOverrides.length} object
+            {objectOverrides.length === 1 ? "" : "s"} override
+          </div>
+          {objectOverrides.map((o) => (
+            <div
+              key={o.id}
+              className="ladder-row obj-row flex items-center gap-2 py-0.5 text-neutral-700 dark:text-neutral-300"
+            >
+              <span
+                className="l-dot inline-block w-2 h-2 rounded-full"
+                style={{ background: o.color || "#888" }}
+                aria-hidden
+              />
+              <span className="l-name flex-1 truncate" title={o.name}>
+                {o.name}
+              </span>
+              <span className="l-val font-mono">{o.value}</span>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+
+  return createPortal(body, document.body);
+}
+
+/** Hook owning the hover-open / close-schedule lifecycle. Returns
+ *  the wire-up handlers + a `register(el)` callback to attach to
+ *  the anchor's React ref. Mockup mirror at SettingsPanel.jsx
+ *  :206-219. */
+export function useLadderHover() {
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const openLadder = (el: HTMLElement) => {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+    setAnchor(el);
+    setOpen(true);
+  };
+
+  const scheduleClose = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setOpen(false), 120);
+  };
+
+  useEffect(() => () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+  }, []);
+
+  return { open, anchor, openLadder, scheduleClose };
+}

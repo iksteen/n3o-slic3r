@@ -27,7 +27,7 @@ index plus phase-level status and notes.
 | Printer-aware visibility + build plate selector | ✅ done | [PR-4-5](phase-4/PR-4-5%20Printer-aware%20visibility%20and%20build%20plate.md) |
 | Slot-adaptive layout (per-slot tab strip + sync-edit) | ✅ done | [PR-4-6](phase-4/PR-4-6%20Slot-adaptive%20layout.md) |
 | Source-layer rule + authored-tier tint + override count badges | ✅ done | [PR-4-7](phase-4/PR-4-7%20Source-layer%20rule.md) |
-| Hover cascade ladder (portal-rendered) | ❌ open | [PR-4-8](phase-4/PR-4-8%20Cascade%20ladder.md) |
+| Hover cascade ladder (portal-rendered) | ✅ done | [PR-4-8](phase-4/PR-4-8%20Cascade%20ladder.md) |
 | Per-object overrides + objects-overriding badge + reset | ❌ open | [PR-4-9](phase-4/PR-4-9%20Per-object%20overrides.md) |
 | Diff view (vs printer default, vs last save) | ❌ open | [PR-4-10](phase-4/PR-4-10%20Diff%20view.md) |
 | Tooltips + inline validation | ❌ open | [PR-4-11](phase-4/PR-4-11%20Tooltips%20and%20validation.md) |

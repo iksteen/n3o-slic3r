@@ -50,6 +50,12 @@ export interface FieldProps {
    *  the hover rule. Defaults to `"cascade"` (neutral) when not
    *  provided. */
   winningLayer?: CascadeLayer;
+  /** Cascade ladder hover lifecycle (PR-4-8). Fired with the row's
+   *  DOM node when the cursor enters/leaves; the panel mounts a
+   *  single CascadeLadder portal centrally based on which row is
+   *  currently hovered. */
+  onRowEnter?: (el: HTMLElement) => void;
+  onRowLeave?: () => void;
   /** The input control. */
   children: ReactNode;
 }
@@ -62,6 +68,8 @@ export function Field({
   trailingBadge,
   resetButton,
   winningLayer = "cascade",
+  onRowEnter,
+  onRowLeave,
   children,
 }: FieldProps) {
   const authored = isAuthoredTier(winningLayer);
@@ -95,6 +103,8 @@ export function Field({
         .join(" ")}
       data-setting-id={schema.key}
       style={style}
+      onMouseEnter={onRowEnter ? (e) => onRowEnter(e.currentTarget) : undefined}
+      onMouseLeave={onRowLeave}
     >
       <div className="set-meta flex-1 min-w-0 flex items-center gap-2">
         <span
