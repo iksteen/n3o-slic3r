@@ -1,6 +1,6 @@
 # PR-3-4 — Slice button + progress bar + summary panel
 
-Status: ❌ open.
+Status: ✅ shipped — `src/slice/{types,reducer,useSliceJob,SlicePanel}.tsx` with the panel wired into `App.tsx`'s header. `useSliceJob` subscribes to the six `slice:*` events, runs them through a pure reducer (vitest-covered), exposes `{status, percent, stage, summaries, error}` plus `start()` / `cancel()` / `reset()`. Backend gained `slice_start_default_a1mini` (Tauri command) that bundles the cascade (embedded via `include_str!` of `profiles/cascades/bambu-a1-mini-default.toml`) + canonical A1 mini / Textured PEI / Generic PLA context — Phase 4's profile UI will replace this with a project-state-driven call to `slice_start_job` directly. The panel guards Slice until a model file has been picked; outputs land at `/tmp/n3o-slice-<stamp>/plate_1.gcode`. Reconnect path uses `slice_status` keyed by a localStorage-cached job id. Per-plate summary cards show formatted time, aggregated filament use (g + m), and layer count. Failure path renders `sliceErrorMessage()` on the typed `SliceError`. Outstanding: manual browser smoke not yet performed in this session.
 
 **Scope.** Frontend surface for the slice loop: a button next to the
 viewport toolbar, a progress bar that subscribes to PR-3-2's events,

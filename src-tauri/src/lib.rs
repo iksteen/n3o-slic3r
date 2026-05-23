@@ -65,6 +65,7 @@ pub fn run() {
             core::slice::commands::slice_start_job,
             core::slice::commands::slice_cancel,
             core::slice::commands::slice_status,
+            core::slice::default_a1mini::slice_start_default_a1mini,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

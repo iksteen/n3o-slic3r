@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ViewportCanvas } from "./viewport/ViewportCanvas";
+import { SlicePanel } from "./slice/SlicePanel";
 import "./App.css";
 
 type SlicerInfo = { version: string; option_count: number };
@@ -23,6 +24,7 @@ function App() {
       <header className="flex items-center justify-between px-4 py-2 border-b border-neutral-800">
         <h1 className="text-lg font-semibold tracking-tight">n3o-slic3r</h1>
         <div className="text-xs text-neutral-400 flex items-center gap-3">
+          <SlicePanel />
           {info && (
             <span>
               {info.version} · {info.option_count} options
