@@ -8,9 +8,10 @@
 // the scroll body to its first row.
 
 import type { CategoryCounts, CategoryGroup } from "./categories";
+import type { OptionSummary } from "../types";
 
 export interface CategorySidebarProps {
-  groups: readonly CategoryGroup[];
+  groups: readonly CategoryGroup<OptionSummary>[];
   counts: ReadonlyMap<string, CategoryCounts>;
   activeId: string | null;
   onActivate: (id: string) => void;

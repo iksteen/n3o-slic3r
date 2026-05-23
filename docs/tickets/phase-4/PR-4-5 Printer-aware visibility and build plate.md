@@ -1,6 +1,6 @@
 # PR-4-5 — Printer-aware visibility filter + build plate selector
 
-Status: ❌ open.
+Status: ✅ shipped — the capability filter lands cleanly on PR-4-1's foundation: `slicer_options_for_printer` already pre-evaluates each option's `CapabilityPredicate` per printer and stamps a `hidden: bool` flag, so the frontend per-row hide/show is a single field read. `SettingsPanel`'s `filterRow` excludes hidden options in the default view and surfaces them in search view; capability-hidden rows in search show a `not applicable` chip in the Field's leadingBadge slot and the input is disabled. `categorize` is now generic over the option type so the `hidden` flag propagates through grouping without lossy projection. New `BuildPlateSelector` component: dropdown of `printer.supported_build_plates` + `printer default` badge when the user's selection matches the printer's documented default plate. The host (Phase 5's project model) wires it into the `cascade_resolve` ContextJson; no scene-state command needed — the active plate lives in the slice context, not in SceneState today.
 
 **Scope.** Two related printer-driven concerns:
 

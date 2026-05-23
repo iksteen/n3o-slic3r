@@ -254,6 +254,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     onClearProjectOverride={onClearProjectOverride}
                     onSetObjectOverride={onSetObjectOverride}
                     onClearObjectOverride={onClearObjectOverride}
+                    notApplicable={opt.hidden}
                   />
                 ))}
               </section>
@@ -275,6 +276,9 @@ interface SettingRowProps {
   onClearProjectOverride: (key: string) => void;
   onSetObjectOverride: (key: string, value: string) => void;
   onClearObjectOverride: (key: string) => void;
+  /** True when this option is capability-hidden but surfaced via
+   *  search; renders the "not applicable" badge inline (PR-4-5). */
+  notApplicable?: boolean;
 }
 
 function SettingRow({
@@ -285,6 +289,7 @@ function SettingRow({
   objectOverrides,
   onSetProjectOverride,
   onSetObjectOverride,
+  notApplicable = false,
 }: SettingRowProps) {
   const tierValue = contextLayer === "object"
     ? objectOverrides[schema.key]
@@ -297,18 +302,34 @@ function SettingRow({
   // edit). PR-4-9 surfaces the "project-scope setting" badge; PR-4-4
   // just enforces disabled-input.
   const disabled =
-    contextLayer === "object" &&
-    schema.scope.project &&
-    !schema.scope.object &&
-    !schema.scope.region;
+    notApplicable ||
+    (contextLayer === "object" &&
+      schema.scope.project &&
+      !schema.scope.object &&
+      !schema.scope.region);
 
   const setValue = (next: string) => {
     if (contextLayer === "object") onSetObjectOverride(schema.key, next);
     else onSetProjectOverride(schema.key, next);
   };
 
+  const leadingBadge = notApplicable ? (
+    <span
+      className="set-badge set-badge-na"
+      title="Not applicable to the active printer"
+    >
+      not applicable
+    </span>
+  ) : null;
+
   return (
-    <Field schema={schema} value={effectiveValue} onChange={setValue} disabled={disabled}>
+    <Field
+      schema={schema}
+      value={effectiveValue}
+      onChange={setValue}
+      disabled={disabled}
+      leadingBadge={leadingBadge}
+    >
       {renderInput(optionTypeKind(schema), schema, effectiveValue, setValue, disabled)}
     </Field>
   );

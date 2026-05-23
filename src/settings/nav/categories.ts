@@ -50,7 +50,7 @@ const CATEGORY_ICON: Record<string, string> = {
   Other: "O",
 };
 
-export type CategoryGroup = {
+export type CategoryGroup<O extends OptionSummary = OptionSummary> = {
   /** Stable category key matching libslic3r's `def->category` string. */
   id: string;
   /** Display name (same as `id` for now — translations land later). */
@@ -58,7 +58,7 @@ export type CategoryGroup = {
   /** Single-letter glyph for the rail. */
   icon: string;
   /** Visible options in declaration order. */
-  settings: OptionSummary[];
+  settings: O[];
 };
 
 /** Apply the FR-UI-2 mode filter — Simple shows Simple-mode
@@ -90,11 +90,13 @@ export function passesMode(opt: OptionSummary, filter: ModeFilter): boolean {
 
 /** Group + order options. Returns the visible category list with
  *  empty categories elided. Within each category, the input order
- *  is preserved. */
-export function categorize(
-  options: readonly OptionSummary[],
-): CategoryGroup[] {
-  const byCategory = new Map<string, OptionSummary[]>();
+ *  is preserved. Generic over the option type so callers can pass
+ *  `PrinterAwareOptionSummary` and keep the `hidden` flag through
+ *  the grouping pass. */
+export function categorize<O extends OptionSummary>(
+  options: readonly O[],
+): CategoryGroup<O>[] {
+  const byCategory = new Map<string, O[]>();
   for (const opt of options) {
     const key = opt.category ?? "Other";
     const bucket = byCategory.get(key);
@@ -106,7 +108,7 @@ export function categorize(
   // sorted alphabetically (so unexpected upstream additions are
   // visible without surprise reordering).
   const seen = new Set<string>();
-  const out: CategoryGroup[] = [];
+  const out: CategoryGroup<O>[] = [];
   for (const id of CATEGORY_ORDER) {
     const settings = byCategory.get(id);
     if (!settings || settings.length === 0) continue;
@@ -146,8 +148,8 @@ export type CategoryCounts = {
  *  the grouped list and a set of overridden keys. PR-4-7 populates
  *  the override set from the trace; for PR-4-3 alone, callers pass
  *  an empty set and only the `total` is meaningful. */
-export function categoryCounts(
-  groups: readonly CategoryGroup[],
+export function categoryCounts<O extends OptionSummary>(
+  groups: readonly CategoryGroup<O>[],
   overriddenKeys: ReadonlySet<string>,
 ): Map<string, CategoryCounts> {
   const out = new Map<string, CategoryCounts>();
