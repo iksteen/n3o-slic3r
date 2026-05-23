@@ -32,7 +32,7 @@ index plus phase-level status and notes.
 | Diff view (vs printer default, vs last save) | ✅ done | [PR-4-10](phase-4/PR-4-10%20Diff%20view.md) |
 | Tooltips + inline validation | ✅ tooltip shipped; validation deferred | [PR-4-11](phase-4/PR-4-11%20Tooltips%20and%20validation.md) |
 | Support toggle per object + first ~30 "why this matters" annotations | ✅ done | [PR-4-12](phase-4/PR-4-12%20Support%20toggle%20and%20annotations.md) |
-| Phase 4 exit-criteria smoke | ❌ open | [PR-4-13](phase-4/PR-4-13%20Exit-criteria%20smoke.md) |
+| Phase 4 exit-criteria smoke | ✅ done | [PR-4-13](phase-4/PR-4-13%20Exit-criteria%20smoke.md) |
 
 ## Design reference + tweaks vs deliverables
 

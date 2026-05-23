@@ -1,6 +1,6 @@
 # PR-4-13 — Phase 4 exit-criteria smoke
 
-Status: ❌ open.
+Status: ✅ shipped — `src-tauri/tests/phase4_smoke.rs` (3 backend integration tests covering introspection coverage + A1 mini/U1 capability filter outcomes + render-budget gate). `docs/phase-4-smoke.md` ships the full procedure with the manual UX-study script and the visual gates to walk against the mockup until App.tsx integration lands in Phase 5. Frontend per-ticket vitest covers the pure helper contracts (88 cases across 10 test files). Total green: 262 Rust + 88 frontend tests.
 
 **Scope.** End-to-end smoke that exercises Phase 4's exit criteria
 as a documented procedure + an automated half. Mirrors
