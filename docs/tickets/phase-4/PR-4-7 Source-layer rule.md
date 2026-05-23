@@ -1,6 +1,6 @@
 # PR-4-7 — Source-layer rule + authored-tier tint + override count badges
 
-Status: ❌ open.
+Status: ✅ shipped — `src/settings/layers.ts` ships the seven-layer vocabulary (matching `docs/design/data.jsx`) with HSL hues (220/18/95/175/235/285/340) + a `cascade` umbrella for not-yet-labeled cascade-tier wins. `winningLayerFor` derives the winning layer per row from project/object overrides (object beats project per FR-CAS-3). Field carries a `winningLayer` prop that publishes `--row-hue` as a CSS variable (production CSS hooks it to the inset rule per `docs/design/styles.css:972-1029`) + applies the authored-tier tint via Tailwind utilities (`bg-purple-50 dark:bg-purple-950/40` for project; `bg-rose-50 dark:bg-rose-950/40` for object; `bg-blue-50 dark:bg-blue-950/40` for user) and `font-semibold` on the name. Panel header shows a total-overrides badge ("N overridden" with a hover-tooltip listing the category spread). 11 new vitest cases (68 → 80 frontend tests): winningLayerFor object-beats-project semantics + authored-tier classification + hue palette snapshot.
 
 **Scope.** Every settings row carries a **left-edge rule** that
 reveals the winning cascade layer's hue on hover, plus a

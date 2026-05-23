@@ -52,6 +52,7 @@ import {
   type PrinterProfileJson,
   type ResolvedMap,
 } from "./resolve";
+import { winningLayerFor } from "./layers";
 
 export interface SettingsPanelProps {
   /** Active printer profile. `null` = no printer selected; the panel
@@ -158,6 +159,13 @@ export function SettingsPanel(props: SettingsPanelProps) {
     [groups, overriddenKeys],
   );
 
+  const totalOverrides = overriddenKeys.size;
+  const totalCategoriesWithOverrides = useMemo(
+    () =>
+      [...counts.values()].filter((c) => c.overrides > 0).length,
+    [counts],
+  );
+
   // Keep the active category valid as the visible list changes.
   useEffect(() => {
     if (groups.length === 0) {
@@ -213,7 +221,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
           onChange={setMode}
           allowDevelop={import.meta.env.DEV}
         />
-        <div className="search-wrap">
+        <div className="search-wrap flex items-center gap-2">
           <input
             type="search"
             className="search-input"
@@ -221,6 +229,16 @@ export function SettingsPanel(props: SettingsPanelProps) {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+          {totalOverrides > 0 && (
+            <span
+              className="sp-overrides-badge px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-900 dark:bg-amber-900/50 dark:text-amber-200"
+              title={`${totalOverrides} settings overridden across ${totalCategoriesWithOverrides} categor${
+                totalCategoriesWithOverrides === 1 ? "y" : "ies"
+              }`}
+            >
+              {totalOverrides} overridden
+            </span>
+          )}
         </div>
         {slotCount >= 2 && (
           <SlotTabStrip
@@ -358,6 +376,11 @@ function SettingRow({
   ) : null;
 
   const kind = optionTypeKind(schema);
+  const winningLayer = winningLayerFor(
+    schema.key,
+    projectOverrides,
+    objectOverrides,
+  );
   return (
     <Field
       schema={schema}
@@ -365,6 +388,7 @@ function SettingRow({
       onChange={setValue}
       disabled={disabled}
       leadingBadge={leadingBadge}
+      winningLayer={winningLayer}
     >
       {isVectorKind(kind) && slotCount >= 1 ? (
         <MultiSelectInput

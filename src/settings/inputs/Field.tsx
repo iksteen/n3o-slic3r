@@ -13,8 +13,14 @@
 // `children` slot. The wrapper itself is presentation-only — it
 // doesn't manage value state.
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { OptionSummary } from "../types";
+import {
+  LAYER_HUE,
+  LAYER_TINT_CLASS,
+  isAuthoredTier,
+  type CascadeLayer,
+} from "../layers";
 
 export interface FieldProps {
   schema: OptionSummary;
@@ -39,6 +45,11 @@ export interface FieldProps {
   trailingBadge?: ReactNode;
   /** Right-aligned reset affordance (PR-4-9). Empty here. */
   resetButton?: ReactNode;
+  /** Winning cascade layer for this row (PR-4-7). Drives the
+   *  authored-tier background tint + `--row-hue` CSS variable for
+   *  the hover rule. Defaults to `"cascade"` (neutral) when not
+   *  provided. */
+  winningLayer?: CascadeLayer;
   /** The input control. */
   children: ReactNode;
 }
@@ -50,15 +61,46 @@ export function Field({
   leadingBadge,
   trailingBadge,
   resetButton,
+  winningLayer = "cascade",
   children,
 }: FieldProps) {
+  const authored = isAuthoredTier(winningLayer);
+  const tintClass = LAYER_TINT_CLASS[winningLayer] ?? "";
+  const authoredClass = authored
+    ? winningLayer === "object"
+      ? "authored-object"
+      : winningLayer === "project"
+        ? "authored-project"
+        : "authored-user"
+    : "";
+  const style: CSSProperties = {
+    // The `--row-hue` CSS var feeds the source-rule hover treatment
+    // (matches docs/design/styles.css:972-1029). Production CSS will
+    // bind it in `:hover` once the design styles are formally
+    // integrated; the Field already publishes the value so the
+    // styling lift is a one-file change.
+    ["--row-hue" as string]: String(LAYER_HUE[winningLayer]),
+  };
   return (
     <div
-      className={`set-row${disabled ? " is-disabled" : ""}${error ? " has-error" : ""}`}
+      className={[
+        "set-row",
+        "px-3 py-2 flex items-center gap-2",
+        authoredClass,
+        tintClass,
+        disabled ? "is-disabled opacity-60" : "",
+        error ? "has-error" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
       data-setting-id={schema.key}
+      style={style}
     >
-      <div className="set-meta">
-        <span className="set-name" title={schema.key}>
+      <div className="set-meta flex-1 min-w-0 flex items-center gap-2">
+        <span
+          className={`set-name truncate text-sm ${authored ? "font-semibold" : ""}`}
+          title={schema.key}
+        >
           {schema.label ?? schema.key}
         </span>
         {leadingBadge}
@@ -67,7 +109,7 @@ export function Field({
       {resetButton}
       <div className="set-value">{children}</div>
       {error && (
-        <div className="set-error" role="alert">
+        <div className="set-error w-full text-xs text-rose-500 mt-1" role="alert">
           {error}
         </div>
       )}
