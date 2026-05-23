@@ -25,16 +25,16 @@ index plus phase-level status and notes.
 |-------------|--------|--------|
 | Scene state types (Rust authoritative) | ✅ done | [PR-2-1](phase-2/PR-2-1%20Scene%20state%20types.md) |
 | Scene Tauri command + event surface | ✅ done | [PR-2-2](phase-2/PR-2-2%20Scene%20command%20event%20surface.md) |
-| STL + OBJ loaders | ⚠️ partial | [PR-2-3](phase-2/PR-2-3%20STL%20and%20OBJ%20loaders.md) (loaders + tests done; Stormtrooper Helmet perf fixture not yet staged) |
-| `.3mf` project loader | ❌ open | [PR-2-4](phase-2/PR-2-4%203mf%20project%20loader.md) |
-| Object transform operations | ❌ open | [PR-2-5](phase-2/PR-2-5%20Object%20transform%20operations.md) |
-| Bed mesh + exclusion zones | ❌ open | [PR-2-6](phase-2/PR-2-6%20Bed%20mesh%20and%20exclusion%20zones.md) |
-| Object library / scaffolding panel | ❌ open | [PR-2-7](phase-2/PR-2-7%20Object%20library%20panel.md) |
-| Auto-arrange | ❌ open | [PR-2-8](phase-2/PR-2-8%20Auto-arrange.md) |
-| Three.js renderer (scene + orbit + camera modes) | ❌ open | [PR-2-9](phase-2/PR-2-9%20Three.js%20renderer.md) |
-| Three.js gizmo (move / rotate / scale) | ❌ open | [PR-2-10](phase-2/PR-2-10%20Three.js%20gizmo.md) |
-| Rust scene-state perf gate (renderer-side FPS + Three.js↔wgpu pivot deferred to Phase 9) | ⚠️ scoped down | [PR-2-11](phase-2/PR-2-11%20Perf%20and%20pivot.md) |
-| Phase 2 exit-criteria smoke | ❌ open | [PR-2-12](phase-2/PR-2-12%20Exit-criteria%20smoke.md) |
+| STL + OBJ loaders | ✅ done | [PR-2-3](phase-2/PR-2-3%20STL%20and%20OBJ%20loaders.md) (Stormtrooper Helmet perf fixture is user-staged at runtime; CC-BY-NC, see `docs/phase-2-smoke.md`) |
+| `.3mf` project loader | ✅ done | [PR-2-4](phase-2/PR-2-4%203mf%20project%20loader.md) |
+| Object transform operations | ✅ done | [PR-2-5](phase-2/PR-2-5%20Object%20transform%20operations.md) (mirror + lay-flat shipped; out-of-bounds check moved to PR-2-6) |
+| Bed mesh + exclusion zones | ✅ done | [PR-2-6](phase-2/PR-2-6%20Bed%20mesh%20and%20exclusion%20zones.md) |
+| Object library / scaffolding panel | ✅ done | [PR-2-7](phase-2/PR-2-7%20Object%20library%20panel.md) (temperature + stringing towers ship as `.drc` in Orca's resources — follow-up tracked for sourcing 3MF/STL replacements) |
+| Auto-arrange | ✅ done | [PR-2-8](phase-2/PR-2-8%20Auto-arrange.md) |
+| Three.js renderer (scene + orbit + camera modes) | ✅ done | [PR-2-9](phase-2/PR-2-9%20Three.js%20renderer.md) |
+| Three.js gizmo (move / rotate / scale) | ✅ done | [PR-2-10](phase-2/PR-2-10%20Three.js%20gizmo.md) (single-object drag; multi-select delta is a Phase 4 follow-up) |
+| Rust scene-state perf gate (renderer-side FPS + Three.js↔wgpu pivot deferred to Phase 9) | ✅ done | [PR-2-11](phase-2/PR-2-11%20Perf%20and%20pivot.md) |
+| Phase 2 exit-criteria smoke | ✅ done | [PR-2-12](phase-2/PR-2-12%20Exit-criteria%20smoke.md) |
 
 ## Architecture invariant (AD-8 / FR-3D-7)
 
@@ -100,13 +100,31 @@ PR-2-3 + PR-2-9 + PR-2-5 ──► PR-2-12 (exit smoke needs full loop)
   just logs events should produce sensible output for typical
   interaction sequences (load → select → transform → deselect).
 
-## Cut candidates (from Execution Plan)
+## Cut candidates (from Execution Plan) — none ultimately cut
 
-If pressed for time:
+The plan flagged three optional drops if Phase 2 ran long. We had
+enough budget to ship all three:
 
-- **Auto-arrange (PR-2-8)** → manual placement only saves ~4 days.
-- **Mirror operation (sub-deliverable of PR-2-5)** → saves ~1 day.
-- **Ortho camera toggle (sub-deliverable of PR-2-9)** → saves ~1 day.
+- **Auto-arrange (PR-2-8)** — shipped. Shelf-style greedy packer.
+- **Mirror operation (sub-deliverable of PR-2-5)** — shipped.
+  Reflects through the world-space object center; double-mirror is
+  a no-op (test pins this).
+- **Ortho camera toggle (sub-deliverable of PR-2-9)** — shipped.
+  P / O button in the viewport toolbar.
+
+## Deferred follow-ups (not Phase 2 scope)
+
+- **Tower fixtures as 3MF/STL** (PR-2-7 footer). Orca ships the
+  temperature + stringing towers as Draco-compressed `.drc`; our
+  loaders surface them as `UnsupportedFormat`. Either add a Draco
+  decoder or source replacement geometry.
+- **Multi-select gizmo drag** (PR-2-10 footer). Currently the gizmo
+  attaches to the first selected object. Per-object delta
+  application needs centroid-pivot UX decisions that belong with
+  the Phase 4 selection tooling.
+- **Phase 5 will replace** `scene_load_default_printer` (the
+  hardcoded A1 mini bootstrap the viewport calls on mount) with a
+  real printer registry + selection UI.
 
 ## Notes on what's *not* in Phase 2
 
