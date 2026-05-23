@@ -5,7 +5,7 @@
 //! itself; cascade lookups read the existing
 //! `Mutex<CascadeRegistry>` shipped in PR-1-9.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, State};
 
@@ -34,7 +34,7 @@ pub fn slice_start_job(
     app_handle: AppHandle,
     jobs: State<JobRegistry>,
     cascades: State<Mutex<CascadeRegistry>>,
-    project: State<Mutex<Project>>,
+    project: State<Arc<Mutex<Project>>>,
 ) -> Result<JobId, String> {
     // Pre-slice gate: refuse the job up front if any requested
     // plate's bindings are invalid. Quick, no-cost-to-the-user

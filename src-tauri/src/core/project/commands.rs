@@ -10,12 +10,13 @@
 //! split is naming-only, picked to keep each file focused as Phase
 //! 5/6/7 commands accumulate.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::{Emitter, State, Window};
 
 use std::path::PathBuf;
 
+use super::autosave::{self, AutosaveConfig, AutosaveEntry, AutosaveHandle};
 use super::binding::MaterialBinding;
 use super::format;
 use super::PlateId;
@@ -45,7 +46,7 @@ pub fn project_set_plate_cycle_count(
     plate_id: PlateId,
     count: u32,
     window: Window,
-    state: State<Mutex<Project>>,
+    state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
     let events = p
@@ -67,7 +68,7 @@ pub fn project_set_plate_composition_order(
     plate_id: PlateId,
     order: u32,
     window: Window,
-    state: State<Mutex<Project>>,
+    state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
     let events = p
@@ -89,7 +90,7 @@ pub fn project_set_material_binding(
     physical_slot: u8,
     filament_identity: String,
     window: Window,
-    state: State<Mutex<Project>>,
+    state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
     let events = p
@@ -108,7 +109,7 @@ pub fn project_clear_material_binding(
     plate_id: PlateId,
     model_material: u8,
     window: Window,
-    state: State<Mutex<Project>>,
+    state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
     let events = p
@@ -134,7 +135,7 @@ pub fn project_auto_bind_materials(
     plate_id: PlateId,
     slot_count: u8,
     window: Window,
-    state: State<Mutex<Project>>,
+    state: State<Arc<Mutex<Project>>>,
 ) -> Result<Vec<MaterialBinding>, String> {
     let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
     let (bindings, events) = p
@@ -159,7 +160,7 @@ pub fn project_auto_bind_materials(
 pub fn project_save(
     path: String,
     window: Window,
-    state: State<Mutex<Project>>,
+    state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     let p = state.lock().map_err(|e| format!("project lock: {e}"))?;
     format::write_project(&p, std::path::Path::new(&path))
@@ -181,7 +182,7 @@ pub fn project_save(
 pub fn project_save_as(
     path: String,
     window: Window,
-    state: State<Mutex<Project>>,
+    state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
     format::write_project(&p, std::path::Path::new(&path))
@@ -208,7 +209,7 @@ pub fn project_save_as(
 pub fn project_load(
     path: String,
     window: Window,
-    state: State<Mutex<Project>>,
+    state: State<Arc<Mutex<Project>>>,
 ) -> Result<Project, String> {
     let loaded = format::read_project(std::path::Path::new(&path))
         .map_err(|e| e.to_string())?;
@@ -222,4 +223,52 @@ pub fn project_load(
         &[SceneEvent::ProjectLoaded { path: path.clone() }],
     );
     Ok(returned)
+}
+
+// ---- Autosave (PR-5-10) --------------------------------------------
+
+/// Start the autosave worker if not already running. Idempotent.
+/// Uses [`autosave::default_autosave_dir`] for the on-disk
+/// location and [`autosave::DEFAULT_INTERVAL`] (30 s) for the
+/// tick rate. Failures to create the autosave directory surface
+/// as an Err.
+#[tauri::command]
+#[tracing::instrument(skip(state, handle))]
+pub fn project_autosave_enable(
+    state: State<Arc<Mutex<Project>>>,
+    handle: State<AutosaveHandle>,
+) -> Result<(), String> {
+    let dir = autosave::default_autosave_dir();
+    let config = AutosaveConfig::new(dir);
+    let project = (*state).clone();
+    handle.start(project, config).map_err(|e| e.to_string())
+}
+
+/// Stop the autosave worker. Idempotent — calling when the
+/// worker isn't running is a silent no-op.
+#[tauri::command]
+#[tracing::instrument(skip(handle))]
+pub fn project_autosave_disable(handle: State<AutosaveHandle>) -> Result<(), String> {
+    handle.stop();
+    Ok(())
+}
+
+/// List recoverable autosave files in the default autosave
+/// directory. Returns entries newest-first. The frontend's
+/// recovery dialog consumes this on app startup.
+#[tauri::command]
+#[tracing::instrument]
+pub fn project_autosave_list() -> Result<Vec<AutosaveEntry>, String> {
+    let dir = autosave::default_autosave_dir();
+    autosave::scan_recoveries(&dir).map_err(|e| e.to_string())
+}
+
+/// Delete the autosave file for `uuid`. Wires the recovery
+/// dialog's "Discard" button. Silent no-op when the file isn't
+/// present (idempotent).
+#[tauri::command]
+#[tracing::instrument]
+pub fn project_autosave_drop(uuid: String) -> Result<(), String> {
+    let dir = autosave::default_autosave_dir();
+    autosave::drop_autosave(&dir, &uuid).map_err(|e| e.to_string())
 }

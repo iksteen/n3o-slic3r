@@ -26,6 +26,7 @@
 //!   (PR-5-2) for its scene contents. The serializable shape
 //!   PR-5-8's `.3mf` save/load round-trips.
 
+pub mod autosave;
 pub mod binding;
 pub mod commands;
 pub mod context;

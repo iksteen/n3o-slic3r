@@ -39,9 +39,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::model::{Plate, PlateId, Project};
+use super::model::{Plate, Project};
 use crate::core::scene::loaders::LoadError;
-use crate::core::scene::state::{Mesh, MeshId, NewMesh};
+use crate::core::scene::state::{MeshId, NewMesh};
 use crate::core::scene::transform::Transform;
 use crate::core::threemf::{
     load_3mf, project_from_objects, read_3mf_extra_entry, write_3mf_with_extras,

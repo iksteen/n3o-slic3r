@@ -51,8 +51,10 @@ use crate::core::scene::state::{Mesh, MeshId, PlateSceneState};
 #[serde(transparent)]
 pub struct PlateId(pub u32);
 
-/// Project-root state. Tauri manages `Mutex<Project>` (one per
-/// app instance); every Tauri command takes `State<Mutex<Project>>`.
+/// Project-root state. Tauri manages `Arc<Mutex<Project>>` (one
+/// per app instance, wrapped in an Arc so the autosave worker
+/// can hold a handle without going through Tauri state lookup);
+/// every Tauri command takes `State<Arc<Mutex<Project>>>`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     /// Stable per-project identifier; baked at construction so the

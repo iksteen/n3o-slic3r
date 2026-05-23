@@ -8,6 +8,8 @@
 
 pub mod core;
 
+use std::sync::{Arc, Mutex};
+
 use slic3r_ffi::init;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -17,11 +19,20 @@ pub fn run() {
     core::logging::init();
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "n3o-slic3r starting");
 
+    // Project state is `Arc<Mutex<Project>>` (not just `Mutex<Project>`)
+    // so the autosave worker (PR-5-10) can clone a handle and snapshot
+    // the project on its own thread without going through Tauri's
+    // state lookup on every tick.
+    let project: Arc<Mutex<core::project::Project>> =
+        Arc::new(Mutex::new(core::project::Project::default()));
+    let autosave = core::project::autosave::AutosaveHandle::new();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(std::sync::Mutex::new(core::cascade::CascadeRegistry::new()))
-        .manage(std::sync::Mutex::new(core::project::Project::default()))
+        .manage(project)
+        .manage(autosave)
         .manage(core::slice::JobRegistry::new())
         .setup(|_app| {
             // Resources dir is only needed for STEP / font embossing; STL
@@ -73,6 +84,10 @@ pub fn run() {
             core::project::commands::project_save,
             core::project::commands::project_save_as,
             core::project::commands::project_load,
+            core::project::commands::project_autosave_enable,
+            core::project::commands::project_autosave_disable,
+            core::project::commands::project_autosave_list,
+            core::project::commands::project_autosave_drop,
             core::scene::commands::library_primitives,
             core::scene::commands::library_calibration,
             core::scene::commands::library_imported,
