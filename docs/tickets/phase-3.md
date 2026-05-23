@@ -39,7 +39,7 @@ index plus phase-level status and notes.
 | Slice orchestration on a worker thread | ❌ open | [PR-3-2](phase-3/PR-3-2%20Slice%20orchestration.md) |
 | Slice errors + post-slice summary | ❌ open | [PR-3-3](phase-3/PR-3-3%20Slice%20errors%20and%20summary.md) |
 | Slice button + progress UI | ❌ open | [PR-3-4](phase-3/PR-3-4%20Slice%20UI.md) |
-| Typed G-code model | ❌ open | [PR-3-5](phase-3/PR-3-5%20Typed%20gcode%20model.md) |
+| Typed G-code model | ✅ done | [PR-3-5](phase-3/PR-3-5%20Typed%20gcode%20model.md) |
 | Streaming G-code parser | ❌ open | [PR-3-6](phase-3/PR-3-6%20Streaming%20gcode%20parser.md) |
 | G-code serializer (byte-equivalent round-trip) | ❌ open | [PR-3-7](phase-3/PR-3-7%20Gcode%20serializer.md) |
 | Header metadata parser | ❌ open | [PR-3-8](phase-3/PR-3-8%20Header%20metadata%20parser.md) |

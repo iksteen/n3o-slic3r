@@ -1,6 +1,6 @@
 # PR-3-5 — Typed G-code model
 
-Status: ❌ open.
+Status: ✅ shipped — `core/gcode/model.rs` carries `Line` (Move / Comment / LayerChange / ToolChange / Other) with round-trip fidelity fields (`Move.param_order` + `command_text`, `Comment.raw` + `style`, every variant carries `raw_offset` + `line_ending`). `FeatureType::parse` handles Orca / Bambu / Prusa lowercase variants with `Other(...)` for forward compat. 9 unit tests including serde round-trip per variant.
 
 **Scope.** The `Line` enum that PR-3-6's parser produces and PR-3-7's
 serializer consumes — the typed sequence shared by the G-code preview
