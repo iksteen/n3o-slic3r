@@ -1,6 +1,6 @@
 # PR-4-4 — Settings panel scaffold + editing-context tabs
 
-Status: ❌ open.
+Status: ✅ shipped — `src/settings/SettingsPanel.tsx` ships the panel scaffold mounting CategorySidebar + ModeFilter + the form-component library; `src/settings/resolve.ts` ships `usePrinterOptions` (caches `slicer_options_for_printer` per stable printer-shape key) + `useCascadeResolve` (calls `cascade_resolve` per (handle, context) tuple). Editing-context tabs (Project / Object) follow the mockup's auto-fall-back pattern — Object tab disables when no object is selected and the panel snaps back to Project if the selection clears mid-edit. Search + mode filter compose into a single `filterRow` pure function (6 vitest cases). Project-scope settings are read-only on the Object tab per FR-3D-3 (PR-4-9 surfaces the "project-scope setting" badge; PR-4-4 enforces the disabled-input). Per-object override storage is stubbed via callback props — PR-4-9 wires the real `scene_object_override_set/clear` plumbing. The panel doesn't mount into App.tsx yet; that wiring lives with Phase 5's project model since the panel takes cascadeHandle + ContextJson + selection state that App.tsx currently doesn't carry. 63 frontend tests green.
 
 **Scope.** The host panel that mounts category nav (PR-4-3) + form
 components (PR-4-2) + the cascade-aware resolve/write loop. Includes
