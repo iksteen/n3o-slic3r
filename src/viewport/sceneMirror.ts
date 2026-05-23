@@ -63,6 +63,12 @@ export class SceneMirror {
   private selection = new Set<ObjectId>();
   private bufferProvider: MeshBufferProvider;
   private listeners: Array<(e: SceneEvent) => void> = [];
+  /** Serialization queue for `applyEvent`. Tauri's event listener
+   * fires synchronously per event but `applyEvent("MeshLoaded")`
+   * awaits a binary buffer fetch — without a queue, a later
+   * `ObjectAdded` could run before its mesh registers, drop on the
+   * "unknown mesh" floor, and never appear in the viewport. */
+  private queue: Promise<void> = Promise.resolve();
 
   /** Current camera state from the Rust side. The viewport reads
    * this and (debounced) writes back via `scene_camera_set`. */
@@ -112,9 +118,21 @@ export class SceneMirror {
     await this.applyEvent({ kind: "BedChanged", data: snapshot.bed });
   }
 
-  /** Apply one event from the Rust side. Async because `MeshLoaded`
-   * fetches the binary buffer via the provider. */
-  async applyEvent(event: SceneEvent): Promise<void> {
+  /** Apply one event from the Rust side. Events are serialized
+   * through an internal queue so a long-running `MeshLoaded` (async
+   * buffer fetch) doesn't allow a following `ObjectAdded` to race
+   * ahead and miss its mesh in the registry. */
+  applyEvent(event: SceneEvent): Promise<void> {
+    const next = this.queue.then(() => this.handleEvent(event));
+    // Detach errors from the queue so one failed event doesn't
+    // permanently jam every subsequent applyEvent.
+    this.queue = next.catch((err) => {
+      console.error("scene mirror event failed", event, err);
+    });
+    return next;
+  }
+
+  private async handleEvent(event: SceneEvent): Promise<void> {
     switch (event.kind) {
       case "MeshLoaded":
         await this.registerMesh(event.data);
