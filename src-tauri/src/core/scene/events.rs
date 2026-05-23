@@ -233,6 +233,15 @@ pub enum SceneOpError {
         plate_id: PlateId,
         message: String,
     },
+    /// The requested build-plate identity is not in the chosen
+    /// printer's `supported_build_plates` list (PR-5-4). The picker
+    /// can recover by falling back to the printer's first supported
+    /// plate.
+    UnsupportedBuildPlate {
+        plate_id: PlateId,
+        printer_identity: String,
+        build_plate_identity: String,
+    },
 }
 
 impl std::fmt::Display for SceneOpError {
@@ -248,6 +257,15 @@ impl std::fmt::Display for SceneOpError {
             Self::InvalidPlateMetadata { plate_id, message } => {
                 write!(f, "plate {}: {}", plate_id.0, message)
             }
+            Self::UnsupportedBuildPlate {
+                plate_id,
+                printer_identity,
+                build_plate_identity,
+            } => write!(
+                f,
+                "plate {}: printer `{}` does not support build plate `{}`",
+                plate_id.0, printer_identity, build_plate_identity,
+            ),
         }
     }
 }
@@ -277,6 +295,48 @@ pub enum RepositionReason {
     /// The object's world-space minimum Z is below the target
     /// plate's bed surface.
     BelowBedSurface,
+}
+
+/// Outcome of a [`Project::rebind_plate_printer`] call (PR-5-4).
+/// Surfaces the from/to printer identities + any settings that no
+/// longer fit the new printer's bounds so the UI can decide what
+/// to warn about. `incompatible` / `clamped` are populated by a
+/// future PR once the validation walk lands; for the MVP they
+/// ride out as empty vectors.
+#[derive(Debug, Clone, Serialize)]
+pub struct PrinterChangeReport {
+    pub plate_id: PlateId,
+    /// Identity of the printer this plate was bound to before the
+    /// change, or `None` if the plate was unbound.
+    pub previous_printer: Option<String>,
+    pub new_printer: String,
+    pub new_build_plate: String,
+    /// Settings whose authored value (project- or object-tier) is
+    /// now out of range / not applicable for the new printer.
+    /// MVP: always empty pending the validation walk.
+    pub incompatible: Vec<IncompatibleSetting>,
+    /// Settings auto-clamped to the new printer's range (e.g.
+    /// extruder selector reduced when slot_count drops). MVP:
+    /// always empty.
+    pub clamped: Vec<ClampedSetting>,
+}
+
+/// Per-setting incompatibility entry — placeholder shape; the
+/// validation walk in a future PR populates it.
+#[derive(Debug, Clone, Serialize)]
+pub struct IncompatibleSetting {
+    pub key: String,
+    pub value: String,
+    pub reason: String,
+}
+
+/// Per-setting clamp entry — placeholder shape; same lineage as
+/// `IncompatibleSetting`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClampedSetting {
+    pub key: String,
+    pub from: String,
+    pub to: String,
 }
 
 impl std::error::Error for SceneOpError {}

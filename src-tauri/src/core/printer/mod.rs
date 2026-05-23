@@ -9,6 +9,8 @@
 
 pub mod bambu;
 pub mod profile;
+pub mod registry;
 pub mod snapmaker;
 
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
+pub use registry::{bundled_catalog, lookup, CatalogEntry};

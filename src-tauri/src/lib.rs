@@ -81,6 +81,8 @@ pub fn run() {
             core::scene::commands::scene_project_override_clear_all,
             core::scene::commands::scene_move_object,
             core::scene::commands::scene_set_plate_printer,
+            core::scene::commands::scene_rebind_plate_printer,
+            core::scene::commands::printer_catalog,
             core::project::commands::project_set_plate_composition_order,
             core::project::commands::project_set_material_binding,
             core::project::commands::project_clear_material_binding,

@@ -349,6 +349,44 @@ pub fn scene_set_plate_printer(
     Ok(())
 }
 
+/// Bundled printer-profile catalog (PR-5-4). Returns the
+/// display-ready summary the picker UI renders. Static data —
+/// no project state needed.
+#[tauri::command]
+#[tracing::instrument]
+pub fn printer_catalog() -> Vec<crate::core::printer::CatalogEntry> {
+    crate::core::printer::bundled_catalog()
+}
+
+/// Rebind a plate to a printer the picker chose by identity
+/// (PR-5-4). The Tauri layer resolves the identity via the
+/// printer registry; the mutation handles the binding update,
+/// bed recompute, and report.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_rebind_plate_printer(
+    plate_id: PlateId,
+    printer_identity: String,
+    build_plate_identity: String,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<crate::core::scene::events::PrinterChangeReport, String> {
+    use crate::core::project::PrinterBinding;
+    let profile = crate::core::printer::lookup(&printer_identity)
+        .ok_or_else(|| format!("no bundled printer with identity `{printer_identity}`"))?;
+    let binding = PrinterBinding {
+        printer_identity,
+        build_plate_identity,
+    };
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let (report, events) = s
+        .rebind_plate_printer(plate_id, binding, &profile)
+        .map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(report)
+}
+
 /// Move an object from one plate to another (PR-5-11). Returns
 /// a `MoveReport` describing whether the world-space position
 /// had to be reset (out-of-bounds, on-exclusion-zone, or

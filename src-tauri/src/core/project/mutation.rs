@@ -464,6 +464,11 @@ impl Project {
     /// Recomputes the bed visualization, caches it on the plate,
     /// and emits a `BedChanged` event the renderer subscribes to.
     /// Pass `None` to clear the plate's bed.
+    ///
+    /// This is the bed-viz-only path — it does NOT touch the plate's
+    /// `printer` binding. Use [`Self::rebind_plate_printer`] for the
+    /// picker flow that also updates the binding + emits the
+    /// metadata-changed signal the tab strip subscribes to.
     pub fn set_plate_printer(
         &mut self,
         plate_id: PlateId,
@@ -483,6 +488,73 @@ impl Project {
             plate_id,
             bed: new_bed,
         }])
+    }
+
+    /// Rebind a plate to a different printer by identity (PR-5-4 —
+    /// the picker flow). The caller is responsible for resolving
+    /// the identity to a `PrinterProfile` via the printer registry;
+    /// keeping the registry lookup at the Tauri-command layer keeps
+    /// this mutation pure + testable without registry plumbing.
+    ///
+    /// Validates that `binding.build_plate_identity` is in the
+    /// chosen profile's `supported_build_plates`. Updates the
+    /// plate's `printer` binding, recomputes the bed visualization,
+    /// and returns a `PrinterChangeReport` documenting the swap.
+    /// Emits `BedChanged` + `PlateMetadataChanged` so the tab
+    /// strip's printer label updates and the cascade re-resolves
+    /// against the new context.
+    pub fn rebind_plate_printer(
+        &mut self,
+        plate_id: PlateId,
+        binding: crate::core::project::PrinterBinding,
+        profile: &PrinterProfile,
+    ) -> Result<(crate::core::scene::events::PrinterChangeReport, Vec<SceneEvent>), SceneOpError> {
+        use crate::core::scene::events::PrinterChangeReport;
+
+        let idx = self
+            .plate_index(plate_id)
+            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        if !profile
+            .supported_build_plates
+            .iter()
+            .any(|p| p == &binding.build_plate_identity)
+        {
+            return Err(SceneOpError::UnsupportedBuildPlate {
+                plate_id,
+                printer_identity: binding.printer_identity.clone(),
+                build_plate_identity: binding.build_plate_identity.clone(),
+            });
+        }
+
+        let previous_printer = self.plates[idx]
+            .printer
+            .as_ref()
+            .map(|p| p.printer_identity.clone());
+        let new_printer = binding.printer_identity.clone();
+        let new_build_plate = binding.build_plate_identity.clone();
+
+        // Update the binding first so events emitted by the bed
+        // recompute see the new state.
+        self.plates[idx].printer = Some(binding);
+
+        // Reuse the bed-viz path for the bed/exclusion-zone update.
+        // Can't fail (we already validated the plate id above).
+        let mut events = self
+            .set_plate_printer(plate_id, Some(profile))
+            .expect("plate id was validated above");
+        events.push(SceneEvent::PlateMetadataChanged { plate_id });
+
+        let report = PrinterChangeReport {
+            plate_id,
+            previous_printer,
+            new_printer,
+            new_build_plate,
+            // Populated by the validation walk in a future PR; for the
+            // MVP we ship the picker without proactive warnings.
+            incompatible: Vec::new(),
+            clamped: Vec::new(),
+        };
+        Ok((report, events))
     }
 
     // ---- Mesh / object load + place -------------------------------
@@ -2505,6 +2577,100 @@ mod tests {
         let mut p = Project::default();
         p.set_active_printer(Some(&a1_mini_for_test()));
         assert!(p.active_plate().scene.bed.is_some());
+    }
+
+    // ---- rebind_plate_printer (PR-5-4 picker flow) ----------------
+
+    #[test]
+    fn rebind_plate_printer_updates_binding_and_emits_events() {
+        use crate::core::project::PrinterBinding;
+        use crate::core::scene::events::SceneEvent;
+        let mut p = Project::default();
+        let profile = a1_mini_for_test();
+        let binding = PrinterBinding {
+            printer_identity: "bambu-a1-mini".into(),
+            build_plate_identity: "Textured PEI".into(),
+        };
+        let (report, events) = p
+            .rebind_plate_printer(PlateId(1), binding.clone(), &profile)
+            .unwrap();
+        // Binding updated.
+        assert_eq!(p.plates[0].printer, Some(binding));
+        // Report shape — previous was None for a fresh project.
+        assert_eq!(report.plate_id, PlateId(1));
+        assert_eq!(report.previous_printer, None);
+        assert_eq!(report.new_printer, "bambu-a1-mini");
+        assert_eq!(report.new_build_plate, "Textured PEI");
+        assert!(report.incompatible.is_empty());
+        assert!(report.clamped.is_empty());
+        // Events emitted: BedChanged + PlateMetadataChanged.
+        assert_eq!(events.len(), 2);
+        assert!(matches!(&events[0], SceneEvent::BedChanged { plate_id: PlateId(1), .. }));
+        assert!(matches!(&events[1], SceneEvent::PlateMetadataChanged { plate_id: PlateId(1) }));
+    }
+
+    #[test]
+    fn rebind_plate_printer_records_previous_identity() {
+        use crate::core::project::PrinterBinding;
+        let mut p = Project::default();
+        p.plates[0].printer = Some(PrinterBinding {
+            printer_identity: "snapmaker-u1".into(),
+            build_plate_identity: "Magnetic".into(),
+        });
+        let profile = a1_mini_for_test();
+        let (report, _) = p
+            .rebind_plate_printer(
+                PlateId(1),
+                PrinterBinding {
+                    printer_identity: "bambu-a1-mini".into(),
+                    build_plate_identity: "Textured PEI".into(),
+                },
+                &profile,
+            )
+            .unwrap();
+        assert_eq!(report.previous_printer.as_deref(), Some("snapmaker-u1"));
+        assert_eq!(report.new_printer, "bambu-a1-mini");
+    }
+
+    #[test]
+    fn rebind_plate_printer_rejects_unsupported_build_plate() {
+        use crate::core::project::PrinterBinding;
+        let mut p = Project::default();
+        let profile = a1_mini_for_test();
+        let err = p
+            .rebind_plate_printer(
+                PlateId(1),
+                PrinterBinding {
+                    printer_identity: "bambu-a1-mini".into(),
+                    build_plate_identity: "Magnetic".into(), // not in A1 mini's list
+                },
+                &profile,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            SceneOpError::UnsupportedBuildPlate { plate_id: PlateId(1), .. },
+        ));
+        // Binding NOT updated on validation failure.
+        assert!(p.plates[0].printer.is_none());
+    }
+
+    #[test]
+    fn rebind_plate_printer_unknown_plate_errors() {
+        use crate::core::project::PrinterBinding;
+        let mut p = Project::default();
+        let profile = a1_mini_for_test();
+        let err = p
+            .rebind_plate_printer(
+                PlateId(99),
+                PrinterBinding {
+                    printer_identity: "bambu-a1-mini".into(),
+                    build_plate_identity: "Textured PEI".into(),
+                },
+                &profile,
+            )
+            .unwrap_err();
+        assert_eq!(err, SceneOpError::UnknownPlate(PlateId(99)));
     }
 
     // ---- Plate rename (PR-5-3) -----------------------------------
