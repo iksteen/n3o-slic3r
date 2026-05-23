@@ -125,10 +125,11 @@ export function SettingsPanel(props: SettingsPanelProps) {
     allObjects = [],
   } = props;
 
-  // Mode filter UI is parked pending a redesign; pin to "expert"
-  // so every stable setting is visible. `setMode` is kept available
-  // for when the new UI lands.
-  const [mode, setMode] = useState<ModeFilter>("expert");
+  // Mode filter UI is parked pending a redesign; pin to "advanced"
+  // — "expert" pulls in G-code / machine-limits noise most users
+  // never touch. `setMode` is kept available for when the new UI
+  // lands.
+  const [mode, setMode] = useState<ModeFilter>("advanced");
   void setMode;
   const [search, setSearch] = useState("");
   const [contextLayer, setContextLayer] = useState<ContextLayer>("project");
