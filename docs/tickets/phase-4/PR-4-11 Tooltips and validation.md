@@ -1,6 +1,6 @@
 # PR-4-11 — Tooltips + inline validation
 
-Status: ❌ open.
+Status: ✅ tooltip surface shipped — `src/settings/tooltip/SettingTooltip.tsx` portal-renders a hover tooltip on the row's label (distinct from PR-4-8's cascade ladder which triggers on row body). Renders libslic3r's `OptionSummary.tooltip` + an optional "💡 tip" annotation slot for PR-4-12's "why this matters" content. Auto-positions below the label, flips above near viewport edges. `useTooltipHover` lifecycle hook with 200 ms close delay. `src/settings/annotations/data.ts` seeded with 4 high-impact entries (layer_height, sparse_infill_density, wall_loops, outer_wall_speed); PR-4-12 fills out the ~30 highest-impact catalog. **Inline validation against libslic3r `config_validate` deferred** — would require a new FFI command + Tauri round-trip; Field already reserves the `error` prop slot so the wiring is a small follow-up when validation backend is in scope.
 
 **Scope.** Two row-level affordances that round out the settings UX:
 

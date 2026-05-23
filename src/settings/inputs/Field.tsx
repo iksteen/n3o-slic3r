@@ -56,6 +56,11 @@ export interface FieldProps {
    *  currently hovered. */
   onRowEnter?: (el: HTMLElement) => void;
   onRowLeave?: () => void;
+  /** SettingTooltip hover lifecycle (PR-4-11). Fired with the
+   *  label's DOM node; distinct from the row enter/leave so the
+   *  tooltip + cascade ladder can coexist without conflict. */
+  onLabelEnter?: (el: HTMLElement) => void;
+  onLabelLeave?: () => void;
   /** The input control. */
   children: ReactNode;
 }
@@ -70,6 +75,8 @@ export function Field({
   winningLayer = "cascade",
   onRowEnter,
   onRowLeave,
+  onLabelEnter,
+  onLabelLeave,
   children,
 }: FieldProps) {
   const authored = isAuthoredTier(winningLayer);
@@ -110,6 +117,8 @@ export function Field({
         <span
           className={`set-name truncate text-sm ${authored ? "font-semibold" : ""}`}
           title={schema.key}
+          onMouseEnter={onLabelEnter ? (e) => onLabelEnter(e.currentTarget) : undefined}
+          onMouseLeave={onLabelLeave}
         >
           {schema.label ?? schema.key}
         </span>
