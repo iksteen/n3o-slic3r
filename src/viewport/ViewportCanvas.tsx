@@ -219,9 +219,16 @@ export function ViewportCanvas() {
       pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
+      // Recursive: post-PR-5-2 phase C, `mirror.objectGroup`'s
+      // direct children are the per-plate wrapper groups, not the
+      // meshes themselves. The meshes live one level down on
+      // `activePlate.objectGroup`. A non-recursive walk finds the
+      // wrapper group (no geometry) and reports zero hits, which
+      // is why object selection silently stopped working once the
+      // per-plate restructure landed.
       const hits = raycaster.intersectObjects(
         mirror.objectGroup.children,
-        false,
+        true,
       );
       const additive = ev.shiftKey || ev.metaKey || ev.ctrlKey;
       if (hits.length === 0) {
