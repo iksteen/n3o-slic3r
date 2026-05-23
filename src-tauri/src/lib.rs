@@ -34,6 +34,7 @@ pub fn run() {
         .manage(project)
         .manage(autosave)
         .manage(core::slice::JobRegistry::new())
+        .manage(Arc::new(core::preview::PreviewRegistry::new()))
         .setup(|_app| {
             // Resources dir is only needed for STEP / font embossing; STL
             // and 3MF load without it. Log level 3 = warning, matching
@@ -103,6 +104,11 @@ pub fn run() {
             core::slice::commands::slice_active_plate,
             core::slice::commands::slice_cancel,
             core::slice::commands::slice_status,
+            core::preview::commands::preview_load,
+            core::preview::commands::preview_buffers,
+            core::preview::commands::preview_layer_stats,
+            core::preview::commands::preview_segment_detail,
+            core::preview::commands::preview_drop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
