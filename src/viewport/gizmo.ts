@@ -125,8 +125,28 @@ export function createGizmo(deps: GizmoDeps): GizmoApi {
     },
     dispose() {
       controls.detach();
+      // three.js 0.169's `TransformControls.dispose()` is buggy:
+      // it calls `this.traverse(...)` but TransformControls no longer
+      // extends Object3D in 0.169+ (it extends Controls/EventDispatcher),
+      // so the traversal crashes the StrictMode dev-mode cleanup and
+      // blanks the screen. Walk the helper ourselves — it's still an
+      // Object3D and owns all the disposable resources. Fixed upstream
+      // in three.js 0.171+; revisit when we bump.
+      helper.traverse((node) => {
+        const mesh = node as THREE.Mesh;
+        if (mesh.geometry) mesh.geometry.dispose();
+        const mat = mesh.material as
+          | THREE.Material
+          | THREE.Material[]
+          | undefined;
+        if (Array.isArray(mat)) {
+          for (const m of mat) m.dispose();
+        } else if (mat) {
+          mat.dispose();
+        }
+      });
       deps.scene.remove(helper);
-      controls.dispose();
+      controls.disconnect();
     },
   };
 }
