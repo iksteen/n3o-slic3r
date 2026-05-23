@@ -92,9 +92,10 @@ export type OutOfBoundsReason =
 
 // ---- Project-level types (PR-5-1, PR-5-5, PR-5-6) ------------------
 
-/** Per-plate metadata the PlateCycler plugin consumes. */
+/** Per-plate metadata the composition plugin host (Phase 8) reads.
+ * `cycle_count` was cut from MVP scope; only `composition_order`
+ * survives on the wire. */
 export interface PlateMetadata {
-  cycle_count: number;
   composition_order: number;
 }
 

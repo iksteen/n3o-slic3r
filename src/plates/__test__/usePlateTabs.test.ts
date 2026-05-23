@@ -45,7 +45,7 @@ function plateSnap(opts: {
   return {
     plate_id: opts.id,
     name: opts.name ?? `Plate ${opts.id}`,
-    metadata: { cycle_count: 1, composition_order: opts.id },
+    metadata: { composition_order: opts.id },
     printer:
       opts.printer_identity == null
         ? null

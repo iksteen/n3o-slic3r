@@ -37,26 +37,6 @@ fn emit_all(window: &Window, events: &[SceneEvent]) {
     }
 }
 
-/// Set a plate's cycle count (FR-MP-7). Validates against the
-/// 1..=999 range declared in `PlateMetadata`; emits
-/// `PlateMetadataChanged` so the tab-strip badge re-renders.
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn project_set_plate_cycle_count(
-    plate_id: PlateId,
-    count: u32,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
-    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    let events = p
-        .set_plate_cycle_count(plate_id, count)
-        .map_err(|e| e.to_string())?;
-    drop(p);
-    emit_all(&window, &events);
-    Ok(())
-}
-
 /// Set a plate's composition order (FR-MP-7). Auto-shifts the
 /// remaining plates so `composition_order` stays a dense
 /// `[1..plates.len()]` sequence. Emits one

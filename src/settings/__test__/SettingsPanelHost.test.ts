@@ -51,7 +51,7 @@ function plate(opts: {
   return {
     plate_id: opts.id,
     name: `Plate ${opts.id}`,
-    metadata: { cycle_count: 1, composition_order: opts.id },
+    metadata: { composition_order: opts.id },
     printer: null,
     material_bindings: [],
     project_overrides: {},

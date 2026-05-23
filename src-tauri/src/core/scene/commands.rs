@@ -879,7 +879,6 @@ mod tests {
             printer_identity: "bambu-a1-mini".into(),
             build_plate_identity: "Textured PEI".into(),
         });
-        p.plates[0].metadata.cycle_count = 5;
         p.plates[0].name = "My Plate".into();
         let mesh_id = p.register_mesh(unit_cube_mesh());
         let obj_id = p.register_object(NewSceneObject {
@@ -894,7 +893,6 @@ mod tests {
         let snap = plate_snapshot(&p.plates[0]);
         assert_eq!(snap.plate_id, PlateId(1));
         assert_eq!(snap.name, "My Plate");
-        assert_eq!(snap.metadata.cycle_count, 5);
         assert!(snap.printer.is_some());
         assert_eq!(snap.objects.len(), 1);
         assert_eq!(snap.objects[0].id, obj_id);

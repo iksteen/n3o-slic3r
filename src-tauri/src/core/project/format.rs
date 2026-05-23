@@ -373,9 +373,8 @@ mod tests {
             .insert("travel_speed".into(), "300".into());
         p.file_metadata
             .insert("Title".into(), "Fixture Project".into());
-        // Plate 0: printer + bindings + cycle count + override.
+        // Plate 0: printer + bindings + project override.
         p.plates[0].printer = Some(a1_mini_binding());
-        p.plates[0].metadata.cycle_count = 3;
         p.plates[0].project_overrides.insert(
             "layer_height".into(),
             "0.12".into(),
@@ -387,7 +386,6 @@ mod tests {
         });
         // Add a second plate so the list-shape survives.
         p.add_plate(None);
-        p.plates[1].metadata.cycle_count = 5;
 
         let path = tempfile_3mf();
         write_project(&p, &path).expect("write");
@@ -404,7 +402,6 @@ mod tests {
         );
         assert_eq!(parsed.plates.len(), 2);
         assert_eq!(parsed.plates[0].printer, Some(a1_mini_binding()));
-        assert_eq!(parsed.plates[0].metadata.cycle_count, 3);
         assert_eq!(
             parsed.plates[0]
                 .project_overrides
@@ -414,7 +411,6 @@ mod tests {
         );
         assert_eq!(parsed.plates[0].material_bindings.len(), 1);
         assert_eq!(parsed.plates[0].material_bindings[0].physical_slot, 2);
-        assert_eq!(parsed.plates[1].metadata.cycle_count, 5);
         std::fs::remove_file(&path).ok();
     }
 
@@ -544,22 +540,13 @@ mod tests {
         };
         let mut p = Project::default();
         p.plates[0].printer = Some(a1_mini_binding());
-        p.plates[0].metadata.cycle_count = 2;
-        let (b, _) = p.add_plate(Some(snapmaker.clone()));
-        p.plate_mut(b).unwrap().metadata.cycle_count = 1;
-        let (c, _) = p.add_plate(Some(snapmaker));
-        p.plate_mut(c).unwrap().metadata.cycle_count = 3;
+        let (_b, _) = p.add_plate(Some(snapmaker.clone()));
+        let (_c, _) = p.add_plate(Some(snapmaker));
 
         let path = tempfile_3mf();
         write_project(&p, &path).expect("write");
         let parsed = read_project(&path).expect("read");
         assert_eq!(parsed.plates.len(), 3);
-        let counts: Vec<u32> = parsed
-            .plates
-            .iter()
-            .map(|pl| pl.metadata.cycle_count)
-            .collect();
-        assert_eq!(counts, vec![2, 1, 3]);
         let printers: Vec<&str> = parsed
             .plates
             .iter()

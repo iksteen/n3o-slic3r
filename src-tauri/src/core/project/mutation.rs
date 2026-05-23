@@ -339,32 +339,6 @@ impl Project {
 
     // ---- Plate metadata (PR-5-5) ----------------------------------
 
-    /// Set a plate's `cycle_count` (FR-MP-7). Validates against the
-    /// `[CYCLE_COUNT_MIN, CYCLE_COUNT_MAX]` range declared in
-    /// [`PlateMetadata`]; emits `PlateMetadataChanged` on success.
-    /// No-op (no event) when the value is unchanged.
-    pub fn set_plate_cycle_count(
-        &mut self,
-        plate_id: PlateId,
-        count: u32,
-    ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        use crate::core::project::metadata::PlateMetadata;
-        let validated = PlateMetadata::validate_cycle_count(count).map_err(|msg| {
-            SceneOpError::InvalidPlateMetadata {
-                plate_id,
-                message: msg,
-            }
-        })?;
-        let idx = self
-            .plate_index(plate_id)
-            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
-        if self.plates[idx].metadata.cycle_count == validated {
-            return Ok(Vec::new());
-        }
-        self.plates[idx].metadata.cycle_count = validated;
-        Ok(vec![SceneEvent::PlateMetadataChanged { plate_id }])
-    }
-
     /// Move a plate to position `order` in the composition queue,
     /// shifting sibling plates' `composition_order` to keep the
     /// queue a dense `[1..plates.len()]` sequence with no gaps.
@@ -2531,72 +2505,6 @@ mod tests {
         let mut p = Project::default();
         p.set_active_printer(Some(&a1_mini_for_test()));
         assert!(p.active_plate().scene.bed.is_some());
-    }
-
-    // ---- Plate metadata (PR-5-5) ----------------------------------
-
-    #[test]
-    fn set_plate_cycle_count_writes_and_emits() {
-        let mut p = Project::default();
-        let events = p.set_plate_cycle_count(PlateId(1), 5).unwrap();
-        assert_eq!(p.plates[0].metadata.cycle_count, 5);
-        assert!(matches!(
-            events.as_slice(),
-            [SceneEvent::PlateMetadataChanged { plate_id: PlateId(1) }],
-        ));
-    }
-
-    #[test]
-    fn set_plate_cycle_count_to_current_is_silent_noop() {
-        let mut p = Project::default();
-        // Default is 1; re-setting to 1 emits nothing.
-        let events = p.set_plate_cycle_count(PlateId(1), 1).unwrap();
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn set_plate_cycle_count_below_min_errors() {
-        let mut p = Project::default();
-        let err = p.set_plate_cycle_count(PlateId(1), 0).unwrap_err();
-        assert!(matches!(
-            err,
-            SceneOpError::InvalidPlateMetadata { plate_id: PlateId(1), .. },
-        ));
-    }
-
-    #[test]
-    fn set_plate_cycle_count_above_max_errors() {
-        let mut p = Project::default();
-        let err = p.set_plate_cycle_count(PlateId(1), 1000).unwrap_err();
-        assert!(matches!(
-            err,
-            SceneOpError::InvalidPlateMetadata { plate_id: PlateId(1), .. },
-        ));
-    }
-
-    #[test]
-    fn set_plate_cycle_count_at_boundaries_succeeds() {
-        let mut p = Project::default();
-        assert!(p.set_plate_cycle_count(PlateId(1), 999).is_ok());
-        assert_eq!(p.plates[0].metadata.cycle_count, 999);
-        assert!(p.set_plate_cycle_count(PlateId(1), 1).is_ok());
-        assert_eq!(p.plates[0].metadata.cycle_count, 1);
-    }
-
-    #[test]
-    fn set_plate_cycle_count_unknown_plate_errors() {
-        let mut p = Project::default();
-        let err = p.set_plate_cycle_count(PlateId(99), 5).unwrap_err();
-        assert_eq!(err, SceneOpError::UnknownPlate(PlateId(99)));
-    }
-
-    #[test]
-    fn cycle_count_round_trips_via_json() {
-        let mut p = Project::default();
-        p.set_plate_cycle_count(PlateId(1), 42).unwrap();
-        let json = serde_json::to_string(&p).unwrap();
-        let parsed: Project = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.plates[0].metadata.cycle_count, 42);
     }
 
     // ---- Plate rename (PR-5-3) -----------------------------------

@@ -108,7 +108,7 @@ export class PlateMirror {
     this.objectGroup.name = `n3o:plate-${plateId}:objects`;
     this.bedGroup.name = `n3o:plate-${plateId}:bed`;
     this.name = snap?.name ?? `Plate ${plateId}`;
-    this.metadata = snap?.metadata ?? { cycle_count: 1, composition_order: plateId };
+    this.metadata = snap?.metadata ?? { composition_order: plateId };
     this.printer = snap?.printer ?? null;
     this.materialBindings = snap?.material_bindings ?? [];
     this.projectOverrides = snap?.project_overrides ?? {};

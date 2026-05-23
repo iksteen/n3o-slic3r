@@ -399,7 +399,6 @@ mod tests {
             physical_slot: 2,
             filament_identity: "Generic PLA".into(),
         });
-        p.plates[0].metadata.cycle_count = 3;
         p.user_overrides
             .insert("travel_speed".into(), "300".into());
         p.file_metadata
@@ -420,7 +419,6 @@ mod tests {
             Some("0.12"),
         );
         assert_eq!(parsed.plates[0].material_bindings.len(), 1);
-        assert_eq!(parsed.plates[0].metadata.cycle_count, 3);
         assert_eq!(
             parsed.user_overrides.get("travel_speed").map(|s| s.as_str()),
             Some("300"),
