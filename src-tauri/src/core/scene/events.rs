@@ -80,6 +80,14 @@ pub enum SceneEvent {
     ActivePlateChanged {
         plate_index: usize,
     },
+    /// One or more cascade overrides on a specific object changed
+    /// (PR-5-7). The frontend re-runs cascade resolution to refresh
+    /// the panel — the event carries no value payload because the
+    /// resolver re-reads the override map directly.
+    ObjectOverridesChanged {
+        plate_index: usize,
+        object_id: ObjectId,
+    },
 }
 
 impl SceneEvent {
@@ -102,6 +110,7 @@ impl SceneEvent {
             Self::PlateAdded { .. } => "scene:plate_added",
             Self::PlateRemoved { .. } => "scene:plate_removed",
             Self::ActivePlateChanged { .. } => "scene:active_plate_changed",
+            Self::ObjectOverridesChanged { .. } => "scene:object_overrides_changed",
         }
     }
 }

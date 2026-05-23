@@ -193,6 +193,65 @@ pub fn scene_set_active_plate(
     Ok(())
 }
 
+/// Upsert one per-object cascade override on a specific plate
+/// (PR-5-7 — replaces PR-4-9's stub `onSetObjectOverride`).
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_object_override_set(
+    plate_index: usize,
+    object_id: ObjectId,
+    key: String,
+    value: String,
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s
+        .object_override_set(plate_index, object_id, key, value)
+        .map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
+/// Drop one per-object cascade override key. Silent no-op when
+/// the override wasn't present.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_object_override_clear(
+    plate_index: usize,
+    object_id: ObjectId,
+    key: String,
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s
+        .object_override_clear(plate_index, object_id, &key)
+        .map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
+/// Wipe every cascade override on an object.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_object_override_clear_all(
+    plate_index: usize,
+    object_id: ObjectId,
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s
+        .object_override_clear_all(plate_index, object_id)
+        .map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
 #[tauri::command]
 #[tracing::instrument]
 pub fn library_primitives() -> Vec<super::library::PrimitiveDescriptor> {

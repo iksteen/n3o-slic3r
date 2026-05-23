@@ -300,6 +300,13 @@ pub struct PlateSceneState {
     /// still works, just without the out-of-bounds check or grid.
     #[serde(default)]
     pub bed: Option<super::bed::BedMesh>,
+    /// Per-object cascade overrides (PR-5-7). Outer key: object;
+    /// inner map: setting key → serialized libslic3r value. The
+    /// resolver consumes this as the highest-priority tier when
+    /// the panel resolves with the Object tab active. Empty for
+    /// objects without authored overrides.
+    #[serde(default)]
+    pub object_overrides: HashMap<ObjectId, HashMap<String, String>>,
 }
 
 /// The root authoritative scene model. Tauri commands lock this
@@ -424,6 +431,96 @@ impl SceneState {
         }
         self.active_plate = idx;
         Ok(vec![SceneEvent::ActivePlateChanged { plate_index: idx }])
+    }
+
+    // ---- Per-object overrides (PR-5-7) ----------------------------
+    //
+    // The override-tier value the cascade resolver consumes when
+    // resolving for a specific object. Stored per-plate so the same
+    // object id on different plates can have different overrides
+    // (this is the contract PR-5-11 will need when objects move
+    // between plates).
+
+    /// Upsert one override for `object_id` on plate `plate_index`.
+    /// Emits one `ObjectOverridesChanged` event.
+    pub fn object_override_set(
+        &mut self,
+        plate_index: usize,
+        object_id: ObjectId,
+        key: String,
+        value: String,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let plate = self
+            .plates
+            .get_mut(plate_index)
+            .ok_or(SceneOpError::UnknownPlate(plate_index))?;
+        if !plate.objects.contains_key(&object_id) {
+            return Err(SceneOpError::UnknownObject(object_id));
+        }
+        plate
+            .object_overrides
+            .entry(object_id)
+            .or_default()
+            .insert(key, value);
+        Ok(vec![SceneEvent::ObjectOverridesChanged {
+            plate_index,
+            object_id,
+        }])
+    }
+
+    /// Drop one override key from `object_id` on plate `plate_index`.
+    /// Silent no-op (no event) when the override wasn't present.
+    /// When the last override on an object is cleared, the per-
+    /// object map entry is removed entirely.
+    pub fn object_override_clear(
+        &mut self,
+        plate_index: usize,
+        object_id: ObjectId,
+        key: &str,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let plate = self
+            .plates
+            .get_mut(plate_index)
+            .ok_or(SceneOpError::UnknownPlate(plate_index))?;
+        if !plate.objects.contains_key(&object_id) {
+            return Err(SceneOpError::UnknownObject(object_id));
+        }
+        let Some(map) = plate.object_overrides.get_mut(&object_id) else {
+            return Ok(Vec::new());
+        };
+        if map.remove(key).is_none() {
+            return Ok(Vec::new());
+        }
+        if map.is_empty() {
+            plate.object_overrides.remove(&object_id);
+        }
+        Ok(vec![SceneEvent::ObjectOverridesChanged {
+            plate_index,
+            object_id,
+        }])
+    }
+
+    /// Wipe every override on `object_id`. Silent no-op when the
+    /// object had no overrides.
+    pub fn object_override_clear_all(
+        &mut self,
+        plate_index: usize,
+        object_id: ObjectId,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let plate = self
+            .plates
+            .get_mut(plate_index)
+            .ok_or(SceneOpError::UnknownPlate(plate_index))?;
+        if !plate.objects.contains_key(&object_id) {
+            return Err(SceneOpError::UnknownObject(object_id));
+        }
+        if plate.object_overrides.remove(&object_id).is_none() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![SceneEvent::ObjectOverridesChanged {
+            plate_index,
+            object_id,
+        }])
     }
 
     /// Allocate the next monotonic `MeshId`. IDs start at 1.
@@ -1787,6 +1884,123 @@ mod tests {
         assert!(!s.plates[0].selection.contains(&obj_b));
         assert!(s.plates[1].selection.contains(&obj_b));
         assert!(!s.plates[1].selection.contains(&obj_a));
+    }
+
+    // ---- Per-object overrides (PR-5-7) -----------------------------
+
+    #[test]
+    fn object_override_set_then_get_round_trips() {
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        let events = s
+            .object_override_set(0, obj, "layer_height".into(), "0.12".into())
+            .unwrap();
+        assert!(matches!(
+            events.as_slice(),
+            [SceneEvent::ObjectOverridesChanged {
+                plate_index: 0,
+                object_id: o,
+            }] if *o == obj,
+        ));
+        let stored = s.plates[0]
+            .object_overrides
+            .get(&obj)
+            .and_then(|m| m.get("layer_height"));
+        assert_eq!(stored.map(|s| s.as_str()), Some("0.12"));
+    }
+
+    #[test]
+    fn object_override_clear_removes_key_and_drops_empty_map() {
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        s.object_override_set(0, obj, "layer_height".into(), "0.12".into())
+            .unwrap();
+        s.object_override_set(0, obj, "infill_density".into(), "25%".into())
+            .unwrap();
+
+        // Clearing one key leaves the other.
+        let events = s.object_override_clear(0, obj, "layer_height").unwrap();
+        assert_eq!(events.len(), 1);
+        let map = s.plates[0].object_overrides.get(&obj).unwrap();
+        assert_eq!(map.len(), 1);
+        assert!(map.contains_key("infill_density"));
+
+        // Clearing the last one removes the per-object entry.
+        s.object_override_clear(0, obj, "infill_density").unwrap();
+        assert!(s.plates[0].object_overrides.get(&obj).is_none());
+    }
+
+    #[test]
+    fn object_override_clear_missing_key_is_silent_noop() {
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        let events = s
+            .object_override_clear(0, obj, "never_set")
+            .unwrap();
+        assert!(events.is_empty(), "clearing absent key emits nothing");
+    }
+
+    #[test]
+    fn object_override_clear_all_drops_every_override() {
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        s.object_override_set(0, obj, "k1".into(), "v1".into()).unwrap();
+        s.object_override_set(0, obj, "k2".into(), "v2".into()).unwrap();
+        s.object_override_set(0, obj, "k3".into(), "v3".into()).unwrap();
+        let events = s.object_override_clear_all(0, obj).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(s.plates[0].object_overrides.get(&obj).is_none());
+    }
+
+    #[test]
+    fn object_override_clear_all_on_clean_object_is_silent_noop() {
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        let events = s.object_override_clear_all(0, obj).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn object_overrides_are_per_plate() {
+        // Same object id is only meaningful within a plate (object
+        // ids are scene-wide unique, so this test really verifies
+        // that overrides on plate A don't bleed into plate B).
+        let mut s = SceneState::new();
+        s.add_plate();
+        let (_, obj_a) = add_cube(&mut s);
+        s.set_active_plate(1).unwrap();
+        let (_, obj_b) = add_cube(&mut s);
+
+        s.object_override_set(0, obj_a, "layer_height".into(), "0.10".into())
+            .unwrap();
+        s.object_override_set(1, obj_b, "layer_height".into(), "0.28".into())
+            .unwrap();
+
+        assert_eq!(
+            s.plates[0].object_overrides.get(&obj_a).unwrap()["layer_height"],
+            "0.10",
+        );
+        assert_eq!(
+            s.plates[1].object_overrides.get(&obj_b).unwrap()["layer_height"],
+            "0.28",
+        );
+        assert!(s.plates[0].object_overrides.get(&obj_b).is_none());
+        assert!(s.plates[1].object_overrides.get(&obj_a).is_none());
+    }
+
+    #[test]
+    fn object_override_errors_on_unknown_plate_or_object() {
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        assert_eq!(
+            s.object_override_set(99, obj, "k".into(), "v".into()).unwrap_err(),
+            SceneOpError::UnknownPlate(99),
+        );
+        assert_eq!(
+            s.object_override_set(0, ObjectId(9999), "k".into(), "v".into())
+                .unwrap_err(),
+            SceneOpError::UnknownObject(ObjectId(9999)),
+        );
     }
 
     #[test]
