@@ -29,6 +29,7 @@
 pub mod binding;
 pub mod commands;
 pub mod context;
+pub mod format;
 pub mod metadata;
 pub mod model;
 pub mod mutation;

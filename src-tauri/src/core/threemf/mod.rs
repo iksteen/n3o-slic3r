@@ -53,7 +53,20 @@ mod writer;
 pub use sliced::{
     fixture_input, write_sliced_3mf, AmsBinding, SlicedPlate, SlicedProjectInput,
 };
-pub use writer::{project_from_objects, write_3mf};
+pub use writer::{project_from_objects, write_3mf, write_3mf_with_extras};
+
+/// Open a `.3mf` and read a single named entry, returning `None`
+/// when the entry is absent. Companion to [`write_3mf_with_extras`]
+/// for callers that need to peek at custom metadata (e.g.
+/// `Metadata/n3o_project.json` for PR-5-8's project save format)
+/// without re-parsing the geometry.
+pub fn read_3mf_extra_entry(
+    path: &Path,
+    entry: &str,
+) -> Result<Option<Vec<u8>>, LoadError> {
+    let mut container = container::Container::open(path)?;
+    container.read_opt(entry)
+}
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;

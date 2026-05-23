@@ -14,7 +14,10 @@ use std::sync::Mutex;
 
 use tauri::{Emitter, State, Window};
 
+use std::path::PathBuf;
+
 use super::binding::MaterialBinding;
+use super::format;
 use super::PlateId;
 use super::Project;
 use crate::core::scene::events::SceneEvent;
@@ -140,4 +143,83 @@ pub fn project_auto_bind_materials(
     drop(p);
     emit_all(&window, &events);
     Ok(bindings)
+}
+
+// ---- Save / load (PR-5-8) ------------------------------------------
+
+/// Save the in-memory project to `path` as an n3o-slic3r `.3mf`.
+/// Overwrites the file if it exists. The project's `source_path`
+/// is **not** updated; use [`project_save_as`] when the user
+/// chooses a new path via Save As.
+///
+/// Emits `project:saved { path }` after the write completes so the
+/// UI can refresh the recent-files list / window-title indicator.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn project_save(
+    path: String,
+    window: Window,
+    state: State<Mutex<Project>>,
+) -> Result<(), String> {
+    let p = state.lock().map_err(|e| format!("project lock: {e}"))?;
+    format::write_project(&p, std::path::Path::new(&path))
+        .map_err(|e| e.to_string())?;
+    drop(p);
+    emit_all(
+        &window,
+        &[SceneEvent::ProjectSaved { path: path.clone() }],
+    );
+    Ok(())
+}
+
+/// Save the in-memory project to `path` AND update its
+/// `source_path` so subsequent `project_save` calls write here.
+/// Use when the user picks a new file via Save As; for the
+/// vanilla Save flow use [`project_save`].
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn project_save_as(
+    path: String,
+    window: Window,
+    state: State<Mutex<Project>>,
+) -> Result<(), String> {
+    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
+    format::write_project(&p, std::path::Path::new(&path))
+        .map_err(|e| e.to_string())?;
+    p.source_path = Some(PathBuf::from(&path));
+    drop(p);
+    emit_all(
+        &window,
+        &[SceneEvent::ProjectSaved { path: path.clone() }],
+    );
+    Ok(())
+}
+
+/// Load a project file from `path`, **replacing** the in-memory
+/// project wholesale. Emits `project:loaded { path }` so the
+/// frontend mirror can throw out its cached scene state and
+/// re-sync via `scene_snapshot`.
+///
+/// Returns the loaded project so the caller doesn't have to chain
+/// a separate read; the frontend can render immediately from the
+/// return value while the mirror catches up via the event.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn project_load(
+    path: String,
+    window: Window,
+    state: State<Mutex<Project>>,
+) -> Result<Project, String> {
+    let loaded = format::read_project(std::path::Path::new(&path))
+        .map_err(|e| e.to_string())?;
+    let returned = loaded.clone();
+    {
+        let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
+        *p = loaded;
+    }
+    emit_all(
+        &window,
+        &[SceneEvent::ProjectLoaded { path: path.clone() }],
+    );
+    Ok(returned)
 }

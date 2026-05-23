@@ -48,6 +48,26 @@ const N3O_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// extruder hints + plate assignments (within floating-point
 /// precision the writer emits).
 pub fn write_3mf(project: &Project3mf, output: &Path) -> Result<(), LoadError> {
+    write_3mf_with_extras(project, &std::collections::BTreeMap::new(), output)
+}
+
+/// Same as [`write_3mf`] but appends extra entries to the zip
+/// container. Used by `core::project::format::write_project`
+/// (PR-5-8) to embed `Metadata/n3o_project.json` alongside the
+/// standard 3MF geometry — foreign slicers (Bambu Studio,
+/// OrcaSlicer) ignore unrecognized `Metadata/*` entries, so the
+/// 3MF stays interoperable.
+///
+/// `extras` keys are container-relative paths (e.g.
+/// `"Metadata/n3o_project.json"`); values are the raw body
+/// strings. Entries collide with the writer's own outputs (e.g.
+/// `3D/3dmodel.model`) at zip-author time; callers should pick
+/// distinct names.
+pub fn write_3mf_with_extras(
+    project: &Project3mf,
+    extras: &std::collections::BTreeMap<String, String>,
+    output: &Path,
+) -> Result<(), LoadError> {
     let file = File::create(output).map_err(|e| LoadError::Io {
         path: output.into(),
         source: e,
@@ -78,6 +98,9 @@ pub fn write_3mf(project: &Project3mf, output: &Path) -> Result<(), LoadError> {
         opts,
         output,
     )?;
+    for (name, body) in extras {
+        write_entry(&mut zip, name, body, opts, output)?;
+    }
 
     zip.finish().map_err(|e| LoadError::Parse {
         path: output.into(),

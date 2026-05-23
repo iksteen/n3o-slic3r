@@ -101,6 +101,19 @@ pub enum SceneEvent {
     MaterialBindingChanged {
         plate_id: PlateId,
     },
+    /// A project was written to disk (PR-5-8). `path` is the
+    /// container the writer just produced. UI updates the window
+    /// title + recent-files list.
+    ProjectSaved {
+        path: String,
+    },
+    /// A project was loaded from disk (PR-5-8) — the in-memory
+    /// `Project` state has been replaced wholesale. The frontend
+    /// drops every cached plate / mesh / object and re-fetches via
+    /// `scene_snapshot`.
+    ProjectLoaded {
+        path: String,
+    },
 }
 
 impl SceneEvent {
@@ -126,6 +139,8 @@ impl SceneEvent {
             Self::ObjectOverridesChanged { .. } => "scene:object_overrides_changed",
             Self::PlateMetadataChanged { .. } => "scene:plate_metadata_changed",
             Self::MaterialBindingChanged { .. } => "scene:material_binding_changed",
+            Self::ProjectSaved { .. } => "project:saved",
+            Self::ProjectLoaded { .. } => "project:loaded",
         }
     }
 }
