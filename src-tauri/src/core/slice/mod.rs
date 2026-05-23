@@ -20,6 +20,7 @@ pub mod commands;
 pub mod default_a1mini;
 pub mod errors;
 pub mod events;
+pub mod input;
 pub mod job;
 pub mod orchestrator;
 pub mod pre_slice_gate;

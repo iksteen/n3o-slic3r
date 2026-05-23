@@ -13,5 +13,7 @@
 //! `Context::predicate_value`.
 
 pub mod profile;
+pub mod registry;
 
 pub use profile::FilamentProfile;
+pub use registry::{bundled_catalog, lookup};
