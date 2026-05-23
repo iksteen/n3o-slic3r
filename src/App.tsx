@@ -3,16 +3,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { ViewportCanvas } from "./viewport/ViewportCanvas";
 import { SlicePanel } from "./slice/SlicePanel";
 import { PlateTabs } from "./plates/PlateTabs";
+import { useProjectSession } from "./project/useProjectSession";
+import {
+  SettingsPanelHost,
+  useSettingsPanelVisible,
+} from "./settings/SettingsPanelHost";
 import "./App.css";
 
 type SlicerInfo = { version: string; option_count: number };
 
-// Phase 4 will restyle this properly. For PR-2-9 the layout is the
-// minimum needed to host the viewport plus a folded-away debug panel
-// that the Phase 0 smoke relied on.
 function App() {
   const [info, setInfo] = useState<SlicerInfo | null>(null);
   const [showDebug, setShowDebug] = useState(false);
+  const [panelVisible, setPanelVisible] = useSettingsPanelVisible();
+  const session = useProjectSession();
 
   useEffect(() => {
     invoke<SlicerInfo>("slicer_info")
@@ -34,6 +38,14 @@ function App() {
           <button
             type="button"
             className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 rounded text-xs"
+            onClick={() => setPanelVisible(!panelVisible)}
+            title="Toggle settings panel (persists across reloads)"
+          >
+            {panelVisible ? "Hide settings" : "Settings"}
+          </button>
+          <button
+            type="button"
+            className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 rounded text-xs"
             onClick={() => setShowDebug((v) => !v)}
           >
             {showDebug ? "Hide debug" : "Debug"}
@@ -41,9 +53,24 @@ function App() {
         </div>
       </header>
       <PlateTabs />
-      <main className="flex-1 relative">
-        <ViewportCanvas />
-      </main>
+      {session.error && (
+        <div
+          role="alert"
+          className="border-b border-red-700 bg-red-950 text-red-200 text-xs px-4 py-2"
+        >
+          Bootstrap failed: {session.error}
+        </div>
+      )}
+      <div className="flex-1 flex min-h-0">
+        <main className="flex-1 relative min-w-0">
+          <ViewportCanvas />
+        </main>
+        {panelVisible && (
+          <aside className="w-96 border-l border-neutral-800 bg-neutral-900 overflow-y-auto">
+            <SettingsPanelHost session={session} />
+          </aside>
+        )}
+      </div>
       {showDebug && <DebugPanel />}
     </div>
   );

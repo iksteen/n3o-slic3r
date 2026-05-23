@@ -1097,6 +1097,66 @@ impl Project {
         }])
     }
 
+    // ---- Per-plate (project-tier) overrides (PR-5-9) -------------
+
+    /// Upsert one project-tier override on a plate. Same shape as
+    /// `object_override_set` but the override applies to the whole
+    /// plate (and through the cascade to every object on it) — the
+    /// `Plate.project_overrides` map is the "second-most-specific"
+    /// override tier the resolver sees, between object and user.
+    /// Silent no-op (no event) when the value is unchanged.
+    pub fn project_override_set(
+        &mut self,
+        plate_id: PlateId,
+        key: String,
+        value: String,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let idx = self
+            .plate_index(plate_id)
+            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        let plate = &mut self.plates[idx];
+        if plate.project_overrides.get(&key) == Some(&value) {
+            return Ok(Vec::new());
+        }
+        plate.project_overrides.insert(key, value);
+        Ok(vec![SceneEvent::ProjectOverridesChanged { plate_id }])
+    }
+
+    /// Drop one project-tier override key from a plate. Silent no-op
+    /// when the key wasn't present — safe to wire to a per-row reset
+    /// button without checking first.
+    pub fn project_override_clear(
+        &mut self,
+        plate_id: PlateId,
+        key: &str,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let idx = self
+            .plate_index(plate_id)
+            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        let plate = &mut self.plates[idx];
+        if plate.project_overrides.remove(key).is_none() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![SceneEvent::ProjectOverridesChanged { plate_id }])
+    }
+
+    /// Wipe every project-tier override on a plate. Silent no-op
+    /// when the plate had none.
+    pub fn project_override_clear_all(
+        &mut self,
+        plate_id: PlateId,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let idx = self
+            .plate_index(plate_id)
+            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        let plate = &mut self.plates[idx];
+        if plate.project_overrides.is_empty() {
+            return Ok(Vec::new());
+        }
+        plate.project_overrides.clear();
+        Ok(vec![SceneEvent::ProjectOverridesChanged { plate_id }])
+    }
+
     /// Drop one override key from a specific (plate, object).
     /// Silent no-op (no event) when the override wasn't present.
     /// When the last override on an object is cleared, the
@@ -2276,6 +2336,93 @@ mod tests {
             )
             .unwrap_err(),
             SceneOpError::UnknownObject(ObjectId(9999)),
+        );
+    }
+
+    // ---- Project-tier (per-plate) overrides (PR-5-9) -------------
+
+    #[test]
+    fn project_override_set_then_get_round_trips() {
+        let mut p = Project::default();
+        let events = p
+            .project_override_set(PlateId(1), "layer_height".into(), "0.12".into())
+            .unwrap();
+        assert!(matches!(
+            events.as_slice(),
+            [SceneEvent::ProjectOverridesChanged { plate_id: PlateId(1) }],
+        ));
+        assert_eq!(
+            p.plates[0].project_overrides.get("layer_height").map(|s| s.as_str()),
+            Some("0.12"),
+        );
+    }
+
+    #[test]
+    fn project_override_set_to_current_value_is_silent_noop() {
+        let mut p = Project::default();
+        p.project_override_set(PlateId(1), "k".into(), "v".into())
+            .unwrap();
+        let again = p
+            .project_override_set(PlateId(1), "k".into(), "v".into())
+            .unwrap();
+        assert!(again.is_empty());
+    }
+
+    #[test]
+    fn project_override_clear_removes_key() {
+        let mut p = Project::default();
+        p.project_override_set(PlateId(1), "k".into(), "v".into())
+            .unwrap();
+        let events = p.project_override_clear(PlateId(1), "k").unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(p.plates[0].project_overrides.get("k").is_none());
+    }
+
+    #[test]
+    fn project_override_clear_missing_key_is_silent_noop() {
+        let mut p = Project::default();
+        let events = p.project_override_clear(PlateId(1), "never_set").unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn project_override_clear_all_wipes_every_key() {
+        let mut p = Project::default();
+        p.project_override_set(PlateId(1), "k1".into(), "v1".into())
+            .unwrap();
+        p.project_override_set(PlateId(1), "k2".into(), "v2".into())
+            .unwrap();
+        let events = p.project_override_clear_all(PlateId(1)).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(p.plates[0].project_overrides.is_empty());
+    }
+
+    #[test]
+    fn project_override_clear_all_on_empty_is_silent_noop() {
+        let mut p = Project::default();
+        let events = p.project_override_clear_all(PlateId(1)).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn project_overrides_are_per_plate() {
+        let mut p = Project::default();
+        let (id_b, _) = p.add_plate(None);
+        p.project_override_set(PlateId(1), "layer_height".into(), "0.10".into())
+            .unwrap();
+        p.project_override_set(id_b, "layer_height".into(), "0.28".into())
+            .unwrap();
+        assert_eq!(p.plates[0].project_overrides["layer_height"], "0.10");
+        assert_eq!(p.plates[1].project_overrides["layer_height"], "0.28");
+    }
+
+    #[test]
+    fn project_override_errors_on_unknown_plate() {
+        let mut p = Project::default();
+        assert_eq!(
+            p.project_override_set(PlateId(99), "k".into(), "v".into())
+                .unwrap_err(),
+            SceneOpError::UnknownPlate(PlateId(99)),
         );
     }
 

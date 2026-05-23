@@ -129,6 +129,13 @@ pub enum SceneEvent {
         plate_id: PlateId,
         object_id: ObjectId,
     },
+    /// One or more project-tier overrides on a plate changed
+    /// (PR-5-9). Same shape as `ObjectOverridesChanged` minus the
+    /// object id — the cascade re-resolves with the updated plate
+    /// override map.
+    ProjectOverridesChanged {
+        plate_id: PlateId,
+    },
     /// A plate's metadata changed — cycle count, composition order,
     /// or (post-PR-5-3) name (PR-5-5). The frontend re-reads the
     /// plate's metadata via the project snapshot to refresh the tab
@@ -178,6 +185,7 @@ impl SceneEvent {
             Self::PlateRemoved { .. } => "scene:plate_removed",
             Self::ActivePlateChanged { .. } => "scene:active_plate_changed",
             Self::ObjectOverridesChanged { .. } => "scene:object_overrides_changed",
+            Self::ProjectOverridesChanged { .. } => "scene:project_overrides_changed",
             Self::PlateMetadataChanged { .. } => "scene:plate_metadata_changed",
             Self::MaterialBindingChanged { .. } => "scene:material_binding_changed",
             Self::ProjectSaved { .. } => "project:saved",

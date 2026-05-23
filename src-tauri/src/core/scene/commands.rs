@@ -175,12 +175,16 @@ pub fn scene_set_active_printer(
 /// command works regardless of the runtime working directory; Phase
 /// 5 will replace this with a profile registry that loads from
 /// `profiles/printers/*.toml` and lets users pick + override.
+///
+/// Returns the installed `PrinterProfile` so PR-5-9's `App.tsx`
+/// integration can use the same canonical shape for the
+/// `SettingsPanel`'s `ContextJson` without a second round-trip.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_load_default_printer(
     window: Window,
     state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
+) -> Result<PrinterProfile, String> {
     use crate::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
     let printer = PrinterProfile {
         model: "Bambu A1 mini".into(),
@@ -208,7 +212,7 @@ pub fn scene_load_default_printer(
     let events = s.set_active_printer(Some(&printer));
     drop(s);
     emit_all(&window, &events);
-    Ok(())
+    Ok(printer)
 }
 
 /// Append a new plate. Active plate is unchanged. `printer` is
@@ -379,6 +383,63 @@ pub fn scene_object_override_clear_all(
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
         .object_override_clear_all(plate_id, object_id)
+        .map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
+/// Upsert one project-tier cascade override on a plate (PR-5-9 —
+/// mirrors `scene_object_override_set` one tier up). Silent backend
+/// no-op when the value is unchanged.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_project_override_set(
+    plate_id: PlateId,
+    key: String,
+    value: String,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s
+        .project_override_set(plate_id, key, value)
+        .map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
+/// Drop one project-tier override key from a plate. Silent no-op
+/// when the key wasn't present.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_project_override_clear(
+    plate_id: PlateId,
+    key: String,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s
+        .project_override_clear(plate_id, &key)
+        .map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
+/// Wipe every project-tier override on a plate.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_project_override_clear_all(
+    plate_id: PlateId,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s
+        .project_override_clear_all(plate_id)
         .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);

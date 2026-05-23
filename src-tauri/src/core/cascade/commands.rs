@@ -168,6 +168,39 @@ pub fn cascade_load(
     Ok(registry.insert(cascade))
 }
 
+/// Embedded copy of the bundled A1 mini cascade — same one the
+/// Phase 3 default-slice path loads. Inline via `include_str!` so
+/// the packaged app doesn't depend on the runtime working directory.
+const A1_MINI_CASCADE_TOML: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../profiles/cascades/bambu-a1-mini-default.toml"
+));
+
+/// Load the bundled A1 mini cascade into the registry and return
+/// its handle (PR-5-9). Saves the frontend from shipping the
+/// cascade text in its asset bundle — the bundled cascade is what
+/// `App.tsx` resolves against on startup.
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub fn cascade_load_default(
+    state: State<Mutex<CascadeRegistry>>,
+) -> Result<CascadeHandle, String> {
+    let label = Path::new("profiles/cascades/bambu-a1-mini-default.toml");
+    let rules = parse_cascade_str(A1_MINI_CASCADE_TOML, label)
+        .map_err(|e| format!("bundled cascade parse: {e}"))?;
+    let cascade = Cascade { rules };
+    if let Err(errs) = validate_cascade(&cascade, &default_known_dimensions()) {
+        let msg = errs
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(format!("bundled cascade validate: {msg}"));
+    }
+    let mut registry = state.lock().map_err(|e| format!("registry lock: {e}"))?;
+    Ok(registry.insert(cascade))
+}
+
 /// Resolve a previously-loaded cascade against the supplied context.
 /// Returns the full `ResolvedOverrides` map serialized into JSON.
 #[tauri::command]

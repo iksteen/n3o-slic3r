@@ -1,0 +1,150 @@
+// PR-5-9 — Settings-panel host.
+//
+// Translates the App-level `ProjectSession` (cascade handle, printer
+// profile, snapshot) into the SettingsPanel's prop shape, then
+// renders the panel. Keeps all the projection logic out of App.tsx
+// so the integration surface stays a one-liner.
+//
+// The host is intentionally thin: every callback either binds
+// pre-existing invoke wrappers to the active plate / object, or
+// projects a slice of the snapshot. No business logic of its own.
+
+import { useMemo, useState } from "react";
+import type { ProjectSession } from "../project/useProjectSession";
+import { SettingsPanel, type PlateObjectStub } from "./SettingsPanel";
+import { buildContextJson } from "./buildContextJson";
+import { makeObjectOverrideCallbacks } from "./overrideCommands";
+import { makeProjectOverrideCallbacks } from "./projectOverrideCommands";
+import type { PlateSnapshot } from "../viewport/types";
+
+/** Locate the active plate in a session snapshot, or `null`
+ * when bootstrap hasn't completed. Exported for tests. */
+export function activePlate(session: ProjectSession): PlateSnapshot | null {
+  if (!session.snapshot) return null;
+  return (
+    session.snapshot.plates.find(
+      (p) => p.plate_id === session.snapshot!.active_plate_id,
+    ) ?? null
+  );
+}
+
+/** First selected object on the plate, projected to the
+ * SettingsPanel's `SelectedObjectStub` shape. `null` when nothing's
+ * selected or the plate is empty. Exported for tests. */
+export function selectedObject(
+  plate: PlateSnapshot | null,
+): { id: number; name: string } | null {
+  if (!plate || plate.selection.length === 0) return null;
+  const id = plate.selection[0];
+  const obj = plate.objects.find((o) => o.id === id);
+  return obj ? { id: obj.id, name: obj.name } : null;
+}
+
+/** Project the plate's objects to the SettingsPanel's
+ * `PlateObjectStub[]` shape — drives the "N objects override" badge
+ * on Project-tab rows (FR-CAS-7b). Exported for tests. */
+export function allObjectsForPanel(
+  plate: PlateSnapshot | null,
+): PlateObjectStub[] {
+  if (!plate) return [];
+  return plate.objects.map((o) => ({
+    id: o.id,
+    name: o.name,
+    color: null, // Filament-color dots arrive with PR-7c filament sync.
+    overrides: plate.object_overrides[o.id] ?? {},
+  }));
+}
+
+export interface SettingsPanelHostProps {
+  session: ProjectSession;
+  /** Active-slot state. The SlotTabStrip inside SettingsPanel owns
+   * which slot is active for the panel UI; the host doesn't read
+   * it back so this is a one-way pass-through. Default 0 covers
+   * the single-slot bootstrap. */
+  activeSlot?: number;
+}
+
+export function SettingsPanelHost({
+  session,
+  activeSlot = 0,
+}: SettingsPanelHostProps) {
+  const plate = useMemo(() => activePlate(session), [session]);
+  const selected = useMemo(() => selectedObject(plate), [plate]);
+
+  const projectOverrides = plate?.project_overrides ?? {};
+  const userOverrides = session.snapshot?.user_overrides ?? {};
+  const objectOverrides =
+    plate && selected ? plate.object_overrides[selected.id] ?? {} : {};
+
+  const allObjects = useMemo(() => allObjectsForPanel(plate), [plate]);
+
+  const context = useMemo(() => {
+    if (!session.printer) return null;
+    return buildContextJson({
+      printer: session.printer,
+      projectOverrides,
+      userOverrides,
+      objectOverrides,
+      activeSlot,
+    });
+  }, [
+    session.printer,
+    projectOverrides,
+    userOverrides,
+    objectOverrides,
+    activeSlot,
+  ]);
+
+  const objectCbs = useMemo(
+    () => makeObjectOverrideCallbacks(plate?.plate_id ?? null, selected?.id ?? null),
+    [plate?.plate_id, selected?.id],
+  );
+  const projectCbs = useMemo(
+    () => makeProjectOverrideCallbacks(plate?.plate_id ?? null),
+    [plate?.plate_id],
+  );
+
+  return (
+    <SettingsPanel
+      printer={session.printer}
+      cascadeHandle={session.cascadeHandle}
+      context={context}
+      selectedObject={selected}
+      objectOverrides={objectOverrides}
+      onSetObjectOverride={objectCbs.onSetObjectOverride}
+      onClearObjectOverride={objectCbs.onClearObjectOverride}
+      projectOverrides={projectOverrides}
+      onSetProjectOverride={projectCbs.onSetProjectOverride}
+      onClearProjectOverride={projectCbs.onClearProjectOverride}
+      allObjects={allObjects}
+    />
+  );
+}
+
+/** localStorage key for the panel visibility toggle. */
+const VISIBLE_KEY = "n3o.settingsPanelVisible";
+
+/** Whether the settings panel is shown — persisted to localStorage
+ * so the preference survives a reload. Default `true`. */
+export function useSettingsPanelVisible(): [boolean, (v: boolean) => void] {
+  const [visible, setVisible] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    try {
+      const raw = window.localStorage.getItem(VISIBLE_KEY);
+      if (raw === null) return true;
+      return raw === "true";
+    } catch {
+      return true;
+    }
+  });
+  const set = (v: boolean) => {
+    setVisible(v);
+    try {
+      window.localStorage.setItem(VISIBLE_KEY, String(v));
+    } catch {
+      // localStorage unavailable (privacy mode); preference doesn't
+      // persist but the toggle still works in-session.
+    }
+  };
+  return [visible, set];
+}
