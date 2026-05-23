@@ -121,6 +121,19 @@ jobs:
         # OrcaSlicer deps tree cached. Save is gated on the cargo
         # build's success below, so a failed test step doesn't
         # invalidate the cache.
+        #
+        # NO `restore-keys` fallback here. The "Bump cached cmake
+        # mtimes" step below needs an EXACT key hit so we know the
+        # restored .o files were compiled from the same FFI sources
+        # we just checked out. A loose prefix match (any FFI hash)
+        # would mean touching potentially-stale .o files past
+        # genuinely-changed sources — ninja then skips the rebuild
+        # and we silently ship libslic3r linked against the old
+        # shim. The cache key already pins everything that affects
+        # the build: OrcaSlicer SHA covers libslic3r sources, the
+        # hashFiles glob covers our ffi shim + CMakeLists +
+        # build.rs. Anything truly changed → key changes → cache
+        # miss → full clean rebuild.
         id: cache-ffi
         uses: actions/cache/restore@v4
         with:
@@ -130,8 +143,30 @@ jobs:
           # build tree to grow indefinitely with parallel
           # per-config object trees.
           key: slic3r-ffi-${{ runner.os }}-${{ steps.orca.outputs.sha }}-release-${{ hashFiles('crates/slic3r-ffi/ffi/**', 'crates/slic3r-ffi/CMakeLists.txt', 'crates/slic3r-ffi/build.rs') }}
-          restore-keys: |
-            slic3r-ffi-${{ runner.os }}-${{ steps.orca.outputs.sha }}-release-
+
+      - name: Bump cached cmake mtimes past checkout time
+        # cmake + ninja decide what to rebuild by comparing source
+        # mtime vs. output (.o) mtime. `actions/cache` restores
+        # tar-preserved mtimes from the original compile (often
+        # days old); `actions/checkout` sets every source mtime
+        # to "now". Result: source mtime > output mtime for every
+        # file → ninja rebuilds the whole tree.
+        #
+        # Run 26339260740 demonstrated this: the slic3r-ffi cache
+        # restored successfully, but `cargo build` still took
+        # 35m 47s — a full cold libslic3r rebuild — because every
+        # restored .o file looked stale next to the just-checked-
+        # out sources.
+        #
+        # Touching every cached file with the current timestamp
+        # makes the cached artifacts unambiguously newer than the
+        # sources, so ninja skips the per-file compile step and
+        # only relinks libslic3r_ffi.so. Safe ONLY when the cache
+        # was restored on an exact key hit (sources byte-identical
+        # to what produced these .o files) — hence the strict
+        # `cache-hit == 'true'` gate, not a substring fallback.
+        if: steps.cache-ffi.outputs.cache-hit == 'true'
+        run: find build/slic3r-ffi -exec touch {} +
 
       - name: Cache cargo registry and target
         uses: actions/cache@v4
