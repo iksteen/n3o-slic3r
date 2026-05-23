@@ -15,6 +15,14 @@ use std::fmt;
 use std::path::Path;
 
 /// Errors returned by the loaders.
+///
+/// **Eventual home: `core/geometry/`** — `core/threemf` already
+/// imports this type via `crate::core::scene::loaders::LoadError`
+/// to share error reporting with the STL/OBJ loaders here. Pull
+/// it (and the `compute_*` helpers below) into a sibling
+/// `core/geometry/` when a third loader / writer arrives so the
+/// scene module isn't a half-utility-bag. See `core/scene/mod.rs`
+/// for the architectural review note.
 #[derive(Debug)]
 pub enum LoadError {
     Io {

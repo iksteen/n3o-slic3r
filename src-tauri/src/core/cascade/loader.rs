@@ -30,9 +30,9 @@
 //! shape only (e.g. `when.*` values must be string-or-array-of-string;
 //! `set.*` must be a leaf, not a table). Schema-level validation (does
 //! `wall_filament` exist? is `filament.type` a valid context dimension?)
-//! is a separate pass — see `validate.rs` (forthcoming) — so that
-//! callers can choose to relax validation for partial-cascade scenarios
-//! like UI live-editing.
+//! is a separate pass — see [`super::validate`] — so that callers can
+//! choose to relax validation for partial-cascade scenarios like UI
+//! live-editing.
 
 use super::types::{Cascade, Condition, ConditionValue, Predicate, Rule, SourceLocation};
 use std::collections::{BTreeMap, HashMap};

@@ -18,6 +18,11 @@ use serde::{Deserialize, Serialize};
 /// `Transform::IDENTITY` is the default. `compose(other)` returns
 /// `self * other` (apply `other` first, then `self`). The constructors
 /// below are the common cases the transform-ops layer uses.
+///
+/// **Eventual home: `core/geometry/`** — same rationale as `Mesh`:
+/// general affine transform, not scene-specific. `core/threemf`
+/// imports it; future preview / plugin work will too. See
+/// `core/scene/mod.rs` for the architectural review note.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Transform {

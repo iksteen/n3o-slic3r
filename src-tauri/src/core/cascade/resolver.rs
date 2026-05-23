@@ -6,9 +6,9 @@
 //! ranking, source-order tie-breaks, within-cascade tie-break warnings.
 //!
 //! The *override* tier (`!important`-style user + project overrides)
-//! lives in PR-1-4 (forthcoming) and consumes this resolver's output.
-//! Trace tooling (PR-1-5) builds the structured "why is X = 55?"
-//! report from the matching-rules list this resolver retains.
+//! lives in `overrides.rs` and consumes this resolver's output. Trace
+//! tooling builds the structured "why is X = 55?" report from the
+//! matching-rules list this resolver retains.
 
 use super::types::{Cascade, Condition, ConditionValue, Rule, SourceLocation};
 use std::collections::BTreeMap;
@@ -17,16 +17,16 @@ use std::fmt::Write;
 /// What the resolver needs to know about the active slice context.
 ///
 /// `predicate_value(key)` returns the live value for a dotted dimension
-/// like `"filament.type"` or `"plate.type"`. PR-1-7's
-/// `core::printer::Context` (forthcoming) will be the production
-/// implementor; tests + early consumers can use `MapContext` below.
+/// like `"filament.type"` or `"plate.type"`. The production implementor
+/// is [`crate::core::project::SlicingContext`]; tests and lightweight
+/// drivers can use [`MapContext`] below.
 pub trait Context {
     fn predicate_value(&self, key: &str) -> Option<&str>;
 }
 
 /// A `Context` backed by a plain `BTreeMap`. Useful for tests, for
-/// `cargo run --example` driving, and as a fallback before PR-1-7's
-/// typed Context structures ship.
+/// `cargo run --example` driving, and for hand-constructing contexts
+/// outside the project layer.
 #[derive(Debug, Clone, Default)]
 pub struct MapContext {
     map: BTreeMap<String, String>,

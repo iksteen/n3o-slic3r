@@ -49,6 +49,15 @@ pub struct ObjectId(pub u64);
 ///
 /// For multi-volume objects (3MF), each volume is its own `Mesh`
 /// and the source 3MF spawns one `SceneObject` per volume.
+///
+/// **Eventual home: `core/geometry/`.** `Mesh` / `MeshHeader` /
+/// `NewMesh` / `MeshProvenance` are general mesh-data types, not
+/// scene-state types. `core/threemf` already imports them upward;
+/// when a third consumer appears (Phase 6 preview's mesh-handle
+/// plumbing is the likely candidate), extract them into a sibling
+/// `core/geometry/` module so the dep direction stops being
+/// scene→peers and starts being peers→geometry. See
+/// `core/scene/mod.rs` for the architectural review note.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mesh {
     pub id: MeshId,

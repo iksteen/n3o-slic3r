@@ -1,9 +1,25 @@
-//! `.3mf` project loader (PR-2-4).
+//! `.3mf` reader + writer.
 //!
-//! Loads a 3MF file as a *project* — geometry, object placements,
-//! per-part extruder assignments, plate metadata — and produces a
-//! [`Project3mf`] container that [`scene_load_3mf`] ingests into the
-//! scene state.
+//! Three roles in one module:
+//!
+//! - **Project reader** (PR-2-4 — this file's `load_3mf`): loads a
+//!   `.3mf` as a *project* — geometry, object placements, per-part
+//!   extruder assignments, plate metadata — into a [`Project3mf`]
+//!   that the `scene_load_3mf` Tauri command ingests into scene
+//!   state.
+//! - **Project writer** (PR-3-9 — `writer::write_3mf`): the inverse,
+//!   producing an OrcaSlicer-compatible 3MF from a `Project3mf`.
+//!   Phase 5's project save format and the test oracle for the
+//!   reader.
+//! - **Sliced `.gcode.3mf` writer** (PR-3-10 — `sliced::write_sliced_3mf`):
+//!   the Bambu A1 mini send-format. Embeds G-code bodies + plate
+//!   metadata + thumbnails with BambuStudio-namespace metadata.
+//!   Consumed by the Phase 7a driver.
+//!
+//! Per PRD §8.2 this module lives at `core/threemf/` — Phase 2 (project
+//! import), Phase 5 (project save), Phase 6 (preview drag-drop of
+//! `.gcode.3mf`), and Phase 7a (Bambu driver) all take stable deps
+//! on this module.
 //!
 //! The 3MF Core spec models geometry as a forest of `<object>`
 //! resources. Each object is either a leaf `<mesh>` or a tree of

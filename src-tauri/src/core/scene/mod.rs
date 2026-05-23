@@ -12,12 +12,19 @@
 //! ownership boundary is load-bearing; resist the urge to let the
 //! frontend hold authoritative state even for "just this one case."
 //!
-//! Implementation lands in Phase 2. Performance contract: state ops
-//! ≤5ms p99 on 1000-object scenes (PRD AD-8).
+//! Performance contract: state ops ≤5 ms p99 on 1000-object scenes
+//! (PRD AD-8). Validated by `src-tauri/tests/scene_state_perf.rs`.
 //!
-//! Phase 1 ships only the `BuildPlate` descriptor here — the cascade
-//! adapter (PR-1-6) needs it for `curr_bed_type`, and the Phase 2
-//! renderer will extend it with mesh + adhesion + visuals.
+//! ## Eventual relocation
+//!
+//! `Mesh` / `Transform` and the loader-side utilities (`LoadError`,
+//! `compute_bounding_box`, `compute_vertex_normals`) are general
+//! geometry types — `core/threemf` already imports them upward.
+//! Once a third consumer appears (likely the Phase 6 preview's
+//! mesh-handle plumbing), extract them into a sibling
+//! `core/geometry/` module so threemf doesn't have to reach into
+//! scene. Today the coupling is small enough that the move would be
+//! cosmetic; documented here so future-us doesn't forget.
 
 pub mod arrange;
 pub mod bed;
