@@ -21,7 +21,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(std::sync::Mutex::new(core::cascade::CascadeRegistry::new()))
-        .manage(std::sync::Mutex::new(core::scene::SceneState::new()))
+        .manage(std::sync::Mutex::new(core::project::Project::default()))
         .manage(core::slice::JobRegistry::new())
         .setup(|_app| {
             // Resources dir is only needed for STEP / font embossing; STL

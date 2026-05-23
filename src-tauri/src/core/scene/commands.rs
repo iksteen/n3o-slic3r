@@ -1,18 +1,19 @@
-//! Tauri commands that drive the scene state (PR-2-2).
+//! Tauri commands that drive the scene side of [`Project`] (PR-2-2).
 //!
-//! Each command takes a `Window` + `State<Mutex<SceneState>>`, locks
-//! the state, calls a pure `SceneState` mutation method, emits the
+//! Each command takes a `Window` + `State<Mutex<Project>>`, locks
+//! the state, calls a pure `Project` mutation method, emits the
 //! returned events via `Window::emit`, and returns the result. Tests
-//! for the *behavior* live in `state.rs` against the pure methods;
-//! this file only validates the Tauri plumbing.
+//! for the *behavior* live in `core::project::mutation` against the
+//! pure methods; this file only validates the Tauri plumbing.
 
 use super::events::{MirrorAxis, MoveReport, SceneEvent, SceneOpError, SelectMode};
 use super::bed::BedMesh;
 use super::state::{
     ActivePlate, CameraState, ExclusionZone, GizmoState, MeshHeader, MeshId, ObjectId,
-    SceneObject, SceneState,
+    SceneObject,
 };
 use crate::core::printer::profile::PrinterProfile;
+use crate::core::project::{PlateId, Project};
 use super::transform::Transform;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -58,13 +59,13 @@ pub struct SceneSnapshot {
 /// `scene_mesh_buffers(mesh_id)` per mesh to fetch the binary data.
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub fn scene_snapshot(state: State<Mutex<SceneState>>) -> Result<SceneSnapshot, String> {
+pub fn scene_snapshot(state: State<Mutex<Project>>) -> Result<SceneSnapshot, String> {
     let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let meshes = s.meshes.values().map(|m| m.header()).collect();
-    let plate = s.active_plate();
-    let objects = plate.objects.values().cloned().collect();
+    let scene = &s.active_plate().scene;
+    let objects = scene.objects.values().cloned().collect();
     let selection: Vec<ObjectId> = {
-        let mut v: Vec<ObjectId> = plate.selection.iter().copied().collect();
+        let mut v: Vec<ObjectId> = scene.selection.iter().copied().collect();
         v.sort();
         v
     };
@@ -73,11 +74,11 @@ pub fn scene_snapshot(state: State<Mutex<SceneState>>) -> Result<SceneSnapshot, 
         meshes,
         objects,
         selection,
-        camera: plate.camera.clone(),
-        gizmo: plate.gizmo.clone(),
-        plate: plate.plate.clone(),
-        exclusion_zones: plate.exclusion_zones.clone(),
-        bed: plate.bed.clone(),
+        camera: scene.camera.clone(),
+        gizmo: scene.gizmo.clone(),
+        plate: scene.plate.clone(),
+        exclusion_zones: scene.exclusion_zones.clone(),
+        bed: scene.bed.clone(),
     })
 }
 
@@ -88,7 +89,7 @@ pub fn scene_snapshot(state: State<Mutex<SceneState>>) -> Result<SceneSnapshot, 
 pub fn scene_set_active_printer(
     printer: Option<PrinterProfile>,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s.set_active_printer(printer.as_ref());
@@ -109,7 +110,7 @@ pub fn scene_set_active_printer(
 #[tracing::instrument(skip(state, window))]
 pub fn scene_load_default_printer(
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     use crate::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
     let printer = PrinterProfile {
@@ -141,34 +142,35 @@ pub fn scene_load_default_printer(
     Ok(())
 }
 
-/// Append a new (empty) plate. Returns the new plate's index.
-/// Active plate is unchanged.
+/// Append a new plate. Active plate is unchanged. `printer` is
+/// optional — new plates may be created unbound and assigned a
+/// printer later via [`scene_set_plate_printer`].
 #[tauri::command]
-#[tracing::instrument(skip(state, window))]
+#[tracing::instrument(skip(state, window, printer))]
 pub fn scene_add_plate(
+    printer: Option<crate::core::project::PrinterBinding>,
     window: Window,
-    state: State<Mutex<SceneState>>,
-) -> Result<usize, String> {
+    state: State<Mutex<Project>>,
+) -> Result<PlateId, String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.add_plate();
-    let new_idx = s.plates.len() - 1;
+    let (id, events) = s.add_plate(printer);
     drop(s);
     emit_all(&window, &events);
-    Ok(new_idx)
+    Ok(id)
 }
 
-/// Remove the plate at `plate_index`. Errors if it would leave the
-/// scene empty or if the index is out of range.
+/// Remove the plate with the given id. Errors if it would leave
+/// the project empty or if the id is unknown.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_remove_plate(
-    plate_index: usize,
+    plate_id: PlateId,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
-        .remove_plate(plate_index)
+        .remove_plate(plate_id)
         .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
@@ -176,17 +178,17 @@ pub fn scene_remove_plate(
 }
 
 /// Switch the active plate. No-op (no event) when already active.
-/// Errors if the index is out of range.
+/// Errors if the id is unknown.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_set_active_plate(
-    plate_index: usize,
+    plate_id: PlateId,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
-        .set_active_plate(plate_index)
+        .set_active_plate(plate_id)
         .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
@@ -198,16 +200,16 @@ pub fn scene_set_active_plate(
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_object_override_set(
-    plate_index: usize,
+    plate_id: PlateId,
     object_id: ObjectId,
     key: String,
     value: String,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
-        .object_override_set(plate_index, object_id, key, value)
+        .object_override_set(plate_id, object_id, key, value)
         .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
@@ -219,15 +221,15 @@ pub fn scene_object_override_set(
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_object_override_clear(
-    plate_index: usize,
+    plate_id: PlateId,
     object_id: ObjectId,
     key: String,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
-        .object_override_clear(plate_index, object_id, &key)
+        .object_override_clear(plate_id, object_id, &key)
         .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
@@ -240,14 +242,14 @@ pub fn scene_object_override_clear(
 #[tauri::command]
 #[tracing::instrument(skip(state, window, printer))]
 pub fn scene_set_plate_printer(
-    plate_index: usize,
+    plate_id: PlateId,
     printer: Option<PrinterProfile>,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
-        .set_plate_printer(plate_index, printer.as_ref())
+        .set_plate_printer(plate_id, printer.as_ref())
         .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
@@ -261,11 +263,11 @@ pub fn scene_set_plate_printer(
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_move_object(
-    from_plate: usize,
-    to_plate: usize,
+    from_plate: PlateId,
+    to_plate: PlateId,
     object_id: ObjectId,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<MoveReport, String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let (report, events) = s
@@ -280,14 +282,14 @@ pub fn scene_move_object(
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_object_override_clear_all(
-    plate_index: usize,
+    plate_id: PlateId,
     object_id: ObjectId,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
-        .object_override_clear_all(plate_index, object_id)
+        .object_override_clear_all(plate_id, object_id)
         .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
@@ -312,7 +314,7 @@ pub fn library_calibration(
 #[tauri::command]
 #[tracing::instrument(skip(state))]
 pub fn library_imported(
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<Vec<super::library::ImportedDescriptor>, String> {
     let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     Ok(super::library::list_imported(&s))
@@ -328,10 +330,10 @@ pub fn library_imported(
 #[tracing::instrument(skip(state, window))]
 pub fn scene_auto_arrange(
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<Vec<ObjectId>, String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let Some(bed) = s.active_plate().bed.clone() else {
+    let Some(bed) = s.active_plate().scene.bed.clone() else {
         return Ok(vec![]);
     };
     let plan = super::arrange::plan_arrangement(&s, &bed);
@@ -352,7 +354,7 @@ pub fn scene_object_add_from_primitive(
     kind: super::primitives::PrimitiveKind,
     params: super::primitives::PrimitiveParams,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(MeshId, ObjectId), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let (mesh_id, obj_id, events) = s.add_from_primitive(kind, params);
@@ -371,7 +373,7 @@ pub fn scene_object_add_from_primitive(
 #[tracing::instrument(skip(state))]
 pub fn scene_mesh_buffers(
     mesh_id: MeshId,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<Response, String> {
     let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let mesh = s
@@ -388,7 +390,7 @@ pub fn scene_select(
     ids: Vec<ObjectId>,
     mode: SelectMode,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s.select(&ids, mode);
@@ -402,7 +404,7 @@ pub fn scene_select(
 #[tracing::instrument(skip(state, window))]
 pub fn scene_deselect(
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s.deselect_all();
@@ -430,7 +432,7 @@ pub fn scene_object_translate(
     id: ObjectId,
     delta: Vec3Json,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
@@ -449,7 +451,7 @@ pub fn scene_object_rotate(
     radians: f32,
     pivot: Option<Vec3Json>,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
@@ -466,7 +468,7 @@ pub fn scene_object_scale(
     id: ObjectId,
     factor: Vec3Json,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
@@ -483,7 +485,7 @@ pub fn scene_object_set_transform(
     id: ObjectId,
     transform: Transform,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
@@ -499,7 +501,7 @@ pub fn scene_object_set_transform(
 pub fn scene_object_delete(
     ids: Vec<ObjectId>,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s.delete_objects(&ids);
@@ -514,7 +516,7 @@ pub fn scene_object_mirror(
     id: ObjectId,
     axis: MirrorAxis,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s.mirror_object(id, axis).map_err(op_err_to_string)?;
@@ -528,7 +530,7 @@ pub fn scene_object_mirror(
 pub fn scene_object_lay_flat(
     id: ObjectId,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s.lay_flat_object(id).map_err(op_err_to_string)?;
@@ -542,7 +544,7 @@ pub fn scene_object_lay_flat(
 pub fn scene_object_duplicate(
     id: ObjectId,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<ObjectId, String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let (new_id, events) = s.duplicate_object(id).map_err(op_err_to_string)?;
@@ -556,7 +558,7 @@ pub fn scene_object_duplicate(
 pub fn scene_gizmo_set(
     gizmo: GizmoState,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s.set_gizmo(gizmo);
@@ -570,7 +572,7 @@ pub fn scene_gizmo_set(
 pub fn scene_camera_set(
     camera: CameraState,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s.set_camera(camera);
@@ -594,7 +596,7 @@ fn op_err_to_string(e: SceneOpError) -> String {
 pub fn scene_load_mesh_from_path(
     path: String,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<(MeshId, ObjectId), String> {
     let new_mesh = super::loaders::load_mesh_from_path(std::path::Path::new(&path))
         .map_err(|e| e.to_string())?;
@@ -638,7 +640,7 @@ pub struct LoadedProject {
 pub fn scene_load_3mf(
     path: String,
     window: Window,
-    state: State<Mutex<SceneState>>,
+    state: State<Mutex<Project>>,
 ) -> Result<LoadedProject, String> {
     use super::state::NewSceneObject;
     use crate::core::threemf;
@@ -671,7 +673,7 @@ pub fn scene_load_3mf(
             extruder_id: obj.extruder_id,
             parent: None,
         });
-        let obj_clone = s.active_plate().objects.get(&object_id).unwrap().clone();
+        let obj_clone = s.active_plate().scene.objects.get(&object_id).unwrap().clone();
         all_events.push(SceneEvent::ObjectAdded(obj_clone));
         loaded.push(LoadedObject {
             mesh_id,

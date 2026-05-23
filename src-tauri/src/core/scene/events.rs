@@ -14,6 +14,7 @@ use super::bed::{BedMesh, OutOfBoundsReason};
 use super::state::{
     CameraState, GizmoState, MeshHeader, MeshId, ObjectId, SceneObject,
 };
+use crate::core::project::model::PlateId;
 use serde::Serialize;
 
 /// One diff payload the renderer applies to its local mirror.
@@ -62,30 +63,29 @@ pub enum SceneEvent {
     AutoArrangeOverflow {
         un_placed: Vec<ObjectId>,
     },
-    /// A new plate was added (PR-5-2). `plate_index` is the position
-    /// in `SceneState::plates` of the newly-appended entry —
-    /// inserts always happen at the end.
+    /// A new plate was added (PR-5-2). The frontend mirror
+    /// reads `plate_id` to track it; subsequent events on this
+    /// plate carry the same id.
     PlateAdded {
-        plate_index: usize,
+        plate_id: PlateId,
     },
-    /// A plate was removed (PR-5-2). `plate_index` is the position
-    /// the plate occupied before removal; subsequent plates have
-    /// shifted down by one. Pairs with `ActivePlateChanged` when
-    /// the removed plate was the active one or sat before it.
+    /// A plate was removed (PR-5-2). Pairs with
+    /// `ActivePlateChanged` when the removed plate was the active
+    /// one (the rebalanced active plate's id ships separately).
     PlateRemoved {
-        plate_index: usize,
+        plate_id: PlateId,
     },
     /// The active plate changed (PR-5-2). Emitted on explicit
-    /// switches and on remove-of-active-or-earlier rebalancing.
+    /// switches and on remove-of-active rebalancing.
     ActivePlateChanged {
-        plate_index: usize,
+        plate_id: PlateId,
     },
     /// One or more cascade overrides on a specific object changed
     /// (PR-5-7). The frontend re-runs cascade resolution to refresh
     /// the panel — the event carries no value payload because the
     /// resolver re-reads the override map directly.
     ObjectOverridesChanged {
-        plate_index: usize,
+        plate_id: PlateId,
         object_id: ObjectId,
     },
 }
@@ -140,13 +140,13 @@ pub enum SelectMode {
 pub enum SceneOpError {
     UnknownObject(ObjectId),
     UnknownMesh(MeshId),
-    /// Plate index is out of range (PR-5-2).
-    UnknownPlate(usize),
+    /// No plate with that id (PR-5-2).
+    UnknownPlate(PlateId),
     /// Tried to remove the only remaining plate (PR-5-2).
     LastPlate,
     /// `move_object` was called with `from_plate == to_plate`
     /// (PR-5-11). Caller should check the source/dest are distinct.
-    SamePlate(usize),
+    SamePlate(PlateId),
 }
 
 impl std::fmt::Display for SceneOpError {
@@ -154,10 +154,10 @@ impl std::fmt::Display for SceneOpError {
         match self {
             Self::UnknownObject(id) => write!(f, "no scene object with id {}", id.0),
             Self::UnknownMesh(id) => write!(f, "no mesh with id {}", id.0),
-            Self::UnknownPlate(idx) => write!(f, "no plate at index {idx}"),
+            Self::UnknownPlate(id) => write!(f, "no plate with id {}", id.0),
             Self::LastPlate => write!(f, "cannot remove the last plate"),
-            Self::SamePlate(idx) => {
-                write!(f, "from_plate == to_plate ({idx}); pick a different target")
+            Self::SamePlate(id) => {
+                write!(f, "from_plate == to_plate ({}); pick a different target", id.0)
             }
         }
     }

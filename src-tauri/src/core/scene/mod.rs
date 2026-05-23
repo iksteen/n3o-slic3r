@@ -42,6 +42,6 @@ pub use build_plate::{BuildPlate, SurfaceKind};
 pub use events::{MirrorAxis, SceneEvent, SceneOpError, SelectMode};
 pub use state::{
     ActivePlate, CameraState, ExclusionZone, GizmoMode, GizmoState, Mesh, MeshId,
-    MeshProvenance, ObjectId, ProjectionMode, SceneObject, SceneState,
+    MeshProvenance, ObjectId, PlateSceneState, ProjectionMode, SceneObject,
 };
 pub use transform::Transform;

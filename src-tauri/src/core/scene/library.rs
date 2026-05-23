@@ -21,8 +21,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use super::primitives::{PrimitiveKind, PrimitiveParams};
-use super::state::{MeshId, SceneState};
+use super::state::MeshId;
 use crate::core::printer::profile::BoundingBox;
+use crate::core::project::Project;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrimitiveDescriptor {
@@ -232,11 +233,12 @@ pub struct ImportedDescriptor {
 /// Snapshot of the meshes registered in the live scene. The
 /// `name` field comes from the *first* object instantiated from
 /// each mesh — the same value the user sees in the outliner.
-pub fn list_imported(state: &SceneState) -> Vec<ImportedDescriptor> {
+pub fn list_imported(state: &Project) -> Vec<ImportedDescriptor> {
     let mut out = Vec::new();
     for (mesh_id, mesh) in &state.meshes {
         let name = state
             .active_plate()
+            .scene
             .objects
             .values()
             .find(|o| o.mesh == *mesh_id)

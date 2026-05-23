@@ -21,14 +21,15 @@
 
 use n3o_slic3r_lib::core::scene::events::SelectMode;
 use n3o_slic3r_lib::core::scene::primitives::{PrimitiveKind, PrimitiveParams};
-use n3o_slic3r_lib::core::scene::state::{ObjectId, SceneState};
+use n3o_slic3r_lib::core::project::Project;
+use n3o_slic3r_lib::core::scene::state::ObjectId;
 use std::time::{Duration, Instant};
 
 const OBJECT_COUNT: usize = 1000;
 const ITERATIONS: u32 = 100;
 
-fn build_scene_with_n_cubes(n: usize) -> (SceneState, Vec<ObjectId>) {
-    let mut s = SceneState::new();
+fn build_scene_with_n_cubes(n: usize) -> (Project, Vec<ObjectId>) {
+    let mut s = Project::default();
     let mut ids = Vec::with_capacity(n);
     // All cubes share one mesh (PR-2-7's primitive cache). The 1000
     // objects exercise the per-object hot path without inflating the
@@ -39,7 +40,7 @@ fn build_scene_with_n_cubes(n: usize) -> (SceneState, Vec<ObjectId>) {
         ids.push(obj);
     }
     assert_eq!(s.meshes.len(), 1, "primitive cache must dedup");
-    assert_eq!(s.active_plate().objects.len(), n);
+    assert_eq!(s.active_plate().scene.objects.len(), n);
     (s, ids)
 }
 
@@ -149,12 +150,12 @@ fn snapshot_clone_under_50ms_on_1000_object_scene() {
         // directly from a #[test] without spinning up a Window;
         // the work is the cloning, which is what we want to time.)
         let _meshes: Vec<_> = state.meshes.values().map(|m| m.header()).collect();
-        let plate = state.active_plate();
-        let _objects: Vec<_> = plate.objects.values().cloned().collect();
-        let _bed = plate.bed.clone();
-        let _selection: Vec<_> = plate.selection.iter().copied().collect();
-        let _camera = plate.camera.clone();
-        let _gizmo = plate.gizmo.clone();
+        let scene = &state.active_plate().scene;
+        let _objects: Vec<_> = scene.objects.values().cloned().collect();
+        let _bed = scene.bed.clone();
+        let _selection: Vec<_> = scene.selection.iter().copied().collect();
+        let _camera = scene.camera.clone();
+        let _gizmo = scene.gizmo.clone();
     });
     println!("snapshot mean={:?} p99={:?}", mean, p99);
     assert!(
@@ -173,7 +174,7 @@ fn snapshot_clone_under_50ms_on_1000_object_scene() {
 #[test]
 fn scene_has_expected_shape_for_perf_run() {
     let (state, ids) = build_scene_with_n_cubes(OBJECT_COUNT);
-    assert_eq!(state.active_plate().objects.len(), OBJECT_COUNT);
+    assert_eq!(state.active_plate().scene.objects.len(), OBJECT_COUNT);
     assert_eq!(ids.len(), OBJECT_COUNT);
     assert_eq!(state.meshes.len(), 1, "primitive dedup");
     let mesh = state.meshes.values().next().unwrap();

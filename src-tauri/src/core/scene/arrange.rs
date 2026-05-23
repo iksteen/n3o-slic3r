@@ -18,8 +18,9 @@
 //! place objects manually via the PR-2-5 transform ops.
 
 use super::bed::BedMesh;
-use super::state::{ObjectId, SceneObject, SceneState};
+use super::state::{ObjectId, SceneObject};
 use super::transform::Transform;
+use crate::core::project::Project;
 use crate::core::printer::profile::BoundingBox;
 use glam::Vec3;
 
@@ -39,9 +40,10 @@ pub struct ArrangeResult {
 /// Compute a packing without mutating the scene. Pure function so the
 /// caller can decide whether to apply the result (e.g., test code
 /// vs. a user-facing "preview" flow).
-pub fn plan_arrangement(state: &SceneState, bed: &BedMesh) -> ArrangeResult {
+pub fn plan_arrangement(state: &Project, bed: &BedMesh) -> ArrangeResult {
     let mut entries: Vec<Entry> = state
         .active_plate()
+        .scene
         .objects
         .values()
         .filter(|o| o.visible)
@@ -139,7 +141,7 @@ pub fn plan_arrangement(state: &SceneState, bed: &BedMesh) -> ArrangeResult {
 /// might have an object on a plate with a custom-shape exclusion
 /// zone, and the OOB event surfaces that correctly.
 pub fn apply_arrangement(
-    state: &mut SceneState,
+    state: &mut Project,
     plan: ArrangeResult,
 ) -> (Vec<super::events::SceneEvent>, Vec<ObjectId>) {
     let mut all_events = Vec::new();
@@ -228,7 +230,7 @@ mod tests {
         }
     }
 
-    fn add_n_cubes(state: &mut SceneState, n: usize, edge: f32) {
+    fn add_n_cubes(state: &mut Project, n: usize, edge: f32) {
         for _ in 0..n {
             state.add_from_primitive(
                 PrimitiveKind::Cube,
@@ -243,14 +245,14 @@ mod tests {
         }
     }
 
-    fn footprints_overlap_after_plan(plan: &ArrangeResult, state: &SceneState) -> bool {
+    fn footprints_overlap_after_plan(plan: &ArrangeResult, state: &Project) -> bool {
         let placed_objs: Vec<(ObjectId, XyFootprint)> = plan
             .placed
             .iter()
             .map(|(id, xform)| {
                 let obj_clone = SceneObject {
                     id: *id,
-                    mesh: state.active_plate().objects.get(id).unwrap().mesh,
+                    mesh: state.active_plate().scene.objects.get(id).unwrap().mesh,
                     transform: *xform,
                     name: String::new(),
                     visible: true,
@@ -279,10 +281,10 @@ mod tests {
 
     #[test]
     fn ten_small_cubes_all_fit_on_a1_mini() {
-        let mut s = SceneState::new();
+        let mut s = Project::new();
         s.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut s, 10, 20.0);
-        let bed = s.active_plate().bed.clone().unwrap();
+        let bed = s.active_plate().scene.bed.clone().unwrap();
         let plan = plan_arrangement(&s, &bed);
         assert_eq!(plan.placed.len(), 10);
         assert!(plan.un_placed.is_empty());
@@ -294,10 +296,10 @@ mod tests {
 
     #[test]
     fn one_hundred_cubes_overflow_lists_un_placed() {
-        let mut s = SceneState::new();
+        let mut s = Project::new();
         s.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut s, 100, 30.0);
-        let bed = s.active_plate().bed.clone().unwrap();
+        let bed = s.active_plate().scene.bed.clone().unwrap();
         let plan = plan_arrangement(&s, &bed);
         assert!(!plan.placed.is_empty(), "some should fit");
         assert!(!plan.un_placed.is_empty(), "some should overflow");
@@ -310,10 +312,10 @@ mod tests {
 
     #[test]
     fn placed_objects_stay_inside_build_volume_after_apply() {
-        let mut s = SceneState::new();
+        let mut s = Project::new();
         s.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut s, 6, 25.0);
-        let bed = s.active_plate().bed.clone().unwrap();
+        let bed = s.active_plate().scene.bed.clone().unwrap();
         let plan = plan_arrangement(&s, &bed);
         let (events, un_placed) = apply_arrangement(&mut s, plan);
         assert!(un_placed.is_empty());
@@ -327,15 +329,16 @@ mod tests {
 
     #[test]
     fn arrange_is_idempotent_on_no_overflow_scene() {
-        let mut s = SceneState::new();
+        let mut s = Project::new();
         s.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut s, 4, 30.0);
-        let bed = s.active_plate().bed.clone().unwrap();
+        let bed = s.active_plate().scene.bed.clone().unwrap();
         let plan1 = plan_arrangement(&s, &bed);
         let _ = apply_arrangement(&mut s, plan1);
         // Snapshot the placed transforms.
         let after_first: Vec<(ObjectId, Transform)> = s
             .active_plate()
+            .scene
             .objects
             .iter()
             .map(|(id, o)| (*id, o.transform))
@@ -345,6 +348,7 @@ mod tests {
         let _ = apply_arrangement(&mut s, plan2);
         let after_second: Vec<(ObjectId, Transform)> = s
             .active_plate()
+            .scene
             .objects
             .iter()
             .map(|(id, o)| (*id, o.transform))
@@ -374,16 +378,16 @@ mod tests {
             min: [0.0, 0.0, 0.0],
             max: [50.0, 50.0, 1.0],
         });
-        let mut s = SceneState::new();
+        let mut s = Project::new();
         s.set_active_printer(Some(&printer));
         add_n_cubes(&mut s, 3, 30.0);
-        let bed = s.active_plate().bed.clone().unwrap();
+        let bed = s.active_plate().scene.bed.clone().unwrap();
         let plan = plan_arrangement(&s, &bed);
         // Every placed cube's XY bbox should clear the zone.
         for (id, xform) in &plan.placed {
             let obj_clone = SceneObject {
                 id: *id,
-                mesh: s.active_plate().objects.get(id).unwrap().mesh,
+                mesh: s.active_plate().scene.objects.get(id).unwrap().mesh,
                 transform: *xform,
                 name: String::new(),
                 visible: true,

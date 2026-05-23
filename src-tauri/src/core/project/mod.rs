@@ -30,6 +30,7 @@ pub mod binding;
 pub mod context;
 pub mod metadata;
 pub mod model;
+pub mod mutation;
 
 pub use binding::{MaterialBinding, PrinterBinding};
 pub use context::SlicingContext;
