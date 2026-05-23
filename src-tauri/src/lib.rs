@@ -53,6 +53,10 @@ pub fn run() {
             core::scene::commands::scene_gizmo_set,
             core::scene::commands::scene_camera_set,
             core::scene::commands::scene_set_active_printer,
+            core::scene::commands::library_primitives,
+            core::scene::commands::library_calibration,
+            core::scene::commands::library_imported,
+            core::scene::commands::scene_object_add_from_primitive,
             core::slice::slicer_slice,
         ])
         .run(tauri::generate_context!())

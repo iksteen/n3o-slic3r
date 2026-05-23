@@ -96,6 +96,48 @@ pub fn scene_set_active_printer(
     Ok(())
 }
 
+#[tauri::command]
+#[tracing::instrument]
+pub fn library_primitives() -> Vec<super::library::PrimitiveDescriptor> {
+    super::library::list_primitives()
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(resources_root))]
+pub fn library_calibration(
+    printer_model: String,
+    resources_root: String,
+) -> Vec<super::library::CalibrationDescriptor> {
+    super::library::list_calibration(&printer_model, std::path::Path::new(&resources_root))
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub fn library_imported(
+    state: State<Mutex<SceneState>>,
+) -> Result<Vec<super::library::ImportedDescriptor>, String> {
+    let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    Ok(super::library::list_imported(&s))
+}
+
+/// Add a procedural primitive to the scene at plate origin. Mesh
+/// data is deduplicated within the scene — re-clicking "Add cube"
+/// with the same parameters reuses the existing MeshId.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_object_add_from_primitive(
+    kind: super::primitives::PrimitiveKind,
+    params: super::primitives::PrimitiveParams,
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<(MeshId, ObjectId), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let (mesh_id, obj_id, events) = s.add_from_primitive(kind, params);
+    drop(s);
+    emit_all(&window, &events);
+    Ok((mesh_id, obj_id))
+}
+
 /// Return the binary vertex/normal/index buffers for one mesh.
 /// Sequential layout: `[vertices_f32 ...][normals_f32 ...][indices_u32 ...]`
 /// in little-endian. Lengths derive from the matching `MeshHeader`.

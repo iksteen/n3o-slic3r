@@ -1,6 +1,6 @@
 # PR-2-7 — Object library / scaffolding panel (FR-UI-10)
 
-Status: ❌ open.
+Status: ✅ shipped (temperature + stringing towers ship as `.drc` in Orca's resources — surfaced as `UnsupportedFormat`; tracked as a follow-up).
 
 **Scope.** The "scaffolding panel" on the left side of the
 viewport — a catalog of meshes the user can click to add to the

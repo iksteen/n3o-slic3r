@@ -288,6 +288,13 @@ pub struct SceneState {
     /// loading meshes, just without the out-of-bounds check or grid.
     #[serde(default)]
     pub bed: Option<super::bed::BedMesh>,
+    /// Primitive mesh cache (PR-2-7). Each (kind, params) tuple
+    /// resolves to one MeshId so re-instancing the same procedural
+    /// primitive yields multiple SceneObjects sharing geometry.
+    /// Linear scan is fine — the cache stays small in practice
+    /// (a handful of distinct shapes per session).
+    #[serde(default, skip)]
+    primitive_cache: Vec<(super::primitives::PrimitiveKind, super::primitives::PrimitiveParams, MeshId)>,
     next_mesh_id: u64,
     next_object_id: u64,
 }
@@ -733,6 +740,49 @@ impl SceneState {
     pub fn set_camera(&mut self, camera: CameraState) -> Vec<SceneEvent> {
         self.camera = camera.clone();
         vec![SceneEvent::CameraChanged(camera)]
+    }
+
+    /// Add (or re-instance) a procedural primitive. Looks up the
+    /// `(kind, params)` tuple in the cache; if missing, generates
+    /// the mesh once and stashes the `MeshId`. Always creates a
+    /// fresh SceneObject placed at plate origin so re-clicking
+    /// "Add cube" in the library palette piles new objects on top
+    /// rather than replacing the previous one.
+    pub fn add_from_primitive(
+        &mut self,
+        kind: super::primitives::PrimitiveKind,
+        params: super::primitives::PrimitiveParams,
+    ) -> (MeshId, ObjectId, Vec<SceneEvent>) {
+        let mut events = Vec::new();
+        let mesh_id = match self
+            .primitive_cache
+            .iter()
+            .find(|(k, p, _)| *k == kind && *p == params)
+            .map(|(_, _, id)| *id)
+        {
+            Some(id) => id,
+            None => {
+                let new_mesh = super::primitives::generate(kind, params);
+                let id = self.register_mesh(new_mesh);
+                self.primitive_cache.push((kind, params, id));
+                let header = self.meshes.get(&id).unwrap().header();
+                events.push(SceneEvent::MeshLoaded(header));
+                id
+            }
+        };
+
+        let name = match kind {
+            super::primitives::PrimitiveKind::Cube => "Cube",
+            super::primitives::PrimitiveKind::Cylinder => "Cylinder",
+            super::primitives::PrimitiveKind::Sphere => "Sphere",
+            super::primitives::PrimitiveKind::Cone => "Cone",
+            super::primitives::PrimitiveKind::Torus => "Torus",
+        };
+        let obj_id = self.register_object(NewSceneObject::at_origin(mesh_id, name));
+        let obj_clone = self.objects.get(&obj_id).unwrap().clone();
+        events.push(SceneEvent::ObjectAdded(obj_clone));
+        events.extend(self.out_of_bounds_event(obj_id));
+        (mesh_id, obj_id, events)
     }
 
     /// Install the active printer's bed. Recomputes the bed
@@ -1251,6 +1301,70 @@ mod tests {
             (max_z - 1.0).abs() < 1e-4,
             "expected extent 1, got max_z={max_z}"
         );
+    }
+
+    #[test]
+    fn add_from_primitive_dedups_same_params_to_one_mesh() {
+        use super::super::primitives::{PrimitiveKind, PrimitiveParams};
+        let mut s = SceneState::new();
+        let p = PrimitiveParams {
+            width: 20.0,
+            depth: 20.0,
+            height: 20.0,
+            radius: 0.0,
+            radial_segments: 0,
+        };
+        let (m1, o1, _) = s.add_from_primitive(PrimitiveKind::Cube, p);
+        let (m2, o2, _) = s.add_from_primitive(PrimitiveKind::Cube, p);
+        assert_eq!(
+            m1, m2,
+            "same (kind, params) should share one mesh after dedup"
+        );
+        assert_ne!(o1, o2, "each call creates a fresh object");
+        // Cache should only have one entry.
+        assert_eq!(s.meshes.len(), 1, "only one mesh registered");
+    }
+
+    #[test]
+    fn add_from_primitive_with_different_params_creates_new_mesh() {
+        use super::super::primitives::{PrimitiveKind, PrimitiveParams};
+        let mut s = SceneState::new();
+        let p1 = PrimitiveParams {
+            width: 20.0,
+            depth: 20.0,
+            height: 20.0,
+            radius: 0.0,
+            radial_segments: 0,
+        };
+        let p2 = PrimitiveParams { width: 30.0, ..p1 };
+        let (m1, _, _) = s.add_from_primitive(PrimitiveKind::Cube, p1);
+        let (m2, _, _) = s.add_from_primitive(PrimitiveKind::Cube, p2);
+        assert_ne!(m1, m2, "different params allocate distinct meshes");
+        assert_eq!(s.meshes.len(), 2);
+    }
+
+    #[test]
+    fn add_from_primitive_emits_mesh_loaded_only_first_time() {
+        use super::super::primitives::{PrimitiveKind, PrimitiveParams};
+        let mut s = SceneState::new();
+        let p = PrimitiveParams::defaults_for(PrimitiveKind::Cube);
+        let (_, _, events1) = s.add_from_primitive(PrimitiveKind::Cube, p);
+        assert!(
+            events1
+                .iter()
+                .any(|e| matches!(e, SceneEvent::MeshLoaded(_))),
+            "first add emits MeshLoaded"
+        );
+        let (_, _, events2) = s.add_from_primitive(PrimitiveKind::Cube, p);
+        assert!(
+            !events2
+                .iter()
+                .any(|e| matches!(e, SceneEvent::MeshLoaded(_))),
+            "second add (dedup) does not re-emit MeshLoaded"
+        );
+        assert!(events2
+            .iter()
+            .any(|e| matches!(e, SceneEvent::ObjectAdded(_))));
     }
 
     #[test]
