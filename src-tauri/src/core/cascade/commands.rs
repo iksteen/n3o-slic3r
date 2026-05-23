@@ -10,7 +10,7 @@
 //! frontend already owns the source-of-truth project state. Reduces
 //! the registry's surface to just the cascade IR.
 
-use super::types::Cascade;
+use super::types::{Cascade, SourceLocation};
 use super::{
     loader::{parse_cascade_str, CascadeLoadError},
     overrides::{parse_override_str, resolve_with_overrides, FlatOverrides, OverrideTiers},
@@ -18,6 +18,7 @@ use super::{
     validate::{default_known_dimensions, validate_cascade},
     ResolvedOverrides,
 };
+use std::collections::BTreeMap;
 use crate::core::filament::FilamentProfile;
 use crate::core::printer::PrinterProfile;
 use crate::core::project::SlicingContext;
@@ -77,6 +78,12 @@ pub struct ContextJson {
     pub user_overrides: Vec<OverrideFileSpec>,
     #[serde(default)]
     pub project_overrides: Vec<OverrideFileSpec>,
+    /// Per-object cascade overrides (PR-5-7). When the panel is in
+    /// the Object tab, this carries the active object's authored
+    /// overrides; otherwise empty / absent. Highest-priority tier:
+    /// beats both user and project overrides.
+    #[serde(default)]
+    pub object_overrides: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -98,6 +105,7 @@ impl ContextJson {
     fn into_overrides(
         user: &[OverrideFileSpec],
         project: &[OverrideFileSpec],
+        object: &HashMap<String, String>,
     ) -> Result<OverrideTiers, CascadeLoadError> {
         let parse = |specs: &[OverrideFileSpec]| -> Result<Vec<FlatOverrides>, CascadeLoadError> {
             specs
@@ -105,9 +113,24 @@ impl ContextJson {
                 .map(|s| parse_override_str(&s.content, Path::new(&s.label)))
                 .collect()
         };
+        let object_tier = if object.is_empty() {
+            None
+        } else {
+            // Object overrides are passed as a flat string map; wrap
+            // them in a synthetic `<object>` source so traces have a
+            // meaningful label distinct from real files on disk.
+            Some(FlatOverrides {
+                source: SourceLocation {
+                    path: Path::new("<object>").into(),
+                    line: 0,
+                },
+                entries: object.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            })
+        };
         Ok(OverrideTiers {
             user: parse(user)?,
             project: parse(project)?,
+            object: object_tier,
         })
     }
 }
@@ -155,8 +178,12 @@ pub fn cascade_resolve(
     context: ContextJson,
     state: State<Mutex<CascadeRegistry>>,
 ) -> Result<ResolvedJson, String> {
-    let overrides = ContextJson::into_overrides(&context.user_overrides, &context.project_overrides)
-        .map_err(|e| e.to_string())?;
+    let overrides = ContextJson::into_overrides(
+        &context.user_overrides,
+        &context.project_overrides,
+        &context.object_overrides,
+    )
+    .map_err(|e| e.to_string())?;
     let ctx = context.into_context();
     let registry = state.lock().map_err(|e| format!("registry lock: {e}"))?;
     let cascade = registry
@@ -176,8 +203,12 @@ pub fn cascade_trace(
     key: String,
     state: State<Mutex<CascadeRegistry>>,
 ) -> Result<Option<Trace>, String> {
-    let overrides = ContextJson::into_overrides(&context.user_overrides, &context.project_overrides)
-        .map_err(|e| e.to_string())?;
+    let overrides = ContextJson::into_overrides(
+        &context.user_overrides,
+        &context.project_overrides,
+        &context.object_overrides,
+    )
+    .map_err(|e| e.to_string())?;
     let ctx = context.into_context();
     let registry = state.lock().map_err(|e| format!("registry lock: {e}"))?;
     let cascade = registry
@@ -275,6 +306,7 @@ mod tests {
             active_slot: 0,
             user_overrides: vec![],
             project_overrides: vec![],
+            object_overrides: HashMap::new(),
         }
     }
 

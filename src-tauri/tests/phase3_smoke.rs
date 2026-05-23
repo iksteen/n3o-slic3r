@@ -128,6 +128,7 @@ fn slice_cube_to_gcode() -> (PathBuf, Vec<u8>) {
             active_slot: 0,
             user_overrides: vec![],
             project_overrides: vec![],
+            object_overrides: std::collections::HashMap::new(),
         },
         plate_ids: vec![1],
     };

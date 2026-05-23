@@ -219,6 +219,7 @@ set.bed_temp = 55
         let overrides = OverrideTiers {
             user: vec![],
             project: vec![project],
+            object: None,
         };
         let resolved = resolve_with_overrides(&c, &overrides, &ctx());
         let t = trace(&resolved, "bed_temp").expect("traced");
@@ -237,6 +238,7 @@ set.bed_temp = 55
         let overrides = OverrideTiers {
             user: vec![],
             project: vec![project],
+            object: None,
         };
         let resolved = resolve_with_overrides(&c, &overrides, &ctx());
         let t = trace(&resolved, "bed_temp").expect("traced");

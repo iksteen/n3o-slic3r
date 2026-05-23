@@ -117,6 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let overrides_with_project = OverrideTiers {
         user: vec![],
         project: vec![project],
+        object: None,
     };
     let resolved_overridden = resolve_with_overrides(&cascade, &overrides_with_project, &ctx);
     let t2 = trace(&resolved_overridden, "bed_temp").expect("bed_temp traced with override");

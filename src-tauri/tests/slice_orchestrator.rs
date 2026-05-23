@@ -125,6 +125,7 @@ fn single_plate_job_emits_started_progress_finished_with_summary() {
             active_slot: 0,
             user_overrides: vec![],
             project_overrides: vec![],
+            object_overrides: std::collections::HashMap::new(),
         },
         plate_ids: vec![1],
     };
@@ -206,6 +207,7 @@ fn unknown_cascade_handle_errors_synchronously() {
             active_slot: 0,
             user_overrides: vec![],
             project_overrides: vec![],
+            object_overrides: std::collections::HashMap::new(),
         },
         plate_ids: vec![1],
     };
@@ -240,6 +242,7 @@ fn empty_plate_list_errors_synchronously() {
             active_slot: 0,
             user_overrides: vec![],
             project_overrides: vec![],
+            object_overrides: std::collections::HashMap::new(),
         },
         plate_ids: vec![],
     };

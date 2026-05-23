@@ -23,13 +23,24 @@ use std::path::Path;
 
 /// Stack of override files for the resolver to apply over the cascade.
 ///
-/// Both tiers are vectors of files in load order. `resolve_with_overrides`
-/// applies them in the order *user* first, then *project* — project
-/// values win when both tiers touch the same key.
+/// Tiers (lowest priority first):
+///   1. authored cascade (resolved by `resolve()`)
+///   2. **user** — `~/.config/n3o-slic3r/overrides/*.toml`-style files
+///   3. **project** — overrides scoped to a project / plate
+///   4. **object** — overrides scoped to a single object on a plate
+///      (PR-5-7). One map, not a file — the panel keeps it in
+///      memory and passes it on each resolve.
+///
+/// Within the user / project tiers, later source files win on ties.
 #[derive(Debug, Clone, Default)]
 pub struct OverrideTiers {
     pub user: Vec<FlatOverrides>,
     pub project: Vec<FlatOverrides>,
+    /// Per-object override tier (PR-5-7). `None` means "no active
+    /// object" (panel viewing global settings); `Some(empty)` means
+    /// "active object has no authored overrides". Both behave the
+    /// same — neither contributes a winning value.
+    pub object: Option<FlatOverrides>,
 }
 
 impl OverrideTiers {
@@ -54,6 +65,9 @@ pub struct FlatOverrides {
 pub enum OverrideTier {
     User,
     Project,
+    /// Per-object overrides (PR-5-7). Highest priority — beats both
+    /// user and project tiers when set.
+    Object,
 }
 
 impl std::fmt::Display for OverrideTier {
@@ -61,6 +75,7 @@ impl std::fmt::Display for OverrideTier {
         match self {
             Self::User => write!(f, "user"),
             Self::Project => write!(f, "project"),
+            Self::Object => write!(f, "object"),
         }
     }
 }
@@ -175,6 +190,9 @@ pub fn resolve_with_overrides(
 
     apply_tier(&mut out, &overrides.user, OverrideTier::User);
     apply_tier(&mut out, &overrides.project, OverrideTier::Project);
+    if let Some(obj) = &overrides.object {
+        apply_tier(&mut out, std::slice::from_ref(obj), OverrideTier::Object);
+    }
     out
 }
 
@@ -353,6 +371,7 @@ set.bed_temp = 55
         let overrides = OverrideTiers {
             user: vec![],
             project: vec![project],
+            object: None,
         };
         let result = resolve_with_overrides(&cascade, &overrides, &pla_pei());
         let v = result.get("bed_temp").unwrap();
@@ -371,6 +390,7 @@ set.bed_temp = 55
         let overrides = OverrideTiers {
             user: vec![user],
             project: vec![],
+            object: None,
         };
         let result = resolve_with_overrides(&cascade, &overrides, &pla_pei());
         let v = result.get("bed_temp").unwrap();
@@ -387,6 +407,7 @@ set.bed_temp = 55
         let overrides = OverrideTiers {
             user: vec![user],
             project: vec![project],
+            object: None,
         };
         let result = resolve_with_overrides(&cascade, &overrides, &pla_pei());
         let v = result.get("bed_temp").unwrap();
@@ -400,12 +421,71 @@ set.bed_temp = 55
     }
 
     #[test]
+    fn object_tier_beats_user_and_project() {
+        let cascade = parse_cascade("bed_temp = 55\n");
+        let user = parse_override("bed_temp = 50\n", "user.toml");
+        let project = parse_override("bed_temp = 45\n", "project.toml");
+        let object = FlatOverrides {
+            source: SourceLocation {
+                path: Path::new("<object>").into(),
+                line: 0,
+            },
+            entries: [("bed_temp".into(), "40".into())]
+                .into_iter()
+                .collect(),
+        };
+        let overrides = OverrideTiers {
+            user: vec![user],
+            project: vec![project],
+            object: Some(object),
+        };
+        let result = resolve_with_overrides(&cascade, &overrides, &pla_pei());
+        let v = result.get("bed_temp").unwrap();
+        assert_eq!(v.value, "40", "object tier wins above project");
+        assert_eq!(v.override_source.as_ref().unwrap().tier, OverrideTier::Object);
+        // cascade_fallback is recorded on first override, which is
+        // user — so the fallback is the cascade-resolved value, NOT
+        // the user/project intermediates.
+        assert_eq!(v.cascade_fallback.as_deref(), Some("55"));
+    }
+
+    #[test]
+    fn object_tier_with_no_overlap_does_not_clobber_lower_tiers() {
+        let cascade = parse_cascade("bed_temp = 55\nlayer_height = 0.2\n");
+        let project = parse_override("bed_temp = 45\n", "project.toml");
+        let object = FlatOverrides {
+            source: SourceLocation {
+                path: Path::new("<object>").into(),
+                line: 0,
+            },
+            entries: [("layer_height".into(), "0.10".into())]
+                .into_iter()
+                .collect(),
+        };
+        let overrides = OverrideTiers {
+            user: vec![],
+            project: vec![project],
+            object: Some(object),
+        };
+        let result = resolve_with_overrides(&cascade, &overrides, &pla_pei());
+        // Object overrode layer_height...
+        let lh = result.get("layer_height").unwrap();
+        assert_eq!(lh.value, "0.10");
+        assert_eq!(lh.override_source.as_ref().unwrap().tier, OverrideTier::Object);
+        // ...but project still wins bed_temp.
+        let bt = result.get("bed_temp").unwrap();
+        assert_eq!(bt.value, "45");
+        assert_eq!(bt.override_source.as_ref().unwrap().tier, OverrideTier::Project);
+    }
+
+    #[test]
     fn override_only_key_synthesizes_resolved_entry() {
         let cascade = parse_cascade("layer_height = 0.2\n");
         let project = parse_override("bed_temp = 60\n", "project.toml");
         let overrides = OverrideTiers {
             user: vec![],
             project: vec![project],
+            object: None,
         };
         let result = resolve_with_overrides(&cascade, &overrides, &pla_pei());
         let v = result.get("bed_temp").unwrap();
