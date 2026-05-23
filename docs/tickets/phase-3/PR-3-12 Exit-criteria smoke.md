@@ -1,6 +1,6 @@
 # PR-3-12 — Phase 3 exit-criteria smoke
 
-Status: ❌ open.
+Status: ✅ shipped — `src-tauri/tests/phase3_smoke.rs` (chained slice → parse (zero ParseErrors) → byte-equal serialize → sliced-3MF bundle with byte-equal extract; plus standalone 3MF structural round-trip on fourcolor.3mf) and `docs/phase-3-smoke.md` (procedure for both halves). Step 4's 50 MB / 3 s parser perf gate is covered by the pre-existing `gcode_parser_perf.rs`, not duplicated. Tool-change-count instrumentation (PR-3-11) is logged when present but not gated; smoke completes without PR-3-11. Manual `tauri dev` walkthrough is documented but not yet performed in this session.
 
 **Scope.** End-to-end smoke that exercises Phase 3's exit criteria
 as a single repeatable test. Mirrors PR-0-5 / PR-1-11 / PR-2-12:
