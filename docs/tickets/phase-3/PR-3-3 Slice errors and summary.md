@@ -1,6 +1,6 @@
 # PR-3-3 — Slice errors with offending-setting attribution + post-slice summary
 
-Status: ❌ open.
+Status: ✅ shipped (pure-Rust halves; the orchestrator wiring lives with PR-3-2). `core/slice/summary.rs` + `core/slice/errors.rs`: typed `PlateSummary` populated from a G-code header via `build_summary(gcode_path)` (delegates to PR-3-8's lenient header parser) — per-extruder grams/mm/mm3, layer count, bbox, output path. `SliceError` typed enum with `classify_libslic3r_error` table-driven catalog covering Invalid Config (with setting-key extraction via backtick / double-quote / "Setting <key>:" patterns), Invalid Geometry, Out of Bounds (with plate id), Cancelled. 16 unit tests.
 
 **Scope.** Two related concerns: (a) when libslic3r fails mid-slice,
 the user sees a typed error that names the offending setting where

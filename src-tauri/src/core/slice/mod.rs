@@ -8,6 +8,12 @@
 //! one-shot `slicer_slice` command; richer orchestration (off-UI-thread
 //! progress callbacks, per-plate sequencing) lands in Phase 3.
 
+pub mod errors;
+pub mod summary;
+
+pub use errors::{classify_libslic3r_error, SliceError};
+pub use summary::{build_summary, build_summary_from_bytes, PlateSummary};
+
 use serde::Serialize;
 use slic3r_ffi::{slice, Config, Model};
 use std::path::PathBuf;

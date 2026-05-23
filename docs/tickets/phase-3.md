@@ -37,7 +37,7 @@ index plus phase-level status and notes.
 |-------------|--------|--------|
 | FFI extensions: slice progress + log sink | ❌ open | [PR-3-1](phase-3/PR-3-1%20FFI%20slice%20progress%20and%20log%20sink.md) |
 | Slice orchestration on a worker thread | ❌ open | [PR-3-2](phase-3/PR-3-2%20Slice%20orchestration.md) |
-| Slice errors + post-slice summary | ❌ open | [PR-3-3](phase-3/PR-3-3%20Slice%20errors%20and%20summary.md) |
+| Slice errors + post-slice summary | ✅ done | [PR-3-3](phase-3/PR-3-3%20Slice%20errors%20and%20summary.md) |
 | Slice button + progress UI | ❌ open | [PR-3-4](phase-3/PR-3-4%20Slice%20UI.md) |
 | Typed G-code model | ✅ done | [PR-3-5](phase-3/PR-3-5%20Typed%20gcode%20model.md) |
 | Streaming G-code parser | ✅ done | [PR-3-6](phase-3/PR-3-6%20Streaming%20gcode%20parser.md) |
