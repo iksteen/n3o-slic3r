@@ -605,8 +605,21 @@ impl Project {
             MeshProvenance::Primitive(name) => name.clone(),
         };
         let mesh_id = self.register_mesh(new_mesh);
-        let obj_id =
-            self.register_object(NewSceneObject::at_origin(mesh_id, obj_name));
+        // Lift to z=0 + center on the bed. Without this, an STL/OBJ
+        // whose native vertices live below Z=0 (common for symmetric
+        // models centered on origin) lands underneath the build
+        // plate; libslic3r clips it and the slice produces zero
+        // layers. Same treatment add_from_primitive applies to
+        // procedural primitives.
+        let transform = self.lift_and_center_transform(mesh_id);
+        let obj_id = self.register_object(NewSceneObject {
+            mesh: mesh_id,
+            transform,
+            name: obj_name,
+            visible: true,
+            extruder_id: None,
+            parent: None,
+        });
 
         let plate_id = self.active_plate().id;
         let mesh_header = self.meshes.get(&mesh_id).unwrap().header();
@@ -625,6 +638,38 @@ impl Project {
             },
         ];
         (mesh_id, obj_id, events)
+    }
+
+    /// Build the transform that drops the mesh's lowest-Z vertex
+    /// onto the build plate (Z=0) and centers its XY bbox on the
+    /// active plate's bed. Falls back to a Z-only lift when no bed
+    /// is bound, and to identity when neither shift is needed.
+    ///
+    /// Used by both [`Self::add_from_primitive`] and
+    /// [`Self::load_mesh`] so file-imported meshes get the same
+    /// "land on the bed, centered" treatment as procedural ones.
+    fn lift_and_center_transform(&self, mesh_id: MeshId) -> Transform {
+        let mesh_bb = self.meshes.get(&mesh_id).unwrap().bounding_box.clone();
+        let lift_z = -mesh_bb.min[2] as f32;
+        let (shift_x, shift_y) = match &self.active_plate().scene.bed {
+            Some(bed) => {
+                let bed_cx =
+                    ((bed.extents.min[0] + bed.extents.max[0]) * 0.5) as f32;
+                let bed_cy =
+                    ((bed.extents.min[1] + bed.extents.max[1]) * 0.5) as f32;
+                let mesh_cx =
+                    ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32;
+                let mesh_cy =
+                    ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32;
+                (bed_cx - mesh_cx, bed_cy - mesh_cy)
+            }
+            None => (0.0, 0.0),
+        };
+        if shift_x.abs() + shift_y.abs() + lift_z.abs() > 1e-5 {
+            Transform::translation(Vec3::new(shift_x, shift_y, lift_z))
+        } else {
+            Transform::IDENTITY
+        }
     }
 
     /// Add (or re-instance) a procedural primitive on the active
@@ -664,36 +709,12 @@ impl Project {
             PrimitiveKind::Cone => "Cone",
             PrimitiveKind::Torus => "Torus",
         };
-        // Lift the spawn so the primitive's lowest mesh point lands
-        // on z=0, and shift XY so the primitive's mesh-bbox center
-        // sits over the bed's XY center (when a bed is active).
-        // Cube/sphere/torus center on origin geometrically, so a
-        // bare-origin placement would sink half the primitive below
-        // the plate AND straddle the back-left corner. Slicer
-        // convention is for newly-added objects to sit on the bed,
-        // roughly centered for the eye.
-        let mesh_bb = self.meshes.get(&mesh_id).unwrap().bounding_box.clone();
-        let lift_z = -mesh_bb.min[2] as f32;
-        let (shift_x, shift_y) = match &self.active_plate().scene.bed {
-            Some(bed) => {
-                let bed_cx =
-                    ((bed.extents.min[0] + bed.extents.max[0]) * 0.5) as f32;
-                let bed_cy =
-                    ((bed.extents.min[1] + bed.extents.max[1]) * 0.5) as f32;
-                let mesh_cx =
-                    ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32;
-                let mesh_cy =
-                    ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32;
-                (bed_cx - mesh_cx, bed_cy - mesh_cy)
-            }
-            None => (0.0, 0.0),
-        };
-        let transform = if shift_x.abs() + shift_y.abs() + lift_z.abs() > 1e-5
-        {
-            Transform::translation(Vec3::new(shift_x, shift_y, lift_z))
-        } else {
-            Transform::IDENTITY
-        };
+        // Lift to z=0 + center on the bed via the shared helper —
+        // primitives like cube/sphere/torus are origin-centered
+        // geometrically, so a bare-origin placement would sink half
+        // the primitive below the plate AND straddle the back-left
+        // corner.
+        let transform = self.lift_and_center_transform(mesh_id);
         let obj_id = self.register_object(NewSceneObject {
             mesh: mesh_id,
             transform,
@@ -1651,15 +1672,15 @@ mod tests {
         }
     }
 
+    /// Test-only helper that lands a unit cube at the world origin
+    /// (transform identity). Doesn't use `load_mesh` because that
+    /// path now lifts + centers on the bed — fine for the live
+    /// importer (file-loaded meshes need to land on the plate) but
+    /// noisy for the transform-math tests below, which want exact
+    /// corner positions to assert against.
     fn add_cube(p: &mut Project) -> (MeshId, ObjectId) {
-        let (mesh_id, obj_id, events) = p.load_mesh(unit_cube_mesh());
-        assert_eq!(
-            events.len(),
-            2,
-            "load_mesh emits mesh_loaded + object_added"
-        );
-        assert!(matches!(events[0], SceneEvent::MeshLoaded { .. }));
-        assert!(matches!(events[1], SceneEvent::ObjectAdded { .. }));
+        let mesh_id = p.register_mesh(unit_cube_mesh());
+        let obj_id = p.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
         (mesh_id, obj_id)
     }
 
@@ -2082,6 +2103,65 @@ mod tests {
         assert!(events2
             .iter()
             .any(|e| matches!(e, SceneEvent::ObjectAdded { .. })));
+    }
+
+    // ---- load_mesh lift + center ---------------------------------
+
+    #[test]
+    fn load_mesh_lifts_mesh_with_negative_z_onto_bed() {
+        // Regression for "complex models slice to 0 layers": STL
+        // files often have vertices below Z=0 (model centered on
+        // origin geometrically). load_mesh must lift so the
+        // lowest mesh point lands on Z=0, otherwise libslic3r
+        // clips the geometry as below-bed and the slice produces
+        // no layers.
+        let mut p = Project::default();
+        let mesh = NewMesh {
+            vertices: vec![
+                -5.0, -5.0, -3.0,
+                 5.0, -5.0, -3.0,
+                 0.0,  5.0,  3.0,
+            ],
+            normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            indices: vec![0, 1, 2],
+            bounding_box: BoundingBox {
+                min: [-5.0, -5.0, -3.0],
+                max: [5.0, 5.0, 3.0],
+            },
+            provenance: MeshProvenance::File("/tmp/test.stl".into()),
+        };
+        let (_, obj_id, _) = p.load_mesh(mesh);
+        let obj = p.plates[0].scene.objects.get(&obj_id).unwrap();
+        // The mesh's lowest Z (-3) should now land on Z=0 after
+        // the transform applies.
+        let lifted_min_z = obj.transform.apply_point(Vec3::new(0.0, 0.0, -3.0)).z;
+        assert!(
+            lifted_min_z.abs() < 1e-4,
+            "lowest mesh vertex must land on Z=0, got {lifted_min_z}",
+        );
+    }
+
+    #[test]
+    fn load_mesh_at_origin_with_z_above_zero_does_not_sink_below() {
+        // Mesh that's already sitting at Z=0+: lift should be 0
+        // (or near-zero), but XY center applies to position on bed.
+        let mut p = Project::default();
+        let mesh = NewMesh {
+            vertices: vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 5.0],
+            normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            indices: vec![0, 1, 2],
+            bounding_box: BoundingBox {
+                min: [0.0, 0.0, 0.0],
+                max: [10.0, 10.0, 5.0],
+            },
+            provenance: MeshProvenance::File("/tmp/test.stl".into()),
+        };
+        let (_, obj_id, _) = p.load_mesh(mesh);
+        let obj = p.plates[0].scene.objects.get(&obj_id).unwrap();
+        // Mesh point (0, 0, 0) should still be on the bed (Z=0)
+        // after the lift-and-center transform.
+        let z = obj.transform.apply_point(Vec3::new(0.0, 0.0, 0.0)).z;
+        assert!(z.abs() < 1e-4, "Z=0 vertex stays on bed, got {z}");
     }
 
     // ---- OOB checks against active plate's bed --------------------
