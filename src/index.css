@@ -609,17 +609,27 @@
     right: 116px;
     top: 50%;
     transform: translateY(-50%);
-    display: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: 18px;
     height: 18px;
     border-radius: 4px;
     background: transparent;
     border: 0;
     color: var(--text-dim);
-    align-items: center;
-    justify-content: center;
+    /* Use opacity instead of display:none/inline-flex so a
+     * hover crossing the row never causes a display toggle.
+     * `pointer-events: none` while invisible keeps stray clicks
+     * from hitting the hidden button. */
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 100ms;
   }
-  .set-row:hover .reset-btn { display: inline-flex; }
+  .set-row:hover .reset-btn {
+    opacity: 1;
+    pointer-events: auto;
+  }
   .reset-btn:hover { background: var(--surface-3); color: var(--text); }
   .set-error {
     grid-column: 1 / -1;
