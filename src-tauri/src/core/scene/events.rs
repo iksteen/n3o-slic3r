@@ -144,6 +144,9 @@ pub enum SceneOpError {
     UnknownPlate(usize),
     /// Tried to remove the only remaining plate (PR-5-2).
     LastPlate,
+    /// `move_object` was called with `from_plate == to_plate`
+    /// (PR-5-11). Caller should check the source/dest are distinct.
+    SamePlate(usize),
 }
 
 impl std::fmt::Display for SceneOpError {
@@ -153,8 +156,38 @@ impl std::fmt::Display for SceneOpError {
             Self::UnknownMesh(id) => write!(f, "no mesh with id {}", id.0),
             Self::UnknownPlate(idx) => write!(f, "no plate at index {idx}"),
             Self::LastPlate => write!(f, "cannot remove the last plate"),
+            Self::SamePlate(idx) => {
+                write!(f, "from_plate == to_plate ({idx}); pick a different target")
+            }
         }
     }
+}
+
+/// Result of a [`SceneState::move_object`] call (PR-5-11). The
+/// frontend reads `repositioned` to surface a toast when the
+/// target's geometry forced the object away from its original
+/// world position.
+#[derive(Debug, Clone, Serialize)]
+pub struct MoveReport {
+    pub object_id: ObjectId,
+    pub new_position: [f32; 3],
+    /// `Some(reason)` when the original world-space position didn't
+    /// fit on the target plate and the object was re-anchored.
+    pub repositioned: Option<RepositionReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind")]
+pub enum RepositionReason {
+    /// The object's world-space bounding box landed outside the
+    /// target plate's build volume in XY.
+    OutOfBounds,
+    /// The object's world-space bounding box intersects one of
+    /// the target's exclusion zones.
+    OnExclusionZone,
+    /// The object's world-space minimum Z is below the target
+    /// plate's bed surface.
+    BelowBedSurface,
 }
 
 impl std::error::Error for SceneOpError {}

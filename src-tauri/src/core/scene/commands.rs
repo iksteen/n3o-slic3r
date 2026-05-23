@@ -6,7 +6,7 @@
 //! for the *behavior* live in `state.rs` against the pure methods;
 //! this file only validates the Tauri plumbing.
 
-use super::events::{MirrorAxis, SceneEvent, SceneOpError, SelectMode};
+use super::events::{MirrorAxis, MoveReport, SceneEvent, SceneOpError, SelectMode};
 use super::bed::BedMesh;
 use super::state::{
     ActivePlate, CameraState, ExclusionZone, GizmoState, MeshHeader, MeshId, ObjectId,
@@ -232,6 +232,28 @@ pub fn scene_object_override_clear(
     drop(s);
     emit_all(&window, &events);
     Ok(())
+}
+
+/// Move an object from one plate to another (PR-5-11). Returns
+/// a `MoveReport` describing whether the world-space position
+/// had to be reset (out-of-bounds, on-exclusion-zone, or
+/// below-bed on the target plate).
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_move_object(
+    from_plate: usize,
+    to_plate: usize,
+    object_id: ObjectId,
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<MoveReport, String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let (report, events) = s
+        .move_object(from_plate, to_plate, object_id)
+        .map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(report)
 }
 
 /// Wipe every cascade override on an object.

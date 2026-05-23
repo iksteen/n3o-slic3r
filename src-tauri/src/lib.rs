@@ -63,6 +63,7 @@ pub fn run() {
             core::scene::commands::scene_object_override_set,
             core::scene::commands::scene_object_override_clear,
             core::scene::commands::scene_object_override_clear_all,
+            core::scene::commands::scene_move_object,
             core::scene::commands::library_primitives,
             core::scene::commands::library_calibration,
             core::scene::commands::library_imported,

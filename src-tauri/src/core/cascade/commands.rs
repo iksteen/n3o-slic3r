@@ -18,7 +18,6 @@ use super::{
     validate::{default_known_dimensions, validate_cascade},
     ResolvedOverrides,
 };
-use std::collections::BTreeMap;
 use crate::core::filament::FilamentProfile;
 use crate::core::printer::PrinterProfile;
 use crate::core::project::SlicingContext;

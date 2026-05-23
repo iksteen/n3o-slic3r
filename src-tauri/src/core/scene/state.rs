@@ -11,7 +11,9 @@
 //! `scene_snapshot()` rebuilds it from scratch on reconnect.
 
 use super::build_plate::BuildPlate;
-use super::events::{MirrorAxis, SceneEvent, SceneOpError, SelectMode};
+use super::events::{
+    MirrorAxis, MoveReport, RepositionReason, SceneEvent, SceneOpError, SelectMode,
+};
 use super::transform::Transform;
 use crate::core::printer::profile::BoundingBox;
 use glam::{Quat, Vec3};
@@ -498,6 +500,109 @@ impl SceneState {
             plate_index,
             object_id,
         }])
+    }
+
+    /// Move an object from `from_plate` to `to_plate`, preserving
+    /// its world-space transform when the target plate's build
+    /// volume can accept it. Per-object overrides travel with the
+    /// object (the object id stays unique scene-wide so overrides
+    /// keyed on it just need to move plates too).
+    ///
+    /// Returns a [`MoveReport`] documenting whether the object had
+    /// to be repositioned to fit on the target plate's bed.
+    ///
+    /// Errors when:
+    ///   - either plate index is out of range
+    ///   - the two plates are the same
+    ///   - the object doesn't exist on `from_plate`
+    pub fn move_object(
+        &mut self,
+        from_plate: usize,
+        to_plate: usize,
+        object_id: ObjectId,
+    ) -> Result<(MoveReport, Vec<SceneEvent>), SceneOpError> {
+        if from_plate >= self.plates.len() {
+            return Err(SceneOpError::UnknownPlate(from_plate));
+        }
+        if to_plate >= self.plates.len() {
+            return Err(SceneOpError::UnknownPlate(to_plate));
+        }
+        if from_plate == to_plate {
+            return Err(SceneOpError::SamePlate(from_plate));
+        }
+        let object = self.plates[from_plate]
+            .objects
+            .get(&object_id)
+            .ok_or(SceneOpError::UnknownObject(object_id))?
+            .clone();
+        let overrides = self.plates[from_plate].object_overrides.remove(&object_id);
+        let was_selected = self.plates[from_plate].selection.remove(&object_id);
+        self.plates[from_plate].objects.remove(&object_id);
+
+        // Re-anchor decision: keep the world-space transform when
+        // the target's build volume is identical-or-larger than the
+        // source. Otherwise re-center on the target plate.
+        let mesh_bb = self
+            .meshes
+            .get(&object.mesh)
+            .ok_or(SceneOpError::UnknownMesh(object.mesh))?
+            .bounding_box
+            .clone();
+        let (final_obj, reposition_reason) = match (
+            self.plates[from_plate].bed.as_ref(),
+            self.plates[to_plate].bed.as_ref(),
+        ) {
+            // Both plates have a bed configured: check if the
+            // object's current world position fits the target bed.
+            (Some(_), Some(target_bed)) => {
+                let reason =
+                    object_repositioning_reason(&object, &mesh_bb, target_bed);
+                match reason {
+                    None => (object, None),
+                    Some(why) => {
+                        // Drop the object onto the target plate's
+                        // center at bed-z. Preserves orientation
+                        // (rotation/scale parts of the transform)
+                        // but resets the translation.
+                        let recentered = recenter_on_bed(&object, &mesh_bb, target_bed);
+                        (recentered, Some(why))
+                    }
+                }
+            }
+            // Either plate has no bed → no bed-relative check
+            // possible; keep the transform as-is.
+            _ => (object, None),
+        };
+        let new_position = final_obj.transform.apply_point(Vec3::ZERO);
+        let report = MoveReport {
+            object_id,
+            new_position: [new_position.x, new_position.y, new_position.z],
+            repositioned: reposition_reason,
+        };
+
+        // Reinsert the object on the target plate (same id).
+        self.plates[to_plate].objects.insert(object_id, final_obj.clone());
+        if let Some(map) = overrides {
+            self.plates[to_plate]
+                .object_overrides
+                .insert(object_id, map);
+        }
+
+        let mut events = vec![
+            SceneEvent::ObjectRemoved { id: object_id },
+            SceneEvent::ObjectAdded(final_obj),
+        ];
+        if was_selected {
+            // The original plate lost its selection of this object.
+            let mut sorted: Vec<ObjectId> = self.plates[from_plate]
+                .selection
+                .iter()
+                .copied()
+                .collect();
+            sorted.sort();
+            events.push(SceneEvent::SelectionChanged { selected: sorted });
+        }
+        Ok((report, events))
     }
 
     /// Wipe every override on `object_id`. Silent no-op when the
@@ -1137,6 +1242,108 @@ impl SceneState {
         } else {
             None
         }
+    }
+}
+
+/// Why an object had to be repositioned when moving to a different
+/// plate. `None` = its world-space position fits the target bed
+/// verbatim. Used by [`SceneState::move_object`] to populate the
+/// [`MoveReport`].
+fn object_repositioning_reason(
+    obj: &SceneObject,
+    mesh_bb: &BoundingBox,
+    target_bed: &super::bed::BedMesh,
+) -> Option<RepositionReason> {
+    let corners = mesh_bb_corners(mesh_bb);
+    let xform = obj.transform.to_mat4();
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    for c in corners {
+        let p = xform.transform_point3(c);
+        min = min.min(p);
+        max = max.max(p);
+    }
+    // Below bed Z = 0 by convention.
+    if min.z < -1e-3 {
+        return Some(RepositionReason::BelowBedSurface);
+    }
+    let bed_min = Vec3::new(
+        target_bed.extents.min[0] as f32,
+        target_bed.extents.min[1] as f32,
+        target_bed.extents.min[2] as f32,
+    );
+    let bed_max = Vec3::new(
+        target_bed.extents.max[0] as f32,
+        target_bed.extents.max[1] as f32,
+        target_bed.extents.max[2] as f32,
+    );
+    if min.x < bed_min.x - 1e-3
+        || min.y < bed_min.y - 1e-3
+        || max.x > bed_max.x + 1e-3
+        || max.y > bed_max.y + 1e-3
+    {
+        return Some(RepositionReason::OutOfBounds);
+    }
+    // Exclusion-zone overlap (XY only — Z is height-of-zone, not a
+    // collision axis for the same-bed check).
+    for zone in &target_bed.exclusion_zones {
+        let z_min = [zone.bounds.min[0] as f32, zone.bounds.min[1] as f32];
+        let z_max = [zone.bounds.max[0] as f32, zone.bounds.max[1] as f32];
+        let overlap_x = !(max.x < z_min[0] || min.x > z_max[0]);
+        let overlap_y = !(max.y < z_min[1] || min.y > z_max[1]);
+        if overlap_x && overlap_y {
+            return Some(RepositionReason::OnExclusionZone);
+        }
+    }
+    None
+}
+
+/// Drop `obj` onto the target plate's XY center at bed Z. Preserves
+/// the rotation + scale of the original transform; only the
+/// translation part changes. The object's bounding-box centroid in
+/// XY lands on the bed centroid; its minimum Z lands on the bed
+/// surface.
+fn recenter_on_bed(
+    obj: &SceneObject,
+    mesh_bb: &BoundingBox,
+    target_bed: &super::bed::BedMesh,
+) -> SceneObject {
+    let current = obj.transform.to_mat4();
+    let (scale, rotation, _trans) = current.to_scale_rotation_translation();
+    let local_center = Vec3::new(
+        ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32,
+        ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32,
+        ((mesh_bb.min[2] + mesh_bb.max[2]) * 0.5) as f32,
+    );
+    // After rotate/scale around the origin, the object's local
+    // center maps to some world-space point. The translation we
+    // need is: target XY = bed center, target Z = bed-min Z + lift
+    // so the object's lowest mesh corner ends up on the bed.
+    let no_translation = glam::Mat4::from_scale_rotation_translation(
+        scale,
+        rotation,
+        Vec3::ZERO,
+    );
+    let post_rs_center = no_translation.transform_point3(local_center);
+    let corners = mesh_bb_corners(mesh_bb);
+    let mut min_z_after_rs = f32::INFINITY;
+    for c in corners {
+        let p = no_translation.transform_point3(c);
+        if p.z < min_z_after_rs {
+            min_z_after_rs = p.z;
+        }
+    }
+    let bed_cx = ((target_bed.extents.min[0] + target_bed.extents.max[0]) * 0.5) as f32;
+    let bed_cy = ((target_bed.extents.min[1] + target_bed.extents.max[1]) * 0.5) as f32;
+    let delta = Vec3::new(
+        bed_cx - post_rs_center.x,
+        bed_cy - post_rs_center.y,
+        -min_z_after_rs,
+    );
+    let final_xform = glam::Mat4::from_translation(delta) * no_translation;
+    SceneObject {
+        transform: Transform::from_mat4(final_xform),
+        ..obj.clone()
     }
 }
 
@@ -2001,6 +2208,145 @@ mod tests {
                 .unwrap_err(),
             SceneOpError::UnknownObject(ObjectId(9999)),
         );
+    }
+
+    // ---- move_object (PR-5-11) -------------------------------------
+
+    #[test]
+    fn move_object_errors_on_same_plate() {
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        let err = s.move_object(0, 0, obj).unwrap_err();
+        assert_eq!(err, SceneOpError::SamePlate(0));
+    }
+
+    #[test]
+    fn move_object_errors_on_unknown_plate() {
+        let mut s = SceneState::new();
+        s.add_plate();
+        let (_, obj) = add_cube(&mut s);
+        assert_eq!(
+            s.move_object(0, 99, obj).unwrap_err(),
+            SceneOpError::UnknownPlate(99),
+        );
+        assert_eq!(
+            s.move_object(99, 0, obj).unwrap_err(),
+            SceneOpError::UnknownPlate(99),
+        );
+    }
+
+    #[test]
+    fn move_object_errors_when_object_not_on_source_plate() {
+        let mut s = SceneState::new();
+        s.add_plate();
+        let (_, obj) = add_cube(&mut s);
+        // Object is on plate 0; try to move it from plate 1.
+        let err = s.move_object(1, 0, obj).unwrap_err();
+        assert_eq!(err, SceneOpError::UnknownObject(obj));
+    }
+
+    #[test]
+    fn move_object_relocates_object_and_emits_remove_add_events() {
+        let mut s = SceneState::new();
+        s.add_plate();
+        let (_, obj) = add_cube(&mut s);
+        // No bed configured on either plate, so the move keeps the
+        // world-space transform verbatim (no reposition).
+        let (report, events) = s.move_object(0, 1, obj).unwrap();
+        assert_eq!(report.object_id, obj);
+        assert!(
+            report.repositioned.is_none(),
+            "without a bed, no reposition reason fires"
+        );
+        assert!(matches!(events[0], SceneEvent::ObjectRemoved { id } if id == obj));
+        assert!(matches!(events[1], SceneEvent::ObjectAdded(_)));
+        // Object lives on the target plate now.
+        assert!(!s.plates[0].objects.contains_key(&obj));
+        assert!(s.plates[1].objects.contains_key(&obj));
+    }
+
+    #[test]
+    fn move_object_carries_per_object_overrides_with_it() {
+        let mut s = SceneState::new();
+        s.add_plate();
+        let (_, obj) = add_cube(&mut s);
+        s.object_override_set(0, obj, "layer_height".into(), "0.12".into())
+            .unwrap();
+        s.object_override_set(0, obj, "infill_density".into(), "30%".into())
+            .unwrap();
+
+        s.move_object(0, 1, obj).unwrap();
+        // Overrides gone from source...
+        assert!(s.plates[0].object_overrides.get(&obj).is_none());
+        // ...and present on target with the same key/value pairs.
+        let landed = s.plates[1].object_overrides.get(&obj).unwrap();
+        assert_eq!(landed.len(), 2);
+        assert_eq!(landed["layer_height"], "0.12");
+        assert_eq!(landed["infill_density"], "30%");
+    }
+
+    #[test]
+    fn move_object_clears_source_selection_and_emits_selection_change() {
+        let mut s = SceneState::new();
+        s.add_plate();
+        let (_, obj) = add_cube(&mut s);
+        s.select(&[obj], SelectMode::Replace);
+        let (_, events) = s.move_object(0, 1, obj).unwrap();
+        // Last event should be SelectionChanged on the source plate.
+        let saw_selection_changed = events
+            .iter()
+            .any(|e| matches!(e, SceneEvent::SelectionChanged { selected } if selected.is_empty()));
+        assert!(saw_selection_changed);
+        assert!(s.plates[0].selection.is_empty());
+    }
+
+    fn small_printer() -> crate::core::printer::profile::PrinterProfile {
+        use crate::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
+        PrinterProfile {
+            model: "Small".into(),
+            slot_count: 1,
+            supported_build_plates: vec!["Plain".into()],
+            toolheads: vec![Toolhead {
+                nozzle_diameter: 0.4,
+                hotend_type: "stainless_steel".into(),
+                max_temp: 300.0,
+                slot_indices: vec![0],
+            }],
+            build_volume: BoundingBox {
+                min: [0.0, 0.0, 0.0],
+                max: [100.0, 100.0, 100.0],
+            },
+            exclusion_zones: vec![],
+        }
+    }
+
+    #[test]
+    fn move_object_recenters_when_target_bed_is_smaller_than_source() {
+        let mut s = SceneState::new();
+        s.add_plate();
+        // Plate 0 = A1 mini (180x180), plate 1 = Small (100x100).
+        s.set_active_plate(0).unwrap();
+        s.set_active_printer(Some(&a1_mini_for_test()));
+        let (_, obj) = add_cube(&mut s);
+        // Push the cube to the far edge of the A1 mini bed, outside
+        // the smaller printer's reach.
+        s.translate_object(obj, Vec3::new(160.0, 160.0, 0.0)).unwrap();
+        s.set_active_plate(1).unwrap();
+        s.set_active_printer(Some(&small_printer()));
+
+        let (report, _) = s.move_object(0, 1, obj).unwrap();
+        assert_eq!(
+            report.repositioned,
+            Some(RepositionReason::OutOfBounds),
+            "world-space (160, 160) is outside the 100x100 bed",
+        );
+        // After recentering, the cube should sit near the small-bed
+        // center (50, 50) on the bed surface.
+        let landed = s.plates[1].objects.get(&obj).unwrap();
+        let center = landed.transform.apply_point(Vec3::new(0.5, 0.5, 0.5));
+        assert!((center.x - 50.0).abs() < 1.0, "got X={}", center.x);
+        assert!((center.y - 50.0).abs() < 1.0, "got Y={}", center.y);
+        assert!(center.z > 0.0 && center.z < 1.0, "cube min Z lands on bed");
     }
 
     #[test]
