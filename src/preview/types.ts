@@ -60,6 +60,10 @@ export interface FilamentUsage {
 export interface FullJobStats {
   total_duration_seconds: number;
   layer_count: number;
+  /** Keyed by FeatureType's canonical display name (Rust-side
+   * `FeatureType::as_token()`). String-keyed because JSON
+   * rejects object-keyed HashMaps — see `feature_key` in
+   * `core/preview/stats.rs`. */
   feature_breakdown: Record<string, number>;
   filament_used_mm: Record<string, number>;
   bounding_box: BoundingBox;

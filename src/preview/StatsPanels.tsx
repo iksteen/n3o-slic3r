@@ -8,8 +8,7 @@
 // chart library — the breakdown is small (≤ 10 features) and
 // avoids the dependency.
 
-import type { FeatureType, FullJobStats, HeaderMetadata, PerLayerStats } from "./types";
-import { featureLabel } from "./HoverTooltip";
+import type { FullJobStats, HeaderMetadata, PerLayerStats } from "./types";
 
 export interface FullJobStatsPanelProps {
   stats: FullJobStats;
@@ -139,10 +138,12 @@ function FeatureBars({
     <div className="feature-bars" role="presentation">
       {entries.map(([feat, secs]) => {
         const pct = (secs / total) * 100;
-        const label = featureLabel(parseFeatureKey(feat));
+        // `feat` is already the canonical display name — the
+        // Rust side keys feature_breakdown by FeatureType::as_token()
+        // (see core/preview/stats.rs::feature_key).
         return (
-          <div className="feature-bar" key={feat} title={`${label}: ${formatDuration(secs)} (${pct.toFixed(1)}%)`}>
-            <span className="feature-bar-label">{label}</span>
+          <div className="feature-bar" key={feat} title={`${feat}: ${formatDuration(secs)} (${pct.toFixed(1)}%)`}>
+            <span className="feature-bar-label">{feat}</span>
             <div className="feature-bar-track">
               <div
                 className="feature-bar-fill"
@@ -194,28 +195,6 @@ function FilamentRows({
       ))}
     </>
   );
-}
-
-/** Parse a serde-serialized FeatureType key back into the typed
- * union. Unit variants ride the wire as bare strings; `Other(x)`
- * comes through as `{"Other":"x"}` which is its JSON shape after
- * a HashMap serialization (the key is the variant *name*, not
- * a JSON-encoded variant — so HashMap<FeatureType, T> keys are
- * actually a string-stringified-enum form). Tolerate both. */
-function parseFeatureKey(key: string): FeatureType {
-  // serde HashMap<FeatureType, _> with a derive-PartialEq+Hash
-  // enum serializes keys via the enum's Display impl — which for
-  // `#[derive(Serialize)]` is "Variant" for unit + "{\"Other\":\"x\"}"
-  // for tuple variants. Try JSON first; fall through to string.
-  if (key.startsWith("{") && key.endsWith("}")) {
-    try {
-      const parsed = JSON.parse(key) as FeatureType;
-      return parsed;
-    } catch {
-      // fall through
-    }
-  }
-  return key as FeatureType;
 }
 
 function formatDuration(seconds: number): string {

@@ -19,6 +19,16 @@ use crate::core::gcode::FeatureType;
 
 use super::ir::{BoundingBox, PreviewGeometry};
 
+/// Canonical string form of a [`FeatureType`] for use as a
+/// HashMap key when the map crosses the JSON boundary
+/// (Tauri returns). JSON requires string keys; serde turns
+/// `FeatureType::Other("Custom")` into `{"Other":"Custom"}`
+/// which isn't a valid JSON key. Stringifying up-front sidesteps
+/// the issue + matches the panel's display label.
+fn feature_key(ft: &FeatureType) -> String {
+    ft.as_token()
+}
+
 /// Per-layer aggregate. One per [`super::ir::LayerRange`], in
 /// `layer_index` order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -37,15 +47,19 @@ pub struct PerLayerStats {
     /// by 0-based tool index.
     pub filament_used_mm: HashMap<u8, f32>,
     /// Time spent in each feature within the layer, seconds.
-    pub feature_breakdown: HashMap<FeatureType, f32>,
+    /// Keyed by [`feature_key`] (canonical display name) so the
+    /// HashMap can round-trip through JSON — see the helper's doc
+    /// for why.
+    pub feature_breakdown: HashMap<String, f32>,
 }
 
 /// Job-level aggregate. Folded from [`PerLayerStats`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FullJobStats {
     pub total_duration_seconds: f32,
+    /// See [`PerLayerStats::feature_breakdown`] for the keying.
+    pub feature_breakdown: HashMap<String, f32>,
     pub layer_count: u32,
-    pub feature_breakdown: HashMap<FeatureType, f32>,
     pub filament_used_mm: HashMap<u8, f32>,
     pub bounding_box: BoundingBox,
     pub layer_heights: HeightStats,
@@ -108,7 +122,7 @@ pub fn compute_layer_stats(geometry: &PreviewGeometry) -> Vec<PerLayerStats> {
             stats.duration_seconds += duration;
             *stats
                 .feature_breakdown
-                .entry(geometry.extrusions.feature[i].clone())
+                .entry(feature_key(&geometry.extrusions.feature[i]))
                 .or_insert(0.0) += duration;
             let extrusion_mm = extrusion_amount_mm(&geometry.extrusions, i);
             *stats
@@ -130,7 +144,7 @@ pub fn compute_layer_stats(geometry: &PreviewGeometry) -> Vec<PerLayerStats> {
                 stats.duration_seconds += duration;
                 *stats
                     .feature_breakdown
-                    .entry(FeatureType::Travel)
+                    .entry(feature_key(&FeatureType::Travel))
                     .or_insert(0.0) += duration;
             }
         }
@@ -147,7 +161,7 @@ pub fn compute_job_stats(
     layer_stats: &[PerLayerStats],
 ) -> FullJobStats {
     let mut total_duration_seconds = 0.0;
-    let mut feature_breakdown: HashMap<FeatureType, f32> = HashMap::new();
+    let mut feature_breakdown: HashMap<String, f32> = HashMap::new();
     let mut filament_used_mm: HashMap<u8, f32> = HashMap::new();
     let mut min_h = f32::INFINITY;
     let mut max_h = f32::NEG_INFINITY;
@@ -434,7 +448,7 @@ mod tests {
         // Travel: sqrt(10²+10²) ≈ 14.14mm @ 100mm/s ≈ 0.141s.
         assert!((ls[0].duration_seconds - 0.641).abs() < 0.01);
         // Feature breakdown should include both Travel and the
-        // extrusion feature.
-        assert!(ls[0].feature_breakdown.contains_key(&FeatureType::Travel));
+        // extrusion feature (keyed by canonical display name).
+        assert!(ls[0].feature_breakdown.contains_key("Travel"));
     }
 }
