@@ -61,9 +61,10 @@ pub struct SceneSnapshot {
 pub fn scene_snapshot(state: State<Mutex<SceneState>>) -> Result<SceneSnapshot, String> {
     let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let meshes = s.meshes.values().map(|m| m.header()).collect();
-    let objects = s.objects.values().cloned().collect();
+    let plate = s.active_plate();
+    let objects = plate.objects.values().cloned().collect();
     let selection: Vec<ObjectId> = {
-        let mut v: Vec<ObjectId> = s.selection.iter().copied().collect();
+        let mut v: Vec<ObjectId> = plate.selection.iter().copied().collect();
         v.sort();
         v
     };
@@ -72,11 +73,11 @@ pub fn scene_snapshot(state: State<Mutex<SceneState>>) -> Result<SceneSnapshot, 
         meshes,
         objects,
         selection,
-        camera: s.camera.clone(),
-        gizmo: s.gizmo.clone(),
-        plate: s.plate.clone(),
-        exclusion_zones: s.exclusion_zones.clone(),
-        bed: s.bed.clone(),
+        camera: plate.camera.clone(),
+        gizmo: plate.gizmo.clone(),
+        plate: plate.plate.clone(),
+        exclusion_zones: plate.exclusion_zones.clone(),
+        bed: plate.bed.clone(),
     })
 }
 
@@ -177,7 +178,7 @@ pub fn scene_auto_arrange(
     state: State<Mutex<SceneState>>,
 ) -> Result<Vec<ObjectId>, String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let Some(bed) = s.bed.clone() else {
+    let Some(bed) = s.active_plate().bed.clone() else {
         return Ok(vec![]);
     };
     let plan = super::arrange::plan_arrangement(&s, &bed);
@@ -517,7 +518,7 @@ pub fn scene_load_3mf(
             extruder_id: obj.extruder_id,
             parent: None,
         });
-        let obj_clone = s.objects.get(&object_id).unwrap().clone();
+        let obj_clone = s.active_plate().objects.get(&object_id).unwrap().clone();
         all_events.push(SceneEvent::ObjectAdded(obj_clone));
         loaded.push(LoadedObject {
             mesh_id,

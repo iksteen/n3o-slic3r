@@ -39,7 +39,7 @@ fn build_scene_with_n_cubes(n: usize) -> (SceneState, Vec<ObjectId>) {
         ids.push(obj);
     }
     assert_eq!(s.meshes.len(), 1, "primitive cache must dedup");
-    assert_eq!(s.objects.len(), n);
+    assert_eq!(s.active_plate().objects.len(), n);
     (s, ids)
 }
 
@@ -149,11 +149,12 @@ fn snapshot_clone_under_50ms_on_1000_object_scene() {
         // directly from a #[test] without spinning up a Window;
         // the work is the cloning, which is what we want to time.)
         let _meshes: Vec<_> = state.meshes.values().map(|m| m.header()).collect();
-        let _objects: Vec<_> = state.objects.values().cloned().collect();
-        let _bed = state.bed.clone();
-        let _selection: Vec<_> = state.selection.iter().copied().collect();
-        let _camera = state.camera.clone();
-        let _gizmo = state.gizmo.clone();
+        let plate = state.active_plate();
+        let _objects: Vec<_> = plate.objects.values().cloned().collect();
+        let _bed = plate.bed.clone();
+        let _selection: Vec<_> = plate.selection.iter().copied().collect();
+        let _camera = plate.camera.clone();
+        let _gizmo = plate.gizmo.clone();
     });
     println!("snapshot mean={:?} p99={:?}", mean, p99);
     assert!(
@@ -172,7 +173,7 @@ fn snapshot_clone_under_50ms_on_1000_object_scene() {
 #[test]
 fn scene_has_expected_shape_for_perf_run() {
     let (state, ids) = build_scene_with_n_cubes(OBJECT_COUNT);
-    assert_eq!(state.objects.len(), OBJECT_COUNT);
+    assert_eq!(state.active_plate().objects.len(), OBJECT_COUNT);
     assert_eq!(ids.len(), OBJECT_COUNT);
     assert_eq!(state.meshes.len(), 1, "primitive dedup");
     let mesh = state.meshes.values().next().unwrap();

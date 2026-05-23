@@ -60,7 +60,7 @@ fn step_1_set_active_printer_emits_bed_changed() {
         .iter()
         .any(|e| matches!(e, SceneEvent::BedChanged(Some(_))));
     assert!(bed_set, "set_active_printer should emit a populated BedChanged");
-    assert!(state.bed.is_some(), "scene state has the bed cached");
+    assert!(state.active_plate().bed.is_some(), "scene state has the bed cached");
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn step_2_library_primitive_lands_on_plate() {
     state.set_active_printer(Some(&a1_mini()));
     let (_mesh_id, obj_id, events) =
         state.add_from_primitive(PrimitiveKind::Cube, PrimitiveParams::defaults_for(PrimitiveKind::Cube));
-    let obj = state.objects.get(&obj_id).expect("registered");
+    let obj = state.active_plate().objects.get(&obj_id).expect("registered");
     let mesh = state.meshes.get(&obj.mesh).expect("registered");
     // Cube primitive bbox is [-10, 10] cubed by default; after the
     // add_from_primitive auto-lift, the world-space min Z should be
@@ -158,7 +158,7 @@ fn step_5_scene_snapshot_round_trips_after_full_setup() {
     );
     // Snapshot via the same shape `scene_snapshot` would assemble.
     let meshes: Vec<_> = state.meshes.values().map(|m| m.header()).collect();
-    let objects: Vec<_> = state.objects.values().cloned().collect();
+    let objects: Vec<_> = state.active_plate().objects.values().cloned().collect();
     assert!(!meshes.is_empty());
     assert!(!objects.is_empty());
     // Each header should match an object's mesh ref.
@@ -183,7 +183,7 @@ fn step_6_auto_arrange_then_oob_clear_under_active_printer() {
             },
         );
     }
-    let bed = state.bed.clone().unwrap();
+    let bed = state.active_plate().bed.clone().unwrap();
     let plan = n3o_slic3r_lib::core::scene::arrange::plan_arrangement(&state, &bed);
     assert!(plan.un_placed.is_empty(), "6 small cubes should fit");
     let (events, _) = n3o_slic3r_lib::core::scene::arrange::apply_arrangement(&mut state, plan);
@@ -214,7 +214,7 @@ fn step_7_selection_and_delete_round_trip() {
         .filter(|e| matches!(e, SceneEvent::ObjectRemoved { .. }))
         .count();
     assert_eq!(removed, 2);
-    assert_eq!(state.objects.len(), 0, "both objects gone");
+    assert_eq!(state.active_plate().objects.len(), 0, "both objects gone");
 }
 
 #[test]

@@ -278,14 +278,17 @@ pub struct ExclusionZone {
     pub bounds: BoundingBox,
 }
 
-/// The root authoritative scene model. Tauri commands lock this
-/// behind a `Mutex<SceneState>` (or `RwLock` if PR-2-11's
-/// scene-state perf gate shows contention) and mutate via the
-/// methods below. The renderer never reaches into this directly —
-/// it sees only the emitted events.
+/// Per-plate scene state — everything one plate owns: placed
+/// objects, selection, camera/gizmo, bed + exclusion zones,
+/// active-build-plate identity. Phase 5 turns the historically
+/// single-global scene into N of these (PR-5-2).
+///
+/// Mesh data + the primitive-dedup cache + ID allocators are
+/// **not** here — they live scene-wide on [`SceneState`] so a
+/// move-between-plates op (PR-5-11) doesn't have to copy mesh
+/// buffers, and ids stay unique across plates.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SceneState {
-    pub meshes: HashMap<MeshId, Mesh>,
+pub struct PlateSceneState {
     pub objects: HashMap<ObjectId, SceneObject>,
     pub selection: HashSet<ObjectId>,
     pub camera: CameraState,
@@ -293,24 +296,78 @@ pub struct SceneState {
     pub plate: Option<ActivePlate>,
     pub exclusion_zones: Vec<ExclusionZone>,
     /// Active bed visualization + bounds (PR-2-6). `None` when no
-    /// printer is selected yet — the scene is still usable for
-    /// loading meshes, just without the out-of-bounds check or grid.
+    /// printer is selected yet for this plate — loading meshes
+    /// still works, just without the out-of-bounds check or grid.
     #[serde(default)]
     pub bed: Option<super::bed::BedMesh>,
+}
+
+/// The root authoritative scene model. Tauri commands lock this
+/// behind a `Mutex<SceneState>` (or `RwLock` if PR-2-11's
+/// scene-state perf gate shows contention) and mutate via the
+/// methods below. The renderer never reaches into this directly —
+/// it sees only the emitted events.
+///
+/// Holds `Vec<PlateSceneState>` (PR-5-2) plus scene-wide registries:
+/// mesh storage (so cross-plate references survive PR-5-11's
+/// move-between-plates), the primitive-dedup cache, and monotonic
+/// ID allocators (unique across plates).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SceneState {
+    /// One entry per plate, in declaration order. Always non-empty
+    /// (default construction yields one plate).
+    pub plates: Vec<PlateSceneState>,
+    /// Index of the currently-active plate. Always points at a
+    /// valid index — see [`SceneState::ensure_active_plate_index`].
+    pub active_plate: usize,
+    /// Mesh storage is scene-wide so the same mesh can be
+    /// referenced by objects on multiple plates without
+    /// duplication.
+    pub meshes: HashMap<MeshId, Mesh>,
     /// Primitive mesh cache (PR-2-7). Each (kind, params) tuple
     /// resolves to one MeshId so re-instancing the same procedural
-    /// primitive yields multiple SceneObjects sharing geometry.
-    /// Linear scan is fine — the cache stays small in practice
-    /// (a handful of distinct shapes per session).
+    /// primitive yields multiple SceneObjects sharing geometry —
+    /// across plates as well as within a plate. Linear scan is
+    /// fine; the cache stays small (a handful of distinct shapes).
     #[serde(default, skip)]
     primitive_cache: Vec<(super::primitives::PrimitiveKind, super::primitives::PrimitiveParams, MeshId)>,
     next_mesh_id: u64,
     next_object_id: u64,
 }
 
+impl Default for SceneState {
+    fn default() -> Self {
+        Self {
+            plates: vec![PlateSceneState::default()],
+            active_plate: 0,
+            meshes: HashMap::new(),
+            primitive_cache: Vec::new(),
+            next_mesh_id: 0,
+            next_object_id: 0,
+        }
+    }
+}
+
 impl SceneState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    // ---- Per-plate accessors --------------------------------------
+    //
+    // Every method below that mutates per-plate state goes through
+    // these. Direct field access (`state.plates[i].objects`) is fine
+    // when a caller has a specific plate id in mind; for the legacy
+    // "operate on the active plate" surface, use the accessors.
+
+    /// The currently-active plate, by index.
+    pub fn active_plate(&self) -> &PlateSceneState {
+        &self.plates[self.active_plate]
+    }
+
+    /// Mutable view of the active plate.
+    pub fn active_plate_mut(&mut self) -> &mut PlateSceneState {
+        &mut self.plates[self.active_plate]
     }
 
     /// Allocate the next monotonic `MeshId`. IDs start at 1.
@@ -344,10 +401,12 @@ impl SceneState {
         id
     }
 
-    /// Register a scene object. Always allocates a fresh `ObjectId`.
+    /// Register a scene object on the active plate. Always allocates
+    /// a fresh `ObjectId` (scene-wide unique).
     pub fn register_object(&mut self, new_obj: NewSceneObject) -> ObjectId {
         let id = self.next_object_id();
-        self.objects.insert(
+        let active = self.active_plate;
+        self.plates[active].objects.insert(
             id,
             SceneObject {
                 id,
@@ -370,8 +429,8 @@ impl SceneState {
     // returning. Tests bypass the Tauri layer and inspect the returned
     // event list directly.
 
-    /// Register a mesh and place one default `SceneObject` at origin.
-    /// Returns (mesh_id, object_id, events).
+    /// Register a mesh and place one default `SceneObject` at origin
+    /// on the active plate. Returns (mesh_id, object_id, events).
     pub fn load_mesh(&mut self, new_mesh: NewMesh) -> (MeshId, ObjectId, Vec<SceneEvent>) {
         let obj_name = match &new_mesh.provenance {
             MeshProvenance::File(p) => p
@@ -384,7 +443,7 @@ impl SceneState {
         let obj_id = self.register_object(NewSceneObject::at_origin(mesh_id, obj_name));
 
         let mesh_header = self.meshes.get(&mesh_id).unwrap().header();
-        let obj_clone = self.objects.get(&obj_id).unwrap().clone();
+        let obj_clone = self.active_plate().objects.get(&obj_id).unwrap().clone();
         let events = vec![
             SceneEvent::MeshLoaded(mesh_header),
             SceneEvent::ObjectAdded(obj_clone),
@@ -392,57 +451,64 @@ impl SceneState {
         (mesh_id, obj_id, events)
     }
 
-    /// Apply a selection change. Returns one `SelectionChanged` event
-    /// (sorted for deterministic output) or empty if the selection
-    /// didn't actually change.
+    /// Apply a selection change on the active plate. Returns one
+    /// `SelectionChanged` event (sorted for deterministic output) or
+    /// empty if the selection didn't actually change.
     pub fn select(&mut self, ids: &[ObjectId], mode: SelectMode) -> Vec<SceneEvent> {
-        let before: HashSet<ObjectId> = self.selection.iter().copied().collect();
+        let plate = &mut self.plates[self.active_plate];
+        let before: HashSet<ObjectId> = plate.selection.iter().copied().collect();
         match mode {
             SelectMode::Replace => {
-                self.selection = ids.iter().copied().filter(|id| self.objects.contains_key(id)).collect();
+                plate.selection = ids
+                    .iter()
+                    .copied()
+                    .filter(|id| plate.objects.contains_key(id))
+                    .collect();
             }
             SelectMode::Add => {
                 for id in ids {
-                    if self.objects.contains_key(id) {
-                        self.selection.insert(*id);
+                    if plate.objects.contains_key(id) {
+                        plate.selection.insert(*id);
                     }
                 }
             }
             SelectMode::Toggle => {
                 for id in ids {
-                    if !self.objects.contains_key(id) {
+                    if !plate.objects.contains_key(id) {
                         continue;
                     }
-                    if !self.selection.insert(*id) {
-                        self.selection.remove(id);
+                    if !plate.selection.insert(*id) {
+                        plate.selection.remove(id);
                     }
                 }
             }
         }
-        if self.selection == before {
+        if plate.selection == before {
             return Vec::new();
         }
-        let mut sorted: Vec<ObjectId> = self.selection.iter().copied().collect();
+        let mut sorted: Vec<ObjectId> = plate.selection.iter().copied().collect();
         sorted.sort();
         vec![SceneEvent::SelectionChanged { selected: sorted }]
     }
 
-    /// Clear the selection.
+    /// Clear the active plate's selection.
     pub fn deselect_all(&mut self) -> Vec<SceneEvent> {
-        if self.selection.is_empty() {
+        let plate = &mut self.plates[self.active_plate];
+        if plate.selection.is_empty() {
             return Vec::new();
         }
-        self.selection.clear();
+        plate.selection.clear();
         vec![SceneEvent::SelectionChanged { selected: Vec::new() }]
     }
 
-    /// Apply a delta translation to an object.
+    /// Apply a delta translation to an object on the active plate.
     pub fn translate_object(
         &mut self,
         id: ObjectId,
         delta: Vec3,
     ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        let obj = self
+        let active = self.active_plate;
+        let obj = self.plates[active]
             .objects
             .get_mut(&id)
             .ok_or(SceneOpError::UnknownObject(id))?;
@@ -464,8 +530,9 @@ impl SceneState {
         radians: f32,
         pivot_override: Option<Vec3>,
     ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let active = self.active_plate;
         let mesh_bb = {
-            let obj = self
+            let obj = self.plates[active]
                 .objects
                 .get(&id)
                 .ok_or(SceneOpError::UnknownObject(id))?;
@@ -476,7 +543,7 @@ impl SceneState {
                 .clone()
         };
 
-        let obj = self.objects.get_mut(&id).unwrap();
+        let obj = self.plates[active].objects.get_mut(&id).unwrap();
         let pivot = match pivot_override {
             Some(p) => p,
             None => {
@@ -511,7 +578,8 @@ impl SceneState {
         id: ObjectId,
         factor: Vec3,
     ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        let obj = self
+        let active = self.active_plate;
+        let obj = self.plates[active]
             .objects
             .get_mut(&id)
             .ok_or(SceneOpError::UnknownObject(id))?;
@@ -544,7 +612,8 @@ impl SceneState {
         let mirror_around_center = Transform::translation(center)
             .compose(Transform::scale(factor))
             .compose(Transform::translation(-center));
-        let obj = self.objects.get_mut(&id).unwrap();
+        let active = self.active_plate;
+        let obj = self.plates[active].objects.get_mut(&id).unwrap();
         obj.transform = mirror_around_center.compose(obj.transform);
         let clone = obj.clone();
         let mut events = vec![SceneEvent::ObjectUpdated(clone)];
@@ -565,8 +634,9 @@ impl SceneState {
         &mut self,
         id: ObjectId,
     ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let active = self.active_plate;
         let mesh_bb = {
-            let obj = self
+            let obj = self.plates[active]
                 .objects
                 .get(&id)
                 .ok_or(SceneOpError::UnknownObject(id))?;
@@ -583,7 +653,7 @@ impl SceneState {
             ((mesh_bb.min[2] + mesh_bb.max[2]) * 0.5) as f32,
         );
 
-        let obj = self.objects.get_mut(&id).unwrap();
+        let obj = self.plates[active].objects.get_mut(&id).unwrap();
         let current = obj.transform.to_mat4();
 
         // Decompose current transform into scale, rotation,
@@ -646,10 +716,12 @@ impl SceneState {
         Ok(events)
     }
 
-    /// World-space center of an object's mesh bounding box. Pulled
-    /// out so mirror + future bbox-anchored ops share one path.
+    /// World-space center of an object's mesh bounding box on the
+    /// active plate. Pulled out so mirror + future bbox-anchored ops
+    /// share one path.
     fn world_center(&self, id: ObjectId) -> Result<Vec3, SceneOpError> {
         let obj = self
+            .active_plate()
             .objects
             .get(&id)
             .ok_or(SceneOpError::UnknownObject(id))?;
@@ -674,7 +746,8 @@ impl SceneState {
         id: ObjectId,
         transform: Transform,
     ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        let obj = self
+        let active = self.active_plate;
+        let obj = self.plates[active]
             .objects
             .get_mut(&id)
             .ok_or(SceneOpError::UnknownObject(id))?;
@@ -685,36 +758,38 @@ impl SceneState {
         Ok(events)
     }
 
-    /// Delete one or more objects. Removes from selection if
-    /// present. Returns one `ObjectRemoved` event per id plus (if
-    /// the selection changed) a `SelectionChanged` event.
+    /// Delete one or more objects on the active plate. Removes from
+    /// selection if present. Returns one `ObjectRemoved` event per
+    /// id plus (if the selection changed) a `SelectionChanged` event.
     pub fn delete_objects(&mut self, ids: &[ObjectId]) -> Vec<SceneEvent> {
+        let plate = &mut self.plates[self.active_plate];
         let mut events = Vec::new();
         let mut selection_changed = false;
         for id in ids {
-            if self.objects.remove(id).is_some() {
+            if plate.objects.remove(id).is_some() {
                 events.push(SceneEvent::ObjectRemoved { id: *id });
-                if self.selection.remove(id) {
+                if plate.selection.remove(id) {
                     selection_changed = true;
                 }
             }
         }
         if selection_changed {
-            let mut sorted: Vec<ObjectId> = self.selection.iter().copied().collect();
+            let mut sorted: Vec<ObjectId> = plate.selection.iter().copied().collect();
             sorted.sort();
             events.push(SceneEvent::SelectionChanged { selected: sorted });
         }
         events
     }
 
-    /// Duplicate an object. The clone gets a fresh `ObjectId` and
-    /// is offset by `+10mm` in X to avoid z-fighting with the
-    /// original.
+    /// Duplicate an object on the active plate. The clone gets a
+    /// fresh `ObjectId` and is offset by `+10mm` in X to avoid
+    /// z-fighting with the original.
     pub fn duplicate_object(
         &mut self,
         id: ObjectId,
     ) -> Result<(ObjectId, Vec<SceneEvent>), SceneOpError> {
         let original = self
+            .active_plate()
             .objects
             .get(&id)
             .ok_or(SceneOpError::UnknownObject(id))?
@@ -728,26 +803,28 @@ impl SceneState {
             extruder_id: original.extruder_id,
             parent: original.parent,
         });
-        let cloned_obj = self.objects.get(&new_id).unwrap().clone();
+        let cloned_obj = self.active_plate().objects.get(&new_id).unwrap().clone();
         Ok((new_id, vec![SceneEvent::ObjectAdded(cloned_obj)]))
     }
 
-    /// Set the gizmo mode + pivot. Returns one event when state
-    /// actually changed.
+    /// Set the gizmo mode + pivot on the active plate. Returns one
+    /// event when state actually changed.
     pub fn set_gizmo(&mut self, new_gizmo: GizmoState) -> Vec<SceneEvent> {
-        if (self.gizmo.mode == new_gizmo.mode)
-            && (self.gizmo.pivot == new_gizmo.pivot)
+        let plate = &mut self.plates[self.active_plate];
+        if (plate.gizmo.mode == new_gizmo.mode)
+            && (plate.gizmo.pivot == new_gizmo.pivot)
         {
             return Vec::new();
         }
-        self.gizmo = new_gizmo.clone();
+        plate.gizmo = new_gizmo.clone();
         vec![SceneEvent::GizmoChanged(new_gizmo)]
     }
 
-    /// Replace the camera state. Always emits an event (camera
-    /// state's equality check is expensive enough to skip).
+    /// Replace the camera state on the active plate. Always emits an
+    /// event (camera state's equality check is expensive enough to
+    /// skip).
     pub fn set_camera(&mut self, camera: CameraState) -> Vec<SceneEvent> {
-        self.camera = camera.clone();
+        self.plates[self.active_plate].camera = camera.clone();
         vec![SceneEvent::CameraChanged(camera)]
     }
 
@@ -797,7 +874,7 @@ impl SceneState {
         // roughly centered for the eye.
         let mesh_bb = self.meshes.get(&mesh_id).unwrap().bounding_box.clone();
         let lift_z = -mesh_bb.min[2] as f32;
-        let (shift_x, shift_y) = match &self.bed {
+        let (shift_x, shift_y) = match &self.active_plate().bed {
             Some(bed) => {
                 let bed_cx = ((bed.extents.min[0] + bed.extents.max[0]) * 0.5) as f32;
                 let bed_cy = ((bed.extents.min[1] + bed.extents.max[1]) * 0.5) as f32;
@@ -820,42 +897,45 @@ impl SceneState {
             extruder_id: None,
             parent: None,
         });
-        let obj_clone = self.objects.get(&obj_id).unwrap().clone();
+        let obj_clone = self.active_plate().objects.get(&obj_id).unwrap().clone();
         events.push(SceneEvent::ObjectAdded(obj_clone));
         events.extend(self.out_of_bounds_event(obj_id));
         (mesh_id, obj_id, events)
     }
 
-    /// Install the active printer's bed. Recomputes the bed
-    /// visualization, caches it on the scene state, and emits a
-    /// `BedChanged` event the renderer subscribes to. Pass `None`
-    /// to clear the bed (e.g., when the user closes the project).
+    /// Install the active printer's bed on the active plate.
+    /// Recomputes the bed visualization, caches it on the plate, and
+    /// emits a `BedChanged` event the renderer subscribes to. Pass
+    /// `None` to clear the bed (e.g., when the user closes the
+    /// project).
     pub fn set_active_printer(
         &mut self,
         printer: Option<&crate::core::printer::profile::PrinterProfile>,
     ) -> Vec<SceneEvent> {
         let new_bed = printer.map(super::bed::bed_for_printer);
-        // Mirror exclusion zones onto the scene's flat field for
+        let plate = &mut self.plates[self.active_plate];
+        // Mirror exclusion zones onto the plate's flat field for
         // consumers that read them directly (the snapshot wire
         // format keeps both — `bed.exclusion_zones` is the
         // authoritative copy, and `exclusion_zones` here is the
         // legacy view PR-2-2's snapshot already exposes).
-        self.exclusion_zones = new_bed
+        plate.exclusion_zones = new_bed
             .as_ref()
             .map(|b| b.exclusion_zones.clone())
             .unwrap_or_default();
-        self.bed = new_bed.clone();
+        plate.bed = new_bed.clone();
         vec![SceneEvent::BedChanged(new_bed)]
     }
 
-    /// Check `object_id` against the active bed and emit warnings
-    /// for every reason it's out of bounds. No bed = no check
-    /// (silently). Designed to be called by every transform op so
-    /// the UI can flash a non-blocking warning the instant the
+    /// Check `object_id` on the active plate against its bed and
+    /// emit warnings for every reason it's out of bounds. No bed =
+    /// no check (silently). Designed to be called by every transform
+    /// op so the UI can flash a non-blocking warning the instant the
     /// user nudges an object off the plate.
     fn out_of_bounds_event(&self, object_id: ObjectId) -> Option<SceneEvent> {
-        let bed = self.bed.as_ref()?;
-        let obj = self.objects.get(&object_id)?;
+        let plate = self.active_plate();
+        let bed = plate.bed.as_ref()?;
+        let obj = plate.objects.get(&object_id)?;
         let mesh = self.meshes.get(&obj.mesh)?;
         let reasons = super::bed::object_out_of_bounds(obj, mesh, bed);
         if reasons.is_empty() {
@@ -868,13 +948,13 @@ impl SceneState {
         }
     }
 
-    /// Compute the world-space bounding box of all visible objects.
-    /// Used by `Frame All` in the renderer.
+    /// Compute the world-space bounding box of all visible objects on
+    /// the active plate. Used by `Frame All` in the renderer.
     pub fn visible_bounds(&self) -> Option<BoundingBox> {
         let mut min = Vec3::splat(f32::INFINITY);
         let mut max = Vec3::splat(f32::NEG_INFINITY);
         let mut any = false;
-        for obj in self.objects.values() {
+        for obj in self.active_plate().objects.values() {
             if !obj.visible {
                 continue;
             }
@@ -1147,7 +1227,7 @@ mod tests {
         let (_mesh, obj) = add_cube(&mut s);
         // Cube center is at (0.5, 0.5, 0.5); rotate 180° around Z.
         let _ = s.rotate_object(obj, Vec3::Z, std::f32::consts::PI, None).unwrap();
-        let o = s.objects.get(&obj).unwrap();
+        let o = s.active_plate().objects.get(&obj).unwrap();
         // After rotation, the corner that was at (0,0,0) maps to
         // (1,1,0) (rotated 180° around the cube's center).
         let corner = o.transform.apply_point(Vec3::ZERO);
@@ -1162,7 +1242,7 @@ mod tests {
         let _ = s
             .rotate_object(obj, Vec3::Z, std::f32::consts::FRAC_PI_2, Some(Vec3::ZERO))
             .unwrap();
-        let o = s.objects.get(&obj).unwrap();
+        let o = s.active_plate().objects.get(&obj).unwrap();
         // Corner (1,0,0) rotates around the origin to (0,1,0).
         let corner = o.transform.apply_point(Vec3::X);
         assert!((corner - Vec3::Y).length() < 1e-4, "got {corner:?}");
@@ -1223,10 +1303,10 @@ mod tests {
     #[test]
     fn gizmo_change_no_op_emits_nothing() {
         let mut s = SceneState::new();
-        let initial = s.gizmo.clone();
+        let initial = s.active_plate().gizmo.clone();
         let events = s.set_gizmo(initial);
         assert!(events.is_empty());
-        let mut next = s.gizmo.clone();
+        let mut next = s.active_plate().gizmo.clone();
         next.mode = GizmoMode::Rotate;
         let events = s.set_gizmo(next);
         assert_eq!(events.len(), 1);
@@ -1245,16 +1325,16 @@ mod tests {
             extruder_id: Some(2),
             parent: None,
         });
-        s.gizmo.mode = GizmoMode::Translate;
+        s.active_plate_mut().gizmo.mode = GizmoMode::Translate;
 
         let json = serde_json::to_string(&s).unwrap();
         let parsed: SceneState = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.meshes.len(), 1);
-        assert_eq!(parsed.objects.len(), 1);
-        let obj = parsed.objects.values().next().unwrap();
+        assert_eq!(parsed.active_plate().objects.len(), 1);
+        let obj = parsed.active_plate().objects.values().next().unwrap();
         assert_eq!(obj.name, "test-cube");
         assert_eq!(obj.extruder_id, Some(2));
-        assert_eq!(parsed.gizmo.mode, GizmoMode::Translate);
+        assert_eq!(parsed.active_plate().gizmo.mode, GizmoMode::Translate);
     }
 
     #[test]
@@ -1262,12 +1342,12 @@ mod tests {
         let mut s = SceneState::new();
         let (_, obj) = add_cube(&mut s);
         let probe = Vec3::new(0.25, 0.5, 0.5);
-        let before = s.objects.get(&obj).unwrap().transform.apply_point(probe);
+        let before = s.active_plate().objects.get(&obj).unwrap().transform.apply_point(probe);
 
         s.mirror_object(obj, MirrorAxis::X).unwrap();
         s.mirror_object(obj, MirrorAxis::X).unwrap();
 
-        let after = s.objects.get(&obj).unwrap().transform.apply_point(probe);
+        let after = s.active_plate().objects.get(&obj).unwrap().transform.apply_point(probe);
         assert!(
             (after - before).length() < 1e-4,
             "double mirror drifted: {before:?} → {after:?}"
@@ -1283,7 +1363,7 @@ mod tests {
         // (0, 0.5, 0.5) after mirror-around-center across X.
         s.mirror_object(obj, MirrorAxis::X).unwrap();
         let probe = Vec3::new(1.0, 0.5, 0.5);
-        let mirrored = s.objects.get(&obj).unwrap().transform.apply_point(probe);
+        let mirrored = s.active_plate().objects.get(&obj).unwrap().transform.apply_point(probe);
         assert!(
             (mirrored - Vec3::new(0.0, 0.5, 0.5)).length() < 1e-5,
             "got {mirrored:?}"
@@ -1323,7 +1403,7 @@ mod tests {
         s.lay_flat_object(obj).unwrap();
 
         // Recompute world-space bbox of the cube after lay_flat.
-        let xform = s.objects.get(&obj).unwrap().transform;
+        let xform = s.active_plate().objects.get(&obj).unwrap().transform;
         let mesh_bb = &s.meshes.values().next().unwrap().bounding_box;
         let mut min_z = f32::INFINITY;
         let mut max_z = f32::NEG_INFINITY;

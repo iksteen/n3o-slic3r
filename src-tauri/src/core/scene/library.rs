@@ -236,6 +236,7 @@ pub fn list_imported(state: &SceneState) -> Vec<ImportedDescriptor> {
     let mut out = Vec::new();
     for (mesh_id, mesh) in &state.meshes {
         let name = state
+            .active_plate()
             .objects
             .values()
             .find(|o| o.mesh == *mesh_id)

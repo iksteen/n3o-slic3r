@@ -19,6 +19,7 @@ use uuid::Uuid;
 use super::binding::{MaterialBinding, PrinterBinding};
 use super::metadata::PlateMetadata;
 use crate::core::cascade::commands::CascadeHandle;
+use crate::core::scene::state::PlateSceneState;
 
 /// Opaque 1-based plate id. Stable across the plate list —
 /// reordering doesn't change the id, only the position. Survives
@@ -104,35 +105,12 @@ pub struct Plate {
 
     pub metadata: PlateMetadata,
 
-    /// The plate's scene contents. PR-5-2 fills this struct out;
-    /// PR-5-1 ships it as an empty placeholder so [`Project`]
-    /// compiles + serializes.
+    /// The plate's scene contents. Real type lives in
+    /// `core::scene::state::PlateSceneState` (PR-5-2); `Plate` just
+    /// composes it so PR-5-8's project `.3mf` save/load round-trips
+    /// the full per-plate scene alongside the plate metadata.
     #[serde(default)]
     pub scene: PlateSceneState,
-}
-
-/// Per-plate scene state — objects, mesh refs, selection, bed mesh,
-/// gizmo mode, camera. **Stub in PR-5-1**; PR-5-2 hoists the
-/// existing single-global `SceneState` fields into here and
-/// rewires the Tauri command surface to address per-plate.
-///
-/// Implementing it as an empty struct now lets [`Plate`] declare
-/// the field with `#[serde(default)]` so PR-5-1's round-trip
-/// tests pass + PR-5-8's save/load is unblocked. Field additions
-/// in PR-5-2 only need to ensure `Default` keeps producing a
-/// usable empty plate.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PlateSceneState {
-    // PR-5-2 fills:
-    //   pub objects: HashMap<ObjectId, SceneObject>,
-    //   pub meshes: HashMap<MeshId, MeshHeader>,
-    //   pub selection: Vec<ObjectId>,
-    //   pub gizmo: Option<GizmoMode>,
-    //   pub camera: Camera,
-    //   pub bed: Option<BedMesh>,
-    //   pub exclusion_zones: Vec<ExclusionZone>,
-    //   pub object_overrides: HashMap<ObjectId, HashMap<String, String>>,
-    // Plus the matching invariant-maintenance methods.
 }
 
 impl Project {

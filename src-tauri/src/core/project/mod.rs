@@ -21,9 +21,10 @@
 //! - **`metadata`** (PR-5-1): `PlateMetadata` carrying cycle count
 //!   + composition order. PlateCycler-relevant.
 //!
-//! - **`model`** (PR-5-1): root `Project` + `Plate` + `PlateId` +
-//!   `PlateSceneState` (stubbed pending PR-5-2). The serializable
-//!   shape PR-5-8's `.3mf` save/load round-trips.
+//! - **`model`** (PR-5-1): root `Project` + `Plate` + `PlateId`.
+//!   Each `Plate` composes `core::scene::state::PlateSceneState`
+//!   (PR-5-2) for its scene contents. The serializable shape
+//!   PR-5-8's `.3mf` save/load round-trips.
 
 pub mod binding;
 pub mod context;
@@ -33,4 +34,5 @@ pub mod model;
 pub use binding::{MaterialBinding, PrinterBinding};
 pub use context::SlicingContext;
 pub use metadata::{PlateMetadata, CYCLE_COUNT_MAX, CYCLE_COUNT_MIN};
-pub use model::{Plate, PlateId, PlateSceneState, Project, ProjectMutError};
+pub use crate::core::scene::state::PlateSceneState;
+pub use model::{Plate, PlateId, Project, ProjectMutError};
