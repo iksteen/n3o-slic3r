@@ -288,3 +288,91 @@ pub fn scene_load_mesh_from_path(
     emit_all(&window, &events);
     Ok((mesh_id, obj_id))
 }
+
+/// Summary of one `<build><item>` ingested from a 3MF, returned by
+/// `scene_load_3mf` so the frontend can highlight what just appeared.
+#[derive(Debug, Clone, Serialize)]
+pub struct LoadedObject {
+    pub mesh_id: MeshId,
+    pub object_id: ObjectId,
+    pub name: String,
+    pub extruder_id: Option<u8>,
+    pub plate_id: u32,
+}
+
+/// Outcome of loading a `.3mf` project: every object registered into
+/// the scene plus the file's informational metadata.
+#[derive(Debug, Clone, Serialize)]
+pub struct LoadedProject {
+    pub objects: Vec<LoadedObject>,
+    pub printer_hint: Option<String>,
+    pub file_metadata: std::collections::BTreeMap<String, String>,
+    /// Raw `Metadata/project_settings.config` if the file carried it.
+    /// Phase 5 (Settings UI) parses this; for now the frontend
+    /// surfaces it as opaque diagnostic text.
+    pub embedded_settings: Option<String>,
+}
+
+/// Load a `.3mf` *project* file into the scene. Each `<build><item>`
+/// becomes a scene object at its file-supplied transform with the
+/// per-part extruder assignment preserved; BBS/Orca metadata
+/// extensions are honored where present.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_load_3mf(
+    path: String,
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<LoadedProject, String> {
+    use super::loaders::threemf;
+    use super::state::NewSceneObject;
+
+    let project = threemf::load_3mf(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
+
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+
+    // Register every mesh first, capturing the allocated MeshIds in
+    // the same order as Project3mf.meshes so ProjectObject.mesh_idx
+    // remains a valid index lookup. Collect MeshLoaded events from
+    // the headers as we go.
+    let mut all_events: Vec<SceneEvent> = Vec::new();
+    let mut mesh_ids: Vec<MeshId> = Vec::with_capacity(project.meshes.len());
+    for new_mesh in project.meshes {
+        let mesh_id = s.register_mesh(new_mesh);
+        let header = s.meshes.get(&mesh_id).unwrap().header();
+        all_events.push(SceneEvent::MeshLoaded(header));
+        mesh_ids.push(mesh_id);
+    }
+
+    let mut loaded = Vec::with_capacity(project.objects.len());
+    for obj in project.objects {
+        let mesh_id = mesh_ids[obj.mesh_idx];
+        let object_id = s.register_object(NewSceneObject {
+            mesh: mesh_id,
+            transform: obj.transform,
+            name: obj.name.clone(),
+            visible: true,
+            extruder_id: obj.extruder_id,
+            parent: None,
+        });
+        let obj_clone = s.objects.get(&object_id).unwrap().clone();
+        all_events.push(SceneEvent::ObjectAdded(obj_clone));
+        loaded.push(LoadedObject {
+            mesh_id,
+            object_id,
+            name: obj.name,
+            extruder_id: obj.extruder_id,
+            plate_id: obj.plate_id,
+        });
+    }
+    drop(s);
+
+    emit_all(&window, &all_events);
+
+    Ok(LoadedProject {
+        objects: loaded,
+        printer_hint: project.printer_hint,
+        file_metadata: project.file_metadata,
+        embedded_settings: project.embedded_settings,
+    })
+}

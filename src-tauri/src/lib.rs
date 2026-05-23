@@ -41,6 +41,7 @@ pub fn run() {
             core::scene::commands::scene_select,
             core::scene::commands::scene_deselect,
             core::scene::commands::scene_load_mesh_from_path,
+            core::scene::commands::scene_load_3mf,
             core::scene::commands::scene_object_translate,
             core::scene::commands::scene_object_rotate,
             core::scene::commands::scene_object_scale,

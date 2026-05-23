@@ -1,6 +1,6 @@
 # PR-2-4 — `.3mf` project loader
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Load `.3mf` files as full *project* — geometry, object
 positions, plate assignment, per-volume extruder, embedded settings.

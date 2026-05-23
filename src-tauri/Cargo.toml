@@ -28,6 +28,8 @@ slic3r-ffi = { path = "../crates/slic3r-ffi" }
 stl_io = "0.8"
 tobj = "4"
 toml = "0.8"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.36"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 

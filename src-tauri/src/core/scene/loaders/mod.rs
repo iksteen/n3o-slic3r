@@ -8,6 +8,7 @@
 
 pub mod obj;
 pub mod stl;
+pub mod threemf;
 
 use super::state::NewMesh;
 use crate::core::printer::profile::BoundingBox;
