@@ -156,15 +156,17 @@ pub enum MoveParam {
 }
 
 /// A `;…` or `(…)` comment line. The `raw` field is the canonical
-/// re-emit source — including the leading delimiter and any
-/// whitespace inside. The `semantic` tag is an inspector hint, not
-/// a serialization source.
+/// re-emit source — the whole source line minus the line ending,
+/// including the leading whitespace and the delimiter. The
+/// `semantic` tag is an inspector hint, not a serialization source.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Comment {
-    /// Whole comment body, *not* including the delimiter (`";"` or
-    /// surrounding `"()"`). For a line `"; estimated time = 1h"`
-    /// the `raw` is `" estimated time = 1h"`; the delimiter style
-    /// is captured by `style`.
+    /// Whole source line excluding the line ending. Includes the
+    /// leading whitespace AND the delimiter so the serializer can
+    /// re-emit identically. For `"  ; foo bar"` → `raw =
+    /// "  ; foo bar"`. `style` reports which delimiter convention
+    /// the source used; it's redundant for serialization but useful
+    /// for plugins that want to filter on delimiter style.
     pub raw: String,
     pub style: CommentStyle,
     /// What kind of structured information, if any, this comment

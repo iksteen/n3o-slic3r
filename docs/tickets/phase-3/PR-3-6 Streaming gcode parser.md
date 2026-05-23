@@ -1,6 +1,6 @@
 # PR-3-6 — Streaming G-code parser
 
-Status: ❌ open.
+Status: ✅ shipped — `core/gcode/parser.rs` ships the streaming `parse_lines` iterator + `parse_with_feature_context` adapter. Recognizes G0–G3 with X/Y/Z/E/F/I/J params (preserves `param_order` + `command_text` for round-trip), `;` and `(...)` comments with inline-tail support, structured `;TYPE:` / `;LAYER:` / `;Z:` / `;HEIGHT:` / estimated time / filament used / total layers count / printer_model. Synthesizes `LayerChange` on `;LAYER:` markers with the most-recent `;Z:` attached. Lenient — unknown commands map to `Line::Other` with the source bytes verbatim. 20 unit tests + perf gate measuring 13 MB/s in debug (extrapolates to ~1.3 s on 50 MB in release, well under the 3 s exit ceiling).
 
 **Scope.** Reader that turns a G-code byte stream into an iterator of
 PR-3-5's typed `Line` values. Streams — does not buffer the whole

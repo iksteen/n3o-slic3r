@@ -10,8 +10,10 @@
 //! features).
 
 pub mod model;
+pub mod parser;
 
 pub use model::{
     ArcCenter, Comment, CommentStyle, FeatureType, LayerChange, LayerSource, Line, Move,
     MoveCommand, MoveParam, Other, Position, SemanticComment, ToolChange,
 };
+pub use parser::{parse_lines, parse_str, parse_with_feature_context, ParseError, ParseErrorKind};
