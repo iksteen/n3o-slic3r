@@ -27,6 +27,7 @@
 //!   PR-5-8's `.3mf` save/load round-trips.
 
 pub mod binding;
+pub mod commands;
 pub mod context;
 pub mod metadata;
 pub mod model;

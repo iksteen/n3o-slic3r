@@ -65,6 +65,8 @@ pub fn run() {
             core::scene::commands::scene_object_override_clear_all,
             core::scene::commands::scene_move_object,
             core::scene::commands::scene_set_plate_printer,
+            core::project::commands::project_set_plate_cycle_count,
+            core::project::commands::project_set_plate_composition_order,
             core::scene::commands::library_primitives,
             core::scene::commands::library_calibration,
             core::scene::commands::library_imported,

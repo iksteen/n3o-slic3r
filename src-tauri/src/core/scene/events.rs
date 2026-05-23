@@ -88,6 +88,13 @@ pub enum SceneEvent {
         plate_id: PlateId,
         object_id: ObjectId,
     },
+    /// A plate's metadata changed — cycle count, composition order,
+    /// or (post-PR-5-3) name (PR-5-5). The frontend re-reads the
+    /// plate's metadata via the project snapshot to refresh the tab
+    /// badge / inputs.
+    PlateMetadataChanged {
+        plate_id: PlateId,
+    },
 }
 
 impl SceneEvent {
@@ -111,6 +118,7 @@ impl SceneEvent {
             Self::PlateRemoved { .. } => "scene:plate_removed",
             Self::ActivePlateChanged { .. } => "scene:active_plate_changed",
             Self::ObjectOverridesChanged { .. } => "scene:object_overrides_changed",
+            Self::PlateMetadataChanged { .. } => "scene:plate_metadata_changed",
         }
     }
 }
@@ -147,6 +155,13 @@ pub enum SceneOpError {
     /// `move_object` was called with `from_plate == to_plate`
     /// (PR-5-11). Caller should check the source/dest are distinct.
     SamePlate(PlateId),
+    /// Plate metadata validation rejected the new value (PR-5-5).
+    /// `message` carries the validator's explanation suitable for
+    /// surfacing as a toast.
+    InvalidPlateMetadata {
+        plate_id: PlateId,
+        message: String,
+    },
 }
 
 impl std::fmt::Display for SceneOpError {
@@ -158,6 +173,9 @@ impl std::fmt::Display for SceneOpError {
             Self::LastPlate => write!(f, "cannot remove the last plate"),
             Self::SamePlate(id) => {
                 write!(f, "from_plate == to_plate ({}); pick a different target", id.0)
+            }
+            Self::InvalidPlateMetadata { plate_id, message } => {
+                write!(f, "plate {}: {}", plate_id.0, message)
             }
         }
     }

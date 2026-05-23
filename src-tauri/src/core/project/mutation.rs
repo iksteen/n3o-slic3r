@@ -188,6 +188,100 @@ impl Project {
         Ok(vec![SceneEvent::ActivePlateChanged { plate_id: id }])
     }
 
+    // ---- Plate metadata (PR-5-5) ----------------------------------
+
+    /// Set a plate's `cycle_count` (FR-MP-7). Validates against the
+    /// `[CYCLE_COUNT_MIN, CYCLE_COUNT_MAX]` range declared in
+    /// [`PlateMetadata`]; emits `PlateMetadataChanged` on success.
+    /// No-op (no event) when the value is unchanged.
+    pub fn set_plate_cycle_count(
+        &mut self,
+        plate_id: PlateId,
+        count: u32,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        use crate::core::project::metadata::PlateMetadata;
+        let validated = PlateMetadata::validate_cycle_count(count).map_err(|msg| {
+            SceneOpError::InvalidPlateMetadata {
+                plate_id,
+                message: msg,
+            }
+        })?;
+        let idx = self
+            .plate_index(plate_id)
+            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        if self.plates[idx].metadata.cycle_count == validated {
+            return Ok(Vec::new());
+        }
+        self.plates[idx].metadata.cycle_count = validated;
+        Ok(vec![SceneEvent::PlateMetadataChanged { plate_id }])
+    }
+
+    /// Move a plate to position `order` in the composition queue,
+    /// shifting sibling plates' `composition_order` to keep the
+    /// queue a dense `[1..plates.len()]` sequence with no gaps.
+    ///
+    /// Validates `1 <= order <= plates.len()`. No-op (no event) when
+    /// the value is unchanged.
+    ///
+    /// Emits one `PlateMetadataChanged` per plate whose order
+    /// actually changed — the moved plate plus every plate between
+    /// its old and new positions (inclusive of one endpoint). The
+    /// frontend mirror re-renders the affected tab badges.
+    pub fn set_plate_composition_order(
+        &mut self,
+        plate_id: PlateId,
+        order: u32,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let n = self.plates.len() as u32;
+        if order < 1 || order > n {
+            return Err(SceneOpError::InvalidPlateMetadata {
+                plate_id,
+                message: format!(
+                    "composition_order must be in 1..={n}, got {order}",
+                ),
+            });
+        }
+        let idx = self
+            .plate_index(plate_id)
+            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        let old_order = self.plates[idx].metadata.composition_order;
+        if old_order == order {
+            return Ok(Vec::new());
+        }
+
+        // Standard drag-and-drop reorder: every plate strictly
+        // between old and new (inclusive of the endpoint nearer
+        // `new`) shifts by ±1 to make room. The moved plate
+        // takes `order`.
+        let (range_lo, range_hi, shift): (u32, u32, i32) = if order < old_order {
+            // Moving UP (lower number = earlier in queue). Plates
+            // in [order, old_order - 1] shift +1.
+            (order, old_order - 1, 1)
+        } else {
+            // Moving DOWN. Plates in [old_order + 1, order] shift -1.
+            (old_order + 1, order, -1)
+        };
+
+        let mut affected: Vec<PlateId> = Vec::new();
+        for plate in self.plates.iter_mut() {
+            if plate.id == plate_id {
+                continue;
+            }
+            let o = plate.metadata.composition_order;
+            if o >= range_lo && o <= range_hi {
+                plate.metadata.composition_order = (o as i32 + shift) as u32;
+                affected.push(plate.id);
+            }
+        }
+        self.plates[idx].metadata.composition_order = order;
+
+        let mut events = vec![SceneEvent::PlateMetadataChanged { plate_id }];
+        for id in affected {
+            events.push(SceneEvent::PlateMetadataChanged { plate_id: id });
+        }
+        Ok(events)
+    }
+
     // ---- Per-plate printer assignment -----------------------------
 
     /// Install the active plate's bed by passing through a resolved
@@ -2010,5 +2104,178 @@ mod tests {
         let mut p = Project::default();
         p.set_active_printer(Some(&a1_mini_for_test()));
         assert!(p.active_plate().scene.bed.is_some());
+    }
+
+    // ---- Plate metadata (PR-5-5) ----------------------------------
+
+    #[test]
+    fn set_plate_cycle_count_writes_and_emits() {
+        let mut p = Project::default();
+        let events = p.set_plate_cycle_count(PlateId(1), 5).unwrap();
+        assert_eq!(p.plates[0].metadata.cycle_count, 5);
+        assert!(matches!(
+            events.as_slice(),
+            [SceneEvent::PlateMetadataChanged { plate_id: PlateId(1) }],
+        ));
+    }
+
+    #[test]
+    fn set_plate_cycle_count_to_current_is_silent_noop() {
+        let mut p = Project::default();
+        // Default is 1; re-setting to 1 emits nothing.
+        let events = p.set_plate_cycle_count(PlateId(1), 1).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn set_plate_cycle_count_below_min_errors() {
+        let mut p = Project::default();
+        let err = p.set_plate_cycle_count(PlateId(1), 0).unwrap_err();
+        assert!(matches!(
+            err,
+            SceneOpError::InvalidPlateMetadata { plate_id: PlateId(1), .. },
+        ));
+    }
+
+    #[test]
+    fn set_plate_cycle_count_above_max_errors() {
+        let mut p = Project::default();
+        let err = p.set_plate_cycle_count(PlateId(1), 1000).unwrap_err();
+        assert!(matches!(
+            err,
+            SceneOpError::InvalidPlateMetadata { plate_id: PlateId(1), .. },
+        ));
+    }
+
+    #[test]
+    fn set_plate_cycle_count_at_boundaries_succeeds() {
+        let mut p = Project::default();
+        assert!(p.set_plate_cycle_count(PlateId(1), 999).is_ok());
+        assert_eq!(p.plates[0].metadata.cycle_count, 999);
+        assert!(p.set_plate_cycle_count(PlateId(1), 1).is_ok());
+        assert_eq!(p.plates[0].metadata.cycle_count, 1);
+    }
+
+    #[test]
+    fn set_plate_cycle_count_unknown_plate_errors() {
+        let mut p = Project::default();
+        let err = p.set_plate_cycle_count(PlateId(99), 5).unwrap_err();
+        assert_eq!(err, SceneOpError::UnknownPlate(PlateId(99)));
+    }
+
+    #[test]
+    fn cycle_count_round_trips_via_json() {
+        let mut p = Project::default();
+        p.set_plate_cycle_count(PlateId(1), 42).unwrap();
+        let json = serde_json::to_string(&p).unwrap();
+        let parsed: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.plates[0].metadata.cycle_count, 42);
+    }
+
+    // ---- Composition order (PR-5-5) -------------------------------
+
+    fn plate_orders(p: &Project) -> Vec<(PlateId, u32)> {
+        p.plates
+            .iter()
+            .map(|pl| (pl.id, pl.metadata.composition_order))
+            .collect()
+    }
+
+    #[test]
+    fn set_composition_order_moves_plate_down_shifts_others_up() {
+        let mut p = Project::default();
+        let (id_b, _) = p.add_plate(None); // composition_order=2
+        let (id_c, _) = p.add_plate(None); // composition_order=3
+        let (id_d, _) = p.add_plate(None); // composition_order=4
+        // Initial: [A=1, B=2, C=3, D=4].
+        // Move A (composition_order=1) → 3.
+        // Expected: A=3, B=1, C=2, D=4.
+        let events = p.set_plate_composition_order(PlateId(1), 3).unwrap();
+        let orders = plate_orders(&p);
+        assert_eq!(orders, vec![
+            (PlateId(1), 3),
+            (id_b, 1),
+            (id_c, 2),
+            (id_d, 4),
+        ]);
+        // 3 plates affected: the moved one + 2 shifted siblings.
+        assert_eq!(events.len(), 3);
+    }
+
+    #[test]
+    fn set_composition_order_moves_plate_up_shifts_others_down() {
+        let mut p = Project::default();
+        let (id_b, _) = p.add_plate(None);
+        let (id_c, _) = p.add_plate(None);
+        let (id_d, _) = p.add_plate(None);
+        // Initial: [A=1, B=2, C=3, D=4].
+        // Move D (composition_order=4) → 2.
+        // Expected: A=1, B=3, C=4, D=2.
+        let events = p.set_plate_composition_order(id_d, 2).unwrap();
+        let orders = plate_orders(&p);
+        assert_eq!(orders, vec![
+            (PlateId(1), 1),
+            (id_b, 3),
+            (id_c, 4),
+            (id_d, 2),
+        ]);
+        assert_eq!(events.len(), 3);
+    }
+
+    #[test]
+    fn set_composition_order_preserves_dense_sequence() {
+        let mut p = Project::default();
+        p.add_plate(None);
+        p.add_plate(None);
+        p.add_plate(None);
+        // Perform several reorders and verify the orders always
+        // form a dense [1..N] set.
+        p.set_plate_composition_order(PlateId(1), 4).unwrap();
+        p.set_plate_composition_order(PlateId(3), 1).unwrap();
+        p.set_plate_composition_order(PlateId(2), 2).unwrap();
+        let mut orders: Vec<u32> = p
+            .plates
+            .iter()
+            .map(|pl| pl.metadata.composition_order)
+            .collect();
+        orders.sort();
+        assert_eq!(orders, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn set_composition_order_to_current_is_silent_noop() {
+        let mut p = Project::default();
+        p.add_plate(None);
+        let events = p.set_plate_composition_order(PlateId(1), 1).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn set_composition_order_zero_errors() {
+        let mut p = Project::default();
+        let err = p.set_plate_composition_order(PlateId(1), 0).unwrap_err();
+        assert!(matches!(
+            err,
+            SceneOpError::InvalidPlateMetadata { plate_id: PlateId(1), .. },
+        ));
+    }
+
+    #[test]
+    fn set_composition_order_above_plate_count_errors() {
+        let mut p = Project::default();
+        p.add_plate(None);
+        // 2 plates → valid range is 1..=2. 3 is too big.
+        let err = p.set_plate_composition_order(PlateId(1), 3).unwrap_err();
+        assert!(matches!(
+            err,
+            SceneOpError::InvalidPlateMetadata { plate_id: PlateId(1), .. },
+        ));
+    }
+
+    #[test]
+    fn set_composition_order_unknown_plate_errors() {
+        let mut p = Project::default();
+        let err = p.set_plate_composition_order(PlateId(99), 1).unwrap_err();
+        assert_eq!(err, SceneOpError::UnknownPlate(PlateId(99)));
     }
 }
