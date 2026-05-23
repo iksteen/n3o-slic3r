@@ -83,6 +83,9 @@ export async function attachEventBridge(
     const un = await listen<SceneEvent>(name, (e) => {
       // Tauri delivers the payload as the event's `payload` field.
       // The backend already shapes it as `{ kind, data }`.
+      if (import.meta.env.DEV) {
+        console.debug("[n3o] event in", name, e.payload);
+      }
       void mirror.applyEvent(e.payload);
     });
     unlisteners.push(un);
@@ -90,6 +93,9 @@ export async function attachEventBridge(
 
   // Initial sync: pull the snapshot and replay.
   const snapshot = await invoke<SceneSnapshot>("scene_snapshot");
+  if (import.meta.env.DEV) {
+    console.debug("[n3o] initial snapshot", snapshot);
+  }
   await mirror.applySnapshot(snapshot);
 
   return async () => {

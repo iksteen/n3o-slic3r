@@ -16,10 +16,12 @@ export type MeshId = number;
 /** Monotonic scene-object id. 1-based on the Rust side. */
 export type ObjectId = number;
 
-/** Column-major [f32; 16] matrix matching glam + THREE.Matrix4. */
-export interface Transform {
-  matrix: number[];
-}
+/** Column-major [f32; 16] matrix matching glam + THREE.Matrix4.
+ *  The Rust `Transform` is `#[serde(transparent)]` over `[f32; 16]`,
+ *  so the wire shape is a bare 16-element number array — *not* an
+ *  object with a `matrix` field. Keep this typed as a tuple so any
+ *  attempt to access `.matrix` is a TypeScript error. */
+export type Transform = readonly number[];
 
 export interface BoundingBox {
   min: [number, number, number];

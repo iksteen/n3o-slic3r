@@ -42,6 +42,7 @@ function unitCubeBuffers() {
 }
 
 function objAt(id: number, mesh: number, tx: number): SceneObject {
+  // Wire shape: Transform is `#[serde(transparent)]` over [f32; 16].
   // prettier-ignore
   const m = [
     1, 0, 0, 0,
@@ -52,7 +53,7 @@ function objAt(id: number, mesh: number, tx: number): SceneObject {
   return {
     id,
     mesh,
-    transform: { matrix: m },
+    transform: m,
     name: `obj-${id}`,
     visible: true,
     extruder_id: null,
@@ -67,19 +68,19 @@ describe("gizmo.buildSetTransformPayload", () => {
     m.makeTranslation(10, 0, 0);
     const payload = buildSetTransformPayload(42, m);
     expect(payload.id).toBe(42);
-    expect(payload.transform.matrix).toHaveLength(16);
+    expect(payload.transform).toHaveLength(16);
     // index 12 = tx, index 13 = ty, index 14 = tz, index 15 = 1
-    expect(payload.transform.matrix[12]).toBe(10);
-    expect(payload.transform.matrix[13]).toBe(0);
-    expect(payload.transform.matrix[14]).toBe(0);
-    expect(payload.transform.matrix[15]).toBe(1);
+    expect(payload.transform[12]).toBe(10);
+    expect(payload.transform[13]).toBe(0);
+    expect(payload.transform[14]).toBe(0);
+    expect(payload.transform[15]).toBe(1);
   });
 
   it("round-trips a SceneObject's matrix without loss", () => {
     const obj = objAt(7, 1, 25);
     const m = transformToMatrix(obj);
     const payload = buildSetTransformPayload(obj.id, m);
-    expect(payload.transform.matrix).toEqual(obj.transform.matrix);
+    expect(payload.transform).toEqual(obj.transform);
   });
 });
 

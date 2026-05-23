@@ -183,6 +183,12 @@ export class SceneMirror {
       return;
     }
     const buffers = await this.bufferProvider(header);
+    if (import.meta.env.DEV) {
+      console.debug("[n3o] mesh buffers", header.id, {
+        vertexCount: buffers.vertices.length / 3,
+        indexCount: buffers.indices.length,
+      });
+    }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute(
       "position",
@@ -207,6 +213,16 @@ export class SceneMirror {
     if (!meshRec) {
       console.warn("ObjectAdded references unknown mesh", obj);
       return;
+    }
+    if (import.meta.env.DEV) {
+      console.debug(
+        "[n3o] add object",
+        obj.id,
+        "mesh",
+        obj.mesh,
+        "tx",
+        obj.transform.slice(12, 15),
+      );
     }
     const material = new THREE.MeshStandardMaterial({
       color: DEFAULT_COLOR,
@@ -382,11 +398,13 @@ export class SceneMirror {
 }
 
 function applyTransform(mesh: THREE.Mesh, obj: SceneObject): void {
-  // `obj.transform.matrix` is column-major 16 floats matching the
-  // glam side and THREE.Matrix4.fromArray. Use matrixAutoUpdate=false
-  // (set at construction) so this matrix is what the renderer uses
-  // verbatim — no risk of Three.js re-deriving from position/quaternion.
-  mesh.matrix.fromArray(obj.transform.matrix);
+  // `obj.transform` is column-major 16 floats matching the glam
+  // side and THREE.Matrix4.fromArray (Rust's Transform is
+  // `#[serde(transparent)]` over `[f32; 16]`, so the wire shape is
+  // a bare array). Use matrixAutoUpdate=false (set at construction)
+  // so this matrix is what the renderer uses verbatim — no risk of
+  // Three.js re-deriving from position/quaternion.
+  mesh.matrix.fromArray(obj.transform as number[]);
   mesh.matrixWorldNeedsUpdate = true;
 }
 

@@ -38,7 +38,9 @@ function unitCubeBuffers() {
 }
 
 function sceneObjectAt(id: number, mesh: number, tx: number): SceneObject {
-  // Column-major translation matrix.
+  // Column-major translation matrix. Rust's Transform is
+  // `#[serde(transparent)]` over `[f32; 16]`, so the wire shape is
+  // a bare array — not an object with a `matrix` field.
   // prettier-ignore
   const m = [
     1, 0, 0, 0,
@@ -49,7 +51,7 @@ function sceneObjectAt(id: number, mesh: number, tx: number): SceneObject {
   return {
     id,
     mesh,
-    transform: { matrix: m },
+    transform: m,
     name: `obj-${id}`,
     visible: true,
     extruder_id: null,

@@ -88,7 +88,7 @@ export function createGizmo(deps: GizmoDeps): GizmoApi {
     const finalMatrix = attached.matrix.clone();
     void invokeFn("scene_object_set_transform", {
       id: selected[0],
-      transform: { matrix: matrixToArray(finalMatrix) },
+      transform: matrixToArray(finalMatrix),
     });
   }
 
@@ -199,14 +199,16 @@ function matrixToArray(m: THREE.Matrix4): number[] {
 
 /** Exported only for tests so they don't need to reach into the
  *  TransformControls drag plumbing. Builds the same commit payload
- *  the live `commitDrag` would. */
+ *  the live `commitDrag` would. Wire shape: `transform` is a bare
+ *  16-element column-major array (Rust's `Transform` is
+ *  `#[serde(transparent)]` over `[f32; 16]`). */
 export function buildSetTransformPayload(
   id: ObjectId,
   matrix: THREE.Matrix4,
-): { id: ObjectId; transform: { matrix: number[] } } {
+): { id: ObjectId; transform: number[] } {
   return {
     id,
-    transform: { matrix: matrixToArray(matrix) },
+    transform: matrixToArray(matrix),
   };
 }
 
@@ -222,5 +224,5 @@ export function pickAttachTargetForTest(
 /** Snapshot of the SceneObject's transform — used by tests to
  * exercise the commit path without spinning up TransformControls. */
 export function transformToMatrix(obj: SceneObject): THREE.Matrix4 {
-  return new THREE.Matrix4().fromArray(obj.transform.matrix);
+  return new THREE.Matrix4().fromArray(obj.transform as number[]);
 }
