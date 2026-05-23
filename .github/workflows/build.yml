@@ -142,7 +142,15 @@ jobs:
         # invokes one small `cc` per source file with no macro
         # expansion. Swap costs ~30 s of provisioning + occasional
         # thrash on the worst crate; in exchange the build completes.
+        #
+        # The ubuntu-24.04 runner image ships with a 4 GB /swapfile
+        # already mounted (run 26329702592 failed with `fallocate:
+        # Text file busy` on /swapfile). Swap it off, replace it with
+        # an 8 GB file, swap on. `swapoff` is a no-op if no swap is
+        # active.
         run: |
+          sudo swapoff /swapfile || true
+          sudo rm -f /swapfile
           sudo fallocate -l 8G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
