@@ -9,8 +9,8 @@
 //! and cmake builds libslic3r and the shim. Subsequent runs are fast.
 
 use slic3r_ffi::{
-    clear_slice_progress, init, option_def, option_defs, set_slice_progress, slice, version,
-    Config, ErrorKind, Model, OptScope, OptType,
+    clear_log_sink, clear_slice_progress, init, option_def, option_defs, set_log_sink,
+    set_slice_progress, slice, version, Config, ErrorKind, LogLevel, Model, OptScope, OptType,
 };
 use std::path::PathBuf;
 use std::sync::Once;
@@ -32,6 +32,9 @@ fn ensure_init() {
 // mutex tests pass under `--test-threads=1` but fail in the
 // default run.
 static SLICE_PROGRESS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+// Same rationale for the log sink — process-global registration.
+static LOG_SINK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn test_stl() -> PathBuf {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -323,6 +326,98 @@ fn slice_progress_callback_fires_with_monotonic_percent() {
         "expected a 'Generating G-code' stage tick — slice may have aborted early",
     );
     let _ = std::fs::remove_file(&out_path);
+}
+
+#[test]
+fn log_sink_receives_records_emitted_during_slice() {
+    use std::sync::{Arc, Mutex};
+
+    ensure_init();
+    let _serial = LOG_SINK_LOCK.lock().expect("log sink lock");
+
+    let records: Arc<Mutex<Vec<(LogLevel, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let records_for_cb = Arc::clone(&records);
+    set_log_sink(move |level, msg| {
+        records_for_cb
+            .lock()
+            .unwrap()
+            .push((level, msg.to_owned()));
+    });
+
+    // Drive a slice — libslic3r emits a handful of BOOST_LOG_TRIVIAL
+    // records during apply/validate/process even at log_level=3
+    // (info), the level the test fixture initializes with. The
+    // exact count is fragile (depends on upstream verbosity), but
+    // "at least one record" is stable.
+    let mut model = Model::new().expect("Model::new");
+    let mut config = Config::new().expect("Config::new");
+    model
+        .load_with_config(test_stl(), &mut config)
+        .expect("load");
+    config
+        .set("use_relative_e_distances", "0")
+        .expect("set use_relative_e_distances");
+
+    let out_path = std::env::temp_dir().join("n3o-log-sink-test.gcode");
+    let slice_result = slice(&model, &config, &out_path);
+    clear_log_sink();
+    slice_result.expect("slice OK");
+
+    let records = records.lock().unwrap();
+    assert!(
+        !records.is_empty(),
+        "expected at least one log record during slice; got 0 — sink may not be installed",
+    );
+    // Every record's message should be non-empty (we'd otherwise
+    // be receiving padding from an empty extract).
+    for (_level, msg) in records.iter() {
+        assert!(!msg.is_empty(), "log message unexpectedly empty");
+    }
+    let _ = std::fs::remove_file(&out_path);
+}
+
+#[test]
+fn log_sink_can_be_unregistered() {
+    use std::sync::{Arc, Mutex};
+
+    ensure_init();
+    let _serial = LOG_SINK_LOCK.lock().expect("log sink lock");
+
+    // First slice: sink active, counter ticks at least once.
+    let counter: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+    let counter_for_cb = Arc::clone(&counter);
+    set_log_sink(move |_lvl, _msg| {
+        *counter_for_cb.lock().unwrap() += 1;
+    });
+
+    let mut model = Model::new().expect("Model::new");
+    let mut config = Config::new().expect("Config::new");
+    model
+        .load_with_config(test_stl(), &mut config)
+        .expect("load");
+    config
+        .set("use_relative_e_distances", "0")
+        .expect("set use_relative_e_distances");
+    let out1 = std::env::temp_dir().join("n3o-log-sink-on.gcode");
+    slice(&model, &config, &out1).expect("slice 1");
+    let ticks_after_first = *counter.lock().unwrap();
+    assert!(
+        ticks_after_first > 0,
+        "expected log sink to fire while registered",
+    );
+
+    clear_log_sink();
+    let out2 = std::env::temp_dir().join("n3o-log-sink-off.gcode");
+    slice(&model, &config, &out2).expect("slice 2");
+    let ticks_after_second = *counter.lock().unwrap();
+    assert_eq!(
+        ticks_after_second, ticks_after_first,
+        "callback fired after clear_log_sink (delta = {})",
+        ticks_after_second - ticks_after_first,
+    );
+
+    let _ = std::fs::remove_file(&out1);
+    let _ = std::fs::remove_file(&out2);
 }
 
 #[test]

@@ -258,6 +258,33 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
 typedef void (*slic3r_progress_fn_t)(int percent, const char* stage, void* user_data);
 void slic3r_set_slice_progress_cb(slic3r_progress_fn_t cb, void* user_data);
 
+/* Log sink callback.
+ *
+ * Replaces libslic3r's stderr-only boost::log default with a
+ * caller-supplied function. Fires on every log record emitted by
+ * libslic3r through `BOOST_LOG_TRIVIAL(...)` — slice progress text,
+ * configuration warnings, internal debug.
+ *
+ * `severity` mirrors boost::log::trivial's enum:
+ *   0=trace, 1=debug, 2=info, 3=warning, 4=error, 5=fatal.
+ * Records below the current severity filter (set via slic3r_init's
+ * log_level argument) are dropped before they reach the callback —
+ * the callback only sees what would have been printed.
+ *
+ * `message` is a NUL-terminated C string valid for the duration
+ * of the call; do NOT retain the pointer. `user_data` is the
+ * opaque pointer passed at registration.
+ *
+ * Threading: libslic3r emits log records from any thread it runs
+ * on (today: the caller's thread, since slic3r_slice is synchronous
+ * and parsing is single-threaded). The sink is `synchronous_sink`-
+ * backed so concurrent emissions serialize internally; the callback
+ * itself must be thread-safe.
+ *
+ * Registration is process-global. Pass cb=NULL to unregister. */
+typedef void (*slic3r_log_fn_t)(int severity, const char* message, void* user_data);
+void slic3r_set_log_sink(slic3r_log_fn_t cb, void* user_data);
+
 #ifdef __cplusplus
 }
 #endif

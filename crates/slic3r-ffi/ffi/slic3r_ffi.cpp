@@ -14,6 +14,11 @@
 #include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/log/expressions.hpp>
+#include <boost/log/sinks/sync_frontend.hpp>
+#include <boost/log/sinks/basic_sink_backend.hpp>
+#include <boost/log/attributes/value_extraction.hpp>
+#include <boost/make_shared.hpp>
+#include <boost/shared_ptr.hpp>
 
 #include <cstdlib>
 #include <cstring>
@@ -57,6 +62,61 @@ void set_err(char** out_err, const std::string& msg) {
 std::mutex g_progress_mutex;
 slic3r_progress_fn_t g_progress_cb = nullptr;
 void* g_progress_user_data = nullptr;
+
+// ---- Log sink ------------------------------------------------------
+//
+// `slic3r_set_log_sink` registers a C function pointer that the
+// boost::log sink trampolines into. The sink is installed once
+// during slic3r_init and remains for the process lifetime; when no
+// callback is registered the sink no-ops, so we don't churn the
+// boost::log core's sink list on every register/clear.
+//
+// Severity mapping mirrors libslic3r's `set_logging_level`:
+//   trace=0, debug=1, info=2, warning=3, error=4, fatal=5.
+// Boost's `severity_level` enum uses the same values so we cast
+// directly.
+//
+// Library hardening: the callback may throw — boost::log won't
+// — so the consume() impl swallows std::exception to keep
+// libslic3r's logging path crash-safe. A throwing callback is a
+// caller bug we don't propagate into the slicer.
+
+std::mutex g_log_mutex;
+slic3r_log_fn_t g_log_cb = nullptr;
+void* g_log_user_data = nullptr;
+
+class CallbackLogBackend
+    : public boost::log::sinks::basic_sink_backend<
+          boost::log::sinks::combine_requirements<
+              boost::log::sinks::synchronized_feeding>::type> {
+public:
+    void consume(boost::log::record_view const& rec) {
+        slic3r_log_fn_t cb;
+        void* user;
+        {
+            std::lock_guard<std::mutex> lk(g_log_mutex);
+            cb = g_log_cb;
+            user = g_log_user_data;
+        }
+        if (!cb) return;
+        const auto* sev = boost::log::extract<boost::log::trivial::severity_level>(
+                              "Severity", rec).get_ptr();
+        const auto* msg = boost::log::extract<std::string>(
+                              "Message", rec).get_ptr();
+        int severity = sev ? static_cast<int>(*sev) : 2;
+        const std::string& text = msg ? *msg : std::string();
+        try {
+            cb(severity, text.c_str(), user);
+        } catch (const std::exception&) {
+            // Swallow — see class doc above.
+        } catch (...) {
+            // Same.
+        }
+    }
+};
+
+using CallbackLogSink = boost::log::sinks::synchronous_sink<CallbackLogBackend>;
+boost::shared_ptr<CallbackLogSink> g_log_sink_ptr;
 
 slic3r_opt_type map_type(ConfigOptionType t) {
     // ConfigOptionType is a bit-packed enum where coVectorType = 0x4000.
@@ -265,6 +325,16 @@ slic3r_status slic3r_init(const char* resources_dir, unsigned int log_level) {
     if (g_initialized) return SLIC3R_OK;
     try {
         set_logging_level(log_level);
+
+        // Install the callback sink once at init. It stays in the
+        // boost::log core's sink list for the process lifetime; the
+        // sink itself no-ops when no callback is registered, so
+        // running without `slic3r_set_log_sink` costs nothing
+        // beyond the sink-list traversal per log record.
+        if (!g_log_sink_ptr) {
+            g_log_sink_ptr = boost::make_shared<CallbackLogSink>();
+            boost::log::core::get()->add_sink(g_log_sink_ptr);
+        }
 
         if (resources_dir && *resources_dir) {
             Slic3r::set_resources_dir(resources_dir);
@@ -546,6 +616,12 @@ void slic3r_set_slice_progress_cb(slic3r_progress_fn_t cb, void* user_data) {
     std::lock_guard<std::mutex> lk(g_progress_mutex);
     g_progress_cb = cb;
     g_progress_user_data = user_data;
+}
+
+void slic3r_set_log_sink(slic3r_log_fn_t cb, void* user_data) {
+    std::lock_guard<std::mutex> lk(g_log_mutex);
+    g_log_cb = cb;
+    g_log_user_data = user_data;
 }
 
 } // extern "C"

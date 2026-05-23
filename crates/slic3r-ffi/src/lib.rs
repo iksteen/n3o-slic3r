@@ -522,3 +522,94 @@ pub fn clear_slice_progress() {
     let mut guard = PROGRESS_CALLBACK.lock().expect("progress callback mutex");
     *guard = None;
 }
+
+// ---- Log sink ----
+//
+// Same pattern as the progress callback: the C side stores a
+// global fn pointer + user_data, the Rust side owns the closure
+// behind a `Mutex<Option<Box<dyn FnMut + Send>>>`, an `extern "C"`
+// trampoline bridges them.
+
+/// Severity ladder mirroring boost::log::trivial. Matches the
+/// integer values libslic3r emits — 0=trace, 5=fatal. Cast directly
+/// from the FFI `int`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warning,
+    Error,
+    Fatal,
+}
+
+impl LogLevel {
+    fn from_raw(value: i32) -> Self {
+        match value {
+            0 => Self::Trace,
+            1 => Self::Debug,
+            2 => Self::Info,
+            3 => Self::Warning,
+            4 => Self::Error,
+            5 => Self::Fatal,
+            // Out-of-range values bucket as Warning so the caller
+            // still sees them — silently dropping a misclassified
+            // record would be worse than over-reporting.
+            _ => Self::Warning,
+        }
+    }
+}
+
+type LogClosure = Box<dyn FnMut(LogLevel, &str) + Send>;
+
+static LOG_CALLBACK: Mutex<Option<LogClosure>> = Mutex::new(None);
+
+extern "C" fn log_trampoline(severity: i32, message: *const c_char, _user_data: *mut std::ffi::c_void) {
+    let msg_str = if message.is_null() {
+        ""
+    } else {
+        // SAFETY: caller (C side) guarantees message is NUL-terminated.
+        match unsafe { CStr::from_ptr(message) }.to_str() {
+            Ok(s) => s,
+            Err(_) => "",
+        }
+    };
+    let level = LogLevel::from_raw(severity);
+    if let Ok(mut guard) = LOG_CALLBACK.lock() {
+        if let Some(cb) = guard.as_mut() {
+            cb(level, msg_str);
+        }
+    }
+}
+
+/// Register a Rust closure as the log sink. Replaces any previously
+/// registered callback. Every libslic3r `BOOST_LOG_TRIVIAL(...)`
+/// record at or above the current severity filter (set via
+/// `init(.., log_level)`) fires the closure.
+pub fn set_log_sink<F>(callback: F)
+where
+    F: FnMut(LogLevel, &str) + Send + 'static,
+{
+    let mut guard = LOG_CALLBACK.lock().expect("log callback mutex");
+    *guard = Some(Box::new(callback));
+    drop(guard);
+    // SAFETY: trampoline is a static `extern "C"` fn; user_data is
+    // null because the closure pointer lives in our Rust static,
+    // not in the C side.
+    unsafe {
+        sys::slic3r_set_log_sink(Some(log_trampoline), ptr::null_mut());
+    }
+}
+
+/// Clear the log sink. Records still flow through libslic3r's
+/// internal sink list (the FFI keeps its sink installed for the
+/// process lifetime), but with no callback they no-op.
+pub fn clear_log_sink() {
+    // SAFETY: passing nullptr to the C API is the documented
+    // "unregister" semantics.
+    unsafe {
+        sys::slic3r_set_log_sink(None, ptr::null_mut());
+    }
+    let mut guard = LOG_CALLBACK.lock().expect("log callback mutex");
+    *guard = None;
+}
