@@ -15,6 +15,8 @@ import { SettingsPanel, type PlateObjectStub } from "./SettingsPanel";
 import { buildContextJson } from "./buildContextJson";
 import { makeObjectOverrideCallbacks } from "./overrideCommands";
 import { makeProjectOverrideCallbacks } from "./projectOverrideCommands";
+import { PrinterPicker } from "../printer/PrinterPicker";
+import { usePrinterCatalog } from "../printer/usePrinterCatalog";
 import type { PlateSnapshot } from "../viewport/types";
 
 /** Locate the active plate in a session snapshot, or `null`
@@ -70,6 +72,7 @@ export function SettingsPanelHost({
 }: SettingsPanelHostProps) {
   const plate = useMemo(() => activePlate(session), [session]);
   const selected = useMemo(() => selectedObject(plate), [plate]);
+  const catalog = usePrinterCatalog();
 
   const projectOverrides = plate?.project_overrides ?? {};
   const userOverrides = session.snapshot?.user_overrides ?? {};
@@ -78,17 +81,32 @@ export function SettingsPanelHost({
 
   const allObjects = useMemo(() => allObjectsForPanel(plate), [plate]);
 
+  // Pick the printer profile for cascade resolution from the active
+  // plate's binding (PR-5-4: the picker can swap printers). Falls
+  // back to the bootstrap printer when the plate hasn't been bound
+  // yet — that's the App.tsx default-printer load that runs before
+  // the user touches anything.
+  const activeProfile = useMemo(() => {
+    if (plate?.printer) {
+      const entry = catalog.entries.find(
+        (e) => e.identity === plate.printer!.printer_identity,
+      );
+      if (entry) return entry.profile;
+    }
+    return session.printer;
+  }, [plate?.printer, catalog.entries, session.printer]);
+
   const context = useMemo(() => {
-    if (!session.printer) return null;
+    if (!activeProfile) return null;
     return buildContextJson({
-      printer: session.printer,
+      printer: activeProfile,
       projectOverrides,
       userOverrides,
       objectOverrides,
       activeSlot,
     });
   }, [
-    session.printer,
+    activeProfile,
     projectOverrides,
     userOverrides,
     objectOverrides,
@@ -105,19 +123,29 @@ export function SettingsPanelHost({
   );
 
   return (
-    <SettingsPanel
-      printer={session.printer}
-      cascadeHandle={session.cascadeHandle}
-      context={context}
-      selectedObject={selected}
-      objectOverrides={objectOverrides}
-      onSetObjectOverride={objectCbs.onSetObjectOverride}
-      onClearObjectOverride={objectCbs.onClearObjectOverride}
-      projectOverrides={projectOverrides}
-      onSetProjectOverride={projectCbs.onSetProjectOverride}
-      onClearProjectOverride={projectCbs.onClearProjectOverride}
-      allObjects={allObjects}
-    />
+    <div className="sp-host">
+      <div className="sp-config">
+        <div className="sp-config-row">
+          <PrinterPicker
+            plateId={plate?.plate_id ?? null}
+            binding={plate?.printer ?? null}
+          />
+        </div>
+      </div>
+      <SettingsPanel
+        printer={activeProfile}
+        cascadeHandle={session.cascadeHandle}
+        context={context}
+        selectedObject={selected}
+        objectOverrides={objectOverrides}
+        onSetObjectOverride={objectCbs.onSetObjectOverride}
+        onClearObjectOverride={objectCbs.onClearObjectOverride}
+        projectOverrides={projectOverrides}
+        onSetProjectOverride={projectCbs.onSetProjectOverride}
+        onClearProjectOverride={projectCbs.onClearProjectOverride}
+        allObjects={allObjects}
+      />
+    </div>
   );
 }
 

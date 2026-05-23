@@ -58,25 +58,24 @@ const BUNDLED: &[BundledProfile] = &[
     },
 ];
 
-/// Picker-facing summary of one printer in the catalog. Carries the
-/// fields the picker chip needs without round-tripping the full
-/// PrinterProfile (which would also serialize toolheads + build
-/// volume + exclusion zones).
+/// Picker-facing entry for one printer in the catalog. Carries the
+/// identity slug + the full `PrinterProfile`. The picker chip + menu
+/// only read `identity`, `profile.model`, `profile.slot_count`, and
+/// `profile.supported_build_plates`, but the rest of the panel
+/// (cascade resolve via `ContextJson`) needs toolheads + build
+/// volume + exclusion zones too. Single fetch, full info beats
+/// a per-row identity → profile round-trip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogEntry {
     pub identity: String,
-    pub model: String,
-    pub slot_count: usize,
-    pub supported_build_plates: Vec<String>,
+    pub profile: PrinterProfile,
 }
 
 impl CatalogEntry {
-    fn from(identity: &str, profile: &PrinterProfile) -> Self {
+    fn from(identity: &str, profile: PrinterProfile) -> Self {
         Self {
             identity: identity.to_owned(),
-            model: profile.model.clone(),
-            slot_count: profile.slot_count,
-            supported_build_plates: profile.supported_build_plates.clone(),
+            profile,
         }
     }
 }
@@ -91,7 +90,7 @@ pub fn bundled_catalog() -> Vec<CatalogEntry> {
         .map(|b| {
             let profile = parse(b.toml)
                 .unwrap_or_else(|e| panic!("bundled printer `{}`: {e}", b.identity));
-            CatalogEntry::from(b.identity, &profile)
+            CatalogEntry::from(b.identity, profile)
         })
         .collect()
 }
@@ -122,9 +121,9 @@ mod tests {
         let entries = bundled_catalog();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].identity, "bambu-a1-mini");
-        assert_eq!(entries[0].model, "Bambu A1 mini");
+        assert_eq!(entries[0].profile.model, "Bambu A1 mini");
         assert_eq!(entries[1].identity, "snapmaker-u1");
-        assert_eq!(entries[1].model, "Snapmaker U1");
+        assert_eq!(entries[1].profile.model, "Snapmaker U1");
     }
 
     #[test]
@@ -148,12 +147,20 @@ mod tests {
     }
 
     #[test]
-    fn catalog_entry_carries_supported_plates() {
-        // The picker uses this to surface the per-printer plate list
-        // when the user changes printer; pin the shape so a future
-        // bundled profile that drops the field gets caught.
+    fn catalog_entry_carries_full_profile_for_panel_resolve() {
+        // The settings panel host derives the active printer's
+        // PrinterProfileJson from the catalog entry (cascade resolve
+        // wants toolheads + build volume + exclusion zones, not just
+        // the picker summary). Pin the shape so a future shrink of
+        // CatalogEntry that drops fields surfaces here.
         let entries = bundled_catalog();
         let a1 = entries.iter().find(|e| e.identity == "bambu-a1-mini").unwrap();
-        assert!(a1.supported_build_plates.contains(&"Textured PEI".into()));
+        assert!(a1.profile.supported_build_plates.contains(&"Textured PEI".into()));
+        assert_eq!(a1.profile.toolheads.len(), 1);
+        assert!(a1.profile.build_volume.max[0] > 0.0);
+
+        let u1 = entries.iter().find(|e| e.identity == "snapmaker-u1").unwrap();
+        assert_eq!(u1.profile.toolheads.len(), 4);
+        assert!(!u1.profile.exclusion_zones.is_empty());
     }
 }
