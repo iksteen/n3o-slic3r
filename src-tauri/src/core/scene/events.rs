@@ -38,6 +38,14 @@ pub enum SceneEvent {
     BedChanged {
         zones: Vec<ExclusionZone>,
     },
+    /// Non-uniform scale was just applied (factor components differ).
+    /// Non-blocking — the renderer pairs this with the ObjectUpdated
+    /// to flag the affected object in the UI, since dimensional
+    /// cascade settings (line widths, top-surface thresholds) assume
+    /// physical extents and a stretched object skews those.
+    NonUniformScale {
+        id: ObjectId,
+    },
 }
 
 impl SceneEvent {
@@ -54,8 +62,17 @@ impl SceneEvent {
             Self::GizmoChanged(_) => "scene:gizmo_changed",
             Self::CameraChanged(_) => "scene:camera_changed",
             Self::BedChanged { .. } => "scene:bed_changed",
+            Self::NonUniformScale { .. } => "scene:non_uniform_scale",
         }
     }
+}
+
+/// Which world-space axis a mirror op reflects across.
+#[derive(Debug, Clone, Copy, Serialize, serde::Deserialize, PartialEq, Eq)]
+pub enum MirrorAxis {
+    X,
+    Y,
+    Z,
 }
 
 /// How a selection command merges with the existing selection.

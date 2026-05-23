@@ -6,7 +6,7 @@
 //! for the *behavior* live in `state.rs` against the pure methods;
 //! this file only validates the Tauri plumbing.
 
-use super::events::{SceneEvent, SceneOpError, SelectMode};
+use super::events::{MirrorAxis, SceneEvent, SceneOpError, SelectMode};
 use super::state::{
     ActivePlate, CameraState, ExclusionZone, GizmoState, MeshHeader, MeshId, ObjectId,
     SceneObject, SceneState,
@@ -216,6 +216,35 @@ pub fn scene_object_delete(
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s.delete_objects(&ids);
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_object_mirror(
+    id: ObjectId,
+    axis: MirrorAxis,
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s.mirror_object(id, axis).map_err(op_err_to_string)?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_object_lay_flat(
+    id: ObjectId,
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s.lay_flat_object(id).map_err(op_err_to_string)?;
     drop(s);
     emit_all(&window, &events);
     Ok(())

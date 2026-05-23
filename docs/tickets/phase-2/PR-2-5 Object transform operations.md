@@ -1,6 +1,6 @@
 # PR-2-5 — Object transform operations
 
-Status: ❌ open.
+Status: ✅ shipped (out-of-bounds check moved to PR-2-6 — see *Out of scope* below).
 
 **Scope.** The seven operations the user can apply to selected
 objects: **move**, **rotate**, **scale**, **mirror**, **lay flat**,
@@ -43,7 +43,10 @@ compute transforms itself. This is the core of the AD-8 invariant
 
 - Collision check (out-of-bed-volume) runs after each operation;
   results in a `scene:object_out_of_bounds` warning event (not
-  blocking — the user can fix or accept).
+  blocking — the user can fix or accept). **Deferred to PR-2-6**,
+  which adds the bed-volume plumbing to scene state; without
+  that plumbing the check would either hardcode a single
+  printer's dimensions or be silently disabled.
 
 - Tests:
   - Translate twice along X — accumulated `Transform` reflects the

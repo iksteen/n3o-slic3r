@@ -11,7 +11,7 @@
 //! `scene_snapshot()` rebuilds it from scratch on reconnect.
 
 use super::build_plate::BuildPlate;
-use super::events::{SceneEvent, SceneOpError, SelectMode};
+use super::events::{MirrorAxis, SceneEvent, SceneOpError, SelectMode};
 use super::transform::Transform;
 use crate::core::printer::profile::BoundingBox;
 use glam::{Quat, Vec3};
@@ -476,9 +476,11 @@ impl SceneState {
         Ok(vec![SceneEvent::ObjectUpdated(clone)])
     }
 
-    /// Scale an object by per-axis factors. Non-uniform scale
-    /// surfaces a side-warning in the event stream (Phase 4 UI can
-    /// nag users); not blocking.
+    /// Scale an object by per-axis factors. Non-uniform scale emits
+    /// an extra `NonUniformScale` warning event so the UI can flag
+    /// the object; it's not blocking. Dimensional cascade settings
+    /// (line widths, top-surface thresholds) reason about physical
+    /// extents, and stretching one axis silently breaks those.
     pub fn scale_object(
         &mut self,
         id: ObjectId,
@@ -490,7 +492,149 @@ impl SceneState {
             .ok_or(SceneOpError::UnknownObject(id))?;
         obj.transform = Transform::scale(factor).compose(obj.transform);
         let clone = obj.clone();
+        let mut events = vec![SceneEvent::ObjectUpdated(clone)];
+        if is_non_uniform(factor) {
+            events.push(SceneEvent::NonUniformScale { id });
+        }
+        Ok(events)
+    }
+
+    /// Mirror an object across a world-axis through the object's
+    /// world-space center. Two mirrors across the same axis return
+    /// the object to its original transform (modulo float error).
+    pub fn mirror_object(
+        &mut self,
+        id: ObjectId,
+        axis: MirrorAxis,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let center = self.world_center(id)?;
+        let factor = match axis {
+            MirrorAxis::X => Vec3::new(-1.0, 1.0, 1.0),
+            MirrorAxis::Y => Vec3::new(1.0, -1.0, 1.0),
+            MirrorAxis::Z => Vec3::new(1.0, 1.0, -1.0),
+        };
+        // Mirror-around-center: translate(-c) → scale(±1) → translate(+c),
+        // applied as a world-space *prefix* to the current transform.
+        let mirror_around_center = Transform::translation(center)
+            .compose(Transform::scale(factor))
+            .compose(Transform::translation(-center));
+        let obj = self.objects.get_mut(&id).unwrap();
+        obj.transform = mirror_around_center.compose(obj.transform);
+        let clone = obj.clone();
         Ok(vec![SceneEvent::ObjectUpdated(clone)])
+    }
+
+    /// Lay-flat heuristic: re-orient the object to minimize its
+    /// world-space Z extent, then drop it so the new minimum Z is
+    /// exactly the active plate's surface (Z=0 for an identity-
+    /// transform plate). Searches the 24 axis-aligned cube
+    /// rotations and picks the one that produces the smallest Z
+    /// extent — fast, deterministic, no mesh-face analysis. MVP
+    /// per the ticket; PR-2-7's library + Phase 4 UI can introduce
+    /// "lay flat on selected face" later when the user can pick a
+    /// face from the viewport.
+    pub fn lay_flat_object(
+        &mut self,
+        id: ObjectId,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let mesh_bb = {
+            let obj = self
+                .objects
+                .get(&id)
+                .ok_or(SceneOpError::UnknownObject(id))?;
+            self.meshes
+                .get(&obj.mesh)
+                .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
+                .bounding_box
+                .clone()
+        };
+        let local_corners = mesh_bb_corners(&mesh_bb);
+        let local_center = Vec3::new(
+            ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32,
+            ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32,
+            ((mesh_bb.min[2] + mesh_bb.max[2]) * 0.5) as f32,
+        );
+
+        let obj = self.objects.get_mut(&id).unwrap();
+        let current = obj.transform.to_mat4();
+
+        // Decompose current transform into scale, rotation,
+        // translation so we can preserve scale + center position
+        // while replacing the rotation with a candidate one. glam's
+        // decomposition is sound for affine matrices without shear
+        // — our transforms are built from translate/rotate/scale
+        // composition only, so this holds.
+        let (current_scale, _current_rot, current_trans) =
+            current.to_scale_rotation_translation();
+        // World-space center under the current transform — we keep
+        // this fixed so the object doesn't drift sideways when
+        // re-oriented; only Z adjusts (to drop to the bed).
+        let current_world_center = obj.transform.apply_point(local_center);
+
+        let (best_rotation, best_min_z) = cube_rotations()
+            .into_iter()
+            .map(|rot| {
+                let candidate = glam::Mat4::from_scale_rotation_translation(
+                    current_scale,
+                    rot,
+                    current_trans,
+                );
+                let (min_z, max_z) = z_extent(&local_corners, &candidate);
+                (rot, min_z, max_z)
+            })
+            .min_by(|a, b| {
+                let extent_a = a.2 - a.1;
+                let extent_b = b.2 - b.1;
+                extent_a
+                    .partial_cmp(&extent_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(rot, min_z, _)| (rot, min_z))
+            .expect("24 rotations is non-empty");
+
+        // Rebuild the transform with the chosen rotation, keeping the
+        // X/Y of the world-space center fixed; the new Z translation
+        // drops the object so its minimum Z lands on the plate.
+        let chosen = glam::Mat4::from_scale_rotation_translation(
+            current_scale,
+            best_rotation,
+            current_trans,
+        );
+        // After the candidate is applied to local corners we know the
+        // world-space min Z. Translate by -(min_z) so it lands at 0.
+        // Also re-pin XY center.
+        let post_rot_center = chosen.transform_point3(local_center);
+        let delta = glam::Vec3::new(
+            current_world_center.x - post_rot_center.x,
+            current_world_center.y - post_rot_center.y,
+            -best_min_z,
+        );
+        let final_xform = glam::Mat4::from_translation(delta) * chosen;
+        obj.transform = Transform::from_mat4(final_xform);
+
+        let clone = obj.clone();
+        Ok(vec![SceneEvent::ObjectUpdated(clone)])
+    }
+
+    /// World-space center of an object's mesh bounding box. Pulled
+    /// out so mirror + future bbox-anchored ops share one path.
+    fn world_center(&self, id: ObjectId) -> Result<Vec3, SceneOpError> {
+        let obj = self
+            .objects
+            .get(&id)
+            .ok_or(SceneOpError::UnknownObject(id))?;
+        let mesh_bb = self
+            .meshes
+            .get(&obj.mesh)
+            .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
+            .bounding_box
+            .clone();
+        let local_center = Vec3::new(
+            ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32,
+            ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32,
+            ((mesh_bb.min[2] + mesh_bb.max[2]) * 0.5) as f32,
+        );
+        Ok(obj.transform.apply_point(local_center))
     }
 
     /// Replace an object's transform wholesale. Used by auto-arrange
@@ -612,6 +756,74 @@ impl SceneState {
             None
         }
     }
+}
+
+fn is_non_uniform(factor: Vec3) -> bool {
+    let eps = 1e-5_f32;
+    (factor.x - factor.y).abs() > eps
+        || (factor.x - factor.z).abs() > eps
+        || (factor.y - factor.z).abs() > eps
+}
+
+fn mesh_bb_corners(bb: &BoundingBox) -> [Vec3; 8] {
+    let mn = [bb.min[0] as f32, bb.min[1] as f32, bb.min[2] as f32];
+    let mx = [bb.max[0] as f32, bb.max[1] as f32, bb.max[2] as f32];
+    [
+        Vec3::new(mn[0], mn[1], mn[2]),
+        Vec3::new(mx[0], mn[1], mn[2]),
+        Vec3::new(mn[0], mx[1], mn[2]),
+        Vec3::new(mx[0], mx[1], mn[2]),
+        Vec3::new(mn[0], mn[1], mx[2]),
+        Vec3::new(mx[0], mn[1], mx[2]),
+        Vec3::new(mn[0], mx[1], mx[2]),
+        Vec3::new(mx[0], mx[1], mx[2]),
+    ]
+}
+
+/// Return (min_z, max_z) of the corners after applying `xform`.
+fn z_extent(corners: &[Vec3; 8], xform: &glam::Mat4) -> (f32, f32) {
+    let mut min_z = f32::INFINITY;
+    let mut max_z = f32::NEG_INFINITY;
+    for c in corners {
+        let p = xform.transform_point3(*c);
+        if p.z < min_z {
+            min_z = p.z;
+        }
+        if p.z > max_z {
+            max_z = p.z;
+        }
+    }
+    (min_z, max_z)
+}
+
+/// The 24 proper rotations of a cube. Generated as compositions of
+/// identity + (90/180/270)° around each of the three principal axes
+/// — that yields 24 distinct rotations (the full chiral octahedral
+/// group). Used by [`SceneState::lay_flat_object`] to pick the
+/// orientation that minimizes the world-space Z extent.
+fn cube_rotations() -> Vec<Quat> {
+    use std::f32::consts::FRAC_PI_2;
+    let face_rots = [
+        Quat::IDENTITY,
+        Quat::from_rotation_y(FRAC_PI_2),
+        Quat::from_rotation_y(std::f32::consts::PI),
+        Quat::from_rotation_y(-FRAC_PI_2),
+        Quat::from_rotation_x(FRAC_PI_2),
+        Quat::from_rotation_x(-FRAC_PI_2),
+    ];
+    let z_spins = [
+        Quat::IDENTITY,
+        Quat::from_rotation_z(FRAC_PI_2),
+        Quat::from_rotation_z(std::f32::consts::PI),
+        Quat::from_rotation_z(-FRAC_PI_2),
+    ];
+    let mut out = Vec::with_capacity(24);
+    for f in face_rots {
+        for s in z_spins {
+            out.push(f * s);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -894,5 +1106,114 @@ mod tests {
         assert_eq!(obj.name, "test-cube");
         assert_eq!(obj.extruder_id, Some(2));
         assert_eq!(parsed.gizmo.mode, GizmoMode::Translate);
+    }
+
+    #[test]
+    fn double_mirror_across_x_returns_to_original() {
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        let probe = Vec3::new(0.25, 0.5, 0.5);
+        let before = s.objects.get(&obj).unwrap().transform.apply_point(probe);
+
+        s.mirror_object(obj, MirrorAxis::X).unwrap();
+        s.mirror_object(obj, MirrorAxis::X).unwrap();
+
+        let after = s.objects.get(&obj).unwrap().transform.apply_point(probe);
+        assert!(
+            (after - before).length() < 1e-4,
+            "double mirror drifted: {before:?} → {after:?}"
+        );
+    }
+
+    #[test]
+    fn mirror_x_flips_x_through_world_center() {
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        // Cube is unit-extent at origin. World-space center is
+        // (0.5, 0.5, 0.5). Probe (1, 0.5, 0.5) should flip to
+        // (0, 0.5, 0.5) after mirror-around-center across X.
+        s.mirror_object(obj, MirrorAxis::X).unwrap();
+        let probe = Vec3::new(1.0, 0.5, 0.5);
+        let mirrored = s.objects.get(&obj).unwrap().transform.apply_point(probe);
+        assert!(
+            (mirrored - Vec3::new(0.0, 0.5, 0.5)).length() < 1e-5,
+            "got {mirrored:?}"
+        );
+    }
+
+    #[test]
+    fn non_uniform_scale_emits_warning_event() {
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        let events = s.scale_object(obj, Vec3::new(2.0, 1.0, 1.0)).unwrap();
+        assert!(matches!(events[0], SceneEvent::ObjectUpdated(_)));
+        assert!(
+            matches!(events.get(1), Some(SceneEvent::NonUniformScale { id }) if *id == obj),
+            "expected NonUniformScale, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn uniform_scale_does_not_emit_warning() {
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        let events = s.scale_object(obj, Vec3::new(1.5, 1.5, 1.5)).unwrap();
+        assert_eq!(events.len(), 1, "uniform scale: only ObjectUpdated");
+        assert!(matches!(events[0], SceneEvent::ObjectUpdated(_)));
+    }
+
+    #[test]
+    fn lay_flat_settles_rotated_cube_to_z_zero_min() {
+        let mut s = SceneState::new();
+        let (_, obj) = add_cube(&mut s);
+        // Push the cube up, then tilt it 30° around X so its Z
+        // extent is bigger than 1. lay_flat should re-orient and
+        // drop min Z back to 0.
+        s.translate_object(obj, Vec3::new(0.0, 0.0, 5.0)).unwrap();
+        s.rotate_object(obj, Vec3::X, 0.5, None).unwrap();
+        s.lay_flat_object(obj).unwrap();
+
+        // Recompute world-space bbox of the cube after lay_flat.
+        let xform = s.objects.get(&obj).unwrap().transform;
+        let mesh_bb = &s.meshes.values().next().unwrap().bounding_box;
+        let mut min_z = f32::INFINITY;
+        let mut max_z = f32::NEG_INFINITY;
+        for &x in &[mesh_bb.min[0] as f32, mesh_bb.max[0] as f32] {
+            for &y in &[mesh_bb.min[1] as f32, mesh_bb.max[1] as f32] {
+                for &z in &[mesh_bb.min[2] as f32, mesh_bb.max[2] as f32] {
+                    let p = xform.apply_point(Vec3::new(x, y, z));
+                    min_z = min_z.min(p.z);
+                    max_z = max_z.max(p.z);
+                }
+            }
+        }
+        assert!(min_z.abs() < 1e-4, "expected min_z ≈ 0, got {min_z}");
+        // The cube is symmetric so the smallest Z extent is 1.
+        assert!(
+            (max_z - 1.0).abs() < 1e-4,
+            "expected extent 1, got max_z={max_z}"
+        );
+    }
+
+    #[test]
+    fn cube_rotations_are_24_distinct() {
+        let rots = cube_rotations();
+        assert_eq!(rots.len(), 24);
+        // Verify uniqueness: any two rotations applied to (1,2,3)
+        // should produce different points (or be the same rotation,
+        // which we check via near-equality).
+        let probe = Vec3::new(1.0, 2.0, 3.0);
+        let points: Vec<Vec3> = rots.iter().map(|q| *q * probe).collect();
+        let mut distinct = 0;
+        for (i, a) in points.iter().enumerate() {
+            let unique = !points
+                .iter()
+                .take(i)
+                .any(|b| (a - b).length() < 1e-3);
+            if unique {
+                distinct += 1;
+            }
+        }
+        assert_eq!(distinct, 24, "expected 24 distinct rotations");
     }
 }

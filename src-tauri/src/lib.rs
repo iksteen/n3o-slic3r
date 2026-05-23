@@ -48,6 +48,8 @@ pub fn run() {
             core::scene::commands::scene_object_set_transform,
             core::scene::commands::scene_object_delete,
             core::scene::commands::scene_object_duplicate,
+            core::scene::commands::scene_object_mirror,
+            core::scene::commands::scene_object_lay_flat,
             core::scene::commands::scene_gizmo_set,
             core::scene::commands::scene_camera_set,
             core::slice::slicer_slice,
