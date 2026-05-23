@@ -1,8 +1,9 @@
-// Tauri ↔ SceneMirror bridge (PR-2-9).
+// Tauri ↔ SceneMirror bridge (PR-2-9, expanded for plate-routing in
+// PR-5-2 phase C).
 //
-// Subscribes to the `scene:*` events the Rust backend emits and
-// routes them through `SceneMirror.applyEvent`. On startup or
-// reconnect it pulls `scene_snapshot` and replays it via
+// Subscribes to every `scene:*` / `project:*` event the Rust backend
+// emits and routes them through `SceneMirror.applyEvent`. On startup
+// or reconnect it pulls `scene_snapshot` and replays it via
 // `applySnapshot` — Rust is the source of truth, the renderer
 // rebuilds its mirror at any time without losing state.
 
@@ -15,10 +16,16 @@ import type {
   SceneSnapshot,
 } from "./types";
 
-/** Names match the SceneEvent::name() function on the Rust side
- * (`scene:<noun>_<verb>`). The bridge subscribes to each and
- * dispatches to the mirror. */
+/** Names match each `SceneEvent::name()` arm on the Rust side. The
+ * bridge subscribes to each and dispatches to the mirror.
+ *
+ * PR-5-2 phase C added the plate-list mutation events
+ * (`plate_added`, `plate_removed`, `active_plate_changed`) and the
+ * project-state notifiers (`plate_metadata_changed`,
+ * `material_binding_changed`, `object_overrides_changed`). PR-5-8
+ * added `project:saved` / `project:loaded`. */
 const EVENT_NAMES = [
+  // Scene-graph deltas
   "scene:mesh_loaded",
   "scene:object_added",
   "scene:object_updated",
@@ -30,6 +37,17 @@ const EVENT_NAMES = [
   "scene:object_out_of_bounds",
   "scene:non_uniform_scale",
   "scene:auto_arrange_overflow",
+  // Plate list mutations (PR-5-2)
+  "scene:plate_added",
+  "scene:plate_removed",
+  "scene:active_plate_changed",
+  // Project-state notifiers (PR-5-5, PR-5-6, PR-5-7)
+  "scene:plate_metadata_changed",
+  "scene:material_binding_changed",
+  "scene:object_overrides_changed",
+  // Project save/load (PR-5-8)
+  "project:saved",
+  "project:loaded",
 ] as const;
 
 /** Build the mesh-buffer provider that calls `scene_mesh_buffers`
@@ -74,7 +92,11 @@ export function decodeMeshBuffer(
   return { vertices, normals, indices };
 }
 
-/** Wire up the bridge. Returns an unsubscribe function. */
+/** Wire up the bridge. Returns an unsubscribe function.
+ *
+ * Special-cases `project:loaded` — when fired, the in-memory project
+ * was just replaced wholesale and the mirror must re-fetch a fresh
+ * snapshot rather than try to diff the old state forward. */
 export async function attachEventBridge(
   mirror: SceneMirror,
 ): Promise<() => Promise<void>> {
@@ -87,18 +109,27 @@ export async function attachEventBridge(
         console.debug("[n3o] event in", name, e.payload);
       }
       void mirror.applyEvent(e.payload);
+      if (e.payload.kind === "ProjectLoaded") {
+        // The whole project changed — refetch the snapshot rather
+        // than try to incrementally update from prior state.
+        void refreshSnapshot(mirror);
+      }
     });
     unlisteners.push(un);
   }
 
   // Initial sync: pull the snapshot and replay.
+  await refreshSnapshot(mirror);
+
+  return async () => {
+    for (const un of unlisteners) un();
+  };
+}
+
+async function refreshSnapshot(mirror: SceneMirror): Promise<void> {
   const snapshot = await invoke<SceneSnapshot>("scene_snapshot");
   if (import.meta.env.DEV) {
     console.debug("[n3o] initial snapshot", snapshot);
   }
   await mirror.applySnapshot(snapshot);
-
-  return async () => {
-    for (const un of unlisteners) un();
-  };
 }

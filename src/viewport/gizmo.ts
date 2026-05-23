@@ -156,23 +156,23 @@ function pickAttachTarget(
   selected: ObjectId[],
   pivotOverride: [number, number, number] | null,
 ): THREE.Object3D | null {
-  // Find the first selected object's Three.js mesh. The mirror's
-  // objectGroup is a flat list of meshes keyed by userData.objectId.
+  // Find the first selected object's Three.js mesh on the **active
+  // plate**. PR-5-2 phase C routes the gizmo to the active plate
+  // only — multi-plate selection is incoherent (you can't drag an
+  // object that lives on a non-visible plate).
   for (const id of selected) {
-    for (const child of mirror.objectGroup.children) {
-      const meshId = (child.userData as { objectId?: ObjectId }).objectId;
-      if (meshId === id) {
-        if (pivotOverride) {
-          // Apply pivot override by translating the mesh's matrix so
-          // its origin aligns with the override before attach. We
-          // don't actually mutate the world matrix — TransformControls
-          // grabs the object's `position` for translate gizmos, so
-          // overriding the pivot is a Phase 4+ concern that needs a
-          // proxy Object3D. For MVP we ignore pivotOverride and let
-          // the gizmo sit at the mesh's natural origin.
-        }
-        return child;
+    const mesh = mirror.findActiveMesh(id);
+    if (mesh) {
+      if (pivotOverride) {
+        // Apply pivot override by translating the mesh's matrix so
+        // its origin aligns with the override before attach. We
+        // don't actually mutate the world matrix — TransformControls
+        // grabs the object's `position` for translate gizmos, so
+        // overriding the pivot is a Phase 4+ concern that needs a
+        // proxy Object3D. For MVP we ignore pivotOverride and let
+        // the gizmo sit at the mesh's natural origin.
       }
+      return mesh;
     }
   }
   return null;

@@ -1,10 +1,23 @@
-// Local Three.js mirror of the Rust authoritative scene (PR-2-9).
+// Local Three.js mirror of the Rust authoritative Project (PR-2-9,
+// rebuilt per-plate in PR-5-2 phase C).
 //
 // The renderer holds **no** authoritative state per AD-8. This module
 // is a passive reflector: events come in via `applyEvent`, the
 // Three.js side updates, and the renderer paints whatever the mirror
 // currently says. Selection, transforms, gizmo state — all owned by
 // Rust.
+//
+// **Shape (PR-5-2 phase C):**
+//   - `SceneMirror` is the project-level root. Holds the scene-wide
+//     mesh registry + project metadata + a `Map<PlateId, PlateMirror>`.
+//   - `PlateMirror` is one plate's worth of scene state — objects,
+//     selection, camera, gizmo, bed, exclusion zones. Each owns its
+//     own internal `THREE.Group` for objects + bed.
+//   - The viewport adds `mirror.objectGroup` + `mirror.bedGroup` to
+//     its scene. These are stable top-level groups whose **single
+//     child** is the active plate's per-plate group. On
+//     `ActivePlateChanged`, SceneMirror swaps the child — the viewport
+//     never sees the structural change.
 //
 // Tests use the `MeshBufferProvider` callback to inject canned
 // buffers without going through Tauri IPC (see __test__/).
@@ -14,9 +27,14 @@ import type {
   BedMesh,
   CameraState,
   GizmoState,
+  MaterialBinding,
   MeshHeader,
   MeshId,
   ObjectId,
+  PlateId,
+  PlateMetadata,
+  PlateSnapshot,
+  PrinterBinding,
   SceneEvent,
   SceneObject,
   SceneSnapshot,
@@ -51,16 +69,94 @@ interface MeshRecord {
   header: MeshHeader;
 }
 
-export class SceneMirror {
-  /** Root of objects in the scene graph. The bed + zone overlays live
-   * under [`bedGroup`](#bedGroup) so callers can toggle them
-   * independently. */
+const DEFAULT_CAMERA: CameraState = {
+  position: [200, -200, 200],
+  target: [0, 0, 0],
+  up: [0, 0, 1],
+  fov_degrees: 45,
+  projection: "Perspective",
+};
+
+const DEFAULT_GIZMO: GizmoState = { mode: "None", pivot: null };
+
+/** One plate's mirror state. Owns its own object + bed groups; the
+ * top-level `SceneMirror` swaps these in/out as the active plate
+ * changes. Per-plate metadata + bindings cached here too so the
+ * frontend's PlateTabs / settings / binding panels can read them. */
+export class PlateMirror {
+  readonly plateId: PlateId;
   readonly objectGroup = new THREE.Group();
   readonly bedGroup = new THREE.Group();
 
+  // Plate identity / metadata (PR-5-1, PR-5-5, PR-5-6).
+  name: string;
+  metadata: PlateMetadata;
+  printer: PrinterBinding | null;
+  materialBindings: MaterialBinding[];
+  projectOverrides: Record<string, string>;
+  objectOverrides: Record<string, Record<string, string>>;
+
+  // Per-plate scene state.
+  objects = new Map<ObjectId, ObjectRecord>();
+  selection = new Set<ObjectId>();
+  camera: CameraState = DEFAULT_CAMERA;
+  gizmo: GizmoState = DEFAULT_GIZMO;
+  bed: BedMesh | null = null;
+
+  constructor(plateId: PlateId, snap?: PlateSnapshot) {
+    this.plateId = plateId;
+    this.objectGroup.name = `n3o:plate-${plateId}:objects`;
+    this.bedGroup.name = `n3o:plate-${plateId}:bed`;
+    this.name = snap?.name ?? `Plate ${plateId}`;
+    this.metadata = snap?.metadata ?? { cycle_count: 1, composition_order: plateId };
+    this.printer = snap?.printer ?? null;
+    this.materialBindings = snap?.material_bindings ?? [];
+    this.projectOverrides = snap?.project_overrides ?? {};
+    this.objectOverrides = snap?.object_overrides ?? {};
+    if (snap) {
+      this.camera = snap.camera;
+      this.gizmo = snap.gizmo;
+    }
+  }
+
+  /** Dispose every Three.js resource this plate owns. Called when
+   * the plate is removed from the project or the whole mirror is
+   * cleared. */
+  dispose(): void {
+    for (const rec of this.objects.values()) {
+      rec.material.dispose();
+      // Geometry lives in the scene-wide mesh registry; not ours
+      // to dispose.
+      this.objectGroup.remove(rec.mesh);
+    }
+    this.objects.clear();
+    this.selection.clear();
+    disposeGroupChildren(this.bedGroup);
+    this.bed = null;
+  }
+}
+
+export class SceneMirror {
+  /** Stable top-level groups the viewport adds to its scene. The
+   * single child of each is the active plate's per-plate group.
+   * On `ActivePlateChanged` we swap that child — the viewport
+   * doesn't have to track the swap. */
+  readonly objectGroup = new THREE.Group();
+  readonly bedGroup = new THREE.Group();
+
+  // Project-level state (PR-5-1, PR-5-8).
+  projectUuid: string | null = null;
+  sourcePath: string | null = null;
+  cascadeHandle: number | null = null;
+  userOverrides: Record<string, string> = {};
+  fileMetadata: Record<string, string> = {};
+
   private meshes = new Map<MeshId, MeshRecord>();
-  private objects = new Map<ObjectId, ObjectRecord>();
-  private selection = new Set<ObjectId>();
+  private plates = new Map<PlateId, PlateMirror>();
+  /** Insertion order tracked separately so `plateOrder()` can return
+   * plates in declaration order without leaning on Map iteration. */
+  private plateOrderList: PlateId[] = [];
+  private activePlateId: PlateId | null = null;
   private bufferProvider: MeshBufferProvider;
   private listeners: Array<(e: SceneEvent) => void> = [];
   /** Serialization queue for `applyEvent`. Tauri's event listener
@@ -70,27 +166,15 @@ export class SceneMirror {
    * "unknown mesh" floor, and never appear in the viewport. */
   private queue: Promise<void> = Promise.resolve();
 
-  /** Current camera state from the Rust side. The viewport reads
-   * this and (debounced) writes back via `scene_camera_set`. */
-  camera: CameraState = {
-    position: [200, -200, 200],
-    target: [0, 0, 0],
-    up: [0, 0, 1],
-    fov_degrees: 45,
-    projection: "Perspective",
-  };
-  gizmo: GizmoState = { mode: "None", pivot: null };
-  bed: BedMesh | null = null;
-
   constructor(bufferProvider: MeshBufferProvider) {
     this.bufferProvider = bufferProvider;
     this.objectGroup.name = "n3o:scene-objects";
     this.bedGroup.name = "n3o:bed";
   }
 
-  /** Used by test code to observe what the mirror just applied. The
-   * eventBridge emits raw Tauri events; this fires for both raw
-   * events and the snapshot-replay path. */
+  /** Used by test code (and the PR-5-3 frontend tab strip) to observe
+   * applied events. The eventBridge emits raw Tauri events; this
+   * fires for both raw events and the snapshot-replay path. */
   onEvent(listener: (e: SceneEvent) => void): () => void {
     this.listeners.push(listener);
     return () => {
@@ -98,24 +182,80 @@ export class SceneMirror {
     };
   }
 
+  // ---- Active-plate accessors -----------------------------------
+  //
+  // The viewport / camera / gizmo code reads these to render the
+  // currently-active plate. Each falls back to a sensible default
+  // when no plate is active (pre-snapshot bootstrap). Avoid
+  // throwing — the renderer should keep painting even in the
+  // brief window between mirror construction and snapshot apply.
+
+  get camera(): CameraState {
+    return this.activePlate()?.camera ?? DEFAULT_CAMERA;
+  }
+  get gizmo(): GizmoState {
+    return this.activePlate()?.gizmo ?? DEFAULT_GIZMO;
+  }
+  get bed(): BedMesh | null {
+    return this.activePlate()?.bed ?? null;
+  }
+
+  activePlate(): PlateMirror | null {
+    return this.activePlateId !== null
+      ? this.plates.get(this.activePlateId) ?? null
+      : null;
+  }
+
+  activePlateIdOrNull(): PlateId | null {
+    return this.activePlateId;
+  }
+
+  plate(id: PlateId): PlateMirror | null {
+    return this.plates.get(id) ?? null;
+  }
+
+  /** Plates in declaration order — drives PlateTabs UI ordering. */
+  plateOrder(): PlateId[] {
+    return [...this.plateOrderList];
+  }
+
+  // ---- Snapshot + event entry points ----------------------------
+
   /** Wholesale rebuild from a Rust-side snapshot. Used on first
-   * mount + after a renderer reconnect. Mesh buffers are
-   * lazy-loaded — the snapshot only carries headers. */
+   * mount + after a renderer reconnect / `ProjectLoaded`. Mesh
+   * buffers are lazy-loaded — the snapshot only carries headers. */
   async applySnapshot(snapshot: SceneSnapshot): Promise<void> {
     this.clear();
+
+    this.projectUuid = snapshot.project_uuid;
+    this.sourcePath = snapshot.source_path;
+    this.cascadeHandle = snapshot.cascade_handle;
+    this.userOverrides = { ...snapshot.user_overrides };
+    this.fileMetadata = { ...snapshot.file_metadata };
+
+    // Mesh registry first so per-plate objects find their geometry
+    // when registered below.
     for (const header of snapshot.meshes) {
-      await this.applyEvent({ kind: "MeshLoaded", data: header });
+      await this.registerMesh(header);
     }
-    for (const obj of snapshot.objects) {
-      await this.applyEvent({ kind: "ObjectAdded", data: obj });
+
+    // Plates, in declaration order. Each PlateMirror constructor
+    // captures the snapshot's metadata + bindings + camera +
+    // gizmo + project_overrides + object_overrides. We then
+    // synthesize per-object adds + selection + bed events so the
+    // Three.js scene graph populates.
+    for (const plateSnap of snapshot.plates) {
+      const plate = new PlateMirror(plateSnap.plate_id, plateSnap);
+      this.plates.set(plateSnap.plate_id, plate);
+      this.plateOrderList.push(plateSnap.plate_id);
+      for (const obj of plateSnap.objects) {
+        this.addObjectOnPlate(plate, obj);
+      }
+      this.setSelectionOnPlate(plate, plateSnap.selection);
+      this.applyBedOnPlate(plate, plateSnap.bed);
     }
-    await this.applyEvent({
-      kind: "SelectionChanged",
-      data: { selected: snapshot.selection },
-    });
-    await this.applyEvent({ kind: "CameraChanged", data: snapshot.camera });
-    await this.applyEvent({ kind: "GizmoChanged", data: snapshot.gizmo });
-    await this.applyEvent({ kind: "BedChanged", data: snapshot.bed });
+
+    this.setActivePlate(snapshot.active_plate_id);
   }
 
   /** Apply one event from the Rust side. Events are serialized
@@ -135,44 +275,86 @@ export class SceneMirror {
   private async handleEvent(event: SceneEvent): Promise<void> {
     switch (event.kind) {
       case "MeshLoaded":
-        await this.registerMesh(event.data);
+        await this.registerMesh(event.data.mesh);
         break;
-      case "ObjectAdded":
-        this.addObject(event.data);
+      case "ObjectAdded": {
+        const plate = this.requirePlate(event.data.plate_id, "ObjectAdded");
+        if (plate) this.addObjectOnPlate(plate, event.data.object);
         break;
-      case "ObjectUpdated":
-        this.updateObject(event.data);
+      }
+      case "ObjectUpdated": {
+        const plate = this.requirePlate(event.data.plate_id, "ObjectUpdated");
+        if (plate) this.updateObjectOnPlate(plate, event.data.object);
         break;
-      case "ObjectRemoved":
-        this.removeObject(event.data.id);
+      }
+      case "ObjectRemoved": {
+        const plate = this.requirePlate(event.data.plate_id, "ObjectRemoved");
+        if (plate) this.removeObjectOnPlate(plate, event.data.object_id);
         break;
-      case "SelectionChanged":
-        this.setSelection(event.data.selected);
+      }
+      case "SelectionChanged": {
+        const plate = this.requirePlate(
+          event.data.plate_id,
+          "SelectionChanged",
+        );
+        if (plate) this.setSelectionOnPlate(plate, event.data.selected);
         break;
-      case "GizmoChanged":
-        this.gizmo = event.data;
+      }
+      case "GizmoChanged": {
+        const plate = this.requirePlate(event.data.plate_id, "GizmoChanged");
+        if (plate) plate.gizmo = event.data.gizmo;
         break;
-      case "CameraChanged":
-        this.camera = event.data;
+      }
+      case "CameraChanged": {
+        const plate = this.requirePlate(event.data.plate_id, "CameraChanged");
+        if (plate) plate.camera = event.data.camera;
         break;
-      case "BedChanged":
-        this.applyBed(event.data);
+      }
+      case "BedChanged": {
+        const plate = this.requirePlate(event.data.plate_id, "BedChanged");
+        if (plate) this.applyBedOnPlate(plate, event.data.bed);
         break;
+      }
       case "ObjectOutOfBounds":
-        // Non-blocking warning; renderer can flash the object.
-        // For MVP we just tint it momentarily, but since the warning
-        // doesn't carry a duration we leave the visual cue to the
-        // UI layer (a toast). Mirror just notifies listeners.
-        break;
       case "NonUniformScale":
       case "AutoArrangeOverflow":
-        // Same: pass-through, the UI panel handles these toasts.
+        // Non-blocking warnings; the UI layer (toast) handles these.
+        // The mirror just notifies listeners.
+        break;
+      case "PlateAdded":
+        this.addPlate(event.data.plate_id);
+        break;
+      case "PlateRemoved":
+        this.removePlate(event.data.plate_id);
+        break;
+      case "ActivePlateChanged":
+        this.setActivePlate(event.data.plate_id);
+        break;
+      case "PlateMetadataChanged":
+      case "MaterialBindingChanged":
+      case "ObjectOverridesChanged":
+        // The mirror keeps a copy of these for fast UI render, but
+        // since the canonical source is the project snapshot, the
+        // simplest correct path is to no-op here and let the UI
+        // re-fetch via the snapshot command when it needs fresh
+        // metadata. PR-5-3+ may add inline updates if profiling
+        // shows the snapshot fetch is on the hot path.
+        break;
+      case "ProjectSaved":
+        this.sourcePath = event.data.path;
+        break;
+      case "ProjectLoaded":
+        // The frontend should re-fetch the snapshot and call
+        // applySnapshot — the new project's plates / meshes /
+        // overrides have nothing in common with the prior state.
         break;
     }
     for (const l of this.listeners) {
       l(event);
     }
   }
+
+  // ---- Scene-wide mesh registry ---------------------------------
 
   private async registerMesh(header: MeshHeader): Promise<void> {
     if (this.meshes.has(header.id)) {
@@ -203,10 +385,23 @@ export class SceneMirror {
     this.meshes.set(header.id, { geometry, header });
   }
 
-  private addObject(obj: SceneObject): void {
-    if (this.objects.has(obj.id)) {
+  // ---- Per-plate scene-graph mutation ---------------------------
+
+  private requirePlate(id: PlateId, eventName: string): PlateMirror | null {
+    const plate = this.plates.get(id);
+    if (!plate) {
+      console.warn(
+        `[n3o] ${eventName} for unknown plate ${id}; event dropped`,
+      );
+      return null;
+    }
+    return plate;
+  }
+
+  private addObjectOnPlate(plate: PlateMirror, obj: SceneObject): void {
+    if (plate.objects.has(obj.id)) {
       // Replay path — treat like an update.
-      this.updateObject(obj);
+      this.updateObjectOnPlate(plate, obj);
       return;
     }
     const meshRec = this.meshes.get(obj.mesh);
@@ -218,6 +413,8 @@ export class SceneMirror {
       console.debug(
         "[n3o] add object",
         obj.id,
+        "plate",
+        plate.plateId,
         "mesh",
         obj.mesh,
         "tx",
@@ -232,6 +429,7 @@ export class SceneMirror {
     const mesh = new THREE.Mesh(meshRec.geometry, material);
     mesh.name = `obj:${obj.id}`;
     mesh.userData.objectId = obj.id;
+    mesh.userData.plateId = plate.plateId;
     mesh.visible = obj.visible;
     // Leave matrixAutoUpdate=true (Three.js default) so that the
     // PR-2-10 gizmo's drag — which writes to position/quaternion/
@@ -239,24 +437,24 @@ export class SceneMirror {
     // the incoming column-major matrix into those three so the
     // next-frame recompute reproduces the same matrix.
     applyTransform(mesh, obj);
-    this.objectGroup.add(mesh);
-    this.objects.set(obj.id, { mesh, material, data: obj });
-    if (this.selection.has(obj.id)) {
-      this.tintForSelection(obj.id, true);
+    plate.objectGroup.add(mesh);
+    plate.objects.set(obj.id, { mesh, material, data: obj });
+    if (plate.selection.has(obj.id)) {
+      this.tintForSelection(plate, obj.id, true);
     }
   }
 
-  private updateObject(obj: SceneObject): void {
-    const rec = this.objects.get(obj.id);
+  private updateObjectOnPlate(plate: PlateMirror, obj: SceneObject): void {
+    const rec = plate.objects.get(obj.id);
     if (!rec) {
-      this.addObject(obj);
+      this.addObjectOnPlate(plate, obj);
       return;
     }
     if (rec.data.mesh !== obj.mesh) {
       // Mesh swap — rare, but possible if PR-2-7's library re-instances.
       // Rebuild the whole record.
-      this.removeObject(obj.id);
-      this.addObject(obj);
+      this.removeObjectOnPlate(plate, obj.id);
+      this.addObjectOnPlate(plate, obj);
       return;
     }
     rec.mesh.visible = obj.visible;
@@ -264,140 +462,152 @@ export class SceneMirror {
     rec.data = obj;
   }
 
-  private removeObject(id: ObjectId): void {
-    const rec = this.objects.get(id);
+  private removeObjectOnPlate(plate: PlateMirror, id: ObjectId): void {
+    const rec = plate.objects.get(id);
     if (!rec) return;
-    this.objectGroup.remove(rec.mesh);
+    plate.objectGroup.remove(rec.mesh);
     rec.material.dispose();
     // Geometry is shared via the mesh registry — don't dispose here.
-    this.objects.delete(id);
-    this.selection.delete(id);
+    plate.objects.delete(id);
+    plate.selection.delete(id);
   }
 
-  private setSelection(ids: ObjectId[]): void {
+  private setSelectionOnPlate(plate: PlateMirror, ids: ObjectId[]): void {
     const next = new Set(ids);
-    for (const old of this.selection) {
+    for (const old of plate.selection) {
       if (!next.has(old)) {
-        this.tintForSelection(old, false);
+        this.tintForSelection(plate, old, false);
       }
     }
     for (const id of next) {
-      if (!this.selection.has(id)) {
-        this.tintForSelection(id, true);
+      if (!plate.selection.has(id)) {
+        this.tintForSelection(plate, id, true);
       }
     }
-    this.selection = next;
+    plate.selection = next;
   }
 
-  private tintForSelection(id: ObjectId, selected: boolean): void {
-    const rec = this.objects.get(id);
+  private tintForSelection(
+    plate: PlateMirror,
+    id: ObjectId,
+    selected: boolean,
+  ): void {
+    const rec = plate.objects.get(id);
     if (!rec) return;
     rec.material.color.setHex(selected ? SELECTED_COLOR : DEFAULT_COLOR);
     rec.material.emissive.setHex(selected ? 0x0a1b3a : 0x000000);
   }
 
-  private applyBed(bed: BedMesh | null): void {
-    // Reset the bed group.
-    while (this.bedGroup.children.length > 0) {
-      const child = this.bedGroup.children[0];
-      this.bedGroup.remove(child);
-      disposeObject3D(child);
-    }
-    this.bed = bed;
+  private applyBedOnPlate(plate: PlateMirror, bed: BedMesh | null): void {
+    disposeGroupChildren(plate.bedGroup);
+    plate.bed = bed;
     if (!bed) return;
-
-    const { extents, grid_spacing, exclusion_zones } = bed;
-    const minX = extents.min[0];
-    const minY = extents.min[1];
-    const maxX = extents.max[0];
-    const maxY = extents.max[1];
-    const z = extents.min[2];
-
-    // Grid lines at every grid_spacing in both X and Y.
-    const gridGeo = new THREE.BufferGeometry();
-    const points: number[] = [];
-    for (let x = minX; x <= maxX + 1e-6; x += grid_spacing) {
-      points.push(x, minY, z, x, maxY, z);
-    }
-    for (let y = minY; y <= maxY + 1e-6; y += grid_spacing) {
-      points.push(minX, y, z, maxX, y, z);
-    }
-    gridGeo.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute(points, 3),
-    );
-    const gridLines = new THREE.LineSegments(
-      gridGeo,
-      new THREE.LineBasicMaterial({ color: 0x444444, transparent: true, opacity: 0.5 }),
-    );
-    gridLines.name = "n3o:bed-grid";
-    this.bedGroup.add(gridLines);
-
-    // Outline (heavy edge of the bed rectangle).
-    const outlineGeo = new THREE.BufferGeometry();
-    outlineGeo.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute(
-        [
-          minX, minY, z, maxX, minY, z,
-          maxX, minY, z, maxX, maxY, z,
-          maxX, maxY, z, minX, maxY, z,
-          minX, maxY, z, minX, minY, z,
-        ],
-        3,
-      ),
-    );
-    const outline = new THREE.LineSegments(
-      outlineGeo,
-      new THREE.LineBasicMaterial({ color: 0x888888 }),
-    );
-    outline.name = "n3o:bed-outline";
-    this.bedGroup.add(outline);
-
-    // Exclusion zones (red wireframe AABBs).
-    for (const zone of exclusion_zones) {
-      this.bedGroup.add(buildZoneWireframe(zone.bounds, zone.label));
-    }
+    buildBedOverlay(plate.bedGroup, bed);
   }
 
-  // ---- Test / inspector accessors -------------------------------------
+  // ---- Plate list mutations -------------------------------------
+
+  private addPlate(id: PlateId): void {
+    if (this.plates.has(id)) return;
+    this.plates.set(id, new PlateMirror(id));
+    this.plateOrderList.push(id);
+  }
+
+  private removePlate(id: PlateId): void {
+    const plate = this.plates.get(id);
+    if (!plate) return;
+    if (this.activePlateId === id) {
+      this.objectGroup.remove(plate.objectGroup);
+      this.bedGroup.remove(plate.bedGroup);
+      this.activePlateId = null;
+    }
+    plate.dispose();
+    this.plates.delete(id);
+    this.plateOrderList = this.plateOrderList.filter((p) => p !== id);
+  }
+
+  private setActivePlate(id: PlateId): void {
+    if (this.activePlateId === id) return;
+    const prior = this.activePlateId !== null
+      ? this.plates.get(this.activePlateId) ?? null
+      : null;
+    const next = this.plates.get(id);
+    if (!next) {
+      console.warn(`[n3o] ActivePlateChanged: unknown plate ${id}`);
+      return;
+    }
+    if (prior) {
+      this.objectGroup.remove(prior.objectGroup);
+      this.bedGroup.remove(prior.bedGroup);
+    }
+    this.objectGroup.add(next.objectGroup);
+    this.bedGroup.add(next.bedGroup);
+    this.activePlateId = id;
+  }
+
+  // ---- Test / inspector accessors -------------------------------
+  //
+  // These read the **active plate** by default so existing
+  // single-plate tests keep working without rewrites. Multi-plate
+  // tests use the explicit per-plate variants.
+
   hasMesh(id: MeshId): boolean {
     return this.meshes.has(id);
   }
   hasObject(id: ObjectId): boolean {
-    return this.objects.has(id);
+    return this.activePlate()?.objects.has(id) ?? false;
+  }
+  hasObjectOnPlate(plateId: PlateId, id: ObjectId): boolean {
+    return this.plates.get(plateId)?.objects.has(id) ?? false;
   }
   selectedIds(): ObjectId[] {
-    return Array.from(this.selection).sort((a, b) => a - b);
+    const sel = this.activePlate()?.selection;
+    return sel ? Array.from(sel).sort((a, b) => a - b) : [];
   }
   objectColor(id: ObjectId): number | null {
-    return this.objects.get(id)?.material.color.getHex() ?? null;
+    return this.activePlate()?.objects.get(id)?.material.color.getHex() ?? null;
   }
   objectMatrix(id: ObjectId): number[] | null {
-    const rec = this.objects.get(id);
+    const rec = this.activePlate()?.objects.get(id);
     return rec ? rec.mesh.matrix.toArray() : null;
   }
   bedChildCount(): number {
-    return this.bedGroup.children.length;
+    return this.activePlate()?.bedGroup.children.length ?? 0;
   }
 
-  /** Drop every mesh / object / overlay. Used by the snapshot
-   * replay path and by Vite hot-reload teardown. */
+  /** Look up the Three.js mesh for an object on the active plate.
+   * Used by the gizmo to attach to the selected object. Returns
+   * `null` when the object isn't on the active plate (or doesn't
+   * exist at all). */
+  findActiveMesh(id: ObjectId): THREE.Mesh | null {
+    return this.activePlate()?.objects.get(id)?.mesh ?? null;
+  }
+
+  /** Drop every plate / mesh / overlay. Used by snapshot replay,
+   * Vite hot-reload teardown, and `ProjectLoaded`. */
   clear(): void {
-    for (const id of Array.from(this.objects.keys())) {
-      this.removeObject(id);
+    for (const plate of this.plates.values()) {
+      plate.dispose();
     }
-    for (const [, rec] of this.meshes) {
+    // Detach the active plate's groups from the top-level groups.
+    while (this.objectGroup.children.length > 0) {
+      this.objectGroup.remove(this.objectGroup.children[0]);
+    }
+    while (this.bedGroup.children.length > 0) {
+      this.bedGroup.remove(this.bedGroup.children[0]);
+    }
+    this.plates.clear();
+    this.plateOrderList = [];
+    this.activePlateId = null;
+    for (const rec of this.meshes.values()) {
       rec.geometry.dispose();
     }
     this.meshes.clear();
-    this.selection.clear();
-    while (this.bedGroup.children.length > 0) {
-      const child = this.bedGroup.children[0];
-      this.bedGroup.remove(child);
-      disposeObject3D(child);
-    }
-    this.bed = null;
+    this.projectUuid = null;
+    this.sourcePath = null;
+    this.cascadeHandle = null;
+    this.userOverrides = {};
+    this.fileMetadata = {};
   }
 }
 
@@ -419,7 +629,69 @@ function applyTransform(mesh: THREE.Mesh, obj: SceneObject): void {
   mesh.updateMatrix();
 }
 
-function buildZoneWireframe(bb: BedMesh["extents"], label: string): THREE.Object3D {
+function buildBedOverlay(group: THREE.Group, bed: BedMesh): void {
+  const { extents, grid_spacing, exclusion_zones } = bed;
+  const minX = extents.min[0];
+  const minY = extents.min[1];
+  const maxX = extents.max[0];
+  const maxY = extents.max[1];
+  const z = extents.min[2];
+
+  // Grid lines at every grid_spacing in both X and Y.
+  const gridGeo = new THREE.BufferGeometry();
+  const points: number[] = [];
+  for (let x = minX; x <= maxX + 1e-6; x += grid_spacing) {
+    points.push(x, minY, z, x, maxY, z);
+  }
+  for (let y = minY; y <= maxY + 1e-6; y += grid_spacing) {
+    points.push(minX, y, z, maxX, y, z);
+  }
+  gridGeo.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(points, 3),
+  );
+  const gridLines = new THREE.LineSegments(
+    gridGeo,
+    new THREE.LineBasicMaterial({
+      color: 0x444444,
+      transparent: true,
+      opacity: 0.5,
+    }),
+  );
+  gridLines.name = "n3o:bed-grid";
+  group.add(gridLines);
+
+  // Outline (heavy edge of the bed rectangle).
+  const outlineGeo = new THREE.BufferGeometry();
+  outlineGeo.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(
+      [
+        minX, minY, z, maxX, minY, z,
+        maxX, minY, z, maxX, maxY, z,
+        maxX, maxY, z, minX, maxY, z,
+        minX, maxY, z, minX, minY, z,
+      ],
+      3,
+    ),
+  );
+  const outline = new THREE.LineSegments(
+    outlineGeo,
+    new THREE.LineBasicMaterial({ color: 0x888888 }),
+  );
+  outline.name = "n3o:bed-outline";
+  group.add(outline);
+
+  // Exclusion zones (red wireframe AABBs).
+  for (const zone of exclusion_zones) {
+    group.add(buildZoneWireframe(zone.bounds, zone.label));
+  }
+}
+
+function buildZoneWireframe(
+  bb: BedMesh["extents"],
+  label: string,
+): THREE.Object3D {
   const w = bb.max[0] - bb.min[0];
   const d = bb.max[1] - bb.min[1];
   const h = Math.max(bb.max[2] - bb.min[2], 1.0);
@@ -428,7 +700,11 @@ function buildZoneWireframe(bb: BedMesh["extents"], label: string): THREE.Object
   geo.dispose();
   const line = new THREE.LineSegments(
     edges,
-    new THREE.LineBasicMaterial({ color: 0xef4444, transparent: true, opacity: 0.7 }),
+    new THREE.LineBasicMaterial({
+      color: 0xef4444,
+      transparent: true,
+      opacity: 0.7,
+    }),
   );
   line.position.set(
     (bb.min[0] + bb.max[0]) * 0.5,
@@ -437,6 +713,14 @@ function buildZoneWireframe(bb: BedMesh["extents"], label: string): THREE.Object
   );
   line.name = `n3o:zone:${label}`;
   return line;
+}
+
+function disposeGroupChildren(group: THREE.Group): void {
+  while (group.children.length > 0) {
+    const child = group.children[0];
+    group.remove(child);
+    disposeObject3D(child);
+  }
 }
 
 function disposeObject3D(obj: THREE.Object3D): void {

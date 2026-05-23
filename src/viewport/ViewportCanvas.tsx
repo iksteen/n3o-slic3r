@@ -97,42 +97,75 @@ export function ViewportCanvas() {
     });
 
     // ---- Event bridge -------------------------------------------------
+    //
+    // PR-5-2 phase C: events route to the active plate via SceneMirror.
+    // The viewport only reacts to events whose `plate_id` matches the
+    // active plate — toasts / gizmo / camera updates for an inactive
+    // plate would render against the wrong workspace. (Frontend
+    // PlateTabs receives ActivePlateChanged separately and swaps the
+    // viewport's framing.)
     const detachToastsListener = mirror.onEvent((evt) => {
+      const activeId = mirror.activePlateIdOrNull();
       switch (evt.kind) {
         case "ObjectOutOfBounds":
+          if (evt.data.plate_id !== activeId) break;
           pushToast(
             "warn",
-            `object ${evt.data.id} out of bounds: ${evt.data.reasons
+            `object ${evt.data.object_id} out of bounds: ${evt.data.reasons
               .map((r) => r.kind)
               .join(", ")}`,
           );
           break;
         case "NonUniformScale":
+          if (evt.data.plate_id !== activeId) break;
           pushToast(
             "warn",
-            `object ${evt.data.id} now has non-uniform scale — dimensional settings may be off`,
+            `object ${evt.data.object_id} now has non-uniform scale — dimensional settings may be off`,
           );
           break;
         case "AutoArrangeOverflow":
+          if (evt.data.plate_id !== activeId) break;
           pushToast(
             "warn",
             `auto-arrange could not place ${evt.data.un_placed.length} object(s)`,
           );
           break;
         case "SelectionChanged":
+          if (evt.data.plate_id !== activeId) break;
           setSelectedIds([...evt.data.selected]);
           gizmo.setSelection(evt.data.selected);
           break;
         case "GizmoChanged":
-          setGizmoMode(evt.data.mode);
-          gizmo.setMode(evt.data.mode);
-          gizmo.setPivotOverride(evt.data.pivot);
+          if (evt.data.plate_id !== activeId) break;
+          setGizmoMode(evt.data.gizmo.mode);
+          gizmo.setMode(evt.data.gizmo.mode);
+          gizmo.setPivotOverride(evt.data.gizmo.pivot);
           break;
         case "BedChanged":
-          if (evt.data) {
-            initialFrameForBed(camera, controls, evt.data, aspect);
+          if (evt.data.plate_id !== activeId) break;
+          if (evt.data.bed) {
+            initialFrameForBed(camera, controls, evt.data.bed, aspect);
           }
           break;
+        case "ActivePlateChanged": {
+          // The active plate just changed — re-sync the viewport's
+          // gizmo + selection + camera framing from the new plate's
+          // cached state so the workspace matches.
+          const plate = mirror.activePlate();
+          if (plate) {
+            setSelectedIds(Array.from(plate.selection).sort((a, b) => a - b));
+            gizmo.setSelection(
+              Array.from(plate.selection).sort((a, b) => a - b),
+            );
+            setGizmoMode(plate.gizmo.mode);
+            gizmo.setMode(plate.gizmo.mode);
+            gizmo.setPivotOverride(plate.gizmo.pivot);
+            if (plate.bed) {
+              initialFrameForBed(camera, controls, plate.bed, aspect);
+            }
+          }
+          break;
+        }
       }
     });
 

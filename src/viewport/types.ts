@@ -1,4 +1,4 @@
-// TypeScript mirrors of the Rust scene types (PR-2-9).
+// TypeScript mirrors of the Rust scene types (PR-2-9, PR-5-2 phase C).
 //
 // These exist to give the renderer a typed view of the JSON payloads
 // the Tauri commands and `scene:*` events emit. Hand-written rather
@@ -15,6 +15,10 @@ export type MeshId = number;
 
 /** Monotonic scene-object id. 1-based on the Rust side. */
 export type ObjectId = number;
+
+/** Stable per-plate identifier (PR-5-2). 1-based on the Rust side;
+ * never reused even when a plate is removed. */
+export type PlateId = number;
 
 /** Column-major [f32; 16] matrix matching glam + THREE.Matrix4.
  *  The Rust `Transform` is `#[serde(transparent)]` over `[f32; 16]`,
@@ -86,32 +90,137 @@ export type OutOfBoundsReason =
   | { kind: "IntersectsExclusion"; data: { label: string } }
   | { kind: "BelowBuildPlate"; data: null };
 
-/** Snapshot returned by the `scene_snapshot` Tauri command. */
-export interface SceneSnapshot {
-  meshes: MeshHeader[];
+// ---- Project-level types (PR-5-1, PR-5-5, PR-5-6) ------------------
+
+/** Per-plate metadata the PlateCycler plugin consumes. */
+export interface PlateMetadata {
+  cycle_count: number;
+  composition_order: number;
+}
+
+/** Identity of a printer + build plate bound to a project plate.
+ * Held as identities (strings), not resolved profiles — profile
+ * resolution happens at slice time. */
+export interface PrinterBinding {
+  printer_identity: string;
+  build_plate_identity: string;
+}
+
+/** Map a 1-based model material index → physical slot + filament
+ * profile identity loaded on that slot. */
+export interface MaterialBinding {
+  model_material: number;
+  physical_slot: number;
+  filament_identity: string;
+}
+
+// ---- Snapshot wire shape (PR-5-2 phase C) --------------------------
+
+/** Per-plate slice of the snapshot. Plate identity + metadata +
+ * bindings + scene contents — enough to render a plate tab and
+ * its workspace. */
+export interface PlateSnapshot {
+  // Plate identity / metadata
+  plate_id: PlateId;
+  name: string;
+  metadata: PlateMetadata;
+  printer: PrinterBinding | null;
+  material_bindings: MaterialBinding[];
+  project_overrides: Record<string, string>;
+
+  // Per-plate scene contents
   objects: SceneObject[];
   selection: ObjectId[];
   camera: CameraState;
   gizmo: GizmoState;
-  plate: unknown | null; // ActivePlate — only used for serialization round-trip; no renderer feature on it yet
+  /** Active build plate identity + transform on this plate (the
+   * bed surface selection — distinct from the multi-plate
+   * `plate_id` field above). */
+  build_plate: unknown | null;
   exclusion_zones: ExclusionZone[];
   bed: BedMesh | null;
+  object_overrides: Record<string, Record<string, string>>;
 }
 
-/** Live diff events on `scene:*` channels. Same shape as Rust's
- * `SceneEvent` with `#[serde(tag = "kind", content = "data")]`. */
+/** Snapshot returned by the `scene_snapshot` Tauri command (PR-5-2
+ * phase C). The renderer rebuilds its mirror from this on first
+ * mount + after every reconnect. */
+export interface SceneSnapshot {
+  project_uuid: string;
+  source_path: string | null;
+  cascade_handle: number | null;
+  user_overrides: Record<string, string>;
+  file_metadata: Record<string, string>;
+  /** Scene-wide mesh registry. Headers only; the renderer follows
+   * up per-mesh with `scene_mesh_buffers(id)` for the binary
+   * vertex / normal / index data. */
+  meshes: MeshHeader[];
+  /** All plates in declaration order. */
+  plates: PlateSnapshot[];
+  /** Stable id of the currently-active plate. */
+  active_plate_id: PlateId;
+}
+
+/** Live diff events on `scene:*` / `project:*` channels. Matches
+ * Rust's `SceneEvent` with `#[serde(tag = "kind", content = "data")]`.
+ *
+ * **PR-5-2 phase C:** every plate-scoped variant carries `plate_id`
+ * as its first data field so the mirror routes the event to the
+ * matching per-plate cache. Scene-wide variants (mesh registry,
+ * project save/load) stay plate-less. */
 export type SceneEvent =
-  | { kind: "MeshLoaded"; data: MeshHeader }
-  | { kind: "ObjectAdded"; data: SceneObject }
-  | { kind: "ObjectUpdated"; data: SceneObject }
-  | { kind: "ObjectRemoved"; data: { id: ObjectId } }
-  | { kind: "SelectionChanged"; data: { selected: ObjectId[] } }
-  | { kind: "GizmoChanged"; data: GizmoState }
-  | { kind: "CameraChanged"; data: CameraState }
-  | { kind: "BedChanged"; data: BedMesh | null }
+  // ---- Scene-wide ----
+  | { kind: "MeshLoaded"; data: { mesh: MeshHeader } }
+  // ---- Per-plate scene-graph deltas ----
+  | { kind: "ObjectAdded"; data: { plate_id: PlateId; object: SceneObject } }
+  | { kind: "ObjectUpdated"; data: { plate_id: PlateId; object: SceneObject } }
+  | {
+      kind: "ObjectRemoved";
+      data: { plate_id: PlateId; object_id: ObjectId };
+    }
+  | {
+      kind: "SelectionChanged";
+      data: { plate_id: PlateId; selected: ObjectId[] };
+    }
+  | {
+      kind: "GizmoChanged";
+      data: { plate_id: PlateId; gizmo: GizmoState };
+    }
+  | {
+      kind: "CameraChanged";
+      data: { plate_id: PlateId; camera: CameraState };
+    }
+  | {
+      kind: "BedChanged";
+      data: { plate_id: PlateId; bed: BedMesh | null };
+    }
   | {
       kind: "ObjectOutOfBounds";
-      data: { id: ObjectId; reasons: OutOfBoundsReason[] };
+      data: {
+        plate_id: PlateId;
+        object_id: ObjectId;
+        reasons: OutOfBoundsReason[];
+      };
     }
-  | { kind: "NonUniformScale"; data: { id: ObjectId } }
-  | { kind: "AutoArrangeOverflow"; data: { un_placed: ObjectId[] } };
+  | {
+      kind: "NonUniformScale";
+      data: { plate_id: PlateId; object_id: ObjectId };
+    }
+  | {
+      kind: "AutoArrangeOverflow";
+      data: { plate_id: PlateId; un_placed: ObjectId[] };
+    }
+  // ---- Plate list mutations (PR-5-2) ----
+  | { kind: "PlateAdded"; data: { plate_id: PlateId } }
+  | { kind: "PlateRemoved"; data: { plate_id: PlateId } }
+  | { kind: "ActivePlateChanged"; data: { plate_id: PlateId } }
+  // ---- Project-state changes (PR-5-5, PR-5-6, PR-5-7) ----
+  | { kind: "PlateMetadataChanged"; data: { plate_id: PlateId } }
+  | { kind: "MaterialBindingChanged"; data: { plate_id: PlateId } }
+  | {
+      kind: "ObjectOverridesChanged";
+      data: { plate_id: PlateId; object_id: ObjectId };
+    }
+  // ---- Project save/load (PR-5-8) ----
+  | { kind: "ProjectSaved"; data: { path: string } }
+  | { kind: "ProjectLoaded"; data: { path: string } };
