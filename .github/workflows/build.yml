@@ -78,31 +78,51 @@ jobs:
             libgles2-mesa-dev \
             libxkbcommon-dev
 
-      - name: Cache OrcaSlicer deps prefix
+      - name: Restore OrcaSlicer deps cache
         id: cache-deps
-        uses: actions/cache@v4
+        # Split restore + save so a downstream failure (cargo test,
+        # libslic3r build, …) doesn't prevent the ~17 min deps
+        # tree from being cached. `actions/cache@v4`'s default
+        # post-step only saves on full job success — that's how
+        # runs 26313140866 / 26327551678 / 26329702592 burned the
+        # cold deps cost repeatedly. Restore here, save right
+        # after the deps build succeeds (below).
+        uses: actions/cache/restore@v4
         with:
           path: external/OrcaSlicer/deps/build/OrcaSlicer_dep
           key: orca-deps-${{ runner.os }}-${{ steps.orca.outputs.sha }}-${{ hashFiles('scripts/build.sh', 'external/OrcaSlicer/deps/CMakeLists.txt') }}
 
       - name: Build OrcaSlicer deps (cache miss only)
+        id: build-deps
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: ./scripts/build.sh deps
+
+      - name: Save OrcaSlicer deps cache
+        # Only saves on cache miss + successful deps build. Runs
+        # eagerly here so the cache is preserved even if the
+        # downstream `cargo test` fails. `actions/cache/save` is
+        # a no-op on cache hit (the cache already exists at that
+        # key); we still gate explicitly for clarity.
+        if: steps.cache-deps.outputs.cache-hit != 'true' && steps.build-deps.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: external/OrcaSlicer/deps/build/OrcaSlicer_dep
+          key: ${{ steps.cache-deps.outputs.cache-primary-key }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache libslic3r cmake build tree
-        # The FFI crate's build.rs drives cmake under build/slic3r-ffi/
-        # — that's where libslic3r.a, libslic3r_ffi.so, and all the
-        # .o files for compiling libslic3r itself land (~5G raw,
-        # ~1-2G compressed). Without this cache, every CI run pays
-        # the ~15 min cold libslic3r build even with the OrcaSlicer
-        # deps tree cached. Key invalidates when the submodule moves
-        # or when the shim sources / CMakeLists / build.rs change;
-        # the restore-keys fallback lets ninja do an incremental
-        # rebuild on shim-source edits.
-        uses: actions/cache@v4
+      - name: Restore libslic3r cmake build tree cache
+        # Same split-restore-save pattern as the deps cache. The
+        # cmake build tree (~5G raw, ~1-2G compressed) holds
+        # libslic3r.a, libslic3r_ffi.so, and all the .o files for
+        # compiling libslic3r itself. Without this cache every
+        # run pays the ~15 min cold libslic3r build even with the
+        # OrcaSlicer deps tree cached. Save is gated on the cargo
+        # build's success below, so a failed test step doesn't
+        # invalidate the cache.
+        id: cache-ffi
+        uses: actions/cache/restore@v4
         with:
           path: build/slic3r-ffi
           # Include the cmake config in the key so flipping
@@ -177,6 +197,35 @@ jobs:
           sudo swapon /swapfile
           free -h
 
+      - name: cargo build (workspace, debug)
+        # Splits the build from the test run so the
+        # libslic3r cmake build (driven by slic3r-ffi's build.rs)
+        # completes + caches before any tests can fail. Without
+        # this split, a test failure cancels the cache save and
+        # the next CI run pays the ~15 min cold libslic3r cost.
+        id: cargo-build
+        env:
+          CARGO_BUILD_JOBS: 1
+          CARGO_INCREMENTAL: 0
+          # Drop libslic3r's debug symbols to keep the cmake build
+          # tree under the runner's disk ceiling. Local builds keep
+          # RelWithDebInfo so PR-3-11-style segfault backtraces
+          # stay actionable; CI doesn't ship binaries so it doesn't
+          # need the symbols.
+          N3O_SLIC3R_FFI_CMAKE_CONFIG: Release
+        run: cargo build --workspace --tests --examples
+
+      - name: Save libslic3r cmake build tree cache
+        # Gated on the cargo build succeeding so a half-built
+        # cmake tree doesn't get cached. No-op on cache hit (key
+        # already present). Runs before `cargo test` so a test
+        # failure can't invalidate the cache.
+        if: steps.cache-ffi.outputs.cache-hit != 'true' && steps.cargo-build.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: build/slic3r-ffi
+          key: ${{ steps.cache-ffi.outputs.cache-primary-key }}
+
       - name: cargo test (workspace, debug)
         # Debug profile is kept (no LLVM optimization pass) on top of
         # the swap headroom; we don't need release-mode codegen for
@@ -189,11 +238,6 @@ jobs:
         env:
           CARGO_BUILD_JOBS: 1
           CARGO_INCREMENTAL: 0
-          # Drop libslic3r's debug symbols to keep the cmake build
-          # tree under the runner's disk ceiling. Local builds keep
-          # RelWithDebInfo so PR-3-11-style segfault backtraces
-          # stay actionable; CI doesn't ship binaries so it doesn't
-          # need the symbols.
           N3O_SLIC3R_FFI_CMAKE_CONFIG: Release
         run: cargo test --workspace
 
