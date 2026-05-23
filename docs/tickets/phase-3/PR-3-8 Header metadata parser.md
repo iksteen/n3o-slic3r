@@ -1,6 +1,6 @@
 # PR-3-8 — Header metadata parser
 
-Status: ❌ open. **Cut candidate** per Execution Plan §5.
+Status: ✅ shipped — `core/gcode/header.rs` parses Orca / Bambu Studio / PrusaSlicer / Cura header dialects into a `HeaderMetadata` struct (slicer + version + estimated time + filament usages with units + layer count + bbox + raw_settings catchall). `parse_header` reads up to 4 K lines or until the first non-comment line, whichever comes first. 9 unit tests covering each slicer + the qualifier handling (`[g]` brackets, `(normal mode)` parens).
 
 **Scope.** Multi-slicer-flavor header parser: extracts estimated
 time, filament use, slicer of origin, layer count, etc. from the

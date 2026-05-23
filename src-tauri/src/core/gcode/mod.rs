@@ -9,6 +9,7 @@
 //! Implementation lands in Phase 3 (parser) and Phase 6 (preview
 //! features).
 
+pub mod header;
 pub mod model;
 pub mod parser;
 pub mod serializer;
@@ -18,4 +19,5 @@ pub use model::{
     MoveCommand, MoveParam, Other, Position, SemanticComment, ToolChange,
 };
 pub use parser::{parse_lines, parse_str, parse_with_feature_context, ParseError, ParseErrorKind};
+pub use header::{parse_header, parse_header_str, FilamentUsage, HeaderMetadata, SlicerOrigin};
 pub use serializer::{to_string, write_lines};
