@@ -601,6 +601,14 @@
     border-radius: 8px;
   }
   .set-row .reset-btn {
+    /* Float outside the row's `1fr 100px` grid so it doesn't
+     * push the value control onto its own line when it appears
+     * on hover. Sits just left of the value column (12px row
+     * padding + 100px value column + 4px gap). */
+    position: absolute;
+    right: 116px;
+    top: 50%;
+    transform: translateY(-50%);
     display: none;
     width: 18px;
     height: 18px;
