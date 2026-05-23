@@ -83,9 +83,17 @@ export interface CascadeLadderProps {
   /** Objects on the plate that override this setting. Empty when
    *  no per-object overrides (or PR-4-9 hasn't populated yet). */
   objectOverrides?: readonly ObjectOverrideEntry[];
+  /** Upstream libslic3r tooltip describing what the setting does.
+   *  Rendered as a small dim paragraph above the cascade title.
+   *  `null` when the schema has no tooltip text. */
+  description?: string | null;
+  /** "Why this matters" annotation from `src/settings/annotations`.
+   *  When present, rendered as a small `tip:` line under the
+   *  description. */
+  whyThisMatters?: string | null;
 }
 
-const LADDER_WIDTH = 250;
+const LADDER_WIDTH = 360;
 const VIEWPORT_PAD = 8;
 
 export function CascadeLadder({
@@ -99,11 +107,14 @@ export function CascadeLadder({
   onMouseLeave,
   cascadeFallback = null,
   objectOverrides = [],
+  description = null,
+  whyThisMatters = null,
 }: CascadeLadderProps) {
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  const popupRef = useRef<HTMLDivElement | null>(null);
 
   useLayoutEffect(() => {
-    if (!open || !anchor) {
+    if (!open || !anchor || !popupRef.current) {
       setPosition(null);
       return;
     }
@@ -117,24 +128,44 @@ export function CascadeLadder({
         rect.right + 10,
       );
     }
-    const top = Math.max(
-      VIEWPORT_PAD,
-      Math.min(rect.top + rect.height / 2, window.innerHeight - VIEWPORT_PAD),
-    );
+    // Vertically center on the row, then clamp so neither the top
+    // nor the bottom escapes the viewport. We compute the box's top
+    // edge directly (no `translateY(-50%)`) so the clamp math is
+    // simple: a popup taller than the viewport sticks to the top
+    // and gets internal scroll via `max-height` in the CSS.
+    const popupHeight = popupRef.current.offsetHeight;
+    const rowCenter = rect.top + rect.height / 2;
+    let top = rowCenter - popupHeight / 2;
+    const maxTop = window.innerHeight - popupHeight - VIEWPORT_PAD;
+    if (maxTop < VIEWPORT_PAD) {
+      // Popup taller than the viewport — pin to the top.
+      top = VIEWPORT_PAD;
+    } else {
+      top = Math.max(VIEWPORT_PAD, Math.min(top, maxTop));
+    }
     setPosition({ top, left });
-  }, [open, anchor]);
+    // `description` + `whyThisMatters` affect the rendered height,
+    // so re-measure when they change; same for `objectOverrides`,
+    // `cascadeFallback`, and the layers (length isn't truly stable
+    // but for our setting it's enough to depend on the open/anchor
+    // pair plus the description-affecting props).
+  }, [open, anchor, description, whyThisMatters, cascadeFallback, objectOverrides]);
 
-  if (!open || !position) return null;
+  if (!open) return null;
 
   const body = (
     <div
+      ref={popupRef}
       className="cascade-ladder"
       style={{
         position: "fixed",
-        top: position.top,
-        left: position.left,
-        transform: "translateY(-50%)",
+        top: position?.top ?? 0,
+        left: position?.left ?? 0,
         width: LADDER_WIDTH,
+        // Hide until the position measurement settles so the
+        // popup doesn't visibly jump from its initial (0,0) frame
+        // to its final clamped frame.
+        visibility: position ? "visible" : "hidden",
       }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
@@ -226,6 +257,20 @@ export function CascadeLadder({
             </div>
           ))}
         </>
+      )}
+
+      {(description || whyThisMatters) && (
+        <div className="ladder-description">
+          {description && (
+            <div className="ladder-description-body">{description}</div>
+          )}
+          {whyThisMatters && (
+            <div className="ladder-description-why">
+              <span className="ladder-description-why-heading">tip</span>
+              {whyThisMatters}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

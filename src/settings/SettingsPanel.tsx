@@ -52,7 +52,6 @@ import {
 } from "./resolve";
 import { winningLayerFor, type CascadeLayer } from "./layers";
 import { CascadeLadder, useLadderHover } from "./ladder/CascadeLadder";
-import { SettingTooltip, useTooltipHover } from "./tooltip/SettingTooltip";
 import { ANNOTATIONS } from "./annotations/data";
 import {
   computeDiff,
@@ -250,15 +249,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
     [visibleOptions, hoveredKey],
   );
 
-  // Tooltip hover state (PR-4-11). Distinct anchor from the cascade
-  // ladder so the row body's ladder and the label's tooltip can
-  // coexist.
-  const tooltip = useTooltipHover();
-  const [tooltipKey, setTooltipKey] = useState<string | null>(null);
-  const tooltipSchema = useMemo(
-    () => visibleOptions.find((o) => o.key === tooltipKey) ?? null,
-    [visibleOptions, tooltipKey],
-  );
+  // PR-4-11's separate `SettingTooltip` popover was folded into the
+  // cascade ladder so a single row hover surfaces both the
+  // description and the layer breakdown.
 
   // Keep the active category valid as the visible list changes.
   useEffect(() => {
@@ -400,27 +393,12 @@ export function SettingsPanel(props: SettingsPanelProps) {
                       ladder.openLadder(el);
                     }}
                     onRowLeave={ladder.scheduleClose}
-                    onLabelEnter={(el) => {
-                      setTooltipKey(opt.key);
-                      tooltip.openAt(el);
-                    }}
-                    onLabelLeave={tooltip.scheduleClose}
                   />
                 ))}
               </section>
             ))}
           </div>
         </div>
-      )}
-      {tooltipSchema && (
-        <SettingTooltip
-          libslic3rTooltip={tooltipSchema.tooltip}
-          whyThisMatters={ANNOTATIONS[tooltipSchema.key] ?? null}
-          anchor={tooltip.anchor}
-          open={tooltip.open}
-          onMouseEnter={() => tooltip.openAt(tooltip.anchor!)}
-          onMouseLeave={tooltip.scheduleClose}
-        />
       )}
       {hoveredSchema && (
         <CascadeLadder
@@ -433,6 +411,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
           onMouseEnter={() => ladder.openLadder(ladder.anchor!)}
           onMouseLeave={ladder.scheduleClose}
           cascadeFallback={resolved[hoveredSchema.key]?.cascade_fallback ?? null}
+          description={hoveredSchema.tooltip ?? null}
+          whyThisMatters={ANNOTATIONS[hoveredSchema.key] ?? null}
           objectOverrides={
             contextLayer === "project"
               ? allObjects
@@ -511,11 +491,10 @@ interface SettingRowProps {
   syncAll: boolean;
   /** Cascade ladder hover hooks (PR-4-8). The panel owns the
    *  open/close lifecycle centrally; SettingRow just forwards the
-   *  row's DOM node + leave. */
+   *  row's DOM node + leave. The label hover hooks retired with
+   *  the SettingTooltip merge — description lives in the ladder. */
   onRowEnter?: (el: HTMLElement) => void;
   onRowLeave?: () => void;
-  onLabelEnter?: (el: HTMLElement) => void;
-  onLabelLeave?: () => void;
   /** All objects on the plate (PR-4-9) — drives the objects-
    *  overriding badge on Project-tab rows. Empty by default. */
   allObjects: ReadonlyArray<PlateObjectStub>;
@@ -537,8 +516,6 @@ function SettingRow({
   syncAll,
   onRowEnter,
   onRowLeave,
-  onLabelEnter,
-  onLabelLeave,
   allObjects,
 }: SettingRowProps) {
   const tierValue = contextLayer === "object"
@@ -655,8 +632,6 @@ function SettingRow({
       winningLayer={winningLayer}
       onRowEnter={onRowEnter}
       onRowLeave={onRowLeave}
-      onLabelEnter={onLabelEnter}
-      onLabelLeave={onLabelLeave}
     >
       {isVectorKind(kind) && slotCount >= 1 ? (
         <MultiSelectInput

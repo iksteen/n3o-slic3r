@@ -53,14 +53,11 @@ export interface FieldProps {
   /** Cascade ladder hover lifecycle (PR-4-8). Fired with the row's
    *  DOM node when the cursor enters/leaves; the panel mounts a
    *  single CascadeLadder portal centrally based on which row is
-   *  currently hovered. */
+   *  currently hovered. The ladder also carries the row's
+   *  description/tip now (PR-4-11's separate tooltip was folded
+   *  in), so the label-hover lifecycle was retired. */
   onRowEnter?: (el: HTMLElement) => void;
   onRowLeave?: () => void;
-  /** SettingTooltip hover lifecycle (PR-4-11). Fired with the
-   *  label's DOM node; distinct from the row enter/leave so the
-   *  tooltip + cascade ladder can coexist without conflict. */
-  onLabelEnter?: (el: HTMLElement) => void;
-  onLabelLeave?: () => void;
   /** The input control. */
   children: ReactNode;
 }
@@ -75,8 +72,6 @@ export function Field({
   winningLayer = "cascade",
   onRowEnter,
   onRowLeave,
-  onLabelEnter,
-  onLabelLeave,
   children,
 }: FieldProps) {
   const authored = isAuthoredTier(winningLayer);
@@ -113,12 +108,7 @@ export function Field({
       onMouseLeave={onRowLeave}
     >
       <div className="set-meta">
-        <span
-          className="set-name"
-          data-key={schema.key}
-          onMouseEnter={onLabelEnter ? (e) => onLabelEnter(e.currentTarget) : undefined}
-          onMouseLeave={onLabelLeave}
-        >
+        <span className="set-name" data-key={schema.key}>
           {schema.label ?? schema.key}
         </span>
         {leadingBadge}
