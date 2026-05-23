@@ -119,6 +119,11 @@ mod tests {
     fn plate_with_unbound_material_fails() {
         let mut p = Project::default();
         add_cube(&mut p, 2);
+        // register_object auto-binds the referenced material; this
+        // test exercises the "user manually cleared the binding"
+        // path, so drop the auto-allocated entry to recover the
+        // unbound state.
+        p.plates[0].material_bindings.clear();
         let err = validate_pre_slice(&p, &[1], 4).unwrap_err();
         assert_eq!(err.plate_id, 1);
         assert!(err.issues.iter().any(|i| matches!(
@@ -131,6 +136,9 @@ mod tests {
     fn plate_with_out_of_range_slot_fails() {
         let mut p = Project::default();
         add_cube(&mut p, 1);
+        // Discard the auto-allocated default binding so we can
+        // plant exactly the malformed entry the test cares about.
+        p.plates[0].material_bindings.clear();
         p.plates[0].material_bindings.push(MaterialBinding {
             model_material: 1,
             physical_slot: 5,
@@ -165,6 +173,10 @@ mod tests {
         p.add_plate(None); // PlateId(2)
         // plate 1: object references material 5, no binding.
         add_cube(&mut p, 5);
+        // Drop the auto-allocated default binding for material 5
+        // so we recover the "referenced + unbound" state this
+        // test is here to exercise.
+        p.plates[0].material_bindings.clear();
         // plate 2: no objects, no issues.
         let err = validate_pre_slice(&p, &[1, 2], 4).unwrap_err();
         assert_eq!(err.plate_id, 1);

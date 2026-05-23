@@ -86,7 +86,6 @@ pub fn run() {
             core::project::commands::project_set_plate_composition_order,
             core::project::commands::project_set_material_binding,
             core::project::commands::project_clear_material_binding,
-            core::project::commands::project_auto_bind_materials,
             core::project::commands::project_save,
             core::project::commands::project_save_as,
             core::project::commands::project_load,

@@ -2,9 +2,7 @@
 //
 // Lists every model-material index referenced by objects on the
 // active plate, with a dropdown to pick the physical slot + the
-// loaded filament identity. An "Auto-bind" button maps the
-// referenced materials to sequential slots and pre-fills the
-// rows.
+// loaded filament identity.
 //
 // The panel reads the referenced-material set from the active
 // plate's `objects[i].extruder_id` (1-based, null = "default
@@ -12,6 +10,12 @@
 // `plate.material_bindings`. Slot count comes from the bound
 // printer profile (or 1 if no printer is bound yet — the panel
 // degrades gracefully).
+//
+// The backend's `Project::register_object` auto-binds each newly
+// introduced model material to slot `((mat-1) MOD slot_count)+1`
+// with the stub catalog's default filament ("Generic PLA"), so
+// the panel typically lands with every row pre-bound; the user
+// edits this panel to override the defaults.
 //
 // Validation pressure (FR-MP-8) is the backend's job — the
 // `start_slice_job` gate refuses jobs with unbound materials.
@@ -24,7 +28,6 @@ import type {
   PlateSnapshot,
 } from "../viewport/types";
 import {
-  autoBindMaterials,
   clearMaterialBinding,
   setMaterialBinding,
 } from "./materialCommands";
@@ -114,24 +117,10 @@ export function MaterialBindingPanel({
     );
   };
 
-  const handleAutoBind = (): void => {
-    void autoBindMaterials(plateId, slotCount).catch((err) =>
-      console.error("[material] autoBindMaterials failed", err),
-    );
-  };
-
   return (
     <div className="material-binding-panel">
       <div className="material-binding-head">
         <span className="material-binding-title">Materials</span>
-        <button
-          type="button"
-          className="material-binding-auto"
-          onClick={handleAutoBind}
-          title="Sequentially assign each referenced material to slots 1..N"
-        >
-          Auto-bind
-        </button>
       </div>
       {referenced.map((mat) => {
         const binding = bindingFor(plate, mat);

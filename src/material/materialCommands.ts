@@ -6,7 +6,7 @@
 // remember command names + arg keys; the panel + tests use it.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { MaterialBinding, PlateId } from "../viewport/types";
+import type { PlateId } from "../viewport/types";
 
 /** Upsert a binding for `(plate, modelMaterial)`. The
  * `physical_slot` is 1-based against the bound printer's
@@ -38,20 +38,5 @@ export function clearMaterialBinding(
   return invoke("project_clear_material_binding", {
     plateId,
     modelMaterial,
-  });
-}
-
-/** Apply the FR-FS-10 stub auto-bind heuristic — sequentially
- * assign each referenced model material to slots 1..slot_count.
- * Returns the resulting bindings; the panel re-fetches via the
- * snapshot event flow anyway, the return value is mostly useful
- * for telemetry + the "Auto-bound N materials" toast. */
-export function autoBindMaterials(
-  plateId: PlateId,
-  slotCount: number,
-): Promise<MaterialBinding[]> {
-  return invoke<MaterialBinding[]>("project_auto_bind_materials", {
-    plateId,
-    slotCount,
   });
 }

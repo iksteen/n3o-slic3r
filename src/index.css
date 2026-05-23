@@ -501,16 +501,6 @@
     text-transform: uppercase;
     color: var(--text-dim);
   }
-  .material-binding-auto {
-    padding: 2px 8px;
-    font-size: 10.5px;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--text);
-  }
-  .material-binding-auto:hover { background: var(--surface-3); }
-
   .material-binding-row {
     display: grid;
     grid-template-columns: 28px 1fr auto auto 1fr auto;

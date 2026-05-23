@@ -17,7 +17,6 @@ use tauri::{Emitter, State, Window};
 use std::path::PathBuf;
 
 use super::autosave::{self, AutosaveConfig, AutosaveEntry, AutosaveHandle};
-use super::binding::MaterialBinding;
 use super::format;
 use super::PlateId;
 use super::Project;
@@ -98,32 +97,6 @@ pub fn project_clear_material_binding(
     drop(p);
     emit_all(&window, &events);
     Ok(())
-}
-
-/// Auto-bind every model material referenced by objects on the
-/// plate to a sequential physical slot (1..=slot_count). Returns
-/// the resulting binding list. Phase 5 stub of FR-FS-10's family-
-/// aware heuristic — Phase 7c upgrades to "match by filament
-/// family" once live slot state lands.
-///
-/// `slot_count` is caller-supplied: comes from the resolved
-/// `PrinterProfile` for the plate's bound printer (no profile
-/// registry yet — see PR-5-4).
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn project_auto_bind_materials(
-    plate_id: PlateId,
-    slot_count: u8,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<Vec<MaterialBinding>, String> {
-    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    let (bindings, events) = p
-        .auto_bind_materials(plate_id, slot_count)
-        .map_err(|e| e.to_string())?;
-    drop(p);
-    emit_all(&window, &events);
-    Ok(bindings)
 }
 
 // ---- Save / load (PR-5-8) ------------------------------------------

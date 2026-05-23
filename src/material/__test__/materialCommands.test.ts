@@ -8,7 +8,6 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import {
-  autoBindMaterials,
   clearMaterialBinding,
   setMaterialBinding,
 } from "../materialCommands";
@@ -46,21 +45,5 @@ describe("clearMaterialBinding", () => {
       plateId: 3,
       modelMaterial: 2,
     });
-  });
-});
-
-describe("autoBindMaterials", () => {
-  it("invokes project_auto_bind_materials with plate + slotCount", async () => {
-    invokeMock.mockResolvedValueOnce([
-      { model_material: 1, physical_slot: 1, filament_identity: "Generic PLA" },
-      { model_material: 2, physical_slot: 2, filament_identity: "Generic PLA" },
-    ]);
-    const bindings = await autoBindMaterials(5, 4);
-    expect(invokeMock).toHaveBeenCalledWith("project_auto_bind_materials", {
-      plateId: 5,
-      slotCount: 4,
-    });
-    expect(bindings).toHaveLength(2);
-    expect(bindings[0].physical_slot).toBe(1);
   });
 });

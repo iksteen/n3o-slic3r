@@ -81,9 +81,25 @@ impl Project {
 
     /// Register a scene object on the active plate. Always
     /// allocates a fresh `ObjectId` (scene-wide unique).
+    ///
+    /// **Auto-bind side effect (FR-MP-8 onboarding):** if the
+    /// object's model material (i.e. `extruder_id`, defaulted to
+    /// `1` when `None`) isn't already in the active plate's
+    /// `material_bindings`, a default binding lands automatically:
+    /// `physical_slot = ((mat-1) MOD slot_count) + 1`,
+    /// `filament_identity = "Generic PLA"`. Slot count comes from
+    /// the bound printer profile (defaults to 1 when no printer is
+    /// bound). User edits via the panel always win — the helper is
+    /// idempotent, so re-registering an object on the same material
+    /// number leaves the user's binding untouched.
+    ///
+    /// Auto-bind doesn't emit its own event — the caller's
+    /// downstream `ObjectAdded` already triggers a snapshot
+    /// refetch on the frontend, which picks up the new binding.
     pub fn register_object(&mut self, new_obj: NewSceneObject) -> ObjectId {
         let id = self.next_object_id();
         let active = self.active_plate;
+        let extruder_id = new_obj.extruder_id;
         self.plates[active].scene.objects.insert(
             id,
             SceneObject {
@@ -92,11 +108,55 @@ impl Project {
                 transform: new_obj.transform,
                 name: new_obj.name,
                 visible: new_obj.visible,
-                extruder_id: new_obj.extruder_id,
+                extruder_id,
                 parent: new_obj.parent,
             },
         );
+        self.ensure_default_material_binding_on_active(
+            extruder_id.unwrap_or(1),
+        );
         id
+    }
+
+    /// Default-filament identity planted on auto-allocated bindings
+    /// from [`Project::register_object`]. The stub filament catalog
+    /// shipping in Phase 5 has `"Generic PLA"` as its first entry;
+    /// when the real catalog lands (post-MVP) the call site should
+    /// switch to "first compatible filament for the bound printer".
+    const DEFAULT_FILAMENT_IDENTITY: &'static str = "Generic PLA";
+
+    /// Plant a default binding for `model_material` on the active
+    /// plate if no binding for that material exists yet. Idempotent
+    /// on re-call. Helper for [`Project::register_object`].
+    fn ensure_default_material_binding_on_active(
+        &mut self,
+        model_material: u8,
+    ) {
+        if model_material < 1 {
+            return;
+        }
+        let idx = self.active_plate;
+        if self.plates[idx]
+            .material_bindings
+            .iter()
+            .any(|b| b.model_material == model_material)
+        {
+            return;
+        }
+        let slot_count = self.plates[idx]
+            .printer
+            .as_ref()
+            .and_then(|b| crate::core::printer::lookup(&b.printer_identity))
+            .map(|p| p.slot_count.max(1))
+            .unwrap_or(1);
+        let slot = (((model_material as usize - 1) % slot_count) + 1) as u8;
+        self.plates[idx].material_bindings.push(
+            crate::core::project::binding::MaterialBinding {
+                model_material,
+                physical_slot: slot,
+                filament_identity: Self::DEFAULT_FILAMENT_IDENTITY.to_string(),
+            },
+        );
     }
 
     // ---- Plate list mutations -------------------------------------
@@ -263,78 +323,6 @@ impl Project {
             return Ok(Vec::new());
         }
         Ok(vec![SceneEvent::MaterialBindingChanged { plate_id }])
-    }
-
-    /// Auto-bind every model material referenced by objects on
-    /// the plate (FR-FS-10). Sequentially assigns the next
-    /// available physical slot starting from 1, capped at
-    /// `slot_count`.
-    ///
-    /// The full heuristic (match by filament family — PLA → first
-    /// PLA slot, PETG → first PETG slot) ships when Phase 7c lands
-    /// the live slot-state poll. Phase 5's sequential allocator
-    /// gives the user a starting point they can adjust in the
-    /// binding panel.
-    ///
-    /// Existing bindings on `plate_id` are **replaced** wholesale
-    /// — the caller's intent in pressing "auto-bind" is "redo
-    /// everything." Materials not referenced by any object are
-    /// dropped.
-    ///
-    /// `filament_identity` is left empty on each generated
-    /// binding; the user picks the loaded filament from the panel.
-    /// (When the binding is then used at slice time, an empty
-    /// `filament_identity` surfaces as an InvalidBinding issue,
-    /// preventing the slice — see
-    /// [`Plate::validate_material_bindings`].)
-    pub fn auto_bind_materials(
-        &mut self,
-        plate_id: PlateId,
-        slot_count: u8,
-    ) -> Result<(Vec<crate::core::project::binding::MaterialBinding>, Vec<SceneEvent>), SceneOpError>
-    {
-        if slot_count == 0 {
-            return Err(SceneOpError::InvalidPlateMetadata {
-                plate_id,
-                message: "slot_count must be >= 1".into(),
-            });
-        }
-        let idx = self
-            .plate_index(plate_id)
-            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
-        let mut referenced: std::collections::BTreeSet<u8> =
-            std::collections::BTreeSet::new();
-        for obj in self.plates[idx].scene.objects.values() {
-            if let Some(mat) = obj.extruder_id {
-                if mat >= 1 {
-                    referenced.insert(mat);
-                }
-            }
-        }
-        // Sequential allocator: 1st referenced material → slot 1,
-        // 2nd → slot 2, capped at slot_count. Excess materials
-        // round-robin to slot 1 (so they at least get *some*
-        // binding the user can fix; the validate pass will flag
-        // these as duplicates on the same slot).
-        let mut bindings: Vec<crate::core::project::binding::MaterialBinding> = Vec::new();
-        for (i, mat) in referenced.iter().enumerate() {
-            let slot = (i as u8 % slot_count) + 1;
-            bindings.push(crate::core::project::binding::MaterialBinding {
-                model_material: *mat,
-                physical_slot: slot,
-                filament_identity: String::new(),
-            });
-        }
-        let prior = std::mem::replace(
-            &mut self.plates[idx].material_bindings,
-            bindings.clone(),
-        );
-        let events = if bindings == prior {
-            Vec::new()
-        } else {
-            vec![SceneEvent::MaterialBindingChanged { plate_id }]
-        };
-        Ok((bindings, events))
     }
 
     // ---- Plate metadata (PR-5-5) ----------------------------------
@@ -2948,67 +2936,78 @@ mod tests {
         assert!(events.is_empty());
     }
 
-    #[test]
-    fn auto_bind_materials_walks_referenced_extruders() {
-        let mut p = Project::default();
-        // 4-color setup: extruders 1..=4 on four cubes.
-        for mat in 1..=4u8 {
-            add_cube_with_extruder(&mut p, mat);
-        }
-        let (bindings, events) = p.auto_bind_materials(PlateId(1), 4).unwrap();
-        assert_eq!(bindings.len(), 4);
-        // Sequential: mat 1 → slot 1, mat 2 → slot 2, etc.
-        for (i, b) in bindings.iter().enumerate() {
-            assert_eq!(b.model_material, (i + 1) as u8);
-            assert_eq!(b.physical_slot, (i + 1) as u8);
-            assert!(b.filament_identity.is_empty(), "user fills in");
-        }
-        assert_eq!(p.plates[0].material_bindings.len(), 4);
-        assert!(matches!(
-            events.as_slice(),
-            [SceneEvent::MaterialBindingChanged { plate_id: PlateId(1) }],
-        ));
-    }
+    // ---- Auto-bind on register_object (introduce-time) ----------
 
     #[test]
-    fn auto_bind_materials_replaces_existing_bindings_wholesale() {
+    fn register_object_auto_binds_default_material_on_unbound_plate() {
+        // No printer bound → slot_count defaults to 1, every
+        // material lands on slot 1 with the stub default filament.
         let mut p = Project::default();
         add_cube_with_extruder(&mut p, 1);
-        // Pre-existing binding for a material that's no longer
-        // referenced.
-        p.set_material_binding(PlateId(1), 99, 4, "stale".into()).unwrap();
-        let (bindings, _) = p.auto_bind_materials(PlateId(1), 4).unwrap();
-        assert_eq!(bindings.len(), 1);
-        assert_eq!(bindings[0].model_material, 1);
-        // Stale binding is gone.
-        assert!(!p.plates[0]
-            .material_bindings
-            .iter()
-            .any(|b| b.model_material == 99));
+        assert_eq!(p.plates[0].material_bindings.len(), 1);
+        let b = &p.plates[0].material_bindings[0];
+        assert_eq!(b.model_material, 1);
+        assert_eq!(b.physical_slot, 1);
+        assert_eq!(b.filament_identity, "Generic PLA");
     }
 
     #[test]
-    fn auto_bind_materials_excess_round_robins_to_slot_1() {
-        // 5 materials referenced but only 2-slot printer.
+    fn register_object_auto_binds_via_modular_formula_on_4_slot_printer() {
+        // 4-slot printer → mat N → slot ((N-1) MOD 4) + 1.
         let mut p = Project::default();
-        for mat in 1..=5u8 {
+        p.plates[0].printer = Some(crate::core::project::binding::PrinterBinding {
+            printer_identity: "bambu-a1-mini".into(),
+            build_plate_identity: "Textured PEI".into(),
+        });
+        for mat in [1u8, 2, 3, 4, 5, 9] {
             add_cube_with_extruder(&mut p, mat);
         }
-        let (bindings, _) = p.auto_bind_materials(PlateId(1), 2).unwrap();
-        // mat 1 → slot 1, mat 2 → slot 2, mat 3 → slot 1, mat 4 →
-        // slot 2, mat 5 → slot 1.
-        assert_eq!(bindings[0].physical_slot, 1);
-        assert_eq!(bindings[1].physical_slot, 2);
-        assert_eq!(bindings[2].physical_slot, 1);
-        assert_eq!(bindings[3].physical_slot, 2);
-        assert_eq!(bindings[4].physical_slot, 1);
+        let bindings = &p.plates[0].material_bindings;
+        let by_mat = |m: u8| {
+            bindings
+                .iter()
+                .find(|b| b.model_material == m)
+                .unwrap()
+                .physical_slot
+        };
+        assert_eq!(by_mat(1), 1);
+        assert_eq!(by_mat(2), 2);
+        assert_eq!(by_mat(3), 3);
+        assert_eq!(by_mat(4), 4);
+        // Wrap: mat 5 → slot 1 (((5-1) MOD 4) + 1 = 1).
+        assert_eq!(by_mat(5), 1);
+        // Wrap: mat 9 → slot 1 (((9-1) MOD 4) + 1 = 1).
+        assert_eq!(by_mat(9), 1);
     }
 
     #[test]
-    fn auto_bind_materials_slot_count_zero_errors() {
+    fn register_object_preserves_existing_user_binding() {
+        // User picked a non-default slot/filament for material 1;
+        // re-registering an object on material 1 must NOT clobber.
         let mut p = Project::default();
-        let err = p.auto_bind_materials(PlateId(1), 0).unwrap_err();
-        assert!(matches!(err, SceneOpError::InvalidPlateMetadata { .. }));
+        p.plates[0].printer = Some(crate::core::project::binding::PrinterBinding {
+            printer_identity: "bambu-a1-mini".into(),
+            build_plate_identity: "Textured PEI".into(),
+        });
+        p.set_material_binding(PlateId(1), 1, 3, "Custom PETG".into())
+            .unwrap();
+        add_cube_with_extruder(&mut p, 1);
+        assert_eq!(p.plates[0].material_bindings.len(), 1);
+        let b = &p.plates[0].material_bindings[0];
+        assert_eq!(b.physical_slot, 3);
+        assert_eq!(b.filament_identity, "Custom PETG");
+    }
+
+    #[test]
+    fn register_object_default_extruder_none_binds_material_1() {
+        // `extruder_id: None` falls back to material 1 at slice
+        // time (libslic3r convention) — auto-bind treats it the
+        // same.
+        let mut p = Project::default();
+        let mesh_id = p.register_mesh(unit_cube_mesh());
+        p.register_object(NewSceneObject::at_origin(mesh_id, "default"));
+        assert_eq!(p.plates[0].material_bindings.len(), 1);
+        assert_eq!(p.plates[0].material_bindings[0].model_material, 1);
     }
 
     // ---- Plate::validate_material_bindings ----------------------
@@ -3029,7 +3028,11 @@ mod tests {
         let mut p = Project::default();
         add_cube_with_extruder(&mut p, 1);
         add_cube_with_extruder(&mut p, 2);
-        // Only bind material 1; material 2 is unbound.
+        // register_object auto-binds both referenced materials;
+        // clear and re-bind only material 1 so material 2 falls
+        // back to the "user manually dropped this binding" path
+        // the validator is here to catch.
+        p.plates[0].material_bindings.clear();
         p.set_material_binding(PlateId(1), 1, 1, "PLA".into()).unwrap();
         let issues = p.plates[0].validate_material_bindings(4);
         assert!(issues
