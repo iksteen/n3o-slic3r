@@ -55,6 +55,13 @@ pub enum SceneEvent {
     NonUniformScale {
         id: ObjectId,
     },
+    /// Auto-arrange could not fit every visible object. Non-blocking;
+    /// the placed objects still moved. UI flags the listed ids in
+    /// the outliner so the user can resize / remove / split to a
+    /// new plate (Phase 5).
+    AutoArrangeOverflow {
+        un_placed: Vec<ObjectId>,
+    },
 }
 
 impl SceneEvent {
@@ -73,6 +80,7 @@ impl SceneEvent {
             Self::BedChanged(_) => "scene:bed_changed",
             Self::ObjectOutOfBounds { .. } => "scene:object_out_of_bounds",
             Self::NonUniformScale { .. } => "scene:non_uniform_scale",
+            Self::AutoArrangeOverflow { .. } => "scene:auto_arrange_overflow",
         }
     }
 }

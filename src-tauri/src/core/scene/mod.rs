@@ -19,6 +19,7 @@
 //! adapter (PR-1-6) needs it for `curr_bed_type`, and the Phase 2
 //! renderer will extend it with mesh + adhesion + visuals.
 
+pub mod arrange;
 pub mod bed;
 pub mod build_plate;
 pub mod commands;

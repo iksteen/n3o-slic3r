@@ -778,7 +778,25 @@ impl SceneState {
             super::primitives::PrimitiveKind::Cone => "Cone",
             super::primitives::PrimitiveKind::Torus => "Torus",
         };
-        let obj_id = self.register_object(NewSceneObject::at_origin(mesh_id, name));
+        // Lift the spawn so the primitive's lowest mesh point lands
+        // on z=0. Cube/sphere/torus center on origin geometrically,
+        // which would sink half the primitive below the build plate
+        // if we placed them at the bare origin — slicer convention
+        // is for newly-added objects to rest on the bed.
+        let lift = -self.meshes.get(&mesh_id).unwrap().bounding_box.min[2] as f32;
+        let transform = if lift.abs() > 1e-5 {
+            Transform::translation(Vec3::new(0.0, 0.0, lift))
+        } else {
+            Transform::IDENTITY
+        };
+        let obj_id = self.register_object(NewSceneObject {
+            mesh: mesh_id,
+            transform,
+            name: name.to_string(),
+            visible: true,
+            extruder_id: None,
+            parent: None,
+        });
         let obj_clone = self.objects.get(&obj_id).unwrap().clone();
         events.push(SceneEvent::ObjectAdded(obj_clone));
         events.extend(self.out_of_bounds_event(obj_id));

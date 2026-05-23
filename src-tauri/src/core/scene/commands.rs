@@ -123,6 +123,31 @@ pub fn library_imported(
 /// Add a procedural primitive to the scene at plate origin. Mesh
 /// data is deduplicated within the scene — re-clicking "Add cube"
 /// with the same parameters reuses the existing MeshId.
+/// Greedy auto-arrange the current scene's visible objects onto
+/// the active plate. No-op (returns empty placed/un_placed) when
+/// no printer is active.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_auto_arrange(
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<Vec<ObjectId>, String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let Some(bed) = s.bed.clone() else {
+        return Ok(vec![]);
+    };
+    let plan = super::arrange::plan_arrangement(&s, &bed);
+    let (mut events, un_placed) = super::arrange::apply_arrangement(&mut s, plan);
+    drop(s);
+    if !un_placed.is_empty() {
+        events.push(SceneEvent::AutoArrangeOverflow {
+            un_placed: un_placed.clone(),
+        });
+    }
+    emit_all(&window, &events);
+    Ok(un_placed)
+}
+
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_object_add_from_primitive(

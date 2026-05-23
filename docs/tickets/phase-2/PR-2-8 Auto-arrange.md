@@ -1,6 +1,6 @@
 # PR-2-8 — Auto-arrange (single plate, no rotation)
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** "Auto-arrange" button that lays out all objects on the
 active plate without overlap and (for MVP) without rotating them.

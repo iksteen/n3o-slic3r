@@ -57,6 +57,7 @@ pub fn run() {
             core::scene::commands::library_calibration,
             core::scene::commands::library_imported,
             core::scene::commands::scene_object_add_from_primitive,
+            core::scene::commands::scene_auto_arrange,
             core::slice::slicer_slice,
         ])
         .run(tauri::generate_context!())
