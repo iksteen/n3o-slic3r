@@ -141,6 +141,58 @@ pub fn scene_load_default_printer(
     Ok(())
 }
 
+/// Append a new (empty) plate. Returns the new plate's index.
+/// Active plate is unchanged.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_add_plate(
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<usize, String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s.add_plate();
+    let new_idx = s.plates.len() - 1;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(new_idx)
+}
+
+/// Remove the plate at `plate_index`. Errors if it would leave the
+/// scene empty or if the index is out of range.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_remove_plate(
+    plate_index: usize,
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s
+        .remove_plate(plate_index)
+        .map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
+/// Switch the active plate. No-op (no event) when already active.
+/// Errors if the index is out of range.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_set_active_plate(
+    plate_index: usize,
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s
+        .set_active_plate(plate_index)
+        .map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
 #[tauri::command]
 #[tracing::instrument]
 pub fn library_primitives() -> Vec<super::library::PrimitiveDescriptor> {

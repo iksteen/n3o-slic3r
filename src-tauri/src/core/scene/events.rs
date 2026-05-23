@@ -62,6 +62,24 @@ pub enum SceneEvent {
     AutoArrangeOverflow {
         un_placed: Vec<ObjectId>,
     },
+    /// A new plate was added (PR-5-2). `plate_index` is the position
+    /// in `SceneState::plates` of the newly-appended entry —
+    /// inserts always happen at the end.
+    PlateAdded {
+        plate_index: usize,
+    },
+    /// A plate was removed (PR-5-2). `plate_index` is the position
+    /// the plate occupied before removal; subsequent plates have
+    /// shifted down by one. Pairs with `ActivePlateChanged` when
+    /// the removed plate was the active one or sat before it.
+    PlateRemoved {
+        plate_index: usize,
+    },
+    /// The active plate changed (PR-5-2). Emitted on explicit
+    /// switches and on remove-of-active-or-earlier rebalancing.
+    ActivePlateChanged {
+        plate_index: usize,
+    },
 }
 
 impl SceneEvent {
@@ -81,6 +99,9 @@ impl SceneEvent {
             Self::ObjectOutOfBounds { .. } => "scene:object_out_of_bounds",
             Self::NonUniformScale { .. } => "scene:non_uniform_scale",
             Self::AutoArrangeOverflow { .. } => "scene:auto_arrange_overflow",
+            Self::PlateAdded { .. } => "scene:plate_added",
+            Self::PlateRemoved { .. } => "scene:plate_removed",
+            Self::ActivePlateChanged { .. } => "scene:active_plate_changed",
         }
     }
 }
@@ -110,6 +131,10 @@ pub enum SelectMode {
 pub enum SceneOpError {
     UnknownObject(ObjectId),
     UnknownMesh(MeshId),
+    /// Plate index is out of range (PR-5-2).
+    UnknownPlate(usize),
+    /// Tried to remove the only remaining plate (PR-5-2).
+    LastPlate,
 }
 
 impl std::fmt::Display for SceneOpError {
@@ -117,6 +142,8 @@ impl std::fmt::Display for SceneOpError {
         match self {
             Self::UnknownObject(id) => write!(f, "no scene object with id {}", id.0),
             Self::UnknownMesh(id) => write!(f, "no mesh with id {}", id.0),
+            Self::UnknownPlate(idx) => write!(f, "no plate at index {idx}"),
+            Self::LastPlate => write!(f, "cannot remove the last plate"),
         }
     }
 }

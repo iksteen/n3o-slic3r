@@ -370,6 +370,62 @@ impl SceneState {
         &mut self.plates[self.active_plate]
     }
 
+    /// Append a fresh empty plate. Returns the new plate's index in
+    /// [`Self::plates`] (the active plate is unchanged — switching
+    /// to the new plate is the caller's choice via
+    /// [`Self::set_active_plate`]).
+    pub fn add_plate(&mut self) -> Vec<SceneEvent> {
+        self.plates.push(PlateSceneState::default());
+        let idx = self.plates.len() - 1;
+        vec![SceneEvent::PlateAdded { plate_index: idx }]
+    }
+
+    /// Remove the plate at `idx`. Errors when the index is out of
+    /// range or when removing it would leave the scene plateless
+    /// (PR-5-2 invariant: `plates` always has ≥ 1 entry — the
+    /// frontend's per-plate UI assumes an active plate exists).
+    ///
+    /// When the removed plate is the active one, the active index is
+    /// clamped to the last valid plate.
+    pub fn remove_plate(&mut self, idx: usize) -> Result<Vec<SceneEvent>, SceneOpError> {
+        if idx >= self.plates.len() {
+            return Err(SceneOpError::UnknownPlate(idx));
+        }
+        if self.plates.len() <= 1 {
+            return Err(SceneOpError::LastPlate);
+        }
+        self.plates.remove(idx);
+        let mut events = vec![SceneEvent::PlateRemoved { plate_index: idx }];
+        if self.active_plate >= self.plates.len() {
+            self.active_plate = self.plates.len() - 1;
+            events.push(SceneEvent::ActivePlateChanged {
+                plate_index: self.active_plate,
+            });
+        } else if self.active_plate > idx {
+            // The removed plate sat before the active one, so the
+            // active plate's index shifts down by 1. Emit the new
+            // index so the frontend mirror stays in sync.
+            self.active_plate -= 1;
+            events.push(SceneEvent::ActivePlateChanged {
+                plate_index: self.active_plate,
+            });
+        }
+        Ok(events)
+    }
+
+    /// Switch the active plate. No-op (no event) when already on
+    /// `idx`. Errors when the index is out of range.
+    pub fn set_active_plate(&mut self, idx: usize) -> Result<Vec<SceneEvent>, SceneOpError> {
+        if idx >= self.plates.len() {
+            return Err(SceneOpError::UnknownPlate(idx));
+        }
+        if self.active_plate == idx {
+            return Ok(Vec::new());
+        }
+        self.active_plate = idx;
+        Ok(vec![SceneEvent::ActivePlateChanged { plate_index: idx }])
+    }
+
     /// Allocate the next monotonic `MeshId`. IDs start at 1.
     pub fn next_mesh_id(&mut self) -> MeshId {
         self.next_mesh_id = self.next_mesh_id.wrapping_add(1);
@@ -1592,5 +1648,162 @@ mod tests {
             }
         }
         assert_eq!(distinct, 24, "expected 24 distinct rotations");
+    }
+
+    // ---- Multi-plate tests (PR-5-2) --------------------------------
+
+    #[test]
+    fn default_scene_starts_with_one_plate_active_index_zero() {
+        let s = SceneState::new();
+        assert_eq!(s.plates.len(), 1);
+        assert_eq!(s.active_plate, 0);
+    }
+
+    #[test]
+    fn add_plate_appends_does_not_switch_active() {
+        let mut s = SceneState::new();
+        let events = s.add_plate();
+        assert_eq!(s.plates.len(), 2);
+        assert_eq!(s.active_plate, 0, "add_plate does not switch active");
+        assert!(matches!(
+            events.as_slice(),
+            [SceneEvent::PlateAdded { plate_index: 1 }],
+        ));
+    }
+
+    #[test]
+    fn set_active_plate_emits_event_and_switches() {
+        let mut s = SceneState::new();
+        s.add_plate();
+        let events = s.set_active_plate(1).unwrap();
+        assert_eq!(s.active_plate, 1);
+        assert!(matches!(
+            events.as_slice(),
+            [SceneEvent::ActivePlateChanged { plate_index: 1 }],
+        ));
+    }
+
+    #[test]
+    fn set_active_plate_to_current_is_silent_noop() {
+        let mut s = SceneState::new();
+        s.add_plate();
+        let events = s.set_active_plate(0).unwrap();
+        assert!(events.is_empty(), "re-selecting active plate emits nothing");
+    }
+
+    #[test]
+    fn set_active_plate_out_of_range_errors() {
+        let mut s = SceneState::new();
+        let err = s.set_active_plate(5).unwrap_err();
+        assert_eq!(err, SceneOpError::UnknownPlate(5));
+    }
+
+    #[test]
+    fn remove_last_plate_errors() {
+        let mut s = SceneState::new();
+        let err = s.remove_plate(0).unwrap_err();
+        assert_eq!(err, SceneOpError::LastPlate);
+    }
+
+    #[test]
+    fn remove_active_plate_clamps_active_to_last() {
+        let mut s = SceneState::new();
+        s.add_plate();
+        s.add_plate();
+        s.set_active_plate(2).unwrap();
+        let events = s.remove_plate(2).unwrap();
+        assert_eq!(s.plates.len(), 2);
+        assert_eq!(s.active_plate, 1);
+        assert!(events.iter().any(|e| matches!(
+            e,
+            SceneEvent::ActivePlateChanged { plate_index: 1 }
+        )));
+    }
+
+    #[test]
+    fn remove_plate_before_active_shifts_active_down() {
+        let mut s = SceneState::new();
+        s.add_plate();
+        s.add_plate();
+        s.set_active_plate(2).unwrap();
+        let events = s.remove_plate(0).unwrap();
+        assert_eq!(s.active_plate, 1, "active shifts down when earlier plate removed");
+        assert!(events.iter().any(|e| matches!(
+            e,
+            SceneEvent::ActivePlateChanged { plate_index: 1 }
+        )));
+    }
+
+    #[test]
+    fn objects_added_to_different_plates_are_independent() {
+        let mut s = SceneState::new();
+        s.add_plate();
+        s.add_plate();
+        // Add a cube to plate 0.
+        let (_, obj_a) = add_cube(&mut s);
+        // Switch to plate 1, add a different cube.
+        s.set_active_plate(1).unwrap();
+        let (_, obj_b) = add_cube(&mut s);
+        // Switch to plate 2, add a third.
+        s.set_active_plate(2).unwrap();
+        let (_, obj_c) = add_cube(&mut s);
+
+        assert_eq!(s.plates[0].objects.len(), 1);
+        assert_eq!(s.plates[1].objects.len(), 1);
+        assert_eq!(s.plates[2].objects.len(), 1);
+        assert!(s.plates[0].objects.contains_key(&obj_a));
+        assert!(s.plates[1].objects.contains_key(&obj_b));
+        assert!(s.plates[2].objects.contains_key(&obj_c));
+        assert!(
+            !s.plates[0].objects.contains_key(&obj_b),
+            "plate 0 should not see plate 1's object",
+        );
+
+        // Mesh storage is scene-wide. `load_mesh` allocates per call
+        // (no content-hash dedup), so 3 calls produce 3 MeshIds, but
+        // they all live in the single scene-wide map.
+        assert_eq!(s.meshes.len(), 3);
+
+        // Object ids are scene-wide unique.
+        assert_ne!(obj_a, obj_b);
+        assert_ne!(obj_b, obj_c);
+        assert_ne!(obj_a, obj_c);
+    }
+
+    #[test]
+    fn selection_is_per_plate() {
+        let mut s = SceneState::new();
+        s.add_plate();
+        let (_, obj_a) = add_cube(&mut s);
+        s.set_active_plate(1).unwrap();
+        let (_, obj_b) = add_cube(&mut s);
+
+        s.set_active_plate(0).unwrap();
+        s.select(&[obj_a], SelectMode::Replace);
+        s.set_active_plate(1).unwrap();
+        s.select(&[obj_b], SelectMode::Replace);
+
+        assert!(s.plates[0].selection.contains(&obj_a));
+        assert!(!s.plates[0].selection.contains(&obj_b));
+        assert!(s.plates[1].selection.contains(&obj_b));
+        assert!(!s.plates[1].selection.contains(&obj_a));
+    }
+
+    #[test]
+    fn primitive_cache_dedups_across_plates() {
+        use super::super::primitives::{PrimitiveKind, PrimitiveParams};
+        let mut s = SceneState::new();
+        s.add_plate();
+        let p = PrimitiveParams::defaults_for(PrimitiveKind::Cube);
+
+        let (mesh_a, _, _) = s.add_from_primitive(PrimitiveKind::Cube, p);
+        s.set_active_plate(1).unwrap();
+        let (mesh_b, _, _) = s.add_from_primitive(PrimitiveKind::Cube, p);
+
+        assert_eq!(
+            mesh_a, mesh_b,
+            "same (kind, params) on different plates should reuse one MeshId",
+        );
+        assert_eq!(s.meshes.len(), 1);
     }
 }
