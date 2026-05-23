@@ -35,7 +35,7 @@ index plus phase-level status and notes.
 
 | Deliverable | Status | Ticket |
 |-------------|--------|--------|
-| FFI extensions: slice progress + log sink | ❌ open | [PR-3-1](phase-3/PR-3-1%20FFI%20slice%20progress%20and%20log%20sink.md) |
+| FFI extensions: slice progress + log sink | ⚠️ partial | [PR-3-1](phase-3/PR-3-1%20FFI%20slice%20progress%20and%20log%20sink.md) (progress callback shipped; log-sink redirect deferred — PR-3-2 doesn't need it) |
 | Slice orchestration on a worker thread | ❌ open | [PR-3-2](phase-3/PR-3-2%20Slice%20orchestration.md) |
 | Slice errors + post-slice summary | ✅ done | [PR-3-3](phase-3/PR-3-3%20Slice%20errors%20and%20summary.md) |
 | Slice button + progress UI | ❌ open | [PR-3-4](phase-3/PR-3-4%20Slice%20UI.md) |

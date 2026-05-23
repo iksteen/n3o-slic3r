@@ -8,7 +8,10 @@
 //! First run is slow because `cargo test` triggers the crate's build.rs
 //! and cmake builds libslic3r and the shim. Subsequent runs are fast.
 
-use slic3r_ffi::{init, option_def, option_defs, version, Config, ErrorKind, Model, OptScope, OptType};
+use slic3r_ffi::{
+    clear_slice_progress, init, option_def, option_defs, set_slice_progress, slice, version,
+    Config, ErrorKind, Model, OptScope, OptType,
+};
 use std::path::PathBuf;
 use std::sync::Once;
 
@@ -21,6 +24,14 @@ fn ensure_init() {
         init(None, 3).expect("slic3r_init failed");
     });
 }
+
+// Serialize slice-progress tests against each other. The FFI's
+// progress callback is process-global, so concurrent registration
+// from parallel test threads strands one test's callback before
+// its slice fires. `cargo test` defaults to parallel; without this
+// mutex tests pass under `--test-threads=1` but fail in the
+// default run.
+static SLICE_PROGRESS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn test_stl() -> PathBuf {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -239,4 +250,122 @@ fn load_with_config_stl_keeps_defaults() {
     m.load_with_config(test_stl(), &mut cfg).expect("load_with_config");
     let after = cfg.get("layer_height").expect("get after");
     assert_eq!(before, after, "STL load should not modify config");
+}
+
+#[test]
+fn slice_progress_callback_fires_with_monotonic_percent() {
+    use std::sync::{Arc, Mutex};
+
+    ensure_init();
+    let _serial = SLICE_PROGRESS_LOCK.lock().expect("slice progress lock");
+
+    // Collect every (percent, stage) tick the slice emits.
+    let ticks: Arc<Mutex<Vec<(i32, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let ticks_for_cb = Arc::clone(&ticks);
+    set_slice_progress(move |percent, stage| {
+        ticks_for_cb
+            .lock()
+            .unwrap()
+            .push((percent, stage.to_owned()));
+    });
+
+    let mut model = Model::new().expect("Model::new");
+    let mut config = Config::new().expect("Config::new");
+    model
+        .load_with_config(test_stl(), &mut config)
+        .expect("load 20mmbox-LF.stl");
+    // FullPrintConfig defaults set `use_relative_e_distances=true`,
+    // which triggers a validate-time check for `G92 E0` in
+    // `layer_gcode`. Flip to absolute so the default validation
+    // passes; the progress test doesn't care which mode the slice
+    // runs in.
+    config
+        .set("use_relative_e_distances", "0")
+        .expect("set use_relative_e_distances");
+
+    let out_path = std::env::temp_dir().join(format!(
+        "n3o-slice-progress-test-{}.gcode",
+        std::process::id(),
+    ));
+    let slice_result = slice(&model, &config, &out_path);
+    // Detach the callback before asserting so a panicking assertion
+    // doesn't strand state for sibling tests.
+    clear_slice_progress();
+    slice_result.expect("slice OK");
+
+    let ticks = ticks.lock().unwrap();
+    assert!(
+        ticks.len() > 5,
+        "expected many progress ticks from libslic3r (got {})",
+        ticks.len(),
+    );
+    // Per-stage monotonicity isn't guaranteed across the whole
+    // slice — libslic3r emits stage-local percents that can
+    // backstep at boundaries (`(71, "Detect overhangs") → (70,
+    // "Generating skirt & brim")` observed in practice). What we
+    // do care about: the slice reaches a high-percent terminal
+    // state, and the stage labels look sane.
+    let final_percent = ticks.last().map(|(p, _)| *p).unwrap_or(0);
+    assert!(
+        final_percent >= 50,
+        "expected slice to reach >= 50% (got {final_percent}, ticks={ticks:?})",
+    );
+    let non_empty_stages: usize = ticks.iter().filter(|(_, s)| !s.is_empty()).count();
+    assert!(
+        non_empty_stages > 0,
+        "expected at least one labelled stage from libslic3r ticks",
+    );
+    // The "Generating G-code" stage is the last meaningful phase;
+    // its presence confirms the callback rode the slice past
+    // process() and into export_gcode().
+    assert!(
+        ticks.iter().any(|(_, s)| s.contains("Generating G-code")),
+        "expected a 'Generating G-code' stage tick — slice may have aborted early",
+    );
+    let _ = std::fs::remove_file(&out_path);
+}
+
+#[test]
+fn slice_progress_callback_can_be_unregistered() {
+    use std::sync::{Arc, Mutex};
+
+    ensure_init();
+    let _serial = SLICE_PROGRESS_LOCK.lock().expect("slice progress lock");
+
+    // First slice: callback active.
+    let ticks: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+    let counter_for_cb = Arc::clone(&ticks);
+    set_slice_progress(move |_percent, _stage| {
+        *counter_for_cb.lock().unwrap() += 1;
+    });
+
+    let mut model = Model::new().expect("Model::new");
+    let mut config = Config::new().expect("Config::new");
+    model
+        .load_with_config(test_stl(), &mut config)
+        .expect("load");
+    config
+        .set("use_relative_e_distances", "0")
+        .expect("set use_relative_e_distances");
+    let out1 = std::env::temp_dir().join("n3o-slice-progress-on.gcode");
+    slice(&model, &config, &out1).expect("slice 1");
+    let ticks_after_first = *ticks.lock().unwrap();
+    assert!(
+        ticks_after_first > 0,
+        "expected callback to fire while registered",
+    );
+
+    // Clear + second slice: counter does NOT advance.
+    clear_slice_progress();
+    let out2 = std::env::temp_dir().join("n3o-slice-progress-off.gcode");
+    slice(&model, &config, &out2).expect("slice 2");
+    let ticks_after_second = *ticks.lock().unwrap();
+    assert_eq!(
+        ticks_after_second, ticks_after_first,
+        "callback fired after clear_slice_progress (delta = {})",
+        ticks_after_second - ticks_after_first,
+    );
+
+    let _ = std::fs::remove_file(&out1);
+    let _ = std::fs::remove_file(&out2);
 }

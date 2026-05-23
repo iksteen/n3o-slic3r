@@ -236,6 +236,28 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
                             const char* out_gcode_path,
                             char** out_err);
 
+/* Slice progress callback.
+ *
+ * Signature: invoked from inside slic3r_slice on libslic3r's slicing
+ * thread (which is the caller's thread today — slice() is synchronous).
+ * `percent` ranges 0..100; `stage` is libslic3r's human-readable
+ * status text ("Generating perimeters", "Generating support material",
+ * etc.) and lives only for the duration of the call (do NOT retain
+ * the pointer beyond the callback's return). `user_data` is whatever
+ * was passed at registration; the FFI doesn't interpret it.
+ *
+ * Threading: the callback fires synchronously while slic3r_slice is
+ * running. If the consumer is on a worker thread, the callback runs
+ * on that same worker thread. The Rust binding sends the events
+ * across a channel to its main thread; consumers calling this C API
+ * directly must handle their own synchronization.
+ *
+ * Registration is process-global — the most recent set_slice_progress_cb
+ * applies to every subsequent slic3r_slice call. Pass cb=NULL to
+ * unregister. */
+typedef void (*slic3r_progress_fn_t)(int percent, const char* stage, void* user_data);
+void slic3r_set_slice_progress_cb(slic3r_progress_fn_t cb, void* user_data);
+
 #ifdef __cplusplus
 }
 #endif

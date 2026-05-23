@@ -1,6 +1,6 @@
 # PR-3-1 — FFI extensions: slice progress callback + log sink redirect
 
-Status: ❌ open.
+Status: ⚠️ partial — slice progress callback shipped; log-sink redirect deferred (PR-3-2 doesn't need it). C side: `slic3r_set_slice_progress_cb` (mutex-guarded global, installed via `PrintBase::set_status_callback` for the duration of each `slic3r_slice` call; emits silently when no callback registered). Rust: `set_slice_progress(impl FnMut(i32, &str) + Send + 'static)` + `clear_slice_progress()` with a `Mutex<Option<Box<dyn FnMut>>>` and an `extern "C"` trampoline. 2 integration tests verify (a) the callback fires across 100+ ticks for a real slice and reaches the "Generating G-code" stage, (b) clearing the callback stops it firing. Tests serialize through a process-local mutex since the FFI registry is global.
 
 **Scope.** Add the two remaining FFI extensions called out in PRD
 §8.3 that Phase 3 depends on. C++/Rust work in `crates/slic3r-ffi/`.

@@ -450,3 +450,75 @@ pub fn slice<P: AsRef<Path>>(model: &Model, config: &Config, out_gcode_path: P) 
     let status = unsafe { sys::slic3r_slice(model.raw, config.raw, p.as_ptr(), &mut err) };
     unsafe { check_with_err(status, err) }
 }
+
+// ---- Slice progress callback ----
+//
+// The C side stores one global function pointer + opaque user_data;
+// we own the closure on the Rust side and register a trampoline
+// that re-enters into it. The closure lives behind a Mutex so it
+// can be replaced from any thread; the slice itself is currently
+// synchronous so the callback fires on the slice thread.
+
+use std::sync::Mutex;
+
+type ProgressClosure = Box<dyn FnMut(i32, &str) + Send>;
+
+static PROGRESS_CALLBACK: Mutex<Option<ProgressClosure>> = Mutex::new(None);
+
+/// Internal trampoline registered with the C side. Calls the
+/// currently-installed Rust closure with the (percent, stage) tuple.
+///
+/// SAFETY: `stage` must point to a NUL-terminated C string valid
+/// for the duration of the call (the C side guarantees this).
+/// `_user_data` is ignored — the closure pointer lives in our
+/// `PROGRESS_CALLBACK` static, not in user_data.
+extern "C" fn progress_trampoline(percent: i32, stage: *const c_char, _user_data: *mut std::ffi::c_void) {
+    let stage_str = if stage.is_null() {
+        ""
+    } else {
+        // SAFETY: caller (C side) guarantees stage is NUL-terminated.
+        match unsafe { CStr::from_ptr(stage) }.to_str() {
+            Ok(s) => s,
+            Err(_) => "",
+        }
+    };
+    if let Ok(mut guard) = PROGRESS_CALLBACK.lock() {
+        if let Some(cb) = guard.as_mut() {
+            cb(percent, stage_str);
+        }
+    }
+}
+
+/// Register a Rust closure as the slice progress callback. The
+/// closure is invoked synchronously from `slice` on the calling
+/// thread for every progress tick libslic3r emits.
+///
+/// Replaces any previously registered callback. Pass `None` (via
+/// [`clear_slice_progress`]) to unregister, after which libslic3r
+/// emits silent slices.
+pub fn set_slice_progress<F>(callback: F)
+where
+    F: FnMut(i32, &str) + Send + 'static,
+{
+    let mut guard = PROGRESS_CALLBACK.lock().expect("progress callback mutex");
+    *guard = Some(Box::new(callback));
+    drop(guard);
+    // SAFETY: the trampoline + null user_data are static; the
+    // C side stores them globally and serializes registration
+    // against the slice thread via its own mutex.
+    unsafe {
+        sys::slic3r_set_slice_progress_cb(Some(progress_trampoline), ptr::null_mut());
+    }
+}
+
+/// Clear the slice progress callback. Subsequent slices run silent
+/// (no callback invocations and no stderr default).
+pub fn clear_slice_progress() {
+    // SAFETY: passing nullptr through the C API is the documented
+    // "unregister" semantics.
+    unsafe {
+        sys::slic3r_set_slice_progress_cb(None, ptr::null_mut());
+    }
+    let mut guard = PROGRESS_CALLBACK.lock().expect("progress callback mutex");
+    *guard = None;
+}
