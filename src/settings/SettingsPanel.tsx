@@ -79,7 +79,21 @@ export interface SettingsPanelProps {
   projectOverrides: Record<string, string>;
   onSetProjectOverride: (key: string, value: string) => void;
   onClearProjectOverride: (key: string) => void;
+  /** All objects on the plate, each with its own override map.
+   *  Used to render the FR-CAS-7b "N objects override" badge on
+   *  Project-tab rows. Empty by default — PR-5's project model
+   *  populates. */
+  allObjects?: ReadonlyArray<PlateObjectStub>;
 }
+
+/** Per-object override info for the objects-overriding badge. */
+export type PlateObjectStub = {
+  id: number;
+  name: string;
+  /** Filament color for the badge swatch. */
+  color?: string | null;
+  overrides: Record<string, string>;
+};
 
 /** Minimal selected-object shape the Object tab needs. Scene state
  *  carries more; the panel only reads name + id. */
@@ -102,6 +116,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
     projectOverrides,
     onSetProjectOverride,
     onClearProjectOverride,
+    allObjects = [],
   } = props;
 
   const [mode, setMode] = useStoredModeFilter();
@@ -310,6 +325,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     slotCount={slotCount}
                     activeSlot={activeSlot}
                     syncAll={syncAll}
+                    allObjects={allObjects}
                     onRowEnter={(el) => {
                       setHoveredKey(opt.key);
                       ladder.openLadder(el);
@@ -333,6 +349,18 @@ export function SettingsPanel(props: SettingsPanelProps) {
           onMouseEnter={() => ladder.openLadder(ladder.anchor!)}
           onMouseLeave={ladder.scheduleClose}
           cascadeFallback={resolved[hoveredSchema.key]?.cascade_fallback ?? null}
+          objectOverrides={
+            contextLayer === "project"
+              ? allObjects
+                  .filter((o) => hoveredSchema.key in o.overrides)
+                  .map((o) => ({
+                    id: o.id,
+                    name: o.name,
+                    color: o.color,
+                    value: o.overrides[hoveredSchema.key],
+                  }))
+              : []
+          }
         />
       )}
     </section>
@@ -402,6 +430,9 @@ interface SettingRowProps {
    *  row's DOM node + leave. */
   onRowEnter?: (el: HTMLElement) => void;
   onRowLeave?: () => void;
+  /** All objects on the plate (PR-4-9) — drives the objects-
+   *  overriding badge on Project-tab rows. Empty by default. */
+  allObjects: ReadonlyArray<PlateObjectStub>;
 }
 
 function SettingRow({
@@ -411,13 +442,16 @@ function SettingRow({
   projectOverrides,
   objectOverrides,
   onSetProjectOverride,
+  onClearProjectOverride,
   onSetObjectOverride,
+  onClearObjectOverride,
   notApplicable = false,
   slotCount,
   activeSlot,
   syncAll,
   onRowEnter,
   onRowLeave,
+  allObjects,
 }: SettingRowProps) {
   const tierValue = contextLayer === "object"
     ? objectOverrides[schema.key]
@@ -443,11 +477,76 @@ function SettingRow({
 
   const leadingBadge = notApplicable ? (
     <span
-      className="set-badge set-badge-na"
+      className="set-badge set-badge-na text-[10px] px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400"
       title="Not applicable to the active printer"
     >
       not applicable
     </span>
+  ) : null;
+
+  // Objects-overriding badge (PR-4-9, FR-CAS-7b): on the Project
+  // tab, surface the objects that override this setting via small
+  // filament-color dots + a count.
+  const overridingObjects =
+    contextLayer === "project"
+      ? allObjects.filter((o) => schema.key in o.overrides)
+      : [];
+  const trailingBadge = overridingObjects.length > 0 ? (
+    <span
+      className="objs-badge inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-900/40 text-rose-800 dark:text-rose-200"
+      title={`${overridingObjects.length} object${
+        overridingObjects.length === 1 ? "" : "s"
+      } override this setting`}
+    >
+      {overridingObjects.slice(0, 3).map((o) => (
+        <span
+          key={o.id}
+          className="objs-badge-dot inline-block w-2 h-2 rounded-full"
+          style={{ background: o.color ?? "#888" }}
+          aria-hidden
+        />
+      ))}
+      {overridingObjects.length > 3 && (
+        <span className="objs-badge-more">+{overridingObjects.length - 3}</span>
+      )}
+    </span>
+  ) : null;
+
+  // Reset button (PR-4-9). Renders when the active tier has a
+  // value for this setting; clicking drops the override and the
+  // row falls back to the cascade resolution underneath.
+  const hasValueAtActiveTier =
+    contextLayer === "object"
+      ? schema.key in objectOverrides
+      : schema.key in projectOverrides;
+  const resetButton = hasValueAtActiveTier ? (
+    <button
+      type="button"
+      className="reset-btn text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 px-1"
+      title={`Reset ${contextLayer} override (falls back to inherited value)`}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (contextLayer === "object") onClearObjectOverride(schema.key);
+        else onClearProjectOverride(schema.key);
+      }}
+      aria-label={`Reset ${schema.key} ${contextLayer} override`}
+    >
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+        <path
+          d="M2.5 5a3.5 3.5 0 1 0 1-2.5"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+        />
+        <path
+          d="M2 2v3h3"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
   ) : null;
 
   const kind = optionTypeKind(schema);
@@ -463,6 +562,8 @@ function SettingRow({
       onChange={setValue}
       disabled={disabled}
       leadingBadge={leadingBadge}
+      trailingBadge={trailingBadge}
+      resetButton={resetButton}
       winningLayer={winningLayer}
       onRowEnter={onRowEnter}
       onRowLeave={onRowLeave}

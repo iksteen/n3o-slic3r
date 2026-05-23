@@ -1,6 +1,6 @@
 # PR-4-9 — Per-object overrides + objects-overriding badge + reset action
 
-Status: ❌ open.
+Status: ✅ frontend shipped — Reset button per row in Field's `resetButton` slot (counter-clockwise arrow SVG matching the mockup; renders when the active tier has a value, calls `onClearProjectOverride` / `onClearObjectOverride`). Objects-overriding badge in Field's `trailingBadge` slot on the Project tab (up to 3 filament-color dots + `+N` overflow when more than 3 objects override a setting). CascadeLadder receives the `objectOverrides` array on the Project tab and renders the per-object section the mockup specifies. `allObjects: PlateObjectStub[]` prop on `SettingsPanel` carries the per-object override maps; Phase 5's project model populates. **Backend Tauri commands deferred** to Phase 5 (`scene_object_override_set/clear/clear_all` + SceneState storage) since SettingsPanel isn't mounted in App.tsx yet — the panel takes the override storage from props, so the wiring is a Phase-5 concern.
 
 **Scope.** The Object editing tab (PR-4-4 ships the tab; PR-4-9
 makes it real) lets the user override any object/region-scope
