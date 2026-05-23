@@ -31,8 +31,12 @@
 mod bbs_meta;
 mod container;
 mod core_spec;
+mod sliced;
 mod writer;
 
+pub use sliced::{
+    fixture_input, write_sliced_3mf, AmsBinding, SlicedPlate, SlicedProjectInput,
+};
 pub use writer::{project_from_objects, write_3mf};
 
 use std::collections::{BTreeMap, HashMap};

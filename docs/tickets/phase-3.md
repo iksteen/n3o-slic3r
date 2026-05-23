@@ -44,7 +44,7 @@ index plus phase-level status and notes.
 | G-code serializer (byte-equivalent round-trip) | ✅ done | [PR-3-7](phase-3/PR-3-7%20Gcode%20serializer.md) |
 | Header metadata parser | ✅ done | [PR-3-8](phase-3/PR-3-8%20Header%20metadata%20parser.md) |
 | Promote `core/threemf` + project-format writer | ✅ done | [PR-3-9](phase-3/PR-3-9%203MF%20writer.md) |
-| `.gcode.3mf` writer (Bambu sliced format) | ❌ open | [PR-3-10](phase-3/PR-3-10%20Sliced%203MF%20writer.md) |
+| `.gcode.3mf` writer (Bambu sliced format) | ✅ done | [PR-3-10](phase-3/PR-3-10%20Sliced%203MF%20writer.md) |
 | Tool-change minimization investigation (carried from PR-0.5-3) | ❌ open | [PR-3-11](phase-3/PR-3-11%20Tool%20change%20investigation.md) |
 | Phase 3 exit-criteria smoke | ❌ open | [PR-3-12](phase-3/PR-3-12%20Exit-criteria%20smoke.md) |
 

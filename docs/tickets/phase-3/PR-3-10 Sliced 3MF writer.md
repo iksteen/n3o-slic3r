@@ -1,6 +1,6 @@
 # PR-3-10 — `.gcode.3mf` writer (Bambu sliced format)
 
-Status: ❌ open.
+Status: ✅ shipped — `core/threemf/sliced.rs` emits the Bambu sliced bundle from a `SlicedProjectInput { plates, printer_model, file_metadata }`. Per-plate: `Metadata/plate_<N>.gcode` (verbatim bytes), `Metadata/plate_<N>.gcode.md5` (self-contained MD5 impl — no dep added; algorithm is small + Bambu-firmware-specific), `Metadata/plate_<N>.json` (PR-3-3's summary + AMS bindings serialized), optional `Metadata/plate_<N>.png` thumbnail. Main 3dmodel.model carries BambuStudio namespace metadata. 7 unit tests including byte-equal G-code round-trip, multi-plate, MD5 reference vector, AMS-binding JSON. End-to-end Bambu validation defers to Phase 7a's first real print.
 
 **Scope.** The variant of 3MF that the Bambu A1 mini driver
 (Phase 7a) sends to the printer: a 3MF container with an embedded
