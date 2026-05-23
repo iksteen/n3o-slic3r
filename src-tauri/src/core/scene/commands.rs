@@ -234,6 +234,26 @@ pub fn scene_object_override_clear(
     Ok(())
 }
 
+/// Install a printer on the specified plate (PR-5-4 backend half).
+/// Pass `None` to clear that plate's bed. The cascade re-resolution
+/// triggers naturally from the BedChanged event flow.
+#[tauri::command]
+#[tracing::instrument(skip(state, window, printer))]
+pub fn scene_set_plate_printer(
+    plate_index: usize,
+    printer: Option<PrinterProfile>,
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s
+        .set_plate_printer(plate_index, printer.as_ref())
+        .map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
 /// Move an object from one plate to another (PR-5-11). Returns
 /// a `MoveReport` describing whether the world-space position
 /// had to be reset (out-of-bounds, on-exclusion-zone, or

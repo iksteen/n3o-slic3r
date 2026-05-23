@@ -1170,8 +1170,26 @@ impl SceneState {
         &mut self,
         printer: Option<&crate::core::printer::profile::PrinterProfile>,
     ) -> Vec<SceneEvent> {
+        let active = self.active_plate;
+        self.set_plate_printer(active, printer)
+            .expect("active plate index is always valid")
+    }
+
+    /// Install a printer on the specified plate (PR-5-4 backend
+    /// half — no profile-registry indirection; caller passes the
+    /// resolved profile). `None` clears the plate's bed.
+    ///
+    /// Errors when `plate_index` is out of range.
+    pub fn set_plate_printer(
+        &mut self,
+        plate_index: usize,
+        printer: Option<&crate::core::printer::profile::PrinterProfile>,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        if plate_index >= self.plates.len() {
+            return Err(SceneOpError::UnknownPlate(plate_index));
+        }
         let new_bed = printer.map(super::bed::bed_for_printer);
-        let plate = &mut self.plates[self.active_plate];
+        let plate = &mut self.plates[plate_index];
         // Mirror exclusion zones onto the plate's flat field for
         // consumers that read them directly (the snapshot wire
         // format keeps both — `bed.exclusion_zones` is the
@@ -1182,7 +1200,7 @@ impl SceneState {
             .map(|b| b.exclusion_zones.clone())
             .unwrap_or_default();
         plate.bed = new_bed.clone();
-        vec![SceneEvent::BedChanged(new_bed)]
+        Ok(vec![SceneEvent::BedChanged(new_bed)])
     }
 
     /// Check `object_id` on the active plate against its bed and
@@ -2208,6 +2226,49 @@ mod tests {
                 .unwrap_err(),
             SceneOpError::UnknownObject(ObjectId(9999)),
         );
+    }
+
+    // ---- per-plate printer assignment (PR-5-4 backend) -------------
+
+    #[test]
+    fn set_plate_printer_targets_specific_plate_not_just_active() {
+        let mut s = SceneState::new();
+        s.add_plate();
+        // Active plate is 0; install printer on plate 1.
+        let printer = a1_mini_for_test();
+        s.set_plate_printer(1, Some(&printer)).unwrap();
+        assert!(
+            s.plates[0].bed.is_none(),
+            "active plate (0) should not have a bed",
+        );
+        assert!(s.plates[1].bed.is_some(), "plate 1 has the bed");
+        assert_eq!(s.active_plate, 0, "set_plate_printer doesn't switch active");
+    }
+
+    #[test]
+    fn set_plate_printer_with_none_clears_target_plate_bed() {
+        let mut s = SceneState::new();
+        s.add_plate();
+        s.set_plate_printer(1, Some(&a1_mini_for_test())).unwrap();
+        assert!(s.plates[1].bed.is_some());
+        s.set_plate_printer(1, None).unwrap();
+        assert!(s.plates[1].bed.is_none(), "bed cleared on plate 1");
+    }
+
+    #[test]
+    fn set_plate_printer_errors_on_unknown_plate() {
+        let mut s = SceneState::new();
+        let err = s
+            .set_plate_printer(7, Some(&a1_mini_for_test()))
+            .unwrap_err();
+        assert_eq!(err, SceneOpError::UnknownPlate(7));
+    }
+
+    #[test]
+    fn set_active_printer_still_works_via_delegation() {
+        let mut s = SceneState::new();
+        s.set_active_printer(Some(&a1_mini_for_test()));
+        assert!(s.active_plate().bed.is_some(), "active plate has the bed");
     }
 
     // ---- move_object (PR-5-11) -------------------------------------
