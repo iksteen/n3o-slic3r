@@ -61,6 +61,11 @@ pub enum SliceStartError {
     UnknownCascadeHandle(u64),
     NoPlatesRequested,
     OutputDirInvalid(String),
+    /// Material-binding validation failed on at least one of the
+    /// requested plates (FR-MP-8 / PR-5-6 follow-up). The frontend
+    /// surfaces `issues` on the binding panel; the user fixes
+    /// them and retries.
+    InvalidMaterialBindings(super::pre_slice_gate::PlateValidationFailure),
 }
 
 impl std::fmt::Display for SliceStartError {
@@ -69,6 +74,12 @@ impl std::fmt::Display for SliceStartError {
             Self::UnknownCascadeHandle(h) => write!(f, "unknown cascade handle {h}"),
             Self::NoPlatesRequested => write!(f, "no plates in job"),
             Self::OutputDirInvalid(p) => write!(f, "output_dir not usable: {p}"),
+            Self::InvalidMaterialBindings(fail) => write!(
+                f,
+                "plate {} has {} unresolved material-binding issue(s); fix in the binding panel before slicing",
+                fail.plate_id,
+                fail.issues.len(),
+            ),
         }
     }
 }
