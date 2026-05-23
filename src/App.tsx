@@ -1,8 +1,49 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ViewportCanvas } from "./viewport/ViewportCanvas";
 import "./App.css";
 
 type SlicerInfo = { version: string; option_count: number };
+
+// Phase 4 will restyle this properly. For PR-2-9 the layout is the
+// minimum needed to host the viewport plus a folded-away debug panel
+// that the Phase 0 smoke relied on.
+function App() {
+  const [info, setInfo] = useState<SlicerInfo | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
+
+  useEffect(() => {
+    invoke<SlicerInfo>("slicer_info")
+      .then(setInfo)
+      .catch(() => undefined);
+  }, []);
+
+  return (
+    <div className="flex flex-col h-screen w-screen bg-neutral-900 text-neutral-100">
+      <header className="flex items-center justify-between px-4 py-2 border-b border-neutral-800">
+        <h1 className="text-lg font-semibold tracking-tight">n3o-slic3r</h1>
+        <div className="text-xs text-neutral-400 flex items-center gap-3">
+          {info && (
+            <span>
+              {info.version} · {info.option_count} options
+            </span>
+          )}
+          <button
+            type="button"
+            className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 rounded text-xs"
+            onClick={() => setShowDebug((v) => !v)}
+          >
+            {showDebug ? "Hide debug" : "Debug"}
+          </button>
+        </div>
+      </header>
+      <main className="flex-1 relative">
+        <ViewportCanvas />
+      </main>
+      {showDebug && <DebugPanel />}
+    </div>
+  );
+}
 
 type OptionSummary = {
   key: string;
@@ -14,17 +55,12 @@ type OptionSummary = {
 
 type SliceResult = { ok: boolean; out_path: string; error: string | null };
 
-function App() {
-  const [info, setInfo] = useState<SlicerInfo | null>(null);
+function DebugPanel() {
   const [filter, setFilter] = useState("");
   const [options, setOptions] = useState<OptionSummary[]>([]);
   const [modelPath, setModelPath] = useState("");
   const [outPath, setOutPath] = useState("/tmp/n3o-out.gcode");
   const [sliceMsg, setSliceMsg] = useState("");
-
-  useEffect(() => {
-    invoke<SlicerInfo>("slicer_info").then(setInfo).catch((e) => setSliceMsg(`init: ${e}`));
-  }, []);
 
   async function loadOptions() {
     const opts = await invoke<OptionSummary[]>("slicer_options", { filter });
@@ -38,89 +74,96 @@ function App() {
   }
 
   return (
-    <main style={{ padding: 16, fontFamily: "system-ui, sans-serif" }}>
-      {/* Tailwind smoke — proves the pipeline is wired. Phase 4 restyles the UI properly. */}
-      <h1 className="text-2xl font-semibold tracking-tight">n3o-slic3r</h1>
-      {info ? (
-        <p style={{ opacity: 0.7, fontSize: 13 }}>
-          {info.version} · {info.option_count} options registered
-        </p>
-      ) : (
-        <p>loading…</p>
-      )}
-
-      <section style={{ marginTop: 24 }}>
-        <h2 style={{ fontSize: 16 }}>Option introspection</h2>
+    <section className="border-t border-neutral-800 bg-neutral-900/95 p-4 max-h-72 overflow-auto text-sm">
+      <div className="flex gap-6">
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            loadOptions();
+            void loadOptions();
           }}
-          style={{ display: "flex", gap: 8 }}
+          className="flex-1 min-w-0"
         >
-          <input
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="filter by key/label (e.g. perimeter)"
-            style={{ flex: 1, padding: 4 }}
-          />
-          <button type="submit">Search</button>
-        </form>
-        {options.length > 0 && (
-          <table style={{ width: "100%", marginTop: 12, fontSize: 12, borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ textAlign: "left", borderBottom: "1px solid #888" }}>
-                <th>Key</th>
-                <th>Type</th>
-                <th>Label</th>
-                <th>Category</th>
-                <th>Default</th>
-              </tr>
-            </thead>
-            <tbody>
-              {options.map((o) => (
-                <tr key={o.key} style={{ borderBottom: "1px solid #333" }}>
-                  <td><code>{o.key}</code></td>
-                  <td>{o.ty}</td>
-                  <td>{o.label ?? ""}</td>
-                  <td>{o.category ?? ""}</td>
-                  <td><code>{o.default_value ?? ""}</code></td>
+          <h2 className="text-xs uppercase tracking-wider text-neutral-400 mb-1">
+            Option introspection
+          </h2>
+          <div className="flex gap-2 mb-2">
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="filter by key/label"
+              className="flex-1 bg-neutral-800 px-2 py-1 rounded text-xs"
+            />
+            <button
+              type="submit"
+              className="bg-neutral-700 hover:bg-neutral-600 px-3 py-1 rounded text-xs"
+            >
+              Search
+            </button>
+          </div>
+          {options.length > 0 && (
+            <table className="w-full text-xs">
+              <thead className="text-neutral-400">
+                <tr className="border-b border-neutral-800 text-left">
+                  <th>Key</th>
+                  <th>Type</th>
+                  <th>Label</th>
+                  <th>Category</th>
+                  <th>Default</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-
-      <section style={{ marginTop: 32 }}>
-        <h2 style={{ fontSize: 16 }}>Slice a model</h2>
-        <p style={{ fontSize: 13, opacity: 0.7 }}>
-          Uses FullPrintConfig defaults; this smoke-tests that the IPC chain to libslic3r works.
-        </p>
+              </thead>
+              <tbody>
+                {options.map((o) => (
+                  <tr key={o.key} className="border-b border-neutral-900">
+                    <td>
+                      <code>{o.key}</code>
+                    </td>
+                    <td>{o.ty}</td>
+                    <td>{o.label ?? ""}</td>
+                    <td>{o.category ?? ""}</td>
+                    <td>
+                      <code>{o.default_value ?? ""}</code>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </form>
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            doSlice();
+            void doSlice();
           }}
-          style={{ display: "grid", gap: 6, maxWidth: 600 }}
+          className="w-80 flex flex-col gap-2"
         >
+          <h2 className="text-xs uppercase tracking-wider text-neutral-400">
+            Slice a model
+          </h2>
           <input
             value={modelPath}
             onChange={(e) => setModelPath(e.target.value)}
             placeholder="absolute path to .stl / .3mf / .obj / .step"
-            style={{ padding: 4 }}
+            className="bg-neutral-800 px-2 py-1 rounded text-xs"
           />
           <input
             value={outPath}
             onChange={(e) => setOutPath(e.target.value)}
             placeholder="output .gcode path"
-            style={{ padding: 4 }}
+            className="bg-neutral-800 px-2 py-1 rounded text-xs"
           />
-          <button type="submit" disabled={!modelPath}>Slice</button>
+          <button
+            type="submit"
+            disabled={!modelPath}
+            className="bg-neutral-700 hover:bg-neutral-600 disabled:opacity-40 px-3 py-1 rounded text-xs"
+          >
+            Slice
+          </button>
+          {sliceMsg && (
+            <p className="font-mono text-xs text-neutral-300">{sliceMsg}</p>
+          )}
         </form>
-        {sliceMsg && <p style={{ marginTop: 8, fontFamily: "monospace" }}>{sliceMsg}</p>}
-      </section>
-    </main>
+      </div>
+    </section>
   );
 }
 

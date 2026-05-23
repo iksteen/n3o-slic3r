@@ -1,6 +1,6 @@
 # PR-2-9 — Three.js renderer (scene + orbit + camera modes)
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** The frontend viewport: Three.js scene that subscribes to
 PR-2-2's events and mirrors the authoritative Rust state. Camera
