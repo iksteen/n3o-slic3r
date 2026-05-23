@@ -25,9 +25,16 @@
 //!   IPC wire.
 
 pub mod build;
+pub mod colors;
 pub mod ir;
+pub mod stats;
 
 pub use build::build_preview;
+pub use colors::{encode_colors, ColorMode, Palette};
 pub use ir::{
     BoundingBox, LayerRange, PreviewGeometry, RetractionMarker, SegmentSet,
+};
+pub use stats::{
+    compute_job_stats, compute_layer_stats, layer_time_map, FullJobStats,
+    HeightStats, PerLayerStats,
 };

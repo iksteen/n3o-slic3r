@@ -230,7 +230,10 @@ pub enum SemanticComment {
 /// Feature-type classification for a Move. Matches FR-GP-3's list,
 /// with an `Other(String)` escape for forward compat. Parses from
 /// the Orca / Bambu canonical strings — see `FeatureType::parse`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// `Hash + Eq` so the preview stats (PR-6-6) can bucket per-feature
+/// durations in a HashMap.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FeatureType {
     Perimeter,
     ExternalPerimeter,
