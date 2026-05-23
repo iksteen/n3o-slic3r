@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ViewportCanvas } from "./viewport/ViewportCanvas";
 import { SlicePanel } from "./slice/SlicePanel";
@@ -13,6 +13,8 @@ import {
   SettingsPanelHost,
   useSettingsPanelVisible,
 } from "./settings/SettingsPanelHost";
+import { PreviewWorkspace } from "./preview/PreviewWorkspace";
+import { useSlicePreviewBridge } from "./preview/useSlicePreviewBridge";
 import "./App.css";
 
 type SlicerInfo = { version: string; option_count: number };
@@ -21,8 +23,65 @@ function App() {
   const [info, setInfo] = useState<SlicerInfo | null>(null);
   const [showDebug, setShowDebug] = useState(false);
   const [panelVisible, setPanelVisible] = useSettingsPanelVisible();
+  const [mode, setMode] = useState<"scene" | "preview">("scene");
   const session = useProjectSession();
   const recovery = useAutosaveRecoveryGate();
+
+  const activePlate =
+    session.snapshot?.plates.find(
+      (p) => p.plate_id === session.snapshot?.active_plate_id,
+    ) ?? null;
+  const activePlateId = activePlate?.plate_id ?? null;
+  const bedExtents = activePlate?.bed
+    ? {
+        min: activePlate.bed.extents.min,
+        max: activePlate.bed.extents.max,
+      }
+    : null;
+
+  const bridge = useSlicePreviewBridge(activePlateId ?? null);
+
+  // Auto-switch to preview on slice completion, unless the user
+  // has manually toggled out of preview during this session.
+  const userToggledOutRef = useRef(false);
+  useEffect(() => {
+    bridge.enableAutoSwitch(!userToggledOutRef.current);
+    bridge.onPreviewReady(() => {
+      if (!userToggledOutRef.current) {
+        setMode("preview");
+      }
+    });
+  }, [bridge]);
+
+  // Keyboard shortcut: `P` toggles between scene and preview.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== "p" && e.key !== "P") return;
+      const el = document.activeElement;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if ((el as HTMLElement | null)?.isContentEditable) return;
+      togglePreview();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // togglePreview captures setMode; safe with empty deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const togglePreview = (): void => {
+    setMode((current) => {
+      if (current === "preview") {
+        userToggledOutRef.current = true;
+        return "scene";
+      }
+      userToggledOutRef.current = false;
+      return "preview";
+    });
+  };
+
+  const canPreview = bridge.activePreview != null;
+  const showPreview = mode === "preview" && canPreview;
 
   useEffect(() => {
     invoke<SlicerInfo>("slicer_info")
@@ -53,17 +112,26 @@ function App() {
         <span className="tb-spacer" />
         <SlicePanel
           snapshot={session.snapshot}
-          activePlate={
-            session.snapshot?.plates.find(
-              (p) => p.plate_id === session.snapshot?.active_plate_id,
-            ) ?? null
-          }
+          activePlate={activePlate}
         />
         {info && (
           <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: "10.5px" }}>
             {info.version} · {info.option_count} options
           </span>
         )}
+        <button
+          type="button"
+          className={`tb-btn${showPreview ? " active" : ""}`}
+          onClick={togglePreview}
+          disabled={!canPreview && mode === "scene"}
+          title={
+            canPreview
+              ? "Toggle G-code preview (P)"
+              : "Slice the active plate first"
+          }
+        >
+          Preview <span className="kbd">P</span>
+        </button>
         <button
           type="button"
           className="tb-btn"
@@ -88,11 +156,24 @@ function App() {
           Bootstrap failed: {session.error}
         </div>
       ) : (
-        <div className={`workspace ${panelVisible ? "" : "no-panel"}`}>
+        <div
+          className={`workspace ${
+            showPreview ? "preview-mode" : panelVisible ? "" : "no-panel"
+          }`}
+        >
           <main style={{ position: "relative", minWidth: 0 }}>
-            <ViewportCanvas />
+            {showPreview ? (
+              <PreviewWorkspace
+                preview={bridge.activePreview}
+                bedExtents={bedExtents}
+              />
+            ) : (
+              <ViewportCanvas />
+            )}
           </main>
-          {panelVisible && <SettingsPanelHost session={session} />}
+          {!showPreview && panelVisible && (
+            <SettingsPanelHost session={session} />
+          )}
         </div>
       )}
 
