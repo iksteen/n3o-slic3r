@@ -1,0 +1,125 @@
+// Settings wire-format types (PR-4-1 + PR-4-2).
+//
+// Mirrors the Rust shapes in `src-tauri/src/core/cascade/mod.rs`:
+//
+//   - `OptionSummary`        (Phase 1 introspection + PR-4-1 fields)
+//   - `OptMode`              (PR-4-1, lowercase string enum)
+//   - `OptScopeFlags`        (PR-4-1, struct of bools)
+//   - `CapabilityPredicate`  (PR-4-1, tagged enum)
+//   - `PrinterAwareOptionSummary` (PR-4-1, summary + hidden bool)
+//
+// Wire-shape drift between this file and the Rust serde output is
+// the most common cause of silent UI bugs (see the Phase 2 viewport
+// gizmo Transform shape regression for prior art). Mirror the
+// serde output literally; the Rust tests assert the shapes.
+
+/** libslic3r option mode (FR-UI-2 Simple/Advanced/Expert filter). */
+export type OptMode = "simple" | "advanced" | "expert" | "develop";
+
+/** Project/object/region scope bitmask flattened to bools (FR-3D-3). */
+export type OptScopeFlags = {
+  project: boolean;
+  object: boolean;
+  region: boolean;
+};
+
+/** Printer capability predicate that gates option visibility
+ *  (FR-UI-7). Tagged enum — `kind` is the variant name from
+ *  `core::schema::capability::CapabilityPredicate`. `None` on the
+ *  Rust side serializes as `null` in the parent's `capability`
+ *  field, never as `{kind: "None"}`. */
+export type CapabilityPredicate =
+  | { kind: "RequiresMultiSlot" }
+  | { kind: "RequiresToolchanger" }
+  | { kind: "RequiresPurgeTower" }
+  | { kind: "RequiresBblPrinter" }
+  | { kind: "RequiresChamberHeater" };
+
+/** One libslic3r option's introspection record. Carries everything
+ *  a settings row needs at render time except the resolved value
+ *  (which comes from `cascade_resolve`). */
+export type OptionSummary = {
+  key: string;
+  /** Debug-formatted enum tag from the FFI (`"Float"`, `"FloatOrPercent"`,
+   *  `"Enum"`, etc.). Use the helper `optionTypeKind()` to discriminate. */
+  ty: string;
+  label: string | null;
+  category: string | null;
+  default_value: string | null;
+  tooltip: string | null;
+  mode: OptMode;
+  scope: OptScopeFlags;
+  capability: CapabilityPredicate | null;
+};
+
+/** `slicer_options_for_printer` result. Same as `OptionSummary` with
+ *  the capability predicate pre-evaluated against the active printer
+ *  (`hidden` is what the panel reads to decide visibility). */
+export type PrinterAwareOptionSummary = OptionSummary & {
+  hidden: boolean;
+};
+
+/** Categorize the raw `ty` string the FFI ships into the shapes the
+ *  form components branch on. Keeps PR-4-2's switch statements honest
+ *  to a small fixed vocabulary. */
+export type OptionTypeKind =
+  | "bool"
+  | "int"
+  | "float"
+  | "percent"
+  | "float-or-percent"
+  | "string"
+  | "color"
+  | "enum"
+  | "vector-bool"
+  | "vector-int"
+  | "vector-float"
+  | "vector-percent"
+  | "vector-float-or-percent"
+  | "vector-string"
+  | "vector-enum"
+  | "point"
+  | "point3"
+  | "unknown";
+
+const TYPE_KIND_MAP: Record<string, OptionTypeKind> = {
+  Bool: "bool",
+  Bools: "vector-bool",
+  Int: "int",
+  Ints: "vector-int",
+  Float: "float",
+  Floats: "vector-float",
+  Percent: "percent",
+  Percents: "vector-percent",
+  FloatOrPercent: "float-or-percent",
+  FloatsOrPercents: "vector-float-or-percent",
+  String: "string",
+  Strings: "vector-string",
+  Enum: "enum",
+  Enums: "vector-enum",
+  Point: "point",
+  Points: "point",
+  Point3: "point3",
+};
+
+/** A few libslic3r `String` options are conventionally color hex
+ *  strings (filament_colour, etc.). Detect by key suffix so we can
+ *  route them to ColorInput rather than the generic text input. */
+const COLOR_KEYS = new Set([
+  "filament_colour",
+  "filament_color",
+  "bed_custom_color",
+  "wipe_tower_color",
+]);
+
+export function optionTypeKind(opt: OptionSummary): OptionTypeKind {
+  if (COLOR_KEYS.has(opt.key)) return "color";
+  return TYPE_KIND_MAP[opt.ty] ?? "unknown";
+}
+
+/** True for any vector-shaped libslic3r option. Vector options need
+ *  one entry per slot/extruder; the panel's slot-adaptive layout
+ *  (PR-4-6) renders the active slot's index only. */
+export function isVectorKind(kind: OptionTypeKind): boolean {
+  return kind.startsWith("vector-");
+}

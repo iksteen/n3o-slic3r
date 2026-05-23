@@ -1,6 +1,6 @@
 # PR-4-2 — Data-driven form component library
 
-Status: ❌ open.
+Status: ✅ shipped — `src/settings/inputs/`: shared `Field` wrapper, six input components (`BoolInput`, `NumberInput`, `PercentInput`, `DropdownInput`, `ColorInput`, `MultiSelectInput`) + pure `helpers.ts` for parse/format/validate. Class names match the mockup (`.val-toggle`, `.val-input`, `.val-unit`, `.val-select`, `.val-wrap`, `.val-color-swatch`, `.val-color-hex`, `.val-percent-wrap`, `.val-vector-wrap`). NumberInput commits on blur/Enter (not per keystroke) with parse-failure-reverts-to-last-good behavior. PercentInput for `FloatOrPercent` has the absolute↔percent toggle (mm/%). MultiSelectInput threads a `renderSlot` callback so PR-4-6's slot-tab-strip plugs in cleanly without the wrapper knowing the inner control type; it pads with the wrap-extend convention (libslic3r's `get_at` semantics). 27 vitest cases against the pure helpers (20 → 47 frontend tests). The Storybook-style demo route was cut per the ticket's cut candidate; helpers + types catch the contract at compile time and PR-4-4 will exercise the components in real renders. `src/settings/types.ts` mirrors the Rust wire types (`OptionSummary`, `OptMode`, `OptScopeFlags`, `CapabilityPredicate`, `PrinterAwareOptionSummary`) + an `OptionTypeKind` discriminator that maps the FFI's Debug-formatted type string into a small fixed vocabulary the form components branch on.
 
 **Scope.** Six input components the settings panel renders per row,
 one per libslic3r option type. Pure TS / React; no Tauri integration
