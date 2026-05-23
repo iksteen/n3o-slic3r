@@ -8,9 +8,17 @@ viewport, which needs a real GUI session).
 ## Automated half — runs in CI
 
 ```
-$ cargo test --workspace --release
+$ cargo test --workspace    # CI uses debug profile; see note below
 $ npm test
 ```
+
+CI runs the suite in **debug** mode after the GitHub Actions runner
+OOM-killed the release-mode compile on `zvariant v5.11.0` (run
+26313140866). Perf-budget tests still pass with > 10× headroom in
+debug — translate p99 ≈ 1 µs vs the 5 ms ceiling, resolver mean ≈
+26 µs vs 10 ms, snapshot ≈ 100 µs vs 50 ms. Release-mode local runs
+remain the canonical headroom check; CI just regresses against the
+budgets, which is what matters.
 
 Expected (from the dev rig — modest-hardware budgets fold into Phase 9
 release prep):

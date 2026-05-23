@@ -129,19 +129,25 @@ jobs:
       - name: npm ci
         run: npm ci
 
-      - name: cargo test (workspace, release)
-        # Serial compile (CARGO_BUILD_JOBS=1) + codegen-units=1 to fit
-        # under the ubuntu-latest runner's ~7 G RAM ceiling. Two earlier
-        # runs (26306143107, 26313140866) got SIGTERM'd at default 4
-        # jobs and then at 2 jobs — Tauri's dep tree
-        # (webkit2gtk + soup3 + wry + zvariant + serde-derive) blows
-        # memory when too many heavy rustc invocations overlap. The
-        # libslic3r + deps caches absorb the long pole; serial Rust
-        # compile is acceptable on top.
+      - name: cargo test (workspace, debug)
+        # Debug profile to keep peak rustc memory under the
+        # ubuntu-latest runner's ~7 G RAM ceiling. Run 26313140866
+        # OOM-killed at exit 143 while compiling `zvariant v5.11.0`
+        # in release mode even with JOBS=1+INCREMENTAL=0 — the LLVM
+        # optimization phase is the bulk of the memory usage, not
+        # the parallelism. Debug compile of the full workspace fits
+        # comfortably.
+        #
+        # The perf-budget tests (cascade_perf, scene_state_perf,
+        # phase2_smoke) pass with 10-1000× headroom in debug mode
+        # — translate p99 ≈ 1 µs vs the 5 ms ceiling, snapshot ≈
+        # 100 µs vs 50 ms. JOBS=1 + INCREMENTAL=0 stay belt-and-
+        # suspenders in case any single crate's debug compile still
+        # spikes memory.
         env:
           CARGO_BUILD_JOBS: 1
           CARGO_INCREMENTAL: 0
-        run: cargo test --workspace --release
+        run: cargo test --workspace
 
       - name: TypeScript typecheck
         run: npx tsc --noEmit
