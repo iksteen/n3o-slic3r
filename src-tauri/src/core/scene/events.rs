@@ -95,6 +95,12 @@ pub enum SceneEvent {
     PlateMetadataChanged {
         plate_id: PlateId,
     },
+    /// A plate's material bindings changed (PR-5-6). The frontend
+    /// re-reads the bindings via the project snapshot to refresh
+    /// the binding panel.
+    MaterialBindingChanged {
+        plate_id: PlateId,
+    },
 }
 
 impl SceneEvent {
@@ -119,6 +125,7 @@ impl SceneEvent {
             Self::ActivePlateChanged { .. } => "scene:active_plate_changed",
             Self::ObjectOverridesChanged { .. } => "scene:object_overrides_changed",
             Self::PlateMetadataChanged { .. } => "scene:plate_metadata_changed",
+            Self::MaterialBindingChanged { .. } => "scene:material_binding_changed",
         }
     }
 }

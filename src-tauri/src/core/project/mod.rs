@@ -33,7 +33,7 @@ pub mod metadata;
 pub mod model;
 pub mod mutation;
 
-pub use binding::{MaterialBinding, PrinterBinding};
+pub use binding::{BindingIssue, MaterialBinding, PrinterBinding};
 pub use context::SlicingContext;
 pub use metadata::{PlateMetadata, CYCLE_COUNT_MAX, CYCLE_COUNT_MIN};
 pub use crate::core::scene::state::PlateSceneState;

@@ -77,6 +77,38 @@ impl MaterialBinding {
     }
 }
 
+/// A problem found by the material-binding validator (PR-5-6 /
+/// FR-MP-8). The pre-slice gate (PR-3-2 follow-up) refuses to
+/// launch the slicer when any plate produces a non-empty issue
+/// list; the UI surfaces these as inline errors on the binding
+/// panel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum BindingIssue {
+    /// An object on the plate references a model material that
+    /// has no binding entry. `model_material` is 1-based.
+    UnboundMaterial { model_material: u8 },
+    /// A binding's `physical_slot` exceeds the printer's
+    /// `slot_count`. (Phase 7c may extend this to "slot exists
+    /// but is unavailable per live polling.")
+    SlotOutOfRange {
+        model_material: u8,
+        physical_slot: u8,
+        slot_count: u8,
+    },
+    /// A binding's own field-level validation rejected it (zero
+    /// indices, empty filament identity).
+    InvalidBinding {
+        model_material: u8,
+        message: String,
+    },
+    /// Two bindings claim the same `model_material`. The plate's
+    /// material_bindings list should hold at most one entry per
+    /// model material; this surfaces if the data shape is
+    /// violated (e.g. on import from a foreign-authored .3mf).
+    DuplicateMaterial { model_material: u8 },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -188,6 +188,148 @@ impl Project {
         Ok(vec![SceneEvent::ActivePlateChanged { plate_id: id }])
     }
 
+    // ---- Material bindings (PR-5-6) -------------------------------
+
+    /// Upsert a material binding on a specific plate: model
+    /// material `model_material` (1-based) maps to physical slot
+    /// `physical_slot` (1-based) loaded with `filament_identity`.
+    ///
+    /// Field-level validation runs first ([`MaterialBinding::validate`]).
+    /// Slot-range checks (vs. `printer.slot_count`) and
+    /// referenced-but-unbound checks land in the validation pass
+    /// the slice orchestrator runs — see
+    /// [`Plate::validate_material_bindings`].
+    pub fn set_material_binding(
+        &mut self,
+        plate_id: PlateId,
+        model_material: u8,
+        physical_slot: u8,
+        filament_identity: String,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let new_binding = crate::core::project::binding::MaterialBinding {
+            model_material,
+            physical_slot,
+            filament_identity,
+        };
+        new_binding.validate().map_err(|msg| {
+            SceneOpError::InvalidPlateMetadata {
+                plate_id,
+                message: msg,
+            }
+        })?;
+        let idx = self
+            .plate_index(plate_id)
+            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        let plate = &mut self.plates[idx];
+        match plate
+            .material_bindings
+            .iter()
+            .position(|b| b.model_material == model_material)
+        {
+            Some(i) => {
+                if plate.material_bindings[i] == new_binding {
+                    return Ok(Vec::new());
+                }
+                plate.material_bindings[i] = new_binding;
+            }
+            None => plate.material_bindings.push(new_binding),
+        }
+        Ok(vec![SceneEvent::MaterialBindingChanged { plate_id }])
+    }
+
+    /// Drop the binding for `model_material` on `plate_id`. Silent
+    /// no-op when the model material had no binding entry.
+    pub fn clear_material_binding(
+        &mut self,
+        plate_id: PlateId,
+        model_material: u8,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let idx = self
+            .plate_index(plate_id)
+            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        let plate = &mut self.plates[idx];
+        let before = plate.material_bindings.len();
+        plate
+            .material_bindings
+            .retain(|b| b.model_material != model_material);
+        if plate.material_bindings.len() == before {
+            return Ok(Vec::new());
+        }
+        Ok(vec![SceneEvent::MaterialBindingChanged { plate_id }])
+    }
+
+    /// Auto-bind every model material referenced by objects on
+    /// the plate (FR-FS-10). Sequentially assigns the next
+    /// available physical slot starting from 1, capped at
+    /// `slot_count`.
+    ///
+    /// The full heuristic (match by filament family — PLA → first
+    /// PLA slot, PETG → first PETG slot) ships when Phase 7c lands
+    /// the live slot-state poll. Phase 5's sequential allocator
+    /// gives the user a starting point they can adjust in the
+    /// binding panel.
+    ///
+    /// Existing bindings on `plate_id` are **replaced** wholesale
+    /// — the caller's intent in pressing "auto-bind" is "redo
+    /// everything." Materials not referenced by any object are
+    /// dropped.
+    ///
+    /// `filament_identity` is left empty on each generated
+    /// binding; the user picks the loaded filament from the panel.
+    /// (When the binding is then used at slice time, an empty
+    /// `filament_identity` surfaces as an InvalidBinding issue,
+    /// preventing the slice — see
+    /// [`Plate::validate_material_bindings`].)
+    pub fn auto_bind_materials(
+        &mut self,
+        plate_id: PlateId,
+        slot_count: u8,
+    ) -> Result<(Vec<crate::core::project::binding::MaterialBinding>, Vec<SceneEvent>), SceneOpError>
+    {
+        if slot_count == 0 {
+            return Err(SceneOpError::InvalidPlateMetadata {
+                plate_id,
+                message: "slot_count must be >= 1".into(),
+            });
+        }
+        let idx = self
+            .plate_index(plate_id)
+            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        let mut referenced: std::collections::BTreeSet<u8> =
+            std::collections::BTreeSet::new();
+        for obj in self.plates[idx].scene.objects.values() {
+            if let Some(mat) = obj.extruder_id {
+                if mat >= 1 {
+                    referenced.insert(mat);
+                }
+            }
+        }
+        // Sequential allocator: 1st referenced material → slot 1,
+        // 2nd → slot 2, capped at slot_count. Excess materials
+        // round-robin to slot 1 (so they at least get *some*
+        // binding the user can fix; the validate pass will flag
+        // these as duplicates on the same slot).
+        let mut bindings: Vec<crate::core::project::binding::MaterialBinding> = Vec::new();
+        for (i, mat) in referenced.iter().enumerate() {
+            let slot = (i as u8 % slot_count) + 1;
+            bindings.push(crate::core::project::binding::MaterialBinding {
+                model_material: *mat,
+                physical_slot: slot,
+                filament_identity: String::new(),
+            });
+        }
+        let prior = std::mem::replace(
+            &mut self.plates[idx].material_bindings,
+            bindings.clone(),
+        );
+        let events = if bindings == prior {
+            Vec::new()
+        } else {
+            vec![SceneEvent::MaterialBindingChanged { plate_id }]
+        };
+        Ok((bindings, events))
+    }
+
     // ---- Plate metadata (PR-5-5) ----------------------------------
 
     /// Set a plate's `cycle_count` (FR-MP-7). Validates against the
@@ -2277,5 +2419,236 @@ mod tests {
         let mut p = Project::default();
         let err = p.set_plate_composition_order(PlateId(99), 1).unwrap_err();
         assert_eq!(err, SceneOpError::UnknownPlate(PlateId(99)));
+    }
+
+    // ---- Material bindings (PR-5-6) -------------------------------
+
+    use crate::core::project::binding::{BindingIssue, MaterialBinding};
+
+    /// Make a cube on the active plate carrying the given model
+    /// material index (extruder_id).
+    fn add_cube_with_extruder(p: &mut Project, mat: u8) -> ObjectId {
+        let mesh_id = p.register_mesh(unit_cube_mesh());
+        p.register_object(NewSceneObject {
+            mesh: mesh_id,
+            transform: Transform::IDENTITY,
+            name: format!("cube-m{mat}"),
+            visible: true,
+            extruder_id: Some(mat),
+            parent: None,
+        })
+    }
+
+    #[test]
+    fn set_material_binding_inserts_when_absent() {
+        let mut p = Project::default();
+        add_cube_with_extruder(&mut p, 1);
+        let events = p
+            .set_material_binding(PlateId(1), 1, 2, "PLA-Basic".into())
+            .unwrap();
+        assert_eq!(p.plates[0].material_bindings.len(), 1);
+        let b = &p.plates[0].material_bindings[0];
+        assert_eq!(b.model_material, 1);
+        assert_eq!(b.physical_slot, 2);
+        assert_eq!(b.filament_identity, "PLA-Basic");
+        assert!(matches!(
+            events.as_slice(),
+            [SceneEvent::MaterialBindingChanged { plate_id: PlateId(1) }],
+        ));
+    }
+
+    #[test]
+    fn set_material_binding_upserts_when_present() {
+        let mut p = Project::default();
+        add_cube_with_extruder(&mut p, 1);
+        p.set_material_binding(PlateId(1), 1, 2, "PLA-Basic".into()).unwrap();
+        p.set_material_binding(PlateId(1), 1, 3, "PETG".into()).unwrap();
+        assert_eq!(p.plates[0].material_bindings.len(), 1);
+        assert_eq!(p.plates[0].material_bindings[0].physical_slot, 3);
+        assert_eq!(p.plates[0].material_bindings[0].filament_identity, "PETG");
+    }
+
+    #[test]
+    fn set_material_binding_identical_to_existing_is_silent_noop() {
+        let mut p = Project::default();
+        add_cube_with_extruder(&mut p, 1);
+        p.set_material_binding(PlateId(1), 1, 2, "PLA".into()).unwrap();
+        let events = p
+            .set_material_binding(PlateId(1), 1, 2, "PLA".into())
+            .unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn set_material_binding_field_validation_errors() {
+        let mut p = Project::default();
+        let err = p
+            .set_material_binding(PlateId(1), 0, 1, "PLA".into())
+            .unwrap_err();
+        assert!(matches!(err, SceneOpError::InvalidPlateMetadata { .. }));
+    }
+
+    #[test]
+    fn set_material_binding_unknown_plate_errors() {
+        let mut p = Project::default();
+        let err = p
+            .set_material_binding(PlateId(99), 1, 1, "PLA".into())
+            .unwrap_err();
+        assert_eq!(err, SceneOpError::UnknownPlate(PlateId(99)));
+    }
+
+    #[test]
+    fn clear_material_binding_drops_entry() {
+        let mut p = Project::default();
+        p.set_material_binding(PlateId(1), 1, 1, "PLA".into()).unwrap();
+        p.set_material_binding(PlateId(1), 2, 2, "PETG".into()).unwrap();
+        p.clear_material_binding(PlateId(1), 1).unwrap();
+        assert_eq!(p.plates[0].material_bindings.len(), 1);
+        assert_eq!(p.plates[0].material_bindings[0].model_material, 2);
+    }
+
+    #[test]
+    fn clear_material_binding_absent_is_silent_noop() {
+        let mut p = Project::default();
+        let events = p.clear_material_binding(PlateId(1), 99).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn auto_bind_materials_walks_referenced_extruders() {
+        let mut p = Project::default();
+        // 4-color setup: extruders 1..=4 on four cubes.
+        for mat in 1..=4u8 {
+            add_cube_with_extruder(&mut p, mat);
+        }
+        let (bindings, events) = p.auto_bind_materials(PlateId(1), 4).unwrap();
+        assert_eq!(bindings.len(), 4);
+        // Sequential: mat 1 → slot 1, mat 2 → slot 2, etc.
+        for (i, b) in bindings.iter().enumerate() {
+            assert_eq!(b.model_material, (i + 1) as u8);
+            assert_eq!(b.physical_slot, (i + 1) as u8);
+            assert!(b.filament_identity.is_empty(), "user fills in");
+        }
+        assert_eq!(p.plates[0].material_bindings.len(), 4);
+        assert!(matches!(
+            events.as_slice(),
+            [SceneEvent::MaterialBindingChanged { plate_id: PlateId(1) }],
+        ));
+    }
+
+    #[test]
+    fn auto_bind_materials_replaces_existing_bindings_wholesale() {
+        let mut p = Project::default();
+        add_cube_with_extruder(&mut p, 1);
+        // Pre-existing binding for a material that's no longer
+        // referenced.
+        p.set_material_binding(PlateId(1), 99, 4, "stale".into()).unwrap();
+        let (bindings, _) = p.auto_bind_materials(PlateId(1), 4).unwrap();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].model_material, 1);
+        // Stale binding is gone.
+        assert!(!p.plates[0]
+            .material_bindings
+            .iter()
+            .any(|b| b.model_material == 99));
+    }
+
+    #[test]
+    fn auto_bind_materials_excess_round_robins_to_slot_1() {
+        // 5 materials referenced but only 2-slot printer.
+        let mut p = Project::default();
+        for mat in 1..=5u8 {
+            add_cube_with_extruder(&mut p, mat);
+        }
+        let (bindings, _) = p.auto_bind_materials(PlateId(1), 2).unwrap();
+        // mat 1 → slot 1, mat 2 → slot 2, mat 3 → slot 1, mat 4 →
+        // slot 2, mat 5 → slot 1.
+        assert_eq!(bindings[0].physical_slot, 1);
+        assert_eq!(bindings[1].physical_slot, 2);
+        assert_eq!(bindings[2].physical_slot, 1);
+        assert_eq!(bindings[3].physical_slot, 2);
+        assert_eq!(bindings[4].physical_slot, 1);
+    }
+
+    #[test]
+    fn auto_bind_materials_slot_count_zero_errors() {
+        let mut p = Project::default();
+        let err = p.auto_bind_materials(PlateId(1), 0).unwrap_err();
+        assert!(matches!(err, SceneOpError::InvalidPlateMetadata { .. }));
+    }
+
+    // ---- Plate::validate_material_bindings ----------------------
+
+    #[test]
+    fn validate_passes_when_all_referenced_materials_bound_in_range() {
+        let mut p = Project::default();
+        add_cube_with_extruder(&mut p, 1);
+        add_cube_with_extruder(&mut p, 2);
+        p.set_material_binding(PlateId(1), 1, 1, "PLA".into()).unwrap();
+        p.set_material_binding(PlateId(1), 2, 2, "PLA".into()).unwrap();
+        let issues = p.plates[0].validate_material_bindings(4);
+        assert!(issues.is_empty(), "expected no issues: {issues:?}");
+    }
+
+    #[test]
+    fn validate_flags_unbound_referenced_material() {
+        let mut p = Project::default();
+        add_cube_with_extruder(&mut p, 1);
+        add_cube_with_extruder(&mut p, 2);
+        // Only bind material 1; material 2 is unbound.
+        p.set_material_binding(PlateId(1), 1, 1, "PLA".into()).unwrap();
+        let issues = p.plates[0].validate_material_bindings(4);
+        assert!(issues
+            .iter()
+            .any(|i| matches!(i, BindingIssue::UnboundMaterial { model_material: 2 })));
+    }
+
+    #[test]
+    fn validate_flags_slot_out_of_range() {
+        let mut p = Project::default();
+        add_cube_with_extruder(&mut p, 1);
+        // Bind material 1 to slot 5 on a 4-slot printer.
+        p.set_material_binding(PlateId(1), 1, 5, "PLA".into()).unwrap();
+        let issues = p.plates[0].validate_material_bindings(4);
+        assert!(issues.iter().any(|i| matches!(
+            i,
+            BindingIssue::SlotOutOfRange {
+                model_material: 1,
+                physical_slot: 5,
+                slot_count: 4,
+            },
+        )));
+    }
+
+    #[test]
+    fn validate_flags_duplicate_material_entry() {
+        // Synthesize a plate with duplicate bindings (shouldn't
+        // happen through the upsert path, but might from .3mf
+        // import).
+        let mut p = Project::default();
+        add_cube_with_extruder(&mut p, 1);
+        p.plates[0].material_bindings.push(MaterialBinding {
+            model_material: 1,
+            physical_slot: 1,
+            filament_identity: "PLA-1".into(),
+        });
+        p.plates[0].material_bindings.push(MaterialBinding {
+            model_material: 1,
+            physical_slot: 2,
+            filament_identity: "PLA-2".into(),
+        });
+        let issues = p.plates[0].validate_material_bindings(4);
+        assert!(issues
+            .iter()
+            .any(|i| matches!(i, BindingIssue::DuplicateMaterial { model_material: 1 })));
+    }
+
+    #[test]
+    fn validate_returns_empty_when_no_objects_reference_materials() {
+        // Plate has neither bindings nor objects → nothing to
+        // validate.
+        let p = Project::default();
+        let issues = p.plates[0].validate_material_bindings(4);
+        assert!(issues.is_empty());
     }
 }
