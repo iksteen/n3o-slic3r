@@ -26,7 +26,17 @@ fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let workspace_root = manifest_dir.join("..").join("..").canonicalize().unwrap();
     let cmake_build_dir = workspace_root.join("build").join("slic3r-ffi");
-    let cmake_config = "RelWithDebInfo";
+    // Default to RelWithDebInfo for local development (backtraces
+    // through libslic3r are essential when a slice misbehaves —
+    // see the PR-3-11 segfault investigation). CI overrides to
+    // `Release` because RelWithDebInfo's debug-symbol output
+    // pushed the GitHub Actions runner past its ~14 G disk ceiling
+    // mid-build (run 26332210186 failed at `'No space left on
+    // device'` in MeshBoolean.cpp.o).
+    println!("cargo:rerun-if-env-changed=N3O_SLIC3R_FFI_CMAKE_CONFIG");
+    let cmake_config = env::var("N3O_SLIC3R_FFI_CMAKE_CONFIG")
+        .unwrap_or_else(|_| "RelWithDebInfo".into());
+    let cmake_config = cmake_config.as_str();
 
     // ---- Sanity check: deps must be built ----
 

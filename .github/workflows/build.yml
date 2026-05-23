@@ -105,9 +105,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/slic3r-ffi
-          key: slic3r-ffi-${{ runner.os }}-${{ steps.orca.outputs.sha }}-${{ hashFiles('crates/slic3r-ffi/ffi/**', 'crates/slic3r-ffi/CMakeLists.txt', 'crates/slic3r-ffi/build.rs') }}
+          # Include the cmake config in the key so flipping
+          # RelWithDebInfo ↔ Release doesn't cause the cached
+          # build tree to grow indefinitely with parallel
+          # per-config object trees.
+          key: slic3r-ffi-${{ runner.os }}-${{ steps.orca.outputs.sha }}-release-${{ hashFiles('crates/slic3r-ffi/ffi/**', 'crates/slic3r-ffi/CMakeLists.txt', 'crates/slic3r-ffi/build.rs') }}
           restore-keys: |
-            slic3r-ffi-${{ runner.os }}-${{ steps.orca.outputs.sha }}-
+            slic3r-ffi-${{ runner.os }}-${{ steps.orca.outputs.sha }}-release-
 
       - name: Cache cargo registry and target
         uses: actions/cache@v4
@@ -128,6 +132,22 @@ jobs:
 
       - name: npm ci
         run: npm ci
+
+      - name: Free runner disk space
+        # Run 26332210186 failed mid-libslic3r with `'No space left
+        # on device'` in MeshBoolean.cpp.o — the RelWithDebInfo
+        # debug-symbol sections push the ubuntu runner past its
+        # ~14 G free-disk ceiling once cargo target + cmake build
+        # tree + npm modules stack up. Strip the runner image of
+        # the toolchains we don't use; typical free is ~15-20 G,
+        # plenty for libslic3r + cargo + npm to all fit.
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      /usr/share/swift
+          sudo docker image prune --all --force || true
+          df -h /
 
       - name: Provision 8 GB swap for rustc peaks
         # The ubuntu-latest runner has ~7 G RAM, and individual rustc
@@ -169,6 +189,12 @@ jobs:
         env:
           CARGO_BUILD_JOBS: 1
           CARGO_INCREMENTAL: 0
+          # Drop libslic3r's debug symbols to keep the cmake build
+          # tree under the runner's disk ceiling. Local builds keep
+          # RelWithDebInfo so PR-3-11-style segfault backtraces
+          # stay actionable; CI doesn't ship binaries so it doesn't
+          # need the symbols.
+          N3O_SLIC3R_FFI_CMAKE_CONFIG: Release
         run: cargo test --workspace
 
       - name: TypeScript typecheck
