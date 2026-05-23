@@ -100,23 +100,22 @@ export function Field({
     <div
       className={[
         "set-row",
-        "px-3 py-2 flex items-center gap-2",
         authoredClass,
         tintClass,
-        disabled ? "is-disabled opacity-60" : "",
+        disabled ? "is-disabled" : "",
         error ? "has-error" : "",
       ]
         .filter(Boolean)
         .join(" ")}
       data-setting-id={schema.key}
-      style={style}
+      style={{ ...style, ...(disabled ? { opacity: 0.6 } : {}) }}
       onMouseEnter={onRowEnter ? (e) => onRowEnter(e.currentTarget) : undefined}
       onMouseLeave={onRowLeave}
     >
-      <div className="set-meta flex-1 min-w-0 flex items-center gap-2">
+      <div className="set-meta">
         <span
-          className={`set-name truncate text-sm ${authored ? "font-semibold" : ""}`}
-          title={schema.key}
+          className="set-name"
+          data-key={schema.key}
           onMouseEnter={onLabelEnter ? (e) => onLabelEnter(e.currentTarget) : undefined}
           onMouseLeave={onLabelLeave}
         >
@@ -128,7 +127,7 @@ export function Field({
       {resetButton}
       <div className="set-value">{children}</div>
       {error && (
-        <div className="set-error w-full text-xs text-rose-500 mt-1" role="alert">
+        <div className="set-error" role="alert">
           {error}
         </div>
       )}

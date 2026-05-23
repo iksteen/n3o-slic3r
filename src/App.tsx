@@ -25,53 +25,63 @@ function App() {
   }, []);
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-neutral-900 text-neutral-100">
-      <header className="flex items-center justify-between px-4 py-2 border-b border-neutral-800">
-        <h1 className="text-lg font-semibold tracking-tight">n3o-slic3r</h1>
-        <div className="text-xs text-neutral-400 flex items-center gap-3">
-          <SlicePanel />
-          {info && (
-            <span>
-              {info.version} · {info.option_count} options
-            </span>
-          )}
-          <button
-            type="button"
-            className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 rounded text-xs"
-            onClick={() => setPanelVisible(!panelVisible)}
-            title="Toggle settings panel (persists across reloads)"
-          >
-            {panelVisible ? "Hide settings" : "Settings"}
-          </button>
-          <button
-            type="button"
-            className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 rounded text-xs"
-            onClick={() => setShowDebug((v) => !v)}
-          >
-            {showDebug ? "Hide debug" : "Debug"}
-          </button>
-        </div>
-      </header>
-      <PlateTabs />
-      {session.error && (
-        <div
-          role="alert"
-          className="border-b border-red-700 bg-red-950 text-red-200 text-xs px-4 py-2"
+    <div className="app">
+      <header className="topbar">
+        <span className="brand">
+          <span className="brand-mark" aria-hidden />
+          n3o-slic3r
+        </span>
+        <span className="tb-spacer" />
+        <SlicePanel />
+        {info && (
+          <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: "10.5px" }}>
+            {info.version} · {info.option_count} options
+          </span>
+        )}
+        <button
+          type="button"
+          className="tb-btn"
+          onClick={() => setPanelVisible(!panelVisible)}
+          title="Toggle settings panel (persists across reloads)"
         >
+          {panelVisible ? "Hide settings" : "Settings"}
+        </button>
+        <button
+          type="button"
+          className="tb-btn"
+          onClick={() => setShowDebug((v) => !v)}
+        >
+          {showDebug ? "Hide debug" : "Debug"}
+        </button>
+      </header>
+
+      <PlateTabs />
+
+      {session.error ? (
+        <div className="sp-error" role="alert" style={{ margin: "8px 14px" }}>
           Bootstrap failed: {session.error}
         </div>
+      ) : (
+        <div className={`workspace ${panelVisible ? "" : "no-panel"}`}>
+          <main style={{ position: "relative", minWidth: 0 }}>
+            <ViewportCanvas />
+          </main>
+          {panelVisible && <SettingsPanelHost session={session} />}
+        </div>
       )}
-      <div className="flex-1 flex min-h-0">
-        <main className="flex-1 relative min-w-0">
-          <ViewportCanvas />
-        </main>
-        {panelVisible && (
-          <aside className="w-96 border-l border-neutral-800 bg-neutral-900 overflow-y-auto">
-            <SettingsPanelHost session={session} />
-          </aside>
-        )}
-      </div>
-      {showDebug && <DebugPanel />}
+
+      <footer className="statusbar">
+        <span className="dot" aria-hidden />
+        <span>
+          {session.loading
+            ? "Loading…"
+            : session.snapshot
+            ? `${session.snapshot.plates.length} plate${session.snapshot.plates.length === 1 ? "" : "s"}`
+            : "—"}
+        </span>
+        <span className="spacer" />
+        {showDebug && <DebugPanel />}
+      </footer>
     </div>
   );
 }
@@ -90,7 +100,7 @@ function DebugPanel() {
   const [filter, setFilter] = useState("");
   const [options, setOptions] = useState<OptionSummary[]>([]);
   const [modelPath, setModelPath] = useState("");
-  const [outPath, setOutPath] = useState("/tmp/n3o-out.gcode");
+  const [outPath] = useState("/tmp/n3o-out.gcode");
   const [sliceMsg, setSliceMsg] = useState("");
 
   async function loadOptions() {
@@ -104,97 +114,44 @@ function DebugPanel() {
     setSliceMsg(r.ok ? `wrote ${r.out_path}` : `error: ${r.error}`);
   }
 
+  // Debug panel renders inline in the status row as a popover-like inline
+  // text block. Kept minimal — it's a developer affordance, not user UX.
   return (
-    <section className="border-t border-neutral-800 bg-neutral-900/95 p-4 max-h-72 overflow-auto text-sm">
-      <div className="flex gap-6">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void loadOptions();
-          }}
-          className="flex-1 min-w-0"
-        >
-          <h2 className="text-xs uppercase tracking-wider text-neutral-400 mb-1">
-            Option introspection
-          </h2>
-          <div className="flex gap-2 mb-2">
-            <input
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="filter by key/label"
-              className="flex-1 bg-neutral-800 px-2 py-1 rounded text-xs"
-            />
-            <button
-              type="submit"
-              className="bg-neutral-700 hover:bg-neutral-600 px-3 py-1 rounded text-xs"
-            >
-              Search
-            </button>
-          </div>
-          {options.length > 0 && (
-            <table className="w-full text-xs">
-              <thead className="text-neutral-400">
-                <tr className="border-b border-neutral-800 text-left">
-                  <th>Key</th>
-                  <th>Type</th>
-                  <th>Label</th>
-                  <th>Category</th>
-                  <th>Default</th>
-                </tr>
-              </thead>
-              <tbody>
-                {options.map((o) => (
-                  <tr key={o.key} className="border-b border-neutral-900">
-                    <td>
-                      <code>{o.key}</code>
-                    </td>
-                    <td>{o.ty}</td>
-                    <td>{o.label ?? ""}</td>
-                    <td>{o.category ?? ""}</td>
-                    <td>
-                      <code>{o.default_value ?? ""}</code>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </form>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void doSlice();
-          }}
-          className="w-80 flex flex-col gap-2"
-        >
-          <h2 className="text-xs uppercase tracking-wider text-neutral-400">
-            Slice a model
-          </h2>
-          <input
-            value={modelPath}
-            onChange={(e) => setModelPath(e.target.value)}
-            placeholder="absolute path to .stl / .3mf / .obj / .step"
-            className="bg-neutral-800 px-2 py-1 rounded text-xs"
-          />
-          <input
-            value={outPath}
-            onChange={(e) => setOutPath(e.target.value)}
-            placeholder="output .gcode path"
-            className="bg-neutral-800 px-2 py-1 rounded text-xs"
-          />
-          <button
-            type="submit"
-            disabled={!modelPath}
-            className="bg-neutral-700 hover:bg-neutral-600 disabled:opacity-40 px-3 py-1 rounded text-xs"
-          >
-            Slice
-          </button>
-          {sliceMsg && (
-            <p className="font-mono text-xs text-neutral-300">{sliceMsg}</p>
-          )}
-        </form>
-      </div>
-    </section>
+    <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <input
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+        placeholder="opt filter"
+        style={{
+          background: "var(--surface-2)",
+          border: "1px solid var(--border)",
+          borderRadius: 4,
+          padding: "1px 6px",
+          fontSize: 10.5,
+          width: 120,
+        }}
+      />
+      <button type="button" className="tb-btn" style={{ height: 20, padding: "0 8px", fontSize: 10.5 }} onClick={() => void loadOptions()}>
+        opts ({options.length})
+      </button>
+      <input
+        value={modelPath}
+        onChange={(e) => setModelPath(e.target.value)}
+        placeholder="model.stl"
+        style={{
+          background: "var(--surface-2)",
+          border: "1px solid var(--border)",
+          borderRadius: 4,
+          padding: "1px 6px",
+          fontSize: 10.5,
+          width: 140,
+        }}
+      />
+      <button type="button" className="tb-btn" style={{ height: 20, padding: "0 8px", fontSize: 10.5 }} disabled={!modelPath} onClick={() => void doSlice()}>
+        slice
+      </button>
+      {sliceMsg && <span style={{ color: "var(--text-dim)" }}>{sliceMsg}</span>}
+    </span>
   );
 }
 

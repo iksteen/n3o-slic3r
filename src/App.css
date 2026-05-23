@@ -1,20 +1,4 @@
-/* App-level resets. Tailwind handles layout + colors; this file
- * just ensures #root + html + body fill the viewport so the
- * viewport canvas can occupy the whole window. */
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-html,
-body,
-#root {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-}
+/* All global app styles now live in src/index.css under the
+ * design-token + @layer components system. This file is kept as
+ * an import target for components that previously relied on it
+ * being side-effect-imported from App.tsx. */

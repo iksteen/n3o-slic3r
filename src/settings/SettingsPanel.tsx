@@ -32,11 +32,9 @@ import {
 import { SlotTabStrip, useSlotState, type SlotInfo } from "./slots/SlotTabStrip";
 import {
   CategorySidebar,
-  ModeFilterControl,
   categorize,
   categoryCounts,
   passesMode,
-  useStoredModeFilter,
   type ModeFilter,
 } from "./nav";
 import type {
@@ -128,7 +126,11 @@ export function SettingsPanel(props: SettingsPanelProps) {
     allObjects = [],
   } = props;
 
-  const [mode, setMode] = useStoredModeFilter();
+  // Mode filter UI is parked pending a redesign; pin to "expert"
+  // so every stable setting is visible. `setMode` is kept available
+  // for when the new UI lands.
+  const [mode, setMode] = useState<ModeFilter>("expert");
+  void setMode;
   const [search, setSearch] = useState("");
   const [contextLayer, setContextLayer] = useState<ContextLayer>("project");
   const [activeCat, setActiveCat] = useState<string | null>(null);
@@ -172,8 +174,13 @@ export function SettingsPanel(props: SettingsPanelProps) {
   //   - "from-save": snapshot of `resolved` at panel mount or at
   //     project-save time. In-memory only for Phase 4; Phase 5's
   //     project save populates from the .3mf load.
-  const [diffMode, setDiffMode] = useState<DiffMode>(() => readStoredDiffMode());
-  useEffect(() => writeStoredDiffMode(diffMode), [diffMode]);
+  // Diff tabs (All / Diff: default / Diff: save) are parked pending
+  // a redesign; pin to "all" so every row shows. `setDiffMode` is
+  // kept available for when the new UI lands.
+  const [diffMode, setDiffMode] = useState<DiffMode>("all");
+  void setDiffMode;
+  void readStoredDiffMode;
+  void writeStoredDiffMode;
   const savedBaselineRef = useRef<ResolvedMap | null>(null);
   useEffect(() => {
     if (savedBaselineRef.current === null && Object.keys(resolved).length > 0) {
@@ -303,51 +310,11 @@ export function SettingsPanel(props: SettingsPanelProps) {
             {objectTabAvailable ? `Object: ${selectedObject!.name}` : "Object"}
           </button>
         </div>
-        <ModeFilterControl
-          value={mode}
-          onChange={setMode}
-          allowDevelop={import.meta.env.DEV}
-        />
-        <div className="sp-tabs sp-tabs-diff" role="tablist" aria-label="Diff filter">
-          {(["all", "from-default", "from-save"] as DiffMode[]).map((m) => (
-            <button
-              key={m}
-              type="button"
-              role="tab"
-              aria-selected={diffMode === m}
-              className={`sp-tab${diffMode === m ? " active" : ""}`}
-              onClick={() => setDiffMode(m)}
-              title={
-                m === "all"
-                  ? "Show all settings"
-                  : m === "from-default"
-                    ? "Show only settings overridden from cascade defaults"
-                    : "Show only settings changed since save"
-              }
-            >
-              {m === "all" ? "All" : m === "from-default" ? "Diff: default" : "Diff: save"}
-            </button>
-          ))}
-        </div>
-        <div className="search-wrap flex items-center gap-2">
-          <input
-            type="search"
-            className="search-input"
-            placeholder="Search 800+ settings…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          {totalOverrides > 0 && (
-            <span
-              className="sp-overrides-badge px-2 py-0.5 rounded text-xs bg-amber-100 text-amber-900 dark:bg-amber-900/50 dark:text-amber-200"
-              title={`${totalOverrides} settings overridden across ${totalCategoriesWithOverrides} categor${
-                totalCategoriesWithOverrides === 1 ? "y" : "ies"
-              }`}
-            >
-              {totalOverrides} overridden
-            </span>
-          )}
-        </div>
+        {/* Mode filter (Simple / Advanced / Expert / Develop) and the
+            diff tabs are intentionally not rendered yet; the user is
+            redesigning that surface. The underlying state + filter
+            machinery is still in place (mode is pinned to "expert" so
+            all stable settings show; diffMode stays at "all"). */}
         {slotCount >= 2 && (
           <SlotTabStrip
             slots={slots}
@@ -357,6 +324,26 @@ export function SettingsPanel(props: SettingsPanelProps) {
             onSyncAllChange={setSyncAll}
           />
         )}
+        <div className="search-wrap">
+          <div className="search-input">
+            <input
+              type="search"
+              placeholder="Search 800+ settings…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {totalOverrides > 0 && (
+              <span
+                className="sp-overrides-badge"
+                title={`${totalOverrides} settings overridden across ${totalCategoriesWithOverrides} categor${
+                  totalCategoriesWithOverrides === 1 ? "y" : "ies"
+                }`}
+              >
+                {totalOverrides} overridden
+              </span>
+            )}
+          </div>
+        </div>
       </header>
 
       {resolveError && (
@@ -578,7 +565,7 @@ function SettingRow({
 
   const leadingBadge = notApplicable ? (
     <span
-      className="set-badge set-badge-na text-[10px] px-1.5 py-0.5 rounded bg-neutral-200 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400"
+      className="set-badge set-badge-na"
       title="Not applicable to the active printer"
     >
       not applicable
@@ -594,7 +581,7 @@ function SettingRow({
       : [];
   const trailingBadge = overridingObjects.length > 0 ? (
     <span
-      className="objs-badge inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-rose-100 dark:bg-rose-900/40 text-rose-800 dark:text-rose-200"
+      className="objs-badge"
       title={`${overridingObjects.length} object${
         overridingObjects.length === 1 ? "" : "s"
       } override this setting`}
@@ -602,7 +589,7 @@ function SettingRow({
       {overridingObjects.slice(0, 3).map((o) => (
         <span
           key={o.id}
-          className="objs-badge-dot inline-block w-2 h-2 rounded-full"
+          className="objs-badge-dot"
           style={{ background: o.color ?? "#888" }}
           aria-hidden
         />
@@ -623,7 +610,7 @@ function SettingRow({
   const resetButton = hasValueAtActiveTier ? (
     <button
       type="button"
-      className="reset-btn text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 px-1"
+      className="reset-btn"
       title={`Reset ${contextLayer} override (falls back to inherited value)`}
       onClick={(e) => {
         e.stopPropagation();

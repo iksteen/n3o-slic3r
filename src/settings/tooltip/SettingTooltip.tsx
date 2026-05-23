@@ -62,24 +62,20 @@ export function SettingTooltip({
     <div
       ref={tooltipRef}
       role="tooltip"
-      className="setting-tooltip fixed bg-neutral-900 text-neutral-100 dark:bg-neutral-100 dark:text-neutral-900 text-xs rounded shadow-lg p-2 z-50"
-      style={{ top: pos.top, left: pos.left, maxWidth: TOOLTIP_MAX_WIDTH }}
+      className="setting-tooltip"
+      style={{ position: "fixed", top: pos.top, left: pos.left, maxWidth: TOOLTIP_MAX_WIDTH }}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
       {libslic3rTooltip && (
-        <div className="tooltip-libslic3r leading-snug whitespace-pre-wrap">
-          {libslic3rTooltip}
-        </div>
+        <div className="tooltip-libslic3r">{libslic3rTooltip}</div>
       )}
       {whyThisMatters && (
-        <div className="tooltip-why mt-2 pt-2 border-t border-neutral-700 dark:border-neutral-300 leading-snug">
-          <span className="tooltip-why-icon mr-1" aria-hidden>
+        <div className="tooltip-why">
+          <span className="tooltip-why-icon" aria-hidden style={{ marginRight: 4 }}>
             💡
           </span>
-          <span className="tooltip-why-heading text-[10px] uppercase tracking-wider opacity-70 mr-1">
-            tip
-          </span>
+          <span className="tooltip-why-heading">tip</span>
           {whyThisMatters}
         </div>
       )}

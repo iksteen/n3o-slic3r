@@ -128,7 +128,7 @@ export function CascadeLadder({
 
   const body = (
     <div
-      className="cascade-ladder fixed bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 shadow-lg rounded p-2 text-xs"
+      className="cascade-ladder"
       style={{
         position: "fixed",
         top: position.top,
@@ -141,7 +141,7 @@ export function CascadeLadder({
       role="tooltip"
       aria-label={`Cascade for ${settingLabel}`}
     >
-      <div className="ladder-title text-xs text-neutral-500 dark:text-neutral-400 mb-1 truncate">
+      <div className="ladder-title">
         Cascade · {settingLabel || settingKey}
       </div>
       {LAYER_ORDER.map(({ id, label }) => {
@@ -151,28 +151,26 @@ export function CascadeLadder({
         return (
           <div
             key={id}
-            className={`ladder-row flex items-center gap-2 py-0.5 ${
-              isWinner
-                ? "font-semibold text-neutral-900 dark:text-neutral-100"
-                : defined
-                  ? "text-neutral-700 dark:text-neutral-300"
-                  : "text-neutral-400 dark:text-neutral-600"
-            }`}
+            className={`ladder-row${isWinner ? " winner" : ""}${defined ? "" : " empty"}`}
             data-layer={id}
             style={{ ["--row-hue" as string]: String(LAYER_HUE[id]) }}
           >
             <span
-              className="l-dot inline-block w-2 h-2 rounded-full"
+              className="l-dot"
               style={{
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
                 background: defined
                   ? `hsl(${LAYER_HUE[id]} 70% 55%)`
                   : "transparent",
-                border: defined ? "none" : "1px dashed currentColor",
+                border: defined ? "none" : "1px dashed var(--border-strong)",
+                flexShrink: 0,
               }}
               aria-hidden
             />
-            <span className="l-name flex-1 truncate">{label}</span>
-            <span className={`l-val font-mono ${defined ? "" : "italic"}`}>
+            <span className="l-name">{label}</span>
+            <span className="l-val" style={defined ? undefined : { fontStyle: "italic", color: "var(--text-dim)" }}>
               {defined ? v : "—"}
             </span>
             {isWinner && <span aria-hidden>✓</span>}
@@ -182,41 +180,49 @@ export function CascadeLadder({
 
       {cascadeFallback !== null && (
         <>
-          <div className="ladder-fallback-sep mt-1 pt-1 border-t border-dashed border-neutral-300 dark:border-neutral-700 text-[10px] uppercase tracking-wider text-neutral-500">
-            cascade fallback
-          </div>
-          <div className="ladder-row flex items-center gap-2 py-0.5 text-neutral-600 dark:text-neutral-400">
+          <div className="ladder-fallback-sep">cascade fallback</div>
+          <div className="ladder-row">
             <span
-              className="l-dot inline-block w-2 h-2 rounded-full opacity-50"
-              style={{ background: `hsl(${LAYER_HUE.cascade} 0% 50%)` }}
+              className="l-dot"
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                background: `hsl(${LAYER_HUE.cascade} 0% 50%)`,
+                opacity: 0.5,
+                flexShrink: 0,
+              }}
               aria-hidden
             />
-            <span className="l-name flex-1">reverts to</span>
-            <span className="l-val font-mono">{cascadeFallback}</span>
+            <span className="l-name">reverts to</span>
+            <span className="l-val">{cascadeFallback}</span>
           </div>
         </>
       )}
 
       {objectOverrides.length > 0 && (
         <>
-          <div className="ladder-objects-sep mt-1 pt-1 border-t border-dashed border-neutral-300 dark:border-neutral-700 text-[10px] uppercase tracking-wider text-neutral-500">
+          <div className="ladder-objects-sep">
             {objectOverrides.length} object
             {objectOverrides.length === 1 ? "" : "s"} override
           </div>
           {objectOverrides.map((o) => (
-            <div
-              key={o.id}
-              className="ladder-row obj-row flex items-center gap-2 py-0.5 text-neutral-700 dark:text-neutral-300"
-            >
+            <div key={o.id} className="ladder-row obj-row">
               <span
-                className="l-dot inline-block w-2 h-2 rounded-full"
-                style={{ background: o.color || "#888" }}
+                className="l-dot"
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background: o.color || "#888",
+                  flexShrink: 0,
+                }}
                 aria-hidden
               />
-              <span className="l-name flex-1 truncate" title={o.name}>
+              <span className="l-name" title={o.name}>
                 {o.name}
               </span>
-              <span className="l-val font-mono">{o.value}</span>
+              <span className="l-val">{o.value}</span>
             </div>
           ))}
         </>
