@@ -1,10 +1,11 @@
-// React hook for the slice loop (PR-3-4).
+// React hook for the slice loop (PR-3-4, PR-6-3).
 //
 // Owns the Tauri `slice:*` subscription, a reducer over the event
 // stream (see `reducer.ts`), and `start()` / `cancel()` actions that
-// wrap the backend commands. The hook is the minimum-viable surface
-// the SlicePanel needs — Phase 4 will replace the bundled-defaults
-// entrypoint with a project-state-driven call to `slice_start_job`.
+// wrap the backend commands. Post-PR-6-3 the slice is driven by
+// live project state via `slice_active_plate` — no model path, no
+// output dir. The backend builds the SliceJobInput from the scene
+// and picks a temp output dir per job.
 
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -89,18 +90,17 @@ export function useSliceJob() {
     };
   }, []);
 
-  const start = useCallback(
-    async (modelPath: string, outputDir: string): Promise<JobId> => {
-      const jobId = await invoke<JobId>("slice_start_default_a1mini", {
-        modelPath,
-        outputDir,
-      });
-      writeStoredJobId(jobId);
-      dispatch({ type: "start", job_id: jobId });
-      return jobId;
-    },
-    [],
-  );
+  const start = useCallback(async (): Promise<JobId> => {
+    // Backend uses the project's active plate when `plateId` is
+    // null. Future "slice plate N" affordances can pass a specific
+    // PlateId here.
+    const jobId = await invoke<JobId>("slice_active_plate", {
+      plateId: null,
+    });
+    writeStoredJobId(jobId);
+    dispatch({ type: "start", job_id: jobId });
+    return jobId;
+  }, []);
 
   const cancel = useCallback(async () => {
     const id = jobIdRef.current;

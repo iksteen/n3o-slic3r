@@ -180,10 +180,18 @@ const A1_MINI_CASCADE_TOML: &str = include_str!(concat!(
 /// its handle (PR-5-9). Saves the frontend from shipping the
 /// cascade text in its asset bundle — the bundled cascade is what
 /// `App.tsx` resolves against on startup.
+///
+/// Also stamps the resulting handle onto `Project.cascade_handle`
+/// so PR-6-2's `slice_active_plate` has a cascade to resolve
+/// against. Without this sync the slice path would always fail
+/// `SliceInputError::NoCascadeLoaded` even though the cascade is
+/// loaded into the registry — the project just wouldn't know
+/// about it.
 #[tauri::command]
-#[tracing::instrument(skip(state))]
+#[tracing::instrument(skip(cascades, project))]
 pub fn cascade_load_default(
-    state: State<Mutex<CascadeRegistry>>,
+    cascades: State<Mutex<CascadeRegistry>>,
+    project: State<std::sync::Arc<Mutex<crate::core::project::Project>>>,
 ) -> Result<CascadeHandle, String> {
     let label = Path::new("profiles/cascades/bambu-a1-mini-default.toml");
     let rules = parse_cascade_str(A1_MINI_CASCADE_TOML, label)
@@ -197,8 +205,17 @@ pub fn cascade_load_default(
             .join("\n");
         return Err(format!("bundled cascade validate: {msg}"));
     }
-    let mut registry = state.lock().map_err(|e| format!("registry lock: {e}"))?;
-    Ok(registry.insert(cascade))
+    let handle = {
+        let mut registry = cascades
+            .lock()
+            .map_err(|e| format!("registry lock: {e}"))?;
+        registry.insert(cascade)
+    };
+    {
+        let mut p = project.lock().map_err(|e| format!("project lock: {e}"))?;
+        p.cascade_handle = Some(handle);
+    }
+    Ok(handle)
 }
 
 /// Resolve a previously-loaded cascade against the supplied context.

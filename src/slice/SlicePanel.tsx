@@ -1,17 +1,22 @@
-// Slice button + progress bar + per-plate summary cards (PR-3-4).
+// Slice button + progress bar + per-plate summary cards
+// (PR-3-4, rewired in PR-6-3).
 //
-// Minimum-viable surface to drive the slice loop; visuals follow
-// Phase 2's neutral-900 dark palette and Phase 4 will restyle.
-// Self-contained: the user picks a model file via the bundled
-// `tauri-plugin-dialog`, the panel maps the basename onto a
-// per-job temp directory and shows progress + summary inline in the
-// header row alongside the cancel button.
+// Post-PR-6-3 the Slice button drives off live project state via
+// `slice_active_plate` — no file picker, no model-path tracking.
+// The backend builds the SliceJobInput from the active plate's
+// scene + bindings + overrides and writes its own temp .3mf for
+// libslic3r to load. Output gcode lands in a per-job temp dir;
+// the path appears on `slice:plate_finished` events.
+//
+// Disabled state: button greys out when there's no active plate,
+// no objects on the active plate, or no printer bound. Visual
+// feedback through opacity + a tooltip naming the blocker.
 
 import { useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { sliceErrorMessage } from "./reducer";
 import type { PlateSummary } from "./types";
+import type { PlateSnapshot, SceneSnapshot } from "../viewport/types";
 import { useSliceJob } from "./useSliceJob";
 
 function formatDuration(seconds: number): string {
@@ -35,9 +40,30 @@ function summarizeFilament(summary: PlateSummary): string {
   return `${grams.toFixed(1)}g · ${(mm / 1000).toFixed(2)}m`;
 }
 
-export function SlicePanel() {
+/** Why the Slice button can't run right now, or `null` if it can. */
+function whyDisabled(
+  snapshot: SceneSnapshot | null,
+  activePlate: PlateSnapshot | null,
+): string | null {
+  if (snapshot == null || activePlate == null) {
+    return "loading project…";
+  }
+  if (activePlate.printer == null) {
+    return "bind a printer to this plate first";
+  }
+  if (activePlate.objects.length === 0) {
+    return "add an object before slicing";
+  }
+  return null;
+}
+
+export interface SlicePanelProps {
+  snapshot: SceneSnapshot | null;
+  activePlate: PlateSnapshot | null;
+}
+
+export function SlicePanel({ snapshot, activePlate }: SlicePanelProps) {
   const { state, start, cancel, reset } = useSliceJob();
-  const [modelPath, setModelPath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
@@ -46,27 +72,15 @@ export function SlicePanel() {
     state.status === "starting" ||
     state.status === "cancelling";
 
-  async function pickModel() {
-    const picked = await openDialog({
-      multiple: false,
-      filters: [{ name: "Mesh", extensions: ["stl", "obj", "3mf"] }],
-    });
-    if (typeof picked === "string") {
-      setModelPath(picked);
-      setStartError(null);
-    }
-  }
+  const disabledReason = whyDisabled(snapshot, activePlate);
+  const sliceDisabled = disabledReason != null || busy;
 
   async function doSlice() {
-    if (modelPath == null) return;
+    if (disabledReason != null) return;
     setStartError(null);
     setBusy(true);
     try {
-      // One job → one temp dir. Backend writes
-      // `<output_dir>/plate_1.gcode` per PR-3-2.
-      const stamp = Date.now();
-      const outputDir = `/tmp/n3o-slice-${stamp}`;
-      await start(modelPath, outputDir);
+      await start();
     } catch (err) {
       setStartError(String(err));
     } finally {
@@ -83,25 +97,15 @@ export function SlicePanel() {
     }
   }
 
-  const basename = modelPath != null ? modelPath.split(/[\\/]/).pop() : null;
-
   return (
     <div className="flex items-center gap-2">
-      <button
-        type="button"
-        onClick={() => void pickModel()}
-        disabled={inFlight}
-        className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-40 rounded text-xs"
-        title={modelPath ?? "Pick a model to slice"}
-      >
-        {basename ?? "Pick model…"}
-      </button>
       {!inFlight && (
         <button
           type="button"
           onClick={() => void doSlice()}
-          disabled={modelPath == null || busy}
+          disabled={sliceDisabled}
           className="px-2 py-1 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 rounded text-xs font-medium"
+          title={disabledReason ?? "Slice the active plate"}
         >
           Slice
         </button>

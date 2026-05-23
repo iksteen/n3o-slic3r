@@ -17,7 +17,6 @@
 //!   becomes the legacy debug-panel path and may be removed.
 
 pub mod commands;
-pub mod default_a1mini;
 pub mod errors;
 pub mod events;
 pub mod input;
@@ -26,8 +25,7 @@ pub mod orchestrator;
 pub mod pre_slice_gate;
 pub mod summary;
 
-pub use commands::{slice_cancel, slice_start_job, slice_status};
-pub use default_a1mini::slice_start_default_a1mini;
+pub use commands::{slice_active_plate, slice_cancel, slice_start_job, slice_status};
 pub use errors::{classify_libslic3r_error, SliceError};
 pub use events::SliceEvent;
 pub use job::{JobHandle, JobId, JobRegistry, JobStatus, SliceJobInput};

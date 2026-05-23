@@ -51,7 +51,14 @@ function App() {
           n3o-slic3r
         </span>
         <span className="tb-spacer" />
-        <SlicePanel />
+        <SlicePanel
+          snapshot={session.snapshot}
+          activePlate={
+            session.snapshot?.plates.find(
+              (p) => p.plate_id === session.snapshot?.active_plate_id,
+            ) ?? null
+          }
+        />
         {info && (
           <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: "10.5px" }}>
             {info.version} · {info.option_count} options
