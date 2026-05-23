@@ -486,8 +486,8 @@ pub fn scene_load_3mf(
     window: Window,
     state: State<Mutex<SceneState>>,
 ) -> Result<LoadedProject, String> {
-    use super::loaders::threemf;
     use super::state::NewSceneObject;
+    use crate::core::threemf;
 
     let project = threemf::load_3mf(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
 

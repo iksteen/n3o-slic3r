@@ -8,7 +8,6 @@
 
 pub mod obj;
 pub mod stl;
-pub mod threemf;
 
 use super::state::NewMesh;
 use crate::core::printer::profile::BoundingBox;
@@ -79,7 +78,7 @@ pub fn load_mesh_from_path(path: &Path) -> Result<NewMesh, LoadError> {
 ///
 /// Vertices laid out flat [x, y, z, x, y, z, ...]; indices triple
 /// (3 per triangle, ccw winding).
-fn compute_vertex_normals(vertices: &[f32], indices: &[u32]) -> Vec<f32> {
+pub(crate) fn compute_vertex_normals(vertices: &[f32], indices: &[u32]) -> Vec<f32> {
     let vert_count = vertices.len() / 3;
     let mut normals = vec![0.0_f32; vert_count * 3];
 
@@ -119,7 +118,7 @@ fn compute_vertex_normals(vertices: &[f32], indices: &[u32]) -> Vec<f32> {
 }
 
 /// Bounding box over a packed vertex array.
-fn compute_bounding_box(vertices: &[f32]) -> BoundingBox {
+pub(crate) fn compute_bounding_box(vertices: &[f32]) -> BoundingBox {
     let mut min = [f64::INFINITY; 3];
     let mut max = [f64::NEG_INFINITY; 3];
     for chunk in vertices.chunks_exact(3) {

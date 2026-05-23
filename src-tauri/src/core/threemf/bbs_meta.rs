@@ -25,7 +25,7 @@
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 
-use super::super::LoadError;
+use crate::core::scene::loaders::LoadError;
 
 #[derive(Debug, Default, Clone)]
 pub struct ModelSettings {

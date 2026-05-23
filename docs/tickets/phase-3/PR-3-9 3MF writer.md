@@ -1,6 +1,6 @@
 # PR-3-9 — Promote `core/threemf` + project-format writer (FR-MP-4)
 
-Status: ❌ open.
+Status: ✅ shipped — module relocated to `core/threemf/` (PRD §8.2 home); `writer.rs` emits valid 3MF Core (`[Content_Types].xml`, `_rels/.rels`, `3D/3dmodel.model` with inline mesh, BBS-style `Metadata/model_settings.config` with per-object name + extruder + a `<part>` so the reader picks up the hint, our `Metadata/n3o_project_settings.config` placeholder for Phase 5). 3 round-trip tests: single-triangle project, two-objects-sharing-a-mesh dedup, file metadata with XML-escaped ampersand. Reader gained entity decoding on `<metadata>` text via `quick_xml::escape::unescape` so the round-trip preserves `&`/`<`/`>`.
 
 **Scope.** Two things:
 

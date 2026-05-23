@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
-use super::super::LoadError;
+use crate::core::scene::loaders::LoadError;
 
 pub struct Container {
     path: PathBuf,

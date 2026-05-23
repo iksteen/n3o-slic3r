@@ -22,7 +22,7 @@ use std::time::Instant;
 
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
 use n3o_slic3r_lib::core::scene::events::SceneEvent;
-use n3o_slic3r_lib::core::scene::loaders::threemf::load_3mf;
+use n3o_slic3r_lib::core::threemf::load_3mf;
 use n3o_slic3r_lib::core::scene::primitives::{PrimitiveKind, PrimitiveParams};
 use n3o_slic3r_lib::core::scene::state::{NewSceneObject, SceneState};
 

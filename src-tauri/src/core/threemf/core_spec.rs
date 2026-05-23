@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 
-use super::super::LoadError;
+use crate::core::scene::loaders::LoadError;
 
 #[derive(Debug, Clone)]
 pub struct ModelDoc {
@@ -95,14 +95,19 @@ pub fn parse_model(bytes: &[u8], source: &std::path::Path) -> Result<ModelDoc, L
             Ok(Event::Start(ref e)) => match local_name(e.name()) {
                 b"metadata" => {
                     let name = attr_string(e, b"name").unwrap_or_default();
-                    let value =
-                        reader
-                            .read_text(e.name())
-                            .map_err(|err| LoadError::Parse {
-                                path: source.into(),
-                                message: format!("metadata: {err}"),
-                            })?;
-                    metadata.push((name, value.into_owned()));
+                    let raw = reader.read_text(e.name()).map_err(|err| LoadError::Parse {
+                        path: source.into(),
+                        message: format!("metadata: {err}"),
+                    })?;
+                    // quick-xml 0.36's `read_text` returns the raw
+                    // escaped form; decode `&amp;` / `&lt;` / etc.
+                    // so callers see the original text. Lossy
+                    // fallback on a malformed entity preserves the
+                    // raw bytes rather than erroring.
+                    let value = quick_xml::escape::unescape(&raw)
+                        .map(|c| c.into_owned())
+                        .unwrap_or_else(|_| raw.into_owned());
+                    metadata.push((name, value));
                 }
                 b"object" => {
                     let obj = parse_object(&mut reader, e, source)?;
