@@ -317,14 +317,13 @@
   .plate-tab-add {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    padding: 0 12px;
+    justify-content: center;
+    padding: 0 10px;
     background: transparent;
     border: 0;
-    border-left: 1px solid var(--hairline);
+    border-right: 1px solid var(--hairline);
     color: var(--text-muted);
-    font-size: 12px;
-    white-space: nowrap;
+    flex-shrink: 0;
   }
   .plate-tab-add:hover { background: var(--surface); color: var(--text); }
 

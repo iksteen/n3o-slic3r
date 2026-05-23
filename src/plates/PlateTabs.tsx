@@ -60,8 +60,39 @@ export function PlateTabs() {
     return <div className="plate-tabs" aria-hidden />;
   }
 
+  const handleAddPlate = (): void => {
+    void addPlate(null)
+      .then((newId) => {
+        // Auto-switch to the freshly-added plate so the user
+        // lands on the workspace they just opened. Mirrors the
+        // intuitive "tab opened in foreground" pattern.
+        void setActivePlate(newId).catch((err) =>
+          console.error("[plates] setActivePlate after addPlate failed", err),
+        );
+      })
+      .catch((err) => {
+        console.error("[plates] addPlate failed", err);
+      });
+  };
+
   return (
     <div className="plate-tabs" role="tablist" aria-label="Plates">
+      <button
+        type="button"
+        className="plate-tab-add"
+        onClick={handleAddPlate}
+        title="New plate"
+        aria-label="Add new plate"
+      >
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+          <path
+            d="M7 2v10M2 7h10"
+            stroke="currentColor"
+            strokeWidth="1.4"
+            strokeLinecap="round"
+          />
+        </svg>
+      </button>
       <div className="plate-tabs-scroll">
         {plates.map((plate) => {
           const isActive = plate.id === activePlateId;
@@ -152,27 +183,6 @@ export function PlateTabs() {
           );
         })}
       </div>
-      <button
-        type="button"
-        className="plate-tab-add"
-        onClick={() => {
-          void addPlate(null).catch((err) => {
-            console.error("[plates] addPlate failed", err);
-          });
-        }}
-        title="New plate"
-        aria-label="Add new plate"
-      >
-        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
-          <path
-            d="M7 2v10M2 7h10"
-            stroke="currentColor"
-            strokeWidth="1.4"
-            strokeLinecap="round"
-          />
-        </svg>
-        <span>New plate</span>
-      </button>
     </div>
   );
 }
