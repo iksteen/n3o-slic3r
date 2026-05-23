@@ -19,7 +19,7 @@
 use std::io::Write;
 use std::time::Instant;
 
-use n3o_slic3r_lib::core::gcode::parse_lines;
+use n3o_slic3r_lib::core::gcode::{parse_lines, parse_str, to_string};
 
 /// Generate a synthetic G-code fixture of approximately `target_bytes`
 /// bytes. The shape mirrors a typical Orca slice output: header
@@ -95,6 +95,50 @@ fn parser_under_750ms_on_5mb_synthetic() {
         elapsed.as_millis() < 750,
         "parser took {:?} on a 5 MB synthetic fixture (budget: 750 ms in debug, \
          ~100 ms in release; extrapolates to 3 s on 50 MB per Execution Plan §5)",
+        elapsed,
+    );
+}
+
+#[test]
+fn round_trip_is_byte_equal_on_synthetic_fixture() {
+    // The Phase 3 independent-oracle assertion (Execution Plan §5):
+    // parse → serialize is the identity on the byte level. If a
+    // future change breaks this, the smoke fails; the diff points
+    // at the model field that lost information; the model expands
+    // to preserve it.
+    let fixture = synthetic_gcode(64 * 1024);
+    let src = std::str::from_utf8(&fixture).expect("synthetic is UTF-8");
+    let lines = parse_str(src);
+    let emitted = to_string(&lines);
+    assert_eq!(
+        emitted.as_bytes(),
+        src.as_bytes(),
+        "byte round-trip failed on synthetic fixture",
+    );
+}
+
+#[test]
+fn round_trip_under_1s_on_5mb_synthetic() {
+    let fixture = synthetic_gcode(5 * 1024 * 1024);
+    let src = std::str::from_utf8(&fixture).expect("synthetic is UTF-8");
+
+    // Warm-up.
+    let _ = parse_str(src);
+
+    let start = Instant::now();
+    let lines = parse_str(src);
+    let emitted = to_string(&lines);
+    let elapsed = start.elapsed();
+    println!(
+        "round-trip {} bytes in {:?} ({:.1} MB/s)",
+        src.len(),
+        elapsed,
+        (src.len() as f64 / 1_048_576.0) / elapsed.as_secs_f64(),
+    );
+    assert_eq!(emitted.len(), src.len(), "round-trip changed byte count");
+    assert!(
+        elapsed.as_millis() < 1500,
+        "5 MB parse + serialize took {:?} (budget: 1500 ms in debug)",
         elapsed,
     );
 }

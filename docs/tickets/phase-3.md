@@ -41,7 +41,7 @@ index plus phase-level status and notes.
 | Slice button + progress UI | ❌ open | [PR-3-4](phase-3/PR-3-4%20Slice%20UI.md) |
 | Typed G-code model | ✅ done | [PR-3-5](phase-3/PR-3-5%20Typed%20gcode%20model.md) |
 | Streaming G-code parser | ✅ done | [PR-3-6](phase-3/PR-3-6%20Streaming%20gcode%20parser.md) |
-| G-code serializer (byte-equivalent round-trip) | ❌ open | [PR-3-7](phase-3/PR-3-7%20Gcode%20serializer.md) |
+| G-code serializer (byte-equivalent round-trip) | ✅ done | [PR-3-7](phase-3/PR-3-7%20Gcode%20serializer.md) |
 | Header metadata parser | ❌ open | [PR-3-8](phase-3/PR-3-8%20Header%20metadata%20parser.md) |
 | Promote `core/threemf` + project-format writer | ❌ open | [PR-3-9](phase-3/PR-3-9%203MF%20writer.md) |
 | `.gcode.3mf` writer (Bambu sliced format) | ❌ open | [PR-3-10](phase-3/PR-3-10%20Sliced%203MF%20writer.md) |

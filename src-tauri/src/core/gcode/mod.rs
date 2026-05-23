@@ -11,9 +11,11 @@
 
 pub mod model;
 pub mod parser;
+pub mod serializer;
 
 pub use model::{
     ArcCenter, Comment, CommentStyle, FeatureType, LayerChange, LayerSource, Line, Move,
     MoveCommand, MoveParam, Other, Position, SemanticComment, ToolChange,
 };
 pub use parser::{parse_lines, parse_str, parse_with_feature_context, ParseError, ParseErrorKind};
+pub use serializer::{to_string, write_lines};

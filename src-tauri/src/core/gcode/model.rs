@@ -75,6 +75,13 @@ impl Line {
 /// A `G0` / `G1` / `G2` / `G3` line — the actual extruder motion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Move {
+    /// Whole source line excluding the line ending. The serializer
+    /// emits `raw + line_ending` for byte-equivalent round-trip;
+    /// the typed fields below are inspection / mutation surfaces.
+    /// When a plugin mutates a typed field (Phase 8), it's
+    /// responsible for invalidating or rewriting `raw` — the
+    /// default un-mutated parse→serialize path emits `raw` verbatim.
+    pub raw: String,
     /// `G0` / `G1` / `G2` / `G3`. Kept as a typed enum so callers
     /// can switch without string parsing.
     pub command: MoveCommand,
@@ -341,8 +348,9 @@ pub enum LayerSource {
 pub struct ToolChange {
     /// 0-based extruder index. `T0` → `0`.
     pub extruder: u8,
-    /// Source spelling (`"T0"`, `"T 0"`, `"T00"`). Preserved for
-    /// round-trip; firmware accepts all three.
+    /// Whole source line excluding the line ending. Includes any
+    /// leading whitespace and any trailing `;` inline comment, so
+    /// the serializer emits `raw + line_ending` for byte round-trip.
     pub raw: String,
     pub raw_offset: u64,
     pub line_ending: String,
@@ -373,6 +381,7 @@ mod tests {
     #[test]
     fn move_round_trips_via_serde() {
         let m = Move {
+            raw: "G1 F1200 X10 Y20 E0.5 ; final".into(),
             command: MoveCommand::Linear,
             command_text: "G1".into(),
             target: Position {
@@ -503,6 +512,7 @@ mod tests {
     #[test]
     fn raw_offset_and_line_ending_accessors_work_for_each_variant() {
         let m = Line::Move(Move {
+            raw: "G0".into(),
             command: MoveCommand::Rapid,
             command_text: "G0".into(),
             target: Position::default(),

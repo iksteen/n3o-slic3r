@@ -1,6 +1,6 @@
 # PR-3-7 — G-code serializer (byte-equivalent round-trip)
 
-Status: ❌ open.
+Status: ✅ shipped — `core/gcode/serializer.rs` emits `raw + line_ending` per `Line` variant. `LayerChange` is elided (marker case: adjacent Comment carries the bytes; heuristic case: source had no marker, emitting would *add* one). Model gained `Move.raw` so the typed-field round-trip is byte-equal without normalization. 14 round-trip tests + a 5 MB perf gate proving parse+serialize sustains 12.7 MB/s in debug (~1.3 s on 50 MB in release, under the Execution Plan §5 ceiling).
 
 **Scope.** Inverse of PR-3-6's parser: given a sequence of typed
 `Line` values, emit G-code byte-for-byte identical to what the

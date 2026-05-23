@@ -244,13 +244,16 @@ impl<R: BufRead> LineIter<R> {
             return Ok(line);
         }
 
-        // Tool change: `T0`, `T 0`, `T00`.
-        if let Some(tc) = try_parse_tool_change(trimmed, raw_offset, line_ending.clone()) {
+        // Tool change: `T0`, `T 0`, `T00`. `try_parse_tool_change`
+        // inspects the trimmed slice but emits the full body as
+        // `raw` so round-trip preserves any leading whitespace.
+        if let Some(tc) = try_parse_tool_change(trimmed, &body, raw_offset, line_ending.clone()) {
             return Ok(Line::ToolChange(tc));
         }
 
         // Motion command: G0 / G1 / G2 / G3.
-        if let Some(parsed) = try_parse_move(trimmed, raw_offset, line_ending.clone(), line_number)
+        if let Some(parsed) =
+            try_parse_move(trimmed, &body, raw_offset, line_ending.clone(), line_number)
         {
             return parsed;
         }
@@ -264,7 +267,12 @@ impl<R: BufRead> LineIter<R> {
     }
 }
 
-fn try_parse_tool_change(line: &str, raw_offset: u64, line_ending: String) -> Option<ToolChange> {
+fn try_parse_tool_change(
+    line: &str,
+    full_body: &str,
+    raw_offset: u64,
+    line_ending: String,
+) -> Option<ToolChange> {
     let trimmed = line.trim_end();
     // Accept `T<n>` and `T <n>` (whitespace tolerant).
     let after_t = trimmed.strip_prefix('T').or_else(|| trimmed.strip_prefix('t'))?;
@@ -286,7 +294,9 @@ fn try_parse_tool_change(line: &str, raw_offset: u64, line_ending: String) -> Op
     }
     Some(ToolChange {
         extruder,
-        raw: trimmed.to_owned(),
+        // Preserve the full source body (including leading
+        // whitespace, trailing comment) so round-trip is byte-exact.
+        raw: full_body.to_owned(),
         raw_offset,
         line_ending,
     })
@@ -294,6 +304,7 @@ fn try_parse_tool_change(line: &str, raw_offset: u64, line_ending: String) -> Op
 
 fn try_parse_move(
     line: &str,
+    full_body: &str,
     raw_offset: u64,
     line_ending: String,
     line_number: u32,
@@ -389,6 +400,9 @@ fn try_parse_move(
     }
 
     Some(Ok(Line::Move(Move {
+        // Whole source body preserved for the byte-equivalent
+        // round-trip; typed fields below are inspection only.
+        raw: full_body.to_owned(),
         command,
         command_text: cmd_text.to_owned(),
         target,
