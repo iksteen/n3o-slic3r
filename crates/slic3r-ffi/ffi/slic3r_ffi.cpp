@@ -559,28 +559,78 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
             cfg.option<ConfigOptionEnumsGeneric>("nozzle_volume_type", true)
                 ->values.resize(extruder_count, nvtStandard);
 
-        // Per-region filament selectors carry "0 = use default" in 3MF
-        // configs, but the headless slicing entry calls ToolOrdering with
-        // first_extruder == -1, and handle_dontcare_extruder(-1) only
-        // promotes zeros if it can find any non-zero extruder in the layer
-        // tools — which it can't, because they're all zero. The sentinel
-        // leaks through and crashes tool ordering downstream. Coerce each
-        // zero to 1 so PrintRegion picks up a real filament index.
+        // Per-region / per-object filament selectors carry "0 = use the
+        // object/printer default" in 3MF configs. OrcaSlicer's GUI resolves
+        // these via PartPlate state pre-apply, substituting the part's
+        // default extruder. The headless slicing entry doesn't have
+        // PartPlate state, so the 0 sentinels leak straight into
+        // Print::process. Once there, `Print::process` invokes ToolOrdering
+        // with first_extruder == -1; `handle_dontcare_extruder(-1)` is
+        // supposed to promote zeros to a real extruder by scanning the
+        // layer-tools list, but if everything is 0 it finds nothing to
+        // promote, the sentinel persists into
+        // `reorder_extruders_for_minimum_flush_volume` →
+        // `check_filament_printable_after_group`, and the unchecked
+        // `filament_maps[filament_id]` access in there SIGSEGVs. We can't
+        // fix the `-1` at the call site without patching libslic3r
+        // (`Print.cpp:2378-2379` hardcodes it), so we resolve the 0s
+        // upstream — same role OrcaSlicer's GUI plays.
         //
-        // PR-3-11 reinstated this after `git bisect` pinpointed commit
-        // 1bcf46d ("PR-0.5-3: document tool-change disparity investigation")
-        // as the SIGSEGV regressor in `check_filament_printable_after_group`
-        // / `reorder_extruders_for_minimum_flush_volume` for the fourcolor
-        // .3mf input. The original removal claimed the coerce was vestigial
-        // after the filament_map normalization fixed an earlier crash and
-        // cited "spike1/2/3 still produce valid gcode" — but spike3's
-        // multi-color path wasn't actually re-run end-to-end after the
-        // removal. It's load-bearing, not vestigial.
-        for (const char* key : {"wall_filament", "sparse_infill_filament",
-                                "solid_infill_filament", "support_filament",
-                                "support_interface_filament"}) {
-            if (auto* opt = cfg.option<ConfigOptionInt>(key); opt && opt->value == 0)
-                opt->value = 1;
+        // Per-object resolution. `support_filament` and
+        // `support_interface_filament` live in PrintObjectConfig. The BBS
+        // 3MF importer lifts each object's `<metadata key="extruder">`
+        // (object-level default extruder) into
+        // `ModelObject::config["extruder"]`, so we re-use that hint per
+        // object — supports inherit the part's body extruder by default,
+        // matching what OrcaSlicer's GUI emits.
+        //
+        // Per-region resolution. `wall_filament`, `sparse_infill_filament`,
+        // and `solid_infill_filament` live in PrintRegionConfig. Per-volume
+        // `extruder` overrides on typed regions (4-color, 5T, etc.) win
+        // during Print::apply's region merge — so the print-level cfg
+        // value only matters for "untyped" regions with no per-volume
+        // override (catch-all like skirt/brim/supports). For these we
+        // fall back to filament 1 if every object's default extruder
+        // disagrees; if all objects share one default, we use that.
+        //
+        // PR-3-11 history: commit 1bcf46d removed an earlier coerce-to-1
+        // block on the rationale that it was "vestigial after filament_map
+        // normalization." That was wrong — the api tests + spike1/spike2
+        // don't exercise multi-color ToolOrdering and the removal regressed
+        // the fourcolor slice into the SIGSEGV above. `git bisect` pinned
+        // the regressor. This per-object resolution is the proper fix
+        // (better than the original hardcoded 1, which would have been
+        // wrong for any model whose default extruder isn't 1).
+        {
+            int common_default = -1;  // -1 = unset, -2 = "objects disagree"
+            for (auto* obj : model->model.objects) {
+                if (!obj) continue;
+                int obj_default = 1;
+                if (auto* opt = dynamic_cast<const ConfigOptionInt*>(
+                        obj->config.option("extruder"))) {
+                    if (opt->value > 0) obj_default = opt->value;
+                }
+                for (const char* key : {"support_filament",
+                                         "support_interface_filament"}) {
+                    const auto* opt = dynamic_cast<const ConfigOptionInt*>(
+                        obj->config.option(key));
+                    int current = opt ? opt->value : 0;
+                    if (current == 0) {
+                        obj->config.set_key_value(
+                            key, new ConfigOptionInt(obj_default));
+                    }
+                }
+                if (common_default == -1) common_default = obj_default;
+                else if (common_default != obj_default) common_default = -2;
+            }
+            int print_fallback = (common_default > 0) ? common_default : 1;
+            for (const char* key : {"wall_filament", "sparse_infill_filament",
+                                     "solid_infill_filament",
+                                     "support_filament",
+                                     "support_interface_filament"}) {
+                if (auto* opt = cfg.option<ConfigOptionInt>(key); opt && opt->value == 0)
+                    opt->value = print_fallback;
+            }
         }
 
         Print print;

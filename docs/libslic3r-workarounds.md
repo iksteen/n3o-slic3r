@@ -178,9 +178,26 @@ run) and HEAD pinpointed commit `1bcf46d` ("PR-0.5-3: document
 tool-change disparity investigation + CI memory fix") as the
 introducer; restoring the coerce restores the slice.
 
-The coerce stays in. Loud `// PR-3-11 reinstated…` comment in
-the FFI shim cross-links the bisect finding so this doesn't get
-re-removed without the multi-color slice being verified end-to-end.
+The coerce stays in — but with a refinement on top of the
+original. The pre-PR-0.5-3 block hardcoded the substitute value
+to `1` (the conventional default-extruder index). PR-3-11
+replaced the hardcoded `1` with the **per-object default
+extruder** read from `ModelObject::config["extruder"]` — the
+same field the BBS 3MF importer populates from the 3MF's
+object-level `<metadata key="extruder" value="N"/>`. So
+`support_filament` / `support_interface_filament` on each
+ModelObject now inherit the object's own default extruder
+(matching what OrcaSlicer's GUI does via `PartPlate` state),
+not a globally hardcoded `1`. The print-level
+wall/sparse/solid_infill_filament fallback uses the
+common-across-objects default if all objects agree, else falls
+back to `1` (it only kicks in for regions without per-volume
+overrides, which is the catch-all bucket — skirt, brim,
+and the support fallback path).
+
+Loud `// PR-3-11…` comment in the FFI shim cross-links the
+bisect finding + the per-object resolution rationale so
+neither half can be quietly undone.
 
 ---
 
