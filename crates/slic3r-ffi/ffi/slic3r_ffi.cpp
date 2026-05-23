@@ -601,8 +601,47 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         // the regressor. This per-object resolution is the proper fix
         // (better than the original hardcoded 1, which would have been
         // wrong for any model whose default extruder isn't 1).
+        // Per-REGION filament selectors (`wall_filament`,
+        // `sparse_infill_filament`, `solid_infill_filament`) must not
+        // leak 0 sentinels into ToolOrdering — `handle_dontcare_
+        // extruder(-1)` (called inside `Print::process` because
+        // `Print.cpp:2378` hardcodes -1) needs at least one non-zero
+        // extruder somewhere in the layer-tools list to promote from,
+        // and if the print-wide defaults are 0 every region with no
+        // per-volume override goes 0 too. Resolve them per-object
+        // using each object's `<metadata key="extruder">` hint
+        // (lifted into `ModelObject::config["extruder"]` by the BBS
+        // 3MF importer), then fall back to filament 1 at the print
+        // level if every object's default is identical else
+        // disagrees. Per-volume `extruder` overrides on typed regions
+        // still dominate this during `Print::apply`'s region merge,
+        // so this only affects the catch-all "untyped" region.
+        //
+        // Per-OBJECT support filament selectors (`support_filament`,
+        // `support_interface_filament`) MUST stay at 0 (dontcare).
+        // libslic3r's per-layer support-extruder resolution at
+        // `GCode.cpp:4794-4820` picks `first_extruder_id =
+        // layer_tools.extruders.front()` for the layer in question —
+        // exactly what we want for the 4-color stacked case where
+        // each layer has only one band active and supports should
+        // inherit that band's body extruder. Coercing
+        // support_filament to any non-zero value suppresses this
+        // routing and pins all supports to one extruder, causing 76
+        // mid-print tool changes on fourcolor.3mf vs Orca/BBS's 7.
+        // Confirmed empirically: with support_filament left at
+        // dontcare, spike3 produces 7 changes / 1h 6m / 14g
+        // matching the BBS reference.
+        //
+        // History: commit 1bcf46d removed an even earlier coerce on
+        // all five selectors thinking it was vestigial, regressing
+        // the slice into SIGSEGV (bisected back to this commit
+        // during PR-3-11). The intermediate "restore as
+        // hardcoded 1" fix matched the segfault repair but kept the
+        // 76-vs-7 disparity. The split below is the proper shape:
+        // resolve the per-region zeros, leave the per-object support
+        // zeros alone.
         {
-            int common_default = -1;  // -1 = unset, -2 = "objects disagree"
+            int common_default = -1;  // -1 = unset, -2 = disagree
             for (auto* obj : model->model.objects) {
                 if (!obj) continue;
                 int obj_default = 1;
@@ -610,8 +649,9 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
                         obj->config.option("extruder"))) {
                     if (opt->value > 0) obj_default = opt->value;
                 }
-                for (const char* key : {"support_filament",
-                                         "support_interface_filament"}) {
+                for (const char* key : {"wall_filament",
+                                         "sparse_infill_filament",
+                                         "solid_infill_filament"}) {
                     const auto* opt = dynamic_cast<const ConfigOptionInt*>(
                         obj->config.option(key));
                     int current = opt ? opt->value : 0;
@@ -624,10 +664,9 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
                 else if (common_default != obj_default) common_default = -2;
             }
             int print_fallback = (common_default > 0) ? common_default : 1;
-            for (const char* key : {"wall_filament", "sparse_infill_filament",
-                                     "solid_infill_filament",
-                                     "support_filament",
-                                     "support_interface_filament"}) {
+            for (const char* key : {"wall_filament",
+                                     "sparse_infill_filament",
+                                     "solid_infill_filament"}) {
                 if (auto* opt = cfg.option<ConfigOptionInt>(key); opt && opt->value == 0)
                     opt->value = print_fallback;
             }

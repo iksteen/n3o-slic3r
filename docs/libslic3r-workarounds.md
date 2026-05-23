@@ -178,26 +178,48 @@ run) and HEAD pinpointed commit `1bcf46d` ("PR-0.5-3: document
 tool-change disparity investigation + CI memory fix") as the
 introducer; restoring the coerce restores the slice.
 
-The coerce stays in — but with a refinement on top of the
-original. The pre-PR-0.5-3 block hardcoded the substitute value
-to `1` (the conventional default-extruder index). PR-3-11
-replaced the hardcoded `1` with the **per-object default
-extruder** read from `ModelObject::config["extruder"]` — the
-same field the BBS 3MF importer populates from the 3MF's
-object-level `<metadata key="extruder" value="N"/>`. So
-`support_filament` / `support_interface_filament` on each
-ModelObject now inherit the object's own default extruder
-(matching what OrcaSlicer's GUI does via `PartPlate` state),
-not a globally hardcoded `1`. The print-level
-wall/sparse/solid_infill_filament fallback uses the
-common-across-objects default if all objects agree, else falls
-back to `1` (it only kicks in for regions without per-volume
-overrides, which is the catch-all bucket — skirt, brim,
-and the support fallback path).
+The coerce stays in — but the **shape** of the coerce matters,
+and PR-3-11 corrected the shape twice in two passes:
 
-Loud `// PR-3-11…` comment in the FFI shim cross-links the
-bisect finding + the per-object resolution rationale so
-neither half can be quietly undone.
+**Pass 1 (intermediate).** Restored the pre-1bcf46d block in
+its original form: hardcoded-1 for all five selectors
+(`wall_filament`, `sparse_infill_filament`,
+`solid_infill_filament`, `support_filament`,
+`support_interface_filament`). Fixed the SIGSEGV but kept the
+76-vs-7 tool-change disparity — actually CAUSED it, since
+pinning support_filament to any non-zero value suppresses
+libslic3r's per-layer support-extruder routing.
+
+**Pass 2 (final).** Split the resolution by axis:
+
+- **Per-REGION selectors** (`wall_filament`,
+  `sparse_infill_filament`, `solid_infill_filament`): MUST be
+  non-zero or `handle_dontcare_extruder(-1)` inside
+  `Print::process` can't find a non-zero extruder to promote
+  and the sentinel persists, segfaulting downstream. Resolve
+  per-object using each object's `<metadata key="extruder">`
+  hint (lifted by the BBS importer into
+  `ModelObject::config["extruder"]`). Falls back to the
+  common-across-objects default at the print level, or `1` if
+  objects disagree.
+- **Per-OBJECT support selectors** (`support_filament`,
+  `support_interface_filament`): LEAVE at 0 (dontcare). The
+  per-layer routing at `GCode.cpp:4794-4820` picks
+  `first_extruder_id = layer_tools.extruders.front()` for each
+  layer — for the fourcolor stacked case, only one band is
+  active per layer, so supports inherit that band's body
+  extruder and produce the right number of tool changes (7,
+  matching Orca/BBS). Coercing support_filament to any non-zero
+  value breaks this.
+
+Confirmed empirically on `examples/spike3/fourcolor.3mf` with
+the embedded BBS config: 7 mid-print tool changes
+(`T0×1 + T1×2 + T2×2 + T3×2`), 1h 6m 23s estimated print time,
+matching the BBS reference within slicing-arithmetic precision.
+
+Loud `// Per-REGION… Per-OBJECT…` comment block in the FFI
+shim cross-links both halves of the resolution + the SIGSEGV /
+tool-change history so neither side can be quietly undone.
 
 ---
 

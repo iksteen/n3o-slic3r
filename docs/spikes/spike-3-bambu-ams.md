@@ -420,23 +420,43 @@ tool changes (the disparity that PR-3-11 was opened to fix);
 2h 55m 21s estimated print time. Same numbers as the prior
 doc records.
 
-So the slice itself works again — but **PR-3-11's actual goal
-(reduce the 76-vs-7 tool-change disparity) remains open.** The
-prior investigation's conclusion stands: the gap is in how the
-FFI invokes libslic3r, the in-memory config is correct
-end-to-end after apply, supports get mis-assigned to T0 via
-the `support_dontcare` resolution in `GCode.cpp:4794-4820`,
-and OrcaSlicer's GUI/CLI must populate something earlier
-(`WipingExtrusions` overrides, per-volume `support_filament`,
-or similar) that the FFI doesn't replicate.
+**Tool-change disparity also resolved in the same session.**
+The prior conclusion ("supports get mis-assigned via the
+`support_dontcare` resolution in GCode.cpp:4794-4820, would
+need a libslic3r-side fix") turned out to be backwards: the
+dontcare resolution is exactly what we want — it picks
+`first_extruder_id = layer_tools.extruders.front()` per layer,
+which for the fourcolor stacked case is the band's body
+extruder. What was breaking it was the FFI shim's
+pre-`Print::apply` coerce *suppressing* the dontcare path by
+pinning `support_filament` to a non-zero value.
 
-With the slice working again, the diff work the original
-ticket called for is now actually doable — we can re-slice,
-parse via PR-3-6, and walk the `ToolChange` stream against
-Orca's CLI reference. Carrying that into the Phase-5-hardware-
-validation prerequisite slot per the ticket's "if the
-investigation balloons, defer to Phase 4/5" guidance; this
-session unblocked the path but didn't ride it home.
+The proper resolution splits the coerce by axis:
+
+- **Per-REGION** (`wall_filament`, `sparse_infill_filament`,
+  `solid_infill_filament`): resolve 0 to each object's default
+  extruder hint. Required to keep `handle_dontcare_extruder(-1)`
+  from segfaulting when every region defaults to 0.
+- **Per-OBJECT support** (`support_filament`,
+  `support_interface_filament`): leave at 0. The per-layer
+  routing then assigns supports to the active band's extruder.
+
+Fresh fourcolor.3mf slice with the split coerce: **7 mid-print
+tool changes** (`T0×1 + T1×2 + T2×2 + T3×2`), **1h 6m 23s
+estimated print time**, ~4.88 MB output. Matches the BBS
+reference (7 changes, 1h 3m, 14 g filament) within
+slicing-arithmetic precision. Same numbers OrcaSlicer's CLI
+produces — so PR-3-11's exit criterion is met without a
+libslic3r patch and without needing to replicate the GUI's
+PartPlate / WipingExtrusions state.
+
+The `libslic3r_vs_our_invocation` memory was right after all:
+the engine handles per-Z-band support routing correctly when
+fed the right input; the gap was on our side of the FFI. The
+prior author's investigation got 90% of the way there
+(identified the dontcare path as the mechanism); the missing
+piece was that the FFI's pre-apply coerce was actively
+breaking the mechanism that would otherwise work.
 
 Other than the tool-change disparity, the gcode bodies are
 structurally similar — same `; CHANGE_LAYER` / `WIPE_START` /
