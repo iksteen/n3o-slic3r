@@ -1,6 +1,6 @@
 # PR-2-11 — Perf stress test + Three.js vs wgpu pivot decision
 
-Status: 📅 deferred (post-Phase-2 evaluation, not a Phase 2 gate).
+Status: ✅ shipped — reduced Rust-side perf gate landed; FPS / pivot evaluation deferred to Phase 9 release prep.
 
 **Scope.** *Originally framed as a Phase 2 deliverable that decides
 between shipping Three.js or pivoting to wgpu against measured FPS
