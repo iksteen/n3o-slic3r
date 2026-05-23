@@ -14,10 +14,12 @@ import { useEffect, useRef } from "react";
 
 import {
   previewBuffers as fetchBuffers,
+  previewSegmentDetail,
 } from "./invokes";
 import {
   applyLayerWindow,
   mountPreviewScene,
+  pickSegment,
   resizePreview,
   setBed,
   setPreviewBuffers,
@@ -60,6 +62,7 @@ export function GcodePreview({
   layerWindow,
   showTravels,
   showRetractions,
+  onSegmentHover,
 }: GcodePreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<PreviewScene | null>(null);
@@ -134,6 +137,68 @@ export function GcodePreview({
     if (!scene) return;
     setVisibility(scene, showTravels, showRetractions);
   }, [showTravels, showRetractions]);
+
+  // Hover-inspection raycast (PR-6-11). RAF-throttled so a
+  // fast-moving cursor doesn't saturate the invoke channel.
+  // Skips entirely when no `onSegmentHover` callback is wired.
+  const hoverPendingRef = useRef<{ x: number; y: number } | null>(null);
+  const hoverRafRef = useRef<number | null>(null);
+  const lastSegmentRef = useRef<number | null>(null);
+  useEffect(() => {
+    const scene = sceneRef.current;
+    const el = containerRef.current;
+    if (!scene || !el || !onSegmentHover || !preview) return;
+
+    const onMove = (e: PointerEvent): void => {
+      hoverPendingRef.current = { x: e.clientX, y: e.clientY };
+      if (hoverRafRef.current != null) return;
+      hoverRafRef.current = requestAnimationFrame(() => {
+        hoverRafRef.current = null;
+        const pending = hoverPendingRef.current;
+        if (!pending) return;
+        const rect = el.getBoundingClientRect();
+        const ndcX = ((pending.x - rect.left) / rect.width) * 2 - 1;
+        const ndcY = -((pending.y - rect.top) / rect.height) * 2 + 1;
+        const segIdx = pickSegment(scene, ndcX, ndcY);
+        if (segIdx == null) {
+          if (lastSegmentRef.current != null) {
+            lastSegmentRef.current = null;
+            onSegmentHover(null);
+          }
+          return;
+        }
+        if (segIdx === lastSegmentRef.current) return;
+        lastSegmentRef.current = segIdx;
+        void previewSegmentDetail(preview.handle, segIdx)
+          .then((detail) => {
+            // Drop the result if the cursor moved away to a
+            // different segment in the meantime.
+            if (lastSegmentRef.current === segIdx) {
+              onSegmentHover(detail);
+            }
+          })
+          .catch((err) =>
+            console.error("[preview] segmentDetail failed", err),
+          );
+      });
+    };
+    const onLeave = (): void => {
+      if (lastSegmentRef.current != null) {
+        lastSegmentRef.current = null;
+        onSegmentHover(null);
+      }
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerleave", onLeave);
+    return () => {
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerleave", onLeave);
+      if (hoverRafRef.current != null) {
+        cancelAnimationFrame(hoverRafRef.current);
+        hoverRafRef.current = null;
+      }
+    };
+  }, [onSegmentHover, preview]);
 
   return (
     <div

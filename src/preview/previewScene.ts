@@ -188,6 +188,46 @@ export function setBed(
   }
 }
 
+/** Raycast against the extrusion `LineSegments` and return the
+ * matched segment index (the Tauri-side index PR-6-7's
+ * `preview_segment_detail` expects), or `null` on a miss.
+ *
+ * `(ndcX, ndcY)` are normalized device coordinates — `[-1, 1]`
+ * with Y flipped from screen-space. Caller is responsible for
+ * the conversion (PR-6-11's GcodePreview does it from
+ * pointer events).
+ *
+ * Three.js's raycaster returns the vertex index it hit; for
+ * `LineSegments` the index is per-vertex (2 per segment), so we
+ * divide by 2 to recover the segment id.
+ */
+export function pickSegment(
+  scene: PreviewScene,
+  ndcX: number,
+  ndcY: number,
+): number | null {
+  if (!scene.extrusionMesh) return null;
+  scene.raycaster.setFromCamera(
+    { x: ndcX, y: ndcY } as THREE.Vector2,
+    scene.camera,
+  );
+  // Tune the raycaster's line threshold so thin segments are
+  // pickable. Default is 1; bump to ~1.5mm at the current bbox
+  // scale (matches the rendered line thickness perceptually).
+  const params = scene.raycaster.params.Line;
+  if (params) params.threshold = 1.5;
+  const hits = scene.raycaster.intersectObject(
+    scene.extrusionMesh,
+    false,
+  );
+  if (hits.length === 0) return null;
+  const hit = hits[0];
+  // index here is the per-vertex index into the position
+  // attribute; segment id = floor(index / 2).
+  if (hit.index == null) return null;
+  return Math.floor(hit.index / 2);
+}
+
 /** Resize the renderer + camera to the container's new size.
  * Call from a ResizeObserver or window resize handler. */
 export function resizePreview(
