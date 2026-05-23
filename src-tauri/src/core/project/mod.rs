@@ -40,3 +40,4 @@ pub use context::SlicingContext;
 pub use metadata::{PlateMetadata, CYCLE_COUNT_MAX, CYCLE_COUNT_MIN};
 pub use crate::core::scene::state::PlateSceneState;
 pub use model::{Plate, PlateId, Project, ProjectMutError};
+pub use mutation::PLATE_NAME_MAX;

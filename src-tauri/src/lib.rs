@@ -71,6 +71,7 @@ pub fn run() {
             core::scene::commands::scene_add_plate,
             core::scene::commands::scene_remove_plate,
             core::scene::commands::scene_set_active_plate,
+            core::scene::commands::scene_rename_plate,
             core::scene::commands::scene_object_override_set,
             core::scene::commands::scene_object_override_clear,
             core::scene::commands::scene_object_override_clear_all,

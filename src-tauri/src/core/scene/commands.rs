@@ -264,6 +264,26 @@ pub fn scene_set_active_plate(
     Ok(())
 }
 
+/// Rename a plate (PR-5-3 — backs the tab strip dblclick-rename).
+/// Trims whitespace; rejects empty / over-`PLATE_NAME_MAX` results.
+/// No-op (no event) when the trimmed value matches the current name.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_rename_plate(
+    plate_id: PlateId,
+    name: String,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s
+        .set_plate_name(plate_id, name)
+        .map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
 /// Upsert one per-object cascade override on a specific plate
 /// (PR-5-7 — replaces PR-4-9's stub `onSetObjectOverride`).
 #[tauri::command]

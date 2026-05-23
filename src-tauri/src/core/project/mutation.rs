@@ -31,6 +31,13 @@ use crate::core::scene::state::{
 };
 use crate::core::scene::transform::Transform;
 
+/// Upper bound on `Plate.name` byte length (PR-5-3). Holds back
+/// pathological renames that would blow out the tab strip layout
+/// or balloon the project `.3mf` JSON skeleton; the actual UI
+/// budget is ~24 chars but we accept up to 200 to leave headroom
+/// for emoji / non-ASCII users.
+pub const PLATE_NAME_MAX: usize = 200;
+
 impl Project {
     // ---- ID allocators (scene-wide) -------------------------------
 
@@ -422,6 +429,43 @@ impl Project {
             events.push(SceneEvent::PlateMetadataChanged { plate_id: id });
         }
         Ok(events)
+    }
+
+    /// Rename a plate (PR-5-3 tab strip dblclick-rename target).
+    /// Trims surrounding whitespace, rejects an empty result and any
+    /// name longer than [`PLATE_NAME_MAX`] bytes. No-op (no event)
+    /// when the trimmed value matches the current name. Emits
+    /// `PlateMetadataChanged` on success — same channel as cycle
+    /// count / composition order so the frontend already re-fetches
+    /// plate metadata on it.
+    pub fn set_plate_name(
+        &mut self,
+        plate_id: PlateId,
+        name: String,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(SceneOpError::InvalidPlateMetadata {
+                plate_id,
+                message: "plate name must not be empty".into(),
+            });
+        }
+        if trimmed.len() > PLATE_NAME_MAX {
+            return Err(SceneOpError::InvalidPlateMetadata {
+                plate_id,
+                message: format!(
+                    "plate name must be at most {PLATE_NAME_MAX} bytes",
+                ),
+            });
+        }
+        let idx = self
+            .plate_index(plate_id)
+            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        if self.plates[idx].name == trimmed {
+            return Ok(Vec::new());
+        }
+        self.plates[idx].name = trimmed.to_owned();
+        Ok(vec![SceneEvent::PlateMetadataChanged { plate_id }])
     }
 
     // ---- Per-plate printer assignment -----------------------------
@@ -2406,6 +2450,81 @@ mod tests {
         let json = serde_json::to_string(&p).unwrap();
         let parsed: Project = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.plates[0].metadata.cycle_count, 42);
+    }
+
+    // ---- Plate rename (PR-5-3) -----------------------------------
+
+    #[test]
+    fn set_plate_name_writes_and_emits() {
+        let mut p = Project::default();
+        let events = p.set_plate_name(PlateId(1), "Bench".into()).unwrap();
+        assert_eq!(p.plates[0].name, "Bench");
+        assert!(matches!(
+            events.as_slice(),
+            [SceneEvent::PlateMetadataChanged { plate_id: PlateId(1) }],
+        ));
+    }
+
+    #[test]
+    fn set_plate_name_trims_surrounding_whitespace() {
+        let mut p = Project::default();
+        p.set_plate_name(PlateId(1), "  Calibration tower  ".into())
+            .unwrap();
+        assert_eq!(p.plates[0].name, "Calibration tower");
+    }
+
+    #[test]
+    fn set_plate_name_to_current_is_silent_noop() {
+        let mut p = Project::default();
+        // Set once, then re-set to the same trimmed value.
+        p.set_plate_name(PlateId(1), "Bench".into()).unwrap();
+        let again = p.set_plate_name(PlateId(1), "  Bench  ".into()).unwrap();
+        assert!(again.is_empty());
+    }
+
+    #[test]
+    fn set_plate_name_empty_after_trim_errors() {
+        let mut p = Project::default();
+        let err = p.set_plate_name(PlateId(1), "   ".into()).unwrap_err();
+        assert!(matches!(
+            err,
+            SceneOpError::InvalidPlateMetadata { plate_id: PlateId(1), .. },
+        ));
+    }
+
+    #[test]
+    fn set_plate_name_over_max_errors() {
+        let mut p = Project::default();
+        let too_long = "x".repeat(PLATE_NAME_MAX + 1);
+        let err = p.set_plate_name(PlateId(1), too_long).unwrap_err();
+        assert!(matches!(
+            err,
+            SceneOpError::InvalidPlateMetadata { plate_id: PlateId(1), .. },
+        ));
+    }
+
+    #[test]
+    fn set_plate_name_at_max_succeeds() {
+        let mut p = Project::default();
+        let on_boundary = "x".repeat(PLATE_NAME_MAX);
+        assert!(p.set_plate_name(PlateId(1), on_boundary.clone()).is_ok());
+        assert_eq!(p.plates[0].name.len(), PLATE_NAME_MAX);
+    }
+
+    #[test]
+    fn set_plate_name_unknown_plate_errors() {
+        let mut p = Project::default();
+        let err = p.set_plate_name(PlateId(99), "Bench".into()).unwrap_err();
+        assert_eq!(err, SceneOpError::UnknownPlate(PlateId(99)));
+    }
+
+    #[test]
+    fn plate_name_round_trips_via_json() {
+        let mut p = Project::default();
+        p.set_plate_name(PlateId(1), "Calibration".into()).unwrap();
+        let json = serde_json::to_string(&p).unwrap();
+        let parsed: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.plates[0].name, "Calibration");
     }
 
     // ---- Composition order (PR-5-5) -------------------------------
