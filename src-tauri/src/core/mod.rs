@@ -12,6 +12,7 @@ pub mod filament;
 pub mod gcode;
 pub mod logging;
 pub mod plugin;
+pub mod preview;
 pub mod printer;
 pub mod project;
 pub mod scene;
