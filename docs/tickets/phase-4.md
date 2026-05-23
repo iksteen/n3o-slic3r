@@ -22,7 +22,7 @@ index plus phase-level status and notes.
 |-------------|--------|--------|
 | Settings backend introspection enrichment (mode/scope/capability) | ✅ done | [PR-4-1](phase-4/PR-4-1%20Settings%20backend%20introspection.md) |
 | Data-driven form component library (6 input types) | ✅ done | [PR-4-2](phase-4/PR-4-2%20Form%20components.md) |
-| Category navigation + mode filter (Simple/Advanced/Expert) | ❌ open | [PR-4-3](phase-4/PR-4-3%20Category%20nav%20and%20mode%20filter.md) |
+| Category navigation + mode filter (Simple/Advanced/Expert) | ✅ done | [PR-4-3](phase-4/PR-4-3%20Category%20nav%20and%20mode%20filter.md) |
 | Settings panel scaffold + editing-context tabs | ❌ open | [PR-4-4](phase-4/PR-4-4%20Settings%20panel%20scaffold.md) |
 | Printer-aware visibility + build plate selector | ❌ open | [PR-4-5](phase-4/PR-4-5%20Printer-aware%20visibility%20and%20build%20plate.md) |
 | Slot-adaptive layout (per-slot tab strip + sync-edit) | ❌ open | [PR-4-6](phase-4/PR-4-6%20Slot-adaptive%20layout.md) |

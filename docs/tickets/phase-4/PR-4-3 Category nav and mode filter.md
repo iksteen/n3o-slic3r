@@ -1,6 +1,6 @@
 # PR-4-3 — Category navigation + mode filter
 
-Status: ❌ open.
+Status: ✅ shipped — `src/settings/nav/`: `categorize()` groups OptionSummary by category preserving libslic3r declaration order (`CATEGORY_ORDER` is the canonical 11-entry list curated from `PrintConfig.cpp`'s first-mention walk; unknown categories sort alphabetically at the end so upstream additions stay visible). `CategorySidebar` renders the `.cat-rail` + `.cat-rail-item` markup with single-letter icons + the `cat-rail-count` slot (renders `overrides/total` in accent color when overrides > 0, plain total otherwise — PR-4-7 will populate the override count). `ModeFilter` ships Simple/Advanced/Expert as `.sp-tabs` segmented control with localStorage persistence keyed `n3o.settings.mode`; Develop tab is opt-in via `allowDevelop` (panel passes `import.meta.env.DEV`). `passesMode` implements "this mode and everything simpler" semantics. Keyboard nav cut per the cut candidate; mouse-only ships for MVP. 10 new vitest cases (47 → 57 frontend tests).
 
 **Scope.** The category sidebar that groups options into navigable
 buckets (Quality, Strength, Speed, Travel, Multiple Extruders,
