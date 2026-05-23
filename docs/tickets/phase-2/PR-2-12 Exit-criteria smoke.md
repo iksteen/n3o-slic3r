@@ -1,6 +1,6 @@
 # PR-2-12 — Phase 2 exit-criteria smoke
 
-Status: ❌ open.
+Status: ✅ shipped — automated half lives in `tests/phase2_smoke.rs` + `npm test`; human-driven viewport half in `docs/phase-2-smoke.md`.
 
 **Scope.** End-to-end smoke procedure that exercises Phase 2's
 exit criteria as a single repeatable test. Mirrors PR-0-5 and

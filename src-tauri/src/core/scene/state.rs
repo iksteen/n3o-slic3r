@@ -779,13 +779,27 @@ impl SceneState {
             super::primitives::PrimitiveKind::Torus => "Torus",
         };
         // Lift the spawn so the primitive's lowest mesh point lands
-        // on z=0. Cube/sphere/torus center on origin geometrically,
-        // which would sink half the primitive below the build plate
-        // if we placed them at the bare origin — slicer convention
-        // is for newly-added objects to rest on the bed.
-        let lift = -self.meshes.get(&mesh_id).unwrap().bounding_box.min[2] as f32;
-        let transform = if lift.abs() > 1e-5 {
-            Transform::translation(Vec3::new(0.0, 0.0, lift))
+        // on z=0, and shift XY so the primitive's mesh-bbox center
+        // sits over the bed's XY center (when a bed is active).
+        // Cube/sphere/torus center on origin geometrically, so the
+        // bare-origin placement would sink half the primitive below
+        // the plate AND straddle the back-left corner. Slicer
+        // convention is for newly-added objects to sit on the bed,
+        // roughly centered for the eye.
+        let mesh_bb = self.meshes.get(&mesh_id).unwrap().bounding_box.clone();
+        let lift_z = -mesh_bb.min[2] as f32;
+        let (shift_x, shift_y) = match &self.bed {
+            Some(bed) => {
+                let bed_cx = ((bed.extents.min[0] + bed.extents.max[0]) * 0.5) as f32;
+                let bed_cy = ((bed.extents.min[1] + bed.extents.max[1]) * 0.5) as f32;
+                let mesh_cx = ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32;
+                let mesh_cy = ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32;
+                (bed_cx - mesh_cx, bed_cy - mesh_cy)
+            }
+            None => (0.0, 0.0),
+        };
+        let transform = if shift_x.abs() + shift_y.abs() + lift_z.abs() > 1e-5 {
+            Transform::translation(Vec3::new(shift_x, shift_y, lift_z))
         } else {
             Transform::IDENTITY
         };
