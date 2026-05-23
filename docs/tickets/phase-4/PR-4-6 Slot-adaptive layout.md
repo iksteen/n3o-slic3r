@@ -1,6 +1,6 @@
 # PR-4-6 — Slot-adaptive layout (per-slot tab strip)
 
-Status: ❌ open.
+Status: ✅ shipped — `src/settings/slots/SlotTabStrip.tsx`: per-slot tab strip + sync-edit checkbox; elides for `slot_count == 1`. `useSlotState(slotCount)` hook owns active-slot (session-only, clamped on printer change) + syncAll (localStorage-persisted `n3o.settings.sync_slots`, default ON). `SettingsPanel` mounts the strip above the settings list when `slot_count >= 2` and threads `{slotCount, activeSlot, syncAll}` into each `SettingRow`. Vector option kinds route through `MultiSelectInput` (PR-4-2's vector wrapper) with `vectorElementKind(kind)` mapping the wrapper's per-slot scalar back to the right control. 5 new vitest cases covering the commit-at-active-slot semantics with sync ON / OFF + wrap-extend / clip cases (63 → 68 frontend tests).
 
 **Scope.** Printers with `slot_count >= 2` render the per-slot
 configuration surface as a tab strip (one tab per slot) with a

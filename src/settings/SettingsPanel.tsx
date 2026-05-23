@@ -25,9 +25,11 @@ import {
   ColorInput,
   DropdownInput,
   Field,
+  MultiSelectInput,
   NumberInput,
   PercentInput,
 } from "./inputs";
+import { SlotTabStrip, useSlotState, type SlotInfo } from "./slots/SlotTabStrip";
 import {
   CategorySidebar,
   ModeFilterControl,
@@ -42,7 +44,7 @@ import type {
   OptionTypeKind,
   PrinterAwareOptionSummary,
 } from "./types";
-import { optionTypeKind } from "./types";
+import { isVectorKind, optionTypeKind } from "./types";
 import {
   usePrinterOptions,
   useCascadeResolve,
@@ -105,6 +107,18 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [contextLayer, setContextLayer] = useState<ContextLayer>("project");
   const [activeCat, setActiveCat] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const slotCount = printer?.slot_count ?? 1;
+  const { activeSlot, setActiveSlot, syncAll, setSyncAll } = useSlotState(slotCount);
+  // Slot info for the tab strip. PR-4-6 ships the index-only labels;
+  // PR-7c (filament sync) will populate color + label per slot
+  // binding.
+  const slots = useMemo<SlotInfo[]>(
+    () =>
+      Array.from({ length: slotCount }, (_, i) => ({
+        index: i + 1,
+      })),
+    [slotCount],
+  );
 
   // Object tab auto-fall-back: when the selected object disappears
   // while the Object tab is active, fall back to Project (mirrors
@@ -208,6 +222,15 @@ export function SettingsPanel(props: SettingsPanelProps) {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
+        {slotCount >= 2 && (
+          <SlotTabStrip
+            slots={slots}
+            activeSlot={activeSlot}
+            onActiveSlotChange={setActiveSlot}
+            syncAll={syncAll}
+            onSyncAllChange={setSyncAll}
+          />
+        )}
       </header>
 
       {resolveError && (
@@ -255,6 +278,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     onSetObjectOverride={onSetObjectOverride}
                     onClearObjectOverride={onClearObjectOverride}
                     notApplicable={opt.hidden}
+                    slotCount={slotCount}
+                    activeSlot={activeSlot}
+                    syncAll={syncAll}
                   />
                 ))}
               </section>
@@ -279,6 +305,12 @@ interface SettingRowProps {
   /** True when this option is capability-hidden but surfaced via
    *  search; renders the "not applicable" badge inline (PR-4-5). */
   notApplicable?: boolean;
+  /** Slot-adaptive layout state (PR-4-6). Vector-typed options
+   *  render only the active slot's value; commits land at that
+   *  index, broadcast to all when syncAll is true. */
+  slotCount: number;
+  activeSlot: number;
+  syncAll: boolean;
 }
 
 function SettingRow({
@@ -290,6 +322,9 @@ function SettingRow({
   onSetProjectOverride,
   onSetObjectOverride,
   notApplicable = false,
+  slotCount,
+  activeSlot,
+  syncAll,
 }: SettingRowProps) {
   const tierValue = contextLayer === "object"
     ? objectOverrides[schema.key]
@@ -322,6 +357,7 @@ function SettingRow({
     </span>
   ) : null;
 
+  const kind = optionTypeKind(schema);
   return (
     <Field
       schema={schema}
@@ -330,12 +366,59 @@ function SettingRow({
       disabled={disabled}
       leadingBadge={leadingBadge}
     >
-      {renderInput(optionTypeKind(schema), schema, effectiveValue, setValue, disabled)}
+      {isVectorKind(kind) && slotCount >= 1 ? (
+        <MultiSelectInput
+          schema={schema}
+          value={effectiveValue}
+          onChange={setValue}
+          disabled={disabled}
+          slotCount={slotCount}
+          activeSlot={activeSlot}
+          syncAll={syncAll}
+          renderSlot={({ value, onChange: onSlotChange, disabled: slotDisabled }) =>
+            renderScalarInput(
+              vectorElementKind(kind),
+              schema,
+              value,
+              onSlotChange,
+              slotDisabled,
+            )
+          }
+        />
+      ) : (
+        renderScalarInput(kind, schema, effectiveValue, setValue, disabled)
+      )}
     </Field>
   );
 }
 
-function renderInput(
+/** Map the vector kind to the scalar inner kind so the renderSlot
+ *  callback can route through the same scalar renderer. */
+function vectorElementKind(kind: OptionTypeKind): OptionTypeKind {
+  switch (kind) {
+    case "vector-bool":
+      return "bool";
+    case "vector-int":
+      return "int";
+    case "vector-float":
+      return "float";
+    case "vector-percent":
+      return "percent";
+    case "vector-float-or-percent":
+      return "float-or-percent";
+    case "vector-string":
+      return "string";
+    case "vector-enum":
+      return "enum";
+    default:
+      return "unknown";
+  }
+}
+
+/** Render the per-slot scalar input. Vector kinds are unwrapped by
+ *  the SettingRow's MultiSelectInput layer; this function only sees
+ *  scalar kinds (single-slot value at a time). */
+function renderScalarInput(
   kind: OptionTypeKind,
   schema: OptionSummary,
   value: string | null,
@@ -395,21 +478,13 @@ function renderInput(
         />
       );
     case "string":
-    case "vector-bool":
-    case "vector-int":
-    case "vector-float":
-    case "vector-percent":
-    case "vector-float-or-percent":
-    case "vector-string":
-    case "vector-enum":
     case "point":
     case "point3":
     case "unknown":
     default:
-      // Fallback to a plain text input for option kinds the
-      // form library doesn't yet support; the row still
-      // renders and the user can edit the serialized value
-      // directly.
+      // Fallback to a plain text input for scalar kinds the form
+      // library doesn't yet specialize for. Vector kinds are
+      // handled in SettingRow above and never reach here.
       return (
         <input
           className="val-input val-input-fallback"
