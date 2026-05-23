@@ -338,6 +338,88 @@ validation prerequisite still holds; the schedule between now
 and then is the open variable. See PR-1-12 "Deferral rationale"
 for the full reasoning.
 
+### PR-3-11 investigation, 2026-05-23 (blocked on slice regression)
+
+Reopened PR-3-11 with PR-3-6 / PR-3-7 now shipped. Plan was to
+re-slice `fourcolor.3mf`, parse via the new parser, diff `ToolChange`
+sequence against an Orca-CLI reference, and either ship a small
+adapter fix or stop with findings.
+
+**Reproduction of the disparity** confirmed against the 2026-05-22
+captured `/tmp/spike3.gcode` (4.8 MB, the prior slice run). Per-
+extruder counts match the doc exactly: **T0×36 + T1×19 + T2×19 +
+T3×2 = 76 mid-print changes** plus 2× `T1000` (machine-start
+pseudo-tool) and 1× `T255` (machine-end "unload" pseudo-tool) for
+79 lines total matching `^T[0-9]+$`. So the disparity hasn't shifted
+on the captured artifact.
+
+**New blocker: fresh slice of `fourcolor.3mf` SIGSEGVs today.**
+Multiple core dumps captured today (1822526, 1822990, 1823106,
+1823374, 1823848, 1824468). Crash backtrace is consistent:
+
+```
+Slic3r::check_filament_printable_after_group           (libslic3r)
+  ToolOrdering::reorder_extruders_for_minimum_flush_volume
+  ToolOrdering::sort_and_build_data
+  Print::process
+  slic3r_slice                                          (our FFI)
+  spike3::main
+```
+
+The `20mmbox-LF.stl` smoke (single-extruder, single-filament)
+still slices cleanly through the same FFI — so the regression is
+multi-color-specific. Older spike3 core dumps from 2026-05-22
+22:44 onwards suggest the crash predates today; the May 22
+captured output is the last known successful run.
+
+**Speculative fix tried.** `check_filament_printable_after_group`
+accesses `print_config->filament_printable.get_at(filament_id)`;
+the schema default is `ConfigOptionInts{3}` (size 1) and 3MF-
+embedded configs don't carry `filament_printable`. Hypothesis was
+that the typed `m_config.filament_printable.values` ends up empty
+and `get_at()`'s release-build `assert(!empty())` no-op lets
+`values.front()` deref end() → SIGSEGV.
+
+Patched the FFI shim to size `filament_printable` to
+`filament_count` (default 3 = printable on both extruders, matching
+schema), confirmed via a stderr probe that `cfg` going into
+`print.apply()` has `filament_printable.size=4, fp[0]=3`. **Still
+segfaults at the same site.** Patch reverted (didn't help here,
+and the existing in-libslic3r access at `Print.cpp:3023` is
+guarded by `extruder_num < 2` for single-extruder printers like
+the A1 mini, so the defensive normalization isn't load-bearing
+either). The crash is therefore not just about
+`filament_printable` being empty — something else in
+`check_filament_printable_after_group`'s state is wrong.
+
+**Next steps when picked up.** Either:
+
+1. Bisect the FFI shim / libslic3r vendor between the
+   2026-05-22 last-known-good slice and today to identify which
+   change broke fresh multi-color slicing. The FFI shim history
+   on the relevant range:
+   - `843aaac` PR-3-1 part 2: FFI log sink redirect
+   - `023bb41` PR-3-1 part 1: FFI slice progress callback
+   - `1bcf46d` docs only
+   - `58e199e` slic3r-ffi: expose option scope
+   - `1bb3503` slic3r-ffi: surface coEnums defaults
+   The log-sink install at `slic3r_init` is the most plausible
+   suspect because it routes boost::log records through a
+   callback the slice doesn't expect to throw. Try a slice with
+   the `CallbackLogBackend` install commented out and see if
+   the crash clears.
+2. Build a debug-symbol libslic3r and run under gdb to see
+   exactly which expression in `check_filament_printable_after_
+   group` triggers the segfault — the in-libslic3r call uses
+   `filament_maps[filament_id]` (unchecked `operator[]`) which
+   could OOB if `filament_maps` shrinks unexpectedly.
+
+The investigation is **paused** behind the regression — we can't
+A/B against Orca's CLI output if we can't even produce a fresh
+n3o output for the same input. Until the slice runs end-to-end
+again, the 76-vs-7 work can only operate on the captured May 22
+artifact, which doesn't let us test fixes.
+
 Other than the tool-change disparity, the gcode bodies are
 structurally similar — same `; CHANGE_LAYER` / `WIPE_START` /
 `WIPE_END` / `FLUSH_START` / `FLUSH_END` markers, same
