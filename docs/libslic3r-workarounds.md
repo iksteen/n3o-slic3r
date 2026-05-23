@@ -153,20 +153,34 @@ if (!cfg.has("nozzle_volume_type"))
 The temporary-copy approach means the caller's config remains
 untouched.
 
-**Update during PR-0.5-3.** An additional zero-coerce block for
-the `wall_filament` / `sparse_infill_filament` / `solid_infill_filament`
-/ `support_filament` / `support_interface_filament` selectors was
-originally part of this workaround. Investigation in PR-0.5-3
-confirmed the coerce is **redundant** once the `filament_map`
-normalization above is in place — removing it keeps all 16 api
-tests green and leaves the slice path unchanged (`Config::get`
-reports the source's 0 end-to-end through `Print::full_print_config`
-and `PrintObject::config`). The coerce block was kept removed
-since it was vestigial and was being mistaken for the cause of
-PR-0.5-3's tool-change-count disparity (it isn't — see
-`docs/spikes/spike-3-bambu-ams.md`). If a future regression
-surfaces a per-region filament-selector zero-related crash, the
-coerce can be reintroduced.
+**Update during PR-0.5-3 — and walked back during PR-3-11.** An
+additional zero-coerce block for the `wall_filament` /
+`sparse_infill_filament` / `solid_infill_filament` /
+`support_filament` / `support_interface_filament` selectors was
+originally part of this workaround. PR-0.5-3 removed it, claiming
+the coerce was redundant once the `filament_map` normalization
+above was in place ("all 16 api tests green; `Config::get` reports
+the source's 0 end-to-end through `Print::full_print_config` and
+`PrintObject::config`"). The premise was that since the *in-memory*
+config carries 0 cleanly, the engine must handle the sentinel
+internally.
+
+The premise was wrong. The api tests + spike1/spike2 don't exercise
+the multi-color (4 filament) path through `ToolOrdering::
+sort_and_build_data` →
+`ToolOrdering::reorder_extruders_for_minimum_flush_volume` →
+`Slic3r::check_filament_printable_after_group`. The fourcolor.3mf
+case in `examples/spike3/` does — and **without** the coerce, that
+path SIGSEGVs deterministically before producing any output.
+
+`git bisect` between the 2026-05-22 LKG (06261cc, PR-0.5-3 spike3
+run) and HEAD pinpointed commit `1bcf46d` ("PR-0.5-3: document
+tool-change disparity investigation + CI memory fix") as the
+introducer; restoring the coerce restores the slice.
+
+The coerce stays in. Loud `// PR-3-11 reinstated…` comment in
+the FFI shim cross-links the bisect finding so this doesn't get
+re-removed without the multi-color slice being verified end-to-end.
 
 ---
 

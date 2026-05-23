@@ -392,50 +392,51 @@ either). The crash is therefore not just about
 `filament_printable` being empty — something else in
 `check_filament_printable_after_group`'s state is wrong.
 
-**Bisect attempted.** Suspected the PR-3-1 log-sink install
-(`boost::log::core::get()->add_sink(g_log_sink_ptr)` at
-`slic3r_init`) because it's the most invasive recent FFI change
-and routes every boost::log record through a sink that calls back
-into our code. Commented it out + rebuilt + reran spike3 —
-**still segfaults at the same site** in
-`check_filament_printable_after_group`. Sink install restored.
+**Bisect found the regressor — and it was ours.** `git bisect`
+between the 2026-05-22 LKG (`06261cc`, the PR-0.5-3 commit that
+last produced a clean `/tmp/spike3.gcode`) and HEAD pinpointed
+commit `1bcf46d` — "PR-0.5-3: document tool-change disparity
+investigation + CI memory fix" — as the first bad commit. That
+commit removed the 14-line `wall_filament` / `sparse_infill_
+filament` / `solid_infill_filament` / `support_filament` /
+`support_interface_filament` zero-coerce block from the FFI
+shim, on the rationale that it was "vestigial" once the
+`filament_map` normalization had been added (workaround #4 in
+`libslic3r-workarounds.md`).
 
-**OrcaSlicer submodule hasn't moved.** Last touch was the
-initial vendor commit (`16c154f`), pinning to nightly-builds
-`956fcea7e260b31f74c247136cef69785515dc51`. So libslic3r's
-slice code hasn't changed since the prior author's session.
-Existing core dumps from 2026-05-22 22:44 onwards show the
-prior author was already hitting this crash during their
-debug session — the 22:15 `/tmp/spike3.gcode` (which we used
-to reproduce the 76-vs-7 disparity) appears to be the **last
-lucky run** before whatever state shift made the crash
-deterministic.
+The rationale was wrong. The api tests + spike1/spike2 don't
+exercise the multi-color path through `ToolOrdering::
+reorder_extruders_for_minimum_flush_volume` →
+`check_filament_printable_after_group`; spike3's fourcolor.3mf
+does. The "still produces valid gcode" check in the original
+removal didn't actually re-run the multi-color slice end-to-end.
 
-This is firmly in the deep-libslic3r-work bucket per the
-project's "libslic3r vs our invocation" memory:
+**Fix:** restored the coerce block (with a comment cross-linking
+this bisect finding so it doesn't get re-removed by future
+"cleanup"). Fresh fourcolor.3mf slice now succeeds and produces
+output byte-for-byte equivalent to the 2026-05-22 LKG capture:
+5,014,587 bytes; T0×36 + T1×19 + T2×19 + T3×2 = 76 mid-print
+tool changes (the disparity that PR-3-11 was opened to fix);
+2h 55m 21s estimated print time. Same numbers as the prior
+doc records.
 
-> When Orca/BBS produce correct output on the same input, the
-> engine is rarely the variable. Frame investigations as
-> "find the pre-`apply` setup we're missing," not "deep
-> libslic3r work."
+So the slice itself works again — but **PR-3-11's actual goal
+(reduce the 76-vs-7 tool-change disparity) remains open.** The
+prior investigation's conclusion stands: the gap is in how the
+FFI invokes libslic3r, the in-memory config is correct
+end-to-end after apply, supports get mis-assigned to T0 via
+the `support_dontcare` resolution in `GCode.cpp:4794-4820`,
+and OrcaSlicer's GUI/CLI must populate something earlier
+(`WipingExtrusions` overrides, per-volume `support_filament`,
+or similar) that the FFI doesn't replicate.
 
-The prior author exhausted the pre-apply-setup framing
-(filament_map normalization, nozzle_volume_type, BBL flag,
-filament_map_mode handling), confirmed `Print::full_print_
-config()` carries the right values end-to-end after apply, and
-still saw incorrect tool-change behavior. The "missing pre-
-apply setup" exit door is closed; what remains is genuinely
-in libslic3r's `ToolOrdering` + support-extruder resolution.
-
-**Recommended deferral.** Carry PR-3-11 + this new slice
-regression as a combined workstream into the Phase-5-hardware-
-validation prerequisite. The fix path will need either (a) a
-debug libslic3r build + gdb session on `check_filament_
-printable_after_group`'s exact state at crash, or (b)
-deferring to whichever upstream OrcaSlicer commit ships a fix.
-Phase 4 (settings UI) can proceed in parallel — single-color
-slicing works, so the smoke + everything Phase 4 demos stay
-green.
+With the slice working again, the diff work the original
+ticket called for is now actually doable — we can re-slice,
+parse via PR-3-6, and walk the `ToolChange` stream against
+Orca's CLI reference. Carrying that into the Phase-5-hardware-
+validation prerequisite slot per the ticket's "if the
+investigation balloons, defer to Phase 4/5" guidance; this
+session unblocked the path but didn't ride it home.
 
 Other than the tool-change disparity, the gcode bodies are
 structurally similar — same `; CHANGE_LAYER` / `WIPE_START` /
