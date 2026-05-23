@@ -233,7 +233,11 @@ export class SceneMirror {
     mesh.name = `obj:${obj.id}`;
     mesh.userData.objectId = obj.id;
     mesh.visible = obj.visible;
-    mesh.matrixAutoUpdate = false;
+    // Leave matrixAutoUpdate=true (Three.js default) so that the
+    // PR-2-10 gizmo's drag — which writes to position/quaternion/
+    // scale — actually moves the mesh. applyTransform decomposes
+    // the incoming column-major matrix into those three so the
+    // next-frame recompute reproduces the same matrix.
     applyTransform(mesh, obj);
     this.objectGroup.add(mesh);
     this.objects.set(obj.id, { mesh, material, data: obj });
@@ -401,11 +405,18 @@ function applyTransform(mesh: THREE.Mesh, obj: SceneObject): void {
   // `obj.transform` is column-major 16 floats matching the glam
   // side and THREE.Matrix4.fromArray (Rust's Transform is
   // `#[serde(transparent)]` over `[f32; 16]`, so the wire shape is
-  // a bare array). Use matrixAutoUpdate=false (set at construction)
-  // so this matrix is what the renderer uses verbatim — no risk of
-  // Three.js re-deriving from position/quaternion.
-  mesh.matrix.fromArray(obj.transform as number[]);
-  mesh.matrixWorldNeedsUpdate = true;
+  // a bare array). Decompose into position/quaternion/scale so the
+  // gizmo's drag (which writes to those three) actually moves the
+  // mesh — matrixAutoUpdate=true (default) recomposes the matrix
+  // next frame. Our matrices are built from TRS compositions on
+  // the Rust side so they decompose cleanly even with non-uniform
+  // scale or mirror.
+  const m = new THREE.Matrix4().fromArray(obj.transform as number[]);
+  m.decompose(mesh.position, mesh.quaternion, mesh.scale);
+  // Sync the matrix immediately from P/Q/S so callers that read
+  // `mesh.matrix` (tests, raycaster, gizmo attach) see the final
+  // value without waiting for the next render frame.
+  mesh.updateMatrix();
 }
 
 function buildZoneWireframe(bb: BedMesh["extents"], label: string): THREE.Object3D {
