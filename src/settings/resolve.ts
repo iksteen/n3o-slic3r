@@ -10,7 +10,13 @@ import { invoke } from "@tauri-apps/api/core";
 import type { PrinterAwareOptionSummary } from "./types";
 
 /** Mirror of `core::cascade::commands::ContextJson` on the wire.
- *  Same shape the slice flow already builds. */
+ *  Same shape the slice flow already builds.
+ *
+ *  PR-5-7: `object_overrides` is the per-object cascade-tier map.
+ *  When the panel's Object tab is active, the host passes the
+ *  selected object's authored overrides here; otherwise the map
+ *  is empty. The resolver applies them as the highest-priority
+ *  tier (Object > Project > User > Cascade). */
 export type ContextJson = {
   printer: PrinterProfileJson;
   plate: BuildPlateJson;
@@ -18,6 +24,7 @@ export type ContextJson = {
   active_slot: number;
   user_overrides: OverrideFileSpec[];
   project_overrides: OverrideFileSpec[];
+  object_overrides: Record<string, string>;
 };
 
 export type PrinterProfileJson = {
