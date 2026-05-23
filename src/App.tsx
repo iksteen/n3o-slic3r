@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ViewportCanvas } from "./viewport/ViewportCanvas";
 import { SlicePanel } from "./slice/SlicePanel";
+import { PlateTabs } from "./plates/PlateTabs";
 import "./App.css";
 
 type SlicerInfo = { version: string; option_count: number };
@@ -39,6 +40,7 @@ function App() {
           </button>
         </div>
       </header>
+      <PlateTabs />
       <main className="flex-1 relative">
         <ViewportCanvas />
       </main>
