@@ -1,6 +1,6 @@
 # PR-4-1 — Settings backend introspection enrichment
 
-Status: ❌ open.
+Status: ✅ shipped — `core/schema/capability.rs` ships the `CapabilityPredicate` enum (5 variants: `RequiresMultiSlot` / `RequiresToolchanger` / `RequiresPurgeTower` / `RequiresBblPrinter` / `RequiresChamberHeater`) + a hand-curated `capability_for_key` table mapping ~17 libslic3r keys to their gating predicate. Each variant evaluates against `PrinterProfile` via `satisfied_by`. `RequiresChamberHeater` is a no-op placeholder until `PrinterProfile` carries a `has_chamber_heater` field (PR-4-5's call). `core/cascade::OptionSummary` gained `mode` (`OptMode` enum serialized lowercase), `scope` (`OptScopeFlags` struct of bools), `capability` (`Option<CapabilityPredicate>`), and `tooltip` (`Option<String>`). New Tauri command `slicer_options_for_printer(printer, filter)` returns the same shape plus a pre-evaluated `hidden: bool` so per-row visibility is a single field read in the panel render. 10 tests (6 capability unit + 4 cascade integration); A1 mini hides `extruder_clearance_radius` and shows `flush_volumes_matrix`; synthetic 2-toolhead inverts; full sweep < 500 ms in debug for ~600+ options.
 
 **Scope.** The existing `slicer_options` Tauri command (`core/
 cascade/mod.rs:82`) returns `OptionSummary { key, ty, label,

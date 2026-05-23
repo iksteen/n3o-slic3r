@@ -34,6 +34,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             core::cascade::slicer_info,
             core::cascade::slicer_options,
+            core::cascade::slicer_options_for_printer,
             core::cascade::commands::cascade_load,
             core::cascade::commands::cascade_resolve,
             core::cascade::commands::cascade_trace,

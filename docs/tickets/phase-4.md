@@ -20,7 +20,7 @@ index plus phase-level status and notes.
 
 | Deliverable | Status | Ticket |
 |-------------|--------|--------|
-| Settings backend introspection enrichment (mode/scope/capability) | ❌ open | [PR-4-1](phase-4/PR-4-1%20Settings%20backend%20introspection.md) |
+| Settings backend introspection enrichment (mode/scope/capability) | ✅ done | [PR-4-1](phase-4/PR-4-1%20Settings%20backend%20introspection.md) |
 | Data-driven form component library (6 input types) | ❌ open | [PR-4-2](phase-4/PR-4-2%20Form%20components.md) |
 | Category navigation + mode filter (Simple/Advanced/Expert) | ❌ open | [PR-4-3](phase-4/PR-4-3%20Category%20nav%20and%20mode%20filter.md) |
 | Settings panel scaffold + editing-context tabs | ❌ open | [PR-4-4](phase-4/PR-4-4%20Settings%20panel%20scaffold.md) |

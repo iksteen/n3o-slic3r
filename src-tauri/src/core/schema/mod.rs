@@ -19,6 +19,10 @@
 //!
 //! See PRD §6.1 (FR-CAS-1..13) and `docs/profiles.md` for the design.
 
+pub mod capability;
+
+pub use capability::{capability_for_key, CapabilityPredicate};
+
 use slic3r_ffi::{option_defs, OptScope, OptType};
 use std::collections::HashMap;
 use std::sync::OnceLock;
