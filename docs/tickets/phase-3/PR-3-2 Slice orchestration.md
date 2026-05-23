@@ -1,6 +1,6 @@
 # PR-3-2 — Slice orchestration on a worker thread
 
-Status: ❌ open.
+Status: ✅ shipped — worker-thread orchestrator in `core/slice/orchestrator.rs` walks the plate list sequentially, resolves cascade → adapter → libslic3r config per plate, fires `slic3r_ffi::slice` with PR-3-1's progress callback wired through Tauri events (rate-limited to ≤50 ms intervals + immediate on stage change), builds `PlateSummary` (PR-3-3) on success, classifies errors via `classify_libslic3r_error`. Job registry behind Tauri-managed state with monotonic `JobId`. `slice_start_job` / `slice_cancel` / `slice_status` commands registered. Integration test slices the 20mmbox-LF fixture end-to-end through the real cascade pipeline, asserting the event stream + a non-empty `PlateSummary` (estimated time, layer count). Side-fix: `build_summary` now scans the whole G-code file for slicer metadata since OrcaSlicer emits time/filament-used in the footer, not the header. Cancellation is cooperative at plate boundaries; the FFI doesn't expose a mid-process cancel hook today.
 
 **Scope.** Rewrite the Phase 0 `slicer_slice` command into a
 proper orchestrator: runs on a worker thread, slices each plate

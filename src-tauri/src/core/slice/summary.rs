@@ -19,7 +19,7 @@
 //!   so we don't double-write the regex catalog.
 
 use std::collections::BTreeMap;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -57,21 +57,52 @@ pub struct PlateSummary {
     pub output_path: PathBuf,
 }
 
-/// Scan `gcode_path`'s header and produce a `PlateSummary`. Returns
-/// `Err` only on I/O errors; missing fields in the header surface as
-/// the variant's documented default, not as a failure.
+/// Scan `gcode_path` and produce a `PlateSummary`. Returns `Err`
+/// only on I/O errors; missing fields surface as the variant's
+/// documented default, not as a failure.
+///
+/// **Why we scan the whole file** (not just the header): libslic3r
+/// (and OrcaSlicer) emit slice-output metadata in the *footer*, not
+/// the prelude. The header carries layer/extrusion-width hints and
+/// the `; HEADER_BLOCK_END` marker; the `; estimated printing time`,
+/// `; filament used [g] = …`, `; total layers count =` lines live
+/// at the end of the file, after the last `M84` / `M104 S0`. We
+/// collect every comment-prefixed line and feed the lot to
+/// PR-3-8's lenient header parser — same pattern catalog, broader
+/// scan.
 pub fn build_summary(gcode_path: &Path) -> Result<PlateSummary, std::io::Error> {
     let file = std::fs::File::open(gcode_path)?;
-    let header = parse_header(BufReader::new(file));
-    Ok(summary_from_header(&header, gcode_path))
+    let comment_block = collect_comment_lines(BufReader::new(file))?;
+    let parsed = parse_header(comment_block.as_bytes());
+    Ok(summary_from_header(&parsed, gcode_path))
 }
 
 /// In-memory variant for tests + the future "summary from buffer"
 /// path the orchestrator could take if libslic3r ever gives us the
 /// G-code in memory (PRD §8.3's pending FFI extension).
 pub fn build_summary_from_bytes(bytes: &[u8], gcode_path: &Path) -> PlateSummary {
-    let header = parse_header(bytes);
-    summary_from_header(&header, gcode_path)
+    let comment_block =
+        collect_comment_lines(std::io::Cursor::new(bytes)).unwrap_or_default();
+    let parsed = parse_header(comment_block.as_bytes());
+    summary_from_header(&parsed, gcode_path)
+}
+
+/// Extract every `;`-prefixed and `(`-prefixed line from a G-code
+/// stream. Result is a synthetic "all comments concatenated" buffer
+/// — PR-3-8's parser doesn't care whether they were contiguous in
+/// the source. Body lines (G-code commands, blank lines) are
+/// dropped.
+fn collect_comment_lines<R: BufRead>(input: R) -> Result<String, std::io::Error> {
+    let mut out = String::with_capacity(4 * 1024);
+    for line in input.lines() {
+        let line = line?;
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(';') || trimmed.starts_with('(') {
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+    Ok(out)
 }
 
 fn summary_from_header(header: &HeaderMetadata, output_path: &Path) -> PlateSummary {

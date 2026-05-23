@@ -22,6 +22,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(std::sync::Mutex::new(core::cascade::CascadeRegistry::new()))
         .manage(std::sync::Mutex::new(core::scene::SceneState::new()))
+        .manage(core::slice::JobRegistry::new())
         .setup(|_app| {
             // Resources dir is only needed for STEP / font embossing; STL
             // and 3MF load without it. Log level 3 = warning, matching
@@ -61,6 +62,9 @@ pub fn run() {
             core::scene::commands::scene_object_add_from_primitive,
             core::scene::commands::scene_auto_arrange,
             core::slice::slicer_slice,
+            core::slice::commands::slice_start_job,
+            core::slice::commands::slice_cancel,
+            core::slice::commands::slice_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

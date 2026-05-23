@@ -23,7 +23,7 @@
 
 use std::fs::File;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use zip::write::SimpleFileOptions;
@@ -395,6 +395,8 @@ mod tests {
     use super::*;
     use std::io::Read;
     use zip::ZipArchive;
+
+    use std::path::PathBuf;
 
     fn tempfile_path() -> PathBuf {
         std::env::temp_dir().join(format!(

@@ -16,10 +16,18 @@
 //!   the above onto a worker thread; once that lands this command
 //!   becomes the legacy debug-panel path and may be removed.
 
+pub mod commands;
 pub mod errors;
+pub mod events;
+pub mod job;
+pub mod orchestrator;
 pub mod summary;
 
+pub use commands::{slice_cancel, slice_start_job, slice_status};
 pub use errors::{classify_libslic3r_error, SliceError};
+pub use events::SliceEvent;
+pub use job::{JobHandle, JobId, JobRegistry, JobStatus, SliceJobInput};
+pub use orchestrator::{start_slice_job as start_slice_job_internal, SliceStartError};
 pub use summary::{build_summary, build_summary_from_bytes, PlateSummary};
 
 use serde::Serialize;

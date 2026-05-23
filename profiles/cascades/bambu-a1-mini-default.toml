@@ -33,7 +33,11 @@ sparse_infill_speed = "250"
 nozzle_diameter = ["0.4"]
 filament_diameter = ["1.75"]
 gcode_flavor = "marlin2"
-use_relative_e_distances = "1"
+# Absolute E so the default `layer_gcode` validates without a
+# `G92 E0` reset (libslic3r enforces this when relative E is on).
+# Production cascades that opt into relative E pair it with a
+# `layer_gcode` override containing the reset.
+use_relative_e_distances = "0"
 
 # --- Filament rule (specificity 1, section shorthand) ---------------
 # PLA-specific temperatures + fan curves.
