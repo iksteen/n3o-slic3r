@@ -19,6 +19,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(std::sync::Mutex::new(core::cascade::CascadeRegistry::new()))
         .manage(std::sync::Mutex::new(core::scene::SceneState::new()))
         .setup(|_app| {
@@ -53,6 +54,7 @@ pub fn run() {
             core::scene::commands::scene_gizmo_set,
             core::scene::commands::scene_camera_set,
             core::scene::commands::scene_set_active_printer,
+            core::scene::commands::scene_load_default_printer,
             core::scene::commands::library_primitives,
             core::scene::commands::library_calibration,
             core::scene::commands::library_imported,

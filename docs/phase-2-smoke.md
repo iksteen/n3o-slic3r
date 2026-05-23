@@ -71,21 +71,19 @@ The window should open within ~2 s on a warm build.
    If no bed is visible: check the snapshot path — the renderer
    subscribes to `scene:bed_changed` and `applySnapshot` calls
    `BedChanged` during initial sync.
-2. **Add a calibration primitive.** Click the **Debug** button in
-   the header to open the Phase 0 debug panel — primitives come in
-   through the same path until Phase 4 builds a dedicated library
-   panel. From a Rust REPL or via the not-yet-wired UI, invoke
-   `scene_object_add_from_primitive` with `Cube` defaults — a 20 mm
-   cube appears centered on the plate.
+2. **Add a calibration primitive.** Click the **+ Cube** button in
+   the top-left toolbar. A 20 mm cube spawns at the bed center,
+   resting on z=0. The primitive cache means clicking again
+   instances the same mesh — multiple cubes, one geometry.
 3. **Drag-select.** Click the cube — selection chip in the top-left
    reads "1 selected". Click empty bed — chip disappears.
-4. **Stormtrooper load.** From the slice-debug input, point at the
+4. **Stormtrooper load.** Click the **Load…** button → pick the
    staged Stormtrooper fixture. Mesh loads in **< 3 s** (verified
    by step 4 of the automated half when the fixture is present).
-5. **BBS-flavor 3MF load.** Load
-   `examples/spike3/fourcolor.3mf`. Per-part extruder assignments
-   (1, 2, 3, 4, 1, 2, 3, 4) ride through the loader (verified by
-   step 3 of the automated half).
+5. **BBS-flavor 3MF load.** Click **Load…** → pick
+   `examples/spike3/fourcolor.3mf`. The 8 per-part objects appear,
+   each with its authored extruder assignment (verified by step 3
+   of the automated half).
 6. **Translate gizmo.** Click the **T** button in the toolbar. The
    gizmo's translate handles appear around the selected object.
    Drag — the object follows. On mouse-up, the position commits to

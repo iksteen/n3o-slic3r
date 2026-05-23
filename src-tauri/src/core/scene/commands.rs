@@ -96,6 +96,50 @@ pub fn scene_set_active_printer(
     Ok(())
 }
 
+/// Install the bundled Bambu A1 mini profile as the active printer.
+///
+/// **Phase 2 bootstrapping** — gives the viewport something to
+/// render before Phase 5 builds a real printer-selection UI. The
+/// profile is hardcoded inline rather than read from disk so the
+/// command works regardless of the runtime working directory; Phase
+/// 5 will replace this with a profile registry that loads from
+/// `profiles/printers/*.toml` and lets users pick + override.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_load_default_printer(
+    window: Window,
+    state: State<Mutex<SceneState>>,
+) -> Result<(), String> {
+    use crate::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
+    let printer = PrinterProfile {
+        model: "Bambu A1 mini".into(),
+        slot_count: 4,
+        supported_build_plates: vec![
+            "Cool".into(),
+            "Textured PEI".into(),
+            "Smooth PEI".into(),
+            "Engineering".into(),
+            "SuperTack".into(),
+        ],
+        toolheads: vec![Toolhead {
+            nozzle_diameter: 0.4,
+            hotend_type: "stainless_steel".into(),
+            max_temp: 300.0,
+            slot_indices: vec![0, 1, 2, 3],
+        }],
+        build_volume: BoundingBox {
+            min: [0.0, 0.0, 0.0],
+            max: [180.0, 180.0, 180.0],
+        },
+        exclusion_zones: vec![],
+    };
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s.set_active_printer(Some(&printer));
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
 #[tauri::command]
 #[tracing::instrument]
 pub fn library_primitives() -> Vec<super::library::PrimitiveDescriptor> {

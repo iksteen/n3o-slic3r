@@ -12,6 +12,7 @@
 // reflector; the canonical state is on the Rust side.
 
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -137,8 +138,18 @@ export function ViewportCanvas() {
 
     let detachBridge: (() => Promise<void>) | null = null;
     attachEventBridge(mirror)
-      .then((un) => {
+      .then(async (un) => {
         detachBridge = un;
+        // Phase 2 bootstrap: pull the bundled A1 mini profile so the
+        // viewport has a bed to render before Phase 5 wires real
+        // printer selection. No-op if a printer is already active.
+        if (!mirror.bed) {
+          try {
+            await invoke("scene_load_default_printer");
+          } catch (e) {
+            pushToast("warn", `default printer load failed: ${e}`);
+          }
+        }
       })
       .catch((err) => {
         pushToast("error", `viewport init failed: ${err}`);
@@ -305,6 +316,61 @@ export function ViewportCanvas() {
             onClick={() => (window as unknown as N3OViewportApi).__n3o_viewport?.frameAll()}
           >
             Frame all
+          </button>
+          <button
+            type="button"
+            className="bg-neutral-800/90 text-neutral-100 text-xs px-3 py-1 rounded shadow"
+            onClick={() => {
+              // 20 mm cube via the same path the future library
+              // panel will use. PR-2-7's primitive dedup means
+              // re-clicking shares one MeshId with multiple objects.
+              void invoke("scene_object_add_from_primitive", {
+                kind: "Cube",
+                params: {
+                  width: 20.0,
+                  depth: 20.0,
+                  height: 20.0,
+                  radius: 0.0,
+                  radial_segments: 0,
+                },
+              });
+            }}
+            title="Add a 20 mm cube at plate center"
+          >
+            + Cube
+          </button>
+          <button
+            type="button"
+            className="bg-neutral-800/90 text-neutral-100 text-xs px-3 py-1 rounded shadow"
+            onClick={() => {
+              void (async () => {
+                const picked = await openDialog({
+                  multiple: false,
+                  filters: [
+                    {
+                      name: "Mesh / project",
+                      extensions: ["stl", "obj", "3mf"],
+                    },
+                  ],
+                });
+                if (typeof picked !== "string") return;
+                const lower = picked.toLowerCase();
+                try {
+                  if (lower.endsWith(".3mf")) {
+                    await invoke("scene_load_3mf", { path: picked });
+                  } else {
+                    await invoke("scene_load_mesh_from_path", {
+                      path: picked,
+                    });
+                  }
+                } catch (err) {
+                  alert(`load failed: ${err}`);
+                }
+              })();
+            }}
+            title="Open a .stl / .obj / .3mf file"
+          >
+            Load…
           </button>
           <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
             {(["Perspective", "Orthographic"] as ProjectionMode[]).map((mode) => (
