@@ -59,7 +59,7 @@ fn step_1_set_active_printer_emits_bed_changed() {
     let events = state.set_active_printer(Some(&a1_mini()));
     let bed_set = events
         .iter()
-        .any(|e| matches!(e, SceneEvent::BedChanged(Some(_))));
+        .any(|e| matches!(e, SceneEvent::BedChanged { bed: Some(_), .. }));
     assert!(bed_set, "set_active_printer should emit a populated BedChanged");
     assert!(state.active_plate().scene.bed.is_some(), "scene state has the bed cached");
 }

@@ -35,22 +35,72 @@ fn emit_all(window: &Window, events: &[SceneEvent]) {
     }
 }
 
-/// JSON-friendly snapshot of the scene. Mesh buffers are *not*
-/// included — only their headers; the frontend fetches the buffers
-/// per-mesh via `scene_mesh_buffers` (see PR-2-2's mesh-transport
-/// refactor).
+/// JSON-friendly snapshot of the entire project (PR-5-2 phase C
+/// wire shape). The frontend calls `scene_snapshot` on startup /
+/// reconnect to rebuild its local mirror from scratch; subsequent
+/// updates arrive as scoped `SceneEvent`s (each carrying its
+/// `plate_id`).
+///
+/// Mesh buffers are *not* included — only their headers; the
+/// frontend fetches the buffers per-mesh via `scene_mesh_buffers`
+/// (see PR-2-2's mesh-transport refactor).
 #[derive(Debug, Clone, Serialize)]
 pub struct SceneSnapshot {
+    /// Stable per-project identifier baked at project creation.
+    pub project_uuid: String,
+    /// Filesystem path the project was loaded from (or `None`
+    /// for an unsaved in-memory project).
+    pub source_path: Option<String>,
+    /// Cascade handle the user loaded via `cascade_load`.
+    /// `None` at startup; bound after first load.
+    pub cascade_handle: Option<u64>,
+    /// User-tier cascade overrides (apply across all plates).
+    pub user_overrides: std::collections::HashMap<String, String>,
+    /// File-level 3MF metadata (Title, Designer, License, …)
+    /// preserved across save/load.
+    pub file_metadata: std::collections::BTreeMap<String, String>,
+    /// Scene-wide mesh registry. Headers only; the frontend
+    /// follows up per-mesh with `scene_mesh_buffers(id)` for
+    /// the binary vertex / normal / index data.
     pub meshes: Vec<MeshHeader>,
+    /// All plates in declaration order. Renderer routes per-plate
+    /// events to the matching entry by `plate_id`.
+    pub plates: Vec<PlateSnapshot>,
+    /// Stable id of the currently-active plate. Frontend renders
+    /// the matching `PlateSnapshot` as the foreground workspace
+    /// while presenting the others as tab affordances.
+    pub active_plate_id: crate::core::project::PlateId,
+}
+
+/// Per-plate slice of the snapshot — everything one plate's UI
+/// surface needs to render: identity / name / printer / metadata /
+/// bindings + scene contents (objects, selection, camera, gizmo,
+/// bed, exclusion zones, project + per-object overrides).
+#[derive(Debug, Clone, Serialize)]
+pub struct PlateSnapshot {
+    // ---- Plate identity / metadata ----------------------------
+    pub plate_id: crate::core::project::PlateId,
+    pub name: String,
+    pub metadata: crate::core::project::PlateMetadata,
+    pub printer: Option<crate::core::project::PrinterBinding>,
+    pub material_bindings: Vec<crate::core::project::MaterialBinding>,
+    pub project_overrides: std::collections::HashMap<String, String>,
+
+    // ---- Per-plate scene contents -----------------------------
     pub objects: Vec<SceneObject>,
     pub selection: Vec<ObjectId>,
     pub camera: CameraState,
     pub gizmo: GizmoState,
-    pub plate: Option<ActivePlate>,
+    /// Active build plate identity + transform on this plate
+    /// (the bed surface selection — distinct from the
+    /// multi-plate `plate_id` field above).
+    pub build_plate: Option<ActivePlate>,
     pub exclusion_zones: Vec<ExclusionZone>,
-    /// Active bed visualization + bounds. `None` until the user
-    /// selects a printer.
     pub bed: Option<BedMesh>,
+    pub object_overrides: std::collections::HashMap<
+        ObjectId,
+        std::collections::HashMap<String, String>,
+    >,
 }
 
 /// Snapshot of the scene state. Frontend calls this on startup /
@@ -62,24 +112,43 @@ pub struct SceneSnapshot {
 pub fn scene_snapshot(state: State<Arc<Mutex<Project>>>) -> Result<SceneSnapshot, String> {
     let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let meshes = s.meshes.values().map(|m| m.header()).collect();
-    let scene = &s.active_plate().scene;
-    let objects = scene.objects.values().cloned().collect();
-    let selection: Vec<ObjectId> = {
-        let mut v: Vec<ObjectId> = scene.selection.iter().copied().collect();
-        v.sort();
-        v
-    };
+    let plates: Vec<PlateSnapshot> = s.plates.iter().map(plate_snapshot).collect();
+    let active_plate_id = s.active_plate().id;
     let _ = HashSet::<ObjectId>::new(); // silence unused-import on certain feature builds
     Ok(SceneSnapshot {
+        project_uuid: s.uuid.to_string(),
+        source_path: s
+            .source_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned()),
+        cascade_handle: s.cascade_handle,
+        user_overrides: s.user_overrides.clone(),
+        file_metadata: s.file_metadata.clone(),
         meshes,
-        objects,
-        selection,
-        camera: scene.camera.clone(),
-        gizmo: scene.gizmo.clone(),
-        plate: scene.plate.clone(),
-        exclusion_zones: scene.exclusion_zones.clone(),
-        bed: scene.bed.clone(),
+        plates,
+        active_plate_id,
     })
+}
+
+fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
+    let mut selection: Vec<ObjectId> = plate.scene.selection.iter().copied().collect();
+    selection.sort();
+    PlateSnapshot {
+        plate_id: plate.id,
+        name: plate.name.clone(),
+        metadata: plate.metadata.clone(),
+        printer: plate.printer.clone(),
+        material_bindings: plate.material_bindings.clone(),
+        project_overrides: plate.project_overrides.clone(),
+        objects: plate.scene.objects.values().cloned().collect(),
+        selection,
+        camera: plate.scene.camera.clone(),
+        gizmo: plate.scene.gizmo.clone(),
+        build_plate: plate.scene.plate.clone(),
+        exclusion_zones: plate.scene.exclusion_zones.clone(),
+        bed: plate.scene.bed.clone(),
+        object_overrides: plate.scene.object_overrides.clone(),
+    }
 }
 
 /// Install the active printer's bed visualization + bounds. Pass
@@ -336,11 +405,13 @@ pub fn scene_auto_arrange(
     let Some(bed) = s.active_plate().scene.bed.clone() else {
         return Ok(vec![]);
     };
+    let plate_id = s.active_plate().id;
     let plan = super::arrange::plan_arrangement(&s, &bed);
     let (mut events, un_placed) = super::arrange::apply_arrangement(&mut s, plan);
     drop(s);
     if !un_placed.is_empty() {
         events.push(SceneEvent::AutoArrangeOverflow {
+            plate_id,
             un_placed: un_placed.clone(),
         });
     }
@@ -658,10 +729,11 @@ pub fn scene_load_3mf(
     for new_mesh in project.meshes {
         let mesh_id = s.register_mesh(new_mesh);
         let header = s.meshes.get(&mesh_id).unwrap().header();
-        all_events.push(SceneEvent::MeshLoaded(header));
+        all_events.push(SceneEvent::MeshLoaded { mesh: header });
         mesh_ids.push(mesh_id);
     }
 
+    let active_plate_id = s.active_plate().id;
     let mut loaded = Vec::with_capacity(project.objects.len());
     for obj in project.objects {
         let mesh_id = mesh_ids[obj.mesh_idx];
@@ -674,7 +746,10 @@ pub fn scene_load_3mf(
             parent: None,
         });
         let obj_clone = s.active_plate().scene.objects.get(&object_id).unwrap().clone();
-        all_events.push(SceneEvent::ObjectAdded(obj_clone));
+        all_events.push(SceneEvent::ObjectAdded {
+            plate_id: active_plate_id,
+            object: obj_clone,
+        });
         loaded.push(LoadedObject {
             mesh_id,
             object_id,
@@ -693,4 +768,80 @@ pub fn scene_load_3mf(
         file_metadata: project.file_metadata,
         embedded_settings: project.embedded_settings,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::project::{PlateId, PrinterBinding, Project};
+    use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
+    use crate::core::printer::profile::BoundingBox;
+    use crate::core::scene::transform::Transform;
+
+    fn unit_cube_mesh() -> NewMesh {
+        NewMesh {
+            vertices: vec![0.0; 24],
+            normals: vec![0.0; 24],
+            indices: vec![0, 1, 2],
+            bounding_box: BoundingBox {
+                min: [0.0, 0.0, 0.0],
+                max: [1.0, 1.0, 1.0],
+            },
+            provenance: MeshProvenance::Primitive("cube".into()),
+        }
+    }
+
+    #[test]
+    fn plate_snapshot_carries_metadata_and_scene() {
+        let mut p = Project::default();
+        p.plates[0].printer = Some(PrinterBinding {
+            printer_identity: "bambu-a1-mini".into(),
+            build_plate_identity: "Textured PEI".into(),
+        });
+        p.plates[0].metadata.cycle_count = 5;
+        p.plates[0].name = "My Plate".into();
+        let mesh_id = p.register_mesh(unit_cube_mesh());
+        let obj_id = p.register_object(NewSceneObject {
+            mesh: mesh_id,
+            transform: Transform::IDENTITY,
+            name: "cube".into(),
+            visible: true,
+            extruder_id: Some(2),
+            parent: None,
+        });
+
+        let snap = plate_snapshot(&p.plates[0]);
+        assert_eq!(snap.plate_id, PlateId(1));
+        assert_eq!(snap.name, "My Plate");
+        assert_eq!(snap.metadata.cycle_count, 5);
+        assert!(snap.printer.is_some());
+        assert_eq!(snap.objects.len(), 1);
+        assert_eq!(snap.objects[0].id, obj_id);
+        assert_eq!(snap.objects[0].extruder_id, Some(2));
+    }
+
+    #[test]
+    fn plate_snapshot_selection_is_sorted() {
+        let mut p = Project::default();
+        let mesh_id = p.register_mesh(unit_cube_mesh());
+        let a = p.register_object(NewSceneObject::at_origin(mesh_id, "a"));
+        let b = p.register_object(NewSceneObject::at_origin(mesh_id, "b"));
+        let c = p.register_object(NewSceneObject::at_origin(mesh_id, "c"));
+        // Insert in non-sorted order.
+        p.plates[0].scene.selection.insert(b);
+        p.plates[0].scene.selection.insert(a);
+        p.plates[0].scene.selection.insert(c);
+
+        let snap = plate_snapshot(&p.plates[0]);
+        assert_eq!(snap.selection, vec![a, b, c]);
+    }
+
+    #[test]
+    fn plate_snapshot_serializes_with_plate_id() {
+        let p = Project::default();
+        let snap = plate_snapshot(&p.plates[0]);
+        let json = serde_json::to_value(&snap).unwrap();
+        assert_eq!(json["plate_id"], 1);
+        assert_eq!(json["name"], "Plate 1");
+    }
 }

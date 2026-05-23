@@ -18,49 +18,90 @@ use crate::core::project::model::PlateId;
 use serde::Serialize;
 
 /// One diff payload the renderer applies to its local mirror.
+///
+/// **Variant convention (PR-5-2 phase C):** Every variant uses
+/// struct-shape fields (not tuple shape) so consumers can pattern
+/// match by name and so new fields can land without re-rolling
+/// the wire shape. Every plate-scoped variant carries
+/// `plate_id: PlateId` as the first field so the frontend mirror
+/// can route the event to the right per-plate cache.
+///
+/// Scene-wide variants (mesh registry, project save/load) don't
+/// have `plate_id`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum SceneEvent {
-    MeshLoaded(MeshHeader),
-    ObjectAdded(SceneObject),
+    // ---- Scene-wide -------------------------------------------------
+    /// A mesh was added to the scene-wide mesh registry. Meshes
+    /// live on `Project.meshes` (not per-plate) so this event
+    /// carries no `plate_id` — the same mesh can be referenced by
+    /// objects on multiple plates.
+    MeshLoaded {
+        mesh: MeshHeader,
+    },
+
+    // ---- Per-plate scene-graph deltas -------------------------------
+    ObjectAdded {
+        plate_id: PlateId,
+        object: SceneObject,
+    },
     /// Full updated object — simpler than diff compression for MVP.
     /// PR-2-9 / PR-2-11 can introduce per-field diffs later if the
     /// 5 ms p99 budget is tight.
-    ObjectUpdated(SceneObject),
+    ObjectUpdated {
+        plate_id: PlateId,
+        object: SceneObject,
+    },
     ObjectRemoved {
-        id: ObjectId,
+        plate_id: PlateId,
+        object_id: ObjectId,
     },
     SelectionChanged {
+        plate_id: PlateId,
         selected: Vec<ObjectId>,
     },
-    GizmoChanged(GizmoState),
-    CameraChanged(CameraState),
-    /// Active bed payload changed (printer switch). Renderer
-    /// redraws the grid + origin marker + exclusion-zone overlays
-    /// from this. None means "no active printer / clear the bed".
-    BedChanged(Option<BedMesh>),
-    /// Object is currently out of bounds. Non-blocking; the user
-    /// fixes it or accepts. Empty `reasons` is impossible (the
-    /// scene only emits this on actual violations) but the field
-    /// is plural since multiple reasons can apply (off-bed *and*
-    /// below z=0).
+    GizmoChanged {
+        plate_id: PlateId,
+        gizmo: GizmoState,
+    },
+    CameraChanged {
+        plate_id: PlateId,
+        camera: CameraState,
+    },
+    /// A plate's bed payload changed (printer switch on this
+    /// plate). Renderer redraws the grid + origin marker +
+    /// exclusion-zone overlays from this. `bed: None` means "no
+    /// active printer on this plate / clear the bed."
+    BedChanged {
+        plate_id: PlateId,
+        bed: Option<BedMesh>,
+    },
+    /// Object is currently out of bounds on its plate.
+    /// Non-blocking; the user fixes it or accepts. Empty
+    /// `reasons` is impossible (the scene only emits this on
+    /// actual violations) but the field is plural since multiple
+    /// reasons can apply (off-bed *and* below z=0).
     ObjectOutOfBounds {
-        id: ObjectId,
+        plate_id: PlateId,
+        object_id: ObjectId,
         reasons: Vec<OutOfBoundsReason>,
     },
-    /// Non-uniform scale was just applied (factor components differ).
-    /// Non-blocking — the renderer pairs this with the ObjectUpdated
-    /// to flag the affected object in the UI, since dimensional
-    /// cascade settings (line widths, top-surface thresholds) assume
-    /// physical extents and a stretched object skews those.
+    /// Non-uniform scale was just applied to an object (factor
+    /// components differ). Non-blocking — the renderer pairs
+    /// this with the ObjectUpdated to flag the affected object
+    /// in the UI, since dimensional cascade settings (line
+    /// widths, top-surface thresholds) assume physical extents
+    /// and a stretched object skews those.
     NonUniformScale {
-        id: ObjectId,
+        plate_id: PlateId,
+        object_id: ObjectId,
     },
-    /// Auto-arrange could not fit every visible object. Non-blocking;
-    /// the placed objects still moved. UI flags the listed ids in
-    /// the outliner so the user can resize / remove / split to a
-    /// new plate (Phase 5).
+    /// Auto-arrange on a plate could not fit every visible object.
+    /// Non-blocking; the placed objects still moved. UI flags the
+    /// listed ids in the outliner so the user can resize / remove /
+    /// move to a different plate (PR-5-11).
     AutoArrangeOverflow {
+        plate_id: PlateId,
         un_placed: Vec<ObjectId>,
     },
     /// A new plate was added (PR-5-2). The frontend mirror
@@ -122,14 +163,14 @@ impl SceneEvent {
     /// statement in PR-2-9.
     pub fn name(&self) -> &'static str {
         match self {
-            Self::MeshLoaded(_) => "scene:mesh_loaded",
-            Self::ObjectAdded(_) => "scene:object_added",
-            Self::ObjectUpdated(_) => "scene:object_updated",
+            Self::MeshLoaded { .. } => "scene:mesh_loaded",
+            Self::ObjectAdded { .. } => "scene:object_added",
+            Self::ObjectUpdated { .. } => "scene:object_updated",
             Self::ObjectRemoved { .. } => "scene:object_removed",
             Self::SelectionChanged { .. } => "scene:selection_changed",
-            Self::GizmoChanged(_) => "scene:gizmo_changed",
-            Self::CameraChanged(_) => "scene:camera_changed",
-            Self::BedChanged(_) => "scene:bed_changed",
+            Self::GizmoChanged { .. } => "scene:gizmo_changed",
+            Self::CameraChanged { .. } => "scene:camera_changed",
+            Self::BedChanged { .. } => "scene:bed_changed",
             Self::ObjectOutOfBounds { .. } => "scene:object_out_of_bounds",
             Self::NonUniformScale { .. } => "scene:non_uniform_scale",
             Self::AutoArrangeOverflow { .. } => "scene:auto_arrange_overflow",

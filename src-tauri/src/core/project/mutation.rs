@@ -461,7 +461,10 @@ impl Project {
             .map(|b| b.exclusion_zones.clone())
             .unwrap_or_default();
         plate.scene.bed = new_bed.clone();
-        Ok(vec![SceneEvent::BedChanged(new_bed)])
+        Ok(vec![SceneEvent::BedChanged {
+            plate_id,
+            bed: new_bed,
+        }])
     }
 
     // ---- Mesh / object load + place -------------------------------
@@ -484,6 +487,7 @@ impl Project {
         let obj_id =
             self.register_object(NewSceneObject::at_origin(mesh_id, obj_name));
 
+        let plate_id = self.active_plate().id;
         let mesh_header = self.meshes.get(&mesh_id).unwrap().header();
         let obj_clone = self
             .active_plate()
@@ -493,8 +497,11 @@ impl Project {
             .unwrap()
             .clone();
         let events = vec![
-            SceneEvent::MeshLoaded(mesh_header),
-            SceneEvent::ObjectAdded(obj_clone),
+            SceneEvent::MeshLoaded { mesh: mesh_header },
+            SceneEvent::ObjectAdded {
+                plate_id,
+                object: obj_clone,
+            },
         ];
         (mesh_id, obj_id, events)
     }
@@ -524,7 +531,7 @@ impl Project {
                 let id = self.register_mesh(new_mesh);
                 self.primitive_cache.push((kind, params, id));
                 let header = self.meshes.get(&id).unwrap().header();
-                events.push(SceneEvent::MeshLoaded(header));
+                events.push(SceneEvent::MeshLoaded { mesh: header });
                 id
             }
         };
@@ -574,6 +581,7 @@ impl Project {
             extruder_id: None,
             parent: None,
         });
+        let plate_id = self.active_plate().id;
         let obj_clone = self
             .active_plate()
             .scene
@@ -581,7 +589,10 @@ impl Project {
             .get(&obj_id)
             .unwrap()
             .clone();
-        events.push(SceneEvent::ObjectAdded(obj_clone));
+        events.push(SceneEvent::ObjectAdded {
+            plate_id,
+            object: obj_clone,
+        });
         events.extend(self.out_of_bounds_event(obj_id));
         (mesh_id, obj_id, events)
     }
@@ -592,7 +603,9 @@ impl Project {
     /// `SelectionChanged` event (sorted for deterministic output)
     /// or empty if the selection didn't actually change.
     pub fn select(&mut self, ids: &[ObjectId], mode: SelectMode) -> Vec<SceneEvent> {
-        let plate = &mut self.plates[self.active_plate].scene;
+        let active = self.active_plate;
+        let plate_id = self.plates[active].id;
+        let plate = &mut self.plates[active].scene;
         let before: HashSet<ObjectId> = plate.selection.iter().copied().collect();
         match mode {
             SelectMode::Replace => {
@@ -625,17 +638,25 @@ impl Project {
         }
         let mut sorted: Vec<ObjectId> = plate.selection.iter().copied().collect();
         sorted.sort();
-        vec![SceneEvent::SelectionChanged { selected: sorted }]
+        vec![SceneEvent::SelectionChanged {
+            plate_id,
+            selected: sorted,
+        }]
     }
 
     /// Clear the active plate's selection.
     pub fn deselect_all(&mut self) -> Vec<SceneEvent> {
-        let plate = &mut self.plates[self.active_plate].scene;
+        let active = self.active_plate;
+        let plate_id = self.plates[active].id;
+        let plate = &mut self.plates[active].scene;
         if plate.selection.is_empty() {
             return Vec::new();
         }
         plate.selection.clear();
-        vec![SceneEvent::SelectionChanged { selected: Vec::new() }]
+        vec![SceneEvent::SelectionChanged {
+            plate_id,
+            selected: Vec::new(),
+        }]
     }
 
     // ---- Per-object transforms (active plate) ---------------------
@@ -647,6 +668,7 @@ impl Project {
         delta: Vec3,
     ) -> Result<Vec<SceneEvent>, SceneOpError> {
         let active = self.active_plate;
+        let plate_id = self.plates[active].id;
         let obj = self.plates[active]
             .scene
             .objects
@@ -654,7 +676,10 @@ impl Project {
             .ok_or(SceneOpError::UnknownObject(id))?;
         obj.transform = Transform::translation(delta).compose(obj.transform);
         let clone = obj.clone();
-        let mut events = vec![SceneEvent::ObjectUpdated(clone)];
+        let mut events = vec![SceneEvent::ObjectUpdated {
+            plate_id,
+            object: clone,
+        }];
         events.extend(self.out_of_bounds_event(id));
         Ok(events)
     }
@@ -684,6 +709,7 @@ impl Project {
                 .clone()
         };
 
+        let plate_id = self.plates[active].id;
         let obj = self.plates[active].scene.objects.get_mut(&id).unwrap();
         let pivot = match pivot_override {
             Some(p) => p,
@@ -705,7 +731,10 @@ impl Project {
             .compose(Transform::translation(-pivot));
         obj.transform = rotate_around_pivot.compose(obj.transform);
         let clone = obj.clone();
-        let mut events = vec![SceneEvent::ObjectUpdated(clone)];
+        let mut events = vec![SceneEvent::ObjectUpdated {
+            plate_id,
+            object: clone,
+        }];
         events.extend(self.out_of_bounds_event(id));
         Ok(events)
     }
@@ -721,6 +750,7 @@ impl Project {
         factor: Vec3,
     ) -> Result<Vec<SceneEvent>, SceneOpError> {
         let active = self.active_plate;
+        let plate_id = self.plates[active].id;
         let obj = self.plates[active]
             .scene
             .objects
@@ -728,9 +758,15 @@ impl Project {
             .ok_or(SceneOpError::UnknownObject(id))?;
         obj.transform = Transform::scale(factor).compose(obj.transform);
         let clone = obj.clone();
-        let mut events = vec![SceneEvent::ObjectUpdated(clone)];
+        let mut events = vec![SceneEvent::ObjectUpdated {
+            plate_id,
+            object: clone,
+        }];
         if is_non_uniform(factor) {
-            events.push(SceneEvent::NonUniformScale { id });
+            events.push(SceneEvent::NonUniformScale {
+                plate_id,
+                object_id: id,
+            });
         }
         events.extend(self.out_of_bounds_event(id));
         Ok(events)
@@ -757,10 +793,14 @@ impl Project {
             .compose(Transform::scale(factor))
             .compose(Transform::translation(-center));
         let active = self.active_plate;
+        let plate_id = self.plates[active].id;
         let obj = self.plates[active].scene.objects.get_mut(&id).unwrap();
         obj.transform = mirror_around_center.compose(obj.transform);
         let clone = obj.clone();
-        let mut events = vec![SceneEvent::ObjectUpdated(clone)];
+        let mut events = vec![SceneEvent::ObjectUpdated {
+            plate_id,
+            object: clone,
+        }];
         events.extend(self.out_of_bounds_event(id));
         Ok(events)
     }
@@ -798,6 +838,7 @@ impl Project {
             ((mesh_bb.min[2] + mesh_bb.max[2]) * 0.5) as f32,
         );
 
+        let plate_id = self.plates[active].id;
         let obj = self.plates[active].scene.objects.get_mut(&id).unwrap();
         let current = obj.transform.to_mat4();
 
@@ -847,7 +888,10 @@ impl Project {
         obj.transform = Transform::from_mat4(final_xform);
 
         let clone = obj.clone();
-        let mut events = vec![SceneEvent::ObjectUpdated(clone)];
+        let mut events = vec![SceneEvent::ObjectUpdated {
+            plate_id,
+            object: clone,
+        }];
         events.extend(self.out_of_bounds_event(id));
         Ok(events)
     }
@@ -861,6 +905,7 @@ impl Project {
         transform: Transform,
     ) -> Result<Vec<SceneEvent>, SceneOpError> {
         let active = self.active_plate;
+        let plate_id = self.plates[active].id;
         let obj = self.plates[active]
             .scene
             .objects
@@ -868,7 +913,10 @@ impl Project {
             .ok_or(SceneOpError::UnknownObject(id))?;
         obj.transform = transform;
         let clone = obj.clone();
-        let mut events = vec![SceneEvent::ObjectUpdated(clone)];
+        let mut events = vec![SceneEvent::ObjectUpdated {
+            plate_id,
+            object: clone,
+        }];
         events.extend(self.out_of_bounds_event(id));
         Ok(events)
     }
@@ -878,12 +926,17 @@ impl Project {
     /// per id plus (if the selection changed) a `SelectionChanged`
     /// event.
     pub fn delete_objects(&mut self, ids: &[ObjectId]) -> Vec<SceneEvent> {
-        let plate = &mut self.plates[self.active_plate].scene;
+        let active = self.active_plate;
+        let plate_id = self.plates[active].id;
+        let plate = &mut self.plates[active].scene;
         let mut events = Vec::new();
         let mut selection_changed = false;
         for id in ids {
             if plate.objects.remove(id).is_some() {
-                events.push(SceneEvent::ObjectRemoved { id: *id });
+                events.push(SceneEvent::ObjectRemoved {
+                    plate_id,
+                    object_id: *id,
+                });
                 if plate.selection.remove(id) {
                     selection_changed = true;
                 }
@@ -893,7 +946,10 @@ impl Project {
             let mut sorted: Vec<ObjectId> =
                 plate.selection.iter().copied().collect();
             sorted.sort();
-            events.push(SceneEvent::SelectionChanged { selected: sorted });
+            events.push(SceneEvent::SelectionChanged {
+                plate_id,
+                selected: sorted,
+            });
         }
         events
     }
@@ -921,6 +977,7 @@ impl Project {
             extruder_id: original.extruder_id,
             parent: original.parent,
         });
+        let plate_id = self.active_plate().id;
         let cloned_obj = self
             .active_plate()
             .scene
@@ -928,28 +985,44 @@ impl Project {
             .get(&new_id)
             .unwrap()
             .clone();
-        Ok((new_id, vec![SceneEvent::ObjectAdded(cloned_obj)]))
+        Ok((
+            new_id,
+            vec![SceneEvent::ObjectAdded {
+                plate_id,
+                object: cloned_obj,
+            }],
+        ))
     }
 
     /// Set the gizmo mode + pivot on the active plate. Returns one
     /// event when state actually changed.
     pub fn set_gizmo(&mut self, new_gizmo: GizmoState) -> Vec<SceneEvent> {
-        let plate = &mut self.plates[self.active_plate].scene;
+        let active = self.active_plate;
+        let plate_id = self.plates[active].id;
+        let plate = &mut self.plates[active].scene;
         if (plate.gizmo.mode == new_gizmo.mode)
             && (plate.gizmo.pivot == new_gizmo.pivot)
         {
             return Vec::new();
         }
         plate.gizmo = new_gizmo.clone();
-        vec![SceneEvent::GizmoChanged(new_gizmo)]
+        vec![SceneEvent::GizmoChanged {
+            plate_id,
+            gizmo: new_gizmo,
+        }]
     }
 
     /// Replace the camera state on the active plate. Always emits
     /// an event (camera state's equality check is expensive enough
     /// to skip).
     pub fn set_camera(&mut self, camera: CameraState) -> Vec<SceneEvent> {
-        self.plates[self.active_plate].scene.camera = camera.clone();
-        vec![SceneEvent::CameraChanged(camera)]
+        let active = self.active_plate;
+        let plate_id = self.plates[active].id;
+        self.plates[active].scene.camera = camera.clone();
+        vec![SceneEvent::CameraChanged {
+            plate_id,
+            camera,
+        }]
     }
 
     // ---- Per-object overrides (PR-5-7) ----------------------------
@@ -1119,8 +1192,14 @@ impl Project {
         }
 
         let mut events = vec![
-            SceneEvent::ObjectRemoved { id: object_id },
-            SceneEvent::ObjectAdded(final_obj),
+            SceneEvent::ObjectRemoved {
+                plate_id: from_plate,
+                object_id,
+            },
+            SceneEvent::ObjectAdded {
+                plate_id: to_plate,
+                object: final_obj,
+            },
         ];
         if was_selected {
             let mut sorted: Vec<ObjectId> = self.plates[from_idx]
@@ -1130,7 +1209,10 @@ impl Project {
                 .copied()
                 .collect();
             sorted.sort();
-            events.push(SceneEvent::SelectionChanged { selected: sorted });
+            events.push(SceneEvent::SelectionChanged {
+                plate_id: from_plate,
+                selected: sorted,
+            });
         }
         Ok((report, events))
     }
@@ -1203,6 +1285,7 @@ impl Project {
     /// transform op so the UI can flash a non-blocking warning the
     /// instant the user nudges an object off the plate.
     fn out_of_bounds_event(&self, object_id: ObjectId) -> Option<SceneEvent> {
+        let plate_id = self.active_plate().id;
         let plate = &self.active_plate().scene;
         let bed = plate.bed.as_ref()?;
         let obj = plate.objects.get(&object_id)?;
@@ -1212,7 +1295,8 @@ impl Project {
             None
         } else {
             Some(SceneEvent::ObjectOutOfBounds {
-                id: object_id,
+                plate_id,
+                object_id,
                 reasons,
             })
         }
@@ -1393,8 +1477,8 @@ mod tests {
             2,
             "load_mesh emits mesh_loaded + object_added"
         );
-        assert!(matches!(events[0], SceneEvent::MeshLoaded(_)));
-        assert!(matches!(events[1], SceneEvent::ObjectAdded(_)));
+        assert!(matches!(events[0], SceneEvent::MeshLoaded { .. }));
+        assert!(matches!(events[1], SceneEvent::ObjectAdded { .. }));
         (mesh_id, obj_id)
     }
 
@@ -1502,7 +1586,7 @@ mod tests {
         let events = p.select(&[obj], SelectMode::Replace);
         assert_eq!(events.len(), 1);
         match &events[0] {
-            SceneEvent::SelectionChanged { selected } => {
+            SceneEvent::SelectionChanged { selected, .. } => {
                 assert_eq!(selected, &vec![obj]);
             }
             other => panic!("expected SelectionChanged, got {other:?}"),
@@ -1511,7 +1595,7 @@ mod tests {
         let events = p.translate_object(obj, Vec3::new(5.0, 0.0, 0.0)).unwrap();
         assert_eq!(events.len(), 1);
         match &events[0] {
-            SceneEvent::ObjectUpdated(o) => {
+            SceneEvent::ObjectUpdated { object: o, .. } => {
                 let center = o.transform.apply_point(Vec3::new(0.5, 0.5, 0.5));
                 assert!((center - Vec3::new(5.5, 0.5, 0.5)).length() < 1e-5);
             }
@@ -1534,7 +1618,7 @@ mod tests {
         let (_mesh, obj) = add_cube(&mut p);
         let events = p.select(&[obj, ObjectId(9999)], SelectMode::Replace);
         match &events[0] {
-            SceneEvent::SelectionChanged { selected } => {
+            SceneEvent::SelectionChanged { selected, .. } => {
                 assert_eq!(selected, &vec![obj], "unknown id filtered out");
             }
             _ => unreachable!(),
@@ -1548,7 +1632,7 @@ mod tests {
         let _ = p.select(&[obj], SelectMode::Replace);
         let events = p.deselect_all();
         match &events[0] {
-            SceneEvent::SelectionChanged { selected } => assert!(selected.is_empty()),
+            SceneEvent::SelectionChanged { selected, .. } => assert!(selected.is_empty()),
             _ => unreachable!(),
         }
         // Second deselect_all is a no-op.
@@ -1594,9 +1678,12 @@ mod tests {
         let _ = p.select(&[obj1, obj2], SelectMode::Replace);
         let events = p.delete_objects(&[obj1]);
         assert_eq!(events.len(), 2);
-        assert!(matches!(events[0], SceneEvent::ObjectRemoved { id } if id == obj1));
+        assert!(matches!(
+            events[0],
+            SceneEvent::ObjectRemoved { object_id, .. } if object_id == obj1,
+        ));
         match &events[1] {
-            SceneEvent::SelectionChanged { selected } => {
+            SceneEvent::SelectionChanged { selected, .. } => {
                 assert_eq!(selected, &vec![obj2]);
             }
             _ => unreachable!(),
@@ -1610,7 +1697,7 @@ mod tests {
         let (new_id, events) = p.duplicate_object(obj).unwrap();
         assert_ne!(new_id, obj);
         match &events[0] {
-            SceneEvent::ObjectAdded(o) => {
+            SceneEvent::ObjectAdded { object: o, .. } => {
                 let new_corner = o.transform.apply_point(Vec3::ZERO);
                 assert!((new_corner - Vec3::new(10.0, 0.0, 0.0)).length() < 1e-5);
                 assert!(o.name.contains("(copy)"));
@@ -1644,7 +1731,7 @@ mod tests {
         next.mode = GizmoMode::Rotate;
         let events = p.set_gizmo(next);
         assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], SceneEvent::GizmoChanged(_)));
+        assert!(matches!(events[0], SceneEvent::GizmoChanged { .. }));
     }
 
     #[test]
@@ -1723,10 +1810,10 @@ mod tests {
         let mut p = Project::default();
         let (_, obj) = add_cube(&mut p);
         let events = p.scale_object(obj, Vec3::new(2.0, 1.0, 1.0)).unwrap();
-        assert!(matches!(events[0], SceneEvent::ObjectUpdated(_)));
+        assert!(matches!(events[0], SceneEvent::ObjectUpdated { .. }));
         assert!(matches!(
             events.get(1),
-            Some(SceneEvent::NonUniformScale { id }) if *id == obj,
+            Some(SceneEvent::NonUniformScale { object_id, .. }) if *object_id == obj,
         ));
     }
 
@@ -1806,14 +1893,14 @@ mod tests {
         let (_, _, events1) = p.add_from_primitive(PrimitiveKind::Cube, params);
         assert!(events1
             .iter()
-            .any(|e| matches!(e, SceneEvent::MeshLoaded(_))));
+            .any(|e| matches!(e, SceneEvent::MeshLoaded { .. })));
         let (_, _, events2) = p.add_from_primitive(PrimitiveKind::Cube, params);
         assert!(!events2
             .iter()
-            .any(|e| matches!(e, SceneEvent::MeshLoaded(_))));
+            .any(|e| matches!(e, SceneEvent::MeshLoaded { .. })));
         assert!(events2
             .iter()
-            .any(|e| matches!(e, SceneEvent::ObjectAdded(_))));
+            .any(|e| matches!(e, SceneEvent::ObjectAdded { .. })));
     }
 
     // ---- OOB checks against active plate's bed --------------------
@@ -1835,7 +1922,10 @@ mod tests {
         let mut p = Project::default();
         let (_, obj) = add_cube(&mut p);
         let bed_events = p.set_active_printer(Some(&a1_mini_for_test()));
-        assert!(matches!(bed_events[0], SceneEvent::BedChanged(Some(_))));
+        assert!(matches!(
+            bed_events[0],
+            SceneEvent::BedChanged { bed: Some(_), .. },
+        ));
 
         let events = p.translate_object(obj, Vec3::new(50.0, 0.0, 0.0)).unwrap();
         assert!(events
@@ -1845,7 +1935,8 @@ mod tests {
         let events = p.translate_object(obj, Vec3::new(200.0, 0.0, 0.0)).unwrap();
         assert!(events.iter().any(|e| matches!(
             e,
-            SceneEvent::ObjectOutOfBounds { id, reasons } if *id == obj && !reasons.is_empty()
+            SceneEvent::ObjectOutOfBounds { object_id, reasons, .. }
+                if *object_id == obj && !reasons.is_empty()
         )));
     }
 
@@ -2173,8 +2264,11 @@ mod tests {
         let (report, events) = p.move_object(PlateId(1), id_b, obj).unwrap();
         assert_eq!(report.object_id, obj);
         assert!(report.repositioned.is_none());
-        assert!(matches!(events[0], SceneEvent::ObjectRemoved { id } if id == obj));
-        assert!(matches!(events[1], SceneEvent::ObjectAdded(_)));
+        assert!(matches!(
+            events[0],
+            SceneEvent::ObjectRemoved { object_id, .. } if object_id == obj,
+        ));
+        assert!(matches!(events[1], SceneEvent::ObjectAdded { .. }));
         assert!(!p.plates[0].scene.objects.contains_key(&obj));
         assert!(p.plates[1].scene.objects.contains_key(&obj));
     }
