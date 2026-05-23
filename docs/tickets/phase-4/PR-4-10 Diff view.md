@@ -1,6 +1,6 @@
 # PR-4-10 — Diff view (vs printer default, vs last save)
 
-Status: ❌ open.
+Status: ✅ shipped — `src/settings/diff.ts`: `computeDiff` pure helper (handles changes + additions + removals), `passesDiff(key, mode, diffSet)`, localStorage persistence keyed `n3o.settings.diff_mode`. SettingsPanel adds a third `.sp-tabs` segmented control (`All` / `Diff: default` / `Diff: save`) next to the mode filter. For "from-default" the panel derives a printer-only baseline by substituting `cascade_fallback` for any key with an override (the cascade resolver already tracks this); for "from-save" it snapshots `resolved` at panel mount until Phase 5 wires real project-save loading. 5 new vitest cases (80 → 85 frontend tests).
 
 **Scope.** Two diff modes the user can toggle on the settings panel
 to see at-a-glance what's changed:

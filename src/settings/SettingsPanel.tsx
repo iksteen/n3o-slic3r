@@ -54,6 +54,13 @@ import {
 } from "./resolve";
 import { winningLayerFor, type CascadeLayer } from "./layers";
 import { CascadeLadder, useLadderHover } from "./ladder/CascadeLadder";
+import {
+  computeDiff,
+  passesDiff,
+  readStoredDiffMode,
+  writeStoredDiffMode,
+  type DiffMode,
+} from "./diff";
 
 export interface SettingsPanelProps {
   /** Active printer profile. `null` = no printer selected; the panel
@@ -152,11 +159,53 @@ export function SettingsPanel(props: SettingsPanelProps) {
     context,
   );
 
-  // Apply visibility + mode + search to the option list. Pure;
-  // memoize to keep the render path bounded.
+  // Diff baselines (PR-4-10):
+  //   - "from-default": cascade resolved with no overrides. We
+  //     approximate by tracking the resolved map sans overrides
+  //     for the same printer + plate + filaments. Since the panel
+  //     receives `context` with overrides already merged, we
+  //     compute a printer-only baseline by stripping overrides
+  //     and re-resolving once per printer change. (Phase 5's
+  //     project model adds dedicated baseline tracking.)
+  //   - "from-save": snapshot of `resolved` at panel mount or at
+  //     project-save time. In-memory only for Phase 4; Phase 5's
+  //     project save populates from the .3mf load.
+  const [diffMode, setDiffMode] = useState<DiffMode>(() => readStoredDiffMode());
+  useEffect(() => writeStoredDiffMode(diffMode), [diffMode]);
+  const savedBaselineRef = useRef<ResolvedMap | null>(null);
+  useEffect(() => {
+    if (savedBaselineRef.current === null && Object.keys(resolved).length > 0) {
+      savedBaselineRef.current = { ...resolved };
+    }
+  }, [resolved]);
+  // For "from-default" we approximate with the cascade resolve
+  // minus project + object overrides — those are the tiers we
+  // know about at the frontend. Phase 5's project model adds a
+  // separate printer-only resolve.
+  const defaultBaseline = useMemo<ResolvedMap>(() => {
+    const out: ResolvedMap = {};
+    for (const [k, v] of Object.entries(resolved)) {
+      if (k in projectOverrides || k in objectOverrides) {
+        out[k] = { ...v, value: v.cascade_fallback ?? v.value };
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  }, [resolved, projectOverrides, objectOverrides]);
+  const diffSet = useMemo(() => {
+    if (diffMode === "all") return new Set<string>();
+    if (diffMode === "from-default") return computeDiff(resolved, defaultBaseline);
+    return computeDiff(resolved, savedBaselineRef.current ?? resolved);
+  }, [diffMode, resolved, defaultBaseline]);
+
+  // Apply visibility + mode + search + diff to the option list.
+  // Pure; memoize to keep the render path bounded.
   const visibleOptions = useMemo(() => {
-    return options.filter((o) => filterRow(o, mode, search));
-  }, [options, mode, search]);
+    return options.filter(
+      (o) => filterRow(o, mode, search) && passesDiff(o.key, diffMode, diffSet),
+    );
+  }, [options, mode, search, diffMode, diffSet]);
 
   const groups = useMemo(() => categorize(visibleOptions), [visibleOptions]);
 
@@ -247,6 +296,27 @@ export function SettingsPanel(props: SettingsPanelProps) {
           onChange={setMode}
           allowDevelop={import.meta.env.DEV}
         />
+        <div className="sp-tabs sp-tabs-diff" role="tablist" aria-label="Diff filter">
+          {(["all", "from-default", "from-save"] as DiffMode[]).map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="tab"
+              aria-selected={diffMode === m}
+              className={`sp-tab${diffMode === m ? " active" : ""}`}
+              onClick={() => setDiffMode(m)}
+              title={
+                m === "all"
+                  ? "Show all settings"
+                  : m === "from-default"
+                    ? "Show only settings overridden from cascade defaults"
+                    : "Show only settings changed since save"
+              }
+            >
+              {m === "all" ? "All" : m === "from-default" ? "Diff: default" : "Diff: save"}
+            </button>
+          ))}
+        </div>
         <div className="search-wrap flex items-center gap-2">
           <input
             type="search"
