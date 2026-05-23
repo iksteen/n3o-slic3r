@@ -23,8 +23,9 @@ import {
   makePerspectiveCamera,
 } from "./cameraControls";
 import { attachEventBridge, tauriMeshBufferProvider } from "./eventBridge";
+import { createGizmo, type GizmoApi } from "./gizmo";
 import { SceneMirror } from "./sceneMirror";
-import type { ObjectId, ProjectionMode } from "./types";
+import type { GizmoMode, ObjectId, ProjectionMode } from "./types";
 
 interface ToastMessage {
   id: number;
@@ -40,6 +41,7 @@ export function ViewportCanvas() {
   const [projection, setProjection] = useState<ProjectionMode>("Perspective");
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [selectedIds, setSelectedIds] = useState<ObjectId[]>([]);
+  const [gizmoMode, setGizmoMode] = useState<GizmoMode>("None");
 
   useEffect(() => {
     const container = containerRef.current;
@@ -79,6 +81,20 @@ export function ViewportCanvas() {
     scene.add(mirror.objectGroup);
     scene.add(mirror.bedGroup);
 
+    // Gizmo. TransformControls subscribes to `dragging-changed` so
+    // OrbitControls can be paused for the duration of a drag —
+    // otherwise the orbit fights the drag.
+    const gizmo: GizmoApi = createGizmo({
+      camera,
+      domElement: renderer.domElement,
+      scene,
+      mirror,
+    });
+    gizmo.controls.addEventListener("dragging-changed", (ev) => {
+      const dragging = (ev as { value: boolean }).value;
+      controls.enabled = !dragging;
+    });
+
     // ---- Event bridge -------------------------------------------------
     const detachToastsListener = mirror.onEvent((evt) => {
       switch (evt.kind) {
@@ -104,6 +120,12 @@ export function ViewportCanvas() {
           break;
         case "SelectionChanged":
           setSelectedIds([...evt.data.selected]);
+          gizmo.setSelection(evt.data.selected);
+          break;
+        case "GizmoChanged":
+          setGizmoMode(evt.data.mode);
+          gizmo.setMode(evt.data.mode);
+          gizmo.setPivotOverride(evt.data.pivot);
           break;
         case "BedChanged":
           if (evt.data) {
@@ -247,6 +269,7 @@ export function ViewportCanvas() {
       resizeObserver.disconnect();
       detachToastsListener();
       if (detachBridge) void detachBridge();
+      gizmo.dispose();
       controls.dispose();
       mirror.clear();
       renderer.dispose();
@@ -301,8 +324,38 @@ export function ViewportCanvas() {
           </div>
         </div>
         {selectedIds.length > 0 && (
-          <div className="bg-neutral-800/90 text-neutral-100 text-xs px-3 py-1 rounded shadow pointer-events-auto">
-            {selectedIds.length} selected · Del to remove
+          <div className="flex gap-2 pointer-events-auto">
+            <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
+              {(
+                [
+                  ["None", "·"],
+                  ["Translate", "T"],
+                  ["Rotate", "R"],
+                  ["Scale", "S"],
+                ] as [GizmoMode, string][]
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`px-3 py-1 ${
+                    gizmoMode === mode
+                      ? "bg-neutral-700"
+                      : "hover:bg-neutral-700/60"
+                  }`}
+                  onClick={() => {
+                    void invoke("scene_gizmo_set", {
+                      gizmo: { mode, pivot: null },
+                    });
+                  }}
+                  title={`Gizmo: ${mode}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="bg-neutral-800/90 text-neutral-100 text-xs px-3 py-1 rounded shadow">
+              {selectedIds.length} selected · Del to remove
+            </div>
           </div>
         )}
       </div>

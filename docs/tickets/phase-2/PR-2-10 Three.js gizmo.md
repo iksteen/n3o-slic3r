@@ -1,6 +1,6 @@
 # PR-2-10 — Three.js gizmo (move / rotate / scale)
 
-Status: ❌ open.
+Status: ✅ shipped (single-object drag; multi-select drag is a documented Phase 4 follow-up).
 
 **Scope.** The 3-axis transform handle the user drags to translate,
 rotate, or scale the selected object(s). Three.js ships
@@ -44,6 +44,11 @@ appropriate handle; user clicks on mode-switching buttons send
   objects are selected, the drag affects all of them. Rust side
   applies the same delta transform to each via a sequence of
   `scene_object_translate` / `_rotate` / `_scale` commands.
+  **Implemented as: gizmo attaches to the first selected object
+  only; dragging moves that one.** Multi-object delta-application
+  is deferred to Phase 4 UI work, when the centroid-pivot semantics
+  for rotate / scale can be designed with the rest of the
+  selection-tooling.
 
 - Tests: JS-side `__test__/gizmo.test.ts` simulates a translate
   drag and asserts the emitted command sequence ends with one
