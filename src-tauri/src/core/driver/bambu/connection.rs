@@ -31,7 +31,7 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::core::driver::status::{
-    BambuExtra, ConnectionState, DriverExtra, PrinterStatus,
+    BambuExtra, ConnectionState, DriverExtra, JobState, PrinterStatus,
 };
 use crate::core::driver::traits::{
     Driver, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle, SendPayload,
@@ -328,11 +328,107 @@ impl Driver for BambuDriver {
         })
     }
 
-    async fn command(&mut self, _cmd: PrinterCommand) -> Result<(), DriverError> {
-        // Implemented in PR-7a-6.
-        Err(DriverError::Other(
-            "BambuDriver::command not implemented yet (PR-7a-6)".into(),
-        ))
+    async fn command(&mut self, cmd: PrinterCommand) -> Result<(), DriverError> {
+        let client = self.client.clone().ok_or(DriverError::NotConnected)?;
+        let device_id = self.device_id.clone().ok_or(DriverError::NotConnected)?;
+
+        // State guards before publishing — invalid transitions
+        // return Other without contacting the printer.
+        let current_state = self
+            .status_tx
+            .borrow()
+            .job
+            .as_ref()
+            .map(|j| j.state.clone())
+            .unwrap_or(JobState::Idle);
+        let (verb, expected) = match cmd {
+            PrinterCommand::Pause => {
+                if !matches!(current_state, JobState::Printing) {
+                    return Err(DriverError::Other(format!(
+                        "cannot pause: printer is {current_state:?}, expected Printing"
+                    )));
+                }
+                ("pause", JobState::Paused)
+            }
+            PrinterCommand::Resume => {
+                if !matches!(current_state, JobState::Paused) {
+                    return Err(DriverError::Other(format!(
+                        "cannot resume: printer is {current_state:?}, expected Paused"
+                    )));
+                }
+                ("resume", JobState::Printing)
+            }
+            PrinterCommand::Stop => {
+                if matches!(current_state, JobState::Idle | JobState::Finished) {
+                    return Err(DriverError::Other(format!(
+                        "cannot stop: printer is {current_state:?}, no print in progress"
+                    )));
+                }
+                // Stop is acknowledged via Finished or Failed —
+                // Bambu firmware reports cancelled prints as FAILED.
+                ("stop", JobState::Failed(String::new()))
+            }
+        };
+
+        let sequence_id = self.next_sequence_id();
+        let body = serde_json::to_vec(&CommandRequest {
+            print: CommandBody {
+                sequence_id: &sequence_id,
+                command: verb,
+                param: "",
+            },
+        })
+        .map_err(|e| DriverError::Other(format!("serialize {verb}: {e}")))?;
+
+        // OpenBambuAPI documents pause/resume/stop at QoS 1
+        // ("higher priority"). Publish + await ack on the status
+        // stream.
+        let topic = format!("device/{device_id}/request");
+        client
+            .publish(&topic, QoS::AtLeastOnce, false, body)
+            .await
+            .map_err(|e| DriverError::Network(format!("publish {verb}: {e}")))?;
+
+        // Wait for the state to transition to the expected
+        // value. The 10s timeout matches the per-ticket spec.
+        let mut rx = self.status_tx.subscribe();
+        let deadline = Duration::from_secs(10);
+        let wait = async {
+            loop {
+                if rx.changed().await.is_err() {
+                    return Err(DriverError::Other("status stream closed".into()));
+                }
+                let snap = rx.borrow().clone();
+                let new_state = snap
+                    .job
+                    .as_ref()
+                    .map(|j| j.state.clone())
+                    .unwrap_or(JobState::Idle);
+                if state_satisfies(&new_state, &expected) {
+                    return Ok(());
+                }
+            }
+        };
+        tokio::time::timeout(deadline, wait).await.map_err(|_| {
+            DriverError::Protocol(format!("no ack for {verb} within 10s"))
+        })?
+    }
+}
+
+/// Loose state match — `Failed(_)` collapses to "any failed
+/// state" so `Stop` is acknowledged regardless of which failure
+/// reason Bambu firmware reports.
+fn state_satisfies(actual: &JobState, expected: &JobState) -> bool {
+    match (actual, expected) {
+        (JobState::Failed(_), JobState::Failed(_)) => true,
+        (JobState::Finished, JobState::Failed(_))
+        | (JobState::Failed(_), JobState::Finished) => {
+            // Stop ack can land as either Finished or Failed
+            // depending on whether the printer finishes the
+            // current layer before stopping.
+            true
+        }
+        (a, b) => std::mem::discriminant(a) == std::mem::discriminant(b),
     }
 }
 
@@ -347,6 +443,21 @@ struct PushAllCommand<'a> {
     command: &'a str,
     version: u8,
     push_target: u8,
+}
+
+/// `pause` / `resume` / `stop` MQTT command — shape from
+/// OpenBambuAPI `mqtt.md`. PR-7a-6 publishes these at QoS 1 per
+/// the doc's "higher priority" annotation.
+#[derive(Serialize)]
+struct CommandRequest<'a> {
+    print: CommandBody<'a>,
+}
+
+#[derive(Serialize)]
+struct CommandBody<'a> {
+    sequence_id: &'a str,
+    command: &'a str,
+    param: &'a str,
 }
 
 /// `project_file` MQTT command — shape from OpenBambuAPI
@@ -610,5 +721,46 @@ mod tests {
             s,
             "{\"pushing\":{\"sequence_id\":\"0\",\"command\":\"pushall\",\"version\":1,\"push_target\":1}}"
         );
+    }
+
+    #[test]
+    fn pause_resume_stop_command_shape_matches_doc() {
+        // OpenBambuAPI mqtt.md specifies an empty param string
+        // for these verbs. Pin both shape + spelling — if either
+        // drifts the printer rejects the command.
+        for verb in ["pause", "resume", "stop"] {
+            let req = CommandRequest {
+                print: CommandBody {
+                    sequence_id: "0",
+                    command: verb,
+                    param: "",
+                },
+            };
+            let s = serde_json::to_string(&req).unwrap();
+            assert_eq!(
+                s,
+                format!(
+                    "{{\"print\":{{\"sequence_id\":\"0\",\"command\":\"{verb}\",\"param\":\"\"}}}}"
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn state_satisfies_collapses_failed_variants() {
+        // Stop ack matches any Failed-flavor reason string.
+        assert!(state_satisfies(
+            &JobState::Failed("user cancelled".into()),
+            &JobState::Failed(String::new())
+        ));
+        // Stop ack also accepts Finished (printer races between
+        // "stop now" and "finish current layer first").
+        assert!(state_satisfies(
+            &JobState::Finished,
+            &JobState::Failed(String::new())
+        ));
+        // Pause is satisfied only by Paused.
+        assert!(state_satisfies(&JobState::Paused, &JobState::Paused));
+        assert!(!state_satisfies(&JobState::Printing, &JobState::Paused));
     }
 }
