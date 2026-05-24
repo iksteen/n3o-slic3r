@@ -69,16 +69,18 @@ export type OptionSummary = {
   capability: CapabilityPredicate | null;
 };
 
-/** Resolve a typed default to the scalar string the active Field
- *  component renders.
+/** Per-slot scalar view of the default — the value a single scalar
+ *  Field component (NumberInput / BoolInput / …) renders.
  *
  *  - Scalar default → its value.
- *  - Vector default on a multiline option → entries joined with `\n`
- *    so the textarea renders one entry per line.
- *  - Vector default on a per-slot vector kind → the entry at
- *    `slot`, falling back to `values[0]` if the slot is out of
- *    range. Returns `null` when the option has no default at all
- *    or when the vector is empty. */
+ *  - Vector default → entry at `slot`, falling back to `values[0]`
+ *    if the slot is out of range. The vector case is the per-extruder
+ *    path; multiline textareas use [`defaultMultilineText`] instead,
+ *    because joining N comma-containing coStrings entries with `\n`
+ *    is meaningless when the consumer is a per-slot picker.
+ *
+ *  Returns `null` when the option has no default or the vector is
+ *  empty. */
 export function defaultScalarFor(
   opt: OptionSummary,
   slot: number = 0,
@@ -87,8 +89,24 @@ export function defaultScalarFor(
   if (dv === null) return null;
   if (dv.kind === "scalar") return dv.value;
   if (dv.values.length === 0) return null;
-  if (opt.multiline) return dv.values.join("\n");
   return dv.values[slot] ?? dv.values[0] ?? null;
+}
+
+/** Multi-line textarea view of the default — one entry per line.
+ *
+ *  Use this when the consumer is a textarea (multiline coStrings:
+ *  `start_gcode`, `end_gcode`, `small_area_infill_flow_compensation_model`,
+ *  …). Returns the scalar value for scalar defaults so callers don't
+ *  need to discriminate, and `\n`-joins the vector entries for vector
+ *  defaults. NEVER pass this output to a per-slot wrapper — the
+ *  joined form contains entry-internal commas that the wrapper's
+ *  comma-split path would destroy. */
+export function defaultMultilineText(opt: OptionSummary): string | null {
+  const dv = opt.default_value;
+  if (dv === null) return null;
+  if (dv.kind === "scalar") return dv.value;
+  if (dv.values.length === 0) return null;
+  return dv.values.join("\n");
 }
 
 /** Vector-shape view of the default — entries already pre-split by
@@ -100,6 +118,23 @@ export function defaultVectorFor(opt: OptionSummary): string[] {
   if (dv === null) return [];
   if (dv.kind === "scalar") return [];
   return dv.values;
+}
+
+/** True for libslic3r vector-string options the panel must NOT route
+ *  through the per-slot [`MultiSelectInput`] wrapper.
+ *
+ *  Multiline coStrings (`start_gcode`, `end_gcode`,
+ *  `small_area_infill_flow_compensation_model`, …) carry one entry
+ *  per line of a multi-line text block — the entries are NOT
+ *  per-extruder. Routing them through MultiSelectInput parseVector-
+ *  splits on commas, which silently destroys entries like `"0,0"`
+ *  or `"0.2,0.4444"` and can land a corrupted value as an override
+ *  if the user touches anything.
+ *
+ *  The matching display is a textarea (or, until we ship one, a
+ *  read-only line-joined display via [`defaultMultilineText`]). */
+export function isMultilineTextField(opt: OptionSummary): boolean {
+  return opt.multiline && opt.ty === "Strings";
 }
 
 /** `slicer_options_for_printer` result. Same as `OptionSummary` with

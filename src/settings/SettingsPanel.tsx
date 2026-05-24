@@ -42,7 +42,13 @@ import type {
   OptionTypeKind,
   PrinterAwareOptionSummary,
 } from "./types";
-import { defaultScalarFor, isVectorKind, optionTypeKind } from "./types";
+import {
+  defaultMultilineText,
+  defaultScalarFor,
+  isMultilineTextField,
+  isVectorKind,
+  optionTypeKind,
+} from "./types";
 import {
   usePrinterOptions,
   useCascadeResolve,
@@ -522,8 +528,16 @@ function SettingRow({
   const tierValue = contextLayer === "object"
     ? objectOverrides[schema.key]
     : projectOverrides[schema.key];
+  // Multiline coStrings (`start_gcode`, the small-area infill flow
+  // compensation model, …) carry one entry per line of a single
+  // logical text block — NOT per-extruder. The per-slot
+  // `defaultScalarFor` view is meaningless for them; use the
+  // `\n`-joined textarea view instead.
+  const fallbackDefault = isMultilineTextField(schema)
+    ? defaultMultilineText(schema)
+    : defaultScalarFor(schema, activeSlot);
   const effectiveValue =
-    tierValue ?? resolved[schema.key]?.value ?? defaultScalarFor(schema, activeSlot) ?? null;
+    tierValue ?? resolved[schema.key]?.value ?? fallbackDefault ?? null;
 
   // Project-scope settings are read-only on the Object tab per
   // FR-3D-3 (the value belongs to a higher tier than per-object can
@@ -634,7 +648,24 @@ function SettingRow({
       onRowEnter={onRowEnter}
       onRowLeave={onRowLeave}
     >
-      {isVectorKind(kind) && slotCount >= 1 ? (
+      {isMultilineTextField(schema) ? (
+        // Multiline coStrings → single textarea showing all entries
+        // joined with `\n`. NEVER routed through MultiSelectInput;
+        // its comma-split path would shred entries like
+        // `"0,0"` / `"0.2,0.4444"` and a corrupted value could land
+        // as an override on commit. Read-only for now — a real
+        // textarea Field with cstyle-aware commit ships later.
+        <textarea
+          className="val-input val-input-multiline"
+          value={effectiveValue ?? ""}
+          disabled
+          readOnly
+          rows={Math.min(
+            10,
+            Math.max(2, (effectiveValue?.split("\n").length ?? 1)),
+          )}
+        />
+      ) : isVectorKind(kind) && slotCount >= 1 ? (
         <MultiSelectInput
           schema={schema}
           value={effectiveValue}
