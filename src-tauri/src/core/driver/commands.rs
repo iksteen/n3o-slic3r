@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use super::dryrun::neuter_gcode_3mf;
 use super::registry::{DriverRegistry, DriverSummary};
 use super::status::PrinterStatus;
 use super::traits::{
@@ -128,6 +129,44 @@ pub async fn driver_send(
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
     let mut d = handle.lock().await;
     d.send(payload).await.map_err(|e| e.to_string())
+}
+
+/// Motion-only dry-run variant of [`driver_send`]. Neuters the
+/// payload's G-code (strips E values, comments out heater commands)
+/// before forwarding to the driver — the printer goes through every
+/// XY motion without heating or extruding. Use as the first send
+/// against a newly-paired printer to confirm the toolpath without
+/// risking the bed.
+///
+/// Only [`SendPayload::Gcode3mf`] is supported for now (Bambu path);
+/// the U1 raw-G-code variant will follow when PR-7b-4 lands.
+#[tauri::command]
+#[tracing::instrument(skip(registry, payload), fields(payload_kind = ?std::mem::discriminant(&payload)))]
+pub async fn driver_dry_send(
+    id: DriverId,
+    payload: SendPayload,
+    registry: State<'_, Arc<DriverRegistry>>,
+) -> Result<SendHandle, String> {
+    let neutered_payload = match payload {
+        SendPayload::Gcode3mf { bytes, plate_id } => {
+            let neutered = neuter_gcode_3mf(&bytes).map_err(|e| e.to_string())?;
+            SendPayload::Gcode3mf {
+                bytes: neutered,
+                plate_id,
+            }
+        }
+        SendPayload::Gcode { .. } => {
+            return Err(
+                "dry-run send for U1 raw-G-code payloads not implemented yet (PR-7b-4 follow-up)"
+                    .into(),
+            );
+        }
+    };
+    let handle = registry
+        .get(id)
+        .ok_or_else(|| format!("unknown driver id {}", id.0))?;
+    let mut d = handle.lock().await;
+    d.send(neutered_payload).await.map_err(|e| e.to_string())
 }
 
 /// Pause / resume / stop the current print.

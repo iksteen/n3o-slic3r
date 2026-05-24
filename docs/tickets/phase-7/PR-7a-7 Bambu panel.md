@@ -58,6 +58,18 @@ pause/resume/stop affordances.
       hook; stub to "use raw gcode wrapped via PR-3-10" until
       7c lands), calls `driver_send`, surfaces the returned
       `SendHandle.id` in the panel.
+  - **Dry-run send button** (next to Send): same enablement
+    rules as Send, but calls `driver_dry_send` instead. The
+    backend (`core/driver/dryrun.rs`) neuters the bundle —
+    strips E values from G0/G1/G2/G3 motion lines and comments
+    out M104/M109/M140/M190 heater commands — before forwarding
+    to the driver. The printer goes through every XY motion
+    without heating or extruding; intended as the first send
+    against a freshly-paired printer to confirm the toolpath
+    without risking the bed. Visually distinct from the Send
+    button (e.g., outlined, smaller, with a "no-heat" badge or
+    similar affordance) — accidentally clicking dry-run when the
+    user meant Send is harmless; the reverse is a destroyed bed.
   - Command buttons (Pause / Resume / Stop):
     - Visible only when state matches a valid transition
       (Pause on RUNNING, Resume on PAUSE, Stop on RUNNING|PAUSE).
