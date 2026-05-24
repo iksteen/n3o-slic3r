@@ -328,18 +328,66 @@ def _toml_string(s: str) -> str:
     return f'"{s}"'
 
 
+def apply_bbs_filter(
+    d: dict,
+) -> tuple[dict, list[str], list[tuple[str, str]]]:
+    """Filter a raw BBS profile dict through the import rules and
+    return `(out, dropped, renamed)`.
+
+    `dropped` is the list of BBS keys we discarded because they're
+    in `DROPPED_KEYS` (Orca's own ignore set + BBS-firmware-only
+    extras). `renamed` is a list of `(bbs_key, orca_key)` pairs for
+    the keys we rewrote via `BBS_KEY_RENAMES`.
+
+    Pure / per-source so callers can accumulate a per-source report
+    (machine vs. process vs. filament) for the import surface. META
+    + PLATE_DIM keys are filtered silently — those aren't real
+    settings and don't warrant a "dropped" entry.
+
+    Designed for reuse: when the runtime project-settings importer
+    lands (Phase 7c+), this function (and the constants it consumes)
+    is the source-of-truth for what to drop / rename. The constants
+    can be exported as JSON for the Rust side to read; the structure
+    of this function maps cleanly onto a Rust port.
+    """
+    out: dict = {}
+    dropped: list[str] = []
+    renamed: list[tuple[str, str]] = []
+    for raw_key, v in d.items():
+        if raw_key in META_KEYS or raw_key in PLATE_DIM_KEYS:
+            continue
+        if raw_key in DROPPED_KEYS:
+            dropped.append(raw_key)
+            continue
+        new_key = BBS_KEY_RENAMES.get(raw_key)
+        if new_key is not None:
+            renamed.append((raw_key, new_key))
+            out[new_key] = v
+        else:
+            out[raw_key] = v
+    return out, dropped, renamed
+
+
 def write_cascade(out: Path, merged_machine: dict, merged_process: dict,
-                  merged_filament: dict, context: dict, source_sha: str) -> None:
-    def filter_keys(d: dict) -> dict:
-        out: dict = {}
-        for raw_key, v in d.items():
-            if raw_key in META_KEYS or raw_key in PLATE_DIM_KEYS:
-                continue
-            if raw_key in DROPPED_KEYS:
-                continue
-            key = BBS_KEY_RENAMES.get(raw_key, raw_key)
-            out[key] = v
-        return out
+                  merged_filament: dict, context: dict,
+                  source_sha: str) -> tuple[dict, dict]:
+    """Render the cascade. Returns `(drops_by_source, renames_by_source)`
+    so `main` can print a stdout summary. Each value is keyed by
+    `"machine" | "process" | "filament"`."""
+    filtered_machine, drops_m, renames_m = apply_bbs_filter(merged_machine)
+    filtered_process, drops_p, renames_p = apply_bbs_filter(merged_process)
+    filtered_filament, drops_f, renames_f = apply_bbs_filter(merged_filament)
+
+    drops_by_source: dict[str, list[str]] = {
+        "machine": drops_m,
+        "process": drops_p,
+        "filament": drops_f,
+    }
+    renames_by_source: dict[str, list[tuple[str, str]]] = {
+        "machine": renames_m,
+        "process": renames_p,
+        "filament": renames_f,
+    }
 
     filament_rule_keys = {
         "nozzle_temperature",
@@ -350,7 +398,7 @@ def write_cascade(out: Path, merged_machine: dict, merged_process: dict,
         "slow_down_layer_time",
     }
 
-    default = filter_keys({**merged_machine, **merged_process, **merged_filament})
+    default = {**filtered_machine, **filtered_process, **filtered_filament}
     filament_rule = {k: default.pop(k) for k in list(default) if k in filament_rule_keys}
 
     bed_temp_value = merged_filament.get("textured_plate_temp", ["55"])
@@ -374,6 +422,7 @@ def write_cascade(out: Path, merged_machine: dict, merged_process: dict,
     lines.append("# supplies context at runtime, not the cascade):")
     for k, v in context.items():
         lines.append(f"#   {k:<14} = {v!r}")
+    lines.extend(_render_import_report(drops_by_source, renames_by_source))
     lines.append("")
     lines.append("# Default rule — specificity 0. Merged machine + process +")
     lines.append("# non-filament-rule filament keys, with plate-dim keys excluded")
@@ -398,6 +447,72 @@ def write_cascade(out: Path, merged_machine: dict, merged_process: dict,
 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines))
+
+    return drops_by_source, renames_by_source
+
+
+def _render_import_report(
+    drops_by_source: dict[str, list[str]],
+    renames_by_source: dict[str, list[tuple[str, str]]],
+) -> list[str]:
+    """Format the drop / rename report as cascade-header comment
+    lines. Stamped into the bundled cascade so the provenance of
+    'why isn't BBS key X here?' is self-describing — no need to
+    cross-reference the converter script."""
+    lines: list[str] = ["#", "# Import report (BBS → cascade):"]
+
+    total_renamed = sum(len(v) for v in renames_by_source.values())
+    if total_renamed == 0:
+        lines.append("#   Renamed: none")
+    else:
+        lines.append(
+            f"#   Renamed: {total_renamed} key{'s' if total_renamed != 1 else ''}"
+        )
+        for source in ("machine", "process", "filament"):
+            entries = renames_by_source[source]
+            for bbs_key, orca_key in sorted(entries):
+                lines.append(f"#     {source:<8} {bbs_key} → {orca_key}")
+
+    total_dropped = sum(len(v) for v in drops_by_source.values())
+    if total_dropped == 0:
+        lines.append("#   Dropped: none")
+    else:
+        lines.append(
+            f"#   Dropped: {total_dropped} key{'s' if total_dropped != 1 else ''} "
+            "(BBS firmware-only or in Orca's ignore set)"
+        )
+        for source in ("machine", "process", "filament"):
+            keys = sorted(drops_by_source[source])
+            if not keys:
+                continue
+            lines.append(f"#     from {source}:")
+            for k in keys:
+                lines.append(f"#       {k}")
+    return lines
+
+
+def _print_import_summary(
+    drops_by_source: dict[str, list[str]],
+    renames_by_source: dict[str, list[tuple[str, str]]],
+) -> None:
+    """Compact stdout summary so a regen run surfaces what changed
+    without scrolling. Detailed per-key breakdown lives in the
+    cascade header."""
+    total_renamed = sum(len(v) for v in renames_by_source.values())
+    total_dropped = sum(len(v) for v in drops_by_source.values())
+    parts = [
+        f"renamed {total_renamed} ("
+        + ", ".join(
+            f"{len(renames_by_source[s])} {s}" for s in ("machine", "process", "filament")
+        )
+        + ")",
+        f"dropped {total_dropped} ("
+        + ", ".join(
+            f"{len(drops_by_source[s])} {s}" for s in ("machine", "process", "filament")
+        )
+        + ")",
+    ]
+    print("import: " + "; ".join(parts))
 
 
 def main() -> None:
@@ -434,9 +549,16 @@ def main() -> None:
         "plate.type": "Textured PEI",
     }
 
-    write_cascade(args.out, merged_machine, merged_process, merged_filament,
-                  context, args.source_sha)
+    drops_by_source, renames_by_source = write_cascade(
+        args.out,
+        merged_machine,
+        merged_process,
+        merged_filament,
+        context,
+        args.source_sha,
+    )
     print(f"wrote {args.out}")
+    _print_import_summary(drops_by_source, renames_by_source)
 
 
 if __name__ == "__main__":
