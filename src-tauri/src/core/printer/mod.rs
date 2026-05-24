@@ -8,9 +8,28 @@
 //! its capabilities, no shared-code changes (PRD §8.2 note).
 
 pub mod bambu;
+pub mod instance;
+pub mod instance_library;
 pub mod profile;
 pub mod registry;
 pub mod snapmaker;
 
+pub use instance::{
+    BedRef, ConnectionInfo, ExtruderState, NozzleMaterial, NozzleSku, PrinterInstance,
+    SlotBinding,
+};
+pub use instance_library::{
+    bundled_instances, lookup_instance, BAMBI_ID, SNAPPY_ID,
+};
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
 pub use registry::{bundled_catalog, default_binding, lookup, CatalogEntry};
+
+/// Tauri command: list all bundled [`PrinterInstance`]s (PR-S-3). The
+/// frontend printer picker will switch to this once instance-aware
+/// editing lands (PR-S-5). Until then both surfaces coexist:
+/// `bundled_catalog()` for the existing PrinterProfile-based picker,
+/// `printer_instance_list()` for the instance-aware path.
+#[tauri::command]
+pub fn printer_instance_list() -> Vec<PrinterInstance> {
+    bundled_instances()
+}
