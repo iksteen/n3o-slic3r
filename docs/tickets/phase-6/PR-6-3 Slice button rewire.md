@@ -1,6 +1,6 @@
 # PR-6-3 — Frontend Slice button rewire
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Drop the file-picker from `SlicePanel.tsx`. The
 Slice button now just calls `slice_active_plate()` against

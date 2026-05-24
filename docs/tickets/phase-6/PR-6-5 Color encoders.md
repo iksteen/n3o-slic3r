@@ -1,6 +1,6 @@
 # PR-6-5 — Color-mode encoders
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Per-segment color computation for the five MVP color
 modes: feature type, speed, flow rate, layer time, tool index.

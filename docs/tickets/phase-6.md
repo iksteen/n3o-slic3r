@@ -37,28 +37,28 @@ the index plus phase-level status and notes.
 
 | Deliverable | Status | Ticket |
 |-------------|--------|--------|
-| Scene-to-slice input builder: `(Project, PlateId) → SliceJobInput` | ❌ open | [PR-6-1](phase-6/PR-6-1%20Scene-to-slice%20input%20builder.md) |
-| `slice_active_plate` Tauri command (replaces `slice_start_default_a1mini`) | ❌ open | [PR-6-2](phase-6/PR-6-2%20Slice%20active%20plate%20command.md) |
-| Frontend Slice button rewire: drop file picker, drive from scene | ❌ open | [PR-6-3](phase-6/PR-6-3%20Slice%20button%20rewire.md) |
+| Scene-to-slice input builder: `(Project, PlateId) → SliceJobInput` | ✅ shipped | [PR-6-1](phase-6/PR-6-1%20Scene-to-slice%20input%20builder.md) |
+| `slice_active_plate` Tauri command (replaces `slice_start_default_a1mini`) | ✅ shipped | [PR-6-2](phase-6/PR-6-2%20Slice%20active%20plate%20command.md) |
+| Frontend Slice button rewire: drop file picker, drive from scene | ✅ shipped | [PR-6-3](phase-6/PR-6-3%20Slice%20button%20rewire.md) |
 
 ### Preview proper
 
 | Deliverable | Status | Ticket |
 |-------------|--------|--------|
-| Preview IR: extrusion + travel segment build | ❌ open | [PR-6-4](phase-6/PR-6-4%20Preview%20IR.md) |
-| Color-mode encoders (feature / speed / flow / layer-time / tool) | ❌ open | [PR-6-5](phase-6/PR-6-5%20Color%20encoders.md) |
-| Per-layer + full-job stats computation | ❌ open | [PR-6-6](phase-6/PR-6-6%20Stats%20computation.md) |
-| Preview Tauri commands (load, buffers, stats) | ❌ open | [PR-6-7](phase-6/PR-6-7%20Tauri%20commands.md) |
-| `GcodePreview` Three.js renderer + camera + bed | ❌ open | [PR-6-8](phase-6/PR-6-8%20Renderer.md) |
-| Layer slider (single / up-to-N / range) + keyboard nav | ❌ open | [PR-6-9](phase-6/PR-6-9%20Layer%20slider.md) |
-| Travel + retraction visibility toggles | ❌ open | [PR-6-10](phase-6/PR-6-10%20Travel%20toggles.md) |
-| Hover inspection: raycast → segment tooltip | ❌ open | [PR-6-11](phase-6/PR-6-11%20Hover%20inspection.md) |
-| Per-layer + full-job stats panels | ❌ open | [PR-6-12](phase-6/PR-6-12%20Stats%20panels.md) |
-| Color-mode picker + color-blind-safe palette | ❌ open | [PR-6-13](phase-6/PR-6-13%20Color%20picker.md) |
-| Drag-drop external `.gcode` + `.gcode.3mf` loader | ❌ open | [PR-6-14](phase-6/PR-6-14%20Drag-drop%20loader.md) |
-| App preview/3D mode toggle + auto-switch after slice | ❌ open | [PR-6-15](phase-6/PR-6-15%20App%20mode%20toggle.md) |
-| Perf gates (50MB <5s; 60fps slider; <1.5GB) | ❌ open | [PR-6-16](phase-6/PR-6-16%20Perf%20gates.md) |
-| Phase 6 exit-criteria smoke + docs | ❌ open | [PR-6-17](phase-6/PR-6-17%20Exit-criteria%20smoke.md) |
+| Preview IR: extrusion + travel segment build | ✅ shipped | [PR-6-4](phase-6/PR-6-4%20Preview%20IR.md) |
+| Color-mode encoders (feature / speed / flow / layer-time / tool) | ✅ shipped | [PR-6-5](phase-6/PR-6-5%20Color%20encoders.md) |
+| Per-layer + full-job stats computation | ✅ shipped | [PR-6-6](phase-6/PR-6-6%20Stats%20computation.md) |
+| Preview Tauri commands (load, buffers, stats) | ✅ shipped | [PR-6-7](phase-6/PR-6-7%20Tauri%20commands.md) |
+| `GcodePreview` Three.js renderer + camera + bed | ✅ shipped | [PR-6-8](phase-6/PR-6-8%20Renderer.md) |
+| Layer slider (single / up-to-N / range) + keyboard nav | ✅ shipped | [PR-6-9](phase-6/PR-6-9%20Layer%20slider.md) |
+| Travel + retraction visibility toggles | ✅ shipped | [PR-6-10](phase-6/PR-6-10%20Travel%20toggles.md) |
+| Hover inspection: raycast → segment tooltip | ✅ shipped | [PR-6-11](phase-6/PR-6-11%20Hover%20inspection.md) |
+| Per-layer + full-job stats panels | ✅ shipped | [PR-6-12](phase-6/PR-6-12%20Stats%20panels.md) |
+| Color-mode picker + color-blind-safe palette | ✅ shipped | [PR-6-13](phase-6/PR-6-13%20Color%20picker.md) |
+| Drag-drop external `.gcode` + `.gcode.3mf` loader | ✅ shipped | [PR-6-14](phase-6/PR-6-14%20Drag-drop%20loader.md) |
+| App preview/3D mode toggle + auto-switch after slice | ✅ shipped | [PR-6-15](phase-6/PR-6-15%20App%20mode%20toggle.md) |
+| Perf gates (50MB <5s; 60fps slider; <1.5GB) | ✅ shipped | [PR-6-16](phase-6/PR-6-16%20Perf%20gates.md) |
+| Phase 6 exit-criteria smoke + docs | ✅ shipped | [PR-6-17](phase-6/PR-6-17%20Exit-criteria%20smoke.md) |
 
 ## Architecture invariant — the preview owns its own Three.js scene
 

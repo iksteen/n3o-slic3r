@@ -1,6 +1,6 @@
 # PR-6-1 — Scene-to-slice input builder
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Pure-function adapter that turns the live `Project`'s
 state for one plate into a `SliceJobInput` libslic3r can consume.

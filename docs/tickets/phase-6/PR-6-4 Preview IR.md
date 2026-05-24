@@ -1,6 +1,6 @@
 # PR-6-4 — Preview IR (segment build from `gcode::Line`)
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Define the in-memory representation the preview
 renderer consumes, and the pure function that builds it from

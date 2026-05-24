@@ -1,6 +1,6 @@
 # PR-6-7 — Preview Tauri commands
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Wire PR-6-4 (IR), PR-6-5 (colors), PR-6-6 (stats)
 into Tauri commands the frontend renderer (PR-6-8) consumes.

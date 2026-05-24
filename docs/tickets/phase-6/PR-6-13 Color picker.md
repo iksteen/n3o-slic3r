@@ -1,6 +1,6 @@
 # PR-6-13 — Color-mode picker + palette UI
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Dropdown / segmented picker for the active color
 mode (Feature / Speed / Flow / LayerTime / Tool) + a small

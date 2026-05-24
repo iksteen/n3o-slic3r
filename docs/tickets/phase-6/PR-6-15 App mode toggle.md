@@ -1,6 +1,6 @@
 # PR-6-15 — App preview/3D mode toggle + topbar wiring
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Top-level `mode: "scene" | "preview"` state in
 App.tsx. Topbar `Preview [P]` button (per design mockup) +

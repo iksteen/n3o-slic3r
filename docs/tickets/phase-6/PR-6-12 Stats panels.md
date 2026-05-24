@@ -1,6 +1,6 @@
 # PR-6-12 — Per-layer + full-job stats panels
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Two side-panels in preview mode that surface
 PR-6-6's computed stats. Full-job panel always visible;

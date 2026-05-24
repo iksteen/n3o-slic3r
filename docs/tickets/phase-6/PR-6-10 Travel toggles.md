@@ -1,6 +1,6 @@
 # PR-6-10 — Travel + retraction visibility toggles
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Two checkbox toggles that hide/show the travel
 LineSegments and the retraction Points objects in the

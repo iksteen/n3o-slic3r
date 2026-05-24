@@ -1,6 +1,6 @@
 # PR-6-6 — Per-layer + full-job stats computation
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Aggregate stats from the PR-6-4 `PreviewGeometry`
 into per-layer and full-job summaries the stats panels (PR-6-12)

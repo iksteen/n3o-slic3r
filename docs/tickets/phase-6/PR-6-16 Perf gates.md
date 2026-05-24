@@ -1,6 +1,6 @@
 # PR-6-16 — Perf gates
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Mechanize the FR-GP-9 perf budgets as automated
 assertions: 50MB G-code parsed + IR built in <5s; layer

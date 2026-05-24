@@ -1,6 +1,6 @@
 # PR-6-9 — Layer slider + keyboard nav
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Single React component that owns the layer-window
 state (`LayerWindow`) and renders the slider control. Drives

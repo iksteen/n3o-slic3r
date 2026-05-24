@@ -1,6 +1,6 @@
 # PR-6-8 — `GcodePreview` Three.js renderer
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Top-level React component that hosts the preview's
 Three.js scene. Owns its own renderer, camera, controls, and

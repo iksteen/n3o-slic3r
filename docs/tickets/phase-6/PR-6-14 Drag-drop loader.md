@@ -1,6 +1,6 @@
 # PR-6-14 — Drag-drop external `.gcode` + `.gcode.3mf` loader
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Drop zone overlay on the preview viewport. Accepts
 `.gcode` and `.gcode.3mf` files. For `.gcode.3mf`, unpacks the

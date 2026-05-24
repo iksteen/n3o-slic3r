@@ -1,6 +1,6 @@
 # PR-6-17 — Phase 6 exit-criteria smoke + docs
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Mechanize the Execution Plan §8 exit criteria
 as a runnable smoke test + a manual walkthrough doc.

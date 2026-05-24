@@ -1,6 +1,6 @@
 # PR-6-11 — Hover inspection (raycast → segment tooltip)
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Raycast onto the extrusion `LineSegments` in
 PR-6-8's renderer. On hover-with-hit, surface a tooltip

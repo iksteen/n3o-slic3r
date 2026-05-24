@@ -1,6 +1,6 @@
 # PR-6-2 — `slice_active_plate` Tauri command
 
-Status: ❌ open.
+Status: ✅ shipped.
 
 **Scope.** Replace `slice_start_default_a1mini` (the path-based
 "slice this file" command) with `slice_active_plate` (the
