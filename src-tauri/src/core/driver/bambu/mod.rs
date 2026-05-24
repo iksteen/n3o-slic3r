@@ -10,6 +10,8 @@
 
 pub mod connection;
 pub mod device_id;
+pub mod status;
 pub mod tls;
 
 pub use connection::BambuDriver;
+pub use status::{parse_message, BambuMessage, BambuReport};

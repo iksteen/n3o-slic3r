@@ -62,10 +62,12 @@ pub struct BambuDriver {
     /// Sink that the background task pushes raw report payloads
     /// into. PR-7a-3's parser drains it. `None` until connected.
     raw_messages_rx: Option<Arc<Mutex<mpsc::Receiver<Vec<u8>>>>>,
-    /// Handle to the spawned background task — held so `drop()`
-    /// or `disconnect()` can abort it.
-    task: Option<JoinHandle<()>>,
-    /// Signals the task to stop cleanly.
+    /// Handle to the spawned background tasks — held so `drop()`
+    /// or `disconnect()` can abort them. Two tasks per driver:
+    /// the rumqttc event loop (PR-7a-2) and the status worker
+    /// (PR-7a-3).
+    tasks: Vec<JoinHandle<()>>,
+    /// Signals the event-loop task to stop cleanly.
     shutdown_tx: Option<oneshot::Sender<()>>,
     /// Client handle for publishing (PR-7a-5 / PR-7a-6 will use
     /// this to send print + command messages).
@@ -85,7 +87,7 @@ impl BambuDriver {
             status_tx,
             status_rx,
             raw_messages_rx: None,
-            task: None,
+            tasks: Vec::new(),
             shutdown_tx: None,
             client: None,
         }
@@ -125,7 +127,7 @@ impl Driver for BambuDriver {
     }
 
     async fn connect(&mut self) -> Result<(), DriverError> {
-        if self.task.is_some() {
+        if !self.tasks.is_empty() {
             // Idempotent: already connected.
             return Ok(());
         }
@@ -153,17 +155,31 @@ impl Driver for BambuDriver {
         let (client, eventloop) = AsyncClient::new(options, 32);
         self.client = Some(client.clone());
 
+        // Two channels: rumqttc loop pushes raw payloads into
+        // raw_tx; the status worker drains raw_rx, parses,
+        // merges, and emits to the watch sender.
         let (raw_tx, raw_rx) = mpsc::channel::<Vec<u8>>(64);
-        self.raw_messages_rx = Some(Arc::new(Mutex::new(raw_rx)));
-
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
 
-        // Spawn the event loop owner.
+        // Status worker task (PR-7a-3). We keep no handle to its
+        // mpsc receiver because the worker owns it; the
+        // raw_messages_rx field is left None until a future
+        // ticket needs out-of-band access to raw payloads.
+        let _ = &self.raw_messages_rx;
+
+        let status_tx_for_worker = self.status_tx.clone();
+        let worker_task = tokio::spawn(super::status::run_worker(
+            raw_rx,
+            status_tx_for_worker,
+        ));
+        self.tasks.push(worker_task);
+
+        // rumqttc event loop task (PR-7a-2).
         let status_tx = self.status_tx.clone();
         let device_id_owned = device_id.clone();
         let client_for_task = client.clone();
-        let task = tokio::spawn(event_loop(
+        let event_loop_task = tokio::spawn(event_loop(
             eventloop,
             client_for_task,
             device_id_owned,
@@ -171,7 +187,7 @@ impl Driver for BambuDriver {
             status_tx,
             shutdown_rx,
         ));
-        self.task = Some(task);
+        self.tasks.push(event_loop_task);
 
         Ok(())
     }
@@ -181,14 +197,19 @@ impl Driver for BambuDriver {
             let _ = tx.send(());
         }
         if let Some(client) = self.client.take() {
-            // Best-effort — the task is going down regardless.
+            // Best-effort — the tasks are going down regardless.
             let _ = client.disconnect().await;
         }
-        if let Some(handle) = self.task.take() {
-            // Wait up to 5s for graceful shutdown; abort if not.
+        // Drain task handles. The event-loop task exits via the
+        // shutdown channel; the status worker exits when its
+        // mpsc receiver drops (which happens when the event-loop
+        // task exits and the raw_tx sender goes out of scope).
+        for handle in std::mem::take(&mut self.tasks) {
             match tokio::time::timeout(Duration::from_secs(5), handle).await {
                 Ok(_) => {}
-                Err(_) => tracing::warn!(driver = %self.id, "bambu task did not exit in 5s"),
+                Err(_) => {
+                    tracing::warn!(driver = %self.id, "bambu task did not exit in 5s")
+                }
             }
         }
         self.set_connection_state(ConnectionState::Disconnected {
