@@ -83,6 +83,14 @@ pub struct PrinterInstance {
 /// feeds (slots) that pull into this extruder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtruderState {
+    /// Display label surfaced in the slot picker. Empty for
+    /// single-extruder printers where the slot's own label carries the
+    /// full identity; populated (e.g. `"T0"`, `"T1"`, `"Left"`) on
+    /// multi-extruder printers so the picker can disambiguate which
+    /// extruder a slot belongs to.
+    #[serde(default)]
+    pub label: String,
+
     /// What's physically screwed into this extruder right now. The user
     /// confirms swaps in the UI; there's no firmware sensor for
     /// installed-nozzle SKU on consumer printers.
@@ -116,13 +124,48 @@ pub enum NozzleMaterial {
     HighFlowStainless,
 }
 
+/// Whether a slot pulls its filament from the printer's external
+/// direct-feed or through an AMS-style swap unit.
+///
+/// The distinction drives the pre-slice gate: within one extruder the
+/// user may NOT mix `Direct` and `Ams` slots in the same print —
+/// Bambu firmware physically can't pull from both feed paths in one
+/// job. (Multiple `Ams` slots on the same extruder are fine; the AMS
+/// firmware swaps within.) Printers with no AMS at all (Snapmaker U1,
+/// Prusa XL, A1 mini standalone) ship every slot as `Direct`; the
+/// per-extruder constraint is trivially satisfied since they only
+/// have one slot per extruder anyway.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedKind {
+    Direct,
+    Ams,
+}
+
 /// Slot → filament binding. `None` = unbound (no filament picked).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlotBinding {
+    /// Display label surfaced in the slot picker. `"Direct"`, `"Ext"`,
+    /// `"AMS:1"` etc. — chosen by the bundled-instance fixture, user-
+    /// editable in a future printer-instance editor. Pure presentation;
+    /// routing/topology is driven by the `(extruder_idx, slot_idx)`
+    /// tuple and `feed`.
+    #[serde(default)]
+    pub label: String,
+
+    /// What feed path this slot uses. Drives the pre-slice
+    /// `PerExtruderFeedMix` check.
+    #[serde(default = "default_feed_kind")]
+    pub feed: FeedKind,
+
     /// Identity string matching an entry in the user's filament
     /// library. `None` while no filament is bound.
     #[serde(default)]
     pub filament_identity: Option<String>,
+}
+
+fn default_feed_kind() -> FeedKind {
+    FeedKind::Direct
 }
 
 /// Reference to a build plate currently installed on the printer.
@@ -163,11 +206,14 @@ mod tests {
             default_process_fragment_slug: "0.20mm-standard-bbl-a1m".into(),
             connection: None,
             extruders: vec![ExtruderState {
+                label: String::new(),
                 installed_nozzle: NozzleSku {
                     diameter_mm: 0.4,
                     material: NozzleMaterial::Stainless,
                 },
                 slots: vec![SlotBinding {
+                    label: "Direct".into(),
+                    feed: FeedKind::Direct,
                     filament_identity: None,
                 }],
             }],

@@ -17,23 +17,21 @@
 //! until a filament picker lands.
 
 use super::instance::{
-    BedRef, ExtruderState, NozzleMaterial, NozzleSku, PrinterInstance, SlotBinding,
+    BedRef, ExtruderState, FeedKind, NozzleMaterial, NozzleSku, PrinterInstance, SlotBinding,
 };
 
 /// Stable IDs for the bundled instances. Used as
-/// `Plate.printer_instance_ref` once that migration lands.
+/// `Plate.printer_instance_id`.
 pub const BAMBI_ID: &str = "bambi";
 pub const SNAPPY_ID: &str = "snappy";
 
-/// Bundled instance set — exactly two for MVP. Insertion order is also
-/// the picker's display order.
+/// Seed for the mutable in-memory registry — built fresh every call
+/// so callers can produce a clean reset list. Insertion order is the
+/// picker's display order. Once the registry initializes from this,
+/// subsequent `lookup_instance` calls read live (possibly user-
+/// mutated) state.
 pub fn bundled_instances() -> Vec<PrinterInstance> {
     vec![bambi(), snappy()]
-}
-
-/// Look up a bundled instance by id. Returns `None` for unknown ids.
-pub fn lookup_instance(id: &str) -> Option<PrinterInstance> {
-    bundled_instances().into_iter().find(|i| i.id == id)
 }
 
 /// Bridge from a legacy `PrinterBinding.printer_identity` (vendor
@@ -45,8 +43,7 @@ pub fn lookup_instance(id: &str) -> Option<PrinterInstance> {
 /// set is the authoritative mapping — PrinterInstances reference
 /// vendor profiles by name, and this function reverses that lookup.
 /// Used by plate bootstrap + printer rebinding to keep the legacy
-/// `Plate.printer` field in sync with the new `Plate.printer_instance_id`
-/// through the PR-S-5c transition.
+/// `Plate.printer` field in sync with the new `Plate.printer_instance_id`.
 pub fn instance_id_for_vendor_profile(vendor_profile_ref: &str) -> Option<&'static str> {
     bundled_instances()
         .iter()
@@ -71,13 +68,18 @@ fn bambi() -> PrinterInstance {
         default_process_fragment_slug: "0.20mm-standard-bbl-a1m".to_owned(),
         connection: None,
         extruders: vec![ExtruderState {
+            // Solo extruder — slot label carries the full identity.
+            label: String::new(),
             installed_nozzle: NozzleSku {
                 diameter_mm: 0.4,
                 material: NozzleMaterial::Stainless,
             },
-            // Single slot — the A1 mini direct feed. Adding AMS Lite
-            // later would extend this to 5 slots (1 direct + 4 AMS).
+            // Single direct-fed slot. Adding AMS Lite later extends
+            // to 5 slots: keep this Direct + push 4 `Ams`-feed slots
+            // labeled "AMS:1".."AMS:4".
             slots: vec![SlotBinding {
+                label: "Direct".to_owned(),
+                feed: FeedKind::Direct,
                 filament_identity: None,
             }],
         }],
@@ -89,12 +91,18 @@ fn bambi() -> PrinterInstance {
 }
 
 fn snappy() -> PrinterInstance {
-    let extruder = || ExtruderState {
+    let extruder = |label: &str| ExtruderState {
+        label: label.to_owned(),
         installed_nozzle: NozzleSku {
             diameter_mm: 0.4,
             material: NozzleMaterial::Stainless,
         },
+        // Per-extruder direct feed. Each extruder is independent;
+        // no AMS in the topology so the feed-mixing gate is trivially
+        // satisfied (one slot per extruder).
         slots: vec![SlotBinding {
+            label: String::new(),
+            feed: FeedKind::Direct,
             filament_identity: None,
         }],
     };
@@ -106,7 +114,7 @@ fn snappy() -> PrinterInstance {
         default_filament_fragment_slug: "snapmaker-pla-u1".to_owned(),
         default_process_fragment_slug: "0.20-standard-snapmaker-u1-0.4-nozzle".to_owned(),
         connection: None,
-        extruders: vec![extruder(), extruder(), extruder(), extruder()],
+        extruders: vec![extruder("T0"), extruder("T1"), extruder("T2"), extruder("T3")],
         bed: BedRef {
             identity: "Snapmaker Textured PEI".to_owned(),
         },
@@ -117,6 +125,7 @@ fn snappy() -> PrinterInstance {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::printer::lookup_instance;
 
     #[test]
     fn bundled_set_is_bambi_then_snappy() {
