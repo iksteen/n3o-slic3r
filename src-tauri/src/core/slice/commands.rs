@@ -27,6 +27,7 @@ use super::orchestrator::{
     start_slice_job as run_start, start_slice_job_with_sink, EventSink,
     SliceStartError,
 };
+use super::pre_slice_gate::validate_pre_slice;
 use crate::core::project::{PlateId, Project};
 
 /// Kick off a slice job. Returns the allocated [`JobId`]
@@ -99,6 +100,13 @@ pub fn slice_active_plate(
             // guarantees `plates[active_plate]` is valid.
             p.plates[p.active_plate].id
         });
+        // Pre-slice gate (PR-S-7): refuse before any FS write if the
+        // plate's material→slot map + bound PrinterInstance aren't
+        // coherent. Returns the first failing plate's issue list as
+        // a serialized SliceStartError::SliceBlocked.
+        validate_pre_slice(&p, &[target_plate.0])
+            .map_err(SliceStartError::SliceBlocked)
+            .map_err(|e| e.to_string())?;
         let job_id_preview = jobs.alloc_id();
         // Re-allocate properly inside start_slice_job; this is just
         // for the output_dir name. The actual JobId may differ if

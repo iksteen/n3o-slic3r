@@ -67,6 +67,9 @@ pub enum SliceStartError {
     /// or the instance's fragment slugs don't resolve to bundled
     /// cascade fragments.
     PrinterInstanceCompose(String),
+    /// Pre-slice validation gate (PR-S-7) refused the job. The
+    /// frontend renders the failure on the binding panel.
+    SliceBlocked(super::pre_slice_gate::PlateValidationFailure),
 }
 
 impl std::fmt::Display for SliceStartError {
@@ -77,6 +80,12 @@ impl std::fmt::Display for SliceStartError {
             Self::PrinterInstanceCompose(s) => {
                 write!(f, "printer-instance cascade compose failed: {s}")
             }
+            Self::SliceBlocked(fail) => write!(
+                f,
+                "plate {} has {} pre-slice issue(s); fix in the binding panel before slicing",
+                fail.plate_id,
+                fail.issues.len(),
+            ),
         }
     }
 }

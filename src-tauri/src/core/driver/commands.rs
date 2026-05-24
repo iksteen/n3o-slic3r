@@ -12,7 +12,7 @@
 //! (PR-7a-3 / PR-7b-3) hook the event emission into their
 //! rate-limited `watch::Sender<PrinterStatus>` pipelines.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -24,7 +24,9 @@ use super::status::PrinterStatus;
 use super::traits::{
     Driver, DriverConfig, DriverError, DriverId, SendHandle, SendPayload, PrinterCommand,
 };
-use crate::core::threemf::{fixture_input, write_sliced_3mf};
+use crate::core::project::{PlateId, Project};
+use crate::core::slice::pre_slice_gate::ams_bindings_for_plate;
+use crate::core::threemf::{fixture_input, write_sliced_3mf, AmsBinding};
 
 /// Wire-shape for the `driver:status_update` Tauri event the
 /// frontend's `useDriverStatus` hook subscribes to. Carries the
@@ -226,11 +228,22 @@ pub async fn driver_send(
 /// Runs on `spawn_blocking` because the writer is sync-IO + does
 /// per-entry MD5 work; calling it from an async command without
 /// the offload would stall the runtime.
-async fn wrap_gcode_as_3mf(gcode_path: String, plate_id: u32) -> Result<Vec<u8>, String> {
+async fn wrap_gcode_as_3mf(
+    gcode_path: String,
+    plate_id: u32,
+    ams_bindings: Vec<AmsBinding>,
+) -> Result<Vec<u8>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let gcode_bytes = std::fs::read(&gcode_path)
             .map_err(|e| format!("read gcode at {gcode_path}: {e}"))?;
-        let input = fixture_input(plate_id, gcode_bytes);
+        let mut input = fixture_input(plate_id, gcode_bytes);
+        // Inject the per-plate AMS slot map (PR-S-7). For Bambi
+        // standalone (1 slot, no AMS) this is `[{material: 1,
+        // ams_slot: 1}]` — identity-shaped. For a future
+        // AMS-equipped instance the picker drives the values.
+        if let Some(plate) = input.plates.iter_mut().find(|p| p.plate_id == plate_id) {
+            plate.ams_bindings = ams_bindings;
+        }
         let tmp = tempfile::Builder::new()
             .suffix(".gcode.3mf")
             .tempfile()
@@ -244,6 +257,23 @@ async fn wrap_gcode_as_3mf(gcode_path: String, plate_id: u32) -> Result<Vec<u8>,
     .map_err(|e| format!("wrap task join: {e}"))?
 }
 
+/// Look up the active project's plate-side AMS bindings for use in
+/// the send/dry-send path. Returns an empty vec when the plate isn't
+/// found or has no mappings — both safe defaults the firmware
+/// tolerates on a single-slot, no-AMS print.
+fn collect_ams_bindings(
+    project: &Mutex<Project>,
+    plate_id: u32,
+) -> Vec<AmsBinding> {
+    let Ok(p) = project.lock() else {
+        return Vec::new();
+    };
+    let Some(plate) = p.plate(PlateId(plate_id)) else {
+        return Vec::new();
+    };
+    ams_bindings_for_plate(plate)
+}
+
 /// Wrap a plate's last-sliced raw G-code into the same
 /// `.gcode.3mf` bundle the driver send path uses, but write it
 /// to disk instead of uploading. Diagnostic surface — lets the
@@ -251,13 +281,15 @@ async fn wrap_gcode_as_3mf(gcode_path: String, plate_id: u32) -> Result<Vec<u8>,
 /// diff vs BBS / other slicer outputs without fishing the bundle
 /// out of the printer's /cache/ directory.
 #[tauri::command]
-#[tracing::instrument]
+#[tracing::instrument(skip(project))]
 pub async fn driver_export_plate(
     plate_id: u32,
     gcode_path: String,
     output_path: String,
+    project: State<'_, Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
-    let bytes = wrap_gcode_as_3mf(gcode_path, plate_id).await?;
+    let ams = collect_ams_bindings(&project, plate_id);
+    let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
     tauri::async_runtime::spawn_blocking(move || {
         std::fs::write(&output_path, &bytes)
             .map_err(|e| format!("write {output_path}: {e}"))
@@ -277,14 +309,16 @@ pub async fn driver_export_plate(
 /// bindings + project metadata; this command keeps the printer's
 /// firmware happy in the meantime.
 #[tauri::command]
-#[tracing::instrument(skip(registry))]
+#[tracing::instrument(skip(registry, project))]
 pub async fn driver_send_plate(
     id: DriverId,
     plate_id: u32,
     gcode_path: String,
     registry: State<'_, Arc<DriverRegistry>>,
+    project: State<'_, Arc<Mutex<Project>>>,
 ) -> Result<SendHandle, String> {
-    let bytes = wrap_gcode_as_3mf(gcode_path, plate_id).await?;
+    let ams = collect_ams_bindings(&project, plate_id);
+    let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
     let handle = registry
         .get(id)
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
@@ -299,14 +333,16 @@ pub async fn driver_send_plate(
 /// comment out heater commands before send. Result: printer
 /// exercises every XY motion cold, with zero filament flow.
 #[tauri::command]
-#[tracing::instrument(skip(registry))]
+#[tracing::instrument(skip(registry, project))]
 pub async fn driver_dry_send_plate(
     id: DriverId,
     plate_id: u32,
     gcode_path: String,
     registry: State<'_, Arc<DriverRegistry>>,
+    project: State<'_, Arc<Mutex<Project>>>,
 ) -> Result<SendHandle, String> {
-    let wrapped = wrap_gcode_as_3mf(gcode_path, plate_id).await?;
+    let ams = collect_ams_bindings(&project, plate_id);
+    let wrapped = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
     let neutered = tauri::async_runtime::spawn_blocking(move || neuter_gcode_3mf(&wrapped))
         .await
         .map_err(|e| format!("neuter task join: {e}"))?
