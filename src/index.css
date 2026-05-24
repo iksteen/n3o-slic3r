@@ -1343,12 +1343,12 @@
  */
 @layer components {
   .workspace.preview-mode {
-    grid-template-columns: 1fr 320px;
+    grid-template-columns: 1fr;
   }
 
   .preview-workspace {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr 320px;
     grid-template-rows: 1fr;
     height: 100%;
     min-height: 0;
@@ -1359,6 +1359,8 @@
     grid-template-rows: auto 1fr auto;
     min-height: 0;
     min-width: 0;
+    grid-column: 1;
+    grid-row: 1;
   }
   .preview-toolbar {
     display: flex;

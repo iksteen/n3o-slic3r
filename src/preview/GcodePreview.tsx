@@ -96,23 +96,28 @@ export function GcodePreview({
   // Load buffers when handle / colorMode / palette changes.
   // The "handle changed" path replaces geometry; the
   // "colorMode/palette changed" path swaps only colors.
-  const lastHandleRef = useRef<PreviewHandle | null>(null);
+  const lastAppliedHandleRef = useRef<PreviewHandle | null>(null);
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene || !preview) return;
-
-    const handleChanged = lastHandleRef.current !== preview.handle;
-    lastHandleRef.current = preview.handle;
 
     let cancelled = false;
     void fetchBuffers(preview.handle, colorMode, palette)
       .then((bytes) => {
         if (cancelled) return;
+        // Decide buffer-rebuild vs color-swap based on whether we
+        // *successfully applied* the handle previously, not whether
+        // we started a fetch for it (strict-mode double-mount
+        // otherwise tracks a cancelled fetch as "applied" and
+        // routes the second fetch through the color-swap path,
+        // which no-ops because no mesh exists yet).
+        const handleChanged = lastAppliedHandleRef.current !== preview.handle;
         if (handleChanged) {
           setPreviewBuffers(scene, bytes, preview);
         } else {
           setPreviewColors(scene, bytes, preview);
         }
+        lastAppliedHandleRef.current = preview.handle;
       })
       .catch((err) => {
         console.error("[preview] fetchBuffers failed", err);

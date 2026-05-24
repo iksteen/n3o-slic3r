@@ -91,9 +91,13 @@ export function jumpTo(
   }
 }
 
-/** Default window for a freshly-loaded preview: show everything. */
+/** Default window for a freshly-loaded preview: show only the
+ * topmost layer, single-layer mode. Matches the Bambu Studio /
+ * Orca / Prusa default. Showing every layer at once on a tall
+ * print is visually unreadable — the user scrubs down from the
+ * top via the slider or arrow keys to inspect specific layers. */
 export function defaultWindow(layerCount: number): LayerWindow {
-  return { mode: "up-to", max: Math.max(0, layerCount - 1) };
+  return { mode: "single", layer: Math.max(0, layerCount - 1) };
 }
 
 /** Best-effort "what layer is currently visible at the top of

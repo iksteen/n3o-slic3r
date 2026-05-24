@@ -111,11 +111,14 @@ describe("jumpTo", () => {
 });
 
 describe("defaultWindow", () => {
-  it("opens at up-to with max = layerCount-1", () => {
-    expect(defaultWindow(235)).toEqual({ mode: "up-to", max: 234 });
+  it("opens at single-layer mode pointing at the top layer", () => {
+    // Showing every layer at once on a tall print is visually
+    // unreadable — match the Bambu Studio / Orca / Prusa default
+    // of single-layer-at-the-top + scrub down via arrow keys.
+    expect(defaultWindow(235)).toEqual({ mode: "single", layer: 234 });
   });
 
   it("doesn't underflow for empty preview", () => {
-    expect(defaultWindow(0)).toEqual({ mode: "up-to", max: 0 });
+    expect(defaultWindow(0)).toEqual({ mode: "single", layer: 0 });
   });
 });
