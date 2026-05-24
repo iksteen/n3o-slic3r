@@ -79,11 +79,20 @@ EXTRUDER_KEYS_RX = re.compile(
     re.DOTALL,
 )
 STRING_LITERAL = re.compile(r'"([A-Za-z_][A-Za-z0-9_]*)"')
-# Meta keys we never want in any fragment (catalog metadata, not
-# config). Subset of what the legacy converter knew about.
+# JSON-side metadata that's structural (inheritance, instantiation,
+# catalog name) — NOT real libslic3r config keys. These get dropped
+# from every fragment.
+#
+# `printer_model` is INTENTIONALLY NOT in this set despite looking
+# meta-ish: libslic3r's FFI shim sets `is_BBL_printer()` by checking
+# whether `printer_model` starts with "Bambu Lab", which gates
+# Bambu-specific validation bypasses (e.g. skipping the relative-E
+# G92-in-layer-gcode check that Bambu firmware handles differently
+# from generic Marlin). Dropping it makes Bambu printers fail
+# Marlin-only validations they shouldn't be subject to.
 META_KEYS = {
     "type", "name", "inherits", "from", "setting_id", "instantiation",
-    "printer_variant", "printer_model",
+    "printer_variant",
 }
 
 

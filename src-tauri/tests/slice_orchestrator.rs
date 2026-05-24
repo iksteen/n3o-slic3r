@@ -30,6 +30,13 @@ fn ensure_ffi_init() {
     });
 }
 
+/// Serializes tests that drive a real FFI slice — `slic3r_ffi::
+/// set_slice_progress` is process-global (only one callback at a time),
+/// so parallel slice tests race on it and one ends up missing all its
+/// progress events. Hold this mutex for the duration of any test that
+/// calls `run_slice_job_blocking`.
+static FFI_SLICE_LOCK: Mutex<()> = Mutex::new(());
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -100,6 +107,7 @@ fn collecting_sink() -> (EventSink, Arc<Mutex<Vec<SliceEvent>>>) {
 
 #[test]
 fn single_plate_job_emits_started_progress_finished_with_summary() {
+    let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     ensure_ffi_init();
     let cascades = CascadeRegistry::new();
     let mut cascades_mut = cascades;
@@ -227,20 +235,9 @@ fn unknown_cascade_handle_errors_synchronously() {
 /// per-bucket fragments instead of looking up `cascade_handle`. This
 /// proves the composer path slices end-to-end against the same FFI
 /// stack the legacy path uses.
-///
-/// NOTE (PR-S-4 rework): currently ignored. The hierarchical-layout
-/// composition produces a cascade that libslic3r rejects with
-/// "Relative extruder addressing requires resetting the extruder
-/// position at each layer to prevent loss of floating point accuracy."
-/// All cascade keys present in the old monolithic path are present in
-/// the new composer's output (verified via key-set diff against
-/// `profiles/cascades/bambu-a1-mini-default.toml`), so the divergence
-/// is in *values* or in source-order tie-break behavior, not in
-/// missing keys. To debug: dump both composed and legacy cascades
-/// resolved against the same context and diff the resolved value map.
 #[test]
-#[ignore = "PR-S-4 rework: composer cascade differs from legacy in a way libslic3r rejects; investigate next session"]
 fn printer_instance_id_routes_through_composed_cascade() {
+    let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     ensure_ffi_init();
     // No cascade registered — composer path doesn't touch the registry.
     let cascades = CascadeRegistry::new();
