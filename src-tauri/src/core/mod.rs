@@ -15,6 +15,7 @@ pub mod logging;
 pub mod plugin;
 pub mod preview;
 pub mod printer;
+pub mod profile_library;
 pub mod project;
 pub mod scene;
 pub mod schema;
