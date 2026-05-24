@@ -222,13 +222,19 @@ mod tests {
 
     /// Sanity: the FeedKind + SlotBinding shape round-trips through
     /// the registry's clone/return path without losing the typed
-    /// feed kind.
+    /// feed kind. Bambi's AMS Lite topology gives us both variants
+    /// in one fixture — slot 0 is the `Ext` Direct feed, slots 1-4
+    /// are the four `Ams` slots.
     #[test]
     fn feed_kind_survives_registry_round_trip() {
         reset_to_bundled();
         let bambi = lookup_instance("bambi").expect("bambi present");
-        let slot: &SlotBinding = &bambi.extruders[0].slots[0];
-        assert_eq!(slot.feed, FeedKind::Direct);
-        assert_eq!(slot.label, "Direct");
+        let slots = &bambi.extruders[0].slots;
+        let ext: &SlotBinding = &slots[0];
+        assert_eq!(ext.feed, FeedKind::Direct);
+        assert_eq!(ext.label, "Ext");
+        let ams: &SlotBinding = &slots[1];
+        assert_eq!(ams.feed, FeedKind::Ams);
+        assert_eq!(ams.label, "AMS:1");
     }
 }

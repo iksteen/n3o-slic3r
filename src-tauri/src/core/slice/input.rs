@@ -417,10 +417,13 @@ mod tests {
         assert!(temp_path.exists(), "temp file written");
         assert_eq!(input.model_path, temp_path.to_string_lossy());
 
-        // Bambi has one extruder with one slot, unbound → Generic PLA
-        // fallback. The builder surfaces it as a single filament entry.
-        assert_eq!(input.context.filaments.len(), 1);
-        assert_eq!(input.context.filaments[0].identity, "Generic PLA");
+        // Bambi has 5 slots (Ext + AMS:1..4), all unbound → all
+        // fall back to Generic PLA. The builder surfaces one
+        // filament entry per slot.
+        assert_eq!(input.context.filaments.len(), 5);
+        for f in &input.context.filaments {
+            assert_eq!(f.identity, "Generic PLA");
+        }
 
         std::fs::remove_file(&temp_path).ok();
     }

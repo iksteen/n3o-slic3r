@@ -22,6 +22,12 @@ dist-ssr
 .env.local
 .env.*.local
 
+# Slice / driver scratch output that wanders into the repo root.
+# Large binary files; never commit. Anchored to `/` so vendored
+# fixtures under `examples/` and `external/` aren't matched.
+/*.gcode.3mf
+/*.3mf
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

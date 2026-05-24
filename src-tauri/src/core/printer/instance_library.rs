@@ -68,20 +68,45 @@ fn bambi() -> PrinterInstance {
         default_process_fragment_slug: "0.20mm-standard-bbl-a1m".to_owned(),
         connection: None,
         extruders: vec![ExtruderState {
-            // Solo extruder — slot label carries the full identity.
+            // Solo extruder — slot labels carry the full identity.
             label: String::new(),
             installed_nozzle: NozzleSku {
                 diameter_mm: 0.4,
                 material: NozzleMaterial::Stainless,
             },
-            // Single direct-fed slot. Adding AMS Lite later extends
-            // to 5 slots: keep this Direct + push 4 `Ams`-feed slots
-            // labeled "AMS:1".."AMS:4".
-            slots: vec![SlotBinding {
-                label: "Direct".to_owned(),
-                feed: FeedKind::Direct,
-                filament_identity: None,
-            }],
+            // A1 mini + AMS Lite: 1 direct-fed `Ext` slot + 4
+            // `Ams`-feed slots. The pre-slice gate refuses prints
+            // that mix `Ext` with any `AMS:n` slot in the same job
+            // (Bambu firmware physically can't pull from both
+            // feed paths). Multiple `AMS:n` slots are fine — the
+            // AMS swaps within.
+            slots: vec![
+                SlotBinding {
+                    label: "Ext".to_owned(),
+                    feed: FeedKind::Direct,
+                    filament_identity: None,
+                },
+                SlotBinding {
+                    label: "AMS:1".to_owned(),
+                    feed: FeedKind::Ams,
+                    filament_identity: None,
+                },
+                SlotBinding {
+                    label: "AMS:2".to_owned(),
+                    feed: FeedKind::Ams,
+                    filament_identity: None,
+                },
+                SlotBinding {
+                    label: "AMS:3".to_owned(),
+                    feed: FeedKind::Ams,
+                    filament_identity: None,
+                },
+                SlotBinding {
+                    label: "AMS:4".to_owned(),
+                    feed: FeedKind::Ams,
+                    filament_identity: None,
+                },
+            ],
         }],
         bed: BedRef {
             identity: "Bambu Cool Plate SuperTack".to_owned(),
@@ -138,16 +163,27 @@ mod tests {
     }
 
     #[test]
-    fn bambi_is_a1_mini_with_supertack_and_stainless() {
+    fn bambi_is_a1_mini_with_ams_lite_supertack_and_stainless() {
+        use crate::core::printer::FeedKind;
+
         let b = lookup_instance(BAMBI_ID).expect("bambi present");
         assert_eq!(b.vendor_profile_ref, "bambu-a1-mini");
         assert_eq!(b.extruders.len(), 1);
-        assert_eq!(b.extruders[0].slots.len(), 1);
         assert_eq!(b.extruders[0].installed_nozzle.diameter_mm, 0.4);
         assert_eq!(
             b.extruders[0].installed_nozzle.material,
             NozzleMaterial::Stainless,
         );
+        // A1 mini + AMS Lite: 5 slots — 1 Direct (`Ext`) + 4
+        // Ams (`AMS:1`..`AMS:4`).
+        let slots = &b.extruders[0].slots;
+        assert_eq!(slots.len(), 5);
+        let labels: Vec<&str> = slots.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels, vec!["Ext", "AMS:1", "AMS:2", "AMS:3", "AMS:4"]);
+        assert_eq!(slots[0].feed, FeedKind::Direct);
+        for ams in &slots[1..] {
+            assert_eq!(ams.feed, FeedKind::Ams);
+        }
         assert_eq!(b.bed.identity, "Bambu Cool Plate SuperTack");
     }
 

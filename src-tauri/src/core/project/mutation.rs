@@ -3104,17 +3104,24 @@ mod tests {
 
     #[test]
     fn register_object_auto_binds_material_to_slot_on_bambi() {
-        // Default project boots into Bambi (1 extruder × 1 slot).
-        // Every model material lands on slot (0, 0).
+        // Default project boots into Bambi (1 extruder × 5 slots:
+        // Ext + AMS:1..AMS:4). Auto-bind rotates through the flat
+        // slot grid `(material - 1) MOD 5`: material 1 → slot 0
+        // (`Ext`), material 2 → slot 1 (`AMS:1`), …
         let mut p = Project::default();
         add_cube_with_material(&mut p, 1);
         add_cube_with_material(&mut p, 2);
+        add_cube_with_material(&mut p, 6); // wraps to slot 0 again
         assert_eq!(
             p.plates[0].material_to_slot.get(&1),
             Some(&SlotRef { extruder: 0, slot: 0 }),
         );
         assert_eq!(
             p.plates[0].material_to_slot.get(&2),
+            Some(&SlotRef { extruder: 0, slot: 1 }),
+        );
+        assert_eq!(
+            p.plates[0].material_to_slot.get(&6),
             Some(&SlotRef { extruder: 0, slot: 0 }),
         );
     }
