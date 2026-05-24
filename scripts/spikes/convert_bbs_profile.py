@@ -325,11 +325,65 @@ def flatten_inheritance(start: Path, kind: str, vendor_dir: Path) -> dict:
     return merged
 
 
-def value_to_toml(v) -> str:
+def value_to_toml(v, *, key: str | None = None, strings_keys: set[str] | None = None) -> str:
+    """Render a JSON profile value as a TOML right-hand side.
+
+    Lists are flattened to a single string. The separator depends on the
+    libslic3r option type:
+      - `coStrings` keys (`key in strings_keys`) → libslic3r's
+        escape_strings_cstyle convention: entries joined by `;`, with
+        entries containing whitespace/quotes/backslashes/newlines wrapped
+        in `"..."` and the special chars c-style-escaped. Plain `,` join
+        is wrong here because real-world `coStrings` values
+        (e.g. `small_area_infill_flow_compensation_model` whose entries
+        are themselves comma-separated number pairs) would lose all entry
+        boundaries.
+      - everything else → comma-separated, matching the parsing
+        coFloats/coInts/coPercents/coBools expect.
+
+    Pass `key` + `strings_keys` whenever the caller has them available;
+    `value_to_toml(v)` keeps the legacy comma-join behavior so spike-era
+    callsites still work.
+    """
     if isinstance(v, list):
-        joined = ",".join(str(x) for x in v)
+        if key is not None and strings_keys is not None and key in strings_keys:
+            joined = escape_strings_cstyle([str(x) for x in v])
+        else:
+            joined = ",".join(str(x) for x in v)
         return _toml_string(joined)
     return _toml_string(str(v))
+
+
+def escape_strings_cstyle(strs: list[str]) -> str:
+    """Mirror libslic3r's `escape_strings_cstyle` (Config.cpp:72).
+
+    Entries are joined with `;`. Each entry containing whitespace,
+    quotes, backslashes, or newlines is wrapped in `"..."` with `\\`,
+    `"`, `\\r`, and `\\n` C-style-escaped. Entries without those chars
+    are written verbatim — commas (which appear inside data like
+    `"0.2,0.4444"`) are NOT triggers, so libslic3r's
+    `unescape_strings_cstyle` round-trips them correctly.
+
+    Mirrors the upstream behavior used by `ConfigOptionStrings::serialize`.
+    """
+    SPECIALS = (" ", "\t", "\\", '"', "\r", "\n")
+    out: list[str] = []
+    for s in strs:
+        should_quote = (
+            any(c in s for c in SPECIALS)
+            or (len(strs) == 1 and not s)
+        )
+        if should_quote:
+            escaped = (
+                s.replace("\\", "\\\\")
+                 .replace('"', '\\"')
+                 .replace("\r", "\\r")
+                 .replace("\n", "\\n")
+            )
+            out.append(f'"{escaped}"')
+        else:
+            out.append(s)
+    return ";".join(out)
 
 
 def _toml_string(s: str) -> str:
