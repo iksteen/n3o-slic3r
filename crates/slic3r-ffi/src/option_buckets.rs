@@ -637,6 +637,46 @@ const OPTION_BUCKETS: &[(&str, OptBucket)] = &[
     ("zaa_minimize_perimeter_height", OptBucket::Process),
 ];
 
+/// Per-extruder vector-keyed options. These printer-bucket keys are
+/// stored as `Vec<T>` (one entry per extruder) by libslic3r at runtime;
+/// our hierarchical vendor profile layout splits each into a scalar
+/// inside the corresponding `nozzles/<sku>.toml`, and the composer
+/// assembles per-extruder vectors at slice time. Mirrors
+/// `PrintConfigDef::init_extruder_option_keys` in PrintConfig.cpp.
+const EXTRUDER_KEYS: &[&str] = &[
+    "default_filament_profile",
+    "default_nozzle_volume_type",
+    "deretraction_speed",
+    "extruder_colour",
+    "extruder_offset",
+    "extruder_printable_height",
+    "extruder_type",
+    "long_retractions_when_cut",
+    "max_layer_height",
+    "min_layer_height",
+    "nozzle_diameter",
+    "nozzle_flush_dataset",
+    "nozzle_type",
+    "nozzle_volume",
+    "retract_before_wipe",
+    "retract_length_toolchange",
+    "retract_lift_above",
+    "retract_lift_below",
+    "retract_lift_enforce",
+    "retract_restart_extra",
+    "retract_restart_extra_toolchange",
+    "retract_when_changing_layer",
+    "retraction_distances_when_cut",
+    "retraction_length",
+    "retraction_minimum_travel",
+    "retraction_speed",
+    "travel_slope",
+    "wipe",
+    "wipe_distance",
+    "z_hop",
+    "z_hop_types",
+];
+
 /// Bucket for the given OptionDef key, or `None` for keys not partitioned by
 /// `Preset::*_options()` (SLA-only, internal, etc.).
 pub fn bucket_of(key: &str) -> Option<OptBucket> {
@@ -644,6 +684,13 @@ pub fn bucket_of(key: &str) -> Option<OptBucket> {
         .binary_search_by_key(&key, |(k, _)| *k)
         .ok()
         .map(|i| OPTION_BUCKETS[i].1)
+}
+
+/// True if `key` is one of libslic3r's per-extruder vector-valued
+/// options. The converter routes these into per-nozzle fragments; the
+/// composer zips them into per-extruder vectors.
+pub fn is_extruder_key(key: &str) -> bool {
+    EXTRUDER_KEYS.binary_search(&key).is_ok()
 }
 
 #[cfg(test)]
@@ -660,6 +707,15 @@ mod tests {
     }
 
     #[test]
+    fn extruder_keys_sorted_for_binary_search() {
+        let mut last = "";
+        for key in EXTRUDER_KEYS {
+            assert!(*key > last, "EXTRUDER_KEYS must be sorted; {key} <= {last}");
+            last = key;
+        }
+    }
+
+    #[test]
     fn known_keys_resolve() {
         assert_eq!(bucket_of("layer_height"),     Some(OptBucket::Process));
         assert_eq!(bucket_of("nozzle_diameter"),  Some(OptBucket::Printer));
@@ -667,5 +723,20 @@ mod tests {
         assert_eq!(bucket_of("filament_type"),    Some(OptBucket::Filament));
         assert_eq!(bucket_of("machine_max_speed_x"), Some(OptBucket::Printer));
         assert_eq!(bucket_of("nonexistent_key"),  None);
+    }
+
+    #[test]
+    fn extruder_key_classification() {
+        // nozzle_diameter is the canonical per-extruder key.
+        assert!(is_extruder_key("nozzle_diameter"));
+        assert!(is_extruder_key("retraction_length"));
+        // machine_max_speed_x is printer-bucket but NOT per-extruder;
+        // it's a machine global, not a per-nozzle override.
+        assert!(!is_extruder_key("machine_max_speed_x"));
+        // Process keys are never extruder-vectored at this layer.
+        assert!(!is_extruder_key("layer_height"));
+        // Filament keys are vectored too, but in a separate axis;
+        // the extruder set is printer-bucket only.
+        assert!(!is_extruder_key("nozzle_temperature"));
     }
 }

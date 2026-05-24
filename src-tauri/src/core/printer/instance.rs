@@ -158,7 +158,7 @@ mod tests {
             id: "test".into(),
             display_name: "Test".into(),
             vendor_profile_ref: "bambu-a1-mini".into(),
-            printer_fragment_slug: "bambu-lab-a1-mini-0.4-nozzle".into(),
+            printer_fragment_slug: "bambu-lab-a1-mini".into(),
             default_filament_fragment_slug: "bambu-pla-basic-bbl-a1m".into(),
             default_process_fragment_slug: "0.20mm-standard-bbl-a1m".into(),
             connection: None,

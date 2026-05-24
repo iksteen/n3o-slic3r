@@ -1,0 +1,12 @@
+# Snapmaker Textured PEI
+#
+# Hand-authored bed metadata (PR-S-4 rework). Bed.toml is intentionally
+# thin: bed-temperature data lives per-filament-per-bed in the filament
+# profile (`*_plate_temp` arrays); the cascade adapter (PR-1-6
+# dimensional expansion) uses `curr_bed_type` to pick the right array
+# index at slice time.
+
+identity = "Snapmaker Textured PEI"
+# Snapmaker's profile tree uses Bambu's enum vocabulary upstream
+# (they share the libslic3r BedType enum).
+curr_bed_type = "Textured PEI Plate"
