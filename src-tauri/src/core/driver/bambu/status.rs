@@ -119,9 +119,130 @@ pub struct BambuReport {
     #[serde(default, rename = "cooling_fan_speed", deserialize_with = "de::optional_f64")]
     pub fan_speed: Option<f64>,
 
-    // --- AMS — populated by PR-7a-4 ---
+    // --- AMS (PR-7a-4) ---
     #[serde(default)]
-    pub ams: Option<serde_json::Value>,
+    pub ams: Option<RawAmsState>,
+}
+
+/// Wire-shape mirror of the `print.ams` sub-object. Decoded
+/// into the typed [`AmsState`] in [`status::DriverExtra::Bambu`].
+/// Ported from `bambu-overlay/src/bambu/models.rs:181-200`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+pub struct RawAmsState {
+    /// Flat slot index of the active tray:
+    /// `unit_id * 4 + tray_id`. Decoded into a separate field on
+    /// the typed shape so consumers don't need to know the
+    /// encoding.
+    #[serde(default, rename = "tray_now", deserialize_with = "de::optional_i64")]
+    pub tray_now: Option<i64>,
+    #[serde(default)]
+    pub ams: Vec<RawAmsUnit>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+pub struct RawAmsUnit {
+    #[serde(default, deserialize_with = "de::optional_i64")]
+    pub id: Option<i64>,
+    #[serde(default)]
+    pub tray: Vec<RawAmsTray>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+pub struct RawAmsTray {
+    #[serde(default, deserialize_with = "de::optional_i64")]
+    pub id: Option<i64>,
+    #[serde(default, rename = "tray_type", deserialize_with = "de::optional_string")]
+    pub material: Option<String>,
+    /// Bambu reports an empty/loaded color as `"00000000"` (fully
+    /// transparent black). The normalizer in `to_typed` treats
+    /// that as "no spool loaded" — the tray is empty.
+    #[serde(default, rename = "tray_color", deserialize_with = "de::optional_string")]
+    pub color: Option<String>,
+    /// Bambu's spool-specific identifier — varies by firmware
+    /// path. Stored as-is. (Overlay reads `tray_sub_brands` —
+    /// note plural — we accept either.)
+    #[serde(
+        default,
+        rename = "tray_sub_brands",
+        alias = "tray_sub_brand",
+        deserialize_with = "de::optional_string"
+    )]
+    pub sub_brand: Option<String>,
+    /// Multi-color spool colors, populated for variegated
+    /// filaments. Empty for solid spools.
+    #[serde(default)]
+    pub cols: Vec<String>,
+}
+
+impl RawAmsState {
+    /// Lower into the typed shape `BambuExtra` exposes.
+    pub fn to_typed(&self) -> crate::core::driver::status::AmsState {
+        use crate::core::driver::status::{
+            AmsFilament, AmsState, AmsTray, AmsUnit,
+        };
+        let active_slot = self.tray_now.and_then(|n| u8::try_from(n).ok());
+        let units = self
+            .ams
+            .iter()
+            .enumerate()
+            .map(|(idx, u)| AmsUnit {
+                id: u.id.and_then(|i| u8::try_from(i).ok()).unwrap_or(idx as u8),
+                trays: u
+                    .tray
+                    .iter()
+                    .enumerate()
+                    .map(|(tidx, t)| AmsTray {
+                        id: t.id.and_then(|i| u8::try_from(i).ok()).unwrap_or(tidx as u8),
+                        identity: tray_identity(t),
+                    })
+                    .collect(),
+            })
+            .collect();
+        AmsState { units, active_slot }
+    }
+}
+
+fn tray_identity(
+    t: &RawAmsTray,
+) -> Option<crate::core::driver::status::AmsFilament> {
+    use crate::core::driver::status::AmsFilament;
+    let material = t.material.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let color = t
+        .color
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter(|c| !is_transparent_black(c));
+    let sub_brand = t
+        .sub_brand
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    let multi_colors: Vec<String> = t
+        .cols
+        .iter()
+        .map(|c| c.trim().to_owned())
+        .filter(|c| !c.is_empty() && !is_transparent_black(c))
+        .collect();
+    if material.is_none() && color.is_none() && sub_brand.is_none() && multi_colors.is_empty() {
+        return None;
+    }
+    Some(AmsFilament {
+        tray_type: material.unwrap_or("").to_owned(),
+        color: color.unwrap_or("").to_owned(),
+        sub_brand,
+        multi_colors,
+    })
+}
+
+fn is_transparent_black(color: &str) -> bool {
+    let normalized = color.trim().trim_start_matches('#');
+    if normalized.len() < 6 {
+        return false;
+    }
+    normalized[..6].eq_ignore_ascii_case("000000")
+        && normalized.get(6..8).map(|a| a == "00").unwrap_or(true)
 }
 
 impl BambuReport {
@@ -249,9 +370,15 @@ pub fn merge_into(snapshot: &mut PrinterStatus, msg: BambuReport) {
         if let Some(f) = msg.fan_speed {
             extra.fan_speed = Some(f as f32);
         }
-        // AMS payload is forwarded as opaque JSON until PR-7a-4
-        // adds typed parsing. We don't replace extra.ams here —
-        // PR-7a-4 will plumb it through the typed shape.
+        // AMS (PR-7a-4): replace the typed shape entirely on
+        // each delta. Bambu sends full AMS state in pushall
+        // snapshots; deltas during printing also carry the
+        // full state. Per-tray spool-aware merge (overlay's
+        // model) is overkill for our needs — the parent merge
+        // already last-write-wins on the raw shape.
+        if let Some(raw) = msg.ams {
+            extra.ams = Some(raw.to_typed());
+        }
     }
 }
 
@@ -451,6 +578,150 @@ mod tests {
             snap.last_updated > before,
             "last_updated must advance on each merge"
         );
+    }
+
+    #[test]
+    fn parse_ams_4_loaded_typed() {
+        // Captured-shape fixture: 4 trays each loaded with a
+        // distinct PLA color. Active = slot 2 (tray_now encoding
+        // = unit 0 * 4 + tray 2).
+        let msg: BambuMessage = serde_json::from_value(json!({
+            "print": {
+                "ams": {
+                    "tray_now": "2",
+                    "ams": [{
+                        "id": "0",
+                        "tray": [
+                            {"id": "0", "tray_type": "PLA", "tray_color": "FF0000FF"},
+                            {"id": "1", "tray_type": "PLA", "tray_color": "00FF00FF"},
+                            {"id": "2", "tray_type": "PLA", "tray_color": "0000FFFF"},
+                            {"id": "3", "tray_type": "PETG", "tray_color": "FFFF00FF"}
+                        ]
+                    }]
+                }
+            }
+        })).unwrap();
+        let raw = msg.print.ams.expect("ams present");
+        let typed = raw.to_typed();
+        assert_eq!(typed.active_slot, Some(2));
+        assert_eq!(typed.units.len(), 1);
+        assert_eq!(typed.units[0].trays.len(), 4);
+        for (i, t) in typed.units[0].trays.iter().enumerate() {
+            let id = t.identity.as_ref().expect("loaded");
+            assert!(!id.color.is_empty(), "tray {i} color");
+            assert!(!id.tray_type.is_empty(), "tray {i} type");
+        }
+    }
+
+    #[test]
+    fn parse_ams_3_loaded_1_empty() {
+        // Slot 3 reports tray_color="00000000" — a Bambu
+        // "empty" sentinel that the normalizer must not
+        // surface as a phantom black spool.
+        let msg: BambuMessage = serde_json::from_value(json!({
+            "print": {
+                "ams": {
+                    "tray_now": "0",
+                    "ams": [{
+                        "id": 0,
+                        "tray": [
+                            {"id": 0, "tray_type": "PLA", "tray_color": "FF0000FF"},
+                            {"id": 1, "tray_type": "PLA", "tray_color": "00FF00FF"},
+                            {"id": 2, "tray_type": "PETG", "tray_color": "0000FFFF"},
+                            {"id": 3, "tray_color": "00000000"}
+                        ]
+                    }]
+                }
+            }
+        })).unwrap();
+        let typed = msg.print.ams.unwrap().to_typed();
+        assert!(typed.units[0].trays[0].identity.is_some());
+        assert!(typed.units[0].trays[1].identity.is_some());
+        assert!(typed.units[0].trays[2].identity.is_some());
+        assert!(
+            typed.units[0].trays[3].identity.is_none(),
+            "empty tray (00000000) must surface as None, not a black spool"
+        );
+    }
+
+    #[test]
+    fn parse_ams_multicolor_spool() {
+        let msg: BambuMessage = serde_json::from_value(json!({
+            "print": {
+                "ams": {
+                    "ams": [{
+                        "id": 0,
+                        "tray": [{
+                            "id": 0,
+                            "tray_type": "PLA",
+                            "tray_color": "FF0000FF",
+                            "cols": ["FF0000FF", "00FF00FF", "0000FFFF"]
+                        }]
+                    }]
+                }
+            }
+        })).unwrap();
+        let typed = msg.print.ams.unwrap().to_typed();
+        let id = typed.units[0].trays[0].identity.as_ref().unwrap();
+        assert_eq!(id.multi_colors.len(), 3);
+        assert_eq!(id.color, "FF0000FF");
+    }
+
+    #[test]
+    fn parse_ams_active_slot_decodes_multi_unit_encoding() {
+        // tray_now = 5 in a 2-unit system encodes unit 1, tray 1
+        // (1 * 4 + 1 = 5). We surface a flat slot index of 5.
+        let msg: BambuMessage = serde_json::from_value(json!({
+            "print": {
+                "ams": {
+                    "tray_now": "5",
+                    "ams": [
+                        {"id": 0, "tray": []},
+                        {"id": 1, "tray": []}
+                    ]
+                }
+            }
+        })).unwrap();
+        let typed = msg.print.ams.unwrap().to_typed();
+        assert_eq!(typed.active_slot, Some(5));
+    }
+
+    #[test]
+    fn merge_into_populates_typed_ams_under_bambu_extra() {
+        let mut snap = PrinterStatus::disconnected_for(DriverExtra::Bambu(
+            BambuExtra::default(),
+        ));
+        let report: BambuReport = serde_json::from_value(json!({
+            "ams": {
+                "tray_now": 0,
+                "ams": [{
+                    "id": 0,
+                    "tray": [
+                        {"id": 0, "tray_type": "PLA", "tray_color": "FF8800FF"}
+                    ]
+                }]
+            }
+        })).unwrap();
+        merge_into(&mut snap, report);
+        match snap.extra {
+            DriverExtra::Bambu(extra) => {
+                let ams = extra.ams.expect("ams populated");
+                assert_eq!(ams.active_slot, Some(0));
+                assert_eq!(ams.units[0].trays[0]
+                    .identity.as_ref().unwrap().color, "FF8800FF");
+            }
+            _ => panic!("expected Bambu extra"),
+        }
+    }
+
+    #[test]
+    fn is_transparent_black_classifies_known_sentinels() {
+        assert!(is_transparent_black("00000000"));
+        assert!(is_transparent_black("000000"));   // 6-hex form
+        assert!(is_transparent_black("#000000"));  // with hash
+        assert!(!is_transparent_black("FF0000FF"));
+        assert!(!is_transparent_black("000001FF")); // not exactly 000000
+        assert!(!is_transparent_black("000000FF"));  // alpha != 00
     }
 
     #[test]
