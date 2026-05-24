@@ -16,6 +16,7 @@
 //!   the above onto a worker thread; once that lands this command
 //!   becomes the legacy debug-panel path and may be removed.
 
+pub mod cascade_safety;
 pub mod commands;
 pub mod errors;
 pub mod events;

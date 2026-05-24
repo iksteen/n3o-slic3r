@@ -47,6 +47,13 @@ pub enum SliceError {
     },
     /// User cancelled the slice via `slice_cancel` (PR-3-2).
     Cancelled,
+    /// Cascade resolved to values the safety gate flagged as
+    /// dangerous to send to a printer: missing machine_start_gcode,
+    /// missing change_filament_gcode for an AMS-capable printer,
+    /// nozzle temp above the bound printer's max_temp, etc. Each
+    /// entry in `issues` is a human-readable description; the UI
+    /// surfaces them on the slice panel + blocks the send button.
+    UnsafeCascade { issues: Vec<String> },
     /// Anything we couldn't classify. UI surfaces the raw message
     /// in a "see logs" toast.
     Unknown { raw_message: String },
@@ -75,6 +82,15 @@ impl std::fmt::Display for SliceError {
                 }
             }
             Self::Cancelled => write!(f, "slice cancelled"),
+            Self::UnsafeCascade { issues } => {
+                write!(
+                    f,
+                    "cascade safety gate refused the slice ({} issue{}): {}",
+                    issues.len(),
+                    if issues.len() == 1 { "" } else { "s" },
+                    issues.join("; "),
+                )
+            }
             Self::Unknown { raw_message } => write!(f, "{raw_message}"),
         }
     }

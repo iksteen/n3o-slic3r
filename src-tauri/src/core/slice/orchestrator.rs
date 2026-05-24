@@ -250,6 +250,28 @@ fn run_worker(
         // (Phase 5) may want per-plate cascade overrides; today the
         // context is the same per plate.
         let resolved_cascade = cascade::resolve(&job.cascade, &job.context);
+
+        // Safety gate (cascade_safety.rs): refuses slice when the
+        // resolved cascade is missing machine_start_gcode /
+        // change_filament_gcode, has an empty acceleration envelope,
+        // or asks for a nozzle temp above the printer's max. Catches
+        // the demonstration-cascade class of failure before we feed
+        // empty start-of-print to libslic3r + ship the result to a
+        // real printer.
+        if let Err(issues) = super::cascade_safety::validate_resolved_cascade(
+            &resolved_cascade,
+            &job.context.printer,
+        ) {
+            tracing::warn!(
+                plate_id = plate_id,
+                issue_count = issues.len(),
+                "cascade safety gate refused slice",
+            );
+            let err = SliceError::UnsafeCascade { issues };
+            fail(&handle, &sink, job_id, plate_id, err);
+            return;
+        }
+
         let manifest = Manifest::build();
         let adapt_result = match adapt(&resolved_cascade, &job.context, &manifest) {
             Ok(ar) => ar,
