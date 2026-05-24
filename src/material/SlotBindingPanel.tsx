@@ -27,7 +27,35 @@ import {
   type PrinterInstance,
   type SlotRef,
 } from "../printer/printerInstance";
-import { FILAMENT_CATALOG, lookupFilament } from "./filamentCatalog";
+
+/** Mirror of Rust's `core::profile_library::FilamentFragmentSummary`.
+ *  The slot picker writes `identity` into `SlotBinding.filament_identity`;
+ *  `display_name` is the human-readable label parsed out of the
+ *  vendor fragment's `filament_settings_id`. */
+interface FilamentSummary {
+  identity: string;
+  display_name: string;
+  base_type: string;
+}
+
+/** Swatch tint per base material family. Vendor fragments don't ship
+ *  display colors so we infer from the filament type — good enough to
+ *  visually distinguish slots until per-spool color editing lands. */
+const SWATCH_BY_BASE: Record<string, string> = {
+  PLA: "#9CA3AF",
+  PETG: "#60A5FA",
+  ABS: "#1F2937",
+  ASA: "#374151",
+  TPU: "#10B981",
+  PC: "#7C3AED",
+  PA: "#F59E0B",
+  PVA: "#FBBF24",
+  HIPS: "#94A3B8",
+};
+
+function swatchFor(base: string | undefined): string {
+  return (base && SWATCH_BY_BASE[base.toUpperCase()]) ?? "#9CA3AF";
+}
 
 export interface SlotBindingPanelProps {
   plateId: PlateId | null;
@@ -67,6 +95,7 @@ async function clearMaterialSlot(
 export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
   const instanceId = plate?.printer_instance_id ?? null;
   const [instance, setInstance] = useState<PrinterInstance | null>(null);
+  const [filaments, setFilaments] = useState<FilamentSummary[]>([]);
 
   // Pull the live instance state. Refetches whenever the bound id
   // changes, or when the backend emits `printer:instance_changed`
@@ -96,12 +125,35 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
     };
   }, [instanceId]);
 
+  // Pull the bundled vendor filament fragments once per mount. The
+  // list is small + stable; no refetch trigger needed until user-
+  // library editing lands.
+  useEffect(() => {
+    let cancelled = false;
+    void invoke<FilamentSummary[]>("filament_profile_list")
+      .then((list) => {
+        if (!cancelled) setFilaments(list);
+      })
+      .catch((err) =>
+        console.error("[slot-binding] filament_profile_list failed", err),
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const slots = useMemo<FlatSlotOption[]>(
     () => (instance ? flattenSlots(instance) : []),
     [instance],
   );
 
   const materials = useMemo(() => referencedMaterials(plate), [plate]);
+
+  const filamentByIdentity = useMemo(() => {
+    const map = new Map<string, FilamentSummary>();
+    for (const f of filaments) map.set(f.identity, f);
+    return map;
+  }, [filaments]);
 
   if (!plateId || !plate || !instance) {
     return null;
@@ -160,9 +212,9 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
         </div>
         {slots.map((s) => {
           const entry = s.filament_identity
-            ? lookupFilament(s.filament_identity)
+            ? filamentByIdentity.get(s.filament_identity)
             : null;
-          const swatch = entry?.color ?? "#9CA3AF";
+          const swatch = swatchFor(entry?.base_type);
           return (
             <div
               key={`slot-${s.ref.extruder}-${s.ref.slot}`}
@@ -183,17 +235,19 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
                 title={`Filament loaded in ${s.label}`}
               >
                 <option value="">— empty —</option>
-                {FILAMENT_CATALOG.map((f) => (
+                {filaments.map((f) => (
                   <option key={f.identity} value={f.identity}>
-                    {f.label}
+                    {f.display_name}
                   </option>
                 ))}
                 {s.filament_identity && !entry && (
-                  // Saved instance may carry an identity not in the
-                  // stub catalog — surface verbatim so the user can
-                  // still see what's bound.
+                  // Loaded instance may carry an identity that isn't
+                  // in the current bundled list (vendor profile
+                  // renamed, removed, etc.) — surface verbatim so
+                  // the user can still see what's bound and pick
+                  // a replacement.
                   <option value={s.filament_identity}>
-                    {s.filament_identity}
+                    {s.filament_identity} (unknown)
                   </option>
                 )}
               </select>
@@ -239,8 +293,11 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
                   <option value="">slot…</option>
                   {slots.map((s) => {
                     const conflict = isFeedMixConflict(s, conflictWith);
+                    const filEntry = s.filament_identity
+                      ? filamentByIdentity.get(s.filament_identity)
+                      : null;
                     const filamentLabel = s.filament_identity
-                      ? ` — ${s.filament_identity}`
+                      ? ` — ${filEntry?.display_name ?? s.filament_identity}`
                       : "";
                     return (
                       <option

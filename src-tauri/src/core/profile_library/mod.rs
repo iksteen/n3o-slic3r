@@ -204,6 +204,50 @@ pub fn load_filament_fragment(slug: &str) -> Option<Cascade> {
         .map(|f| parse_fragment(f.slug, f.toml, f.source_path))
 }
 
+/// One bundled vendor filament's identity + display label, surfaced
+/// to the frontend slot-binding panel. `identity` is the slug
+/// (matches the wire form stored in `SlotBinding.filament_identity`);
+/// `display_name` is the `filament_settings_id` field a human will
+/// recognize ("Bambu PLA Basic @BBL A1M"); `base_type` drives the
+/// swatch color in the picker.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FilamentFragmentSummary {
+    pub identity: String,
+    pub display_name: String,
+    pub base_type: String,
+}
+
+/// Enumerate every bundled vendor filament fragment. Parses
+/// `filament_settings_id` + `filament_type` out of each TOML — both
+/// are stamped by the vendor converter and stable across regens.
+/// Insertion order is preserved (matches `FILAMENTS` declaration).
+pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
+    FILAMENTS
+        .iter()
+        .map(|f| {
+            let value: toml::Value = toml::from_str(f.toml).unwrap_or_else(|e| {
+                panic!("bundled filament `{}` TOML parse: {e}", f.slug)
+            });
+            let table = value.as_table().expect("filament fragment is a table");
+            let display_name = table
+                .get("filament_settings_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| f.slug.to_owned());
+            let base_type = table
+                .get("filament_type")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| "PLA".to_owned());
+            FilamentFragmentSummary {
+                identity: f.slug.to_owned(),
+                display_name,
+                base_type,
+            }
+        })
+        .collect()
+}
+
 /// Load process/<slug>.toml.
 pub fn load_process_fragment(slug: &str) -> Option<Cascade> {
     PROCESSES

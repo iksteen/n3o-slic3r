@@ -29,6 +29,7 @@ pub use profile::{BoundingBox, PrinterProfile, Toolhead};
 pub use registry::{bundled_catalog, default_binding, lookup, CatalogEntry};
 
 use crate::core::filament::{bundled_catalog as filament_bundled_catalog, FilamentProfile};
+use crate::core::profile_library::{list_filament_fragments, FilamentFragmentSummary};
 
 /// Tauri command: list every printer instance the user has access to
 /// (the bundled fixtures plus any future user-library entries). Drives
@@ -66,11 +67,29 @@ pub fn printer_instance_set_slot_filament(
     Ok(updated)
 }
 
-/// Tauri command: the bundled filament catalog. Drives the
-/// per-slot filament picker. Currently a single Generic PLA entry
-/// from the bundled fixtures — user-library filaments land in a
-/// follow-up.
+/// Tauri command: the bundled filament catalog. Returns the
+/// cascade-context profiles (currently just `Generic PLA` —
+/// `base_type`-driven cascade-resolve fallback). Used by the
+/// slice-input builder; the slot picker uses
+/// [`filament_profile_list`] for the richer vendor-fragment
+/// surface instead.
 #[tauri::command]
 pub fn filament_catalog_list() -> Vec<FilamentProfile> {
     filament_bundled_catalog()
+}
+
+/// Tauri command: bundled vendor filament fragments
+/// (`profiles/vendor/<vendor>/filament/<slug>.toml`). Each entry
+/// carries the slug (the wire `filament_identity` the slot panel
+/// stores) plus a display label parsed out of the fragment's
+/// `filament_settings_id` field, plus the base material type for
+/// the picker swatch.
+///
+/// Drives the slot-binding panel's filament dropdown — what the
+/// user actually picks from when binding a slot. The cascade-
+/// context `filament_catalog_list` above is for the slice-time
+/// resolver, not the picker.
+#[tauri::command]
+pub fn filament_profile_list() -> Vec<FilamentFragmentSummary> {
+    list_filament_fragments()
 }
