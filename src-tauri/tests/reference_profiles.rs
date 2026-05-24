@@ -2,13 +2,12 @@
 //!
 //! Loads `profiles/printers/bambu-a1-mini.toml`,
 //! `profiles/plates/textured-pei.toml`, `profiles/filaments/
-//! generic-pla.toml`, parses `profiles/cascades/bambu-a1-mini-default.toml`,
-//! resolves PLA-on-Textured-PEI, and asserts the expected effective
-//! values. This is the production-shaped end-to-end test of PR-1-1
-//! through PR-1-7 without yet driving the slicer.
-//!
-//! TOML is the only config format the project ships; profiles + cascades +
-//! override files all share the same format.
+//! generic-pla.toml`, parses `profiles/cascades/bambu-a1-mini-demo.toml`
+//! (the small spec-0/1/2 fixture), resolves PLA-on-Textured-PEI, and
+//! asserts the expected effective values. End-to-end test of PR-1-1
+//! through PR-1-7 against an auditable cascade surface — production
+//! safety properties of the BBS-derived `*-default.toml` live in
+//! `bbs_production_cascade.rs` instead.
 
 use n3o_slic3r_lib::core::cascade::{
     loader::parse_cascade_str, resolve, validate_cascade, Cascade, KnownDimensions,
@@ -60,10 +59,10 @@ fn reference_profiles_resolve_canonical_pla_pei_context() {
 
     let ctx = SlicingContext::new(Arc::new(printer), Arc::new(plate), vec![Arc::new(filament)]);
 
-    let cascade_path = workspace_root().join("profiles/cascades/bambu-a1-mini-default.toml");
+    let cascade_path = workspace_root().join("profiles/cascades/bambu-a1-mini-demo.toml");
     let src = std::fs::read_to_string(&cascade_path).expect("read cascade");
     let cascade = Cascade {
-        rules: parse_cascade_str(&src, Path::new("bambu-a1-mini-default.toml"))
+        rules: parse_cascade_str(&src, Path::new("bambu-a1-mini-demo.toml"))
             .expect("parse cascade"),
     };
 

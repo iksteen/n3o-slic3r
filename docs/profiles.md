@@ -597,6 +597,29 @@ For the record:
   for compound rules — mixed syntax. The `[[rule]]` form scales
   uniformly. Section shorthand kept for single-condition cases.
 
+## Open: cascade `include:` directive (post-MVP)
+
+BambuStudio's machine profiles split G-code macros into sibling
+template files referenced by an `include:` array — the machine
+JSON pulls e.g. `"Bambu Lab A1 mini 0.4 nozzle template machine_start_gcode"`
+which lives in its own JSON file. Keeps the per-printer JSON small
++ lets multiple machines share one macro fragment without copy-paste.
+
+Our format inlines everything into one TOML. The BBS importer
+(`scripts/spikes/convert_orca_profile.py`) flattens the include
+tree at conversion time, so the resulting cascade loses the
+upstream's modularity. If we ship more cascades and the BBL/BBS
+macros drift independently, we'll want this on our format too.
+
+**Future work** — extend the cascade format with `include = […]`
+at the top level (or per-`[[rule]]` block). Loader resolves
+relative paths against the cascade file's directory; cycles fail
+fast. Use case: ship `BBL/machine_start_gcode.toml` shared across
+all BBL printer variants instead of duplicating it into each.
+
+Scoped Phase 9 polish; promote earlier if a second BBL variant
+(P1S, X1) starts duplicating macros against the A1 mini.
+
 ## References
 
 - OrcaSlicer's bed-temp implementation:
