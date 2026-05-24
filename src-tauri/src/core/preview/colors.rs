@@ -79,46 +79,61 @@ pub fn encode_colors(
 ) -> Vec<f32> {
     let seg_count = segments.len();
     let mut out = Vec::with_capacity(seg_count * 6);
-    for i in 0..seg_count {
-        let rgb = color_for_segment(segments, i, mode, palette, layer_times);
-        // Duplicate per-vertex (start + end).
-        out.extend_from_slice(&rgb);
-        out.extend_from_slice(&rgb);
-    }
-    out
-}
 
-fn color_for_segment(
-    segments: &SegmentSet,
-    i: usize,
-    mode: ColorMode,
-    palette: Palette,
-    layer_times: Option<&[f32]>,
-) -> [f32; 3] {
+    // Hoist the per-mode lookup out of the inner loop. Continuous
+    // modes (Speed / Flow / LayerTime) need a min/max across the
+    // whole input array; computing it per-segment is O(N²) and
+    // turns a 5 MB G-code's color encode into a 68 s stall.
+    // Discrete modes (Feature / Tool) have no precompute step.
     match mode {
-        ColorMode::Feature => feature_color(&segments.feature[i], palette),
-        ColorMode::Tool => tool_color(segments.tool[i], palette),
+        ColorMode::Feature => {
+            for i in 0..seg_count {
+                let rgb = feature_color(&segments.feature[i], palette);
+                out.extend_from_slice(&rgb);
+                out.extend_from_slice(&rgb);
+            }
+        }
+        ColorMode::Tool => {
+            for i in 0..seg_count {
+                let rgb = tool_color(segments.tool[i], palette);
+                out.extend_from_slice(&rgb);
+                out.extend_from_slice(&rgb);
+            }
+        }
         ColorMode::Speed => {
             let (lo, hi) = scalar_range(&segments.speed);
-            continuous_color(segments.speed[i], lo, hi, palette)
+            for i in 0..seg_count {
+                let rgb = continuous_color(segments.speed[i], lo, hi, palette);
+                out.extend_from_slice(&rgb);
+                out.extend_from_slice(&rgb);
+            }
         }
         ColorMode::Flow => {
             let (lo, hi) = scalar_range(&segments.flow);
-            continuous_color(segments.flow[i], lo, hi, palette)
+            for i in 0..seg_count {
+                let rgb = continuous_color(segments.flow[i], lo, hi, palette);
+                out.extend_from_slice(&rgb);
+                out.extend_from_slice(&rgb);
+            }
         }
         ColorMode::LayerTime => {
-            let layer = segments.layer_index[i * 2] as usize;
-            let t = match layer_times {
-                Some(times) if layer < times.len() => times[layer],
-                _ => segments.layer_index[i * 2], // fallback: layer index itself
-            };
             let (lo, hi) = match layer_times {
                 Some(times) if !times.is_empty() => scalar_range(times),
                 _ => (0.0, segments.layer_index.last().copied().unwrap_or(1.0)),
             };
-            continuous_color(t, lo, hi, palette)
+            for i in 0..seg_count {
+                let layer = segments.layer_index[i * 2] as usize;
+                let t = match layer_times {
+                    Some(times) if layer < times.len() => times[layer],
+                    _ => segments.layer_index[i * 2], // fallback: layer index
+                };
+                let rgb = continuous_color(t, lo, hi, palette);
+                out.extend_from_slice(&rgb);
+                out.extend_from_slice(&rgb);
+            }
         }
     }
+    out
 }
 
 fn scalar_range(values: &[f32]) -> (f32, f32) {
