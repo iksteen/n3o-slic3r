@@ -21,6 +21,7 @@ function stub(
     category,
     default_value: { kind: "scalar", value: "0" },
     multiline: false,
+    enum_values: [],
     tooltip: null,
     mode,
     scope: { project: false, object: false, region: true },

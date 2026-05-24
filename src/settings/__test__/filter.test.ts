@@ -12,6 +12,7 @@ function stub(over: Partial<PrinterAwareOptionSummary> = {}): PrinterAwareOption
     category: "Quality",
     default_value: { kind: "scalar", value: "0.2" },
     multiline: false,
+    enum_values: [],
     tooltip: null,
     mode: "simple",
     scope: { project: false, object: true, region: true },

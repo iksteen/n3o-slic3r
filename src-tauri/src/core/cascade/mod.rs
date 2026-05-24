@@ -242,6 +242,10 @@ pub struct OptionSummary {
     /// as textareas with `\n`-joined display of the vector default
     /// instead of an index-by-slot picker.
     pub multiline: bool,
+    /// Enum value/label pairs in libslic3r declaration order. Empty
+    /// for non-enum types. The frontend's DropdownInput consumes
+    /// this directly — no per-key lookup needed at render time.
+    pub enum_values: Vec<(String, String)>,
     /// libslic3r tooltip text (FR-UI-6, PR-4-11's tooltip surface
     /// consumes this).
     pub tooltip: Option<String>,
@@ -265,6 +269,21 @@ fn summary_from_def(d: slic3r_ffi::OptionDef) -> OptionSummary {
         .default_serialized
         .as_deref()
         .map(|s| DefaultValue::from_serialized(d.ty, s));
+    // Zip values + labels — libslic3r's enum_values is the canonical
+    // wire key, enum_labels is the (possibly-shorter) human label
+    // list. When labels run out, fall back to the value as its own
+    // label so the dropdown still renders something readable.
+    let enum_values = d
+        .enum_values
+        .iter()
+        .cloned()
+        .zip(
+            d.enum_labels
+                .iter()
+                .cloned()
+                .chain(std::iter::repeat(String::new())),
+        )
+        .collect();
     OptionSummary {
         capability: capability_for_key(&d.key),
         key: d.key,
@@ -273,6 +292,7 @@ fn summary_from_def(d: slic3r_ffi::OptionDef) -> OptionSummary {
         category: d.category,
         default_value,
         multiline: d.multiline,
+        enum_values,
         tooltip: d.tooltip,
         mode: d.mode.into(),
         scope: d.scope.into(),
@@ -542,6 +562,33 @@ mod tests {
             panic!("expected Vector");
         };
         assert_eq!(values, vec!["a\\b\"c"]);
+    }
+
+    #[test]
+    fn enum_values_surface_on_option_summary() {
+        // Without enum_values on the wire, DropdownInput renders an
+        // empty <select> and can't be opened. Pin the surface using
+        // seam_position — a Process-bucket Enum that the panel
+        // routinely shows.
+        ensure_ffi();
+        let opts = slicer_options(Some("seam_position".into()));
+        let opt = opts
+            .iter()
+            .find(|o| o.key == "seam_position")
+            .expect("seam_position in schema");
+        assert!(
+            !opt.enum_values.is_empty(),
+            "enum option must surface enum_values",
+        );
+        let keys: Vec<&str> = opt.enum_values.iter().map(|(k, _)| k.as_str()).collect();
+        // libslic3r ships at least these four. The full list can grow
+        // upstream; we only pin the well-known ones.
+        for expected in ["nearest", "aligned", "back", "random"] {
+            assert!(
+                keys.contains(&expected),
+                "seam_position missing value {expected:?} (got {keys:?})",
+            );
+        }
     }
 
     #[test]

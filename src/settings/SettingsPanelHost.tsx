@@ -59,10 +59,11 @@ export function allObjectsForPanel(
 
 export interface SettingsPanelHostProps {
   session: ProjectSession;
-  /** Active-slot state. The SlotTabStrip inside SettingsPanel owns
-   * which slot is active for the panel UI; the host doesn't read
-   * it back so this is a one-way pass-through. Default 0 covers
-   * the single-slot bootstrap. */
+  /** Active-slot index plumbed into `buildContextJson` for the
+   * cascade resolve. The settings panel itself no longer surfaces a
+   * slot picker (PR-S-2 filtered to Process bucket — no per-
+   * extruder rows here), so this defaults to 0 and stays there
+   * until per-extruder editing surfaces ship in their own panels. */
   activeSlot?: number;
 }
 

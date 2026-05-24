@@ -25,11 +25,9 @@ import {
   ColorInput,
   DropdownInput,
   Field,
-  MultiSelectInput,
   NumberInput,
   PercentInput,
 } from "./inputs";
-import { SlotTabStrip, useSlotState, type SlotInfo } from "./slots/SlotTabStrip";
 import {
   CategorySidebar,
   categorize,
@@ -141,18 +139,6 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [contextLayer, setContextLayer] = useState<ContextLayer>("project");
   const [activeCat, setActiveCat] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const slotCount = printer?.slot_count ?? 1;
-  const { activeSlot, setActiveSlot, syncAll, setSyncAll } = useSlotState(slotCount);
-  // Slot info for the tab strip. PR-4-6 ships the index-only labels;
-  // PR-7c (filament sync) will populate color + label per slot
-  // binding.
-  const slots = useMemo<SlotInfo[]>(
-    () =>
-      Array.from({ length: slotCount }, (_, i) => ({
-        index: i + 1,
-      })),
-    [slotCount],
-  );
 
   // Object tab auto-fall-back: when the selected object disappears
   // while the Object tab is active, fall back to Project (mirrors
@@ -314,16 +300,12 @@ export function SettingsPanel(props: SettingsPanelProps) {
             diff tabs are intentionally not rendered yet; the user is
             redesigning that surface. The underlying state + filter
             machinery is still in place (mode is pinned to "expert" so
-            all stable settings show; diffMode stays at "all"). */}
-        {slotCount >= 2 && (
-          <SlotTabStrip
-            slots={slots}
-            activeSlot={activeSlot}
-            onActiveSlotChange={setActiveSlot}
-            syncAll={syncAll}
-            onSyncAllChange={setSyncAll}
-          />
-        )}
+            all stable settings show; diffMode stays at "all").
+            The per-extruder slot strip + sync-edit toggle retired
+            with PR-S-2's Process-only filter — there are no per-
+            extruder options surfaced here for a slot picker to act
+            on. Filament/printer-bucket editing surfaces live
+            elsewhere. */}
         <div className="search-wrap">
           <div className="search-input">
             <input
@@ -391,9 +373,6 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     onSetObjectOverride={onSetObjectOverride}
                     onClearObjectOverride={onClearObjectOverride}
                     notApplicable={opt.hidden}
-                    slotCount={slotCount}
-                    activeSlot={activeSlot}
-                    syncAll={syncAll}
                     allObjects={allObjects}
                     onRowEnter={(el) => {
                       setHoveredKey(opt.key);
@@ -490,12 +469,6 @@ interface SettingRowProps {
   /** True when this option is capability-hidden but surfaced via
    *  search; renders the "not applicable" badge inline (PR-4-5). */
   notApplicable?: boolean;
-  /** Slot-adaptive layout state (PR-4-6). Vector-typed options
-   *  render only the active slot's value; commits land at that
-   *  index, broadcast to all when syncAll is true. */
-  slotCount: number;
-  activeSlot: number;
-  syncAll: boolean;
   /** Cascade ladder hover hooks (PR-4-8). The panel owns the
    *  open/close lifecycle centrally; SettingRow just forwards the
    *  row's DOM node + leave. The label hover hooks retired with
@@ -518,9 +491,6 @@ function SettingRow({
   onSetObjectOverride,
   onClearObjectOverride,
   notApplicable = false,
-  slotCount,
-  activeSlot,
-  syncAll,
   onRowEnter,
   onRowLeave,
   allObjects,
@@ -530,12 +500,11 @@ function SettingRow({
     : projectOverrides[schema.key];
   // Multiline coStrings (`start_gcode`, the small-area infill flow
   // compensation model, …) carry one entry per line of a single
-  // logical text block — NOT per-extruder. The per-slot
-  // `defaultScalarFor` view is meaningless for them; use the
-  // `\n`-joined textarea view instead.
+  // logical text block. The `\n`-joined textarea view is what
+  // displays; per-slot indexing is meaningless here.
   const fallbackDefault = isMultilineTextField(schema)
     ? defaultMultilineText(schema)
-    : defaultScalarFor(schema, activeSlot);
+    : defaultScalarFor(schema);
   const effectiveValue =
     tierValue ?? resolved[schema.key]?.value ?? fallbackDefault ?? null;
 
@@ -650,11 +619,8 @@ function SettingRow({
     >
       {isMultilineTextField(schema) ? (
         // Multiline coStrings → single textarea showing all entries
-        // joined with `\n`. NEVER routed through MultiSelectInput;
-        // its comma-split path would shred entries like
-        // `"0,0"` / `"0.2,0.4444"` and a corrupted value could land
-        // as an override on commit. Read-only for now — a real
-        // textarea Field with cstyle-aware commit ships later.
+        // joined with `\n`. Read-only for now — a real textarea
+        // Field with cstyle-aware commit ships later.
         <textarea
           className="val-input val-input-multiline"
           value={effectiveValue ?? ""}
@@ -665,24 +631,21 @@ function SettingRow({
             Math.max(2, (effectiveValue?.split("\n").length ?? 1)),
           )}
         />
-      ) : isVectorKind(kind) && slotCount >= 1 ? (
-        <MultiSelectInput
-          schema={schema}
-          value={effectiveValue}
-          onChange={setValue}
-          disabled={disabled}
-          slotCount={slotCount}
-          activeSlot={activeSlot}
-          syncAll={syncAll}
-          renderSlot={({ value, onChange: onSlotChange, disabled: slotDisabled }) =>
-            renderScalarInput(
-              vectorElementKind(kind),
-              schema,
-              value,
-              onSlotChange,
-              slotDisabled,
-            )
-          }
+      ) : isVectorKind(kind) ? (
+        // Other vector kinds (`vector-int`, `vector-float`, etc.)
+        // surface in the Process bucket through dimensional families
+        // (e.g. bed_temp expands per plate type) — but the panel
+        // doesn't have an editor for those yet. Show read-only text
+        // so the user can see the value without a path to corrupt
+        // it. Per-extruder editing surfaces (filament/printer
+        // buckets) live elsewhere; the slot picker that used to
+        // mount here retired with PR-S-2's Process-only filter.
+        <input
+          className="val-input val-input-fallback"
+          type="text"
+          value={effectiveValue ?? ""}
+          readOnly
+          disabled
         />
       ) : (
         renderScalarInput(kind, schema, effectiveValue, setValue, disabled)
@@ -691,32 +654,7 @@ function SettingRow({
   );
 }
 
-/** Map the vector kind to the scalar inner kind so the renderSlot
- *  callback can route through the same scalar renderer. */
-function vectorElementKind(kind: OptionTypeKind): OptionTypeKind {
-  switch (kind) {
-    case "vector-bool":
-      return "bool";
-    case "vector-int":
-      return "int";
-    case "vector-float":
-      return "float";
-    case "vector-percent":
-      return "percent";
-    case "vector-float-or-percent":
-      return "float-or-percent";
-    case "vector-string":
-      return "string";
-    case "vector-enum":
-      return "enum";
-    default:
-      return "unknown";
-  }
-}
-
-/** Render the per-slot scalar input. Vector kinds are unwrapped by
- *  the SettingRow's MultiSelectInput layer; this function only sees
- *  scalar kinds (single-slot value at a time). */
+/** Render a scalar input for a single-value option. */
 function renderScalarInput(
   kind: OptionTypeKind,
   schema: OptionSummary,
@@ -764,16 +702,13 @@ function renderScalarInput(
         />
       );
     case "enum":
-      // Until PR-4-1's OptionSummary surfaces enum_values, we
-      // render a plain text input for enums. The dropdown is
-      // ready to mount when the schema gains the field.
       return (
         <DropdownInput
           schema={schema}
           value={value}
           onChange={onChange}
           disabled={disabled}
-          options={[]}
+          options={schema.enum_values}
         />
       );
     case "string":

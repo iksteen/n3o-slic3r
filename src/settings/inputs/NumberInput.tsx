@@ -6,7 +6,7 @@
 // fire cascade re-resolves).
 
 import { useEffect, useState } from "react";
-import { commitNumber, formatNumber, parseNumber } from "./helpers";
+import { commitNumber, formatNumber } from "./helpers";
 import { defaultScalarFor, type OptionSummary } from "../types";
 
 export interface NumberInputProps {
@@ -90,9 +90,3 @@ export function NumberInput({
   );
 }
 
-/** Exported for the `MultiSelectInput` vector wrapper — same parse
- *  + format helpers without the React component shell. */
-export function commitNumberHelper(text: string, bounds: { min?: number; max?: number; step?: number }) {
-  return commitNumber(text, bounds);
-}
-export { parseNumber as parseNumberHelper };

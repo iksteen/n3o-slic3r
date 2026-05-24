@@ -59,10 +59,13 @@ export type OptionSummary = {
   default_value: DefaultValue | null;
   /** True for libslic3r options flagged `multiline` — freeform
    *  textareas (start_gcode, end_gcode, the small-area infill flow
-   *  compensation model). Vector defaults on multi-line fields
-   *  display as `values.join("\n")`; non-multi-line vectors index
-   *  by active slot. */
+   *  compensation model). The panel renders these as a `\n`-joined
+   *  textarea via [`defaultMultilineText`]. */
   multiline: boolean;
+  /** `[value, label]` pairs in libslic3r declaration order for Enum
+   *  options. Empty for non-enum types. DropdownInput consumes these
+   *  directly — no per-key lookup at render time. */
+  enum_values: ReadonlyArray<readonly [string, string]>;
   tooltip: string | null;
   mode: OptMode;
   scope: OptScopeFlags;
@@ -109,30 +112,11 @@ export function defaultMultilineText(opt: OptionSummary): string | null {
   return dv.values.join("\n");
 }
 
-/** Vector-shape view of the default — entries already pre-split by
- *  the Rust side. Returns `[]` when the option has no default or
- *  the default is scalar; the [`MultiSelectInput`] wrapper consults
- *  this for padVector / parseVector seed. */
-export function defaultVectorFor(opt: OptionSummary): string[] {
-  const dv = opt.default_value;
-  if (dv === null) return [];
-  if (dv.kind === "scalar") return [];
-  return dv.values;
-}
-
-/** True for libslic3r vector-string options the panel must NOT route
- *  through the per-slot [`MultiSelectInput`] wrapper.
- *
- *  Multiline coStrings (`start_gcode`, `end_gcode`,
- *  `small_area_infill_flow_compensation_model`, …) carry one entry
- *  per line of a multi-line text block — the entries are NOT
- *  per-extruder. Routing them through MultiSelectInput parseVector-
- *  splits on commas, which silently destroys entries like `"0,0"`
- *  or `"0.2,0.4444"` and can land a corrupted value as an override
- *  if the user touches anything.
- *
- *  The matching display is a textarea (or, until we ship one, a
- *  read-only line-joined display via [`defaultMultilineText`]). */
+/** True for libslic3r `coStrings` options flagged `multiline` —
+ *  `start_gcode`, `end_gcode`, `small_area_infill_flow_compensation_model`,
+ *  etc. These are textareas with one entry per line, NOT per-extruder
+ *  vectors; the panel routes them to a read-only textarea seeded
+ *  from [`defaultMultilineText`]. */
 export function isMultilineTextField(opt: OptionSummary): boolean {
   return opt.multiline && opt.ty === "Strings";
 }
