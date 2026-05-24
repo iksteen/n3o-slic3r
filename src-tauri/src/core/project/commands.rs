@@ -58,6 +58,47 @@ pub fn project_set_plate_composition_order(
     Ok(())
 }
 
+/// Set (upsert) a `material → slot` mapping on a plate (PR-S-7).
+/// The slot reference is validated against the plate's bound
+/// PrinterInstance; out-of-range indices error with
+/// `InvalidPlateMetadata`.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn project_set_material_slot(
+    plate_id: PlateId,
+    model_material: u8,
+    slot: crate::core::printer::SlotRef,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
+    let events = p
+        .set_material_slot(plate_id, model_material, slot)
+        .map_err(|e| e.to_string())?;
+    drop(p);
+    emit_all(&window, &events);
+    Ok(())
+}
+
+/// Drop a plate's `material → slot` entry. Silent no-op when the
+/// material has no current mapping.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn project_clear_material_slot(
+    plate_id: PlateId,
+    model_material: u8,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
+    let events = p
+        .clear_material_slot(plate_id, model_material)
+        .map_err(|e| e.to_string())?;
+    drop(p);
+    emit_all(&window, &events);
+    Ok(())
+}
+
 // ---- Save / load (PR-5-8) ------------------------------------------
 
 /// Save the in-memory project to `path` as an n3o-slic3r `.3mf`.

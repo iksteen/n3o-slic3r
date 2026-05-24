@@ -143,6 +143,12 @@ pub enum SceneEvent {
     PlateMetadataChanged {
         plate_id: PlateId,
     },
+    /// A plate's material → slot routing changed (PR-S-7). The
+    /// frontend re-reads `plate.material_to_slot` via the snapshot
+    /// to refresh the slot binding panel.
+    MaterialSlotChanged {
+        plate_id: PlateId,
+    },
     /// A project was written to disk (PR-5-8). `path` is the
     /// container the writer just produced. UI updates the window
     /// title + recent-files list.
@@ -181,6 +187,7 @@ impl SceneEvent {
             Self::ObjectOverridesChanged { .. } => "scene:object_overrides_changed",
             Self::ProjectOverridesChanged { .. } => "scene:project_overrides_changed",
             Self::PlateMetadataChanged { .. } => "scene:plate_metadata_changed",
+            Self::MaterialSlotChanged { .. } => "scene:material_slot_changed",
             Self::ProjectSaved { .. } => "project:saved",
             Self::ProjectLoaded { .. } => "project:loaded",
         }

@@ -81,9 +81,19 @@ impl Project {
 
     /// Register a scene object on the active plate. Always
     /// allocates a fresh `ObjectId` (scene-wide unique).
+    ///
+    /// **Auto-bind side effect:** if the object's model material
+    /// (its `extruder_id`, defaulted to `1` when `None`) isn't
+    /// already in the active plate's `material_to_slot` map, a
+    /// default mapping lands automatically — walks the bound
+    /// PrinterInstance's extruder/slot grid in `(extruder, slot)`
+    /// order, picks the slot at flat-index `(material - 1) MOD
+    /// total_slots`. Idempotent on re-call; user edits via the
+    /// panel always win.
     pub fn register_object(&mut self, new_obj: NewSceneObject) -> ObjectId {
         let id = self.next_object_id();
         let active = self.active_plate;
+        let extruder_id = new_obj.extruder_id;
         self.plates[active].scene.objects.insert(
             id,
             SceneObject {
@@ -92,11 +102,62 @@ impl Project {
                 transform: new_obj.transform,
                 name: new_obj.name,
                 visible: new_obj.visible,
-                extruder_id: new_obj.extruder_id,
+                extruder_id,
                 parent: new_obj.parent,
             },
         );
+        self.ensure_default_material_slot_on_active(extruder_id.unwrap_or(1));
         id
+    }
+
+    /// Plant a default `material → slot` mapping on the active plate
+    /// when the material has no entry yet. Helper for
+    /// [`Project::register_object`]; idempotent on re-call.
+    ///
+    /// Slot selection: walk the bound `PrinterInstance`'s flat slot
+    /// list `(extruder, slot)`-major and pick index
+    /// `(material - 1) MOD total_slots`. For Bambi (1 slot total)
+    /// every material lands on `(0, 0)`. For Snappy (4 extruders ×
+    /// 1 slot) material N maps to extruder `N-1` mod 4. For a
+    /// future Bambi+AMS (1 extruder × 5 slots) material N rotates
+    /// through the 5 slots, starting at the `Direct` slot.
+    ///
+    /// No-op when the plate has no `printer_instance_id` — the slice
+    /// path refuses unbound plates anyway, and we don't want to
+    /// pin a mapping before the user picks a printer.
+    fn ensure_default_material_slot_on_active(&mut self, model_material: u8) {
+        if model_material < 1 {
+            return;
+        }
+        let idx = self.active_plate;
+        if self.plates[idx].material_to_slot.contains_key(&model_material) {
+            return;
+        }
+        let Some(instance_id) = self.plates[idx].printer_instance_id.clone()
+        else {
+            return;
+        };
+        let Some(instance) = crate::core::printer::lookup_instance(&instance_id)
+        else {
+            return;
+        };
+        // Flat (extruder, slot) walk in extruder-major order.
+        let flat: Vec<crate::core::printer::SlotRef> = instance
+            .extruders
+            .iter()
+            .enumerate()
+            .flat_map(|(e_idx, e)| {
+                (0..e.slots.len()).map(move |s_idx| crate::core::printer::SlotRef {
+                    extruder: e_idx as u8,
+                    slot: s_idx as u8,
+                })
+            })
+            .collect();
+        if flat.is_empty() {
+            return;
+        }
+        let pick = flat[(model_material as usize - 1) % flat.len()];
+        self.plates[idx].material_to_slot.insert(model_material, pick);
     }
 
     // ---- Plate list mutations -------------------------------------
@@ -241,6 +302,84 @@ impl Project {
         }
         self.active_plate = idx;
         Ok(vec![SceneEvent::ActivePlateChanged { plate_id: id }])
+    }
+
+    // ---- Material → slot routing (PR-S-7) ------------------------
+
+    /// Upsert a `material → slot` mapping on `plate_id`. The slot
+    /// reference is validated against the plate's bound
+    /// PrinterInstance — out-of-range `extruder` or `slot` indices
+    /// reject with `SceneOpError::InvalidPlateMetadata`.
+    pub fn set_material_slot(
+        &mut self,
+        plate_id: PlateId,
+        model_material: u8,
+        slot: crate::core::printer::SlotRef,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        if model_material < 1 {
+            return Err(SceneOpError::InvalidPlateMetadata {
+                plate_id,
+                message: "model_material must be >= 1".into(),
+            });
+        }
+        let plate_idx = self
+            .plate_index(plate_id)
+            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        // Range-check against the bound instance, if any. An unbound
+        // plate still accepts the mapping (the slice path rejects
+        // separately); range-check would error before the picker can
+        // round-trip the user's choice.
+        if let Some(instance_id) = self.plates[plate_idx].printer_instance_id.clone() {
+            if let Some(instance) =
+                crate::core::printer::lookup_instance(&instance_id)
+            {
+                let e_count = instance.extruders.len();
+                if (slot.extruder as usize) >= e_count {
+                    return Err(SceneOpError::InvalidPlateMetadata {
+                        plate_id,
+                        message: format!(
+                            "instance `{instance_id}` has {e_count} extruder(s); index {} is out of range",
+                            slot.extruder,
+                        ),
+                    });
+                }
+                let s_count = instance.extruders[slot.extruder as usize].slots.len();
+                if (slot.slot as usize) >= s_count {
+                    return Err(SceneOpError::InvalidPlateMetadata {
+                        plate_id,
+                        message: format!(
+                            "instance `{instance_id}` extruder {} has {s_count} slot(s); index {} is out of range",
+                            slot.extruder, slot.slot,
+                        ),
+                    });
+                }
+            }
+        }
+        let prev = self.plates[plate_idx].material_to_slot.insert(model_material, slot);
+        if prev == Some(slot) {
+            return Ok(Vec::new());
+        }
+        Ok(vec![SceneEvent::MaterialSlotChanged { plate_id }])
+    }
+
+    /// Drop the mapping for `model_material`. Silent no-op when there
+    /// was no entry.
+    pub fn clear_material_slot(
+        &mut self,
+        plate_id: PlateId,
+        model_material: u8,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let plate_idx = self
+            .plate_index(plate_id)
+            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        if self.plates[plate_idx]
+            .material_to_slot
+            .remove(&model_material)
+            .is_none()
+        {
+            return Ok(Vec::new());
+        }
+        Ok(vec![SceneEvent::MaterialSlotChanged { plate_id }])
     }
 
     // ---- Plate metadata (PR-5-5) ----------------------------------
@@ -2934,4 +3073,100 @@ mod tests {
         assert_eq!(err, SceneOpError::UnknownPlate(PlateId(99)));
     }
 
+    // ---- Material → slot routing (PR-S-7) ------------------------
+
+    use crate::core::printer::SlotRef;
+
+    fn cube_mesh() -> NewMesh {
+        NewMesh {
+            vertices: vec![0.0; 24],
+            normals: vec![0.0; 24],
+            indices: vec![0, 1, 2],
+            bounding_box: BoundingBox {
+                min: [0.0, 0.0, 0.0],
+                max: [1.0, 1.0, 1.0],
+            },
+            provenance: MeshProvenance::Primitive("cube".into()),
+        }
+    }
+
+    fn add_cube_with_material(p: &mut Project, mat: u8) {
+        let mesh_id = p.register_mesh(cube_mesh());
+        p.register_object(NewSceneObject {
+            mesh: mesh_id,
+            transform: Transform::IDENTITY,
+            name: format!("cube-m{mat}"),
+            visible: true,
+            extruder_id: Some(mat),
+            parent: None,
+        });
+    }
+
+    #[test]
+    fn register_object_auto_binds_material_to_slot_on_bambi() {
+        // Default project boots into Bambi (1 extruder × 1 slot).
+        // Every model material lands on slot (0, 0).
+        let mut p = Project::default();
+        add_cube_with_material(&mut p, 1);
+        add_cube_with_material(&mut p, 2);
+        assert_eq!(
+            p.plates[0].material_to_slot.get(&1),
+            Some(&SlotRef { extruder: 0, slot: 0 }),
+        );
+        assert_eq!(
+            p.plates[0].material_to_slot.get(&2),
+            Some(&SlotRef { extruder: 0, slot: 0 }),
+        );
+    }
+
+    #[test]
+    fn set_material_slot_overrides_auto_bind_and_idempotent_on_repeat() {
+        let mut p = Project::default();
+        add_cube_with_material(&mut p, 1);
+        let target = SlotRef { extruder: 0, slot: 0 };
+        let events = p.set_material_slot(PlateId(1), 1, target).unwrap();
+        // Same value as auto-bind picked → silent no-op.
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn set_material_slot_out_of_range_extruder_errors() {
+        let mut p = Project::default();
+        add_cube_with_material(&mut p, 1);
+        let err = p
+            .set_material_slot(
+                PlateId(1),
+                1,
+                SlotRef { extruder: 5, slot: 0 },
+            )
+            .unwrap_err();
+        assert!(matches!(err, SceneOpError::InvalidPlateMetadata { .. }));
+    }
+
+    #[test]
+    fn clear_material_slot_drops_entry_and_is_idempotent() {
+        let mut p = Project::default();
+        add_cube_with_material(&mut p, 1);
+        let events = p.clear_material_slot(PlateId(1), 1).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(!p.plates[0].material_to_slot.contains_key(&1));
+        // Second call has nothing to drop.
+        let again = p.clear_material_slot(PlateId(1), 1).unwrap();
+        assert!(again.is_empty());
+    }
+
+    #[test]
+    fn material_to_slot_round_trips_through_project_serde() {
+        // material_to_slot survives the JSON round-trip the project
+        // save/load path uses.
+        let mut p = Project::default();
+        add_cube_with_material(&mut p, 1);
+        let json = serde_json::to_string(&p).unwrap();
+        let parsed: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.plates[0].material_to_slot.len(), 1);
+        assert_eq!(
+            parsed.plates[0].material_to_slot.get(&1),
+            Some(&SlotRef { extruder: 0, slot: 0 }),
+        );
+    }
 }

@@ -18,6 +18,19 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Pointer into a [`PrinterInstance`]'s extruder/slot grid. Used by
+/// [`Plate.material_to_slot`](crate::core::project::Plate) to record
+/// which filament feed each model material routes to.
+///
+/// `(0, 0)` is "first extruder's first slot." Indices are 0-based;
+/// the libslic3r-side 1-based filament index is derived by walking
+/// the printer's flat slot list at slice time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SlotRef {
+    pub extruder: u8,
+    pub slot: u8,
+}
+
 /// One physical printer the user has access to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrinterInstance {

@@ -80,6 +80,15 @@ pub struct PlateSnapshot {
     pub name: String,
     pub metadata: crate::core::project::PlateMetadata,
     pub printer: Option<crate::core::project::PrinterBinding>,
+    /// Plate's bound PrinterInstance id (the new printer-routing
+    /// path; `printer` above stays for the legacy PrinterPicker
+    /// surface). Drives the slot-binding panel.
+    pub printer_instance_id: Option<String>,
+    /// Plate's material → slot routing. The slot-binding panel
+    /// reads this to render the per-material slot picker; auto-bind
+    /// populates it on object register.
+    pub material_to_slot:
+        std::collections::BTreeMap<u8, crate::core::printer::SlotRef>,
     pub project_overrides: std::collections::HashMap<String, String>,
 
     // ---- Per-plate scene contents -----------------------------
@@ -133,6 +142,8 @@ fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
         name: plate.name.clone(),
         metadata: plate.metadata.clone(),
         printer: plate.printer.clone(),
+        printer_instance_id: plate.printer_instance_id.clone(),
+        material_to_slot: plate.material_to_slot.clone(),
         project_overrides: plate.project_overrides.clone(),
         objects: plate.scene.objects.values().cloned().collect(),
         selection,

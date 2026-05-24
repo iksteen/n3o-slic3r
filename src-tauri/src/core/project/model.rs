@@ -157,6 +157,19 @@ pub struct Plate {
     #[serde(default)]
     pub printer_instance_id: Option<String>,
 
+    /// Per-plate routing from a model material index (the per-volume
+    /// `extruder` metadata libslic3r consumes) to a specific feed slot
+    /// on the bound `PrinterInstance`. Auto-populated when
+    /// `register_object` lands a new material (first available slot,
+    /// walked extruder-major), user-editable via the slot binding
+    /// panel. Empty for plates with no material-tagged objects.
+    ///
+    /// `BTreeMap` (not `HashMap`) so the wire form stays deterministic
+    /// for save/load + diff displays.
+    #[serde(default)]
+    pub material_to_slot:
+        std::collections::BTreeMap<u8, crate::core::printer::SlotRef>,
+
     pub metadata: PlateMetadata,
 
     /// The plate's scene contents. Real type lives in
@@ -267,6 +280,7 @@ impl Plate {
             printer: None,
             project_overrides: HashMap::new(),
             printer_instance_id: None,
+            material_to_slot: std::collections::BTreeMap::new(),
             metadata: PlateMetadata::at_position(position),
             scene: PlateSceneState::default(),
         }

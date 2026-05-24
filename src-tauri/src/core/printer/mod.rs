@@ -17,7 +17,7 @@ pub mod snapmaker;
 
 pub use instance::{
     BedRef, ConnectionInfo, ExtruderState, FeedKind, NozzleMaterial, NozzleSku,
-    PrinterInstance, SlotBinding,
+    PrinterInstance, SlotBinding, SlotRef,
 };
 pub use instance_library::{
     bundled_instances, instance_id_for_vendor_profile, BAMBI_ID, SNAPPY_ID,
