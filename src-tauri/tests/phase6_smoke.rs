@@ -125,10 +125,6 @@ fn collecting_sink() -> (EventSink, Arc<Mutex<Vec<SliceEvent>>>) {
 }
 
 fn slice_cube_to_gcode() -> (PathBuf, Vec<u8>) {
-    let mut cascades = CascadeRegistry::new();
-    let cascade = load_cascade(&[a1_mini_cascade_path().as_path()]).expect("load cascade");
-    let handle = cascades.insert(cascade);
-
     let registry = JobRegistry::new();
     let (sink, events) = collecting_sink();
     let temp_dir = std::env::temp_dir().join(format!("n3o-phase6-smoke-{}", std::process::id()));
@@ -136,7 +132,6 @@ fn slice_cube_to_gcode() -> (PathBuf, Vec<u8>) {
     let input = SliceJobInput {
         model_path: cube_stl().display().to_string(),
         output_dir: temp_dir.display().to_string(),
-        cascade_handle: handle,
         context: ContextJson {
             printer: canonical_printer(),
             plate: canonical_plate(),
@@ -147,10 +142,10 @@ fn slice_cube_to_gcode() -> (PathBuf, Vec<u8>) {
             object_overrides: std::collections::HashMap::new(),
         },
         plate_ids: vec![1],
-        printer_instance_id: None,
+        printer_instance_id: "bambi".into(),
     };
 
-    run_slice_job_blocking(input, &registry, &cascades, sink).expect("slice start");
+    run_slice_job_blocking(input, &registry, sink).expect("slice start");
 
     let events = events.lock().unwrap();
     let output_path = events

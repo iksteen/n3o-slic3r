@@ -28,7 +28,6 @@ use super::orchestrator::{
     SliceStartError,
 };
 use super::pre_slice_gate::validate_pre_slice;
-use crate::core::cascade::CascadeRegistry;
 use crate::core::project::{PlateId, Project};
 
 /// Kick off a slice job. Returns the allocated [`JobId`]
@@ -41,15 +40,14 @@ use crate::core::project::{PlateId, Project};
 ///      `Project` state under its mutex and refuses to launch on
 ///      any unresolved binding issue. The frontend surfaces
 ///      `InvalidMaterialBindings` on the binding panel.
-///   2. Cascade-handle resolution + output-dir writability —
-///      delegated to the orchestrator.
+///   2. Cascade composition + output-dir writability — delegated
+///      to the orchestrator.
 #[tauri::command]
-#[tracing::instrument(skip(app_handle, jobs, cascades, project, input))]
+#[tracing::instrument(skip(app_handle, jobs, project, input))]
 pub fn slice_start_job(
     input: SliceJobInput,
     app_handle: AppHandle,
     jobs: State<JobRegistry>,
-    cascades: State<Mutex<CascadeRegistry>>,
     project: State<Arc<Mutex<Project>>>,
 ) -> Result<JobId, String> {
     // Pre-slice gate: refuse the job up front if any requested
@@ -68,10 +66,7 @@ pub fn slice_start_job(
             .map_err(SliceStartError::InvalidMaterialBindings)
             .map_err(|e: SliceStartError| e.to_string())?;
     }
-    let cascades = cascades
-        .lock()
-        .map_err(|e| format!("cascade registry lock: {e}"))?;
-    run_start(input, app_handle, jobs.inner(), &cascades).map_err(|e: SliceStartError| e.to_string())
+    run_start(input, app_handle, jobs.inner()).map_err(|e: SliceStartError| e.to_string())
 }
 
 /// Flip the cancel flag on a running job. The worker thread reads
@@ -111,25 +106,13 @@ pub fn slice_status(job_id: JobId, jobs: State<JobRegistry>) -> Result<JobStatus
 /// The frontend reads the resulting path off `slice:plate_finished`
 /// events when it wants to preview / send the result.
 #[tauri::command]
-#[tracing::instrument(skip(app_handle, jobs, cascades, project))]
+#[tracing::instrument(skip(app_handle, jobs, project))]
 pub fn slice_active_plate(
     plate_id: Option<PlateId>,
     app_handle: AppHandle,
     jobs: State<JobRegistry>,
-    cascades: State<Mutex<CascadeRegistry>>,
     project: State<Arc<Mutex<Project>>>,
 ) -> Result<JobId, String> {
-    // Self-heal a stale `Project.cascade_handle` before building
-    // the input — autosave restore (PR-5-10) carries a handle
-    // serialized from a prior session; the registry restarts each
-    // process, so that handle wouldn't exist. ensure_default_
-    // cascade_loaded is a no-op when the handle is live + bound.
-    crate::core::cascade::commands::ensure_default_cascade_loaded(
-        &*cascades,
-        &**project,
-        /* force_reinstall = */ false,
-    )?;
-
     // Build the SliceJobInput + temp-file path under the project
     // mutex. We drop the lock before spawning the orchestrator so
     // the worker thread doesn't contend with frontend updates.
@@ -170,16 +153,12 @@ pub fn slice_active_plate(
             })?;
     }
 
-    let cascades = cascades
-        .lock()
-        .map_err(|e| format!("cascade registry lock: {e}"))?;
-
     // Sink wraps the standard AppHandle emit with a one-shot temp-
     // file cleanup that fires on the first terminal event. The
     // cleanup itself is best-effort — a missing file is a debug
     // log, not an error (the OS may have GC'd temp dirs).
     let sink = cleanup_sink(app_handle, temp_path.clone());
-    start_slice_job_with_sink(input, jobs.inner(), &cascades, sink)
+    start_slice_job_with_sink(input, jobs.inner(), sink)
         .map_err(|e: SliceStartError| {
             // Spawn failed → no worker, no terminal event, so
             // cleanup never fires. Best-effort delete here too.

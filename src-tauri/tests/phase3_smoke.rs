@@ -120,7 +120,6 @@ fn slice_cube_to_gcode() -> (PathBuf, Vec<u8>) {
     let input = SliceJobInput {
         model_path: cube_stl().display().to_string(),
         output_dir: temp_dir.display().to_string(),
-        cascade_handle: handle,
         context: ContextJson {
             printer: canonical_printer(),
             plate: canonical_plate(),
@@ -131,10 +130,10 @@ fn slice_cube_to_gcode() -> (PathBuf, Vec<u8>) {
             object_overrides: std::collections::HashMap::new(),
         },
         plate_ids: vec![1],
-        printer_instance_id: None,
+        printer_instance_id: "bambi".into(),
     };
 
-    let _job_id = run_slice_job_blocking(input, &registry, &cascades, sink).expect("slice start");
+    let _job_id = run_slice_job_blocking(input, &registry, sink).expect("slice start");
 
     let events = events.lock().unwrap();
     let (output_path, summary) = events

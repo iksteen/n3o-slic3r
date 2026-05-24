@@ -1,19 +1,15 @@
-//! Slice orchestrator integration test (PR-3-2).
+//! Slice orchestrator integration test (PR-3-2; reshaped by PR-S-5c).
 //!
 //! Drives the full chain end-to-end without spinning up Tauri:
-//! parse cascade TOML → insert into CascadeRegistry → build a
-//! `SliceJobInput` → call `run_slice_job_blocking` → assert the
-//! emitted `SliceEvent` stream and the produced G-code file.
-//!
-//! This is the project's vertical-slice exit smoke for Phase 3 —
-//! everything PR-3-1 through PR-3-9 ships gets exercised in one
-//! sequence.
+//! construct a `SliceJobInput` with `printer_instance_id`, call
+//! `run_slice_job_blocking`, assert the emitted `SliceEvent` stream
+//! and the produced G-code file. The orchestrator composes the
+//! cascade from the PR-S-4 per-bucket vendor fragments at slice time.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};
 
 use n3o_slic3r_lib::core::cascade::commands::ContextJson;
-use n3o_slic3r_lib::core::cascade::{load_cascade, CascadeRegistry};
 use n3o_slic3r_lib::core::filament::FilamentProfile;
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
 use n3o_slic3r_lib::core::scene::build_plate::{BuildPlate, SurfaceKind};
@@ -46,10 +42,6 @@ fn workspace_root() -> PathBuf {
 
 fn test_stl() -> PathBuf {
     workspace_root().join("external/OrcaSlicer/tests/data/test_stl/ASCII/20mmbox-LF.stl")
-}
-
-fn a1_mini_cascade_path() -> PathBuf {
-    workspace_root().join("profiles/cascades/bambu-a1-mini-default.toml")
 }
 
 fn canonical_printer() -> PrinterProfile {
@@ -105,27 +97,10 @@ fn collecting_sink() -> (EventSink, Arc<Mutex<Vec<SliceEvent>>>) {
     (sink, bucket)
 }
 
-#[test]
-fn single_plate_job_emits_started_progress_finished_with_summary() {
-    let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    ensure_ffi_init();
-    let cascades = CascadeRegistry::new();
-    let mut cascades_mut = cascades;
-    let cascade = load_cascade(&[a1_mini_cascade_path().as_path()]).expect("load cascade");
-    let handle = cascades_mut.insert(cascade);
-
-    let registry = JobRegistry::new();
-    let (sink, events) = collecting_sink();
-
-    let temp_dir = std::env::temp_dir().join(format!(
-        "n3o-slice-orch-test-{}",
-        std::process::id(),
-    ));
-
-    let input = SliceJobInput {
-        model_path: test_stl().display().to_string(),
-        output_dir: temp_dir.display().to_string(),
-        cascade_handle: handle,
+fn bambi_input(model_path: String, output_dir: String, plate_ids: Vec<u32>) -> SliceJobInput {
+    SliceJobInput {
+        model_path,
+        output_dir,
         context: ContextJson {
             printer: canonical_printer(),
             plate: canonical_plate(),
@@ -135,11 +110,30 @@ fn single_plate_job_emits_started_progress_finished_with_summary() {
             project_overrides: vec![],
             object_overrides: std::collections::HashMap::new(),
         },
-        plate_ids: vec![1],
-        printer_instance_id: None,
-    };
+        plate_ids,
+        printer_instance_id: "bambi".into(),
+    }
+}
 
-    let job_id = run_slice_job_blocking(input, &registry, &cascades_mut, sink).expect("start");
+#[test]
+fn bambi_slice_emits_started_progress_finished_with_summary() {
+    let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    ensure_ffi_init();
+    let registry = JobRegistry::new();
+    let (sink, events) = collecting_sink();
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "n3o-slice-orch-test-{}",
+        std::process::id(),
+    ));
+
+    let input = bambi_input(
+        test_stl().display().to_string(),
+        temp_dir.display().to_string(),
+        vec![1],
+    );
+
+    let job_id = run_slice_job_blocking(input, &registry, sink).expect("start");
     assert_eq!(job_id.0, 1);
 
     let events = events.lock().unwrap();
@@ -199,141 +193,39 @@ fn single_plate_job_emits_started_progress_finished_with_summary() {
 }
 
 #[test]
-fn unknown_cascade_handle_errors_synchronously() {
-    ensure_ffi_init();
-    let cascades = CascadeRegistry::new();
-    let registry = JobRegistry::new();
-    let (sink, _events) = collecting_sink();
-
-    let input = SliceJobInput {
-        model_path: test_stl().display().to_string(),
-        output_dir: std::env::temp_dir().display().to_string(),
-        cascade_handle: 9999,
-        context: ContextJson {
-            printer: canonical_printer(),
-            plate: canonical_plate(),
-            filaments: vec![canonical_filament()],
-            active_slot: 0,
-            user_overrides: vec![],
-            project_overrides: vec![],
-            object_overrides: std::collections::HashMap::new(),
-        },
-        plate_ids: vec![1],
-        printer_instance_id: None,
-    };
-
-    let err = run_slice_job_blocking(input, &registry, &cascades, sink).expect_err("ok");
-    use n3o_slic3r_lib::core::slice::SliceStartError;
-    assert!(
-        matches!(err, SliceStartError::UnknownCascadeHandle(9999)),
-        "got {err:?}"
-    );
-}
-
-/// PR-S-5b: when `printer_instance_id` is set on the job input the
-/// orchestrator composes a cascade from the matching PrinterInstance's
-/// per-bucket fragments instead of looking up `cascade_handle`. This
-/// proves the composer path slices end-to-end against the same FFI
-/// stack the legacy path uses.
-#[test]
-fn printer_instance_id_routes_through_composed_cascade() {
-    let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    ensure_ffi_init();
-    // No cascade registered — composer path doesn't touch the registry.
-    let cascades = CascadeRegistry::new();
-    let registry = JobRegistry::new();
-    let (sink, events) = collecting_sink();
-
-    let temp_dir = std::env::temp_dir().join(format!(
-        "n3o-slice-orch-composer-test-{}",
-        std::process::id(),
-    ));
-
-    let input = SliceJobInput {
-        model_path: test_stl().display().to_string(),
-        output_dir: temp_dir.display().to_string(),
-        // Stub handle — must be unused when printer_instance_id is set.
-        cascade_handle: 0,
-        context: ContextJson {
-            printer: canonical_printer(),
-            plate: canonical_plate(),
-            filaments: vec![canonical_filament()],
-            active_slot: 0,
-            user_overrides: vec![],
-            project_overrides: vec![],
-            object_overrides: std::collections::HashMap::new(),
-        },
-        plate_ids: vec![1],
-        printer_instance_id: Some("bambi".into()),
-    };
-
-    let job_id = run_slice_job_blocking(input, &registry, &cascades, sink)
-        .expect("composer path should slice without a registered cascade");
-    assert_eq!(job_id.0, 1);
-
-    let events = events.lock().unwrap();
-    // Same expected event sequence as the legacy path.
-    let finished = events
-        .iter()
-        .find_map(|e| match e {
-            SliceEvent::PlateFinished {
-                plate_id,
-                output_path,
-                summary,
-                ..
-            } => Some((*plate_id, output_path.clone(), summary.clone())),
-            _ => None,
-        })
-        .unwrap_or_else(|| {
-            panic!(
-                "expected PlateFinished from composer path; got events: {:#?}",
-                events.iter().map(|e| format!("{:?}", e)).collect::<Vec<_>>(),
-            )
-        });
-    assert_eq!(finished.0, 1);
-    assert!(
-        std::path::Path::new(&finished.1).exists(),
-        "expected composed-path gcode at {}",
-        finished.1,
-    );
-    assert!(
-        finished.2.layer_count > 0,
-        "composer path should produce non-zero layers; got {}",
-        finished.2.layer_count,
-    );
-
-    let _ = std::fs::remove_dir_all(&temp_dir);
-}
-
-#[test]
 fn empty_plate_list_errors_synchronously() {
     ensure_ffi_init();
-    let cascades = CascadeRegistry::new();
-    let mut cascades_mut = cascades;
-    let cascade = load_cascade(&[a1_mini_cascade_path().as_path()]).expect("load cascade");
-    let handle = cascades_mut.insert(cascade);
-
     let registry = JobRegistry::new();
     let (sink, _events) = collecting_sink();
 
-    let input = SliceJobInput {
-        model_path: test_stl().display().to_string(),
-        output_dir: std::env::temp_dir().display().to_string(),
-        cascade_handle: handle,
-        context: ContextJson {
-            printer: canonical_printer(),
-            plate: canonical_plate(),
-            filaments: vec![canonical_filament()],
-            active_slot: 0,
-            user_overrides: vec![],
-            project_overrides: vec![],
-            object_overrides: std::collections::HashMap::new(),
-        },
-        plate_ids: vec![],
-        printer_instance_id: None,
-    };
+    let input = bambi_input(
+        test_stl().display().to_string(),
+        std::env::temp_dir().display().to_string(),
+        vec![],
+    );
 
-    let err = run_slice_job_blocking(input, &registry, &cascades_mut, sink).expect_err("ok");
+    let err = run_slice_job_blocking(input, &registry, sink).expect_err("ok");
     use n3o_slic3r_lib::core::slice::SliceStartError;
     assert!(matches!(err, SliceStartError::NoPlatesRequested), "got {err:?}");
+}
+
+#[test]
+fn unknown_printer_instance_errors() {
+    ensure_ffi_init();
+    let registry = JobRegistry::new();
+    let (sink, _events) = collecting_sink();
+
+    let mut input = bambi_input(
+        test_stl().display().to_string(),
+        std::env::temp_dir().display().to_string(),
+        vec![1],
+    );
+    input.printer_instance_id = "ghost-printer".into();
+
+    let err = run_slice_job_blocking(input, &registry, sink).expect_err("ok");
+    use n3o_slic3r_lib::core::slice::SliceStartError;
+    assert!(
+        matches!(err, SliceStartError::PrinterInstanceCompose(_)),
+        "got {err:?}",
+    );
 }

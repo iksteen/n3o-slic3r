@@ -63,10 +63,6 @@ pub enum SliceInputError {
     /// the user's mistake — surface early rather than letting
     /// libslic3r emit "no geometry" two seconds in.
     EmptyScene { plate_id: PlateId },
-    /// `project.cascade_handle` is `None`. Bootstrap should have
-    /// loaded the default cascade; if it didn't, the slice can't
-    /// proceed.
-    NoCascadeLoaded,
     /// Writing the temp `.3mf` failed. The included path is the
     /// candidate the builder tried.
     TempWrite { path: PathBuf, message: String },
@@ -95,9 +91,6 @@ impl std::fmt::Display for SliceInputError {
                 "plate {} has no objects; add geometry before slicing",
                 plate_id.0,
             ),
-            Self::NoCascadeLoaded => {
-                write!(f, "no cascade loaded; bootstrap should have run `cascade_load_default`")
-            }
             Self::TempWrite { path, message } => {
                 write!(f, "couldn't write slice input at {}: {message}", path.display())
             }
@@ -200,10 +193,15 @@ pub fn build_slice_input(
         &plate.project_overrides,
     );
 
-    // ── Cascade handle ────────────────────────────────────────
-    let cascade_handle = project
-        .cascade_handle
-        .ok_or(SliceInputError::NoCascadeLoaded)?;
+    // ── Printer instance routing ──────────────────────────────
+    // Cascade composition happens in the orchestrator from this
+    // instance's per-bucket vendor fragments. PR-S-5c made the
+    // composer the only path; an unbound plate (no printer_instance_id)
+    // can't slice.
+    let printer_instance_id = plate
+        .printer_instance_id
+        .clone()
+        .ok_or(SliceInputError::UnboundPrinter { plate_id })?;
 
     // ── Empty-scene check (after metadata so the error message
     //    can name the plate without re-walking) ────────────────
@@ -224,7 +222,6 @@ pub fn build_slice_input(
     let input = SliceJobInput {
         model_path: temp_path.to_string_lossy().into_owned(),
         output_dir,
-        cascade_handle,
         context: ContextJson {
             printer: printer_profile,
             plate: build_plate,
@@ -239,7 +236,7 @@ pub fn build_slice_input(
             object_overrides: HashMap::new(),
         },
         plate_ids: vec![plate_id.0],
-        printer_instance_id: plate.printer_instance_id.clone(),
+        printer_instance_id,
     };
 
     Ok((input, temp_path))
@@ -388,7 +385,6 @@ mod tests {
 
     fn one_plate_project_with_cube() -> Project {
         let mut p = Project::default();
-        p.cascade_handle = Some(1u64);
         p.plates[0].printer = Some(a1_mini_binding());
         let mesh_id = p.register_mesh(triangle_mesh());
         p.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
@@ -421,7 +417,6 @@ mod tests {
     #[test]
     fn multi_plate_targets_the_requested_plate_not_active() {
         let mut project = Project::default();
-        project.cascade_handle = Some(1u64);
 
         // Plate 1: A1 mini with one cube.
         project.plates[0].printer = Some(a1_mini_binding());
@@ -454,7 +449,6 @@ mod tests {
     #[test]
     fn per_object_extruder_survives_temp_3mf_round_trip() {
         let mut project = Project::default();
-        project.cascade_handle = Some(1u64);
         project.plates[0].printer = Some(a1_mini_binding());
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject {
@@ -523,7 +517,6 @@ mod tests {
     #[test]
     fn unbound_printer_errors() {
         let mut project = Project::default();
-        project.cascade_handle = Some(1u64);
         // Project::default now auto-binds; clear it so this test
         // pins the genuinely-unbound error path.
         project.plates[0].printer = None;
@@ -541,7 +534,6 @@ mod tests {
     #[test]
     fn empty_scene_errors() {
         let mut project = Project::default();
-        project.cascade_handle = Some(1u64);
         project.plates[0].printer = Some(a1_mini_binding());
         // No register_object call → no objects on the plate.
         let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
@@ -553,21 +545,8 @@ mod tests {
     }
 
     #[test]
-    fn no_cascade_loaded_errors() {
-        let mut project = Project::default();
-        project.plates[0].printer = Some(a1_mini_binding());
-        let mesh_id = project.register_mesh(triangle_mesh());
-        project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
-        // cascade_handle stays None.
-        let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
-            .expect_err("no cascade");
-        assert!(matches!(err, SliceInputError::NoCascadeLoaded));
-    }
-
-    #[test]
     fn unknown_printer_identity_errors() {
         let mut project = Project::default();
-        project.cascade_handle = Some(1u64);
         project.plates[0].printer = Some(PrinterBinding {
             printer_identity: "totally-fake-printer".into(),
             build_plate_identity: "Textured PEI".into(),
@@ -585,7 +564,6 @@ mod tests {
     #[test]
     fn unsupported_build_plate_errors() {
         let mut project = Project::default();
-        project.cascade_handle = Some(1u64);
         project.plates[0].printer = Some(PrinterBinding {
             printer_identity: "bambu-a1-mini".into(),
             // A1 mini doesn't support U1's Magnetic plate.
@@ -630,7 +608,6 @@ mod tests {
     #[test]
     fn no_material_bindings_falls_back_to_generic_pla() {
         let mut project = Project::default();
-        project.cascade_handle = Some(1u64);
         project.plates[0].printer = Some(a1_mini_binding());
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
@@ -665,7 +642,6 @@ mod tests {
     #[test]
     fn temp_3mf_omits_unused_meshes_from_other_plates() {
         let mut project = Project::default();
-        project.cascade_handle = Some(1u64);
         project.plates[0].printer = Some(a1_mini_binding());
 
         // Mesh on plate 1.

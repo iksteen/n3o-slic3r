@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::core::cascade::commands::{CascadeHandle, ContextJson};
+use crate::core::cascade::commands::ContextJson;
 
 /// Opaque monotonic job id. 1-based; 0 is reserved as "no job".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -44,19 +44,16 @@ pub struct SliceJobInput {
     /// Directory to write G-code into. Output files land at
     /// `<output_dir>/plate_<N>.gcode`.
     pub output_dir: String,
-    pub cascade_handle: CascadeHandle,
     pub context: ContextJson,
     /// Plates to slice. MVP iterates this sequentially; multi-plate
     /// projects are Phase 5.
     pub plate_ids: Vec<u32>,
-    /// PR-S-5b: if set, the orchestrator composes a fresh cascade from
-    /// this PrinterInstance's per-bucket fragments + the plate's
-    /// process overrides, then uses *that* cascade instead of looking
-    /// up `cascade_handle` in the registry. `None` falls back to the
-    /// legacy monolithic-cascade path (PR-S-5c will rip this fallback
-    /// out + make composition the only path).
-    #[serde(default)]
-    pub printer_instance_id: Option<String>,
+    /// Names the PrinterInstance whose per-bucket fragments compose
+    /// this job's cascade (PR-S-5b wiring + PR-S-5c burn). The
+    /// orchestrator looks the instance up in the bundled printer
+    /// library and composes a fresh cascade per job — no shared
+    /// registry, no preloaded monolithic cascade.
+    pub printer_instance_id: String,
 }
 
 /// Snapshot of a job's lifecycle. Returned by `slice_status` so the

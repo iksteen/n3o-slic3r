@@ -47,7 +47,7 @@ use super::errors::{classify_libslic3r_error, SliceError};
 use super::events::SliceEvent;
 use super::job::{JobHandle, JobId, JobRegistry, JobStatus, ResolvedJob, SliceJobInput};
 use super::summary::build_summary;
-use crate::core::cascade::{self, types::Cascade, CascadeRegistry};
+use crate::core::cascade::{self, types::Cascade};
 use crate::core::cascade_adapter::{adapt, Manifest};
 use crate::core::printer::lookup_instance;
 use crate::core::profile_library::compose_cascade;
@@ -61,7 +61,6 @@ use slic3r_ffi::{clear_slice_progress, set_slice_progress, slice, Model};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum SliceStartError {
-    UnknownCascadeHandle(u64),
     NoPlatesRequested,
     OutputDirInvalid(String),
     /// Material-binding validation failed on at least one of the
@@ -69,16 +68,15 @@ pub enum SliceStartError {
     /// surfaces `issues` on the binding panel; the user fixes
     /// them and retries.
     InvalidMaterialBindings(super::pre_slice_gate::PlateValidationFailure),
-    /// PR-S-5b: `printer_instance_id` set on the job but no matching
-    /// PrinterInstance in the bundled library, or the instance's
-    /// fragment slugs don't resolve to bundled cascade fragments.
+    /// `printer_instance_id` doesn't match any bundled PrinterInstance,
+    /// or the instance's fragment slugs don't resolve to bundled
+    /// cascade fragments.
     PrinterInstanceCompose(String),
 }
 
 impl std::fmt::Display for SliceStartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownCascadeHandle(h) => write!(f, "unknown cascade handle {h}"),
             Self::NoPlatesRequested => write!(f, "no plates in job"),
             Self::OutputDirInvalid(p) => write!(f, "output_dir not usable: {p}"),
             Self::InvalidMaterialBindings(fail) => write!(
@@ -103,55 +101,41 @@ pub type EventSink = Box<dyn Fn(SliceEvent) + Send + Sync + 'static>;
 
 /// Resolve the [`Cascade`] this job slices against.
 ///
-/// Two paths:
-/// - `input.printer_instance_id` is `Some` → compose a fresh cascade
-///   from the matching PrinterInstance's per-bucket vendor fragments
-///   (PR-S-5b path).
-/// - Else → look up the legacy monolithic cascade by handle from the
-///   project-shared registry. PR-S-5c rips this fallback out.
+/// Looks the named PrinterInstance up in the bundled library and
+/// composes a fresh cascade from its per-bucket vendor fragments +
+/// the plate's process overrides. Composition happens per job, not
+/// against a shared registry; there's no caching.
 ///
-/// Plate process overrides flow into the composed cascade via
-/// `input.context.project_overrides` — already attached to the input
-/// by `build_slice_input`. The composer treats them as the
-/// highest-precedence layer.
-fn resolve_cascade(
-    input: &SliceJobInput,
-    cascades: &CascadeRegistry,
-) -> Result<Cascade, SliceStartError> {
-    if let Some(instance_id) = &input.printer_instance_id {
-        let instance = lookup_instance(instance_id).ok_or_else(|| {
-            SliceStartError::PrinterInstanceCompose(format!(
-                "unknown printer instance id `{instance_id}`",
-            ))
-        })?;
-        // Pull plate overrides off the spec list. The composer wants
-        // them as a flat BTreeMap; the spec list carries them as a
-        // TOML body so the regular cascade override-tier loader works.
-        let mut plate_overrides: BTreeMap<String, String> = BTreeMap::new();
-        for spec in &input.context.project_overrides {
-            // Each spec is a (path, body) tuple — body is sorted-key
-            // TOML the loader normally parses. For the composer we
-            // re-parse it back into a map. Cheap; spec lists are tiny.
-            if let Ok(table) = spec.content.parse::<toml::Value>() {
-                if let Some(t) = table.as_table() {
-                    for (k, v) in t {
-                        if let Some(s) = v.as_str() {
-                            plate_overrides.insert(k.clone(), s.to_owned());
-                        } else {
-                            plate_overrides.insert(k.clone(), v.to_string());
-                        }
+/// Plate process overrides flow in via `input.context.project_overrides`
+/// (`build_slice_input` attaches them). The composer treats them as
+/// the highest-precedence layer.
+fn resolve_cascade(input: &SliceJobInput) -> Result<Cascade, SliceStartError> {
+    let instance = lookup_instance(&input.printer_instance_id).ok_or_else(|| {
+        SliceStartError::PrinterInstanceCompose(format!(
+            "unknown printer instance id `{}`",
+            input.printer_instance_id,
+        ))
+    })?;
+    // Pull plate overrides off the spec list. The composer wants them
+    // as a flat BTreeMap; the spec list carries them as a TOML body
+    // so the regular cascade override-tier loader works. Re-parse
+    // back to a map — cheap, spec lists are tiny.
+    let mut plate_overrides: BTreeMap<String, String> = BTreeMap::new();
+    for spec in &input.context.project_overrides {
+        if let Ok(table) = spec.content.parse::<toml::Value>() {
+            if let Some(t) = table.as_table() {
+                for (k, v) in t {
+                    if let Some(s) = v.as_str() {
+                        plate_overrides.insert(k.clone(), s.to_owned());
+                    } else {
+                        plate_overrides.insert(k.clone(), v.to_string());
                     }
                 }
             }
         }
-        compose_cascade(&instance, &plate_overrides)
-            .map_err(|e| SliceStartError::PrinterInstanceCompose(e.to_string()))
-    } else {
-        cascades
-            .get(input.cascade_handle)
-            .cloned()
-            .ok_or(SliceStartError::UnknownCascadeHandle(input.cascade_handle))
     }
+    compose_cascade(&instance, &plate_overrides)
+        .map_err(|e| SliceStartError::PrinterInstanceCompose(e.to_string()))
 }
 
 /// Spawn the worker thread for a slice job. Returns the allocated
@@ -161,9 +145,8 @@ pub fn start_slice_job(
     input: SliceJobInput,
     app_handle: AppHandle,
     registry: &JobRegistry,
-    cascades: &CascadeRegistry,
 ) -> Result<JobId, SliceStartError> {
-    start_slice_job_with_sink(input, registry, cascades, app_handle_sink(app_handle))
+    start_slice_job_with_sink(input, registry, app_handle_sink(app_handle))
 }
 
 /// Production sink — emits each event on the matching Tauri
@@ -186,13 +169,12 @@ fn app_handle_sink(app: AppHandle) -> EventSink {
 pub fn start_slice_job_with_sink(
     input: SliceJobInput,
     registry: &JobRegistry,
-    cascades: &CascadeRegistry,
     sink: EventSink,
 ) -> Result<JobId, SliceStartError> {
     if input.plate_ids.is_empty() {
         return Err(SliceStartError::NoPlatesRequested);
     }
-    let cascade = resolve_cascade(&input, cascades)?;
+    let cascade = resolve_cascade(&input)?;
     let context = SlicingContext {
         printer: Arc::new(input.context.printer.clone()),
         plate: Arc::new(input.context.plate.clone()),
@@ -240,13 +222,12 @@ pub fn start_slice_job_with_sink(
 pub fn run_slice_job_blocking(
     input: SliceJobInput,
     registry: &JobRegistry,
-    cascades: &CascadeRegistry,
     sink: EventSink,
 ) -> Result<JobId, SliceStartError> {
     if input.plate_ids.is_empty() {
         return Err(SliceStartError::NoPlatesRequested);
     }
-    let cascade = resolve_cascade(&input, cascades)?;
+    let cascade = resolve_cascade(&input)?;
     let context = SlicingContext {
         printer: Arc::new(input.context.printer.clone()),
         plate: Arc::new(input.context.plate.clone()),
