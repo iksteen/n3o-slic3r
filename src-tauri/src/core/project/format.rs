@@ -360,7 +360,6 @@ mod tests {
         write_project(&p, &path).expect("write");
         let parsed = read_project(&path).expect("read");
         assert_eq!(parsed.plates.len(), 1);
-        assert_eq!(parsed.cascade_handle, None);
         assert_eq!(parsed.source_path, Some(path.clone()));
         std::fs::remove_file(&path).ok();
     }
@@ -368,7 +367,6 @@ mod tests {
     #[test]
     fn round_trip_preserves_plate_metadata_and_bindings() {
         let mut p = Project::default();
-        p.cascade_handle = Some(42);
         p.user_overrides
             .insert("travel_speed".into(), "300".into());
         p.file_metadata
@@ -391,7 +389,6 @@ mod tests {
         write_project(&p, &path).expect("write");
         let parsed = read_project(&path).expect("read");
 
-        assert_eq!(parsed.cascade_handle, Some(42));
         assert_eq!(
             parsed.user_overrides.get("travel_speed").map(|s| s.as_str()),
             Some("300"),
@@ -522,10 +519,8 @@ mod tests {
         let mut p = Project::default();
         let path = tempfile_3mf();
         write_project(&p, &path).expect("write 1");
-        p.cascade_handle = Some(7);
         write_project(&p, &path).expect("write 2");
         let parsed = read_project(&path).expect("read");
-        assert_eq!(parsed.cascade_handle, Some(7));
         std::fs::remove_file(&path).ok();
     }
 

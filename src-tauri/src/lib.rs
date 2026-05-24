@@ -49,7 +49,6 @@ pub fn run() {
             core::cascade::slicer_options,
             core::cascade::slicer_options_for_printer,
             core::cascade::commands::cascade_load,
-            core::cascade::commands::cascade_load_default,
             core::cascade::commands::cascade_resolve,
             core::cascade::commands::cascade_trace,
             core::cascade::commands::cascade_context_dimensions,

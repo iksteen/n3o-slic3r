@@ -37,7 +37,6 @@ use uuid::Uuid;
 
 use super::binding::{MaterialBinding, PrinterBinding};
 use super::metadata::PlateMetadata;
-use crate::core::cascade::commands::CascadeHandle;
 use crate::core::scene::state::{Mesh, MeshId, PlateSceneState};
 
 /// Opaque 1-based plate id. Stable across the plate list —
@@ -73,17 +72,6 @@ pub struct Project {
     /// invariant maintenance. Internal; the public command surface
     /// addresses plates by `PlateId`.
     pub active_plate: usize,
-
-    /// Currently-loaded cascade handle (from PR-1-9's
-    /// `CascadeRegistry`). `None` at app startup before the user
-    /// loads a cascade; bound to `Some(handle)` after the
-    /// `cascade_load` Tauri command returns its id.
-    ///
-    /// One cascade per project — per-plate overrides layer on top.
-    /// Phase 5 ships single-cascade-per-project; future work can
-    /// introduce per-plate cascades if a workflow demands it.
-    #[serde(default)]
-    pub cascade_handle: Option<CascadeHandle>,
 
     /// User-tier overrides (FR-CAS-3). Apply across every plate.
     /// Project-tier overrides live on each [`Plate`].
@@ -168,13 +156,11 @@ pub struct Plate {
     #[serde(default)]
     pub material_bindings: Vec<MaterialBinding>,
 
-    /// PR-S-5b: opt-in path that routes this plate's slicing through
-    /// the per-bucket cascade composer. When set, the orchestrator
-    /// looks up the matching `PrinterInstance`, composes a fresh
-    /// cascade from its vendor printer/filament/process fragments,
-    /// and uses that instead of the project's monolithic
-    /// `cascade_handle`. `None` keeps the legacy path (PR-S-5c rips
-    /// the fallback out).
+    /// Names the [`PrinterInstance`] this plate slices against. The
+    /// composer assembles the slice-time cascade from the instance's
+    /// vendor printer/filament/process fragments + per-extruder
+    /// nozzle.tomls + this plate's process overrides. `None` for an
+    /// unbound plate (slice refuses with `UnboundPrinter`).
     #[serde(default)]
     pub printer_instance_id: Option<String>,
 
@@ -202,7 +188,6 @@ impl Default for Project {
             uuid: Uuid::new_v4(),
             plates: vec![plate],
             active_plate: 0,
-            cascade_handle: None,
             user_overrides: HashMap::new(),
             file_metadata: BTreeMap::new(),
             source_path: None,
@@ -421,7 +406,6 @@ mod tests {
         // `project_default_bootstraps_with_bundled_printer`.
         assert!(p.plates[0].printer.is_some(), "auto-bound to bundled default");
         assert_eq!(p.active_plate, 0);
-        assert_eq!(p.cascade_handle, None, "no cascade loaded at startup");
         assert!(p.meshes.is_empty());
         assert_eq!(p.next_mesh_id, 0);
         assert_eq!(p.next_object_id, 0);
@@ -438,7 +422,6 @@ mod tests {
     #[test]
     fn project_serde_round_trips() {
         let mut p = Project::default();
-        p.cascade_handle = Some(42);
         p.plates[0].printer = Some(a1_mini());
         p.plates[0]
             .project_overrides
@@ -457,7 +440,6 @@ mod tests {
         let parsed: Project = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed.uuid, p.uuid);
-        assert_eq!(parsed.cascade_handle, Some(42));
         assert_eq!(parsed.plates.len(), 1);
         assert_eq!(parsed.plates[0].printer, Some(a1_mini()));
         assert_eq!(

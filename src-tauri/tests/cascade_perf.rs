@@ -14,9 +14,10 @@
 //! regression gate; statistical-quality bench numbers can come back
 //! later if Phase 4's UI shows the resolver hot path.
 
-use n3o_slic3r_lib::core::cascade::{
-    loader::parse_cascade_str, resolve_with_overrides, Cascade, OverrideTiers,
-};
+use n3o_slic3r_lib::core::cascade::{resolve_with_overrides, Cascade, OverrideTiers};
+use n3o_slic3r_lib::core::printer::lookup_instance;
+use n3o_slic3r_lib::core::profile_library::compose_cascade;
+use std::collections::BTreeMap;
 use n3o_slic3r_lib::core::cascade_adapter::{adapt_with_overrides, Manifest};
 use n3o_slic3r_lib::core::filament::FilamentProfile;
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
@@ -66,12 +67,12 @@ fn measure<F: FnMut()>(mut op: F) -> (Duration, Duration) {
 }
 
 fn load_reference_cascade() -> Cascade {
-    let path = workspace_root().join("profiles/cascades/bambu-a1-mini-default.toml");
-    let src = std::fs::read_to_string(&path).expect("read reference cascade");
-    Cascade {
-        rules: parse_cascade_str(&src, Path::new("bambu-a1-mini-default.toml"))
-            .expect("parse reference cascade"),
-    }
+    // PR-S-5c: use the composer-derived cascade for the Bambi instance
+    // instead of the (now-deleted) monolithic profiles/cascades/...toml.
+    // Shape is identical from the resolver's perspective; just sourced
+    // from the per-bucket vendor fragments + composer.
+    let bambi = lookup_instance("bambi").expect("bambi bundled");
+    compose_cascade(&bambi, &BTreeMap::new()).expect("compose bambi cascade")
 }
 
 fn a1_mini_pla_pei_context() -> SlicingContext {

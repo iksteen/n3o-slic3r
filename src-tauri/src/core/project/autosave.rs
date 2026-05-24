@@ -363,7 +363,7 @@ mod tests {
         // Mutate.
         {
             let mut p = project.lock().unwrap();
-            p.cascade_handle = Some(99);
+            p.user_overrides.insert("k".into(), "v".into());
         }
         let outcome = write_one_tick(&project, dir.path(), &mut last_hash).expect("ok");
         assert!(matches!(outcome, WriteOutcome::Wrote(_)));

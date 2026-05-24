@@ -51,9 +51,6 @@ pub struct SceneSnapshot {
     /// Filesystem path the project was loaded from (or `None`
     /// for an unsaved in-memory project).
     pub source_path: Option<String>,
-    /// Cascade handle the user loaded via `cascade_load`.
-    /// `None` at startup; bound after first load.
-    pub cascade_handle: Option<u64>,
     /// User-tier cascade overrides (apply across all plates).
     pub user_overrides: std::collections::HashMap<String, String>,
     /// File-level 3MF metadata (Title, Designer, License, …)
@@ -121,7 +118,6 @@ pub fn scene_snapshot(state: State<Arc<Mutex<Project>>>) -> Result<SceneSnapshot
             .source_path
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned()),
-        cascade_handle: s.cascade_handle,
         user_overrides: s.user_overrides.clone(),
         file_metadata: s.file_metadata.clone(),
         meshes,

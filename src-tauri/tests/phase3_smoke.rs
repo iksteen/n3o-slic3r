@@ -16,7 +16,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};
 
 use n3o_slic3r_lib::core::cascade::commands::ContextJson;
-use n3o_slic3r_lib::core::cascade::{load_cascade, CascadeRegistry};
 use n3o_slic3r_lib::core::filament::FilamentProfile;
 use n3o_slic3r_lib::core::gcode::{parser, serializer};
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
@@ -48,10 +47,6 @@ fn cube_stl() -> PathBuf {
 
 fn fourcolor_3mf() -> PathBuf {
     workspace_root().join("examples/spike3/fourcolor.3mf")
-}
-
-fn a1_mini_cascade_path() -> PathBuf {
-    workspace_root().join("profiles/cascades/bambu-a1-mini-default.toml")
 }
 
 fn canonical_printer() -> PrinterProfile {
@@ -106,10 +101,6 @@ fn collecting_sink() -> (EventSink, Arc<Mutex<Vec<SliceEvent>>>) {
 }
 
 fn slice_cube_to_gcode() -> (PathBuf, Vec<u8>) {
-    let mut cascades = CascadeRegistry::new();
-    let cascade = load_cascade(&[a1_mini_cascade_path().as_path()]).expect("load cascade");
-    let handle = cascades.insert(cascade);
-
     let registry = JobRegistry::new();
     let (sink, events) = collecting_sink();
     let temp_dir = std::env::temp_dir().join(format!(
