@@ -177,9 +177,7 @@ pub struct RawAmsTray {
 impl RawAmsState {
     /// Lower into the typed shape `BambuExtra` exposes.
     pub fn to_typed(&self) -> crate::core::driver::status::AmsState {
-        use crate::core::driver::status::{
-            AmsFilament, AmsState, AmsTray, AmsUnit,
-        };
+        use crate::core::driver::status::{AmsState, AmsTray, AmsUnit};
         let active_slot = self.tray_now.and_then(|n| u8::try_from(n).ok());
         let units = self
             .ams

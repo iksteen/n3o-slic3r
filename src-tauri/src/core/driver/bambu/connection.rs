@@ -19,6 +19,7 @@
 //! During backoff the status connection state is
 //! `Reconnecting { in_seconds }` so the UI can show progress.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -69,9 +70,13 @@ pub struct BambuDriver {
     tasks: Vec<JoinHandle<()>>,
     /// Signals the event-loop task to stop cleanly.
     shutdown_tx: Option<oneshot::Sender<()>>,
-    /// Client handle for publishing (PR-7a-5 / PR-7a-6 will use
-    /// this to send print + command messages).
+    /// Client handle for publishing — used by send-print
+    /// (PR-7a-5) and pause/resume/stop (PR-7a-6).
     client: Option<AsyncClient>,
+    /// Monotonic sequence_id counter for outgoing MQTT commands.
+    /// Bambu echoes the value back in status messages so we can
+    /// correlate the printer's ack with the command we sent.
+    sequence_counter: Arc<AtomicU64>,
 }
 
 impl BambuDriver {
@@ -90,7 +95,15 @@ impl BambuDriver {
             tasks: Vec::new(),
             shutdown_tx: None,
             client: None,
+            sequence_counter: Arc::new(AtomicU64::new(1)),
         }
+    }
+
+    /// Allocate the next sequence_id for an outgoing MQTT
+    /// command. Wraps as a stringified u64 — Bambu expects
+    /// string-typed sequence ids.
+    fn next_sequence_id(&self) -> String {
+        self.sequence_counter.fetch_add(1, Ordering::SeqCst).to_string()
     }
 
     /// The serial-derived device id, available after a
@@ -226,11 +239,93 @@ impl Driver for BambuDriver {
         self.status_rx.clone()
     }
 
-    async fn send(&mut self, _payload: SendPayload) -> Result<SendHandle, DriverError> {
-        // Implemented in PR-7a-5 — this is the connection ticket.
-        Err(DriverError::Other(
-            "BambuDriver::send not implemented yet (PR-7a-5)".into(),
-        ))
+    async fn send(&mut self, payload: SendPayload) -> Result<SendHandle, DriverError> {
+        let (bytes, plate_id) = match payload {
+            SendPayload::Gcode3mf { bytes, plate_id } => (bytes, plate_id),
+            SendPayload::Gcode { .. } => {
+                return Err(DriverError::Other(
+                    "BambuDriver only accepts SendPayload::Gcode3mf".into(),
+                ));
+            }
+        };
+        let client = self
+            .client
+            .clone()
+            .ok_or(DriverError::NotConnected)?;
+        let device_id = self
+            .device_id
+            .clone()
+            .ok_or(DriverError::NotConnected)?;
+
+        // Unique remote name keeps concurrent sends from
+        // colliding + makes it easy to grep server-side logs
+        // for our uploads vs Bambu Studio's.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let remote_name = format!("n3o-{plate_id}-{nanos}.gcode.3mf");
+        let md5 = super::ftps::md5_hex(&bytes);
+
+        // FTPS is blocking — push it onto Tokio's blocking pool.
+        let host = self.config.host.clone();
+        let access_code = self.config.access_code.clone();
+        let remote_for_task = remote_name.clone();
+        let bytes_for_task = bytes;
+        let remote_path = tokio::task::spawn_blocking(move || {
+            let mut ftps = super::ftps::connect(&host, &access_code)?;
+            let path = super::ftps::upload(&mut ftps, &remote_for_task, &bytes_for_task)?;
+            // Quit politely; ignore errors — the upload has
+            // already landed by this point.
+            let _ = ftps.quit();
+            Ok::<String, DriverError>(path)
+        })
+        .await
+        .map_err(|e| DriverError::Other(format!("upload join: {e}")))??;
+
+        // Publish the project_file MQTT command. Field shape
+        // sourced from OpenBambuAPI mqtt.md (Doridian fork) —
+        // matches what Bambu Studio publishes for cache-uploaded
+        // .gcode.3mf files.
+        let sequence_id = self.next_sequence_id();
+        let cmd = ProjectFileCommand {
+            print: ProjectFileBody {
+                sequence_id: &sequence_id,
+                command: "project_file",
+                param: format!("Metadata/plate_{plate_id}.gcode"),
+                project_id: "0",
+                profile_id: "0",
+                task_id: "0",
+                subtask_id: "0",
+                subtask_name: &remote_name,
+                file: "",
+                // `file:///mnt/sdcard` is the SD-card root on
+                // the printer; FTPS uploaded files at
+                // /cache/<name> become file:///mnt/sdcard/cache/<name>.
+                url: &format!("file:///mnt/sdcard{remote_path}"),
+                md5: &md5,
+                bed_type: "auto",
+                timelapse: false,
+                bed_levelling: true,
+                flow_cali: false,
+                vibration_cali: false,
+                layer_inspect: false,
+                ams_mapping: "",
+                use_ams: false,
+            },
+        };
+        let body = serde_json::to_vec(&cmd)
+            .map_err(|e| DriverError::Other(format!("serialize project_file: {e}")))?;
+        let topic = format!("device/{device_id}/request");
+        client
+            .publish(&topic, QoS::AtMostOnce, false, body)
+            .await
+            .map_err(|e| DriverError::Network(format!("publish project_file: {e}")))?;
+
+        Ok(SendHandle {
+            id: sequence_id,
+            file_name: remote_name,
+        })
     }
 
     async fn command(&mut self, _cmd: PrinterCommand) -> Result<(), DriverError> {
@@ -252,6 +347,41 @@ struct PushAllCommand<'a> {
     command: &'a str,
     version: u8,
     push_target: u8,
+}
+
+/// `project_file` MQTT command — shape from OpenBambuAPI
+/// (Doridian fork) `mqtt.md`. PR-7a-5 publishes this after FTPS
+/// upload to start a print of the uploaded file.
+#[derive(Serialize)]
+struct ProjectFileCommand<'a> {
+    print: ProjectFileBody<'a>,
+}
+
+#[derive(Serialize)]
+struct ProjectFileBody<'a> {
+    sequence_id: &'a str,
+    command: &'a str,
+    /// Path inside the .gcode.3mf zip (Bambu's per-plate gcode
+    /// always lives at `Metadata/plate_<N>.gcode`).
+    param: String,
+    project_id: &'a str,
+    profile_id: &'a str,
+    task_id: &'a str,
+    subtask_id: &'a str,
+    subtask_name: &'a str,
+    file: &'a str,
+    /// URL of the .gcode.3mf on the printer-side filesystem.
+    /// For FTPS-uploaded files: `file:///mnt/sdcard/cache/<name>`.
+    url: &'a str,
+    md5: &'a str,
+    bed_type: &'a str,
+    timelapse: bool,
+    bed_levelling: bool,
+    flow_cali: bool,
+    vibration_cali: bool,
+    layer_inspect: bool,
+    ams_mapping: &'a str,
+    use_ams: bool,
 }
 
 /// Background task: own the rumqttc event loop until shutdown.
@@ -415,6 +545,51 @@ mod tests {
         );
         assert_eq!(d.id(), DriverId(7));
         assert_eq!(d.kind(), DriverKind::Bambu);
+    }
+
+    #[test]
+    fn project_file_command_carries_expected_fields() {
+        let cmd = ProjectFileCommand {
+            print: ProjectFileBody {
+                sequence_id: "42",
+                command: "project_file",
+                param: "Metadata/plate_1.gcode".into(),
+                project_id: "0",
+                profile_id: "0",
+                task_id: "0",
+                subtask_id: "0",
+                subtask_name: "n3o-1-12345.gcode.3mf",
+                file: "",
+                url: "file:///mnt/sdcard/cache/n3o-1-12345.gcode.3mf",
+                md5: "deadbeef",
+                bed_type: "auto",
+                timelapse: false,
+                bed_levelling: true,
+                flow_cali: false,
+                vibration_cali: false,
+                layer_inspect: false,
+                ams_mapping: "",
+                use_ams: false,
+            },
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&cmd).unwrap()).unwrap();
+        // Pin every field the OpenBambuAPI doc says the printer
+        // requires; if any one drifts we want a loud failure.
+        let print = &json["print"];
+        assert_eq!(print["sequence_id"], "42");
+        assert_eq!(print["command"], "project_file");
+        assert_eq!(print["param"], "Metadata/plate_1.gcode");
+        assert_eq!(
+            print["url"],
+            "file:///mnt/sdcard/cache/n3o-1-12345.gcode.3mf"
+        );
+        assert_eq!(print["md5"], "deadbeef");
+        assert_eq!(print["bed_type"], "auto");
+        assert_eq!(print["use_ams"], false);
+        // Booleans, not strings — Bambu rejects use_ams:"false".
+        assert!(print["use_ams"].is_boolean());
+        assert!(print["timelapse"].is_boolean());
     }
 
     /// Pushall payload shape is what the printer expects. Pin

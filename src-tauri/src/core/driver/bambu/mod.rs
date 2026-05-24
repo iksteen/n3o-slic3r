@@ -10,6 +10,7 @@
 
 pub mod connection;
 pub mod device_id;
+pub mod ftps;
 pub mod status;
 pub mod tls;
 

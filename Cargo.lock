@@ -2073,6 +2073,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy-regex"
+version = "3.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bae91019476d3ec7147de9aa291cadb6d870abf2f3015d2da73a90325ac1496"
+dependencies = [
+ "lazy-regex-proc_macros",
+ "once_cell",
+ "regex",
+]
+
+[[package]]
+name = "lazy-regex-proc_macros"
+version = "3.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4de9c1e1439d8b7b3061b2d209809f447ca33241733d9a3c01eabf2dc8d94358"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "regex",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2293,6 +2316,7 @@ dependencies = [
  "serde_json",
  "slic3r-ffi",
  "stl_io",
+ "suppaftp",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -3719,6 +3743,20 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "suppaftp"
+version = "8.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4275c142b5be3af2eeadd70dd368caf3b65546c8af1035839372dd7a1436127d"
+dependencies = [
+ "chrono",
+ "futures-lite",
+ "lazy-regex",
+ "log",
+ "native-tls",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "swift-rs"
