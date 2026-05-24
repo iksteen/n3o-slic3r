@@ -43,7 +43,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PROFILES_ROOT = REPO_ROOT / "external/BambuStudio-profiles"
+DEFAULT_PROFILES_ROOT = REPO_ROOT / "external/BambuStudio-profiles"
 
 # Keys that libslic3r expands per plate type. The cascade carries a
 # single logical `bed_temp`; the adapter expands it across all of
@@ -214,6 +214,11 @@ DROPPED_KEYS = {
     "support_ironing_direction", "support_ironing_inset",
     "support_ironing_speed", "enable_support_ironing",
     "top_color_penetration_layers", "bottom_color_penetration_layers",
+    # Stale in Orca's own data: referenced from BBL/machine/
+    # fdm_machine_common.json but NOT registered in their
+    # libslic3r PrintConfig.cpp (an upstream pruning miss — the
+    # JSON references a setting their C++ doesn't recognise). Drop.
+    "apply_top_surface_compensation",
 }
 
 # JSON metadata keys that aren't libslic3r options and should never
@@ -542,10 +547,15 @@ def main() -> None:
     p.add_argument("--out", required=True, type=Path,
                    help="Output TOML cascade path")
     p.add_argument("--source-sha", default="unknown",
-                   help="BambuStudio upstream commit SHA for the vendored snapshot")
+                   help="Upstream commit SHA for the vendored snapshot")
+    p.add_argument("--profiles-root", type=Path, default=DEFAULT_PROFILES_ROOT,
+                   help="Profile tree root (default: external/BambuStudio-profiles/; "
+                        "use external/OrcaSlicer/resources/profiles/ for Orca-derived "
+                        "profiles whose start_gcode macros target the OrcaSlicer libslic3r "
+                        "option vocabulary that our FFI ships)")
     args = p.parse_args()
 
-    vendor_dir = PROFILES_ROOT / args.vendor
+    vendor_dir = args.profiles_root / args.vendor
     if not vendor_dir.is_dir():
         sys.exit(f"vendor directory missing: {vendor_dir}")
 
