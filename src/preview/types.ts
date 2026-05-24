@@ -113,6 +113,41 @@ export type FeatureType =
   | "Travel"
   | { Other: string };
 
+/** Bambu's per-plate `plate_<N>.json` shape, surfaced by the
+ *  `.gcode.3mf` drop-loader (PR-6-14). Mirror of Rust's
+ *  `core::threemf::SlicedPlateMetadata`. */
+export interface SlicedPlateMetadata {
+  plate_index: number;
+  layer_count: number;
+  object_count: number;
+  estimated_time_seconds: number;
+  estimated_time_text: string;
+  filament_used_grams: Record<string, number>;
+  filament_used_mm: Record<string, number>;
+  bbox_min: [number, number, number] | null;
+  bbox_max: [number, number, number] | null;
+  ams_bindings: AmsBinding[];
+  emitter: string;
+}
+
+export interface AmsBinding {
+  model_material_index: number;
+  ams_slot: number;
+}
+
+/** What `preview_load_gcode_3mf` returns: the standard preview
+ *  load response plus 3MF-specific surfacing (multi-plate hint,
+ *  pre-baked plate metadata, optional thumbnail). */
+export interface PreviewLoadGcode3mfResponse {
+  preview: PreviewLoadResponse;
+  plate_count: number;
+  plate_metadata: SlicedPlateMetadata | null;
+  /** PNG bytes when the file shipped a thumbnail, else null.
+   *  The frontend wraps in `new Blob([bytes], {type: "image/png"})`
+   *  + `URL.createObjectURL` for `<img>` display. */
+  thumbnail_png: number[] | null;
+}
+
 /** Layer-window state PR-6-9 owns + threads down to the renderer. */
 export type LayerWindow =
   | { mode: "single"; layer: number }

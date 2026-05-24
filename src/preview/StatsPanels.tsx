@@ -8,24 +8,69 @@
 // chart library — the breakdown is small (≤ 10 features) and
 // avoids the dependency.
 
-import type { FullJobStats, HeaderMetadata, PerLayerStats } from "./types";
+import { useEffect, useMemo } from "react";
+
+import type {
+  FullJobStats,
+  HeaderMetadata,
+  PerLayerStats,
+  PreviewLoadGcode3mfResponse,
+} from "./types";
 
 export interface FullJobStatsPanelProps {
   stats: FullJobStats;
   header: HeaderMetadata;
+  /** Populated when the active preview came from a `.gcode.3mf`
+   * drop (PR-6-14). Surfaces multi-plate badge, plate-metadata
+   * estimated time / AMS bindings, and an inline thumbnail. */
+  sliced?: PreviewLoadGcode3mfResponse | null;
 }
 
 export function FullJobStatsPanel({
   stats,
   header,
+  sliced,
 }: FullJobStatsPanelProps) {
   const headerTime = header.estimated_time;
   const computedTime = formatDuration(stats.total_duration_seconds);
-  const time = headerTime ?? computedTime;
+  const slicedMeta = sliced?.plate_metadata ?? null;
+  const time =
+    slicedMeta?.estimated_time_text || headerTime || computedTime;
+
+  // Thumbnail: wrap the byte array in a Blob URL so the <img>
+  // tag can render it. URL lifecycle is component-scoped — revoke
+  // on unmount / when the thumbnail bytes change to avoid the
+  // resource leak that Blob URLs cause by default.
+  const thumbBytes = sliced?.thumbnail_png ?? null;
+  const thumbUrl = useMemo(() => {
+    if (!thumbBytes) return null;
+    const blob = new Blob([new Uint8Array(thumbBytes)], { type: "image/png" });
+    return URL.createObjectURL(blob);
+  }, [thumbBytes]);
+  useEffect(() => {
+    return () => {
+      if (thumbUrl) URL.revokeObjectURL(thumbUrl);
+    };
+  }, [thumbUrl]);
 
   return (
     <div className="stats-panel job-stats-panel">
       <h3 className="stats-panel-title">Full job</h3>
+      {sliced && sliced.plate_count > 1 && (
+        <div
+          className="stats-panel-badge multi-plate-badge"
+          title={`This .gcode.3mf contains ${sliced.plate_count} plates — the preview only shows plate 1.`}
+        >
+          Plate 1 of {sliced.plate_count}
+        </div>
+      )}
+      {thumbUrl && (
+        <img
+          className="stats-panel-thumb"
+          src={thumbUrl}
+          alt="Plate thumbnail from .gcode.3mf"
+        />
+      )}
       {header.slicer && (
         <div className="stats-panel-meta">
           {header.slicer}
@@ -61,6 +106,19 @@ export function FullJobStatsPanel({
           {(stats.bounding_box.max[2] - stats.bounding_box.min[2]).toFixed(0)} mm
         </span>
       </div>
+      {slicedMeta && slicedMeta.ams_bindings.length > 0 && (
+        <div className="stats-panel-row">
+          <span className="stats-panel-label">AMS bindings</span>
+          <span className="stats-panel-value">
+            {slicedMeta.ams_bindings
+              .map(
+                (b) =>
+                  `m${b.model_material_index + 1}→slot ${b.ams_slot + 1}`,
+              )
+              .join(", ")}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

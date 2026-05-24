@@ -51,7 +51,8 @@ mod sliced;
 mod writer;
 
 pub use sliced::{
-    fixture_input, write_sliced_3mf, AmsBinding, SlicedPlate, SlicedProjectInput,
+    fixture_input, read_sliced_3mf, write_sliced_3mf, AmsBinding, SlicedPlate,
+    SlicedPlateMetadata, SlicedPlateRead, SlicedProjectInput, SlicedRead,
 };
 pub use writer::{project_from_objects, write_3mf, write_3mf_with_extras};
 

@@ -15,11 +15,12 @@
 import { useEffect, useState } from "react";
 
 import { ColorModePicker, useColorModePicker } from "./ColorModePicker";
+import { DropZone, type DroppedPreview } from "./DropZone";
 import { GcodePreview } from "./GcodePreview";
 import { HoverTooltip } from "./HoverTooltip";
 import { LayerSlider } from "./LayerSlider";
 import { defaultWindow } from "./layerWindow";
-import { previewLayerStats } from "./invokes";
+import { previewDrop, previewLayerStats } from "./invokes";
 import { FullJobStatsPanel, PerLayerStatsPanel } from "./StatsPanels";
 import { VisibilityToggles, useVisibilityToggles } from "./VisibilityToggles";
 import type {
@@ -39,23 +40,43 @@ export function PreviewWorkspace({ preview, bedExtents }: PreviewWorkspaceProps)
   const { state: colorState, onChange: setColorState } = useColorModePicker();
   const { value: visState, onChange: setVisState } = useVisibilityToggles();
 
+  // Drag-drop loader (PR-6-14). When a user drops a file, the
+  // dropped preview overrides the plate's sliced preview until
+  // the plate's slice prop changes (re-slice / plate switch).
+  const [dropped, setDropped] = useState<DroppedPreview | null>(null);
+  const [dropError, setDropError] = useState<string | null>(null);
+  useEffect(() => {
+    // Plate-switch / re-slice clears the dropped override. Free
+    // the handle the drop registered so we don't leak ~250MB per
+    // file.
+    if (dropped) {
+      void previewDrop(dropped.preview.handle).catch(() => undefined);
+      setDropped(null);
+    }
+    // Only refire on slice-side changes — `dropped` in the dep
+    // list would re-clear immediately.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preview?.handle]);
+
+  const activePreview = dropped?.preview ?? preview;
+
   // Layer window resets to "show all" on each new preview load.
   const [layerWindow, setLayerWindow] = useState<LayerWindow>(() =>
-    defaultWindow(preview?.layer_count ?? 0),
+    defaultWindow(activePreview?.layer_count ?? 0),
   );
   useEffect(() => {
-    setLayerWindow(defaultWindow(preview?.layer_count ?? 0));
-  }, [preview?.handle]);
+    setLayerWindow(defaultWindow(activePreview?.layer_count ?? 0));
+  }, [activePreview?.handle]);
 
   // Per-layer stats fetched once per preview load.
   const [layerStats, setLayerStats] = useState<PerLayerStats[]>([]);
   useEffect(() => {
-    if (!preview) {
+    if (!activePreview) {
       setLayerStats([]);
       return;
     }
     let cancelled = false;
-    void previewLayerStats(preview.handle)
+    void previewLayerStats(activePreview.handle)
       .then((stats) => {
         if (!cancelled) setLayerStats(stats);
       })
@@ -65,7 +86,7 @@ export function PreviewWorkspace({ preview, bedExtents }: PreviewWorkspaceProps)
     return () => {
       cancelled = true;
     };
-  }, [preview?.handle]);
+  }, [activePreview?.handle]);
 
   // Hover-inspection state.
   const [hoverDetail, setHoverDetail] = useState<SegmentDetail | null>(null);
@@ -107,7 +128,7 @@ export function PreviewWorkspace({ preview, bedExtents }: PreviewWorkspaceProps)
           </div>
           <div className="preview-canvas-host">
             <GcodePreview
-              preview={preview}
+              preview={activePreview}
               bedExtents={bedExtents}
               colorMode={colorState.mode}
               palette={colorState.palette}
@@ -116,24 +137,45 @@ export function PreviewWorkspace({ preview, bedExtents }: PreviewWorkspaceProps)
               showRetractions={visState.showRetractions}
               onSegmentHover={setHoverDetail}
             />
+            <DropZone
+              onLoaded={(result) => {
+                setDropError(null);
+                setDropped(result);
+              }}
+              onError={(msg) => setDropError(msg)}
+            />
+            {dropError && (
+              <div className="preview-drop-error" role="alert">
+                {dropError}
+                <button
+                  type="button"
+                  className="preview-drop-error-dismiss"
+                  onClick={() => setDropError(null)}
+                  aria-label="Dismiss"
+                >
+                  ×
+                </button>
+              </div>
+            )}
           </div>
           <div className="preview-slider-region">
             <LayerSlider
-              layerCount={preview?.layer_count ?? 0}
+              layerCount={activePreview?.layer_count ?? 0}
               value={layerWindow}
               onChange={setLayerWindow}
             />
           </div>
         </div>
-        {preview && (
+        {activePreview && (
           <aside className="preview-stats-column">
             <FullJobStatsPanel
-              stats={preview.job_stats}
-              header={preview.header}
+              stats={activePreview.job_stats}
+              header={activePreview.header}
+              sliced={dropped?.sliced ?? null}
             />
             <PerLayerStatsPanel
               stats={currentLayerStats}
-              layerCount={preview.layer_count}
+              layerCount={activePreview.layer_count}
               rangeMode={layerWindow.mode === "range"}
             />
           </aside>

@@ -71,8 +71,88 @@ pub fn preview_load(
 ) -> Result<PreviewLoadResponse, String> {
     let src = std::fs::read_to_string(&path)
         .map_err(|e| format!("read {path}: {e}"))?;
+    Ok(register_preview(&registry, PathBuf::from(&path), &src))
+}
+
+/// Drag-drop loader for Bambu `.gcode.3mf` containers (PR-6-14).
+///
+/// Unpacks the 3MF, extracts the first plate's embedded G-code,
+/// runs the same parse+IR+stats pipeline as [`preview_load`], and
+/// returns the standard [`PreviewLoadResponse`] alongside the
+/// container's plate count, the first plate's pre-baked
+/// [`SlicedPlateMetadata`] (estimated time, filament use, AMS
+/// bindings — surfaced in the stats panel), and the first plate's
+/// optional thumbnail PNG.
+///
+/// Multi-plate behavior: MVP loads plate 1. The `plate_count`
+/// field lets the frontend show a "Plate 1 of N" badge so the
+/// user knows the other plates exist; a plate picker is deferred
+/// per the index's open question.
+#[tauri::command]
+#[tracing::instrument(skip(registry))]
+pub fn preview_load_gcode_3mf(
+    path: String,
+    registry: State<Arc<PreviewRegistry>>,
+) -> Result<PreviewLoadGcode3mfResponse, String> {
+    let read = crate::core::threemf::read_sliced_3mf(std::path::Path::new(&path))
+        .map_err(|e| format!("read {path}: {e}"))?;
+    if read.plates.is_empty() {
+        return Err(format!(
+            "{path}: no Metadata/plate_<N>.gcode entries found"
+        ));
+    }
+    let plate_count = read.plates.len() as u32;
+    if plate_count > 1 {
+        tracing::warn!(
+            path = %path,
+            plate_count,
+            "preview_load_gcode_3mf: multi-plate .gcode.3mf; MVP loads plate 1",
+        );
+    }
+    let plate = read.plates.into_iter().next().expect("len > 0 checked");
+    let src = String::from_utf8(plate.gcode).map_err(|e| {
+        format!(
+            "{path}: plate {} gcode is not utf-8 ({e}); preview pipeline needs text",
+            plate.plate_id,
+        )
+    })?;
+    let preview = register_preview(&registry, PathBuf::from(&path), &src);
+    Ok(PreviewLoadGcode3mfResponse {
+        preview,
+        plate_count,
+        plate_metadata: plate.metadata,
+        thumbnail_png: plate.thumbnail_png,
+    })
+}
+
+/// What [`preview_load_gcode_3mf`] returns. The `preview` field is
+/// the same shape `preview_load` produces (so the frontend's load
+/// handlers share a path); the rest is `.gcode.3mf`-specific
+/// surface (metadata + thumbnail + multi-plate hint).
+#[derive(Debug, Clone, Serialize)]
+pub struct PreviewLoadGcode3mfResponse {
+    pub preview: PreviewLoadResponse,
+    pub plate_count: u32,
+    pub plate_metadata: Option<crate::core::threemf::SlicedPlateMetadata>,
+    /// Bytes of the embedded PNG, ready for the frontend to wrap
+    /// in a `Blob` for `<img>` display. `None` when the file
+    /// omitted a thumbnail.
+    pub thumbnail_png: Option<Vec<u8>>,
+}
+
+/// Shared parse→IR→stats→register path. Source for both
+/// [`preview_load`] (raw `.gcode` file) and
+/// [`preview_load_gcode_3mf`] (gcode body extracted from a 3MF
+/// container). The caller picks how to obtain `src`; this helper
+/// owns the wiring so the two commands can't drift on, e.g.,
+/// header-vs-body parser choice.
+fn register_preview(
+    registry: &PreviewRegistry,
+    source_path: PathBuf,
+    src: &str,
+) -> PreviewLoadResponse {
     let header = crate::core::gcode::parse_all_metadata(src.as_bytes());
-    let lines = parse_str(&src);
+    let lines = parse_str(src);
     let geometry = build_preview(&lines);
     let layer_stats = compute_layer_stats(&geometry);
     let job_stats = compute_job_stats(&geometry, &layer_stats);
@@ -87,7 +167,7 @@ pub fn preview_load(
     registry.insert(
         handle,
         LoadedPreview {
-            source_path: PathBuf::from(&path),
+            source_path,
             header: header.clone(),
             geometry,
             layer_stats,
@@ -96,7 +176,7 @@ pub fn preview_load(
         },
     );
 
-    Ok(PreviewLoadResponse {
+    PreviewLoadResponse {
         handle,
         header,
         layer_count,
@@ -105,7 +185,7 @@ pub fn preview_load(
         retraction_count,
         bounding_box,
         job_stats,
-    })
+    }
 }
 
 /// Return the binary vertex + color + layer-index buffers for the
@@ -469,6 +549,68 @@ mod tests {
         assert!(detail.source_line_text.contains("G1"));
         assert!(detail.source_line_text.contains("X10"));
         assert_eq!(detail.feature, FeatureType::ExternalPerimeter);
+    }
+
+    #[test]
+    fn gcode_3mf_round_trip_loads_first_plate_with_metadata() {
+        use crate::core::slice::PlateSummary;
+        use crate::core::threemf::{
+            write_sliced_3mf, AmsBinding, SlicedPlate, SlicedProjectInput,
+        };
+
+        // Build a tiny synthetic .gcode.3mf with two plates so we
+        // also exercise the multi-plate path.
+        let mut summary = PlateSummary::default();
+        summary.layer_count = 2;
+        summary.estimated_time_seconds = 60;
+        summary.estimated_time_text = "1m".into();
+        let plate1 = SlicedPlate {
+            plate_id: 1,
+            gcode: fixture_gcode().into_bytes(),
+            summary: summary.clone(),
+            thumbnail_png: Some(vec![0xDE, 0xAD]),
+            ams_bindings: vec![AmsBinding {
+                model_material_index: 0,
+                ams_slot: 3,
+            }],
+        };
+        let plate2 = SlicedPlate {
+            plate_id: 2,
+            gcode: b";LAYER_CHANGE\n;Z:0.2\nG1 X0 Y0 Z0.2 F1800\n".to_vec(),
+            summary,
+            thumbnail_png: None,
+            ams_bindings: vec![],
+        };
+        let input = SlicedProjectInput {
+            printer_model: "Bambu A1 mini".into(),
+            file_metadata: std::collections::BTreeMap::new(),
+            plates: vec![plate1, plate2],
+        };
+        let path = std::env::temp_dir().join(format!(
+            "n3o-test-3mf-load-{}.gcode.3mf",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        write_sliced_3mf(&input, &path).expect("write");
+
+        // Drive the new command's body (inline; State is hard to
+        // synthesize in unit tests).
+        let read = crate::core::threemf::read_sliced_3mf(&path).expect("read");
+        assert_eq!(read.plates.len(), 2);
+        let plate = read.plates.into_iter().next().unwrap();
+        let src = String::from_utf8(plate.gcode).expect("utf-8");
+        let reg = PreviewRegistry::new();
+        let preview = register_preview(&reg, path.clone(), &src);
+        assert_eq!(preview.layer_count, 2);
+        let meta = plate.metadata.expect("metadata");
+        assert_eq!(meta.estimated_time_text, "1m");
+        assert_eq!(meta.ams_bindings.len(), 1);
+        assert_eq!(meta.ams_bindings[0].ams_slot, 3);
+        assert_eq!(plate.thumbnail_png.as_deref(), Some([0xDE, 0xAD].as_slice()));
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -105,6 +105,7 @@ pub fn run() {
             core::slice::commands::slice_cancel,
             core::slice::commands::slice_status,
             core::preview::commands::preview_load,
+            core::preview::commands::preview_load_gcode_3mf,
             core::preview::commands::preview_buffers,
             core::preview::commands::preview_layer_stats,
             core::preview::commands::preview_segment_detail,

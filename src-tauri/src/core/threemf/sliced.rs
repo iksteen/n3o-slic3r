@@ -21,13 +21,14 @@
 //! writer — same `zip` crate, same `Content_Types.xml` /
 //! `_rels/.rels` preamble.
 
+use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipWriter};
+use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::core::slice::PlateSummary;
 
@@ -144,6 +145,105 @@ fn write_entry(
     Ok(())
 }
 
+/// What [`read_sliced_3mf`] returns for one plate inside a
+/// `.gcode.3mf` container. The G-code body is the verbatim bytes
+/// the writer embedded; metadata + thumbnail are surfaced
+/// separately so the preview UI can render them without re-
+/// parsing G-code.
+#[derive(Debug, Clone)]
+pub struct SlicedPlateRead {
+    pub plate_id: u32,
+    pub gcode: Vec<u8>,
+    /// `None` if the file shipped without a `plate_<N>.json` or it
+    /// failed to deserialize into [`SlicedPlateMetadata`] (older
+    /// Bambu Studio versions used slightly different shapes; the
+    /// reader tolerates absence rather than rejecting the file).
+    pub metadata: Option<SlicedPlateMetadata>,
+    /// `None` when the file omitted `plate_<N>.png`. Bambu Studio
+    /// emits a 600×600 preview render; we don't validate.
+    pub thumbnail_png: Option<Vec<u8>>,
+}
+
+/// What [`read_sliced_3mf`] returns at the container level.
+#[derive(Debug, Clone)]
+pub struct SlicedRead {
+    /// One entry per plate found in the container, ordered by
+    /// plate_id ascending. MVP preview only renders the first plate
+    /// per PR-6-14; the rest are surfaced so a future multi-plate
+    /// picker can choose.
+    pub plates: Vec<SlicedPlateRead>,
+}
+
+/// Open a `.gcode.3mf` and pull out every `plate_<N>.gcode` entry
+/// along with its sidecar metadata + thumbnail. Reader for PR-3-10's
+/// writer (`write_sliced_3mf`). Consumed by PR-6-14's drag-drop
+/// preview loader.
+///
+/// Errors only on I/O / zip-corruption / missing G-code body; a
+/// missing JSON or PNG sidecar is tolerated (metadata=None /
+/// thumbnail=None) so older Bambu Studio output and hand-rolled
+/// `.gcode.3mf` files still work in the preview.
+pub fn read_sliced_3mf(path: &Path) -> Result<SlicedRead, std::io::Error> {
+    let file = File::open(path)?;
+    let mut zip = ZipArchive::new(file)
+        .map_err(|e| std::io::Error::other(format!("open zip {}: {e}", path.display())))?;
+
+    // Discover plates by scanning for `Metadata/plate_<N>.gcode`.
+    let mut plate_ids: Vec<u32> = Vec::new();
+    for name in zip.file_names() {
+        if let Some(rest) = name.strip_prefix("Metadata/plate_") {
+            if let Some(num_str) = rest.strip_suffix(".gcode") {
+                // Avoid matching `plate_1.gcode.md5` etc.
+                if let Ok(n) = num_str.parse::<u32>() {
+                    plate_ids.push(n);
+                }
+            }
+        }
+    }
+    plate_ids.sort_unstable();
+    plate_ids.dedup();
+
+    let mut plates: Vec<SlicedPlateRead> = Vec::with_capacity(plate_ids.len());
+    for plate_id in plate_ids {
+        let gcode = read_entry_bytes(&mut zip, &format!("Metadata/plate_{plate_id}.gcode"))?
+            .ok_or_else(|| {
+                std::io::Error::other(format!("missing Metadata/plate_{plate_id}.gcode body"))
+            })?;
+        let metadata = match read_entry_bytes(&mut zip, &format!("Metadata/plate_{plate_id}.json"))?
+        {
+            Some(bytes) => serde_json::from_slice::<SlicedPlateMetadata>(&bytes).ok(),
+            None => None,
+        };
+        let thumbnail_png =
+            read_entry_bytes(&mut zip, &format!("Metadata/plate_{plate_id}.png"))?;
+        plates.push(SlicedPlateRead {
+            plate_id,
+            gcode,
+            metadata,
+            thumbnail_png,
+        });
+    }
+
+    Ok(SlicedRead { plates })
+}
+
+fn read_entry_bytes(
+    zip: &mut ZipArchive<File>,
+    name: &str,
+) -> Result<Option<Vec<u8>>, std::io::Error> {
+    match zip.by_name(name) {
+        Ok(mut entry) => {
+            let mut buf = Vec::with_capacity(entry.size() as usize);
+            entry.read_to_end(&mut buf)?;
+            Ok(Some(buf))
+        }
+        Err(zip::result::ZipError::FileNotFound) => Ok(None),
+        Err(e) => Err(std::io::Error::other(format!(
+            "read zip entry {name}: {e}"
+        ))),
+    }
+}
+
 fn content_types_xml() -> String {
     // Bambu's sliced 3MF declares the same content types as a
     // project 3MF, plus an explicit `.gcode` mapping so the
@@ -218,39 +318,45 @@ fn model_xml(input: &SlicedProjectInput) -> String {
     out
 }
 
-/// Bambu's per-plate `plate_<N>.json` — print time + filament
+/// Bambu's per-plate `plate_<N>.json` shape — print time + filament
 /// aggregates + bbox + AMS bindings + a few flags the firmware
 /// surfaces in the UI. JSON shape mirrors what PR-0.5-3 observed
-/// in real Bambu Studio output.
+/// in real Bambu Studio output. Reader side ([`read_sliced_3mf`])
+/// deserializes the same shape so the preview UI can show
+/// estimated time + AMS bindings on `.gcode.3mf` drops without
+/// re-deriving them from the parsed G-code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlicedPlateMetadata {
+    pub plate_index: u32,
+    pub layer_count: u32,
+    pub object_count: u32,
+    pub estimated_time_seconds: u64,
+    pub estimated_time_text: String,
+    pub filament_used_grams: BTreeMap<u8, f64>,
+    pub filament_used_mm: BTreeMap<u8, f64>,
+    pub bbox_min: Option<[f32; 3]>,
+    pub bbox_max: Option<[f32; 3]>,
+    pub ams_bindings: Vec<AmsBinding>,
+    /// Identifier of the writer; useful for diagnostics if a future
+    /// reader version needs to detect older format quirks.
+    pub emitter: String,
+}
+
 fn plate_json(plate: &SlicedPlate) -> String {
-    #[derive(Serialize)]
-    struct PlateJson<'a> {
-        plate_index: u32,
-        layer_count: u32,
-        object_count: u32,
-        estimated_time_seconds: u64,
-        estimated_time_text: &'a str,
-        filament_used_grams: &'a std::collections::BTreeMap<u8, f64>,
-        filament_used_mm: &'a std::collections::BTreeMap<u8, f64>,
-        bbox_min: Option<[f32; 3]>,
-        bbox_max: Option<[f32; 3]>,
-        ams_bindings: &'a [AmsBinding],
-        emitter: String,
-    }
-    let payload = PlateJson {
+    let payload = SlicedPlateMetadata {
         plate_index: plate.plate_id,
         layer_count: plate.summary.layer_count,
         object_count: plate.summary.object_count,
         estimated_time_seconds: plate.summary.estimated_time_seconds,
-        estimated_time_text: &plate.summary.estimated_time_text,
-        filament_used_grams: &plate.summary.filament_used_grams,
-        filament_used_mm: &plate.summary.filament_used_mm,
+        estimated_time_text: plate.summary.estimated_time_text.clone(),
+        filament_used_grams: plate.summary.filament_used_grams.clone(),
+        filament_used_mm: plate.summary.filament_used_mm.clone(),
         bbox_min: plate.summary.bbox_min,
         bbox_max: plate.summary.bbox_max,
-        ams_bindings: &plate.ams_bindings,
+        ams_bindings: plate.ams_bindings.clone(),
         emitter: format!("n3o-slic3r-{N3O_VERSION}"),
     };
-    serde_json::to_string_pretty(&payload).expect("PlateJson serializes")
+    serde_json::to_string_pretty(&payload).expect("SlicedPlateMetadata serializes")
 }
 
 /// Bambu's plate G-code MD5 is the lowercase hex digest of the
@@ -421,6 +527,85 @@ mod tests {
         let file = File::open(path).unwrap();
         let zip = ZipArchive::new(file).unwrap();
         zip.file_names().map(|s| s.to_owned()).collect()
+    }
+
+    #[test]
+    fn read_sliced_round_trips_gcode_metadata_and_thumbnail() {
+        let mut summary = PlateSummary::default();
+        summary.layer_count = 7;
+        summary.estimated_time_seconds = 123;
+        summary.estimated_time_text = "2m 3s".into();
+        summary.filament_used_grams.insert(0, 1.5);
+        let original_gcode = b";test\nG28\nG1 X1\n".to_vec();
+        let thumb = vec![0x89, 0x50, 0x4E, 0x47];
+        let input = SlicedProjectInput {
+            printer_model: "Bambu A1 mini".into(),
+            file_metadata: BTreeMap::new(),
+            plates: vec![SlicedPlate {
+                plate_id: 1,
+                gcode: original_gcode.clone(),
+                summary,
+                thumbnail_png: Some(thumb.clone()),
+                ams_bindings: vec![AmsBinding {
+                    model_material_index: 0,
+                    ams_slot: 2,
+                }],
+            }],
+        };
+        let path = tempfile_path();
+        write_sliced_3mf(&input, &path).expect("write");
+
+        let read = read_sliced_3mf(&path).expect("read");
+        assert_eq!(read.plates.len(), 1);
+        let plate = &read.plates[0];
+        assert_eq!(plate.plate_id, 1);
+        assert_eq!(plate.gcode, original_gcode);
+        assert_eq!(plate.thumbnail_png.as_deref(), Some(thumb.as_slice()));
+        let meta = plate.metadata.as_ref().expect("metadata");
+        assert_eq!(meta.layer_count, 7);
+        assert_eq!(meta.estimated_time_text, "2m 3s");
+        assert_eq!(meta.ams_bindings.len(), 1);
+        assert_eq!(meta.ams_bindings[0].ams_slot, 2);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_sliced_orders_plates_ascending() {
+        let mut input = fixture_input(2, b"G28 ; plate 2\n".to_vec());
+        input.plates.push(SlicedPlate {
+            plate_id: 1,
+            gcode: b"G28 ; plate 1\n".to_vec(),
+            summary: PlateSummary::default(),
+            thumbnail_png: None,
+            ams_bindings: vec![],
+        });
+        let path = tempfile_path();
+        write_sliced_3mf(&input, &path).expect("write");
+
+        let read = read_sliced_3mf(&path).expect("read");
+        let ids: Vec<u32> = read.plates.iter().map(|p| p.plate_id).collect();
+        assert_eq!(ids, vec![1, 2]);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_sliced_tolerates_missing_json_and_thumbnail() {
+        // Hand-roll a minimal .gcode.3mf without sidecars.
+        let path = tempfile_path();
+        {
+            let f = File::create(&path).unwrap();
+            let mut zip = ZipWriter::new(f);
+            let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            zip.start_file("Metadata/plate_1.gcode", opts).unwrap();
+            zip.write_all(b"G28 ; bare\n").unwrap();
+            zip.finish().unwrap();
+        }
+        let read = read_sliced_3mf(&path).expect("tolerant read");
+        assert_eq!(read.plates.len(), 1);
+        assert!(read.plates[0].metadata.is_none());
+        assert!(read.plates[0].thumbnail_png.is_none());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

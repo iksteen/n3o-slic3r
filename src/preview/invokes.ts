@@ -12,6 +12,7 @@ import type {
   Palette,
   PerLayerStats,
   PreviewHandle,
+  PreviewLoadGcode3mfResponse,
   PreviewLoadResponse,
   SegmentDetail,
 } from "./types";
@@ -20,6 +21,18 @@ import type {
  * handle the renderer follows up with. */
 export function previewLoad(path: string): Promise<PreviewLoadResponse> {
   return invoke<PreviewLoadResponse>("preview_load", { path });
+}
+
+/** Drag-drop loader (PR-6-14) for Bambu `.gcode.3mf` containers.
+ * Unwraps the container, loads plate 1's embedded gcode via the
+ * same pipeline as `previewLoad`, and surfaces the pre-baked
+ * plate metadata + optional thumbnail for the stats panel. */
+export function previewLoadGcode3mf(
+  path: string,
+): Promise<PreviewLoadGcode3mfResponse> {
+  return invoke<PreviewLoadGcode3mfResponse>("preview_load_gcode_3mf", {
+    path,
+  });
 }
 
 /** Fetch the binary buffer (positions + colors + layer indices
