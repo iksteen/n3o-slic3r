@@ -49,6 +49,14 @@ pub struct SliceJobInput {
     /// Plates to slice. MVP iterates this sequentially; multi-plate
     /// projects are Phase 5.
     pub plate_ids: Vec<u32>,
+    /// PR-S-5b: if set, the orchestrator composes a fresh cascade from
+    /// this PrinterInstance's per-bucket fragments + the plate's
+    /// process overrides, then uses *that* cascade instead of looking
+    /// up `cascade_handle` in the registry. `None` falls back to the
+    /// legacy monolithic-cascade path (PR-S-5c will rip this fallback
+    /// out + make composition the only path).
+    #[serde(default)]
+    pub printer_instance_id: Option<String>,
 }
 
 /// Snapshot of a job's lifecycle. Returned by `slice_status` so the

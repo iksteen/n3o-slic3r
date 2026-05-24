@@ -128,6 +128,7 @@ fn single_plate_job_emits_started_progress_finished_with_summary() {
             object_overrides: std::collections::HashMap::new(),
         },
         plate_ids: vec![1],
+        printer_instance_id: None,
     };
 
     let job_id = run_slice_job_blocking(input, &registry, &cascades_mut, sink).expect("start");
@@ -210,6 +211,7 @@ fn unknown_cascade_handle_errors_synchronously() {
             object_overrides: std::collections::HashMap::new(),
         },
         plate_ids: vec![1],
+        printer_instance_id: None,
     };
 
     let err = run_slice_job_blocking(input, &registry, &cascades, sink).expect_err("ok");
@@ -245,6 +247,7 @@ fn empty_plate_list_errors_synchronously() {
             object_overrides: std::collections::HashMap::new(),
         },
         plate_ids: vec![],
+        printer_instance_id: None,
     };
 
     let err = run_slice_job_blocking(input, &registry, &cascades_mut, sink).expect_err("ok");

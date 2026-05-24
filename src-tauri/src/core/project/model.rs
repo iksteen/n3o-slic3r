@@ -168,6 +168,16 @@ pub struct Plate {
     #[serde(default)]
     pub material_bindings: Vec<MaterialBinding>,
 
+    /// PR-S-5b: opt-in path that routes this plate's slicing through
+    /// the per-bucket cascade composer. When set, the orchestrator
+    /// looks up the matching `PrinterInstance`, composes a fresh
+    /// cascade from its vendor printer/filament/process fragments,
+    /// and uses that instead of the project's monolithic
+    /// `cascade_handle`. `None` keeps the legacy path (PR-S-5c rips
+    /// the fallback out).
+    #[serde(default)]
+    pub printer_instance_id: Option<String>,
+
     pub metadata: PlateMetadata,
 
     /// The plate's scene contents. Real type lives in
@@ -339,6 +349,7 @@ impl Plate {
             printer: None,
             project_overrides: HashMap::new(),
             material_bindings: Vec::new(),
+            printer_instance_id: None,
             metadata: PlateMetadata::at_position(position),
             scene: PlateSceneState::default(),
         }

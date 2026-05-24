@@ -239,6 +239,7 @@ pub fn build_slice_input(
             object_overrides: HashMap::new(),
         },
         plate_ids: vec![plate_id.0],
+        printer_instance_id: plate.printer_instance_id.clone(),
     };
 
     Ok((input, temp_path))

@@ -147,6 +147,7 @@ fn slice_cube_to_gcode() -> (PathBuf, Vec<u8>) {
             object_overrides: std::collections::HashMap::new(),
         },
         plate_ids: vec![1],
+        printer_instance_id: None,
     };
 
     run_slice_job_blocking(input, &registry, &cascades, sink).expect("slice start");
