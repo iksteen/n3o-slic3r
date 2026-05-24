@@ -100,75 +100,51 @@ fn slicer_options_carries_phase4_introspection() {
     assert!(wf.scope.region, "wall_filament is region-scope");
 }
 
-/// A1 mini + U1 capability filter outcomes (FR-UI-7 exit criterion).
-///   A1 mini hides toolchange options, U1 hides purge volumes
-///   matrix; both show priming tower geometry settings...
+/// A1 mini + U1 capability filter outcomes for the surviving process-bucket
+/// capability-gated keys (FR-UI-7 exit criterion).
+///
+/// After PR-S-2 the panel filters to Process bucket only — printer-bucket
+/// toolchanger geometry (`extruder_clearance_radius`, `machine_*_filament_time`)
+/// is gone from the panel entirely, so its capability-hide path no longer
+/// applies. The purge-tower family stays in Process bucket and exercises the
+/// same hide/show logic.
 #[test]
 fn a1_mini_hides_toolchange_keys_u1_hides_purge_tower_keys() {
     ensure_ffi();
     let a1 = slicer_options_for_printer(a1_mini(), None);
     let u1 = slicer_options_for_printer(snapmaker_u1(), None);
 
-    // A1 mini hides toolchanger geometry.
-    let toolchanger_keys = [
-        "extruder_clearance_radius",
-        "machine_load_filament_time",
-        "machine_unload_filament_time",
-    ];
-    for key in toolchanger_keys {
-        let a1_row = a1.iter().find(|o| o.summary.key == key);
-        if let Some(row) = a1_row {
-            assert!(
-                row.hidden,
-                "A1 mini should hide toolchanger key {key:?}",
-            );
-            assert_eq!(
-                row.summary.capability,
-                Some(CapabilityPredicate::RequiresToolchanger),
-            );
-        }
-    }
-
-    // U1 hides purge tower keys.
-    let purge_keys = [
-        "flush_volumes_matrix",
-        "enable_prime_tower",
-        "prime_tower_width",
-    ];
+    // U1 (toolchanger) hides purge tower process keys.
+    let purge_keys = ["enable_prime_tower", "prime_tower_width"];
     for key in purge_keys {
-        let u1_row = u1.iter().find(|o| o.summary.key == key);
-        if let Some(row) = u1_row {
-            assert!(row.hidden, "U1 should hide purge-tower key {key:?}");
-            assert_eq!(
-                row.summary.capability,
-                Some(CapabilityPredicate::RequiresPurgeTower),
-            );
-        }
+        let u1_row = u1
+            .iter()
+            .find(|o| o.summary.key == key)
+            .unwrap_or_else(|| panic!("{key} should be in process-bucket catalog"));
+        assert!(u1_row.hidden, "U1 should hide purge-tower key {key:?}");
+        assert_eq!(
+            u1_row.summary.capability,
+            Some(CapabilityPredicate::RequiresPurgeTower),
+        );
     }
 
     // Cross-check: A1 mini SHOWS purge-tower keys (it's AMS-style).
-    let a1_purge = a1
-        .iter()
-        .find(|o| o.summary.key == "flush_volumes_matrix")
-        .expect("flush_volumes_matrix in catalog");
-    assert!(
-        !a1_purge.hidden,
-        "A1 mini should show purge-tower (it's AMS-style)",
-    );
-
-    // Cross-check: U1 SHOWS toolchanger keys.
-    let u1_tc = u1
-        .iter()
-        .find(|o| o.summary.key == "extruder_clearance_radius");
-    if let Some(row) = u1_tc {
-        assert!(!row.hidden, "U1 should show toolchanger geometry");
+    for key in purge_keys {
+        let a1_row = a1
+            .iter()
+            .find(|o| o.summary.key == key)
+            .unwrap_or_else(|| panic!("{key} should be in process-bucket catalog"));
+        assert!(
+            !a1_row.hidden,
+            "A1 mini should show purge-tower key {key:?} (it's AMS-style)",
+        );
     }
 }
 
 /// Render-budget gate (PR-4-1 / PR-4-4): the printer-aware option
 /// list must complete fast enough that the panel's 50 ms re-render
-/// budget can absorb it. Debug builds have ~10× more headroom than
-/// release; the budget below is a debug-mode gate.
+/// budget can absorb it. After PR-S-2 the panel surfaces Process-bucket
+/// options only (~345 keys vs ~624 before); the budget is unchanged.
 #[test]
 fn slicer_options_for_printer_meets_render_budget_in_debug() {
     ensure_ffi();
@@ -176,8 +152,8 @@ fn slicer_options_for_printer_meets_render_budget_in_debug() {
     let opts = slicer_options_for_printer(a1_mini(), None);
     let elapsed = start.elapsed();
     assert!(
-        opts.len() >= 400,
-        "expected ≥ 400 options, got {}",
+        opts.len() >= 300,
+        "expected ≥ 300 process-bucket options, got {}",
         opts.len(),
     );
     assert!(

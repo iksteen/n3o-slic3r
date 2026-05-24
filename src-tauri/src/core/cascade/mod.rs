@@ -160,6 +160,14 @@ fn matches_filter(d: &slic3r_ffi::OptionDef, needle: &str) -> bool {
         || d.label.as_deref().is_some_and(|s| s.to_lowercase().contains(needle))
 }
 
+/// Settings-panel-visible options: Process bucket only (PR-S-2). Printer
+/// + filament editing lives on other surfaces; metadata keys
+/// (`compatible_printers`, `inherits`, …) and SLA-only keys have no
+/// bucket and are also excluded.
+fn is_panel_visible(d: &slic3r_ffi::OptionDef) -> bool {
+    d.bucket == Some(slic3r_ffi::OptBucket::Process)
+}
+
 /// Filtered option introspection. The filter matches against the
 /// canonical key and the display label, case-insensitively. Does
 /// **not** evaluate capability predicates — callers that want a
@@ -170,6 +178,7 @@ pub fn slicer_options(filter: Option<String>) -> Vec<OptionSummary> {
     let needle = filter.unwrap_or_default().to_lowercase();
     let out: Vec<OptionSummary> = option_defs()
         .into_iter()
+        .filter(is_panel_visible)
         .filter(|d| matches_filter(d, &needle))
         .map(summary_from_def)
         .collect();
@@ -207,6 +216,7 @@ pub fn slicer_options_for_printer(
     let needle = filter.unwrap_or_default().to_lowercase();
     let out: Vec<PrinterAwareOptionSummary> = option_defs()
         .into_iter()
+        .filter(is_panel_visible)
         .filter(|d| matches_filter(d, &needle))
         .map(|d| {
             let summary = summary_from_def(d);
@@ -312,23 +322,21 @@ mod tests {
     }
 
     #[test]
-    fn a1_mini_hides_toolchanger_keys_via_printer_aware_view() {
+    fn a1_mini_shows_purge_tower_keys_via_printer_aware_view() {
         ensure_ffi();
+        // PR-S-2 filters the panel to Process bucket only — printer-bucket
+        // toolchanger geometry is no longer in scope here. The remaining
+        // capability-gated process-bucket keys are the purge-tower /
+        // prime-tower family, which AMS-style printers DO use.
         let opts = slicer_options_for_printer(a1_mini(), None);
-        let toolchanger = opts
-            .iter()
-            .find(|o| o.summary.key == "extruder_clearance_radius")
-            .expect("extruder_clearance_radius present");
-        assert!(toolchanger.hidden, "toolchanger key should hide on A1 mini");
-        assert_eq!(
-            toolchanger.summary.capability,
-            Some(CapabilityPredicate::RequiresToolchanger),
-        );
-
         let purge = opts
             .iter()
-            .find(|o| o.summary.key == "flush_volumes_matrix")
-            .expect("flush_volumes_matrix present");
+            .find(|o| o.summary.key == "enable_prime_tower")
+            .expect("enable_prime_tower present");
+        assert_eq!(
+            purge.summary.capability,
+            Some(CapabilityPredicate::RequiresPurgeTower),
+        );
         assert!(
             !purge.hidden,
             "purge-tower key should be visible on AMS-style A1 mini",
@@ -341,34 +349,24 @@ mod tests {
         let opts = slicer_options_for_printer(synthetic_toolchanger(), None);
         let purge = opts
             .iter()
-            .find(|o| o.summary.key == "flush_volumes_matrix")
-            .expect("flush_volumes_matrix present");
+            .find(|o| o.summary.key == "enable_prime_tower")
+            .expect("enable_prime_tower present");
         assert!(purge.hidden, "purge-tower key should hide on toolchanger");
-
-        let toolchanger = opts
-            .iter()
-            .find(|o| o.summary.key == "extruder_clearance_radius")
-            .expect("extruder_clearance_radius present");
-        assert!(
-            !toolchanger.hidden,
-            "toolchanger geometry should show on toolchanger printer",
-        );
     }
 
     #[test]
     fn printer_aware_view_completes_within_render_budget() {
         ensure_ffi();
-        // Per the FR-UI 50 ms panel re-render budget, the full
-        // capability evaluation pass must not dominate. Allow 10×
-        // headroom in debug — production release builds are
-        // ~4-10× faster than debug for this kind of small-loop
-        // hot path.
+        // After PR-S-2 the panel surfaces Process-bucket options only
+        // (~345 keys vs ~624 before bucket filtering). Per the FR-UI
+        // 50 ms panel re-render budget, the full capability evaluation
+        // pass must not dominate; debug allows 10× headroom.
         let start = std::time::Instant::now();
         let opts = slicer_options_for_printer(a1_mini(), None);
         let elapsed = start.elapsed();
         assert!(
-            opts.len() >= 400,
-            "expected ≥ 400 options from libslic3r, got {}",
+            opts.len() >= 300,
+            "expected ≥ 300 process-bucket options from libslic3r, got {}",
             opts.len(),
         );
         assert!(

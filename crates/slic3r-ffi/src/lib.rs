@@ -234,6 +234,29 @@ impl OptScope {
     }
 }
 
+/// Preset-bucket classification, scraped from OrcaSlicer's `Preset.cpp`.
+///
+/// Every FFF config-key belongs to exactly one bucket — Printer, Filament, or
+/// Process. The partitioning comes from `Preset::printer_options()` /
+/// `filament_options()` / `print_options()`; extruder-keyed printer options
+/// (per-extruder vectors) fall under `Printer` because that's where their
+/// vendor preset stores them. See `docs/orcaslicer-settings-classification.md`
+/// for the upstream rationale.
+///
+/// Some metadata keys (`compatible_printers`, `inherits`, …) appear in all
+/// three buckets upstream; they're omitted from the table, and
+/// [`bucket_of`] returns `None` for them — correct UX since they're not
+/// user-editable settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptBucket {
+    Printer,
+    Filament,
+    Process,
+}
+
+mod option_buckets;
+pub use option_buckets::bucket_of;
+
 /// An owned, allocated copy of a `slic3r_option_def_t` view, decoded into Rust types.
 /// The original C struct's strings are process-lifetime so we _could_ borrow them,
 /// but copying keeps the consumer ergonomics simple.
@@ -255,6 +278,10 @@ pub struct OptionDef {
     pub min: f64,
     pub max: f64,
     pub scope: OptScope,
+    /// Preset bucket (Printer / Filament / Process). `None` for metadata
+    /// keys that span all buckets (`compatible_printers`, `inherits`, …)
+    /// or keys outside the FFF preset universe (SLA-only, internal scratch).
+    pub bucket: Option<OptBucket>,
 }
 
 unsafe fn maybe_cstr(p: *const c_char) -> Option<String> {
@@ -296,6 +323,7 @@ impl OptionDef {
                 min: raw.min,
                 max: raw.max,
                 scope: OptScope(raw.scope),
+                bucket: None, // populated by `option_defs()` from the scraped table
             }
         }
     }
@@ -310,7 +338,9 @@ pub fn option_defs() -> Vec<OptionDef> {
     for i in 0..count {
         let status = unsafe { sys::slic3r_option_def_at(i, &mut raw) };
         if status == sys::SLIC3R_OK {
-            out.push(OptionDef::from_raw(&raw));
+            let mut def = OptionDef::from_raw(&raw);
+            def.bucket = bucket_of(&def.key);
+            out.push(def);
         }
     }
     out

@@ -23,7 +23,7 @@ pub mod capability;
 
 pub use capability::{capability_for_key, CapabilityPredicate};
 
-use slic3r_ffi::{option_defs, OptScope, OptType};
+use slic3r_ffi::{option_defs, OptBucket, OptScope, OptType};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -37,6 +37,11 @@ pub struct OptionSchema {
     pub key: String,
     pub ty: OptType,
     pub scope: OptScope,
+    /// Preset bucket (Printer / Filament / Process). `None` for metadata
+    /// keys (`compatible_printers`, `inherits`) or non-FFF keys. The
+    /// settings UI filters on this to keep printer/filament fields out of
+    /// the process-bucket panel.
+    pub bucket: Option<OptBucket>,
     /// True for any libslic3r vector option (Floats / Ints / Strings /
     /// Percents / FloatsOrPercents / Points / Bools / Enums). Derived
     /// from `ty.is_vector()`; surfaced here so callers don't need to
@@ -145,6 +150,7 @@ fn build_cache() -> SchemaCache {
             key: def.key.clone(),
             ty: def.ty,
             scope: def.scope,
+            bucket: def.bucket,
             is_vector: def.ty.is_vector(),
             dimensional,
             label: def.label,
