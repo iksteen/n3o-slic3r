@@ -476,14 +476,14 @@ fn parse_semantic_comment(content: &str, last_seen_z: &mut Option<f32>) -> Optio
         }
     }
 
-    // `;HEIGHT:<height>` — PrusaSlicer variant of `;Z:`. Per
-    // FR-GP-11 we want the same info, so map to `Z`.
-    if let Some(rest) = strip_prefix_ci(trimmed, "height:") {
-        if let Ok(z) = rest.trim().parse::<f32>() {
-            *last_seen_z = Some(z);
-            return Some(SemanticComment::Z(z));
-        }
-    }
+    // `;HEIGHT:<height>` is NOT a Z marker — it's the per-
+    // extrusion line thickness annotation (variable layer height,
+    // bridges, etc.). The earlier "map to Z" mapping was wrong and
+    // caused preview segments to render at the bridge/top-shell
+    // height (e.g., 0.4 or 0.2) instead of their actual layer Z
+    // — the cap appeared to render at z=0. We intentionally drop
+    // this token rather than introduce a new SemanticComment
+    // variant; no consumer needs per-segment thickness today.
 
     // `; estimated printing time (normal mode) = …` /
     // `; estimated printing time = …`
@@ -763,6 +763,28 @@ mod tests {
         assert_eq!(first_lc.index, 0);
         assert_eq!(first_lc.z, Some(0.2));
         assert_eq!(first_lc.source, LayerSource::Marker);
+    }
+
+    #[test]
+    fn height_comment_is_not_treated_as_z() {
+        // Regression: `;HEIGHT:0.4` (Bambu/Prusa per-extrusion line
+        // thickness annotation) used to be miscoerced into a `;Z:0.4`
+        // semantic, which then reset state.z in the preview IR. A
+        // bridge segment in the middle of layer 80 (z=16.2) would
+        // render at z=0.4 in the preview, making the "top cap"
+        // appear to bleed down to the bed when scrubbing the layer
+        // slider. `;HEIGHT:` should be ignored at the semantic
+        // layer: not Z, not anything we care about today.
+        let src = ";HEIGHT:0.4\n";
+        let lines = parse_str(src);
+        match &lines[0] {
+            Line::Comment(c) => assert!(
+                c.semantic.is_none(),
+                ";HEIGHT: should not produce a semantic, got {:?}",
+                c.semantic,
+            ),
+            other => panic!("expected Comment, got {other:?}"),
+        }
     }
 
     #[test]
