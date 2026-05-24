@@ -25,6 +25,9 @@ export interface SlotBinding {
   feed: FeedKind;
   /** `null` when no filament is loaded in this slot. */
   filament_identity: string | null;
+  /** Spool color as a CSS hex string ("#ff8800"). `null` means
+   *  unassigned — the picker shows a neutral placeholder. */
+  color: string | null;
 }
 
 export interface NozzleSku {
@@ -100,6 +103,24 @@ export async function setSlotFilament(
   });
 }
 
+/** Set (or clear, with `null`) a slot's user-assigned spool color.
+ *  Hex string ("#ff8800"). Same event-emission contract as
+ *  `setSlotFilament`. A future driver-side AMS sync writes the
+ *  same field. */
+export async function setSlotColor(
+  id: string,
+  extruderIdx: number,
+  slotIdx: number,
+  color: string | null,
+): Promise<PrinterInstance> {
+  return invoke<PrinterInstance>("printer_instance_set_slot_color", {
+    id,
+    extruderIdx,
+    slotIdx,
+    color,
+  });
+}
+
 /** Compose a flat list of slot picker options across the instance's
  *  extruder × slot grid. The label combines extruder + slot labels
  *  with " — " when both are non-empty; one label alone otherwise.
@@ -109,6 +130,7 @@ export interface FlatSlotOption {
   label: string;
   feed: FeedKind;
   filament_identity: string | null;
+  color: string | null;
 }
 
 export function flattenSlots(instance: PrinterInstance): FlatSlotOption[] {
@@ -124,6 +146,7 @@ export function flattenSlots(instance: PrinterInstance): FlatSlotOption[] {
         label,
         feed: slot.feed,
         filament_identity: slot.filament_identity,
+        color: slot.color,
       });
     });
   });

@@ -175,6 +175,14 @@ pub struct SlotBinding {
     /// library. `None` while no filament is bound.
     #[serde(default)]
     pub filament_identity: Option<String>,
+
+    /// User-assigned spool color as a CSS-style hex string
+    /// (e.g. `"#ff8800"`). `None` = unassigned; the UI renders a
+    /// neutral placeholder swatch in that case. Authoritative
+    /// per-slot — a future driver-sync path (e.g. Bambu AMS readout)
+    /// writes here, not into the filament profile.
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 fn default_feed_kind() -> FeedKind {
@@ -228,6 +236,7 @@ mod tests {
                     label: "Direct".into(),
                     feed: FeedKind::Direct,
                     filament_identity: None,
+                    color: None,
                 }],
             }],
             bed: BedRef {
@@ -251,5 +260,15 @@ mod tests {
     fn nozzle_material_serializes_snake_case() {
         let json = serde_json::to_string(&NozzleMaterial::HighFlowHardened).unwrap();
         assert_eq!(json, "\"high_flow_hardened\"");
+    }
+
+    /// Older persisted instances (and the bundled fixtures pre-color)
+    /// don't carry a `color` field. The serde default keeps them
+    /// loading as unassigned rather than failing.
+    #[test]
+    fn slot_binding_color_defaults_to_none_when_absent() {
+        let raw = r#"{"label":"Ext","feed":"direct","filament_identity":null}"#;
+        let s: SlotBinding = serde_json::from_str(raw).expect("legacy slot binding parses");
+        assert_eq!(s.color, None);
     }
 }

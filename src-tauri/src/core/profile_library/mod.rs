@@ -134,6 +134,12 @@ const BEDS: &[BundledFragment] = &[
 
 const FILAMENTS: &[BundledFragment] = &[
     BundledFragment {
+        slug: "generic-pla",
+        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
+            "/../profiles/vendor/orca/filament/generic-pla.toml")),
+        source_path: "profiles/vendor/orca/filament/generic-pla.toml",
+    },
+    BundledFragment {
         slug: "bambu-pla-basic-bbl-a1m",
         toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
             "/../profiles/vendor/bbl/filament/bambu-pla-basic-bbl-a1m.toml")),

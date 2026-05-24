@@ -118,6 +118,37 @@ pub fn set_slot_filament(
     slot_idx: usize,
     filament_identity: Option<String>,
 ) -> Result<PrinterInstance, InstanceMutError> {
+    mutate_slot(id, extruder_idx, slot_idx, |slot| {
+        slot.filament_identity = filament_identity;
+    })
+}
+
+/// Set (or clear, with `None`) a slot's user-assigned spool color.
+/// Hex string like `"#ff8800"`; the backend does not validate the
+/// shape — the picker only ever writes well-formed values.
+pub fn set_slot_color(
+    id: &str,
+    extruder_idx: usize,
+    slot_idx: usize,
+    color: Option<String>,
+) -> Result<PrinterInstance, InstanceMutError> {
+    mutate_slot(id, extruder_idx, slot_idx, |slot| {
+        slot.color = color;
+    })
+}
+
+/// Range-check the `(extruder_idx, slot_idx)` pair and hand the
+/// mutable slot to `f`. Shared backbone for `set_slot_filament` /
+/// `set_slot_color` so the OOB error mapping lives in one place.
+fn mutate_slot<F>(
+    id: &str,
+    extruder_idx: usize,
+    slot_idx: usize,
+    f: F,
+) -> Result<PrinterInstance, InstanceMutError>
+where
+    F: FnOnce(&mut super::instance::SlotBinding),
+{
     mutate_instance(id, |inst| {
         let extruder_count = inst.extruders.len();
         let extruder = inst.extruders.get_mut(extruder_idx).ok_or(
@@ -134,7 +165,7 @@ pub fn set_slot_filament(
             slot_idx,
             slots: slot_count,
         })?;
-        slot.filament_identity = filament_identity;
+        f(slot);
         Ok(())
     })
 }
@@ -214,6 +245,41 @@ mod tests {
         reset_to_bundled();
         // Snappy extruders have 1 slot each; index 3 is out of range.
         let err = set_slot_filament("snappy", 0, 3, Some("PLA".into())).unwrap_err();
+        assert!(matches!(
+            err,
+            InstanceMutError::BadSlot { slots: 1, slot_idx: 3, .. },
+        ));
+    }
+
+    #[test]
+    fn set_slot_color_persists_and_clears() {
+        // Mutates a slot the bundled fixture already paints (Bambi
+        // AMS:1 ships with `#111827`). Asserts only against the
+        // returned post-mutation clone — cross-test re-lookups race
+        // with other tests' `reset_to_bundled` calls. Registry
+        // persistence itself is covered by
+        // `set_slot_filament_mutates_in_place_and_persists_across_lookups`.
+        reset_to_bundled();
+        let identity_before = lookup_instance("bambi")
+            .expect("bambi present")
+            .extruders[0]
+            .slots[1]
+            .filament_identity
+            .clone();
+        let updated = set_slot_color("bambi", 0, 1, Some("#ff8800".into()))
+            .expect("bambi AMS:1 exists");
+        assert_eq!(updated.extruders[0].slots[1].color.as_deref(), Some("#ff8800"));
+        // Filament identity stays untouched — color is its own field.
+        assert_eq!(updated.extruders[0].slots[1].filament_identity, identity_before);
+        let cleared = set_slot_color("bambi", 0, 1, None).expect("clear ok");
+        assert_eq!(cleared.extruders[0].slots[1].color, None);
+        reset_to_bundled();
+    }
+
+    #[test]
+    fn set_slot_color_errors_on_bad_slot() {
+        reset_to_bundled();
+        let err = set_slot_color("snappy", 0, 3, Some("#fff".into())).unwrap_err();
         assert!(matches!(
             err,
             InstanceMutError::BadSlot { slots: 1, slot_idx: 3, .. },

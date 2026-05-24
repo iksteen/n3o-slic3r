@@ -310,8 +310,10 @@ mod tests {
     fn slot_without_filament_blocks() {
         let _g = GATE_LOCK.lock().unwrap();
         reset_to_bundled();
-        // Bambi's solo slot starts unbound — auto-bind plants the
-        // material → slot mapping but doesn't pick a filament.
+        // Bundled fixtures now ship every slot pre-bound to
+        // `generic-pla`. Clear the slot auto-bind would target so
+        // the gate sees an unbound slot in the material's path.
+        set_slot_filament("bambi", 0, 0, None).unwrap();
         let mut p = Project::default();
         add_cube(&mut p, 1);
         let err = validate_pre_slice(&p, &[1]).unwrap_err();

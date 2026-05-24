@@ -337,23 +337,33 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--vendor", required=True,
-                   help="Vendor directory under --profiles-root (e.g. BBL, Snapmaker)")
-    p.add_argument("--machine", required=True,
+                   help="Vendor directory under --profiles-root (e.g. BBL, Snapmaker, "
+                        "OrcaFilamentLibrary)")
+    p.add_argument("--machine",
                    help="Machine leaf display name (e.g. 'Bambu Lab A1 mini 0.4 nozzle'). "
                         "Drives both the printer.toml (via its family base) and the "
-                        "primary nozzle fragment.")
-    p.add_argument("--printer-slug", required=True,
-                   help="Filesystem slug for printer/<slug>.toml + printer/<slug>/...")
+                        "primary nozzle fragment. Omit when importing only filaments "
+                        "(e.g. from OrcaFilamentLibrary, which has no machine profiles).")
+    p.add_argument("--printer-slug",
+                   help="Filesystem slug for printer/<slug>.toml + printer/<slug>/... "
+                        "Required when --machine is given; ignored otherwise.")
     p.add_argument("--extra-nozzles", nargs="*", default=[],
                    help="Additional machine leaves to emit as nozzles/<sku>.toml")
-    p.add_argument("--filament", required=True,
-                   help="Filament profile display name")
-    p.add_argument("--process", required=True,
-                   help="Process profile display name")
+    p.add_argument("--filament",
+                   help="Filament profile display name. Optional — omit to skip "
+                        "filament emission.")
+    p.add_argument("--process",
+                   help="Process profile display name. Optional — omit to skip "
+                        "process emission.")
     p.add_argument("--out-dir", required=True, type=Path,
                    help="Vendor output directory (printer/, bed/, filament/, process/ subdirs)")
     p.add_argument("--profiles-root", type=Path, default=DEFAULT_PROFILES_ROOT)
     args = p.parse_args()
+
+    if args.machine and not args.printer_slug:
+        sys.exit("--printer-slug is required when --machine is given")
+    if not any([args.machine, args.filament, args.process]):
+        sys.exit("nothing to do: pass at least one of --machine, --filament, --process")
 
     vendor_dir = args.profiles_root / args.vendor
     if not vendor_dir.is_dir():
@@ -361,26 +371,27 @@ def main() -> None:
 
     extruder_keys = load_extruder_keys()
     strings_keys = load_strings_keys()
-    leaf_path = find_by_name(vendor_dir, "machine", args.machine)
-    leaf_data = load_json(leaf_path)
 
-    # printer.toml from the leaf's family base.
-    emit_printer_fragment(
-        args, vendor_dir, leaf_data, extruder_keys, strings_keys, args.printer_slug
-    )
-
-    # One nozzles/<sku>.toml per requested nozzle variant.
-    for nozzle_leaf in [args.machine] + args.extra_nozzles:
-        emit_nozzle_fragment(
-            args, vendor_dir, nozzle_leaf, extruder_keys, strings_keys, args.printer_slug
+    if args.machine:
+        leaf_path = find_by_name(vendor_dir, "machine", args.machine)
+        leaf_data = load_json(leaf_path)
+        # printer.toml from the leaf's family base.
+        emit_printer_fragment(
+            args, vendor_dir, leaf_data, extruder_keys, strings_keys, args.printer_slug
         )
+        # One nozzles/<sku>.toml per requested nozzle variant.
+        for nozzle_leaf in [args.machine] + args.extra_nozzles:
+            emit_nozzle_fragment(
+                args, vendor_dir, nozzle_leaf, extruder_keys, strings_keys, args.printer_slug
+            )
+        print("\nNote: bed.toml files are hand-authored under "
+              f"{_safe_rel(args.out_dir / 'bed')}; the converter does NOT generate them.")
 
     # filament/process — unchanged from the legacy per-bucket layout.
-    emit_filament_fragment(args, vendor_dir, strings_keys)
-    emit_process_fragment(args, vendor_dir, strings_keys)
-
-    print("\nNote: bed.toml files are hand-authored under "
-          f"{_safe_rel(args.out_dir / 'bed')}; the converter does NOT generate them.")
+    if args.filament:
+        emit_filament_fragment(args, vendor_dir, strings_keys)
+    if args.process:
+        emit_process_fragment(args, vendor_dir, strings_keys)
 
 
 if __name__ == "__main__":

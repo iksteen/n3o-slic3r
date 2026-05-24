@@ -22,6 +22,7 @@ import {
   flattenSlots,
   getPrinterInstance,
   isFeedMixConflict,
+  setSlotColor,
   setSlotFilament,
   type FlatSlotOption,
   type PrinterInstance,
@@ -38,24 +39,10 @@ interface FilamentSummary {
   base_type: string;
 }
 
-/** Swatch tint per base material family. Vendor fragments don't ship
- *  display colors so we infer from the filament type — good enough to
- *  visually distinguish slots until per-spool color editing lands. */
-const SWATCH_BY_BASE: Record<string, string> = {
-  PLA: "#9CA3AF",
-  PETG: "#60A5FA",
-  ABS: "#1F2937",
-  ASA: "#374151",
-  TPU: "#10B981",
-  PC: "#7C3AED",
-  PA: "#F59E0B",
-  PVA: "#FBBF24",
-  HIPS: "#94A3B8",
-};
-
-function swatchFor(base: string | undefined): string {
-  return (base && SWATCH_BY_BASE[base.toUpperCase()]) ?? "#9CA3AF";
-}
+/** Placeholder fill when a slot has no color assigned yet. The picker
+ *  still renders as an `<input type="color">` so the user can paint
+ *  it in; we just don't want to lie about a real value. */
+const UNASSIGNED_SWATCH = "#9ca3af";
 
 export interface SlotBindingPanelProps {
   plateId: PlateId | null;
@@ -166,6 +153,13 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
     );
   };
 
+  const onPickColor = (slot: SlotRef, color: string): void => {
+    if (!instance) return;
+    void setSlotColor(instance.id, slot.extruder, slot.slot, color).catch(
+      (err) => console.error("[slot-binding] setSlotColor failed", err),
+    );
+  };
+
   // Find the FlatSlotOption that matches the plate's current
   // material→slot pick (if any).
   const slotForMaterial = (material: number): FlatSlotOption | null => {
@@ -214,17 +208,24 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
           const entry = s.filament_identity
             ? filamentByIdentity.get(s.filament_identity)
             : null;
-          const swatch = swatchFor(entry?.base_type);
+          const swatch = s.color ?? UNASSIGNED_SWATCH;
           return (
             <div
               key={`slot-${s.ref.extruder}-${s.ref.slot}`}
               className="slot-binding-row"
             >
               <span className="slot-binding-label">{s.label}</span>
-              <span
+              <input
+                type="color"
                 className="slot-binding-swatch"
-                style={{ background: swatch }}
-                aria-hidden
+                value={swatch}
+                onChange={(e) => onPickColor(s.ref, e.target.value)}
+                title={
+                  s.color
+                    ? `${s.label} spool color — click to change`
+                    : `${s.label} spool color — click to assign`
+                }
+                aria-label={`${s.label} spool color`}
               />
               <select
                 className="slot-binding-filament"

@@ -168,7 +168,7 @@ pub fn build_slice_input(
     // plate. Walk extruders in declaration order, slots within each
     // extruder in declaration order, and resolve each slot's
     // `filament_identity` via the bundled registry. Unbound slots
-    // (and unknown identities) fall back to Generic PLA so the
+    // (and unknown identities) fall back to `generic-pla` so the
     // cascade still has something to resolve against — same
     // behavior as the legacy "no bindings" path.
     let instance = lookup_instance(&printer_instance_id).ok_or(
@@ -180,7 +180,7 @@ pub fn build_slice_input(
             let identity = slot
                 .filament_identity
                 .as_deref()
-                .unwrap_or("Generic PLA");
+                .unwrap_or("generic-pla");
             let profile = filament::lookup(identity).unwrap_or_else(|| FilamentProfile {
                 identity: identity.to_owned(),
                 base_type: "PLA".into(),
@@ -417,12 +417,12 @@ mod tests {
         assert!(temp_path.exists(), "temp file written");
         assert_eq!(input.model_path, temp_path.to_string_lossy());
 
-        // Bambi has 5 slots (Ext + AMS:1..4), all unbound → all
-        // fall back to Generic PLA. The builder surfaces one
+        // Bambi has 5 slots (Ext + AMS:1..4), all seeded with the
+        // bundled `generic-pla` fragment. The builder surfaces one
         // filament entry per slot.
         assert_eq!(input.context.filaments.len(), 5);
         for f in &input.context.filaments {
-            assert_eq!(f.identity, "Generic PLA");
+            assert_eq!(f.identity, "generic-pla");
         }
 
         std::fs::remove_file(&temp_path).ok();
@@ -459,10 +459,10 @@ mod tests {
         assert_eq!(input.context.plate.identity, "Magnetic");
         assert_eq!(input.context.plate.libslic3r_curr_bed_type, "Magnetic Plate");
         // Snappy has 4 extruders × 1 slot → 4 filament entries (all
-        // unbound, falling back to Generic PLA).
+        // seeded with the bundled `generic-pla` fragment).
         assert_eq!(input.context.filaments.len(), 4);
         for f in &input.context.filaments {
-            assert_eq!(f.identity, "Generic PLA");
+            assert_eq!(f.identity, "generic-pla");
         }
 
         std::fs::remove_file(&temp_path).ok();
@@ -607,8 +607,8 @@ mod tests {
 
     #[test]
     fn snappy_emits_one_filament_per_extruder_slot() {
-        // Snappy = U1 with 4 extruders × 1 slot. Unbound slots fall
-        // back to Generic PLA so the cascade still resolves.
+        // Snappy = U1 with 4 extruders × 1 slot. Each slot is seeded
+        // with the bundled `generic-pla` fragment.
         let mut project = Project::default();
         project.plates[0].printer = Some(PrinterBinding {
             printer_identity: "snapmaker-u1".into(),
@@ -622,7 +622,7 @@ mod tests {
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
         assert_eq!(input.context.filaments.len(), 4);
         for f in &input.context.filaments {
-            assert_eq!(f.identity, "Generic PLA");
+            assert_eq!(f.identity, "generic-pla");
         }
         std::fs::remove_file(&temp_path).ok();
     }

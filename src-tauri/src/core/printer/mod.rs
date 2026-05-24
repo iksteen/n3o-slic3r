@@ -23,7 +23,8 @@ pub use instance_library::{
     bundled_instances, instance_id_for_vendor_profile, BAMBI_ID, SNAPPY_ID,
 };
 pub use instance_registry::{
-    list_instances, lookup_instance, mutate_instance, set_slot_filament, InstanceMutError,
+    list_instances, lookup_instance, mutate_instance, set_slot_color, set_slot_filament,
+    InstanceMutError,
 };
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
 pub use registry::{bundled_catalog, default_binding, lookup, CatalogEntry};
@@ -60,6 +61,27 @@ pub fn printer_instance_set_slot_filament(
 ) -> Result<PrinterInstance, String> {
     let updated = set_slot_filament(&id, extruder_idx, slot_idx, filament_identity)
         .map_err(|e| e.to_string())?;
+    use tauri::Emitter;
+    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
+        tracing::warn!(error = %e, "printer:instance_changed emit failed");
+    }
+    Ok(updated)
+}
+
+/// Tauri command: set (or clear) the user-assigned spool color on one
+/// instance's slot. Hex string like `"#ff8800"`. Emits
+/// `printer:instance_changed` so consumers refetch.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn printer_instance_set_slot_color(
+    id: String,
+    extruder_idx: usize,
+    slot_idx: usize,
+    color: Option<String>,
+    window: tauri::Window,
+) -> Result<PrinterInstance, String> {
+    let updated =
+        set_slot_color(&id, extruder_idx, slot_idx, color).map_err(|e| e.to_string())?;
     use tauri::Emitter;
     if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
         tracing::warn!(error = %e, "printer:instance_changed emit failed");

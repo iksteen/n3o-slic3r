@@ -22,7 +22,7 @@ function bambi(): PrinterInstance {
         label: "",
         installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
         slots: [
-          { label: "Direct", feed: "direct", filament_identity: null },
+          { label: "Direct", feed: "direct", filament_identity: null, color: null },
         ],
       },
     ],
@@ -44,7 +44,7 @@ function snappy(): PrinterInstance {
       label,
       installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
       slots: [
-        { label: "", feed: "direct" as const, filament_identity: null },
+        { label: "", feed: "direct" as const, filament_identity: null, color: null },
       ],
     })),
     bed: { identity: "Snapmaker Textured PEI" },
@@ -59,11 +59,11 @@ function ams_a1_mini(): PrinterInstance {
     label: "",
     installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
     slots: [
-      { label: "Ext", feed: "direct", filament_identity: null },
-      { label: "AMS:1", feed: "ams", filament_identity: null },
-      { label: "AMS:2", feed: "ams", filament_identity: null },
-      { label: "AMS:3", feed: "ams", filament_identity: null },
-      { label: "AMS:4", feed: "ams", filament_identity: null },
+      { label: "Ext", feed: "direct", filament_identity: null, color: null },
+      { label: "AMS:1", feed: "ams", filament_identity: null, color: null },
+      { label: "AMS:2", feed: "ams", filament_identity: null, color: null },
+      { label: "AMS:3", feed: "ams", filament_identity: null, color: null },
+      { label: "AMS:4", feed: "ams", filament_identity: null, color: null },
     ],
   };
   return { ...bambi(), extruders: [ext] };
@@ -125,6 +125,7 @@ describe("isFeedMixConflict", () => {
       label: "T1 — AMS:1",
       feed: "ams",
       filament_identity: null,
+      color: null,
     };
     expect(isFeedMixConflict(ext, [otherExtAms])).toBe(false);
   });

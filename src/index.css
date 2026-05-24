@@ -551,13 +551,37 @@
     width: 14px;
     text-align: center;
   }
+  /* Color picker for the loaded spool. `<input type="color">` is
+   * styled to match the previous static disc swatch — round, subtle
+   * inner highlight — but is clickable to pop the native picker. */
   .slot-binding-swatch {
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
+    padding: 0;
     border-radius: 50%;
     border: 1px solid rgba(0, 0, 0, 0.15);
     box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.4);
+    background: transparent;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
     flex-shrink: 0;
+  }
+  .slot-binding-swatch::-webkit-color-swatch-wrapper { padding: 0; }
+  .slot-binding-swatch::-webkit-color-swatch {
+    border: none;
+    border-radius: 50%;
+  }
+  .slot-binding-swatch::-moz-color-swatch {
+    border: none;
+    border-radius: 50%;
+  }
+  .slot-binding-swatch:hover {
+    border-color: rgba(0, 0, 0, 0.35);
+  }
+  .slot-binding-swatch:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
   }
   .slot-binding-filament,
   .slot-binding-slot {
