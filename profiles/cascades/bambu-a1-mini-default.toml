@@ -15,11 +15,12 @@
 #   plate.type     = 'Textured PEI'
 #
 # Import report (BBS → cascade):
-#   Renamed: 3 keys
+#   Renamed: 4 keys
 #     machine  extruder_clearance_max_radius → extruder_clearance_radius
 #     machine  machine_switch_extruder_time → machine_tool_change_time
 #     filament chamber_temperatures → chamber_temperature
-#   Dropped: 110 keys (BBS firmware-only or in Orca's ignore set)
+#     filament filament_id → filament_ids
+#   Dropped: 109 keys (BBS firmware-only or in Orca's ignore set)
 #     from machine:
 #       cooling_filter_enabled
 #       enable_pre_heating
@@ -100,7 +101,6 @@
 #       filament_dev_drying_softening_temperature
 #       filament_enable_overhang_speed
 #       filament_extruder_compatibility
-#       filament_id
 #       filament_long_retractions_when_ec
 #       filament_metal_stickiness
 #       filament_overhang_1_4_speed
@@ -426,6 +426,7 @@ filament_extruder_variant = "Direct Drive Standard"
 filament_flow_ratio = "0.98"
 filament_flush_temp = "0"
 filament_flush_volumetric_speed = "0"
+filament_ids = "GFA00"
 filament_is_support = "0"
 filament_long_retractions_when_cut = "1"
 filament_max_volumetric_speed = "21"
@@ -438,6 +439,7 @@ filament_retraction_distances_when_cut = "18"
 filament_retraction_length = "nil"
 filament_retraction_minimum_travel = "nil"
 filament_retraction_speed = "nil"
+filament_settings_id = "Bambu PLA Basic @BBL A1M"
 filament_shrink = "100%"
 filament_soluble = "0"
 filament_start_gcode = '''; filament start gcode
@@ -1178,11 +1180,13 @@ prime_tower_width = "35"
 print_extruder_id = "1"
 print_extruder_variant = "Direct Drive Standard"
 print_sequence = "by layer"
+print_settings_id = "0.20mm Standard @BBL A1M"
 printable_area = "0x0,180x0,180x180,0x180"
 printable_height = "180"
 printer_extruder_id = "1"
 printer_extruder_variant = "Direct Drive Standard"
 printer_model = "Bambu Lab A1 mini"
+printer_settings_id = "Bambu Lab A1 mini 0.4 nozzle"
 printer_structure = "i3"
 raft_layers = "0"
 reduce_crossing_wall = "0"

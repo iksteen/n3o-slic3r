@@ -90,6 +90,11 @@ BBS_KEY_RENAMES = {
     "extruder_clearance_max_radius": "extruder_clearance_radius",
     "machine_switch_extruder_time": "machine_tool_change_time",
     "thumbnail_size": "thumbnails",
+    # `filament_id` is BBS's singular per-filament identifier
+    # ("GFA00"); libslic3r's vector form is `filament_ids`. The Bambu
+    # firmware reads `filament_ids` from CONFIG_BLOCK for profile
+    # validation — empty value trips an immediate "Print cancelled".
+    "filament_id": "filament_ids",
 }
 
 # Keys to drop on import. Three buckets:
@@ -183,7 +188,6 @@ DROPPED_KEYS = {
     # BBS extruder-clearance/topology extras
     "extruder_clearance_dist_to_rod", "extruder_height_gap",
     "extruder_max_nozzle_count", "filament_extruder_compatibility",
-    "filament_id",
     # Cooling/wall ordering BBS extras
     "cooling_filter_enabled", "cooling_perimeter_transition_distance",
     "cooling_slowdown_logic", "no_slow_down_for_cooling_on_outwalls",
@@ -228,9 +232,10 @@ META_KEYS = {
     "compatible_printers_condition",
     "compatible_prints",
     "compatible_prints_condition",
-    "printer_settings_id",
-    "filament_settings_id",
-    "print_settings_id",
+    # `*_settings_id` look like metadata but the Bambu firmware reads
+    # them from the gcode CONFIG_BLOCK to validate the slice against
+    # known profiles — empty `filament_settings_id` triggers an
+    # immediate "Print cancelled" on the printer. Keep them.
     "upward_compatible_machine",
     "renamed_from",
     "extruder_variant_list",
@@ -399,6 +404,17 @@ def write_cascade(out: Path, merged_machine: dict, merged_process: dict,
     }
 
     default = {**filtered_machine, **filtered_process, **filtered_filament}
+
+    # Synthesize the *_settings_id profile-name keys that BBS auto-
+    # derives from profile names at runtime. They aren't stored in
+    # the JSON files but the Bambu firmware reads them from the
+    # gcode CONFIG_BLOCK to validate the slice — an empty
+    # filament_settings_id triggers an immediate "Print cancelled".
+    # The converter knows these names from its CLI args so it's the
+    # natural place to inject them.
+    default["printer_settings_id"] = context["machine"]
+    default["filament_settings_id"] = context["filament.name"]
+    default["print_settings_id"] = context["process"]
     filament_rule = {k: default.pop(k) for k in list(default) if k in filament_rule_keys}
 
     bed_temp_value = merged_filament.get("textured_plate_temp", ["55"])
