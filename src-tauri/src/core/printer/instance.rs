@@ -34,6 +34,29 @@ pub struct PrinterInstance {
     /// built on. Looked up in [`crate::core::printer::bundled_catalog`].
     pub vendor_profile_ref: String,
 
+    /// Slug of the printer-bucket vendor fragment this instance loads
+    /// at slice time. Resolved against
+    /// [`crate::core::profile_library::load_fragment`] with
+    /// [`Bucket::Printer`](crate::core::profile_library::Bucket::Printer).
+    /// E.g. `"bambu-lab-a1-mini-0.4-nozzle"`.
+    ///
+    /// Carried as a separate field (rather than derived from
+    /// `vendor_profile_ref` + nozzle) because the printer fragment is
+    /// nozzle-variant-specific upstream — `vendor_profile_ref` names
+    /// the printer model, `printer_fragment_slug` names the specific
+    /// (model, nozzle-variant) tuple.
+    pub printer_fragment_slug: String,
+
+    /// Default filament fragment to use for slots that haven't been
+    /// bound to a specific filament yet. Resolved against
+    /// [`Bucket::Filament`](crate::core::profile_library::Bucket::Filament).
+    pub default_filament_fragment_slug: String,
+
+    /// Default process fragment for plates that don't specify one.
+    /// MVP: every plate uses this default; future process binding
+    /// makes this overridable per plate.
+    pub default_process_fragment_slug: String,
+
     /// Network connection details. `None` when the user hasn't
     /// configured connection yet — the instance still works for slicing,
     /// just not for sending to the printer.
@@ -135,6 +158,9 @@ mod tests {
             id: "test".into(),
             display_name: "Test".into(),
             vendor_profile_ref: "bambu-a1-mini".into(),
+            printer_fragment_slug: "bambu-lab-a1-mini-0.4-nozzle".into(),
+            default_filament_fragment_slug: "bambu-pla-basic-bbl-a1m".into(),
+            default_process_fragment_slug: "0.20mm-standard-bbl-a1m".into(),
             connection: None,
             extruders: vec![ExtruderState {
                 installed_nozzle: NozzleSku {

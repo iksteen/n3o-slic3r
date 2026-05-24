@@ -41,6 +41,9 @@ fn bambi() -> PrinterInstance {
         id: BAMBI_ID.to_owned(),
         display_name: "Bambi".to_owned(),
         vendor_profile_ref: "bambu-a1-mini".to_owned(),
+        printer_fragment_slug: "bambu-lab-a1-mini-0.4-nozzle".to_owned(),
+        default_filament_fragment_slug: "bambu-pla-basic-bbl-a1m".to_owned(),
+        default_process_fragment_slug: "0.20mm-standard-bbl-a1m".to_owned(),
         connection: None,
         extruders: vec![ExtruderState {
             installed_nozzle: NozzleSku {
@@ -74,6 +77,9 @@ fn snappy() -> PrinterInstance {
         id: SNAPPY_ID.to_owned(),
         display_name: "Snappy".to_owned(),
         vendor_profile_ref: "snapmaker-u1".to_owned(),
+        printer_fragment_slug: "snapmaker-u1-0.4-nozzle".to_owned(),
+        default_filament_fragment_slug: "snapmaker-pla-u1".to_owned(),
+        default_process_fragment_slug: "0.20-standard-snapmaker-u1-0.4-nozzle".to_owned(),
         connection: None,
         extruders: vec![extruder(), extruder(), extruder(), extruder()],
         bed: BedRef {

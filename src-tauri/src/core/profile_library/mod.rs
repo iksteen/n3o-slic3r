@@ -21,6 +21,9 @@ use std::path::Path;
 use crate::core::cascade::loader::{parse_cascade_str, CascadeLoadError};
 use crate::core::cascade::types::Cascade;
 
+pub mod composer;
+pub use composer::{compose_cascade, ComposeError};
+
 /// One bundled per-bucket fragment.
 #[derive(Debug, Clone, Copy)]
 struct BundledFragment {
