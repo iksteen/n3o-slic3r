@@ -91,13 +91,13 @@ export function jumpTo(
   }
 }
 
-/** Default window for a freshly-loaded preview: show only the
- * topmost layer, single-layer mode. Matches the Bambu Studio /
- * Orca / Prusa default. Showing every layer at once on a tall
- * print is visually unreadable — the user scrubs down from the
- * top via the slider or arrow keys to inspect specific layers. */
+/** Default window for a freshly-loaded preview: up-to with max
+ * = top layer (show the whole print). The shader's depth-fade
+ * (shaderMaterial.ts FADE_LAYERS) keeps the rendering legible
+ * by emphasizing the top ~25 layers and fading older ones
+ * toward the background. */
 export function defaultWindow(layerCount: number): LayerWindow {
-  return { mode: "single", layer: Math.max(0, layerCount - 1) };
+  return { mode: "up-to", max: Math.max(0, layerCount - 1) };
 }
 
 /** Best-effort "what layer is currently visible at the top of
