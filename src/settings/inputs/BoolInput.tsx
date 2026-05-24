@@ -4,7 +4,7 @@
 // SettingsPanel.jsx:222-227). Commits on click.
 
 import { parseBool, formatBool } from "./helpers";
-import type { OptionSummary } from "../types";
+import { defaultScalarFor, type OptionSummary } from "../types";
 
 export interface BoolInputProps {
   schema: OptionSummary;
@@ -23,7 +23,7 @@ export function BoolInput({
   disabled = false,
 }: BoolInputProps) {
   const effective =
-    parseBool(value ?? schema.default_value ?? "0") ?? false;
+    parseBool(value ?? defaultScalarFor(schema) ?? "0") ?? false;
   return (
     <div className="val-toggle-wrap">
       <button

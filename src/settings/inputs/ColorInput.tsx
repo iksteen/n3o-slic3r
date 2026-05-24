@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { commitColor, isValidHexColor } from "./helpers";
-import type { OptionSummary } from "../types";
+import { defaultScalarFor, type OptionSummary } from "../types";
 
 export interface ColorInputProps {
   schema: OptionSummary;
@@ -23,9 +23,10 @@ export function ColorInput({
   onChange,
   disabled = false,
 }: ColorInputProps) {
-  const effective = value ?? schema.default_value ?? FALLBACK;
+  const fallback = defaultScalarFor(schema) ?? FALLBACK;
+  const effective = value ?? fallback;
   const [draft, setDraft] = useState(effective);
-  useEffect(() => setDraft(value ?? schema.default_value ?? FALLBACK), [value, schema.default_value]);
+  useEffect(() => setDraft(value ?? fallback), [value, fallback]);
 
   const safe = isValidHexColor(draft) ? draft : FALLBACK;
 

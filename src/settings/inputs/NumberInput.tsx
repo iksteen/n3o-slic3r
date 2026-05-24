@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import { commitNumber, formatNumber, parseNumber } from "./helpers";
-import type { OptionSummary } from "../types";
+import { defaultScalarFor, type OptionSummary } from "../types";
 
 export interface NumberInputProps {
   schema: OptionSummary;
@@ -42,11 +42,12 @@ export function NumberInput({
   // Local draft state so typing is responsive (no per-keystroke
   // commit). Reset when the parent's value changes (e.g. cascade
   // re-resolve after a printer switch).
-  const initial = value ?? schema.default_value ?? "";
+  const fallback = defaultScalarFor(schema) ?? "";
+  const initial = value ?? fallback;
   const [draft, setDraft] = useState(initial);
   useEffect(() => {
-    setDraft(value ?? schema.default_value ?? "");
-  }, [value, schema.default_value]);
+    setDraft(value ?? fallback);
+  }, [value, fallback]);
 
   const commit = () => {
     const result = commitNumber(draft, { min, max, step });
@@ -57,12 +58,12 @@ export function NumberInput({
       // Only fire onChange when the serialized form actually differs
       // from what the parent passed — avoids spurious cascade
       // round-trips when the user blurs without editing.
-      if (result.serialized !== (value ?? schema.default_value ?? "")) {
+      if (result.serialized !== (value ?? fallback)) {
         onChange(result.serialized);
       }
     } else {
       // Parse failure → revert to last good value.
-      setDraft(value ?? schema.default_value ?? "");
+      setDraft(value ?? fallback);
     }
   };
 

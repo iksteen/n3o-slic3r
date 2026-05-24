@@ -14,8 +14,7 @@ import {
   formatNumber,
   parseFloatOrPercent,
 } from "./helpers";
-import type { OptionSummary } from "../types";
-import { optionTypeKind } from "../types";
+import { defaultScalarFor, optionTypeKind, type OptionSummary } from "../types";
 
 export interface PercentInputProps {
   schema: OptionSummary;
@@ -41,17 +40,18 @@ export function PercentInput({
 
   // Local draft + percent-mode flag, mirroring the wire form
   // ("75" vs "75%"). For pure Percent, the flag is always true.
-  const initial = value ?? schema.default_value ?? "";
+  const fallback = defaultScalarFor(schema) ?? "";
+  const initial = value ?? fallback;
   const [draft, setDraft] = useState(initial);
-  useEffect(() => setDraft(value ?? schema.default_value ?? ""), [value, schema.default_value]);
+  useEffect(() => setDraft(value ?? fallback), [value, fallback]);
 
   const parsed = parseFloatOrPercent(initial);
   const initialPercent = allowsAbsolute ? parsed?.percent ?? true : true;
   const [percent, setPercent] = useState<boolean>(initialPercent);
   useEffect(() => {
-    const p = parseFloatOrPercent(value ?? schema.default_value ?? "");
+    const p = parseFloatOrPercent(value ?? fallback);
     if (p) setPercent(allowsAbsolute ? p.percent : true);
-  }, [value, schema.default_value, allowsAbsolute]);
+  }, [value, fallback, allowsAbsolute]);
 
   const commit = (overridePercent?: boolean) => {
     const wantPercent = overridePercent ?? percent;
@@ -64,21 +64,21 @@ export function PercentInput({
       );
       if (result.ok) {
         setDraft(formatFloatOrPercent(result.value));
-        if (result.serialized !== (value ?? schema.default_value ?? "")) {
+        if (result.serialized !== (value ?? fallback)) {
           onChange(result.serialized);
         }
       } else {
-        setDraft(value ?? schema.default_value ?? "");
+        setDraft(value ?? fallback);
       }
     } else {
       const result = commitPercent(draft, { min, max, step });
       if (result.ok) {
         setDraft(formatNumber(result.value));
-        if (result.serialized !== (value ?? schema.default_value ?? "")) {
+        if (result.serialized !== (value ?? fallback)) {
           onChange(result.serialized);
         }
       } else {
-        setDraft(value ?? schema.default_value ?? "");
+        setDraft(value ?? fallback);
       }
     }
   };

@@ -35,6 +35,17 @@ export type CapabilityPredicate =
   | { kind: "RequiresBblPrinter" }
   | { kind: "RequiresChamberHeater" };
 
+/** Typed default-value wire shape (mirrors Rust's `cascade::DefaultValue`).
+ *
+ *  Vector entries are pre-split server-side so the frontend doesn't
+ *  have to know about libslic3r's per-type serialization quirks
+ *  (`escape_strings_cstyle` for coStrings, comma-joined for coFloats /
+ *  coInts / coPercents, etc.). Use `defaultScalarFor(opt, slot)` to
+ *  pick the right entry for the active slot. */
+export type DefaultValue =
+  | { kind: "scalar"; value: string }
+  | { kind: "vector"; values: string[] };
+
 /** One libslic3r option's introspection record. Carries everything
  *  a settings row needs at render time except the resolved value
  *  (which comes from `cascade_resolve`). */
@@ -45,12 +56,51 @@ export type OptionSummary = {
   ty: string;
   label: string | null;
   category: string | null;
-  default_value: string | null;
+  default_value: DefaultValue | null;
+  /** True for libslic3r options flagged `multiline` — freeform
+   *  textareas (start_gcode, end_gcode, the small-area infill flow
+   *  compensation model). Vector defaults on multi-line fields
+   *  display as `values.join("\n")`; non-multi-line vectors index
+   *  by active slot. */
+  multiline: boolean;
   tooltip: string | null;
   mode: OptMode;
   scope: OptScopeFlags;
   capability: CapabilityPredicate | null;
 };
+
+/** Resolve a typed default to the scalar string the active Field
+ *  component renders.
+ *
+ *  - Scalar default → its value.
+ *  - Vector default on a multiline option → entries joined with `\n`
+ *    so the textarea renders one entry per line.
+ *  - Vector default on a per-slot vector kind → the entry at
+ *    `slot`, falling back to `values[0]` if the slot is out of
+ *    range. Returns `null` when the option has no default at all
+ *    or when the vector is empty. */
+export function defaultScalarFor(
+  opt: OptionSummary,
+  slot: number = 0,
+): string | null {
+  const dv = opt.default_value;
+  if (dv === null) return null;
+  if (dv.kind === "scalar") return dv.value;
+  if (dv.values.length === 0) return null;
+  if (opt.multiline) return dv.values.join("\n");
+  return dv.values[slot] ?? dv.values[0] ?? null;
+}
+
+/** Vector-shape view of the default — entries already pre-split by
+ *  the Rust side. Returns `[]` when the option has no default or
+ *  the default is scalar; the [`MultiSelectInput`] wrapper consults
+ *  this for padVector / parseVector seed. */
+export function defaultVectorFor(opt: OptionSummary): string[] {
+  const dv = opt.default_value;
+  if (dv === null) return [];
+  if (dv.kind === "scalar") return [];
+  return dv.values;
+}
 
 /** `slicer_options_for_printer` result. Same as `OptionSummary` with
  *  the capability predicate pre-evaluated against the active printer

@@ -42,7 +42,7 @@ import type {
   OptionTypeKind,
   PrinterAwareOptionSummary,
 } from "./types";
-import { isVectorKind, optionTypeKind } from "./types";
+import { defaultScalarFor, isVectorKind, optionTypeKind } from "./types";
 import {
   usePrinterOptions,
   useCascadeResolve,
@@ -446,7 +446,7 @@ function buildLadderLayers(
   objectOverrides: Record<string, string>,
 ): Map<CascadeLayer, string | null> {
   const map = new Map<CascadeLayer, string | null>();
-  map.set("default", schema.default_value);
+  map.set("default", defaultScalarFor(schema));
   // Cascade-side layers — until profile tagging, the cascade-tier
   // winner shows under `default` and the rest are em-dashes. The
   // resolve map's value is the effective post-cascade-and-overrides
@@ -523,7 +523,7 @@ function SettingRow({
     ? objectOverrides[schema.key]
     : projectOverrides[schema.key];
   const effectiveValue =
-    tierValue ?? resolved[schema.key]?.value ?? schema.default_value ?? null;
+    tierValue ?? resolved[schema.key]?.value ?? defaultScalarFor(schema, activeSlot) ?? null;
 
   // Project-scope settings are read-only on the Object tab per
   // FR-3D-3 (the value belongs to a higher tier than per-object can

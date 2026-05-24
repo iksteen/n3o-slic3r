@@ -45,7 +45,7 @@ pub use types::{Cascade, Condition, ConditionValue, Predicate, Rule, SourceLocat
 pub use validate::{default_known_dimensions, validate_cascade, KnownDimensions};
 
 use serde::Serialize;
-use slic3r_ffi::{option_defs, version, OptMode as FfiOptMode, OptScope as FfiOptScope};
+use slic3r_ffi::{option_defs, version, OptMode as FfiOptMode, OptScope as FfiOptScope, OptType};
 
 use crate::core::printer::profile::PrinterProfile;
 use crate::core::schema::{capability_for_key, CapabilityPredicate};
@@ -115,13 +115,133 @@ impl From<FfiOptScope> for OptScopeFlags {
     }
 }
 
+/// Typed default-value wire shape.
+///
+/// libslic3r serializes every option to a single string, but its
+/// vector types (`coStrings`, `coFloats`, `coInts`, …) flatten into
+/// forms that look like gibberish if the frontend tries to render
+/// them verbatim:
+///
+///   - `coStrings` uses `escape_strings_cstyle`: entries joined by
+///     `;`, with whitespace/quote/newline-containing entries wrapped
+///     in `"..."` and c-style-escaped. Showing this to a user as the
+///     "default" reads as `0,0;"\n0.2,0.4444";"\n0.4,0.6145";...`
+///     instead of one entry per line.
+///   - `coFloats` / `coInts` / `coPercents` use comma-joined forms.
+///     The frontend wants one entry per slot/extruder; index 0 is
+///     not the same logical thing as the whole vector for display.
+///
+/// Splitting on the Rust side gives each Field component access to
+/// the right shape: `Scalar` for the obvious one-value-per-option
+/// case, `Vector` carrying pre-split entries for everything else.
+/// Both variants carry strings (not typed scalars) — the per-Field
+/// parsing (`parseFloat`, `parseBool`, …) already lives on the
+/// frontend; we don't move it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DefaultValue {
+    Scalar { value: String },
+    Vector { values: Vec<String> },
+}
+
+impl DefaultValue {
+    /// Parse libslic3r's `default_serialized` into the typed wire
+    /// shape based on the option's [`OptType`].
+    ///
+    /// Vector types go through type-specific deserialization:
+    ///   - `Strings` → `unescape_strings_cstyle` (`;`-split with
+    ///     quote handling), mirroring libslic3r's own deserializer.
+    ///   - other vectors → simple comma split.
+    pub fn from_serialized(ty: OptType, serialized: &str) -> Self {
+        if !ty.is_vector() {
+            return Self::Scalar { value: serialized.to_owned() };
+        }
+        let values = if matches!(ty, OptType::Strings) {
+            unescape_strings_cstyle(serialized)
+        } else if serialized.is_empty() {
+            Vec::new()
+        } else {
+            serialized.split(',').map(str::to_owned).collect()
+        };
+        Self::Vector { values }
+    }
+}
+
+/// Mirror of libslic3r's `unescape_strings_cstyle` (Config.cpp:146).
+///
+/// Splits a serialized `coStrings` value into its entries:
+/// `;`-separated, leading whitespace skipped per entry, quoted
+/// entries (`"..."`) c-style-unescape `\n`/`\r`/`\\`/`\"`.
+fn unescape_strings_cstyle(s: &str) -> Vec<String> {
+    let bytes = s.as_bytes();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Skip leading whitespace.
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let mut buf: Vec<u8> = Vec::new();
+        if bytes[i] == b'"' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'"' {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    i += 1;
+                    match bytes[i] {
+                        b'n' => buf.push(b'\n'),
+                        b'r' => buf.push(b'\r'),
+                        c => buf.push(c),
+                    }
+                    i += 1;
+                } else {
+                    buf.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            if i < bytes.len() {
+                i += 1; // closing quote
+            }
+        } else {
+            while i < bytes.len() && bytes[i] != b';' {
+                buf.push(bytes[i]);
+                i += 1;
+            }
+        }
+        out.push(String::from_utf8_lossy(&buf).into_owned());
+        // Skip whitespace before the separator.
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+        }
+        if i < bytes.len() && bytes[i] == b';' {
+            i += 1;
+            if i == bytes.len() {
+                // Trailing `;` → one empty entry (matches libslic3r).
+                out.push(String::new());
+            }
+        }
+    }
+    out
+}
+
 #[derive(Serialize)]
 pub struct OptionSummary {
     pub key: String,
     pub ty: String,
     pub label: Option<String>,
     pub category: Option<String>,
-    pub default_value: Option<String>,
+    /// Typed default. `None` when libslic3r has no compile-time
+    /// default for this option. See [`DefaultValue`] for the wire
+    /// shape and why vectors are pre-split server-side.
+    pub default_value: Option<DefaultValue>,
+    /// True for libslic3r options flagged `multiline = true` —
+    /// freeform text areas (start_gcode, end_gcode, the small-area
+    /// infill flow compensation model). The frontend renders these
+    /// as textareas with `\n`-joined display of the vector default
+    /// instead of an index-by-slot picker.
+    pub multiline: bool,
     /// libslic3r tooltip text (FR-UI-6, PR-4-11's tooltip surface
     /// consumes this).
     pub tooltip: Option<String>,
@@ -141,13 +261,18 @@ pub struct OptionSummary {
 }
 
 fn summary_from_def(d: slic3r_ffi::OptionDef) -> OptionSummary {
+    let default_value = d
+        .default_serialized
+        .as_deref()
+        .map(|s| DefaultValue::from_serialized(d.ty, s));
     OptionSummary {
         capability: capability_for_key(&d.key),
         key: d.key,
         ty: format!("{:?}", d.ty),
         label: d.label,
         category: d.category,
-        default_value: d.default_serialized,
+        default_value,
+        multiline: d.multiline,
         tooltip: d.tooltip,
         mode: d.mode.into(),
         scope: d.scope.into(),
@@ -352,6 +477,90 @@ mod tests {
             .find(|o| o.summary.key == "enable_prime_tower")
             .expect("enable_prime_tower present");
         assert!(purge.hidden, "purge-tower key should hide on toolchanger");
+    }
+
+    #[test]
+    fn default_value_for_scalar_keeps_serialized_string() {
+        let dv = DefaultValue::from_serialized(OptType::Float, "0.2");
+        assert_eq!(dv, DefaultValue::Scalar { value: "0.2".into() });
+    }
+
+    #[test]
+    fn default_value_for_simple_vector_comma_splits() {
+        // coFloats / coInts / coPercents all use comma-joined
+        // serialization. The wire form is exactly what libslic3r
+        // emits via ConfigOptionFloats::serialize.
+        let dv = DefaultValue::from_serialized(OptType::Floats, "220,220,220,220");
+        assert_eq!(
+            dv,
+            DefaultValue::Vector {
+                values: vec!["220".into(), "220".into(), "220".into(), "220".into()],
+            },
+        );
+    }
+
+    #[test]
+    fn default_value_for_empty_vector_emits_empty_vec() {
+        let dv = DefaultValue::from_serialized(OptType::Ints, "");
+        assert_eq!(dv, DefaultValue::Vector { values: Vec::new() });
+    }
+
+    #[test]
+    fn default_value_for_strings_round_trips_through_cstyle_unescape() {
+        // small_area_infill_flow_compensation_model's compiled-in default
+        // — the canonical regression case. Entries contain embedded
+        // newlines + commas; comma-split would corrupt them.
+        let serialized = "0,0;\"\\n0.2,0.4444\";\"\\n0.4,0.6145\";\"\\n0.6,0.7059\"";
+        let dv = DefaultValue::from_serialized(OptType::Strings, serialized);
+        let DefaultValue::Vector { values } = dv else {
+            panic!("expected Vector for coStrings");
+        };
+        assert_eq!(values.len(), 4);
+        assert_eq!(values[0], "0,0", "unquoted first entry");
+        assert_eq!(values[1], "\n0.2,0.4444", "quoted entry round-trips with literal newline");
+        assert_eq!(values[2], "\n0.4,0.6145");
+        assert_eq!(values[3], "\n0.6,0.7059");
+    }
+
+    #[test]
+    fn default_value_for_strings_handles_unquoted_singleton() {
+        // Single-entry default with no special chars — emitted bare by
+        // escape_strings_cstyle. Should still split cleanly.
+        let dv = DefaultValue::from_serialized(OptType::Strings, "PLA");
+        assert_eq!(
+            dv,
+            DefaultValue::Vector { values: vec!["PLA".into()] },
+        );
+    }
+
+    #[test]
+    fn default_value_for_strings_handles_escaped_quotes_and_backslashes() {
+        // Entry contains a backslash + a quote; both have to come back
+        // through the cstyle unescape pass.
+        let dv = DefaultValue::from_serialized(OptType::Strings, "\"a\\\\b\\\"c\"");
+        let DefaultValue::Vector { values } = dv else {
+            panic!("expected Vector");
+        };
+        assert_eq!(values, vec!["a\\b\"c"]);
+    }
+
+    #[test]
+    fn small_area_default_surfaces_as_split_vector_on_live_schema() {
+        // End-to-end: the live FFI default for the regression key lands
+        // as a Vector of 10 entries, each carrying readable text.
+        ensure_ffi();
+        let opts = slicer_options(Some("small_area_infill_flow_compensation_model".into()));
+        let opt = opts
+            .iter()
+            .find(|o| o.key == "small_area_infill_flow_compensation_model")
+            .expect("regression key present in libslic3r schema");
+        let dv = opt.default_value.as_ref().expect("compile-time default");
+        let DefaultValue::Vector { values } = dv else {
+            panic!("coStrings must surface as Vector, got {dv:?}");
+        };
+        assert_eq!(values.len(), 10, "10-entry default per upstream PrintConfig.cpp");
+        assert_eq!(values[0], "0,0", "first entry is the (0,0) anchor pair");
+        assert!(opt.multiline, "regression field is a multiline textarea");
     }
 
     #[test]

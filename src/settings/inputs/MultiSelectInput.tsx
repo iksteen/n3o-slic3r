@@ -18,7 +18,7 @@ import {
   padVector,
   parseVector,
 } from "./helpers";
-import type { OptionSummary } from "../types";
+import { defaultVectorFor, type OptionSummary } from "../types";
 
 export interface MultiSelectInputProps {
   schema: OptionSummary;
@@ -55,10 +55,15 @@ export function MultiSelectInput({
   syncAll,
   renderSlot,
 }: MultiSelectInputProps) {
-  const raw = value ?? schema.default_value ?? "";
-  const padded = padVector(parseVector(raw), slotCount);
+  // Use the explicit override when set; otherwise seed from the
+  // pre-split default vector the Rust side ships in OptionSummary
+  // (typed DefaultValue::Vector). Falls through parseVector either
+  // way for the user-edited override-string path.
+  const entries = value !== null ? parseVector(value) : defaultVectorFor(schema);
+  const padded = padVector(entries, slotCount);
   const idx = Math.max(0, Math.min(activeSlot - 1, slotCount - 1));
   const slotValue = padded[idx] ?? "";
+  const raw = value ?? formatVector(padded);
 
   const commitSlot = (next: string) => {
     const updated = commitVectorEdit(padded, idx, next, syncAll);

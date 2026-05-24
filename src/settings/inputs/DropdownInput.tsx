@@ -12,7 +12,7 @@
 // when that lands the prop becomes redundant.
 
 import { useEffect, useState } from "react";
-import type { OptionSummary } from "../types";
+import { defaultScalarFor, type OptionSummary } from "../types";
 
 export interface DropdownInputProps {
   schema: OptionSummary;
@@ -32,7 +32,8 @@ export function DropdownInput({
   disabled = false,
   options,
 }: DropdownInputProps) {
-  const effective = value ?? schema.default_value ?? options[0]?.[0] ?? "";
+  const effective =
+    value ?? defaultScalarFor(schema) ?? options[0]?.[0] ?? "";
   // Local mirror so we can show the user's choice immediately even
   // before the parent re-resolves the cascade.
   const [local, setLocal] = useState(effective);
