@@ -11,6 +11,7 @@
 // driver-setup flow are tracked as separate UX concerns).
 
 import { useEffect, useState } from "react";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { BambuAmsStrip } from "./BambuAmsStrip";
 import {
   clearCredentials,
@@ -24,6 +25,7 @@ import {
   driverConnect,
   driverDisconnect,
   driverDrySendPlate,
+  driverExportPlate,
   driverRegister,
   driverSendPlate,
   driverUnregister,
@@ -113,46 +115,8 @@ export function PrinterPanel(props: PrinterPanelProps): React.JSX.Element {
     };
   }, [printerIdentity]);
 
-  // No active plate / no binding — show the bind-a-printer hint.
-  if (printerIdentity == null || plateId == null) {
-    return (
-      <span className="text-xs text-text-muted">
-        Bind a printer to send
-      </span>
-    );
-  }
-
-  // Has binding but no live driver — show Connect entry point.
-  if (driverId == null) {
-    return (
-      <>
-        <button
-          type="button"
-          onClick={() => setShowDialog(true)}
-          className="px-2 py-1 text-xs border border-border rounded hover:bg-surface-2"
-          title={`Connect to ${printerIdentity}`}
-        >
-          Connect printer
-        </button>
-        {showDialog && (
-          <PrinterCredentialsDialog
-            printerIdentity={printerIdentity}
-            initial={getCredentials(printerIdentity) ?? undefined}
-            onConnected={(id) => {
-              setDriverId(printerIdentity, id);
-              setDriverIdState(id);
-              setShowDialog(false);
-              setActionError(null);
-            }}
-            onCancel={() => setShowDialog(false)}
-          />
-        )}
-      </>
-    );
-  }
-
   const handleSend = async (dryRun: boolean): Promise<void> => {
-    if (lastSliceOutputPath == null) return;
+    if (driverId == null || plateId == null || lastSliceOutputPath == null) return;
     setActionPending(true);
     setActionError(null);
     try {
@@ -166,6 +130,7 @@ export function PrinterPanel(props: PrinterPanelProps): React.JSX.Element {
   };
 
   const handleCommand = async (cmd: "Pause" | "Resume" | "Stop"): Promise<void> => {
+    if (driverId == null) return;
     setActionPending(true);
     setActionError(null);
     try {
@@ -177,7 +142,30 @@ export function PrinterPanel(props: PrinterPanelProps): React.JSX.Element {
     }
   };
 
+  const handleExport = async (): Promise<void> => {
+    if (plateId == null || lastSliceOutputPath == null) return;
+    setActionPending(true);
+    setActionError(null);
+    try {
+      const path = await saveDialog({
+        title: "Export .gcode.3mf",
+        defaultPath: `plate-${plateId}.gcode.3mf`,
+        filters: [{ name: "Bambu sliced bundle", extensions: ["gcode.3mf"] }],
+      });
+      if (path == null) {
+        // User cancelled the picker.
+        return;
+      }
+      await driverExportPlate(plateId, lastSliceOutputPath, path);
+    } catch (e) {
+      setActionError(`Export failed: ${String(e)}`);
+    } finally {
+      setActionPending(false);
+    }
+  };
+
   const handleDisconnect = async (): Promise<void> => {
+    if (driverId == null || printerIdentity == null) return;
     setActionPending(true);
     try {
       await driverDisconnect(driverId).catch(() => {});
@@ -197,50 +185,109 @@ export function PrinterPanel(props: PrinterPanelProps): React.JSX.Element {
     isJobIdle(status.job) &&
     !actionPending;
 
+  // Export doesn't touch the printer — just wraps + writes to disk.
+  // Available whenever we have a slice to wrap.
+  const exportEnabled = lastSliceOutputPath != null && !actionPending;
+
+  // Export is the only diagnostic that works without a connected
+  // driver — just wraps + writes to disk. Always render it (when
+  // there's a slice to wrap), so it's reachable from the bind-hint
+  // and Connect-button states too.
+  const exportButton = (
+    <button
+      type="button"
+      onClick={() => void handleExport()}
+      disabled={!exportEnabled}
+      className="px-2 py-1 border border-border rounded text-xs hover:bg-surface-2 disabled:opacity-40"
+      title="Save the .gcode.3mf bundle we'd send to disk (diagnostic)"
+    >
+      Export
+    </button>
+  );
+
   return (
     <div className="flex items-center gap-2 text-xs">
-      <ConnectionPill connection={status?.connection ?? null} />
-      <JobLine job={status?.job ?? null} />
-      <TempsLine temps={status?.temps ?? null} />
-      {status?.extra.kind === "Bambu" && (
-        <BambuAmsStrip ams={status.extra.data.ams} />
+      {driverId == null ? (
+        // No live driver: either no binding (hint) or have binding
+        // but not connected yet (Connect button).
+        printerIdentity == null || plateId == null ? (
+          <span className="text-text-muted">Bind a printer to send</span>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={() => setShowDialog(true)}
+              className="px-2 py-1 text-xs border border-border rounded hover:bg-surface-2"
+              title={`Connect to ${printerIdentity}`}
+            >
+              Connect printer
+            </button>
+            {showDialog && (
+              <PrinterCredentialsDialog
+                printerIdentity={printerIdentity}
+                initial={getCredentials(printerIdentity) ?? undefined}
+                onConnected={(id) => {
+                  setDriverId(printerIdentity, id);
+                  setDriverIdState(id);
+                  setShowDialog(false);
+                  setActionError(null);
+                }}
+                onCancel={() => setShowDialog(false)}
+              />
+            )}
+          </>
+        )
+      ) : (
+        <>
+          <ConnectionPill connection={status?.connection ?? null} />
+          <JobLine job={status?.job ?? null} />
+          <TempsLine temps={status?.temps ?? null} />
+          {status?.extra.kind === "Bambu" && (
+            <BambuAmsStrip ams={status.extra.data.ams} />
+          )}
+          <button
+            type="button"
+            onClick={() => void handleSend(false)}
+            disabled={!sendEnabled}
+            className="px-2 py-1 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 rounded text-xs font-medium text-white"
+            title={
+              sendEnabled
+                ? "Send to printer"
+                : sendDisabledReason(status, lastSliceOutputPath)
+            }
+          >
+            Send
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSend(true)}
+            disabled={!sendEnabled}
+            className="px-2 py-1 border border-border rounded text-xs hover:bg-surface-2 disabled:opacity-40"
+            title="Dry-run: every motion executes but cold (no heating, no extrusion)"
+          >
+            Dry-run
+          </button>
+        </>
       )}
-      <button
-        type="button"
-        onClick={() => void handleSend(false)}
-        disabled={!sendEnabled}
-        className="px-2 py-1 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 rounded text-xs font-medium text-white"
-        title={
-          sendEnabled
-            ? "Send to printer"
-            : sendDisabledReason(status, lastSliceOutputPath)
-        }
-      >
-        Send
-      </button>
-      <button
-        type="button"
-        onClick={() => void handleSend(true)}
-        disabled={!sendEnabled}
-        className="px-2 py-1 border border-border rounded text-xs hover:bg-surface-2 disabled:opacity-40"
-        title="Dry-run: every motion executes but cold (no heating, no extrusion)"
-      >
-        Dry-run
-      </button>
-      <CommandButtons
-        jobState={status?.job?.state ?? null}
-        onCommand={handleCommand}
-        disabled={actionPending}
-      />
-      <button
-        type="button"
-        onClick={() => void handleDisconnect()}
-        className="px-1.5 py-0.5 text-xs text-text-muted hover:text-text"
-        title="Disconnect + forget credentials for this session"
-        disabled={actionPending}
-      >
-        Disconnect
-      </button>
+      {exportButton}
+      {driverId != null && (
+        <>
+          <CommandButtons
+            jobState={status?.job?.state ?? null}
+            onCommand={handleCommand}
+            disabled={actionPending}
+          />
+          <button
+            type="button"
+            onClick={() => void handleDisconnect()}
+            className="px-1.5 py-0.5 text-xs text-text-muted hover:text-text"
+            title="Disconnect + forget credentials for this session"
+            disabled={actionPending}
+          >
+            Disconnect
+          </button>
+        </>
+      )}
       {actionError && (
         <span
           className="text-xs text-danger truncate max-w-xs"

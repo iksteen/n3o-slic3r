@@ -244,6 +244,28 @@ async fn wrap_gcode_as_3mf(gcode_path: String, plate_id: u32) -> Result<Vec<u8>,
     .map_err(|e| format!("wrap task join: {e}"))?
 }
 
+/// Wrap a plate's last-sliced raw G-code into the same
+/// `.gcode.3mf` bundle the driver send path uses, but write it
+/// to disk instead of uploading. Diagnostic surface — lets the
+/// user grab the exact bytes our send path produces so they can
+/// diff vs BBS / other slicer outputs without fishing the bundle
+/// out of the printer's /cache/ directory.
+#[tauri::command]
+#[tracing::instrument]
+pub async fn driver_export_plate(
+    plate_id: u32,
+    gcode_path: String,
+    output_path: String,
+) -> Result<(), String> {
+    let bytes = wrap_gcode_as_3mf(gcode_path, plate_id).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::write(&output_path, &bytes)
+            .map_err(|e| format!("write {output_path}: {e}"))
+    })
+    .await
+    .map_err(|e| format!("export task join: {e}"))?
+}
+
 /// Send the plate's last-sliced raw G-code to the driver as a
 /// `.gcode.3mf` bundle. The frontend obtains `gcode_path` from
 /// the most recent `slice:plate_finished` event (the `output_path`

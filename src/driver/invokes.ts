@@ -88,3 +88,19 @@ export function driverDrySendPlate(
     gcodePath,
   });
 }
+
+/** Diagnostic: wrap the plate's gcode into the same `.gcode.3mf`
+ * bundle the send path produces and write it to disk. Lets us
+ * grab exactly what we'd send for offline diffing against BBS /
+ * other slicer outputs. No driver / network involvement. */
+export function driverExportPlate(
+  plateId: number,
+  gcodePath: string,
+  outputPath: string,
+): Promise<void> {
+  return invoke<void>("driver_export_plate", {
+    plateId,
+    gcodePath,
+    outputPath,
+  });
+}
