@@ -39,7 +39,15 @@ uuid = { version = "1", features = ["serde", "v4"] }
 # explicitly with the feature flags we need.
 async-trait = "0.1"
 thiserror = "1"
-tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+tokio = { version = "1", features = ["sync", "rt", "macros", "time", "net"] }
+# Bambu LAN driver (PR-7a-2). native-tls + matching tokio adapter
+# because the BBL device cert is X.509 v1 with CN-as-serial — rustls
+# can't accept that with a custom verifier; matches bambu-overlay's
+# choice for the same reason.
+native-tls = "0.2"
+tokio-native-tls = "0.3"
+rumqttc = { version = "0.25", default-features = false, features = ["use-native-tls"] }
+x509-parser = "0.18"
 
 [dev-dependencies]
 tempfile = "3"
