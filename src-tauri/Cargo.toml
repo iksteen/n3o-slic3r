@@ -76,3 +76,7 @@ path = "examples/spike3.rs"
 name = "phase1_smoke"
 path = "examples/phase1_smoke.rs"
 
+[[example]]
+name = "slice_to_gcode_3mf"
+path = "examples/slice_to_gcode_3mf.rs"
+

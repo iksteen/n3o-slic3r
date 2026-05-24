@@ -265,7 +265,6 @@ impl Driver for BambuDriver {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let remote_name = format!("n3o-{plate_id}-{nanos}.gcode.3mf");
-        let md5 = super::ftps::md5_hex(&bytes);
 
         // FTPS is blocking — push it onto Tokio's blocking pool.
         let host = self.config.host.clone();
@@ -284,9 +283,20 @@ impl Driver for BambuDriver {
         .map_err(|e| DriverError::Other(format!("upload join: {e}")))??;
 
         // Publish the project_file MQTT command. Field shape
-        // sourced from OpenBambuAPI mqtt.md (Doridian fork) —
-        // matches what Bambu Studio publishes for cache-uploaded
-        // .gcode.3mf files.
+        // cross-referenced against two working open-source impls
+        // (Home Assistant Bambu integration + bambu-connect)
+        // because OpenBambuAPI mqtt.md (Doridian fork) is stale:
+        //
+        //   - `bed_leveling` (American), not `bed_levelling` —
+        //     Doridian's doc had the typo; firmware rejects the
+        //     British spelling as a missing field.
+        //   - `ftp://<remote_path>` URL form for FTPS-uploaded
+        //     files; `file:///mnt/sdcard/...` returns the
+        //     generic "update Bambu Studio" reject.
+        //   - No `file`, `md5`, or `ams_mapping` fields. They're
+        //     in the Doridian doc but neither working impl
+        //     ships them; the firmware tolerates absence and
+        //     rejects presence in some combinations.
         let sequence_id = self.next_sequence_id();
         let cmd = ProjectFileCommand {
             print: ProjectFileBody {
@@ -298,19 +308,18 @@ impl Driver for BambuDriver {
                 task_id: "0",
                 subtask_id: "0",
                 subtask_name: &remote_name,
-                file: "",
-                // `file:///mnt/sdcard` is the SD-card root on
-                // the printer; FTPS uploaded files at
-                // /cache/<name> become file:///mnt/sdcard/cache/<name>.
-                url: &format!("file:///mnt/sdcard{remote_path}"),
-                md5: &md5,
+                // `ftp://<name>` — two slashes, no path prefix.
+                // File is at the FTPS root (bambu-connect's
+                // convention). The `/cache/` directory approach
+                // was a `MicroSD R/W exception` rabbit hole; see
+                // bambu/ftps.rs docs.
+                url: &format!("ftp://{remote_path}"),
                 bed_type: "auto",
                 timelapse: false,
-                bed_levelling: true,
+                bed_leveling: true,
                 flow_cali: false,
                 vibration_cali: false,
                 layer_inspect: false,
-                ams_mapping: "",
                 use_ams: false,
             },
         };
@@ -460,9 +469,12 @@ struct CommandBody<'a> {
     param: &'a str,
 }
 
-/// `project_file` MQTT command — shape from OpenBambuAPI
-/// (Doridian fork) `mqtt.md`. PR-7a-5 publishes this after FTPS
-/// upload to start a print of the uploaded file.
+/// `project_file` MQTT command — shape cross-referenced against
+/// Home Assistant's Bambu integration + `bambu-connect` (the
+/// open-source impls that are known-working against current
+/// firmware). The OpenBambuAPI mqtt.md Doridian fork is stale +
+/// has a `bed_levelling`/`bed_leveling` spelling typo we got
+/// burned by.
 #[derive(Serialize)]
 struct ProjectFileCommand<'a> {
     print: ProjectFileBody<'a>,
@@ -480,18 +492,18 @@ struct ProjectFileBody<'a> {
     task_id: &'a str,
     subtask_id: &'a str,
     subtask_name: &'a str,
-    file: &'a str,
     /// URL of the .gcode.3mf on the printer-side filesystem.
-    /// For FTPS-uploaded files: `file:///mnt/sdcard/cache/<name>`.
+    /// For FTPS-uploaded files: `ftp:///cache/<name>` (three
+    /// slashes because `<name>` starts with `/cache/`).
     url: &'a str,
-    md5: &'a str,
     bed_type: &'a str,
     timelapse: bool,
-    bed_levelling: bool,
+    /// American spelling — firmware treats `bed_levelling`
+    /// (British) as a missing required field.
+    bed_leveling: bool,
     flow_cali: bool,
     vibration_cali: bool,
     layer_inspect: bool,
-    ams_mapping: &'a str,
     use_ams: bool,
 }
 
@@ -670,37 +682,39 @@ mod tests {
                 task_id: "0",
                 subtask_id: "0",
                 subtask_name: "n3o-1-12345.gcode.3mf",
-                file: "",
-                url: "file:///mnt/sdcard/cache/n3o-1-12345.gcode.3mf",
-                md5: "deadbeef",
+                url: "ftp://n3o-1-12345.gcode.3mf",
                 bed_type: "auto",
                 timelapse: false,
-                bed_levelling: true,
+                bed_leveling: true,
                 flow_cali: false,
                 vibration_cali: false,
                 layer_inspect: false,
-                ams_mapping: "",
                 use_ams: false,
             },
         };
         let json: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&cmd).unwrap()).unwrap();
-        // Pin every field the OpenBambuAPI doc says the printer
-        // requires; if any one drifts we want a loud failure.
+        // Pin the shape that current Bambu firmware accepts
+        // (validated against Home Assistant Bambu + bambu-connect).
         let print = &json["print"];
         assert_eq!(print["sequence_id"], "42");
         assert_eq!(print["command"], "project_file");
         assert_eq!(print["param"], "Metadata/plate_1.gcode");
-        assert_eq!(
-            print["url"],
-            "file:///mnt/sdcard/cache/n3o-1-12345.gcode.3mf"
-        );
-        assert_eq!(print["md5"], "deadbeef");
+        assert_eq!(print["url"], "ftp://n3o-1-12345.gcode.3mf");
         assert_eq!(print["bed_type"], "auto");
         assert_eq!(print["use_ams"], false);
         // Booleans, not strings — Bambu rejects use_ams:"false".
         assert!(print["use_ams"].is_boolean());
         assert!(print["timelapse"].is_boolean());
+        // American spelling — the British `bed_levelling` is what
+        // we got burned by. Firmware treats it as a missing field.
+        assert!(print["bed_leveling"].is_boolean());
+        assert!(print.get("bed_levelling").is_none());
+        // Fields that the OpenBambuAPI doc lists but current
+        // firmware doesn't tolerate: file, md5, ams_mapping.
+        assert!(print.get("file").is_none());
+        assert!(print.get("md5").is_none());
+        assert!(print.get("ams_mapping").is_none());
     }
 
     /// Pushall payload shape is what the printer expects. Pin
