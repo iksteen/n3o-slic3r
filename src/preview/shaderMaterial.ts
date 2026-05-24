@@ -29,11 +29,26 @@ uniform float uLayerMin;
 uniform float uLayerMax;
 varying vec3 vColor;
 varying float vLayer;
+
+// Depth-fade range — how many layers below the top before
+// extrusions go fully transparent. 25 layers ≈ 5mm at 0.2mm
+// layer height: a single perimeter loop's worth of context.
+// Tunable; the user-facing tradeoff is "deeper history visible"
+// vs "top layer pops".
+const float FADE_LAYERS = 25.0;
+const float MIN_OPACITY = 0.10;
+
 void main() {
   if (vLayer < uLayerMin - 0.5 || vLayer > uLayerMax + 0.5) {
     discard;
   }
-  gl_FragColor = vec4(vColor, 1.0);
+  // Depth from the current top of the window. 0 = top, larger
+  // values = older layers. Fades linearly to MIN_OPACITY so
+  // up-to-N mode reads as "top layer emphasized, older layers
+  // for context" rather than 200-deep spaghetti.
+  float depth = uLayerMax - vLayer;
+  float fade = mix(1.0, MIN_OPACITY, clamp(depth / FADE_LAYERS, 0.0, 1.0));
+  gl_FragColor = vec4(vColor, fade);
 }
 `;
 
@@ -46,12 +61,20 @@ export interface ExtrusionMaterial extends THREE.ShaderMaterial {
 
 /** Build a fresh ShaderMaterial for the extrusion `LineSegments`.
  * Each call returns a fresh material; share by reference across
- * the same scene. */
+ * the same scene.
+ *
+ * `transparent: true` + `depthWrite: false` lets the depth-fade
+ * shader emit per-fragment alpha without z-fighting between
+ * stacked layers. The cost is unsorted blending — fine here
+ * since the layers are color-coded and the fade is monotone in
+ * layer depth, so order errors aren't visually disruptive. */
 export function makeExtrusionMaterial(): ExtrusionMaterial {
   const mat = new THREE.ShaderMaterial({
     vertexShader: VERTEX_SHADER,
     fragmentShader: FRAGMENT_SHADER,
     vertexColors: true,
+    transparent: true,
+    depthWrite: false,
     uniforms: {
       uLayerMin: { value: 0.0 },
       uLayerMax: { value: 0.0 },
