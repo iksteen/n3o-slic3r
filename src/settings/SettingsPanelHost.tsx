@@ -17,6 +17,7 @@ import { makeObjectOverrideCallbacks } from "./overrideCommands";
 import { makeProjectOverrideCallbacks } from "./projectOverrideCommands";
 import { PrinterPicker } from "../printer/PrinterPicker";
 import { usePrinterCatalog } from "../printer/usePrinterCatalog";
+import { SlotBindingPanel } from "../material/SlotBindingPanel";
 import type { PlateSnapshot } from "../viewport/types";
 
 /** Locate the active plate in a session snapshot, or `null`
@@ -132,6 +133,10 @@ export function SettingsPanelHost({
             binding={plate?.printer ?? null}
           />
         </div>
+        <SlotBindingPanel
+          plateId={plate?.plate_id ?? null}
+          plate={plate}
+        />
       </div>
       <SettingsPanel
         printer={activeProfile}

@@ -118,6 +118,15 @@ export interface PlateSnapshot {
   name: string;
   metadata: PlateMetadata;
   printer: PrinterBinding | null;
+  /** PrinterInstance id the plate slices against (PR-S-5c). `null`
+   *  for an unbound plate. Drives the slot binding panel + the
+   *  composer-side cascade resolution. */
+  printer_instance_id: string | null;
+  /** Per-plate model material → PrinterInstance slot routing
+   *  (PR-S-7). Keyed by 1-based material index; values point into
+   *  the bound instance's `(extruder, slot)` grid. Auto-bind
+   *  populates this on object register. */
+  material_to_slot: Record<number, { extruder: number; slot: number }>;
   project_overrides: Record<string, string>;
 
   // Per-plate scene contents
@@ -207,6 +216,7 @@ export type SceneEvent =
   | { kind: "ActivePlateChanged"; data: { plate_id: PlateId } }
   // ---- Project-state changes (PR-5-5, PR-5-6, PR-5-7) ----
   | { kind: "PlateMetadataChanged"; data: { plate_id: PlateId } }
+  | { kind: "MaterialSlotChanged"; data: { plate_id: PlateId } }
   | {
       kind: "ObjectOverridesChanged";
       data: { plate_id: PlateId; object_id: ObjectId };

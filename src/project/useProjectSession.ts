@@ -33,6 +33,7 @@ export const SESSION_EVENT_NAMES = [
   "scene:plate_removed",
   "scene:active_plate_changed",
   "scene:plate_metadata_changed",
+  "scene:material_slot_changed",
   "scene:object_added",
   "scene:object_removed",
   "scene:object_updated",

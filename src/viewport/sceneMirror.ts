@@ -326,6 +326,7 @@ export class SceneMirror {
         this.setActivePlate(event.data.plate_id);
         break;
       case "PlateMetadataChanged":
+      case "MaterialSlotChanged":
       case "ObjectOverridesChanged":
         // The mirror keeps a copy of these for fast UI render, but
         // since the canonical source is the project snapshot, the

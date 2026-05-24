@@ -53,6 +53,8 @@ function plate(opts: {
     name: `Plate ${opts.id}`,
     metadata: { composition_order: opts.id },
     printer: null,
+    printer_instance_id: null,
+    material_to_slot: {},
     project_overrides: {},
     objects: opts.objects ?? [],
     selection: opts.selection ?? [],

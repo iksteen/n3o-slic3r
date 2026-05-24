@@ -70,6 +70,8 @@ function plateSnap(id: number, objects: SceneObject[] = []): PlateSnapshot {
     name: `Plate ${id}`,
     metadata: { composition_order: id },
     printer: null,
+    printer_instance_id: null,
+    material_to_slot: {},
     project_overrides: {},
     objects,
     selection: [],

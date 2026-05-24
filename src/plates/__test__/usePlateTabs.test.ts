@@ -53,6 +53,8 @@ function plateSnap(opts: {
             printer_identity: opts.printer_identity,
             build_plate_identity: "textured_pei",
           },
+    printer_instance_id: null,
+    material_to_slot: {},
     project_overrides: {},
     objects: Array.from({ length: opts.objects ?? 0 }, (_, i) => obj(i + 1)),
     selection: [],
