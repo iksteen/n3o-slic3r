@@ -230,6 +230,14 @@ fn bind_default_printer_in_place(plate: &mut Plate) {
     let bed = crate::core::scene::bed::bed_for_printer(&profile);
     plate.scene.exclusion_zones = bed.exclusion_zones.clone();
     plate.scene.bed = Some(bed);
+    // PR-S-5c: also route this plate through the composer path. The
+    // legacy `printer` binding stays populated for any consumer not
+    // yet migrated; `printer_instance_id` is what `resolve_cascade`
+    // checks first and uses the per-bucket composer for.
+    plate.printer_instance_id = crate::core::printer::instance_id_for_vendor_profile(
+        &binding.printer_identity,
+    )
+    .map(str::to_owned);
     plate.printer = Some(binding);
 }
 

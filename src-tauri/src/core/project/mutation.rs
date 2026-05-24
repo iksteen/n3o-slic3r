@@ -204,6 +204,11 @@ impl Project {
                 plate.scene.exclusion_zones = bed.exclusion_zones.clone();
                 plate.scene.bed = Some(bed);
             }
+            // PR-S-5c: route this plate through the composer path
+            // (see model.rs::bind_default_printer_in_place for rationale).
+            plate.printer_instance_id =
+                crate::core::printer::instance_id_for_vendor_profile(&b.printer_identity)
+                    .map(str::to_owned);
         }
         self.plates.push(plate);
 
@@ -565,7 +570,12 @@ impl Project {
         let new_build_plate = binding.build_plate_identity.clone();
 
         // Update the binding first so events emitted by the bed
-        // recompute see the new state.
+        // recompute see the new state. PR-S-5c: keep the new
+        // `printer_instance_id` in sync so the composer path picks
+        // the right PrinterInstance on the next slice.
+        self.plates[idx].printer_instance_id =
+            crate::core::printer::instance_id_for_vendor_profile(&binding.printer_identity)
+                .map(str::to_owned);
         self.plates[idx].printer = Some(binding);
 
         // Reuse the bed-viz path for the bed/exclusion-zone update.

@@ -36,6 +36,28 @@ pub fn lookup_instance(id: &str) -> Option<PrinterInstance> {
     bundled_instances().into_iter().find(|i| i.id == id)
 }
 
+/// Bridge from a legacy `PrinterBinding.printer_identity` (vendor
+/// profile slug like `"bambu-a1-mini"`) to the matching bundled
+/// PrinterInstance id (`"bambi"`). Returns `None` for vendor profiles
+/// that don't yet have a corresponding bundled instance fixture.
+///
+/// Lives here (not on `PrinterInstance` itself) because the bundled
+/// set is the authoritative mapping — PrinterInstances reference
+/// vendor profiles by name, and this function reverses that lookup.
+/// Used by plate bootstrap + printer rebinding to keep the legacy
+/// `Plate.printer` field in sync with the new `Plate.printer_instance_id`
+/// through the PR-S-5c transition.
+pub fn instance_id_for_vendor_profile(vendor_profile_ref: &str) -> Option<&'static str> {
+    bundled_instances()
+        .iter()
+        .find(|i| i.vendor_profile_ref == vendor_profile_ref)
+        .map(|i| match i.id.as_str() {
+            "bambi" => BAMBI_ID,
+            "snappy" => SNAPPY_ID,
+            _ => unreachable!(),
+        })
+}
+
 fn bambi() -> PrinterInstance {
     PrinterInstance {
         id: BAMBI_ID.to_owned(),

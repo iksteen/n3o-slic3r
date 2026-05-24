@@ -19,7 +19,7 @@ pub use instance::{
     SlotBinding,
 };
 pub use instance_library::{
-    bundled_instances, lookup_instance, BAMBI_ID, SNAPPY_ID,
+    bundled_instances, instance_id_for_vendor_profile, lookup_instance, BAMBI_ID, SNAPPY_ID,
 };
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
 pub use registry::{bundled_catalog, default_binding, lookup, CatalogEntry};
