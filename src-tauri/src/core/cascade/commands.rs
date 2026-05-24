@@ -193,6 +193,45 @@ pub fn cascade_load_default(
     cascades: State<Mutex<CascadeRegistry>>,
     project: State<std::sync::Arc<Mutex<crate::core::project::Project>>>,
 ) -> Result<CascadeHandle, String> {
+    ensure_default_cascade_loaded(
+        &cascades,
+        &project,
+        /* force_reinstall = */ false,
+    )
+}
+
+/// Make sure the project's `cascade_handle` points at a valid
+/// entry in the registry. Behavior:
+///
+/// - If the project's handle resolves in the registry and
+///   `force_reinstall` is false: no-op, return the existing handle.
+/// - Otherwise: parse + validate the bundled cascade fresh,
+///   insert it into the registry, stamp the new handle onto the
+///   project, return the handle.
+///
+/// This is the recovery path that prevents "unknown cascade
+/// handle N" errors when a stale handle survives across sessions
+/// (autosave restore reloads a project file whose `cascade_handle`
+/// references a registry that no longer exists). Slice paths call
+/// this transparently before they need a cascade.
+pub fn ensure_default_cascade_loaded(
+    cascades: &Mutex<CascadeRegistry>,
+    project: &Mutex<crate::core::project::Project>,
+    force_reinstall: bool,
+) -> Result<CascadeHandle, String> {
+    if !force_reinstall {
+        // Fast path: project already points at a live handle.
+        let p = project.lock().map_err(|e| format!("project lock: {e}"))?;
+        if let Some(existing) = p.cascade_handle {
+            let registry = cascades
+                .lock()
+                .map_err(|e| format!("registry lock: {e}"))?;
+            if registry.get(existing).is_some() {
+                return Ok(existing);
+            }
+        }
+    }
+    // Slow path: parse + validate + insert + stamp.
     let label = Path::new("profiles/cascades/bambu-a1-mini-default.toml");
     let rules = parse_cascade_str(A1_MINI_CASCADE_TOML, label)
         .map_err(|e| format!("bundled cascade parse: {e}"))?;

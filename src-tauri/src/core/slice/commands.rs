@@ -119,6 +119,17 @@ pub fn slice_active_plate(
     cascades: State<Mutex<CascadeRegistry>>,
     project: State<Arc<Mutex<Project>>>,
 ) -> Result<JobId, String> {
+    // Self-heal a stale `Project.cascade_handle` before building
+    // the input — autosave restore (PR-5-10) carries a handle
+    // serialized from a prior session; the registry restarts each
+    // process, so that handle wouldn't exist. ensure_default_
+    // cascade_loaded is a no-op when the handle is live + bound.
+    crate::core::cascade::commands::ensure_default_cascade_loaded(
+        &*cascades,
+        &**project,
+        /* force_reinstall = */ false,
+    )?;
+
     // Build the SliceJobInput + temp-file path under the project
     // mutex. We drop the lock before spawning the orchestrator so
     // the worker thread doesn't contend with frontend updates.
