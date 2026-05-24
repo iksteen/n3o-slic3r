@@ -1,6 +1,42 @@
 # PR-7a-7 — Frontend printer state panel + send button
 
-Status: ❌ open.
+Status: ✅ landed.
+
+## Scope cuts made at implementation time
+
+Two deferrals discussed with the user during build-out, both
+captured here so a follow-up ticket can pick them up cleanly:
+
+- **Credentials persistence**: NOT shipped. Per user direction the
+  "whole printer set up is currently misdesigned" — credentials
+  live only in an in-memory cache (`credentialsCache.ts`) keyed
+  by `printer_identity`, lost on app reload. No fields added to
+  `core/project/model.rs`; nothing reaches the project `.3mf`.
+  Memory item: `feedback_no_credentials_in_project_file.md`.
+- **Auto-registration on plate binding**: NOT shipped. Spec said
+  the MaterialBindingPanel should call `driver_register` /
+  `driver_connect` on bind. Instead, the panel renders a "Connect
+  printer" button that opens `PrinterCredentialsDialog`. Auto-
+  registration is a clean follow-up once the printer-setup design
+  is revisited.
+
+## Other choices worth documenting
+
+- The hook test (`useDriverStatus`) is not included — this repo's
+  vitest config has no jsdom + no RTL + no `renderHook`, and the
+  hook has no extractable pure logic. Matches the existing
+  convention (e.g. `usePlateTabs.test.ts` only tests the pure
+  projection). Component lifecycle is covered by visual + future
+  Playwright smoke.
+- Status events are pumped to the frontend via a per-driver tokio
+  task spawned at `driver_register` time. The bridge owns the
+  driver's `watch::Receiver<PrinterStatus>` and emits a Tauri
+  `driver:status_update` event on every watch change. No polling
+  in either direction.
+- The .gcode → .gcode.3mf wrap happens server-side in
+  `driver_send_plate` via PR-3-10's writer (`fixture_input` →
+  `write_sliced_3mf`) as a stub; PR-7c-7 will replace it with the
+  full sync-on-send pipeline (AMS bindings, project metadata).
 
 **Scope.** First UI surface for the driver. Sits in the topbar
 area near the Slice + Preview buttons. Shows the active plate's

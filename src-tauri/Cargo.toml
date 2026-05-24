@@ -53,9 +53,12 @@ x509-parser = "0.18"
 # in the explicit `connect_secure_implicit` constructor we need
 # (port 990 implicit-TLS rather than the AUTH-TLS handshake).
 suppaftp = { version = "8.0.3", default-features = false, features = ["native-tls", "deprecated"] }
+# Scratch-file allocator used by the driver's send pipeline to wrap
+# the raw .gcode into a Bambu .gcode.3mf bundle before upload. Was
+# dev-only until PR-7a-7 made it part of the runtime path.
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
 
 [[example]]
 name = "spike1"

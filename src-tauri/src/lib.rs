@@ -119,6 +119,8 @@ pub fn run() {
             core::driver::commands::driver_status,
             core::driver::commands::driver_send,
             core::driver::commands::driver_dry_send,
+            core::driver::commands::driver_send_plate,
+            core::driver::commands::driver_dry_send_plate,
             core::driver::commands::driver_command,
         ])
         .run(tauri::generate_context!())

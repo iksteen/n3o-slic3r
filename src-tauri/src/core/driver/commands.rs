@@ -14,34 +14,119 @@
 
 use std::sync::Arc;
 
-use tauri::State;
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, State};
 
+use super::bambu::connection::{BambuConfig, BambuDriver};
 use super::dryrun::neuter_gcode_3mf;
 use super::registry::{DriverRegistry, DriverSummary};
 use super::status::PrinterStatus;
 use super::traits::{
-    DriverConfig, DriverError, DriverId, SendHandle, SendPayload, PrinterCommand,
+    Driver, DriverConfig, DriverError, DriverId, SendHandle, SendPayload, PrinterCommand,
 };
+use crate::core::threemf::{fixture_input, write_sliced_3mf};
+
+/// Wire-shape for the `driver:status_update` Tauri event the
+/// frontend's `useDriverStatus` hook subscribes to. Carries the
+/// driver id so the hook can filter to just the panel's driver.
+#[derive(Debug, Clone, Serialize)]
+struct StatusUpdateEvent {
+    driver_id: DriverId,
+    status: PrinterStatus,
+}
+
+/// Spawn a tokio task that pumps a driver's internal
+/// `watch::Receiver<PrinterStatus>` to a Tauri event. Lives for
+/// the driver's lifetime — the watch channel closes when the
+/// driver is dropped (driver_unregister + registry remove),
+/// which ends the task naturally. Per-driver rate-limiting
+/// happens in the driver's own worker (PR-7a-3); this bridge
+/// just forwards every change without filtering.
+fn spawn_status_bridge(
+    app: AppHandle,
+    driver_id: DriverId,
+    mut rx: tokio::sync::watch::Receiver<PrinterStatus>,
+) {
+    tauri::async_runtime::spawn(async move {
+        // Emit the initial state once on spawn — `changed()` only
+        // fires on subsequent writes, so without this the panel
+        // would show a stale empty state until the first reconnect
+        // or status report.
+        let initial = rx.borrow().clone();
+        let _ = app.emit(
+            "driver:status_update",
+            StatusUpdateEvent {
+                driver_id,
+                status: initial,
+            },
+        );
+        while rx.changed().await.is_ok() {
+            let status = rx.borrow().clone();
+            if app
+                .emit(
+                    "driver:status_update",
+                    StatusUpdateEvent {
+                        driver_id,
+                        status,
+                    },
+                )
+                .is_err()
+            {
+                // App shutting down; stop the bridge.
+                break;
+            }
+        }
+    });
+}
 
 /// Register a fresh driver instance with the runtime. Returns
 /// the allocated [`DriverId`] on success. Doesn't auto-connect
 /// — caller follows up with [`driver_connect`].
 ///
-/// Returns `DriverError::Other` until PR-7a-2 (Bambu) / PR-7b-2
-/// (U1) land their concrete `Driver` impls.
+/// As a side-effect, spawns a status-bridge task that pumps the
+/// driver's `subscribe_status` channel onto the
+/// `driver:status_update` Tauri event so the frontend's
+/// `useDriverStatus` hook can react without polling.
+///
+/// U1 path stubbed — PR-7b-2 lands it.
 #[tauri::command]
-#[tracing::instrument(skip(registry))]
+#[tracing::instrument(skip(registry, app))]
 pub async fn driver_register(
     config: DriverConfig,
+    app: AppHandle,
     registry: State<'_, Arc<DriverRegistry>>,
 ) -> Result<DriverId, String> {
-    let _ = (config, registry);
-    Err(DriverError::Other(
-        "no driver implementations yet — \
-         register is wired but PR-7a-2 / PR-7b-2 are open"
-            .into(),
-    )
-    .to_string())
+    match config {
+        DriverConfig::Bambu {
+            host,
+            access_code,
+            serial,
+        } => {
+            let bambu_config = BambuConfig {
+                host,
+                access_code,
+                serial,
+            };
+            // `register_with` allocates the id atomically with
+            // insertion so the driver's internal `id()` matches
+            // the registry's id (drivers use it for log spans +
+            // outgoing protocol frames).
+            let mut bridge_rx = None;
+            let id = registry.register_with(|id| {
+                let driver = BambuDriver::new(id, bambu_config);
+                bridge_rx = Some(driver.subscribe_status());
+                Box::new(driver) as Box<dyn Driver>
+            });
+            if let Some(rx) = bridge_rx {
+                spawn_status_bridge(app, id, rx);
+            }
+            Ok(id)
+        }
+        DriverConfig::U1 { .. } => Err(DriverError::Other(
+            "U1 driver not implemented yet — PR-7b-2 follow-up".into(),
+        )
+        .to_string()),
+    }
 }
 
 /// Tear down + remove a driver. Calls `disconnect()` first.
@@ -129,6 +214,91 @@ pub async fn driver_send(
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
     let mut d = handle.lock().await;
     d.send(payload).await.map_err(|e| e.to_string())
+}
+
+/// Wrap a raw G-code file on disk into a Bambu-flavored
+/// `.gcode.3mf` bundle byte buffer. Used by the plate-send
+/// commands as a stub for PR-7c-7's full sync-on-send pipeline:
+/// the bundle that PR-7c-7 emits will include per-AMS bindings
+/// + project metadata; this one just gets the bytes packaged
+/// well enough for the printer to read.
+///
+/// Runs on `spawn_blocking` because the writer is sync-IO + does
+/// per-entry MD5 work; calling it from an async command without
+/// the offload would stall the runtime.
+async fn wrap_gcode_as_3mf(gcode_path: String, plate_id: u32) -> Result<Vec<u8>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let gcode_bytes = std::fs::read(&gcode_path)
+            .map_err(|e| format!("read gcode at {gcode_path}: {e}"))?;
+        let input = fixture_input(plate_id, gcode_bytes);
+        let tmp = tempfile::Builder::new()
+            .suffix(".gcode.3mf")
+            .tempfile()
+            .map_err(|e| format!("create temp bundle: {e}"))?;
+        write_sliced_3mf(&input, tmp.path())
+            .map_err(|e| format!("write .gcode.3mf bundle: {e}"))?;
+        std::fs::read(tmp.path())
+            .map_err(|e| format!("read back .gcode.3mf bundle: {e}"))
+    })
+    .await
+    .map_err(|e| format!("wrap task join: {e}"))?
+}
+
+/// Send the plate's last-sliced raw G-code to the driver as a
+/// `.gcode.3mf` bundle. The frontend obtains `gcode_path` from
+/// the most recent `slice:plate_finished` event (the `output_path`
+/// field on `PlateSummary`).
+///
+/// Bundling is a stub: it uses [`fixture_input`] to produce a
+/// minimal valid `.gcode.3mf` shell around the raw G-code. The
+/// real sync-on-send pipeline (PR-7c-7) will embed per-AMS slot
+/// bindings + project metadata; this command keeps the printer's
+/// firmware happy in the meantime.
+#[tauri::command]
+#[tracing::instrument(skip(registry))]
+pub async fn driver_send_plate(
+    id: DriverId,
+    plate_id: u32,
+    gcode_path: String,
+    registry: State<'_, Arc<DriverRegistry>>,
+) -> Result<SendHandle, String> {
+    let bytes = wrap_gcode_as_3mf(gcode_path, plate_id).await?;
+    let handle = registry
+        .get(id)
+        .ok_or_else(|| format!("unknown driver id {}", id.0))?;
+    let mut d = handle.lock().await;
+    d.send(SendPayload::Gcode3mf { bytes, plate_id })
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Dry-run variant of [`driver_send_plate`]. Same wrap pipeline,
+/// then routes through [`neuter_gcode_3mf`] to strip extrusion +
+/// comment out heater commands before send. Result: printer
+/// exercises every XY motion cold, with zero filament flow.
+#[tauri::command]
+#[tracing::instrument(skip(registry))]
+pub async fn driver_dry_send_plate(
+    id: DriverId,
+    plate_id: u32,
+    gcode_path: String,
+    registry: State<'_, Arc<DriverRegistry>>,
+) -> Result<SendHandle, String> {
+    let wrapped = wrap_gcode_as_3mf(gcode_path, plate_id).await?;
+    let neutered = tauri::async_runtime::spawn_blocking(move || neuter_gcode_3mf(&wrapped))
+        .await
+        .map_err(|e| format!("neuter task join: {e}"))?
+        .map_err(|e| format!("neuter bundle: {e}"))?;
+    let handle = registry
+        .get(id)
+        .ok_or_else(|| format!("unknown driver id {}", id.0))?;
+    let mut d = handle.lock().await;
+    d.send(SendPayload::Gcode3mf {
+        bytes: neutered,
+        plate_id,
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Motion-only dry-run variant of [`driver_send`]. Neuters the

@@ -58,13 +58,22 @@ impl DriverRegistry {
     /// (constructor ran) but NOT for having called `connect()`
     /// yet — that's a separate Tauri command.
     pub fn register(&self, driver: Box<dyn Driver>) -> DriverId {
+        self.register_with(|_id| driver)
+    }
+
+    /// Allocate the next id, hand it to `builder`, and insert the
+    /// driver under that id atomically. Use this when the driver's
+    /// own `id()` should match the registry's id (most cases —
+    /// drivers carry the id into log spans + outgoing protocol
+    /// frames).
+    pub fn register_with<F>(&self, builder: F) -> DriverId
+    where
+        F: FnOnce(DriverId) -> Box<dyn Driver>,
+    {
         let mut inner = self.inner.lock().expect("registry mutex");
         let id = DriverId(inner.next_id);
         inner.next_id += 1;
-        // Drivers self-assign their id when constructed; the
-        // registry's id is authoritative + we re-derive on
-        // lookup, but most drivers will want both to match.
-        // For now we just trust the construction site.
+        let driver = builder(id);
         let kind = driver.kind();
         inner.drivers.insert(
             id,

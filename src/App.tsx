@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ViewportCanvas } from "./viewport/ViewportCanvas";
 import { SlicePanel } from "./slice/SlicePanel";
+import { useLastSliceOutput } from "./slice/useLastSliceOutput";
 import { PlateTabs } from "./plates/PlateTabs";
 import { useProjectSession } from "./project/useProjectSession";
 import {
@@ -15,6 +16,7 @@ import {
 } from "./settings/SettingsPanelHost";
 import { PreviewWorkspace } from "./preview/PreviewWorkspace";
 import { useSlicePreviewBridge } from "./preview/useSlicePreviewBridge";
+import { PrinterPanel } from "./driver/PrinterPanel";
 import "./App.css";
 
 type SlicerInfo = { version: string; option_count: number };
@@ -40,6 +42,10 @@ function App() {
     : null;
 
   const bridge = useSlicePreviewBridge(activePlateId ?? null);
+  const lastSliceOutput = useLastSliceOutput();
+  const lastSliceOutputPath =
+    activePlateId != null ? lastSliceOutput.pathForPlate(activePlateId) : null;
+  const printerIdentity = activePlate?.printer?.printer_identity ?? null;
 
   // Auto-switch to preview on slice completion, unless the user
   // has manually toggled out of preview during this session.
@@ -113,6 +119,11 @@ function App() {
         <SlicePanel
           snapshot={session.snapshot}
           activePlate={activePlate}
+        />
+        <PrinterPanel
+          printerIdentity={printerIdentity}
+          plateId={activePlateId}
+          lastSliceOutputPath={lastSliceOutputPath}
         />
         {info && (
           <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: "10.5px" }}>
