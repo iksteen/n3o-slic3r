@@ -63,11 +63,6 @@ use slic3r_ffi::{clear_slice_progress, set_slice_progress, slice, Model};
 pub enum SliceStartError {
     NoPlatesRequested,
     OutputDirInvalid(String),
-    /// Material-binding validation failed on at least one of the
-    /// requested plates (FR-MP-8 / PR-5-6 follow-up). The frontend
-    /// surfaces `issues` on the binding panel; the user fixes
-    /// them and retries.
-    InvalidMaterialBindings(super::pre_slice_gate::PlateValidationFailure),
     /// `printer_instance_id` doesn't match any bundled PrinterInstance,
     /// or the instance's fragment slugs don't resolve to bundled
     /// cascade fragments.
@@ -79,12 +74,6 @@ impl std::fmt::Display for SliceStartError {
         match self {
             Self::NoPlatesRequested => write!(f, "no plates in job"),
             Self::OutputDirInvalid(p) => write!(f, "output_dir not usable: {p}"),
-            Self::InvalidMaterialBindings(fail) => write!(
-                f,
-                "plate {} has {} unresolved material-binding issue(s); fix in the binding panel before slicing",
-                fail.plate_id,
-                fail.issues.len(),
-            ),
             Self::PrinterInstanceCompose(s) => {
                 write!(f, "printer-instance cascade compose failed: {s}")
             }

@@ -27,7 +27,6 @@ import type {
   BedMesh,
   CameraState,
   GizmoState,
-  MaterialBinding,
   MeshHeader,
   MeshId,
   ObjectId,
@@ -92,7 +91,6 @@ export class PlateMirror {
   name: string;
   metadata: PlateMetadata;
   printer: PrinterBinding | null;
-  materialBindings: MaterialBinding[];
   projectOverrides: Record<string, string>;
   objectOverrides: Record<string, Record<string, string>>;
 
@@ -110,7 +108,6 @@ export class PlateMirror {
     this.name = snap?.name ?? `Plate ${plateId}`;
     this.metadata = snap?.metadata ?? { composition_order: plateId };
     this.printer = snap?.printer ?? null;
-    this.materialBindings = snap?.material_bindings ?? [];
     this.projectOverrides = snap?.project_overrides ?? {};
     this.objectOverrides = snap?.object_overrides ?? {};
     if (snap) {
@@ -147,7 +144,6 @@ export class SceneMirror {
   // Project-level state (PR-5-1, PR-5-8).
   projectUuid: string | null = null;
   sourcePath: string | null = null;
-  cascadeHandle: number | null = null;
   userOverrides: Record<string, string> = {};
   fileMetadata: Record<string, string> = {};
 
@@ -229,7 +225,6 @@ export class SceneMirror {
 
     this.projectUuid = snapshot.project_uuid;
     this.sourcePath = snapshot.source_path;
-    this.cascadeHandle = snapshot.cascade_handle;
     this.userOverrides = { ...snapshot.user_overrides };
     this.fileMetadata = { ...snapshot.file_metadata };
 
@@ -331,7 +326,6 @@ export class SceneMirror {
         this.setActivePlate(event.data.plate_id);
         break;
       case "PlateMetadataChanged":
-      case "MaterialBindingChanged":
       case "ObjectOverridesChanged":
         // The mirror keeps a copy of these for fast UI render, but
         // since the canonical source is the project snapshot, the
@@ -605,7 +599,6 @@ export class SceneMirror {
     this.meshes.clear();
     this.projectUuid = null;
     this.sourcePath = null;
-    this.cascadeHandle = null;
     this.userOverrides = {};
     this.fileMetadata = {};
   }

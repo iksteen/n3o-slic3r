@@ -1,28 +1,22 @@
 // `useProjectSession` — App.tsx's top-level project state hook
 // (PR-5-9).
 //
-// Owns three pieces of "current session" state the SettingsPanel
+// Owns two pieces of "current session" state the SettingsPanel
 // host needs:
-//   - `cascadeHandle` — from `cascade_load_default()` on mount.
 //   - `printer` — the canonical `PrinterProfileJson` returned by
 //     `scene_load_default_printer()` on mount. The bundled A1 mini
 //     fixture for now; Phase 9 swaps for a registry.
 //   - `snapshot` — the current `SceneSnapshot` (refetched on every
 //     scene/project event).
 //
+// `cascadeHandle` is no longer plumbed here — the slice path
+// composes the cascade fresh per job from the bound printer
+// instance (PR-S-5c), and the SettingsPanel's resolved-value display
+// is wired separately downstream.
+//
 // The hook performs the bootstrap dance once on mount, then
 // listens for the full firehose of project / scene events so the
-// snapshot stays fresh. Project-level fields (cascade handle,
-// printer profile) don't change after bootstrap; only the snapshot
-// does. We co-locate them all so `App.tsx` reads `useProjectSession()`
-// once and gets everything the SettingsPanel host wants.
-//
-// PR-5-9 also relies on the PlateTabs strip — that already maintains
-// its own light-weight view-model via `usePlateTabs`. The two are
-// not consolidated because they have different refresh sensitivities
-// (the tab strip cares about `object_added`; the cascade context
-// doesn't), and keeping their fetches independent costs us at most
-// one redundant snapshot per event.
+// snapshot stays fresh.
 
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -39,7 +33,6 @@ export const SESSION_EVENT_NAMES = [
   "scene:plate_removed",
   "scene:active_plate_changed",
   "scene:plate_metadata_changed",
-  "scene:material_binding_changed",
   "scene:object_added",
   "scene:object_removed",
   "scene:object_updated",
@@ -51,22 +44,25 @@ export const SESSION_EVENT_NAMES = [
 ] as const;
 
 export interface ProjectSession {
+  /** Always `null` post-PR-S-5c. Kept on the interface so the
+   * SettingsPanel host can pass it through without conditionalizing
+   * its prop shape; downstream consumers treat `null` as "no
+   * resolved values to render" the same way they did with the
+   * legacy missing-handle case. */
   cascadeHandle: number | null;
   printer: PrinterProfileJson | null;
   snapshot: SceneSnapshot | null;
-  /** True until both bootstrap calls return + the first snapshot
+  /** True until the bootstrap call returns + the first snapshot
    * lands. App-level chrome can render a tiny loading state if it
    * wants. */
   loading: boolean;
   /** Bootstrap error message — non-null indicates the session
-   * couldn't initialize (typically: cascade parse failure on a
-   * broken bundled file). Surfaces in App.tsx as a banner; the
+   * couldn't initialize. Surfaces in App.tsx as a banner; the
    * panel won't render in this state. */
   error: string | null;
 }
 
 export function useProjectSession(): ProjectSession {
-  const [cascadeHandle, setCascadeHandle] = useState<number | null>(null);
   const [printer, setPrinter] = useState<PrinterProfileJson | null>(null);
   const [snapshot, setSnapshot] = useState<SceneSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -100,16 +96,11 @@ export function useProjectSession(): ProjectSession {
         unlisteners.push(un);
       }
 
-      // Bootstrap: cascade + default printer + first snapshot in
-      // parallel. Failures are isolated so a missing default printer
-      // doesn't take out cascade load.
       try {
-        const [handle, prof] = await Promise.all([
-          invoke<number>("cascade_load_default"),
-          invoke<PrinterProfileJson>("scene_load_default_printer"),
-        ]);
+        const prof = await invoke<PrinterProfileJson>(
+          "scene_load_default_printer",
+        );
         if (!mounted) return;
-        setCascadeHandle(handle);
         setPrinter(prof);
         await refetchSnapshot();
       } catch (err) {
@@ -127,5 +118,5 @@ export function useProjectSession(): ProjectSession {
     };
   }, [refetchSnapshot]);
 
-  return { cascadeHandle, printer, snapshot, loading, error };
+  return { cascadeHandle: null, printer, snapshot, loading, error };
 }

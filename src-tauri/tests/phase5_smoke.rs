@@ -17,9 +17,10 @@
 //!   2. Author the override surface the exit criterion calls
 //!      out (project-tier on plate 2, object-tier on a plate-1
 //!      object, user-tier project-wide).
-//!   3. Bind one material per plate via the auto-bind helper.
-//!   4. Save → drop → load → assert every authored field
-//!      survived byte-equivalent.
+//!   3. Save → drop → load → assert every authored field
+//!      survived byte-equivalent. Filament/slot bindings live on
+//!      the PrinterInstance post-PR-S-5c, not the plate — outside
+//!      this round-trip surface.
 //!
 //! What this test DOES NOT cover (manual-half only):
 //!   - Slicing each of the 3 plates end-to-end. Each plate
@@ -39,7 +40,7 @@ use n3o_slic3r_lib::core::printer::profile::BoundingBox;
 use n3o_slic3r_lib::core::printer::{lookup, PrinterProfile};
 use n3o_slic3r_lib::core::project::{
     format::{read_project, write_project},
-    MaterialBinding, PlateId, PrinterBinding, Project,
+    PlateId, PrinterBinding, Project,
 };
 use n3o_slic3r_lib::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
 
@@ -132,14 +133,6 @@ fn build_exit_fixture() -> Project {
     p.set_active_plate(id3).expect("activate plate 3");
     let mesh_c = p.register_mesh(triangle_mesh());
     p.register_object(NewSceneObject::at_origin(mesh_c, "plate3-20mmbox-stub"));
-
-    // ── Material bindings (one per plate, slot 1 → Generic PLA) ──
-    p.set_material_binding(PlateId(1), 1, 1, "Generic PLA".into())
-        .expect("plate 1 material binding");
-    p.set_material_binding(id2, 1, 1, "Generic PLA".into())
-        .expect("plate 2 material binding");
-    p.set_material_binding(id3, 1, 1, "Generic PLA".into())
-        .expect("plate 3 material binding");
 
     // ── User-tier override (project-wide) ──
     p.user_overrides
@@ -242,26 +235,7 @@ fn phase5_smoke_3plate_save_reload_roundtrip() {
         "step 4d: user-tier override must round-trip",
     );
 
-    // 4e. Material bindings — one per plate, slot 1 → Generic PLA.
-    for (i, plate) in reloaded.plates.iter().enumerate() {
-        assert_eq!(
-            plate.material_bindings.len(),
-            1,
-            "step 4e: plate {} should have exactly 1 material binding, got {}",
-            i + 1,
-            plate.material_bindings.len(),
-        );
-        let b: &MaterialBinding = &plate.material_bindings[0];
-        assert_eq!(b.model_material, 1, "step 4e: plate {} model_material", i + 1);
-        assert_eq!(b.physical_slot, 1, "step 4e: plate {} physical_slot", i + 1);
-        assert_eq!(
-            b.filament_identity, "Generic PLA",
-            "step 4e: plate {} filament_identity",
-            i + 1,
-        );
-    }
-
-    // 4f. File metadata (Title / Designer / License) — the 3MF
+    // 4e. File metadata (Title / Designer / License) — the 3MF
     //     container preserves this across save/load.
     assert_eq!(
         reloaded.file_metadata.get("Title").map(|s| s.as_str()),

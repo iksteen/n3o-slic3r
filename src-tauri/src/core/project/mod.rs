@@ -15,8 +15,8 @@
 //!   slice call from per-plate state; not stored.
 //!
 //! - **`binding`** (PR-5-1): typed `PrinterBinding` (plate ←→
-//!   printer + build plate) and `MaterialBinding` (model material
-//!   index → physical slot → filament profile).
+//!   printer + build plate). Material/slot bindings moved to
+//!   `PrinterInstance` in PR-S-5c.
 //!
 //! - **`metadata`** (PR-5-1): `PlateMetadata` carrying cycle count
 //!   + composition order. PlateCycler-relevant.
@@ -35,7 +35,7 @@ pub mod metadata;
 pub mod model;
 pub mod mutation;
 
-pub use binding::{BindingIssue, MaterialBinding, PrinterBinding};
+pub use binding::PrinterBinding;
 pub use context::SlicingContext;
 pub use metadata::PlateMetadata;
 pub use crate::core::scene::state::PlateSceneState;

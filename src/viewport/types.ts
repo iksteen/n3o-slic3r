@@ -107,14 +107,6 @@ export interface PrinterBinding {
   build_plate_identity: string;
 }
 
-/** Map a 1-based model material index → physical slot + filament
- * profile identity loaded on that slot. */
-export interface MaterialBinding {
-  model_material: number;
-  physical_slot: number;
-  filament_identity: string;
-}
-
 // ---- Snapshot wire shape (PR-5-2 phase C) --------------------------
 
 /** Per-plate slice of the snapshot. Plate identity + metadata +
@@ -126,7 +118,6 @@ export interface PlateSnapshot {
   name: string;
   metadata: PlateMetadata;
   printer: PrinterBinding | null;
-  material_bindings: MaterialBinding[];
   project_overrides: Record<string, string>;
 
   // Per-plate scene contents
@@ -149,7 +140,6 @@ export interface PlateSnapshot {
 export interface SceneSnapshot {
   project_uuid: string;
   source_path: string | null;
-  cascade_handle: number | null;
   user_overrides: Record<string, string>;
   file_metadata: Record<string, string>;
   /** Scene-wide mesh registry. Headers only; the renderer follows
@@ -217,7 +207,6 @@ export type SceneEvent =
   | { kind: "ActivePlateChanged"; data: { plate_id: PlateId } }
   // ---- Project-state changes (PR-5-5, PR-5-6, PR-5-7) ----
   | { kind: "PlateMetadataChanged"; data: { plate_id: PlateId } }
-  | { kind: "MaterialBindingChanged"; data: { plate_id: PlateId } }
   | {
       kind: "ObjectOverridesChanged";
       data: { plate_id: PlateId; object_id: ObjectId };

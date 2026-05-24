@@ -86,8 +86,6 @@ pub fn run() {
             core::scene::commands::printer_catalog,
             core::printer::printer_instance_list,
             core::project::commands::project_set_plate_composition_order,
-            core::project::commands::project_set_material_binding,
-            core::project::commands::project_clear_material_binding,
             core::project::commands::project_save,
             core::project::commands::project_save_as,
             core::project::commands::project_load,

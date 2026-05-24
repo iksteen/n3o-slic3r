@@ -53,7 +53,6 @@ function plate(opts: {
     name: `Plate ${opts.id}`,
     metadata: { composition_order: opts.id },
     printer: null,
-    material_bindings: [],
     project_overrides: {},
     objects: opts.objects ?? [],
     selection: opts.selection ?? [],
@@ -70,7 +69,6 @@ function snap(plates: PlateSnapshot[], activeId: number): SceneSnapshot {
   return {
     project_uuid: "test",
     source_path: null,
-    cascade_handle: 0,
     user_overrides: {},
     file_metadata: {},
     meshes: [],
@@ -81,7 +79,7 @@ function snap(plates: PlateSnapshot[], activeId: number): SceneSnapshot {
 
 function session(overrides: Partial<ProjectSession> = {}): ProjectSession {
   return {
-    cascadeHandle: 0,
+    cascadeHandle: null,
     printer: null,
     snapshot: null,
     loading: false,
@@ -210,7 +208,6 @@ describe("SESSION_EVENT_NAMES", () => {
       "scene:plate_removed",
       "scene:active_plate_changed",
       "scene:plate_metadata_changed",
-      "scene:material_binding_changed",
       "scene:object_added",
       "scene:object_removed",
       "scene:object_updated",

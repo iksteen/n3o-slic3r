@@ -23,7 +23,6 @@ pub mod events;
 pub mod input;
 pub mod job;
 pub mod orchestrator;
-pub mod pre_slice_gate;
 pub mod summary;
 
 pub use commands::{slice_active_plate, slice_cancel, slice_start_job, slice_status};

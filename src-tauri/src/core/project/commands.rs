@@ -58,47 +58,6 @@ pub fn project_set_plate_composition_order(
     Ok(())
 }
 
-/// Upsert a material binding on a plate (FR-MP-8). The caller
-/// passes the resolved 1-based indices + the filament profile
-/// identity loaded in the slot.
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn project_set_material_binding(
-    plate_id: PlateId,
-    model_material: u8,
-    physical_slot: u8,
-    filament_identity: String,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
-    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    let events = p
-        .set_material_binding(plate_id, model_material, physical_slot, filament_identity)
-        .map_err(|e| e.to_string())?;
-    drop(p);
-    emit_all(&window, &events);
-    Ok(())
-}
-
-/// Drop a plate's binding for `model_material`. The model material
-/// falls back to "use slot 1" at slice time per FR-MP-8.
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn project_clear_material_binding(
-    plate_id: PlateId,
-    model_material: u8,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
-    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    let events = p
-        .clear_material_binding(plate_id, model_material)
-        .map_err(|e| e.to_string())?;
-    drop(p);
-    emit_all(&window, &events);
-    Ok(())
-}
-
 // ---- Save / load (PR-5-8) ------------------------------------------
 
 /// Save the in-memory project to `path` as an n3o-slic3r `.3mf`.

@@ -318,7 +318,7 @@ fn _force_transform_import_used(t: Transform) -> Transform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::project::binding::{MaterialBinding, PrinterBinding};
+    use crate::core::project::binding::PrinterBinding;
     use crate::core::printer::profile::BoundingBox;
     use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
 
@@ -377,11 +377,6 @@ mod tests {
             "layer_height".into(),
             "0.12".into(),
         );
-        p.plates[0].material_bindings.push(MaterialBinding {
-            model_material: 1,
-            physical_slot: 2,
-            filament_identity: "Generic PLA".into(),
-        });
         // Add a second plate so the list-shape survives.
         p.add_plate(None);
 
@@ -406,8 +401,6 @@ mod tests {
                 .map(|s| s.as_str()),
             Some("0.12"),
         );
-        assert_eq!(parsed.plates[0].material_bindings.len(), 1);
-        assert_eq!(parsed.plates[0].material_bindings[0].physical_slot, 2);
         std::fs::remove_file(&path).ok();
     }
 
@@ -516,11 +509,11 @@ mod tests {
 
     #[test]
     fn write_then_overwrite_clobbers_existing_file() {
-        let mut p = Project::default();
+        let p = Project::default();
         let path = tempfile_3mf();
         write_project(&p, &path).expect("write 1");
         write_project(&p, &path).expect("write 2");
-        let parsed = read_project(&path).expect("read");
+        let _ = read_project(&path).expect("read");
         std::fs::remove_file(&path).ok();
     }
 

@@ -64,7 +64,6 @@ function plateSnap(id = 1): PlateSnapshot {
     name: `Plate ${id}`,
     metadata: { composition_order: id },
     printer: null,
-    material_bindings: [],
     project_overrides: {},
     objects: [],
     selection: [],
@@ -81,7 +80,6 @@ function emptySnapshot(): SceneSnapshot {
   return {
     project_uuid: "test",
     source_path: null,
-    cascade_handle: null,
     user_overrides: {},
     file_metadata: {},
     meshes: [],

@@ -143,12 +143,6 @@ pub enum SceneEvent {
     PlateMetadataChanged {
         plate_id: PlateId,
     },
-    /// A plate's material bindings changed (PR-5-6). The frontend
-    /// re-reads the bindings via the project snapshot to refresh
-    /// the binding panel.
-    MaterialBindingChanged {
-        plate_id: PlateId,
-    },
     /// A project was written to disk (PR-5-8). `path` is the
     /// container the writer just produced. UI updates the window
     /// title + recent-files list.
@@ -187,7 +181,6 @@ impl SceneEvent {
             Self::ObjectOverridesChanged { .. } => "scene:object_overrides_changed",
             Self::ProjectOverridesChanged { .. } => "scene:project_overrides_changed",
             Self::PlateMetadataChanged { .. } => "scene:plate_metadata_changed",
-            Self::MaterialBindingChanged { .. } => "scene:material_binding_changed",
             Self::ProjectSaved { .. } => "project:saved",
             Self::ProjectLoaded { .. } => "project:loaded",
         }

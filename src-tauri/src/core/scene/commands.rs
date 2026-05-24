@@ -80,7 +80,6 @@ pub struct PlateSnapshot {
     pub name: String,
     pub metadata: crate::core::project::PlateMetadata,
     pub printer: Option<crate::core::project::PrinterBinding>,
-    pub material_bindings: Vec<crate::core::project::MaterialBinding>,
     pub project_overrides: std::collections::HashMap<String, String>,
 
     // ---- Per-plate scene contents -----------------------------
@@ -134,7 +133,6 @@ fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
         name: plate.name.clone(),
         metadata: plate.metadata.clone(),
         printer: plate.printer.clone(),
-        material_bindings: plate.material_bindings.clone(),
         project_overrides: plate.project_overrides.clone(),
         objects: plate.scene.objects.values().cloned().collect(),
         selection,

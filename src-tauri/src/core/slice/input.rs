@@ -30,7 +30,7 @@ use std::path::PathBuf;
 use crate::core::cascade::commands::{ContextJson, OverrideFileSpec};
 use crate::core::filament;
 use crate::core::filament::FilamentProfile;
-use crate::core::printer;
+use crate::core::printer::{self, lookup_instance};
 use crate::core::project::{PlateId, Project};
 use crate::core::scene::build_plate::{self, BuildPlate, SurfaceKind};
 use crate::core::scene::state::NewMesh;
@@ -153,31 +153,47 @@ pub fn build_slice_input(
         }
     });
 
-    // ── Filaments (sorted by physical slot) ───────────────────
-    // Walk the plate's material bindings and resolve each identity
-    // via the bundled filament registry. Identities not in the
-    // registry fall back to a `base_type = "PLA"` stand-in so
-    // partially-authored projects can still slice (the cascade
-    // resolver predicates on `filament.type`; PLA is the safe
-    // default for the bundled A1 mini cascade).
-    let mut sorted_bindings = plate.material_bindings.clone();
-    sorted_bindings.sort_by_key(|b| b.physical_slot);
-    let mut filaments: Vec<FilamentProfile> = sorted_bindings
-        .iter()
-        .map(|b| {
-            filament::lookup(&b.filament_identity).unwrap_or_else(|| FilamentProfile {
-                identity: b.filament_identity.clone(),
+    // ── Printer instance routing ──────────────────────────────
+    // Cascade composition happens in the orchestrator from this
+    // instance's per-bucket vendor fragments. PR-S-5c made the
+    // composer the only path; an unbound plate (no printer_instance_id)
+    // can't slice.
+    let printer_instance_id = plate
+        .printer_instance_id
+        .clone()
+        .ok_or(SliceInputError::UnboundPrinter { plate_id })?;
+
+    // ── Filaments — one per (extruder, slot) in instance order ───
+    // PR-S-5c: slot bindings live on the PrinterInstance, not the
+    // plate. Walk extruders in declaration order, slots within each
+    // extruder in declaration order, and resolve each slot's
+    // `filament_identity` via the bundled registry. Unbound slots
+    // (and unknown identities) fall back to Generic PLA so the
+    // cascade still has something to resolve against — same
+    // behavior as the legacy "no bindings" path.
+    let instance = lookup_instance(&printer_instance_id).ok_or(
+        SliceInputError::UnboundPrinter { plate_id },
+    )?;
+    let mut filaments: Vec<FilamentProfile> = Vec::new();
+    for extruder in &instance.extruders {
+        for slot in &extruder.slots {
+            let identity = slot
+                .filament_identity
+                .as_deref()
+                .unwrap_or("Generic PLA");
+            let profile = filament::lookup(identity).unwrap_or_else(|| FilamentProfile {
+                identity: identity.to_owned(),
                 base_type: "PLA".into(),
                 vendor: None,
                 color: None,
-            })
-        })
-        .collect();
+            });
+            filaments.push(profile);
+        }
+    }
     if filaments.is_empty() {
-        // No bindings yet (e.g. a brand-new project where
-        // `register_object`'s auto-bind hasn't fired). Fall back to
-        // a single Generic PLA slot so the cascade has *something*
-        // to resolve against.
+        // Defensive: an instance with zero extruders shouldn't make
+        // it past the bundled-instance shape check, but if it does,
+        // make sure the cascade still sees one slot.
         filaments.push(
             filament::lookup("Generic PLA").expect("Generic PLA is bundled"),
         );
@@ -192,16 +208,6 @@ pub fn build_slice_input(
         "project-overrides.toml",
         &plate.project_overrides,
     );
-
-    // ── Printer instance routing ──────────────────────────────
-    // Cascade composition happens in the orchestrator from this
-    // instance's per-bucket vendor fragments. PR-S-5c made the
-    // composer the only path; an unbound plate (no printer_instance_id)
-    // can't slice.
-    let printer_instance_id = plate
-        .printer_instance_id
-        .clone()
-        .ok_or(SliceInputError::UnboundPrinter { plate_id })?;
 
     // ── Empty-scene check (after metadata so the error message
     //    can name the plate without re-walking) ────────────────
@@ -358,7 +364,7 @@ fn temp_3mf_path(plate_id: PlateId) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::project::binding::{MaterialBinding, PrinterBinding};
+    use crate::core::project::binding::PrinterBinding;
     use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
     use crate::core::scene::transform::Transform;
     use crate::core::printer::profile::BoundingBox;
@@ -385,7 +391,13 @@ mod tests {
 
     fn one_plate_project_with_cube() -> Project {
         let mut p = Project::default();
+        // Project::default() auto-binds the bootstrap plate to the
+        // bundled default printer (Bambi), which also sets
+        // printer_instance_id — overwrite both fields explicitly so
+        // the tests pin the same A1 mini routing regardless of which
+        // printer happens to be bundled-default.
         p.plates[0].printer = Some(a1_mini_binding());
+        p.plates[0].printer_instance_id = Some("bambi".into());
         let mesh_id = p.register_mesh(triangle_mesh());
         p.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
         p
@@ -405,9 +417,8 @@ mod tests {
         assert!(temp_path.exists(), "temp file written");
         assert_eq!(input.model_path, temp_path.to_string_lossy());
 
-        // The auto-bind on register_object pushed Generic PLA on slot 1
-        // for material 1; the input builder surfaces that as a single
-        // filament entry.
+        // Bambi has one extruder with one slot, unbound → Generic PLA
+        // fallback. The builder surfaces it as a single filament entry.
         assert_eq!(input.context.filaments.len(), 1);
         assert_eq!(input.context.filaments[0].identity, "Generic PLA");
 
@@ -420,6 +431,7 @@ mod tests {
 
         // Plate 1: A1 mini with one cube.
         project.plates[0].printer = Some(a1_mini_binding());
+        project.plates[0].printer_instance_id = Some("bambi".into());
         let mesh_a = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_a, "cube-a"));
 
@@ -430,6 +442,7 @@ mod tests {
             printer_identity: "snapmaker-u1".into(),
             build_plate_identity: "Magnetic".into(),
         });
+        project.plates[1].printer_instance_id = Some("snappy".into());
         project.set_active_plate(id2).expect("activate plate 2");
         let mesh_b = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_b, "cube-b"));
@@ -442,6 +455,12 @@ mod tests {
         // Plate 2's build plate isn't bundled → synthesized fallback.
         assert_eq!(input.context.plate.identity, "Magnetic");
         assert_eq!(input.context.plate.libslic3r_curr_bed_type, "Magnetic Plate");
+        // Snappy has 4 extruders × 1 slot → 4 filament entries (all
+        // unbound, falling back to Generic PLA).
+        assert_eq!(input.context.filaments.len(), 4);
+        for f in &input.context.filaments {
+            assert_eq!(f.identity, "Generic PLA");
+        }
 
         std::fs::remove_file(&temp_path).ok();
     }
@@ -450,6 +469,7 @@ mod tests {
     fn per_object_extruder_survives_temp_3mf_round_trip() {
         let mut project = Project::default();
         project.plates[0].printer = Some(a1_mini_binding());
+        project.plates[0].printer_instance_id = Some("bambi".into());
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject {
             mesh: mesh_id,
@@ -535,6 +555,7 @@ mod tests {
     fn empty_scene_errors() {
         let mut project = Project::default();
         project.plates[0].printer = Some(a1_mini_binding());
+        project.plates[0].printer_instance_id = Some("bambi".into());
         // No register_object call → no objects on the plate.
         let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
             .expect_err("empty scene");
@@ -551,6 +572,7 @@ mod tests {
             printer_identity: "totally-fake-printer".into(),
             build_plate_identity: "Textured PEI".into(),
         });
+        project.plates[0].printer_instance_id = Some("bambi".into());
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
         let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
@@ -569,6 +591,7 @@ mod tests {
             // A1 mini doesn't support U1's Magnetic plate.
             build_plate_identity: "Magnetic".into(),
         });
+        project.plates[0].printer_instance_id = Some("bambi".into());
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
         let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
@@ -580,62 +603,24 @@ mod tests {
     }
 
     #[test]
-    fn filaments_sort_by_physical_slot() {
-        let mut project = one_plate_project_with_cube();
-        // Wipe the auto-bound entry and plant bindings out of slot
-        // order to verify the builder re-sorts.
-        project.plates[0].material_bindings.clear();
-        project.plates[0].material_bindings.push(MaterialBinding {
-            model_material: 1,
-            physical_slot: 3,
-            filament_identity: "Generic PLA".into(),
-        });
-        project.plates[0].material_bindings.push(MaterialBinding {
-            model_material: 2,
-            physical_slot: 1,
-            filament_identity: "Generic PLA".into(),
-        });
-        let (input, temp_path) =
-            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
-        assert_eq!(input.context.filaments.len(), 2);
-        // The builder doesn't tag filaments with their slot; the
-        // sort order is the contract. Both happen to be Generic PLA
-        // so we can't disambiguate from identity, but we can confirm
-        // the slot count matches the binding count.
-        std::fs::remove_file(&temp_path).ok();
-    }
-
-    #[test]
-    fn no_material_bindings_falls_back_to_generic_pla() {
+    fn snappy_emits_one_filament_per_extruder_slot() {
+        // Snappy = U1 with 4 extruders × 1 slot. Unbound slots fall
+        // back to Generic PLA so the cascade still resolves.
         let mut project = Project::default();
-        project.plates[0].printer = Some(a1_mini_binding());
+        project.plates[0].printer = Some(PrinterBinding {
+            printer_identity: "snapmaker-u1".into(),
+            build_plate_identity: "Textured PEI".into(),
+        });
+        project.plates[0].printer_instance_id = Some("snappy".into());
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
-        // Manually clear the auto-bound entry.
-        project.plates[0].material_bindings.clear();
 
         let (input, temp_path) =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
-        assert_eq!(input.context.filaments.len(), 1);
-        assert_eq!(input.context.filaments[0].identity, "Generic PLA");
-        std::fs::remove_file(&temp_path).ok();
-    }
-
-    #[test]
-    fn unbundled_filament_identity_falls_back_to_pla_stand_in() {
-        let mut project = one_plate_project_with_cube();
-        project.plates[0].material_bindings.clear();
-        project.plates[0].material_bindings.push(MaterialBinding {
-            model_material: 1,
-            physical_slot: 1,
-            filament_identity: "Vendor PETG Magma".into(),
-        });
-        let (input, temp_path) =
-            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
-        assert_eq!(input.context.filaments[0].identity, "Vendor PETG Magma");
-        // Stand-in carries `base_type = "PLA"` so the bundled
-        // cascade's PLA-typed rules still resolve.
-        assert_eq!(input.context.filaments[0].base_type, "PLA");
+        assert_eq!(input.context.filaments.len(), 4);
+        for f in &input.context.filaments {
+            assert_eq!(f.identity, "Generic PLA");
+        }
         std::fs::remove_file(&temp_path).ok();
     }
 
@@ -643,6 +628,7 @@ mod tests {
     fn temp_3mf_omits_unused_meshes_from_other_plates() {
         let mut project = Project::default();
         project.plates[0].printer = Some(a1_mini_binding());
+        project.plates[0].printer_instance_id = Some("bambi".into());
 
         // Mesh on plate 1.
         let mesh_a = project.register_mesh(triangle_mesh());
@@ -651,6 +637,7 @@ mod tests {
         // Plate 2 with its own mesh.
         let (id2, _) = project.add_plate(None);
         project.plates[1].printer = Some(a1_mini_binding());
+        project.plates[1].printer_instance_id = Some("bambi".into());
         project.set_active_plate(id2).unwrap();
         let mesh_b = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_b, "b"));

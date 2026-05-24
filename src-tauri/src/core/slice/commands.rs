@@ -27,45 +27,21 @@ use super::orchestrator::{
     start_slice_job as run_start, start_slice_job_with_sink, EventSink,
     SliceStartError,
 };
-use super::pre_slice_gate::validate_pre_slice;
 use crate::core::project::{PlateId, Project};
 
 /// Kick off a slice job. Returns the allocated [`JobId`]
 /// synchronously; the worker thread drives lifecycle events
 /// through the Tauri event channel.
 ///
-/// Pre-flight (before spawning the worker):
-///   1. Material-binding validation against the requested plates'
-///      bindings (PR-5-6 follow-up): `slice_start_job` reads the
-///      `Project` state under its mutex and refuses to launch on
-///      any unresolved binding issue. The frontend surfaces
-///      `InvalidMaterialBindings` on the binding panel.
-///   2. Cascade composition + output-dir writability — delegated
-///      to the orchestrator.
+/// Pre-flight is just cascade composition + output-dir
+/// writability, both delegated to the orchestrator.
 #[tauri::command]
-#[tracing::instrument(skip(app_handle, jobs, project, input))]
+#[tracing::instrument(skip(app_handle, jobs, input))]
 pub fn slice_start_job(
     input: SliceJobInput,
     app_handle: AppHandle,
     jobs: State<JobRegistry>,
-    project: State<Arc<Mutex<Project>>>,
 ) -> Result<JobId, String> {
-    // Pre-slice gate: refuse the job up front if any requested
-    // plate's bindings are invalid. Quick, no-cost-to-the-user
-    // failure mode that beats spawning the worker and erroring
-    // mid-slice. Slot count comes from the resolved printer
-    // profile the frontend passed in via context; PrinterProfile
-    // stores it as `usize` but binding slot indices are `u8`, so
-    // we cap at u8::MAX (256-slot printers don't exist).
-    let slot_count = u8::try_from(input.context.printer.slot_count).unwrap_or(u8::MAX);
-    {
-        let p = project
-            .lock()
-            .map_err(|e| format!("project lock: {e}"))?;
-        validate_pre_slice(&p, &input.plate_ids, slot_count)
-            .map_err(SliceStartError::InvalidMaterialBindings)
-            .map_err(|e: SliceStartError| e.to_string())?;
-    }
     run_start(input, app_handle, jobs.inner()).map_err(|e: SliceStartError| e.to_string())
 }
 
@@ -135,23 +111,6 @@ pub fn slice_active_plate(
         build_slice_input(&p, target_plate, output_dir)
             .map_err(|e: SliceInputError| e.to_string())?
     };
-
-    // Pre-slice gate (PR-5-6): refuse if material bindings are
-    // unresolvable. Same shape as slice_start_job's gate.
-    let slot_count =
-        u8::try_from(input.context.printer.slot_count).unwrap_or(u8::MAX);
-    {
-        let p = project.lock().map_err(|e| format!("project lock: {e}"))?;
-        validate_pre_slice(&p, &input.plate_ids, slot_count)
-            .map_err(SliceStartError::InvalidMaterialBindings)
-            .map_err(|e: SliceStartError| {
-                // Clean up the temp file before bubbling the error;
-                // the orchestrator never spawned a worker so its
-                // sink-based cleanup hook won't fire.
-                let _ = std::fs::remove_file(&temp_path);
-                e.to_string()
-            })?;
-    }
 
     // Sink wraps the standard AppHandle emit with a one-shot temp-
     // file cleanup that fires on the first terminal event. The

@@ -1,15 +1,13 @@
 //! Bundled filament profile registry.
 //!
 //! Mirrors `core::printer::registry` for filament identities. The
-//! cascade context (PR-1-7) wants `Vec<FilamentProfile>`, the
-//! per-plate material bindings (PR-5-6) point at identities; this
+//! cascade context (PR-1-7) wants `Vec<FilamentProfile>` and
+//! `PrinterInstance.extruders[].slots[]` point at identities; this
 //! registry is the bridge.
 //!
-//! Phase 5/6 ship `Generic PLA` as the only bundled entry — every
-//! plate's auto-bind defaults to it (see
-//! `Project::ensure_default_material_binding_on_active`). Real
-//! filament catalog work lands post-MVP alongside the filament-sync
-//! UX (Phase 7c).
+//! Ships `Generic PLA` as the only bundled entry — unbound slots
+//! fall back to it at slice-input build time. Real filament catalog
+//! work lands post-MVP alongside the filament-sync UX (Phase 7c).
 //!
 //! Surface:
 //! - [`lookup(identity)`] — `Option<FilamentProfile>` for bundled

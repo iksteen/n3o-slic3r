@@ -35,7 +35,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::binding::{MaterialBinding, PrinterBinding};
+use super::binding::PrinterBinding;
 use super::metadata::PlateMetadata;
 use crate::core::scene::state::{Mesh, MeshId, PlateSceneState};
 
@@ -149,13 +149,6 @@ pub struct Plate {
     #[serde(default)]
     pub project_overrides: HashMap<String, String>,
 
-    /// Per-(plate, printer) model-material → physical-slot
-    /// bindings. Empty for fresh plates; PR-5-6's auto-bind
-    /// pre-fills based on loaded filaments at first printer
-    /// assignment.
-    #[serde(default)]
-    pub material_bindings: Vec<MaterialBinding>,
-
     /// Names the [`PrinterInstance`] this plate slices against. The
     /// composer assembles the slice-time cascade from the instance's
     /// vendor printer/filament/process fragments + per-extruder
@@ -265,74 +258,6 @@ impl Project {
 }
 
 impl Plate {
-    /// Validate this plate's material bindings against the bound
-    /// printer's slot count and the model materials its objects
-    /// reference (FR-MP-8 / PR-5-6).
-    ///
-    /// Returns an empty `Vec` when the plate is ready to slice.
-    /// A non-empty `Vec` lists every problem; the pre-slice gate
-    /// surfaces these as `slice_blocker` errors.
-    ///
-    /// `slot_count` is caller-supplied — the plate holds the
-    /// printer *identity* via [`PrinterBinding`], not the resolved
-    /// profile. The caller (Tauri command layer / slice
-    /// orchestrator) loads the profile and passes its slot count
-    /// in.
-    pub fn validate_material_bindings(&self, slot_count: u8) -> Vec<super::BindingIssue> {
-        use super::BindingIssue;
-        let mut issues = Vec::new();
-
-        // Pass 1: bindings' own field validity + slot-range check
-        // + duplicate detection.
-        let mut seen_materials = std::collections::HashSet::new();
-        for b in &self.material_bindings {
-            if let Err(msg) = b.validate() {
-                issues.push(BindingIssue::InvalidBinding {
-                    model_material: b.model_material,
-                    message: msg,
-                });
-                continue;
-            }
-            if !seen_materials.insert(b.model_material) {
-                issues.push(BindingIssue::DuplicateMaterial {
-                    model_material: b.model_material,
-                });
-                continue;
-            }
-            if b.physical_slot > slot_count {
-                issues.push(BindingIssue::SlotOutOfRange {
-                    model_material: b.model_material,
-                    physical_slot: b.physical_slot,
-                    slot_count,
-                });
-            }
-        }
-
-        // Pass 2: every model material referenced by an object on
-        // this plate must have a binding entry.
-        let bound: std::collections::HashSet<u8> = self
-            .material_bindings
-            .iter()
-            .map(|b| b.model_material)
-            .collect();
-        let mut referenced: std::collections::BTreeSet<u8> =
-            std::collections::BTreeSet::new();
-        for obj in self.scene.objects.values() {
-            if let Some(mat) = obj.extruder_id {
-                if mat >= 1 {
-                    referenced.insert(mat);
-                }
-            }
-        }
-        for mat in referenced {
-            if !bound.contains(&mat) {
-                issues.push(BindingIssue::UnboundMaterial { model_material: mat });
-            }
-        }
-
-        issues
-    }
-
     /// Construct an empty plate (no printer assigned) at the
     /// given 1-based position with the default name.
     pub fn new(id: PlateId, position: u32) -> Self {
@@ -341,7 +266,6 @@ impl Plate {
             name: Self::default_name(position),
             printer: None,
             project_overrides: HashMap::new(),
-            material_bindings: Vec::new(),
             printer_instance_id: None,
             metadata: PlateMetadata::at_position(position),
             scene: PlateSceneState::default(),
@@ -426,11 +350,6 @@ mod tests {
         p.plates[0]
             .project_overrides
             .insert("layer_height".into(), "0.12".into());
-        p.plates[0].material_bindings.push(MaterialBinding {
-            model_material: 1,
-            physical_slot: 2,
-            filament_identity: "Generic PLA".into(),
-        });
         p.user_overrides
             .insert("travel_speed".into(), "300".into());
         p.file_metadata
@@ -449,7 +368,6 @@ mod tests {
                 .map(|s| s.as_str()),
             Some("0.12"),
         );
-        assert_eq!(parsed.plates[0].material_bindings.len(), 1);
         assert_eq!(
             parsed.user_overrides.get("travel_speed").map(|s| s.as_str()),
             Some("300"),

@@ -12,9 +12,9 @@
 //! profiles via [`crate::core::printer::bundled_catalog`] — the same
 //! [`PrinterProfile`]s the existing PrinterPicker has been using.
 //!
-//! Slot bindings start unbound (`filament_identity: None`); the user
-//! picks filaments via the existing MaterialBindingPanel (PR-5-6),
-//! whose backing storage migrates to this struct in PR-S-5.
+//! Slot bindings start unbound (`filament_identity: None`); the
+//! slice-input builder falls back to "Generic PLA" for unbound slots
+//! until a filament picker lands.
 
 use super::instance::{
     BedRef, ExtruderState, NozzleMaterial, NozzleSku, PrinterInstance, SlotBinding,

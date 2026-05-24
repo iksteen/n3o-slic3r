@@ -53,7 +53,6 @@ function plateSnap(opts: {
             printer_identity: opts.printer_identity,
             build_plate_identity: "textured_pei",
           },
-    material_bindings: [],
     project_overrides: {},
     objects: Array.from({ length: opts.objects ?? 0 }, (_, i) => obj(i + 1)),
     selection: [],
@@ -70,7 +69,6 @@ function snap(plates: PlateSnapshot[], activeId: number): SceneSnapshot {
   return {
     project_uuid: "test",
     source_path: null,
-    cascade_handle: null,
     user_overrides: {},
     file_metadata: {},
     meshes: [],

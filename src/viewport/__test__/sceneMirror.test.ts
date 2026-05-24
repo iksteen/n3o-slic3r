@@ -70,7 +70,6 @@ function plateSnap(id: number, objects: SceneObject[] = []): PlateSnapshot {
     name: `Plate ${id}`,
     metadata: { composition_order: id },
     printer: null,
-    material_bindings: [],
     project_overrides: {},
     objects,
     selection: [],
@@ -87,7 +86,6 @@ function emptySnapshot(plates: PlateSnapshot[], activeId = 1): SceneSnapshot {
   return {
     project_uuid: "test-uuid",
     source_path: null,
-    cascade_handle: null,
     user_overrides: {},
     file_metadata: {},
     meshes: [],
@@ -289,7 +287,6 @@ describe("SceneMirror", () => {
     const snap: SceneSnapshot = {
       project_uuid: "abc-123",
       source_path: "/tmp/proj.3mf",
-      cascade_handle: 42,
       user_overrides: { layer_height: "0.12" },
       file_metadata: { Title: "Test" },
       meshes: [unitCubeHeader(1)],
@@ -303,7 +300,6 @@ describe("SceneMirror", () => {
 
     expect(mirror.projectUuid).toBe("abc-123");
     expect(mirror.sourcePath).toBe("/tmp/proj.3mf");
-    expect(mirror.cascadeHandle).toBe(42);
     expect(mirror.userOverrides).toEqual({ layer_height: "0.12" });
     expect(mirror.fileMetadata).toEqual({ Title: "Test" });
     expect(mirror.plateOrder()).toEqual([1, 2]);

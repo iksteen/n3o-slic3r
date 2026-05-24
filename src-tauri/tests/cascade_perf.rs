@@ -24,7 +24,6 @@ use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhe
 use n3o_slic3r_lib::core::project::SlicingContext;
 use n3o_slic3r_lib::core::scene::build_plate::{BuildPlate, SurfaceKind};
 use slic3r_ffi::init;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Once;
 use std::time::{Duration, Instant};
@@ -34,13 +33,6 @@ fn ensure_ffi() {
     FFI_INIT.call_once(|| {
         init(None, 3).expect("libslic3r init");
     });
-}
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("workspace root")
-        .to_path_buf()
 }
 
 const ITERATIONS: u32 = 100;

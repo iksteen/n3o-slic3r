@@ -41,9 +41,8 @@ const EVENT_NAMES = [
   "scene:plate_added",
   "scene:plate_removed",
   "scene:active_plate_changed",
-  // Project-state notifiers (PR-5-5, PR-5-6, PR-5-7)
+  // Project-state notifiers (PR-5-5, PR-5-7)
   "scene:plate_metadata_changed",
-  "scene:material_binding_changed",
   "scene:object_overrides_changed",
   // Project save/load (PR-5-8)
   "project:saved",

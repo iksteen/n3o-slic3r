@@ -20,10 +20,10 @@
 //   binding; building the `BuildPlateJson` from it is Phase 5+
 //   profile-registry work, deferred. For now the constant matches
 //   the bundled cascade's default branch.
-// - `filaments` defaults to one Generic PLA slot. The MaterialBinding
-//   model exists but the FilamentProfile registry doesn't yet —
-//   surfaced via PR-7c filament-sync. The single-slot fallback
-//   resolves the same way the existing slice path does.
+// - `filaments` defaults to one Generic PLA slot. Per-slot
+//   filament bindings live on the PrinterInstance (PR-S-5c) — the
+//   single-slot fallback resolves the same way the slice path does
+//   when no slot is bound.
 
 import type {
   BuildPlateJson,

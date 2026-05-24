@@ -31,7 +31,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};
 
 use n3o_slic3r_lib::core::cascade::commands::ContextJson;
-use n3o_slic3r_lib::core::cascade::{load_cascade, CascadeRegistry};
 use n3o_slic3r_lib::core::filament::FilamentProfile;
 use n3o_slic3r_lib::core::gcode::{parse_str, parse_all_metadata, SlicerOrigin};
 use n3o_slic3r_lib::core::preview::{
@@ -67,10 +66,6 @@ fn workspace_root() -> PathBuf {
 
 fn cube_stl() -> PathBuf {
     workspace_root().join("external/OrcaSlicer/tests/data/test_stl/ASCII/20mmbox-LF.stl")
-}
-
-fn a1_mini_cascade_path() -> PathBuf {
-    workspace_root().join("profiles/cascades/bambu-a1-mini-default.toml")
 }
 
 fn canonical_printer() -> PrinterProfile {
