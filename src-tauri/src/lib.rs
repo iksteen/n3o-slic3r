@@ -35,6 +35,7 @@ pub fn run() {
         .manage(autosave)
         .manage(core::slice::JobRegistry::new())
         .manage(Arc::new(core::preview::PreviewRegistry::new()))
+        .manage(Arc::new(core::driver::DriverRegistry::new()))
         .setup(|_app| {
             // Resources dir is only needed for STEP / font embossing; STL
             // and 3MF load without it. Log level 3 = warning, matching
@@ -110,6 +111,14 @@ pub fn run() {
             core::preview::commands::preview_layer_stats,
             core::preview::commands::preview_segment_detail,
             core::preview::commands::preview_drop,
+            core::driver::commands::driver_register,
+            core::driver::commands::driver_unregister,
+            core::driver::commands::driver_list,
+            core::driver::commands::driver_connect,
+            core::driver::commands::driver_disconnect,
+            core::driver::commands::driver_status,
+            core::driver::commands::driver_send,
+            core::driver::commands::driver_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

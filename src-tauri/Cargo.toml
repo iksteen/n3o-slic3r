@@ -34,6 +34,12 @@ quick-xml = "0.36"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 uuid = { version = "1", features = ["serde", "v4"] }
+# Driver layer (Phase 7). tokio is technically transitive via tauri
+# but the driver code uses watch/mpsc/oneshot directly so we depend
+# explicitly with the feature flags we need.
+async-trait = "0.1"
+thiserror = "1"
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
 
 [dev-dependencies]
 tempfile = "3"
