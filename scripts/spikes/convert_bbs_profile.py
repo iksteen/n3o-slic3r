@@ -65,6 +65,153 @@ PLATE_DIM_KEYS = {
     "smooth_plate_temp_initial_layer",
 }
 
+# BBS-to-Orca key renames mirrored verbatim from OrcaSlicer's own
+# legacy-handling table (external/OrcaSlicer/src/libslic3r/PrintConfig.cpp,
+# the `handle_legacy` chain around lines 7992-8064). When BBS writes
+# one of these keys into project_settings.config, Orca's own loader
+# would rewrite it before applying — we do the same at convert-time
+# so the resulting cascade stays inside our FFI's option vocabulary.
+#
+# Only pure key→key renames are mirrored here. The handful of BBS
+# keys with value-conditional rewrites (`wall_infill_order`,
+# `top_one_wall_type`, etc.) land in `DROPPED_KEYS` instead — safer
+# to fall back to the libslic3r default than to ship a half-mapped
+# value through.
+BBS_KEY_RENAMES = {
+    "sparse_infill_anchor": "infill_anchor",
+    "sparse_infill_anchor_max": "infill_anchor_max",
+    "chamber_temperatures": "chamber_temperature",
+    "initial_layer_flow_ratio": "bottom_solid_infill_flow_ratio",
+    "ironing_direction": "ironing_angle",
+    "counterbole_hole_bridging": "counterbore_hole_bridging",
+    "prime_tower_extra_rib_length": "wipe_tower_extra_rib_length",
+    "prime_tower_rib_width": "wipe_tower_rib_width",
+    "prime_tower_fillet_wall": "wipe_tower_fillet_wall",
+    "extruder_clearance_max_radius": "extruder_clearance_radius",
+    "machine_switch_extruder_time": "machine_tool_change_time",
+    "thumbnail_size": "thumbnails",
+}
+
+# Keys to drop on import. Three buckets:
+#
+# 1. Orca's own `handle_legacy` ignore set
+#    (PrintConfig.cpp:8070-8086) — keys that vanilla libslic3r-as-
+#    shipped considers obsolete + silently discards.
+# 2. BBS-only firmware extras with no libslic3r counterpart —
+#    drying schedules, z-height slowdown curves, scarf-seam params,
+#    circle-compensation calibration, AMS-side metadata. libslic3r
+#    would accept them only via `--config-overrides`; the printer
+#    firmware handles them.
+# 3. Value-conditional Orca renames we don't attempt to rewrite
+#    (`wall_infill_order`, `top_one_wall_type`, prime_tower_rib_wall,
+#    etc.) — dropping is safer than half-mapping.
+#
+# Sourced from external/OrcaSlicer/src/libslic3r/PrintConfig.cpp +
+# a one-time audit of the BBS profile snapshot's set-key surface.
+# When BBS adds a new firmware-only key the bootstrap-time validator
+# will surface it; add it here and regen.
+DROPPED_KEYS = {
+    # --- Orca's ignore set ---
+    "acceleration", "scale", "rotate", "duplicate", "duplicate_grid",
+    "bed_size", "print_center", "g0", "wipe_tower_per_color_wipe",
+    "support_sharp_tails", "support_remove_small_overhangs",
+    "support_with_sheath", "tree_support_collision_resolution",
+    "tree_support_with_infill", "max_volumetric_speed",
+    "max_print_speed", "support_closing_radius", "remove_freq_sweep",
+    "remove_bed_leveling", "remove_extrusion_calibration",
+    "support_transition_line_width", "support_transition_speed",
+    "bed_temperature", "bed_temperature_initial_layer",
+    "can_switch_nozzle_type", "can_add_auxiliary_fan",
+    "extra_flush_volume", "spaghetti_detector", "adaptive_layer_height",
+    "z_hop_type", "z_lift_type", "bed_temperature_difference",
+    "long_retraction_when_cut", "retraction_distance_when_cut",
+    "internal_bridge_support_thickness", "top_area_threshold",
+    "reduce_wall_solid_infill", "filament_load_time",
+    "filament_unload_time", "smooth_coefficient",
+    "overhang_totally_speed", "silent_mode", "overhang_speed_classic",
+    "filament_prime_volume",
+    # --- Value-conditional Orca renames we don't auto-rewrite ---
+    "wall_infill_order",          # → wall_sequence (value-conditional)
+    "top_one_wall_type",          # → only_one_wall_top (value-conditional)
+    "prime_tower_rib_wall",       # → wipe_tower_wall_type (value-conditional)
+    # --- SLA-only meta-key BBS sometimes emits into FFF projects ---
+    "printer_technology",
+    # --- BBS firmware-only extras (no libslic3r counterpart) ---
+    # Bambu z-height velocity ramp
+    "slowdown_end_acc", "slowdown_end_height", "slowdown_end_speed",
+    "slowdown_start_acc", "slowdown_start_height", "slowdown_start_speed",
+    "enable_height_slowdown", "layer_time_smoothing",
+    "layer_time_smoothing_threshold",
+    # Bambu circle/hole compensation calibration
+    "circle_compensation_manual_offset", "circle_compensation_speed",
+    "counter_coef_1", "counter_coef_2", "counter_coef_3",
+    "counter_limit_max", "counter_limit_min",
+    "hole_coef_1", "hole_coef_2", "hole_coef_3",
+    "hole_limit_max", "hole_limit_min", "diameter_limit",
+    "enable_circle_compensation",
+    # AMS-side drying / pre-heating metadata
+    "filament_dev_ams_drying_ams_limitations",
+    "filament_dev_ams_drying_heat_distortion_temperature",
+    "filament_dev_ams_drying_temperature",
+    "filament_dev_ams_drying_time",
+    "filament_dev_chamber_drying_bed_temperature",
+    "filament_dev_chamber_drying_time",
+    "filament_dev_drying_cooling_temperature",
+    "filament_dev_drying_softening_temperature",
+    "enable_pre_heating", "pre_start_fan_time",
+    "filament_pre_cooling_temperature",
+    "filament_pre_cooling_temperature_nc",
+    "filament_preheat_temperature_delta",
+    "hotend_cooling_rate", "hotend_heating_rate",
+    # Scarf-seam Bambu extension
+    "filament_scarf_gap", "filament_scarf_height",
+    "filament_scarf_length", "filament_scarf_seam_type",
+    "override_filament_scarf_seam_setting", "seam_slope_gap",
+    "seam_placement_away_from_overhangs",
+    # BBS filament-side per-region overhang speeds (1/4..4/4 + totally)
+    "filament_overhang_1_4_speed", "filament_overhang_2_4_speed",
+    "filament_overhang_3_4_speed", "filament_overhang_4_4_speed",
+    "filament_overhang_totally_speed",
+    "filament_enable_overhang_speed",
+    "override_process_overhang_speed",
+    # Non-chamber/_nc filament variants
+    "filament_prime_volume_nc", "filament_ramming_travel_time",
+    "filament_ramming_travel_time_nc",
+    "filament_ramming_volumetric_speed",
+    "filament_ramming_volumetric_speed_nc",
+    "filament_retract_length_nc",
+    # BBS extruder-clearance/topology extras
+    "extruder_clearance_dist_to_rod", "extruder_height_gap",
+    "extruder_max_nozzle_count", "filament_extruder_compatibility",
+    "filament_id",
+    # Cooling/wall ordering BBS extras
+    "cooling_filter_enabled", "cooling_perimeter_transition_distance",
+    "cooling_slowdown_logic", "no_slow_down_for_cooling_on_outwalls",
+    "support_cooling_filter",
+    "monotonic_travel_into_wall", "filament_bridge_speed",
+    "vertical_shell_speed", "z_direction_outwall_speed_continuous",
+    "travel_short_distance_acceleration",
+    "avoid_crossing_wall_includes_support",
+    "detect_floating_vertical_shell",
+    # BBS toolchanger timing
+    "machine_hotend_change_time", "machine_prepare_compensation_time",
+    # Misc BBS extras
+    "fan_direction", "filament_long_retractions_when_ec",
+    "filament_metal_stickiness",
+    "filament_retraction_distances_when_ec",
+    "filament_velocity_adaptation_factor",
+    "group_algo_with_time", "impact_strength_z",
+    "infill_instead_top_bottom_surfaces", "infill_rotate_step",
+    "locked_skeleton_infill_pattern", "locked_skin_infill_pattern",
+    "prime_tower_lift_height", "prime_tower_lift_speed",
+    "prime_tower_max_speed", "print_in_clockwise",
+    "reduce_infill_retraction_mode",
+    "sparse_infill_lattice_angle_1", "sparse_infill_lattice_angle_2",
+    "support_ironing_direction", "support_ironing_inset",
+    "support_ironing_speed", "enable_support_ironing",
+    "top_color_penetration_layers", "bottom_color_penetration_layers",
+}
+
 # JSON metadata keys that aren't libslic3r options and should never
 # make it into the cascade. Includes BBS-specific keys (`include`,
 # `instantiation`) on top of the Orca variant's set.
@@ -184,10 +331,15 @@ def _toml_string(s: str) -> str:
 def write_cascade(out: Path, merged_machine: dict, merged_process: dict,
                   merged_filament: dict, context: dict, source_sha: str) -> None:
     def filter_keys(d: dict) -> dict:
-        return {
-            k: v for k, v in d.items()
-            if k not in META_KEYS and k not in PLATE_DIM_KEYS
-        }
+        out: dict = {}
+        for raw_key, v in d.items():
+            if raw_key in META_KEYS or raw_key in PLATE_DIM_KEYS:
+                continue
+            if raw_key in DROPPED_KEYS:
+                continue
+            key = BBS_KEY_RENAMES.get(raw_key, raw_key)
+            out[key] = v
+        return out
 
     filament_rule_keys = {
         "nozzle_temperature",

@@ -452,4 +452,35 @@ mod tests {
         let reg = registry.lock().unwrap();
         assert!(reg.get(9999).is_none());
     }
+
+    /// Exercises the exact path `cascade_load_default` takes on
+    /// app bootstrap: parse the embedded bundled cascade text +
+    /// run it through `validate_cascade(&_, &default_known_dimensions())`.
+    ///
+    /// If a future BBS regen pulls in a key that isn't in our
+    /// FFI's `OptionDef` registry (and isn't in the converter's
+    /// `DROPPED_KEYS` filter), this test fires with the same
+    /// error message the user sees on bootstrap. Add the offending
+    /// keys to `scripts/spikes/convert_bbs_profile.py`'s
+    /// `DROPPED_KEYS` set + re-run the converter.
+    #[test]
+    fn bundled_cascade_validates_at_bootstrap() {
+        ensure_ffi();
+        let rules = parse_cascade_str(
+            A1_MINI_CASCADE_TOML,
+            Path::new("profiles/cascades/bambu-a1-mini-default.toml"),
+        )
+        .expect("bundled cascade parses");
+        let cascade = Cascade { rules };
+        if let Err(errs) = validate_cascade(&cascade, &default_known_dimensions()) {
+            let msg = errs
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            panic!(
+                "bundled cascade failed validation — bootstrap would refuse to load:\n{msg}",
+            );
+        }
+    }
 }
