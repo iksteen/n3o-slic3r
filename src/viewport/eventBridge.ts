@@ -15,6 +15,10 @@ import type {
   SceneEvent,
   SceneSnapshot,
 } from "./types";
+import {
+  getPrinterInstance,
+  listPrinterInstances,
+} from "../printer/printerInstance";
 
 /** Names match each `SceneEvent::name()` arm on the Rust side. The
  * bridge subscribes to each and dispatches to the mirror.
@@ -114,9 +118,33 @@ export async function attachEventBridge(
         // than try to incrementally update from prior state.
         void refreshSnapshot(mirror);
       }
+      if (e.payload.kind === "MaterialSlotChanged") {
+        // The mirror caches material→slot per plate to drive the
+        // spool-color paint. The event carries only the plate_id,
+        // not the new map — fetch fresh and push.
+        void refreshPlateMaterialToSlot(mirror, e.payload.data.plate_id);
+      }
     });
     unlisteners.push(un);
   }
+
+  // Live printer-instance updates: payload is the mutated instance
+  // id; fetch its post-mutation state + push so the mirror can
+  // recolor any plate bound to it. Kept off the SceneEvent channel
+  // since the printer-instance registry is its own concern (the
+  // setter lives in `core::printer`, not `core::scene`).
+  const instanceUn = await listen<string>("printer:instance_changed", (e) => {
+    if (import.meta.env.DEV) {
+      console.debug("[n3o] printer:instance_changed", e.payload);
+    }
+    void pushPrinterInstance(mirror, e.payload);
+  });
+  unlisteners.push(instanceUn);
+
+  // Prime the cache before the first snapshot so initial render
+  // paints with the right spool colors instead of flashing the
+  // neutral default for one frame.
+  await primePrinterInstances(mirror);
 
   // Initial sync: pull the snapshot and replay.
   await refreshSnapshot(mirror);
@@ -124,6 +152,48 @@ export async function attachEventBridge(
   return async () => {
     for (const un of unlisteners) un();
   };
+}
+
+async function primePrinterInstances(mirror: SceneMirror): Promise<void> {
+  try {
+    const instances = await listPrinterInstances();
+    for (const inst of instances) {
+      mirror.applyPrinterInstance(inst);
+    }
+  } catch (err) {
+    console.warn("[n3o] failed to prime printer instances", err);
+  }
+}
+
+async function pushPrinterInstance(
+  mirror: SceneMirror,
+  id: string,
+): Promise<void> {
+  try {
+    const inst = await getPrinterInstance(id);
+    if (inst) mirror.applyPrinterInstance(inst);
+  } catch (err) {
+    console.warn("[n3o] failed to refresh printer instance", id, err);
+  }
+}
+
+async function refreshPlateMaterialToSlot(
+  mirror: SceneMirror,
+  plateId: number,
+): Promise<void> {
+  try {
+    const snapshot = await invoke<SceneSnapshot>("scene_snapshot");
+    const plate = snapshot.plates.find((p) => p.plate_id === plateId);
+    if (plate) {
+      mirror.applyPlateMaterialToSlot(plateId, plate.material_to_slot);
+    }
+  } catch (err) {
+    console.warn(
+      "[n3o] failed to refresh material→slot for plate",
+      plateId,
+      err,
+    );
+  }
 }
 
 async function refreshSnapshot(mirror: SceneMirror): Promise<void> {

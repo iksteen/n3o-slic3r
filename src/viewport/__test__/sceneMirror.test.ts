@@ -15,6 +15,7 @@ import type {
   SceneObject,
   SceneSnapshot,
 } from "../types";
+import type { PrinterInstance } from "../../printer/printerInstance";
 
 function unitCubeHeader(id = 1): MeshHeader {
   return {
@@ -444,5 +445,150 @@ describe("SceneMirror", () => {
       data: { plate_id: 1, object: sceneObjectAt(101, 1, 0) },
     });
     expect(mirror.hasObject(101)).toBe(true);
+  });
+});
+
+// ─── Spool-color paint (PR-S-7) ────────────────────────────────────
+//
+// `colorForObject` walks: object.extruder_id → plate.materialToSlot
+// → printerInstance.extruders[e].slots[s].color. Each link can be
+// missing; the resolver falls back to the neutral default so a
+// half-bound plate still renders.
+
+function bambiInstance(): PrinterInstance {
+  // Hex values match the bundled fixture (Ext=red, AMS:1=black).
+  return {
+    id: "bambi",
+    display_name: "Bambi",
+    vendor_profile_ref: "bambu-a1-mini",
+    printer_fragment_slug: "bambu-lab-a1-mini",
+    default_filament_fragment_slug: "generic-pla",
+    default_process_fragment_slug: "0.20mm-standard-bbl-a1m",
+    connection: null,
+    extruders: [
+      {
+        label: "",
+        installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
+        slots: [
+          {
+            label: "Ext",
+            feed: "direct",
+            filament_identity: "generic-pla",
+            color: "#dc2626",
+          },
+          {
+            label: "AMS:1",
+            feed: "ams",
+            filament_identity: "generic-pla",
+            color: "#111827",
+          },
+        ],
+      },
+    ],
+    bed: { identity: "Bambu Cool Plate SuperTack" },
+    config_overrides: {},
+  };
+}
+
+/** Plate bound to `bambi` with material 1 routed to (0,0)=Ext red. */
+function bambiBoundPlate(): PlateSnapshot {
+  return {
+    ...plateSnap(1),
+    printer_instance_id: "bambi",
+    material_to_slot: { 1: { extruder: 0, slot: 0 } },
+  };
+}
+
+describe("SceneMirror spool-color paint", () => {
+  it("paints an object with the bound slot's color when both are present", async () => {
+    const mirror = new SceneMirror(async () => unitCubeBuffers());
+    mirror.applyPrinterInstance(bambiInstance());
+    await mirror.applySnapshot(emptySnapshot([bambiBoundPlate()]));
+    await mirror.applyEvent({
+      kind: "MeshLoaded",
+      data: { mesh: unitCubeHeader(1) },
+    });
+    await mirror.applyEvent({
+      kind: "ObjectAdded",
+      data: { plate_id: 1, object: sceneObjectAt(101, 1, 0) },
+    });
+    expect(mirror.objectColor(101)).toBe(0xdc2626);
+  });
+
+  it("recolors live when applyPrinterInstance pushes a new spool color", async () => {
+    const mirror = new SceneMirror(async () => unitCubeBuffers());
+    mirror.applyPrinterInstance(bambiInstance());
+    await mirror.applySnapshot(emptySnapshot([bambiBoundPlate()]));
+    await mirror.applyEvent({
+      kind: "MeshLoaded",
+      data: { mesh: unitCubeHeader(1) },
+    });
+    await mirror.applyEvent({
+      kind: "ObjectAdded",
+      data: { plate_id: 1, object: sceneObjectAt(101, 1, 0) },
+    });
+    // Recolor Ext slot to gold; same instance id so the cache key
+    // matches and the bound plate repaints.
+    const inst = bambiInstance();
+    inst.extruders[0].slots[0].color = "#d4a017";
+    mirror.applyPrinterInstance(inst);
+    expect(mirror.objectColor(101)).toBe(0xd4a017);
+  });
+
+  it("recolors when applyPlateMaterialToSlot reroutes the material to a different slot", async () => {
+    const mirror = new SceneMirror(async () => unitCubeBuffers());
+    mirror.applyPrinterInstance(bambiInstance());
+    await mirror.applySnapshot(emptySnapshot([bambiBoundPlate()]));
+    await mirror.applyEvent({
+      kind: "MeshLoaded",
+      data: { mesh: unitCubeHeader(1) },
+    });
+    await mirror.applyEvent({
+      kind: "ObjectAdded",
+      data: { plate_id: 1, object: sceneObjectAt(101, 1, 0) },
+    });
+    expect(mirror.objectColor(101)).toBe(0xdc2626); // Ext red
+    mirror.applyPlateMaterialToSlot(1, { 1: { extruder: 0, slot: 1 } });
+    expect(mirror.objectColor(101)).toBe(0x111827); // AMS:1 black
+  });
+
+  it("falls back to neutral default when the chain is unbound", async () => {
+    const mirror = new SceneMirror(async () => unitCubeBuffers());
+    // No applyPrinterInstance call; no material_to_slot on the plate.
+    await mirror.applySnapshot(emptySnapshot([plateSnap(1)]));
+    await mirror.applyEvent({
+      kind: "MeshLoaded",
+      data: { mesh: unitCubeHeader(1) },
+    });
+    await mirror.applyEvent({
+      kind: "ObjectAdded",
+      data: { plate_id: 1, object: sceneObjectAt(101, 1, 0) },
+    });
+    expect(mirror.objectColor(101)).toBe(0xb1b1b1); // DEFAULT_COLOR
+  });
+
+  it("preserves spool color across selection cycle (deselect restores baseColor, not the default)", async () => {
+    const mirror = new SceneMirror(async () => unitCubeBuffers());
+    mirror.applyPrinterInstance(bambiInstance());
+    await mirror.applySnapshot(emptySnapshot([bambiBoundPlate()]));
+    await mirror.applyEvent({
+      kind: "MeshLoaded",
+      data: { mesh: unitCubeHeader(1) },
+    });
+    await mirror.applyEvent({
+      kind: "ObjectAdded",
+      data: { plate_id: 1, object: sceneObjectAt(101, 1, 0) },
+    });
+    expect(mirror.objectColor(101)).toBe(0xdc2626);
+    await mirror.applyEvent({
+      kind: "SelectionChanged",
+      data: { plate_id: 1, selected: [101] },
+    });
+    expect(mirror.objectColor(101)).toBe(0x3b82f6); // SELECTED_COLOR
+    await mirror.applyEvent({
+      kind: "SelectionChanged",
+      data: { plate_id: 1, selected: [] },
+    });
+    expect(mirror.objectColor(101)).toBe(0xdc2626); // restored, not neutral
   });
 });

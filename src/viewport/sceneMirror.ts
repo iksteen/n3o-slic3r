@@ -38,6 +38,7 @@ import type {
   SceneObject,
   SceneSnapshot,
 } from "./types";
+import type { PrinterInstance, SlotRef } from "../printer/printerInstance";
 
 /** Resolver for binary mesh buffers — at runtime this calls Tauri's
  * `scene_mesh_buffers(meshId)` command and decodes the LE-packed
@@ -57,10 +58,25 @@ interface ObjectRecord {
   mesh: THREE.Mesh;
   /** Material reused so selection tinting is reversible. */
   material: THREE.MeshStandardMaterial;
+  /** Resolved spool color (object → material → slot → slot.color),
+   * or the neutral default if anything in the chain is unbound. The
+   * selection tint overrides this while selected; deselecting
+   * restores it. */
+  baseColor: number;
   /** Last-applied serialized data — keeps us from rebuilding on
    * no-op `ObjectUpdated` events (e.g., a rotate that lands the same
    * matrix). Not used by the renderer's display, just for diagnostics. */
   data: SceneObject;
+}
+
+/** Parse a CSS hex string (`"#ff8800"` or `"ff8800"`) into a Three.js
+ * 24-bit number. Returns `null` on malformed input so the caller can
+ * fall back to the neutral default. */
+function parseHexColor(hex: string | null | undefined): number | null {
+  if (!hex) return null;
+  const s = hex.startsWith("#") ? hex.slice(1) : hex;
+  if (!/^[0-9a-fA-F]{6}$/.test(s)) return null;
+  return Number.parseInt(s, 16);
 }
 
 interface MeshRecord {
@@ -91,6 +107,14 @@ export class PlateMirror {
   name: string;
   metadata: PlateMetadata;
   printer: PrinterBinding | null;
+  /** PrinterInstance id this plate slices against (PR-S-5c). The
+   * mirror caches it so the spool-color resolver can find the
+   * bound instance in `SceneMirror.printerInstances` without going
+   * back through a snapshot fetch. */
+  printerInstanceId: string | null;
+  /** Per-plate model material → PrinterInstance slot routing
+   * (PR-S-7). Drives the spool-color paint per object. */
+  materialToSlot: Record<number, SlotRef>;
   projectOverrides: Record<string, string>;
   objectOverrides: Record<string, Record<string, string>>;
 
@@ -108,6 +132,8 @@ export class PlateMirror {
     this.name = snap?.name ?? `Plate ${plateId}`;
     this.metadata = snap?.metadata ?? { composition_order: plateId };
     this.printer = snap?.printer ?? null;
+    this.printerInstanceId = snap?.printer_instance_id ?? null;
+    this.materialToSlot = snap?.material_to_slot ?? {};
     this.projectOverrides = snap?.project_overrides ?? {};
     this.objectOverrides = snap?.object_overrides ?? {};
     if (snap) {
@@ -149,6 +175,13 @@ export class SceneMirror {
 
   private meshes = new Map<MeshId, MeshRecord>();
   private plates = new Map<PlateId, PlateMirror>();
+  /** Scene-wide cache of every PrinterInstance the renderer has been
+   * told about, keyed by instance id. Drives the spool-color paint —
+   * each plate looks up its bound instance here when resolving an
+   * object's `(extruder_id → slot → color)` chain. Populated by
+   * `applyPrinterInstance` (bridge calls it on startup with each
+   * known instance + on every `printer:instance_changed` event). */
+  private printerInstances = new Map<string, PrinterInstance>();
   /** Insertion order tracked separately so `plateOrder()` can return
    * plates in declaration order without leaning on Map iteration. */
   private plateOrderList: PlateId[] = [];
@@ -416,8 +449,9 @@ export class SceneMirror {
         obj.transform.slice(12, 15),
       );
     }
+    const baseColor = this.colorForObject(plate, obj);
     const material = new THREE.MeshStandardMaterial({
-      color: DEFAULT_COLOR,
+      color: baseColor,
       metalness: 0.0,
       roughness: 0.8,
     });
@@ -433,7 +467,7 @@ export class SceneMirror {
     // next-frame recompute reproduces the same matrix.
     applyTransform(mesh, obj);
     plate.objectGroup.add(mesh);
-    plate.objects.set(obj.id, { mesh, material, data: obj });
+    plate.objects.set(obj.id, { mesh, material, baseColor, data: obj });
     if (plate.selection.has(obj.id)) {
       this.tintForSelection(plate, obj.id, true);
     }
@@ -454,6 +488,15 @@ export class SceneMirror {
     }
     rec.mesh.visible = obj.visible;
     applyTransform(rec.mesh, obj);
+    // If the model-material assignment changed, the spool-color
+    // chain (material → slot → color) may resolve to a different
+    // hex. Recompute + repaint (preserving the selection tint).
+    if (rec.data.extruder_id !== obj.extruder_id) {
+      rec.baseColor = this.colorForObject(plate, obj);
+      if (!plate.selection.has(obj.id)) {
+        rec.material.color.setHex(rec.baseColor);
+      }
+    }
     rec.data = obj;
   }
 
@@ -489,7 +532,12 @@ export class SceneMirror {
   ): void {
     const rec = plate.objects.get(id);
     if (!rec) return;
-    rec.material.color.setHex(selected ? SELECTED_COLOR : DEFAULT_COLOR);
+    // Selection overrides the spool color with a uniform blue so
+    // the picked object stands out regardless of its slot's tint.
+    // Deselect restores `baseColor`, not a global default — that's
+    // how each object keeps its own spool color across selection
+    // cycles.
+    rec.material.color.setHex(selected ? SELECTED_COLOR : rec.baseColor);
     rec.material.emissive.setHex(selected ? 0x0a1b3a : 0x000000);
   }
 
@@ -498,6 +546,71 @@ export class SceneMirror {
     plate.bed = bed;
     if (!bed) return;
     buildBedOverlay(plate.bedGroup, bed);
+  }
+
+  // ---- Spool-color resolution (PR-S-7) --------------------------
+  //
+  // The render color for an object is `obj.extruder_id →
+  // plate.materialToSlot → slot.color`. Anything unbound along the
+  // chain falls back to `DEFAULT_COLOR` so an early-bootstrap plate
+  // (no printer yet) or an out-of-range slot still renders.
+
+  /** Resolve the spool color for one object on one plate, falling
+   * back to `DEFAULT_COLOR` if any link in the chain is missing.
+   * Pure — no side effects, no mutation. */
+  private colorForObject(plate: PlateMirror, obj: SceneObject): number {
+    const material = obj.extruder_id ?? 1;
+    const slot = plate.materialToSlot[material];
+    if (!slot) return DEFAULT_COLOR;
+    if (!plate.printerInstanceId) return DEFAULT_COLOR;
+    const inst = this.printerInstances.get(plate.printerInstanceId);
+    if (!inst) return DEFAULT_COLOR;
+    const ext = inst.extruders[slot.extruder];
+    if (!ext) return DEFAULT_COLOR;
+    const slotBinding = ext.slots[slot.slot];
+    if (!slotBinding) return DEFAULT_COLOR;
+    return parseHexColor(slotBinding.color) ?? DEFAULT_COLOR;
+  }
+
+  /** Re-resolve every object's baseColor on this plate + repaint
+   * (preserving any selection tint). Called when anything upstream
+   * of the resolver changes (instance updated, material→slot map
+   * updated). */
+  private recolorPlate(plate: PlateMirror): void {
+    for (const [id, rec] of plate.objects) {
+      const next = this.colorForObject(plate, rec.data);
+      if (next === rec.baseColor) continue;
+      rec.baseColor = next;
+      if (!plate.selection.has(id)) {
+        rec.material.color.setHex(next);
+      }
+    }
+  }
+
+  /** Public: cache a `PrinterInstance` snapshot + recolor every
+   * plate currently bound to it. Bridge calls this on startup with
+   * each bundled instance + on every `printer:instance_changed`
+   * event with the fresh post-mutation instance. */
+  applyPrinterInstance(instance: PrinterInstance): void {
+    this.printerInstances.set(instance.id, instance);
+    for (const plate of this.plates.values()) {
+      if (plate.printerInstanceId === instance.id) {
+        this.recolorPlate(plate);
+      }
+    }
+  }
+
+  /** Public: replace a plate's `materialToSlot` routing + recolor.
+   * Bridge calls this on `MaterialSlotChanged` events after pulling
+   * the fresh map from a snapshot fetch. */
+  applyPlateMaterialToSlot(
+    plateId: PlateId,
+    materialToSlot: Record<number, SlotRef>,
+  ): void {
+    const plate = this.plates.get(plateId);
+    if (!plate) return;
+    plate.materialToSlot = materialToSlot;
+    this.recolorPlate(plate);
   }
 
   // ---- Plate list mutations -------------------------------------
