@@ -222,6 +222,75 @@ fn unknown_cascade_handle_errors_synchronously() {
     );
 }
 
+/// PR-S-5b: when `printer_instance_id` is set on the job input the
+/// orchestrator composes a cascade from the matching PrinterInstance's
+/// per-bucket fragments instead of looking up `cascade_handle`. This
+/// proves the composer path slices end-to-end against the same FFI
+/// stack the legacy path uses.
+#[test]
+fn printer_instance_id_routes_through_composed_cascade() {
+    ensure_ffi_init();
+    // No cascade registered — composer path doesn't touch the registry.
+    let cascades = CascadeRegistry::new();
+    let registry = JobRegistry::new();
+    let (sink, events) = collecting_sink();
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "n3o-slice-orch-composer-test-{}",
+        std::process::id(),
+    ));
+
+    let input = SliceJobInput {
+        model_path: test_stl().display().to_string(),
+        output_dir: temp_dir.display().to_string(),
+        // Stub handle — must be unused when printer_instance_id is set.
+        cascade_handle: 0,
+        context: ContextJson {
+            printer: canonical_printer(),
+            plate: canonical_plate(),
+            filaments: vec![canonical_filament()],
+            active_slot: 0,
+            user_overrides: vec![],
+            project_overrides: vec![],
+            object_overrides: std::collections::HashMap::new(),
+        },
+        plate_ids: vec![1],
+        printer_instance_id: Some("bambi".into()),
+    };
+
+    let job_id = run_slice_job_blocking(input, &registry, &cascades, sink)
+        .expect("composer path should slice without a registered cascade");
+    assert_eq!(job_id.0, 1);
+
+    let events = events.lock().unwrap();
+    // Same expected event sequence as the legacy path.
+    let finished = events
+        .iter()
+        .find_map(|e| match e {
+            SliceEvent::PlateFinished {
+                plate_id,
+                output_path,
+                summary,
+                ..
+            } => Some((*plate_id, output_path.clone(), summary.clone())),
+            _ => None,
+        })
+        .expect("expected PlateFinished from composer path");
+    assert_eq!(finished.0, 1);
+    assert!(
+        std::path::Path::new(&finished.1).exists(),
+        "expected composed-path gcode at {}",
+        finished.1,
+    );
+    assert!(
+        finished.2.layer_count > 0,
+        "composer path should produce non-zero layers; got {}",
+        finished.2.layer_count,
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
 #[test]
 fn empty_plate_list_errors_synchronously() {
     ensure_ffi_init();
