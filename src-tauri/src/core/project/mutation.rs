@@ -602,6 +602,28 @@ impl Project {
         self.plates[idx].printer_instance_id =
             crate::core::printer::instance_id_for_vendor_profile(&binding.printer_identity)
                 .map(str::to_owned);
+        // Mirror the picker's bed pick onto the bound PrinterInstance.
+        // The slicer composer reads bed.identity off the instance, not
+        // off `plate.printer.build_plate_identity`, so without this
+        // mirror the picker change is purely cosmetic — the slice
+        // would silently use whatever bed the instance shipped with
+        // (and on next launch the plate would re-bind to the
+        // instance's bed anyway, losing the user's pick).
+        if let Some(instance_id) = self.plates[idx].printer_instance_id.clone() {
+            let bed_id = binding.build_plate_identity.clone();
+            if let Err(e) =
+                crate::core::printer::mutate_instance(&instance_id, move |inst| {
+                    inst.bed.identity = bed_id;
+                    Ok(())
+                })
+            {
+                tracing::warn!(
+                    instance_id = %instance_id,
+                    error = %e,
+                    "couldn't mirror bed pick onto printer instance",
+                );
+            }
+        }
         self.plates[idx].printer = Some(binding);
         // Slot refs are physical (extruder, slot) coordinates — they
         // don't survive a topology change. Wipe + re-auto-bind any
