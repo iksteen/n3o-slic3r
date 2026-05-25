@@ -20,11 +20,14 @@ import { PrinterPicker } from "../printer/PrinterPicker";
 import { usePrinterCatalog } from "../printer/usePrinterCatalog";
 import {
   getPrinterInstance,
+  setExtruderNozzleDiameter,
   setInstanceBed,
   type PrinterInstance,
 } from "../printer/printerInstance";
 import { SlotBindingPanel } from "../material/SlotBindingPanel";
 import { BuildPlateSelector } from "./BuildPlateSelector";
+import { NozzlePicker } from "./NozzlePicker";
+import { chunkExtruders, nozzlesInline } from "./nozzleLayout";
 import type { PlateSnapshot } from "../viewport/types";
 
 /** Locate the active plate in a session snapshot, or `null`
@@ -138,30 +141,30 @@ export function SettingsPanelHost({
     [plate?.plate_id],
   );
 
-  // The bed currently loaded on the bound PrinterInstance — drives
-  // the BuildPlateSelector's chip + selected-item highlight. Reads
-  // off the instance (not the binding) per the post-build-plate-
-  // refactor source-of-truth: the picker writes through
-  // `printerInstanceSetBed`, the slicer composer reads off
-  // `instance.bed.identity`. Same fetch + `instance_changed`
-  // refresh pattern SlotBindingPanel uses; bed + slots are
-  // independent panels, so each holds its own copy.
+  // The bound PrinterInstance — drives the BuildPlateSelector +
+  // NozzlePicker chips. Reads off the instance (not the binding)
+  // per the post-build-plate-refactor source-of-truth: pickers
+  // write through `printerInstanceSetBed` /
+  // `printerInstanceSetExtruderNozzleDiameter`, the slicer composer
+  // reads off `instance.bed.identity` /
+  // `instance.extruders[i].installed_nozzle`. Same fetch +
+  // `instance_changed` refresh pattern SlotBindingPanel uses.
   const instanceId = plate?.printer_instance_id ?? null;
-  const [instanceBed, setInstanceBedState] = useState<string | null>(null);
+  const [instance, setInstance] = useState<PrinterInstance | null>(null);
   useEffect(() => {
     if (!instanceId) {
-      setInstanceBedState(null);
+      setInstance(null);
       return;
     }
     let cancelled = false;
     void getPrinterInstance(instanceId).then((inst) => {
-      if (!cancelled) setInstanceBedState(inst?.bed.identity ?? null);
+      if (!cancelled) setInstance(inst);
     });
     let unlisten: UnlistenFn | null = null;
     void listen<string>("printer:instance_changed", (event) => {
       if (event.payload !== instanceId) return;
       void getPrinterInstance(instanceId).then((inst) => {
-        if (!cancelled) setInstanceBedState(inst?.bed.identity ?? null);
+        if (!cancelled) setInstance(inst);
       });
     }).then((u) => {
       if (cancelled) u();
@@ -172,6 +175,39 @@ export function SettingsPanelHost({
       unlisten?.();
     };
   }, [instanceId]);
+  const instanceBed = instance?.bed.identity ?? null;
+
+  const extruderCount = instance?.extruders.length ?? 0;
+  const inlineNozzles = nozzlesInline(extruderCount);
+  const nozzleRows = chunkExtruders(extruderCount);
+  const renderNozzlePicker = (extruderIdx: number, compact: boolean) => {
+    if (!instance || !instanceId || !activeProfile) return null;
+    const installed = instance.extruders[extruderIdx]?.installed_nozzle;
+    if (!installed) return null;
+    const defaultDiameter =
+      activeProfile.toolheads[extruderIdx]?.default_nozzle_diameter ?? null;
+    return (
+      <NozzlePicker
+        key={extruderIdx}
+        extruderIdx={extruderIdx}
+        totalExtruders={extruderCount}
+        compact={compact}
+        value={installed.diameter_mm}
+        diameters={activeProfile.available_nozzle_diameters}
+        printerDefault={defaultDiameter}
+        onChange={(next) => {
+          void setExtruderNozzleDiameter(instanceId, extruderIdx, next).catch(
+            (err) => {
+              console.error(
+                "[settings] setExtruderNozzleDiameter failed",
+                err,
+              );
+            },
+          );
+        }}
+      />
+    );
+  };
 
   return (
     <div className="sp-host">
@@ -195,7 +231,29 @@ export function SettingsPanelHost({
               printerDefault={activeProfile.supported_build_plates[0] ?? null}
             />
           )}
+          {inlineNozzles &&
+            Array.from({ length: extruderCount }, (_, i) =>
+              renderNozzlePicker(i, false),
+            )}
         </div>
+        {nozzleRows.length > 0 && (
+          <div
+            className="sp-config-divider"
+            role="separator"
+            aria-label="Nozzles"
+            title="Per-toolhead nozzles — click any chip below to change that extruder's installed nozzle."
+          >
+            <span className="sp-config-divider-label">Nozzles</span>
+          </div>
+        )}
+        {nozzleRows.map((row, rowIdx) => (
+          <div
+            key={rowIdx}
+            className="sp-config-row sp-config-nozzles"
+          >
+            {row.map((i) => renderNozzlePicker(i, true))}
+          </div>
+        ))}
         <SlotBindingPanel
           plateId={plate?.plate_id ?? null}
           plate={plate}

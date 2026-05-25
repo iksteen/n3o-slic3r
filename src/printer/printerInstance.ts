@@ -121,6 +121,20 @@ export async function setSlotColor(
   });
 }
 
+/** Change the diameter of the nozzle currently installed on the
+ *  named extruder. Material is preserved — the picker only writes
+ *  diameter swaps in the MVP. Emits `printer:instance_changed`. */
+export async function setExtruderNozzleDiameter(
+  id: string,
+  extruderIdx: number,
+  diameterMm: number,
+): Promise<PrinterInstance> {
+  return invoke<PrinterInstance>(
+    "printer_instance_set_extruder_nozzle_diameter",
+    { id, extruderIdx, diameterMm },
+  );
+}
+
 /** Change the bed currently loaded on this instance. Validated
  *  backend-side against the bound printer profile's
  *  `supported_build_plates`. Emits `printer:instance_changed`. */

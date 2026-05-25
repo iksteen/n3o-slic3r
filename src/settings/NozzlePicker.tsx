@@ -1,0 +1,133 @@
+// PR-S-7 — installed-nozzle picker.
+//
+// Chip + popover, one per extruder. Chip label is `Nozzle` for
+// single-extruder printers and `Nozzle T0` / `Nozzle T1` / … for
+// multi-extruder printers (so multiple chips in the same row read
+// as a numbered set). Value shown on the chip is the diameter in
+// millimetres (e.g. `0.4 mm`). The popover lists every diameter
+// the printer profile bundled nozzle fragments for.
+//
+// Material is out of scope for the MVP — the picker only writes
+// diameter swaps; the backend mutation preserves whatever material
+// was set.
+
+import { useEffect, useRef, useState } from "react";
+
+export interface NozzlePickerProps {
+  /** Multi-extruder printers show this in the chip label as `Nozzle T<idx>`. */
+  extruderIdx: number;
+  /** Total extruder count — drives whether the label is `Nozzle` (1) or
+   *  `Nozzle T<idx>` (>1) in the default form. */
+  totalExtruders: number;
+  /** Drop the `Nozzle` prefix from the chip label and popover title;
+   *  the chip reads just `T<idx>`. Used when chips sit under the
+   *  "Nozzles" section divider in the expanded layout (3+ extruders),
+   *  where the section header already carries the noun. */
+  compact?: boolean;
+  /** Currently-installed diameter on this extruder, in millimetres. */
+  value: number;
+  /** Diameters the printer profile bundled nozzle fragments for. */
+  diameters: readonly number[];
+  onChange: (next: number) => void;
+  /** Diameter the printer treats as its default (typically the
+   *  `Toolhead.default_nozzle_diameter`). Renders the `default` badge
+   *  on the matching popover entry. */
+  printerDefault?: number | null;
+  disabled?: boolean;
+}
+
+/** Format a diameter for display — keeps 0.4 as `0.4 mm`, drops
+ *  trailing zeros for cleaner integer cases (the picker doesn't ship
+ *  those today but the formatter is forward-looking). */
+function formatDiameter(d: number): string {
+  // `toString` already drops trailing zeros for floats; explicit
+  // `parseFloat(d.toFixed(2))` would round but lose precision on
+  // exotic sizes. Trust the source list to be clean (0.2 / 0.4 / …).
+  return `${d} mm`;
+}
+
+export function NozzlePicker({
+  extruderIdx,
+  totalExtruders,
+  compact = false,
+  value,
+  diameters,
+  onChange,
+  printerDefault = null,
+  disabled = false,
+}: NozzlePickerProps): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (!wrapRef.current) return;
+      if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const pick = (next: number): void => {
+    setOpen(false);
+    if (next !== value) onChange(next);
+  };
+
+  const chipLabel = compact
+    ? `T${extruderIdx}`
+    : totalExtruders > 1
+      ? `Nozzle T${extruderIdx}`
+      : "Nozzle";
+  const isDefault = printerDefault != null && value === printerDefault;
+
+  return (
+    <div className="config-chip-wrap" ref={wrapRef}>
+      <button
+        type="button"
+        className="config-chip config-chip-nozzle"
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled || diameters.length === 0}
+        title={
+          diameters.length === 0
+            ? "Printer has no bundled nozzle fragments"
+            : `${chipLabel} — click to change`
+        }
+        aria-haspopup="menu"
+        aria-expanded={open}
+        data-default={isDefault}
+      >
+        <span className="config-chip-top">
+          <span className="chip-label">{chipLabel}</span>
+          <span className="chev" aria-hidden>
+            ▾
+          </span>
+        </span>
+        <span className="chip-value">{formatDiameter(value)}</span>
+      </button>
+      {open && (
+        <div className="printer-picker-menu" role="menu">
+          <div className="ptpm-title">{chipLabel}</div>
+          {diameters.map((d) => {
+            const isActive = d === value;
+            return (
+              <button
+                key={d}
+                type="button"
+                role="menuitemradio"
+                aria-checked={isActive}
+                className={`ptpm-item${isActive ? " active" : ""}`}
+                onClick={() => pick(d)}
+              >
+                <span className="ptpm-name">{formatDiameter(d)}</span>
+                {d === printerDefault && (
+                  <span className="ptpm-detail">default</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

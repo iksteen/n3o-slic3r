@@ -25,7 +25,8 @@ pub use instance_library::{
 };
 pub use instance_registry::{
     create_instance, delete_instance, list_instances, lookup_instance, mutate_instance,
-    set_instance_bed, set_slot_color, set_slot_filament, InstanceMutError,
+    set_extruder_nozzle_diameter, set_instance_bed, set_slot_color, set_slot_filament,
+    InstanceMutError,
 };
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
 pub use registry::{bundled_catalog, default_printer_identity, lookup, CatalogEntry};
@@ -107,6 +108,27 @@ pub fn printer_instance_delete(
         tracing::warn!(error = %e, "printer:instance_changed emit failed");
     }
     Ok(())
+}
+
+/// Tauri command: change the diameter of the nozzle currently
+/// installed on the named extruder. Material is preserved (the picker
+/// only surfaces diameter swaps in the MVP). Emits
+/// `printer:instance_changed` so the cascade preview re-resolves.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn printer_instance_set_extruder_nozzle_diameter(
+    id: String,
+    extruder_idx: usize,
+    diameter_mm: f32,
+    window: tauri::Window,
+) -> Result<PrinterInstance, String> {
+    let updated = set_extruder_nozzle_diameter(&id, extruder_idx, diameter_mm)
+        .map_err(|e| e.to_string())?;
+    use tauri::Emitter;
+    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
+        tracing::warn!(error = %e, "printer:instance_changed emit failed");
+    }
+    Ok(updated)
 }
 
 /// Tauri command: change the bed currently loaded on one instance.

@@ -66,6 +66,11 @@ fn hydrate_profile(base: &PrinterProfile, fragment_slug: &str) -> PrinterProfile
             .into_iter()
             .map(str::to_owned)
             .collect();
+    profile.available_nozzle_diameters =
+        profile_library::nozzle_skus_for(fragment_slug)
+            .into_iter()
+            .filter_map(|sku| sku.parse::<f64>().ok())
+            .collect();
     if let Some(bv) = profile_library::build_volume_for_printer(fragment_slug) {
         profile.build_volume = bv;
     }
@@ -129,6 +134,8 @@ mod tests {
         let a1 = entries.iter().find(|e| e.identity == "bambu-lab-a1-mini").unwrap();
         assert!(a1.profile.supported_build_plates.contains(&"Textured PEI Plate".into()));
         assert_eq!(a1.profile.toolheads.len(), 1);
+        // A1 mini ships per-nozzle fragments for 0.2 / 0.4 / 0.6 / 0.8.
+        assert_eq!(a1.profile.available_nozzle_diameters, vec![0.2, 0.4, 0.6, 0.8]);
         // Build volume is hydrated from the machine cascade's
         // `printable_area` / `printable_height`; A1 mini is 180³.
         assert_eq!(a1.profile.build_volume.max, [180.0, 180.0, 180.0]);

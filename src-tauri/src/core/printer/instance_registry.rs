@@ -231,6 +231,30 @@ pub fn set_slot_color(
     })
 }
 
+/// Change the diameter of the nozzle currently installed on the named
+/// extruder. Material stays as-is — the picker MVP only surfaces
+/// diameter swaps. The caller-side popover only offers diameters from
+/// the printer profile's `available_nozzle_diameters`, so no validation
+/// against the bundled catalog happens here.
+pub fn set_extruder_nozzle_diameter(
+    id: &str,
+    extruder_idx: usize,
+    diameter_mm: f32,
+) -> Result<PrinterInstance, InstanceMutError> {
+    mutate_instance(id, |inst| {
+        let extruder_count = inst.extruders.len();
+        let extruder = inst.extruders.get_mut(extruder_idx).ok_or(
+            InstanceMutError::BadExtruder {
+                instance_id: id.to_owned(),
+                extruder_idx,
+                extruders: extruder_count,
+            },
+        )?;
+        extruder.installed_nozzle.diameter_mm = diameter_mm;
+        Ok(())
+    })
+}
+
 /// Construct a fresh `PrinterInstance` from a bundled printer
 /// identity + a user-chosen display name + AMS unit count. Inserts
 /// the new instance into the registry and persists it (when the
@@ -779,6 +803,35 @@ mod tests {
         assert!(matches!(
             err,
             InstanceMutError::BadSlot { slots: 1, slot_idx: 3, .. },
+        ));
+    }
+
+    #[test]
+    fn set_extruder_nozzle_diameter_updates_in_place() {
+        reset_to_bundled();
+        // Snappy is a 4-toolhead toolchanger — pick T2 and swap to
+        // a 0.6 nozzle so the assertion isn't confounded by the
+        // bundled default.
+        let updated = set_extruder_nozzle_diameter("snappy", 2, 0.6)
+            .expect("snappy has 4 extruders");
+        assert_eq!(updated.extruders[2].installed_nozzle.diameter_mm, 0.6);
+        // Material is preserved — the picker only writes diameter.
+        let material = updated.extruders[2].installed_nozzle.material;
+        let again =
+            lookup_instance("snappy").expect("snappy present after mutation");
+        assert_eq!(again.extruders[2].installed_nozzle.diameter_mm, 0.6);
+        assert_eq!(again.extruders[2].installed_nozzle.material, material);
+        reset_to_bundled();
+    }
+
+    #[test]
+    fn set_extruder_nozzle_diameter_errors_on_bad_extruder() {
+        reset_to_bundled();
+        // Bambi has 1 extruder (AMS-fed single toolhead); index 1 is OOB.
+        let err = set_extruder_nozzle_diameter("bambi", 1, 0.4).unwrap_err();
+        assert!(matches!(
+            err,
+            InstanceMutError::BadExtruder { extruders: 1, extruder_idx: 1, .. },
         ));
     }
 

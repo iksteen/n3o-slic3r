@@ -55,6 +55,16 @@ pub struct PrinterProfile {
     #[serde(default)]
     pub supported_build_plates: Vec<String>,
 
+    /// Nozzle diameters the printer ships fragments for, in
+    /// declaration order (e.g. `[0.2, 0.4, 0.6, 0.8]` for the A1
+    /// mini, `[0.4, 0.6]` for the U1). The NozzlePicker reads this
+    /// to populate its diameter menu. Hydrated by
+    /// `registry::hydrate_profile` from
+    /// `profile_library::nozzle_skus_for(slug)`; `#[serde(default)]`
+    /// so model.toml doesn't have to repeat it.
+    #[serde(default)]
+    pub available_nozzle_diameters: Vec<f64>,
+
     /// Default `curr_bed_type` enum value Orca's upstream
     /// `machine_model` JSON declares for this printer (e.g.
     /// `"Textured PEI Plate"` for both the A1 mini and the U1).
@@ -135,6 +145,7 @@ mod tests {
                 "Engineering Plate".into(),
                 "Supertack Plate".into(),
             ],
+            available_nozzle_diameters: vec![0.2, 0.4, 0.6, 0.8],
             toolheads: vec![Toolhead {
                 default_nozzle_diameter: 0.4,
                 hotend_type: "stainless_steel".into(),

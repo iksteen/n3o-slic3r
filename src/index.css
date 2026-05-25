@@ -361,6 +361,29 @@
     gap: 4px;
     align-items: center;
   }
+  /* Section divider between the printer/bed row and the per-toolhead
+   * nozzle rows. Horizontal hairline with a centered label sitting
+   * on top — the "Nozzles" header reads as a divider, not a row chip. */
+  .sp-config-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 2px 0;
+    color: var(--text-muted, var(--text));
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .sp-config-divider::before,
+  .sp-config-divider::after {
+    content: "";
+    flex: 1 1 0;
+    height: 1px;
+    background: var(--hairline);
+  }
+  .sp-config-divider-label {
+    flex: 0 0 auto;
+  }
   .config-chip-wrap {
     position: relative;
     flex: 1 1 0;

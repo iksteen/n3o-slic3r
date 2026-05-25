@@ -129,6 +129,7 @@ pub fn run() {
             core::printer::printer_instance_get,
             core::printer::printer_instance_set_slot_filament,
             core::printer::printer_instance_set_slot_color,
+            core::printer::printer_instance_set_extruder_nozzle_diameter,
             core::printer::printer_instance_set_bed,
             core::printer::printer_instance_create,
             core::printer::printer_instance_delete,

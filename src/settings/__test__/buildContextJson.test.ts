@@ -17,6 +17,7 @@ const PRINTER: PrinterProfileJson = {
   ams_type: "AMS Lite",
   default_bed: "Textured PEI",
   supported_build_plates: ["Textured PEI", "Cool"],
+  available_nozzle_diameters: [0.4],
   toolheads: [
     {
       default_nozzle_diameter: 0.4,
