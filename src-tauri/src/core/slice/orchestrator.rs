@@ -344,15 +344,32 @@ fn run_worker(
         // body and the FFI's progress thread (which today is the
         // same thread, but the Sync bound is documented as part of
         // the sink's contract).
+        //
+        // libslic3r overloads the progress callback to also carry
+        // warnings: percent = -1 with the warning text in `stage`
+        // (e.g. "It seems object X has floating regions..."). When the
+        // slice subsequently aborts, the FFI surface only returns the
+        // opaque string "Slice: Errors" — the real diagnosis is the
+        // last warning. Capture it here so the failure path can
+        // substitute it into `SliceError::Unknown.raw_message` instead
+        // of the unhelpful cryptic summary.
         let sink_for_cb = sink.clone();
         let handle_for_cb = handle.clone();
         let throttle = Arc::new(std::sync::Mutex::new(ProgressThrottle::default()));
+        let last_warning: Arc<std::sync::Mutex<Option<String>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let last_warning_for_cb = last_warning.clone();
         set_slice_progress(move |percent, stage| {
             handle_for_cb.set_status(JobStatus::Running {
                 plate_id,
                 percent,
                 stage: stage.to_owned(),
             });
+            if percent < 0 {
+                if let Ok(mut guard) = last_warning_for_cb.lock() {
+                    *guard = Some(stage.to_owned());
+                }
+            }
             if let Ok(mut guard) = throttle.lock() {
                 if !guard.should_emit(percent, stage) {
                     return;
@@ -394,7 +411,26 @@ fn run_worker(
                 });
             }
             Err(e) => {
-                let err = classify_libslic3r_error(&format!("{e}"));
+                let raw = format!("{e}");
+                let mut err = classify_libslic3r_error(&raw);
+                // The FFI surface returns an opaque "Slice: Errors"
+                // (and similar) when libslic3r aborts mid-slice with a
+                // diagnosis it only logged through the progress
+                // callback. Swap in the last warning text so the UI
+                // shows the actual reason instead of the unhelpful
+                // summary.
+                if let SliceError::Unknown { raw_message } = &mut err {
+                    if let Ok(guard) = last_warning.lock() {
+                        if let Some(warning) = guard.as_deref() {
+                            tracing::info!(
+                                raw = %raw_message,
+                                warning,
+                                "substituting libslic3r progress-warning into opaque slice error",
+                            );
+                            *raw_message = warning.to_owned();
+                        }
+                    }
+                }
                 fail(&handle, &sink, job_id, plate_id, err);
                 return;
             }
