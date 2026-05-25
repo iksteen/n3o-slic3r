@@ -48,7 +48,7 @@ function whyDisabled(
   if (snapshot == null || activePlate == null) {
     return "loading project…";
   }
-  if (activePlate.printer == null) {
+  if (activePlate.printer_identity == null) {
     return "bind a printer to this plate first";
   }
   if (activePlate.objects.length === 0) {

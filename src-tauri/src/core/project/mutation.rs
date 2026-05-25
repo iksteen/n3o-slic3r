@@ -179,54 +179,57 @@ impl Project {
 
     // ---- Plate list mutations -------------------------------------
 
-    /// Append a new plate. `printer` is optional — newly-added
-    /// plates may stay unbound until the user picks a printer via
-    /// PR-5-4's picker. Returns the new plate's id paired with the
-    /// `PlateAdded` event the renderer subscribes to. Active plate
-    /// is unchanged (the caller switches if desired).
+    /// Append a new plate. `printer_identity` is optional — newly-
+    /// added plates may stay unbound until the user picks a printer
+    /// via PR-5-4's picker. Returns the new plate's id paired with
+    /// the `PlateAdded` event the renderer subscribes to. Active
+    /// plate is unchanged (the caller switches if desired).
     pub fn add_plate(
         &mut self,
-        printer: Option<crate::core::project::binding::PrinterBinding>,
+        printer_identity: Option<String>,
     ) -> (PlateId, Vec<SceneEvent>) {
         let id = self.next_plate_id();
         let position = (self.plates.len() + 1) as u32;
 
         // Auto-bind precedence (mirrors the auto-bind-materials
         // pattern from PR-5-6):
-        //   1. Caller-supplied `printer` wins outright.
+        //   1. Caller-supplied identity wins outright.
         //   2. Otherwise inherit from the currently-active plate
         //      (the tab the user clicked "+ New plate" from — most
         //      multi-plate workflows want every plate on the same
-        //      printer).
+        //      printer). Identity is derived from the active plate's
+        //      bound `PrinterInstance.vendor_profile_ref`.
         //   3. Otherwise fall back to the bundled-catalog default
         //      (fresh project case — first launch).
-        let binding = printer
+        let identity = printer_identity
             .or_else(|| {
                 self.plates
                     .get(self.active_plate)
-                    .and_then(|p| p.printer.clone())
+                    .and_then(|p| p.printer_instance_id.as_deref())
+                    .and_then(crate::core::printer::lookup_instance)
+                    .map(|inst| inst.vendor_profile_ref)
             })
-            .or_else(crate::core::printer::default_binding);
+            .or_else(|| {
+                crate::core::printer::default_printer_identity().map(str::to_owned)
+            });
 
-        let mut plate = match &binding {
-            Some(b) => Plate::with_printer(id, b.clone(), position),
+        let instance_id = identity.as_deref().and_then(|id_str| {
+            crate::core::printer::instance_id_for_vendor_profile(id_str).map(str::to_owned)
+        });
+        let mut plate = match instance_id.clone() {
+            Some(iid) => Plate::with_instance(id, iid, position),
             None => Plate::new(id, position),
         };
         // Populate the bed visualization so the viewport renders
         // immediately on plate switch — set_plate_printer would
         // otherwise be the only path setting plate.scene.bed, but
         // it's only called by the explicit picker flow.
-        if let Some(b) = &binding {
-            if let Some(profile) = crate::core::printer::lookup(&b.printer_identity) {
+        if let Some(ident) = &identity {
+            if let Some(profile) = crate::core::printer::lookup(ident) {
                 let bed = crate::core::scene::bed::bed_for_printer(&profile);
                 plate.scene.exclusion_zones = bed.exclusion_zones.clone();
                 plate.scene.bed = Some(bed);
             }
-            // PR-S-5c: route this plate through the composer path
-            // (see model.rs::bind_default_printer_in_place for rationale).
-            plate.printer_instance_id =
-                crate::core::printer::instance_id_for_vendor_profile(&b.printer_identity)
-                    .map(str::to_owned);
         }
         self.plates.push(plate);
 
@@ -558,16 +561,16 @@ impl Project {
     /// keeping the registry lookup at the Tauri-command layer keeps
     /// this mutation pure + testable without registry plumbing.
     ///
-    /// Updates the plate's `printer` binding + `printer_instance_id`
-    /// and recomputes the bed visualization. The bed itself lives on
-    /// the `PrinterInstance` — change it via
+    /// Updates `printer_instance_id` (the sole carrier of binding
+    /// state) and recomputes the bed visualization. The bed itself
+    /// lives on the `PrinterInstance` — change it via
     /// `printer_instance_set_bed`. Emits `BedChanged` +
     /// `PlateMetadataChanged` so the tab strip's printer label
     /// updates and the cascade re-resolves against the new context.
     pub fn rebind_plate_printer(
         &mut self,
         plate_id: PlateId,
-        binding: crate::core::project::PrinterBinding,
+        printer_identity: String,
         profile: &PrinterProfile,
     ) -> Result<(crate::core::scene::events::PrinterChangeReport, Vec<SceneEvent>), SceneOpError> {
         use crate::core::scene::events::PrinterChangeReport;
@@ -577,16 +580,15 @@ impl Project {
             .ok_or(SceneOpError::UnknownPlate(plate_id))?;
 
         let previous_printer = self.plates[idx]
-            .printer
-            .as_ref()
-            .map(|p| p.printer_identity.clone());
-        let new_printer = binding.printer_identity.clone();
-        // PR-S-5c: keep `printer_instance_id` in sync so the composer
-        // path picks the right PrinterInstance on the next slice. The
-        // bed shown in `PrinterChangeReport` (and stamped onto plate
-        // metadata) is read off the newly-bound instance.
+            .printer_instance_id
+            .as_deref()
+            .and_then(crate::core::printer::lookup_instance)
+            .map(|inst| inst.vendor_profile_ref);
+        let new_printer = printer_identity.clone();
+        // The new instance and the bed it carries are the answer
+        // for both the cascade composer and the change report.
         let new_instance_id =
-            crate::core::printer::instance_id_for_vendor_profile(&binding.printer_identity)
+            crate::core::printer::instance_id_for_vendor_profile(&printer_identity)
                 .map(str::to_owned);
         let new_build_plate = new_instance_id
             .as_deref()
@@ -594,7 +596,6 @@ impl Project {
             .map(|inst| inst.bed.identity)
             .unwrap_or_default();
         self.plates[idx].printer_instance_id = new_instance_id;
-        self.plates[idx].printer = Some(binding);
         // Slot refs are physical (extruder, slot) coordinates — they
         // don't survive a topology change. Wipe + re-auto-bind any
         // referenced material against the new printer so existing
@@ -2306,49 +2307,42 @@ mod tests {
 
     #[test]
     fn add_plate_inherits_printer_from_active_plate() {
-        use crate::core::project::binding::PrinterBinding;
         let mut p = Project::default();
-        // Override the bootstrap plate's binding so we can tell the
+        // Override the bootstrap plate's instance so we can tell the
         // inheritance apart from the bundled-default fallback.
-        p.plates[0].printer = Some(PrinterBinding {
-            printer_identity: "snapmaker-u1".into(),
-        });
+        p.plates[0].printer_instance_id = Some("snappy".into());
         let (new_id, _) = p.add_plate(None);
         let new_plate = p.plate(new_id).unwrap();
         assert_eq!(
-            new_plate.printer.as_ref().map(|b| b.printer_identity.as_str()),
-            Some("snapmaker-u1"),
+            new_plate.printer_instance_id.as_deref(),
+            Some("snappy"),
             "inherits from active plate",
         );
     }
 
     #[test]
-    fn add_plate_falls_back_to_default_binding_when_active_unbound() {
+    fn add_plate_falls_back_to_default_when_active_unbound() {
         let mut p = Project::default();
         // Clear the bootstrap binding so the fallback can fire.
-        p.plates[0].printer = None;
+        p.plates[0].printer_instance_id = None;
         p.plates[0].scene.bed = None;
         let (new_id, _) = p.add_plate(None);
         let new_plate = p.plate(new_id).unwrap();
         assert!(
-            new_plate.printer.is_some(),
-            "fallback to bundled-default binding",
+            new_plate.printer_instance_id.is_some(),
+            "fallback to bundled-default printer",
         );
     }
 
     #[test]
-    fn add_plate_respects_explicit_binding() {
-        use crate::core::project::binding::PrinterBinding;
+    fn add_plate_respects_explicit_identity() {
         let mut p = Project::default();
-        let explicit = PrinterBinding {
-            printer_identity: "snapmaker-u1".into(),
-        };
-        let (new_id, _) = p.add_plate(Some(explicit.clone()));
+        let (new_id, _) = p.add_plate(Some("snapmaker-u1".into()));
         let new_plate = p.plate(new_id).unwrap();
         assert_eq!(
-            new_plate.printer.as_ref().map(|b| b.printer_identity.as_str()),
-            Some("snapmaker-u1"),
-            "explicit binding wins over inheritance",
+            new_plate.printer_instance_id.as_deref(),
+            Some("snappy"),
+            "explicit identity wins over inheritance",
         );
     }
 
@@ -2356,7 +2350,7 @@ mod tests {
     fn project_default_bootstraps_with_bundled_printer() {
         let p = Project::default();
         assert!(
-            p.plates[0].printer.is_some(),
+            p.plates[0].printer_instance_id.is_some(),
             "default project's first plate is auto-bound",
         );
         assert!(
@@ -2814,24 +2808,24 @@ mod tests {
 
     #[test]
     fn rebind_plate_printer_updates_binding_and_emits_events() {
-        use crate::core::project::PrinterBinding;
         use crate::core::scene::events::SceneEvent;
         let mut p = Project::default();
         // Clear the bootstrap auto-bind so this test pins the
         // rebinding-from-unbound case explicitly (previous_printer
         // = None). The rebind-from-bound case is covered by
         // `rebind_plate_printer_records_previous_printer`.
-        p.plates[0].printer = None;
+        p.plates[0].printer_instance_id = None;
         p.plates[0].scene.bed = None;
         let profile = a1_mini_for_test();
-        let binding = PrinterBinding {
-            printer_identity: "bambu-lab-a1-mini".into(),
-        };
         let (report, events) = p
-            .rebind_plate_printer(PlateId(1), binding.clone(), &profile)
+            .rebind_plate_printer(
+                PlateId(1),
+                "bambu-lab-a1-mini".into(),
+                &profile,
+            )
             .unwrap();
-        // Binding updated.
-        assert_eq!(p.plates[0].printer, Some(binding));
+        // printer_instance_id resolved + assigned.
+        assert_eq!(p.plates[0].printer_instance_id.as_deref(), Some("bambi"));
         // Report shape — previous was None for a fresh project.
         assert_eq!(report.plate_id, PlateId(1));
         assert_eq!(report.previous_printer, None);
@@ -2850,18 +2844,13 @@ mod tests {
 
     #[test]
     fn rebind_plate_printer_records_previous_identity() {
-        use crate::core::project::PrinterBinding;
         let mut p = Project::default();
-        p.plates[0].printer = Some(PrinterBinding {
-            printer_identity: "snapmaker-u1".into(),
-        });
+        p.plates[0].printer_instance_id = Some("snappy".into());
         let profile = a1_mini_for_test();
         let (report, _) = p
             .rebind_plate_printer(
                 PlateId(1),
-                PrinterBinding {
-                    printer_identity: "bambu-lab-a1-mini".into(),
-                },
+                "bambu-lab-a1-mini".into(),
                 &profile,
             )
             .unwrap();
@@ -2871,15 +2860,12 @@ mod tests {
 
     #[test]
     fn rebind_plate_printer_unknown_plate_errors() {
-        use crate::core::project::PrinterBinding;
         let mut p = Project::default();
         let profile = a1_mini_for_test();
         let err = p
             .rebind_plate_printer(
                 PlateId(99),
-                PrinterBinding {
-                    printer_identity: "bambu-lab-a1-mini".into(),
-                },
+                "bambu-lab-a1-mini".into(),
                 &profile,
             )
             .unwrap_err();

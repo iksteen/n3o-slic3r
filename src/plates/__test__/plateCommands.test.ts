@@ -23,19 +23,17 @@ describe("addPlate", () => {
   it("invokes scene_add_plate with printer=null when called with no args", async () => {
     invokeMock.mockResolvedValueOnce(7);
     const id = await addPlate();
-    expect(invokeMock).toHaveBeenCalledWith("scene_add_plate", { printer: null });
+    expect(invokeMock).toHaveBeenCalledWith("scene_add_plate", {
+      printerIdentity: null,
+    });
     expect(id).toBe(7);
   });
 
-  it("passes through a PrinterBinding when supplied", async () => {
+  it("passes through a printer identity when supplied", async () => {
     invokeMock.mockResolvedValueOnce(8);
-    await addPlate({
-      printer_identity: "bambu_a1_mini",
-    });
+    await addPlate("bambu_a1_mini");
     expect(invokeMock).toHaveBeenCalledWith("scene_add_plate", {
-      printer: {
-        printer_identity: "bambu_a1_mini",
-      },
+      printerIdentity: "bambu_a1_mini",
     });
   });
 });

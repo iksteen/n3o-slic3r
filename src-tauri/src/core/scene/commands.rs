@@ -79,10 +79,15 @@ pub struct PlateSnapshot {
     pub plate_id: crate::core::project::PlateId,
     pub name: String,
     pub metadata: crate::core::project::PlateMetadata,
-    pub printer: Option<crate::core::project::PrinterBinding>,
-    /// Plate's bound PrinterInstance id (the new printer-routing
-    /// path; `printer` above stays for the legacy PrinterPicker
-    /// surface). Drives the slot-binding panel.
+    /// Vendor printer identity derived from the bound
+    /// `PrinterInstance.vendor_profile_ref`. Snapshot-only field
+    /// for the frontend's chip + cascade context — the in-memory
+    /// `Plate` only carries `printer_instance_id`. `None` for
+    /// unbound plates or when the bound id no longer resolves.
+    pub printer_identity: Option<String>,
+    /// Plate's bound `PrinterInstance` id. The sole carrier of
+    /// binding state on the plate; drives the slicer composer +
+    /// the slot-binding panel.
     pub printer_instance_id: Option<String>,
     /// Plate's material → slot routing. The slot-binding panel
     /// reads this to render the per-material slot picker; auto-bind
@@ -137,11 +142,16 @@ pub fn scene_snapshot(state: State<Arc<Mutex<Project>>>) -> Result<SceneSnapshot
 fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
     let mut selection: Vec<ObjectId> = plate.scene.selection.iter().copied().collect();
     selection.sort();
+    let printer_identity = plate
+        .printer_instance_id
+        .as_deref()
+        .and_then(crate::core::printer::lookup_instance)
+        .map(|inst| inst.vendor_profile_ref);
     PlateSnapshot {
         plate_id: plate.id,
         name: plate.name.clone(),
         metadata: plate.metadata.clone(),
-        printer: plate.printer.clone(),
+        printer_identity,
         printer_instance_id: plate.printer_instance_id.clone(),
         material_to_slot: plate.material_to_slot.clone(),
         project_overrides: plate.project_overrides.clone(),
@@ -191,18 +201,20 @@ pub fn scene_load_default_printer(
     Ok(printer)
 }
 
-/// Append a new plate. Active plate is unchanged. `printer` is
-/// optional — new plates may be created unbound and assigned a
-/// printer later via [`scene_set_plate_printer`].
+/// Append a new plate. Active plate is unchanged. `printerIdentity`
+/// is optional — new plates may be created unbound and assigned a
+/// printer later via [`scene_rebind_plate_printer`]. When supplied,
+/// the backend resolves the identity to a `PrinterInstance` from
+/// the bundled library.
 #[tauri::command]
-#[tracing::instrument(skip(state, window, printer))]
+#[tracing::instrument(skip(state, window))]
 pub fn scene_add_plate(
-    printer: Option<crate::core::project::PrinterBinding>,
+    printer_identity: Option<String>,
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<PlateId, String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let (id, events) = s.add_plate(printer);
+    let (id, events) = s.add_plate(printer_identity);
     drop(s);
     emit_all(&window, &events);
     Ok(id)
@@ -347,13 +359,11 @@ pub fn scene_rebind_plate_printer(
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<crate::core::scene::events::PrinterChangeReport, String> {
-    use crate::core::project::PrinterBinding;
     let profile = crate::core::printer::lookup(&printer_identity)
         .ok_or_else(|| format!("no bundled printer with identity `{printer_identity}`"))?;
-    let binding = PrinterBinding { printer_identity };
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let (report, events) = s
-        .rebind_plate_printer(plate_id, binding, &profile)
+        .rebind_plate_printer(plate_id, printer_identity, &profile)
         .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
@@ -865,7 +875,7 @@ pub fn scene_load_3mf(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::project::{PlateId, PrinterBinding, Project};
+    use crate::core::project::{PlateId, Project};
     use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
     use crate::core::printer::profile::BoundingBox;
     use crate::core::scene::transform::Transform;
@@ -886,9 +896,7 @@ mod tests {
     #[test]
     fn plate_snapshot_carries_metadata_and_scene() {
         let mut p = Project::default();
-        p.plates[0].printer = Some(PrinterBinding {
-            printer_identity: "bambu-lab-a1-mini".into(),
-        });
+        p.plates[0].printer_instance_id = Some("bambi".into());
         p.plates[0].name = "My Plate".into();
         let mesh_id = p.register_mesh(unit_cube_mesh());
         let obj_id = p.register_object(NewSceneObject {
@@ -903,7 +911,8 @@ mod tests {
         let snap = plate_snapshot(&p.plates[0]);
         assert_eq!(snap.plate_id, PlateId(1));
         assert_eq!(snap.name, "My Plate");
-        assert!(snap.printer.is_some());
+        // printer_identity is derived from the bound instance.
+        assert_eq!(snap.printer_identity.as_deref(), Some("bambu-lab-a1-mini"));
         assert_eq!(snap.objects.len(), 1);
         assert_eq!(snap.objects[0].id, obj_id);
         assert_eq!(snap.objects[0].extruder_id, Some(2));

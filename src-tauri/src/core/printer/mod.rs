@@ -28,7 +28,7 @@ pub use instance_registry::{
     set_slot_filament, InstanceMutError,
 };
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
-pub use registry::{bundled_catalog, default_binding, lookup, CatalogEntry};
+pub use registry::{bundled_catalog, default_printer_identity, lookup, CatalogEntry};
 
 use crate::core::filament::{bundled_catalog as filament_bundled_catalog, FilamentProfile};
 use crate::core::profile_library::{list_filament_fragments, FilamentFragmentSummary};

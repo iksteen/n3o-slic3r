@@ -33,7 +33,6 @@ import type {
   PlateId,
   PlateMetadata,
   PlateSnapshot,
-  PrinterBinding,
   SceneEvent,
   SceneObject,
   SceneSnapshot,
@@ -106,7 +105,10 @@ export class PlateMirror {
   // Plate identity / metadata (PR-5-1, PR-5-5, PR-5-6).
   name: string;
   metadata: PlateMetadata;
-  printer: PrinterBinding | null;
+  /** Vendor printer identity derived from the bound instance at
+   * snapshot time. Surfaced for the picker chip + the cascade
+   * preview's printer-profile lookup. `null` for unbound plates. */
+  printerIdentity: string | null;
   /** PrinterInstance id this plate slices against (PR-S-5c). The
    * mirror caches it so the spool-color resolver can find the
    * bound instance in `SceneMirror.printerInstances` without going
@@ -131,7 +133,7 @@ export class PlateMirror {
     this.bedGroup.name = `n3o:plate-${plateId}:bed`;
     this.name = snap?.name ?? `Plate ${plateId}`;
     this.metadata = snap?.metadata ?? { composition_order: plateId };
-    this.printer = snap?.printer ?? null;
+    this.printerIdentity = snap?.printer_identity ?? null;
     this.printerInstanceId = snap?.printer_instance_id ?? null;
     this.materialToSlot = snap?.material_to_slot ?? {};
     this.projectOverrides = snap?.project_overrides ?? {};

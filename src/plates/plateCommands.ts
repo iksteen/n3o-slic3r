@@ -6,17 +6,18 @@
 // surface.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { PlateId, PrinterBinding } from "../viewport/types";
+import type { PlateId } from "../viewport/types";
 
 /** Append a new plate to the project. Returns the freshly-allocated
  * `PlateId` so the caller can immediately switch focus or rename.
- * `printer === undefined` matches Rust's `None` (unbound plate);
- * the binding may be assigned later via the settings printer-picker. */
+ * `printerIdentity === undefined` matches Rust's `None` (unbound
+ * plate); the printer may be assigned later via the settings
+ * printer-picker. */
 export function addPlate(
-  printer?: PrinterBinding | null,
+  printerIdentity?: string | null,
 ): Promise<PlateId> {
   return invoke<PlateId>("scene_add_plate", {
-    printer: printer ?? null,
+    printerIdentity: printerIdentity ?? null,
   });
 }
 

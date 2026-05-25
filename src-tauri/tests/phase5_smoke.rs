@@ -40,7 +40,7 @@ use n3o_slic3r_lib::core::printer::profile::BoundingBox;
 use n3o_slic3r_lib::core::printer::{lookup, PrinterProfile};
 use n3o_slic3r_lib::core::project::{
     format::{read_project, write_project},
-    PlateId, PrinterBinding, Project,
+    PlateId, Project,
 };
 use n3o_slic3r_lib::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
 
@@ -52,17 +52,8 @@ fn snapmaker_u1() -> PrinterProfile {
     lookup("snapmaker-u1").expect("snapmaker-u1 bundled profile present")
 }
 
-fn a1_mini_binding() -> PrinterBinding {
-    PrinterBinding {
-        printer_identity: "bambu-lab-a1-mini".into(),
-    }
-}
-
-fn u1_binding() -> PrinterBinding {
-    PrinterBinding {
-        printer_identity: "snapmaker-u1".into(),
-    }
-}
+const A1_MINI_IDENTITY: &str = "bambu-lab-a1-mini";
+const U1_IDENTITY: &str = "snapmaker-u1";
 
 /// Mesh stub the smoke test plants on each plate. The geometry
 /// is the minimal valid triangle libslic3r's 3MF writer accepts
@@ -100,7 +91,7 @@ fn build_exit_fixture() -> Project {
     let mut p = Project::default();
 
     // ── Plate 1 (default plate, pre-existing) → A1 mini ──
-    p.rebind_plate_printer(PlateId(1), a1_mini_binding(), &a1_mini())
+    p.rebind_plate_printer(PlateId(1), A1_MINI_IDENTITY.into(), &a1_mini())
         .expect("plate 1 rebind to a1 mini");
     p.set_active_plate(PlateId(1)).expect("activate plate 1");
     let mesh_a = p.register_mesh(triangle_mesh());
@@ -116,7 +107,7 @@ fn build_exit_fixture() -> Project {
 
     // ── Plate 2 → U1, with a project-tier override ──
     let (id2, _) = p.add_plate(None);
-    p.rebind_plate_printer(id2, u1_binding(), &snapmaker_u1())
+    p.rebind_plate_printer(id2, U1_IDENTITY.into(), &snapmaker_u1())
         .expect("plate 2 rebind to u1");
     p.set_active_plate(id2).expect("activate plate 2");
     let mesh_b = p.register_mesh(triangle_mesh());
@@ -126,7 +117,7 @@ fn build_exit_fixture() -> Project {
 
     // ── Plate 3 → U1 ──
     let (id3, _) = p.add_plate(None);
-    p.rebind_plate_printer(id3, u1_binding(), &snapmaker_u1())
+    p.rebind_plate_printer(id3, U1_IDENTITY.into(), &snapmaker_u1())
         .expect("plate 3 rebind to u1");
     p.set_active_plate(id3).expect("activate plate 3");
     let mesh_c = p.register_mesh(triangle_mesh());
@@ -160,22 +151,20 @@ fn phase5_smoke_3plate_save_reload_roundtrip() {
 
     // ─ Step 4: per-field equality assertions ───────────────
 
-    // 4a. Plate count + printer bindings survived.
+    // 4a. Plate count + printer bindings survived. Bindings now live
+    // entirely on `printer_instance_id`; the (printer_identity)
+    // denormalization in the .3mf format module is a portability
+    // hedge for unregistered instances — not asserted here.
     assert_eq!(reloaded.plates.len(), 3, "step 4a: plate count must be 3");
     let identities: Vec<&str> = reloaded
         .plates
         .iter()
-        .map(|pl| {
-            pl.printer
-                .as_ref()
-                .map(|b| b.printer_identity.as_str())
-                .unwrap_or("<unbound>")
-        })
+        .map(|pl| pl.printer_instance_id.as_deref().unwrap_or("<unbound>"))
         .collect();
     assert_eq!(
         identities,
-        vec!["bambu-lab-a1-mini", "snapmaker-u1", "snapmaker-u1"],
-        "step 4a: per-plate printer bindings must round-trip",
+        vec!["bambi", "snappy", "snappy"],
+        "step 4a: per-plate printer instance ids must round-trip",
     );
     // Build-plate identity is no longer carried on the binding — it
     // lives on the bound `PrinterInstance` (validated + persisted by

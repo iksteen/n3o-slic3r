@@ -120,22 +120,13 @@ pub fn build_slice_input(
         .find(|p| p.id == plate_id)
         .ok_or(SliceInputError::UnknownPlate(plate_id))?;
 
-    // ── Printer + build-plate resolution ──────────────────────
-    let binding = plate
-        .printer
-        .as_ref()
-        .ok_or(SliceInputError::UnboundPrinter { plate_id })?;
-    let printer_profile = printer::lookup(&binding.printer_identity).ok_or_else(|| {
-        SliceInputError::PrinterNotInRegistry {
-            identity: binding.printer_identity.clone(),
-        }
-    })?;
-
     // ── Printer instance routing ──────────────────────────────
     // Cascade composition happens in the orchestrator from this
     // instance's per-bucket vendor fragments. PR-S-5c made the
     // composer the only path; an unbound plate (no printer_instance_id)
-    // can't slice.
+    // can't slice. The printer profile is derived from the
+    // instance's `vendor_profile_ref` — the per-plate binding no
+    // longer carries an identity of its own.
     let printer_instance_id = plate
         .printer_instance_id
         .clone()
@@ -143,6 +134,11 @@ pub fn build_slice_input(
     let instance = lookup_instance(&printer_instance_id).ok_or(
         SliceInputError::UnboundPrinter { plate_id },
     )?;
+    let printer_profile = printer::lookup(&instance.vendor_profile_ref).ok_or_else(|| {
+        SliceInputError::PrinterNotInRegistry {
+            identity: instance.vendor_profile_ref.clone(),
+        }
+    })?;
 
     // ── Build plate ──────────────────────────────────────────
     // The PrinterInstance is the single source of truth for which
@@ -371,7 +367,6 @@ fn temp_3mf_path(plate_id: PlateId) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::project::binding::PrinterBinding;
     use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
     use crate::core::scene::transform::Transform;
     use crate::core::printer::profile::BoundingBox;
@@ -389,20 +384,11 @@ mod tests {
         }
     }
 
-    fn a1_mini_binding() -> PrinterBinding {
-        PrinterBinding {
-            printer_identity: "bambu-lab-a1-mini".into(),
-        }
-    }
-
     fn one_plate_project_with_cube() -> Project {
         let mut p = Project::default();
         // Project::default() auto-binds the bootstrap plate to the
-        // bundled default printer (Bambi), which also sets
-        // printer_instance_id — overwrite both fields explicitly so
-        // the tests pin the same A1 mini routing regardless of which
-        // printer happens to be bundled-default.
-        p.plates[0].printer = Some(a1_mini_binding());
+        // bundled default printer (Bambi) — pin it explicitly so the
+        // tests don't drift if the bundled-default identity changes.
         p.plates[0].printer_instance_id = Some("bambi".into());
         let mesh_id = p.register_mesh(triangle_mesh());
         p.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
@@ -441,7 +427,6 @@ mod tests {
         let mut project = Project::default();
 
         // Plate 1: A1 mini with one cube.
-        project.plates[0].printer = Some(a1_mini_binding());
         project.plates[0].printer_instance_id = Some("bambi".into());
         let mesh_a = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_a, "cube-a"));
@@ -449,9 +434,6 @@ mod tests {
         // Plate 2: Snapmaker U1 with one cube. Activate so
         // register_object lands on it.
         let (id2, _) = project.add_plate(None);
-        project.plates[1].printer = Some(PrinterBinding {
-            printer_identity: "snapmaker-u1".into(),
-        });
         project.plates[1].printer_instance_id = Some("snappy".into());
         project.set_active_plate(id2).expect("activate plate 2");
         let mesh_b = project.register_mesh(triangle_mesh());
@@ -477,7 +459,6 @@ mod tests {
     #[test]
     fn per_object_extruder_survives_temp_3mf_round_trip() {
         let mut project = Project::default();
-        project.plates[0].printer = Some(a1_mini_binding());
         project.plates[0].printer_instance_id = Some("bambi".into());
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject {
@@ -548,7 +529,7 @@ mod tests {
         let mut project = Project::default();
         // Project::default now auto-binds; clear it so this test
         // pins the genuinely-unbound error path.
-        project.plates[0].printer = None;
+        project.plates[0].printer_instance_id = None;
         project.plates[0].scene.bed = None;
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
@@ -563,7 +544,6 @@ mod tests {
     #[test]
     fn empty_scene_errors() {
         let mut project = Project::default();
-        project.plates[0].printer = Some(a1_mini_binding());
         project.plates[0].printer_instance_id = Some("bambi".into());
         // No register_object call → no objects on the plate.
         let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
@@ -575,23 +555,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_printer_identity_errors() {
-        let mut project = Project::default();
-        project.plates[0].printer = Some(PrinterBinding {
-            printer_identity: "totally-fake-printer".into(),
-        });
-        project.plates[0].printer_instance_id = Some("bambi".into());
-        let mesh_id = project.register_mesh(triangle_mesh());
-        project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
-        let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
-            .expect_err("printer not in registry");
-        assert!(matches!(
-            err,
-            SliceInputError::PrinterNotInRegistry { .. }
-        ));
-    }
-
-    #[test]
     fn unsupported_build_plate_errors() {
         // The supported-plate validation in `printer_instance_set_bed`
         // makes this path unreachable through normal mutations; the
@@ -599,9 +562,6 @@ mod tests {
         // hand-edited on-disk instance case. Simulate that by going
         // around the validator via `mutate_instance` directly.
         let mut project = Project::default();
-        project.plates[0].printer = Some(PrinterBinding {
-            printer_identity: "bambu-lab-a1-mini".into(),
-        });
         project.plates[0].printer_instance_id = Some("bambi".into());
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
@@ -633,9 +593,6 @@ mod tests {
         // Snappy = U1 with 4 extruders × 1 slot. Each slot is seeded
         // with the bundled `generic-pla` fragment.
         let mut project = Project::default();
-        project.plates[0].printer = Some(PrinterBinding {
-            printer_identity: "snapmaker-u1".into(),
-        });
         project.plates[0].printer_instance_id = Some("snappy".into());
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
@@ -652,7 +609,6 @@ mod tests {
     #[test]
     fn temp_3mf_omits_unused_meshes_from_other_plates() {
         let mut project = Project::default();
-        project.plates[0].printer = Some(a1_mini_binding());
         project.plates[0].printer_instance_id = Some("bambi".into());
 
         // Mesh on plate 1.
@@ -661,7 +617,6 @@ mod tests {
 
         // Plate 2 with its own mesh.
         let (id2, _) = project.add_plate(None);
-        project.plates[1].printer = Some(a1_mini_binding());
         project.plates[1].printer_instance_id = Some("bambi".into());
         project.set_active_plate(id2).unwrap();
         let mesh_b = project.register_mesh(triangle_mesh());

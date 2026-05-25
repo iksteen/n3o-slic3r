@@ -52,7 +52,7 @@ function plate(opts: {
     plate_id: opts.id,
     name: `Plate ${opts.id}`,
     metadata: { composition_order: opts.id },
-    printer: null,
+    printer_identity: null,
     printer_instance_id: null,
     material_to_slot: {},
     project_overrides: {},

@@ -17,7 +17,6 @@ use serde::{Deserialize, Serialize};
 
 use super::profile::PrinterProfile;
 use crate::core::profile_library;
-use crate::core::project::binding::PrinterBinding;
 
 /// Picker-facing entry for one printer in the catalog. Carries the
 /// identity slug + the full `PrinterProfile`. The picker chip + menu
@@ -69,23 +68,20 @@ pub fn lookup(identity: &str) -> Option<PrinterProfile> {
     })
 }
 
-/// Best-guess default printer binding for fresh projects + newly-
-/// added plates whose caller didn't pick a printer. Mirrors the
-/// auto-bind-materials pattern: the user gets a sensible starting
-/// state and changes it explicitly via the picker if it doesn't
-/// match their actual printer.
-///
-/// Picks the first bundled printer; the build plate comes from
-/// whatever the bound `PrinterInstance.bed.identity` says — the
-/// instance is authoritative for "which bed is currently loaded."
+/// Identity of the bundled-default printer. Used to auto-bind a
+/// fresh plate to the bundled instance for that printer so first-
+/// launch slicing works without forcing the user through the
+/// picker.
 ///
 /// Returns `None` only if the bundled catalog is empty.
-pub fn default_binding() -> Option<PrinterBinding> {
-    let entry = bundled_catalog().into_iter().next()?;
-    Some(PrinterBinding {
-        printer_identity: entry.identity,
-    })
+pub fn default_printer_identity() -> Option<&'static str> {
+    DEFAULT_IDENTITY.get_or_init(|| {
+        bundled_catalog().into_iter().next().map(|e| e.identity)
+    }).as_deref()
 }
+
+static DEFAULT_IDENTITY: std::sync::OnceLock<Option<String>> =
+    std::sync::OnceLock::new();
 
 #[cfg(test)]
 mod tests {
@@ -121,9 +117,8 @@ mod tests {
     }
 
     #[test]
-    fn default_binding_picks_first_printer() {
-        let binding = default_binding().expect("default binding available");
-        assert_eq!(binding.printer_identity, "bambu-lab-a1-mini");
+    fn default_picks_first_printer() {
+        assert_eq!(default_printer_identity(), Some("bambu-lab-a1-mini"));
     }
 
     #[test]

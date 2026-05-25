@@ -99,13 +99,6 @@ export interface PlateMetadata {
   composition_order: number;
 }
 
-/** Identity of a printer bound to a project plate. The bed
- * currently loaded on the bound `PrinterInstance` is read off
- * the instance itself, not the binding — change it via
- * `printerInstanceSetBed`. */
-export interface PrinterBinding {
-  printer_identity: string;
-}
 
 // ---- Snapshot wire shape (PR-5-2 phase C) --------------------------
 
@@ -117,10 +110,15 @@ export interface PlateSnapshot {
   plate_id: PlateId;
   name: string;
   metadata: PlateMetadata;
-  printer: PrinterBinding | null;
-  /** PrinterInstance id the plate slices against (PR-S-5c). `null`
-   *  for an unbound plate. Drives the slot binding panel + the
-   *  composer-side cascade resolution. */
+  /** Vendor printer identity derived from the bound
+   *  `PrinterInstance.vendor_profile_ref`. Snapshot-only — the
+   *  in-memory `Plate` only carries `printer_instance_id`. `null`
+   *  for unbound plates or when the bound id no longer resolves. */
+  printer_identity: string | null;
+  /** PrinterInstance id the plate slices against (PR-S-5c). Sole
+   *  carrier of binding state — `null` for an unbound plate.
+   *  Drives the slot binding panel + the composer-side cascade
+   *  resolution. */
   printer_instance_id: string | null;
   /** Per-plate model material → PrinterInstance slot routing
    *  (PR-S-7). Keyed by 1-based material index; values point into

@@ -90,19 +90,19 @@ export function SettingsPanelHost({
   const allObjects = useMemo(() => allObjectsForPanel(plate), [plate]);
 
   // Pick the printer profile for cascade resolution from the active
-  // plate's binding (PR-5-4: the picker can swap printers). Falls
-  // back to the bootstrap printer when the plate hasn't been bound
-  // yet — that's the App.tsx default-printer load that runs before
-  // the user touches anything.
+  // plate's bound instance (the snapshot's derived
+  // `printer_identity`). Falls back to the bootstrap printer when
+  // the plate hasn't been bound yet — that's the App.tsx default-
+  // printer load that runs before the user touches anything.
   const activeProfile = useMemo(() => {
-    if (plate?.printer) {
+    if (plate?.printer_identity) {
       const entry = catalog.entries.find(
-        (e) => e.identity === plate.printer!.printer_identity,
+        (e) => e.identity === plate.printer_identity,
       );
       if (entry) return entry.profile;
     }
     return session.printer;
-  }, [plate?.printer, catalog.entries, session.printer]);
+  }, [plate?.printer_identity, catalog.entries, session.printer]);
 
   const context = useMemo(() => {
     if (!activeProfile) return null;
@@ -171,9 +171,9 @@ export function SettingsPanelHost({
         <div className="sp-config-row">
           <PrinterPicker
             plateId={plate?.plate_id ?? null}
-            binding={plate?.printer ?? null}
+            printerIdentity={plate?.printer_identity ?? null}
           />
-          {plate?.printer && activeProfile && instanceId && instanceBed && (
+          {plate?.printer_identity && activeProfile && instanceId && instanceBed && (
             <BuildPlateSelector
               plates={activeProfile.supported_build_plates}
               value={instanceBed}

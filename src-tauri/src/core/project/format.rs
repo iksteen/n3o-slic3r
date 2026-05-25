@@ -125,14 +125,25 @@ impl From<LoadError> for ProjectIoError {
 }
 
 /// JSON-side payload: the project skeleton plus the
-/// `format_version` marker. Kept as its own struct (vs. just
-/// `Project`) so future fields outside of `Project` can attach
-/// without polluting the runtime type — e.g. writer fingerprint,
-/// generator-tool version.
+/// `format_version` marker plus side-fields that don't belong on
+/// the in-memory `Project` shape. Kept as its own struct so the
+/// runtime type stays small while the on-disk form can grow
+/// portability/diagnostic hints.
+///
+/// `plate_printer_identities` is the only such side-field today —
+/// vendor printer identities indexed by `PlateId`, populated at
+/// save time from each plate's bound `PrinterInstance.vendor_profile_ref`.
+/// In-memory state only carries `printer_instance_id`; the
+/// denormalization survives "saved on machine A, opened on machine B
+/// where that instance isn't registered" so the loader can hand
+/// the user a meaningful "rebind to a Bambu A1 mini" prompt instead
+/// of just "unbound."
 #[derive(Debug, Serialize, Deserialize)]
 struct ProjectFile {
     format_version: String,
     project: Project,
+    #[serde(default)]
+    plate_printer_identities: BTreeMap<u32, String>,
 }
 
 /// Write `project` to `output` as a `.3mf` project file.
@@ -199,10 +210,25 @@ pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoEr
         project.file_metadata.clone(),
     );
 
+    // Denormalize each plate's bound printer identity from its
+    // `PrinterInstance.vendor_profile_ref` — see `ProjectFile`'s
+    // docs for the cross-machine-portability rationale. Skipped
+    // for unbound plates or instances no longer in the registry.
+    let plate_printer_identities: BTreeMap<u32, String> = project
+        .plates
+        .iter()
+        .filter_map(|plate| {
+            let instance_id = plate.printer_instance_id.as_deref()?;
+            let instance = crate::core::printer::lookup_instance(instance_id)?;
+            Some((plate.id.0, instance.vendor_profile_ref))
+        })
+        .collect();
+
     // Build the JSON-side payload + the extras map.
     let project_json = serde_json::to_string_pretty(&ProjectFile {
         format_version: FORMAT_VERSION.into(),
         project: project.clone(),
+        plate_printer_identities,
     })
     .map_err(|e| ProjectIoError::Json {
         path: output.into(),
@@ -318,7 +344,6 @@ fn _force_transform_import_used(t: Transform) -> Transform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::project::binding::PrinterBinding;
     use crate::core::printer::profile::BoundingBox;
     use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
 
@@ -346,11 +371,8 @@ mod tests {
         }
     }
 
-    fn a1_mini_binding() -> PrinterBinding {
-        PrinterBinding {
-            printer_identity: "bambu-lab-a1-mini".into(),
-        }
-    }
+    const A1_MINI_INSTANCE: &str = "bambi";
+    const U1_INSTANCE: &str = "snappy";
 
     #[test]
     fn round_trip_minimal_default_project() {
@@ -371,7 +393,7 @@ mod tests {
         p.file_metadata
             .insert("Title".into(), "Fixture Project".into());
         // Plate 0: printer + bindings + project override.
-        p.plates[0].printer = Some(a1_mini_binding());
+        p.plates[0].printer_instance_id = Some(A1_MINI_INSTANCE.into());
         p.plates[0].project_overrides.insert(
             "layer_height".into(),
             "0.12".into(),
@@ -392,7 +414,10 @@ mod tests {
             Some("Fixture Project"),
         );
         assert_eq!(parsed.plates.len(), 2);
-        assert_eq!(parsed.plates[0].printer, Some(a1_mini_binding()));
+        assert_eq!(
+            parsed.plates[0].printer_instance_id.as_deref(),
+            Some(A1_MINI_INSTANCE),
+        );
         assert_eq!(
             parsed.plates[0]
                 .project_overrides
@@ -521,26 +546,23 @@ mod tests {
         // PR-5-12 exit-criteria flavor: 3 plates, one bound to
         // each of two printers, per-plate metadata, material
         // bindings. Verifies the full save/load shape.
-        let snapmaker = PrinterBinding {
-            printer_identity: "snapmaker-u1".into(),
-        };
         let mut p = Project::default();
-        p.plates[0].printer = Some(a1_mini_binding());
-        let (_b, _) = p.add_plate(Some(snapmaker.clone()));
-        let (_c, _) = p.add_plate(Some(snapmaker));
+        p.plates[0].printer_instance_id = Some(A1_MINI_INSTANCE.into());
+        let (_b, _) = p.add_plate(Some("snapmaker-u1".into()));
+        let (_c, _) = p.add_plate(Some("snapmaker-u1".into()));
 
         let path = tempfile_3mf();
         write_project(&p, &path).expect("write");
         let parsed = read_project(&path).expect("read");
         assert_eq!(parsed.plates.len(), 3);
-        let printers: Vec<&str> = parsed
+        let instances: Vec<&str> = parsed
             .plates
             .iter()
-            .map(|pl| pl.printer.as_ref().unwrap().printer_identity.as_str())
+            .map(|pl| pl.printer_instance_id.as_deref().unwrap_or("<unbound>"))
             .collect();
         assert_eq!(
-            printers,
-            vec!["bambu-lab-a1-mini", "snapmaker-u1", "snapmaker-u1"],
+            instances,
+            vec![A1_MINI_INSTANCE, U1_INSTANCE, U1_INSTANCE],
         );
         std::fs::remove_file(&path).ok();
     }

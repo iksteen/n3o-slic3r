@@ -17,18 +17,20 @@
 import { useEffect, useRef, useState } from "react";
 import { usePrinterCatalog } from "./usePrinterCatalog";
 import { rebindPlatePrinter } from "./printerCommands";
-import type { PlateId, PrinterBinding } from "../viewport/types";
+import type { PlateId } from "../viewport/types";
 
 export interface PrinterPickerProps {
   /** Active plate the picker rebinds. `null` disables the
    * picker (e.g. before the snapshot lands). */
   plateId: PlateId | null;
-  /** Currently-bound printer + build plate. `null` when the plate
-   * is unbound — the chip surfaces "no printer". */
-  binding: PrinterBinding | null;
+  /** Vendor printer identity of the currently-bound printer
+   * (derived from the bound PrinterInstance's vendor_profile_ref).
+   * `null` when the plate is unbound — the chip surfaces
+   * "no printer". */
+  printerIdentity: string | null;
 }
 
-export function PrinterPicker({ plateId, binding }: PrinterPickerProps) {
+export function PrinterPicker({ plateId, printerIdentity }: PrinterPickerProps) {
   const { entries, loading, error } = usePrinterCatalog();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -61,11 +63,11 @@ export function PrinterPicker({ plateId, binding }: PrinterPickerProps) {
   };
 
   const activeEntry =
-    binding == null
+    printerIdentity == null
       ? null
-      : entries.find((e) => e.identity === binding.printer_identity) ?? null;
+      : entries.find((e) => e.identity === printerIdentity) ?? null;
   const chipLabel =
-    activeEntry?.profile.model ?? binding?.printer_identity ?? "No printer";
+    activeEntry?.profile.model ?? printerIdentity ?? "No printer";
 
   return (
     <div className="config-chip-wrap" ref={wrapRef}>
@@ -101,7 +103,7 @@ export function PrinterPicker({ plateId, binding }: PrinterPickerProps) {
             </div>
           )}
           {entries.map((entry) => {
-            const isActive = entry.identity === binding?.printer_identity;
+            const isActive = entry.identity === printerIdentity;
             return (
               <button
                 key={entry.identity}

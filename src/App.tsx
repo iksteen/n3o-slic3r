@@ -45,7 +45,7 @@ function App() {
   const lastSliceOutput = useLastSliceOutput();
   const lastSliceOutputPath =
     activePlateId != null ? lastSliceOutput.pathForPlate(activePlateId) : null;
-  const printerIdentity = activePlate?.printer?.printer_identity ?? null;
+  const printerIdentity = activePlate?.printer_identity ?? null;
 
   // Auto-switch to preview on slice completion, unless the user
   // has manually toggled out of preview during this session.

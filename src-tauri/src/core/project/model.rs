@@ -35,7 +35,6 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::binding::PrinterBinding;
 use super::metadata::PlateMetadata;
 use crate::core::scene::state::{Mesh, MeshId, PlateSceneState};
 
@@ -132,15 +131,6 @@ pub struct Plate {
     /// user-renamable via PR-5-3.
     pub name: String,
 
-    /// Bound printer + build plate. `None` for a freshly-added
-    /// plate that hasn't been assigned a printer yet — the
-    /// `+` button in PR-5-3's tab strip creates a plate without
-    /// a printer; the user picks one via PR-5-4's picker. The
-    /// cascade context for an unbound plate is undefined; the
-    /// slice command refuses to run until the binding is set.
-    #[serde(default)]
-    pub printer: Option<PrinterBinding>,
-
     /// Project-tier overrides scoped to this plate. The cascade
     /// resolves each plate against the union of
     /// `Project.user_overrides` (applies everywhere) and this map
@@ -154,6 +144,13 @@ pub struct Plate {
     /// vendor printer/filament/process fragments + per-extruder
     /// nozzle.tomls + this plate's process overrides. `None` for an
     /// unbound plate (slice refuses with `UnboundPrinter`).
+    ///
+    /// Sole carrier of binding state — the vendor profile identity
+    /// (e.g. `"bambu-lab-a1-mini"`) is derived on demand via
+    /// `lookup_instance(id).vendor_profile_ref` rather than stored
+    /// alongside. .3mf save persists a denormalized copy as a
+    /// cross-machine portability hedge (see
+    /// `ProjectFile.plate_printer_identities`).
     #[serde(default)]
     pub printer_instance_id: Option<String>,
 
@@ -208,31 +205,25 @@ impl Default for Project {
     }
 }
 
-/// Bind `plate.printer` + populate `plate.scene.bed` from the
-/// bundled default printer. Silent no-op when the bundled catalog
+/// Bind the bundled default printer instance + populate
+/// `plate.scene.bed` so first-launch slicing works without the user
+/// having to open the picker. Silent no-op when the bundled catalog
 /// is empty (compile-time-enforced not to happen today) or the
-/// printer registry can't resolve the chosen identity (likewise
-/// shouldn't happen for bundled entries — defense in depth).
+/// chosen identity can't be resolved (likewise shouldn't happen
+/// for bundled entries — defense in depth).
 fn bind_default_printer_in_place(plate: &mut Plate) {
-    let Some(binding) = crate::core::printer::default_binding() else {
+    let Some(default_id) = crate::core::printer::default_printer_identity() else {
         return;
     };
-    let Some(profile) = crate::core::printer::lookup(&binding.printer_identity)
-    else {
+    let Some(profile) = crate::core::printer::lookup(default_id) else {
         return;
     };
     let bed = crate::core::scene::bed::bed_for_printer(&profile);
     plate.scene.exclusion_zones = bed.exclusion_zones.clone();
     plate.scene.bed = Some(bed);
-    // PR-S-5c: also route this plate through the composer path. The
-    // legacy `printer` binding stays populated for any consumer not
-    // yet migrated; `printer_instance_id` is what `resolve_cascade`
-    // checks first and uses the per-bucket composer for.
-    plate.printer_instance_id = crate::core::printer::instance_id_for_vendor_profile(
-        &binding.printer_identity,
-    )
-    .map(str::to_owned);
-    plate.printer = Some(binding);
+    plate.printer_instance_id =
+        crate::core::printer::instance_id_for_vendor_profile(default_id)
+            .map(str::to_owned);
 }
 
 impl Project {
@@ -280,7 +271,6 @@ impl Plate {
         Self {
             id,
             name: Self::default_name(position),
-            printer: None,
             project_overrides: HashMap::new(),
             printer_instance_id: None,
             material_to_slot: std::collections::BTreeMap::new(),
@@ -289,10 +279,10 @@ impl Plate {
         }
     }
 
-    /// Construct a plate already bound to the given printer.
-    pub fn with_printer(id: PlateId, printer: PrinterBinding, position: u32) -> Self {
+    /// Construct a plate already bound to the named PrinterInstance.
+    pub fn with_instance(id: PlateId, instance_id: String, position: u32) -> Self {
         Self {
-            printer: Some(printer),
+            printer_instance_id: Some(instance_id),
             ..Self::new(id, position)
         }
     }
@@ -328,11 +318,7 @@ impl std::error::Error for ProjectMutError {}
 mod tests {
     use super::*;
 
-    fn a1_mini() -> PrinterBinding {
-        PrinterBinding {
-            printer_identity: "bambu-lab-a1-mini".into(),
-        }
-    }
+    const BAMBI: &str = "bambi";
 
     #[test]
     fn default_project_has_one_plate_no_cascade() {
@@ -341,10 +327,11 @@ mod tests {
         assert_eq!(p.plates[0].id, PlateId(1));
         assert_eq!(p.plates[0].name, "Plate 1");
         // Project::default auto-binds the bootstrap plate to the
-        // bundled-default printer (mirrors the auto-bind-materials
-        // pattern). The actual binding identity is exercised in
-        // `project_default_bootstraps_with_bundled_printer`.
-        assert!(p.plates[0].printer.is_some(), "auto-bound to bundled default");
+        // bundled-default printer instance.
+        assert!(
+            p.plates[0].printer_instance_id.is_some(),
+            "auto-bound to bundled default",
+        );
         assert_eq!(p.active_plate, 0);
         assert!(p.meshes.is_empty());
         assert_eq!(p.next_mesh_id, 0);
@@ -352,17 +339,17 @@ mod tests {
     }
 
     #[test]
-    fn plate_with_printer_constructor_attaches_printer() {
-        let p = Plate::with_printer(PlateId(2), a1_mini(), 2);
+    fn plate_with_instance_constructor_attaches_id() {
+        let p = Plate::with_instance(PlateId(2), BAMBI.into(), 2);
         assert_eq!(p.id, PlateId(2));
         assert_eq!(p.name, "Plate 2");
-        assert_eq!(p.printer, Some(a1_mini()));
+        assert_eq!(p.printer_instance_id.as_deref(), Some(BAMBI));
     }
 
     #[test]
     fn project_serde_round_trips() {
         let mut p = Project::default();
-        p.plates[0].printer = Some(a1_mini());
+        p.plates[0].printer_instance_id = Some(BAMBI.into());
         p.plates[0]
             .project_overrides
             .insert("layer_height".into(), "0.12".into());
@@ -376,7 +363,7 @@ mod tests {
 
         assert_eq!(parsed.uuid, p.uuid);
         assert_eq!(parsed.plates.len(), 1);
-        assert_eq!(parsed.plates[0].printer, Some(a1_mini()));
+        assert_eq!(parsed.plates[0].printer_instance_id.as_deref(), Some(BAMBI));
         assert_eq!(
             parsed.plates[0]
                 .project_overrides
@@ -409,7 +396,7 @@ mod tests {
     #[test]
     fn plate_lookup_by_id() {
         let mut p = Project::default();
-        let plate = Plate::with_printer(PlateId(7), a1_mini(), 2);
+        let plate = Plate::with_instance(PlateId(7), BAMBI.into(), 2);
         p.plates.push(plate);
         assert_eq!(p.plate(PlateId(7)).map(|x| x.id), Some(PlateId(7)));
         assert!(p.plate(PlateId(99)).is_none());

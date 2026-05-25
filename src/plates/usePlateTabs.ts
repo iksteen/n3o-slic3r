@@ -77,7 +77,7 @@ export function projectSnapshot(snap: SceneSnapshot): PlateTabsState {
     plates: snap.plates.map((p) => ({
       id: p.plate_id,
       name: p.name,
-      printerLabel: p.printer?.printer_identity ?? null,
+      printerLabel: p.printer_identity ?? null,
       objectCount: p.objects.length,
     })),
     activePlateId: snap.active_plate_id,

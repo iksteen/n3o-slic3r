@@ -63,7 +63,7 @@ function plateSnap(id = 1): PlateSnapshot {
     plate_id: id,
     name: `Plate ${id}`,
     metadata: { composition_order: id },
-    printer: null,
+    printer_identity: null,
     printer_instance_id: null,
     material_to_slot: {},
     project_overrides: {},
