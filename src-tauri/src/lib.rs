@@ -19,24 +19,16 @@ pub fn run() {
     core::logging::init();
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "n3o-slic3r starting");
 
-    // Project state is `Arc<Mutex<Project>>` (not just `Mutex<Project>`)
-    // so the autosave worker (PR-5-10) can clone a handle and snapshot
-    // the project on its own thread without going through Tauri's
-    // state lookup on every tick.
-    let project: Arc<Mutex<core::project::Project>> =
-        Arc::new(Mutex::new(core::project::Project::default()));
-    let autosave = core::project::autosave::AutosaveHandle::new();
-
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(std::sync::Mutex::new(core::cascade::CascadeRegistry::new()))
-        .manage(project)
-        .manage(autosave)
         .manage(core::slice::JobRegistry::new())
         .manage(Arc::new(core::preview::PreviewRegistry::new()))
         .manage(Arc::new(core::driver::DriverRegistry::new()))
         .setup(|app| {
+            use tauri::Manager;
+
             // Resources dir is only needed for STEP / font embossing; STL
             // and 3MF load without it. Log level 3 = warning, matching
             // OrcaSlicer's CLI default.
@@ -49,7 +41,8 @@ pub fn run() {
             // compile time) is only meaningful for tests; a packaged
             // binary needs this explicit init or it'd panic on the
             // first cascade compose.
-            let resource_root = tauri::Manager::path(app)
+            let resource_root = app
+                .path()
                 .resource_dir()
                 .expect("resource_dir")
                 .join("profiles/vendor");
@@ -69,12 +62,26 @@ pub fn run() {
             // (`org.thegraveyard.n3o-slic3r`), which is the right
             // thing for the bundle but reads ugly when a user goes
             // looking through their config files.
-            let printers_root = tauri::Manager::path(app)
+            let printers_root = app
+                .path()
                 .config_dir()
                 .expect("config_dir")
                 .join("n3o-slic3r/printers");
             core::printer::instance_storage::init_root(printers_root);
             tracing::info!("printer instance library initialized");
+
+            // Project state is constructed AFTER the storage roots are
+            // wired so its `Project::default()` (which auto-binds a
+            // printer instance, eagerly touching the registry) can
+            // load from the on-disk library instead of seeding the
+            // OnceLock with the in-memory bundled fixtures. Same
+            // reasoning for cascade — once both roots are live, the
+            // rest of the app's state managers see a fully initialized
+            // backend.
+            let project: Arc<Mutex<core::project::Project>> =
+                Arc::new(Mutex::new(core::project::Project::default()));
+            app.manage(project);
+            app.manage(core::project::autosave::AutosaveHandle::new());
 
             Ok(())
         })
