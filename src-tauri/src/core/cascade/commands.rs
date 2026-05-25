@@ -280,13 +280,11 @@ mod tests {
         ContextJson {
             printer: PrinterProfile {
                 model: "Bambu A1 mini".into(),
-                slot_count: 4,
                 supported_build_plates: vec!["Textured PEI".into()],
                 toolheads: vec![Toolhead {
-                    nozzle_diameter: 0.4,
+                    default_nozzle_diameter: 0.4,
                     hotend_type: "stainless_steel".into(),
                     max_temp: 300.0,
-                    slot_indices: vec![0],
                 }],
                 build_volume: BoundingBox::default(),
                 exclusion_zones: vec![],

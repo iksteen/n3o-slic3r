@@ -11,7 +11,7 @@ import type { PrinterProfileJson } from "../settings/resolve";
 /** Picker-facing entry. Mirror of Rust's
  * `core::printer::registry::CatalogEntry`. Carries the identity slug
  * + the full `PrinterProfile` — the picker chip + menu read the
- * summary fields (model/slot_count/supported_build_plates) and the
+ * summary fields (model + supported_build_plates) and the
  * settings panel host reads the full profile to feed
  * `cascade_resolve`. */
 export interface PrinterCatalogEntry {

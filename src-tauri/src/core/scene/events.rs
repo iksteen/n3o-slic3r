@@ -298,7 +298,7 @@ pub struct PrinterChangeReport {
     /// MVP: always empty pending the validation walk.
     pub incompatible: Vec<IncompatibleSetting>,
     /// Settings auto-clamped to the new printer's range (e.g.
-    /// extruder selector reduced when slot_count drops). MVP:
+    /// extruder selector reduced when toolheads count drops). MVP:
     /// always empty.
     pub clamped: Vec<ClampedSetting>,
 }

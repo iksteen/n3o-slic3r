@@ -80,20 +80,24 @@ impl CapabilityPredicate {
     /// gated on it should be shown). False means hide.
     pub fn satisfied_by(self, printer: &PrinterProfile) -> bool {
         match self {
-            Self::RequiresMultiSlot => printer.slot_count > 1,
+            // Multi-material: either AMS-fed (single toolhead with
+            // an AMS host attached) or toolchanger (multiple
+            // toolheads). Single-material printers fail both clauses.
+            Self::RequiresMultiSlot => printer.has_multiple_slots(),
 
             // Toolchanger heuristic: more than one physical toolhead.
-            // AMS-style (slot_count > 1, toolheads.len() == 1) does
-            // NOT satisfy this — its multi-material is filament
-            // swap, not head swap.
+            // AMS-style (toolheads.len() == 1, ams_max > 0) does NOT
+            // satisfy this — its multi-material is filament swap,
+            // not head swap.
             Self::RequiresToolchanger => printer.toolheads.len() > 1,
 
-            // Purge-tower heuristic: multi-material AND single
-            // toolhead. Toolchangers skip purging because they swap
-            // heads; single-slot printers don't purge because they
-            // only print one filament.
+            // Purge-tower heuristic: AMS-style printers, where the
+            // single toolhead has to flush each color through it.
+            // Toolchangers skip purging because they swap heads;
+            // single-material printers don't purge because they only
+            // print one filament.
             Self::RequiresPurgeTower => {
-                printer.slot_count > 1 && printer.toolheads.len() == 1
+                printer.toolheads.len() == 1 && printer.ams_max > 0
             }
 
             Self::RequiresBblPrinter => printer.model.starts_with("Bambu"),
@@ -172,13 +176,16 @@ mod tests {
     fn a1_mini() -> PrinterProfile {
         PrinterProfile {
             model: "Bambu A1 mini".into(),
-            slot_count: 4,
+            // AMS-fed: one toolhead, one or more AMS units. The
+            // capability predicates read multi-material status off
+            // `ams_max`, so it must be set explicitly for tests that
+            // depend on RequiresMultiSlot/RequiresPurgeTower.
+            ams_max: 1,
             supported_build_plates: vec!["Textured PEI".into()],
             toolheads: vec![Toolhead {
-                nozzle_diameter: 0.4,
+                default_nozzle_diameter: 0.4,
                 hotend_type: "stainless_steel".into(),
                 max_temp: 300.0,
-                slot_indices: vec![0, 1, 2, 3],
             }],
             build_volume: BoundingBox {
                 min: [0.0, 0.0, 0.0],
@@ -192,14 +199,12 @@ mod tests {
     fn snapmaker_u1() -> PrinterProfile {
         PrinterProfile {
             model: "Snapmaker U1".into(),
-            slot_count: 4,
             supported_build_plates: vec!["Textured PEI".into()],
             toolheads: (0..4)
                 .map(|i| Toolhead {
-                    nozzle_diameter: 0.4,
+                    default_nozzle_diameter: 0.4,
                     hotend_type: "stainless_steel".into(),
                     max_temp: 300.0,
-                    slot_indices: vec![i],
                 })
                 .collect(),
             build_volume: BoundingBox {
@@ -214,13 +219,11 @@ mod tests {
     fn single_material_voron() -> PrinterProfile {
         PrinterProfile {
             model: "Voron 2.4 350".into(),
-            slot_count: 1,
             supported_build_plates: vec!["Textured PEI".into()],
             toolheads: vec![Toolhead {
-                nozzle_diameter: 0.4,
+                default_nozzle_diameter: 0.4,
                 hotend_type: "stainless_steel".into(),
                 max_temp: 300.0,
-                slot_indices: vec![0],
             }],
             build_volume: BoundingBox {
                 min: [0.0, 0.0, 0.0],

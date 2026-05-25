@@ -22,14 +22,12 @@ describe("printerCatalog", () => {
   it("invokes printer_catalog and returns the parsed list", async () => {
     const minimalProfile = (model: string) => ({
       model,
-      slot_count: 4,
       supported_build_plates: ["Textured PEI"],
       toolheads: [
         {
-          nozzle_diameter: 0.4,
+          default_nozzle_diameter: 0.4,
           hotend_type: "stainless_steel",
           max_temp: 300,
-          slot_indices: [0, 1, 2, 3],
         },
       ],
       build_volume: { min: [0, 0, 0] as [number, number, number], max: [180, 180, 180] as [number, number, number] },
@@ -91,7 +89,6 @@ describe("setActivePrinter", () => {
     invokeMock.mockResolvedValueOnce(undefined);
     const printer = {
       model: "X",
-      slot_count: 1,
       supported_build_plates: [],
       toolheads: [],
       build_volume: { min: [0, 0, 0], max: [1, 1, 1] },

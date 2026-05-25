@@ -1,10 +1,11 @@
 identity = "snapmaker-u1"
 model = "Snapmaker U1"
+default_bed = "Textured PEI Plate"
 brand = "Snapmaker"
 brand_short = "S"
 # 4 magnetically-docked toolheads; each slot maps 1:1 to a physical
-# toolhead (vs the A1 mini's AMS feeding a single toolhead).
-slot_count = 4
+# toolhead (vs the A1 mini's AMS feeding a single toolhead). The
+# extruder count is read off `len(toolheads)` at load time.
 # Toolchanger, no AMS.
 ams_max = 0
 
@@ -12,36 +13,21 @@ ams_max = 0
 # 0.4mm hardened-steel set per FR-SU-6; the data model permits any
 # combination, but the MVP cascade fixtures assume uniform.
 [[toolheads]]
-nozzle_diameter = 0.4
+default_nozzle_diameter = 0.4
 hotend_type = "hardened_steel"
 max_temp = 300.0
-slot_indices = [0]
 
 [[toolheads]]
-nozzle_diameter = 0.4
+default_nozzle_diameter = 0.4
 hotend_type = "hardened_steel"
 max_temp = 300.0
-slot_indices = [1]
 
 [[toolheads]]
-nozzle_diameter = 0.4
+default_nozzle_diameter = 0.4
 hotend_type = "hardened_steel"
 max_temp = 300.0
-slot_indices = [2]
 
 [[toolheads]]
-nozzle_diameter = 0.4
+default_nozzle_diameter = 0.4
 hotend_type = "hardened_steel"
 max_temp = 300.0
-slot_indices = [3]
-
-[build_volume]
-min = [0.0, 0.0, 0.0]
-max = [220.0, 220.0, 220.0]
-
-# Toolhead parking bay is on the +Y edge of the bed; the print area
-# excludes a ~20mm strip there per PRD FR-3D-4. Approximate; refine
-# once we have measurements from the hardware.
-[[exclusion_zones]]
-min = [0.0, 200.0, 0.0]
-max = [220.0, 220.0, 0.0]

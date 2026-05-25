@@ -1,7 +1,7 @@
 //! Runtime cascade composer (PR-S-5a rework, hierarchical layout).
 //!
 //! Composes a slice-time cascade from the hierarchical vendor fragment
-//! layout introduced by PR-S-4 (per-printer printer.toml + per-nozzle
+//! layout introduced by PR-S-4 (per-printer model.toml + per-nozzle
 //! scalar nozzle.toml + per-bed bed.toml + filament + process), plus
 //! the plate-level process overrides.
 //!

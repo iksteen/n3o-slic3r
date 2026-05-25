@@ -29,7 +29,7 @@ pub struct SlicingContext {
     pub filaments: Vec<Arc<FilamentProfile>>,
     /// Which slot's filament drives the `filament.*` predicates.
     /// Multi-color models slice once per active slot; production
-    /// callers iterate `0..printer.slot_count` and rebuild
+    /// callers iterate over the active material map and rebuild
     /// `SlicingContext::active_slot` between calls.
     pub active_slot: usize,
 }
@@ -68,13 +68,6 @@ impl Context for SlicingContext {
             "filament.color" => {
                 self.active_filament().and_then(|f| f.color.as_deref())
             }
-            // printer.slot_count is integer-shaped; predicates today
-            // compare against string values, so format on read.
-            // Lifetime gymnastics: we can't return a borrow into a
-            // local format!() string, so this dimension stays out of
-            // the trait return until the resolver gains a `as_int`
-            // variant in a future iteration. Document as a known gap.
-            "printer.slot_count" => None,
             _ => None,
         }
     }
@@ -88,13 +81,11 @@ mod tests {
         use crate::core::printer::profile::{BoundingBox, Toolhead};
         Arc::new(PrinterProfile {
             model: "Bambu A1 mini".into(),
-            slot_count: 4,
             supported_build_plates: vec!["Textured PEI Plate".into()],
             toolheads: vec![Toolhead {
-                nozzle_diameter: 0.4,
+                default_nozzle_diameter: 0.4,
                 hotend_type: "stainless_steel".into(),
                 max_temp: 300.0,
-                slot_indices: vec![0, 1, 2, 3],
             }],
             build_volume: BoundingBox::default(),
             exclusion_zones: vec![],

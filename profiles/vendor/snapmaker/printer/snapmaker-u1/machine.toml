@@ -60,7 +60,6 @@ endif
 ";
 }
 '''
-default_bed_type = "Textured PEI Plate"
 enable_filament_ramming = "0"
 extruder_clearance_height_to_lid = "130"
 extruder_clearance_height_to_rod = "60"

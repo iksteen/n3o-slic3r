@@ -2,7 +2,7 @@
 //!
 //! Loaded once per active printer (from a JSON file shipped under
 //! `profiles/printers/` or authored by the user). The cascade
-//! resolver reads `model`, `slot_count`, and per-toolhead config via
+//! resolver reads `model` and per-toolhead config via
 //! `Context::predicate_value`; the scene-state code (Phase 2) reads
 //! `build_volume` + `exclusion_zones`; the driver layer (Phase 5)
 //! reads per-toolhead config for sync-on-send decisions.
@@ -29,10 +29,6 @@ pub struct PrinterProfile {
     /// rounded square. `#[serde(default)]` for backward compat.
     #[serde(default)]
     pub brand_short: String,
-
-    /// Number of filament slots (AMS slots on Bambu, toolheads on
-    /// Snapmaker U1). Surfaced as `printer.slot_count`.
-    pub slot_count: usize,
 
     /// Maximum number of AMS-style swap units this printer
     /// accepts. `0` for printers with no AMS support (direct-feed
@@ -61,20 +57,27 @@ pub struct PrinterProfile {
 
     /// Default `curr_bed_type` enum value Orca's upstream
     /// `machine_model` JSON declares for this printer (e.g.
-    /// `"Textured PEI Plate"` for the A1 mini, the same for U1).
-    /// Populated by the registry from
-    /// `profile_library::default_bed_for_printer` — the machine
-    /// fragment carries the raw key. `None` for printers whose
-    /// upstream profile omits the field.
+    /// `"Textured PEI Plate"` for both the A1 mini and the U1).
+    /// Seeded into `model.toml` by `import_machine_profile.py`
+    /// from the model JSON's `default_bed_type` field. `None` for
+    /// printers whose upstream profile omits the field.
     #[serde(default)]
     pub default_bed: Option<String>,
 
-    /// One entry per physical toolhead. For Bambu A1 mini (AMS-fed
-    /// single nozzle), `toolheads.len() == 1` and `slot_count == 4`.
-    /// For Snapmaker U1 (toolchanger), `toolheads.len() == 4` and
-    /// `slot_count == 4`.
+    /// One entry per physical toolhead. `toolheads.len()` is the
+    /// canonical extruder count: 1 for AMS-fed printers (Bambu A1
+    /// mini), N for toolchangers (Snapmaker U1). Combined with
+    /// `ams_max`, it distinguishes the multi-material flavor:
+    /// `toolheads.len() == 1 && ams_max > 0` is AMS-style;
+    /// `toolheads.len() > 1` is toolchanger.
     pub toolheads: Vec<Toolhead>,
 
+    /// Hydrated by the registry from the machine cascade's
+    /// `printable_area` (XY corners polygon) + `printable_height`.
+    /// `#[serde(default)]` so model.toml doesn't repeat what the
+    /// cascade already declares — the zero AABB lives just long
+    /// enough for `hydrate_profile` to replace it.
+    #[serde(default)]
     pub build_volume: BoundingBox,
 
     /// Areas that must not be printed in (parking bays, accessory
@@ -84,19 +87,27 @@ pub struct PrinterProfile {
     pub exclusion_zones: Vec<BoundingBox>,
 }
 
-/// A single toolhead's hardware config. Per-extruder cascade
-/// expansion (when Phase 1 grows beyond bed_temp) reads these.
+impl PrinterProfile {
+    /// True when this printer can host multiple filament slots
+    /// simultaneously — either via multiple physical toolheads
+    /// (toolchangers, U1) or via an AMS feeding a single toolhead
+    /// (Bambu A1 mini + AMS Lite). Single-toolhead printers without
+    /// AMS support return false.
+    pub fn has_multiple_slots(&self) -> bool {
+        self.toolheads.len() > 1 || self.ams_max > 0
+    }
+}
+
+/// A single toolhead's hardware config. The nozzle is a swappable
+/// consumable — `default_nozzle_diameter` is just the SKU the printer
+/// ships with / what `create_instance` seeds onto a fresh instance.
+/// The runtime `ExtruderState.installed_nozzle` holds the current
+/// nozzle; this field is *not* consulted at slice time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Toolhead {
-    pub nozzle_diameter: f64,
+    pub default_nozzle_diameter: f64,
     pub hotend_type: String,
     pub max_temp: f64,
-    /// Slot indices this toolhead can pull filament from. For a
-    /// dual-feed AMS-Lite-style printer this would be `[0]`
-    /// (single toolhead reads from any of the 4 slots through the
-    /// AMS feed). For a U1 toolchanger this would be `[i]` (each
-    /// toolhead bound to one slot).
-    pub slot_indices: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -114,7 +125,6 @@ mod tests {
             model: "Bambu A1 mini".into(),
             brand: "Bambu Lab".into(),
             brand_short: "B".into(),
-            slot_count: 4,
             ams_max: 1,
             ams_type: Some("AMS Lite".into()),
             default_bed: Some("Textured PEI Plate".into()),
@@ -126,10 +136,9 @@ mod tests {
                 "Supertack Plate".into(),
             ],
             toolheads: vec![Toolhead {
-                nozzle_diameter: 0.4,
+                default_nozzle_diameter: 0.4,
                 hotend_type: "stainless_steel".into(),
                 max_temp: 300.0,
-                slot_indices: vec![0, 1, 2, 3],
             }],
             build_volume: BoundingBox {
                 min: [0.0, 0.0, 0.0],
@@ -145,9 +154,8 @@ mod tests {
         let text = toml::to_string(&p).expect("serialize");
         let parsed: PrinterProfile = toml::from_str(&text).expect("deserialize");
         assert_eq!(parsed.model, "Bambu A1 mini");
-        assert_eq!(parsed.slot_count, 4);
         assert_eq!(parsed.toolheads.len(), 1);
-        assert_eq!(parsed.toolheads[0].nozzle_diameter, 0.4);
+        assert_eq!(parsed.toolheads[0].default_nozzle_diameter, 0.4);
         assert_eq!(parsed.supported_build_plates.len(), 5);
     }
 }

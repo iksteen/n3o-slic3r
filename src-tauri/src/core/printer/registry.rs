@@ -2,7 +2,7 @@
 //!
 //! Thin facade over [`crate::core::profile_library::printer_catalog`].
 //! The library walks the vendor profile tree at startup and parses one
-//! `printer.toml` per printer directory; this module re-exposes that
+//! `model.toml` per printer directory; this module re-exposes that
 //! data in the picker-facing shape (`CatalogEntry`).
 //!
 //! Surface:
@@ -20,7 +20,7 @@ use crate::core::profile_library;
 
 /// Picker-facing entry for one printer in the catalog. Carries the
 /// identity slug + the full `PrinterProfile`. The picker chip + menu
-/// only read `identity`, `profile.model`, `profile.slot_count`, and
+/// only read `identity`, `profile.model`, and
 /// `profile.supported_build_plates`, but the rest of the panel
 /// (cascade resolve via `ContextJson`) needs toolheads + build
 /// volume + exclusion zones too. Single fetch, full info beats
@@ -54,8 +54,11 @@ pub fn lookup(identity: &str) -> Option<PrinterProfile> {
 }
 
 /// Fill in the runtime-derived fields on a `PrinterProfile` — the
-/// per-printer bed list and the upstream `default_bed_type`. Kept as
-/// one place so the catalog walk + single-id `lookup` can't drift.
+/// per-printer bed list and the build volume parsed from the
+/// machine cascade's `printable_area` / `printable_height`. Kept
+/// as one place so the catalog walk + single-id `lookup` can't
+/// drift. `default_bed` is loaded by serde directly from
+/// `model.toml` and needs no hydration.
 fn hydrate_profile(base: &PrinterProfile, fragment_slug: &str) -> PrinterProfile {
     let mut profile = base.clone();
     profile.supported_build_plates =
@@ -63,7 +66,9 @@ fn hydrate_profile(base: &PrinterProfile, fragment_slug: &str) -> PrinterProfile
             .into_iter()
             .map(str::to_owned)
             .collect();
-    profile.default_bed = profile_library::default_bed_for_printer(fragment_slug);
+    if let Some(bv) = profile_library::build_volume_for_printer(fragment_slug) {
+        profile.build_volume = bv;
+    }
     profile
 }
 
@@ -101,12 +106,10 @@ mod tests {
     fn lookup_resolves_known_identities() {
         let a1 = lookup("bambu-lab-a1-mini").expect("a1 mini present");
         assert_eq!(a1.model, "Bambu A1 mini");
-        assert_eq!(a1.slot_count, 4);
         assert_eq!(a1.toolheads.len(), 1);
 
         let u1 = lookup("snapmaker-u1").expect("u1 present");
         assert_eq!(u1.model, "Snapmaker U1");
-        assert_eq!(u1.slot_count, 4);
         assert_eq!(u1.toolheads.len(), 4);
     }
 
@@ -126,10 +129,15 @@ mod tests {
         let a1 = entries.iter().find(|e| e.identity == "bambu-lab-a1-mini").unwrap();
         assert!(a1.profile.supported_build_plates.contains(&"Textured PEI Plate".into()));
         assert_eq!(a1.profile.toolheads.len(), 1);
-        assert!(a1.profile.build_volume.max[0] > 0.0);
+        // Build volume is hydrated from the machine cascade's
+        // `printable_area` / `printable_height`; A1 mini is 180³.
+        assert_eq!(a1.profile.build_volume.max, [180.0, 180.0, 180.0]);
 
         let u1 = entries.iter().find(|e| e.identity == "snapmaker-u1").unwrap();
         assert_eq!(u1.profile.toolheads.len(), 4);
-        assert!(!u1.profile.exclusion_zones.is_empty());
+        // U1 cascade: printable_area "0.5x1,270.5x1,270.5x271,0.5x271",
+        // printable_height "270.05".
+        assert_eq!(u1.profile.build_volume.max, [270.5, 271.0, 270.05]);
+        assert_eq!(u1.profile.build_volume.min, [0.5, 1.0, 0.0]);
     }
 }

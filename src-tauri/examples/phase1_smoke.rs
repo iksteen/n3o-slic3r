@@ -40,10 +40,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let filament = filament_registry::lookup("generic-pla")
         .ok_or("generic-pla missing from registry")?;
     println!(
-        "  printer:  {} ({} slots, {} toolheads)",
+        "  printer:  {} ({} toolheads, ams_max={})",
         printer.model,
-        printer.slot_count,
-        printer.toolheads.len()
+        printer.toolheads.len(),
+        printer.ams_max,
     );
     println!(
         "  plate:    {} → libslic3r curr_bed_type = {:?}",

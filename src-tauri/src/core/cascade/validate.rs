@@ -54,8 +54,7 @@ impl KnownDimensions {
 
 /// Canonical predicate-dimension set used by the resolver before PR-1-7
 /// lands. Matches the dotted keys produced by the spike resolver:
-/// `printer.model`, `printer.slot_count`, `filament.type`,
-/// `filament.name`, `plate.type`.
+/// `printer.model`, `filament.type`, `filament.name`, `plate.type`.
 ///
 /// Once PR-1-7 ships, this should be replaced with the dimensions
 /// derived from the active `Context`'s `predicate_value`'s key
@@ -63,7 +62,6 @@ impl KnownDimensions {
 pub fn default_known_dimensions() -> KnownDimensions {
     KnownDimensions::new([
         "printer.model",
-        "printer.slot_count",
         "filament.type",
         "filament.name",
         "plate.type",

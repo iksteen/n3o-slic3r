@@ -184,13 +184,11 @@ mod tests {
     fn a1_mini_with_ams_zone() -> PrinterProfile {
         PrinterProfile {
             model: "Bambu A1 mini".into(),
-            slot_count: 4,
             supported_build_plates: vec!["Textured PEI Plate".into()],
             toolheads: vec![Toolhead {
-                nozzle_diameter: 0.4,
+                default_nozzle_diameter: 0.4,
                 hotend_type: "stainless_steel".into(),
                 max_temp: 300.0,
-                slot_indices: vec![0, 1, 2, 3],
             }],
             build_volume: BoundingBox {
                 min: [0.0, 0.0, 0.0],

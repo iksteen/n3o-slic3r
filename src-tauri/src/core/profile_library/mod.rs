@@ -5,9 +5,9 @@
 //! ```text
 //! <root>/<vendor>/
 //! ├── printer/
-//! │   ├── <slug>.toml                  ← cascade fragment (machine globals)
 //! │   └── <slug>/
-//! │       ├── printer.toml             ← PrinterProfile metadata (n3o shape)
+//! │       ├── machine.toml             ← cascade fragment (machine globals)
+//! │       ├── model.toml               ← PrinterProfile metadata (n3o shape)
 //! │       ├── nozzles/<sku>.toml       ← per-extruder scalars
 //! │       ├── beds/<name>.toml         ← thin metadata (identity, curr_bed_type)
 //! │       └── processes/<slug>.toml    ← printer-bound process preset
@@ -33,7 +33,7 @@
 //! - filament fragment: `<slug>` (file stem). Filaments are cross-
 //!   printer.
 //! - printer catalog entry: `<identity>` (declared inside
-//!   `printer.toml`, falls back to the directory name).
+//!   `model.toml`, falls back to the directory name).
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -85,14 +85,14 @@ struct CascadeAsset {
     source_path: String,
 }
 
-/// One printer catalog entry, parsed from `printer.toml` next to the
-/// printer's fragment.
+/// One printer catalog entry, parsed from `model.toml` next to the
+/// printer's `machine.toml` cascade fragment.
 #[derive(Debug, Clone)]
 pub struct PrinterCatalogEntry {
     pub identity: String,
     pub profile: PrinterProfile,
     /// Fragment slug = directory name. Equal to identity when no
-    /// `identity` override is declared in `printer.toml`.
+    /// `identity` override is declared in `model.toml`.
     pub fragment_slug: String,
 }
 
@@ -112,7 +112,7 @@ pub struct ProfileLibrary {
     /// Filament slug declaration order (UI presentation).
     filament_order: Vec<String>,
 
-    /// Picker catalog — one entry per `<printer_dir>/printer.toml`.
+    /// Picker catalog — one entry per `<printer_dir>/model.toml`.
     catalog: Vec<PrinterCatalogEntry>,
 }
 
@@ -209,22 +209,27 @@ impl ProfileLibrary {
     }
 
     fn load_printers(&mut self, root: &Path, printer_root: &Path) -> Result<(), LibraryError> {
-        // Top-level cascade fragments: <printer_root>/<slug>.toml
-        for f in read_sorted_files(printer_root)? {
-            let slug = file_stem(&f);
-            let asset = read_cascade(root, &f)?;
-            self.printer_fragments.insert(slug, asset);
-        }
-        // Sub-directories carry the per-printer breakdown (nozzles/,
-        // beds/, printer.toml). Iterate in stable order.
+        // Each printer lives in its own directory under <printer_root>:
+        //   <slug>/machine.toml — cascade fragment (the bulk of the
+        //                         imported libslic3r config).
+        //   <slug>/model.toml   — PrinterProfile metadata (n3o shape).
+        //   <slug>/nozzles/<sku>.toml
+        //   <slug>/beds/<id>.toml
+        //   <slug>/processes/<slug>.toml
         for printer_dir in read_sorted_subdirs(printer_root)? {
             let slug = printer_dir
                 .file_name()
                 .and_then(|n| n.to_str())
                 .expect("directory name is valid utf-8")
                 .to_owned();
-            // printer.toml — catalog metadata.
-            let meta_path = printer_dir.join("printer.toml");
+            // machine.toml — cascade fragment (libslic3r config).
+            let machine_path = printer_dir.join("machine.toml");
+            if machine_path.is_file() {
+                let asset = read_cascade(root, &machine_path)?;
+                self.printer_fragments.insert(slug.clone(), asset);
+            }
+            // model.toml — catalog metadata.
+            let meta_path = printer_dir.join("model.toml");
             if meta_path.is_file() {
                 let raw = std::fs::read_to_string(&meta_path)
                     .map_err(|e| LibraryError::Io(meta_path.clone(), e))?;
@@ -380,14 +385,46 @@ fn fragment_set_value(cascade: &Cascade, key: &str) -> Option<String> {
     None
 }
 
-/// Default `curr_bed_type` enum value for the printer, as declared
-/// in the upstream Orca `machine_model` JSON and merged into our
-/// machine fragment by `import_machine_profile.py`. Returns `None`
-/// when the printer fragment doesn't declare it — callers fall back
-/// to "first supported bed."
-pub fn default_bed_for_printer(printer_slug: &str) -> Option<String> {
+/// Parse libslic3r's `printable_area` + `printable_height` for the
+/// printer into a 3-D AABB. `printable_area` is a BBS-style polygon
+/// (`"x1xy1,x2xy2,..."` corner list) — we take the axis-aligned XY
+/// bounds. Returns `None` when either key is missing or unparseable.
+pub fn build_volume_for_printer(
+    printer_slug: &str,
+) -> Option<crate::core::printer::profile::BoundingBox> {
     let cascade = load_printer_fragment(printer_slug)?;
-    fragment_set_value(&cascade, "default_bed_type")
+    let area = fragment_set_value(&cascade, "printable_area")?;
+    let height = fragment_set_value(&cascade, "printable_height")?;
+    parse_build_volume(&area, &height)
+}
+
+fn parse_build_volume(
+    area: &str,
+    height: &str,
+) -> Option<crate::core::printer::profile::BoundingBox> {
+    let max_z: f64 = height.trim().parse().ok()?;
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    let mut saw_corner = false;
+    for corner in area.split(',') {
+        let (x, y) = corner.trim().split_once('x')?;
+        let x: f64 = x.trim().parse().ok()?;
+        let y: f64 = y.trim().parse().ok()?;
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+        saw_corner = true;
+    }
+    if !saw_corner {
+        return None;
+    }
+    Some(crate::core::printer::profile::BoundingBox {
+        min: [min_x, min_y, 0.0],
+        max: [max_x, max_y, max_z],
+    })
 }
 
 /// libslic3r `default_filament_profile` for the given printer + nozzle
@@ -514,7 +551,7 @@ pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
         .collect()
 }
 
-/// Printer catalog — one entry per `printer.toml` found on disk.
+/// Printer catalog — one entry per `model.toml` found on disk.
 /// `core::printer::registry` re-exposes this for the picker.
 pub fn printer_catalog() -> &'static [PrinterCatalogEntry] {
     &library().catalog
@@ -561,7 +598,7 @@ mod tests {
         assert!(rule.set.contains_key("machine_max_acceleration_x"));
         assert!(
             !rule.set.contains_key("nozzle_diameter"),
-            "nozzle_diameter must NOT be in printer.toml (lives in nozzles/<sku>.toml)",
+            "nozzle_diameter must NOT be in machine.toml (lives in nozzles/<sku>.toml)",
         );
     }
 

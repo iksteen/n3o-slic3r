@@ -38,7 +38,7 @@ pub fn validate_resolved_cascade(
 
     // AMS / multi-toolhead printers need the filament-swap macro
     // or the printer just emits raw T<n> with no purge/flush/wipe.
-    if printer.slot_count > 1 {
+    if printer.has_multiple_slots() {
         require_non_empty(resolved, "change_filament_gcode", &mut issues);
     }
 
@@ -160,13 +160,14 @@ mod tests {
     fn a1_mini_profile() -> PrinterProfile {
         PrinterProfile {
             model: "Bambu A1 mini".into(),
-            slot_count: 4,
+            // AMS-fed: single toolhead but multi-material via AMS.
+            // The change_filament_gcode requirement keys off this.
+            ams_max: 1,
             supported_build_plates: vec!["Textured PEI".into()],
             toolheads: vec![Toolhead {
-                nozzle_diameter: 0.4,
+                default_nozzle_diameter: 0.4,
                 hotend_type: "stainless_steel".into(),
                 max_temp: 300.0,
-                slot_indices: vec![0, 1, 2, 3],
             }],
             build_volume: BoundingBox {
                 min: [0.0, 0.0, 0.0],
@@ -222,15 +223,16 @@ mod tests {
     }
 
     #[test]
-    fn change_filament_required_only_when_slot_count_gt_1() {
+    fn change_filament_required_only_when_multi_material() {
+        // Strip the AMS to make this a single-material A1 mini.
         let mut single_slot = a1_mini_profile();
-        single_slot.slot_count = 1;
+        single_slot.ams_max = 0;
         let mut r = Resolved::new();
         r.insert("machine_start_gcode".into(), rv("G28\n"));
         r.insert("machine_end_gcode".into(), rv("M104 S0\n"));
         r.insert("machine_max_acceleration_extruding".into(), rv("20000"));
         r.insert("nozzle_temperature".into(), rv("220"));
-        // No change_filament_gcode — should pass for single-slot.
+        // No change_filament_gcode — should pass for single-material.
         assert_eq!(validate_resolved_cascade(&r, &single_slot), Ok(()));
         // But fail for AMS-capable printer.
         assert!(validate_resolved_cascade(&r, &a1_mini_profile()).is_err());

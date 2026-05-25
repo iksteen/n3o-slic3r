@@ -253,7 +253,7 @@ pub fn set_slot_color(
 ///       `T0..T(N-1)`, each with one `FeedKind::Direct` slot. The
 ///       `ams_units` parameter is ignored for this branch; the
 ///       caller-side AMS picker is hidden when `ams_max == 0`.
-///   - nozzle: each toolhead's own `nozzle_diameter`, `Stainless`.
+///   - nozzle: each toolhead's `default_nozzle_diameter`, `Stainless`.
 ///   - bed: `profile.default_bed` (Orca's upstream `default_bed_type`)
 ///     when set + supported, else the first entry in
 ///     `supported_build_plates`.
@@ -321,11 +321,11 @@ pub fn create_instance(
             .iter()
             .enumerate()
             .map(|(i, toolhead)| {
-                let filament_slug = resolve_default_filament(toolhead.nozzle_diameter);
+                let filament_slug = resolve_default_filament(toolhead.default_nozzle_diameter);
                 ExtruderState {
                     label: format!("T{i}"),
                     installed_nozzle: NozzleSku {
-                        diameter_mm: toolhead.nozzle_diameter as f32,
+                        diameter_mm: toolhead.default_nozzle_diameter as f32,
                         material: NozzleMaterial::Stainless,
                     },
                     slots: vec![SlotBinding {
@@ -344,8 +344,9 @@ pub fn create_instance(
         // slots 1.. are AMS-fed. The extruder's solo so its label
         // stays empty — the slot labels carry the identity.
         let toolhead = profile.toolheads.first();
-        let nozzle_diameter = toolhead.map(|t| t.nozzle_diameter).unwrap_or(0.4);
-        let filament_slug = resolve_default_filament(nozzle_diameter);
+        let default_nozzle_diameter =
+            toolhead.map(|t| t.default_nozzle_diameter).unwrap_or(0.4);
+        let filament_slug = resolve_default_filament(default_nozzle_diameter);
         let mut slots = Vec::new();
         slots.push(SlotBinding {
             label: "Ext".to_owned(),
@@ -372,7 +373,7 @@ pub fn create_instance(
         vec![ExtruderState {
             label: String::new(),
             installed_nozzle: NozzleSku {
-                diameter_mm: nozzle_diameter as f32,
+                diameter_mm: default_nozzle_diameter as f32,
                 material: NozzleMaterial::Stainless,
             },
             slots,
@@ -385,7 +386,7 @@ pub fn create_instance(
     let default_filament_slug = profile
         .toolheads
         .first()
-        .map(|t| resolve_default_filament(t.nozzle_diameter))
+        .map(|t| resolve_default_filament(t.default_nozzle_diameter))
         .unwrap_or_else(|| "generic-pla".to_owned());
 
     // Bed: prefer the upstream-declared default when it's actually

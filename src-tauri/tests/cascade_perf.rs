@@ -71,13 +71,11 @@ fn a1_mini_pla_pei_context() -> SlicingContext {
     SlicingContext::new(
         Arc::new(PrinterProfile {
             model: "Bambu A1 mini".into(),
-            slot_count: 4,
             supported_build_plates: vec!["Textured PEI".into()],
             toolheads: vec![Toolhead {
-                nozzle_diameter: 0.4,
+                default_nozzle_diameter: 0.4,
                 hotend_type: "stainless_steel".into(),
                 max_temp: 300.0,
-                slot_indices: vec![0, 1, 2, 3],
             }],
             build_volume: BoundingBox::default(),
             exclusion_zones: vec![],
@@ -102,14 +100,12 @@ fn four_slot_context() -> SlicingContext {
     SlicingContext::new(
         Arc::new(PrinterProfile {
             model: "Snapmaker U1".into(),
-            slot_count: 4,
             supported_build_plates: vec!["Textured PEI".into()],
             toolheads: (0..4)
                 .map(|i| Toolhead {
-                    nozzle_diameter: if i % 2 == 0 { 0.4 } else { 0.6 },
+                    default_nozzle_diameter: if i % 2 == 0 { 0.4 } else { 0.6 },
                     hotend_type: "hardened_steel".into(),
                     max_temp: 300.0,
-                    slot_indices: vec![i],
                 })
                 .collect(),
             build_volume: BoundingBox::default(),
@@ -181,7 +177,7 @@ fn perf_resolve_four_slot_synthetic() {
     let overrides = OverrideTiers::empty();
 
     let (mean, peak) = measure(|| {
-        for slot in 0..ctx.printer.slot_count {
+        for slot in 0..ctx.printer.toolheads.len() {
             ctx.active_slot = slot;
             let _ = resolve_with_overrides(&cascade, &overrides, &ctx);
         }

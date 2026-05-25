@@ -47,7 +47,6 @@ fn test_stl() -> PathBuf {
 fn canonical_printer() -> PrinterProfile {
     PrinterProfile {
         model: "Bambu A1 mini".into(),
-        slot_count: 4,
         supported_build_plates: vec![
             "Cool".into(),
             "Textured PEI".into(),
@@ -56,10 +55,9 @@ fn canonical_printer() -> PrinterProfile {
             "SuperTack".into(),
         ],
         toolheads: vec![Toolhead {
-            nozzle_diameter: 0.4,
+            default_nozzle_diameter: 0.4,
             hotend_type: "stainless_steel".into(),
             max_temp: 300.0,
-            slot_indices: vec![0, 1, 2, 3],
         }],
         build_volume: BoundingBox {
             min: [0.0, 0.0, 0.0],
@@ -118,14 +116,12 @@ fn bambi_input(model_path: String, output_dir: String, plate_ids: Vec<u32>) -> S
 fn snappy_printer() -> PrinterProfile {
     PrinterProfile {
         model: "Snapmaker U1".into(),
-        slot_count: 4,
         supported_build_plates: vec!["Textured PEI Plate".into()],
         toolheads: (0..4)
             .map(|i| Toolhead {
-                nozzle_diameter: 0.4,
+                default_nozzle_diameter: 0.4,
                 hotend_type: "hardened_steel".into(),
                 max_temp: 300.0,
-                slot_indices: vec![i],
             })
             .collect(),
         build_volume: BoundingBox {

@@ -35,7 +35,6 @@ export type PrinterProfileJson = {
   brand: string;
   /** Short brand glyph for cards/chips ("B" for Bambu Lab). */
   brand_short: string;
-  slot_count: number;
   /** Maximum number of AMS-style swap units this printer accepts.
    * `0` means no AMS support (direct-feed only / toolchanger). */
   ams_max: number;
@@ -50,10 +49,9 @@ export type PrinterProfileJson = {
    * legacy profiles that omit the field. */
   default_bed: string | null;
   toolheads: {
-    nozzle_diameter: number;
+    default_nozzle_diameter: number;
     hotend_type: string;
     max_temp: number;
-    slot_indices: number[];
   }[];
   build_volume: { min: [number, number, number]; max: [number, number, number] };
   exclusion_zones: { min: [number, number, number]; max: [number, number, number] }[];
@@ -83,7 +81,7 @@ export type ResolvedEntry = {
 export type ResolvedMap = Record<string, ResolvedEntry>;
 
 /** Fetch the printer-aware option list. Cached per printer model
- *  + slot_count + toolhead count since those are the inputs the
+ *  + toolhead count since those are the inputs the
  *  capability predicates read; switching printers with the same
  *  capability shape would still trigger a refetch via the
  *  composite key but the result is identical. */

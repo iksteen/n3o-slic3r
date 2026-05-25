@@ -13,17 +13,15 @@ const PRINTER: PrinterProfileJson = {
   model: "Bambu A1 mini",
   brand: "Bambu Lab",
   brand_short: "B",
-  slot_count: 4,
   ams_max: 1,
   ams_type: "AMS Lite",
   default_bed: "Textured PEI",
   supported_build_plates: ["Textured PEI", "Cool"],
   toolheads: [
     {
-      nozzle_diameter: 0.4,
+      default_nozzle_diameter: 0.4,
       hotend_type: "stainless_steel",
       max_temp: 300,
-      slot_indices: [0, 1, 2, 3],
     },
   ],
   build_volume: { min: [0, 0, 0], max: [180, 180, 180] },

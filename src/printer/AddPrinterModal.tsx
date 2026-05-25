@@ -314,7 +314,7 @@ export function AddPrinterModal({
                   <div className="apm-spec-row">
                     <dt>Default nozzle</dt>
                     <dd>
-                      {selected.profile.toolheads[0]?.nozzle_diameter ?? "—"}
+                      {selected.profile.toolheads[0]?.default_nozzle_diameter ?? "—"}
                       mm{" "}
                       {selected.profile.toolheads[0]?.hotend_type ?? ""}
                     </dd>

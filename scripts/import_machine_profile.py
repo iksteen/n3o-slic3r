@@ -25,8 +25,11 @@ Algorithm:
      explicitly and the declared values differ, the source data is
      inconsistent and we abort with a diff.
   5. Emit:
-       <toml-out>/<slug>.toml             ← base machine
+       <toml-out>/<slug>/machine.toml         ← base machine
        <toml-out>/<slug>/nozzles/<sku>.toml   ← per-nozzle (scalars)
+       <toml-out>/<slug>/model.toml           ← printer metadata (default_bed
+                                                seeded; hand-curated fields
+                                                preserved if file exists)
 
 The conflict check is the key safety property: it lets us trust the
 canonical leaf's machine-wide overrides while accepting silently-
@@ -69,19 +72,6 @@ ENVELOPE_KEYS = frozenset({
     "printer_settings_id",
 })
 
-# Picker / UX defaults declared in the model JSON (`type: "machine_model"`)
-# that are real machine-side config we want in the output. The model JSON
-# is a sibling of the per-nozzle leaves rather than a parent in the
-# `inherits` chain, so the leaf walker never reaches it — we merge these
-# keys explicitly. Keys NOT in this set get dropped (envelope-y picker
-# fields like `bed_model`, `bed_texture`, `image_bed_type`, `url`,
-# `family`, `model_id`, `machine_tech` don't belong in the cascade).
-MODEL_JSON_KEYS = frozenset({
-    "default_bed_type",
-    "not_support_bed_type",
-    "default_materials",
-})
-
 # Catalog/picker metadata that travels in machine leaves but isn't
 # slicer config and doesn't belong in our cascade. Dropped by default.
 #
@@ -93,6 +83,16 @@ MODEL_JSON_KEYS = frozenset({
 DEFAULT_DROPPED_META = frozenset({
     "default_print_profile",       # picker UX hint, broken for mixed-nozzle setups
     "upward_compatible_machine",   # libslic3r cross-printer compat artefact
+    # Picker / UX defaults that some leaves redundantly declare. The
+    # canonical source for `default_bed_type` is the model JSON, with
+    # the leaf chain as a fallback for vendors (e.g. Snapmaker) that
+    # only declare it there. main() extracts it into the model.toml
+    # `default_bed` field; this filter then keeps it out of the
+    # machine fragment. The other two are purely picker hints we
+    # don't consume.
+    "default_bed_type",
+    "not_support_bed_type",
+    "default_materials",
 })
 
 # Keys that don't belong in either dimension but DO need to ride along
@@ -217,6 +217,13 @@ def discover_variants(machine_dir: Path, model: str) -> list[tuple[str, Path]]:
             continue
         sku = m.group(1).strip().strip("()")
         if not sku:
+            continue
+        # Multi-SKU mixed-nozzle leaves (e.g. Snapmaker's "0.4+0.6 nozzle")
+        # describe a per-toolhead heterogeneous configuration, not a
+        # single-SKU profile. They can't collapse to one nozzle TOML and
+        # would crash `write_nozzle_profile` on heterogeneity. Skip them.
+        if "+" in sku:
+            print(f"skipping mixed-nozzle leaf {p.name!r} (SKU `{sku}`)")
             continue
         variants.append((sku, p))
 
@@ -395,7 +402,11 @@ def write_base_machine(path: Path, kv: dict, *, source_root: str, slug: str) -> 
         f"# Per-nozzle scalars live under `{slug}/nozzles/<sku>.toml`.",
         "",
     ]
-    body = [f"{k} = {_value_to_toml_machine(kv[k])}" for k in sorted(kv)]
+    body = [
+        f"{k} = {_value_to_toml_machine(kv[k])}"
+        for k in sorted(kv)
+        if k not in DEFAULT_DROPPED_META
+    ]
     path.write_text("\n".join(header + body) + "\n")
 
 
@@ -442,9 +453,13 @@ def main() -> None:
     if not machine_dir.is_dir():
         sys.exit(f"error: machine dir not found: {machine_dir}")
 
+    # User --drop-key applies everywhere (flat / leaf / nozzle / machine
+    # fragment). DEFAULT_DROPPED_META is machine-fragment-only and gets
+    # applied at write time in `write_base_machine`, so that `flat` /
+    # `base_machine` still see the picker keys (e.g. `default_bed_type`)
+    # for selective extraction below.
     drop_keys = frozenset(
-        list(DEFAULT_DROPPED_META)
-        + [k.strip() for k in args.drop.split(",") if k.strip()]
+        k.strip() for k in args.drop.split(",") if k.strip()
     )
     skip_skus = {s.strip() for s in args.skip.split(",") if s.strip()}
 
@@ -476,11 +491,17 @@ def main() -> None:
     # Build outputs.
     base_machine = build_base_machine(flat, leaf)
 
-    # Merge picker defaults from the model JSON (`<model>.json`,
-    # type "machine_model"). These are sibling-not-parent fields the
-    # leaf walker can't reach. Only merge keys the leaf chain didn't
-    # already declare — the leaf is authoritative when both speak.
+    # Resolve the upstream `default_bed_type`. Prefer the model JSON
+    # (`<model>.json`, type "machine_model") — that's the canonical
+    # picker-side declaration. Fall back to the flattened leaf chain;
+    # some upstream profiles (e.g. Snapmaker U1) only declare it
+    # there. The value flows into `<slug>/model.toml` as `default_bed`;
+    # `write_base_machine` filters it out of the machine fragment
+    # via DEFAULT_DROPPED_META. Other model-JSON keys
+    # (`bed_model`, `bed_texture`, `family`, `machine_tech`, ...)
+    # are picker-UX hints we don't consume — never read.
     model_json = machine_dir / f"{args.model}.json"
+    default_bed: str | None = None
     if model_json.exists():
         try:
             mdoc = load_json(model_json)
@@ -488,22 +509,19 @@ def main() -> None:
             print(f"warning: couldn't parse {model_json}: {e}", file=sys.stderr)
         else:
             if mdoc.get("type") == "machine_model":
-                added = 0
-                for k in MODEL_JSON_KEYS:
-                    if k in mdoc and k not in base_machine:
-                        base_machine[k] = mdoc[k]
-                        added += 1
-                if added:
-                    print(
-                        f"\nmerged {added} picker-default(s) from "
-                        f"{model_json.relative_to(args.root)}"
-                    )
+                v = mdoc.get("default_bed_type")
+                if isinstance(v, str) and v:
+                    default_bed = v
+    if default_bed is None:
+        v = base_machine.get("default_bed_type")
+        if isinstance(v, str) and v:
+            default_bed = v
 
     nozzle_profiles = {sku: build_nozzle_profile(flat[sku]) for sku in flat}
 
     # Emit TOML.
     source_root = f"{args.root}/{args.vendor}/machine/"
-    base_path = args.toml_out / f"{args.slug}.toml"
+    base_path = args.toml_out / args.slug / "machine.toml"
     write_base_machine(base_path, base_machine, source_root=source_root, slug=args.slug)
     print(f"\nwrote {base_path} ({len(base_machine)} keys)")
 
@@ -512,6 +530,51 @@ def main() -> None:
         p = nozzle_dir / f"{sku}.toml"
         write_nozzle_profile(p, kv, sku=sku)
         print(f"wrote {p} ({len(kv)} keys)")
+
+    # Seed `default_bed` into the hand-curated model.toml. The rest
+    # of that file (brand, ams_*, toolheads, build_volume,
+    # exclusion_zones) is curator territory and we leave it alone.
+    model_toml = args.toml_out / args.slug / "model.toml"
+    if model_toml.exists():
+        if update_model_toml_default_bed(model_toml, default_bed):
+            shown = "<stripped>" if default_bed is None else repr(default_bed)
+            print(f"updated {model_toml} default_bed = {shown}")
+    elif default_bed is not None:
+        print(
+            f"note: {model_json.relative_to(args.root)} declares "
+            f"default_bed_type={default_bed!r}; no {model_toml} "
+            f"exists yet — author it first."
+        )
+
+
+def update_model_toml_default_bed(path: Path, default_bed: str | None) -> bool:
+    """Edit `default_bed = "..."` on a hand-curated model.toml.
+
+    Preserves all other content + comments + layout. Inserts after
+    the `model = ...` line when the key is missing; strips the line
+    when `default_bed is None`. Returns True iff the file changed.
+    """
+    text = path.read_text(encoding="utf-8")
+    pattern = re.compile(r"^default_bed\s*=.*(?:\r?\n|$)", re.MULTILINE)
+    if default_bed is None:
+        new_text, n = pattern.subn("", text)
+        if n == 0:
+            return False
+    else:
+        replacement = f'default_bed = "{default_bed}"\n'
+        if pattern.search(text):
+            new_text = pattern.sub(replacement, text, count=1)
+        else:
+            model_pat = re.compile(r"^model\s*=.*(?:\r?\n|$)", re.MULTILINE)
+            m = model_pat.search(text)
+            if m:
+                new_text = text[: m.end()] + replacement + text[m.end():]
+            else:
+                new_text = replacement + text
+    if new_text == text:
+        return False
+    path.write_text(new_text, encoding="utf-8")
+    return True
 
 
 if __name__ == "__main__":
