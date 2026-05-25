@@ -66,9 +66,9 @@ pub fn run() {
             // `%APPDATA%/` on Windows); we append our own name rather
             // than reusing `app_config_dir` because that suffixes
             // with Tauri's reverse-DNS identifier
-            // (`com.n3o.slic3r`), which is the right thing for the
-            // bundle but reads ugly when a user goes looking through
-            // their config files.
+            // (`org.thegraveyard.n3o-slic3r`), which is the right
+            // thing for the bundle but reads ugly when a user goes
+            // looking through their config files.
             let printers_root = tauri::Manager::path(app)
                 .config_dir()
                 .expect("config_dir")
