@@ -63,6 +63,46 @@ META_KEYS = {
 
 MISSING = object()
 
+# Libslic3r's authoritative per-extruder option list — every key here
+# is owned by the extruder dimension regardless of whether its values
+# happen to match across nozzle SKUs. Mirrors
+# `PrintConfigDef::init_extruder_option_keys()` in
+# `external/OrcaSlicer/src/libslic3r/PrintConfig.cpp`. Keep in sync if
+# the upstream list grows.
+EXTRUDER_KEYS = {
+    "default_filament_profile",
+    "default_nozzle_volume_type",
+    "deretraction_speed",
+    "extruder_colour",
+    "extruder_offset",
+    "extruder_printable_height",
+    "extruder_type",
+    "long_retractions_when_cut",
+    "max_layer_height",
+    "min_layer_height",
+    "nozzle_diameter",
+    "nozzle_flush_dataset",
+    "nozzle_type",
+    "nozzle_volume",
+    "retract_before_wipe",
+    "retract_length_toolchange",
+    "retract_lift_above",
+    "retract_lift_below",
+    "retract_lift_enforce",
+    "retract_restart_extra",
+    "retract_restart_extra_toolchange",
+    "retract_when_changing_layer",
+    "retraction_distances_when_cut",
+    "retraction_length",
+    "retraction_minimum_travel",
+    "retraction_speed",
+    "travel_slope",
+    "wipe",
+    "wipe_distance",
+    "z_hop",
+    "z_hop_types",
+}
+
 
 def load_json(path: Path) -> dict:
     return json.loads(path.read_text())
@@ -179,8 +219,20 @@ def split_common_vs_per_variant(
             merged_per_sku[sku].get(k, MISSING) == first_value
             for sku in merged_per_sku
         )
-        if all_same and first_value is not MISSING:
+        # libslic3r-declared per-extruder keys always live in the
+        # per-variant deltas, even when every variant carries the
+        # same value — the composer needs them in the nozzle fragment
+        # so it can vector-assemble per extruder.
+        if all_same and first_value is not MISSING and k not in EXTRUDER_KEYS:
             common[k] = first_value
+            continue
+        if all_same:
+            # No semantic difference, but per-extruder dimension forces
+            # per-nozzle placement. Don't count toward the diff report.
+            for sku, doc in merged_per_sku.items():
+                val = doc.get(k, MISSING)
+                if val is not MISSING:
+                    per_variant_delta[sku][k] = val
             continue
         differing_keys.add(k)
         for sku, doc in merged_per_sku.items():
@@ -266,7 +318,10 @@ def value_to_toml_scalar(v: Any, *, key: str) -> str:
     """
     if isinstance(v, list):
         if len(v) == 0:
-            raise ValueError(f"per-nozzle key `{key}` is an empty list")
+            # An empty list serializes the same as an empty scalar
+            # string in the BBS TOML convention (e.g. `bed_exclude_area
+            # = ""`). Keep it singular-shaped.
+            return _toml_string("")
         if len(v) > 1:
             raise ValueError(
                 f"per-nozzle key `{key}` has {len(v)} elements; per-nozzle "
