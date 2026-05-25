@@ -20,6 +20,7 @@ use tauri::{AppHandle, Emitter, State};
 use super::bambu::connection::{BambuConfig, BambuDriver};
 use super::dryrun::neuter_gcode_3mf;
 use super::registry::{DriverRegistry, DriverSummary};
+use super::snapmaker::{U1Config, U1Driver};
 use super::status::PrinterStatus;
 use super::traits::{
     Driver, DriverConfig, DriverError, DriverId, SendHandle, SendPayload, PrinterCommand,
@@ -124,10 +125,19 @@ pub async fn driver_register(
             }
             Ok(id)
         }
-        DriverConfig::U1 { .. } => Err(DriverError::Other(
-            "U1 driver not implemented yet — PR-7b-2 follow-up".into(),
-        )
-        .to_string()),
+        DriverConfig::U1 { host, port, serial } => {
+            let u1_config = U1Config { host, port, serial };
+            let mut bridge_rx = None;
+            let id = registry.register_with(|id| {
+                let driver = U1Driver::new(id, u1_config);
+                bridge_rx = Some(driver.subscribe_status());
+                Box::new(driver) as Box<dyn Driver>
+            });
+            if let Some(rx) = bridge_rx {
+                spawn_status_bridge(app, id, rx);
+            }
+            Ok(id)
+        }
     }
 }
 
