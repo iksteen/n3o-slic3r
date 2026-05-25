@@ -59,11 +59,12 @@ suppaftp = { version = "8.0.3", default-features = false, features = ["native-tl
 tempfile = "3"
 # Snapmaker U1 driver (PR-7b). Plain Moonraker over Klipper firmware:
 # reqwest for the HTTP probe + file upload + print/start, tokio-
-# tungstenite for the WebSocket status subscription. Mirrors bambu-
-# overlay's snapmaker module dep choices (rustls so we don't need
-# OpenSSL on platforms that have moved away from it).
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
-tokio-tungstenite = "0.24"
+# tungstenite for the WebSocket status subscription. Both pinned to
+# native-tls (not rustls) so we reuse the TLS stack already linked
+# in for the Bambu MQTT driver — keeps the binary single-TLS-stack
+# and avoids two trust-store paths.
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "multipart"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "native-tls"] }
 futures-util = "0.3"
 
 [dev-dependencies]
