@@ -27,7 +27,9 @@ use super::{
     load_bed_fragment, load_filament_fragment, load_nozzle_fragment,
     load_printer_fragment, load_process_fragment,
 };
+use crate::core::cascade::resolver::{resolve, MapContext};
 use crate::core::cascade::types::{Cascade, Predicate, Rule, SourceLocation};
+use crate::core::filament;
 use crate::core::printer::PrinterInstance;
 use crate::core::schema::schema_by_key;
 use slic3r_ffi::OptType;
@@ -327,11 +329,13 @@ fn assemble_nozzle_vectors(
 /// positions left empty by a fragment fall back to the slot-0
 /// value so length stays uniform across keys.
 ///
-/// Filament fragments are single-rule scalars (the importer never
-/// emits `[[rule]]` blocks); printer-specific conditional rules
-/// inside fragments are dropped on this path — improving that
-/// requires resolving each fragment against a partial context
-/// before vectoring, which is future work.
+/// Each fragment is resolved against a slot-scoped context (per
+/// `docs/settings-model.md` §5 "Per-slot vector-key assembly")
+/// before vector-assembly: conditional `[[rule]]` blocks inside
+/// fragments — e.g. `when.filament.type = "PETG" set.fan_speed = 30`
+/// — match against THIS slot's bound filament, so the vector entry
+/// reflects per-slot conditional behavior rather than just the
+/// fragment's default rule.
 fn assemble_filament_vectors(
     instance: &PrinterInstance,
 ) -> Result<BTreeMap<String, String>, ComposeError> {
@@ -346,12 +350,16 @@ fn assemble_filament_vectors(
             let cascade = load_filament_fragment(slug).ok_or_else(|| {
                 ComposeError::UnknownFilamentFragment(slug.to_owned())
             })?;
-            let scalars = cascade
-                .rules
+            // Resolve against this slot's filament context so
+            // conditional rules in the fragment can match on
+            // `when.filament.*` predicates. Falls through to the
+            // unconditional default rule when no filament profile is
+            // registered for this slug.
+            let slot_ctx = slot_filament_context(slug);
+            let scalars: BTreeMap<String, String> = resolve(&cascade, &slot_ctx)
                 .into_iter()
-                .next()
-                .map(|r| r.set)
-                .unwrap_or_default();
+                .map(|(k, v)| (k, v.value))
+                .collect();
             per_slot.push(scalars);
         }
     }
@@ -424,6 +432,30 @@ fn assemble_flush_defaults(instance: &PrinterInstance) -> BTreeMap<String, Strin
     let multipliers: Vec<String> = (0..heads_count).map(|_| "1".to_owned()).collect();
     out.insert("flush_multiplier".to_owned(), multipliers.join(","));
     out
+}
+
+/// Build the slot-scoped resolver context for a single filament slug.
+/// Populates the `filament.*` predicates the resolver consults
+/// (mirrors `SlicingContext`'s `Context` impl) so conditional rules
+/// inside a filament fragment can fire per-slot.
+///
+/// Unknown slugs (e.g. an instance bound to a filament identity that
+/// isn't in the registry yet) get an empty context — the fragment's
+/// unconditional default rule still matches, conditional rules
+/// silently don't.
+fn slot_filament_context(slug: &str) -> MapContext {
+    let mut ctx = MapContext::new();
+    if let Some(profile) = filament::lookup(slug) {
+        ctx.set("filament.type", profile.base_type);
+        ctx.set("filament.name", profile.identity);
+        if let Some(vendor) = profile.vendor {
+            ctx.set("filament.vendor", vendor);
+        }
+        if let Some(color) = profile.color {
+            ctx.set("filament.color", color);
+        }
+    }
+    ctx
 }
 
 /// Default per-slot color for unbound slots — Orca's bundled
@@ -653,6 +685,75 @@ mod tests {
             matches!(&err, ComposeError::UnknownNozzleFragment { sku, .. } if sku == "0.9"),
             "got {err:?}",
         );
+    }
+
+    #[test]
+    fn slot_filament_context_populates_predicates_from_lookup() {
+        use crate::core::cascade::resolver::Context;
+        // A bundled filament with known shape — generic-pla is shipped
+        // by the converter under profiles/vendor/generic/filament/.
+        let ctx = slot_filament_context("generic-pla");
+        assert_eq!(ctx.predicate_value("filament.type"), Some("PLA"));
+        // filament.name carries the FilamentProfile.identity string,
+        // not the slug — the bundled generic PLA is labeled "Generic PLA".
+        assert!(ctx.predicate_value("filament.name").is_some());
+    }
+
+    #[test]
+    fn slot_filament_context_unknown_slug_is_empty() {
+        use crate::core::cascade::resolver::Context;
+        // Unknown slug — context has no predicates set; conditional
+        // rules in fragments simply don't match, the unconditional
+        // default rule still does.
+        let ctx = slot_filament_context("not-a-real-filament-ever");
+        assert!(ctx.predicate_value("filament.type").is_none());
+        assert!(ctx.predicate_value("filament.name").is_none());
+    }
+
+    #[test]
+    fn per_slot_fragment_resolution_fires_conditional_rules() {
+        // Hand-build a cascade with one default rule + one conditional
+        // rule keyed on filament.type. Resolve against two different
+        // slot contexts (PLA vs PETG) and confirm the conditional
+        // rule fires for each context's matching filament type — this
+        // is the per-slot fan-out behavior that lets a future vendor
+        // filament fragment carry `when.filament.type` rules safely.
+        use crate::core::cascade::loader::parse_cascade_str;
+        use std::path::Path;
+
+        let rules = parse_cascade_str(
+            "\
+[[rule]]
+set.fan_speed = 50
+
+[[rule]]
+when.filament.type = \"PETG\"
+set.fan_speed = 30
+",
+            Path::new("synthetic.toml"),
+        )
+        .unwrap();
+        let cascade = Cascade { rules };
+
+        // Resolve against a PLA-typed context: only the default rule
+        // matches → fan_speed = 50.
+        let mut pla_ctx = MapContext::new();
+        pla_ctx.set("filament.type", "PLA");
+        let pla_scalars: BTreeMap<String, String> = resolve(&cascade, &pla_ctx)
+            .into_iter()
+            .map(|(k, v)| (k, v.value))
+            .collect();
+        assert_eq!(pla_scalars.get("fan_speed").map(String::as_str), Some("50"));
+
+        // Resolve against a PETG-typed context: the conditional rule
+        // matches and wins on higher specificity → fan_speed = 30.
+        let mut petg_ctx = MapContext::new();
+        petg_ctx.set("filament.type", "PETG");
+        let petg_scalars: BTreeMap<String, String> = resolve(&cascade, &petg_ctx)
+            .into_iter()
+            .map(|(k, v)| (k, v.value))
+            .collect();
+        assert_eq!(petg_scalars.get("fan_speed").map(String::as_str), Some("30"));
     }
 
     #[test]
