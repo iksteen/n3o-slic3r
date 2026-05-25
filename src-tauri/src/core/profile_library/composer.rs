@@ -29,6 +29,8 @@ use super::{
 };
 use crate::core::cascade::types::{Cascade, Predicate, Rule, SourceLocation};
 use crate::core::printer::PrinterInstance;
+use crate::core::schema::schema_by_key;
+use slic3r_ffi::OptType;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -249,14 +251,8 @@ fn assemble_nozzle_vectors(
                     .unwrap_or_default()
             })
             .collect();
-        // libslic3r's vector option deserialization uses comma as the
-        // entry separator — `ConfigOptionVector::deserialize` (and
-        // `ConfigOptionEnumsGeneric::deserialize`) splits on ','.
-        // Semicolons would silently parse as a single-element vector
-        // containing the joined string, leaving e.g. `nozzle_type`
-        // empty and tripping `GCodeProcessor::update_slice_warnings`
-        // when it indexes `nozzle_hrc_lists`.
-        out.insert(key, values.join(","));
+        let joined = join_for_key(&key, &values);
+        out.insert(key, joined);
     }
 
     Ok(out)
@@ -330,13 +326,8 @@ fn assemble_filament_vectors(
                     .unwrap_or_default()
             })
             .collect();
-        // Comma separator matches `assemble_nozzle_vectors`. libslic3r's
-        // coFloats/coInts/coBools/Enums deserialize on ','; coStrings
-        // (filament_colour, filament_type, filament_settings_id) prefer
-        // ';' upstream but accept ',' in current versions. If a key
-        // surfaces a deserialization issue, switch to per-OptType-aware
-        // joining via `slic3r_ffi::option_defs`.
-        out.insert(key, values.join(","));
+        let joined = join_for_key(&key, &values);
+        out.insert(key, joined);
     }
 
     Ok(out)
@@ -364,6 +355,65 @@ fn assemble_filament_topology(
     out
 }
 
+/// Join a list of per-extruder/per-slot scalar values into the
+/// vector-string libslic3r's `ConfigOptionVector::deserialize` expects.
+///
+/// Almost every libslic3r vector option uses `,` as the separator
+/// (coFloats, coInts, coBools, coPercents, coEnums, coFloatsOrPercents,
+/// coPoints) — that's what `ConfigOptionVector::deserialize` and
+/// `ConfigOptionEnumsGeneric::deserialize` parse. `coStrings` is the
+/// exception: it expects `;` as the separator, with cstyle escaping
+/// (`"…"` quoting + `\"`/`\\`/`\r`/`\n` escapes) applied to entries
+/// containing whitespace or quotes. See
+/// `external/OrcaSlicer/src/libslic3r/Config.cpp::escape_strings_cstyle`.
+///
+/// When the schema isn't available (FFI not initialized in some unit
+/// tests) or the key isn't in libslic3r's option universe, fall back
+/// to comma-join — matches the pre-existing behavior so tests stay
+/// deterministic.
+fn join_for_key(key: &str, values: &[String]) -> String {
+    let ty = schema_by_key(key).map(|s| s.ty);
+    if matches!(ty, Some(OptType::Strings)) {
+        values
+            .iter()
+            .map(|v| escape_string_cstyle(v))
+            .collect::<Vec<_>>()
+            .join(";")
+    } else {
+        values.join(",")
+    }
+}
+
+/// Rust port of libslic3r's `escape_string_cstyle` (Config.cpp:49). A
+/// value is quoted iff it contains a character that would otherwise
+/// confuse the `;`-delimited parser: space, tab, backslash, quote, CR,
+/// LF. Inside the quotes, `"` and `\` are backslash-escaped; CR/LF
+/// become the literal `\r`/`\n` digraphs. Non-quoting values pass
+/// through verbatim.
+fn escape_string_cstyle(s: &str) -> String {
+    let needs_quote = s
+        .bytes()
+        .any(|b| matches!(b, b' ' | b'\t' | b'\\' | b'"' | b'\r' | b'\n'));
+    if !needs_quote {
+        return s.to_owned();
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' | '"' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\r' => out.push_str("\\r"),
+            '\n' => out.push_str("\\n"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Format a NozzleSku for fragment lookup. Currently just the
 /// diameter as the SKU string (matches the converter's filename
 /// convention). Future: incorporate material when we author
@@ -383,6 +433,25 @@ fn nozzle_sku_string(nozzle: &crate::core::printer::NozzleSku) -> String {
 mod tests {
     use super::*;
     use crate::core::printer::lookup_instance;
+
+    #[test]
+    fn escape_string_cstyle_passes_simple_values_through() {
+        assert_eq!(escape_string_cstyle("PLA"), "PLA");
+        assert_eq!(escape_string_cstyle("#F2754E"), "#F2754E");
+        assert_eq!(escape_string_cstyle(""), "");
+    }
+
+    #[test]
+    fn escape_string_cstyle_quotes_whitespace_and_specials() {
+        // Space, tab, backslash, quote, CR, LF all trigger quoting; quote and
+        // backslash get backslash-escaped inside; CR/LF become \r / \n.
+        assert_eq!(escape_string_cstyle("Generic PLA"), "\"Generic PLA\"");
+        assert_eq!(escape_string_cstyle("a\tb"), "\"a\tb\"");
+        assert_eq!(escape_string_cstyle("a\"b"), "\"a\\\"b\"");
+        assert_eq!(escape_string_cstyle("a\\b"), "\"a\\\\b\"");
+        assert_eq!(escape_string_cstyle("a\nb"), "\"a\\nb\"");
+        assert_eq!(escape_string_cstyle("a\rb"), "\"a\\rb\"");
+    }
 
     #[test]
     fn compose_bambi_yields_printer_nozzle_bed_filament_process_layers() {

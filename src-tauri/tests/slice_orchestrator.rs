@@ -296,6 +296,9 @@ fn snappy_orchestrator_compose_succeeds() {
     use n3o_slic3r_lib::core::printer::lookup_instance;
     use n3o_slic3r_lib::core::profile_library::compose_cascade;
     use std::collections::BTreeMap;
+    // FFI init is required so the schema cache is populated; the composer
+    // dispatches separator choice on OptType (`;` for coStrings).
+    ensure_ffi_init();
     let instance = lookup_instance("snappy").expect("snappy in instance library");
     let cascade = compose_cascade(&instance, &BTreeMap::new())
         .expect("snappy cascade composes");
@@ -324,6 +327,25 @@ fn snappy_orchestrator_compose_succeeds() {
         diam_parts.len(),
         4,
         "expected 4-element filament_diameter vector, got {diam:?}"
+    );
+
+    // coStrings keys use ';' as the separator (libslic3r's
+    // ConfigOptionStrings convention). filament_type ("PLA") doesn't
+    // need quoting; verify both the separator choice and length-4.
+    let ftype = cascade
+        .rules
+        .iter()
+        .find_map(|r| r.set.get("filament_type"))
+        .expect("filament_type assembled into the cascade");
+    let ftype_parts: Vec<&str> = ftype.split(';').collect();
+    assert_eq!(
+        ftype_parts.len(),
+        4,
+        "expected 4-element ';'-joined filament_type, got {ftype:?}"
+    );
+    assert!(
+        !ftype.contains(','),
+        "filament_type must not use ',' (libslic3r treats it as data inside a string), got {ftype:?}"
     );
 }
 
