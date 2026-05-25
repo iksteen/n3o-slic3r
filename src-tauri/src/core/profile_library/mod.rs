@@ -367,6 +367,53 @@ pub fn load_bed_fragment(printer_slug: &str, identity: &str) -> Option<Cascade> 
         .map(|a| a.cascade.clone())
 }
 
+/// Peek a single config key out of a printer fragment's cascade. The
+/// machine fragment is a flat TOML in practice — every key is set by
+/// some rule's `set` map — so the first hit wins. Returns `None` when
+/// no rule sets `key`, or when the printer slug is unknown.
+fn fragment_set_value(cascade: &Cascade, key: &str) -> Option<String> {
+    for rule in &cascade.rules {
+        if let Some(v) = rule.set.get(key) {
+            return Some(v.clone());
+        }
+    }
+    None
+}
+
+/// Default `curr_bed_type` enum value for the printer, as declared
+/// in the upstream Orca `machine_model` JSON and merged into our
+/// machine fragment by `import_machine_profile.py`. Returns `None`
+/// when the printer fragment doesn't declare it — callers fall back
+/// to "first supported bed."
+pub fn default_bed_for_printer(printer_slug: &str) -> Option<String> {
+    let cascade = load_printer_fragment(printer_slug)?;
+    fragment_set_value(&cascade, "default_bed_type")
+}
+
+/// libslic3r `default_filament_profile` for the given printer + nozzle
+/// SKU — the filament preset Orca picks when a fresh instance lands.
+/// Returns the preset's `filament_settings_id` string (e.g.
+/// `"Bambu PLA Basic @BBL A1M"`); callers map this to a fragment slug
+/// via [`filament_slug_by_display_name`].
+pub fn default_filament_profile_for(
+    printer_slug: &str,
+    sku: &str,
+) -> Option<String> {
+    let cascade = load_nozzle_fragment(printer_slug, sku)?;
+    fragment_set_value(&cascade, "default_filament_profile")
+}
+
+/// Look up a filament fragment slug by its human-readable
+/// `filament_settings_id` (the same name libslic3r's
+/// `default_filament_profile` uses). Returns `None` when no fragment
+/// matches — callers should fall back to a generic filament slug.
+pub fn filament_slug_by_display_name(display_name: &str) -> Option<String> {
+    list_filament_fragments()
+        .into_iter()
+        .find(|f| f.display_name == display_name)
+        .map(|f| f.identity)
+}
+
 /// Every bed identity bundled for the named printer, in declaration
 /// order (file-system sort order, deterministic).
 pub fn bundled_beds_for_printer(printer_slug: &str) -> Vec<&'static str> {

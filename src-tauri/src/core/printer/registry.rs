@@ -38,17 +38,9 @@ pub struct CatalogEntry {
 pub fn bundled_catalog() -> Vec<CatalogEntry> {
     profile_library::printer_catalog()
         .iter()
-        .map(|e| {
-            let mut profile = e.profile.clone();
-            profile.supported_build_plates =
-                profile_library::bundled_beds_for_printer(&e.fragment_slug)
-                    .into_iter()
-                    .map(str::to_owned)
-                    .collect();
-            CatalogEntry {
-                identity: e.identity.clone(),
-                profile,
-            }
+        .map(|e| CatalogEntry {
+            identity: e.identity.clone(),
+            profile: hydrate_profile(&e.profile, &e.fragment_slug),
         })
         .collect()
 }
@@ -57,15 +49,22 @@ pub fn bundled_catalog() -> Vec<CatalogEntry> {
 /// `None` for unknown identities. The Tauri command layer maps that
 /// to a `String` error the picker shows as a toast.
 pub fn lookup(identity: &str) -> Option<PrinterProfile> {
-    profile_library::printer_catalog_lookup(identity).map(|e| {
-        let mut profile = e.profile.clone();
-        profile.supported_build_plates =
-            profile_library::bundled_beds_for_printer(&e.fragment_slug)
-                .into_iter()
-                .map(str::to_owned)
-                .collect();
-        profile
-    })
+    profile_library::printer_catalog_lookup(identity)
+        .map(|e| hydrate_profile(&e.profile, &e.fragment_slug))
+}
+
+/// Fill in the runtime-derived fields on a `PrinterProfile` — the
+/// per-printer bed list and the upstream `default_bed_type`. Kept as
+/// one place so the catalog walk + single-id `lookup` can't drift.
+fn hydrate_profile(base: &PrinterProfile, fragment_slug: &str) -> PrinterProfile {
+    let mut profile = base.clone();
+    profile.supported_build_plates =
+        profile_library::bundled_beds_for_printer(fragment_slug)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+    profile.default_bed = profile_library::default_bed_for_printer(fragment_slug);
+    profile
 }
 
 /// Identity of the bundled-default printer. Used to auto-bind a

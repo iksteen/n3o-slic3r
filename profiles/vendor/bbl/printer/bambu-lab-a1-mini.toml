@@ -238,6 +238,8 @@ G392 S0
 
 M1007 S1
 '''
+default_bed_type = "Textured PEI Plate"
+default_materials = "Bambu PLA Matte @BBL A1M;Bambu PLA Basic @BBL A1M;Bambu PLA Silk @BBL A1M;Bambu Support For PLA @BBL A1M;Bambu TPU 95A @BBL A1M;Generic PLA @BBL A1M;Generic PLA High Speed @BBL A1M;Bambu PLA Metal @BBL A1M;Generic PETG @BBL A1M;Bambu PLA Marble @BBL A1M;Bambu PLA-CF @BBL A1M;Bambu PETG-CF @BBL A1M;Bambu PETG HF @BBL A1M"
 enable_filament_ramming = "0"
 enable_long_retraction_when_cut = "2"
 enable_power_loss_recovery = "printer_configuration"
@@ -888,6 +890,7 @@ M1007 S1
 machine_switch_extruder_time = "0"
 machine_unload_filament_time = "34"
 master_extruder_id = "1"
+not_support_bed_type = "Smooth Cool Plate;Engineering Plate"
 nozzle_height = "4.76"
 physical_extruder_map = "0"
 printable_area = "0x0,180x0,180x180,0x180"

@@ -69,6 +69,19 @@ ENVELOPE_KEYS = frozenset({
     "printer_settings_id",
 })
 
+# Picker / UX defaults declared in the model JSON (`type: "machine_model"`)
+# that are real machine-side config we want in the output. The model JSON
+# is a sibling of the per-nozzle leaves rather than a parent in the
+# `inherits` chain, so the leaf walker never reaches it — we merge these
+# keys explicitly. Keys NOT in this set get dropped (envelope-y picker
+# fields like `bed_model`, `bed_texture`, `image_bed_type`, `url`,
+# `family`, `model_id`, `machine_tech` don't belong in the cascade).
+MODEL_JSON_KEYS = frozenset({
+    "default_bed_type",
+    "not_support_bed_type",
+    "default_materials",
+})
+
 # Catalog/picker metadata that travels in machine leaves but isn't
 # slicer config and doesn't belong in our cascade. Dropped by default.
 #
@@ -462,6 +475,30 @@ def main() -> None:
 
     # Build outputs.
     base_machine = build_base_machine(flat, leaf)
+
+    # Merge picker defaults from the model JSON (`<model>.json`,
+    # type "machine_model"). These are sibling-not-parent fields the
+    # leaf walker can't reach. Only merge keys the leaf chain didn't
+    # already declare — the leaf is authoritative when both speak.
+    model_json = machine_dir / f"{args.model}.json"
+    if model_json.exists():
+        try:
+            mdoc = load_json(model_json)
+        except json.JSONDecodeError as e:
+            print(f"warning: couldn't parse {model_json}: {e}", file=sys.stderr)
+        else:
+            if mdoc.get("type") == "machine_model":
+                added = 0
+                for k in MODEL_JSON_KEYS:
+                    if k in mdoc and k not in base_machine:
+                        base_machine[k] = mdoc[k]
+                        added += 1
+                if added:
+                    print(
+                        f"\nmerged {added} picker-default(s) from "
+                        f"{model_json.relative_to(args.root)}"
+                    )
+
     nozzle_profiles = {sku: build_nozzle_profile(flat[sku]) for sku in flat}
 
     # Emit TOML.

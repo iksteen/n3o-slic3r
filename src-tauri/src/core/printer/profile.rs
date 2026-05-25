@@ -59,6 +59,16 @@ pub struct PrinterProfile {
     #[serde(default)]
     pub supported_build_plates: Vec<String>,
 
+    /// Default `curr_bed_type` enum value Orca's upstream
+    /// `machine_model` JSON declares for this printer (e.g.
+    /// `"Textured PEI Plate"` for the A1 mini, the same for U1).
+    /// Populated by the registry from
+    /// `profile_library::default_bed_for_printer` — the machine
+    /// fragment carries the raw key. `None` for printers whose
+    /// upstream profile omits the field.
+    #[serde(default)]
+    pub default_bed: Option<String>,
+
     /// One entry per physical toolhead. For Bambu A1 mini (AMS-fed
     /// single nozzle), `toolheads.len() == 1` and `slot_count == 4`.
     /// For Snapmaker U1 (toolchanger), `toolheads.len() == 4` and
@@ -107,6 +117,7 @@ mod tests {
             slot_count: 4,
             ams_max: 1,
             ams_type: Some("AMS Lite".into()),
+            default_bed: Some("Textured PEI Plate".into()),
             supported_build_plates: vec![
                 "Cool Plate".into(),
                 "Textured PEI Plate".into(),

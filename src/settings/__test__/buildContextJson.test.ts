@@ -16,6 +16,7 @@ const PRINTER: PrinterProfileJson = {
   slot_count: 4,
   ams_max: 1,
   ams_type: "AMS Lite",
+  default_bed: "Textured PEI",
   supported_build_plates: ["Textured PEI", "Cool"],
   toolheads: [
     {

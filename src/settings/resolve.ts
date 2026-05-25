@@ -43,6 +43,12 @@ export type PrinterProfileJson = {
    * `null` when ams_max is 0. */
   ams_type: string | null;
   supported_build_plates: string[];
+  /** Default `curr_bed_type` enum value the upstream Orca profile
+   * declares for this printer. Frontend uses this when displaying
+   * "the canonical default" hint; create_instance on the backend
+   * uses it to seed a fresh PrinterInstance's bed. `null` for
+   * legacy profiles that omit the field. */
+  default_bed: string | null;
   toolheads: {
     nozzle_diameter: number;
     hotend_type: string;

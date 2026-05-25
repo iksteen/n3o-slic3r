@@ -246,11 +246,16 @@ pub fn set_slot_color(
 ///
 /// Defaults derived from the bundled profile + library:
 ///   - nozzle: first toolhead's `nozzle_diameter`, `Stainless`.
-///   - bed: first entry in `supported_build_plates`.
+///   - bed: `profile.default_bed` (Orca's upstream `default_bed_type`)
+///     when set + supported, else the first entry in
+///     `supported_build_plates`.
 ///   - default process: first bundled process fragment for the
 ///     printer (deterministic by `BTreeMap` key order).
-///   - default filament: `"generic-pla"` (we ship this for every
-///     vendor, so it's the safest cross-printer default).
+///   - default filament: the nozzle SKU's upstream
+///     `default_filament_profile` (e.g. `"Bambu PLA Basic @BBL A1M"`)
+///     resolved to a fragment slug; every slot is pre-bound to it.
+///     Falls back to `"generic-pla"` when the nozzle doesn't declare
+///     a default or the named filament isn't in our library.
 ///
 /// Validates: the printer identity exists in the catalog, AMS
 /// count is within `ams_max`, display name is non-empty (after
@@ -277,13 +282,37 @@ pub fn create_instance(
         });
     }
 
+    // Default nozzle SKU from the printer's first toolhead. Used
+    // both to seed `installed_nozzle` and to look up the upstream
+    // `default_filament_profile` from the matching nozzle fragment.
+    let nozzle_diameter = profile
+        .toolheads
+        .first()
+        .map(|t| t.nozzle_diameter as f32)
+        .unwrap_or(0.4);
+    // Format with one decimal place — matches how the nozzle
+    // fragments are filed on disk (`0.4`, `0.6`).
+    let nozzle_sku = format!("{:.1}", nozzle_diameter);
+    // Resolve the upstream `default_filament_profile` (a
+    // `filament_settings_id` like `"Bambu PLA Basic @BBL A1M"`) to
+    // a fragment slug. Fall back to `generic-pla` when the nozzle
+    // doesn't declare one or the named filament isn't in our
+    // library — every vendor ships a Generic PLA fragment so the
+    // slice path always has *something* to resolve against.
+    let default_filament_slug = crate::core::profile_library::default_filament_profile_for(
+        printer_identity,
+        &nozzle_sku,
+    )
+    .and_then(|name| crate::core::profile_library::filament_slug_by_display_name(&name))
+    .unwrap_or_else(|| "generic-pla".to_owned());
+
     let mut slots = Vec::new();
     // Slot 0: the direct/external spool. Always present so users
     // who picked 0 AMS units still have a feed.
     slots.push(SlotBinding {
         label: "Ext".to_owned(),
         feed: FeedKind::Direct,
-        filament_identity: None,
+        filament_identity: Some(default_filament_slug.clone()),
         color: None,
     });
     for unit in 0..ams_units {
@@ -298,21 +327,22 @@ pub fn create_instance(
             slots.push(SlotBinding {
                 label,
                 feed: FeedKind::Ams,
-                filament_identity: None,
+                filament_identity: Some(default_filament_slug.clone()),
                 color: None,
             });
         }
     }
 
-    let nozzle_diameter = profile
-        .toolheads
-        .first()
-        .map(|t| t.nozzle_diameter as f32)
-        .unwrap_or(0.4);
+    // Bed: prefer the upstream-declared default when it's actually
+    // in the supported list; otherwise first-supported. The
+    // `supported_build_plates` filter guards against a stale or
+    // hand-edited `default_bed` pointing at a bed we don't ship.
     let bed_identity = profile
-        .supported_build_plates
-        .first()
+        .default_bed
+        .as_ref()
+        .filter(|id| profile.supported_build_plates.iter().any(|p| p == *id))
         .cloned()
+        .or_else(|| profile.supported_build_plates.first().cloned())
         .unwrap_or_default();
     let default_process_fragment_slug =
         crate::core::profile_library::bundled_process_slugs_for_printer(printer_identity)
@@ -326,7 +356,7 @@ pub fn create_instance(
         display_name,
         vendor_profile_ref: printer_identity.to_owned(),
         printer_fragment_slug: printer_identity.to_owned(),
-        default_filament_fragment_slug: "generic-pla".to_owned(),
+        default_filament_fragment_slug: default_filament_slug,
         default_process_fragment_slug,
         connection: None,
         extruders: vec![ExtruderState {
