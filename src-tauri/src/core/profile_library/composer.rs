@@ -87,6 +87,33 @@ pub fn compose_cascade(
 
     let mut rules: Vec<Rule> = Vec::new();
 
+    // 0. Synthesized flush-purge defaults.
+    //
+    //    libslic3r's gcode pass validates
+    //    `flush_volumes_matrix.size() == filament_count² × heads_count`
+    //    (see GCode.cpp::append_full_config) and throws
+    //    "Flush volumes matrix do not match to the correct size!"
+    //    on mismatch. The hardcoded default in PrintConfig.cpp is a
+    //    4×4 matrix (16 entries) — fine for 1..=4 filaments on a
+    //    single head, broken for everything else.
+    //
+    //    Synthesize sane defaults sized to the instance topology
+    //    (N² × H, off-diagonal 280, diagonal 0; plus length-H
+    //    flush_multiplier of 1.0). Placed *before* the printer
+    //    fragment so a vendor-shipped matrix (snappy's 84-off-diag
+    //    snapmaker default) still wins on source-order tie-break.
+    let flush_defaults = assemble_flush_defaults(instance);
+    if !flush_defaults.is_empty() {
+        rules.push(Rule {
+            when: Predicate::default(),
+            set: flush_defaults,
+            source: SourceLocation {
+                path: PathBuf::from("<flush-defaults>"),
+                line: 1,
+            },
+        });
+    }
+
     // 1. Printer fragment — machine globals only (per-extruder keys
     //    are deliberately absent here; they come from step 2).
     let printer = load_printer_fragment(&instance.printer_fragment_slug)
@@ -164,6 +191,35 @@ pub fn compose_cascade(
             set: filament_vectors,
             source: SourceLocation {
                 path: PathBuf::from("<filament-vector-assembly>"),
+                line: 1,
+            },
+        });
+    }
+
+    // 4b. Per-slot color synthesis.
+    //
+    //    `filament_colour` must be length-N matching `filament_diameter`:
+    //    `apply_mm_segmentation` in PrintObjectSlice.cpp uses
+    //    `filament_diameter.size()` as the extruder count, while
+    //    `multi_material_segmentation_by_painting` sizes its inner
+    //    per-layer vectors by `filament_colour.size() + 1`. A mismatch
+    //    causes an out-of-bounds read on `segmentation[layer_id][i]` for
+    //    `i >= filament_colour.size() + 1`, surfacing as a SIGSEGV deep
+    //    in `get_extents` with a garbage-length expolygons vector.
+    //
+    //    The bundled filament fragments don't carry `filament_colour` at
+    //    all, so the filament-tier fan-out can't produce the right
+    //    length on its own. Synthesize from `PrinterInstance.slots[]
+    //    .color`, falling back to "#F2754E" for unbound slots — the
+    //    color value doesn't affect slicing correctness, only the vector
+    //    length does.
+    let colours = assemble_filament_colours(instance);
+    if !colours.is_empty() {
+        rules.push(Rule {
+            when: Predicate::default(),
+            set: colours,
+            source: SourceLocation {
+                path: PathBuf::from("<filament-colour-synthesis>"),
                 line: 1,
             },
         });
@@ -331,6 +387,67 @@ fn assemble_filament_vectors(
     }
 
     Ok(out)
+}
+
+/// Default off-diagonal purge volume (mm³) — matches libslic3r's
+/// PrintConfig.cpp default for `flush_volumes_matrix`. Per-vendor
+/// overrides (snappy ships 84) replace this via the printer fragment.
+const DEFAULT_FLUSH_OFF_DIAG_MM3: f32 = 280.0;
+
+/// Synthesize `flush_volumes_matrix` (N² × H entries) and
+/// `flush_multiplier` (length H of 1.0) sized to the instance
+/// topology. N = total slot count across all extruders (= filament
+/// count for the cascade), H = extruder count (= "heads" in
+/// libslic3r terminology — `flush_multiplier.size()`).
+///
+/// The matrix layout per libslic3r: H consecutive N×N blocks, each
+/// flat row-major. Off-diagonal entries are
+/// [`DEFAULT_FLUSH_OFF_DIAG_MM3`]; diagonal entries (same → same
+/// filament) are zero. Returned as a comma-joined coFloats string.
+fn assemble_flush_defaults(instance: &PrinterInstance) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let filament_count: usize = instance.extruders.iter().map(|e| e.slots.len()).sum();
+    let heads_count = instance.extruders.len();
+    if filament_count == 0 || heads_count == 0 {
+        return out;
+    }
+    let mut matrix: Vec<String> = Vec::with_capacity(filament_count * filament_count * heads_count);
+    for _ in 0..heads_count {
+        for row in 0..filament_count {
+            for col in 0..filament_count {
+                let v = if row == col { 0.0 } else { DEFAULT_FLUSH_OFF_DIAG_MM3 };
+                matrix.push(format!("{v}"));
+            }
+        }
+    }
+    out.insert("flush_volumes_matrix".to_owned(), matrix.join(","));
+    let multipliers: Vec<String> = (0..heads_count).map(|_| "1".to_owned()).collect();
+    out.insert("flush_multiplier".to_owned(), multipliers.join(","));
+    out
+}
+
+/// Default per-slot color for unbound slots — Orca's bundled
+/// bambu-pla-basic default. The value is cosmetic; the *length* of
+/// the assembled vector is the load-bearing part for slicing
+/// correctness (see `apply_mm_segmentation` index OOB).
+const DEFAULT_FILAMENT_COLOUR: &str = "#F2754E";
+
+/// Synthesize the `filament_colour` vector from PrinterInstance slot
+/// colors. Walks slots in extruder-major order (matching the filament
+/// dimension everywhere else in the cascade) and falls back to
+/// [`DEFAULT_FILAMENT_COLOUR`] for slots with `color == None`.
+fn assemble_filament_colours(instance: &PrinterInstance) -> BTreeMap<String, String> {
+    let values: Vec<String> = instance
+        .extruders
+        .iter()
+        .flat_map(|extruder| extruder.slots.iter())
+        .map(|slot| slot.color.clone().unwrap_or_else(|| DEFAULT_FILAMENT_COLOUR.to_owned()))
+        .collect();
+    let mut out = BTreeMap::new();
+    if !values.is_empty() {
+        out.insert("filament_colour".to_owned(), join_for_key("filament_colour", &values));
+    }
+    out
 }
 
 /// Synthesize `filament_map` + `filament_map_mode` from the instance's
