@@ -29,23 +29,30 @@ use slic3r_ffi::init as ffi_init;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let model_path = args.next().ok_or_else(|| {
-        "usage: slice_repro <path/to/model.3mf> [--override key=value ...]".to_string()
+        "usage: slice_repro <model.3mf> [--instance ID] [--override key=value ...]".to_string()
     })?;
     let model_abs = std::fs::canonicalize(&model_path)?;
     eprintln!("model: {}", model_abs.display());
 
-    // Collect --override key=value pairs. Builds a TOML body the
-    // orchestrator parses as plate-tier overrides (highest precedence).
+    // Collect --instance / --override flags. Override builds a TOML
+    // body the orchestrator parses as plate-tier overrides (highest
+    // precedence). Instance defaults to "bambi"; pass "snappy" for U1.
+    let mut instance_id = "bambi".to_string();
     let mut override_lines: Vec<String> = Vec::new();
     while let Some(flag) = args.next() {
-        if flag != "--override" {
-            return Err(format!("unexpected arg {flag:?}").into());
+        match flag.as_str() {
+            "--instance" => {
+                instance_id = args.next().ok_or("--instance requires ID")?;
+            }
+            "--override" => {
+                let pair = args.next().ok_or("--override requires key=value")?;
+                let (k, v) = pair.split_once('=').ok_or("override must be key=value")?;
+                // libslic3r config values serialize as strings; the
+                // override loader requires TOML-shaped k = "v".
+                override_lines.push(format!("{k} = {:?}", v));
+            }
+            other => return Err(format!("unexpected arg {other:?}").into()),
         }
-        let pair = args.next().ok_or("--override requires key=value")?;
-        let (k, v) = pair.split_once('=').ok_or("override must be key=value")?;
-        // libslic3r config values serialize as strings; the override
-        // loader requires TOML-shaped k = "v".
-        override_lines.push(format!("{k} = {:?}", v));
     }
     let project_overrides: Vec<OverrideFileSpec> = if override_lines.is_empty() {
         vec![]
@@ -64,11 +71,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // app's setup hook isn't running here. `lookup_instance` returns a
     // None if the registry hasn't been seeded; force it via the bundled
     // catalog.
-    let instance = lookup_instance("bambi").ok_or("bambi instance missing from registry")?;
+    let instance = lookup_instance(&instance_id)
+        .ok_or_else(|| format!("instance `{instance_id}` missing from registry"))?;
     let printer = lookup(&instance.printer_fragment_slug)
-        .ok_or("bambi printer profile missing from registry")?;
+        .ok_or_else(|| format!("printer profile for `{instance_id}` missing from registry"))?;
     eprintln!(
-        "bambi: {} extruders, {} bed = {}",
+        "{instance_id}: {} extruders × {} slots, bed = {}",
         instance.extruders.len(),
         instance.extruders[0].slots.len(),
         instance.bed.identity,
@@ -108,7 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             object_overrides: HashMap::new(),
         },
         plate_ids: vec![1],
-        printer_instance_id: "bambi".into(),
+        printer_instance_id: instance_id.clone(),
     };
 
     let bucket: Arc<Mutex<Vec<SliceEvent>>> = Arc::new(Mutex::new(Vec::new()));

@@ -310,6 +310,21 @@ fn snappy_orchestrator_compose_succeeds() {
         .expect("nozzle_diameter assembled into the cascade");
     let parts: Vec<&str> = set.split(',').collect();
     assert_eq!(parts.len(), 4, "expected 4-element nozzle_diameter vector, got {set:?}");
+
+    // And per-slot filament vectors fan out to length-4 (one per AMS/
+    // toolchanger slot). `filament_diameter` is a coFloats key present
+    // in every filament fragment.
+    let diam = cascade
+        .rules
+        .iter()
+        .find_map(|r| r.set.get("filament_diameter"))
+        .expect("filament_diameter assembled into the cascade");
+    let diam_parts: Vec<&str> = diam.split(',').collect();
+    assert_eq!(
+        diam_parts.len(),
+        4,
+        "expected 4-element filament_diameter vector, got {diam:?}"
+    );
 }
 
 #[test]

@@ -146,19 +146,26 @@ pub fn compose_cascade(
         )))?;
     rules.extend(bed.rules);
 
-    // 4. Filament fragment — slot-0-bound filament or instance default.
-    //    Multi-slot vector assembly for filament keys lands when the
-    //    instance actually carries multiple bound slots; MVP uses
-    //    slot 0 only.
-    let filament_slug = instance
-        .extruders
-        .first()
-        .and_then(|e| e.slots.first())
-        .and_then(|s| s.filament_identity.as_deref())
-        .unwrap_or(&instance.default_filament_fragment_slug);
-    let filament = load_filament_fragment(filament_slug)
-        .ok_or_else(|| ComposeError::UnknownFilamentFragment(filament_slug.to_owned()))?;
-    rules.extend(filament.rules);
+    // 4. Per-slot filament fragments → vector assembly.
+    //    Walk slots in extruder-major flat order (matching the
+    //    `filament_map` dimension libslic3r expects), load each
+    //    slot's filament fragment, and zip the scalar values into
+    //    per-key vector strings. Single-filament instances collapse
+    //    to length-1 vectors which libslic3r accepts as scalars.
+    //    Without this fan-out the toolchanger (U1) and AMS-fed
+    //    (Bambi) printers both end up emitting `filament: 1` even
+    //    with N slots bound — no tool changes in the output gcode.
+    let filament_vectors = assemble_filament_vectors(instance)?;
+    if !filament_vectors.is_empty() {
+        rules.push(Rule {
+            when: Predicate::default(),
+            set: filament_vectors,
+            source: SourceLocation {
+                path: PathBuf::from("<filament-vector-assembly>"),
+                line: 1,
+            },
+        });
+    }
 
     // 5. Process fragment — printer-bound, looked up by
     //    `(printer_fragment_slug, default_process_fragment_slug)`.
@@ -249,6 +256,86 @@ fn assemble_nozzle_vectors(
         // containing the joined string, leaving e.g. `nozzle_type`
         // empty and tripping `GCodeProcessor::update_slice_warnings`
         // when it indexes `nozzle_hrc_lists`.
+        out.insert(key, values.join(","));
+    }
+
+    Ok(out)
+}
+
+/// Walk the instance's slots in extruder-major flat order, load each
+/// one's filament fragment, and zip the scalar values into per-key
+/// vector strings. Mirrors [`assemble_nozzle_vectors`] but for
+/// filament-side keys (`filament_diameter`, `filament_colour`,
+/// `filament_type`, `filament_settings_id`, …). Slot order must
+/// match [`assemble_filament_topology`] so `filament[N]` in the
+/// libslic3r vector lines up with `filament_map[N]`'s extruder.
+///
+/// Slots without a bound `filament_identity` fall back to the
+/// instance's `default_filament_fragment_slug`. Per-key vector
+/// positions left empty by a fragment fall back to the slot-0
+/// value so length stays uniform across keys.
+///
+/// Filament fragments are single-rule scalars (the importer never
+/// emits `[[rule]]` blocks); printer-specific conditional rules
+/// inside fragments are dropped on this path — improving that
+/// requires resolving each fragment against a partial context
+/// before vectoring, which is future work.
+fn assemble_filament_vectors(
+    instance: &PrinterInstance,
+) -> Result<BTreeMap<String, String>, ComposeError> {
+    // Load every slot's filament fragment, in extruder-major flat order.
+    let mut per_slot: Vec<BTreeMap<String, String>> = Vec::new();
+    for extruder in &instance.extruders {
+        for slot in &extruder.slots {
+            let slug = slot
+                .filament_identity
+                .as_deref()
+                .unwrap_or(&instance.default_filament_fragment_slug);
+            let cascade = load_filament_fragment(slug).ok_or_else(|| {
+                ComposeError::UnknownFilamentFragment(slug.to_owned())
+            })?;
+            let scalars = cascade
+                .rules
+                .into_iter()
+                .next()
+                .map(|r| r.set)
+                .unwrap_or_default();
+            per_slot.push(scalars);
+        }
+    }
+
+    if per_slot.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    // Union of all keys seen across slots.
+    let mut all_keys: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    for scalars in &per_slot {
+        for k in scalars.keys() {
+            all_keys.insert(k.clone());
+        }
+    }
+
+    // Build length-N vector strings per key.
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    for key in all_keys {
+        let values: Vec<String> = per_slot
+            .iter()
+            .map(|scalars| {
+                scalars
+                    .get(&key)
+                    .cloned()
+                    .or_else(|| per_slot.first().and_then(|p| p.get(&key).cloned()))
+                    .unwrap_or_default()
+            })
+            .collect();
+        // Comma separator matches `assemble_nozzle_vectors`. libslic3r's
+        // coFloats/coInts/coBools/Enums deserialize on ','; coStrings
+        // (filament_colour, filament_type, filament_settings_id) prefer
+        // ';' upstream but accept ',' in current versions. If a key
+        // surfaces a deserialization issue, switch to per-OptType-aware
+        // joining via `slic3r_ffi::option_defs`.
         out.insert(key, values.join(","));
     }
 
