@@ -47,16 +47,16 @@ export function printerCatalog(): Promise<PrinterCatalogEntry[]> {
   return invoke<PrinterCatalogEntry[]>("printer_catalog");
 }
 
-/** Rebind a plate to a different printer by identity. The bed
- * currently loaded on the bound `PrinterInstance` follows from the
- * instance itself — change it via `printerInstanceSetBed`. */
+/** Rebind a plate to a different `PrinterInstance` (by id). The
+ *  bed currently loaded on the instance follows from the instance
+ *  itself — change it via `printerInstanceSetBed`. */
 export function rebindPlatePrinter(
   plateId: PlateId,
-  printerIdentity: string,
+  instanceId: string,
 ): Promise<PrinterChangeReport> {
   return invoke<PrinterChangeReport>("scene_rebind_plate_printer", {
     plateId,
-    printerIdentity,
+    instanceId,
   });
 }
 

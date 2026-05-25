@@ -49,7 +49,7 @@ describe("printerCatalog", () => {
 });
 
 describe("rebindPlatePrinter", () => {
-  it("invokes scene_rebind_plate_printer with plateId/printerIdentity (no bed)", async () => {
+  it("invokes scene_rebind_plate_printer with plateId/instanceId", async () => {
     invokeMock.mockResolvedValueOnce({
       plate_id: 1,
       previous_printer: null,
@@ -58,10 +58,10 @@ describe("rebindPlatePrinter", () => {
       incompatible: [],
       clamped: [],
     });
-    const report = await rebindPlatePrinter(1, "bambu-lab-a1-mini");
+    const report = await rebindPlatePrinter(1, "bambi");
     expect(invokeMock).toHaveBeenCalledWith("scene_rebind_plate_printer", {
       plateId: 1,
-      printerIdentity: "bambu-lab-a1-mini",
+      instanceId: "bambi",
     });
     expect(report.new_printer).toBe("bambu-lab-a1-mini");
     expect(report.incompatible).toEqual([]);
