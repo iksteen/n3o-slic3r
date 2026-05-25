@@ -108,6 +108,33 @@ pub fn compose_cascade(
         });
     }
 
+    // 2b. Filament-map topology.
+    //
+    //    libslic3r's `GCodeProcessor::update_slice_warnings` indexes
+    //    `m_filament_maps` by filament index — if the map is shorter
+    //    than the highest used filament index, you get out-of-bounds
+    //    UB (SIGSEGV in release). The default is `{1}` (length-1), so
+    //    any multi-filament print blows up unless someone (in Orca's
+    //    case, the PartPlate GUI) writes the right value.
+    //
+    //    We author it from the instance topology: for each slot (in
+    //    flat extruder-major order, matching the filament dimension
+    //    libslic3r expects), the value is the 1-based extruder index
+    //    that slot belongs to. We also force
+    //    `filament_map_mode = "Manual"` so libslic3r treats the value
+    //    as authoritative rather than auto-rebalancing.
+    let topology = assemble_filament_topology(instance);
+    if !topology.is_empty() {
+        rules.push(Rule {
+            when: Predicate::default(),
+            set: topology,
+            source: SourceLocation {
+                path: PathBuf::from("<filament-topology>"),
+                line: 1,
+            },
+        });
+    }
+
     // 3. Bed fragment — looked up by `(printer_slug, bed_identity)`
     //    where the identity matches libslic3r's `curr_bed_type` enum
     //    value verbatim.
@@ -215,11 +242,39 @@ fn assemble_nozzle_vectors(
                     .unwrap_or_default()
             })
             .collect();
-        // libslic3r's vector option format: semicolon-separated.
-        out.insert(key, values.join(";"));
+        // libslic3r's vector option deserialization uses comma as the
+        // entry separator — `ConfigOptionVector::deserialize` (and
+        // `ConfigOptionEnumsGeneric::deserialize`) splits on ','.
+        // Semicolons would silently parse as a single-element vector
+        // containing the joined string, leaving e.g. `nozzle_type`
+        // empty and tripping `GCodeProcessor::update_slice_warnings`
+        // when it indexes `nozzle_hrc_lists`.
+        out.insert(key, values.join(","));
     }
 
     Ok(out)
+}
+
+/// Synthesize `filament_map` + `filament_map_mode` from the instance's
+/// `extruders[].slots[]` topology. Walks slots in extruder-major order
+/// (= flat filament dimension libslic3r expects) and emits a 1-based
+/// extruder index per slot. Empty when the instance has no slots
+/// (the caller skips the rule in that case).
+fn assemble_filament_topology(
+    instance: &PrinterInstance,
+) -> BTreeMap<String, String> {
+    let mut filament_map: Vec<String> = Vec::new();
+    for (e_idx, extruder) in instance.extruders.iter().enumerate() {
+        for _ in &extruder.slots {
+            filament_map.push((e_idx + 1).to_string());
+        }
+    }
+    let mut out = BTreeMap::new();
+    if !filament_map.is_empty() {
+        out.insert("filament_map".to_owned(), filament_map.join(","));
+        out.insert("filament_map_mode".to_owned(), "Manual".to_owned());
+    }
+    out
 }
 
 /// Format a NozzleSku for fragment lookup. Currently just the
@@ -273,7 +328,8 @@ mod tests {
     #[test]
     fn nozzle_vector_assembly_replicates_for_u1() {
         // Snappy has 4 extruders all bound to 0.4 SS — the assembled
-        // nozzle_diameter must be "0.4;0.4;0.4;0.4".
+        // nozzle_diameter must be "0.4,0.4,0.4,0.4" — libslic3r's
+        // ConfigOptionVector deserialize splits on ','.
         let snappy = lookup_instance("snappy").expect("snappy present");
         let cascade = compose_cascade(&snappy, &BTreeMap::new()).expect("compose");
 
@@ -287,7 +343,7 @@ mod tests {
             .set
             .get("nozzle_diameter")
             .expect("nozzle_diameter assembled");
-        assert_eq!(diameter, "0.4;0.4;0.4;0.4");
+        assert_eq!(diameter, "0.4,0.4,0.4,0.4");
     }
 
     #[test]

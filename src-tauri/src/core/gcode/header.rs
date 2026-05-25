@@ -353,10 +353,11 @@ fn extract_version(text: &str) -> Option<String> {
 }
 
 fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
-    if s.len() < prefix.len() {
-        return None;
-    }
-    let head = &s[..prefix.len()];
+    // `s.get(..n)` returns None if `n` doesn't fall on a UTF-8 char
+    // boundary — important for Snapmaker's machine_start_gcode which
+    // carries CJK comments like `===== 床面异物检测 =====` that the
+    // byte-indexed slice would panic on.
+    let head = s.get(..prefix.len())?;
     if head.eq_ignore_ascii_case(prefix) {
         Some(&s[prefix.len()..])
     } else {

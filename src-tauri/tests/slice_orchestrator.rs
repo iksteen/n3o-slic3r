@@ -234,21 +234,16 @@ fn bambi_slice_emits_started_progress_finished_with_summary() {
 }
 
 #[test]
-#[ignore = "libslic3r SIGSEGVs on klipper gcode_flavor — U1 needs upstream klipper support work"]
 fn snappy_slice_emits_started_progress_finished_with_summary() {
     // Sibling of the Bambi slice smoke. Exercises the 4-extruder
     // toolchanger path through the composer: each extruder loads its
     // own nozzle.toml, the cascade vector-assembles per-extruder
     // scalars into length-4 strings, and the Textured PEI bed
-    // fragment is the only one Snapmaker authored.
-    //
-    // **Currently ignored** — the U1 machine fragment declares
-    // `gcode_flavor = "klipper"`, and Orca's libslic3r segfaults
-    // somewhere inside its klipper-flavored slice path. Real Snappy
-    // slicing needs upstream work; this test stays in the suite so
-    // it's easy to flip back on when that lands. The cascade compose
-    // half is verified by `composer.rs::tests` and by
-    // `snappy_orchestrator_resolve_cascade_succeeds` below.
+    // fragment is the only one Snapmaker authored. Also exercises
+    // the synthesized `filament_map` topology — without it
+    // `GCodeProcessor::update_slice_warnings` segfaults on the
+    // default length-1 filament map (caught the first time this
+    // test was written).
     let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     ensure_ffi_init();
     let registry = JobRegistry::new();
@@ -315,7 +310,7 @@ fn snappy_orchestrator_compose_succeeds() {
         .iter()
         .find_map(|r| r.set.get("nozzle_diameter"))
         .expect("nozzle_diameter assembled into the cascade");
-    let parts: Vec<&str> = set.split(';').collect();
+    let parts: Vec<&str> = set.split(',').collect();
     assert_eq!(parts.len(), 4, "expected 4-element nozzle_diameter vector, got {set:?}");
 }
 
