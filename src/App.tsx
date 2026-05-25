@@ -58,6 +58,24 @@ function App() {
   const lastSliceOutputPath =
     activePlateId != null ? lastSliceOutput.pathForPlate(activePlateId) : null;
   const printerIdentity = activePlate?.printer_identity ?? null;
+  // PR-7b-7 — derive the active plate's driver kind from its
+  // bound printer instance so PrinterPanel + the credentials
+  // dialog can branch between Bambu (LAN MQTT) and U1 (Moonraker
+  // HTTP+WS). Brittle: keyed on the fragment slug prefix because
+  // PrinterInstance / PrinterProfile don't yet carry an explicit
+  // `kind` field. Tracked for a clean refactor once the profile-
+  // editor UI lands.
+  const activeInstance =
+    activePlate?.printer_instance_id != null
+      ? (printers.instances.find(
+          (i) => i.id === activePlate.printer_instance_id,
+        ) ?? null)
+      : null;
+  const driverKind: "Bambu" | "U1" | null = activeInstance
+    ? activeInstance.printer_fragment_slug.startsWith("snapmaker-")
+      ? "U1"
+      : "Bambu"
+    : null;
 
   // Auto-switch to preview on slice completion, unless the user
   // has manually toggled out of preview during this session.
@@ -158,6 +176,7 @@ function App() {
         />
         <PrinterPanel
           printerIdentity={printerIdentity}
+          driverKind={driverKind}
           plateId={activePlateId}
           lastSliceOutputPath={lastSliceOutputPath}
         />

@@ -16,8 +16,9 @@ import { BambuAmsStrip } from "./BambuAmsStrip";
 import {
   clearCredentials,
   clearDriverId,
-  getCredentials,
+  getBambuCredentials,
   getDriverId,
+  getU1Credentials,
   setDriverId,
 } from "./credentialsCache";
 import {
@@ -35,6 +36,7 @@ import { useDriverStatus } from "./useDriverStatus";
 import type {
   ConnectionState,
   DriverId,
+  DriverKind,
   JobProgress,
   PrinterStatus,
   Temps,
@@ -44,6 +46,13 @@ export interface PrinterPanelProps {
   /** Cascade-side printer identity from the active plate's
    * binding (or `null` if the plate isn't bound yet). */
   printerIdentity: string | null;
+  /** Which driver kind to register for this printer instance.
+   * Derived in App.tsx from the active plate's printer-instance
+   * brand (PR-7b-7). `null` when no plate is bound or the
+   * derivation hasn't resolved yet (treated as Bambu for the
+   * legacy single-printer flow — TODO drop the default when the
+   * derivation always resolves). */
+  driverKind?: DriverKind | null;
   /** Active plate id — needed for the send call's
    * `subtask_name`. `null` collapses the panel to the bind hint. */
   plateId: number | null;
@@ -55,6 +64,10 @@ export interface PrinterPanelProps {
 
 export function PrinterPanel(props: PrinterPanelProps): React.JSX.Element {
   const { printerIdentity, plateId, lastSliceOutputPath } = props;
+  // Default to Bambu when no kind is derived yet — keeps the
+  // pre-PR-7b-7 mount path working until App.tsx always passes a
+  // resolved kind.
+  const driverKind: DriverKind = props.driverKind ?? "Bambu";
   const [driverId, setDriverIdState] = useState<DriverId | null>(null);
   const [showDialog, setShowDialog] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -75,23 +88,38 @@ export function PrinterPanel(props: PrinterPanelProps): React.JSX.Element {
       setDriverIdState(cachedId);
       return;
     }
-    const creds = getCredentials(printerIdentity);
-    if (creds == null) {
+    // Have credentials for the current kind, no live driver →
+    // re-register silently. Read the right variant from the cache;
+    // mismatched kinds (e.g. plate switched from Bambu to U1)
+    // return null and fall through to the connect dialog.
+    const bambuCreds = driverKind === "Bambu" ? getBambuCredentials(printerIdentity) : null;
+    const u1Creds = driverKind === "U1" ? getU1Credentials(printerIdentity) : null;
+    if (bambuCreds == null && u1Creds == null) {
       setDriverIdState(null);
       return;
     }
-    // Have credentials, no live driver — re-register silently.
     let cancelled = false;
     (async () => {
       try {
-        const id = await driverRegister({
-          kind: "Bambu",
-          data: {
-            host: creds.host,
-            access_code: creds.access_code,
-            serial: creds.serial,
-          },
-        });
+        const id = await driverRegister(
+          bambuCreds != null
+            ? {
+                kind: "Bambu",
+                data: {
+                  host: bambuCreds.host,
+                  access_code: bambuCreds.access_code,
+                  serial: bambuCreds.serial,
+                },
+              }
+            : {
+                kind: "U1",
+                data: {
+                  host: u1Creds!.host,
+                  port: u1Creds!.port,
+                  serial: u1Creds!.serial,
+                },
+              },
+        );
         if (cancelled) {
           await driverUnregister(id).catch(() => {});
           return;
@@ -225,7 +253,12 @@ export function PrinterPanel(props: PrinterPanelProps): React.JSX.Element {
             {showDialog && (
               <PrinterCredentialsDialog
                 printerIdentity={printerIdentity}
-                initial={getCredentials(printerIdentity) ?? undefined}
+                kind={driverKind}
+                initial={
+                  (driverKind === "Bambu"
+                    ? getBambuCredentials(printerIdentity)
+                    : getU1Credentials(printerIdentity)) ?? undefined
+                }
                 onConnected={(id) => {
                   setDriverId(printerIdentity, id);
                   setDriverIdState(id);

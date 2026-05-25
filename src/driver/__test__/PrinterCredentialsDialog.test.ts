@@ -6,7 +6,11 @@
 // check or host-presence check trips loudly.
 
 import { describe, expect, it } from "vitest";
-import { validateCredentials } from "../PrinterCredentialsDialog";
+import {
+  validateBambuCredentials,
+  validateCredentials,
+  validateU1Credentials,
+} from "../PrinterCredentialsDialog";
 
 describe("validateCredentials", () => {
   it("accepts a complete + correctly-shaped credential", () => {
@@ -90,5 +94,77 @@ describe("validateCredentials", () => {
         serial: null,
       }),
     ).toMatch(/8 digits/);
+  });
+
+  it("validateBambuCredentials is the canonical name; validateCredentials is a legacy alias", () => {
+    // Pin the alias so a future cleanup that removes one
+    // accidentally without renaming call sites trips here.
+    expect(validateCredentials).toBe(validateBambuCredentials);
+  });
+});
+
+describe("validateU1Credentials", () => {
+  it("accepts a complete + correctly-shaped credential", () => {
+    expect(
+      validateU1Credentials({
+        host: "192.168.1.42",
+        port: 80,
+        serial: "SN-U1-12345",
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts a null serial (driver probes via /machine/system_info)", () => {
+    expect(
+      validateU1Credentials({
+        host: "192.168.1.42",
+        port: 80,
+        serial: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts non-default port", () => {
+    expect(
+      validateU1Credentials({ host: "192.168.1.42", port: 7125, serial: null }),
+    ).toBeNull();
+  });
+
+  it("rejects empty host", () => {
+    expect(
+      validateU1Credentials({ host: "", port: 80, serial: null }),
+    ).toMatch(/Host/);
+  });
+
+  it("rejects whitespace-only host", () => {
+    expect(
+      validateU1Credentials({ host: "   ", port: 80, serial: null }),
+    ).toMatch(/Host/);
+  });
+
+  it("rejects out-of-range port (< 1)", () => {
+    expect(
+      validateU1Credentials({ host: "192.168.1.42", port: 0, serial: null }),
+    ).toMatch(/Port/);
+  });
+
+  it("rejects out-of-range port (> 65535)", () => {
+    expect(
+      validateU1Credentials({
+        host: "192.168.1.42",
+        port: 70000,
+        serial: null,
+      }),
+    ).toMatch(/Port/);
+  });
+
+  it("rejects non-integer port", () => {
+    expect(
+      validateU1Credentials({
+        host: "192.168.1.42",
+        port: 80.5,
+        serial: null,
+      }),
+    ).toMatch(/Port/);
   });
 });

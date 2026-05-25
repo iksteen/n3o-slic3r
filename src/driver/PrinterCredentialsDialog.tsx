@@ -1,8 +1,9 @@
-// PR-7a-7 — modal asking for Bambu LAN credentials before the
-// driver registers + connects.
+// Modal asking for LAN credentials before the driver registers +
+// connects. Branches by printer kind (Bambu vs U1, PR-7b-7).
 //
-// Three text inputs: host, 8-char access code (LCD-shown), serial
-// (optional — the driver probes the peer cert CN if omitted).
+// Bambu: host + 8-digit access code (LCD-shown) + optional serial.
+// U1:    host + port (default 80) + optional serial.
+//
 // On submit: driver_register → driver_connect; on failure both
 // error states surface inline + the driver is unregistered so the
 // user can retry from a clean slate.
@@ -10,8 +11,7 @@
 // Credentials are NOT persisted anywhere — they live in the
 // in-memory cache (`credentialsCache.ts`) for the duration of the
 // app session and are discarded on reload. See
-// `memory/feedback_no_credentials_in_project_file.md` for the
-// design directive.
+// `memory/feedback_no_credentials_in_project_file.md`.
 
 import { useState } from "react";
 import {
@@ -19,18 +19,26 @@ import {
   driverRegister,
   driverUnregister,
 } from "./invokes";
-import { setCredentials, type BambuCredentials } from "./credentialsCache";
-import type { DriverId } from "./types";
+import {
+  setBambuCredentials,
+  setU1Credentials,
+  type BambuCredentials,
+  type U1Credentials,
+} from "./credentialsCache";
+import type { DriverId, DriverKind } from "./types";
 
 export interface PrinterCredentialsDialogProps {
   /** Cascade-side printer identity. Used as the credentials-cache
    * key so the same physical printer is reachable from any plate
    * bound to this identity. */
   printerIdentity: string;
+  /** Which driver this dialog is registering. Derived in App.tsx
+   * from the active plate's printer-instance brand. */
+  kind: DriverKind;
   /** Pre-fill values shown on first open. Lets callers seed from
    * the cache if a previous session entered them. `null` fields
    * render empty. */
-  initial?: Partial<BambuCredentials>;
+  initial?: Partial<BambuCredentials> | Partial<U1Credentials>;
   /** Called with the registered `DriverId` after `driver_connect`
    * resolves. The credentials are already in the cache by the
    * time this fires. */
@@ -39,20 +47,25 @@ export interface PrinterCredentialsDialogProps {
   onCancel(): void;
 }
 
-/** Pure validator — extracted for tests. Returns the first error
- * encountered, or null if every field is acceptable. The access
- * code is always 8 numeric characters; host is non-empty; serial
- * is optional but if provided must be non-empty after trimming. */
-export function validateCredentials(input: BambuCredentials): string | null {
+/** Pure Bambu validator — extracted for tests. */
+export function validateBambuCredentials(input: BambuCredentials): string | null {
   if (input.host.trim().length === 0) {
     return "Host is required";
   }
   if (!/^[0-9]{8}$/.test(input.access_code)) {
     return "Access code must be 8 digits (shown on the printer LCD)";
   }
-  if (input.serial != null && input.serial.trim().length === 0) {
-    // Treat an empty-but-not-null serial as "leave blank for probe".
-    return null;
+  return null;
+}
+
+/** Pure U1 validator. Port defaults handled at the caller; we just
+ *  check the parsed value is in-range and host is non-empty. */
+export function validateU1Credentials(input: U1Credentials): string | null {
+  if (input.host.trim().length === 0) {
+    return "Host is required";
+  }
+  if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) {
+    return "Port must be between 1 and 65535";
   }
   return null;
 }
@@ -60,11 +73,21 @@ export function validateCredentials(input: BambuCredentials): string | null {
 export function PrinterCredentialsDialog(
   props: PrinterCredentialsDialogProps,
 ): React.JSX.Element {
-  const [host, setHost] = useState(props.initial?.host ?? "");
-  const [accessCode, setAccessCode] = useState(
-    props.initial?.access_code ?? "",
+  return props.kind === "Bambu" ? (
+    <BambuForm {...props} />
+  ) : (
+    <U1Form {...props} />
   );
-  const [serial, setSerial] = useState(props.initial?.serial ?? "");
+}
+
+// ---- Bambu form (unchanged from PR-7a-7 except for the
+//      kind-aware cache helper + props plumbing) ----
+
+function BambuForm(props: PrinterCredentialsDialogProps): React.JSX.Element {
+  const initial = (props.initial as Partial<BambuCredentials>) ?? {};
+  const [host, setHost] = useState(initial.host ?? "");
+  const [accessCode, setAccessCode] = useState(initial.access_code ?? "");
+  const [serial, setSerial] = useState(initial.serial ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -76,7 +99,7 @@ export function PrinterCredentialsDialog(
       access_code: accessCode.trim(),
       serial: trimmedSerial.length > 0 ? trimmedSerial : null,
     };
-    const validation = validateCredentials(creds);
+    const validation = validateBambuCredentials(creds);
     if (validation) {
       setError(validation);
       return;
@@ -95,29 +118,201 @@ export function PrinterCredentialsDialog(
         },
       });
       await driverConnect(registeredId);
-      // Only stash credentials AFTER connect resolves successfully
-      // — failing creds shouldn't pollute the cache.
-      setCredentials(props.printerIdentity, creds);
+      setBambuCredentials(props.printerIdentity, creds);
       props.onConnected(registeredId);
     } catch (e) {
       const message = String(e);
       setError(`Connect failed: ${message}`);
-      // Roll back the registration so a retry doesn't accumulate
-      // dead driver instances.
       if (registeredId != null) {
         try {
           await driverUnregister(registeredId);
         } catch (cleanupErr) {
-          console.error(
-            "[printer-credentials] rollback failed",
-            cleanupErr,
-          );
+          console.error("[printer-credentials] rollback failed", cleanupErr);
         }
       }
       setSubmitting(false);
     }
   };
 
+  return (
+    <ModalShell
+      title={`Connect to ${props.printerIdentity}`}
+      onSubmit={handleSubmit}
+      onCancel={props.onCancel}
+      submitting={submitting}
+      error={error}
+      blurb="Enter the printer's LAN host and the 8-digit access code shown on its LCD under Settings → Network. Credentials stay in memory for this session only."
+    >
+      <Field label="Host (IP or .local name)">
+        <input
+          type="text"
+          value={host}
+          onChange={(e) => setHost(e.target.value)}
+          placeholder="192.168.1.42"
+          className="bg-surface-2 border border-border rounded px-2 py-1 text-sm font-mono"
+          autoFocus
+          disabled={submitting}
+        />
+      </Field>
+      <Field label="Access code (8 digits)">
+        <input
+          type="text"
+          inputMode="numeric"
+          value={accessCode}
+          onChange={(e) => setAccessCode(e.target.value)}
+          placeholder="12345678"
+          maxLength={8}
+          className="bg-surface-2 border border-border rounded px-2 py-1 text-sm font-mono"
+          disabled={submitting}
+        />
+      </Field>
+      <Field label="Serial (optional — probed from cert if blank)">
+        <input
+          type="text"
+          value={serial}
+          onChange={(e) => setSerial(e.target.value)}
+          placeholder="01S00A123400000"
+          className="bg-surface-2 border border-border rounded px-2 py-1 text-sm font-mono"
+          disabled={submitting}
+        />
+      </Field>
+    </ModalShell>
+  );
+}
+
+// ---- U1 form (PR-7b-7) ----
+
+function U1Form(props: PrinterCredentialsDialogProps): React.JSX.Element {
+  const initial = (props.initial as Partial<U1Credentials>) ?? {};
+  const [host, setHost] = useState(initial.host ?? "");
+  const [port, setPort] = useState(String(initial.port ?? 80));
+  const [serial, setSerial] = useState(initial.serial ?? "");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    const parsedPort = Number.parseInt(port, 10);
+    const trimmedSerial = serial.trim();
+    const creds: U1Credentials = {
+      host: host.trim(),
+      port: Number.isNaN(parsedPort) ? 0 : parsedPort,
+      serial: trimmedSerial.length > 0 ? trimmedSerial : null,
+    };
+    const validation = validateU1Credentials(creds);
+    if (validation) {
+      setError(validation);
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+
+    let registeredId: DriverId | null = null;
+    try {
+      registeredId = await driverRegister({
+        kind: "U1",
+        data: {
+          host: creds.host,
+          port: creds.port,
+          serial: creds.serial,
+        },
+      });
+      await driverConnect(registeredId);
+      setU1Credentials(props.printerIdentity, creds);
+      props.onConnected(registeredId);
+    } catch (e) {
+      const message = String(e);
+      setError(`Connect failed: ${message}`);
+      if (registeredId != null) {
+        try {
+          await driverUnregister(registeredId);
+        } catch (cleanupErr) {
+          console.error("[printer-credentials] rollback failed", cleanupErr);
+        }
+      }
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <ModalShell
+      title={`Connect to ${props.printerIdentity}`}
+      onSubmit={handleSubmit}
+      onCancel={props.onCancel}
+      submitting={submitting}
+      error={error}
+      blurb="Enter the printer's LAN host and Moonraker port (default 80). Credentials stay in memory for this session only."
+    >
+      <Field label="Host (IP or .local name)">
+        <input
+          type="text"
+          value={host}
+          onChange={(e) => setHost(e.target.value)}
+          placeholder="192.168.1.42"
+          className="bg-surface-2 border border-border rounded px-2 py-1 text-sm font-mono"
+          autoFocus
+          disabled={submitting}
+        />
+      </Field>
+      <Field label="Port">
+        <input
+          type="text"
+          inputMode="numeric"
+          value={port}
+          onChange={(e) => setPort(e.target.value)}
+          placeholder="80"
+          className="bg-surface-2 border border-border rounded px-2 py-1 text-sm font-mono"
+          disabled={submitting}
+        />
+      </Field>
+      <Field label="Serial (optional — probed from /machine/system_info if blank)">
+        <input
+          type="text"
+          value={serial}
+          onChange={(e) => setSerial(e.target.value)}
+          placeholder="SN-…"
+          className="bg-surface-2 border border-border rounded px-2 py-1 text-sm font-mono"
+          disabled={submitting}
+        />
+      </Field>
+    </ModalShell>
+  );
+}
+
+// ---- shared modal chrome ----
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <label className="flex flex-col gap-1 text-xs">
+      <span className="text-text-muted">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function ModalShell({
+  title,
+  blurb,
+  onSubmit,
+  onCancel,
+  submitting,
+  error,
+  children,
+}: {
+  title: string;
+  blurb: string;
+  onSubmit(e: React.FormEvent): void;
+  onCancel(): void;
+  submitting: boolean;
+  error: string | null;
+  children: React.ReactNode;
+}): React.JSX.Element {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
@@ -126,58 +321,14 @@ export function PrinterCredentialsDialog(
       aria-labelledby="printer-credentials-title"
     >
       <form
-        onSubmit={handleSubmit}
+        onSubmit={onSubmit}
         className="bg-surface text-text border border-border rounded-lg w-96 p-5 shadow-lg flex flex-col gap-3"
       >
-        <h2
-          id="printer-credentials-title"
-          className="text-sm font-semibold"
-        >
-          Connect to {props.printerIdentity}
+        <h2 id="printer-credentials-title" className="text-sm font-semibold">
+          {title}
         </h2>
-        <p className="text-xs text-text-muted">
-          Enter the printer's LAN host and the 8-digit access code shown
-          on its LCD under Settings → Network. Credentials stay in
-          memory for this session only.
-        </p>
-        <label className="flex flex-col gap-1 text-xs">
-          <span className="text-text-muted">Host (IP or .local name)</span>
-          <input
-            type="text"
-            value={host}
-            onChange={(e) => setHost(e.target.value)}
-            placeholder="192.168.1.42"
-            className="bg-surface-2 border border-border rounded px-2 py-1 text-sm font-mono"
-            autoFocus
-            disabled={submitting}
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs">
-          <span className="text-text-muted">Access code (8 digits)</span>
-          <input
-            type="text"
-            inputMode="numeric"
-            value={accessCode}
-            onChange={(e) => setAccessCode(e.target.value)}
-            placeholder="12345678"
-            maxLength={8}
-            className="bg-surface-2 border border-border rounded px-2 py-1 text-sm font-mono"
-            disabled={submitting}
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs">
-          <span className="text-text-muted">
-            Serial (optional — probed from cert if blank)
-          </span>
-          <input
-            type="text"
-            value={serial}
-            onChange={(e) => setSerial(e.target.value)}
-            placeholder="01S00A123400000"
-            className="bg-surface-2 border border-border rounded px-2 py-1 text-sm font-mono"
-            disabled={submitting}
-          />
-        </label>
+        <p className="text-xs text-text-muted">{blurb}</p>
+        {children}
         {error && (
           <div
             className="text-xs text-danger bg-danger/10 border border-danger/30 rounded px-2 py-1"
@@ -189,7 +340,7 @@ export function PrinterCredentialsDialog(
         <div className="flex gap-2 justify-end mt-1">
           <button
             type="button"
-            onClick={props.onCancel}
+            onClick={onCancel}
             disabled={submitting}
             className="px-3 py-1 text-xs border border-border rounded hover:bg-surface-2"
           >
@@ -207,3 +358,8 @@ export function PrinterCredentialsDialog(
     </div>
   );
 }
+
+/** Legacy export kept for callers that pre-date PR-7b-7's
+ *  per-variant split. New code should call validateBambuCredentials
+ *  / validateU1Credentials directly. */
+export const validateCredentials = validateBambuCredentials;
