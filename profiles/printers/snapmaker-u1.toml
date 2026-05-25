@@ -2,12 +2,9 @@ model = "Snapmaker U1"
 # 4 magnetically-docked toolheads; each slot maps 1:1 to a physical
 # toolhead (vs the A1 mini's AMS feeding a single toolhead).
 slot_count = 4
-# Bed identities match libslic3r's `curr_bed_type` enum vocabulary;
-# Snapmaker only ships the textured PEI plate, fragment at
-# `profiles/vendor/snapmaker/printer/snapmaker-u1/beds/...`.
-supported_build_plates = [
-    "Textured PEI Plate",
-]
+# `supported_build_plates` is derived at load time from the bed
+# fragments under
+# `profiles/vendor/snapmaker/printer/snapmaker-u1/beds/`.
 
 # One toolhead per slot. Defaults assume the as-shipped 4× identical
 # 0.4mm hardened-steel set per FR-SU-6; the data model permits any

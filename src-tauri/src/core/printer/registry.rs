@@ -33,6 +33,11 @@ use crate::core::project::binding::PrinterBinding;
 #[derive(Debug, Clone, Copy)]
 struct BundledProfile {
     identity: &'static str,
+    /// Slug under `profiles/vendor/<vendor>/printer/<slug>/` — used
+    /// to look up the bed-fragment registry. May differ from the
+    /// catalog identity (e.g. catalog `"bambu-a1-mini"` →
+    /// fragment slug `"bambu-lab-a1-mini"`).
+    fragment_slug: &'static str,
     toml: &'static str,
 }
 
@@ -51,10 +56,12 @@ const SNAPMAKER_U1_TOML: &str = include_str!(concat!(
 const BUNDLED: &[BundledProfile] = &[
     BundledProfile {
         identity: "bambu-a1-mini",
+        fragment_slug: "bambu-lab-a1-mini",
         toml: BAMBU_A1_MINI_TOML,
     },
     BundledProfile {
         identity: "snapmaker-u1",
+        fragment_slug: "snapmaker-u1",
         toml: SNAPMAKER_U1_TOML,
     },
 ];
@@ -89,8 +96,7 @@ pub fn bundled_catalog() -> Vec<CatalogEntry> {
     BUNDLED
         .iter()
         .map(|b| {
-            let profile = parse(b.toml)
-                .unwrap_or_else(|e| panic!("bundled printer `{}`: {e}", b.identity));
+            let profile = load_profile(b);
             CatalogEntry::from(b.identity, profile)
         })
         .collect()
@@ -103,14 +109,23 @@ pub fn lookup(identity: &str) -> Option<PrinterProfile> {
     BUNDLED
         .iter()
         .find(|b| b.identity == identity)
-        .map(|b| {
-            parse(b.toml)
-                .unwrap_or_else(|e| panic!("bundled printer `{identity}`: {e}"))
-        })
+        .map(load_profile)
 }
 
-fn parse(toml: &str) -> Result<PrinterProfile, toml::de::Error> {
-    toml::from_str::<PrinterProfile>(toml)
+/// Parse a bundled printer TOML and populate `supported_build_plates`
+/// from the bed fragments registered under that printer's
+/// `fragment_slug`. The TOML itself doesn't list plates — the bed
+/// registry is the single source of truth
+/// (`profiles/vendor/<vendor>/printer/<fragment_slug>/beds/`).
+fn load_profile(b: &BundledProfile) -> PrinterProfile {
+    let mut profile: PrinterProfile = toml::from_str(b.toml)
+        .unwrap_or_else(|e| panic!("bundled printer `{}`: {e}", b.identity));
+    profile.supported_build_plates =
+        crate::core::profile_library::bundled_beds_for_printer(b.fragment_slug)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+    profile
 }
 
 /// Best-guess default printer binding for fresh projects + newly-

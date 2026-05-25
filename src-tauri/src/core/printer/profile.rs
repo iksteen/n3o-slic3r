@@ -20,10 +20,13 @@ pub struct PrinterProfile {
     /// Snapmaker U1). Surfaced as `printer.slot_count`.
     pub slot_count: usize,
 
-    /// Build-plate identities this printer can target. Reference the
-    /// matching `profiles/plates/<identity>.json` files. Surfaced as
-    /// a constraint for predicate validation (PR-1-2) but not as a
-    /// predicate dimension itself.
+    /// Build-plate identities this printer can target. Derived from
+    /// the bed fragments bundled at
+    /// `profiles/vendor/<vendor>/printer/<slug>/beds/<id>.toml` — the
+    /// registry populates this in `bundled_catalog`/`lookup` from
+    /// `bundled_beds_for_printer(slug)`. `#[serde(default)]` so
+    /// printer TOMLs don't need to repeat the list.
+    #[serde(default)]
     pub supported_build_plates: Vec<String>,
 
     /// One entry per physical toolhead. For Bambu A1 mini (AMS-fed
