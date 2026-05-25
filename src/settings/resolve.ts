@@ -44,7 +44,6 @@ export type PrinterProfileJson = {
 export type BuildPlateJson = {
   identity: string;
   libslic3r_curr_bed_type: string;
-  surface_kind: "PEI" | "PowderCoated" | "Glass" | "Other";
 };
 
 export type FilamentProfileJson = {

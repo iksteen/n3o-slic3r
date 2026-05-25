@@ -40,7 +40,6 @@ import type {
 export const DEFAULT_BUILD_PLATE: BuildPlateJson = {
   identity: "Textured PEI",
   libslic3r_curr_bed_type: "Textured PEI Plate",
-  surface_kind: "PEI",
 };
 
 /** Default filament rendered into slot 0. Same as

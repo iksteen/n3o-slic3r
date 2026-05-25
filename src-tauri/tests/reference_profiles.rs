@@ -59,7 +59,8 @@ fn reference_profiles_resolve_canonical_pla_pei_context() {
 
     let ctx = SlicingContext::new(Arc::new(printer), Arc::new(plate), vec![Arc::new(filament)]);
 
-    let cascade_path = workspace_root().join("profiles/cascades/bambu-a1-mini-demo.toml");
+    let cascade_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bambu-a1-mini-demo.toml");
     let src = std::fs::read_to_string(&cascade_path).expect("read cascade");
     let cascade = Cascade {
         rules: parse_cascade_str(&src, Path::new("bambu-a1-mini-demo.toml"))

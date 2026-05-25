@@ -32,7 +32,7 @@ use crate::core::filament;
 use crate::core::filament::FilamentProfile;
 use crate::core::printer::{self, lookup_instance};
 use crate::core::project::{PlateId, Project};
-use crate::core::scene::build_plate::{self, BuildPlate, SurfaceKind};
+use crate::core::scene::build_plate::{self, BuildPlate};
 use crate::core::scene::state::NewMesh;
 use crate::core::threemf::{project_from_objects, write_3mf, ProjectObject};
 
@@ -149,7 +149,6 @@ pub fn build_slice_input(
         BuildPlate {
             identity: binding.build_plate_identity.clone(),
             libslic3r_curr_bed_type: format!("{} Plate", binding.build_plate_identity),
-            surface_kind: SurfaceKind::Other,
         }
     });
 

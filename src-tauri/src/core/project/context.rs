@@ -102,11 +102,9 @@ mod tests {
     }
 
     fn textured_pei() -> Arc<BuildPlate> {
-        use crate::core::scene::build_plate::SurfaceKind;
         Arc::new(BuildPlate {
             identity: "Textured PEI Plate".into(),
             libslic3r_curr_bed_type: "Textured PEI Plate".into(),
-            surface_kind: SurfaceKind::PEI,
         })
     }
 

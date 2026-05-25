@@ -277,7 +277,6 @@ mod tests {
     fn context_json() -> ContextJson {
         use crate::core::filament::FilamentProfile;
         use crate::core::printer::profile::{BoundingBox, Toolhead};
-        use crate::core::scene::build_plate::SurfaceKind;
         ContextJson {
             printer: PrinterProfile {
                 model: "Bambu A1 mini".into(),
@@ -295,7 +294,6 @@ mod tests {
             plate: BuildPlate {
                 identity: "Textured PEI".into(),
                 libslic3r_curr_bed_type: "Textured PEI Plate".into(),
-                surface_kind: SurfaceKind::PEI,
             },
             filaments: vec![FilamentProfile {
                 identity: "Generic PLA".into(),

@@ -18,18 +18,6 @@ use serde::{Deserialize, Serialize};
 pub struct BuildPlate {
     pub identity: String,
     pub libslic3r_curr_bed_type: String,
-    pub surface_kind: SurfaceKind,
-}
-
-/// Categorical surface kind. Drives adhesion guidance + (Phase 2)
-/// renderer texture choice. Not currently in cascade predicates.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum SurfaceKind {
-    PEI,
-    SuperTack,
-    Engineering,
-    Cool,
-    Other,
 }
 
 // ---- Bundled-plate registry ---------------------------------------
@@ -80,13 +68,11 @@ mod tests {
         let p = BuildPlate {
             identity: "Textured PEI Plate".into(),
             libslic3r_curr_bed_type: "Textured PEI Plate".into(),
-            surface_kind: SurfaceKind::PEI,
         };
         let text = toml::to_string(&p).expect("serialize");
         let parsed: BuildPlate = toml::from_str(&text).expect("deserialize");
         assert_eq!(parsed.identity, "Textured PEI Plate");
         assert_eq!(parsed.libslic3r_curr_bed_type, "Textured PEI Plate");
-        assert_eq!(parsed.surface_kind, SurfaceKind::PEI);
     }
 
     #[test]
@@ -94,7 +80,6 @@ mod tests {
         let p = lookup("Textured PEI Plate").expect("Textured PEI present");
         assert_eq!(p.identity, "Textured PEI Plate");
         assert_eq!(p.libslic3r_curr_bed_type, "Textured PEI Plate");
-        assert_eq!(p.surface_kind, SurfaceKind::PEI);
     }
 
     #[test]

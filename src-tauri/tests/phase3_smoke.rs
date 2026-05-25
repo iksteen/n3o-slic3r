@@ -19,7 +19,7 @@ use n3o_slic3r_lib::core::cascade::commands::ContextJson;
 use n3o_slic3r_lib::core::filament::FilamentProfile;
 use n3o_slic3r_lib::core::gcode::{parser, serializer};
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
-use n3o_slic3r_lib::core::scene::build_plate::{BuildPlate, SurfaceKind};
+use n3o_slic3r_lib::core::scene::build_plate::BuildPlate;
 use n3o_slic3r_lib::core::slice::{
     orchestrator::{run_slice_job_blocking, EventSink},
     JobRegistry, SliceEvent, SliceJobInput,
@@ -78,7 +78,6 @@ fn canonical_plate() -> BuildPlate {
     BuildPlate {
         identity: "Textured PEI".into(),
         libslic3r_curr_bed_type: "Textured PEI Plate".into(),
-        surface_kind: SurfaceKind::PEI,
     }
 }
 

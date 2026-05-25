@@ -22,7 +22,7 @@ use n3o_slic3r_lib::core::cascade_adapter::{adapt_with_overrides, Manifest};
 use n3o_slic3r_lib::core::filament::FilamentProfile;
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
 use n3o_slic3r_lib::core::project::SlicingContext;
-use n3o_slic3r_lib::core::scene::build_plate::{BuildPlate, SurfaceKind};
+use n3o_slic3r_lib::core::scene::build_plate::BuildPlate;
 use slic3r_ffi::init;
 use std::sync::Arc;
 use std::sync::Once;
@@ -85,7 +85,6 @@ fn a1_mini_pla_pei_context() -> SlicingContext {
         Arc::new(BuildPlate {
             identity: "Textured PEI".into(),
             libslic3r_curr_bed_type: "Textured PEI Plate".into(),
-            surface_kind: SurfaceKind::PEI,
         }),
         vec![Arc::new(FilamentProfile {
             identity: "Generic PLA".into(),
@@ -118,7 +117,6 @@ fn four_slot_context() -> SlicingContext {
         Arc::new(BuildPlate {
             identity: "Textured PEI".into(),
             libslic3r_curr_bed_type: "Textured PEI Plate".into(),
-            surface_kind: SurfaceKind::PEI,
         }),
         vec![
             Arc::new(FilamentProfile {

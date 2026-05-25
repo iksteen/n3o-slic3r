@@ -38,7 +38,7 @@ pub mod state;
 pub mod transform;
 
 pub use bed::{bed_for_printer, object_out_of_bounds, BedMesh, BoundsAxis, OutOfBoundsReason};
-pub use build_plate::{BuildPlate, SurfaceKind};
+pub use build_plate::BuildPlate;
 pub use events::{MirrorAxis, SceneEvent, SceneOpError, SelectMode};
 pub use state::{
     ActivePlate, CameraState, ExclusionZone, GizmoMode, GizmoState, Mesh, MeshId,
