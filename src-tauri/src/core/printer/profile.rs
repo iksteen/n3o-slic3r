@@ -10,15 +10,45 @@
 use serde::{Deserialize, Serialize};
 
 /// Declarative description of a physical printer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrinterProfile {
     /// Human-readable model name. Surfaced as `printer.model` in
     /// cascade predicates.
     pub model: String,
 
+    /// Manufacturer name (e.g. `"Bambu Lab"`, `"Snapmaker"`).
+    /// Drives the add-printer modal's grouping + brand-tinted
+    /// cards. `#[serde(default)]` so legacy profiles without the
+    /// field still load — they render under an empty-brand group.
+    #[serde(default)]
+    pub brand: String,
+
+    /// Short brand mark for the modal's profile cards + chips
+    /// (e.g. `"B"` for Bambu Lab, `"S"` for Snapmaker). One or
+    /// two characters; the design treats it as a glyph in a
+    /// rounded square. `#[serde(default)]` for backward compat.
+    #[serde(default)]
+    pub brand_short: String,
+
     /// Number of filament slots (AMS slots on Bambu, toolheads on
     /// Snapmaker U1). Surfaced as `printer.slot_count`.
     pub slot_count: usize,
+
+    /// Maximum number of AMS-style swap units this printer
+    /// accepts. `0` for printers with no AMS support (direct-feed
+    /// only, e.g. Snapmaker U1). `1` for single-AMS printers
+    /// (A1 mini + AMS Lite). Higher for stackable AMS hosts
+    /// (X1C/P1S can chain up to 4 AMS units). Drives the modal's
+    /// AMS picker — when `0`, the picker is hidden entirely.
+    #[serde(default)]
+    pub ams_max: u32,
+
+    /// User-visible AMS family name (`"AMS Lite"`, `"AMS"`,
+    /// `"AMS 2 Pro"`). `None` when the printer has no AMS
+    /// support (`ams_max == 0`). The modal renders this as
+    /// `"<ams_type> configuration"`.
+    #[serde(default)]
+    pub ams_type: Option<String>,
 
     /// Build-plate identities this printer can target. Derived from
     /// the bed fragments bundled at
@@ -46,7 +76,7 @@ pub struct PrinterProfile {
 
 /// A single toolhead's hardware config. Per-extruder cascade
 /// expansion (when Phase 1 grows beyond bed_temp) reads these.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Toolhead {
     pub nozzle_diameter: f64,
     pub hotend_type: String,
@@ -72,7 +102,11 @@ mod tests {
     fn bambu_a1_mini() -> PrinterProfile {
         PrinterProfile {
             model: "Bambu A1 mini".into(),
+            brand: "Bambu Lab".into(),
+            brand_short: "B".into(),
             slot_count: 4,
+            ams_max: 1,
+            ams_type: Some("AMS Lite".into()),
             supported_build_plates: vec![
                 "Cool Plate".into(),
                 "Textured PEI Plate".into(),

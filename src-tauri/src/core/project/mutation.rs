@@ -1750,6 +1750,7 @@ mod tests {
                 max: [180.0, 180.0, 180.0],
             },
             exclusion_zones: vec![],
+            ..Default::default()
         }
     }
 
@@ -1770,6 +1771,7 @@ mod tests {
                 max: [100.0, 100.0, 100.0],
             },
             exclusion_zones: vec![],
+            ..Default::default()
         }
     }
 

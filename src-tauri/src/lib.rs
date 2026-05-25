@@ -130,6 +130,8 @@ pub fn run() {
             core::printer::printer_instance_set_slot_filament,
             core::printer::printer_instance_set_slot_color,
             core::printer::printer_instance_set_bed,
+            core::printer::printer_instance_create,
+            core::printer::printer_instance_delete,
             core::printer::filament_catalog_list,
             core::printer::filament_profile_list,
             core::project::commands::project_set_plate_composition_order,

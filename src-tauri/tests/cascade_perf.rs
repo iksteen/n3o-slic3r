@@ -81,6 +81,7 @@ fn a1_mini_pla_pei_context() -> SlicingContext {
             }],
             build_volume: BoundingBox::default(),
             exclusion_zones: vec![],
+            ..Default::default()
         }),
         Arc::new(BuildPlate {
             identity: "Textured PEI".into(),
@@ -113,6 +114,7 @@ fn four_slot_context() -> SlicingContext {
                 .collect(),
             build_volume: BoundingBox::default(),
             exclusion_zones: vec![],
+            ..Default::default()
         }),
         Arc::new(BuildPlate {
             identity: "Textured PEI".into(),

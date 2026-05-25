@@ -290,6 +290,7 @@ mod tests {
                 }],
                 build_volume: BoundingBox::default(),
                 exclusion_zones: vec![],
+                ..Default::default()
             },
             plate: BuildPlate {
                 identity: "Textured PEI".into(),

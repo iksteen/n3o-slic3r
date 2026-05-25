@@ -66,6 +66,7 @@ fn canonical_printer() -> PrinterProfile {
             max: [180.0, 180.0, 180.0],
         },
         exclusion_zones: vec![],
+        ..Default::default()
     }
 }
 
@@ -132,6 +133,7 @@ fn snappy_printer() -> PrinterProfile {
             max: [220.0, 220.0, 220.0],
         },
         exclusion_zones: vec![],
+        ..Default::default()
     }
 }
 

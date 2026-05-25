@@ -98,6 +98,7 @@ mod tests {
             }],
             build_volume: BoundingBox::default(),
             exclusion_zones: vec![],
+            ..Default::default()
         })
     }
 

@@ -203,6 +203,7 @@ mod tests {
                 min: [0.0, 150.0, 0.0],
                 max: [30.0, 180.0, 5.0],
             }],
+            ..Default::default()
         }
     }
 

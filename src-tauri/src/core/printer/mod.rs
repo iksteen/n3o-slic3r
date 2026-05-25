@@ -24,8 +24,8 @@ pub use instance_library::{
     bundled_instances, instance_id_for_vendor_profile, BAMBI_ID, SNAPPY_ID,
 };
 pub use instance_registry::{
-    list_instances, lookup_instance, mutate_instance, set_instance_bed, set_slot_color,
-    set_slot_filament, InstanceMutError,
+    create_instance, delete_instance, list_instances, lookup_instance, mutate_instance,
+    set_instance_bed, set_slot_color, set_slot_filament, InstanceMutError,
 };
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
 pub use registry::{bundled_catalog, default_printer_identity, lookup, CatalogEntry};
@@ -67,6 +67,46 @@ pub fn printer_instance_set_slot_filament(
         tracing::warn!(error = %e, "printer:instance_changed emit failed");
     }
     Ok(updated)
+}
+
+/// Tauri command: register a new `PrinterInstance` from a bundled
+/// printer identity + display name + AMS unit count. Returns the
+/// new instance for the frontend to optionally auto-bind. Emits
+/// `printer:instance_changed` so consumers re-list.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn printer_instance_create(
+    printer_identity: String,
+    display_name: String,
+    ams_units: u32,
+    window: tauri::Window,
+) -> Result<PrinterInstance, String> {
+    let inst = create_instance(&printer_identity, display_name, ams_units)
+        .map_err(|e| e.to_string())?;
+    use tauri::Emitter;
+    if let Err(e) = window.emit("printer:instance_changed", &inst.id) {
+        tracing::warn!(error = %e, "printer:instance_changed emit failed");
+    }
+    Ok(inst)
+}
+
+/// Tauri command: remove a `PrinterInstance`. The caller (frontend)
+/// is responsible for unbinding any plates that referenced this
+/// instance; the backend currently leaves them as dangling refs
+/// (the slice gate refuses to run, the picker surfaces "unbound").
+/// Emits `printer:instance_changed` so consumers re-list.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn printer_instance_delete(
+    id: String,
+    window: tauri::Window,
+) -> Result<(), String> {
+    delete_instance(&id).map_err(|e| e.to_string())?;
+    use tauri::Emitter;
+    if let Err(e) = window.emit("printer:instance_changed", &id) {
+        tracing::warn!(error = %e, "printer:instance_changed emit failed");
+    }
+    Ok(())
 }
 
 /// Tauri command: change the bed currently loaded on one instance.

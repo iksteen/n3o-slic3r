@@ -16,7 +16,11 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use super::instance::PrinterInstance;
+use uuid::Uuid;
+
+use super::instance::{
+    BedRef, ExtruderState, FeedKind, NozzleMaterial, NozzleSku, PrinterInstance, SlotBinding,
+};
 use super::instance_library::bundled_instances;
 use super::instance_storage;
 
@@ -99,6 +103,18 @@ pub enum InstanceMutError {
         instance_id: String,
         printer_identity: String,
     },
+    /// `create_instance` was called with a vendor profile id not in
+    /// the bundled catalog.
+    UnknownPrinterIdentity { identity: String },
+    /// `create_instance`'s `ams_units` exceeds the printer profile's
+    /// declared `ams_max`.
+    AmsCountExceeded {
+        identity: String,
+        requested: u32,
+        max: u32,
+    },
+    /// `create_instance` was called with an empty display name.
+    EmptyDisplayName,
 }
 
 impl std::fmt::Display for InstanceMutError {
@@ -137,6 +153,19 @@ impl std::fmt::Display for InstanceMutError {
                 f,
                 "instance `{instance_id}` references printer `{printer_identity}`, which is not in the bundled catalog",
             ),
+            Self::UnknownPrinterIdentity { identity } => write!(
+                f,
+                "no bundled printer with identity `{identity}`",
+            ),
+            Self::AmsCountExceeded {
+                identity,
+                requested,
+                max,
+            } => write!(
+                f,
+                "printer `{identity}` supports at most {max} AMS unit(s); {requested} requested",
+            ),
+            Self::EmptyDisplayName => write!(f, "display name must not be empty"),
         }
     }
 }
@@ -199,6 +228,160 @@ pub fn set_slot_color(
     mutate_slot(id, extruder_idx, slot_idx, |slot| {
         slot.color = color;
     })
+}
+
+/// Construct a fresh `PrinterInstance` from a bundled printer
+/// identity + a user-chosen display name + AMS unit count. Inserts
+/// the new instance into the registry and persists it (when the
+/// storage root is set).
+///
+/// Topology: one extruder with `(ams_units * 4 + 1)` slots — slot 0
+/// is `FeedKind::Direct` with label `"Ext"`, the remaining slots
+/// are `FeedKind::Ams` with labels `"AMS:1".."AMS:4"` (single
+/// AMS) or `"AMS A:1".."AMS B:4"..` (multiple AMS units, letter-
+/// disambiguated). When the printer profile's `ams_max == 0`
+/// `ams_units` must also be `0`; the resulting instance has one
+/// direct-fed slot.
+///
+/// Defaults derived from the bundled profile + library:
+///   - nozzle: first toolhead's `nozzle_diameter`, `Stainless`.
+///   - bed: first entry in `supported_build_plates`.
+///   - default process: first bundled process fragment for the
+///     printer (deterministic by `BTreeMap` key order).
+///   - default filament: `"generic-pla"` (we ship this for every
+///     vendor, so it's the safest cross-printer default).
+///
+/// Validates: the printer identity exists in the catalog, AMS
+/// count is within `ams_max`, display name is non-empty (after
+/// trim). Returns the new instance for the caller to surface.
+pub fn create_instance(
+    printer_identity: &str,
+    display_name: String,
+    ams_units: u32,
+) -> Result<PrinterInstance, InstanceMutError> {
+    let display_name = display_name.trim().to_owned();
+    if display_name.is_empty() {
+        return Err(InstanceMutError::EmptyDisplayName);
+    }
+    let profile = super::lookup(printer_identity).ok_or_else(|| {
+        InstanceMutError::UnknownPrinterIdentity {
+            identity: printer_identity.to_owned(),
+        }
+    })?;
+    if ams_units > profile.ams_max {
+        return Err(InstanceMutError::AmsCountExceeded {
+            identity: printer_identity.to_owned(),
+            requested: ams_units,
+            max: profile.ams_max,
+        });
+    }
+
+    let mut slots = Vec::new();
+    // Slot 0: the direct/external spool. Always present so users
+    // who picked 0 AMS units still have a feed.
+    slots.push(SlotBinding {
+        label: "Ext".to_owned(),
+        feed: FeedKind::Direct,
+        filament_identity: None,
+        color: None,
+    });
+    for unit in 0..ams_units {
+        for slot in 1..=4 {
+            // Single-AMS: "AMS:1..4". Multi-AMS: "AMS A:1", etc.
+            let label = if ams_units > 1 {
+                let letter = char::from(b'A' + unit as u8);
+                format!("AMS {letter}:{slot}")
+            } else {
+                format!("AMS:{slot}")
+            };
+            slots.push(SlotBinding {
+                label,
+                feed: FeedKind::Ams,
+                filament_identity: None,
+                color: None,
+            });
+        }
+    }
+
+    let nozzle_diameter = profile
+        .toolheads
+        .first()
+        .map(|t| t.nozzle_diameter as f32)
+        .unwrap_or(0.4);
+    let bed_identity = profile
+        .supported_build_plates
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    let default_process_fragment_slug =
+        crate::core::profile_library::bundled_process_slugs_for_printer(printer_identity)
+            .into_iter()
+            .next()
+            .unwrap_or("")
+            .to_owned();
+
+    let instance = PrinterInstance {
+        id: Uuid::new_v4().to_string(),
+        display_name,
+        vendor_profile_ref: printer_identity.to_owned(),
+        printer_fragment_slug: printer_identity.to_owned(),
+        default_filament_fragment_slug: "generic-pla".to_owned(),
+        default_process_fragment_slug,
+        connection: None,
+        extruders: vec![ExtruderState {
+            label: String::new(),
+            installed_nozzle: NozzleSku {
+                diameter_mm: nozzle_diameter,
+                material: NozzleMaterial::Stainless,
+            },
+            slots,
+        }],
+        bed: BedRef { identity: bed_identity },
+        config_overrides: Default::default(),
+    };
+
+    {
+        let mut guard = registry()
+            .lock()
+            .expect("printer instance registry poisoned");
+        guard.push(instance.clone());
+    }
+    if let Some(root) = instance_storage::root() {
+        if let Err(e) = instance_storage::persist(root, &instance) {
+            tracing::warn!(
+                instance_id = %instance.id,
+                error = %e,
+                "instance create persist failed; in-memory state unchanged",
+            );
+        }
+    }
+    Ok(instance)
+}
+
+/// Remove the named instance from the registry + on-disk library.
+/// Errors with `UnknownInstance` when the id doesn't match anything;
+/// no-op cleanly for files already missing from disk.
+pub fn delete_instance(id: &str) -> Result<(), InstanceMutError> {
+    {
+        let mut guard = registry()
+            .lock()
+            .expect("printer instance registry poisoned");
+        let pos = guard
+            .iter()
+            .position(|i| i.id == id)
+            .ok_or_else(|| InstanceMutError::UnknownInstance { id: id.to_owned() })?;
+        guard.remove(pos);
+    }
+    if let Some(root) = instance_storage::root() {
+        if let Err(e) = instance_storage::delete(root, id) {
+            tracing::warn!(
+                instance_id = id,
+                error = %e,
+                "instance delete on-disk cleanup failed; in-memory state already gone",
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Set the instance's currently-loaded build plate. Validates the new

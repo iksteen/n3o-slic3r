@@ -405,6 +405,17 @@ pub fn load_process_fragment(printer_slug: &str, process_slug: &str) -> Option<C
         .map(|a| a.cascade.clone())
 }
 
+/// Every bundled process slug for `printer_slug`, in declaration
+/// order. Used by `create_instance` to pick a sensible default
+/// process fragment when seeding a fresh PrinterInstance.
+pub fn bundled_process_slugs_for_printer(printer_slug: &str) -> Vec<&'static str> {
+    library()
+        .process_fragments
+        .keys()
+        .filter_map(|(p, slug)| (p == printer_slug).then(|| slug.as_str()))
+        .collect()
+}
+
 /// One bundled vendor filament's identity + display label, surfaced
 /// to the frontend slot-binding panel. `identity` is the slug
 /// (matches the wire form stored in `SlotBinding.filament_identity`);

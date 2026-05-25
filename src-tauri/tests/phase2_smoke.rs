@@ -50,6 +50,7 @@ fn a1_mini() -> PrinterProfile {
             max: [180.0, 180.0, 180.0],
         },
         exclusion_zones: vec![],
+        ..Default::default()
     }
 }
 

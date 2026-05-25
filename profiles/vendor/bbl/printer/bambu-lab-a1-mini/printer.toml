@@ -1,6 +1,10 @@
 identity = "bambu-lab-a1-mini"
 model = "Bambu A1 mini"
+brand = "Bambu Lab"
+brand_short = "B"
 slot_count = 4
+ams_max = 1
+ams_type = "AMS Lite"
 
 [[toolheads]]
 nozzle_diameter = 0.4
