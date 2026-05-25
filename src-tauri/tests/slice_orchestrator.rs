@@ -118,7 +118,7 @@ fn snappy_printer() -> PrinterProfile {
         model: "Snapmaker U1".into(),
         supported_build_plates: vec!["Textured PEI Plate".into()],
         toolheads: (0..4)
-            .map(|i| Toolhead {
+            .map(|_i| Toolhead {
                 default_nozzle_diameter: 0.4,
                 hotend_type: "hardened_steel".into(),
                 max_temp: 300.0,

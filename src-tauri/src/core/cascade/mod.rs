@@ -437,7 +437,7 @@ mod tests {
             model: "Synthetic 2-toolhead".into(),
             supported_build_plates: vec!["Textured PEI".into()],
             toolheads: (0..2)
-                .map(|i| Toolhead {
+                .map(|_i| Toolhead {
                     default_nozzle_diameter: 0.4,
                     hotend_type: "stainless_steel".into(),
                     max_temp: 300.0,

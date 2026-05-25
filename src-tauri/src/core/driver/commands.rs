@@ -23,7 +23,7 @@ use super::registry::{DriverRegistry, DriverSummary};
 use super::snapmaker::{U1Config, U1Driver};
 use super::status::PrinterStatus;
 use super::traits::{
-    Driver, DriverConfig, DriverError, DriverId, SendHandle, SendPayload, PrinterCommand,
+    Driver, DriverConfig, DriverId, SendHandle, SendPayload, PrinterCommand,
 };
 use crate::core::project::{PlateId, Project};
 use crate::core::slice::pre_slice_gate::{ams_bindings_for_plate, ams_mapping_for_plate};
