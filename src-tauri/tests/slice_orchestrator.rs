@@ -114,6 +114,48 @@ fn bambi_input(model_path: String, output_dir: String, plate_ids: Vec<u32>) -> S
     }
 }
 
+fn snappy_printer() -> PrinterProfile {
+    PrinterProfile {
+        model: "Snapmaker U1".into(),
+        slot_count: 4,
+        supported_build_plates: vec!["Textured PEI Plate".into()],
+        toolheads: (0..4)
+            .map(|i| Toolhead {
+                nozzle_diameter: 0.4,
+                hotend_type: "hardened_steel".into(),
+                max_temp: 300.0,
+                slot_indices: vec![i],
+            })
+            .collect(),
+        build_volume: BoundingBox {
+            min: [0.0, 0.0, 0.0],
+            max: [220.0, 220.0, 220.0],
+        },
+        exclusion_zones: vec![],
+    }
+}
+
+fn snappy_input(model_path: String, output_dir: String, plate_ids: Vec<u32>) -> SliceJobInput {
+    // 4 extruders × 1 slot — flat ContextJson.filaments is per-slot,
+    // so populate four canonical PLAs even though the composer pulls
+    // the real filament identity off the bound PrinterInstance.
+    SliceJobInput {
+        model_path,
+        output_dir,
+        context: ContextJson {
+            printer: snappy_printer(),
+            plate: canonical_plate(),
+            filaments: (0..4).map(|_| canonical_filament()).collect(),
+            active_slot: 0,
+            user_overrides: vec![],
+            project_overrides: vec![],
+            object_overrides: std::collections::HashMap::new(),
+        },
+        plate_ids,
+        printer_instance_id: "snappy".into(),
+    }
+}
+
 #[test]
 fn bambi_slice_emits_started_progress_finished_with_summary() {
     let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -189,6 +231,92 @@ fn bambi_slice_emits_started_progress_finished_with_summary() {
 
     // Clean up the temp dir.
     let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+#[ignore = "libslic3r SIGSEGVs on klipper gcode_flavor — U1 needs upstream klipper support work"]
+fn snappy_slice_emits_started_progress_finished_with_summary() {
+    // Sibling of the Bambi slice smoke. Exercises the 4-extruder
+    // toolchanger path through the composer: each extruder loads its
+    // own nozzle.toml, the cascade vector-assembles per-extruder
+    // scalars into length-4 strings, and the Textured PEI bed
+    // fragment is the only one Snapmaker authored.
+    //
+    // **Currently ignored** — the U1 machine fragment declares
+    // `gcode_flavor = "klipper"`, and Orca's libslic3r segfaults
+    // somewhere inside its klipper-flavored slice path. Real Snappy
+    // slicing needs upstream work; this test stays in the suite so
+    // it's easy to flip back on when that lands. The cascade compose
+    // half is verified by `composer.rs::tests` and by
+    // `snappy_orchestrator_resolve_cascade_succeeds` below.
+    let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    ensure_ffi_init();
+    let registry = JobRegistry::new();
+    let (sink, events) = collecting_sink();
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "n3o-slice-orch-snappy-{}",
+        std::process::id(),
+    ));
+
+    let input = snappy_input(
+        test_stl().display().to_string(),
+        temp_dir.display().to_string(),
+        vec![1],
+    );
+
+    let job_id = run_slice_job_blocking(input, &registry, sink).expect("start");
+    assert_eq!(job_id.0, 1);
+
+    let events = events.lock().unwrap();
+    assert!(
+        matches!(events.first(), Some(SliceEvent::PlateStarted { plate_id: 1, .. })),
+        "first event should be PlateStarted, got {:?}",
+        events.first(),
+    );
+    let finished = events
+        .iter()
+        .find_map(|e| match e {
+            SliceEvent::PlateFinished {
+                plate_id,
+                output_path,
+                summary,
+                ..
+            } => Some((*plate_id, output_path.clone(), summary.clone())),
+            _ => None,
+        })
+        .expect("expected PlateFinished");
+    assert_eq!(finished.0, 1);
+    assert!(std::path::Path::new(&finished.1).exists());
+    assert!(finished.2.estimated_time_seconds > 0);
+    assert!(finished.2.layer_count > 0);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+/// Composer-only check for the Snappy path: build the cascade for the
+/// snappy PrinterInstance and confirm it resolves without errors. This
+/// is the most we can verify end-to-end while the real klipper slice
+/// (above) is blocked on upstream.
+#[test]
+fn snappy_orchestrator_compose_succeeds() {
+    use n3o_slic3r_lib::core::printer::lookup_instance;
+    use n3o_slic3r_lib::core::profile_library::compose_cascade;
+    use std::collections::BTreeMap;
+    let instance = lookup_instance("snappy").expect("snappy in instance library");
+    let cascade = compose_cascade(&instance, &BTreeMap::new())
+        .expect("snappy cascade composes");
+    assert!(!cascade.rules.is_empty(), "snappy cascade is empty");
+    // Spot-check a per-extruder vector landed length-4 (one entry per
+    // U1 toolhead): the composer assembles `nozzle_diameter` from each
+    // extruder's installed_nozzle SKU.
+    let set = cascade
+        .rules
+        .iter()
+        .find_map(|r| r.set.get("nozzle_diameter"))
+        .expect("nozzle_diameter assembled into the cascade");
+    let parts: Vec<&str> = set.split(';').collect();
+    assert_eq!(parts.len(), 4, "expected 4-element nozzle_diameter vector, got {set:?}");
 }
 
 #[test]
