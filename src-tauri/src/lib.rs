@@ -60,10 +60,19 @@ pub fn run() {
             // bundled fixtures on first launch; subsequent launches
             // load whatever's on disk. Mutations (slot filament/color
             // edits, future printer add/remove) persist back here.
+            //
+            // `config_dir()` is the platform base (`~/.config/` on
+            // Linux, `~/Library/Application Support/` on macOS,
+            // `%APPDATA%/` on Windows); we append our own name rather
+            // than reusing `app_config_dir` because that suffixes
+            // with Tauri's reverse-DNS identifier
+            // (`com.n3o.slic3r`), which is the right thing for the
+            // bundle but reads ugly when a user goes looking through
+            // their config files.
             let printers_root = tauri::Manager::path(app)
-                .app_config_dir()
-                .expect("app_config_dir")
-                .join("printers");
+                .config_dir()
+                .expect("config_dir")
+                .join("n3o-slic3r/printers");
             core::printer::instance_storage::init_root(printers_root);
             tracing::info!("printer instance library initialized");
 
