@@ -118,7 +118,7 @@ fn bambi() -> PrinterInstance {
             ],
         }],
         bed: BedRef {
-            identity: "Bambu Cool Plate SuperTack".to_owned(),
+            identity: "Supertack Plate".to_owned(),
         },
         config_overrides: Default::default(),
     }
@@ -157,7 +157,7 @@ fn snappy() -> PrinterInstance {
             extruder("T3", "#f8fafc"),
         ],
         bed: BedRef {
-            identity: "Snapmaker Textured PEI".to_owned(),
+            identity: "Textured PEI Plate".to_owned(),
         },
         config_overrides: Default::default(),
     }
@@ -200,7 +200,7 @@ mod tests {
         for ams in &slots[1..] {
             assert_eq!(ams.feed, FeedKind::Ams);
         }
-        assert_eq!(b.bed.identity, "Bambu Cool Plate SuperTack");
+        assert_eq!(b.bed.identity, "Supertack Plate");
     }
 
     #[test]
@@ -213,7 +213,7 @@ mod tests {
             assert_eq!(extruder.installed_nozzle.diameter_mm, 0.4);
             assert_eq!(extruder.installed_nozzle.material, NozzleMaterial::Stainless);
         }
-        assert_eq!(s.bed.identity, "Snapmaker Textured PEI");
+        assert_eq!(s.bed.identity, "Textured PEI Plate");
     }
 
     #[test]

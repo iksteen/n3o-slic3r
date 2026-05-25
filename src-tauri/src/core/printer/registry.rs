@@ -179,7 +179,7 @@ mod tests {
         // CatalogEntry that drops fields surfaces here.
         let entries = bundled_catalog();
         let a1 = entries.iter().find(|e| e.identity == "bambu-a1-mini").unwrap();
-        assert!(a1.profile.supported_build_plates.contains(&"Textured PEI".into()));
+        assert!(a1.profile.supported_build_plates.contains(&"Textured PEI Plate".into()));
         assert_eq!(a1.profile.toolheads.len(), 1);
         assert!(a1.profile.build_volume.max[0] > 0.0);
 

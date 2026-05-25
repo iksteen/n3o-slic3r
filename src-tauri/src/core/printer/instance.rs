@@ -194,9 +194,10 @@ fn default_feed_kind() -> FeedKind {
 /// add per-bed conditioning state, wear tracking, etc.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BedRef {
-    /// Bed type identity (e.g. `"Bambu Cool Plate SuperTack"`,
-    /// `"Snapmaker Textured PEI"`). Must be in the vendor profile's
-    /// `supported_build_plates` for the resolution to succeed.
+    /// Bed type identity, matching libslic3r's `curr_bed_type` enum
+    /// (e.g. `"Supertack Plate"`, `"Cool Plate"`, `"Textured PEI Plate"`).
+    /// Must be in the vendor profile's `supported_build_plates` for
+    /// the resolution to succeed.
     pub identity: String,
 }
 
@@ -240,7 +241,7 @@ mod tests {
                 }],
             }],
             bed: BedRef {
-                identity: "Bambu Cool Plate SuperTack".into(),
+                identity: "Supertack Plate".into(),
             },
             config_overrides: Default::default(),
         };
@@ -253,7 +254,7 @@ mod tests {
             parsed.extruders[0].installed_nozzle.material,
             NozzleMaterial::Stainless,
         );
-        assert_eq!(parsed.bed.identity, "Bambu Cool Plate SuperTack");
+        assert_eq!(parsed.bed.identity, "Supertack Plate");
     }
 
     #[test]

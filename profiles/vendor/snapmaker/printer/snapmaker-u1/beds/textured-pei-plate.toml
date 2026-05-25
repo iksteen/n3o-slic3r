@@ -1,0 +1,5 @@
+# Textured PEI Plate (Snapmaker U1 ships only this plate). Snapmaker
+# reuses libslic3r's BedType enum vocabulary directly.
+
+identity = "Textured PEI Plate"
+curr_bed_type = "Textured PEI Plate"

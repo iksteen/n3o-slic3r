@@ -7,11 +7,18 @@
 //! profiles/vendor/<vendor>/
 //! ├── printer/
 //! │   ├── <slug>.toml              ← machine globals only
-//! │   └── <slug>/nozzles/<sku>.toml ← per-extruder scalars
-//! ├── bed/<slug>.toml              ← thin metadata (identity, curr_bed_type)
+//! │   └── <slug>/
+//! │       ├── nozzles/<sku>.toml   ← per-extruder scalars
+//! │       └── beds/<slug>.toml     ← thin metadata (identity, curr_bed_type)
 //! ├── filament/<slug>.toml
 //! └── process/<slug>.toml
 //! ```
+//!
+//! Beds live under the printer (sibling to nozzles) — the supported
+//! plate list is printer-specific (A1 mini's Supertack vs the U1's
+//! textured PEI etc.) and the bed identity vocabulary is shared with
+//! libslic3r's `curr_bed_type` enum so the picker, cascade, and FFI
+//! all speak the same strings.
 //!
 //! Each fragment is `include_str!`-bundled at compile time. The
 //! composer (`composer::compose_cascade`) layers them into a slice-
@@ -45,6 +52,18 @@ struct BundledFragment {
 struct BundledNozzle {
     printer_slug: &'static str,
     sku: &'static str,
+    toml: &'static str,
+    source_path: &'static str,
+}
+
+/// One bundled bed fragment scoped to a printer. `identity` is the
+/// libslic3r `curr_bed_type` enum value the bed.toml carries
+/// (e.g. `"Supertack Plate"`); the cascade composer looks up the
+/// fragment by `(printer_slug, identity)`.
+#[derive(Debug, Clone, Copy)]
+struct BundledBed {
+    printer_slug: &'static str,
+    identity: &'static str,
     toml: &'static str,
     source_path: &'static str,
 }
@@ -113,20 +132,47 @@ const NOZZLES: &[BundledNozzle] = &[
     },
 ];
 
-// ---- Beds (vendor-namespaced) ---------------------------------------
+// ---- Beds (per-printer) ---------------------------------------------
 
-const BEDS: &[BundledFragment] = &[
-    BundledFragment {
-        slug: "bbl/supertack",
+const BEDS: &[BundledBed] = &[
+    // Bambu A1 mini — full plate range. Identities match libslic3r's
+    // `s_keys_map_BedType` enum vocabulary verbatim.
+    BundledBed {
+        printer_slug: "bambu-lab-a1-mini", identity: "Cool Plate",
         toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/bbl/bed/supertack.toml")),
-        source_path: "profiles/vendor/bbl/bed/supertack.toml",
+            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/cool-plate.toml")),
+        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/cool-plate.toml",
     },
-    BundledFragment {
-        slug: "snapmaker/textured-pei",
+    BundledBed {
+        printer_slug: "bambu-lab-a1-mini", identity: "Textured PEI Plate",
         toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/snapmaker/bed/textured-pei.toml")),
-        source_path: "profiles/vendor/snapmaker/bed/textured-pei.toml",
+            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/textured-pei-plate.toml")),
+        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/textured-pei-plate.toml",
+    },
+    BundledBed {
+        printer_slug: "bambu-lab-a1-mini", identity: "High Temp Plate",
+        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
+            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/high-temp-plate.toml")),
+        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/high-temp-plate.toml",
+    },
+    BundledBed {
+        printer_slug: "bambu-lab-a1-mini", identity: "Engineering Plate",
+        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
+            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/engineering-plate.toml")),
+        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/engineering-plate.toml",
+    },
+    BundledBed {
+        printer_slug: "bambu-lab-a1-mini", identity: "Supertack Plate",
+        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
+            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/supertack-plate.toml")),
+        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/supertack-plate.toml",
+    },
+    // Snapmaker U1 — single plate.
+    BundledBed {
+        printer_slug: "snapmaker-u1", identity: "Textured PEI Plate",
+        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
+            "/../profiles/vendor/snapmaker/printer/snapmaker-u1/beds/textured-pei-plate.toml")),
+        source_path: "profiles/vendor/snapmaker/printer/snapmaker-u1/beds/textured-pei-plate.toml",
     },
 ];
 
@@ -195,11 +241,25 @@ pub fn load_nozzle_fragment(printer_slug: &str, sku: &str) -> Option<Cascade> {
         .map(|n| parse_fragment(n.sku, n.toml, n.source_path))
 }
 
-/// Load bed/<slug>.toml (vendor-namespaced slug like `"bbl/supertack"`).
-pub fn load_bed_fragment(slug: &str) -> Option<Cascade> {
+/// Load a printer's bed fragment by libslic3r `curr_bed_type`
+/// identity (e.g. `("bambu-lab-a1-mini", "Supertack Plate")`).
+/// Returns `None` when either the printer or the identity is unknown
+/// for that printer.
+pub fn load_bed_fragment(printer_slug: &str, identity: &str) -> Option<Cascade> {
     BEDS.iter()
-        .find(|b| b.slug == slug)
-        .map(|b| parse_fragment(b.slug, b.toml, b.source_path))
+        .find(|b| b.printer_slug == printer_slug && b.identity == identity)
+        .map(|b| parse_fragment(b.identity, b.toml, b.source_path))
+}
+
+/// Every bed identity bundled for the named printer, in declaration
+/// order. The picker enumerates this; falls back to the printer
+/// profile's `supported_build_plates` when empty (e.g. a newly-added
+/// printer without bed fragments).
+pub fn bundled_beds_for_printer(printer_slug: &str) -> Vec<&'static str> {
+    BEDS.iter()
+        .filter(|b| b.printer_slug == printer_slug)
+        .map(|b| b.identity)
+        .collect()
 }
 
 /// Load filament/<slug>.toml.
@@ -294,7 +354,12 @@ mod tests {
             );
         }
         for b in BEDS {
-            assert!(load_bed_fragment(b.slug).is_some(), "bed `{}` missing", b.slug);
+            assert!(
+                load_bed_fragment(b.printer_slug, b.identity).is_some(),
+                "bed ({}, {}) missing",
+                b.printer_slug,
+                b.identity,
+            );
         }
         for f in FILAMENTS {
             assert!(load_filament_fragment(f.slug).is_some(), "filament `{}` missing", f.slug);
@@ -341,10 +406,28 @@ mod tests {
 
     #[test]
     fn supertack_bed_carries_curr_bed_type_enum_value() {
-        let cascade = load_bed_fragment("bbl/supertack").expect("supertack bed");
+        let cascade = load_bed_fragment("bambu-lab-a1-mini", "Supertack Plate")
+            .expect("supertack bed");
         let rule = &cascade.rules[0];
         assert_eq!(rule.set.get("curr_bed_type").map(String::as_str), Some("Supertack Plate"));
-        assert_eq!(rule.set.get("identity").map(String::as_str), Some("Bambu Cool Plate SuperTack"));
+        assert_eq!(rule.set.get("identity").map(String::as_str), Some("Supertack Plate"));
+    }
+
+    #[test]
+    fn bundled_beds_for_printer_lists_full_a1_mini_range() {
+        let beds = bundled_beds_for_printer("bambu-lab-a1-mini");
+        assert_eq!(
+            beds,
+            vec![
+                "Cool Plate",
+                "Textured PEI Plate",
+                "High Temp Plate",
+                "Engineering Plate",
+                "Supertack Plate",
+            ],
+        );
+        assert_eq!(bundled_beds_for_printer("snapmaker-u1"), vec!["Textured PEI Plate"]);
+        assert!(bundled_beds_for_printer("ghost-printer").is_empty());
     }
 
     #[test]
@@ -360,7 +443,8 @@ mod tests {
     fn unknown_slugs_return_none() {
         assert!(load_printer_fragment("ghost").is_none());
         assert!(load_nozzle_fragment("bambu-lab-a1-mini", "9.9").is_none());
-        assert!(load_bed_fragment("ghost").is_none());
+        assert!(load_bed_fragment("ghost", "Cool Plate").is_none());
+        assert!(load_bed_fragment("bambu-lab-a1-mini", "Ghost Plate").is_none());
         assert!(load_filament_fragment("ghost").is_none());
         assert!(load_process_fragment("ghost").is_none());
     }

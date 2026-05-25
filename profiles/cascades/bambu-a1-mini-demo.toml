@@ -61,7 +61,7 @@ fan_min_speed = "60"
 # `bed_temp`; the adapter expands across libslic3r's per-plate-type
 # keys at apply time (BED_TEMP_KEYS in core/schema).
 [[rule]]
-when.plate.type = "Textured PEI"
+when.plate.type = "Textured PEI Plate"
 set.bed_temp = "65"
 
 # --- Plate × filament rule (specificity 2) --------------------------
@@ -69,6 +69,6 @@ set.bed_temp = "65"
 # strategy than the catch-all PLA rule.
 [[rule]]
 when.filament.type = "PLA"
-when.plate.type = "Textured PEI"
+when.plate.type = "Textured PEI Plate"
 set.bed_temp = "65"
 set.initial_layer_print_height = "0.2"

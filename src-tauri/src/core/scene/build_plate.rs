@@ -9,11 +9,11 @@ use serde::{Deserialize, Serialize};
 
 /// A build plate the active printer supports.
 ///
-/// `identity` is the cascade-side name (`"Textured PEI"`,
-/// `"SuperTack"`) — appears in cascade predicates as `plate.type`
-/// values. `libslic3r_curr_bed_type` is the corresponding string
-/// libslic3r's `curr_bed_type` enum accepts (`"Textured PEI Plate"`,
-/// `"Supertack Plate"`); the adapter writes this verbatim.
+/// `identity` matches libslic3r's `curr_bed_type` enum vocabulary
+/// verbatim (e.g. `"Textured PEI Plate"`, `"Supertack Plate"`). The
+/// `libslic3r_curr_bed_type` field is the same string and exists for
+/// historical reasons — earlier the picker used short identities
+/// ("Textured PEI") and this descriptor translated them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildPlate {
     pub identity: String,
@@ -46,7 +46,7 @@ const TEXTURED_PEI_TOML: &str = include_str!(concat!(
 ));
 
 const BUNDLED: &[BundledPlate] = &[BundledPlate {
-    identity: "Textured PEI",
+    identity: "Textured PEI Plate",
     toml: TEXTURED_PEI_TOML,
 }];
 
@@ -78,29 +78,30 @@ mod tests {
     #[test]
     fn round_trip_toml() {
         let p = BuildPlate {
-            identity: "Textured PEI".into(),
+            identity: "Textured PEI Plate".into(),
             libslic3r_curr_bed_type: "Textured PEI Plate".into(),
             surface_kind: SurfaceKind::PEI,
         };
         let text = toml::to_string(&p).expect("serialize");
         let parsed: BuildPlate = toml::from_str(&text).expect("deserialize");
-        assert_eq!(parsed.identity, "Textured PEI");
+        assert_eq!(parsed.identity, "Textured PEI Plate");
         assert_eq!(parsed.libslic3r_curr_bed_type, "Textured PEI Plate");
         assert_eq!(parsed.surface_kind, SurfaceKind::PEI);
     }
 
     #[test]
     fn lookup_resolves_bundled_textured_pei() {
-        let p = lookup("Textured PEI").expect("Textured PEI present");
-        assert_eq!(p.identity, "Textured PEI");
+        let p = lookup("Textured PEI Plate").expect("Textured PEI present");
+        assert_eq!(p.identity, "Textured PEI Plate");
         assert_eq!(p.libslic3r_curr_bed_type, "Textured PEI Plate");
         assert_eq!(p.surface_kind, SurfaceKind::PEI);
     }
 
     #[test]
     fn lookup_returns_none_for_unbundled_plate() {
-        // `Magnetic` is in snapmaker-u1's supported_build_plates list
-        // but has no bundled TOML yet — callers synthesize a fallback.
-        assert!(lookup("Magnetic").is_none());
+        // Unbundled identities return None — callers synthesize a
+        // fallback descriptor with `libslic3r_curr_bed_type` =
+        // identity (true now that identities match the enum).
+        assert!(lookup("Engineering Plate").is_none());
     }
 }

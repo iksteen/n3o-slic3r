@@ -385,7 +385,7 @@ mod tests {
     fn a1_mini_binding() -> PrinterBinding {
         PrinterBinding {
             printer_identity: "bambu-a1-mini".into(),
-            build_plate_identity: "Textured PEI".into(),
+            build_plate_identity: "Textured PEI Plate".into(),
         }
     }
 
@@ -412,7 +412,7 @@ mod tests {
 
         assert_eq!(input.plate_ids, vec![1]);
         assert_eq!(input.context.printer.model, "Bambu A1 mini");
-        assert_eq!(input.context.plate.identity, "Textured PEI");
+        assert_eq!(input.context.plate.identity, "Textured PEI Plate");
         assert_eq!(input.context.plate.libslic3r_curr_bed_type, "Textured PEI Plate");
         assert!(temp_path.exists(), "temp file written");
         assert_eq!(input.model_path, temp_path.to_string_lossy());
@@ -443,7 +443,7 @@ mod tests {
         let (id2, _) = project.add_plate(None);
         project.plates[1].printer = Some(PrinterBinding {
             printer_identity: "snapmaker-u1".into(),
-            build_plate_identity: "Magnetic".into(),
+            build_plate_identity: "Textured PEI Plate".into(),
         });
         project.plates[1].printer_instance_id = Some("snappy".into());
         project.set_active_plate(id2).expect("activate plate 2");
@@ -455,9 +455,8 @@ mod tests {
             build_slice_input(&project, id2, "/tmp/n3o-out".into()).expect("build plate 2");
         assert_eq!(input.plate_ids, vec![2]);
         assert_eq!(input.context.printer.model, "Snapmaker U1");
-        // Plate 2's build plate isn't bundled → synthesized fallback.
-        assert_eq!(input.context.plate.identity, "Magnetic");
-        assert_eq!(input.context.plate.libslic3r_curr_bed_type, "Magnetic Plate");
+        assert_eq!(input.context.plate.identity, "Textured PEI Plate");
+        assert_eq!(input.context.plate.libslic3r_curr_bed_type, "Textured PEI Plate");
         // Snappy has 4 extruders × 1 slot → 4 filament entries (all
         // seeded with the bundled `generic-pla` fragment).
         assert_eq!(input.context.filaments.len(), 4);
@@ -573,7 +572,7 @@ mod tests {
         let mut project = Project::default();
         project.plates[0].printer = Some(PrinterBinding {
             printer_identity: "totally-fake-printer".into(),
-            build_plate_identity: "Textured PEI".into(),
+            build_plate_identity: "Textured PEI Plate".into(),
         });
         project.plates[0].printer_instance_id = Some("bambi".into());
         let mesh_id = project.register_mesh(triangle_mesh());
@@ -612,7 +611,7 @@ mod tests {
         let mut project = Project::default();
         project.plates[0].printer = Some(PrinterBinding {
             printer_identity: "snapmaker-u1".into(),
-            build_plate_identity: "Textured PEI".into(),
+            build_plate_identity: "Textured PEI Plate".into(),
         });
         project.plates[0].printer_instance_id = Some("snappy".into());
         let mesh_id = project.register_mesh(triangle_mesh());

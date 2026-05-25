@@ -54,7 +54,7 @@ fn reference_profiles_resolve_canonical_pla_pei_context() {
     let filament: FilamentProfile = load_toml("profiles/filaments/generic-pla.toml");
 
     assert_eq!(printer.model, "Bambu A1 mini");
-    assert_eq!(plate.identity, "Textured PEI");
+    assert_eq!(plate.identity, "Textured PEI Plate");
     assert_eq!(filament.base_type, "PLA");
 
     let ctx = SlicingContext::new(Arc::new(printer), Arc::new(plate), vec![Arc::new(filament)]);

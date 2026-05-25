@@ -44,7 +44,7 @@ mod tests {
     fn printer_binding_serde_round_trips() {
         let pb = PrinterBinding {
             printer_identity: "bambu-a1-mini".into(),
-            build_plate_identity: "Textured PEI".into(),
+            build_plate_identity: "Textured PEI Plate".into(),
         };
         let json = serde_json::to_string(&pb).unwrap();
         let parsed: PrinterBinding = serde_json::from_str(&json).unwrap();

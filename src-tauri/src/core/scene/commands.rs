@@ -195,11 +195,11 @@ pub fn scene_load_default_printer(
         model: "Bambu A1 mini".into(),
         slot_count: 4,
         supported_build_plates: vec![
-            "Cool".into(),
-            "Textured PEI".into(),
-            "Smooth PEI".into(),
-            "Engineering".into(),
-            "SuperTack".into(),
+            "Cool Plate".into(),
+            "Textured PEI Plate".into(),
+            "High Temp Plate".into(),
+            "Engineering Plate".into(),
+            "Supertack Plate".into(),
         ],
         toolheads: vec![Toolhead {
             nozzle_diameter: 0.4,
@@ -920,7 +920,7 @@ mod tests {
         let mut p = Project::default();
         p.plates[0].printer = Some(PrinterBinding {
             printer_identity: "bambu-a1-mini".into(),
-            build_plate_identity: "Textured PEI".into(),
+            build_plate_identity: "Textured PEI Plate".into(),
         });
         p.plates[0].name = "My Plate".into();
         let mesh_id = p.register_mesh(unit_cube_mesh());

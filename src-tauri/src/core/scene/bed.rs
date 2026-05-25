@@ -185,7 +185,7 @@ mod tests {
         PrinterProfile {
             model: "Bambu A1 mini".into(),
             slot_count: 4,
-            supported_build_plates: vec!["Textured PEI".into()],
+            supported_build_plates: vec!["Textured PEI Plate".into()],
             toolheads: vec![Toolhead {
                 nozzle_diameter: 0.4,
                 hotend_type: "stainless_steel".into(),

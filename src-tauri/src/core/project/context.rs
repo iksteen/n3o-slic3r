@@ -89,7 +89,7 @@ mod tests {
         Arc::new(PrinterProfile {
             model: "Bambu A1 mini".into(),
             slot_count: 4,
-            supported_build_plates: vec!["Textured PEI".into()],
+            supported_build_plates: vec!["Textured PEI Plate".into()],
             toolheads: vec![Toolhead {
                 nozzle_diameter: 0.4,
                 hotend_type: "stainless_steel".into(),
@@ -104,7 +104,7 @@ mod tests {
     fn textured_pei() -> Arc<BuildPlate> {
         use crate::core::scene::build_plate::SurfaceKind;
         Arc::new(BuildPlate {
-            identity: "Textured PEI".into(),
+            identity: "Textured PEI Plate".into(),
             libslic3r_curr_bed_type: "Textured PEI Plate".into(),
             surface_kind: SurfaceKind::PEI,
         })
@@ -136,7 +136,7 @@ mod tests {
             vec![pla("PLA Cyan", "#0A2989")],
         );
         assert_eq!(ctx.predicate_value("printer.model"), Some("Bambu A1 mini"));
-        assert_eq!(ctx.predicate_value("plate.type"), Some("Textured PEI"));
+        assert_eq!(ctx.predicate_value("plate.type"), Some("Textured PEI Plate"));
         assert_eq!(ctx.predicate_value("filament.type"), Some("PLA"));
         assert_eq!(ctx.predicate_value("filament.name"), Some("PLA Cyan"));
         assert_eq!(ctx.predicate_value("filament.color"), Some("#0A2989"));
@@ -180,7 +180,7 @@ mod tests {
                 "\
 [[rule]]
 when.filament.type = \"PLA\"
-when.plate.type = \"Textured PEI\"
+when.plate.type = \"Textured PEI Plate\"
 set.bed_temp = 65
 ",
                 Path::new("test.toml"),

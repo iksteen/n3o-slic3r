@@ -1,0 +1,11 @@
+# Cool Plate
+#
+# Thin bed metadata: identity matches libslic3r's `curr_bed_type`
+# enum vocabulary verbatim so the picker, cascade, and FFI all
+# speak the same string. Bed-temperature data lives per-filament-
+# per-bed in the filament profile (`*_plate_temp` arrays); the
+# cascade adapter's dimensional expansion (PR-1-6) uses
+# `curr_bed_type` to pick the right index at slice time.
+
+identity = "Cool Plate"
+curr_bed_type = "Cool Plate"

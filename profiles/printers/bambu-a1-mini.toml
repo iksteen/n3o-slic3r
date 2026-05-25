@@ -1,11 +1,15 @@
 model = "Bambu A1 mini"
 slot_count = 4
+# Bed identities match libslic3r's `curr_bed_type` enum vocabulary
+# (`s_keys_map_BedType` in PrintConfig.cpp). Each entry has a
+# corresponding bed.toml at `profiles/vendor/bbl/printer/
+# bambu-lab-a1-mini/beds/<slug>.toml`.
 supported_build_plates = [
-    "Cool",
-    "Textured PEI",
-    "Smooth PEI",
-    "Engineering",
-    "SuperTack",
+    "Cool Plate",
+    "Textured PEI Plate",
+    "High Temp Plate",
+    "Engineering Plate",
+    "Supertack Plate",
 ]
 
 [[toolheads]]

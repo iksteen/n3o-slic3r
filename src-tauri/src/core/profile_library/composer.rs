@@ -108,10 +108,15 @@ pub fn compose_cascade(
         });
     }
 
-    // 3. Bed fragment.
-    let bed_slug = bed_slug_from_identity(&instance.bed.identity);
-    let bed = load_bed_fragment(&bed_slug)
-        .ok_or_else(|| ComposeError::UnknownBedFragment(bed_slug.clone()))?;
+    // 3. Bed fragment — looked up by `(printer_slug, bed_identity)`
+    //    where the identity matches libslic3r's `curr_bed_type` enum
+    //    value verbatim.
+    let bed = load_bed_fragment(&instance.printer_fragment_slug, &instance.bed.identity)
+        .ok_or_else(|| ComposeError::UnknownBedFragment(format!(
+            "{}/{}",
+            instance.printer_fragment_slug,
+            instance.bed.identity,
+        )))?;
     rules.extend(bed.rules);
 
     // 4. Filament fragment — slot-0-bound filament or instance default.
@@ -222,25 +227,6 @@ fn nozzle_sku_string(nozzle: &crate::core::printer::NozzleSku) -> String {
         // One decimal place for 0.2/0.4/0.6/0.8 etc.
         format!("{:.1}", d)
     }
-}
-
-/// Map a bed identity (vendor's display string) to a fragment slug.
-/// MVP: hand-mapped. Post-MVP: derive from a bed registry.
-fn bed_slug_from_identity(identity: &str) -> String {
-    match identity {
-        "Bambu Cool Plate SuperTack" => "bbl/supertack".to_owned(),
-        "Snapmaker Textured PEI" => "snapmaker/textured-pei".to_owned(),
-        // Unknown identity falls back to slugifying — the lookup will
-        // fail and bubble UnknownBedFragment, which surfaces in the UI
-        // as "this bed isn't bundled; add a bed.toml".
-        other => slugify(other),
-    }
-}
-
-fn slugify(s: &str) -> String {
-    s.to_lowercase()
-        .replace(['(', ')', '@', '_', '/'], "-")
-        .replace(' ', "-")
 }
 
 #[cfg(test)]

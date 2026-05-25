@@ -71,11 +71,11 @@ mod tests {
             model: "Bambu A1 mini".into(),
             slot_count: 4,
             supported_build_plates: vec![
-                "Cool".into(),
-                "Textured PEI".into(),
-                "Smooth PEI".into(),
-                "Engineering".into(),
-                "SuperTack".into(),
+                "Cool Plate".into(),
+                "Textured PEI Plate".into(),
+                "High Temp Plate".into(),
+                "Engineering Plate".into(),
+                "Supertack Plate".into(),
             ],
             toolheads: vec![Toolhead {
                 nozzle_diameter: 0.4,

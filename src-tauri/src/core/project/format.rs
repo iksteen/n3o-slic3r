@@ -349,7 +349,7 @@ mod tests {
     fn a1_mini_binding() -> PrinterBinding {
         PrinterBinding {
             printer_identity: "bambu-a1-mini".into(),
-            build_plate_identity: "Textured PEI".into(),
+            build_plate_identity: "Textured PEI Plate".into(),
         }
     }
 
@@ -524,7 +524,7 @@ mod tests {
         // bindings. Verifies the full save/load shape.
         let snapmaker = PrinterBinding {
             printer_identity: "snapmaker-u1".into(),
-            build_plate_identity: "Textured PEI".into(),
+            build_plate_identity: "Textured PEI Plate".into(),
         };
         let mut p = Project::default();
         p.plates[0].printer = Some(a1_mini_binding());

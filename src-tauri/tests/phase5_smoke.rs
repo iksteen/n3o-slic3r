@@ -55,14 +55,14 @@ fn snapmaker_u1() -> PrinterProfile {
 fn a1_mini_binding() -> PrinterBinding {
     PrinterBinding {
         printer_identity: "bambu-a1-mini".into(),
-        build_plate_identity: "Textured PEI".into(),
+        build_plate_identity: "Textured PEI Plate".into(),
     }
 }
 
 fn u1_binding() -> PrinterBinding {
     PrinterBinding {
         printer_identity: "snapmaker-u1".into(),
-        build_plate_identity: "Magnetic".into(),
+        build_plate_identity: "Textured PEI Plate".into(),
     }
 }
 
@@ -191,7 +191,7 @@ fn phase5_smoke_3plate_save_reload_roundtrip() {
         .collect();
     assert_eq!(
         plates_bp,
-        vec!["Textured PEI", "Magnetic", "Magnetic"],
+        vec!["Textured PEI Plate", "Textured PEI Plate", "Textured PEI Plate"],
         "step 4a: per-plate build-plate bindings must round-trip",
     );
 
