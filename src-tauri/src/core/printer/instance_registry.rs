@@ -12,17 +12,35 @@
 //! Persistence to disk is intentionally NOT here — MVP keeps the
 //! registry in-memory only. App restart resets bindings; that
 //! tradeoff is documented in the design doc § "User library
-//! persistence is post-MVP."
+//! persistence is post-MVP — superseded by `instance_storage`."
 
 use std::sync::{Mutex, OnceLock};
 
 use super::instance::PrinterInstance;
 use super::instance_library::bundled_instances;
+use super::instance_storage;
 
 static REGISTRY: OnceLock<Mutex<Vec<PrinterInstance>>> = OnceLock::new();
 
 fn registry() -> &'static Mutex<Vec<PrinterInstance>> {
-    REGISTRY.get_or_init(|| Mutex::new(bundled_instances()))
+    REGISTRY.get_or_init(|| {
+        // First-access seed. If the runtime registered a user-library
+        // directory, load from there (seeding bundled on first launch);
+        // otherwise fall back to the in-memory bundled set. The
+        // fall-back keeps unit tests that never hit Tauri's setup
+        // working with no surprise filesystem writes.
+        let initial = match instance_storage::root() {
+            Some(root) => instance_storage::load_or_seed(root).unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "instance library load failed; falling back to bundled fixtures",
+                );
+                bundled_instances()
+            }),
+            None => bundled_instances(),
+        };
+        Mutex::new(initial)
+    })
 }
 
 /// Snapshot the entire registry. Returns cloned `PrinterInstance`s in
@@ -108,7 +126,21 @@ where
         .find(|i| i.id == id)
         .ok_or_else(|| InstanceMutError::UnknownInstance { id: id.to_owned() })?;
     f(inst)?;
-    Ok(inst.clone())
+    let cloned = inst.clone();
+    // Persist while still under the registry lock so concurrent
+    // mutations can't race to write stale state. A persist failure
+    // is non-fatal: log and continue — in-memory state is still
+    // authoritative for the rest of the session.
+    if let Some(root) = instance_storage::root() {
+        if let Err(e) = instance_storage::persist(root, &cloned) {
+            tracing::warn!(
+                instance_id = %cloned.id,
+                error = %e,
+                "instance mutation persist failed; in-memory state unchanged",
+            );
+        }
+    }
+    Ok(cloned)
 }
 
 /// Set (or clear, with `None`) a slot's bound filament identity.

@@ -56,6 +56,17 @@ pub fn run() {
             core::profile_library::init_from(resource_root);
             tracing::info!("profile library loaded");
 
+            // User-owned printer instance library. Seeded from the
+            // bundled fixtures on first launch; subsequent launches
+            // load whatever's on disk. Mutations (slot filament/color
+            // edits, future printer add/remove) persist back here.
+            let printers_root = tauri::Manager::path(app)
+                .app_config_dir()
+                .expect("app_config_dir")
+                .join("printers");
+            core::printer::instance_storage::init_root(printers_root);
+            tracing::info!("printer instance library initialized");
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

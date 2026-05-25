@@ -11,6 +11,7 @@ pub mod bambu;
 pub mod instance;
 pub mod instance_library;
 pub mod instance_registry;
+pub mod instance_storage;
 pub mod profile;
 pub mod registry;
 pub mod snapmaker;
