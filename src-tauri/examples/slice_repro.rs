@@ -1,0 +1,146 @@
+//! Repro spike: load a .3mf, slice it on the bambi instance via the
+//! orchestrator, dump every event. Mirrors what `slice_active_plate`
+//! does from the UI — minus the Tauri/Project plumbing.
+//!
+//! Usage from the workspace root:
+//!   cargo run -p n3o-slic3r --release --example slice_repro -- \
+//!       <path/to.3mf> [--override key=value ...]
+//!
+//! `--override key=value` injects plate-level config overrides (highest
+//! precedence in the cascade). Repeat for multiple keys. Example:
+//!   --override enable_support=1 --override support_style=organic
+//!
+//! Prints each `SliceEvent` in the order it fires. Pay attention to
+//! `JobFailed` — that's where the typed `SliceError` lands.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use n3o_slic3r_lib::core::cascade::commands::{ContextJson, OverrideFileSpec};
+use n3o_slic3r_lib::core::filament::FilamentProfile;
+use n3o_slic3r_lib::core::printer::{lookup, lookup_instance};
+use n3o_slic3r_lib::core::scene::build_plate::BuildPlate;
+use n3o_slic3r_lib::core::slice::{
+    orchestrator::{run_slice_job_blocking, EventSink},
+    JobRegistry, SliceEvent, SliceJobInput,
+};
+use slic3r_ffi::init as ffi_init;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1);
+    let model_path = args.next().ok_or_else(|| {
+        "usage: slice_repro <path/to/model.3mf> [--override key=value ...]".to_string()
+    })?;
+    let model_abs = std::fs::canonicalize(&model_path)?;
+    eprintln!("model: {}", model_abs.display());
+
+    // Collect --override key=value pairs. Builds a TOML body the
+    // orchestrator parses as plate-tier overrides (highest precedence).
+    let mut override_lines: Vec<String> = Vec::new();
+    while let Some(flag) = args.next() {
+        if flag != "--override" {
+            return Err(format!("unexpected arg {flag:?}").into());
+        }
+        let pair = args.next().ok_or("--override requires key=value")?;
+        let (k, v) = pair.split_once('=').ok_or("override must be key=value")?;
+        // libslic3r config values serialize as strings; the override
+        // loader requires TOML-shaped k = "v".
+        override_lines.push(format!("{k} = {:?}", v));
+    }
+    let project_overrides: Vec<OverrideFileSpec> = if override_lines.is_empty() {
+        vec![]
+    } else {
+        let body = override_lines.join("\n") + "\n";
+        eprintln!("plate overrides:\n{body}");
+        vec![OverrideFileSpec {
+            label: "spike-cli".into(),
+            content: body,
+        }]
+    };
+
+    ffi_init(None, 3).map_err(|e| format!("libslic3r init: {e}"))?;
+
+    // The instance registry is seeded lazily by the test helpers — the
+    // app's setup hook isn't running here. `lookup_instance` returns a
+    // None if the registry hasn't been seeded; force it via the bundled
+    // catalog.
+    let instance = lookup_instance("bambi").ok_or("bambi instance missing from registry")?;
+    let printer = lookup(&instance.printer_fragment_slug)
+        .ok_or("bambi printer profile missing from registry")?;
+    eprintln!(
+        "bambi: {} extruders, {} bed = {}",
+        instance.extruders.len(),
+        instance.extruders[0].slots.len(),
+        instance.bed.identity,
+    );
+
+    let plate = BuildPlate {
+        identity: instance.bed.identity.clone(),
+        // The composer hydrates this; the context-side value is only
+        // read for predicate matching, not the actual slice config.
+        libslic3r_curr_bed_type: instance.bed.identity.clone(),
+    };
+
+    let filament = FilamentProfile {
+        identity: "Generic PLA".into(),
+        base_type: "PLA".into(),
+        vendor: None,
+        color: None,
+    };
+
+    let temp_dir = std::env::temp_dir().join(format!("n3o-slice-repro-{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir)?;
+    eprintln!("output dir: {}", temp_dir.display());
+
+    let input = SliceJobInput {
+        model_path: model_abs.display().to_string(),
+        output_dir: temp_dir.display().to_string(),
+        context: ContextJson {
+            printer,
+            plate,
+            // 4-color model wants 4 filaments. Composer pulls real
+            // identities off the bound instance's slots; this list is
+            // for the cascade-context filament.* predicates only.
+            filaments: (0..4).map(|_| filament.clone()).collect(),
+            active_slot: 0,
+            user_overrides: vec![],
+            project_overrides,
+            object_overrides: HashMap::new(),
+        },
+        plate_ids: vec![1],
+        printer_instance_id: "bambi".into(),
+    };
+
+    let bucket: Arc<Mutex<Vec<SliceEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let bucket_for_cb = bucket.clone();
+    let sink: EventSink = Box::new(move |event| {
+        // Stream each event as it fires (so progress shows up live)
+        // AND record it for the post-run dump.
+        eprintln!("event: {event:?}");
+        bucket_for_cb.lock().unwrap().push(event);
+    });
+
+    let registry = JobRegistry::new();
+    match run_slice_job_blocking(input, &registry, sink) {
+        Ok(job_id) => eprintln!("synchronous start ok (job_id={})", job_id.0),
+        Err(e) => {
+            eprintln!("SYNCHRONOUS START FAILED: {e}");
+            eprintln!("debug: {e:?}");
+            std::process::exit(2);
+        }
+    }
+
+    let events = bucket.lock().unwrap();
+    eprintln!("---");
+    eprintln!("total events: {}", events.len());
+    for ev in events.iter() {
+        if let SliceEvent::JobFailed { plate_id, error, .. } = ev {
+            eprintln!("JOB FAILED on plate {plate_id}");
+            eprintln!("SliceError variant: {error:?}");
+            eprintln!("Display: {error}");
+            std::process::exit(3);
+        }
+    }
+    eprintln!("ok");
+    Ok(())
+}
