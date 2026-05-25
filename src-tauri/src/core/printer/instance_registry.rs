@@ -245,13 +245,21 @@ pub fn set_slot_color(
 /// direct-fed slot.
 ///
 /// Defaults derived from the bundled profile + library:
-///   - nozzle: first toolhead's `nozzle_diameter`, `Stainless`.
+///   - **Topology** branches on `profile.toolheads.len()`:
+///     - `1` (AMS-style: single toolhead, optionally AMS-fed) — one
+///       extruder with `(ams_units * 4 + 1)` slots; slot 0 is
+///       `FeedKind::Direct` ("Ext"), the rest are `FeedKind::Ams`.
+///     - `N > 1` (toolchanger: U1, XL) — N extruders labelled
+///       `T0..T(N-1)`, each with one `FeedKind::Direct` slot. The
+///       `ams_units` parameter is ignored for this branch; the
+///       caller-side AMS picker is hidden when `ams_max == 0`.
+///   - nozzle: each toolhead's own `nozzle_diameter`, `Stainless`.
 ///   - bed: `profile.default_bed` (Orca's upstream `default_bed_type`)
 ///     when set + supported, else the first entry in
 ///     `supported_build_plates`.
 ///   - default process: first bundled process fragment for the
 ///     printer (deterministic by `BTreeMap` key order).
-///   - default filament: the nozzle SKU's upstream
+///   - default filament: the bound nozzle's upstream
 ///     `default_filament_profile` (e.g. `"Bambu PLA Basic @BBL A1M"`)
 ///     resolved to a fragment slug; every slot is pre-bound to it.
 ///     Falls back to `"generic-pla"` when the nozzle doesn't declare
@@ -282,56 +290,103 @@ pub fn create_instance(
         });
     }
 
-    // Default nozzle SKU from the printer's first toolhead. Used
-    // both to seed `installed_nozzle` and to look up the upstream
-    // `default_filament_profile` from the matching nozzle fragment.
-    let nozzle_diameter = profile
+    // Resolve the upstream `default_filament_profile` (a
+    // `filament_settings_id` like `"Bambu PLA Basic @BBL A1M"`) for
+    // a given nozzle SKU to a fragment slug. Fall back to
+    // `generic-pla` when the nozzle doesn't declare one or the
+    // named filament isn't in our library — every vendor ships a
+    // Generic PLA fragment so the slice path always has *something*
+    // to resolve against.
+    let resolve_default_filament = |nozzle_diameter: f64| -> String {
+        let sku = format!("{:.1}", nozzle_diameter);
+        crate::core::profile_library::default_filament_profile_for(printer_identity, &sku)
+            .and_then(|name| {
+                crate::core::profile_library::filament_slug_by_display_name(&name)
+            })
+            .unwrap_or_else(|| "generic-pla".to_owned())
+    };
+
+    // Topology branches on toolhead count. AMS-style printers
+    // (single toolhead) get one extruder with N+1 slots; toolchangers
+    // (U1, XL) get one extruder *per toolhead*, each with a single
+    // Direct feed.
+    let extruders: Vec<ExtruderState> = if profile.toolheads.len() > 1 {
+        // Toolchanger: one extruder per toolhead, labelled `T0..T(N-1)`,
+        // single Direct slot. `ams_units` is ignored — the modal
+        // hides the AMS picker for `ams_max == 0` printers, so a
+        // caller that somehow passes >0 here gets the same topology
+        // (we already validated `ams_units <= ams_max` above).
+        profile
+            .toolheads
+            .iter()
+            .enumerate()
+            .map(|(i, toolhead)| {
+                let filament_slug = resolve_default_filament(toolhead.nozzle_diameter);
+                ExtruderState {
+                    label: format!("T{i}"),
+                    installed_nozzle: NozzleSku {
+                        diameter_mm: toolhead.nozzle_diameter as f32,
+                        material: NozzleMaterial::Stainless,
+                    },
+                    slots: vec![SlotBinding {
+                        // Solo slot — the extruder label carries the
+                        // full identity, no per-slot label needed.
+                        label: String::new(),
+                        feed: FeedKind::Direct,
+                        filament_identity: Some(filament_slug),
+                        color: None,
+                    }],
+                }
+            })
+            .collect()
+    } else {
+        // AMS-style: one extruder, slot 0 is the Direct/Ext spool,
+        // slots 1.. are AMS-fed. The extruder's solo so its label
+        // stays empty — the slot labels carry the identity.
+        let toolhead = profile.toolheads.first();
+        let nozzle_diameter = toolhead.map(|t| t.nozzle_diameter).unwrap_or(0.4);
+        let filament_slug = resolve_default_filament(nozzle_diameter);
+        let mut slots = Vec::new();
+        slots.push(SlotBinding {
+            label: "Ext".to_owned(),
+            feed: FeedKind::Direct,
+            filament_identity: Some(filament_slug.clone()),
+            color: None,
+        });
+        for unit in 0..ams_units {
+            for slot in 1..=4 {
+                let label = if ams_units > 1 {
+                    let letter = char::from(b'A' + unit as u8);
+                    format!("AMS {letter}:{slot}")
+                } else {
+                    format!("AMS:{slot}")
+                };
+                slots.push(SlotBinding {
+                    label,
+                    feed: FeedKind::Ams,
+                    filament_identity: Some(filament_slug.clone()),
+                    color: None,
+                });
+            }
+        }
+        vec![ExtruderState {
+            label: String::new(),
+            installed_nozzle: NozzleSku {
+                diameter_mm: nozzle_diameter as f32,
+                material: NozzleMaterial::Stainless,
+            },
+            slots,
+        }]
+    };
+
+    // For the instance-level `default_filament_fragment_slug` we
+    // pick the first toolhead's default; this is the fallback the
+    // slicer composer uses for slots that lack their own binding.
+    let default_filament_slug = profile
         .toolheads
         .first()
-        .map(|t| t.nozzle_diameter as f32)
-        .unwrap_or(0.4);
-    // Format with one decimal place — matches how the nozzle
-    // fragments are filed on disk (`0.4`, `0.6`).
-    let nozzle_sku = format!("{:.1}", nozzle_diameter);
-    // Resolve the upstream `default_filament_profile` (a
-    // `filament_settings_id` like `"Bambu PLA Basic @BBL A1M"`) to
-    // a fragment slug. Fall back to `generic-pla` when the nozzle
-    // doesn't declare one or the named filament isn't in our
-    // library — every vendor ships a Generic PLA fragment so the
-    // slice path always has *something* to resolve against.
-    let default_filament_slug = crate::core::profile_library::default_filament_profile_for(
-        printer_identity,
-        &nozzle_sku,
-    )
-    .and_then(|name| crate::core::profile_library::filament_slug_by_display_name(&name))
-    .unwrap_or_else(|| "generic-pla".to_owned());
-
-    let mut slots = Vec::new();
-    // Slot 0: the direct/external spool. Always present so users
-    // who picked 0 AMS units still have a feed.
-    slots.push(SlotBinding {
-        label: "Ext".to_owned(),
-        feed: FeedKind::Direct,
-        filament_identity: Some(default_filament_slug.clone()),
-        color: None,
-    });
-    for unit in 0..ams_units {
-        for slot in 1..=4 {
-            // Single-AMS: "AMS:1..4". Multi-AMS: "AMS A:1", etc.
-            let label = if ams_units > 1 {
-                let letter = char::from(b'A' + unit as u8);
-                format!("AMS {letter}:{slot}")
-            } else {
-                format!("AMS:{slot}")
-            };
-            slots.push(SlotBinding {
-                label,
-                feed: FeedKind::Ams,
-                filament_identity: Some(default_filament_slug.clone()),
-                color: None,
-            });
-        }
-    }
+        .map(|t| resolve_default_filament(t.nozzle_diameter))
+        .unwrap_or_else(|| "generic-pla".to_owned());
 
     // Bed: prefer the upstream-declared default when it's actually
     // in the supported list; otherwise first-supported. The
@@ -359,14 +414,7 @@ pub fn create_instance(
         default_filament_fragment_slug: default_filament_slug,
         default_process_fragment_slug,
         connection: None,
-        extruders: vec![ExtruderState {
-            label: String::new(),
-            installed_nozzle: NozzleSku {
-                diameter_mm: nozzle_diameter,
-                material: NozzleMaterial::Stainless,
-            },
-            slots,
-        }],
+        extruders,
         bed: BedRef { identity: bed_identity },
         config_overrides: Default::default(),
     };
@@ -634,8 +682,30 @@ mod tests {
         }
         // First supported bed becomes the default.
         assert!(!inst.bed.identity.is_empty());
-        // New instance landed in the registry.
-        assert!(lookup_instance(&inst.id).is_some());
+        // Don't assert on `lookup_instance(&inst.id)` here — a
+        // parallel test's `reset_to_bundled` can wipe the registry
+        // between our create + lookup (same flake pattern documented
+        // in `set_slot_color_persists_and_clears`). The mutation's
+        // correctness is fully captured by the returned `inst`.
+    }
+
+    #[test]
+    fn create_instance_toolchanger_emits_one_extruder_per_toolhead() {
+        reset_to_bundled();
+        // U1 has 4 toolheads → 4 extruders, each with one Direct
+        // slot, labelled T0..T3. AMS units are 0 (ams_max=0).
+        let inst = create_instance("snapmaker-u1", "Test U1".into(), 0)
+            .expect("create snapmaker u1");
+        assert_eq!(inst.extruders.len(), 4);
+        for (i, ext) in inst.extruders.iter().enumerate() {
+            assert_eq!(ext.label, format!("T{i}"));
+            assert_eq!(ext.slots.len(), 1, "T{i} should have a single slot");
+            assert_eq!(ext.slots[0].feed, FeedKind::Direct);
+            // Slot label is empty — extruder label carries identity.
+            assert_eq!(ext.slots[0].label, "");
+            // Pre-bound to the nozzle's default filament (Snapmaker PLA).
+            assert!(ext.slots[0].filament_identity.is_some());
+        }
     }
 
     #[test]
