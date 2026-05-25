@@ -405,5 +405,5 @@ To be resolved during ticket drafting, not before:
    - **PR-S-8**: SettingsPanel rewrite — drop SlotTabStrip + sync-edit + vector rendering; show process-bucket only.
    - **PR-S-9**: Project format rewrite (no migration).
    - **PR-S-10**: Edit-routing + override indicators + "synced across N plates" badges.
-   - **PR-S-11**: Exit-criteria smoke (multi-filament A1 + AMS Lite, multi-instance project, copy-vs-vendor binding).
+   - **PR-S-11**: Exit-criteria smoke (multi-filament A1 + AMS Lite, multi-instance project, copy-vs-vendor binding). Legs 1 + 2 landed as `phase_s_smoke.rs` (see `docs/phase-s-smoke.md`); leg 3 deferred behind the in-app filament/process copy mechanic (§9 MVP exclusion).
 3. Sequence: PR-7c (filament sync) blocks on PR-S-3/4/5 at minimum. PR-7a-8 (real-print smoke) can run independently on the current model since the send pipeline is downstream of the cascade.
