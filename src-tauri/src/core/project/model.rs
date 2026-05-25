@@ -183,13 +183,13 @@ pub struct Plate {
 
 impl Default for Project {
     fn default() -> Self {
-        // Mirror the auto-bind-materials pattern (PR-5-6 follow-up):
-        // the bootstrap plate inherits the bundled-catalog default
-        // printer so first-launch slicing works without the user
-        // having to open the picker first. Override via the picker
-        // (PR-5-4) when the actual printer differs.
+        // The bootstrap plate inherits whatever `PrinterInstance` is
+        // first in the registry — production starts empty (no
+        // instances → unbound plate; the empty-state UI fires), but
+        // tests that don't initialize storage get the bundled bambi
+        // fixture so they keep working without per-test setup.
         let mut plate = Plate::new(PlateId(1), 1);
-        bind_default_printer_in_place(&mut plate);
+        bind_first_available_printer_in_place(&mut plate);
         Self {
             uuid: Uuid::new_v4(),
             plates: vec![plate],
@@ -205,25 +205,22 @@ impl Default for Project {
     }
 }
 
-/// Bind the bundled default printer instance + populate
-/// `plate.scene.bed` so first-launch slicing works without the user
-/// having to open the picker. Silent no-op when the bundled catalog
-/// is empty (compile-time-enforced not to happen today) or the
-/// chosen identity can't be resolved (likewise shouldn't happen
-/// for bundled entries — defense in depth).
-fn bind_default_printer_in_place(plate: &mut Plate) {
-    let Some(default_id) = crate::core::printer::default_printer_identity() else {
+/// Bind the first registered `PrinterInstance` to `plate` (in
+/// production, that's whichever instance the user created first;
+/// in tests, the bundled bambi fixture). Silent no-op when the
+/// registry is empty — the bootstrap plate stays unbound and the
+/// frontend's empty-state onboarding takes over.
+fn bind_first_available_printer_in_place(plate: &mut Plate) {
+    let Some(first) = crate::core::printer::list_instances().into_iter().next() else {
         return;
     };
-    let Some(profile) = crate::core::printer::lookup(default_id) else {
+    let Some(profile) = crate::core::printer::lookup(&first.vendor_profile_ref) else {
         return;
     };
     let bed = crate::core::scene::bed::bed_for_printer(&profile);
     plate.scene.exclusion_zones = bed.exclusion_zones.clone();
     plate.scene.bed = Some(bed);
-    plate.printer_instance_id =
-        crate::core::printer::instance_id_for_vendor_profile(default_id)
-            .map(str::to_owned);
+    plate.printer_instance_id = Some(first.id);
 }
 
 impl Project {

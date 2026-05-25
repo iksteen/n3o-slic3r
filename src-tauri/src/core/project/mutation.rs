@@ -179,43 +179,32 @@ impl Project {
 
     // ---- Plate list mutations -------------------------------------
 
-    /// Append a new plate. `printer_identity` is optional — newly-
-    /// added plates may stay unbound until the user picks a printer
-    /// via PR-5-4's picker. Returns the new plate's id paired with
-    /// the `PlateAdded` event the renderer subscribes to. Active
-    /// plate is unchanged (the caller switches if desired).
+    /// Append a new plate. `instance_id` is optional — newly-added
+    /// plates may stay unbound until the user picks a printer via
+    /// PR-5-4's picker. Returns the new plate's id paired with the
+    /// `PlateAdded` event the renderer subscribes to. Active plate
+    /// is unchanged (the caller switches if desired).
     pub fn add_plate(
         &mut self,
-        printer_identity: Option<String>,
+        instance_id: Option<String>,
     ) -> (PlateId, Vec<SceneEvent>) {
         let id = self.next_plate_id();
         let position = (self.plates.len() + 1) as u32;
 
-        // Auto-bind precedence (mirrors the auto-bind-materials
-        // pattern from PR-5-6):
-        //   1. Caller-supplied identity wins outright.
-        //   2. Otherwise inherit from the currently-active plate
-        //      (the tab the user clicked "+ New plate" from — most
+        // Auto-bind precedence:
+        //   1. Caller-supplied `instance_id` wins outright.
+        //   2. Otherwise inherit the active plate's binding (most
         //      multi-plate workflows want every plate on the same
-        //      printer). Identity is derived from the active plate's
-        //      bound `PrinterInstance.vendor_profile_ref`.
-        //   3. Otherwise fall back to the bundled-catalog default
-        //      (fresh project case — first launch).
-        let identity = printer_identity
-            .or_else(|| {
-                self.plates
-                    .get(self.active_plate)
-                    .and_then(|p| p.printer_instance_id.as_deref())
-                    .and_then(crate::core::printer::lookup_instance)
-                    .map(|inst| inst.vendor_profile_ref)
-            })
-            .or_else(|| {
-                crate::core::printer::default_printer_identity().map(str::to_owned)
-            });
-
-        let instance_id = identity.as_deref().and_then(|id_str| {
-            crate::core::printer::instance_id_for_vendor_profile(id_str).map(str::to_owned)
+        //      printer).
+        //   3. Otherwise the new plate is unbound. The frontend
+        //      empty-state UI or the picker handles the bind from
+        //      here.
+        let instance_id = instance_id.or_else(|| {
+            self.plates
+                .get(self.active_plate)
+                .and_then(|p| p.printer_instance_id.clone())
         });
+
         let mut plate = match instance_id.clone() {
             Some(iid) => Plate::with_instance(id, iid, position),
             None => Plate::new(id, position),
@@ -224,8 +213,10 @@ impl Project {
         // immediately on plate switch — set_plate_printer would
         // otherwise be the only path setting plate.scene.bed, but
         // it's only called by the explicit picker flow.
-        if let Some(ident) = &identity {
-            if let Some(profile) = crate::core::printer::lookup(ident) {
+        if let Some(iid) = &instance_id {
+            if let Some(profile) = crate::core::printer::lookup_instance(iid)
+                .and_then(|inst| crate::core::printer::lookup(&inst.vendor_profile_ref))
+            {
                 let bed = crate::core::scene::bed::bed_for_printer(&profile);
                 plate.scene.exclusion_zones = bed.exclusion_zones.clone();
                 plate.scene.bed = Some(bed);
@@ -555,9 +546,9 @@ impl Project {
         }])
     }
 
-    /// Rebind a plate to a different printer by identity (PR-5-4 —
+    /// Rebind a plate to a different `PrinterInstance` (PR-5-4 —
     /// the picker flow). The caller is responsible for resolving
-    /// the identity to a `PrinterProfile` via the printer registry;
+    /// the chosen instance's `PrinterProfile` via the registry;
     /// keeping the registry lookup at the Tauri-command layer keeps
     /// this mutation pure + testable without registry plumbing.
     ///
@@ -570,7 +561,7 @@ impl Project {
     pub fn rebind_plate_printer(
         &mut self,
         plate_id: PlateId,
-        printer_identity: String,
+        instance_id: String,
         profile: &PrinterProfile,
     ) -> Result<(crate::core::scene::events::PrinterChangeReport, Vec<SceneEvent>), SceneOpError> {
         use crate::core::scene::events::PrinterChangeReport;
@@ -584,18 +575,21 @@ impl Project {
             .as_deref()
             .and_then(crate::core::printer::lookup_instance)
             .map(|inst| inst.vendor_profile_ref);
-        let new_printer = printer_identity.clone();
-        // The new instance and the bed it carries are the answer
-        // for both the cascade composer and the change report.
-        let new_instance_id =
-            crate::core::printer::instance_id_for_vendor_profile(&printer_identity)
-                .map(str::to_owned);
-        let new_build_plate = new_instance_id
-            .as_deref()
-            .and_then(crate::core::printer::lookup_instance)
-            .map(|inst| inst.bed.identity)
+        // Resolve identity + bed off the new instance for the
+        // change-report. If the id doesn't resolve (caller passed a
+        // stale uuid from a deleted instance) we still bind it —
+        // the slice gate downstream will refuse the unresolved
+        // reference with a meaningful error.
+        let new_instance = crate::core::printer::lookup_instance(&instance_id);
+        let new_printer = new_instance
+            .as_ref()
+            .map(|i| i.vendor_profile_ref.clone())
+            .unwrap_or_else(|| instance_id.clone());
+        let new_build_plate = new_instance
+            .as_ref()
+            .map(|i| i.bed.identity.clone())
             .unwrap_or_default();
-        self.plates[idx].printer_instance_id = new_instance_id;
+        self.plates[idx].printer_instance_id = Some(instance_id);
         // Slot refs are physical (extruder, slot) coordinates — they
         // don't survive a topology change. Wipe + re-auto-bind any
         // referenced material against the new printer so existing
@@ -2323,28 +2317,27 @@ mod tests {
     }
 
     #[test]
-    fn add_plate_falls_back_to_default_when_active_unbound() {
+    fn add_plate_unbound_when_active_is_unbound() {
         let mut p = Project::default();
-        // Clear the bootstrap binding so the fallback can fire.
         p.plates[0].printer_instance_id = None;
         p.plates[0].scene.bed = None;
         let (new_id, _) = p.add_plate(None);
         let new_plate = p.plate(new_id).unwrap();
         assert!(
-            new_plate.printer_instance_id.is_some(),
-            "fallback to bundled-default printer",
+            new_plate.printer_instance_id.is_none(),
+            "no inheritance source + no caller-supplied id → unbound",
         );
     }
 
     #[test]
-    fn add_plate_respects_explicit_identity() {
+    fn add_plate_respects_explicit_instance_id() {
         let mut p = Project::default();
-        let (new_id, _) = p.add_plate(Some("snapmaker-u1".into()));
+        let (new_id, _) = p.add_plate(Some("snappy".into()));
         let new_plate = p.plate(new_id).unwrap();
         assert_eq!(
             new_plate.printer_instance_id.as_deref(),
             Some("snappy"),
-            "explicit identity wins over inheritance",
+            "explicit instance id wins over inheritance",
         );
     }
 
@@ -2820,13 +2813,9 @@ mod tests {
         p.plates[0].scene.bed = None;
         let profile = a1_mini_for_test();
         let (report, events) = p
-            .rebind_plate_printer(
-                PlateId(1),
-                "bambu-lab-a1-mini".into(),
-                &profile,
-            )
+            .rebind_plate_printer(PlateId(1), "bambi".into(), &profile)
             .unwrap();
-        // printer_instance_id resolved + assigned.
+        // printer_instance_id assigned to the chosen instance.
         assert_eq!(p.plates[0].printer_instance_id.as_deref(), Some("bambi"));
         // Report shape — previous was None for a fresh project.
         assert_eq!(report.plate_id, PlateId(1));
@@ -2850,11 +2839,7 @@ mod tests {
         p.plates[0].printer_instance_id = Some("snappy".into());
         let profile = a1_mini_for_test();
         let (report, _) = p
-            .rebind_plate_printer(
-                PlateId(1),
-                "bambu-lab-a1-mini".into(),
-                &profile,
-            )
+            .rebind_plate_printer(PlateId(1), "bambi".into(), &profile)
             .unwrap();
         assert_eq!(report.previous_printer.as_deref(), Some("snapmaker-u1"));
         assert_eq!(report.new_printer, "bambu-lab-a1-mini");
@@ -2865,11 +2850,7 @@ mod tests {
         let mut p = Project::default();
         let profile = a1_mini_for_test();
         let err = p
-            .rebind_plate_printer(
-                PlateId(99),
-                "bambu-lab-a1-mini".into(),
-                &profile,
-            )
+            .rebind_plate_printer(PlateId(99), "bambi".into(), &profile)
             .unwrap_err();
         assert_eq!(err, SceneOpError::UnknownPlate(PlateId(99)));
     }

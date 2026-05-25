@@ -346,24 +346,31 @@ pub fn printer_catalog() -> Vec<crate::core::printer::CatalogEntry> {
     crate::core::printer::bundled_catalog()
 }
 
-/// Rebind a plate to a printer the picker chose by identity
-/// (PR-5-4). The Tauri layer resolves the identity via the
-/// printer registry; the mutation handles the binding update,
-/// bed recompute, and report. The bed lives on the bound
-/// `PrinterInstance` — change it via `printer_instance_set_bed`.
+/// Rebind a plate to a `PrinterInstance` the picker chose. The
+/// Tauri layer resolves the instance + its bound printer profile
+/// via the registry; the mutation handles the binding update, bed
+/// recompute, and report. The bed lives on the bound instance —
+/// change it via `printer_instance_set_bed`.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_rebind_plate_printer(
     plate_id: PlateId,
-    printer_identity: String,
+    instance_id: String,
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<crate::core::scene::events::PrinterChangeReport, String> {
-    let profile = crate::core::printer::lookup(&printer_identity)
-        .ok_or_else(|| format!("no bundled printer with identity `{printer_identity}`"))?;
+    let instance = crate::core::printer::lookup_instance(&instance_id)
+        .ok_or_else(|| format!("no printer instance with id `{instance_id}`"))?;
+    let profile = crate::core::printer::lookup(&instance.vendor_profile_ref)
+        .ok_or_else(|| {
+            format!(
+                "printer instance `{instance_id}` references unknown vendor profile `{}`",
+                instance.vendor_profile_ref,
+            )
+        })?;
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let (report, events) = s
-        .rebind_plate_printer(plate_id, printer_identity, &profile)
+        .rebind_plate_printer(plate_id, instance_id, &profile)
         .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);

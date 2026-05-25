@@ -548,8 +548,8 @@ mod tests {
         // bindings. Verifies the full save/load shape.
         let mut p = Project::default();
         p.plates[0].printer_instance_id = Some(A1_MINI_INSTANCE.into());
-        let (_b, _) = p.add_plate(Some("snapmaker-u1".into()));
-        let (_c, _) = p.add_plate(Some("snapmaker-u1".into()));
+        let (_b, _) = p.add_plate(Some(U1_INSTANCE.into()));
+        let (_c, _) = p.add_plate(Some(U1_INSTANCE.into()));
 
         let path = tempfile_3mf();
         write_project(&p, &path).expect("write");

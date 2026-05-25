@@ -17,6 +17,15 @@ import {
 import { PreviewWorkspace } from "./preview/PreviewWorkspace";
 import { useSlicePreviewBridge } from "./preview/useSlicePreviewBridge";
 import { PrinterPanel } from "./driver/PrinterPanel";
+import { usePrinterInstances } from "./printer/usePrinterInstances";
+import { usePrinterCatalog } from "./printer/usePrinterCatalog";
+import { PrintersEmptyState } from "./printer/PrintersEmptyState";
+import {
+  AddPrinterModal,
+  type AddPrinterResult,
+} from "./printer/AddPrinterModal";
+import { createInstance } from "./printer/printerInstance";
+import { rebindPlatePrinter } from "./printer/printerCommands";
 import "./App.css";
 
 type SlicerInfo = { version: string; option_count: number };
@@ -28,6 +37,9 @@ function App() {
   const [mode, setMode] = useState<"scene" | "preview">("scene");
   const session = useProjectSession();
   const recovery = useAutosaveRecoveryGate();
+  const printers = usePrinterInstances();
+  const printerCatalog = usePrinterCatalog();
+  const [showAddPrinter, setShowAddPrinter] = useState(false);
 
   const activePlate =
     session.snapshot?.plates.find(
@@ -105,6 +117,30 @@ function App() {
     );
   }, []);
 
+  const handleAddPrinter = async (result: AddPrinterResult): Promise<void> => {
+    try {
+      const inst = await createInstance(
+        result.printerIdentity,
+        result.displayName,
+        result.amsUnits,
+      );
+      setShowAddPrinter(false);
+      // Auto-bind to the active plate (matches the design's "always
+      // auto-bind" choice for the picker flow). Empty-state path
+      // takes this same code with the bootstrap plate as the
+      // active one.
+      if (activePlateId != null) {
+        await rebindPlatePrinter(activePlateId, inst.id);
+      }
+    } catch (err) {
+      console.error("[printer] create failed", err);
+    }
+  };
+
+  // No printers + bootstrap completed → onboarding takes over.
+  const noPrinters =
+    !printers.loading && printers.instances.length === 0;
+
   return (
     <div className="app">
       {!recovery.resolved && (
@@ -166,6 +202,11 @@ function App() {
         <div className="sp-error" role="alert" style={{ margin: "8px 14px" }}>
           Bootstrap failed: {session.error}
         </div>
+      ) : noPrinters ? (
+        <PrintersEmptyState
+          catalog={printerCatalog.entries}
+          onAdd={() => setShowAddPrinter(true)}
+        />
       ) : (
         <div
           className={`workspace ${
@@ -183,9 +224,24 @@ function App() {
             )}
           </main>
           {!showPreview && panelVisible && (
-            <SettingsPanelHost session={session} />
+            <SettingsPanelHost
+              session={session}
+              instances={printers.instances}
+              onAddPrinter={() => setShowAddPrinter(true)}
+            />
           )}
         </div>
+      )}
+
+      {showAddPrinter && (
+        <AddPrinterModal
+          catalog={printerCatalog.entries}
+          existingNames={printers.instances.map((i) => i.display_name)}
+          onAdd={(result) => {
+            void handleAddPrinter(result);
+          }}
+          onClose={() => setShowAddPrinter(false)}
+        />
       )}
 
       <footer className="statusbar">

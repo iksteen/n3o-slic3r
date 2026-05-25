@@ -134,6 +134,29 @@ export async function setInstanceBed(
   });
 }
 
+/** Register a fresh `PrinterInstance` from a bundled printer
+ *  identity + display name + AMS unit count. Returns the new
+ *  instance (UUID-keyed) so the caller can immediately rebind it
+ *  to a plate. Emits `printer:instance_changed`. */
+export async function createInstance(
+  printerIdentity: string,
+  displayName: string,
+  amsUnits: number,
+): Promise<PrinterInstance> {
+  return invoke<PrinterInstance>("printer_instance_create", {
+    printerIdentity,
+    displayName,
+    amsUnits,
+  });
+}
+
+/** Remove a registered `PrinterInstance`. Plates bound to this
+ *  instance become dangling; the slice gate refuses to run on
+ *  them and the picker surfaces them as "unbound." */
+export async function deleteInstance(id: string): Promise<void> {
+  return invoke("printer_instance_delete", { id });
+}
+
 /** Compose a flat list of slot picker options across the instance's
  *  extruder × slot grid. The label combines extruder + slot labels
  *  with " — " when both are non-empty; one label alone otherwise.

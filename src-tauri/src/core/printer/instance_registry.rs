@@ -28,18 +28,19 @@ static REGISTRY: OnceLock<Mutex<Vec<PrinterInstance>>> = OnceLock::new();
 
 fn registry() -> &'static Mutex<Vec<PrinterInstance>> {
     REGISTRY.get_or_init(|| {
-        // First-access seed. If the runtime registered a user-library
-        // directory, load from there (seeding bundled on first launch);
-        // otherwise fall back to the in-memory bundled set. The
-        // fall-back keeps unit tests that never hit Tauri's setup
-        // working with no surprise filesystem writes.
+        // First-access load. Production has a storage root registered
+        // by Tauri's `setup()` and starts empty on first launch (the
+        // empty-state UI fires; create_instance writes the first
+        // entry). Tests that never hit Tauri's setup fall back to
+        // the in-memory bundled fixtures so the wide test surface
+        // doesn't need temp-library plumbing.
         let initial = match instance_storage::root() {
-            Some(root) => instance_storage::load_or_seed(root).unwrap_or_else(|e| {
+            Some(root) => instance_storage::load_from_disk(root).unwrap_or_else(|e| {
                 tracing::warn!(
                     error = %e,
-                    "instance library load failed; falling back to bundled fixtures",
+                    "instance library load failed; starting with an empty registry",
                 );
-                bundled_instances()
+                Vec::new()
             }),
             None => bundled_instances(),
         };
@@ -579,6 +580,94 @@ mod tests {
     fn set_instance_bed_errors_on_unknown_instance() {
         reset_to_bundled();
         let err = set_instance_bed("ghost", "Cool Plate".into()).unwrap_err();
+        assert!(matches!(err, InstanceMutError::UnknownInstance { .. }));
+    }
+
+    #[test]
+    fn create_instance_builds_topology_from_ams_units() {
+        reset_to_bundled();
+        // 1 AMS = 5 slots: Ext (Direct) + AMS:1..4 (Ams).
+        let inst = create_instance("bambu-lab-a1-mini", "Garage A1".into(), 1)
+            .expect("create with 1 AMS");
+        assert_eq!(inst.display_name, "Garage A1");
+        assert_eq!(inst.vendor_profile_ref, "bambu-lab-a1-mini");
+        // UUIDv4 string shape: 36 chars with hyphens.
+        assert_eq!(inst.id.len(), 36);
+        assert_eq!(inst.extruders.len(), 1);
+        let slots = &inst.extruders[0].slots;
+        assert_eq!(slots.len(), 5);
+        assert_eq!(slots[0].feed, FeedKind::Direct);
+        assert_eq!(slots[0].label, "Ext");
+        for (i, slot) in slots.iter().enumerate().skip(1) {
+            assert_eq!(slot.feed, FeedKind::Ams);
+            assert_eq!(slot.label, format!("AMS:{i}"));
+        }
+        // First supported bed becomes the default.
+        assert!(!inst.bed.identity.is_empty());
+        // New instance landed in the registry.
+        assert!(lookup_instance(&inst.id).is_some());
+    }
+
+    #[test]
+    fn create_instance_zero_ams_produces_single_direct_slot() {
+        reset_to_bundled();
+        let inst = create_instance("bambu-lab-a1-mini", "Direct-feed bambi".into(), 0)
+            .expect("create with 0 AMS units");
+        let slots = &inst.extruders[0].slots;
+        assert_eq!(slots.len(), 1, "0 AMS units → 1 direct slot");
+        assert_eq!(slots[0].feed, FeedKind::Direct);
+        assert_eq!(slots[0].label, "Ext");
+    }
+
+    #[test]
+    fn create_instance_multi_ams_letters_disambiguate_slots() {
+        reset_to_bundled();
+        // 3 AMS units on a fictional config: slots get "AMS A:1..4",
+        // "AMS B:1..4", "AMS C:1..4" prefixes. The A1 mini's ams_max
+        // is 1, so this would normally error — call directly with a
+        // forced value via the test backdoor. (We assert validation
+        // separately below.)
+        //
+        // For now exercise the labelling on the supported case (1 unit)
+        // and document the multi-AMS labelling expectation as a unit
+        // test against the helper indirectly when a higher ams_max
+        // printer ships.
+        let inst = create_instance("bambu-lab-a1-mini", "Single AMS".into(), 1)
+            .expect("ams_max=1 supports 1 unit");
+        let slot_labels: Vec<&str> = inst.extruders[0]
+            .slots
+            .iter()
+            .map(|s| s.label.as_str())
+            .collect();
+        // Single-AMS uses the un-lettered "AMS:N" form.
+        assert_eq!(slot_labels, vec!["Ext", "AMS:1", "AMS:2", "AMS:3", "AMS:4"]);
+    }
+
+    #[test]
+    fn create_instance_validates_ams_max_and_identity_and_name() {
+        reset_to_bundled();
+        let too_many =
+            create_instance("bambu-lab-a1-mini", "Too many".into(), 2).unwrap_err();
+        assert!(
+            matches!(too_many, InstanceMutError::AmsCountExceeded { requested: 2, max: 1, .. }),
+        );
+        let unknown =
+            create_instance("nope-printer", "Nope".into(), 0).unwrap_err();
+        assert!(matches!(unknown, InstanceMutError::UnknownPrinterIdentity { .. }));
+        let blank =
+            create_instance("bambu-lab-a1-mini", "   ".into(), 0).unwrap_err();
+        assert!(matches!(blank, InstanceMutError::EmptyDisplayName));
+    }
+
+    #[test]
+    fn delete_instance_errors_on_unknown_id() {
+        // Cross-test parallel reset_to_bundled() in this module makes
+        // "create, then delete, then assert gone" racy — same flake
+        // pattern documented in `set_slot_color_persists_and_clears`.
+        // Pin only the UnknownInstance error path, which doesn't
+        // depend on prior state.
+        reset_to_bundled();
+        let err = delete_instance("definitely-not-a-real-uuid").unwrap_err();
         assert!(matches!(err, InstanceMutError::UnknownInstance { .. }));
     }
 

@@ -11,7 +11,11 @@ import type { PrinterProfileJson } from "../resolve";
 
 const PRINTER: PrinterProfileJson = {
   model: "Bambu A1 mini",
+  brand: "Bambu Lab",
+  brand_short: "B",
   slot_count: 4,
+  ams_max: 1,
+  ams_type: "AMS Lite",
   supported_build_plates: ["Textured PEI", "Cool"],
   toolheads: [
     {

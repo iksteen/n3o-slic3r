@@ -29,7 +29,19 @@ export type ContextJson = {
 
 export type PrinterProfileJson = {
   model: string;
+  /** Manufacturer name ("Bambu Lab", "Snapmaker"). Drives the
+   * add-printer modal's brand grouping + brand-tinted cards.
+   * `""` when the profile predates the brand field. */
+  brand: string;
+  /** Short brand glyph for cards/chips ("B" for Bambu Lab). */
+  brand_short: string;
   slot_count: number;
+  /** Maximum number of AMS-style swap units this printer accepts.
+   * `0` means no AMS support (direct-feed only / toolchanger). */
+  ams_max: number;
+  /** User-visible AMS family name ("AMS Lite", "AMS 2 Pro").
+   * `null` when ams_max is 0. */
+  ams_type: string | null;
   supported_build_plates: string[];
   toolheads: {
     nozzle_diameter: number;

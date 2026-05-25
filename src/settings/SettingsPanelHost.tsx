@@ -21,6 +21,7 @@ import { usePrinterCatalog } from "../printer/usePrinterCatalog";
 import {
   getPrinterInstance,
   setInstanceBed,
+  type PrinterInstance,
 } from "../printer/printerInstance";
 import { SlotBindingPanel } from "../material/SlotBindingPanel";
 import { BuildPlateSelector } from "./BuildPlateSelector";
@@ -66,6 +67,11 @@ export function allObjectsForPanel(
 
 export interface SettingsPanelHostProps {
   session: ProjectSession;
+  /** All registered PrinterInstances — populates the picker. */
+  instances: PrinterInstance[];
+  /** Open the add-printer modal (the picker's "+ New printer…"
+   *  entry fires this; App.tsx owns the modal). */
+  onAddPrinter: () => void;
   /** Active-slot index plumbed into `buildContextJson` for the
    * cascade resolve. The settings panel itself no longer surfaces a
    * slot picker (PR-S-2 filtered to Process bucket — no per-
@@ -76,6 +82,8 @@ export interface SettingsPanelHostProps {
 
 export function SettingsPanelHost({
   session,
+  instances,
+  onAddPrinter,
   activeSlot = 0,
 }: SettingsPanelHostProps) {
   const plate = useMemo(() => activePlate(session), [session]);
@@ -171,7 +179,9 @@ export function SettingsPanelHost({
         <div className="sp-config-row">
           <PrinterPicker
             plateId={plate?.plate_id ?? null}
-            printerIdentity={plate?.printer_identity ?? null}
+            instances={instances}
+            activeInstanceId={plate?.printer_instance_id ?? null}
+            onAddPrinter={onAddPrinter}
           />
           {plate?.printer_identity && activeProfile && instanceId && instanceBed && (
             <BuildPlateSelector

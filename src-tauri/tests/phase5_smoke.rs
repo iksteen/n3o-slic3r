@@ -52,8 +52,8 @@ fn snapmaker_u1() -> PrinterProfile {
     lookup("snapmaker-u1").expect("snapmaker-u1 bundled profile present")
 }
 
-const A1_MINI_IDENTITY: &str = "bambu-lab-a1-mini";
-const U1_IDENTITY: &str = "snapmaker-u1";
+const BAMBI_INSTANCE: &str = "bambi";
+const SNAPPY_INSTANCE: &str = "snappy";
 
 /// Mesh stub the smoke test plants on each plate. The geometry
 /// is the minimal valid triangle libslic3r's 3MF writer accepts
@@ -91,7 +91,7 @@ fn build_exit_fixture() -> Project {
     let mut p = Project::default();
 
     // ── Plate 1 (default plate, pre-existing) → A1 mini ──
-    p.rebind_plate_printer(PlateId(1), A1_MINI_IDENTITY.into(), &a1_mini())
+    p.rebind_plate_printer(PlateId(1), BAMBI_INSTANCE.into(), &a1_mini())
         .expect("plate 1 rebind to a1 mini");
     p.set_active_plate(PlateId(1)).expect("activate plate 1");
     let mesh_a = p.register_mesh(triangle_mesh());
@@ -107,7 +107,7 @@ fn build_exit_fixture() -> Project {
 
     // ── Plate 2 → U1, with a project-tier override ──
     let (id2, _) = p.add_plate(None);
-    p.rebind_plate_printer(id2, U1_IDENTITY.into(), &snapmaker_u1())
+    p.rebind_plate_printer(id2, SNAPPY_INSTANCE.into(), &snapmaker_u1())
         .expect("plate 2 rebind to u1");
     p.set_active_plate(id2).expect("activate plate 2");
     let mesh_b = p.register_mesh(triangle_mesh());
@@ -117,7 +117,7 @@ fn build_exit_fixture() -> Project {
 
     // ── Plate 3 → U1 ──
     let (id3, _) = p.add_plate(None);
-    p.rebind_plate_printer(id3, U1_IDENTITY.into(), &snapmaker_u1())
+    p.rebind_plate_printer(id3, SNAPPY_INSTANCE.into(), &snapmaker_u1())
         .expect("plate 3 rebind to u1");
     p.set_active_plate(id3).expect("activate plate 3");
     let mesh_c = p.register_mesh(triangle_mesh());
