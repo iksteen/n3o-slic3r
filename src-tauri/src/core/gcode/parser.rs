@@ -512,10 +512,12 @@ fn parse_semantic_comment(content: &str, last_seen_z: &mut Option<f32>) -> Optio
 }
 
 fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
-    if s.len() < prefix.len() {
-        return None;
-    }
-    let head = &s[..prefix.len()];
+    // `s.get(..n)` returns `None` if the byte index lands inside a
+    // multi-byte UTF-8 character — a real risk in gcode comments
+    // emitted by some printers (e.g. Snapmaker U1's machine_start_gcode
+    // contains Chinese annotations like `===== 床面异物检测 ========`).
+    // A raw `&s[..n]` would panic there.
+    let head = s.get(..prefix.len())?;
     if head.eq_ignore_ascii_case(prefix) {
         Some(&s[prefix.len()..])
     } else {
@@ -528,10 +530,8 @@ fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
 /// trimmed value side or `None` if the line doesn't match.
 fn strip_after_eq<'a>(s: &'a str, key: &str) -> Option<&'a str> {
     let trimmed = s.trim_start();
-    if trimmed.len() < key.len() {
-        return None;
-    }
-    let head = &trimmed[..key.len()];
+    // Boundary-safe prefix check — see `strip_prefix_ci`.
+    let head = trimmed.get(..key.len())?;
     if !head.eq_ignore_ascii_case(key) {
         return None;
     }
@@ -892,6 +892,21 @@ mod tests {
             Line::Comment(c) => {
                 matches!(c.semantic, Some(SemanticComment::FilamentUsed(_)));
             }
+            other => panic!("expected Comment, got {other:?}"),
+        }
+    }
+
+    /// Regression for the panic when slicing on the Snapmaker U1 —
+    /// its `machine_start_gcode` carries Chinese annotations like
+    /// `===== 床面异物检测 ========`. A raw `&s[..key.len()]` slice
+    /// hit a non-char-boundary inside `测` (bytes 21..24) and panicked.
+    #[test]
+    fn comment_with_multibyte_chars_does_not_panic() {
+        let src = "; ===== 床面异物检测 ========\n";
+        let mut iter = parse_lines(src.as_bytes());
+        let line = iter.next().unwrap().expect("parse multibyte comment");
+        match line {
+            Line::Comment(c) => assert!(c.raw.contains("床面异物检测")),
             other => panic!("expected Comment, got {other:?}"),
         }
     }
