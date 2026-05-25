@@ -19,3 +19,4 @@
 
 pub mod moonraker;
 pub mod probe;
+pub mod status;
