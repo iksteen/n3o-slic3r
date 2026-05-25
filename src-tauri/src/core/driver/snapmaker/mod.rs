@@ -17,4 +17,5 @@
 //!
 //! [`iksteen/bambu-overlay`]: https://github.com/iksteen/bambu-overlay
 
+pub mod moonraker;
 pub mod probe;
