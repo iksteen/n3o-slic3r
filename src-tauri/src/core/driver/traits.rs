@@ -10,6 +10,8 @@ use std::fmt;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+
+pub use crate::core::slice::pre_slice_gate::AmsMappingV2;
 use tokio::sync::watch;
 
 use super::status::PrinterStatus;
@@ -76,8 +78,20 @@ fn default_u1_port() -> u16 {
 pub enum SendPayload {
     /// Bambu A1 mini: pre-built `.gcode.3mf` bundle. The bytes
     /// are the FTPS-uploaded body; `plate_id` is repeated for
-    /// the MQTT command's `subtask_name` field.
-    Gcode3mf { bytes: Vec<u8>, plate_id: u32 },
+    /// the MQTT command's `subtask_name` field. AMS routing
+    /// fields match the shape BBS publishes — both `ams_mapping`
+    /// (5-element `[i8]` array, left-aligned, -1 for unused) and
+    /// `ams_mapping2` (5-element `{ams_id, slot_id}` array,
+    /// `{255, 255}` for unused) are required; firmware ignores
+    /// the `.gcode.3mf` bundle's `ams_bindings` and falls back
+    /// to the external PTFE-tube spool without both.
+    Gcode3mf {
+        bytes: Vec<u8>,
+        plate_id: u32,
+        use_ams: bool,
+        ams_mapping: [i8; 5],
+        ams_mapping2: [AmsMappingV2; 5],
+    },
     /// Snapmaker U1: raw G-code body + the filename the printer
     /// should store it under (`<file_name>.gcode`).
     Gcode { bytes: Vec<u8>, file_name: String },
@@ -182,13 +196,26 @@ mod tests {
         let bambu = SendPayload::Gcode3mf {
             bytes: vec![1, 2, 3],
             plate_id: 1,
+            use_ams: true,
+            ams_mapping: [1, -1, -1, -1, -1],
+            ams_mapping2: [
+                AmsMappingV2 { ams_id: 0, slot_id: 1 },
+                AmsMappingV2::UNUSED,
+                AmsMappingV2::UNUSED,
+                AmsMappingV2::UNUSED,
+                AmsMappingV2::UNUSED,
+            ],
         };
         let s = serde_json::to_string(&bambu).unwrap();
         let back: SendPayload = serde_json::from_str(&s).unwrap();
         match back {
-            SendPayload::Gcode3mf { plate_id, bytes } => {
+            SendPayload::Gcode3mf { plate_id, bytes, use_ams, ams_mapping, ams_mapping2 } => {
                 assert_eq!(plate_id, 1);
                 assert_eq!(bytes, vec![1, 2, 3]);
+                assert!(use_ams);
+                assert_eq!(ams_mapping, [1, -1, -1, -1, -1]);
+                assert_eq!(ams_mapping2[0], AmsMappingV2 { ams_id: 0, slot_id: 1 });
+                assert_eq!(ams_mapping2[1], AmsMappingV2::UNUSED);
             }
             _ => panic!("variant"),
         }

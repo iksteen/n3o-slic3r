@@ -25,7 +25,7 @@ use super::traits::{
     Driver, DriverConfig, DriverError, DriverId, SendHandle, SendPayload, PrinterCommand,
 };
 use crate::core::project::{PlateId, Project};
-use crate::core::slice::pre_slice_gate::ams_bindings_for_plate;
+use crate::core::slice::pre_slice_gate::{ams_bindings_for_plate, ams_mapping_for_plate};
 use crate::core::threemf::{fixture_input, write_sliced_3mf, AmsBinding};
 
 /// Wire-shape for the `driver:status_update` Tauri event the
@@ -274,6 +274,29 @@ fn collect_ams_bindings(
     ams_bindings_for_plate(plate)
 }
 
+/// Plate-side AMS routing for the Bambu MQTT `project_file` print
+/// command: `(use_ams, ams_mapping[5], ams_mapping2[5])`. Default
+/// is the all-unused "external spool" shape when the plate is
+/// unknown or unbound.
+fn collect_ams_mapping(
+    project: &Mutex<Project>,
+    plate_id: u32,
+) -> (
+    bool,
+    [i8; 5],
+    [crate::core::slice::pre_slice_gate::AmsMappingV2; 5],
+) {
+    use crate::core::slice::pre_slice_gate::AmsMappingV2;
+    let default = (false, [-1i8; 5], [AmsMappingV2::UNUSED; 5]);
+    let Ok(p) = project.lock() else {
+        return default;
+    };
+    let Some(plate) = p.plate(PlateId(plate_id)) else {
+        return default;
+    };
+    ams_mapping_for_plate(plate)
+}
+
 /// Wrap a plate's last-sliced raw G-code into the same
 /// `.gcode.3mf` bundle the driver send path uses, but write it
 /// to disk instead of uploading. Diagnostic surface — lets the
@@ -288,6 +311,9 @@ pub async fn driver_export_plate(
     output_path: String,
     project: State<'_, Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
+    // MQTT mapping isn't surfaced in the exported bundle, but pull it
+    // anyway so the .gcode.3mf side stays consistent with what the
+    // send path would emit.
     let ams = collect_ams_bindings(&project, plate_id);
     let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -318,14 +344,21 @@ pub async fn driver_send_plate(
     project: State<'_, Arc<Mutex<Project>>>,
 ) -> Result<SendHandle, String> {
     let ams = collect_ams_bindings(&project, plate_id);
+    let (use_ams, ams_mapping, ams_mapping2) = collect_ams_mapping(&project, plate_id);
     let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
     let handle = registry
         .get(id)
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
     let mut d = handle.lock().await;
-    d.send(SendPayload::Gcode3mf { bytes, plate_id })
-        .await
-        .map_err(|e| e.to_string())
+    d.send(SendPayload::Gcode3mf {
+        bytes,
+        plate_id,
+        use_ams,
+        ams_mapping,
+        ams_mapping2,
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Dry-run variant of [`driver_send_plate`]. Same wrap pipeline,
@@ -342,6 +375,7 @@ pub async fn driver_dry_send_plate(
     project: State<'_, Arc<Mutex<Project>>>,
 ) -> Result<SendHandle, String> {
     let ams = collect_ams_bindings(&project, plate_id);
+    let (use_ams, ams_mapping, ams_mapping2) = collect_ams_mapping(&project, plate_id);
     let wrapped = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
     let neutered = tauri::async_runtime::spawn_blocking(move || neuter_gcode_3mf(&wrapped))
         .await
@@ -354,6 +388,9 @@ pub async fn driver_dry_send_plate(
     d.send(SendPayload::Gcode3mf {
         bytes: neutered,
         plate_id,
+        use_ams,
+        ams_mapping,
+        ams_mapping2,
     })
     .await
     .map_err(|e| e.to_string())
@@ -376,11 +413,20 @@ pub async fn driver_dry_send(
     registry: State<'_, Arc<DriverRegistry>>,
 ) -> Result<SendHandle, String> {
     let neutered_payload = match payload {
-        SendPayload::Gcode3mf { bytes, plate_id } => {
+        SendPayload::Gcode3mf {
+            bytes,
+            plate_id,
+            use_ams,
+            ams_mapping,
+            ams_mapping2,
+        } => {
             let neutered = neuter_gcode_3mf(&bytes).map_err(|e| e.to_string())?;
             SendPayload::Gcode3mf {
                 bytes: neutered,
                 plate_id,
+                use_ams,
+                ams_mapping,
+                ams_mapping2,
             }
         }
         SendPayload::Gcode { .. } => {

@@ -240,8 +240,14 @@ impl Driver for BambuDriver {
     }
 
     async fn send(&mut self, payload: SendPayload) -> Result<SendHandle, DriverError> {
-        let (bytes, plate_id) = match payload {
-            SendPayload::Gcode3mf { bytes, plate_id } => (bytes, plate_id),
+        let (bytes, plate_id, use_ams, ams_mapping, ams_mapping2) = match payload {
+            SendPayload::Gcode3mf {
+                bytes,
+                plate_id,
+                use_ams,
+                ams_mapping,
+                ams_mapping2,
+            } => (bytes, plate_id, use_ams, ams_mapping, ams_mapping2),
             SendPayload::Gcode { .. } => {
                 return Err(DriverError::Other(
                     "BambuDriver only accepts SendPayload::Gcode3mf".into(),
@@ -283,20 +289,22 @@ impl Driver for BambuDriver {
         .map_err(|e| DriverError::Other(format!("upload join: {e}")))??;
 
         // Publish the project_file MQTT command. Field shape
-        // cross-referenced against two working open-source impls
-        // (Home Assistant Bambu integration + bambu-connect)
-        // because OpenBambuAPI mqtt.md (Doridian fork) is stale:
+        // pinned against a real BBS capture (single-color AMS
+        // print on an A1 mini + AMS Lite). Notable:
         //
         //   - `bed_leveling` (American), not `bed_levelling` —
-        //     Doridian's doc had the typo; firmware rejects the
+        //     Doridian's doc has the typo; firmware rejects the
         //     British spelling as a missing field.
         //   - `ftp://<remote_path>` URL form for FTPS-uploaded
-        //     files; `file:///mnt/sdcard/...` returns the
-        //     generic "update Bambu Studio" reject.
-        //   - No `file`, `md5`, or `ams_mapping` fields. They're
-        //     in the Doridian doc but neither working impl
-        //     ships them; the firmware tolerates absence and
-        //     rejects presence in some combinations.
+        //     files; `file:///mnt/sdcard/...` is the generic
+        //     "update Bambu Studio" reject path.
+        //   - `ams_mapping` is a **real JSON array** of 5
+        //     elements, left-aligned (filament 0 at index 0,
+        //     unused tail = -1). The earlier "stringified" form
+        //     was a misread of OrcaSlicer's calibration path.
+        //   - `ams_mapping2` is also required — the firmware
+        //     uses both in tandem and silently falls back to
+        //     the external spool when only `ams_mapping` is set.
         let sequence_id = self.next_sequence_id();
         let cmd = ProjectFileCommand {
             print: ProjectFileBody {
@@ -320,12 +328,19 @@ impl Driver for BambuDriver {
                 flow_cali: false,
                 vibration_cali: false,
                 layer_inspect: false,
-                use_ams: false,
+                use_ams,
+                ams_mapping,
+                ams_mapping2,
             },
         };
         let body = serde_json::to_vec(&cmd)
             .map_err(|e| DriverError::Other(format!("serialize project_file: {e}")))?;
         let topic = format!("device/{device_id}/request");
+        tracing::info!(
+            topic = %topic,
+            body = %String::from_utf8_lossy(&body),
+            "publishing project_file MQTT command",
+        );
         client
             .publish(&topic, QoS::AtMostOnce, false, body)
             .await
@@ -505,6 +520,16 @@ struct ProjectFileBody<'a> {
     vibration_cali: bool,
     layer_inspect: bool,
     use_ams: bool,
+    /// 5-element AMS routing array, left-aligned (filament 0 at
+    /// index 0). Values: 0-based AMS slot id (0..3) for AMS-fed
+    /// filaments, -1 for the external spool / unused. Real JSON
+    /// array; firmware rejects the stringified form.
+    ams_mapping: [i8; 5],
+    /// Structured `{ams_id, slot_id}` companion to `ams_mapping`.
+    /// Required alongside — firmware uses both and falls back to
+    /// the external spool when only one is set. `{255, 255}` =
+    /// unused.
+    ams_mapping2: [crate::core::slice::pre_slice_gate::AmsMappingV2; 5],
 }
 
 /// Background task: own the rumqttc event loop until shutdown.
@@ -672,6 +697,7 @@ mod tests {
 
     #[test]
     fn project_file_command_carries_expected_fields() {
+        use crate::core::slice::pre_slice_gate::AmsMappingV2;
         let cmd = ProjectFileCommand {
             print: ProjectFileBody {
                 sequence_id: "42",
@@ -689,32 +715,53 @@ mod tests {
                 flow_cali: false,
                 vibration_cali: false,
                 layer_inspect: false,
-                use_ams: false,
+                use_ams: true,
+                ams_mapping: [1, -1, -1, -1, -1],
+                ams_mapping2: [
+                    AmsMappingV2 { ams_id: 0, slot_id: 1 },
+                    AmsMappingV2::UNUSED,
+                    AmsMappingV2::UNUSED,
+                    AmsMappingV2::UNUSED,
+                    AmsMappingV2::UNUSED,
+                ],
             },
         };
         let json: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&cmd).unwrap()).unwrap();
-        // Pin the shape that current Bambu firmware accepts
-        // (validated against Home Assistant Bambu + bambu-connect).
+        // Pin against a real BBS capture (single-color AMS print
+        // on A1 mini + AMS Lite).
         let print = &json["print"];
         assert_eq!(print["sequence_id"], "42");
         assert_eq!(print["command"], "project_file");
         assert_eq!(print["param"], "Metadata/plate_1.gcode");
         assert_eq!(print["url"], "ftp://n3o-1-12345.gcode.3mf");
         assert_eq!(print["bed_type"], "auto");
-        assert_eq!(print["use_ams"], false);
-        // Booleans, not strings — Bambu rejects use_ams:"false".
+        assert_eq!(print["use_ams"], true);
         assert!(print["use_ams"].is_boolean());
         assert!(print["timelapse"].is_boolean());
-        // American spelling — the British `bed_levelling` is what
-        // we got burned by. Firmware treats it as a missing field.
+        // American spelling — British `bed_levelling` is read as
+        // a missing required field.
         assert!(print["bed_leveling"].is_boolean());
         assert!(print.get("bed_levelling").is_none());
-        // Fields that the OpenBambuAPI doc lists but current
-        // firmware doesn't tolerate: file, md5, ams_mapping.
+        // Earlier (Doridian doc) and current (BBS capture) agree
+        // the firmware tolerates absent file + md5.
         assert!(print.get("file").is_none());
         assert!(print.get("md5").is_none());
-        assert!(print.get("ams_mapping").is_none());
+        // ams_mapping: real JSON array of 5 elements, left-aligned.
+        assert_eq!(print["ams_mapping"], serde_json::json!([1, -1, -1, -1, -1]));
+        assert!(print["ams_mapping"].is_array());
+        // ams_mapping2: structured form, also 5 elements with
+        // {255, 255} sentinel for unused slots.
+        assert_eq!(
+            print["ams_mapping2"],
+            serde_json::json!([
+                {"ams_id": 0, "slot_id": 1},
+                {"ams_id": 255, "slot_id": 255},
+                {"ams_id": 255, "slot_id": 255},
+                {"ams_id": 255, "slot_id": 255},
+                {"ams_id": 255, "slot_id": 255},
+            ])
+        );
     }
 
     /// Pushall payload shape is what the printer expects. Pin

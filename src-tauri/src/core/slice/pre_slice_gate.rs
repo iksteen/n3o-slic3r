@@ -163,6 +163,70 @@ pub fn ams_bindings_for_plate(
     out
 }
 
+/// One entry of the Bambu MQTT `ams_mapping2` array — the
+/// `{ams_id, slot_id}` form the firmware uses to identify which
+/// physical AMS unit + slot within it a filament loads from.
+/// Unused entries are `{ams_id: 255, slot_id: 255}` (the sentinel
+/// BBS publishes for empty positions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AmsMappingV2 {
+    pub ams_id: u8,
+    pub slot_id: u8,
+}
+
+impl AmsMappingV2 {
+    pub const UNUSED: Self = Self { ams_id: 255, slot_id: 255 };
+}
+
+/// Compute the Bambu MQTT `project_file` AMS routing fields for a
+/// plate: `(use_ams, ams_mapping[5], ams_mapping2[5])`.
+///
+/// Both arrays are 5-element fixed-length, left-aligned (filament 0
+/// at index 0). `ams_mapping[i]` is the 0-based flat AMS slot id
+/// (0..3) for filament i, `-1` for external; `ams_mapping2[i]` is
+/// the structured `{ams_id, slot_id}` pair (`{255, 255}` for
+/// unused). Both shapes are required — the firmware on A1 mini
+/// firmware needs them in tandem, and the BBS publish always sends
+/// both. `use_ams` is true when at least one referenced material
+/// lands on an `Ams`-feed slot.
+///
+/// MVP: we assume a single AMS unit per extruder (the A1 mini + AMS
+/// Lite case), so `ams_id` is always `0` for AMS-fed slots. Multi-
+/// AMS printers (X1C with 4 AMS units) need a richer printer-side
+/// model to know which AMS each `Ams`-feed slot belongs to.
+pub fn ams_mapping_for_plate(
+    plate: &crate::core::project::model::Plate,
+) -> (bool, [i8; 5], [AmsMappingV2; 5]) {
+    use crate::core::printer::FeedKind;
+    let mut mapping = [-1i8; 5];
+    let mut mapping2 = [AmsMappingV2::UNUSED; 5];
+    let Some(instance_id) = plate.printer_instance_id.as_deref() else {
+        return (false, mapping, mapping2);
+    };
+    let Some(instance) = lookup_instance(instance_id) else {
+        return (false, mapping, mapping2);
+    };
+
+    let mut any_ams = false;
+    for (i, slot_ref) in plate.material_to_slot.values().enumerate().take(5) {
+        let Some(ext) = instance.extruders.get(slot_ref.extruder as usize) else { continue };
+        let Some(slot) = ext.slots.get(slot_ref.slot as usize) else { continue };
+        match slot.feed {
+            FeedKind::Direct => {} // leave as -1 / UNUSED
+            FeedKind::Ams => {
+                let ams_slot = ext.slots[..slot_ref.slot as usize]
+                    .iter()
+                    .filter(|s| s.feed == FeedKind::Ams)
+                    .count() as u8;
+                mapping[i] = ams_slot as i8;
+                mapping2[i] = AmsMappingV2 { ams_id: 0, slot_id: ams_slot };
+                any_ams = true;
+            }
+        }
+    }
+    (any_ams, mapping, mapping2)
+}
+
 fn validate_plate(plate: &crate::core::project::model::Plate) -> Vec<SliceBlocker> {
     let mut issues = Vec::new();
 
