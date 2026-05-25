@@ -118,10 +118,17 @@ export async function attachEventBridge(
         // than try to incrementally update from prior state.
         void refreshSnapshot(mirror);
       }
-      if (e.payload.kind === "MaterialSlotChanged") {
-        // The mirror caches material→slot per plate to drive the
-        // spool-color paint. The event carries only the plate_id,
-        // not the new map — fetch fresh and push.
+      // Anything that may have silently mutated the plate's
+      // material→slot routing on the backend: refetch + recolor.
+      // Auto-bind runs as a side effect of register_object
+      // (ObjectAdded) and rebind_plate_printer wipes + re-binds
+      // (PlateMetadataChanged) — neither emits MaterialSlotChanged,
+      // so the explicit-edit handler isn't enough on its own.
+      if (
+        e.payload.kind === "MaterialSlotChanged" ||
+        e.payload.kind === "ObjectAdded" ||
+        e.payload.kind === "PlateMetadataChanged"
+      ) {
         void refreshPlateMaterialToSlot(mirror, e.payload.data.plate_id);
       }
     });
@@ -185,7 +192,11 @@ async function refreshPlateMaterialToSlot(
     const snapshot = await invoke<SceneSnapshot>("scene_snapshot");
     const plate = snapshot.plates.find((p) => p.plate_id === plateId);
     if (plate) {
-      mirror.applyPlateMaterialToSlot(plateId, plate.material_to_slot);
+      mirror.applyPlateRouting(
+        plateId,
+        plate.printer_instance_id,
+        plate.material_to_slot,
+      );
     }
   } catch (err) {
     console.warn(

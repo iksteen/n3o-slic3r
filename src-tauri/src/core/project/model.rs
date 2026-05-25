@@ -164,6 +164,9 @@ pub struct Plate {
     /// walked extruder-major), user-editable via the slot binding
     /// panel. Empty for plates with no material-tagged objects.
     ///
+    /// Cleared on printer swap — slot refs are physical coordinates
+    /// (`(extruder, slot)`) that don't survive a topology change.
+    ///
     /// `BTreeMap` (not `HashMap`) so the wire form stays deterministic
     /// for save/load + diff displays.
     #[serde(default)]

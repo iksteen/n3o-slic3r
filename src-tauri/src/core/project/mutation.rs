@@ -586,6 +586,26 @@ impl Project {
             crate::core::printer::instance_id_for_vendor_profile(&binding.printer_identity)
                 .map(str::to_owned);
         self.plates[idx].printer = Some(binding);
+        // Slot refs are physical (extruder, slot) coordinates — they
+        // don't survive a topology change. Wipe + re-auto-bind any
+        // referenced material against the new printer so existing
+        // objects keep a sensible color instead of going gray. The
+        // frontend refetches material_to_slot off `PlateMetadataChanged`
+        // (always emitted below), so no separate MaterialSlotChanged
+        // event is needed.
+        self.plates[idx].material_to_slot.clear();
+        let referenced: std::collections::BTreeSet<u8> = self.plates[idx]
+            .scene
+            .objects
+            .values()
+            .map(|o| o.extruder_id.unwrap_or(1))
+            .collect();
+        let prev_active = self.active_plate;
+        self.active_plate = idx;
+        for mat in referenced {
+            self.ensure_default_material_slot_on_active(mat);
+        }
+        self.active_plate = prev_active;
 
         // Reuse the bed-viz path for the bed/exclusion-zone update.
         // Can't fail (we already validated the plate id above).

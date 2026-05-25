@@ -600,15 +600,20 @@ export class SceneMirror {
     }
   }
 
-  /** Public: replace a plate's `materialToSlot` routing + recolor.
-   * Bridge calls this on `MaterialSlotChanged` events after pulling
-   * the fresh map from a snapshot fetch. */
-  applyPlateMaterialToSlot(
+  /** Public: replace a plate's routing inputs (printer instance +
+   * material→slot map) + recolor. Bridge calls this whenever an
+   * event fires that may have mutated either: `MaterialSlotChanged`,
+   * `ObjectAdded`, `PlateMetadataChanged` (printer swap). Both
+   * fields are needed because a printer swap changes the instance
+   * id, not just the map. */
+  applyPlateRouting(
     plateId: PlateId,
+    printerInstanceId: string | null,
     materialToSlot: Record<number, SlotRef>,
   ): void {
     const plate = this.plates.get(plateId);
     if (!plate) return;
+    plate.printerInstanceId = printerInstanceId;
     plate.materialToSlot = materialToSlot;
     this.recolorPlate(plate);
   }

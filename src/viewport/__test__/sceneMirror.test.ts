@@ -535,7 +535,7 @@ describe("SceneMirror spool-color paint", () => {
     expect(mirror.objectColor(101)).toBe(0xd4a017);
   });
 
-  it("recolors when applyPlateMaterialToSlot reroutes the material to a different slot", async () => {
+  it("recolors when applyPlateRouting reroutes the material to a different slot", async () => {
     const mirror = new SceneMirror(async () => unitCubeBuffers());
     mirror.applyPrinterInstance(bambiInstance());
     await mirror.applySnapshot(emptySnapshot([bambiBoundPlate()]));
@@ -548,7 +548,7 @@ describe("SceneMirror spool-color paint", () => {
       data: { plate_id: 1, object: sceneObjectAt(101, 1, 0) },
     });
     expect(mirror.objectColor(101)).toBe(0xdc2626); // Ext red
-    mirror.applyPlateMaterialToSlot(1, { 1: { extruder: 0, slot: 1 } });
+    mirror.applyPlateRouting(1, "bambi", { 1: { extruder: 0, slot: 1 } });
     expect(mirror.objectColor(101)).toBe(0x111827); // AMS:1 black
   });
 
@@ -565,6 +565,94 @@ describe("SceneMirror spool-color paint", () => {
       data: { plate_id: 1, object: sceneObjectAt(101, 1, 0) },
     });
     expect(mirror.objectColor(101)).toBe(0xb1b1b1); // DEFAULT_COLOR
+  });
+
+  it("Snappy: object routed to a higher-extruder slot paints with that extruder's color", async () => {
+    // Snappy = 4 extruders × 1 slot. The user reports objects go
+    // gray when routed to extruder 2+ via the material→slot picker.
+    // Reproduce: plate bound to a Snappy-shaped instance, object
+    // with extruder_id=2 routed to slot (1, 0) = T1=yellow.
+    const snappy: PrinterInstance = {
+      id: "snappy",
+      display_name: "Snappy",
+      vendor_profile_ref: "snapmaker-u1",
+      printer_fragment_slug: "snapmaker-u1",
+      default_filament_fragment_slug: "generic-pla",
+      default_process_fragment_slug: "p",
+      connection: null,
+      extruders: [
+        { label: "T0", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#dc2626" }] },
+        { label: "T1", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#eab308" }] },
+        { label: "T2", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#111827" }] },
+        { label: "T3", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#f8fafc" }] },
+      ],
+      bed: { identity: "Snapmaker Textured PEI" },
+      config_overrides: {},
+    };
+    const plate: PlateSnapshot = {
+      ...plateSnap(1),
+      printer_instance_id: "snappy",
+      material_to_slot: { 2: { extruder: 1, slot: 0 } },
+    };
+    const mirror = new SceneMirror(async () => unitCubeBuffers());
+    mirror.applyPrinterInstance(snappy);
+    await mirror.applySnapshot(emptySnapshot([plate]));
+    await mirror.applyEvent({
+      kind: "MeshLoaded",
+      data: { mesh: unitCubeHeader(1) },
+    });
+    const obj: SceneObject = { ...sceneObjectAt(101, 1, 0), extruder_id: 2 };
+    await mirror.applyEvent({
+      kind: "ObjectAdded",
+      data: { plate_id: 1, object: obj },
+    });
+    expect(mirror.objectColor(101)).toBe(0xeab308); // T1 yellow
+  });
+
+  it("Snappy: reroute material 1 to T2 via applyPlateRouting recolors to black", async () => {
+    // The user's reported flow: extruder_id=null object (defaults
+    // to material 1), Snappy plate, opens Materials section, picks
+    // T2 (extruder 2 / slot 0). Should render T2's color (#111827).
+    const snappy: PrinterInstance = {
+      id: "snappy",
+      display_name: "Snappy",
+      vendor_profile_ref: "snapmaker-u1",
+      printer_fragment_slug: "snapmaker-u1",
+      default_filament_fragment_slug: "generic-pla",
+      default_process_fragment_slug: "p",
+      connection: null,
+      extruders: [
+        { label: "T0", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#dc2626" }] },
+        { label: "T1", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#eab308" }] },
+        { label: "T2", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#111827" }] },
+        { label: "T3", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#f8fafc" }] },
+      ],
+      bed: { identity: "Snapmaker Textured PEI" },
+      config_overrides: {},
+    };
+    const initialPlate: PlateSnapshot = {
+      ...plateSnap(1),
+      printer_instance_id: "snappy",
+      material_to_slot: { 1: { extruder: 0, slot: 0 } }, // auto-bind → T0
+    };
+    const mirror = new SceneMirror(async () => unitCubeBuffers());
+    mirror.applyPrinterInstance(snappy);
+    await mirror.applySnapshot(emptySnapshot([initialPlate]));
+    await mirror.applyEvent({
+      kind: "MeshLoaded",
+      data: { mesh: unitCubeHeader(1) },
+    });
+    await mirror.applyEvent({
+      kind: "ObjectAdded",
+      data: { plate_id: 1, object: sceneObjectAt(101, 1, 0) }, // extruder_id null
+    });
+    expect(mirror.objectColor(101)).toBe(0xdc2626); // T0 red
+
+    // User picks T2 in the Materials section → backend writes
+    // material_to_slot[1] = {extruder: 2, slot: 0} → bridge re-fetches
+    // snapshot and calls applyPlateRouting.
+    mirror.applyPlateRouting(1, "snappy", { 1: { extruder: 2, slot: 0 } });
+    expect(mirror.objectColor(101)).toBe(0x111827); // T2 black
   });
 
   it("preserves spool color across selection cycle (deselect restores baseColor, not the default)", async () => {
