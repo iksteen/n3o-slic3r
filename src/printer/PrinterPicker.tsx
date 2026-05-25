@@ -51,24 +51,11 @@ export function PrinterPicker({ plateId, binding }: PrinterPickerProps) {
     if (plateId === null) return;
     const entry = entries.find((e) => e.identity === identity);
     if (!entry) return;
-    // Keep the existing build plate if the new printer supports
-    // it; otherwise fall back to the printer's first supported
-    // plate (the rebind mutation requires a valid identity).
-    const previousPlate = binding?.build_plate_identity;
-    const buildPlate =
-      previousPlate &&
-      entry.profile.supported_build_plates.includes(previousPlate)
-        ? previousPlate
-        : entry.profile.supported_build_plates[0];
-    if (!buildPlate) {
-      console.error(
-        `[printer] catalog entry "${identity}" has no supported_build_plates`,
-      );
-      setOpen(false);
-      return;
-    }
     setOpen(false);
-    void rebindPlatePrinter(plateId, identity, buildPlate).catch((err) => {
+    // The bed comes off the newly-bound PrinterInstance — if the
+    // user wants a different bed they pick it from
+    // `BuildPlateSelector`, which writes through `printerInstanceSetBed`.
+    void rebindPlatePrinter(plateId, identity).catch((err) => {
       console.error("[printer] rebindPlatePrinter failed", err);
     });
   };

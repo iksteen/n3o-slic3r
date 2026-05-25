@@ -49,10 +49,7 @@ function plateSnap(opts: {
     printer:
       opts.printer_identity == null
         ? null
-        : {
-            printer_identity: opts.printer_identity,
-            build_plate_identity: "textured_pei",
-          },
+        : { printer_identity: opts.printer_identity },
     printer_instance_id: null,
     material_to_slot: {},
     project_overrides: {},

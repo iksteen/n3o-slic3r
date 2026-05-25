@@ -51,10 +51,11 @@ pub enum SliceInputError {
     /// of a loaded project authored against a printer this build
     /// doesn't ship; UI should prompt to rebind to a bundled one.
     PrinterNotInRegistry { identity: String },
-    /// `plate.printer.build_plate_identity` isn't in the bound
+    /// The PrinterInstance's currently-loaded bed isn't in the bound
     /// printer's `supported_build_plates`. Shouldn't happen for
-    /// projects mutated through the normal commands (those validate
-    /// at bind-time) but a hand-edited `.3mf` could trip it.
+    /// instances mutated through the normal commands (those validate
+    /// at set-time) but a hand-edited on-disk instance file could
+    /// trip it.
     UnsupportedBuildPlate {
         plate_id: PlateId,
         identity: String,
@@ -129,28 +130,6 @@ pub fn build_slice_input(
             identity: binding.printer_identity.clone(),
         }
     })?;
-    if !printer_profile
-        .supported_build_plates
-        .iter()
-        .any(|p| p == &binding.build_plate_identity)
-    {
-        return Err(SliceInputError::UnsupportedBuildPlate {
-            plate_id,
-            identity: binding.build_plate_identity.clone(),
-        });
-    }
-    let build_plate = build_plate::lookup(&binding.build_plate_identity).unwrap_or_else(|| {
-        // Synthesized fallback for plates we accept in
-        // `supported_build_plates` but don't have a TOML asset for
-        // yet (e.g. snapmaker U1's "Magnetic"). The cascade still
-        // needs a `libslic3r_curr_bed_type` to write into the slice
-        // config; a best-effort `"<identity> Plate"` keeps libslic3r
-        // happy without authoring real plate profiles up-front.
-        BuildPlate {
-            identity: binding.build_plate_identity.clone(),
-            libslic3r_curr_bed_type: format!("{} Plate", binding.build_plate_identity),
-        }
-    });
 
     // ── Printer instance routing ──────────────────────────────
     // Cascade composition happens in the orchestrator from this
@@ -161,6 +140,38 @@ pub fn build_slice_input(
         .printer_instance_id
         .clone()
         .ok_or(SliceInputError::UnboundPrinter { plate_id })?;
+    let instance = lookup_instance(&printer_instance_id).ok_or(
+        SliceInputError::UnboundPrinter { plate_id },
+    )?;
+
+    // ── Build plate ──────────────────────────────────────────
+    // The PrinterInstance is the single source of truth for which
+    // bed is currently loaded. `printer_instance_set_bed` validates
+    // against `supported_build_plates` at set time, so we only have
+    // a defense-in-depth check for hand-edited on-disk instances.
+    let bed_identity = instance.bed.identity.clone();
+    if !printer_profile
+        .supported_build_plates
+        .iter()
+        .any(|p| p == &bed_identity)
+    {
+        return Err(SliceInputError::UnsupportedBuildPlate {
+            plate_id,
+            identity: bed_identity,
+        });
+    }
+    let build_plate = build_plate::lookup(&bed_identity).unwrap_or_else(|| {
+        // Synthesized fallback for plates we accept in
+        // `supported_build_plates` but don't have a TOML asset for
+        // yet (e.g. snapmaker U1's "Magnetic"). The cascade still
+        // needs a `libslic3r_curr_bed_type` to write into the slice
+        // config; a best-effort `"<identity> Plate"` keeps libslic3r
+        // happy without authoring real plate profiles up-front.
+        BuildPlate {
+            identity: bed_identity.clone(),
+            libslic3r_curr_bed_type: format!("{} Plate", bed_identity),
+        }
+    });
 
     // ── Filaments — one per (extruder, slot) in instance order ───
     // PR-S-5c: slot bindings live on the PrinterInstance, not the
@@ -170,9 +181,6 @@ pub fn build_slice_input(
     // (and unknown identities) fall back to `generic-pla` so the
     // cascade still has something to resolve against — same
     // behavior as the legacy "no bindings" path.
-    let instance = lookup_instance(&printer_instance_id).ok_or(
-        SliceInputError::UnboundPrinter { plate_id },
-    )?;
     let mut filaments: Vec<FilamentProfile> = Vec::new();
     for extruder in &instance.extruders {
         for slot in &extruder.slots {
@@ -384,7 +392,6 @@ mod tests {
     fn a1_mini_binding() -> PrinterBinding {
         PrinterBinding {
             printer_identity: "bambu-lab-a1-mini".into(),
-            build_plate_identity: "Textured PEI Plate".into(),
         }
     }
 
@@ -411,8 +418,10 @@ mod tests {
 
         assert_eq!(input.plate_ids, vec![1]);
         assert_eq!(input.context.printer.model, "Bambu A1 mini");
-        assert_eq!(input.context.plate.identity, "Textured PEI Plate");
-        assert_eq!(input.context.plate.libslic3r_curr_bed_type, "Textured PEI Plate");
+        // The bambi instance ships with Supertack Plate; reads off the
+        // instance, not off a per-binding override.
+        assert_eq!(input.context.plate.identity, "Supertack Plate");
+        assert_eq!(input.context.plate.libslic3r_curr_bed_type, "Supertack Plate");
         assert!(temp_path.exists(), "temp file written");
         assert_eq!(input.model_path, temp_path.to_string_lossy());
 
@@ -442,7 +451,6 @@ mod tests {
         let (id2, _) = project.add_plate(None);
         project.plates[1].printer = Some(PrinterBinding {
             printer_identity: "snapmaker-u1".into(),
-            build_plate_identity: "Textured PEI Plate".into(),
         });
         project.plates[1].printer_instance_id = Some("snappy".into());
         project.set_active_plate(id2).expect("activate plate 2");
@@ -571,7 +579,6 @@ mod tests {
         let mut project = Project::default();
         project.plates[0].printer = Some(PrinterBinding {
             printer_identity: "totally-fake-printer".into(),
-            build_plate_identity: "Textured PEI Plate".into(),
         });
         project.plates[0].printer_instance_id = Some("bambi".into());
         let mesh_id = project.register_mesh(triangle_mesh());
@@ -586,17 +593,35 @@ mod tests {
 
     #[test]
     fn unsupported_build_plate_errors() {
+        // The supported-plate validation in `printer_instance_set_bed`
+        // makes this path unreachable through normal mutations; the
+        // defense-in-depth check in `build_slice_input` exists for the
+        // hand-edited on-disk instance case. Simulate that by going
+        // around the validator via `mutate_instance` directly.
         let mut project = Project::default();
         project.plates[0].printer = Some(PrinterBinding {
             printer_identity: "bambu-lab-a1-mini".into(),
-            // A1 mini doesn't support U1's Magnetic plate.
-            build_plate_identity: "Magnetic".into(),
         });
         project.plates[0].printer_instance_id = Some("bambi".into());
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
+
+        let restore = printer::lookup_instance("bambi").unwrap().bed.identity;
+        printer::mutate_instance("bambi", |inst| {
+            // A1 mini doesn't support U1's Magnetic plate.
+            inst.bed.identity = "Magnetic".into();
+            Ok(())
+        })
+        .unwrap();
         let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
             .expect_err("a1 mini doesn't support magnetic plate");
+        // Restore before asserting so a panic doesn't leak the bad
+        // state into other tests on this thread.
+        printer::mutate_instance("bambi", |inst| {
+            inst.bed.identity = restore.clone();
+            Ok(())
+        })
+        .unwrap();
         assert!(matches!(
             err,
             SliceInputError::UnsupportedBuildPlate { .. }
@@ -610,7 +635,6 @@ mod tests {
         let mut project = Project::default();
         project.plates[0].printer = Some(PrinterBinding {
             printer_identity: "snapmaker-u1".into(),
-            build_plate_identity: "Textured PEI Plate".into(),
         });
         project.plates[0].printer_instance_id = Some("snappy".into());
         let mesh_id = project.register_mesh(triangle_mesh());

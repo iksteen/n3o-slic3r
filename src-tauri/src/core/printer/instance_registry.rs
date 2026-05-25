@@ -82,6 +82,23 @@ pub enum InstanceMutError {
         slot_idx: usize,
         slots: usize,
     },
+    /// Requested bed isn't in the instance's bound printer profile's
+    /// `supported_build_plates`. Surfaced by [`set_instance_bed`]; the
+    /// picker UI recovers by re-rendering the selector against the
+    /// fresh supported list.
+    UnsupportedBuildPlate {
+        instance_id: String,
+        printer_identity: String,
+        bed_identity: String,
+    },
+    /// The instance's `vendor_profile_ref` doesn't resolve in the
+    /// bundled printer catalog. Should be impossible for fixtures
+    /// shipped in-tree, but a hand-edited on-disk instance file
+    /// could trip this.
+    PrinterProfileNotFound {
+        instance_id: String,
+        printer_identity: String,
+    },
 }
 
 impl std::fmt::Display for InstanceMutError {
@@ -104,6 +121,21 @@ impl std::fmt::Display for InstanceMutError {
             } => write!(
                 f,
                 "instance `{instance_id}` extruder {extruder_idx} has {slots} slot(s); index {slot_idx} is out of range",
+            ),
+            Self::UnsupportedBuildPlate {
+                instance_id,
+                printer_identity,
+                bed_identity,
+            } => write!(
+                f,
+                "instance `{instance_id}` printer `{printer_identity}` does not support build plate `{bed_identity}`",
+            ),
+            Self::PrinterProfileNotFound {
+                instance_id,
+                printer_identity,
+            } => write!(
+                f,
+                "instance `{instance_id}` references printer `{printer_identity}`, which is not in the bundled catalog",
             ),
         }
     }
@@ -166,6 +198,38 @@ pub fn set_slot_color(
 ) -> Result<PrinterInstance, InstanceMutError> {
     mutate_slot(id, extruder_idx, slot_idx, |slot| {
         slot.color = color;
+    })
+}
+
+/// Set the instance's currently-loaded build plate. Validates the new
+/// identity against the bound printer profile's `supported_build_plates`
+/// — the printer profile is the authority on what plates a given
+/// printer accepts. After this, the slicer composer + every other reader
+/// can trust `instance.bed.identity` blindly.
+pub fn set_instance_bed(
+    id: &str,
+    bed_identity: String,
+) -> Result<PrinterInstance, InstanceMutError> {
+    mutate_instance(id, |inst| {
+        let profile = super::lookup(&inst.vendor_profile_ref).ok_or_else(|| {
+            InstanceMutError::PrinterProfileNotFound {
+                instance_id: id.to_owned(),
+                printer_identity: inst.vendor_profile_ref.clone(),
+            }
+        })?;
+        if !profile
+            .supported_build_plates
+            .iter()
+            .any(|p| p == &bed_identity)
+        {
+            return Err(InstanceMutError::UnsupportedBuildPlate {
+                instance_id: id.to_owned(),
+                printer_identity: inst.vendor_profile_ref.clone(),
+                bed_identity,
+            });
+        }
+        inst.bed.identity = bed_identity;
+        Ok(())
     })
 }
 
@@ -306,6 +370,33 @@ mod tests {
         let cleared = set_slot_color("bambi", 0, 1, None).expect("clear ok");
         assert_eq!(cleared.extruders[0].slots[1].color, None);
         reset_to_bundled();
+    }
+
+    #[test]
+    fn set_instance_bed_validates_against_supported_plates() {
+        // Asserts only against the returned post-mutation clone — a
+        // parallel test's `reset_to_bundled` can race a `lookup_instance`
+        // re-read (same pattern documented in `set_slot_color_persists_and_clears`).
+        reset_to_bundled();
+        let updated = set_instance_bed("bambi", "Cool Plate".into())
+            .expect("Cool Plate is supported by bambi");
+        assert_eq!(updated.bed.identity, "Cool Plate");
+
+        // Garbage identity is refused with the typed error.
+        let err = set_instance_bed("bambi", "Nonsense Plate".into()).unwrap_err();
+        assert!(
+            matches!(err, InstanceMutError::UnsupportedBuildPlate { .. }),
+            "expected UnsupportedBuildPlate, got {err:?}",
+        );
+
+        reset_to_bundled();
+    }
+
+    #[test]
+    fn set_instance_bed_errors_on_unknown_instance() {
+        reset_to_bundled();
+        let err = set_instance_bed("ghost", "Cool Plate".into()).unwrap_err();
+        assert!(matches!(err, InstanceMutError::UnknownInstance { .. }));
     }
 
     #[test]

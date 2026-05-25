@@ -31,12 +31,10 @@ describe("addPlate", () => {
     invokeMock.mockResolvedValueOnce(8);
     await addPlate({
       printer_identity: "bambu_a1_mini",
-      build_plate_identity: "textured_pei",
     });
     expect(invokeMock).toHaveBeenCalledWith("scene_add_plate", {
       printer: {
         printer_identity: "bambu_a1_mini",
-        build_plate_identity: "textured_pei",
       },
     });
   });

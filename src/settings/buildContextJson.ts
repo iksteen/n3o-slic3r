@@ -14,12 +14,12 @@
 // Profiles for `printer`, `plate`, and `filaments`:
 // - `printer` comes from `scene_load_default_printer` — App.tsx
 //   caches the returned `PrinterProfile` and passes it in.
-// - `plate` (build plate) defaults to the Textured PEI fixture
-//   used everywhere else in the app today. The PR-4-5 build-plate
-//   selector edits the active plate's `printer.build_plate_identity`
-//   binding; building the `BuildPlateJson` from it is Phase 5+
-//   profile-registry work, deferred. For now the constant matches
-//   the bundled cascade's default branch.
+// - `plate` (build plate) is the bed currently loaded on the active
+//   plate's bound PrinterInstance. The picker writes through
+//   `printerInstanceSetBed`; the slicer composer reads off
+//   `instance.bed.identity`. Building a full `BuildPlateJson`
+//   profile (vs. the synthesized identity-only form here) is the
+//   plate-profile-registry work still deferred.
 // - `filaments` defaults to one Generic PLA slot. Per-slot
 //   filament bindings live on the PrinterInstance (PR-S-5c) — the
 //   single-slot fallback resolves the same way the slice path does

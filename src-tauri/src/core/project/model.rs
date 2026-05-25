@@ -331,7 +331,6 @@ mod tests {
     fn a1_mini() -> PrinterBinding {
         PrinterBinding {
             printer_identity: "bambu-lab-a1-mini".into(),
-            build_plate_identity: "Textured PEI".into(),
         }
     }
 

@@ -75,27 +75,15 @@ pub fn lookup(identity: &str) -> Option<PrinterProfile> {
 /// state and changes it explicitly via the picker if it doesn't
 /// match their actual printer.
 ///
-/// Picks the first bundled printer. The build plate identity is
-/// taken from the bound `PrinterInstance.bed.identity` when one is
-/// registered for the catalog identity — that's the "currently-
-/// loaded bed" the instance library declares, and matching it keeps
-/// the picker default in sync with what the slicer composer will
-/// actually load. Falls back to the first entry in the profile's
-/// `supported_build_plates` when no instance is registered.
+/// Picks the first bundled printer; the build plate comes from
+/// whatever the bound `PrinterInstance.bed.identity` says — the
+/// instance is authoritative for "which bed is currently loaded."
 ///
-/// Returns `None` only if the bundled catalog is empty or the first
-/// printer ships with no build plates and no instance.
+/// Returns `None` only if the bundled catalog is empty.
 pub fn default_binding() -> Option<PrinterBinding> {
     let entry = bundled_catalog().into_iter().next()?;
-    let supported = &entry.profile.supported_build_plates;
-    let instance_bed = super::instance_id_for_vendor_profile(&entry.identity)
-        .and_then(super::lookup_instance)
-        .map(|inst| inst.bed.identity)
-        .filter(|id| supported.iter().any(|p| p == id));
-    let build_plate_identity = instance_bed.or_else(|| supported.iter().next().cloned())?;
     Some(PrinterBinding {
         printer_identity: entry.identity,
-        build_plate_identity,
     })
 }
 
@@ -133,21 +121,9 @@ mod tests {
     }
 
     #[test]
-    fn default_binding_tracks_the_default_instance_bed() {
-        // The bambi PrinterInstance declares `bed.identity = "Supertack
-        // Plate"`; default_binding must mirror that so the picker
-        // default agrees with the bed the slicer composer will load.
-        // (Naive `supported_build_plates[0]` would pick "Cool Plate"
-        // because the bed-fragment filenames sort alphabetically.)
+    fn default_binding_picks_first_printer() {
         let binding = default_binding().expect("default binding available");
         assert_eq!(binding.printer_identity, "bambu-lab-a1-mini");
-        let inst = super::super::lookup_instance(
-            &super::super::instance_id_for_vendor_profile(&binding.printer_identity)
-                .expect("bambi registered")
-                .to_owned(),
-        )
-        .expect("instance present");
-        assert_eq!(binding.build_plate_identity, inst.bed.identity);
     }
 
     #[test]

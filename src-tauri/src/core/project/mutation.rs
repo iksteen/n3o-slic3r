@@ -558,13 +558,12 @@ impl Project {
     /// keeping the registry lookup at the Tauri-command layer keeps
     /// this mutation pure + testable without registry plumbing.
     ///
-    /// Validates that `binding.build_plate_identity` is in the
-    /// chosen profile's `supported_build_plates`. Updates the
-    /// plate's `printer` binding, recomputes the bed visualization,
-    /// and returns a `PrinterChangeReport` documenting the swap.
-    /// Emits `BedChanged` + `PlateMetadataChanged` so the tab
-    /// strip's printer label updates and the cascade re-resolves
-    /// against the new context.
+    /// Updates the plate's `printer` binding + `printer_instance_id`
+    /// and recomputes the bed visualization. The bed itself lives on
+    /// the `PrinterInstance` — change it via
+    /// `printer_instance_set_bed`. Emits `BedChanged` +
+    /// `PlateMetadataChanged` so the tab strip's printer label
+    /// updates and the cascade re-resolves against the new context.
     pub fn rebind_plate_printer(
         &mut self,
         plate_id: PlateId,
@@ -576,54 +575,25 @@ impl Project {
         let idx = self
             .plate_index(plate_id)
             .ok_or(SceneOpError::UnknownPlate(plate_id))?;
-        if !profile
-            .supported_build_plates
-            .iter()
-            .any(|p| p == &binding.build_plate_identity)
-        {
-            return Err(SceneOpError::UnsupportedBuildPlate {
-                plate_id,
-                printer_identity: binding.printer_identity.clone(),
-                build_plate_identity: binding.build_plate_identity.clone(),
-            });
-        }
 
         let previous_printer = self.plates[idx]
             .printer
             .as_ref()
             .map(|p| p.printer_identity.clone());
         let new_printer = binding.printer_identity.clone();
-        let new_build_plate = binding.build_plate_identity.clone();
-
-        // Update the binding first so events emitted by the bed
-        // recompute see the new state. PR-S-5c: keep the new
-        // `printer_instance_id` in sync so the composer path picks
-        // the right PrinterInstance on the next slice.
-        self.plates[idx].printer_instance_id =
+        // PR-S-5c: keep `printer_instance_id` in sync so the composer
+        // path picks the right PrinterInstance on the next slice. The
+        // bed shown in `PrinterChangeReport` (and stamped onto plate
+        // metadata) is read off the newly-bound instance.
+        let new_instance_id =
             crate::core::printer::instance_id_for_vendor_profile(&binding.printer_identity)
                 .map(str::to_owned);
-        // Mirror the picker's bed pick onto the bound PrinterInstance.
-        // The slicer composer reads bed.identity off the instance, not
-        // off `plate.printer.build_plate_identity`, so without this
-        // mirror the picker change is purely cosmetic — the slice
-        // would silently use whatever bed the instance shipped with
-        // (and on next launch the plate would re-bind to the
-        // instance's bed anyway, losing the user's pick).
-        if let Some(instance_id) = self.plates[idx].printer_instance_id.clone() {
-            let bed_id = binding.build_plate_identity.clone();
-            if let Err(e) =
-                crate::core::printer::mutate_instance(&instance_id, move |inst| {
-                    inst.bed.identity = bed_id;
-                    Ok(())
-                })
-            {
-                tracing::warn!(
-                    instance_id = %instance_id,
-                    error = %e,
-                    "couldn't mirror bed pick onto printer instance",
-                );
-            }
-        }
+        let new_build_plate = new_instance_id
+            .as_deref()
+            .and_then(crate::core::printer::lookup_instance)
+            .map(|inst| inst.bed.identity)
+            .unwrap_or_default();
+        self.plates[idx].printer_instance_id = new_instance_id;
         self.plates[idx].printer = Some(binding);
         // Slot refs are physical (extruder, slot) coordinates — they
         // don't survive a topology change. Wipe + re-auto-bind any
@@ -2342,7 +2312,6 @@ mod tests {
         // inheritance apart from the bundled-default fallback.
         p.plates[0].printer = Some(PrinterBinding {
             printer_identity: "snapmaker-u1".into(),
-            build_plate_identity: "Magnetic".into(),
         });
         let (new_id, _) = p.add_plate(None);
         let new_plate = p.plate(new_id).unwrap();
@@ -2350,10 +2319,6 @@ mod tests {
             new_plate.printer.as_ref().map(|b| b.printer_identity.as_str()),
             Some("snapmaker-u1"),
             "inherits from active plate",
-        );
-        assert_eq!(
-            new_plate.printer.as_ref().map(|b| b.build_plate_identity.as_str()),
-            Some("Magnetic"),
         );
     }
 
@@ -2377,7 +2342,6 @@ mod tests {
         let mut p = Project::default();
         let explicit = PrinterBinding {
             printer_identity: "snapmaker-u1".into(),
-            build_plate_identity: "Magnetic".into(),
         };
         let (new_id, _) = p.add_plate(Some(explicit.clone()));
         let new_plate = p.plate(new_id).unwrap();
@@ -2862,7 +2826,6 @@ mod tests {
         let profile = a1_mini_for_test();
         let binding = PrinterBinding {
             printer_identity: "bambu-lab-a1-mini".into(),
-            build_plate_identity: "Textured PEI".into(),
         };
         let (report, events) = p
             .rebind_plate_printer(PlateId(1), binding.clone(), &profile)
@@ -2873,7 +2836,10 @@ mod tests {
         assert_eq!(report.plate_id, PlateId(1));
         assert_eq!(report.previous_printer, None);
         assert_eq!(report.new_printer, "bambu-lab-a1-mini");
-        assert_eq!(report.new_build_plate, "Textured PEI");
+        // new_build_plate reflects whatever the now-bound PrinterInstance
+        // carries on its `bed.identity` — the bambi fixture ships with
+        // Supertack Plate as the default.
+        assert_eq!(report.new_build_plate, "Supertack Plate");
         assert!(report.incompatible.is_empty());
         assert!(report.clamped.is_empty());
         // Events emitted: BedChanged + PlateMetadataChanged.
@@ -2888,7 +2854,6 @@ mod tests {
         let mut p = Project::default();
         p.plates[0].printer = Some(PrinterBinding {
             printer_identity: "snapmaker-u1".into(),
-            build_plate_identity: "Magnetic".into(),
         });
         let profile = a1_mini_for_test();
         let (report, _) = p
@@ -2896,40 +2861,12 @@ mod tests {
                 PlateId(1),
                 PrinterBinding {
                     printer_identity: "bambu-lab-a1-mini".into(),
-                    build_plate_identity: "Textured PEI".into(),
                 },
                 &profile,
             )
             .unwrap();
         assert_eq!(report.previous_printer.as_deref(), Some("snapmaker-u1"));
         assert_eq!(report.new_printer, "bambu-lab-a1-mini");
-    }
-
-    #[test]
-    fn rebind_plate_printer_rejects_unsupported_build_plate() {
-        use crate::core::project::PrinterBinding;
-        let mut p = Project::default();
-        // Clear the bootstrap auto-bind so the "binding NOT updated"
-        // assertion below isn't conflated with the default binding.
-        p.plates[0].printer = None;
-        p.plates[0].scene.bed = None;
-        let profile = a1_mini_for_test();
-        let err = p
-            .rebind_plate_printer(
-                PlateId(1),
-                PrinterBinding {
-                    printer_identity: "bambu-lab-a1-mini".into(),
-                    build_plate_identity: "Magnetic".into(), // not in A1 mini's list
-                },
-                &profile,
-            )
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            SceneOpError::UnsupportedBuildPlate { plate_id: PlateId(1), .. },
-        ));
-        // Binding NOT updated on validation failure.
-        assert!(p.plates[0].printer.is_none());
     }
 
     #[test]
@@ -2942,7 +2879,6 @@ mod tests {
                 PlateId(99),
                 PrinterBinding {
                     printer_identity: "bambu-lab-a1-mini".into(),
-                    build_plate_identity: "Textured PEI".into(),
                 },
                 &profile,
             )

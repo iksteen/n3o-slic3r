@@ -99,12 +99,12 @@ export interface PlateMetadata {
   composition_order: number;
 }
 
-/** Identity of a printer + build plate bound to a project plate.
- * Held as identities (strings), not resolved profiles — profile
- * resolution happens at slice time. */
+/** Identity of a printer bound to a project plate. The bed
+ * currently loaded on the bound `PrinterInstance` is read off
+ * the instance itself, not the binding — change it via
+ * `printerInstanceSetBed`. */
 export interface PrinterBinding {
   printer_identity: string;
-  build_plate_identity: string;
 }
 
 // ---- Snapshot wire shape (PR-5-2 phase C) --------------------------

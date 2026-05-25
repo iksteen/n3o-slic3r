@@ -233,15 +233,6 @@ pub enum SceneOpError {
         plate_id: PlateId,
         message: String,
     },
-    /// The requested build-plate identity is not in the chosen
-    /// printer's `supported_build_plates` list (PR-5-4). The picker
-    /// can recover by falling back to the printer's first supported
-    /// plate.
-    UnsupportedBuildPlate {
-        plate_id: PlateId,
-        printer_identity: String,
-        build_plate_identity: String,
-    },
 }
 
 impl std::fmt::Display for SceneOpError {
@@ -257,15 +248,6 @@ impl std::fmt::Display for SceneOpError {
             Self::InvalidPlateMetadata { plate_id, message } => {
                 write!(f, "plate {}: {}", plate_id.0, message)
             }
-            Self::UnsupportedBuildPlate {
-                plate_id,
-                printer_identity,
-                build_plate_identity,
-            } => write!(
-                f,
-                "plate {}: printer `{}` does not support build plate `{}`",
-                plate_id.0, printer_identity, build_plate_identity,
-            ),
         }
     }
 }

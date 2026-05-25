@@ -337,23 +337,20 @@ pub fn printer_catalog() -> Vec<crate::core::printer::CatalogEntry> {
 /// Rebind a plate to a printer the picker chose by identity
 /// (PR-5-4). The Tauri layer resolves the identity via the
 /// printer registry; the mutation handles the binding update,
-/// bed recompute, and report.
+/// bed recompute, and report. The bed lives on the bound
+/// `PrinterInstance` — change it via `printer_instance_set_bed`.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_rebind_plate_printer(
     plate_id: PlateId,
     printer_identity: String,
-    build_plate_identity: String,
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<crate::core::scene::events::PrinterChangeReport, String> {
     use crate::core::project::PrinterBinding;
     let profile = crate::core::printer::lookup(&printer_identity)
         .ok_or_else(|| format!("no bundled printer with identity `{printer_identity}`"))?;
-    let binding = PrinterBinding {
-        printer_identity,
-        build_plate_identity,
-    };
+    let binding = PrinterBinding { printer_identity };
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let (report, events) = s
         .rebind_plate_printer(plate_id, binding, &profile)
@@ -891,7 +888,6 @@ mod tests {
         let mut p = Project::default();
         p.plates[0].printer = Some(PrinterBinding {
             printer_identity: "bambu-lab-a1-mini".into(),
-            build_plate_identity: "Textured PEI Plate".into(),
         });
         p.plates[0].name = "My Plate".into();
         let mesh_id = p.register_mesh(unit_cube_mesh());

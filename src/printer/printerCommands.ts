@@ -47,18 +47,16 @@ export function printerCatalog(): Promise<PrinterCatalogEntry[]> {
   return invoke<PrinterCatalogEntry[]>("printer_catalog");
 }
 
-/** Rebind a plate to a different printer + build-plate by
- * identity. Returns the change report the picker uses to surface
- * "what changed" feedback. */
+/** Rebind a plate to a different printer by identity. The bed
+ * currently loaded on the bound `PrinterInstance` follows from the
+ * instance itself — change it via `printerInstanceSetBed`. */
 export function rebindPlatePrinter(
   plateId: PlateId,
   printerIdentity: string,
-  buildPlateIdentity: string,
 ): Promise<PrinterChangeReport> {
   return invoke<PrinterChangeReport>("scene_rebind_plate_printer", {
     plateId,
     printerIdentity,
-    buildPlateIdentity,
   });
 }
 
@@ -69,4 +67,15 @@ export function setActivePrinter(
   printer: PrinterProfileJson | null,
 ): Promise<void> {
   return invoke("scene_set_active_printer", { printer });
+}
+
+/** Change the bed currently loaded on a `PrinterInstance`. The
+ * backend validates the identity against the instance's bound
+ * printer profile's `supported_build_plates` and emits
+ * `printer:instance_changed`. */
+export function printerInstanceSetBed(
+  id: string,
+  bedIdentity: string,
+): Promise<void> {
+  return invoke("printer_instance_set_bed", { id, bedIdentity });
 }

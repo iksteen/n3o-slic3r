@@ -9,6 +9,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import {
   printerCatalog,
+  printerInstanceSetBed,
   rebindPlatePrinter,
   setActivePrinter,
 } from "../printerCommands";
@@ -48,31 +49,39 @@ describe("printerCatalog", () => {
 });
 
 describe("rebindPlatePrinter", () => {
-  it("invokes scene_rebind_plate_printer with plateId/printerIdentity/buildPlateIdentity", async () => {
+  it("invokes scene_rebind_plate_printer with plateId/printerIdentity (no bed)", async () => {
     invokeMock.mockResolvedValueOnce({
       plate_id: 1,
       previous_printer: null,
       new_printer: "bambu-lab-a1-mini",
-      new_build_plate: "Textured PEI",
+      new_build_plate: "Supertack Plate",
       incompatible: [],
       clamped: [],
     });
-    const report = await rebindPlatePrinter(1, "bambu-lab-a1-mini", "Textured PEI");
+    const report = await rebindPlatePrinter(1, "bambu-lab-a1-mini");
     expect(invokeMock).toHaveBeenCalledWith("scene_rebind_plate_printer", {
       plateId: 1,
       printerIdentity: "bambu-lab-a1-mini",
-      buildPlateIdentity: "Textured PEI",
     });
     expect(report.new_printer).toBe("bambu-lab-a1-mini");
     expect(report.incompatible).toEqual([]);
   });
+});
 
-  it("propagates the backend's UnsupportedBuildPlate rejection", async () => {
+describe("printerInstanceSetBed", () => {
+  it("invokes printer_instance_set_bed and propagates UnsupportedBuildPlate", async () => {
+    invokeMock.mockResolvedValueOnce(undefined);
+    await printerInstanceSetBed("bambi", "Cool Plate");
+    expect(invokeMock).toHaveBeenCalledWith("printer_instance_set_bed", {
+      id: "bambi",
+      bedIdentity: "Cool Plate",
+    });
+
     invokeMock.mockRejectedValueOnce(
-      "plate 1: printer `bambu-lab-a1-mini` does not support build plate `Magnetic`",
+      "instance `bambi` printer `bambu-lab-a1-mini` does not support build plate `Magnetic`",
     );
     await expect(
-      rebindPlatePrinter(1, "bambu-lab-a1-mini", "Magnetic"),
+      printerInstanceSetBed("bambi", "Magnetic"),
     ).rejects.toMatch(/does not support build plate/);
   });
 });

@@ -121,6 +121,19 @@ export async function setSlotColor(
   });
 }
 
+/** Change the bed currently loaded on this instance. Validated
+ *  backend-side against the bound printer profile's
+ *  `supported_build_plates`. Emits `printer:instance_changed`. */
+export async function setInstanceBed(
+  id: string,
+  bedIdentity: string,
+): Promise<PrinterInstance> {
+  return invoke<PrinterInstance>("printer_instance_set_bed", {
+    id,
+    bedIdentity,
+  });
+}
+
 /** Compose a flat list of slot picker options across the instance's
  *  extruder × slot grid. The label combines extruder + slot labels
  *  with " — " when both are non-empty; one label alone otherwise.

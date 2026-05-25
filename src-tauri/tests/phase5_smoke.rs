@@ -55,14 +55,12 @@ fn snapmaker_u1() -> PrinterProfile {
 fn a1_mini_binding() -> PrinterBinding {
     PrinterBinding {
         printer_identity: "bambu-lab-a1-mini".into(),
-        build_plate_identity: "Textured PEI Plate".into(),
     }
 }
 
 fn u1_binding() -> PrinterBinding {
     PrinterBinding {
         printer_identity: "snapmaker-u1".into(),
-        build_plate_identity: "Textured PEI Plate".into(),
     }
 }
 
@@ -179,20 +177,25 @@ fn phase5_smoke_3plate_save_reload_roundtrip() {
         vec!["bambu-lab-a1-mini", "snapmaker-u1", "snapmaker-u1"],
         "step 4a: per-plate printer bindings must round-trip",
     );
-    let plates_bp: Vec<&str> = reloaded
+    // Build-plate identity is no longer carried on the binding — it
+    // lives on the bound `PrinterInstance` (validated + persisted by
+    // `printer_instance_set_bed`). The smoke test exercises the
+    // .3mf round-trip, not instance-library persistence, so we just
+    // assert that every plate has its `printer_instance_id` survive
+    // the load.
+    let plates_inst: Vec<&str> = reloaded
         .plates
         .iter()
         .map(|pl| {
-            pl.printer
-                .as_ref()
-                .map(|b| b.build_plate_identity.as_str())
+            pl.printer_instance_id
+                .as_deref()
                 .unwrap_or("<unbound>")
         })
         .collect();
     assert_eq!(
-        plates_bp,
-        vec!["Textured PEI Plate", "Textured PEI Plate", "Textured PEI Plate"],
-        "step 4a: per-plate build-plate bindings must round-trip",
+        plates_inst,
+        vec!["bambi", "snappy", "snappy"],
+        "step 4a: per-plate printer instance bindings must round-trip",
     );
 
     // 4b. Project-tier override on plate 2.

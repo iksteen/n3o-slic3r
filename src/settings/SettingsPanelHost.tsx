@@ -9,7 +9,8 @@
 // pre-existing invoke wrappers to the active plate / object, or
 // projects a slice of the snapshot. No business logic of its own.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { ProjectSession } from "../project/useProjectSession";
 import { SettingsPanel, type PlateObjectStub } from "./SettingsPanel";
 import { buildContextJson } from "./buildContextJson";
@@ -17,7 +18,10 @@ import { makeObjectOverrideCallbacks } from "./overrideCommands";
 import { makeProjectOverrideCallbacks } from "./projectOverrideCommands";
 import { PrinterPicker } from "../printer/PrinterPicker";
 import { usePrinterCatalog } from "../printer/usePrinterCatalog";
-import { rebindPlatePrinter } from "../printer/printerCommands";
+import {
+  getPrinterInstance,
+  setInstanceBed,
+} from "../printer/printerInstance";
 import { SlotBindingPanel } from "../material/SlotBindingPanel";
 import { BuildPlateSelector } from "./BuildPlateSelector";
 import type { PlateSnapshot } from "../viewport/types";
@@ -126,6 +130,41 @@ export function SettingsPanelHost({
     [plate?.plate_id],
   );
 
+  // The bed currently loaded on the bound PrinterInstance — drives
+  // the BuildPlateSelector's chip + selected-item highlight. Reads
+  // off the instance (not the binding) per the post-build-plate-
+  // refactor source-of-truth: the picker writes through
+  // `printerInstanceSetBed`, the slicer composer reads off
+  // `instance.bed.identity`. Same fetch + `instance_changed`
+  // refresh pattern SlotBindingPanel uses; bed + slots are
+  // independent panels, so each holds its own copy.
+  const instanceId = plate?.printer_instance_id ?? null;
+  const [instanceBed, setInstanceBedState] = useState<string | null>(null);
+  useEffect(() => {
+    if (!instanceId) {
+      setInstanceBedState(null);
+      return;
+    }
+    let cancelled = false;
+    void getPrinterInstance(instanceId).then((inst) => {
+      if (!cancelled) setInstanceBedState(inst?.bed.identity ?? null);
+    });
+    let unlisten: UnlistenFn | null = null;
+    void listen<string>("printer:instance_changed", (event) => {
+      if (event.payload !== instanceId) return;
+      void getPrinterInstance(instanceId).then((inst) => {
+        if (!cancelled) setInstanceBedState(inst?.bed.identity ?? null);
+      });
+    }).then((u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [instanceId]);
+
   return (
     <div className="sp-host">
       <div className="sp-config">
@@ -134,18 +173,13 @@ export function SettingsPanelHost({
             plateId={plate?.plate_id ?? null}
             binding={plate?.printer ?? null}
           />
-          {plate?.printer && activeProfile && (
+          {plate?.printer && activeProfile && instanceId && instanceBed && (
             <BuildPlateSelector
               plates={activeProfile.supported_build_plates}
-              value={plate.printer.build_plate_identity}
+              value={instanceBed}
               onChange={(next) => {
-                if (!plate.printer) return;
-                void rebindPlatePrinter(
-                  plate.plate_id,
-                  plate.printer.printer_identity,
-                  next,
-                ).catch((err) => {
-                  console.error("[settings] rebindPlatePrinter failed", err);
+                void setInstanceBed(instanceId, next).catch((err) => {
+                  console.error("[settings] setInstanceBed failed", err);
                 });
               }}
               printerDefault={activeProfile.supported_build_plates[0] ?? null}
