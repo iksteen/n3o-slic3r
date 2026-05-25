@@ -45,7 +45,9 @@ pub use types::{Cascade, Condition, ConditionValue, Predicate, Rule, SourceLocat
 pub use validate::{default_known_dimensions, validate_cascade, KnownDimensions};
 
 use serde::Serialize;
-use slic3r_ffi::{option_defs, version, OptMode as FfiOptMode, OptScope as FfiOptScope, OptType};
+use slic3r_ffi::{
+    display_order_of, option_defs, version, OptMode as FfiOptMode, OptScope as FfiOptScope, OptType,
+};
 
 use crate::core::printer::profile::PrinterProfile;
 use crate::core::schema::{capability_for_key, CapabilityPredicate};
@@ -321,14 +323,28 @@ fn is_panel_visible(d: &slic3r_ffi::OptionDef) -> bool {
 #[tracing::instrument]
 pub fn slicer_options(filter: Option<String>) -> Vec<OptionSummary> {
     let needle = filter.unwrap_or_default().to_lowercase();
-    let out: Vec<OptionSummary> = option_defs()
+    let mut out: Vec<OptionSummary> = option_defs()
         .into_iter()
         .filter(is_panel_visible)
         .filter(|d| matches_filter(d, &needle))
         .map(summary_from_def)
         .collect();
+    sort_by_display_order(&mut out, |s| &s.key);
     tracing::info!(matched = out.len(), "slicer_options");
     out
+}
+
+/// Stable-sort options by their position in Orca's hand-curated
+/// Tab.cpp UI layout (scraped at build time via
+/// `scripts/scrape_option_display_order.py`). Keys absent from the
+/// table (internal/deprecated options) sort to the end while
+/// preserving libslic3r's `option_defs()` registration order among
+/// themselves.
+fn sort_by_display_order<T, F>(items: &mut [T], key: F)
+where
+    F: Fn(&T) -> &str,
+{
+    items.sort_by_key(|item| display_order_of(key(item)).unwrap_or(u32::MAX));
 }
 
 /// Per-option printer-aware view (PR-4-5 / FR-UI-7). Same shape as
@@ -359,7 +375,7 @@ pub fn slicer_options_for_printer(
     filter: Option<String>,
 ) -> Vec<PrinterAwareOptionSummary> {
     let needle = filter.unwrap_or_default().to_lowercase();
-    let out: Vec<PrinterAwareOptionSummary> = option_defs()
+    let mut out: Vec<PrinterAwareOptionSummary> = option_defs()
         .into_iter()
         .filter(is_panel_visible)
         .filter(|d| matches_filter(d, &needle))
@@ -372,6 +388,7 @@ pub fn slicer_options_for_printer(
             PrinterAwareOptionSummary { summary, hidden }
         })
         .collect();
+    sort_by_display_order(&mut out, |s| &s.summary.key);
     let hidden_count = out.iter().filter(|s| s.hidden).count();
     tracing::info!(
         matched = out.len(),

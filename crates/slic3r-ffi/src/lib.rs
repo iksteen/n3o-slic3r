@@ -257,6 +257,9 @@ pub enum OptBucket {
 mod option_buckets;
 pub use option_buckets::bucket_of;
 
+mod option_display_order;
+pub use option_display_order::display_order_of;
+
 /// An owned, allocated copy of a `slic3r_option_def_t` view, decoded into Rust types.
 /// The original C struct's strings are process-lifetime so we _could_ borrow them,
 /// but copying keeps the consumer ergonomics simple.
