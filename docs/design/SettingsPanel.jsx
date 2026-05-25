@@ -7,6 +7,7 @@ const {
   CASCADE_LAYERS, LAYER_BY_ID,
   CATEGORIES, ALL_SETTINGS,
   resolveValue, getOverriddenLayers,
+  computeSlotIds, slotShortLabel, slotLongLabel,
 } = window.SLICER_DATA;
 
 // tiny chevron used on dropdown chips
@@ -122,6 +123,8 @@ function SettingRow({
   selectedObject,         // present when contextLayer === "object"
   objects,                // ALL objects on the plate, so we can show which override this setting
   filaments,              // for color swatches in the per-object section
+  slotMap,                // slot → filamentId
+  materialMap,            // materialId → slot
   accountabilityMode,
   userOverrides,          // project-level user edits only
   onSetProjectOverride,
@@ -135,13 +138,16 @@ function SettingRow({
     if (!objects) return [];
     return objects
       .filter(o => o.overrides && o.overrides[setting.id] !== undefined && o.overrides[setting.id] !== null)
-      .map(o => ({
-        obj: o,
-        value: o.overrides[setting.id],
-        filament: filaments.find(f => f.id === o.filamentId),
-        isSelected: selectedObject && o.id === selectedObject.id,
-      }));
-  }, [objects, filaments, setting.id, selectedObject]);
+      .map(o => {
+        const { filament } = window.SLICER_DATA.resolveObjectFilament(o, materialMap, slotMap, filaments);
+        return {
+          obj: o,
+          value: o.overrides[setting.id],
+          filament,
+          isSelected: selectedObject && o.id === selectedObject.id,
+        };
+      });
+  }, [objects, filaments, materialMap, slotMap, setting.id, selectedObject]);
   // Effective cascade:
   //   - Base: setting.cascade (printer..project, set by profile data)
   //   - + user project overrides
@@ -330,6 +336,109 @@ function SettingRow({
   );
 }
 
+// ───────── Slot / Material chips ─────────
+// Two small dropdown chips used in the config strip.
+//
+// SlotChip — represents a physical slot in the printer (ext or AMS:1..4) and
+// lets the user re-bind it to any filament in the library.
+//
+// MaterialChip — represents a logical project material (M1, M2…) and lets the
+// user choose which slot it should be printed from.
+function SlotChip({ slotId, slotIds, filament, onOpenPicker }) {
+  const shortLabel = slotShortLabel(slotId, slotIds);
+  const longLabel = slotLongLabel(slotId);
+  return (
+    <div className="slot-chip-wrap">
+      <button
+        className={`slot-pill slot-chip-${slotId.replace(/[:]/g,"-")} ${filament ? "" : "empty"}`}
+        onClick={() => onOpenPicker(slotId)}
+        title={filament
+          ? `${longLabel} · ${filament.brand || ""} ${filament.product || filament.label || ""}${filament.colorName ? " (" + filament.colorName + ")" : ""}\nClick to change`
+          : `${longLabel} — click to load filament`}
+      >
+        <span className="slot-pill-swatch" style={{ background: filament?.color || "transparent" }}/>
+        <span className="slot-pill-label">{shortLabel}</span>
+        <span className="slot-pill-material">{filament?.material || "—"}</span>
+      </button>
+    </div>
+  );
+}
+
+function MaterialChip({ materialId, slotId, filament, useCount, filaments, slotIds = [], slotMap, onPickSlot }) {
+  const [open, setOpen] = useSPS(false);
+  useSPE(() => {
+    if (!open) return;
+    const onDoc = (e) => {
+      if (!e.target.closest(`.material-menu-${materialId}`) &&
+          !e.target.closest(`.material-chip-${materialId}`)) setOpen(false);
+    };
+    document.addEventListener("click", onDoc);
+    return () => document.removeEventListener("click", onDoc);
+  }, [open, materialId]);
+
+  return (
+    <div className="config-chip-wrap">
+      <button
+        className={`material-chip material-chip-${materialId}`}
+        onClick={() => setOpen(o => !o)}
+        title={filament ? `${materialId} → ${slotLongLabel(slotId)} (${filament.label}) · ${useCount} object${useCount !== 1 ? "s" : ""}` : `${materialId} → unmapped`}
+      >
+        <span className="material-id">{materialId}</span>
+        <span className="material-arrow">→</span>
+        <span className="material-slot">{slotId ? slotShortLabel(slotId, slotIds) : "—"}</span>
+        <span className="fil-swatch" style={{ background: filament?.color || "transparent", border: filament ? "none" : "1px dashed currentColor" }}/>
+        <span className="fil-label">{filament ? filament.label : "unmapped"}</span>
+        <span className="fil-count">×{useCount}</span>
+        <ChevronChip/>
+      </button>
+      {open && (
+        <div className={`printer-picker-menu material-menu material-menu-${materialId}`} onClick={(e) => e.stopPropagation()}>
+          <div className="ptpm-title">Route {materialId} to slot…</div>
+          {slotIds.map(sid => {
+            const fid = (slotMap || {})[sid];
+            const f = fid ? filaments.find(x => x.id === fid) : null;
+            return (
+              <button
+                key={sid}
+                className={`ptpm-item ptpm-row ${sid === slotId ? "active" : ""}`}
+                onClick={() => { onPickSlot(sid); setOpen(false); }}
+              >
+                <span className="ptpm-name">
+                  <span className="ptpm-swatch" style={{ background: f?.color || "transparent", border: f ? "none" : "1px dashed currentColor" }}/>
+                  {slotLongLabel(sid)}
+                </span>
+                <span className="ptpm-detail">{f ? f.label : "empty"}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Per-extruder nozzle chip. With one extruder this is the classic "Nozzle"
+// chip; with multiple toolheads (Snapmaker U1, Prusa XL) we render one chip
+// per toolhead and number them T1, T2, …
+function NozzleChip({ index, total, nozzle, onClick }) {
+  const label = total > 1 ? `Nozzle T${index + 1}` : "Nozzle";
+  return (
+    <button
+      className="config-chip"
+      onClick={onClick}
+      style={{ "--chip-hue": LAYER_BY_ID.nozzle.hue }}
+      title={`${label} — ${nozzle}\nClick to change`}
+    >
+      <span className="config-chip-top">
+        <span className="chip-dot"/>
+        <span className="chip-label">{label}</span>
+        <span className="chev"><ChevronChip/></span>
+      </span>
+      <span className="chip-value" title={nozzle}>{nozzle}</span>
+    </button>
+  );
+}
+
 // ───────── Settings Panel root ─────────
 function SettingsPanel({
   contextLayer,
@@ -345,9 +454,18 @@ function SettingsPanel({
   filaments,
   // config-strip props
   printer, bedPlate, nozzle,
+  extruders = 1,
+  nozzles,                 // optional per-extruder array; falls back to [nozzle] × extruders
   filamentsInUse,
+  materialsInUse,
+  slotIds = [],
+  slotMap,
+  materialMap,
+  onOpenSlotPicker,
+  setMaterialSlot,
   printerPresets,
   onSwapPrinter, onSwapBedPlate, onSwapNozzle, onSwapFilament,
+  onEditPrinter,
 }) {
   const [query, setQuery] = useSPS("");
   const [activeCat, setActiveCat] = useSPS(CATEGORIES[0].id);
@@ -369,6 +487,19 @@ function SettingsPanel({
   }, [printerMenuOpen]);
 
   const objectAvailable = !!selectedObject;
+
+  // Derive the per-extruder nozzle list. Most printers have a single nozzle;
+  // the U1 has 4 (one per toolhead), the Prusa XL up to 5. If the plate
+  // doesn't store per-extruder strings yet, mirror the default nozzle into
+  // each slot so the chips still render.
+  const nozzleList = useSPM(() => {
+    const n = Math.max(1, extruders | 0);
+    if (Array.isArray(nozzles) && nozzles.length) {
+      return Array.from({ length: n }, (_, i) => nozzles[i] || nozzle);
+    }
+    return Array(n).fill(nozzle);
+  }, [extruders, nozzles, nozzle]);
+  const inlineNozzles = nozzleList.length <= 2;
   // If object becomes unavailable while on object tab, fall back to project.
   useSPE(() => {
     if (contextLayer === "object" && !objectAvailable) setContextLayer("project");
@@ -519,21 +650,62 @@ function SettingsPanel({
             {printerMenuOpen && printerPresets && (
               <div className="printer-picker-menu" onClick={(e) => e.stopPropagation()}>
                 <div className="ptpm-title">Assign printer to this plate</div>
-                {printerPresets.map(preset => (
-                  <button
+                {printerPresets.filter(p => !p.isAddNew).map(preset => (
+                  <div
                     key={preset.id}
-                    className={`ptpm-item ${preset.name === printer ? "active" : ""}`}
-                    onClick={() => {
-                      onSwapPrinter && onSwapPrinter(preset.id);
-                      setPrinterMenuOpen(false);
-                    }}
+                    className={`ptpm-item ptpm-row ${preset.name === printer ? "active" : ""}`}
                   >
-                    <span className="ptpm-name">{preset.name}</span>
-                    <span className="ptpm-detail">
-                      {preset.plateSize[0]}×{preset.plateSize[1]} · {preset.bedPlate}
-                    </span>
-                  </button>
+                    <button
+                      className="ptpm-row-main"
+                      onClick={() => {
+                        onSwapPrinter && onSwapPrinter(preset.id);
+                        setPrinterMenuOpen(false);
+                      }}
+                      title={`Assign ${preset.name} to this plate`}
+                    >
+                      <span className="ptpm-name">{preset.name}</span>
+                      <span className="ptpm-detail">
+                        {preset.plateSize[0]}×{preset.plateSize[1]} · {preset.bedPlate}
+                      </span>
+                    </button>
+                    {onEditPrinter && (
+                      <button
+                        className="ptpm-cog"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPrinterMenuOpen(false);
+                          onEditPrinter(preset.id);
+                        }}
+                        title={`Settings for ${preset.name}`}
+                        aria-label={`Settings for ${preset.name}`}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                          <path d="M7 4.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM7 1v1.5M7 11.5V13M3.5 3.5l1 1M9.5 9.5l1 1M1 7h1.5M11.5 7H13M3.5 10.5l1-1M9.5 4.5l1-1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                        </svg>
+                      </button>
+                    )}
+                  </div>
                 ))}
+                {printerPresets.some(p => p.isAddNew) && (
+                  <>
+                    <div className="ptpm-divider"/>
+                    <button
+                      className="ptpm-item ptpm-add"
+                      onClick={() => {
+                        onSwapPrinter && onSwapPrinter("__new__");
+                        setPrinterMenuOpen(false);
+                      }}
+                    >
+                      <span className="ptpm-name">
+                        <svg width="11" height="11" viewBox="0 0 14 14" fill="none" style={{verticalAlign:"-1px", marginRight:6}}>
+                          <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+                        </svg>
+                        New printer…
+                      </span>
+                      <span className="ptpm-detail">⌘N</span>
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -545,35 +717,74 @@ function SettingsPanel({
             </span>
             <span className="chip-value" title={bedPlate}>{bedPlate}</span>
           </button>
-          {/* Nozzle is context-state on the printer profile, not a cascade layer of its own. */}
-          <button className="config-chip" onClick={onSwapNozzle} style={{ "--chip-hue": LAYER_BY_ID.printer.hue }}>
-            <span className="config-chip-top">
-              <span className="chip-dot"/>
-              <span className="chip-label">Nozzle</span>
-              <span className="chev"><ChevronChip/></span>
-            </span>
-            <span className="chip-value" title={nozzle}>{nozzle}</span>
-          </button>
+          {inlineNozzles && nozzleList.map((nz, i) => (
+            <NozzleChip
+              key={i}
+              index={i}
+              total={nozzleList.length}
+              nozzle={nz}
+              onClick={() => onSwapNozzle && onSwapNozzle(i)}
+            />
+          ))}
         </div>
-        <div className="sp-config-row sp-config-filaments">
-          <span className="config-row-label">Filaments</span>
-          {filamentsInUse.length === 0 ? (
+        {!inlineNozzles && (
+          <div className="sp-config-row sp-config-nozzles">
+            <span
+              className="config-row-label"
+              title="Per-toolhead nozzles — one chip per extruder. Click any to change that toolhead's nozzle."
+            >Nozzles</span>
+            <div className="nozzle-grid">
+              {nozzleList.map((nz, i) => (
+                <NozzleChip
+                  key={i}
+                  index={i}
+                  total={nozzleList.length}
+                  nozzle={nz}
+                  onClick={() => onSwapNozzle && onSwapNozzle(i)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="sp-config-row sp-config-slots">
+          <span className="config-row-label" title="Physical loadout — what each slot is spooled with right now.">Slots</span>
+          {slotIds.length === 0 ? (
             <span className="dim" style={{ fontSize: 11, fontFamily: "var(--font-mono)" }}>
-              none — add an object to assign material
+              no slots — printer has no extruders configured
+            </span>
+          ) : slotIds.map(slotId => {
+            const filamentId = (slotMap || {})[slotId];
+            const fil = filamentId ? filaments.find(f => f.id === filamentId) : null;
+            return (
+              <SlotChip
+                key={slotId}
+                slotId={slotId}
+                slotIds={slotIds}
+                filament={fil}
+                onOpenPicker={onOpenSlotPicker}
+              />
+            );
+          })}
+        </div>
+        <div className="sp-config-row sp-config-materials">
+          <span className="config-row-label" title="Each material in the project (M1, M2…) is routed to one slot.">Materials</span>
+          {(!materialsInUse || materialsInUse.length === 0) ? (
+            <span className="dim" style={{ fontSize: 11, fontFamily: "var(--font-mono)" }}>
+              none — add an object to assign a material
             </span>
           ) : (
-            filamentsInUse.map(fil => (
-              <button
-                key={fil.id}
-                className="filament-chip"
-                onClick={() => onSwapFilament(fil.id)}
-                title={`${fil.label} · used by ${fil.useCount} object${fil.useCount !== 1 ? "s" : ""}`}
-              >
-                <span className="fil-swatch" style={{ background: fil.color }}/>
-                <span className="fil-label">{fil.label}</span>
-                <span className="fil-count">×{fil.useCount}</span>
-                <ChevronChip/>
-              </button>
+            materialsInUse.map(m => (
+              <MaterialChip
+                key={m.materialId}
+                materialId={m.materialId}
+                slotId={m.slotId}
+                filament={m.filament}
+                useCount={m.useCount}
+                filaments={filaments}
+                slotIds={slotIds}
+                slotMap={slotMap || {}}
+                onPickSlot={(slotId) => setMaterialSlot && setMaterialSlot(m.materialId, slotId)}
+              />
             ))
           )}
         </div>
@@ -680,6 +891,8 @@ function SettingsPanel({
                   selectedObject={contextLayer === "object" ? selectedObject : null}
                   objects={objects}
                   filaments={filaments}
+                  slotMap={slotMap}
+                  materialMap={materialMap}
                   accountabilityMode={accountabilityMode}
                   userOverrides={userOverrides}
                   onSetProjectOverride={setProjectOverride}

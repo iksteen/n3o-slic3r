@@ -1,6 +1,7 @@
 // ObjectsPanel.jsx — left panel: object library + plate object list.
 
 const { useState: useStateOP, useRef: useRefOP } = React;
+const { resolveObjectFilament: resolveOP } = window.SLICER_DATA;
 
 const OBJECT_LIBRARY = [
   { section: "Primitives", items: [
@@ -25,6 +26,8 @@ function ObjectsPanel({
   objects, setObjects,
   selectedId, setSelectedId,
   filaments,
+  slotMap,
+  materialMap,
   printerName,
   countObjectOverrides,
   plateSize,
@@ -36,7 +39,7 @@ function ObjectsPanel({
     const payload = {
       kind: item.kind,
       name: item.name,
-      filamentId: filaments[0].id,
+      materialId: "M1",
     };
     e.dataTransfer.setData("application/json", JSON.stringify(payload));
     e.dataTransfer.effectAllowed = "copy";
@@ -61,7 +64,7 @@ function ObjectsPanel({
     setObjects(prev => [...prev, {
       id, name: item.name, kind: item.kind,
       x, y, rotZ: 0,
-      filamentId: filaments[0].id,
+      materialId: "M1",
       overrides: {},
     }]);
     setSelectedId(id);
@@ -92,7 +95,9 @@ function ObjectsPanel({
           </div>
         )}
         {objects.map(obj => {
-          const fil = filaments.find(f => f.id === obj.filamentId) || filaments[0];
+          const { materialId, filament } = resolveOP(obj, materialMap, slotMap, filaments);
+          const color = (filament && filament.color) || "#888";
+          const filLabel = (filament && filament.label) || "unassigned";
           const overrideCount = countObjectOverrides(obj.id);
           return (
             <div
@@ -103,11 +108,13 @@ function ObjectsPanel({
               <div className="object-thumb">{obj.kind.slice(0, 2).toUpperCase()}</div>
               <div style={{ minWidth: 0 }}>
                 <div className="object-name">
-                  <span className="object-color-tag" style={{ background: fil.color }}/>
+                  <span className="object-color-tag" style={{ background: color }}/>
                   {obj.name}
                 </div>
                 <div className="object-meta">
-                  {Math.round(obj.x)}, {Math.round(obj.y)} mm · {fil.label}
+                  <span className="object-material-badge" title={`Material ${materialId} → ${filLabel}`}>{materialId || "M?"}</span>
+                  <span>{Math.round(obj.x)}, {Math.round(obj.y)} mm</span>
+                  <span className="dim">· {filLabel}</span>
                 </div>
               </div>
               <div style={{ display: "flex", gap: 4, alignItems: "center" }}>

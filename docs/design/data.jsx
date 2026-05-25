@@ -2,19 +2,14 @@
 // Each setting carries a `cascade` object with values at zero or more layers.
 // The "active" value is whichever layer is highest-priority and defined.
 
-// Cascade layers in priority order (low → high). Phases:
-//   Authored (specificity-and-source-order within): default → printer → build_plate → filament
-//   Absolute overrides (CSS-!important style, higher tiers beat lower): user → project → object
-// The mockup uses a simple "highest defined wins" walk; the real resolver
-// does proper two-phase resolution per docs/profiles.md.
 const CASCADE_LAYERS = [
-  { id: "default",     label: "Defaults",    short: "DEF", hue: 220, desc: "Shipped baseline values" },
-  { id: "printer",     label: "Printer",     short: "PRN", hue: 18,  desc: "Mechanical limits, kinematics, dimensions, toolhead+nozzle context" },
-  { id: "build_plate", label: "Build plate", short: "PLT", hue: 95,  desc: "Plate surface and temperatures" },
-  { id: "filament",    label: "Filament",    short: "FIL", hue: 175, desc: "Material chemistry, temps, retract" },
-  { id: "user",        label: "Profile",     short: "USR", hue: 235, desc: "Personal defaults across projects (override tier)" },
-  { id: "project",     label: "Project",     short: "PRJ", hue: 285, desc: "This .3mf file (override tier — beats user)" },
-  { id: "object",      label: "Object",      short: "OBJ", hue: 340, desc: "Per-mesh overrides (override tier — beats project)" },
+  { id: "printer",  label: "Printer",   short: "PRN", hue: 18,  desc: "Mechanical limits, kinematics, dimensions" },
+  { id: "toolhead", label: "Toolhead",  short: "TOO", hue: 55,  desc: "Extruder hardware, hotend block" },
+  { id: "nozzle",   label: "Nozzle",    short: "NOZ", hue: 95,  desc: "Diameter, material, flow geometry" },
+  { id: "filament", label: "Filament",  short: "FIL", hue: 175, desc: "Material chemistry, temps, retract" },
+  { id: "user",     label: "Profile",   short: "USR", hue: 235, desc: "Personal defaults across projects" },
+  { id: "project",  label: "Project",   short: "PRJ", hue: 285, desc: "This .3mf file" },
+  { id: "object",   label: "Object",    short: "OBJ", hue: 340, desc: "Per-mesh overrides" },
 ];
 
 const LAYER_BY_ID = Object.fromEntries(CASCADE_LAYERS.map(l => [l.id, l]));
@@ -28,7 +23,7 @@ function resolveValue(setting) {
       return { value: setting.cascade[id], layer: id };
     }
   }
-  return { value: setting.default, layer: "default" };
+  return { value: setting.default, layer: "printer" };
 }
 
 // Detect a conflict: object overrides project (or any higher layer overrides lower).
@@ -54,9 +49,9 @@ const CATEGORIES = [
     settings: [
       s("layer_height",       "Layer height",            "number", "mm", { printer: 0.2, filament: 0.16, project: 0.12 }, { min: 0.04, max: 0.6, step: 0.01 }),
       s("initial_layer_h",    "Initial layer height",    "number", "mm", { printer: 0.3, project: 0.24 }, { min: 0.1, max: 0.5, step: 0.02 }),
-      s("line_width",         "Line width",              "number", "mm", { printer: 0.4 }, { min: 0.1, max: 1.2, step: 0.01 }),
-      s("wall_line_width",    "Wall line width",         "number", "mm", { printer: 0.4, project: 0.42 }, { min: 0.1, max: 1.2, step: 0.01 }),
-      s("infill_line_width",  "Infill line width",       "number", "mm", { printer: 0.4 }, { min: 0.1, max: 1.2, step: 0.01 }),
+      s("line_width",         "Line width",              "number", "mm", { nozzle: 0.4 }, { min: 0.1, max: 1.2, step: 0.01 }),
+      s("wall_line_width",    "Wall line width",         "number", "mm", { nozzle: 0.4, project: 0.42 }, { min: 0.1, max: 1.2, step: 0.01 }),
+      s("infill_line_width",  "Infill line width",       "number", "mm", { nozzle: 0.4 }, { min: 0.1, max: 1.2, step: 0.01 }),
       s("init_line_width",    "Initial layer line width","number", "%",  { printer: 100 }, { min: 50, max: 200, step: 5 }),
       s("seam_position",      "Seam position",           "select", "",   { filament: "aligned" }, { options: ["aligned", "nearest", "random", "sharpest"] }),
       s("seam_visibility",    "Hide seam in overhangs",  "toggle", "",   { project: true }),
@@ -66,8 +61,8 @@ const CATEGORIES = [
       s("xy_offset_hole",     "Hole horizontal expansion","number","mm", { printer: 0 }, { min: -1, max: 1, step: 0.01 }),
       s("z_offset",           "Z offset",                "number", "mm", { printer: 0, user: -0.04 }, { min: -1, max: 1, step: 0.01 }),
       s("slicing_tolerance",  "Slicing tolerance",       "select", "",   { printer: "middle" }, { options: ["middle", "exclusive", "inclusive"] }),
-      s("min_feat_size",      "Minimum feature size",    "number", "mm", { printer: 0.1 }, { min: 0, max: 1, step: 0.01 }),
-      s("min_thick_wall",     "Minimum thin-wall size",  "number", "mm", { printer: 0.34 }, { min: 0, max: 2, step: 0.01 }),
+      s("min_feat_size",      "Minimum feature size",    "number", "mm", { nozzle: 0.1 }, { min: 0, max: 1, step: 0.01 }),
+      s("min_thick_wall",     "Minimum thin-wall size",  "number", "mm", { nozzle: 0.34 }, { min: 0, max: 2, step: 0.01 }),
       s("res_avoid_cross",    "Resolution",              "number", "mm", { printer: 0.05 }, { min: 0.001, max: 1, step: 0.005 }),
     ],
   },
@@ -87,11 +82,11 @@ const CATEGORIES = [
       s("overhang_speed",     "Overhang wall speed",     "number","mm/s",{ filament: 30, project: 22 }, { min: 1, max: 200, step: 1 }),
       s("overhang_thresh",    "Overhang angle",          "number", "°",  { filament: 45 }, { min: 0, max: 90, step: 1 }),
       s("wall_print_order",   "Wall printing order",     "select", "",   { project: "inside-out" }, { options: ["inside-out", "outside-in"] }),
-      s("ext_wall_acc",       "Outer wall acceleration", "number","mm/s²",{ default: 1500, filament: 800 }, { min: 100, max: 10000, step: 50 }),
-      s("ext_wall_jerk",      "Outer wall jerk",         "number","mm/s",{ default: 8, filament: 5 }, { min: 0, max: 50, step: 0.5 }),
+      s("ext_wall_acc",       "Outer wall acceleration", "number","mm/s²",{ toolhead: 1500, filament: 800 }, { min: 100, max: 10000, step: 50 }),
+      s("ext_wall_jerk",      "Outer wall jerk",         "number","mm/s",{ toolhead: 8, filament: 5 }, { min: 0, max: 50, step: 0.5 }),
       s("ironing_enable",     "Enable ironing",          "toggle", "",   { project: false }),
       s("ironing_flow",       "Ironing flow",            "number", "%",  { filament: 10 }, { min: 0, max: 100, step: 1 }),
-      s("ironing_inset",      "Ironing inset",           "number", "mm", { printer: 0.38 }, { min: 0, max: 2, step: 0.01 }),
+      s("ironing_inset",      "Ironing inset",           "number", "mm", { nozzle: 0.38 }, { min: 0, max: 2, step: 0.01 }),
     ],
   },
   {
@@ -106,7 +101,7 @@ const CATEGORIES = [
       s("bottom_pattern",     "Bottom pattern",          "select", "",   { filament: "lines" }, { options: ["lines", "concentric", "zig-zag"] }),
       s("monotonic_top",      "Monotonic top order",     "toggle", "",   { project: true }),
       s("skin_overlap",       "Skin overlap",            "number", "%",  { filament: 10 }, { min: 0, max: 100, step: 1 }),
-      s("skin_removal",       "Skin removal width",      "number", "mm", { printer: 0.8 }, { min: 0, max: 5, step: 0.1 }),
+      s("skin_removal",       "Skin removal width",      "number", "mm", { nozzle: 0.8 }, { min: 0, max: 5, step: 0.1 }),
       s("expand_skins",       "Expand top/bottom skins", "toggle", "",   { printer: false }),
       s("top_init_line",      "Initial top line width",  "number", "%",  { printer: 100 }, { min: 50, max: 200, step: 5 }),
       s("ironing_only_top",   "Iron only the topmost",   "toggle", "",   { project: true }),
@@ -124,9 +119,9 @@ const CATEGORIES = [
       s("infill_pattern",     "Infill pattern",          "select", "",   { filament: "gyroid", project: "honeycomb" }, { options: ["grid", "lines", "triangles", "cubic", "gyroid", "honeycomb", "lightning"] }),
       s("infill_line_dist",   "Infill line distance",    "number", "mm", { printer: 4.0 }, { min: 0.1, max: 50, step: 0.1 }),
       s("infill_speed",       "Infill speed",            "number","mm/s",{ filament: 80, project: 120 }, { min: 1, max: 500, step: 1 }),
-      s("infill_acc",         "Infill acceleration",     "number","mm/s²",{ default: 2500 }, { min: 100, max: 20000, step: 50 }),
+      s("infill_acc",         "Infill acceleration",     "number","mm/s²",{ toolhead: 2500 }, { min: 100, max: 20000, step: 50 }),
       s("infill_overlap",     "Infill overlap %",        "number", "%",  { filament: 15 }, { min: 0, max: 100, step: 1 }),
-      s("infill_wipe_dist",   "Infill wipe distance",    "number", "mm", { printer: 0.1 }, { min: 0, max: 2, step: 0.01 }),
+      s("infill_wipe_dist",   "Infill wipe distance",    "number", "mm", { nozzle: 0.1 }, { min: 0, max: 2, step: 0.01 }),
       s("infill_z_step",      "Infill Z step",           "number", "mm", { printer: 0 }, { min: 0, max: 2, step: 0.05 }),
       s("min_infill_area",    "Minimum infill area",     "number", "mm²",{ printer: 0 }, { min: 0, max: 100, step: 1 }),
       s("connect_infill",     "Connect infill lines",    "toggle", "",   { filament: true }),
@@ -151,8 +146,8 @@ const CATEGORIES = [
       s("flow",               "Flow",                    "number", "%",  { filament: 100, user: 98 }, { min: 50, max: 200, step: 1 }),
       s("init_flow",          "Initial layer flow",      "number", "%",  { filament: 100, project: 105 }, { min: 50, max: 200, step: 1 }),
       s("retract_enable",     "Enable retraction",       "toggle", "",   { filament: true }),
-      s("retract_dist",       "Retraction distance",     "number", "mm", { default: 4, filament: 0.8 }, { min: 0, max: 20, step: 0.05 }),
-      s("retract_speed",      "Retraction speed",        "number","mm/s",{ default: 35, filament: 40 }, { min: 1, max: 200, step: 1 }),
+      s("retract_dist",       "Retraction distance",     "number", "mm", { toolhead: 4, filament: 0.8 }, { min: 0, max: 20, step: 0.05 }),
+      s("retract_speed",      "Retraction speed",        "number","mm/s",{ toolhead: 35, filament: 40 }, { min: 1, max: 200, step: 1 }),
       s("retract_min_travel", "Retract min travel",      "number", "mm", { filament: 1.5 }, { min: 0, max: 10, step: 0.1 }),
       s("retract_count_max",  "Retract count max",       "number", "",   { filament: 90 }, { min: 0, max: 200, step: 1 }),
       s("density",            "Material density",        "number","g/cm³",{ filament: 1.24 }, { min: 0.5, max: 3, step: 0.01 }),
@@ -176,7 +171,7 @@ const CATEGORIES = [
       s("init_layer_speed",   "Initial layer speed",     "number","mm/s",{ filament: 20 }, { min: 1, max: 200, step: 1 }),
       s("skirt_speed",        "Skirt/brim speed",        "number","mm/s",{ printer: 20 }, { min: 1, max: 200, step: 1 }),
       s("z_hop_speed",        "Z hop speed",             "number","mm/s",{ printer: 10 }, { min: 1, max: 100, step: 1 }),
-      s("max_accel",          "Max acceleration",        "number","mm/s²",{ printer: 3000, default: 4000 }, { min: 100, max: 20000, step: 100 }),
+      s("max_accel",          "Max acceleration",        "number","mm/s²",{ printer: 3000, toolhead: 4000 }, { min: 100, max: 20000, step: 100 }),
       s("max_jerk",           "Max jerk",                "number","mm/s",{ printer: 10 }, { min: 0, max: 50, step: 0.5 }),
       s("classic_jerk",       "Use classic jerk",        "toggle", "",   { printer: false }),
       s("first_layer_acc",    "First layer acceleration","number","mm/s²",{ printer: 500 }, { min: 100, max: 10000, step: 50 }),
@@ -231,7 +226,7 @@ const CATEGORIES = [
       s("support_type",       "Support type",            "select", "",   { project: "tree" }, { options: ["normal", "tree", "snug", "organic"] }),
       s("support_angle",      "Overhang threshold",      "number", "°",  { filament: 45 }, { min: 0, max: 90, step: 1 }),
       s("support_density",    "Support density",         "number", "%",  { project: 15 }, { min: 0, max: 100, step: 1 }),
-      s("support_xy_dist",    "Support XY distance",     "number", "mm", { printer: 0.8 }, { min: 0, max: 5, step: 0.05 }),
+      s("support_xy_dist",    "Support XY distance",     "number", "mm", { nozzle: 0.8 }, { min: 0, max: 5, step: 0.05 }),
       s("support_z_dist",     "Support Z distance",      "number", "mm", { filament: 0.16 }, { min: 0, max: 2, step: 0.02 }),
       s("support_interface",  "Enable interface",        "toggle", "",   { project: true }),
       s("interface_density",  "Interface density",       "number", "%",  { project: 90 }, { min: 0, max: 100, step: 1 }),
@@ -268,10 +263,10 @@ const CATEGORIES = [
     id: "multiext", name: "Multi-Extruder", icon: "⫶",
     desc: "Toolchange routing for multi-material prints",
     settings: [
-      s("prime_volume",       "Prime volume on swap",    "number","mm³", { default: 30, filament: 45 }, { min: 0, max: 500, step: 1 }),
+      s("prime_volume",       "Prime volume on swap",    "number","mm³", { toolhead: 30, filament: 45 }, { min: 0, max: 500, step: 1 }),
       s("toolchange_temp",    "Toolchange temperature",  "number", "°C", { filament: 200 }, { min: 0, max: 320, step: 1 }),
-      s("toolchange_retract", "Toolchange retract",      "number", "mm", { default: 6 }, { min: 0, max: 20, step: 0.1 }),
-      s("toolchange_zhop",    "Toolchange Z hop",        "number", "mm", { default: 1 }, { min: 0, max: 5, step: 0.1 }),
+      s("toolchange_retract", "Toolchange retract",      "number", "mm", { toolhead: 6 }, { min: 0, max: 20, step: 0.1 }),
+      s("toolchange_zhop",    "Toolchange Z hop",        "number", "mm", { toolhead: 1 }, { min: 0, max: 5, step: 0.1 }),
       s("wipe_tower_enable",  "Enable wipe tower",       "toggle", "",   { project: true }),
       s("wipe_tower_x",       "Wipe tower X",            "number", "mm", { project: 170 }, { min: 0, max: 400, step: 1 }),
       s("wipe_tower_y",       "Wipe tower Y",            "number", "mm", { project: 140 }, { min: 0, max: 400, step: 1 }),
@@ -341,8 +336,77 @@ function countOverridesAtLayer(layerId) {
   ).length;
 }
 
+// ───────────── Slot / material model ─────────────
+// Filaments live in physical *slots*. Slots come from the printer's hardware
+// configuration:
+//   - one or more direct extruders ("ext", "ext:2", …)
+//   - zero or more AMS units, each with 4 slots ("AMS-A:1"…"AMS-A:4",
+//     "AMS-B:1"…"AMS-B:4", …; letter = unit identity).
+//
+// Objects on the plate carry a *material id* (M1, M2, …) which the project
+// maps to a slot. Resolution goes: object.materialId → slot → filament.
+
+// Compute the ordered slot id list for a given hardware config.
+function computeSlotIds({ extruders = 1, amsUnits = 0 } = {}) {
+  const ids = [];
+  if (extruders <= 1) {
+    ids.push("ext");
+  } else {
+    for (let i = 1; i <= extruders; i++) ids.push(`ext:${i}`);
+  }
+  for (let u = 0; u < amsUnits; u++) {
+    const letter = String.fromCharCode(65 + u); // A, B, C, D
+    for (let s = 1; s <= 4; s++) ids.push(`AMS-${letter}:${s}`);
+  }
+  return ids;
+}
+
+// Compact label for a slot — what shows on the slot pill.
+// Hides the AMS-unit letter when there's only one AMS unit (no ambiguity).
+function slotShortLabel(slotId, slotIds = []) {
+  if (slotId === "ext") return "ext";
+  const extMatch = slotId.match(/^ext:(\d+)$/);
+  if (extMatch) return `e${extMatch[1]}`;
+  const amsMatch = slotId.match(/^AMS-([A-Z]):(\d+)$/);
+  if (amsMatch) {
+    const [, letter, idx] = amsMatch;
+    // If multiple AMS units present, show "A1", "B3", etc.
+    // If only one, just show the slot number.
+    const distinctUnits = new Set();
+    slotIds.forEach(id => {
+      const m = id.match(/^AMS-([A-Z]):/);
+      if (m) distinctUnits.add(m[1]);
+    });
+    return distinctUnits.size > 1 ? `${letter}${idx}` : idx;
+  }
+  return slotId;
+}
+
+// Verbose label for dropdowns / tooltips.
+function slotLongLabel(slotId) {
+  if (slotId === "ext") return "External spool";
+  const extMatch = slotId.match(/^ext:(\d+)$/);
+  if (extMatch) return `Extruder ${extMatch[1]}`;
+  const amsMatch = slotId.match(/^AMS-([A-Z]):(\d+)$/);
+  if (amsMatch) return `AMS ${amsMatch[1]} · slot ${amsMatch[2]}`;
+  return slotId;
+}
+
+// Resolve an object's filament through the two-step indirection.
+// Returns { material, slot, filament } — any leg may be null/undefined if
+// the mapping is incomplete; callers should fall back gracefully.
+function resolveObjectFilament(obj, materialMap, slotMap, filaments) {
+  const materialId = obj && obj.materialId;
+  const slotId = materialId ? materialMap[materialId] : null;
+  const filamentId = slotId ? slotMap[slotId] : null;
+  const filament = filamentId ? filaments.find(f => f.id === filamentId) : null;
+  return { materialId, slotId, filamentId, filament };
+}
+
 window.SLICER_DATA = {
   CASCADE_LAYERS, LAYER_BY_ID, LAYER_INDEX,
   CATEGORIES, ALL_SETTINGS,
   resolveValue, getOverriddenLayers, countOverridesAtLayer,
+  computeSlotIds, slotShortLabel, slotLongLabel,
+  resolveObjectFilament,
 };

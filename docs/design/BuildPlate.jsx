@@ -53,6 +53,8 @@ function BuildPlate({
   selectedId, setSelectedId,
   plateSize, // [x, y]
   filaments,
+  slotMap,
+  materialMap,
   onCameraReset,
 }) {
   const mountRef = useRef(null);
@@ -351,8 +353,10 @@ function BuildPlate({
     // Add or update
     objects.forEach(obj => {
       let mesh = objectGroup.children.find(m => m.userData.id === obj.id);
-      const fil = filaments.find(f => f.id === obj.filamentId) || filaments[0];
-      const color = new THREE.Color(fil.color || "#7AA2D9");
+      const { filament: fil } = window.SLICER_DATA.resolveObjectFilament(
+        obj, materialMap, slotMap, filaments
+      );
+      const color = new THREE.Color((fil && fil.color) || "#7AA2D9");
       const isSelected = obj.id === selectedId;
       const emissive = isSelected ? new THREE.Color("#FFFFFF").multiplyScalar(0.08) : new THREE.Color(0,0,0);
 
@@ -397,7 +401,7 @@ function BuildPlate({
         wire.material.color.set(isSelected ? 0xffffff : 0xffffff);
       }
     });
-  }, [objects, selectedId, filaments, plateSize[0], plateSize[1]]);
+  }, [objects, selectedId, filaments, slotMap, materialMap, plateSize[0], plateSize[1]]);
 
   // Drop handling (from object library drag)
   const onDragOver = (e) => {
@@ -436,7 +440,7 @@ function BuildPlate({
         name: payload.name,
         kind: payload.kind,
         x, y, rotZ: 0,
-        filamentId: payload.filamentId || filaments[0].id,
+        materialId: payload.materialId || "M1",
         overrides: {},
       }]);
       setSelectedId(id);
