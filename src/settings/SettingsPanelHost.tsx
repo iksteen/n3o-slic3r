@@ -17,7 +17,9 @@ import { makeObjectOverrideCallbacks } from "./overrideCommands";
 import { makeProjectOverrideCallbacks } from "./projectOverrideCommands";
 import { PrinterPicker } from "../printer/PrinterPicker";
 import { usePrinterCatalog } from "../printer/usePrinterCatalog";
+import { rebindPlatePrinter } from "../printer/printerCommands";
 import { SlotBindingPanel } from "../material/SlotBindingPanel";
+import { BuildPlateSelector } from "./BuildPlateSelector";
 import type { PlateSnapshot } from "../viewport/types";
 
 /** Locate the active plate in a session snapshot, or `null`
@@ -132,6 +134,23 @@ export function SettingsPanelHost({
             plateId={plate?.plate_id ?? null}
             binding={plate?.printer ?? null}
           />
+          {plate?.printer && activeProfile && (
+            <BuildPlateSelector
+              plates={activeProfile.supported_build_plates}
+              value={plate.printer.build_plate_identity}
+              onChange={(next) => {
+                if (!plate.printer) return;
+                void rebindPlatePrinter(
+                  plate.plate_id,
+                  plate.printer.printer_identity,
+                  next,
+                ).catch((err) => {
+                  console.error("[settings] rebindPlatePrinter failed", err);
+                });
+              }}
+              printerDefault={activeProfile.supported_build_plates[0] ?? null}
+            />
+          )}
         </div>
         <SlotBindingPanel
           plateId={plate?.plate_id ?? null}
