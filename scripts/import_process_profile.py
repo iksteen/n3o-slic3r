@@ -11,11 +11,16 @@ Backfills `print_settings_id` from the leaf's `name` field — Orca
 populates that at preset-load time, not as a static JSON field, so
 the cascade fragment would otherwise have no picker-visible label.
 
+Process presets are printer-bound — each lives under the printer
+directory it belongs to (`printer/<slug>/processes/`), the same way
+nozzle and bed fragments do. The cascade composer looks them up by
+`(printer_slug, process_slug)`.
+
 Usage:
   import_process_profile.py \\
       --root external/OrcaSlicer/resources/profiles \\
       --leaf "BBL/process/0.20mm Standard @BBL A1M.json" \\
-      --out profiles/vendor/bbl/process/0.20mm-standard-bbl-a1m.toml
+      --out profiles/vendor/bbl/printer/bambu-lab-a1-mini/processes/0.20mm-standard-bbl-a1m.toml
 """
 
 from __future__ import annotations

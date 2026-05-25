@@ -133,9 +133,17 @@ pub fn compose_cascade(
         .ok_or_else(|| ComposeError::UnknownFilamentFragment(filament_slug.to_owned()))?;
     rules.extend(filament.rules);
 
-    // 5. Process fragment.
-    let process = load_process_fragment(&instance.default_process_fragment_slug)
-        .ok_or_else(|| ComposeError::UnknownProcessFragment(instance.default_process_fragment_slug.clone()))?;
+    // 5. Process fragment — printer-bound, looked up by
+    //    `(printer_fragment_slug, default_process_fragment_slug)`.
+    let process = load_process_fragment(
+        &instance.printer_fragment_slug,
+        &instance.default_process_fragment_slug,
+    )
+    .ok_or_else(|| ComposeError::UnknownProcessFragment(format!(
+        "{}/{}",
+        instance.printer_fragment_slug,
+        instance.default_process_fragment_slug,
+    )))?;
     rules.extend(process.rules);
 
     // 6. Plate overrides — virtual source so trace UI can name them.

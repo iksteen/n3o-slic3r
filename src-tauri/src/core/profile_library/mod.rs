@@ -5,13 +5,13 @@
 //! ```text
 //! <root>/<vendor>/
 //! ├── printer/
-//! │   ├── <slug>.toml                ← cascade fragment (machine globals)
+//! │   ├── <slug>.toml                  ← cascade fragment (machine globals)
 //! │   └── <slug>/
-//! │       ├── printer.toml           ← PrinterProfile metadata (n3o shape)
-//! │       ├── nozzles/<sku>.toml     ← per-extruder scalars
-//! │       └── beds/<name>.toml       ← thin metadata (identity, curr_bed_type)
-//! ├── filament/<slug>.toml
-//! └── process/<slug>.toml
+//! │       ├── printer.toml             ← PrinterProfile metadata (n3o shape)
+//! │       ├── nozzles/<sku>.toml       ← per-extruder scalars
+//! │       ├── beds/<name>.toml         ← thin metadata (identity, curr_bed_type)
+//! │       └── processes/<slug>.toml    ← printer-bound process preset
+//! └── filament/<slug>.toml
 //! ```
 //!
 //! No `include_str!`. The vendor tree is loaded once into a process-
@@ -27,7 +27,11 @@
 //! - nozzle fragment: `(<printer_slug>, <sku>)` (sku = file stem).
 //! - bed fragment: `(<printer_slug>, <identity>)` — identity is the
 //!   libslic3r `curr_bed_type` enum value carried inside the file.
-//! - filament / process fragment: `<slug>` (file stem).
+//! - process fragment: `(<printer_slug>, <slug>)` (process presets
+//!   live under each printer because they're printer-tuned — e.g.
+//!   layer-height sets, speeds, calibration).
+//! - filament fragment: `<slug>` (file stem). Filaments are cross-
+//!   printer.
 //! - printer catalog entry: `<identity>` (declared inside
 //!   `printer.toml`, falls back to the directory name).
 
@@ -99,7 +103,7 @@ pub struct ProfileLibrary {
     nozzle_fragments: HashMap<(String, String), CascadeAsset>,
     bed_fragments: HashMap<(String, String), CascadeAsset>,
     filament_fragments: HashMap<String, CascadeAsset>,
-    process_fragments: HashMap<String, CascadeAsset>,
+    process_fragments: HashMap<(String, String), CascadeAsset>,
 
     /// Per-printer nozzle SKU declaration order (UI presentation).
     nozzle_order: BTreeMap<String, Vec<String>>,
@@ -201,14 +205,6 @@ impl ProfileLibrary {
                 }
             }
         }
-        let process_root = vendor_dir.join("process");
-        if process_root.is_dir() {
-            for f in read_sorted_files(&process_root)? {
-                let slug = file_stem(&f);
-                let asset = read_cascade(root, &f)?;
-                self.process_fragments.insert(slug, asset);
-            }
-        }
         Ok(())
     }
 
@@ -253,6 +249,16 @@ impl ProfileLibrary {
                         .entry(slug.clone())
                         .or_default()
                         .push(sku);
+                }
+            }
+            // processes/<slug>.toml — printer-bound process presets.
+            let processes_dir = printer_dir.join("processes");
+            if processes_dir.is_dir() {
+                for f in read_sorted_files(&processes_dir)? {
+                    let process_slug = file_stem(&f);
+                    let asset = read_cascade(root, &f)?;
+                    self.process_fragments
+                        .insert((slug.clone(), process_slug), asset);
                 }
             }
             // beds/<name>.toml — identity comes from inside the file.
@@ -388,11 +394,14 @@ pub fn load_filament_fragment(slug: &str) -> Option<Cascade> {
         .map(|a| a.cascade.clone())
 }
 
-/// Load the process cascade fragment for `slug`.
-pub fn load_process_fragment(slug: &str) -> Option<Cascade> {
+/// Load the process cascade fragment for `(printer_slug, process_slug)`.
+/// Process presets are printer-bound (each lives under
+/// `printer/<slug>/processes/<process_slug>.toml`); a process slug
+/// alone is ambiguous if two printers reuse a name.
+pub fn load_process_fragment(printer_slug: &str, process_slug: &str) -> Option<Cascade> {
     library()
         .process_fragments
-        .get(slug)
+        .get(&(printer_slug.to_owned(), process_slug.to_owned()))
         .map(|a| a.cascade.clone())
 }
 
@@ -478,8 +487,11 @@ mod tests {
         for slug in library().filament_fragments.keys() {
             assert!(load_filament_fragment(slug).is_some(), "filament {slug}");
         }
-        for slug in library().process_fragments.keys() {
-            assert!(load_process_fragment(slug).is_some(), "process {slug}");
+        for (printer, slug) in library().process_fragments.keys() {
+            assert!(
+                load_process_fragment(printer, slug).is_some(),
+                "process {printer}/{slug}",
+            );
         }
     }
 
@@ -559,7 +571,8 @@ mod tests {
         assert!(load_bed_fragment("ghost", "Cool Plate").is_none());
         assert!(load_bed_fragment("bambu-lab-a1-mini", "Ghost Plate").is_none());
         assert!(load_filament_fragment("ghost").is_none());
-        assert!(load_process_fragment("ghost").is_none());
+        assert!(load_process_fragment("ghost", "0.20mm-standard-bbl-a1m").is_none());
+        assert!(load_process_fragment("bambu-lab-a1-mini", "ghost").is_none());
     }
 
     #[test]
