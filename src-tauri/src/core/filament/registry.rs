@@ -1,64 +1,45 @@
 //! Bundled filament profile registry.
 //!
-//! Mirrors `core::printer::registry` for filament identities. The
-//! cascade context (PR-1-7) wants `Vec<FilamentProfile>` and
-//! `PrinterInstance.extruders[].slots[]` point at identities; this
-//! registry is the bridge.
-//!
-//! Ships `Generic PLA` as the only bundled entry — unbound slots
-//! fall back to it at slice-input build time. Real filament catalog
-//! work lands post-MVP alongside the filament-sync UX (Phase 7c).
+//! Thin facade over [`crate::core::profile_library::list_filament_fragments`].
+//! Each vendor filament fragment under `profiles/vendor/<v>/filament/`
+//! carries the `filament_settings_id` and `filament_type` fields the
+//! cascade context needs to construct a [`FilamentProfile`]; we derive
+//! the picker-facing struct from those instead of keeping a parallel
+//! n3o-shape filament catalog on disk.
 //!
 //! Surface:
 //! - [`lookup(identity)`] — `Option<FilamentProfile>` for bundled
-//!   identities.
+//!   fragments.
 //! - [`bundled_catalog()`] — every bundled identity + its profile.
 
 use super::profile::FilamentProfile;
+use crate::core::profile_library;
 
-#[derive(Debug, Clone, Copy)]
-struct BundledFilament {
-    identity: &'static str,
-    toml: &'static str,
+fn build_profile(summary: profile_library::FilamentFragmentSummary) -> FilamentProfile {
+    FilamentProfile {
+        identity: summary.identity,
+        base_type: summary.base_type,
+        vendor: None,
+        color: None,
+    }
 }
 
-const GENERIC_PLA_TOML: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../profiles/filaments/generic-pla.toml"
-));
-
-const BUNDLED: &[BundledFilament] = &[BundledFilament {
-    identity: "Generic PLA",
-    toml: GENERIC_PLA_TOML,
-}];
-
-/// Resolve a bundled identity to its full `FilamentProfile`. Returns
-/// `None` for unknown identities — callers fall back to a synthesized
-/// stand-in (slice context still needs *some* filament; the cascade
-/// uses `base_type` to pick PLA-flavor rules).
+/// Resolve a bundled identity (fragment slug) to a `FilamentProfile`.
+/// Returns `None` for unknown identities — callers fall back to a
+/// synthesized stand-in (slice context still needs *some* filament;
+/// the cascade uses `base_type` to pick PLA-flavor rules).
 pub fn lookup(identity: &str) -> Option<FilamentProfile> {
-    BUNDLED
-        .iter()
-        .find(|b| b.identity == identity)
-        .map(|b| {
-            toml::from_str::<FilamentProfile>(b.toml).unwrap_or_else(|e| {
-                panic!("bundled filament `{}`: {e}", b.identity)
-            })
-        })
+    profile_library::list_filament_fragments()
+        .into_iter()
+        .find(|s| s.identity == identity)
+        .map(build_profile)
 }
 
-/// Full bundled catalog in declaration order. Useful for UI pickers
-/// once a real filament-picker lands; currently the frontend stubs a
-/// 4-entry list in `material/filamentCatalog.ts` for the binding
-/// panel.
+/// Full bundled catalog in declaration order.
 pub fn bundled_catalog() -> Vec<FilamentProfile> {
-    BUNDLED
-        .iter()
-        .map(|b| {
-            toml::from_str::<FilamentProfile>(b.toml).unwrap_or_else(|e| {
-                panic!("bundled filament `{}`: {e}", b.identity)
-            })
-        })
+    profile_library::list_filament_fragments()
+        .into_iter()
+        .map(build_profile)
         .collect()
 }
 
@@ -68,8 +49,8 @@ mod tests {
 
     #[test]
     fn lookup_resolves_generic_pla() {
-        let f = lookup("Generic PLA").expect("Generic PLA present");
-        assert_eq!(f.identity, "Generic PLA");
+        let f = lookup("generic-pla").expect("generic-pla present");
+        assert_eq!(f.identity, "generic-pla");
         assert_eq!(f.base_type, "PLA");
     }
 
@@ -81,6 +62,6 @@ mod tests {
     #[test]
     fn bundled_catalog_contains_generic_pla() {
         let catalog = bundled_catalog();
-        assert!(catalog.iter().any(|f| f.identity == "Generic PLA"));
+        assert!(catalog.iter().any(|f| f.identity == "generic-pla"));
     }
 }

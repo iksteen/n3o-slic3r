@@ -1,273 +1,399 @@
-//! Hierarchical vendor profile library (PR-S-4 rework).
+//! Hierarchical vendor profile library, loaded from disk at startup.
 //!
-//! Loads the bundled vendor profile fragments from the hierarchical
-//! layout:
+//! On-disk layout (root = `profiles/vendor/`):
 //!
 //! ```text
-//! profiles/vendor/<vendor>/
+//! <root>/<vendor>/
 //! ├── printer/
-//! │   ├── <slug>.toml              ← machine globals only
+//! │   ├── <slug>.toml                ← cascade fragment (machine globals)
 //! │   └── <slug>/
-//! │       ├── nozzles/<sku>.toml   ← per-extruder scalars
-//! │       └── beds/<slug>.toml     ← thin metadata (identity, curr_bed_type)
+//! │       ├── printer.toml           ← PrinterProfile metadata (n3o shape)
+//! │       ├── nozzles/<sku>.toml     ← per-extruder scalars
+//! │       └── beds/<name>.toml       ← thin metadata (identity, curr_bed_type)
 //! ├── filament/<slug>.toml
 //! └── process/<slug>.toml
 //! ```
 //!
-//! Beds live under the printer (sibling to nozzles) — the supported
-//! plate list is printer-specific (A1 mini's Supertack vs the U1's
-//! textured PEI etc.) and the bed identity vocabulary is shared with
-//! libslic3r's `curr_bed_type` enum so the picker, cascade, and FFI
-//! all speak the same strings.
+//! No `include_str!`. The vendor tree is loaded once into a process-
+//! wide `OnceLock<ProfileLibrary>`; subsequent lookups borrow from
+//! that cache. Tauri's `setup()` hook calls [`init_from`] with the
+//! bundled-resources path so packaged builds find the profiles next
+//! to the binary. Tests lazy-init from the workspace path via
+//! `env!("CARGO_MANIFEST_DIR")`.
 //!
-//! Each fragment is `include_str!`-bundled at compile time. The
-//! composer (`composer::compose_cascade`) layers them into a slice-
-//! time Cascade with per-extruder vector assembly for nozzle fragments.
-//!
-//! Per-bucket OptionDef classification (PR-S-1) is a separate
-//! concern — it drives UI editing routes. File layout reflects
-//! physical sub-component ownership (printer / nozzle / bed); bucket
-//! reflects semantic category (printer / filament / process). The two
-//! are orthogonal.
+//! Lookups are keyed by:
+//! - printer cascade fragment: `<slug>` (file stem, e.g.
+//!   `"bambu-lab-a1-mini"`).
+//! - nozzle fragment: `(<printer_slug>, <sku>)` (sku = file stem).
+//! - bed fragment: `(<printer_slug>, <identity>)` — identity is the
+//!   libslic3r `curr_bed_type` enum value carried inside the file.
+//! - filament / process fragment: `<slug>` (file stem).
+//! - printer catalog entry: `<identity>` (declared inside
+//!   `printer.toml`, falls back to the directory name).
 
-use std::path::Path;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+use serde::Deserialize;
 
 use crate::core::cascade::loader::{parse_cascade_str, CascadeLoadError};
 use crate::core::cascade::types::Cascade;
+use crate::core::printer::profile::PrinterProfile;
 
 pub mod composer;
 pub use composer::{compose_cascade, ComposeError};
 
-/// One bundled fragment along with the path the cascade loader uses
-/// as its SourceLocation (for trace readability).
-#[derive(Debug, Clone, Copy)]
-struct BundledFragment {
-    slug: &'static str,
-    toml: &'static str,
-    source_path: &'static str,
+/// Errors emitted by [`ProfileLibrary::load`]. The Tauri setup hook
+/// panics on failure — a packaged binary without a parseable profile
+/// tree shouldn't have shipped — so the error type only needs to be
+/// clearly describable in a panic message.
+#[derive(Debug)]
+pub enum LibraryError {
+    MissingRoot(PathBuf),
+    Io(PathBuf, std::io::Error),
+    Toml(PathBuf, toml::de::Error),
+    Cascade(PathBuf, CascadeLoadError),
 }
 
-/// One bundled nozzle fragment scoped to a printer.
-#[derive(Debug, Clone, Copy)]
-struct BundledNozzle {
-    printer_slug: &'static str,
-    sku: &'static str,
-    toml: &'static str,
-    source_path: &'static str,
+impl std::fmt::Display for LibraryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingRoot(p) => write!(f, "profile root `{}` does not exist", p.display()),
+            Self::Io(p, e) => write!(f, "io error reading `{}`: {e}", p.display()),
+            Self::Toml(p, e) => write!(f, "parse error in `{}`: {e}", p.display()),
+            Self::Cascade(p, e) => write!(f, "cascade load error in `{}`: {e}", p.display()),
+        }
+    }
 }
 
-/// One bundled bed fragment scoped to a printer. `identity` is the
-/// libslic3r `curr_bed_type` enum value the bed.toml carries
-/// (e.g. `"Supertack Plate"`); the cascade composer looks up the
-/// fragment by `(printer_slug, identity)`.
-#[derive(Debug, Clone, Copy)]
-struct BundledBed {
-    printer_slug: &'static str,
-    identity: &'static str,
-    toml: &'static str,
-    source_path: &'static str,
+impl std::error::Error for LibraryError {}
+
+/// One parsed cascade fragment + the workspace-relative path the
+/// resolver embeds in `SourceLocation` for trace UI.
+#[derive(Debug, Clone)]
+struct CascadeAsset {
+    cascade: Cascade,
+    /// Workspace-relative source path string (only used for human-
+    /// readable display; once a fragment is parsed we don't refer
+    /// back to the file).
+    #[allow(dead_code)]
+    source_path: String,
 }
 
-// ---- Printers -------------------------------------------------------
+/// One printer catalog entry, parsed from `printer.toml` next to the
+/// printer's fragment.
+#[derive(Debug, Clone)]
+pub struct PrinterCatalogEntry {
+    pub identity: String,
+    pub profile: PrinterProfile,
+    /// Fragment slug = directory name. Equal to identity when no
+    /// `identity` override is declared in `printer.toml`.
+    pub fragment_slug: String,
+}
 
-const PRINTERS: &[BundledFragment] = &[
-    BundledFragment {
-        slug: "bambu-lab-a1-mini",
-        toml: include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini.toml"
-        )),
-        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini.toml",
-    },
-    BundledFragment {
-        slug: "snapmaker-u1",
-        toml: include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/snapmaker/printer/snapmaker-u1.toml"
-        )),
-        source_path: "profiles/vendor/snapmaker/printer/snapmaker-u1.toml",
-    },
-];
+/// Snapshot of every parseable profile fragment on disk, plus the
+/// printer catalog. Built once at startup; lookups borrow from this.
+pub struct ProfileLibrary {
+    printer_fragments: HashMap<String, CascadeAsset>,
+    nozzle_fragments: HashMap<(String, String), CascadeAsset>,
+    bed_fragments: HashMap<(String, String), CascadeAsset>,
+    filament_fragments: HashMap<String, CascadeAsset>,
+    process_fragments: HashMap<String, CascadeAsset>,
 
-// ---- Nozzles (per-printer, per-SKU) --------------------------------
+    /// Per-printer nozzle SKU declaration order (UI presentation).
+    nozzle_order: BTreeMap<String, Vec<String>>,
+    /// Per-printer bed identity declaration order (UI presentation).
+    bed_order: BTreeMap<String, Vec<String>>,
+    /// Filament slug declaration order (UI presentation).
+    filament_order: Vec<String>,
 
-const NOZZLES: &[BundledNozzle] = &[
-    // Bambu A1 mini nozzle range.
-    BundledNozzle {
-        printer_slug: "bambu-lab-a1-mini", sku: "0.2",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini/nozzles/0.2.toml")),
-        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini/nozzles/0.2.toml",
-    },
-    BundledNozzle {
-        printer_slug: "bambu-lab-a1-mini", sku: "0.4",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini/nozzles/0.4.toml")),
-        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini/nozzles/0.4.toml",
-    },
-    BundledNozzle {
-        printer_slug: "bambu-lab-a1-mini", sku: "0.6",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini/nozzles/0.6.toml")),
-        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini/nozzles/0.6.toml",
-    },
-    BundledNozzle {
-        printer_slug: "bambu-lab-a1-mini", sku: "0.8",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini/nozzles/0.8.toml")),
-        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini/nozzles/0.8.toml",
-    },
-    // Snapmaker U1 nozzle range.
-    BundledNozzle {
-        printer_slug: "snapmaker-u1", sku: "0.4",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/snapmaker/printer/snapmaker-u1/nozzles/0.4.toml")),
-        source_path: "profiles/vendor/snapmaker/printer/snapmaker-u1/nozzles/0.4.toml",
-    },
-    BundledNozzle {
-        printer_slug: "snapmaker-u1", sku: "0.6",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/snapmaker/printer/snapmaker-u1/nozzles/0.6.toml")),
-        source_path: "profiles/vendor/snapmaker/printer/snapmaker-u1/nozzles/0.6.toml",
-    },
-];
+    /// Picker catalog — one entry per `<printer_dir>/printer.toml`.
+    catalog: Vec<PrinterCatalogEntry>,
+}
 
-// ---- Beds (per-printer) ---------------------------------------------
+static LIBRARY: OnceLock<ProfileLibrary> = OnceLock::new();
 
-const BEDS: &[BundledBed] = &[
-    // Bambu A1 mini — full plate range. Identities match libslic3r's
-    // `s_keys_map_BedType` enum vocabulary verbatim.
-    BundledBed {
-        printer_slug: "bambu-lab-a1-mini", identity: "Cool Plate",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/cool-plate.toml")),
-        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/cool-plate.toml",
-    },
-    BundledBed {
-        printer_slug: "bambu-lab-a1-mini", identity: "Textured PEI Plate",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/textured-pei-plate.toml")),
-        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/textured-pei-plate.toml",
-    },
-    BundledBed {
-        printer_slug: "bambu-lab-a1-mini", identity: "High Temp Plate",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/high-temp-plate.toml")),
-        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/high-temp-plate.toml",
-    },
-    BundledBed {
-        printer_slug: "bambu-lab-a1-mini", identity: "Engineering Plate",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/engineering-plate.toml")),
-        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/engineering-plate.toml",
-    },
-    BundledBed {
-        printer_slug: "bambu-lab-a1-mini", identity: "Supertack Plate",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/supertack-plate.toml")),
-        source_path: "profiles/vendor/bbl/printer/bambu-lab-a1-mini/beds/supertack-plate.toml",
-    },
-    // Snapmaker U1 — single plate.
-    BundledBed {
-        printer_slug: "snapmaker-u1", identity: "Textured PEI Plate",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/snapmaker/printer/snapmaker-u1/beds/textured-pei-plate.toml")),
-        source_path: "profiles/vendor/snapmaker/printer/snapmaker-u1/beds/textured-pei-plate.toml",
-    },
-];
-
-// ---- Filaments + Processes -----------------------------------------
-
-const FILAMENTS: &[BundledFragment] = &[
-    BundledFragment {
-        slug: "generic-pla",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/orca/filament/generic-pla.toml")),
-        source_path: "profiles/vendor/orca/filament/generic-pla.toml",
-    },
-    BundledFragment {
-        slug: "bambu-pla-basic-bbl-a1m",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/bbl/filament/bambu-pla-basic-bbl-a1m.toml")),
-        source_path: "profiles/vendor/bbl/filament/bambu-pla-basic-bbl-a1m.toml",
-    },
-    BundledFragment {
-        slug: "snapmaker-pla-u1",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/snapmaker/filament/snapmaker-pla-u1.toml")),
-        source_path: "profiles/vendor/snapmaker/filament/snapmaker-pla-u1.toml",
-    },
-];
-
-const PROCESSES: &[BundledFragment] = &[
-    BundledFragment {
-        slug: "0.20mm-standard-bbl-a1m",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/bbl/process/0.20mm-standard-bbl-a1m.toml")),
-        source_path: "profiles/vendor/bbl/process/0.20mm-standard-bbl-a1m.toml",
-    },
-    BundledFragment {
-        slug: "0.20-standard-snapmaker-u1-0.4-nozzle",
-        toml: include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
-            "/../profiles/vendor/snapmaker/process/0.20-standard-snapmaker-u1-0.4-nozzle.toml")),
-        source_path: "profiles/vendor/snapmaker/process/0.20-standard-snapmaker-u1-0.4-nozzle.toml",
-    },
-];
-
-// ---- Public loaders -------------------------------------------------
-
-fn parse_fragment(slug: &str, toml: &str, source_path: &str) -> Cascade {
-    let path = Path::new(source_path);
-    let rules = parse_cascade_str(toml, path).unwrap_or_else(|e: CascadeLoadError| {
-        panic!("bundled fragment `{slug}` ({source_path}) failed to parse: {e}")
+/// Explicit init. The Tauri runtime calls this from `setup()` with
+/// the bundled-resources `profiles/vendor` path. Subsequent calls
+/// are no-ops (`OnceLock` only initializes the first time).
+pub fn init_from(root: PathBuf) {
+    let _ = LIBRARY.get_or_init(|| {
+        ProfileLibrary::load(&root)
+            .unwrap_or_else(|e| panic!("profile library load failed: {e}"))
     });
-    Cascade { rules }
 }
 
-/// Load the printer.toml for `slug`. Returns `None` if unknown.
+fn library() -> &'static ProfileLibrary {
+    LIBRARY.get_or_init(|| {
+        // Test/dev fallback: walk up from the manifest dir to find
+        // `profiles/vendor` in the workspace. A packaged binary
+        // *must* explicitly call `init_from` before any lookup; if
+        // it doesn't, this fallback will pick up a stale build-time
+        // path that doesn't exist post-install and `load` will panic
+        // with a clear "missing root" message.
+        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root above manifest dir")
+            .to_path_buf();
+        let root = workspace_root.join("profiles/vendor");
+        ProfileLibrary::load(&root)
+            .unwrap_or_else(|e| panic!("profile library load (workspace fallback) failed: {e}"))
+    })
+}
+
+// ---- Walker --------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct PrinterProfileEnvelope {
+    /// Catalog identity. Defaults to the directory name if omitted.
+    #[serde(default)]
+    identity: Option<String>,
+    #[serde(flatten)]
+    profile: PrinterProfile,
+}
+
+#[derive(Debug, Deserialize)]
+struct BedIdentityProbe {
+    identity: String,
+}
+
+impl ProfileLibrary {
+    fn load(root: &Path) -> Result<Self, LibraryError> {
+        if !root.exists() {
+            return Err(LibraryError::MissingRoot(root.to_owned()));
+        }
+
+        let mut lib = ProfileLibrary {
+            printer_fragments: HashMap::new(),
+            nozzle_fragments: HashMap::new(),
+            bed_fragments: HashMap::new(),
+            filament_fragments: HashMap::new(),
+            process_fragments: HashMap::new(),
+            nozzle_order: BTreeMap::new(),
+            bed_order: BTreeMap::new(),
+            filament_order: Vec::new(),
+            catalog: Vec::new(),
+        };
+
+        // Iterate vendors in stable sorted order so the catalog &
+        // picker presentation are deterministic.
+        for vendor_dir in read_sorted_subdirs(root)? {
+            lib.load_vendor(root, &vendor_dir)?;
+        }
+
+        Ok(lib)
+    }
+
+    fn load_vendor(&mut self, root: &Path, vendor_dir: &Path) -> Result<(), LibraryError> {
+        let printer_root = vendor_dir.join("printer");
+        if printer_root.is_dir() {
+            self.load_printers(root, &printer_root)?;
+        }
+        let filament_root = vendor_dir.join("filament");
+        if filament_root.is_dir() {
+            for f in read_sorted_files(&filament_root)? {
+                let slug = file_stem(&f);
+                let asset = read_cascade(root, &f)?;
+                self.filament_fragments.insert(slug.clone(), asset);
+                if !self.filament_order.contains(&slug) {
+                    self.filament_order.push(slug);
+                }
+            }
+        }
+        let process_root = vendor_dir.join("process");
+        if process_root.is_dir() {
+            for f in read_sorted_files(&process_root)? {
+                let slug = file_stem(&f);
+                let asset = read_cascade(root, &f)?;
+                self.process_fragments.insert(slug, asset);
+            }
+        }
+        Ok(())
+    }
+
+    fn load_printers(&mut self, root: &Path, printer_root: &Path) -> Result<(), LibraryError> {
+        // Top-level cascade fragments: <printer_root>/<slug>.toml
+        for f in read_sorted_files(printer_root)? {
+            let slug = file_stem(&f);
+            let asset = read_cascade(root, &f)?;
+            self.printer_fragments.insert(slug, asset);
+        }
+        // Sub-directories carry the per-printer breakdown (nozzles/,
+        // beds/, printer.toml). Iterate in stable order.
+        for printer_dir in read_sorted_subdirs(printer_root)? {
+            let slug = printer_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .expect("directory name is valid utf-8")
+                .to_owned();
+            // printer.toml — catalog metadata.
+            let meta_path = printer_dir.join("printer.toml");
+            if meta_path.is_file() {
+                let raw = std::fs::read_to_string(&meta_path)
+                    .map_err(|e| LibraryError::Io(meta_path.clone(), e))?;
+                let envelope: PrinterProfileEnvelope =
+                    toml::from_str(&raw).map_err(|e| LibraryError::Toml(meta_path.clone(), e))?;
+                let identity = envelope.identity.unwrap_or_else(|| slug.clone());
+                self.catalog.push(PrinterCatalogEntry {
+                    identity,
+                    profile: envelope.profile,
+                    fragment_slug: slug.clone(),
+                });
+            }
+            // nozzles/<sku>.toml
+            let nozzles_dir = printer_dir.join("nozzles");
+            if nozzles_dir.is_dir() {
+                for f in read_sorted_files(&nozzles_dir)? {
+                    let sku = file_stem(&f);
+                    let asset = read_cascade(root, &f)?;
+                    self.nozzle_fragments
+                        .insert((slug.clone(), sku.clone()), asset);
+                    self.nozzle_order
+                        .entry(slug.clone())
+                        .or_default()
+                        .push(sku);
+                }
+            }
+            // beds/<name>.toml — identity comes from inside the file.
+            let beds_dir = printer_dir.join("beds");
+            if beds_dir.is_dir() {
+                for f in read_sorted_files(&beds_dir)? {
+                    let raw = std::fs::read_to_string(&f)
+                        .map_err(|e| LibraryError::Io(f.clone(), e))?;
+                    let probe: BedIdentityProbe = toml::from_str(&raw)
+                        .map_err(|e| LibraryError::Toml(f.clone(), e))?;
+                    let identity = probe.identity;
+                    let asset = parse_cascade(root, &f, &raw)?;
+                    self.bed_fragments
+                        .insert((slug.clone(), identity.clone()), asset);
+                    self.bed_order
+                        .entry(slug.clone())
+                        .or_default()
+                        .push(identity);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn read_sorted_files(dir: &Path) -> Result<Vec<PathBuf>, LibraryError> {
+    let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| LibraryError::Io(dir.to_owned(), e))?
+        .filter_map(|entry| entry.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("toml"))
+        .collect();
+    out.sort();
+    Ok(out)
+}
+
+fn read_sorted_subdirs(dir: &Path) -> Result<Vec<PathBuf>, LibraryError> {
+    let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| LibraryError::Io(dir.to_owned(), e))?
+        .filter_map(|entry| entry.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    out.sort();
+    Ok(out)
+}
+
+fn file_stem(p: &Path) -> String {
+    p.file_stem()
+        .and_then(|s| s.to_str())
+        .expect("toml file has a utf-8 stem")
+        .to_owned()
+}
+
+fn read_cascade(root: &Path, path: &Path) -> Result<CascadeAsset, LibraryError> {
+    let raw = std::fs::read_to_string(path).map_err(|e| LibraryError::Io(path.to_owned(), e))?;
+    parse_cascade(root, path, &raw)
+}
+
+fn parse_cascade(
+    root: &Path,
+    path: &Path,
+    raw: &str,
+) -> Result<CascadeAsset, LibraryError> {
+    // Trace UI uses this path verbatim; show it relative to the
+    // vendor root so traces stay readable across machines.
+    let relative = path
+        .strip_prefix(root)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| path.to_path_buf());
+    let rules = parse_cascade_str(raw, &relative)
+        .map_err(|e| LibraryError::Cascade(path.to_owned(), e))?;
+    Ok(CascadeAsset {
+        cascade: Cascade { rules },
+        source_path: relative.display().to_string(),
+    })
+}
+
+// ---- Public loaders (preserve the legacy free-function surface) ----
+
+/// Load the printer cascade fragment for `slug`. Returns `None` if
+/// unknown.
 pub fn load_printer_fragment(slug: &str) -> Option<Cascade> {
-    PRINTERS
-        .iter()
-        .find(|p| p.slug == slug)
-        .map(|p| parse_fragment(p.slug, p.toml, p.source_path))
+    library()
+        .printer_fragments
+        .get(slug)
+        .map(|a| a.cascade.clone())
 }
 
-/// Load nozzles/<sku>.toml for the named printer + SKU. Returns
-/// `None` if either is unknown.
+/// Load the nozzle cascade fragment for `(printer_slug, sku)`. Both
+/// strings must match the loaded library; returns `None` otherwise.
 pub fn load_nozzle_fragment(printer_slug: &str, sku: &str) -> Option<Cascade> {
-    NOZZLES
-        .iter()
-        .find(|n| n.printer_slug == printer_slug && n.sku == sku)
-        .map(|n| parse_fragment(n.sku, n.toml, n.source_path))
+    library()
+        .nozzle_fragments
+        .get(&(printer_slug.to_owned(), sku.to_owned()))
+        .map(|a| a.cascade.clone())
 }
 
-/// Load a printer's bed fragment by libslic3r `curr_bed_type`
-/// identity (e.g. `("bambu-lab-a1-mini", "Supertack Plate")`).
-/// Returns `None` when either the printer or the identity is unknown
-/// for that printer.
+/// Load the bed cascade fragment for `(printer_slug, identity)`.
+/// Identity is the libslic3r `curr_bed_type` enum value carried in
+/// the bed.toml's own `identity` field.
 pub fn load_bed_fragment(printer_slug: &str, identity: &str) -> Option<Cascade> {
-    BEDS.iter()
-        .find(|b| b.printer_slug == printer_slug && b.identity == identity)
-        .map(|b| parse_fragment(b.identity, b.toml, b.source_path))
+    library()
+        .bed_fragments
+        .get(&(printer_slug.to_owned(), identity.to_owned()))
+        .map(|a| a.cascade.clone())
 }
 
 /// Every bed identity bundled for the named printer, in declaration
-/// order. The picker enumerates this; falls back to the printer
-/// profile's `supported_build_plates` when empty (e.g. a newly-added
-/// printer without bed fragments).
+/// order (file-system sort order, deterministic).
 pub fn bundled_beds_for_printer(printer_slug: &str) -> Vec<&'static str> {
-    BEDS.iter()
-        .filter(|b| b.printer_slug == printer_slug)
-        .map(|b| b.identity)
-        .collect()
+    library()
+        .bed_order
+        .get(printer_slug)
+        .map(|v| v.iter().map(String::as_str).collect())
+        .unwrap_or_default()
 }
 
-/// Load filament/<slug>.toml.
+/// All nozzle SKUs bundled for the named printer.
+pub fn nozzle_skus_for(printer_slug: &str) -> Vec<&'static str> {
+    library()
+        .nozzle_order
+        .get(printer_slug)
+        .map(|v| v.iter().map(String::as_str).collect())
+        .unwrap_or_default()
+}
+
+/// Load the filament cascade fragment for `slug`.
 pub fn load_filament_fragment(slug: &str) -> Option<Cascade> {
-    FILAMENTS
-        .iter()
-        .find(|f| f.slug == slug)
-        .map(|f| parse_fragment(f.slug, f.toml, f.source_path))
+    library()
+        .filament_fragments
+        .get(slug)
+        .map(|a| a.cascade.clone())
+}
+
+/// Load the process cascade fragment for `slug`.
+pub fn load_process_fragment(slug: &str) -> Option<Cascade> {
+    library()
+        .process_fragments
+        .get(slug)
+        .map(|a| a.cascade.clone())
 }
 
 /// One bundled vendor filament's identity + display label, surfaced
@@ -283,30 +409,37 @@ pub struct FilamentFragmentSummary {
     pub base_type: String,
 }
 
-/// Enumerate every bundled vendor filament fragment. Parses
-/// `filament_settings_id` + `filament_type` out of each TOML — both
-/// are stamped by the vendor converter and stable across regens.
-/// Insertion order is preserved (matches `FILAMENTS` declaration).
+/// Enumerate every bundled vendor filament fragment. Parses the
+/// `filament_settings_id` + `filament_type` fields out of each
+/// fragment (stamped by the vendor converter, stable across regens).
 pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
-    FILAMENTS
+    library()
+        .filament_order
         .iter()
-        .map(|f| {
-            let value: toml::Value = toml::from_str(f.toml).unwrap_or_else(|e| {
-                panic!("bundled filament `{}` TOML parse: {e}", f.slug)
-            });
-            let table = value.as_table().expect("filament fragment is a table");
-            let display_name = table
+        .map(|slug| {
+            let cascade = library()
+                .filament_fragments
+                .get(slug)
+                .expect("filament_order index always present in fragments map");
+            // The cascade.rules vec carries one unconditional rule
+            // for converter output; read `filament_settings_id` /
+            // `filament_type` out of its set.
+            let set = cascade
+                .cascade
+                .rules
+                .first()
+                .map(|r| &r.set)
+                .expect("filament fragment carries at least one rule");
+            let display_name = set
                 .get("filament_settings_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned)
-                .unwrap_or_else(|| f.slug.to_owned());
-            let base_type = table
+                .cloned()
+                .unwrap_or_else(|| slug.clone());
+            let base_type = set
                 .get("filament_type")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned)
+                .cloned()
                 .unwrap_or_else(|| "PLA".to_owned());
             FilamentFragmentSummary {
-                identity: f.slug.to_owned(),
+                identity: slug.clone(),
                 display_name,
                 base_type,
             }
@@ -314,22 +447,15 @@ pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
         .collect()
 }
 
-/// Load process/<slug>.toml.
-pub fn load_process_fragment(slug: &str) -> Option<Cascade> {
-    PROCESSES
-        .iter()
-        .find(|p| p.slug == slug)
-        .map(|p| parse_fragment(p.slug, p.toml, p.source_path))
+/// Printer catalog — one entry per `printer.toml` found on disk.
+/// `core::printer::registry` re-exposes this for the picker.
+pub fn printer_catalog() -> &'static [PrinterCatalogEntry] {
+    &library().catalog
 }
 
-/// All nozzle SKUs bundled for the named printer, in declaration
-/// order. Empty vec for unknown printer slugs.
-pub fn nozzle_skus_for(printer_slug: &str) -> Vec<&'static str> {
-    NOZZLES
-        .iter()
-        .filter(|n| n.printer_slug == printer_slug)
-        .map(|n| n.sku)
-        .collect()
+/// Look up a printer catalog entry by its identity slug.
+pub fn printer_catalog_lookup(identity: &str) -> Option<&'static PrinterCatalogEntry> {
+    library().catalog.iter().find(|e| e.identity == identity)
 }
 
 #[cfg(test)]
@@ -338,34 +464,22 @@ mod tests {
 
     #[test]
     fn every_bundled_fragment_parses() {
-        for p in PRINTERS {
-            assert!(
-                load_printer_fragment(p.slug).is_some(),
-                "printer fragment `{}` missing",
-                p.slug,
-            );
+        // Smoke: walk the library and ensure each registered slug
+        // resolves back through the public loaders.
+        for slug in library().printer_fragments.keys() {
+            assert!(load_printer_fragment(slug).is_some(), "printer {slug}");
         }
-        for n in NOZZLES {
-            assert!(
-                load_nozzle_fragment(n.printer_slug, n.sku).is_some(),
-                "nozzle ({}, {}) missing",
-                n.printer_slug,
-                n.sku,
-            );
+        for (printer, sku) in library().nozzle_fragments.keys() {
+            assert!(load_nozzle_fragment(printer, sku).is_some(), "nozzle {printer}/{sku}");
         }
-        for b in BEDS {
-            assert!(
-                load_bed_fragment(b.printer_slug, b.identity).is_some(),
-                "bed ({}, {}) missing",
-                b.printer_slug,
-                b.identity,
-            );
+        for (printer, identity) in library().bed_fragments.keys() {
+            assert!(load_bed_fragment(printer, identity).is_some(), "bed {printer}/{identity}");
         }
-        for f in FILAMENTS {
-            assert!(load_filament_fragment(f.slug).is_some(), "filament `{}` missing", f.slug);
+        for slug in library().filament_fragments.keys() {
+            assert!(load_filament_fragment(slug).is_some(), "filament {slug}");
         }
-        for p in PROCESSES {
-            assert!(load_process_fragment(p.slug).is_some(), "process `{}` missing", p.slug);
+        for slug in library().process_fragments.keys() {
+            assert!(load_process_fragment(slug).is_some(), "process {slug}");
         }
     }
 
@@ -373,10 +487,8 @@ mod tests {
     fn bambi_printer_fragment_carries_machine_envelope_not_nozzle_keys() {
         let cascade = load_printer_fragment("bambu-lab-a1-mini").expect("bambi printer");
         let rule = &cascade.rules[0];
-        // Printer.toml should have machine globals but NOT per-extruder keys.
         assert!(rule.set.contains_key("printable_height"));
         assert!(rule.set.contains_key("machine_max_acceleration_x"));
-        // nozzle_diameter is per-extruder → lives in nozzles/, NOT in printer.toml.
         assert!(
             !rule.set.contains_key("nozzle_diameter"),
             "nozzle_diameter must NOT be in printer.toml (lives in nozzles/<sku>.toml)",
@@ -388,20 +500,15 @@ mod tests {
         let cascade = load_nozzle_fragment("bambu-lab-a1-mini", "0.4").expect("0.4 nozzle");
         let rule = &cascade.rules[0];
         let diameter = rule.set.get("nozzle_diameter").expect("nozzle_diameter present");
-        // Scalar — not "0.4,0.4,0.4,0.4". The composer replicates for
-        // multi-extruder printers.
         assert_eq!(diameter, "0.4");
     }
 
     #[test]
     fn u1_0_4_nozzle_is_also_scalar_despite_4_extruders() {
-        // U1's leaf JSON had ["0.4","0.4","0.4","0.4"] — the converter
-        // collapses the homogeneous array to scalar "0.4", and the
-        // composer will replicate at slice time.
         let cascade = load_nozzle_fragment("snapmaker-u1", "0.4").expect("U1 0.4 nozzle");
         let rule = &cascade.rules[0];
         let diameter = rule.set.get("nozzle_diameter").expect("nozzle_diameter present");
-        assert_eq!(diameter, "0.4", "U1's 0.4 nozzle scalar must equal 0.4");
+        assert_eq!(diameter, "0.4");
     }
 
     #[test]
@@ -415,16 +522,22 @@ mod tests {
 
     #[test]
     fn bundled_beds_for_printer_lists_full_a1_mini_range() {
-        let beds = bundled_beds_for_printer("bambu-lab-a1-mini");
+        // Order is file-system sort order (alphabetical by file
+        // name), not authoring intent. Don't pin to a specific
+        // ordering — pin to set membership instead.
+        let beds: std::collections::BTreeSet<&str> =
+            bundled_beds_for_printer("bambu-lab-a1-mini").into_iter().collect();
         assert_eq!(
             beds,
-            vec![
+            [
                 "Cool Plate",
-                "Textured PEI Plate",
-                "High Temp Plate",
                 "Engineering Plate",
+                "High Temp Plate",
                 "Supertack Plate",
-            ],
+                "Textured PEI Plate",
+            ]
+            .into_iter()
+            .collect(),
         );
         assert_eq!(bundled_beds_for_printer("snapmaker-u1"), vec!["Textured PEI Plate"]);
         assert!(bundled_beds_for_printer("ghost-printer").is_empty());
@@ -447,5 +560,15 @@ mod tests {
         assert!(load_bed_fragment("bambu-lab-a1-mini", "Ghost Plate").is_none());
         assert!(load_filament_fragment("ghost").is_none());
         assert!(load_process_fragment("ghost").is_none());
+    }
+
+    #[test]
+    fn printer_catalog_carries_both_bundled_printers() {
+        let cat = printer_catalog();
+        assert!(cat.iter().any(|e| e.identity == "bambu-lab-a1-mini"));
+        assert!(cat.iter().any(|e| e.identity == "snapmaker-u1"));
+        let bambu = printer_catalog_lookup("bambu-lab-a1-mini").expect("a1 mini");
+        assert_eq!(bambu.profile.model, "Bambu A1 mini");
+        assert_eq!(bambu.fragment_slug, "bambu-lab-a1-mini");
     }
 }

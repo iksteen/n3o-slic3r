@@ -8,7 +8,7 @@
 // for the design directive.
 //
 // Keyed by `printer_identity` (the cascade-side identifier, e.g.
-// `"bambu-a1-mini"`) so the same physical printer is reachable
+// `"bambu-lab-a1-mini"`) so the same physical printer is reachable
 // from any plate bound to that identity.
 
 export interface BambuCredentials {

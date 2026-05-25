@@ -460,7 +460,7 @@ function bambiInstance(): PrinterInstance {
   return {
     id: "bambi",
     display_name: "Bambi",
-    vendor_profile_ref: "bambu-a1-mini",
+    vendor_profile_ref: "bambu-lab-a1-mini",
     printer_fragment_slug: "bambu-lab-a1-mini",
     default_filament_fragment_slug: "generic-pla",
     default_process_fragment_slug: "0.20mm-standard-bbl-a1m",

@@ -20,43 +20,35 @@ pub struct BuildPlate {
     pub libslic3r_curr_bed_type: String,
 }
 
-// ---- Bundled-plate registry ---------------------------------------
-
-#[derive(Debug, Clone, Copy)]
-struct BundledPlate {
-    identity: &'static str,
-    toml: &'static str,
-}
-
-const TEXTURED_PEI_TOML: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../profiles/plates/textured-pei.toml"
-));
-
-const BUNDLED: &[BundledPlate] = &[BundledPlate {
-    identity: "Textured PEI Plate",
-    toml: TEXTURED_PEI_TOML,
-}];
-
-/// Resolve a build-plate identity to its full descriptor. Returns
-/// `None` for plates not present in the bundled set — callers
-/// synthesize a fallback (cascade still needs *some*
-/// `libslic3r_curr_bed_type`; a best-effort `format!("{identity}
-/// Plate")` suffices for plates whose TOML hasn't been authored
-/// yet).
+/// Resolve a build-plate identity to its descriptor. The library's
+/// bed fragments are vendor-scoped (per-printer); for the picker
+/// fallback path we accept any identity that any bundled printer
+/// supports — the cascade composer is the only place where the
+/// printer-scoped lookup actually matters.
 ///
-/// Authoring more bundled plates is post-MVP profile work; the
-/// printer registry's `supported_build_plates` lists identities the
-/// picker shows even when no plate TOML exists for them.
+/// Returns `None` for plates not present in any bundled bed
+/// fragment — callers synthesize a fallback descriptor at the call
+/// site (cascade still needs *some* `libslic3r_curr_bed_type` to
+/// write into the slice config).
 pub fn lookup(identity: &str) -> Option<BuildPlate> {
-    BUNDLED
-        .iter()
-        .find(|b| b.identity == identity)
-        .map(|b| {
-            toml::from_str::<BuildPlate>(b.toml).unwrap_or_else(|e| {
-                panic!("bundled plate `{}`: {e}", b.identity)
-            })
+    // The bed identity is its own libslic3r `curr_bed_type` enum
+    // value verbatim — see the vendor bed.toml fragments. The
+    // descriptor exposes the two as separate fields purely for
+    // historical reasons; the values match.
+    let lib = crate::core::profile_library::printer_catalog();
+    let known = lib.iter().any(|entry| {
+        crate::core::profile_library::bundled_beds_for_printer(&entry.fragment_slug)
+            .iter()
+            .any(|id| *id == identity)
+    });
+    if known {
+        Some(BuildPlate {
+            identity: identity.to_owned(),
+            libslic3r_curr_bed_type: identity.to_owned(),
         })
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -76,7 +68,7 @@ mod tests {
     }
 
     #[test]
-    fn lookup_resolves_bundled_textured_pei() {
+    fn lookup_resolves_textured_pei() {
         let p = lookup("Textured PEI Plate").expect("Textured PEI present");
         assert_eq!(p.identity, "Textured PEI Plate");
         assert_eq!(p.libslic3r_curr_bed_type, "Textured PEI Plate");
@@ -84,9 +76,6 @@ mod tests {
 
     #[test]
     fn lookup_returns_none_for_unbundled_plate() {
-        // Unbundled identities return None — callers synthesize a
-        // fallback descriptor with `libslic3r_curr_bed_type` =
-        // identity (true now that identities match the enum).
-        assert!(lookup("Engineering Plate").is_none());
+        assert!(lookup("Magnetic").is_none());
     }
 }

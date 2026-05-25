@@ -35,7 +35,7 @@ pub fn bundled_instances() -> Vec<PrinterInstance> {
 }
 
 /// Bridge from a legacy `PrinterBinding.printer_identity` (vendor
-/// profile slug like `"bambu-a1-mini"`) to the matching bundled
+/// profile slug like `"bambu-lab-a1-mini"`) to the matching bundled
 /// PrinterInstance id (`"bambi"`). Returns `None` for vendor profiles
 /// that don't yet have a corresponding bundled instance fixture.
 ///
@@ -59,7 +59,7 @@ fn bambi() -> PrinterInstance {
     PrinterInstance {
         id: BAMBI_ID.to_owned(),
         display_name: "Bambi".to_owned(),
-        vendor_profile_ref: "bambu-a1-mini".to_owned(),
+        vendor_profile_ref: "bambu-lab-a1-mini".to_owned(),
         // PR-S-4 rework: slug is the printer model, NOT the per-nozzle
         // variant. The nozzle SKU lives on the extruder state below;
         // the composer loads `printer/<slug>/nozzles/<sku>.toml`.
@@ -183,7 +183,7 @@ mod tests {
         use crate::core::printer::FeedKind;
 
         let b = lookup_instance(BAMBI_ID).expect("bambi present");
-        assert_eq!(b.vendor_profile_ref, "bambu-a1-mini");
+        assert_eq!(b.vendor_profile_ref, "bambu-lab-a1-mini");
         assert_eq!(b.extruders.len(), 1);
         assert_eq!(b.extruders[0].installed_nozzle.diameter_mm, 0.4);
         assert_eq!(

@@ -2822,7 +2822,7 @@ mod tests {
         p.plates[0].scene.bed = None;
         let profile = a1_mini_for_test();
         let binding = PrinterBinding {
-            printer_identity: "bambu-a1-mini".into(),
+            printer_identity: "bambu-lab-a1-mini".into(),
             build_plate_identity: "Textured PEI".into(),
         };
         let (report, events) = p
@@ -2833,7 +2833,7 @@ mod tests {
         // Report shape — previous was None for a fresh project.
         assert_eq!(report.plate_id, PlateId(1));
         assert_eq!(report.previous_printer, None);
-        assert_eq!(report.new_printer, "bambu-a1-mini");
+        assert_eq!(report.new_printer, "bambu-lab-a1-mini");
         assert_eq!(report.new_build_plate, "Textured PEI");
         assert!(report.incompatible.is_empty());
         assert!(report.clamped.is_empty());
@@ -2856,14 +2856,14 @@ mod tests {
             .rebind_plate_printer(
                 PlateId(1),
                 PrinterBinding {
-                    printer_identity: "bambu-a1-mini".into(),
+                    printer_identity: "bambu-lab-a1-mini".into(),
                     build_plate_identity: "Textured PEI".into(),
                 },
                 &profile,
             )
             .unwrap();
         assert_eq!(report.previous_printer.as_deref(), Some("snapmaker-u1"));
-        assert_eq!(report.new_printer, "bambu-a1-mini");
+        assert_eq!(report.new_printer, "bambu-lab-a1-mini");
     }
 
     #[test]
@@ -2879,7 +2879,7 @@ mod tests {
             .rebind_plate_printer(
                 PlateId(1),
                 PrinterBinding {
-                    printer_identity: "bambu-a1-mini".into(),
+                    printer_identity: "bambu-lab-a1-mini".into(),
                     build_plate_identity: "Magnetic".into(), // not in A1 mini's list
                 },
                 &profile,
@@ -2902,7 +2902,7 @@ mod tests {
             .rebind_plate_printer(
                 PlateId(99),
                 PrinterBinding {
-                    printer_identity: "bambu-a1-mini".into(),
+                    printer_identity: "bambu-lab-a1-mini".into(),
                     build_plate_identity: "Textured PEI".into(),
                 },
                 &profile,

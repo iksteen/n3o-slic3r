@@ -383,7 +383,7 @@ mod tests {
 
     fn a1_mini_binding() -> PrinterBinding {
         PrinterBinding {
-            printer_identity: "bambu-a1-mini".into(),
+            printer_identity: "bambu-lab-a1-mini".into(),
             build_plate_identity: "Textured PEI Plate".into(),
         }
     }
@@ -588,7 +588,7 @@ mod tests {
     fn unsupported_build_plate_errors() {
         let mut project = Project::default();
         project.plates[0].printer = Some(PrinterBinding {
-            printer_identity: "bambu-a1-mini".into(),
+            printer_identity: "bambu-lab-a1-mini".into(),
             // A1 mini doesn't support U1's Magnetic plate.
             build_plate_identity: "Magnetic".into(),
         });

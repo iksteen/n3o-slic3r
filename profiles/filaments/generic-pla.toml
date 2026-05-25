@@ -1,4 +1,0 @@
-identity = "Generic PLA"
-base_type = "PLA"
-# vendor and color intentionally omitted — both are Option<String> and
-# default to None.

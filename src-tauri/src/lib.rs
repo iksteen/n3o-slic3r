@@ -36,12 +36,26 @@ pub fn run() {
         .manage(core::slice::JobRegistry::new())
         .manage(Arc::new(core::preview::PreviewRegistry::new()))
         .manage(Arc::new(core::driver::DriverRegistry::new()))
-        .setup(|_app| {
+        .setup(|app| {
             // Resources dir is only needed for STEP / font embossing; STL
             // and 3MF load without it. Log level 3 = warning, matching
             // OrcaSlicer's CLI default.
             init(None, 3).expect("libslic3r init failed");
             tracing::info!("libslic3r initialized");
+
+            // Load the bundled profile tree from the Tauri resource dir
+            // (configured via tauri.conf.json::bundle.resources). The
+            // ProfileLibrary lazy fallback (workspace path baked in at
+            // compile time) is only meaningful for tests; a packaged
+            // binary needs this explicit init or it'd panic on the
+            // first cascade compose.
+            let resource_root = tauri::Manager::path(app)
+                .resource_dir()
+                .expect("resource_dir")
+                .join("profiles/vendor");
+            core::profile_library::init_from(resource_root);
+            tracing::info!("profile library loaded");
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

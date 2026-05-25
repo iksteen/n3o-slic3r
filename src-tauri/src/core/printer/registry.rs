@@ -1,70 +1,23 @@
-//! Printer profile registry (PR-5-4).
+//! Printer profile registry.
 //!
-//! Holds the bundled printer profiles so the frontend has something
-//! concrete to pick between in the settings panel's printer picker.
-//! Each TOML in `profiles/printers/` is embedded via `include_str!`
-//! at compile time — same pattern the cascade registry uses for the
-//! bundled A1 mini cascade. Packaged builds work without runtime
-//! resource lookup.
+//! Thin facade over [`crate::core::profile_library::printer_catalog`].
+//! The library walks the vendor profile tree at startup and parses one
+//! `printer.toml` per printer directory; this module re-exposes that
+//! data in the picker-facing shape (`CatalogEntry`).
 //!
 //! Surface:
-//! - [`bundled_catalog()`] — returns the full set of registered
-//!   profiles. Stable order: A1 mini first (the MVP default), then
-//!   Snapmaker U1, then anything else added in declaration order.
-//! - [`lookup(identity)`] — find a profile by its identity slug
-//!   (the profile filename stem, e.g. `"bambu-a1-mini"`).
+//! - [`bundled_catalog()`] — every entry from the library, in
+//!   declaration order (vendor sort order, then printer directory
+//!   sort order within each vendor).
+//! - [`lookup(identity)`] — find a profile by its identity slug.
 //! - [`CatalogEntry`] — the small summary the picker UI consumes
 //!   without having to round-trip the full profile.
-//!
-//! The registry is content-only — every call re-parses the embedded
-//! TOML. Parse cost is single-digit ms even on debug builds, far
-//! less than any cascade resolve, and we hit it once per app launch
-//! plus once per printer change. Caching adds complexity (Mutex on
-//! a lazy_static) for no measurable benefit.
 
 use serde::{Deserialize, Serialize};
 
 use super::profile::PrinterProfile;
+use crate::core::profile_library;
 use crate::core::project::binding::PrinterBinding;
-
-/// One bundled printer profile: identity slug + the embedded TOML
-/// body. Identity is the stable string the frontend passes to
-/// `scene_set_plate_printer_by_identity` to swap printers on a plate.
-#[derive(Debug, Clone, Copy)]
-struct BundledProfile {
-    identity: &'static str,
-    /// Slug under `profiles/vendor/<vendor>/printer/<slug>/` — used
-    /// to look up the bed-fragment registry. May differ from the
-    /// catalog identity (e.g. catalog `"bambu-a1-mini"` →
-    /// fragment slug `"bambu-lab-a1-mini"`).
-    fragment_slug: &'static str,
-    toml: &'static str,
-}
-
-const BAMBU_A1_MINI_TOML: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../profiles/printers/bambu-a1-mini.toml"
-));
-const SNAPMAKER_U1_TOML: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../profiles/printers/snapmaker-u1.toml"
-));
-
-/// Declaration-ordered list of bundled printers. Insertion order is
-/// also the picker's display order; the MVP A1 mini sits at the top
-/// because that's what the bootstrap loads.
-const BUNDLED: &[BundledProfile] = &[
-    BundledProfile {
-        identity: "bambu-a1-mini",
-        fragment_slug: "bambu-lab-a1-mini",
-        toml: BAMBU_A1_MINI_TOML,
-    },
-    BundledProfile {
-        identity: "snapmaker-u1",
-        fragment_slug: "snapmaker-u1",
-        toml: SNAPMAKER_U1_TOML,
-    },
-];
 
 /// Picker-facing entry for one printer in the catalog. Carries the
 /// identity slug + the full `PrinterProfile`. The picker chip + menu
@@ -79,25 +32,24 @@ pub struct CatalogEntry {
     pub profile: PrinterProfile,
 }
 
-impl CatalogEntry {
-    fn from(identity: &str, profile: PrinterProfile) -> Self {
-        Self {
-            identity: identity.to_owned(),
-            profile,
-        }
-    }
-}
-
-/// Picker-side view of every bundled profile, in display order.
-/// Panics on TOML parse failure — the embedded strings are
-/// compile-time constants, so a parse failure means the bundled
-/// profile is malformed and the binary shouldn't have shipped.
+/// Picker-side view of every bundled profile, in declaration order.
+/// Clones from the library because `PrinterProfile` is serialized
+/// across the Tauri IPC boundary by value and the picker shape
+/// (`CatalogEntry`) reorders fields.
 pub fn bundled_catalog() -> Vec<CatalogEntry> {
-    BUNDLED
+    profile_library::printer_catalog()
         .iter()
-        .map(|b| {
-            let profile = load_profile(b);
-            CatalogEntry::from(b.identity, profile)
+        .map(|e| {
+            let mut profile = e.profile.clone();
+            profile.supported_build_plates =
+                profile_library::bundled_beds_for_printer(&e.fragment_slug)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect();
+            CatalogEntry {
+                identity: e.identity.clone(),
+                profile,
+            }
         })
         .collect()
 }
@@ -106,26 +58,15 @@ pub fn bundled_catalog() -> Vec<CatalogEntry> {
 /// `None` for unknown identities. The Tauri command layer maps that
 /// to a `String` error the picker shows as a toast.
 pub fn lookup(identity: &str) -> Option<PrinterProfile> {
-    BUNDLED
-        .iter()
-        .find(|b| b.identity == identity)
-        .map(load_profile)
-}
-
-/// Parse a bundled printer TOML and populate `supported_build_plates`
-/// from the bed fragments registered under that printer's
-/// `fragment_slug`. The TOML itself doesn't list plates — the bed
-/// registry is the single source of truth
-/// (`profiles/vendor/<vendor>/printer/<fragment_slug>/beds/`).
-fn load_profile(b: &BundledProfile) -> PrinterProfile {
-    let mut profile: PrinterProfile = toml::from_str(b.toml)
-        .unwrap_or_else(|e| panic!("bundled printer `{}`: {e}", b.identity));
-    profile.supported_build_plates =
-        crate::core::profile_library::bundled_beds_for_printer(b.fragment_slug)
-            .into_iter()
-            .map(str::to_owned)
-            .collect();
-    profile
+    profile_library::printer_catalog_lookup(identity).map(|e| {
+        let mut profile = e.profile.clone();
+        profile.supported_build_plates =
+            profile_library::bundled_beds_for_printer(&e.fragment_slug)
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
+        profile
+    })
 }
 
 /// Best-guess default printer binding for fresh projects + newly-
@@ -136,15 +77,10 @@ fn load_profile(b: &BundledProfile) -> PrinterProfile {
 ///
 /// Picks the first bundled printer + its first supported build
 /// plate. Returns `None` only if the bundled catalog is empty or
-/// the first printer ships with no build plates (neither happens
-/// today — both are compile-time-enforced by the embedded TOML).
+/// the first printer ships with no build plates.
 pub fn default_binding() -> Option<PrinterBinding> {
     let entry = bundled_catalog().into_iter().next()?;
-    let build_plate_identity = entry
-        .profile
-        .supported_build_plates
-        .into_iter()
-        .next()?;
+    let build_plate_identity = entry.profile.supported_build_plates.into_iter().next()?;
     Some(PrinterBinding {
         printer_identity: entry.identity,
         build_plate_identity,
@@ -158,25 +94,24 @@ mod tests {
     #[test]
     fn bundled_catalog_contains_a1_mini_and_u1() {
         let entries = bundled_catalog();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].identity, "bambu-a1-mini");
-        assert_eq!(entries[0].profile.model, "Bambu A1 mini");
-        assert_eq!(entries[1].identity, "snapmaker-u1");
-        assert_eq!(entries[1].profile.model, "Snapmaker U1");
+        assert!(entries.iter().any(|e| e.identity == "bambu-lab-a1-mini"));
+        assert!(entries.iter().any(|e| e.identity == "snapmaker-u1"));
+        let a1 = entries.iter().find(|e| e.identity == "bambu-lab-a1-mini").unwrap();
+        assert_eq!(a1.profile.model, "Bambu A1 mini");
+        let u1 = entries.iter().find(|e| e.identity == "snapmaker-u1").unwrap();
+        assert_eq!(u1.profile.model, "Snapmaker U1");
     }
 
     #[test]
     fn lookup_resolves_known_identities() {
-        let a1 = lookup("bambu-a1-mini").expect("a1 mini present");
+        let a1 = lookup("bambu-lab-a1-mini").expect("a1 mini present");
         assert_eq!(a1.model, "Bambu A1 mini");
         assert_eq!(a1.slot_count, 4);
-        // One AMS-fed toolhead.
         assert_eq!(a1.toolheads.len(), 1);
 
         let u1 = lookup("snapmaker-u1").expect("u1 present");
         assert_eq!(u1.model, "Snapmaker U1");
         assert_eq!(u1.slot_count, 4);
-        // Four toolchanger toolheads.
         assert_eq!(u1.toolheads.len(), 4);
     }
 
@@ -187,13 +122,8 @@ mod tests {
 
     #[test]
     fn catalog_entry_carries_full_profile_for_panel_resolve() {
-        // The settings panel host derives the active printer's
-        // PrinterProfileJson from the catalog entry (cascade resolve
-        // wants toolheads + build volume + exclusion zones, not just
-        // the picker summary). Pin the shape so a future shrink of
-        // CatalogEntry that drops fields surfaces here.
         let entries = bundled_catalog();
-        let a1 = entries.iter().find(|e| e.identity == "bambu-a1-mini").unwrap();
+        let a1 = entries.iter().find(|e| e.identity == "bambu-lab-a1-mini").unwrap();
         assert!(a1.profile.supported_build_plates.contains(&"Textured PEI Plate".into()));
         assert_eq!(a1.profile.toolheads.len(), 1);
         assert!(a1.profile.build_volume.max[0] > 0.0);

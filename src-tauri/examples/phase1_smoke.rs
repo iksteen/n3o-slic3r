@@ -1,11 +1,11 @@
 //! Phase 1 exit-criteria smoke (PR-1-11).
 //!
-//! Drives the full PR-1-1 .. PR-1-7 pipeline end-to-end against the
-//! reference profiles shipped at `profiles/`. Loads the A1 mini
-//! printer + Textured PEI plate + Generic PLA filament, parses the
-//! default cascade, validates against the schema, resolves PLA on
-//! Textured PEI, prints the structured trace for `bed_temp`, applies
-//! a project-tier override on top, and runs the adapter to produce a
+//! Drives the full PR-1-1 .. PR-1-7 pipeline end-to-end. Loads the A1
+//! mini printer + Textured PEI plate + Generic PLA filament from the
+//! profile registries, parses the small demo cascade fixture,
+//! validates against the schema, resolves PLA on Textured PEI, prints
+//! the structured trace for `bed_temp`, applies a project-tier
+//! override on top, and runs the adapter to produce a
 //! `slic3r_ffi::Config`.
 //!
 //! No actual slice (yet). Production slicing wiring lands when PR-1-9
@@ -19,39 +19,26 @@ use n3o_slic3r_lib::core::cascade::{
     Cascade, KnownDimensions, OverrideTiers,
 };
 use n3o_slic3r_lib::core::cascade_adapter::{adapt_with_overrides, Manifest};
-use n3o_slic3r_lib::core::filament::FilamentProfile;
-use n3o_slic3r_lib::core::printer::PrinterProfile;
+use n3o_slic3r_lib::core::filament::registry as filament_registry;
+use n3o_slic3r_lib::core::printer::registry as printer_registry;
 use n3o_slic3r_lib::core::project::SlicingContext;
-use n3o_slic3r_lib::core::scene::BuildPlate;
+use n3o_slic3r_lib::core::scene::build_plate;
 use slic3r_ffi::init;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("workspace root")
-        .to_path_buf()
-}
-
-fn load_toml<T: serde::de::DeserializeOwned>(relative: &str) -> T {
-    let path = workspace_root().join(relative);
-    let bytes = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    toml::from_str(&bytes)
-        .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
-}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     init(None, 3).map_err(|e| format!("libslic3r init: {e}"))?;
 
     println!("=== Phase 1 exit-criteria smoke ===\n");
 
-    // 1. Load reference profiles
-    println!("[1/6] Loading reference profiles (TOML)");
-    let printer: PrinterProfile = load_toml("profiles/printers/bambu-a1-mini.toml");
-    let plate: BuildPlate = load_toml("profiles/plates/textured-pei.toml");
-    let filament: FilamentProfile = load_toml("profiles/filaments/generic-pla.toml");
+    println!("[1/6] Loading reference profiles via registries");
+    let printer = printer_registry::lookup("bambu-lab-a1-mini")
+        .ok_or("bambu-lab-a1-mini missing from registry")?;
+    let plate = build_plate::lookup("Textured PEI Plate")
+        .ok_or("Textured PEI Plate missing from registry")?;
+    let filament = filament_registry::lookup("generic-pla")
+        .ok_or("generic-pla missing from registry")?;
     println!(
         "  printer:  {} ({} slots, {} toolheads)",
         printer.model,
@@ -62,22 +49,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "  plate:    {} → libslic3r curr_bed_type = {:?}",
         plate.identity, plate.libslic3r_curr_bed_type
     );
-    println!(
-        "  filament: {} ({})",
-        filament.identity, filament.base_type
-    );
+    println!("  filament: {} ({})", filament.identity, filament.base_type);
 
-    // 2. Build SlicingContext
     println!("\n[2/6] Building SlicingContext");
     let ctx = SlicingContext::new(Arc::new(printer), Arc::new(plate), vec![Arc::new(filament)]);
     println!("  active_slot = {}", ctx.active_slot);
 
-    // 3. Parse + validate cascade
-    println!("\n[3/6] Parsing + validating cascade");
-    let cascade_path = workspace_root().join("profiles/cascades/bambu-a1-mini-default.toml");
+    println!("\n[3/6] Parsing + validating demo cascade");
+    let cascade_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/bambu-lab-a1-mini-demo.toml");
     let src = std::fs::read_to_string(&cascade_path)?;
     let cascade = Cascade {
-        rules: parse_cascade_str(&src, Path::new("bambu-a1-mini-default.toml"))?,
+        rules: parse_cascade_str(&src, Path::new("bambu-lab-a1-mini-demo.toml"))?,
     };
     println!("  cascade: {} rules parsed", cascade.rules.len());
     let known_dims =
@@ -92,7 +75,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     println!("  validation: OK");
 
-    // 4. Resolve PLA on Textured PEI
     println!("\n[4/6] Resolving cascade against context");
     let overrides_empty = OverrideTiers::empty();
     let resolved = resolve_with_overrides(&cascade, &overrides_empty, &ctx);
@@ -106,12 +88,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // 5. Trace bed_temp
     println!("\n[5/6] Tracing bed_temp");
     let t = trace(&resolved, "bed_temp").expect("bed_temp traced");
     print!("{t}");
 
-    // 6. Apply project override + adapt
     println!("\n[6/6] Applying project override + running adapter");
     let project = parse_override_str("bed_temp = 50\n", Path::new("project.toml"))?;
     let overrides_with_project = OverrideTiers {
@@ -148,20 +128,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         accepted, dropped, remapped, unknown, parse_err, expanded_keys
     );
 
-    // Spot-check the Config — confirm a couple of resolved keys made it
-    // through and the expansion happened.
-    let layer_height_in_config = adapt_result
-        .config
-        .get("layer_height")
-        .unwrap_or_default();
-    let hot_plate_temp_in_config = adapt_result
-        .config
-        .get("hot_plate_temp")
-        .unwrap_or_default();
-    let curr_bed_type_in_config = adapt_result
-        .config
-        .get("curr_bed_type")
-        .unwrap_or_default();
+    let layer_height_in_config = adapt_result.config.get("layer_height").unwrap_or_default();
+    let hot_plate_temp_in_config = adapt_result.config.get("hot_plate_temp").unwrap_or_default();
+    let curr_bed_type_in_config = adapt_result.config.get("curr_bed_type").unwrap_or_default();
     println!(
         "  Config spot-check: layer_height={:?}, hot_plate_temp={:?}, curr_bed_type={:?}",
         layer_height_in_config, hot_plate_temp_in_config, curr_bed_type_in_config

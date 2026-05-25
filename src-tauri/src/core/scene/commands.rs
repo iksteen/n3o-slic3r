@@ -182,8 +182,8 @@ pub fn scene_load_default_printer(
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<PrinterProfile, String> {
-    let printer = crate::core::printer::registry::lookup("bambu-a1-mini")
-        .ok_or_else(|| "bundled `bambu-a1-mini` profile missing from catalog".to_owned())?;
+    let printer = crate::core::printer::registry::lookup("bambu-lab-a1-mini")
+        .ok_or_else(|| "bundled `bambu-lab-a1-mini` profile missing from catalog".to_owned())?;
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s.set_active_printer(Some(&printer));
     drop(s);
@@ -890,7 +890,7 @@ mod tests {
     fn plate_snapshot_carries_metadata_and_scene() {
         let mut p = Project::default();
         p.plates[0].printer = Some(PrinterBinding {
-            printer_identity: "bambu-a1-mini".into(),
+            printer_identity: "bambu-lab-a1-mini".into(),
             build_plate_identity: "Textured PEI Plate".into(),
         });
         p.plates[0].name = "My Plate".into();

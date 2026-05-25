@@ -348,7 +348,7 @@ mod tests {
 
     fn a1_mini_binding() -> PrinterBinding {
         PrinterBinding {
-            printer_identity: "bambu-a1-mini".into(),
+            printer_identity: "bambu-lab-a1-mini".into(),
             build_plate_identity: "Textured PEI Plate".into(),
         }
     }
@@ -542,7 +542,7 @@ mod tests {
             .collect();
         assert_eq!(
             printers,
-            vec!["bambu-a1-mini", "snapmaker-u1", "snapmaker-u1"],
+            vec!["bambu-lab-a1-mini", "snapmaker-u1", "snapmaker-u1"],
         );
         std::fs::remove_file(&path).ok();
     }

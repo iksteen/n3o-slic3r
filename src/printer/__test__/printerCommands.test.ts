@@ -35,13 +35,13 @@ describe("printerCatalog", () => {
       exclusion_zones: [],
     });
     invokeMock.mockResolvedValueOnce([
-      { identity: "bambu-a1-mini", profile: minimalProfile("Bambu A1 mini") },
+      { identity: "bambu-lab-a1-mini", profile: minimalProfile("Bambu A1 mini") },
       { identity: "snapmaker-u1", profile: minimalProfile("Snapmaker U1") },
     ]);
     const entries = await printerCatalog();
     expect(invokeMock).toHaveBeenCalledWith("printer_catalog");
     expect(entries).toHaveLength(2);
-    expect(entries[0].identity).toBe("bambu-a1-mini");
+    expect(entries[0].identity).toBe("bambu-lab-a1-mini");
     expect(entries[0].profile.model).toBe("Bambu A1 mini");
     expect(entries[1].identity).toBe("snapmaker-u1");
   });
@@ -52,27 +52,27 @@ describe("rebindPlatePrinter", () => {
     invokeMock.mockResolvedValueOnce({
       plate_id: 1,
       previous_printer: null,
-      new_printer: "bambu-a1-mini",
+      new_printer: "bambu-lab-a1-mini",
       new_build_plate: "Textured PEI",
       incompatible: [],
       clamped: [],
     });
-    const report = await rebindPlatePrinter(1, "bambu-a1-mini", "Textured PEI");
+    const report = await rebindPlatePrinter(1, "bambu-lab-a1-mini", "Textured PEI");
     expect(invokeMock).toHaveBeenCalledWith("scene_rebind_plate_printer", {
       plateId: 1,
-      printerIdentity: "bambu-a1-mini",
+      printerIdentity: "bambu-lab-a1-mini",
       buildPlateIdentity: "Textured PEI",
     });
-    expect(report.new_printer).toBe("bambu-a1-mini");
+    expect(report.new_printer).toBe("bambu-lab-a1-mini");
     expect(report.incompatible).toEqual([]);
   });
 
   it("propagates the backend's UnsupportedBuildPlate rejection", async () => {
     invokeMock.mockRejectedValueOnce(
-      "plate 1: printer `bambu-a1-mini` does not support build plate `Magnetic`",
+      "plate 1: printer `bambu-lab-a1-mini` does not support build plate `Magnetic`",
     );
     await expect(
-      rebindPlatePrinter(1, "bambu-a1-mini", "Magnetic"),
+      rebindPlatePrinter(1, "bambu-lab-a1-mini", "Magnetic"),
     ).rejects.toMatch(/does not support build plate/);
   });
 });

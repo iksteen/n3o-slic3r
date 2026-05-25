@@ -45,7 +45,7 @@ use n3o_slic3r_lib::core::project::{
 use n3o_slic3r_lib::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
 
 fn a1_mini() -> PrinterProfile {
-    lookup("bambu-a1-mini").expect("bambu-a1-mini bundled profile present")
+    lookup("bambu-lab-a1-mini").expect("bambu-lab-a1-mini bundled profile present")
 }
 
 fn snapmaker_u1() -> PrinterProfile {
@@ -54,7 +54,7 @@ fn snapmaker_u1() -> PrinterProfile {
 
 fn a1_mini_binding() -> PrinterBinding {
     PrinterBinding {
-        printer_identity: "bambu-a1-mini".into(),
+        printer_identity: "bambu-lab-a1-mini".into(),
         build_plate_identity: "Textured PEI Plate".into(),
     }
 }
@@ -176,7 +176,7 @@ fn phase5_smoke_3plate_save_reload_roundtrip() {
         .collect();
     assert_eq!(
         identities,
-        vec!["bambu-a1-mini", "snapmaker-u1", "snapmaker-u1"],
+        vec!["bambu-lab-a1-mini", "snapmaker-u1", "snapmaker-u1"],
         "step 4a: per-plate printer bindings must round-trip",
     );
     let plates_bp: Vec<&str> = reloaded
