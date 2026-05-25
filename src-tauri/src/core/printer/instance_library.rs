@@ -166,10 +166,12 @@ fn snappy() -> PrinterInstance {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::printer::instance_registry::RegistryGuard;
     use crate::core::printer::lookup_instance;
 
     #[test]
     fn bundled_set_is_bambi_then_snappy() {
+        let _registry = RegistryGuard::acquire();
         let instances = bundled_instances();
         assert_eq!(instances.len(), 2);
         assert_eq!(instances[0].id, BAMBI_ID);
@@ -182,6 +184,7 @@ mod tests {
     fn bambi_is_a1_mini_with_ams_lite_supertack_and_stainless() {
         use crate::core::printer::FeedKind;
 
+        let _registry = RegistryGuard::acquire();
         let b = lookup_instance(BAMBI_ID).expect("bambi present");
         assert_eq!(b.vendor_profile_ref, "bambu-lab-a1-mini");
         assert_eq!(b.extruders.len(), 1);
@@ -205,6 +208,7 @@ mod tests {
 
     #[test]
     fn snappy_is_u1_with_four_independent_extruders_and_textured_pei() {
+        let _registry = RegistryGuard::acquire();
         let s = lookup_instance(SNAPPY_ID).expect("snappy present");
         assert_eq!(s.vendor_profile_ref, "snapmaker-u1");
         assert_eq!(s.extruders.len(), 4);

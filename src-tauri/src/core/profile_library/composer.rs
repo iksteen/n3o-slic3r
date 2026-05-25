@@ -581,6 +581,7 @@ fn nozzle_sku_string(nozzle: &crate::core::printer::NozzleSku) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::printer::instance_registry::RegistryGuard;
     use crate::core::printer::lookup_instance;
 
     #[test]
@@ -604,6 +605,7 @@ mod tests {
 
     #[test]
     fn compose_bambi_yields_printer_nozzle_bed_filament_process_layers() {
+        let _registry = RegistryGuard::acquire();
         let bambi = lookup_instance("bambi").expect("bambi present");
         let cascade = compose_cascade(&bambi, &BTreeMap::new()).expect("compose");
 
@@ -635,6 +637,7 @@ mod tests {
         // Snappy has 4 extruders all bound to 0.4 SS — the assembled
         // nozzle_diameter must be "0.4,0.4,0.4,0.4" — libslic3r's
         // ConfigOptionVector deserialize splits on ','.
+        let _registry = RegistryGuard::acquire();
         let snappy = lookup_instance("snappy").expect("snappy present");
         let cascade = compose_cascade(&snappy, &BTreeMap::new()).expect("compose");
 
@@ -653,6 +656,7 @@ mod tests {
 
     #[test]
     fn nozzle_vector_assembly_yields_single_value_for_a1_mini() {
+        let _registry = RegistryGuard::acquire();
         let bambi = lookup_instance("bambi").expect("bambi present");
         let cascade = compose_cascade(&bambi, &BTreeMap::new()).expect("compose");
         let vector_rule = cascade
@@ -667,6 +671,7 @@ mod tests {
 
     #[test]
     fn plate_overrides_appended_as_last_rule() {
+        let _registry = RegistryGuard::acquire();
         let bambi = lookup_instance("bambi").expect("bambi present");
         let mut overrides = BTreeMap::new();
         overrides.insert("layer_height".to_owned(), "0.12".to_owned());
@@ -678,6 +683,7 @@ mod tests {
 
     #[test]
     fn missing_nozzle_fragment_errors_with_useful_message() {
+        let _registry = RegistryGuard::acquire();
         let mut bambi = lookup_instance("bambi").expect("bambi present");
         bambi.extruders[0].installed_nozzle.diameter_mm = 0.9; // not bundled
         let err = compose_cascade(&bambi, &BTreeMap::new()).unwrap_err();
@@ -758,6 +764,7 @@ set.fan_speed = 30
 
     #[test]
     fn missing_printer_fragment_errors() {
+        let _registry = RegistryGuard::acquire();
         let mut bambi = lookup_instance("bambi").expect("bambi present");
         bambi.printer_fragment_slug = "ghost".into();
         let err = compose_cascade(&bambi, &BTreeMap::new()).unwrap_err();

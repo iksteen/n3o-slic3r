@@ -367,6 +367,7 @@ fn temp_3mf_path(plate_id: PlateId) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::printer::instance_registry::RegistryGuard;
     use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
     use crate::core::scene::transform::Transform;
     use crate::core::printer::profile::BoundingBox;
@@ -397,6 +398,7 @@ mod tests {
 
     #[test]
     fn happy_path_builds_input_and_writes_temp_3mf() {
+        let _registry = RegistryGuard::acquire();
         let project = one_plate_project_with_cube();
         let (input, temp_path) =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
@@ -424,6 +426,7 @@ mod tests {
 
     #[test]
     fn multi_plate_targets_the_requested_plate_not_active() {
+        let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
 
         // Plate 1: A1 mini with one cube.
@@ -458,6 +461,7 @@ mod tests {
 
     #[test]
     fn per_object_extruder_survives_temp_3mf_round_trip() {
+        let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         project.plates[0].printer_instance_id = Some("bambi".into());
         let mesh_id = project.register_mesh(triangle_mesh());
@@ -483,6 +487,7 @@ mod tests {
 
     #[test]
     fn project_and_user_overrides_populate_context_specs() {
+        let _registry = RegistryGuard::acquire();
         let mut project = one_plate_project_with_cube();
         project
             .user_overrides
@@ -508,6 +513,7 @@ mod tests {
 
     #[test]
     fn empty_override_maps_produce_empty_spec_lists() {
+        let _registry = RegistryGuard::acquire();
         let project = one_plate_project_with_cube();
         let (input, temp_path) =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
@@ -518,6 +524,7 @@ mod tests {
 
     #[test]
     fn unknown_plate_id_errors() {
+        let _registry = RegistryGuard::acquire();
         let project = one_plate_project_with_cube();
         let err = build_slice_input(&project, PlateId(99), "/tmp/n3o-out".into())
             .expect_err("plate 99 not present");
@@ -526,6 +533,7 @@ mod tests {
 
     #[test]
     fn unbound_printer_errors() {
+        let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         // Project::default now auto-binds; clear it so this test
         // pins the genuinely-unbound error path.
@@ -543,6 +551,7 @@ mod tests {
 
     #[test]
     fn empty_scene_errors() {
+        let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         project.plates[0].printer_instance_id = Some("bambi".into());
         // No register_object call → no objects on the plate.
@@ -561,12 +570,12 @@ mod tests {
         // defense-in-depth check in `build_slice_input` exists for the
         // hand-edited on-disk instance case. Simulate that by going
         // around the validator via `mutate_instance` directly.
+        let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         project.plates[0].printer_instance_id = Some("bambi".into());
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
 
-        let restore = printer::lookup_instance("bambi").unwrap().bed.identity;
         printer::mutate_instance("bambi", |inst| {
             // A1 mini doesn't support U1's Magnetic plate.
             inst.bed.identity = "Magnetic".into();
@@ -575,13 +584,9 @@ mod tests {
         .unwrap();
         let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
             .expect_err("a1 mini doesn't support magnetic plate");
-        // Restore before asserting so a panic doesn't leak the bad
-        // state into other tests on this thread.
-        printer::mutate_instance("bambi", |inst| {
-            inst.bed.identity = restore.clone();
-            Ok(())
-        })
-        .unwrap();
+        // No manual restore: `RegistryGuard::Drop` resets to bundled
+        // before the next test sees the registry, regardless of any
+        // failure path through this body.
         assert!(matches!(
             err,
             SliceInputError::UnsupportedBuildPlate { .. }
@@ -592,6 +597,7 @@ mod tests {
     fn snappy_emits_one_filament_per_extruder_slot() {
         // Snappy = U1 with 4 extruders × 1 slot. Each slot is seeded
         // with the bundled `generic-pla` fragment.
+        let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         project.plates[0].printer_instance_id = Some("snappy".into());
         let mesh_id = project.register_mesh(triangle_mesh());
@@ -608,6 +614,7 @@ mod tests {
 
     #[test]
     fn temp_3mf_omits_unused_meshes_from_other_plates() {
+        let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         project.plates[0].printer_instance_id = Some("bambi".into());
 

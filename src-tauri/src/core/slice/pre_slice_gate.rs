@@ -309,18 +309,12 @@ fn validate_plate(plate: &crate::core::project::model::Plate) -> Vec<SliceBlocke
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::printer::instance_registry::reset_to_bundled;
+    use crate::core::printer::instance_registry::RegistryGuard;
     use crate::core::printer::set_slot_filament;
     use crate::core::printer::SlotRef;
     use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
     use crate::core::scene::transform::Transform;
     use crate::core::printer::profile::BoundingBox;
-    use std::sync::Mutex;
-
-    // The bundled PrinterInstance registry is process-global mutable
-    // state — serialize gate tests so concurrent runs don't see each
-    // other's slot bindings.
-    static GATE_LOCK: Mutex<()> = Mutex::new(());
 
     fn unit_cube() -> NewMesh {
         NewMesh {
@@ -349,31 +343,26 @@ mod tests {
 
     #[test]
     fn plate_with_all_referenced_materials_mapped_and_filaments_bound_passes() {
-        let _g = GATE_LOCK.lock().unwrap();
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         set_slot_filament("bambi", 0, 0, Some("Generic PLA".into())).unwrap();
         let mut p = Project::default();
         add_cube(&mut p, 1);
         assert!(validate_pre_slice(&p, &[1]).is_ok());
-        reset_to_bundled();
     }
 
     #[test]
     fn unbound_printer_blocks() {
-        let _g = GATE_LOCK.lock().unwrap();
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let mut p = Project::default();
         p.plates[0].printer_instance_id = None;
         add_cube(&mut p, 1);
         let err = validate_pre_slice(&p, &[1]).unwrap_err();
         assert!(err.issues.iter().any(|i| matches!(i, SliceBlocker::UnboundPrinter)));
-        reset_to_bundled();
     }
 
     #[test]
     fn slot_without_filament_blocks() {
-        let _g = GATE_LOCK.lock().unwrap();
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         // Bundled fixtures now ship every slot pre-bound to
         // `generic-pla`. Auto-bind on Bambi skips the external spool
         // (slot 0) and lands material 1 on AMS:1 (slot 1) — clear
@@ -387,13 +376,11 @@ mod tests {
             .issues
             .iter()
             .any(|i| matches!(i, SliceBlocker::SlotHasNoFilament { .. })));
-        reset_to_bundled();
     }
 
     #[test]
     fn unmapped_material_blocks_when_object_references_it() {
-        let _g = GATE_LOCK.lock().unwrap();
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         set_slot_filament("bambi", 0, 0, Some("Generic PLA".into())).unwrap();
         let mut p = Project::default();
         add_cube(&mut p, 1);
@@ -405,13 +392,11 @@ mod tests {
             .issues
             .iter()
             .any(|i| matches!(i, SliceBlocker::UnmappedMaterial { model_material: 1 })));
-        reset_to_bundled();
     }
 
     #[test]
     fn slot_extruder_out_of_range_blocks() {
-        let _g = GATE_LOCK.lock().unwrap();
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         set_slot_filament("bambi", 0, 0, Some("Generic PLA".into())).unwrap();
         let mut p = Project::default();
         add_cube(&mut p, 1);
@@ -425,13 +410,11 @@ mod tests {
             .issues
             .iter()
             .any(|i| matches!(i, SliceBlocker::SlotExtruderOutOfRange { .. })));
-        reset_to_bundled();
     }
 
     #[test]
     fn absent_plate_id_is_skipped() {
-        let _g = GATE_LOCK.lock().unwrap();
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let p = Project::default();
         // No plate 99 → no error.
         assert!(validate_pre_slice(&p, &[99]).is_ok());
@@ -443,23 +426,20 @@ mod tests {
         // bind skips the external spool when AMS slots exist, so
         // material 1 lands on (0, 1) — slot 1 = flat slot 2 in the
         // 1-based AMS index.
-        let _g = GATE_LOCK.lock().unwrap();
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let mut p = Project::default();
         add_cube(&mut p, 1);
         let bindings = ams_bindings_for_plate(&p.plates[0]);
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].model_material_index, 1);
         assert_eq!(bindings[0].ams_slot, 2);
-        reset_to_bundled();
     }
 
     #[test]
     fn ams_bindings_flatten_extruder_grid_for_snappy() {
         // Snappy has 4 extruders × 1 slot — material N → extruder
         // (N-1 mod 4), slot 0 → flat slot N.
-        let _g = GATE_LOCK.lock().unwrap();
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let mut p = Project::default();
         // Snappy isn't the default — re-bind by hand.
         p.plates[0].printer_instance_id = Some("snappy".into());
@@ -476,6 +456,5 @@ mod tests {
         assert_eq!(by_mat.get(&2), Some(&2)); // extruder 1 → flat 2
         assert_eq!(by_mat.get(&3), Some(&3));
         assert_eq!(by_mat.get(&4), Some(&4));
-        reset_to_bundled();
     }
 }

@@ -553,11 +553,73 @@ where
     })
 }
 
-/// Reset the registry to bundled-fixture defaults. Test-only — drops
-/// every user mutation. Useful when one test's binding changes would
-/// otherwise leak into the next.
+// ─────────────────────────────────────────────────────────────────────
+// Test-only serialization scaffolding.
+//
+// The registry is a process-global `Mutex<Vec<PrinterInstance>>`. The
+// per-call Mutex serializes individual operations cleanly, but it
+// CAN'T enforce sequence-level invariants like "reset, then mutate,
+// then read what we wrote" because parallel tests can reset between
+// my mutate and my read.
+//
+// [`RegistryGuard`] solves this by acquiring a separate process-wide
+// `TEST_LOCK` for the test's entire body, then resetting on both
+// acquire and drop so the next test starts from the same baseline.
+// Every test that touches the registry MUST take this guard — the
+// only way to reset the registry is through the guard, so any test
+// that skips it can't influence (or be influenced by) tests that
+// do.
+// ─────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
-pub fn reset_to_bundled() {
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// RAII guard that serializes a test's registry access. Acquire at
+/// the top of any test body that calls into this module — reads or
+/// writes alike. The lock is released on drop along with another
+/// `reset_to_bundled_inner()` so the next test sees a clean baseline
+/// regardless of failure path.
+///
+/// Idiom:
+/// ```ignore
+/// #[test]
+/// fn my_test() {
+///     let _registry = RegistryGuard::acquire();
+///     // … test body …
+/// }
+/// ```
+#[cfg(test)]
+pub struct RegistryGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl RegistryGuard {
+    /// Take the test-wide lock + reset the registry to bundled
+    /// fixtures. Blocks until any concurrent guarded test releases
+    /// its lock. Poison-tolerant: a previous test that panicked
+    /// while holding the lock doesn't wedge subsequent tests.
+    pub fn acquire() -> Self {
+        let lock = TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_to_bundled_inner();
+        Self { _lock: lock }
+    }
+}
+
+#[cfg(test)]
+impl Drop for RegistryGuard {
+    fn drop(&mut self) {
+        // Reset so the next test starts clean even if this one left
+        // the registry mid-mutation.
+        reset_to_bundled_inner();
+    }
+}
+
+/// Inner reset — does NOT take the test lock. Only called by
+/// `RegistryGuard::acquire` and `RegistryGuard::drop` (each already
+/// holds `TEST_LOCK`).
+#[cfg(test)]
+fn reset_to_bundled_inner() {
     let mut guard = registry().lock().expect("registry poisoned");
     *guard = bundled_instances();
 }
@@ -569,7 +631,7 @@ mod tests {
 
     #[test]
     fn list_returns_bundled_set() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let instances = list_instances();
         assert!(instances.iter().any(|i| i.id == "bambi"));
         assert!(instances.iter().any(|i| i.id == "snappy"));
@@ -577,13 +639,13 @@ mod tests {
 
     #[test]
     fn lookup_unknown_returns_none() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         assert!(lookup_instance("ghost").is_none());
     }
 
     #[test]
     fn set_slot_filament_mutates_in_place_and_persists_across_lookups() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let updated = set_slot_filament("bambi", 0, 0, Some("Generic PLA".into()))
             .expect("bambi extruder 0 slot 0 exists");
         assert_eq!(
@@ -602,19 +664,18 @@ mod tests {
         let cleared =
             set_slot_filament("bambi", 0, 0, None).expect("clear should succeed");
         assert_eq!(cleared.extruders[0].slots[0].filament_identity, None);
-        reset_to_bundled();
     }
 
     #[test]
     fn set_slot_filament_errors_on_unknown_instance() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let err = set_slot_filament("ghost", 0, 0, Some("PLA".into())).unwrap_err();
         assert!(matches!(err, InstanceMutError::UnknownInstance { .. }));
     }
 
     #[test]
     fn set_slot_filament_errors_on_bad_extruder() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         // Bambi has 1 extruder; index 5 is out of range.
         let err = set_slot_filament("bambi", 5, 0, Some("PLA".into())).unwrap_err();
         assert!(matches!(
@@ -625,7 +686,7 @@ mod tests {
 
     #[test]
     fn set_slot_filament_errors_on_bad_slot() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         // Snappy extruders have 1 slot each; index 3 is out of range.
         let err = set_slot_filament("snappy", 0, 3, Some("PLA".into())).unwrap_err();
         assert!(matches!(
@@ -637,12 +698,10 @@ mod tests {
     #[test]
     fn set_slot_color_persists_and_clears() {
         // Mutates a slot the bundled fixture already paints (Bambi
-        // AMS:1 ships with `#111827`). Asserts only against the
-        // returned post-mutation clone — cross-test re-lookups race
-        // with other tests' `reset_to_bundled` calls. Registry
-        // persistence itself is covered by
+        // AMS:1 ships with `#111827`). Registry persistence itself is
+        // covered by
         // `set_slot_filament_mutates_in_place_and_persists_across_lookups`.
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let identity_before = lookup_instance("bambi")
             .expect("bambi present")
             .extruders[0]
@@ -656,15 +715,11 @@ mod tests {
         assert_eq!(updated.extruders[0].slots[1].filament_identity, identity_before);
         let cleared = set_slot_color("bambi", 0, 1, None).expect("clear ok");
         assert_eq!(cleared.extruders[0].slots[1].color, None);
-        reset_to_bundled();
     }
 
     #[test]
     fn set_instance_bed_validates_against_supported_plates() {
-        // Asserts only against the returned post-mutation clone — a
-        // parallel test's `reset_to_bundled` can race a `lookup_instance`
-        // re-read (same pattern documented in `set_slot_color_persists_and_clears`).
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let updated = set_instance_bed("bambi", "Cool Plate".into())
             .expect("Cool Plate is supported by bambi");
         assert_eq!(updated.bed.identity, "Cool Plate");
@@ -675,20 +730,18 @@ mod tests {
             matches!(err, InstanceMutError::UnsupportedBuildPlate { .. }),
             "expected UnsupportedBuildPlate, got {err:?}",
         );
-
-        reset_to_bundled();
     }
 
     #[test]
     fn set_instance_bed_errors_on_unknown_instance() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let err = set_instance_bed("ghost", "Cool Plate".into()).unwrap_err();
         assert!(matches!(err, InstanceMutError::UnknownInstance { .. }));
     }
 
     #[test]
     fn create_instance_builds_topology_from_ams_units() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         // 1 AMS = 5 slots: Ext (Direct) + AMS:1..4 (Ams).
         let inst = create_instance("bambu-lab-a1-mini", "Garage A1".into(), 1)
             .expect("create with 1 AMS");
@@ -707,16 +760,11 @@ mod tests {
         }
         // First supported bed becomes the default.
         assert!(!inst.bed.identity.is_empty());
-        // Don't assert on `lookup_instance(&inst.id)` here — a
-        // parallel test's `reset_to_bundled` can wipe the registry
-        // between our create + lookup (same flake pattern documented
-        // in `set_slot_color_persists_and_clears`). The mutation's
-        // correctness is fully captured by the returned `inst`.
     }
 
     #[test]
     fn create_instance_toolchanger_emits_one_extruder_per_toolhead() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         // U1 has 4 toolheads → 4 extruders, each with one Direct
         // slot, labelled T0..T3. AMS units are 0 (ams_max=0).
         let inst = create_instance("snapmaker-u1", "Test U1".into(), 0)
@@ -735,7 +783,7 @@ mod tests {
 
     #[test]
     fn create_instance_zero_ams_produces_single_direct_slot() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let inst = create_instance("bambu-lab-a1-mini", "Direct-feed bambi".into(), 0)
             .expect("create with 0 AMS units");
         let slots = &inst.extruders[0].slots;
@@ -746,7 +794,7 @@ mod tests {
 
     #[test]
     fn create_instance_multi_ams_letters_disambiguate_slots() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         // 3 AMS units on a fictional config: slots get "AMS A:1..4",
         // "AMS B:1..4", "AMS C:1..4" prefixes. The A1 mini's ams_max
         // is 1, so this would normally error — call directly with a
@@ -770,7 +818,7 @@ mod tests {
 
     #[test]
     fn create_instance_validates_ams_max_and_identity_and_name() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let too_many =
             create_instance("bambu-lab-a1-mini", "Too many".into(), 2).unwrap_err();
         assert!(
@@ -786,19 +834,14 @@ mod tests {
 
     #[test]
     fn delete_instance_errors_on_unknown_id() {
-        // Cross-test parallel reset_to_bundled() in this module makes
-        // "create, then delete, then assert gone" racy — same flake
-        // pattern documented in `set_slot_color_persists_and_clears`.
-        // Pin only the UnknownInstance error path, which doesn't
-        // depend on prior state.
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let err = delete_instance("definitely-not-a-real-uuid").unwrap_err();
         assert!(matches!(err, InstanceMutError::UnknownInstance { .. }));
     }
 
     #[test]
     fn set_slot_color_errors_on_bad_slot() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let err = set_slot_color("snappy", 0, 3, Some("#fff".into())).unwrap_err();
         assert!(matches!(
             err,
@@ -808,7 +851,7 @@ mod tests {
 
     #[test]
     fn set_extruder_nozzle_diameter_updates_in_place() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         // Snappy is a 4-toolhead toolchanger — pick T2 and swap to
         // a 0.6 nozzle so the assertion isn't confounded by the
         // bundled default.
@@ -821,12 +864,11 @@ mod tests {
             lookup_instance("snappy").expect("snappy present after mutation");
         assert_eq!(again.extruders[2].installed_nozzle.diameter_mm, 0.6);
         assert_eq!(again.extruders[2].installed_nozzle.material, material);
-        reset_to_bundled();
     }
 
     #[test]
     fn set_extruder_nozzle_diameter_errors_on_bad_extruder() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         // Bambi has 1 extruder (AMS-fed single toolhead); index 1 is OOB.
         let err = set_extruder_nozzle_diameter("bambi", 1, 0.4).unwrap_err();
         assert!(matches!(
@@ -842,7 +884,7 @@ mod tests {
     /// are the four `Ams` slots.
     #[test]
     fn feed_kind_survives_registry_round_trip() {
-        reset_to_bundled();
+        let _registry = RegistryGuard::acquire();
         let bambi = lookup_instance("bambi").expect("bambi present");
         let slots = &bambi.extruders[0].slots;
         let ext: &SlotBinding = &slots[0];
