@@ -141,16 +141,33 @@ impl Project {
         else {
             return;
         };
-        // Flat (extruder, slot) walk in extruder-major order.
+        // Flat (extruder, slot) walk in extruder-major order. If the
+        // instance has any AMS-fed slots, exclude the external/direct
+        // spool from the rotation — the AMS holds the user's everyday
+        // filaments; the external spool is for one-offs the user
+        // explicitly chose to print from. Auto-loading material 1 onto
+        // the external spool means the firmware halts at print time
+        // asking the user to feed the PTFE tube. Printers with no AMS
+        // (Snapmaker U1, etc.) ship every slot as Direct, so the
+        // filter falls back to the full list.
+        use crate::core::printer::FeedKind;
+        let has_ams = instance
+            .extruders
+            .iter()
+            .any(|e| e.slots.iter().any(|s| s.feed == FeedKind::Ams));
         let flat: Vec<crate::core::printer::SlotRef> = instance
             .extruders
             .iter()
             .enumerate()
             .flat_map(|(e_idx, e)| {
-                (0..e.slots.len()).map(move |s_idx| crate::core::printer::SlotRef {
-                    extruder: e_idx as u8,
-                    slot: s_idx as u8,
-                })
+                e.slots
+                    .iter()
+                    .enumerate()
+                    .filter(move |(_, s)| !has_ams || s.feed == FeedKind::Ams)
+                    .map(move |(s_idx, _)| crate::core::printer::SlotRef {
+                        extruder: e_idx as u8,
+                        slot: s_idx as u8,
+                    })
             })
             .collect();
         if flat.is_empty() {
@@ -3125,24 +3142,28 @@ mod tests {
     #[test]
     fn register_object_auto_binds_material_to_slot_on_bambi() {
         // Default project boots into Bambi (1 extruder × 5 slots:
-        // Ext + AMS:1..AMS:4). Auto-bind rotates through the flat
-        // slot grid `(material - 1) MOD 5`: material 1 → slot 0
-        // (`Ext`), material 2 → slot 1 (`AMS:1`), …
+        // Ext + AMS:1..AMS:4). Because the instance carries AMS slots,
+        // auto-bind skips the external spool (slot 0) — assigning
+        // material 1 to Ext would make the firmware halt at print
+        // time asking the user to feed the PTFE tube. Materials
+        // rotate through the 4 AMS slots: material 1 → AMS:1
+        // (slot 1), material 2 → AMS:2 (slot 2), … material 5 wraps
+        // back to AMS:1.
         let mut p = Project::default();
         add_cube_with_material(&mut p, 1);
         add_cube_with_material(&mut p, 2);
-        add_cube_with_material(&mut p, 6); // wraps to slot 0 again
+        add_cube_with_material(&mut p, 5); // wraps back to AMS:1
         assert_eq!(
             p.plates[0].material_to_slot.get(&1),
-            Some(&SlotRef { extruder: 0, slot: 0 }),
-        );
-        assert_eq!(
-            p.plates[0].material_to_slot.get(&2),
             Some(&SlotRef { extruder: 0, slot: 1 }),
         );
         assert_eq!(
-            p.plates[0].material_to_slot.get(&6),
-            Some(&SlotRef { extruder: 0, slot: 0 }),
+            p.plates[0].material_to_slot.get(&2),
+            Some(&SlotRef { extruder: 0, slot: 2 }),
+        );
+        assert_eq!(
+            p.plates[0].material_to_slot.get(&5),
+            Some(&SlotRef { extruder: 0, slot: 1 }),
         );
     }
 
@@ -3150,9 +3171,10 @@ mod tests {
     fn set_material_slot_overrides_auto_bind_and_idempotent_on_repeat() {
         let mut p = Project::default();
         add_cube_with_material(&mut p, 1);
-        let target = SlotRef { extruder: 0, slot: 0 };
+        // Auto-bind on Bambi puts material 1 on AMS:1 (slot 1);
+        // setting the same value should be a silent no-op.
+        let target = SlotRef { extruder: 0, slot: 1 };
         let events = p.set_material_slot(PlateId(1), 1, target).unwrap();
-        // Same value as auto-bind picked → silent no-op.
         assert!(events.is_empty());
     }
 
@@ -3193,7 +3215,7 @@ mod tests {
         assert_eq!(parsed.plates[0].material_to_slot.len(), 1);
         assert_eq!(
             parsed.plates[0].material_to_slot.get(&1),
-            Some(&SlotRef { extruder: 0, slot: 0 }),
+            Some(&SlotRef { extruder: 0, slot: 1 }),
         );
     }
 }

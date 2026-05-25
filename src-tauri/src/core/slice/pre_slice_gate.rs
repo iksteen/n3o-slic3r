@@ -375,9 +375,11 @@ mod tests {
         let _g = GATE_LOCK.lock().unwrap();
         reset_to_bundled();
         // Bundled fixtures now ship every slot pre-bound to
-        // `generic-pla`. Clear the slot auto-bind would target so
-        // the gate sees an unbound slot in the material's path.
-        set_slot_filament("bambi", 0, 0, None).unwrap();
+        // `generic-pla`. Auto-bind on Bambi skips the external spool
+        // (slot 0) and lands material 1 on AMS:1 (slot 1) — clear
+        // that slot's filament so the gate sees an unbound slot in
+        // the material's path.
+        set_slot_filament("bambi", 0, 1, None).unwrap();
         let mut p = Project::default();
         add_cube(&mut p, 1);
         let err = validate_pre_slice(&p, &[1]).unwrap_err();
@@ -437,8 +439,10 @@ mod tests {
 
     #[test]
     fn ams_bindings_pull_from_material_to_slot_map() {
-        // Bambi has 1 extruder × 1 slot — material 1 lands on
-        // (0, 0) which is flat slot 1.
+        // Bambi has 1 extruder × 5 slots (Ext + AMS:1..AMS:4). Auto-
+        // bind skips the external spool when AMS slots exist, so
+        // material 1 lands on (0, 1) — slot 1 = flat slot 2 in the
+        // 1-based AMS index.
         let _g = GATE_LOCK.lock().unwrap();
         reset_to_bundled();
         let mut p = Project::default();
@@ -446,7 +450,7 @@ mod tests {
         let bindings = ams_bindings_for_plate(&p.plates[0]);
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].model_material_index, 1);
-        assert_eq!(bindings[0].ams_slot, 1);
+        assert_eq!(bindings[0].ams_slot, 2);
         reset_to_bundled();
     }
 
