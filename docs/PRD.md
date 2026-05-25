@@ -421,7 +421,7 @@ Model materials are abstract extruder indices (1..N) assigned to objects, paint 
 
 - **Storage.** TOML for profile layers, 3MF for project files, JSON for app state.
 
-- **Printer comms.** rumqttc for Bambu MQTT, reqwest for Snapmaker HTTP.
+- **Printer comms.** rumqttc for Bambu MQTT; reqwest + tokio-tungstenite (both on native-tls, sharing the Bambu stack) for the U1's Moonraker HTTP/WS endpoints.
 
 ## 8.2 Module boundaries
 
@@ -445,7 +445,7 @@ Model materials are abstract extruder indices (1..N) assigned to objects, paint 
 
 - **core/printer/bambu.** Bambu MQTT protocol.
 
-- **core/printer/snapmaker.** Snapmaker HTTP protocol.
+- **core/printer/snapmaker.** Snapmaker U1 printer-profile adapter (cascade layer). Driver-side comms live under `core/driver/snapmaker/` (Moonraker HTTP+WS).
 
 - **ui/.** React app. Communicates with core via Tauri commands and events only.
 
@@ -551,11 +551,13 @@ Decision: plate count is not constrained per-printer. A1 mini and U1 can both ha
 
 - **Resolves:** lets PlateCycler workflows shine for A1 mini owners while not artificially limiting U1 users who want multi-plate for batch jobs.
 
-### AD-7: Klipper-based U1 — Snapmaker HTTP, not general Klipper
+### AD-7: Klipper-based U1 — Snapmaker-targeted Moonraker driver, not general-purpose
 
-Decision (acknowledged limitation): the U1 driver targets Snapmaker's HTTP wrapper, not Klipper's Moonraker. A future generic Klipper/Moonraker driver is a separate driver, not a generalization of the U1 driver.
+Decision (acknowledged limitation): the U1 driver speaks vanilla Moonraker over plain HTTP+WS on port 80 — that's what the U1 firmware exposes — but treats the U1's Snapmaker-specific status objects (e.g. `print_task_config.{filament_color_rgba, filament_type}` for per-toolhead filament identity) as load-bearing. A future generic Klipper/Moonraker driver targeting non-Snapmaker hardware is a separate driver, not a generalization of the U1 driver. The Snapmaker-specific pair / mTLS / MQTT control plane (used for the webcam in their ecosystem) is out of MVP scope.
 
-- **Resolves:** U1 firmware updates that change Snapmaker's API are tracked; Klipper firmware changes upstream do not directly affect us. A future Voron/RatRig user gets a Moonraker driver, not a 'U1-compatible' driver.
+- **Resolves:** U1 firmware updates that change Snapmaker's vendor objects are tracked; upstream Klipper / Moonraker changes affect us only via the standard endpoints (`printer.objects.subscribe`, `/server/files/upload`, `/printer/print/*`) which are stable. A future Voron/RatRig user gets a Moonraker driver, not a 'U1-compatible' driver.
+
+- **Note:** the prior version of this decision claimed U1 used a "Snapmaker HTTP wrapper, not Moonraker." That was incorrect — the U1 exposes standard Moonraker, just with extra Snapmaker-specific status objects layered in. Corrected during PR-7b-6 (PRD §11.3 living-documents).
 
 ### AD-8: 3D scene state lives in Rust, not in the renderer
 
