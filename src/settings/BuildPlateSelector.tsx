@@ -1,16 +1,7 @@
-// Build plate selector (PR-4-5) — FR-CAS-9.
-//
-// Dropdown of the active printer's `supported_build_plates`. The
-// value drives the `BuildPlate` cascade layer the next
-// `cascade_resolve` call resolves against (the host wires this into
-// its ContextJson; Phase 5's project model owns durable storage).
-//
-// When the printer carries a default plate (`printerDefault`) and
-// the user hasn't overridden, the selector shows a `printer default`
-// badge. The selection clears the badge; setting the value back to
-// the default restores it.
+// Build plate selector — chip + popover, matches PrinterPicker
+// shape so the two read as a pair in the settings config strip.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export interface BuildPlateSelectorProps {
   /** All plate identities this printer supports. */
@@ -18,9 +9,8 @@ export interface BuildPlateSelectorProps {
   /** Currently selected plate identity. */
   value: string;
   onChange: (next: string) => void;
-  /** Plate identity the printer profile considers its default.
-   *  When the user's selection matches, the `printer default` badge
-   *  renders. */
+  /** Plate identity the printer profile considers its default —
+   *  renders the `default` badge when the user's selection matches. */
   printerDefault?: string | null;
   disabled?: boolean;
 }
@@ -32,37 +22,72 @@ export function BuildPlateSelector({
   printerDefault = null,
   disabled = false,
 }: BuildPlateSelectorProps) {
-  // Local mirror so the dropdown re-renders crisply during the
-  // commit round-trip back through the cascade resolve.
-  const [local, setLocal] = useState(value);
-  useEffect(() => setLocal(value), [value]);
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
 
-  const isDefault = printerDefault != null && local === printerDefault;
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (!wrapRef.current) return;
+      if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const pick = (next: string): void => {
+    setOpen(false);
+    if (next !== value) onChange(next);
+  };
+
+  const isDefault = printerDefault != null && value === printerDefault;
 
   return (
-    <div className="config-chip config-chip-plate" data-default={isDefault}>
-      <span className="config-chip-label">Plate</span>
-      <select
-        className="config-chip-select"
-        value={local}
-        disabled={disabled}
-        onChange={(e) => {
-          const next = e.target.value;
-          setLocal(next);
-          if (next !== value) onChange(next);
-        }}
-        aria-label="Build plate"
+    <div className="config-chip-wrap" ref={wrapRef}>
+      <button
+        type="button"
+        className="config-chip config-chip-plate"
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled || plates.length === 0}
+        title={
+          plates.length === 0
+            ? "Printer has no build plates"
+            : "Change build plate for this plate"
+        }
+        aria-haspopup="menu"
+        aria-expanded={open}
+        data-default={isDefault}
       >
-        {plates.map((p) => (
-          <option key={p} value={p}>
-            {p}
-          </option>
-        ))}
-      </select>
-      {isDefault && (
-        <span className="config-chip-badge" title="Printer's default plate">
-          printer default
+        <span className="config-chip-top">
+          <span className="chip-label">Plate</span>
+          <span className="chev" aria-hidden>
+            ▾
+          </span>
         </span>
+        <span className="chip-value">{value || "—"}</span>
+      </button>
+      {open && (
+        <div className="printer-picker-menu" role="menu">
+          <div className="ptpm-title">Build plate</div>
+          {plates.map((p) => {
+            const isActive = p === value;
+            return (
+              <button
+                key={p}
+                type="button"
+                role="menuitemradio"
+                aria-checked={isActive}
+                className={`ptpm-item${isActive ? " active" : ""}`}
+                onClick={() => pick(p)}
+              >
+                <span className="ptpm-name">{p}</span>
+                {p === printerDefault && (
+                  <span className="ptpm-detail">default</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
       )}
     </div>
   );
