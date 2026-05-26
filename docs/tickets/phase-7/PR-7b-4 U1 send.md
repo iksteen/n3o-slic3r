@@ -1,6 +1,13 @@
 # PR-7b-4 — Plain `.gcode` upload (multipart) + start-print
 
-Status: ❌ open.
+Status: ✅ done — driver side landed with the PR-7b arc (one-step
+multipart upload with `print=true`, see
+`core/driver/snapmaker/http.rs::upload_and_start`). The `Driver::send`
+impl in `core/driver/snapmaker/connection.rs` matches
+`SendPayload::Gcode { bytes, file_name }`. The Tauri commands
+`driver_send_plate` and `driver_dry_send_plate` now branch on
+driver `kind()` so the U1 path is reachable end-to-end. Dry-run on
+U1 routes raw G-code through `neuter_gcode` directly.
 
 **Scope.** `Driver::send()` impl for U1. Two-step Moonraker
 flow: multipart POST to `/server/files/upload`, then JSON-RPC

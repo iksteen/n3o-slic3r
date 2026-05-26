@@ -18,7 +18,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use super::bambu::connection::{BambuConfig, BambuDriver};
-use super::dryrun::neuter_gcode_3mf;
+use super::dryrun::{neuter_gcode, neuter_gcode_3mf};
 use super::registry::{DriverRegistry, DriverSummary};
 use super::snapmaker::{U1Config, U1Driver};
 use super::status::PrinterStatus;
@@ -403,13 +403,16 @@ pub async fn driver_send_plate(
     d.send(payload).await.map_err(|e| e.to_string())
 }
 
-/// Dry-run variant of [`driver_send_plate`]. Same wrap pipeline,
-/// then routes through [`neuter_gcode_3mf`] to strip extrusion +
-/// comment out heater commands before send. Result: printer
-/// exercises every XY motion cold, with zero filament flow.
+/// Dry-run variant of [`driver_send_plate`]. Same dispatch as the
+/// send path, but the G-code is routed through the dry-run neuter
+/// (strips E values, comments out heater commands) before send so
+/// the printer exercises every XY motion cold with zero filament
+/// flow.
 ///
-/// Currently Bambu-only; U1 dry-run is wired in the immediate
-/// follow-up commit.
+/// - **Bambu** → wrap + [`neuter_gcode_3mf`] + send as `Gcode3mf`.
+/// - **U1**    → read + [`neuter_gcode`] on the raw stream + send
+///               as `Gcode` with a `-dryrun.gcode` file name so the
+///               operator can tell the two on disk apart.
 #[tauri::command]
 #[tracing::instrument(skip(registry, project))]
 pub async fn driver_dry_send_plate(
@@ -445,10 +448,23 @@ pub async fn driver_dry_send_plate(
             .await
             .map_err(|e| e.to_string())
         }
-        DriverKind::U1 => Err(
-            "dry-run send for U1 raw-G-code payloads is not yet wired (follow-up commit)"
-                .into(),
-        ),
+        DriverKind::U1 => {
+            let bytes = read_gcode_bytes(gcode_path).await?;
+            let neutered = tauri::async_runtime::spawn_blocking(move || {
+                let s = std::str::from_utf8(&bytes)
+                    .map_err(|e| format!("gcode is not utf-8: {e}"))?;
+                Ok::<_, String>(neuter_gcode(s).into_bytes())
+            })
+            .await
+            .map_err(|e| format!("neuter task join: {e}"))??;
+            let mut d = handle.lock().await;
+            d.send(SendPayload::Gcode {
+                bytes: neutered,
+                file_name: format!("plate-{plate_id}-dryrun.gcode"),
+            })
+            .await
+            .map_err(|e| e.to_string())
+        }
     }
 }
 
@@ -459,8 +475,10 @@ pub async fn driver_dry_send_plate(
 /// against a newly-paired printer to confirm the toolpath without
 /// risking the bed.
 ///
-/// Only [`SendPayload::Gcode3mf`] is supported for now (Bambu path);
-/// the U1 raw-G-code variant will follow when PR-7b-4 lands.
+/// Branches on payload variant: Bambu `.gcode.3mf` bundles route
+/// through [`neuter_gcode_3mf`] (unzip → neuter inner G-code →
+/// rezip + md5 fixup); U1 raw G-code routes through [`neuter_gcode`]
+/// directly.
 #[tauri::command]
 #[tracing::instrument(skip(registry, payload), fields(payload_kind = ?std::mem::discriminant(&payload)))]
 pub async fn driver_dry_send(
@@ -485,11 +503,13 @@ pub async fn driver_dry_send(
                 ams_mapping2,
             }
         }
-        SendPayload::Gcode { .. } => {
-            return Err(
-                "dry-run send for U1 raw-G-code payloads not implemented yet (PR-7b-4 follow-up)"
-                    .into(),
-            );
+        SendPayload::Gcode { bytes, file_name } => {
+            let s = std::str::from_utf8(&bytes)
+                .map_err(|e| format!("gcode is not utf-8: {e}"))?;
+            SendPayload::Gcode {
+                bytes: neuter_gcode(s).into_bytes(),
+                file_name,
+            }
         }
     };
     let handle = registry
