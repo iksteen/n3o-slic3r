@@ -132,7 +132,7 @@ fn resolve_cascade(input: &SliceJobInput) -> Result<Cascade, SliceStartError> {
             }
         }
     }
-    compose_cascade(&instance, &plate_overrides)
+    compose_cascade(&instance, &plate_overrides, &input.material_to_slot)
         .map_err(|e| SliceStartError::PrinterInstanceCompose(e.to_string()))
 }
 

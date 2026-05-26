@@ -171,6 +171,7 @@ fn slice_fourcolor(
         },
         plate_ids: vec![1],
         printer_instance_id: instance_id.into(),
+        material_to_slot: std::collections::BTreeMap::new(),
     };
 
     run_slice_job_blocking(input, &registry, sink)

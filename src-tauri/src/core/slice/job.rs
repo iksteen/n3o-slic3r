@@ -14,12 +14,13 @@
 //! `slice:cancelled` event on next check.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::core::cascade::commands::ContextJson;
+use crate::core::printer::SlotRef;
 
 /// Opaque monotonic job id. 1-based; 0 is reserved as "no job".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -54,6 +55,13 @@ pub struct SliceJobInput {
     /// library and composes a fresh cascade per job — no shared
     /// registry, no preloaded monolithic cascade.
     pub printer_instance_id: String,
+    /// Model-material → PrinterInstance slot binding for this plate.
+    /// Drives the toolchanger-side `filament_map` synthesis in the
+    /// composer so a binding like "M1 → T1's slot" produces a
+    /// gcode `T1` toolchange. Pass an empty map for the default
+    /// extruder-major identity mapping.
+    #[serde(default)]
+    pub material_to_slot: BTreeMap<u8, SlotRef>,
 }
 
 /// Snapshot of a job's lifecycle. Returned by `slice_status` so the

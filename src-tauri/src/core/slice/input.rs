@@ -246,6 +246,7 @@ pub fn build_slice_input(
         },
         plate_ids: vec![plate_id.0],
         printer_instance_id,
+        material_to_slot: plate.material_to_slot.clone(),
     };
 
     Ok((input, temp_path))
