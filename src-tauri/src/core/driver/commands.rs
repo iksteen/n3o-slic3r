@@ -298,19 +298,19 @@ fn collect_ams_bindings(
 }
 
 /// Plate-side AMS routing for the Bambu MQTT `project_file` print
-/// command: `(use_ams, ams_mapping[5], ams_mapping2[5])`. Default
-/// is the all-unused "external spool" shape when the plate is
-/// unknown or unbound.
+/// command: `(use_ams, ams_mapping, ams_mapping2)`. Arrays are
+/// sized to the plate's materials list length; empty when the
+/// plate is unknown, unbound, or carries no materials — the
+/// firmware falls back to the external spool in that case.
 fn collect_ams_mapping(
     project: &Mutex<Project>,
     plate_id: u32,
 ) -> (
     bool,
-    [i8; 5],
-    [crate::core::slice::pre_slice_gate::AmsMappingV2; 5],
+    Vec<i8>,
+    Vec<crate::core::slice::pre_slice_gate::AmsMappingV2>,
 ) {
-    use crate::core::slice::pre_slice_gate::AmsMappingV2;
-    let default = (false, [-1i8; 5], [AmsMappingV2::UNUSED; 5]);
+    let default = (false, Vec::new(), Vec::new());
     let Ok(p) = project.lock() else {
         return default;
     };

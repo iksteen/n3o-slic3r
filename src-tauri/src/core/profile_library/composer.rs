@@ -30,11 +30,77 @@ use super::{
 use crate::core::cascade::resolver::{resolve, MapContext};
 use crate::core::cascade::types::{Cascade, Predicate, Rule, SourceLocation};
 use crate::core::filament;
-use crate::core::printer::PrinterInstance;
+use crate::core::printer::{PrinterInstance, SlotBinding, SlotRef};
 use crate::core::schema::schema_by_key;
 use slic3r_ffi::OptType;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+
+/// Per-filament-position view used by the composer to fan vector
+/// keys (filament_diameter, filament_settings_id, filament_colour,
+/// filament_map, …). One entry per libslic3r filament slot — same
+/// length as the cascade's filament dimension.
+///
+/// `slot_ref` is the `PrinterInstance` slot this filament is bound
+/// to (`None` for an unbound filament position); the composer
+/// resolves it to the actual `SlotBinding` and uses that for the
+/// fragment slug, color, and extruder index.
+struct FilamentEntry<'a> {
+    /// The slot binding to source this filament's identity/color
+    /// from. `None` means "unbound" — the composer falls back to
+    /// the instance's `default_filament_fragment_slug` for the
+    /// slug, `extruder=0` for `filament_map`, and the default
+    /// color.
+    slot: Option<&'a SlotBinding>,
+    /// 0-based extruder index this filament should feed from (for
+    /// `filament_map`). When `slot.is_some()`, this is the
+    /// extruder the slot lives on; when `None`, defaults to 0.
+    extruder_index: u8,
+}
+
+/// Resolve a list of `Option<SlotRef>` material bindings against
+/// the printer instance, producing the per-filament view the
+/// composer fan-outs consume. Out-of-range slot refs (a stale
+/// binding from a project file authored against a now-shrunken
+/// instance) collapse to "unbound" rather than erroring.
+fn resolve_layout<'a>(
+    instance: &'a PrinterInstance,
+    material_layout: &[Option<SlotRef>],
+) -> Vec<FilamentEntry<'a>> {
+    material_layout
+        .iter()
+        .map(|maybe_slot_ref| match maybe_slot_ref {
+            Some(slot_ref) => instance
+                .extruders
+                .get(slot_ref.extruder as usize)
+                .and_then(|ext| ext.slots.get(slot_ref.slot as usize))
+                .map(|slot| FilamentEntry {
+                    slot: Some(slot),
+                    extruder_index: slot_ref.extruder,
+                })
+                .unwrap_or(FilamentEntry { slot: None, extruder_index: 0 }),
+            None => FilamentEntry { slot: None, extruder_index: 0 },
+        })
+        .collect()
+}
+
+/// Legacy fallback when no material layout is provided — fan out
+/// one filament per `PrinterInstance` slot in extruder-major flat
+/// order. Preserves the old "one filament per slot" semantics used
+/// by non-slice callers (cascade trace UI) and unit tests that
+/// don't care about plate state.
+fn slot_layout(instance: &PrinterInstance) -> Vec<FilamentEntry<'_>> {
+    let mut out = Vec::new();
+    for (e_idx, extruder) in instance.extruders.iter().enumerate() {
+        for slot in &extruder.slots {
+            out.push(FilamentEntry {
+                slot: Some(slot),
+                extruder_index: e_idx as u8,
+            });
+        }
+    }
+    out
+}
 
 /// Errors from composing a slice-time cascade.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,15 +143,31 @@ impl std::error::Error for ComposeError {}
 
 /// Compose the slice-time cascade for `instance`.
 ///
+/// `material_layout` is the per-material filament view: one entry
+/// per libslic3r filament slot, where each entry's `Option<SlotRef>`
+/// names the `PrinterInstance` slot that material is bound to.
+/// The cascade's filament dimension (the length of the
+/// `filament_diameter` / `filament_colour` / `filament_map` /
+/// `flush_volumes_matrix` vectors) is sized from this slice's
+/// length. Pass an empty slice to fall back to the legacy "one
+/// filament per `PrinterInstance` slot" view used by non-slice
+/// callers (cascade trace UI, schema preview).
+///
 /// `plate_overrides` becomes the highest-precedence layer (the
 /// resolver's source-order tie-break makes later sources win).
 pub fn compose_cascade(
     instance: &PrinterInstance,
+    material_layout: &[Option<SlotRef>],
     plate_overrides: &BTreeMap<String, String>,
 ) -> Result<Cascade, ComposeError> {
     if instance.extruders.is_empty() {
         return Err(ComposeError::NoExtruders(instance.id.clone()));
     }
+    let filaments: Vec<FilamentEntry<'_>> = if material_layout.is_empty() {
+        slot_layout(instance)
+    } else {
+        resolve_layout(instance, material_layout)
+    };
 
     let mut rules: Vec<Rule> = Vec::new();
 
@@ -104,7 +186,7 @@ pub fn compose_cascade(
     //    flush_multiplier of 1.0). Placed *before* the printer
     //    fragment so a vendor-shipped matrix (snappy's 84-off-diag
     //    snapmaker default) still wins on source-order tie-break.
-    let flush_defaults = assemble_flush_defaults(instance);
+    let flush_defaults = assemble_flush_defaults(instance, filaments.len());
     if !flush_defaults.is_empty() {
         rules.push(Rule {
             when: Predicate::default(),
@@ -154,7 +236,7 @@ pub fn compose_cascade(
     //    that slot belongs to. We also force
     //    `filament_map_mode = "Manual"` so libslic3r treats the value
     //    as authoritative rather than auto-rebalancing.
-    let topology = assemble_filament_topology(instance);
+    let topology = assemble_filament_topology(&filaments);
     if !topology.is_empty() {
         rules.push(Rule {
             when: Predicate::default(),
@@ -186,7 +268,7 @@ pub fn compose_cascade(
     //    Without this fan-out the toolchanger (U1) and AMS-fed
     //    (Bambi) printers both end up emitting `filament: 1` even
     //    with N slots bound — no tool changes in the output gcode.
-    let filament_vectors = assemble_filament_vectors(instance)?;
+    let filament_vectors = assemble_filament_vectors(instance, &filaments)?;
     if !filament_vectors.is_empty() {
         rules.push(Rule {
             when: Predicate::default(),
@@ -215,7 +297,7 @@ pub fn compose_cascade(
     //    .color`, falling back to "#F2754E" for unbound slots — the
     //    color value doesn't affect slicing correctness, only the vector
     //    length does.
-    let colours = assemble_filament_colours(instance);
+    let colours = assemble_filament_colours(&filaments);
     if !colours.is_empty() {
         rules.push(Rule {
             when: Predicate::default(),
@@ -316,18 +398,18 @@ fn assemble_nozzle_vectors(
     Ok(out)
 }
 
-/// Walk the instance's slots in extruder-major flat order, load each
-/// one's filament fragment, and zip the scalar values into per-key
-/// vector strings. Mirrors [`assemble_nozzle_vectors`] but for
-/// filament-side keys (`filament_diameter`, `filament_colour`,
-/// `filament_type`, `filament_settings_id`, …). Slot order must
-/// match [`assemble_filament_topology`] so `filament[N]` in the
-/// libslic3r vector lines up with `filament_map[N]`'s extruder.
+/// Walk the cascade's filament layout, load each one's filament
+/// fragment, and zip the scalar values into per-key vector strings.
+/// Mirrors [`assemble_nozzle_vectors`] but for filament-side keys
+/// (`filament_diameter`, `filament_colour`, `filament_type`,
+/// `filament_settings_id`, …). Filament position N in the vector
+/// pairs with `filament_map[N]`'s extruder.
 ///
-/// Slots without a bound `filament_identity` fall back to the
-/// instance's `default_filament_fragment_slug`. Per-key vector
-/// positions left empty by a fragment fall back to the slot-0
-/// value so length stays uniform across keys.
+/// Entries without a bound slot — or whose slot has no
+/// `filament_identity` — fall back to the instance's
+/// `default_filament_fragment_slug`. Per-key vector positions left
+/// empty by a fragment fall back to the first entry's value so
+/// length stays uniform across keys.
 ///
 /// Each fragment is resolved against a slot-scoped context (per
 /// `docs/settings-model.md` §5 "Per-slot vector-key assembly")
@@ -338,40 +420,37 @@ fn assemble_nozzle_vectors(
 /// fragment's default rule.
 fn assemble_filament_vectors(
     instance: &PrinterInstance,
+    filaments: &[FilamentEntry<'_>],
 ) -> Result<BTreeMap<String, String>, ComposeError> {
-    // Load every slot's filament fragment, in extruder-major flat order.
-    let mut per_slot: Vec<BTreeMap<String, String>> = Vec::new();
-    for extruder in &instance.extruders {
-        for slot in &extruder.slots {
-            let slug = slot
-                .filament_identity
-                .as_deref()
-                .unwrap_or(&instance.default_filament_fragment_slug);
-            let cascade = load_filament_fragment(slug).ok_or_else(|| {
-                ComposeError::UnknownFilamentFragment(slug.to_owned())
-            })?;
-            // Resolve against this slot's filament context so
-            // conditional rules in the fragment can match on
-            // `when.filament.*` predicates. Falls through to the
-            // unconditional default rule when no filament profile is
-            // registered for this slug.
-            let slot_ctx = slot_filament_context(slug);
-            let scalars: BTreeMap<String, String> = resolve(&cascade, &slot_ctx)
-                .into_iter()
-                .map(|(k, v)| (k, v.value))
-                .collect();
-            per_slot.push(scalars);
-        }
+    let mut per_filament: Vec<BTreeMap<String, String>> = Vec::new();
+    for entry in filaments {
+        let slug = entry
+            .slot
+            .and_then(|s| s.filament_identity.as_deref())
+            .unwrap_or(&instance.default_filament_fragment_slug);
+        let cascade = load_filament_fragment(slug).ok_or_else(|| {
+            ComposeError::UnknownFilamentFragment(slug.to_owned())
+        })?;
+        // Resolve against this slot's filament context so conditional
+        // rules in the fragment can match on `when.filament.*`
+        // predicates. Falls through to the unconditional default rule
+        // when no filament profile is registered for this slug.
+        let slot_ctx = slot_filament_context(slug);
+        let scalars: BTreeMap<String, String> = resolve(&cascade, &slot_ctx)
+            .into_iter()
+            .map(|(k, v)| (k, v.value))
+            .collect();
+        per_filament.push(scalars);
     }
 
-    if per_slot.is_empty() {
+    if per_filament.is_empty() {
         return Ok(BTreeMap::new());
     }
 
-    // Union of all keys seen across slots.
+    // Union of all keys seen across filament entries.
     let mut all_keys: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
-    for scalars in &per_slot {
+    for scalars in &per_filament {
         for k in scalars.keys() {
             all_keys.insert(k.clone());
         }
@@ -380,13 +459,13 @@ fn assemble_filament_vectors(
     // Build length-N vector strings per key.
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     for key in all_keys {
-        let values: Vec<String> = per_slot
+        let values: Vec<String> = per_filament
             .iter()
             .map(|scalars| {
                 scalars
                     .get(&key)
                     .cloned()
-                    .or_else(|| per_slot.first().and_then(|p| p.get(&key).cloned()))
+                    .or_else(|| per_filament.first().and_then(|p| p.get(&key).cloned()))
                     .unwrap_or_default()
             })
             .collect();
@@ -403,18 +482,21 @@ fn assemble_filament_vectors(
 const DEFAULT_FLUSH_OFF_DIAG_MM3: f32 = 280.0;
 
 /// Synthesize `flush_volumes_matrix` (N² × H entries) and
-/// `flush_multiplier` (length H of 1.0) sized to the instance
-/// topology. N = total slot count across all extruders (= filament
-/// count for the cascade), H = extruder count (= "heads" in
-/// libslic3r terminology — `flush_multiplier.size()`).
+/// `flush_multiplier` (length H of 1.0) sized to the cascade's
+/// filament count. N = filament count (the libslic3r filament
+/// dimension, derived from the materials list at slice time or
+/// from the instance's slot count otherwise), H = extruder count
+/// (= "heads" in libslic3r terminology — `flush_multiplier.size()`).
 ///
 /// The matrix layout per libslic3r: H consecutive N×N blocks, each
 /// flat row-major. Off-diagonal entries are
 /// [`DEFAULT_FLUSH_OFF_DIAG_MM3`]; diagonal entries (same → same
 /// filament) are zero. Returned as a comma-joined coFloats string.
-fn assemble_flush_defaults(instance: &PrinterInstance) -> BTreeMap<String, String> {
+fn assemble_flush_defaults(
+    instance: &PrinterInstance,
+    filament_count: usize,
+) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
-    let filament_count: usize = instance.extruders.iter().map(|e| e.slots.len()).sum();
     let heads_count = instance.extruders.len();
     if filament_count == 0 || heads_count == 0 {
         return out;
@@ -464,16 +546,19 @@ fn slot_filament_context(slug: &str) -> MapContext {
 /// correctness (see `apply_mm_segmentation` index OOB).
 const DEFAULT_FILAMENT_COLOUR: &str = "#F2754E";
 
-/// Synthesize the `filament_colour` vector from PrinterInstance slot
-/// colors. Walks slots in extruder-major order (matching the filament
-/// dimension everywhere else in the cascade) and falls back to
-/// [`DEFAULT_FILAMENT_COLOUR`] for slots with `color == None`.
-fn assemble_filament_colours(instance: &PrinterInstance) -> BTreeMap<String, String> {
-    let values: Vec<String> = instance
-        .extruders
+/// Synthesize the `filament_colour` vector from the cascade's
+/// filament layout. Each entry pulls the color from its bound
+/// `PrinterInstance` slot, or [`DEFAULT_FILAMENT_COLOUR`] when the
+/// slot is unbound / has no color set.
+fn assemble_filament_colours(filaments: &[FilamentEntry<'_>]) -> BTreeMap<String, String> {
+    let values: Vec<String> = filaments
         .iter()
-        .flat_map(|extruder| extruder.slots.iter())
-        .map(|slot| slot.color.clone().unwrap_or_else(|| DEFAULT_FILAMENT_COLOUR.to_owned()))
+        .map(|entry| {
+            entry
+                .slot
+                .and_then(|s| s.color.clone())
+                .unwrap_or_else(|| DEFAULT_FILAMENT_COLOUR.to_owned())
+        })
         .collect();
     let mut out = BTreeMap::new();
     if !values.is_empty() {
@@ -482,19 +567,16 @@ fn assemble_filament_colours(instance: &PrinterInstance) -> BTreeMap<String, Str
     out
 }
 
-/// Synthesize `filament_map` + `filament_map_mode` from the instance's
-/// `extruders[].slots[]` topology. Walks slots in extruder-major order
-/// (= flat filament dimension libslic3r expects) and emits a 1-based
-/// extruder index per slot. Empty when the instance has no slots
-/// (the caller skips the rule in that case).
+/// Synthesize `filament_map` + `filament_map_mode` from the
+/// cascade's filament layout. Each entry contributes the 1-based
+/// extruder index it should feed from. Empty when the layout is
+/// empty (the caller skips the rule in that case).
 fn assemble_filament_topology(
-    instance: &PrinterInstance,
+    filaments: &[FilamentEntry<'_>],
 ) -> BTreeMap<String, String> {
     let mut filament_map: Vec<String> = Vec::new();
-    for (e_idx, extruder) in instance.extruders.iter().enumerate() {
-        for _ in &extruder.slots {
-            filament_map.push((e_idx + 1).to_string());
-        }
+    for entry in filaments {
+        filament_map.push((entry.extruder_index as usize + 1).to_string());
     }
     let mut out = BTreeMap::new();
     if !filament_map.is_empty() {
@@ -607,7 +689,7 @@ mod tests {
     fn compose_bambi_yields_printer_nozzle_bed_filament_process_layers() {
         let _registry = RegistryGuard::acquire();
         let bambi = lookup_instance("bambi").expect("bambi present");
-        let cascade = compose_cascade(&bambi, &BTreeMap::new()).expect("compose");
+        let cascade = compose_cascade(&bambi, &[], &BTreeMap::new()).expect("compose");
 
         // Each layer contributes at least one rule. With 5 layers + nozzle
         // assembly + no plate overrides → ≥ 6 rules (printer, nozzle,
@@ -639,7 +721,7 @@ mod tests {
         // ConfigOptionVector deserialize splits on ','.
         let _registry = RegistryGuard::acquire();
         let snappy = lookup_instance("snappy").expect("snappy present");
-        let cascade = compose_cascade(&snappy, &BTreeMap::new()).expect("compose");
+        let cascade = compose_cascade(&snappy, &[], &BTreeMap::new()).expect("compose");
 
         // Find the synthesized extruder-vector rule.
         let vector_rule = cascade
@@ -658,7 +740,7 @@ mod tests {
     fn nozzle_vector_assembly_yields_single_value_for_a1_mini() {
         let _registry = RegistryGuard::acquire();
         let bambi = lookup_instance("bambi").expect("bambi present");
-        let cascade = compose_cascade(&bambi, &BTreeMap::new()).expect("compose");
+        let cascade = compose_cascade(&bambi, &[], &BTreeMap::new()).expect("compose");
         let vector_rule = cascade
             .rules
             .iter()
@@ -675,7 +757,7 @@ mod tests {
         let bambi = lookup_instance("bambi").expect("bambi present");
         let mut overrides = BTreeMap::new();
         overrides.insert("layer_height".to_owned(), "0.12".to_owned());
-        let cascade = compose_cascade(&bambi, &overrides).expect("compose");
+        let cascade = compose_cascade(&bambi, &[], &overrides).expect("compose");
         let last = cascade.rules.last().expect("rules");
         assert_eq!(last.set.get("layer_height").map(String::as_str), Some("0.12"));
         assert_eq!(last.source.path.to_string_lossy(), "<plate-overrides>");
@@ -686,7 +768,7 @@ mod tests {
         let _registry = RegistryGuard::acquire();
         let mut bambi = lookup_instance("bambi").expect("bambi present");
         bambi.extruders[0].installed_nozzle.diameter_mm = 0.9; // not bundled
-        let err = compose_cascade(&bambi, &BTreeMap::new()).unwrap_err();
+        let err = compose_cascade(&bambi, &[], &BTreeMap::new()).unwrap_err();
         assert!(
             matches!(&err, ComposeError::UnknownNozzleFragment { sku, .. } if sku == "0.9"),
             "got {err:?}",
@@ -767,7 +849,7 @@ set.fan_speed = 30
         let _registry = RegistryGuard::acquire();
         let mut bambi = lookup_instance("bambi").expect("bambi present");
         bambi.printer_fragment_slug = "ghost".into();
-        let err = compose_cascade(&bambi, &BTreeMap::new()).unwrap_err();
+        let err = compose_cascade(&bambi, &[], &BTreeMap::new()).unwrap_err();
         assert_eq!(err, ComposeError::UnknownPrinterFragment("ghost".into()));
     }
 }

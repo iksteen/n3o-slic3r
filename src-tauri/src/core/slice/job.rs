@@ -54,6 +54,22 @@ pub struct SliceJobInput {
     /// library and composes a fresh cascade per job — no shared
     /// registry, no preloaded monolithic cascade.
     pub printer_instance_id: String,
+    /// Per-material slot bindings: one entry per model material on
+    /// the plate, in material-index order (material `i + 1` at
+    /// position `i`). `None` for materials with no slot binding
+    /// yet. The composer fans the libslic3r filament dimension
+    /// (filament_diameter, filament_colour, filament_map, …) out
+    /// to this length, and the per-object `extruder_id` in the
+    /// temp `.3mf` carries the 1-based material number verbatim
+    /// so the gcode emits `T<material - 1>` for each cube. The
+    /// driver's `ams_mapping` array uses the same indexing.
+    ///
+    /// Empty when the plate has no materials (an empty plate's
+    /// slice job fails earlier, but the field is included for
+    /// the legacy Deserialize path used by frontend-posted
+    /// SliceJobInput shapes).
+    #[serde(default)]
+    pub material_layout: Vec<Option<crate::core::printer::SlotRef>>,
 }
 
 /// Snapshot of a job's lifecycle. Returned by `slice_status` so the

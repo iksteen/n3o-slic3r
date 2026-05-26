@@ -260,19 +260,28 @@ pub fn set_extruder_nozzle_diameter(
 /// the new instance into the registry and persists it (when the
 /// storage root is set).
 ///
-/// Topology: one extruder with `(ams_units * 4 + 1)` slots — slot 0
-/// is `FeedKind::Direct` with label `"Ext"`, the remaining slots
-/// are `FeedKind::Ams` with labels `"AMS:1".."AMS:4"` (single
+/// Topology: one extruder with `(ams_units * 4 + 1)` slots — the
+/// AMS-fed slots come first, labelled `"AMS:1".."AMS:4"` (single
 /// AMS) or `"AMS A:1".."AMS B:4"..` (multiple AMS units, letter-
-/// disambiguated). When the printer profile's `ams_max == 0`
-/// `ams_units` must also be `0`; the resulting instance has one
-/// direct-fed slot.
+/// disambiguated), and the last slot is `FeedKind::Direct` with
+/// label `"Ext"`. When the printer profile's `ams_max == 0`
+/// `ams_units` must also be `0`; the resulting instance has just
+/// the one direct-fed slot.
+///
+/// AMS-first ordering matters: BBS's `ams_mapping[5]` /
+/// `ams_mapping2[5]` arrays put AMS slots at filament indices
+/// `0..3` and the external spool at index `4` (with the `-1` /
+/// `{255,255}` sentinel). The libslic3r filament index is derived
+/// directly from this slot ordering, so swapping the order shifts
+/// every cube's tool-number by one and the firmware routes the
+/// wrong AMS slot.
 ///
 /// Defaults derived from the bundled profile + library:
 ///   - **Topology** branches on `profile.toolheads.len()`:
 ///     - `1` (AMS-style: single toolhead, optionally AMS-fed) — one
-///       extruder with `(ams_units * 4 + 1)` slots; slot 0 is
-///       `FeedKind::Direct` ("Ext"), the rest are `FeedKind::Ams`.
+///       extruder with `(ams_units * 4 + 1)` slots; AMS-fed slots
+///       come first (`FeedKind::Ams`), the trailing slot is
+///       `FeedKind::Direct` ("Ext").
 ///     - `N > 1` (toolchanger: U1, XL) — N extruders labelled
 ///       `T0..T(N-1)`, each with one `FeedKind::Direct` slot. The
 ///       `ams_units` parameter is ignored for this branch; the
@@ -364,20 +373,17 @@ pub fn create_instance(
             })
             .collect()
     } else {
-        // AMS-style: one extruder, slot 0 is the Direct/Ext spool,
-        // slots 1.. are AMS-fed. The extruder's solo so its label
-        // stays empty — the slot labels carry the identity.
+        // AMS-style: one extruder, AMS-fed slots come first, the
+        // direct/Ext spool is the trailing slot. The extruder's
+        // solo so its label stays empty — the slot labels carry
+        // the identity. AMS-first ordering matches BBS's
+        // ams_mapping convention; see the doc comment on
+        // `create_instance`.
         let toolhead = profile.toolheads.first();
         let default_nozzle_diameter =
             toolhead.map(|t| t.default_nozzle_diameter).unwrap_or(0.4);
         let filament_slug = resolve_default_filament(default_nozzle_diameter);
         let mut slots = Vec::new();
-        slots.push(SlotBinding {
-            label: "Ext".to_owned(),
-            feed: FeedKind::Direct,
-            filament_identity: Some(filament_slug.clone()),
-            color: None,
-        });
         for unit in 0..ams_units {
             for slot in 1..=4 {
                 let label = if ams_units > 1 {
@@ -394,6 +400,12 @@ pub fn create_instance(
                 });
             }
         }
+        slots.push(SlotBinding {
+            label: "Ext".to_owned(),
+            feed: FeedKind::Direct,
+            filament_identity: Some(filament_slug.clone()),
+            color: None,
+        });
         vec![ExtruderState {
             label: String::new(),
             installed_nozzle: NozzleSku {
@@ -698,9 +710,9 @@ mod tests {
     #[test]
     fn set_slot_color_persists_and_clears() {
         // Mutates a slot the bundled fixture already paints (Bambi
-        // AMS:1 ships with `#111827`). Registry persistence itself is
-        // covered by
-        // `set_slot_filament_mutates_in_place_and_persists_across_lookups`.
+        // AMS:2 — slot index 1 in the AMS-first ordering — ships
+        // with `#d4a017`). Registry persistence itself is covered
+        // by `set_slot_filament_mutates_in_place_and_persists_across_lookups`.
         let _registry = RegistryGuard::acquire();
         let identity_before = lookup_instance("bambi")
             .expect("bambi present")
@@ -709,7 +721,7 @@ mod tests {
             .filament_identity
             .clone();
         let updated = set_slot_color("bambi", 0, 1, Some("#ff8800".into()))
-            .expect("bambi AMS:1 exists");
+            .expect("bambi AMS:2 exists");
         assert_eq!(updated.extruders[0].slots[1].color.as_deref(), Some("#ff8800"));
         // Filament identity stays untouched — color is its own field.
         assert_eq!(updated.extruders[0].slots[1].filament_identity, identity_before);
@@ -742,7 +754,7 @@ mod tests {
     #[test]
     fn create_instance_builds_topology_from_ams_units() {
         let _registry = RegistryGuard::acquire();
-        // 1 AMS = 5 slots: Ext (Direct) + AMS:1..4 (Ams).
+        // 1 AMS = 5 slots: AMS:1..4 (Ams) + Ext (Direct).
         let inst = create_instance("bambu-lab-a1-mini", "Garage A1".into(), 1)
             .expect("create with 1 AMS");
         assert_eq!(inst.display_name, "Garage A1");
@@ -752,12 +764,12 @@ mod tests {
         assert_eq!(inst.extruders.len(), 1);
         let slots = &inst.extruders[0].slots;
         assert_eq!(slots.len(), 5);
-        assert_eq!(slots[0].feed, FeedKind::Direct);
-        assert_eq!(slots[0].label, "Ext");
-        for (i, slot) in slots.iter().enumerate().skip(1) {
+        for (i, slot) in slots.iter().enumerate().take(4) {
             assert_eq!(slot.feed, FeedKind::Ams);
-            assert_eq!(slot.label, format!("AMS:{i}"));
+            assert_eq!(slot.label, format!("AMS:{}", i + 1));
         }
+        assert_eq!(slots[4].feed, FeedKind::Direct);
+        assert_eq!(slots[4].label, "Ext");
         // First supported bed becomes the default.
         assert!(!inst.bed.identity.is_empty());
     }
@@ -812,8 +824,10 @@ mod tests {
             .iter()
             .map(|s| s.label.as_str())
             .collect();
-        // Single-AMS uses the un-lettered "AMS:N" form.
-        assert_eq!(slot_labels, vec!["Ext", "AMS:1", "AMS:2", "AMS:3", "AMS:4"]);
+        // Single-AMS uses the un-lettered "AMS:N" form. AMS slots
+        // come first, Ext is trailing (matches BBS's ams_mapping
+        // convention).
+        assert_eq!(slot_labels, vec!["AMS:1", "AMS:2", "AMS:3", "AMS:4", "Ext"]);
     }
 
     #[test]
@@ -880,18 +894,19 @@ mod tests {
     /// Sanity: the FeedKind + SlotBinding shape round-trips through
     /// the registry's clone/return path without losing the typed
     /// feed kind. Bambi's AMS Lite topology gives us both variants
-    /// in one fixture — slot 0 is the `Ext` Direct feed, slots 1-4
-    /// are the four `Ams` slots.
+    /// in one fixture — slots 0-3 are the four `Ams` slots, slot 4
+    /// is the `Ext` Direct feed (AMS-first ordering matches BBS's
+    /// ams_mapping convention).
     #[test]
     fn feed_kind_survives_registry_round_trip() {
         let _registry = RegistryGuard::acquire();
         let bambi = lookup_instance("bambi").expect("bambi present");
         let slots = &bambi.extruders[0].slots;
-        let ext: &SlotBinding = &slots[0];
-        assert_eq!(ext.feed, FeedKind::Direct);
-        assert_eq!(ext.label, "Ext");
-        let ams: &SlotBinding = &slots[1];
+        let ams: &SlotBinding = &slots[0];
         assert_eq!(ams.feed, FeedKind::Ams);
         assert_eq!(ams.label, "AMS:1");
+        let ext: &SlotBinding = &slots[4];
+        assert_eq!(ext.feed, FeedKind::Direct);
+        assert_eq!(ext.label, "Ext");
     }
 }

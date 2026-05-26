@@ -171,6 +171,7 @@ fn slice_fourcolor(
         },
         plate_ids: vec![1],
         printer_instance_id: instance_id.into(),
+        material_layout: vec![],
     };
 
     run_slice_job_blocking(input, &registry, sink)
@@ -290,11 +291,12 @@ fn snappy_multi_color_slices_with_toolhead_changes() {
 /// `build_slice_input` (the production path), and verifies the
 /// emitted gcode contains `T1` toolchange markers.
 ///
-/// Without the per-object `extruder_id` remap in `build_slice_input`,
-/// the cube would default to filament 1 and emit `T0` everywhere —
-/// the user reproduced this against the live UI before the remap
-/// landed. With the remap, material 1 → flat slot index 1 → libslic3r
-/// filament index 2 → T1.
+/// Toolchangers use the legacy slot-fanned cascade and the
+/// per-object remap: material 1 → bound flat slot index 1 →
+/// libslic3r filament index 2. The temp `.3mf` carries the
+/// remapped value (`extruder_id = 2`) so libslic3r's gcode
+/// template emits the right `T<n>` for the firmware to select
+/// the right toolhead.
 #[test]
 fn snappy_binding_routes_single_material_to_bound_toolhead() {
     use n3o_slic3r_lib::core::printer::SlotRef;
@@ -347,8 +349,9 @@ fn snappy_binding_routes_single_material_to_bound_toolhead() {
     .expect("build_slice_input");
 
     // The cube's recorded extruder in the temp .3mf must already be
-    // 2 (libslic3r 1-based filament index). Pin it here so a regression
-    // is caught even if the slice itself fails for unrelated reasons.
+    // 2 (libslic3r 1-based filament index = bound flat slot 1 + 1
+    // on snappy). Pin it here so a regression is caught even if the
+    // slice itself fails for unrelated reasons.
     let reloaded = load_3mf(&temp_3mf).expect("reload temp 3mf");
     assert!(
         reloaded.objects.iter().any(|o| o.extruder_id == Some(2)),

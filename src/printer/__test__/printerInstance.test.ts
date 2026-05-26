@@ -54,16 +54,17 @@ function snappy(): PrinterInstance {
 
 function ams_a1_mini(): PrinterInstance {
   // Hypothetical Bambi + AMS Lite shape: 1 extruder × 5 slots
-  // (Ext + AMS:1..4).
+  // (AMS:1..4 + Ext). AMS-first ordering matches BBS's
+  // ams_mapping convention; see the Rust-side `bambi()` fixture.
   const ext: PrinterInstance["extruders"][number] = {
     label: "",
     installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
     slots: [
-      { label: "Ext", feed: "direct", filament_identity: null, color: null },
       { label: "AMS:1", feed: "ams", filament_identity: null, color: null },
       { label: "AMS:2", feed: "ams", filament_identity: null, color: null },
       { label: "AMS:3", feed: "ams", filament_identity: null, color: null },
       { label: "AMS:4", feed: "ams", filament_identity: null, color: null },
+      { label: "Ext", feed: "direct", filament_identity: null, color: null },
     ],
   };
   return { ...bambi(), extruders: [ext] };
@@ -88,22 +89,22 @@ describe("flattenSlots", () => {
   it("A1+AMS shape: extruder label empty, slot labels carry the identity", () => {
     const slots = flattenSlots(ams_a1_mini());
     expect(slots.map((s) => s.label)).toEqual([
-      "Ext",
       "AMS:1",
       "AMS:2",
       "AMS:3",
       "AMS:4",
+      "Ext",
     ]);
-    expect(slots[0].feed).toBe("direct");
-    expect(slots.slice(1).every((s) => s.feed === "ams")).toBe(true);
+    expect(slots.slice(0, 4).every((s) => s.feed === "ams")).toBe(true);
+    expect(slots[4].feed).toBe("direct");
   });
 });
 
 describe("isFeedMixConflict", () => {
   const slots = flattenSlots(ams_a1_mini());
-  const ext = slots[0]!; // Direct
-  const ams1 = slots[1]!; // Ams
-  const ams2 = slots[2]!; // Ams
+  const ams1 = slots[0]!; // Ams
+  const ams2 = slots[1]!; // Ams
+  const ext = slots[4]!; // Direct
 
   it("flags Direct → already-Ams-used on same extruder", () => {
     expect(isFeedMixConflict(ext, [ams1])).toBe(true);

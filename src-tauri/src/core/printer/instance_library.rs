@@ -74,23 +74,26 @@ fn bambi() -> PrinterInstance {
                 diameter_mm: 0.4,
                 material: NozzleMaterial::Stainless,
             },
-            // A1 mini + AMS Lite: 1 direct-fed `Ext` slot + 4
-            // `Ams`-feed slots. The pre-slice gate refuses prints
-            // that mix `Ext` with any `AMS:n` slot in the same job
-            // (Bambu firmware physically can't pull from both
-            // feed paths). Multiple `AMS:n` slots are fine — the
-            // AMS swaps within.
+            // A1 mini + AMS Lite: 4 `Ams`-feed slots followed by 1
+            // direct-fed `Ext` slot. The pre-slice gate refuses
+            // prints that mix `Ext` with any `AMS:n` slot in the
+            // same job (Bambu firmware physically can't pull from
+            // both feed paths). Multiple `AMS:n` slots are fine —
+            // the AMS swaps within.
+            //
+            // AMS-first / Ext-last is cosmetic: the binding panel
+            // and the slot-color strip read more naturally when
+            // the AMS row is the dominant fixture and the external
+            // spool sits at the end. Slot order has no semantic
+            // meaning to libslic3r or the firmware — the
+            // material→filament mapping is built from the user's
+            // material bindings, not from slot position.
+            //
             // Seeded with the colors of the spools physically loaded
             // in this fixture's printer right now. Once printer-instance
             // editing or driver-side AMS sync land these become the
             // initial defaults rather than hardcoded values.
             slots: vec![
-                SlotBinding {
-                    label: "Ext".to_owned(),
-                    feed: FeedKind::Direct,
-                    filament_identity: Some("generic-pla".to_owned()),
-                    color: Some("#dc2626".to_owned()),
-                },
                 SlotBinding {
                     label: "AMS:1".to_owned(),
                     feed: FeedKind::Ams,
@@ -114,6 +117,12 @@ fn bambi() -> PrinterInstance {
                     feed: FeedKind::Ams,
                     filament_identity: Some("generic-pla".to_owned()),
                     color: Some("#ea580c".to_owned()),
+                },
+                SlotBinding {
+                    label: "Ext".to_owned(),
+                    feed: FeedKind::Direct,
+                    filament_identity: Some("generic-pla".to_owned()),
+                    color: Some("#dc2626".to_owned()),
                 },
             ],
         }],
@@ -193,16 +202,17 @@ mod tests {
             b.extruders[0].installed_nozzle.material,
             NozzleMaterial::Stainless,
         );
-        // A1 mini + AMS Lite: 5 slots — 1 Direct (`Ext`) + 4
-        // Ams (`AMS:1`..`AMS:4`).
+        // A1 mini + AMS Lite: 5 slots — 4 Ams (`AMS:1`..`AMS:4`)
+        // followed by 1 Direct (`Ext`). AMS-first is cosmetic; see
+        // the comment in `bambi()`.
         let slots = &b.extruders[0].slots;
         assert_eq!(slots.len(), 5);
         let labels: Vec<&str> = slots.iter().map(|s| s.label.as_str()).collect();
-        assert_eq!(labels, vec!["Ext", "AMS:1", "AMS:2", "AMS:3", "AMS:4"]);
-        assert_eq!(slots[0].feed, FeedKind::Direct);
-        for ams in &slots[1..] {
+        assert_eq!(labels, vec!["AMS:1", "AMS:2", "AMS:3", "AMS:4", "Ext"]);
+        for ams in &slots[..4] {
             assert_eq!(ams.feed, FeedKind::Ams);
         }
+        assert_eq!(slots[4].feed, FeedKind::Direct);
         assert_eq!(b.bed.identity, "Supertack Plate");
     }
 

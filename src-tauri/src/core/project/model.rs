@@ -289,6 +289,49 @@ impl Plate {
     pub fn default_name(position: u32) -> String {
         format!("Plate {position}")
     }
+
+    /// Length of the plate's materials list — the highest
+    /// `extruder_id` (1-based model-material number) across the
+    /// scene's objects, or 0 on an empty plate. This is the
+    /// equivalent of BBS's project filament list length: the
+    /// cascade composer fans out one libslic3r filament per
+    /// material at index `material - 1`, and the `ams_mapping` /
+    /// `ams_mapping2` arrays are sized the same so the firmware
+    /// can look up `ams_mapping[material - 1]` for each tool
+    /// change in the gcode.
+    ///
+    /// Objects without an explicit `extruder_id` are implicitly
+    /// material 1 elsewhere in the pipeline. Pre-bound material
+    /// numbers (in `material_to_slot`) without a corresponding
+    /// object also extend the list — the user can pin a binding
+    /// before adding geometry. An empty plate (no objects, no
+    /// bindings) returns 0.
+    pub fn material_count(&self) -> u8 {
+        let mut max = 0u8;
+        let mut has_any_object = false;
+        for obj in self.scene.objects.values() {
+            has_any_object = true;
+            let mat = obj.extruder_id.unwrap_or(1);
+            if mat > max {
+                max = mat;
+            }
+        }
+        // Also count materials explicitly bound (e.g. user pre-bound
+        // a slot before adding the object). The cascade has to
+        // include filaments for those too so the slice path doesn't
+        // see a zero-length list when the only object hasn't loaded
+        // yet.
+        if let Some(&last_material) = self.material_to_slot.keys().next_back() {
+            if last_material > max {
+                max = last_material;
+            }
+        }
+        if max == 0 && has_any_object {
+            1
+        } else {
+            max
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

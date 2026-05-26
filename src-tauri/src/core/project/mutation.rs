@@ -3156,30 +3156,32 @@ mod tests {
     #[test]
     fn register_object_auto_binds_material_to_slot_on_bambi() {
         // Default project boots into Bambi (1 extruder × 5 slots:
-        // Ext + AMS:1..AMS:4). Because the instance carries AMS slots,
-        // auto-bind skips the external spool (slot 0) — assigning
-        // material 1 to Ext would make the firmware halt at print
-        // time asking the user to feed the PTFE tube.
+        // AMS:1..AMS:4 + Ext, AMS-first cosmetic ordering). Because
+        // the instance carries AMS slots, auto-bind skips the
+        // external spool — assigning material 1 to Ext would make
+        // the firmware halt at print time asking the user to feed
+        // the PTFE tube.
         //
         // Materials get distinct slots while any remain free: M1 →
-        // AMS:1, M2 → AMS:2. M5's preferred slot (modular) is
-        // AMS:1 (taken); the first-free-from-preferred policy walks
-        // forward and lands on AMS:3 instead of colliding with M1.
+        // AMS:1 (slot 0), M2 → AMS:2 (slot 1). M5's preferred slot
+        // (modular over the 4 AMS slots) is AMS:1 (taken); the
+        // first-free-from-preferred policy walks forward and lands
+        // on AMS:3 (slot 2) instead of colliding with M1.
         let mut p = Project::default();
         add_cube_with_material(&mut p, 1);
         add_cube_with_material(&mut p, 2);
         add_cube_with_material(&mut p, 5);
         assert_eq!(
             p.plates[0].material_to_slot.get(&1),
-            Some(&SlotRef { extruder: 0, slot: 1 }),
+            Some(&SlotRef { extruder: 0, slot: 0 }),
         );
         assert_eq!(
             p.plates[0].material_to_slot.get(&2),
-            Some(&SlotRef { extruder: 0, slot: 2 }),
+            Some(&SlotRef { extruder: 0, slot: 1 }),
         );
         assert_eq!(
             p.plates[0].material_to_slot.get(&5),
-            Some(&SlotRef { extruder: 0, slot: 3 }),
+            Some(&SlotRef { extruder: 0, slot: 2 }),
             "preferred slot (AMS:1, modular) is taken by M1; walk forward to first free → AMS:3",
         );
     }
@@ -3199,8 +3201,8 @@ mod tests {
         add_cube_with_material(&mut p, 5);
         assert_eq!(
             p.plates[0].material_to_slot.get(&5),
-            Some(&SlotRef { extruder: 0, slot: 1 }),
-            "all 4 AMS slots taken → wrap to preferred (AMS:1)",
+            Some(&SlotRef { extruder: 0, slot: 0 }),
+            "all 4 AMS slots taken → wrap to preferred (AMS:1 = slot 0)",
         );
     }
 
@@ -3287,9 +3289,10 @@ mod tests {
     fn set_material_slot_overrides_auto_bind_and_idempotent_on_repeat() {
         let mut p = Project::default();
         add_cube_with_material(&mut p, 1);
-        // Auto-bind on Bambi puts material 1 on AMS:1 (slot 1);
-        // setting the same value should be a silent no-op.
-        let target = SlotRef { extruder: 0, slot: 1 };
+        // Auto-bind on Bambi puts material 1 on AMS:1 (slot 0 in
+        // the AMS-first layout); setting the same value should be
+        // a silent no-op.
+        let target = SlotRef { extruder: 0, slot: 0 };
         let events = p.set_material_slot(PlateId(1), 1, target).unwrap();
         assert!(events.is_empty());
     }
@@ -3331,7 +3334,7 @@ mod tests {
         assert_eq!(parsed.plates[0].material_to_slot.len(), 1);
         assert_eq!(
             parsed.plates[0].material_to_slot.get(&1),
-            Some(&SlotRef { extruder: 0, slot: 1 }),
+            Some(&SlotRef { extruder: 0, slot: 0 }),
         );
     }
 }

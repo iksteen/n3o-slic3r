@@ -169,21 +169,82 @@ pub fn build_slice_input(
         }
     });
 
-    // ── Filaments — one per (extruder, slot) in instance order ───
-    // PR-S-5c: slot bindings live on the PrinterInstance, not the
-    // plate. Walk extruders in declaration order, slots within each
-    // extruder in declaration order, and resolve each slot's
-    // `filament_identity` via the bundled registry. Unbound slots
-    // (and unknown identities) fall back to `generic-pla` so the
-    // cascade still has something to resolve against — same
-    // behavior as the legacy "no bindings" path.
-    let mut filaments: Vec<FilamentProfile> = Vec::new();
-    for extruder in &instance.extruders {
-        for slot in &extruder.slots {
-            let identity = slot
-                .filament_identity
-                .as_deref()
-                .unwrap_or("generic-pla");
+    // ── Empty-scene check (before materials assembly so the
+    //    fallback for zero-material plates isn't needed) ──────
+    if plate.scene.objects.is_empty() {
+        return Err(SliceInputError::EmptyScene { plate_id });
+    }
+
+    // ── Material layout — one filament position per material ─────
+    //
+    // BBS convention for AMS-style printers (single physical
+    // extruder + AMS slots): the libslic3r cascade has one filament
+    // per material in the user's materials list, ordered by
+    // material index. Position `i` belongs to model material
+    // `i + 1`. The gcode emits `T<material - 1>` and the driver's
+    // `ams_mapping[material - 1]` routes the bound spool to it.
+    //
+    // Toolchangers (one physical extruder per toolhead) are
+    // different: libslic3r's tool-change template emits the
+    // filament index directly as the T number, and the firmware
+    // takes that as the physical toolhead selector — no AMS
+    // mapping in between. To keep "material N → T<bound>" working
+    // we keep the legacy "one filament per (extruder, slot)"
+    // cascade for toolchangers and remap each object's
+    // `extruder_id` to its bound extruder's flat-slot index at
+    // `.3mf` write time.
+    //
+    // `instance.extruders.len() > 1` is the marker — AMS-style
+    // printers always carry exactly one extruder regardless of
+    // AMS unit count.
+    let is_toolchanger = instance.extruders.len() > 1;
+    let material_count = plate.material_count() as usize;
+    let (material_layout, filaments) = if is_toolchanger {
+        // Legacy slot-fanned cascade — empty `material_layout`
+        // makes `compose_cascade` fall back to `slot_layout`.
+        // Per-slot filament profiles match the cascade's filament
+        // dimension.
+        let mut filaments: Vec<FilamentProfile> = Vec::new();
+        for extruder in &instance.extruders {
+            for slot in &extruder.slots {
+                let identity = slot
+                    .filament_identity
+                    .as_deref()
+                    .unwrap_or(instance.default_filament_fragment_slug.as_str());
+                let profile = filament::lookup(identity).unwrap_or_else(|| FilamentProfile {
+                    identity: identity.to_owned(),
+                    base_type: "PLA".into(),
+                    vendor: None,
+                    color: None,
+                });
+                filaments.push(profile);
+            }
+        }
+        (Vec::new(), filaments)
+    } else {
+        // Per-material cascade: one filament per material, slot
+        // bindings resolved via `material_to_slot`. Unbound
+        // materials fall back to the instance's
+        // `default_filament_fragment_slug` so the cascade is
+        // always resolvable, even before the user picks a slot.
+        let mut layout: Vec<Option<crate::core::printer::SlotRef>> =
+            Vec::with_capacity(material_count);
+        let mut filaments: Vec<FilamentProfile> =
+            Vec::with_capacity(material_count);
+        for material in 1..=material_count as u8 {
+            let slot_ref = plate.material_to_slot.get(&material).copied();
+            layout.push(slot_ref);
+            let identity = slot_ref
+                .and_then(|sr| instance.extruders.get(sr.extruder as usize))
+                .and_then(|ext| {
+                    let slot_idx = match slot_ref {
+                        Some(sr) => sr.slot as usize,
+                        None => return None,
+                    };
+                    ext.slots.get(slot_idx)
+                })
+                .and_then(|slot| slot.filament_identity.as_deref())
+                .unwrap_or(instance.default_filament_fragment_slug.as_str());
             let profile = filament::lookup(identity).unwrap_or_else(|| FilamentProfile {
                 identity: identity.to_owned(),
                 base_type: "PLA".into(),
@@ -192,15 +253,8 @@ pub fn build_slice_input(
             });
             filaments.push(profile);
         }
-    }
-    if filaments.is_empty() {
-        // Defensive: an instance with zero extruders shouldn't make
-        // it past the bundled-instance shape check, but if it does,
-        // make sure the cascade still sees one slot.
-        filaments.push(
-            filament::lookup("Generic PLA").expect("Generic PLA is bundled"),
-        );
-    }
+        (layout, filaments)
+    };
 
     // ── Overrides ─────────────────────────────────────────────
     let user_overrides = encode_overrides_as_specs(
@@ -211,12 +265,6 @@ pub fn build_slice_input(
         "project-overrides.toml",
         &plate.project_overrides,
     );
-
-    // ── Empty-scene check (after metadata so the error message
-    //    can name the plate without re-walking) ────────────────
-    if plate.scene.objects.is_empty() {
-        return Err(SliceInputError::EmptyScene { plate_id });
-    }
 
     // ── Temp 3MF write ────────────────────────────────────────
     //
@@ -262,24 +310,34 @@ pub fn build_slice_input(
         },
         plate_ids: vec![plate_id.0],
         printer_instance_id,
+        material_layout,
     };
 
     Ok((input, temp_path))
 }
 
 /// Map a model-material number to the 1-based libslic3r filament
-/// index for `instance`, honouring `plate.material_to_slot`.
+/// index for a *toolchanger* instance, honouring
+/// `plate.material_to_slot`. AMS-style printers get identity
+/// (material N → filament N) because the per-material cascade
+/// makes `filament_index == material - 1`.
 ///
-/// Without a binding, identity: material N → filament N (cap at the
-/// instance's total slot count). With a binding, material N maps to
-/// the *flat slot index* of `material_to_slot[N]` (extruder-major
-/// order). `filament_map` stays identity downstream, so the gcode
-/// then emits `T<filament_idx - 1>` for the right physical extruder.
+/// On a toolchanger the legacy "one filament per (extruder, slot)"
+/// cascade is in effect, so the material's bound slot translates
+/// to a flat slot index that libslic3r reads as the filament index.
+/// `filament_map` stays identity downstream, so the gcode emits
+/// `T<filament_idx - 1>` for the right physical extruder. Without
+/// a binding, fall back to identity (material N → filament N) —
+/// the slicer treats unbound material 1 as filament 1.
 fn material_to_filament_idx(
     material: u8,
     instance: &PrinterInstance,
     material_to_slot: &std::collections::BTreeMap<u8, crate::core::printer::SlotRef>,
 ) -> u8 {
+    if instance.extruders.len() <= 1 {
+        // AMS-style — per-material cascade owns the mapping.
+        return material;
+    }
     if let Some(slot_ref) = material_to_slot.get(&material) {
         // Sum slot counts of preceding extruders + slot index = flat
         // 0-based, then +1 for libslic3r's 1-based filament index.
@@ -303,10 +361,11 @@ fn material_to_filament_idx(
 /// are included, so the temp file stays minimal even on
 /// many-mesh projects.
 ///
-/// `instance` is borrowed to walk the topology so per-object
-/// `extruder_id` (model material number) can be remapped to the
-/// flat slot index of the slot the material binds to. Default
-/// (identity material→slot) is a no-op.
+/// `instance` is borrowed to remap per-object `extruder_id` on
+/// toolchanger printers (where the cascade is per-slot and the
+/// gcode emits the filament index directly). On AMS-style
+/// printers the remap is identity — the cascade is per-material
+/// and material number ⇔ filament index already.
 fn build_plate_geometry(
     project: &Project,
     plate_id: PlateId,
@@ -352,17 +411,14 @@ fn build_plate_geometry(
         .objects
         .values()
         .map(|obj| {
-            // Remap material number → libslic3r filament index
-            // through the plate's `material_to_slot` binding.
-            //
-            // Objects without an explicit `extruder_id` default to
-            // material 1 elsewhere in the slice pipeline (the pre-
-            // slice gate, libslic3r's own object loader). The remap
-            // has to materialize that default first — otherwise an
-            // unannotated object passes through as `None` (= "default
-            // to filament 1") and libslic3r emits T0 regardless of
-            // the binding. After remap, that "filament 1" maps to the
-            // bound slot's flat index.
+            // Remap material → libslic3r filament index. For
+            // toolchangers this routes via the bound slot's
+            // flat-slot index (legacy behavior — the per-slot
+            // cascade puts each slot's filament settings at that
+            // position). For AMS-style printers this is identity
+            // (material N → filament N) because the per-material
+            // cascade already places M N's settings at filament
+            // index N - 1.
             let material = obj.extruder_id.unwrap_or(1);
             let remapped = material_to_filament_idx(material, instance, &plate.material_to_slot);
             ProjectObject {
@@ -478,13 +534,14 @@ mod tests {
         assert!(temp_path.exists(), "temp file written");
         assert_eq!(input.model_path, temp_path.to_string_lossy());
 
-        // Bambi has 5 slots (Ext + AMS:1..4), all seeded with the
-        // bundled `generic-pla` fragment. The builder surfaces one
-        // filament entry per slot.
-        assert_eq!(input.context.filaments.len(), 5);
-        for f in &input.context.filaments {
-            assert_eq!(f.identity, "generic-pla");
-        }
+        // One filament per *material* on the plate. This single-cube
+        // happy path uses material 1 only → length 1, sourced from
+        // bambi's first AMS slot (generic-pla in the bundled
+        // fixture). Slot count is independent.
+        assert_eq!(input.context.filaments.len(), 1);
+        assert_eq!(input.context.filaments[0].identity, "generic-pla");
+        assert_eq!(input.material_layout.len(), 1);
+        assert!(input.material_layout[0].is_some(), "M1 auto-binds to an AMS slot");
 
         std::fs::remove_file(&temp_path).ok();
     }
@@ -514,8 +571,10 @@ mod tests {
         assert_eq!(input.context.printer.model, "Snapmaker U1");
         assert_eq!(input.context.plate.identity, "Textured PEI Plate");
         assert_eq!(input.context.plate.libslic3r_curr_bed_type, "Textured PEI Plate");
-        // Snappy has 4 extruders × 1 slot → 4 filament entries (all
-        // seeded with the bundled `generic-pla` fragment).
+        // Snappy is a toolchanger (>1 extruder) → legacy per-slot
+        // cascade: 4 extruders × 1 slot = 4 filaments. AMS-style
+        // printers (single extruder) would use one filament per
+        // material instead.
         assert_eq!(input.context.filaments.len(), 4);
         for f in &input.context.filaments {
             assert_eq!(f.identity, "generic-pla");
@@ -525,15 +584,14 @@ mod tests {
     }
 
     #[test]
-    fn per_object_extruder_remaps_through_material_binding() {
-        // Object authored with material 3 on bambi. `register_object`
-        // auto-binds material 3 to the third AMS-fed slot (AMS:3) via
-        // `ensure_default_material_slot_on_active` — that's
-        // `(extruder=0, slot=3)` in the bambi topology, flat slot
-        // index 3, libslic3r filament index 4 (1-based). The temp
-        // .3mf the slicer consumes should carry the remapped value so
-        // libslic3r's `{initial_extruder}`-style template substitution
-        // picks the right filament (AMS:3's loaded spool / color).
+    fn per_object_extruder_passes_material_through_verbatim() {
+        // Per-material cascade (BBS convention): libslic3r filament
+        // index ⇔ model material number. The object's authored
+        // `extruder_id` (= material number) passes through verbatim
+        // to the temp `.3mf` so libslic3r emits `T<material - 1>`,
+        // and the per-material filament_settings_id / filament_map
+        // entries the composer fans out at material's position carry
+        // the bound slot's filament identity + extruder routing.
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         project.plates[0].printer_instance_id = Some("bambi".into());
@@ -547,26 +605,29 @@ mod tests {
             parent: None,
         });
 
-        let (_, temp_path) =
+        let (input, temp_path) =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         let reloaded =
             crate::core::threemf::load_3mf(&temp_path).expect("reload temp 3MF");
         assert_eq!(reloaded.objects.len(), 1);
-        assert_eq!(reloaded.objects[0].extruder_id, Some(4));
+        assert_eq!(reloaded.objects[0].extruder_id, Some(3));
+        // material_layout has one entry per material; material 3 → 3
+        // entries, and the third entry is the auto-bound AMS slot.
+        assert_eq!(input.material_layout.len(), 3);
+        assert!(input.material_layout[2].is_some());
 
         std::fs::remove_file(&temp_path).ok();
     }
 
     #[test]
     fn per_object_extruder_remaps_for_snappy_toolchanger() {
-        // Snappy's 4 extruders × 1 slot each. Bind material 1 to
-        // T1's slot (extruder=1, slot=0) — flat slot index 1, libslic3r
-        // filament index 2. The cube's per-object extruder in the
-        // temp 3mf must read 2 so libslic3r's start-gcode template
-        // substitutes `T2` for `{initial_extruder}`, then identity
-        // `filament_map` resolves filament-idx 2 → physical extruder 1
-        // = T1 in the emitted G-code.
+        // Snappy = toolchanger → legacy "one filament per slot"
+        // cascade with the per-object remap reapplied. Bind M1 →
+        // T1's solo slot (extruder=1, slot=0): flat slot index 1,
+        // libslic3r filament index 2 (1-based). The temp `.3mf`
+        // carries the remapped value so libslic3r's template
+        // substitution picks the right filament.
         use crate::core::printer::SlotRef;
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
@@ -585,13 +646,17 @@ mod tests {
             .material_to_slot
             .insert(1, SlotRef { extruder: 1, slot: 0 });
 
-        let (_, temp_path) =
+        let (input, temp_path) =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         let reloaded =
             crate::core::threemf::load_3mf(&temp_path).expect("reload temp 3MF");
         assert_eq!(reloaded.objects.len(), 1);
         assert_eq!(reloaded.objects[0].extruder_id, Some(2));
+        // Toolchangers fall back to the legacy slot-fanned cascade
+        // — `material_layout` stays empty so `compose_cascade` uses
+        // `slot_layout` (4 filaments for snappy).
+        assert!(input.material_layout.is_empty());
 
         std::fs::remove_file(&temp_path).ok();
     }
@@ -706,8 +771,9 @@ mod tests {
 
     #[test]
     fn snappy_emits_one_filament_per_extruder_slot() {
-        // Snappy = U1 with 4 extruders × 1 slot. Each slot is seeded
-        // with the bundled `generic-pla` fragment.
+        // Snappy is a toolchanger → legacy slot-fanned cascade
+        // (4 extruders × 1 slot). Each slot is seeded with the
+        // bundled `generic-pla` fragment.
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         project.plates[0].printer_instance_id = Some("snappy".into());

@@ -456,7 +456,9 @@ describe("SceneMirror", () => {
 // half-bound plate still renders.
 
 function bambiInstance(): PrinterInstance {
-  // Hex values match the bundled fixture (Ext=red, AMS:1=black).
+  // Hex values match the bundled fixture. AMS-first ordering
+  // matches BBS's ams_mapping convention (AMS slots at filament
+  // indices 0..N-1, Ext last).
   return {
     id: "bambi",
     display_name: "Bambi",
@@ -471,16 +473,16 @@ function bambiInstance(): PrinterInstance {
         installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
         slots: [
           {
-            label: "Ext",
-            feed: "direct",
-            filament_identity: "generic-pla",
-            color: "#dc2626",
-          },
-          {
             label: "AMS:1",
             feed: "ams",
             filament_identity: "generic-pla",
             color: "#111827",
+          },
+          {
+            label: "Ext",
+            feed: "direct",
+            filament_identity: "generic-pla",
+            color: "#dc2626",
           },
         ],
       },
@@ -490,12 +492,12 @@ function bambiInstance(): PrinterInstance {
   };
 }
 
-/** Plate bound to `bambi` with material 1 routed to (0,0)=Ext red. */
+/** Plate bound to `bambi` with material 1 routed to (0,1)=Ext red. */
 function bambiBoundPlate(): PlateSnapshot {
   return {
     ...plateSnap(1),
     printer_instance_id: "bambi",
-    material_to_slot: { 1: { extruder: 0, slot: 0 } },
+    material_to_slot: { 1: { extruder: 0, slot: 1 } },
   };
 }
 
@@ -528,9 +530,10 @@ describe("SceneMirror spool-color paint", () => {
       data: { plate_id: 1, object: sceneObjectAt(101, 1, 0) },
     });
     // Recolor Ext slot to gold; same instance id so the cache key
-    // matches and the bound plate repaints.
+    // matches and the bound plate repaints. Ext is slot index 1 in
+    // the AMS-first ordering.
     const inst = bambiInstance();
-    inst.extruders[0].slots[0].color = "#d4a017";
+    inst.extruders[0].slots[1].color = "#d4a017";
     mirror.applyPrinterInstance(inst);
     expect(mirror.objectColor(101)).toBe(0xd4a017);
   });
@@ -548,7 +551,7 @@ describe("SceneMirror spool-color paint", () => {
       data: { plate_id: 1, object: sceneObjectAt(101, 1, 0) },
     });
     expect(mirror.objectColor(101)).toBe(0xdc2626); // Ext red
-    mirror.applyPlateRouting(1, "bambi", { 1: { extruder: 0, slot: 1 } });
+    mirror.applyPlateRouting(1, "bambi", { 1: { extruder: 0, slot: 0 } });
     expect(mirror.objectColor(101)).toBe(0x111827); // AMS:1 black
   });
 

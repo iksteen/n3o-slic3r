@@ -64,7 +64,7 @@ fn load_reference_cascade() -> Cascade {
     // Shape is identical from the resolver's perspective; just sourced
     // from the per-bucket vendor fragments + composer.
     let bambi = lookup_instance("bambi").expect("bambi bundled");
-    compose_cascade(&bambi, &BTreeMap::new()).expect("compose bambi cascade")
+    compose_cascade(&bambi, &[], &BTreeMap::new()).expect("compose bambi cascade")
 }
 
 fn a1_mini_pla_pei_context() -> SlicingContext {

@@ -298,10 +298,11 @@ impl Driver for BambuDriver {
         //   - `ftp://<remote_path>` URL form for FTPS-uploaded
         //     files; `file:///mnt/sdcard/...` is the generic
         //     "update Bambu Studio" reject path.
-        //   - `ams_mapping` is a **real JSON array** of 5
-        //     elements, left-aligned (filament 0 at index 0,
-        //     unused tail = -1). The earlier "stringified" form
-        //     was a misread of OrcaSlicer's calibration path.
+        //   - `ams_mapping` is a **real JSON array** whose
+        //     length matches the plate's materials list (one
+        //     entry per material, filament index `i` ⇔ material
+        //     `i + 1`). The earlier "stringified" form was a
+        //     misread of OrcaSlicer's calibration path.
         //   - `ams_mapping2` is also required — the firmware
         //     uses both in tandem and silently falls back to
         //     the external spool when only `ams_mapping` is set.
@@ -329,8 +330,8 @@ impl Driver for BambuDriver {
                 vibration_cali: false,
                 layer_inspect: false,
                 use_ams,
-                ams_mapping,
-                ams_mapping2,
+                ams_mapping: &ams_mapping,
+                ams_mapping2: &ams_mapping2,
             },
         };
         let body = serde_json::to_vec(&cmd)
@@ -520,16 +521,19 @@ struct ProjectFileBody<'a> {
     vibration_cali: bool,
     layer_inspect: bool,
     use_ams: bool,
-    /// 5-element AMS routing array, left-aligned (filament 0 at
-    /// index 0). Values: 0-based AMS slot id (0..3) for AMS-fed
-    /// filaments, -1 for the external spool / unused. Real JSON
-    /// array; firmware rejects the stringified form.
-    ams_mapping: [i8; 5],
-    /// Structured `{ams_id, slot_id}` companion to `ams_mapping`.
-    /// Required alongside — firmware uses both and falls back to
-    /// the external spool when only one is set. `{255, 255}` =
-    /// unused.
-    ams_mapping2: [crate::core::slice::pre_slice_gate::AmsMappingV2; 5],
+    /// AMS routing array, sized to the plate's materials list
+    /// length (filament index `i` ⇔ model material `i + 1`).
+    /// Values: 0-based AMS slot id (0..3) when the material is
+    /// bound to an AMS-fed slot, `-1` for external spool or
+    /// unbound. Real JSON array; firmware rejects the stringified
+    /// form.
+    ams_mapping: &'a [i8],
+    /// Structured `{ams_id, slot_id}` companion to `ams_mapping`,
+    /// same length. Required alongside — firmware uses both and
+    /// falls back to the external spool when only one is set.
+    /// `{255, 0}` = bound to the external spool, `{255, 255}` =
+    /// unbound.
+    ams_mapping2: &'a [crate::core::slice::pre_slice_gate::AmsMappingV2],
 }
 
 /// Background task: own the rumqttc event loop until shutdown.
@@ -698,6 +702,13 @@ mod tests {
     #[test]
     fn project_file_command_carries_expected_fields() {
         use crate::core::slice::pre_slice_gate::AmsMappingV2;
+        let mapping: Vec<i8> = vec![0, 1, 2, 3];
+        let mapping2: Vec<AmsMappingV2> = vec![
+            AmsMappingV2 { ams_id: 0, slot_id: 0 },
+            AmsMappingV2 { ams_id: 0, slot_id: 1 },
+            AmsMappingV2 { ams_id: 0, slot_id: 2 },
+            AmsMappingV2 { ams_id: 0, slot_id: 3 },
+        ];
         let cmd = ProjectFileCommand {
             print: ProjectFileBody {
                 sequence_id: "42",
@@ -716,20 +727,14 @@ mod tests {
                 vibration_cali: false,
                 layer_inspect: false,
                 use_ams: true,
-                ams_mapping: [1, -1, -1, -1, -1],
-                ams_mapping2: [
-                    AmsMappingV2 { ams_id: 0, slot_id: 1 },
-                    AmsMappingV2::UNUSED,
-                    AmsMappingV2::UNUSED,
-                    AmsMappingV2::UNUSED,
-                    AmsMappingV2::UNUSED,
-                ],
+                ams_mapping: &mapping,
+                ams_mapping2: &mapping2,
             },
         };
         let json: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&cmd).unwrap()).unwrap();
-        // Pin against a real BBS capture (single-color AMS print
-        // on A1 mini + AMS Lite).
+        // Pin against a real BBS capture (4-AMS print on A1 mini +
+        // AMS Lite, M1..M4 → AMS:1..4).
         let print = &json["print"];
         assert_eq!(print["sequence_id"], "42");
         assert_eq!(print["command"], "project_file");
@@ -747,19 +752,19 @@ mod tests {
         // the firmware tolerates absent file + md5.
         assert!(print.get("file").is_none());
         assert!(print.get("md5").is_none());
-        // ams_mapping: real JSON array of 5 elements, left-aligned.
-        assert_eq!(print["ams_mapping"], serde_json::json!([1, -1, -1, -1, -1]));
+        // ams_mapping: real JSON array, length = plate's materials
+        // list length (one entry per material, indexed by
+        // `material - 1`).
+        assert_eq!(print["ams_mapping"], serde_json::json!([0, 1, 2, 3]));
         assert!(print["ams_mapping"].is_array());
-        // ams_mapping2: structured form, also 5 elements with
-        // {255, 255} sentinel for unused slots.
+        // ams_mapping2: structured form, same length.
         assert_eq!(
             print["ams_mapping2"],
             serde_json::json!([
+                {"ams_id": 0, "slot_id": 0},
                 {"ams_id": 0, "slot_id": 1},
-                {"ams_id": 255, "slot_id": 255},
-                {"ams_id": 255, "slot_id": 255},
-                {"ams_id": 255, "slot_id": 255},
-                {"ams_id": 255, "slot_id": 255},
+                {"ams_id": 0, "slot_id": 2},
+                {"ams_id": 0, "slot_id": 3},
             ])
         );
     }

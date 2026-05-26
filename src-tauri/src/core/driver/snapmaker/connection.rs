@@ -464,8 +464,8 @@ mod tests {
             bytes: vec![],
             plate_id: 1,
             use_ams: false,
-            ams_mapping: [-1; 5],
-            ams_mapping2: [crate::core::driver::traits::AmsMappingV2::UNUSED; 5],
+            ams_mapping: Vec::new(),
+            ams_mapping2: Vec::new(),
         };
         let err = driver.send(payload).await.unwrap_err();
         match err {
