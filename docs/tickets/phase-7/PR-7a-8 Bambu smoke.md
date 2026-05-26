@@ -49,6 +49,34 @@ in CI).
     moves between slots in the AMS strip).
   - Print to completion.
 
+- **External-spool sub-walkthrough** (separate section in the
+  doc; required to close this ticket):
+
+  - **External-spool only**: bind a model material to the A1
+    mini's `Ext` (external/direct-feed) slot via the binding
+    panel. Slice + send. Verify:
+    - `ams_bindings` in the wrapped `.gcode.3mf` is empty for
+      that material (Ext routes via the `ams_mapping` `-1`
+      sentinel, not via AMS slot — see commit `9458e56`
+      regression test for the encoder).
+    - `use_ams = false` in the project_file MQTT publish.
+    - The printer doesn't try to load from AMS; pulls from the
+      external spool directly. Print completes.
+
+  - **External spool + 1 AMS slot** (2-material print, if
+    libslic3r emits a tower for it): bind M1 → Ext, M2 → an
+    AMS slot. Slice + send. Verify:
+    - `ams_bindings` contains only M2's entry (M1 is omitted).
+    - `use_ams = true` (at least one material is AMS-fed).
+    - During print, the printer alternates between the external
+      spool and the AMS slot for the two materials. Manual
+      loading/unloading of the external spool may be required if
+      the firmware doesn't auto-handle the source switch — note
+      observed behavior in the doc either way.
+  - These two cases pin behavior the off-by-one fix
+    (`9458e56`) restored — material on Ext should NOT publish as
+    AMS slot 1 (the old bug); the encoder now omits it correctly.
+
 - **What the doc explicitly does NOT cover** (called out so
   later phases know):
   - Pause + resume from the app — separate manual case but
