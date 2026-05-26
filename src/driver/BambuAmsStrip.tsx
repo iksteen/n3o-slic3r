@@ -9,6 +9,7 @@
 // shape); we prepend `#` for CSS consumption. Sentinel "empty
 // spool" identity (per PR-7a-4) shows up as `identity == null`.
 
+import { cssColorFromHex } from "./colorUtils";
 import type { AmsState, AmsTray, AmsUnit } from "./types";
 
 export interface BambuAmsStripProps {
@@ -61,18 +62,6 @@ function chipFromTray(
     cssLabel: `${tray.identity.tray_type} · #${tray.identity.color}`,
     isActive,
   };
-}
-
-/** RRGGBBAA wire-hex → CSS color. Drops alpha if it's `FF`; keeps
- * full 8-digit form otherwise so transparency renders correctly. */
-export function cssColorFromHex(wire: string): string {
-  if (wire.length === 8) {
-    const alpha = wire.slice(6, 8).toLowerCase();
-    if (alpha === "ff") {
-      return `#${wire.slice(0, 6)}`;
-    }
-  }
-  return `#${wire}`;
 }
 
 export function BambuAmsStrip({ ams }: BambuAmsStripProps): React.JSX.Element | null {

@@ -6,7 +6,8 @@
 // of the rendered DOM is covered by the eventual Playwright smoke.
 
 import { describe, expect, it } from "vitest";
-import { chipsFromAms, cssColorFromHex } from "../BambuAmsStrip";
+import { chipsFromAms } from "../BambuAmsStrip";
+import { cssColorFromHex } from "../colorUtils";
 import type { AmsState } from "../types";
 
 describe("cssColorFromHex", () => {

@@ -13,6 +13,7 @@
 import { useEffect, useState } from "react";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { BambuAmsStrip } from "./BambuAmsStrip";
+import { U1ToolheadStrip } from "./U1ToolheadStrip";
 import {
   clearCredentials,
   clearDriverId,
@@ -274,9 +275,12 @@ export function PrinterPanel(props: PrinterPanelProps): React.JSX.Element {
         <>
           <ConnectionPill connection={status?.connection ?? null} />
           <JobLine job={status?.job ?? null} />
-          <TempsLine temps={status?.temps ?? null} />
+          <TempsLine temps={status?.temps ?? null} kind={driverKind} />
           {status?.extra.kind === "Bambu" && (
             <BambuAmsStrip ams={status.extra.data.ams} />
+          )}
+          {status?.extra.kind === "U1" && (
+            <U1ToolheadStrip extra={status.extra.data} temps={status.temps} />
           )}
           <button
             type="button"
@@ -425,8 +429,24 @@ function formatEta(totalSeconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function TempsLine({ temps }: { temps: Temps | null }): React.JSX.Element | null {
+function TempsLine({
+  temps,
+  kind,
+}: {
+  temps: Temps | null;
+  kind: DriverKind;
+}): React.JSX.Element | null {
   if (temps == null) return null;
+  // U1 reports 4 independent nozzles; their per-toolhead temps
+  // render in `U1ToolheadStrip`. Showing `nozzles[0]` here would
+  // double the T0 reading. Bed temp is single-source either way.
+  if (kind === "U1") {
+    return (
+      <span className="text-text-muted font-mono">
+        B {formatTemp(temps.bed)}
+      </span>
+    );
+  }
   const nozzle = temps.nozzles[0];
   return (
     <span className="text-text-muted font-mono">
