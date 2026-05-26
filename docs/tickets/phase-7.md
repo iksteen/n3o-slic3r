@@ -45,13 +45,13 @@ the index plus phase-level status and notes.
 
 | Deliverable | Status | Ticket |
 |-------------|--------|--------|
-| `Driver` trait + `DriverRegistry` (shared with 7b) | ❌ open | [PR-7a-1](phase-7/PR-7a-1%20Driver%20trait.md) |
-| rumqttc MQTT connection + auth + status subscribe | ❌ open | [PR-7a-2](phase-7/PR-7a-2%20Bambu%20MQTT%20connection.md) |
-| Status parser → `PrinterStatus` + mounted build plate read | ❌ open | [PR-7a-3](phase-7/PR-7a-3%20Bambu%20status%20parser.md) |
-| AMS lite state read (slot 1–4 filament identity) | ❌ open | [PR-7a-4](phase-7/PR-7a-4%20AMS%20lite%20state.md) |
-| `.gcode.3mf` upload + send-print command | ❌ open | [PR-7a-5](phase-7/PR-7a-5%20Bambu%20send.md) |
-| Pause / resume / stop commands | ❌ open | [PR-7a-6](phase-7/PR-7a-6%20Bambu%20commands.md) |
-| Frontend printer state panel + send button | ❌ open | [PR-7a-7](phase-7/PR-7a-7%20Bambu%20panel.md) |
+| `Driver` trait + `DriverRegistry` (shared with 7b) | ✅ done | [PR-7a-1](phase-7/PR-7a-1%20Driver%20trait.md) |
+| rumqttc MQTT connection + auth + status subscribe | ✅ done | [PR-7a-2](phase-7/PR-7a-2%20Bambu%20MQTT%20connection.md) |
+| Status parser → `PrinterStatus` + mounted build plate read | ✅ done | [PR-7a-3](phase-7/PR-7a-3%20Bambu%20status%20parser.md) |
+| AMS lite state read (slot 1–4 filament identity) | ✅ done | [PR-7a-4](phase-7/PR-7a-4%20AMS%20lite%20state.md) |
+| `.gcode.3mf` upload + send-print command | ✅ done | [PR-7a-5](phase-7/PR-7a-5%20Bambu%20send.md) |
+| Pause / resume / stop commands | ✅ done | [PR-7a-6](phase-7/PR-7a-6%20Bambu%20commands.md) |
+| Frontend printer state panel + send button | ✅ done | [PR-7a-7](phase-7/PR-7a-7%20Bambu%20panel.md) |
 | Real-print smoke + walkthrough doc | ❌ open | [PR-7a-8](phase-7/PR-7a-8%20Bambu%20smoke.md) |
 
 ### 7b — Snapmaker U1 (~2 weeks)
@@ -80,13 +80,13 @@ status.
 
 | Deliverable | Status | Ticket |
 |-------------|--------|--------|
-| Filament profile library + cascade integration | ❌ open | [PR-7c-1](phase-7/PR-7c-1%20Filament%20library.md) |
+| Filament profile library + cascade integration | ✅ done | [PR-7c-1](phase-7/PR-7c-1%20Filament%20library.md) |
 | `FilamentState` per-printer model + driver hookup | ❌ open | [PR-7c-2](phase-7/PR-7c-2%20Filament%20state%20model.md) |
 | Filament state panel UI + manual override + badge | ❌ open | [PR-7c-3](phase-7/PR-7c-3%20Filament%20state%20UI.md) |
 | Mismatch detector (family / temp ±10°C / color) + warn-vs-block | ❌ open | [PR-7c-4](phase-7/PR-7c-4%20Mismatch%20detector.md) |
 | Auto-binding heuristic (family match on first assignment) | ❌ open | [PR-7c-5](phase-7/PR-7c-5%20Auto-binding.md) |
-| Per-(plate, printer) binding persistence | ❌ open | [PR-7c-6](phase-7/PR-7c-6%20Per-plate-printer%20bindings.md) |
-| Sync-on-send (per-driver metadata emission) | ❌ open | [PR-7c-7](phase-7/PR-7c-7%20Sync%20on%20send.md) |
+| Per-(plate, printer) binding persistence | 🟡 partial | [PR-7c-6](phase-7/PR-7c-6%20Per-plate-printer%20bindings.md) |
+| Sync-on-send (per-driver metadata emission) | 🟡 partial | [PR-7c-7](phase-7/PR-7c-7%20Sync%20on%20send.md) |
 | Multi-color paint UI binds to material indices | ❌ open | [PR-7c-8](phase-7/PR-7c-8%20Paint%20to%20material%20index.md) |
 | Phase 7 exit-criteria smoke + walkthrough doc | ❌ open | [PR-7c-9](phase-7/PR-7c-9%20Exit-criteria%20smoke.md) |
 
