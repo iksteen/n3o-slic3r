@@ -199,7 +199,7 @@ impl ProfileLibrary {
             for f in read_sorted_files(&filament_root)? {
                 let slug = file_stem(&f);
                 let asset = read_cascade(root, &f)?;
-                self.filament_fragments.insert(slug.clone(), asset);
+                insert_fragment(&mut self.filament_fragments, slug.clone(), asset, "filament");
                 if !self.filament_order.contains(&slug) {
                     self.filament_order.push(slug);
                 }
@@ -226,7 +226,7 @@ impl ProfileLibrary {
             let machine_path = printer_dir.join("machine.toml");
             if machine_path.is_file() {
                 let asset = read_cascade(root, &machine_path)?;
-                self.printer_fragments.insert(slug.clone(), asset);
+                insert_fragment(&mut self.printer_fragments, slug.clone(), asset, "printer");
             }
             // model.toml — catalog metadata.
             let meta_path = printer_dir.join("model.toml");
@@ -248,8 +248,12 @@ impl ProfileLibrary {
                 for f in read_sorted_files(&nozzles_dir)? {
                     let sku = file_stem(&f);
                     let asset = read_cascade(root, &f)?;
-                    self.nozzle_fragments
-                        .insert((slug.clone(), sku.clone()), asset);
+                    insert_fragment(
+                        &mut self.nozzle_fragments,
+                        (slug.clone(), sku.clone()),
+                        asset,
+                        "nozzle",
+                    );
                     self.nozzle_order
                         .entry(slug.clone())
                         .or_default()
@@ -262,8 +266,12 @@ impl ProfileLibrary {
                 for f in read_sorted_files(&processes_dir)? {
                     let process_slug = file_stem(&f);
                     let asset = read_cascade(root, &f)?;
-                    self.process_fragments
-                        .insert((slug.clone(), process_slug), asset);
+                    insert_fragment(
+                        &mut self.process_fragments,
+                        (slug.clone(), process_slug),
+                        asset,
+                        "process",
+                    );
                 }
             }
             // beds/<name>.toml — identity comes from inside the file.
@@ -276,8 +284,12 @@ impl ProfileLibrary {
                         .map_err(|e| LibraryError::Toml(f.clone(), e))?;
                     let identity = probe.identity;
                     let asset = parse_cascade(root, &f, &raw)?;
-                    self.bed_fragments
-                        .insert((slug.clone(), identity.clone()), asset);
+                    insert_fragment(
+                        &mut self.bed_fragments,
+                        (slug.clone(), identity.clone()),
+                        asset,
+                        "bed",
+                    );
                     self.bed_order
                         .entry(slug.clone())
                         .or_default()
@@ -286,6 +298,41 @@ impl ProfileLibrary {
             }
         }
         Ok(())
+    }
+}
+
+/// Insert a fragment into one of the library's HashMaps, warning on
+/// collision. Both source paths land in the warning so a stale
+/// resource-dir leftover (or a genuine same-slug collision across
+/// vendors) is visible at startup rather than silently winning by
+/// alphabetical order.
+///
+/// **Why:** Tauri copies `bundle.resources` into the target dir on
+/// build and doesn't prune directories that have since vanished from
+/// source. A stale `target/<profile>/profiles/vendor/<old-vendor>/`
+/// leftover whose name sorts later than a current vendor's will
+/// silently overwrite the right fragment — same-slug collisions are
+/// load-bearing for slice correctness (plate-temp keys vanished into
+/// libslic3r defaults for one such case; bed temp emitted as the
+/// engine's 45 °C instead of the cascade-resolved value).
+fn insert_fragment<K>(
+    map: &mut HashMap<K, CascadeAsset>,
+    key: K,
+    asset: CascadeAsset,
+    kind: &'static str,
+) where
+    K: Eq + std::hash::Hash + std::fmt::Debug,
+{
+    let new_source = asset.source_path.clone();
+    if let Some(prior) = map.insert(key, asset) {
+        tracing::warn!(
+            kind = kind,
+            prior_source = %prior.source_path,
+            new_source = %new_source,
+            "profile_library: {kind} fragment slug collision — later file silently \
+             overwrites the earlier one. Check for stale leftovers in the resource dir \
+             (`target/<profile>/profiles/vendor/`) or remove the duplicate from source.",
+        );
     }
 }
 
@@ -678,5 +725,66 @@ mod tests {
         let bambu = printer_catalog_lookup("bambu-lab-a1-mini").expect("a1 mini");
         assert_eq!(bambu.profile.model, "Bambu A1 mini");
         assert_eq!(bambu.fragment_slug, "bambu-lab-a1-mini");
+    }
+
+    #[test]
+    fn same_slug_in_two_vendors_warns_about_silent_overwrite() {
+        // Repro for the resource-dir-leftover incident: a stale vendor
+        // dir whose name sorts later than the current vendor silently
+        // overwrote the correct filament fragment. The loader must now
+        // emit a warning so the next such leftover surfaces at startup.
+        use std::sync::{Arc, Mutex};
+        use tracing::subscriber::with_default;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        for vendor in ["alpha", "zulu"] {
+            let path = root.join(vendor).join("filament");
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(
+                path.join("generic-pla.toml"),
+                format!("filament_settings_id = \"Generic PLA ({vendor})\"\n"),
+            )
+            .unwrap();
+        }
+
+        let captured: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let writer = TestWriter { buf: captured.clone() };
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let lib = with_default(subscriber, || ProfileLibrary::load(root))
+            .expect("load");
+
+        // Last-wins: zulu beats alpha alphabetically.
+        let frag = lib.filament_fragments.get("generic-pla").expect("present");
+        assert!(
+            frag.cascade.rules[0].set.get("filament_settings_id").unwrap()
+                .contains("zulu"),
+            "later vendor still wins (preserves prior behavior)",
+        );
+
+        let log = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+        assert!(log.contains("filament fragment slug collision"), "got: {log}");
+        assert!(log.contains("alpha"), "prior source named in warning: {log}");
+        assert!(log.contains("zulu"), "new source named in warning: {log}");
+    }
+
+    /// Tracing-capture sink — mirrors the pattern in
+    /// `cascade::resolver` tests. Lets us assert on warn-level output
+    /// without pulling in a heavier tracing-test dep.
+    #[derive(Clone)]
+    struct TestWriter {
+        buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+    impl std::io::Write for TestWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.buf.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 }
