@@ -23,7 +23,7 @@ use super::registry::{DriverRegistry, DriverSummary};
 use super::snapmaker::{U1Config, U1Driver};
 use super::status::PrinterStatus;
 use super::traits::{
-    Driver, DriverConfig, DriverId, SendHandle, SendPayload, PrinterCommand,
+    Driver, DriverConfig, DriverId, DriverKind, SendHandle, SendPayload, PrinterCommand,
 };
 use crate::core::project::{PlateId, Project};
 use crate::core::slice::pre_slice_gate::{ams_bindings_for_plate, ams_mapping_for_plate};
@@ -267,6 +267,19 @@ async fn wrap_gcode_as_3mf(
     .map_err(|e| format!("wrap task join: {e}"))?
 }
 
+/// Read a raw G-code file off disk into memory for the U1 send
+/// path. Sliced bundles can be tens of megabytes — the read is
+/// offloaded to a blocking thread to keep the Tauri runtime
+/// responsive.
+async fn read_gcode_bytes(gcode_path: String) -> Result<Vec<u8>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::read(&gcode_path)
+            .map_err(|e| format!("read gcode at {gcode_path}: {e}"))
+    })
+    .await
+    .map_err(|e| format!("read task join: {e}"))?
+}
+
 /// Look up the active project's plate-side AMS bindings for use in
 /// the send/dry-send path. Returns an empty vec when the plate isn't
 /// found or has no mappings — both safe defaults the firmware
@@ -334,16 +347,23 @@ pub async fn driver_export_plate(
     .map_err(|e| format!("export task join: {e}"))?
 }
 
-/// Send the plate's last-sliced raw G-code to the driver as a
-/// `.gcode.3mf` bundle. The frontend obtains `gcode_path` from
-/// the most recent `slice:plate_finished` event (the `output_path`
-/// field on `PlateSummary`).
+/// Send the plate's last-sliced raw G-code to the driver. The
+/// frontend obtains `gcode_path` from the most recent
+/// `slice:plate_finished` event (the `output_path` field on
+/// `PlateSummary`).
 ///
-/// Bundling is a stub: it uses [`fixture_input`] to produce a
-/// minimal valid `.gcode.3mf` shell around the raw G-code. The
-/// real sync-on-send pipeline (PR-7c-7) will embed per-AMS slot
-/// bindings + project metadata; this command keeps the printer's
-/// firmware happy in the meantime.
+/// Payload shape depends on the driver kind:
+/// - **Bambu** — wrap as `.gcode.3mf` via [`wrap_gcode_as_3mf`] and
+///   ship as [`SendPayload::Gcode3mf`] with the plate's AMS routing.
+///   Bundling is a stub: it uses [`fixture_input`] to produce a
+///   minimal valid `.gcode.3mf` shell around the raw G-code. The
+///   real sync-on-send pipeline (PR-7c-7) will embed per-AMS slot
+///   bindings + project metadata; this command keeps the printer's
+///   firmware happy in the meantime.
+/// - **U1** — ship the raw G-code body as [`SendPayload::Gcode`].
+///   Moonraker stores it under the supplied file name and starts
+///   the print in the same multipart upload (see
+///   `core/driver/snapmaker/http.rs`).
 #[tauri::command]
 #[tracing::instrument(skip(registry, project))]
 pub async fn driver_send_plate(
@@ -353,28 +373,43 @@ pub async fn driver_send_plate(
     registry: State<'_, Arc<DriverRegistry>>,
     project: State<'_, Arc<Mutex<Project>>>,
 ) -> Result<SendHandle, String> {
-    let ams = collect_ams_bindings(&project, plate_id);
-    let (use_ams, ams_mapping, ams_mapping2) = collect_ams_mapping(&project, plate_id);
-    let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
     let handle = registry
         .get(id)
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
+    let kind = handle.lock().await.kind();
+    let payload = match kind {
+        DriverKind::Bambu => {
+            let ams = collect_ams_bindings(&project, plate_id);
+            let (use_ams, ams_mapping, ams_mapping2) =
+                collect_ams_mapping(&project, plate_id);
+            let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
+            SendPayload::Gcode3mf {
+                bytes,
+                plate_id,
+                use_ams,
+                ams_mapping,
+                ams_mapping2,
+            }
+        }
+        DriverKind::U1 => {
+            let bytes = read_gcode_bytes(gcode_path).await?;
+            SendPayload::Gcode {
+                bytes,
+                file_name: format!("plate-{plate_id}.gcode"),
+            }
+        }
+    };
     let mut d = handle.lock().await;
-    d.send(SendPayload::Gcode3mf {
-        bytes,
-        plate_id,
-        use_ams,
-        ams_mapping,
-        ams_mapping2,
-    })
-    .await
-    .map_err(|e| e.to_string())
+    d.send(payload).await.map_err(|e| e.to_string())
 }
 
 /// Dry-run variant of [`driver_send_plate`]. Same wrap pipeline,
 /// then routes through [`neuter_gcode_3mf`] to strip extrusion +
 /// comment out heater commands before send. Result: printer
 /// exercises every XY motion cold, with zero filament flow.
+///
+/// Currently Bambu-only; U1 dry-run is wired in the immediate
+/// follow-up commit.
 #[tauri::command]
 #[tracing::instrument(skip(registry, project))]
 pub async fn driver_dry_send_plate(
@@ -384,26 +419,37 @@ pub async fn driver_dry_send_plate(
     registry: State<'_, Arc<DriverRegistry>>,
     project: State<'_, Arc<Mutex<Project>>>,
 ) -> Result<SendHandle, String> {
-    let ams = collect_ams_bindings(&project, plate_id);
-    let (use_ams, ams_mapping, ams_mapping2) = collect_ams_mapping(&project, plate_id);
-    let wrapped = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
-    let neutered = tauri::async_runtime::spawn_blocking(move || neuter_gcode_3mf(&wrapped))
-        .await
-        .map_err(|e| format!("neuter task join: {e}"))?
-        .map_err(|e| format!("neuter bundle: {e}"))?;
     let handle = registry
         .get(id)
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
-    let mut d = handle.lock().await;
-    d.send(SendPayload::Gcode3mf {
-        bytes: neutered,
-        plate_id,
-        use_ams,
-        ams_mapping,
-        ams_mapping2,
-    })
-    .await
-    .map_err(|e| e.to_string())
+    let kind = handle.lock().await.kind();
+    match kind {
+        DriverKind::Bambu => {
+            let ams = collect_ams_bindings(&project, plate_id);
+            let (use_ams, ams_mapping, ams_mapping2) =
+                collect_ams_mapping(&project, plate_id);
+            let wrapped = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
+            let neutered =
+                tauri::async_runtime::spawn_blocking(move || neuter_gcode_3mf(&wrapped))
+                    .await
+                    .map_err(|e| format!("neuter task join: {e}"))?
+                    .map_err(|e| format!("neuter bundle: {e}"))?;
+            let mut d = handle.lock().await;
+            d.send(SendPayload::Gcode3mf {
+                bytes: neutered,
+                plate_id,
+                use_ams,
+                ams_mapping,
+                ams_mapping2,
+            })
+            .await
+            .map_err(|e| e.to_string())
+        }
+        DriverKind::U1 => Err(
+            "dry-run send for U1 raw-G-code payloads is not yet wired (follow-up commit)"
+                .into(),
+        ),
+    }
 }
 
 /// Motion-only dry-run variant of [`driver_send`]. Neuters the
