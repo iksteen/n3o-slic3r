@@ -38,6 +38,30 @@ jobs:
           sha=$(git -C external/OrcaSlicer rev-parse HEAD)
           echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
 
+      - name: Free runner disk space
+        # Originally added after `Run 26332210186` failed mid-libslic3r
+        # with `'No space left on device'` in MeshBoolean.cpp.o — the
+        # RelWithDebInfo debug-symbol sections push the ubuntu runner
+        # past its ~14 G free-disk ceiling once cargo target + cmake
+        # build tree + npm modules stack up. Strip the runner image
+        # of the toolchains we don't use; typical free is ~15-20 G,
+        # plenty for libslic3r + cargo + npm to all fit.
+        #
+        # Moved EARLY in the job (before any cache restore) after runs
+        # 26449015224 / 26453559888 stalled in the "Cache cargo
+        # registry and target" step: the OrcaSlicer deps cache + the
+        # libslic3r cmake tree cache (~5 G extracted) restore first,
+        # and that left no room for cargo's restore-tarball
+        # extraction. Running this step ahead of every cache restore
+        # gives the whole pipeline its headroom up front.
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      /usr/share/swift
+          sudo docker image prune --all --force || true
+          df -h /
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -187,22 +211,6 @@ jobs:
 
       - name: npm ci
         run: npm ci
-
-      - name: Free runner disk space
-        # Run 26332210186 failed mid-libslic3r with `'No space left
-        # on device'` in MeshBoolean.cpp.o — the RelWithDebInfo
-        # debug-symbol sections push the ubuntu runner past its
-        # ~14 G free-disk ceiling once cargo target + cmake build
-        # tree + npm modules stack up. Strip the runner image of
-        # the toolchains we don't use; typical free is ~15-20 G,
-        # plenty for libslic3r + cargo + npm to all fit.
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
-                      /usr/share/swift
-          sudo docker image prune --all --force || true
-          df -h /
 
       - name: Provision 8 GB swap for rustc peaks
         # The ubuntu-latest runner has ~7 G RAM, and individual rustc
