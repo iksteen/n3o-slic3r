@@ -462,6 +462,32 @@ mod tests {
         assert_eq!(project.file_metadata.get("Designer").map(|s| s.as_str()), Some("jansonne"));
     }
 
+    fn two_cubes_fixture() -> PathBuf {
+        // First-party fixture; generator script + binary live next
+        // to each other under tests/fixtures/3mf/. See the dir's
+        // README for shape + provenance.
+        let crate_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+        PathBuf::from(crate_dir).join("tests/fixtures/3mf/two-cubes-2mat.3mf")
+    }
+
+    #[test]
+    fn two_cubes_2mat_decodes_per_object_extruder_hints() {
+        // The 2-cube fixture authored at tests/fixtures/3mf/ carries
+        // a BBS-flavor `<metadata key="extruder">` on each <part>
+        // (cube A = 1, cube B = 2). Pins the per-object extruder
+        // hint path end-to-end through `apply_bbs_metadata` so a
+        // regression there (e.g. zip-order vs document-order
+        // confusion) surfaces immediately. Companion regression
+        // tests for the auto-bind that consumes these values live
+        // in `core::project::mutation::tests::auto_bind_*`.
+        let project = load_3mf(&two_cubes_fixture()).expect("load 2-cube fixture");
+        assert_eq!(project.objects.len(), 2, "two build items");
+        let extruders: Vec<Option<u8>> = project.objects.iter().map(|o| o.extruder_id).collect();
+        assert_eq!(extruders, vec![Some(1), Some(2)]);
+        let names: Vec<&str> = project.objects.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(names, vec!["Cube A (T0)", "Cube B (T1)"]);
+    }
+
     fn orcacube_fixture() -> PathBuf {
         let crate_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
         let mut p = PathBuf::from(crate_dir);

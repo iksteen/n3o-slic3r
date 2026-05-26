@@ -14,7 +14,7 @@
 //! when they need to mutate sibling plates — the borrow checker
 //! wants index-then-deref, not a borrowed `Plate`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use glam::{Quat, Vec3};
 
@@ -115,12 +115,25 @@ impl Project {
     /// [`Project::register_object`]; idempotent on re-call.
     ///
     /// Slot selection: walk the bound `PrinterInstance`'s flat slot
-    /// list `(extruder, slot)`-major and pick index
-    /// `(material - 1) MOD total_slots`. For Bambi (1 slot total)
-    /// every material lands on `(0, 0)`. For Snappy (4 extruders ×
-    /// 1 slot) material N maps to extruder `N-1` mod 4. For a
-    /// future Bambi+AMS (1 extruder × 5 slots) material N rotates
-    /// through the 5 slots, starting at the `Direct` slot.
+    /// list `(extruder, slot)`-major starting at the *preferred*
+    /// index `(material - 1) MOD total_slots`, then advance to the
+    /// first slot not already bound to another material. Falls back
+    /// to the preferred index when every slot is taken (genuine
+    /// more-materials-than-slots case).
+    ///
+    /// Why prefer + skip rather than plain modular ring: a stale
+    /// binding from a deleted object lingers in `material_to_slot`,
+    /// and a naive modular pick happily doubles a *new* material
+    /// onto the slot a previously-deleted material already claims —
+    /// e.g. Snappy with M1 manually pinned to T1, then loading a
+    /// 2-cube 2-material 3mf would auto-bind M2 to T1 as well
+    /// (collision) instead of T2. First-free-from-preferred avoids
+    /// the collision; wrap-around at saturation preserves the
+    /// previous behavior for the 5-materials-on-4-slots case.
+    ///
+    /// Bambi (1 extruder × 5 slots, has AMS) → flat list excludes
+    /// the external spool, so materials rotate through AMS:1..AMS:4.
+    /// Snappy (4 extruders × 1 slot) → material N starts at T(N-1).
     ///
     /// No-op when the plate has no `printer_instance_id` — the slice
     /// path refuses unbound plates anyway, and we don't want to
@@ -173,7 +186,16 @@ impl Project {
         if flat.is_empty() {
             return;
         }
-        let pick = flat[(model_material as usize - 1) % flat.len()];
+        let taken: std::collections::HashSet<crate::core::printer::SlotRef> = self.plates[idx]
+            .material_to_slot
+            .values()
+            .copied()
+            .collect();
+        let start = (model_material as usize - 1) % flat.len();
+        let pick = (0..flat.len())
+            .map(|offset| flat[(start + offset) % flat.len()])
+            .find(|s| !taken.contains(s))
+            .unwrap_or(flat[start]);
         self.plates[idx].material_to_slot.insert(model_material, pick);
     }
 
@@ -1109,34 +1131,90 @@ impl Project {
     /// Delete one or more objects on the active plate. Removes
     /// from selection if present. Returns one `ObjectRemoved` event
     /// per id plus (if the selection changed) a `SelectionChanged`
-    /// event.
+    /// event, plus (if a material's last user was removed) a
+    /// `MaterialSlotChanged` event.
     pub fn delete_objects(&mut self, ids: &[ObjectId]) -> Vec<SceneEvent> {
         let active = self.active_plate;
         let plate_id = self.plates[active].id;
-        let plate = &mut self.plates[active].scene;
         let mut events = Vec::new();
         let mut selection_changed = false;
-        for id in ids {
-            if plate.objects.remove(id).is_some() {
-                events.push(SceneEvent::ObjectRemoved {
-                    plate_id,
-                    object_id: *id,
-                });
-                if plate.selection.remove(id) {
-                    selection_changed = true;
+        // Collect the materials the soon-to-be-removed objects use,
+        // *before* removal — otherwise we can't tell which bindings
+        // might now be orphaned.
+        let mut removed_materials: BTreeSet<u8> = BTreeSet::new();
+        {
+            let plate = &mut self.plates[active].scene;
+            for id in ids {
+                if let Some(obj) = plate.objects.remove(id) {
+                    removed_materials.insert(obj.extruder_id.unwrap_or(1));
+                    events.push(SceneEvent::ObjectRemoved {
+                        plate_id,
+                        object_id: *id,
+                    });
+                    if plate.selection.remove(id) {
+                        selection_changed = true;
+                    }
                 }
             }
+            if selection_changed {
+                let mut sorted: Vec<ObjectId> =
+                    plate.selection.iter().copied().collect();
+                sorted.sort();
+                events.push(SceneEvent::SelectionChanged {
+                    plate_id,
+                    selected: sorted,
+                });
+            }
         }
-        if selection_changed {
-            let mut sorted: Vec<ObjectId> =
-                plate.selection.iter().copied().collect();
-            sorted.sort();
-            events.push(SceneEvent::SelectionChanged {
-                plate_id,
-                selected: sorted,
-            });
+        if self.prune_orphan_material_bindings(active, &removed_materials) {
+            events.push(SceneEvent::MaterialSlotChanged { plate_id });
         }
         events
+    }
+
+    /// Drop `material_to_slot` entries on `plate_idx` for any material
+    /// in `candidates` that no remaining object on the plate uses.
+    /// Returns `true` if anything was dropped — callers emit
+    /// [`SceneEvent::MaterialSlotChanged`] when so.
+    ///
+    /// **Why:** the auto-bind in [`ensure_default_material_slot_on_active`]
+    /// inserts a binding on first use; without symmetric cleanup,
+    /// the binding lingers after every object that referenced the
+    /// material is deleted. Loading a new model afterwards then
+    /// auto-binds new materials *around* the stale entry — leading to
+    /// the "second material lands on the same physical slot as the
+    /// long-deleted first material" collision the user hit in the
+    /// 2-cube-2-material 3mf load (a fresh M1 pin lingered from an
+    /// earlier session; loading M1+M2 routed M2 onto the same slot).
+    ///
+    /// Object material is `extruder_id.unwrap_or(1)`, matching the
+    /// default applied at register-time.
+    fn prune_orphan_material_bindings(
+        &mut self,
+        plate_idx: usize,
+        candidates: &BTreeSet<u8>,
+    ) -> bool {
+        if candidates.is_empty() {
+            return false;
+        }
+        let still_in_use: BTreeSet<u8> = self.plates[plate_idx]
+            .scene
+            .objects
+            .values()
+            .map(|o| o.extruder_id.unwrap_or(1))
+            .collect();
+        let mut changed = false;
+        for material in candidates {
+            if !still_in_use.contains(material)
+                && self.plates[plate_idx]
+                    .material_to_slot
+                    .remove(material)
+                    .is_some()
+            {
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Duplicate an object on the active plate. The clone gets a
@@ -1389,6 +1467,7 @@ impl Project {
             .object_overrides
             .remove(&object_id);
         let was_selected = self.plates[from_idx].scene.selection.remove(&object_id);
+        let moved_material = object.extruder_id.unwrap_or(1);
         self.plates[from_idx].scene.objects.remove(&object_id);
 
         let mesh_bb = self
@@ -1458,6 +1537,18 @@ impl Project {
                 plate_id: from_plate,
                 selected: sorted,
             });
+        }
+        // The destination plate's auto-bind for the moved object's
+        // material doesn't fire here (move_object_to_plate uses
+        // `objects.insert` directly, not `register_object`), so the
+        // destination's material→slot map is unaffected by the
+        // arrival. We *do* prune the source plate, though: a moved
+        // object behaves like a deleted one from the source plate's
+        // perspective.
+        let mut moved_set = BTreeSet::new();
+        moved_set.insert(moved_material);
+        if self.prune_orphan_material_bindings(from_idx, &moved_set) {
+            events.push(SceneEvent::MaterialSlotChanged { plate_id: from_plate });
         }
         Ok((report, events))
     }
@@ -3050,7 +3141,7 @@ mod tests {
         }
     }
 
-    fn add_cube_with_material(p: &mut Project, mat: u8) {
+    fn add_cube_with_material(p: &mut Project, mat: u8) -> ObjectId {
         let mesh_id = p.register_mesh(cube_mesh());
         p.register_object(NewSceneObject {
             mesh: mesh_id,
@@ -3059,7 +3150,7 @@ mod tests {
             visible: true,
             extruder_id: Some(mat),
             parent: None,
-        });
+        })
     }
 
     #[test]
@@ -3068,14 +3159,16 @@ mod tests {
         // Ext + AMS:1..AMS:4). Because the instance carries AMS slots,
         // auto-bind skips the external spool (slot 0) — assigning
         // material 1 to Ext would make the firmware halt at print
-        // time asking the user to feed the PTFE tube. Materials
-        // rotate through the 4 AMS slots: material 1 → AMS:1
-        // (slot 1), material 2 → AMS:2 (slot 2), … material 5 wraps
-        // back to AMS:1.
+        // time asking the user to feed the PTFE tube.
+        //
+        // Materials get distinct slots while any remain free: M1 →
+        // AMS:1, M2 → AMS:2. M5's preferred slot (modular) is
+        // AMS:1 (taken); the first-free-from-preferred policy walks
+        // forward and lands on AMS:3 instead of colliding with M1.
         let mut p = Project::default();
         add_cube_with_material(&mut p, 1);
         add_cube_with_material(&mut p, 2);
-        add_cube_with_material(&mut p, 5); // wraps back to AMS:1
+        add_cube_with_material(&mut p, 5);
         assert_eq!(
             p.plates[0].material_to_slot.get(&1),
             Some(&SlotRef { extruder: 0, slot: 1 }),
@@ -3086,7 +3179,107 @@ mod tests {
         );
         assert_eq!(
             p.plates[0].material_to_slot.get(&5),
+            Some(&SlotRef { extruder: 0, slot: 3 }),
+            "preferred slot (AMS:1, modular) is taken by M1; walk forward to first free → AMS:3",
+        );
+    }
+
+    #[test]
+    fn auto_bind_wraps_when_every_slot_taken() {
+        // Genuine more-materials-than-slots case: with M1..M4 already
+        // bound on Bambi (all 4 AMS slots taken), M5 must still land
+        // *somewhere* — the fallback wraps back to the preferred
+        // modular index (AMS:1). Users sharing one physical slot
+        // across two materials is the expected outcome when the
+        // model has more materials than the printer has slots.
+        let mut p = Project::default();
+        for m in 1..=4 {
+            add_cube_with_material(&mut p, m);
+        }
+        add_cube_with_material(&mut p, 5);
+        assert_eq!(
+            p.plates[0].material_to_slot.get(&5),
             Some(&SlotRef { extruder: 0, slot: 1 }),
+            "all 4 AMS slots taken → wrap to preferred (AMS:1)",
+        );
+    }
+
+    #[test]
+    fn deleting_last_user_of_a_material_drops_its_slot_binding() {
+        // The user's reproduction (rebuilt): on Snappy, add a cube
+        // for material 1, pin it to T1 manually, then delete the
+        // cube. The binding for M1 must NOT linger after its last
+        // user vanishes — otherwise a subsequent multi-material load
+        // collides materials onto T1 (auto-bind's first-free-from-
+        // preferred still has T1 as "taken" and steers the new
+        // material around it, but the panel would also still show
+        // M1 → T1 with no object to justify it: confusing UX, and
+        // the slice-time cascade keeps emitting toolchanges to T1
+        // for a material nothing references).
+        let mut p = Project::default();
+        let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
+        p.plates[0].printer_instance_id = Some("snappy".into());
+        let cube = add_cube_with_material(&mut p, 1);
+        // User manually pins M1 → T1 (instead of the auto-bind's T0).
+        p.plates[0]
+            .material_to_slot
+            .insert(1, SlotRef { extruder: 1, slot: 0 });
+        let events = p.delete_objects(&[cube]);
+        assert!(!p.plates[0].material_to_slot.contains_key(&1));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SceneEvent::MaterialSlotChanged { .. })),
+            "delete that orphans a material must emit MaterialSlotChanged so the panel refreshes",
+        );
+    }
+
+    #[test]
+    fn deleting_one_cube_keeps_binding_when_another_still_uses_the_material() {
+        // Two cubes share material 1. Deleting one leaves M1 still in
+        // use → binding survives, no MaterialSlotChanged event.
+        let mut p = Project::default();
+        let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
+        p.plates[0].printer_instance_id = Some("snappy".into());
+        let cube_a = add_cube_with_material(&mut p, 1);
+        let _cube_b = add_cube_with_material(&mut p, 1);
+        let before = p.plates[0].material_to_slot.get(&1).copied();
+        assert!(before.is_some(), "auto-bind populated M1");
+        let events = p.delete_objects(&[cube_a]);
+        assert_eq!(p.plates[0].material_to_slot.get(&1).copied(), before);
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, SceneEvent::MaterialSlotChanged { .. })),
+            "no MaterialSlotChanged when the material still has a user",
+        );
+    }
+
+    #[test]
+    fn auto_bind_skips_slot_already_pinned_by_user() {
+        // Regression for the bug the user hit by hand: on Snappy
+        // (4 extruders × 1 slot), pin M1 → T1 manually, then add a
+        // cube with material 2. The auto-bind's preferred slot for
+        // M2 is flat[(2-1) % 4] = T1 — same as M1's pin. Without
+        // the first-free-from-preferred policy, M2 would collide
+        // onto T1; with it, M2 advances to the next free slot (T2).
+        let mut p = Project::default();
+        let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
+        p.plates[0].printer_instance_id = Some("snappy".into());
+        // User pins M1 → T1 before adding any objects.
+        p.plates[0]
+            .material_to_slot
+            .insert(1, SlotRef { extruder: 1, slot: 0 });
+        add_cube_with_material(&mut p, 2);
+        assert_eq!(
+            p.plates[0].material_to_slot.get(&1),
+            Some(&SlotRef { extruder: 1, slot: 0 }),
+            "user pin survives",
+        );
+        assert_eq!(
+            p.plates[0].material_to_slot.get(&2),
+            Some(&SlotRef { extruder: 2, slot: 0 }),
+            "M2's preferred T1 is taken by user pin; walks forward to T2",
         );
     }
 

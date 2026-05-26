@@ -1,0 +1,32 @@
+# 3MF test fixtures
+
+Hand-authored 3MF files (with generator scripts checked in) for
+loader / scene / slice integration tests. Each `<name>.3mf` is
+produced by running its sibling `<name>.py` — the generator is the
+source of truth, the binary is checked in only so test runs don't
+need a Python interpreter.
+
+## Files
+
+| Fixture | Source | Use |
+|---|---|---|
+| `two-cubes-2mat.3mf` | `two-cubes-2mat.py` | Two 20mm cubes, each with a BBS-flavor `<metadata key="extruder">` hint (cube A → material 1, cube B → material 2). Exercises the per-object extruder-hint → material→slot auto-bind path on multi-material printers (Snapmaker U1). |
+
+## Regenerating
+
+```bash
+python3 src-tauri/tests/fixtures/3mf/<fixture>.py
+```
+
+Scripts have no external dependencies — stdlib `zipfile` +
+`pathlib` only.
+
+## Adding a new fixture
+
+1. Author the generator as `<name>.py` (write any geometry,
+   per-object `extruder` metadata, plate stanza, etc.).
+2. Run it once to produce `<name>.3mf`.
+3. Commit both. Add a row to the table above.
+4. Document non-obvious shape choices inside the script's
+   docstring — readers shouldn't have to rerun the script + diff
+   the zip to understand what edge case the fixture targets.
