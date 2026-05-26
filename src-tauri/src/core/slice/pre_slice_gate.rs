@@ -224,22 +224,51 @@ pub fn ams_mapping_for_plate(
         return (false, mapping, mapping2);
     };
 
+    // `ams_mapping[i]` is the AMS slot for **libslic3r filament index
+    // i** (0-based), NOT for the i-th entry in `material_to_slot`
+    // iteration order. The cascade composer fans out one filament per
+    // PrinterInstance slot (in flat extruder-major order); the slicer
+    // emits `T<n>` referring to those filament indices; the firmware
+    // looks up `ams_mapping[n]` to find which physical AMS slot to
+    // pull from. Indexing by iteration position instead of filament
+    // index produced an off-by-one (or off-by-N when Direct slots
+    // exist) — on Bambi (`[Ext, AMS:1..AMS:4]`) we sent
+    // `[0, 1, 2, 3, -1]` which the firmware read as
+    // "filament 0 → AMS:1, filament 1 → AMS:2, …, filament 4 →
+    // external", shifting every cube's color one slot up and
+    // producing a "no AMS slot 5" error on the 4th color.
+    //
+    // Correct indexing:
+    //   filament_index = sum(prev extruders' slot counts) + slot_ref.slot
+    //   ams_slot_in_unit = count(AMS-feed slots in this extruder, [..slot])
     let mut any_ams = false;
-    for (i, slot_ref) in plate.material_to_slot.values().enumerate().take(5) {
-        let Some(ext) = instance.extruders.get(slot_ref.extruder as usize) else { continue };
-        let Some(slot) = ext.slots.get(slot_ref.slot as usize) else { continue };
-        match slot.feed {
-            FeedKind::Direct => {} // leave as -1 / UNUSED
-            FeedKind::Ams => {
-                let ams_slot = ext.slots[..slot_ref.slot as usize]
-                    .iter()
-                    .filter(|s| s.feed == FeedKind::Ams)
-                    .count() as u8;
-                mapping[i] = ams_slot as i8;
-                mapping2[i] = AmsMappingV2 { ams_id: 0, slot_id: ams_slot };
-                any_ams = true;
-            }
+    for slot_ref in plate.material_to_slot.values() {
+        let Some(ext) = instance.extruders.get(slot_ref.extruder as usize) else {
+            continue;
+        };
+        let Some(slot) = ext.slots.get(slot_ref.slot as usize) else {
+            continue;
+        };
+        if slot.feed != FeedKind::Ams {
+            continue;
         }
+        let preceding: usize = instance
+            .extruders
+            .iter()
+            .take(slot_ref.extruder as usize)
+            .map(|e| e.slots.len())
+            .sum();
+        let filament_index = preceding + slot_ref.slot as usize;
+        if filament_index >= mapping.len() {
+            continue;
+        }
+        let ams_slot = ext.slots[..slot_ref.slot as usize]
+            .iter()
+            .filter(|s| s.feed == FeedKind::Ams)
+            .count() as u8;
+        mapping[filament_index] = ams_slot as i8;
+        mapping2[filament_index] = AmsMappingV2 { ams_id: 0, slot_id: ams_slot };
+        any_ams = true;
     }
     (any_ams, mapping, mapping2)
 }
@@ -497,6 +526,55 @@ mod tests {
             .insert(1, SlotRef { extruder: 0, slot: 0 });
         let bindings = ams_bindings_for_plate(&p.plates[0]);
         assert!(bindings.is_empty(), "got {bindings:?}");
+    }
+
+    #[test]
+    fn ams_mapping_for_4mat_bambi_indexed_by_filament_not_material_position() {
+        // Regression for the wrong-colors symptom the user hit on a
+        // real 4-cube print: every cube printed with the next slot's
+        // filament, and the 4th errored as "filament loading
+        // failed". The encoder had been indexing `mapping[i]` by the
+        // position of the material in the BTreeMap iteration order
+        // (0..3), but the firmware indexes it by libslic3r FILAMENT
+        // INDEX (0..N where N = sum of all PrinterInstance slot
+        // counts). Bambi's `[Ext, AMS:1..AMS:4]` means filament 0 =
+        // Ext (no AMS), filaments 1..4 = AMS:1..AMS:4 — so the
+        // correct shape is `[-1, 0, 1, 2, 3]` (Ext at index 0),
+        // not `[0, 1, 2, 3, -1]`.
+        let _registry = RegistryGuard::acquire();
+        let mut p = Project::default();
+        for mat in 1u8..=4 {
+            add_cube(&mut p, mat);
+        }
+        let (use_ams, mapping, mapping2) = ams_mapping_for_plate(&p.plates[0]);
+        assert!(use_ams);
+        // Material 1 → AMS:1 → filament index 1 → AMS slot 0 (0-based,
+        // AMS-feed-only). Material 4 → AMS:4 → filament index 4 →
+        // AMS slot 3. Filament 0 (Ext) is unused → -1.
+        assert_eq!(mapping, [-1, 0, 1, 2, 3]);
+        assert_eq!(mapping2[0], AmsMappingV2::UNUSED);
+        assert_eq!(mapping2[1], AmsMappingV2 { ams_id: 0, slot_id: 0 });
+        assert_eq!(mapping2[2], AmsMappingV2 { ams_id: 0, slot_id: 1 });
+        assert_eq!(mapping2[3], AmsMappingV2 { ams_id: 0, slot_id: 2 });
+        assert_eq!(mapping2[4], AmsMappingV2 { ams_id: 0, slot_id: 3 });
+    }
+
+    #[test]
+    fn ams_mapping_external_only_routes_to_ext_filament_index_with_unused() {
+        // Material pinned manually to the Bambi external spool (Ext,
+        // flat slot 0 / filament 0). No AMS-feed slot is referenced,
+        // so `mapping` stays all-`-1`, `use_ams = false`.
+        use crate::core::printer::SlotRef;
+        let _registry = RegistryGuard::acquire();
+        let mut p = Project::default();
+        add_cube(&mut p, 1);
+        p.plates[0]
+            .material_to_slot
+            .insert(1, SlotRef { extruder: 0, slot: 0 });
+        let (use_ams, mapping, mapping2) = ams_mapping_for_plate(&p.plates[0]);
+        assert!(!use_ams);
+        assert_eq!(mapping, [-1, -1, -1, -1, -1]);
+        assert!(mapping2.iter().all(|m| *m == AmsMappingV2::UNUSED));
     }
 
     #[test]
