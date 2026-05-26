@@ -175,18 +175,36 @@ fn model_xml(project: &Project3mf) -> String {
     }
 
     out.push_str(" <resources>\n");
-    // One <object> per mesh, with an inline <mesh>. We assign
-    // object ids 1..=meshes.len(). The build items below reference
-    // these ids per scene object.
-    for (idx, mesh) in project.meshes.iter().enumerate() {
-        let object_id = idx as u32 + 1;
+    // One <object> per scene object, with an inline <mesh>. The
+    // object id is `obj_idx + 1` and is shared with both the build
+    // item AND model_settings_xml below — per-object metadata in
+    // model_settings (extruder, name) is bound to the <object>
+    // resource id, so two scene objects that share a mesh must
+    // still get distinct <object> resources or libslic3r will
+    // collapse their metadata into one entry. We accept the mesh-
+    // duplication cost (each scene object writes its mesh
+    // geometry once, even when other objects share it) for the
+    // sake of per-instance metadata correctness.
+    //
+    // Earlier the resources loop deduped meshes (one <object> per
+    // unique mesh, build items used `mesh_idx + 1`). That broke
+    // when `plate.scene.objects.values()` iteration order
+    // (HashMap, non-deterministic) diverged from the sorted
+    // mesh-id order: build items' `objectid` and model_settings'
+    // `object id` would land on different scene objects, so
+    // libslic3r placed object A's geometry at A's transform but
+    // applied object B's extruder hint to it. Manifested as
+    // material-color swaps between cubes at random.
+    for (obj_idx, obj) in project.objects.iter().enumerate() {
+        let object_id = obj_idx as u32 + 1;
+        let mesh = &project.meshes[obj.mesh_idx];
         write_object_with_mesh(&mut out, object_id, mesh);
     }
     out.push_str(" </resources>\n");
 
     out.push_str(" <build>\n");
-    for obj in &project.objects {
-        let object_id = obj.mesh_idx as u32 + 1;
+    for (obj_idx, obj) in project.objects.iter().enumerate() {
+        let object_id = obj_idx as u32 + 1;
         let transform = transform_to_3mf_string(&obj.transform);
         out.push_str(&format!(
             "  <item objectid=\"{object_id}\" transform=\"{transform}\" printable=\"1\"/>\n"
@@ -434,7 +452,15 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_two_objects_sharing_a_mesh() {
+    fn round_trips_two_objects_with_distinct_metadata_even_when_sharing_a_mesh() {
+        // Per-object metadata in model_settings (extruder hint,
+        // name) is keyed by `<object id="N">`, so two scene objects
+        // that share mesh geometry but need distinct extruder hints
+        // must each get their own `<object>` resource. The writer
+        // duplicates the mesh content on disk to preserve per-
+        // instance metadata. (Earlier behaviour deduped meshes but
+        // then the build-item / model-settings id schemes diverged
+        // — see the resources-loop docstring for the regression.)
         let project = project_from_objects(
             vec![one_triangle_mesh()],
             vec![
@@ -459,9 +485,11 @@ mod tests {
         write_3mf(&project, &path).expect("write");
         let reloaded = super::super::load_3mf(&path).expect("re-read");
 
-        // Both build items point at the same `<object>` so the
-        // reader dedupes to one mesh.
-        assert_eq!(reloaded.meshes.len(), 1);
+        // Two scene objects → two `<object>` resources → two meshes
+        // on reload (geometry duplicated). The point of the test is
+        // that the per-object metadata round-trips with the right
+        // object even though both reference the same geometry.
+        assert_eq!(reloaded.meshes.len(), 2);
         assert_eq!(reloaded.objects.len(), 2);
         assert_eq!(reloaded.objects[0].extruder_id, Some(1));
         assert_eq!(reloaded.objects[1].extruder_id, Some(2));
