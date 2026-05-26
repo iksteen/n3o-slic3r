@@ -132,33 +132,50 @@ pub fn validate_pre_slice(
 pub fn ams_bindings_for_plate(
     plate: &crate::core::project::model::Plate,
 ) -> Vec<crate::core::threemf::AmsBinding> {
+    use crate::core::printer::FeedKind;
     let Some(instance_id) = plate.printer_instance_id.as_deref() else {
         return Vec::new();
     };
     let Some(instance) = lookup_instance(instance_id) else {
         return Vec::new();
     };
-    // Flatten the instance's slot grid once so we can convert
-    // (extruder, slot) tuples into 1-based linear indices.
-    let flat: BTreeMap<(u8, u8), u8> = instance
-        .extruders
-        .iter()
-        .enumerate()
-        .flat_map(|(e_idx, e)| {
-            (0..e.slots.len()).map(move |s_idx| ((e_idx as u8, s_idx as u8), 0))
-        })
-        .enumerate()
-        .map(|(linear, ((e, s), _))| ((e, s), (linear + 1) as u8))
-        .collect();
 
+    // BBL firmware expects 1-based AMS-only slot indices (1..N for an
+    // N-slot AMS unit) in the `ams_bindings.ams_slot` field — these
+    // become the `M620 S<N>A` operands the print pre-loads. Direct-
+    // fed slots (the A1 mini's external spool) aren't AMS-addressable;
+    // material loading from a Direct slot is signaled via the
+    // separate `ams_mapping` field's `-1` sentinel and shouldn't
+    // appear in ams_bindings at all.
+    //
+    // Earlier implementation walked the *full* flat slot grid
+    // (including Direct slots) with 1-based numbering — Bambi's
+    // `[Ext, AMS:1..4]` got `[1, 2, 3, 4, 5]`, so material auto-bound
+    // to AMS:1 published ams_slot=2 and material auto-bound to AMS:4
+    // published ams_slot=5 (which doesn't exist on the 4-slot AMS
+    // lite and produced a firmware-side "filament loading error" on a
+    // real 4-color print). Now mirror `ams_mapping_for_plate`: skip
+    // Direct-feed slots and number AMS-feed slots within their
+    // extruder, 1-based.
     let mut out = Vec::new();
     for (&material, &slot_ref) in &plate.material_to_slot {
-        if let Some(&ams_slot) = flat.get(&(slot_ref.extruder, slot_ref.slot)) {
-            out.push(crate::core::threemf::AmsBinding {
-                model_material_index: material,
-                ams_slot,
-            });
+        let Some(extruder) = instance.extruders.get(slot_ref.extruder as usize) else {
+            continue;
+        };
+        let Some(slot) = extruder.slots.get(slot_ref.slot as usize) else {
+            continue;
+        };
+        if slot.feed != FeedKind::Ams {
+            continue;
         }
+        let ams_slot = extruder.slots[..=slot_ref.slot as usize]
+            .iter()
+            .filter(|s| s.feed == FeedKind::Ams)
+            .count() as u8;
+        out.push(crate::core::threemf::AmsBinding {
+            model_material_index: material,
+            ams_slot,
+        });
     }
     out
 }
@@ -424,37 +441,79 @@ mod tests {
     fn ams_bindings_pull_from_material_to_slot_map() {
         // Bambi has 1 extruder × 5 slots (Ext + AMS:1..AMS:4). Auto-
         // bind skips the external spool when AMS slots exist, so
-        // material 1 lands on (0, 1) — slot 1 = flat slot 2 in the
-        // 1-based AMS index.
+        // material 1 lands on (0, 1) = AMS:1 → ams_slot=1 (first
+        // AMS-feed slot under this extruder, 1-based).
         let _registry = RegistryGuard::acquire();
         let mut p = Project::default();
         add_cube(&mut p, 1);
         let bindings = ams_bindings_for_plate(&p.plates[0]);
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].model_material_index, 1);
-        assert_eq!(bindings[0].ams_slot, 2);
+        assert_eq!(bindings[0].ams_slot, 1);
     }
 
     #[test]
-    fn ams_bindings_flatten_extruder_grid_for_snappy() {
-        // Snappy has 4 extruders × 1 slot — material N → extruder
-        // (N-1 mod 4), slot 0 → flat slot N.
+    fn ams_bindings_for_full_amslite_uses_1_through_4_not_2_through_5() {
+        // Regression for the off-by-one that caused a real-print
+        // filament-loading error on the 4-cube 4-mat smoke: M1..M4
+        // got published as ams_slot 2,3,4,5 (Ext was being counted
+        // as ams_slot=1). M4→5 doesn't exist on the AMS lite's
+        // 4 slots; the firmware refused to load it.
         let _registry = RegistryGuard::acquire();
         let mut p = Project::default();
-        // Snappy isn't the default — re-bind by hand.
+        for mat in 1u8..=4 {
+            add_cube(&mut p, mat);
+        }
+        let bindings = ams_bindings_for_plate(&p.plates[0]);
+        let by_mat: std::collections::BTreeMap<u8, u8> = bindings
+            .iter()
+            .map(|b| (b.model_material_index, b.ams_slot))
+            .collect();
+        assert_eq!(by_mat.get(&1), Some(&1));
+        assert_eq!(by_mat.get(&2), Some(&2));
+        assert_eq!(by_mat.get(&3), Some(&3));
+        assert_eq!(by_mat.get(&4), Some(&4));
+        assert!(
+            !by_mat.values().any(|&v| v == 5),
+            "no AMS slot may publish as 5 — the AMS lite only has 4 slots",
+        );
+    }
+
+    #[test]
+    fn ams_bindings_skips_materials_routed_to_direct_external_spool() {
+        // Material bound explicitly to the Bambi external spool
+        // (Direct-feed slot at index 0) should NOT publish an
+        // ams_bindings entry — the firmware reads "use external
+        // spool" via the separate `ams_mapping` field's `-1`
+        // sentinel. Publishing it as an AMS slot would route the
+        // print to a real AMS slot the user didn't choose.
+        use crate::core::printer::SlotRef;
+        let _registry = RegistryGuard::acquire();
+        let mut p = Project::default();
+        // Override the auto-bind: pin M1 to Ext.
+        add_cube(&mut p, 1);
+        p.plates[0]
+            .material_to_slot
+            .insert(1, SlotRef { extruder: 0, slot: 0 });
+        let bindings = ams_bindings_for_plate(&p.plates[0]);
+        assert!(bindings.is_empty(), "got {bindings:?}");
+    }
+
+    #[test]
+    fn ams_bindings_empty_for_snappy_toolchanger() {
+        // Snappy is a 4-toolhead toolchanger — all slots are
+        // Direct-feed, not AMS. ams_bindings is a BBL-firmware
+        // concept and shouldn't carry entries for a U1 plate
+        // (the U1 send path doesn't even wrap as .gcode.3mf, but
+        // the encoder should still produce a clean empty output
+        // for hygiene).
+        let _registry = RegistryGuard::acquire();
+        let mut p = Project::default();
         p.plates[0].printer_instance_id = Some("snappy".into());
         for mat in 1u8..=4 {
             add_cube(&mut p, mat);
         }
         let bindings = ams_bindings_for_plate(&p.plates[0]);
-        assert_eq!(bindings.len(), 4);
-        let by_mat: std::collections::BTreeMap<u8, u8> = bindings
-            .iter()
-            .map(|b| (b.model_material_index, b.ams_slot))
-            .collect();
-        assert_eq!(by_mat.get(&1), Some(&1)); // extruder 0 → flat 1
-        assert_eq!(by_mat.get(&2), Some(&2)); // extruder 1 → flat 2
-        assert_eq!(by_mat.get(&3), Some(&3));
-        assert_eq!(by_mat.get(&4), Some(&4));
+        assert!(bindings.is_empty(), "got {bindings:?}");
     }
 }
