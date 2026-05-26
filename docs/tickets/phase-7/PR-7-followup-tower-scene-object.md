@@ -65,6 +65,61 @@ exists to replace.
   capabilities). Decide whether the U1 surfaces a tower object
   or just hides the affordance. Probably the latter.
 
+## Tower-dimension semantics — pick a visualization path
+
+The tower's X width is a cascade constant (`prime_tower_width`,
+35 mm in both bundled printers today). The Y depth is **computed
+per layer at slice time** from purge volume — see
+`external/OrcaSlicer/src/libslic3r/GCode/WipeTower2.cpp:2317`
+(`required_depth = ramming_depth + depth_to_wipe`, where
+`depth_to_wipe` is a function of `max(filament_minimal_purge_on_wipe_tower,
+wipe_volume_total - savings)` and divided by the tower width).
+
+The mode driver is `single_extruder_multi_material`:
+
+| | A1 mini (SEMM = 1) | U1 (SEMM = 0) |
+|---|---|---|
+| X (width) | `prime_tower_width = 35` | `prime_tower_width = 35` |
+| Y (depth) | computed per layer; driven by `flush_volumes_matrix` (cross-color purge volume — substantial) — ends up **~width** (looks square) | computed per layer; driven by `filament_minimal_purge_on_wipe_tower` only (no cross-color purge on a toolchanger) — ends up a **small fraction of width** (looks like a thin strip in Y) |
+| Wall geometry | rectangle (default) | rib (4 stabilizing ribs around a hollow walled tower; `wipe_tower_wall_type = "rib"`) |
+| Brim | `prime_tower_brim_width = 3` | `prime_tower_brim_width = 5` |
+
+Other shape knobs that exist but neither bundled printer uses:
+`wipe_tower_wall_type = "cone"` + `wipe_tower_cone_angle` for a
+tapered tower, and `wipe_tower_extra_rib_length` to scale rib
+length explicitly.
+
+### Three visualization paths to decide between
+
+1. **Conservative bounding box (pre-slice)**: render
+   `prime_tower_width × prime_tower_width` regardless of mode.
+   Over-reserves on the U1 (most of the bounding-box Y is empty)
+   but never under-reserves; pre-slice gate validates against
+   this conservative box.
+
+2. **Mode-aware estimate (pre-slice)**: branch on
+   `single_extruder_multi_material`. SEMM = 1 → estimate Y ≈ X.
+   SEMM = 0 → estimate Y from
+   `filament_minimal_purge_on_wipe_tower × N_filaments /
+   prime_tower_width`. More accurate but still an estimate; user
+   may find actual tower a few mm different from the indicator.
+
+3. **Post-slice rendering**: parse `WIPE_TOWER_START` /
+   `WIPE_TOWER_END` markers from the produced gcode and draw the
+   real bounding box. Accurate but only useful after slicing —
+   no help during plate layout.
+
+**Likely best UX**: (1) + (3) combined. Conservative box during
+layout (gives the user a "stay away from here" hint), then
+redraw with the actual rectangle after slicing so they can
+confirm placement before sending. Defer (2) unless pre-slice
+accuracy becomes a UX complaint.
+
+The cascade composer needs to emit `wipe_tower_x` / `wipe_tower_y`
+based on the scene-state position regardless of which visualization
+path we pick — those values land in the slice-time config either
+way.
+
 **Effort.** ~3–5 days. Touches scene state, renderer, transform
 gizmo, cascade composer, pre-slice gate, and the binding panel.
 
