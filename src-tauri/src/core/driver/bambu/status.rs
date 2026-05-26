@@ -174,7 +174,94 @@ pub struct RawAmsTray {
     pub cols: Vec<String>,
 }
 
+impl RawAmsTray {
+    /// True iff this tray carries any real spool information
+    /// (non-empty material, non-transparent color, non-empty
+    /// sub_brand, or at least one real multi-color entry).
+    ///
+    /// Used as the gate in [`RawAmsUnit::merge_in`] to ignore the
+    /// placeholder tray fields BBL emits during print startup
+    /// (`tray_color = "00000000"`, empty material strings) so they
+    /// don't wipe the real spool data the initial `pushall` carried.
+    /// Mirrors the predicate `tray_identity` uses to decide whether
+    /// to emit `Some(AmsFilament)` — kept separate so the merge
+    /// gate doesn't have to allocate.
+    pub fn has_spool_data(&self) -> bool {
+        let has_text = |opt: &Option<String>| {
+            opt.as_deref().map(str::trim).is_some_and(|s| !s.is_empty())
+        };
+        let has_color = self.color.as_deref().map(str::trim).is_some_and(|s| {
+            !s.is_empty() && !is_transparent_black(s)
+        });
+        let has_multi_color = self
+            .cols
+            .iter()
+            .any(|c| !c.trim().is_empty() && !is_transparent_black(c.trim()));
+        has_text(&self.material) || has_color || has_text(&self.sub_brand) || has_multi_color
+    }
+}
+
+impl RawAmsUnit {
+    /// True iff any tray in this unit has real spool data. Gate
+    /// for the unit-level branch of [`RawAmsState::merge_in`].
+    pub fn has_spool_data(&self) -> bool {
+        self.tray.iter().any(RawAmsTray::has_spool_data)
+    }
+
+    /// Conditional per-tray merge — adopts a patched tray verbatim
+    /// when it carries real spool data, otherwise keeps the cached
+    /// tray at that position so a placeholder-only patch can't
+    /// clobber a real spool. `id` last-write-wins on `is_some`.
+    pub fn merge_in(&mut self, patch: RawAmsUnit) {
+        if patch.id.is_some() {
+            self.id = patch.id;
+        }
+        for (i, patch_tray) in patch.tray.into_iter().enumerate() {
+            if !patch_tray.has_spool_data() {
+                continue;
+            }
+            if let Some(self_tray) = self.tray.get_mut(i) {
+                *self_tray = patch_tray;
+            } else {
+                self.tray.push(patch_tray);
+            }
+        }
+    }
+}
+
 impl RawAmsState {
+    /// True iff at least one unit carries at least one tray with
+    /// real spool data.
+    pub fn has_spool_data(&self) -> bool {
+        self.ams.iter().any(RawAmsUnit::has_spool_data)
+    }
+
+    /// Conditional merge — `tray_now` last-write-wins; the unit
+    /// list is only consulted when the patch has *some* real spool
+    /// data, and even then individual trays are gated by
+    /// [`RawAmsUnit::merge_in`]. This means a placeholder push
+    /// (BBL's startup-time empty-tray report) updates the active
+    /// slot indicator but leaves the cached spool identities intact.
+    ///
+    /// Ported from `iksteen/machin3d-overlay` commit `dcf6b26350`
+    /// ("Hopefully not lose AMS data during print startup") with
+    /// the per-tray gate adapted to our `RawAmsTray` field set.
+    pub fn merge_in(&mut self, patch: RawAmsState) {
+        if patch.tray_now.is_some() {
+            self.tray_now = patch.tray_now;
+        }
+        if !patch.has_spool_data() {
+            return;
+        }
+        for (i, patch_unit) in patch.ams.into_iter().enumerate() {
+            if let Some(self_unit) = self.ams.get_mut(i) {
+                self_unit.merge_in(patch_unit);
+            } else {
+                self.ams.push(patch_unit);
+            }
+        }
+    }
+
     /// Lower into the typed shape `BambuExtra` exposes.
     pub fn to_typed(&self) -> crate::core::driver::status::AmsState {
         use crate::core::driver::status::{AmsState, AmsTray, AmsUnit};
@@ -245,9 +332,12 @@ fn is_transparent_black(color: &str) -> bool {
 
 impl BambuReport {
     /// Apply a delta to the receiver. Last-write-wins for scalar
-    /// fields (when patch is `Some`); AMS is replaced verbatim
-    /// when patch is `Some` (PR-7a-4 layers spool-aware merge on
-    /// top once it adds the typed AMS shape).
+    /// fields (when patch is `Some`); AMS uses a spool-aware
+    /// per-tray merge ([`RawAmsState::merge_in`]) that ignores
+    /// placeholder pushes — BBL emits empty-tray patches during
+    /// print startup (`tray_color = "00000000"`, empty material
+    /// strings) which a naive wholesale replace would let wipe
+    /// the real cached spool identities.
     pub fn merge(&mut self, patch: BambuReport) {
         macro_rules! lww {
             ($($f:ident),+ $(,)?) => {
@@ -270,8 +360,14 @@ impl BambuReport {
             current_stage,
             print_error,
             fan_speed,
-            ams,
         );
+        // AMS: spool-aware per-tray merge.
+        if let Some(patch_ams) = patch.ams {
+            match &mut self.ams {
+                None => self.ams = Some(patch_ams),
+                Some(cached) => cached.merge_in(patch_ams),
+            }
+        }
     }
 }
 
@@ -710,6 +806,196 @@ mod tests {
             }
             _ => panic!("expected Bambu extra"),
         }
+    }
+
+    // ---- spool-aware AMS merge (the print-startup data-loss fix) ----
+
+    /// Helper: build a `RawAmsTray` quickly. `material=None` + empty
+    /// `color` + empty `sub_brand` + no `cols` is what BBL pushes
+    /// during print startup — a "placeholder" tray that signals
+    /// position-occupancy without carrying real spool identity.
+    fn placeholder_tray(id: i64) -> RawAmsTray {
+        RawAmsTray {
+            id: Some(id),
+            material: None,
+            color: Some("00000000".into()),
+            sub_brand: None,
+            cols: Vec::new(),
+        }
+    }
+
+    fn real_tray(id: i64, material: &str, color: &str) -> RawAmsTray {
+        RawAmsTray {
+            id: Some(id),
+            material: Some(material.into()),
+            color: Some(color.into()),
+            sub_brand: None,
+            cols: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn has_spool_data_detects_real_vs_placeholder_trays() {
+        assert!(real_tray(0, "PLA", "FF8800FF").has_spool_data());
+        assert!(!placeholder_tray(0).has_spool_data());
+        // Color alone is enough.
+        assert!(RawAmsTray { id: None, material: None, color: Some("FF0000FF".into()), sub_brand: None, cols: vec![] }.has_spool_data());
+        // Multi-color cols alone is enough.
+        assert!(RawAmsTray { id: None, material: None, color: None, sub_brand: None, cols: vec!["FF0000FF".into()] }.has_spool_data());
+        // sub_brand alone is enough.
+        assert!(RawAmsTray { id: None, material: None, color: None, sub_brand: Some("Bambu PLA Basic".into()), cols: vec![] }.has_spool_data());
+        // All blanks / sentinels → empty.
+        assert!(!RawAmsTray { id: Some(0), material: Some("".into()), color: Some("000000".into()), sub_brand: Some("  ".into()), cols: vec!["00000000".into()] }.has_spool_data());
+    }
+
+    #[test]
+    fn merge_keeps_cached_real_data_when_patch_is_all_placeholders() {
+        // The bug we're fixing: initial pushall carried 4 real
+        // trays; a follow-up startup push carried 4 placeholders;
+        // the wholesale-replace merge wiped the cached identities
+        // and the panel showed empty AMS slots mid-print.
+        let mut cached = RawAmsState {
+            tray_now: Some(0),
+            ams: vec![RawAmsUnit {
+                id: Some(0),
+                tray: vec![
+                    real_tray(0, "PLA", "FF0000FF"),
+                    real_tray(1, "PETG", "00FF00FF"),
+                    real_tray(2, "PLA", "0000FFFF"),
+                    real_tray(3, "ABS", "FFFF00FF"),
+                ],
+            }],
+        };
+        let patch = RawAmsState {
+            tray_now: Some(1),
+            ams: vec![RawAmsUnit {
+                id: Some(0),
+                tray: (0..4).map(placeholder_tray).collect(),
+            }],
+        };
+        cached.merge_in(patch);
+        // tray_now advanced.
+        assert_eq!(cached.tray_now, Some(1));
+        // But the trays kept their cached identities.
+        assert_eq!(cached.ams[0].tray[0].material.as_deref(), Some("PLA"));
+        assert_eq!(cached.ams[0].tray[0].color.as_deref(), Some("FF0000FF"));
+        assert_eq!(cached.ams[0].tray[2].material.as_deref(), Some("PLA"));
+        assert_eq!(cached.ams[0].tray[3].material.as_deref(), Some("ABS"));
+    }
+
+    #[test]
+    fn merge_adopts_real_patch_trays_and_keeps_placeholder_positions() {
+        // Mixed patch: two real, two placeholder. The real ones
+        // overwrite cached values at those positions; the placeholder
+        // positions keep the cached tray.
+        let mut cached = RawAmsState {
+            tray_now: None,
+            ams: vec![RawAmsUnit {
+                id: Some(0),
+                tray: vec![
+                    real_tray(0, "PLA", "FF0000FF"),
+                    real_tray(1, "PLA", "00FF00FF"),
+                    real_tray(2, "PLA", "0000FFFF"),
+                    real_tray(3, "PLA", "FFFF00FF"),
+                ],
+            }],
+        };
+        let patch = RawAmsState {
+            tray_now: None,
+            ams: vec![RawAmsUnit {
+                id: Some(0),
+                tray: vec![
+                    real_tray(0, "PETG", "FF00FFFF"), // updates [0]
+                    placeholder_tray(1),               // preserve cached [1]
+                    placeholder_tray(2),               // preserve cached [2]
+                    real_tray(3, "ABS", "00FFFFFF"),  // updates [3]
+                ],
+            }],
+        };
+        cached.merge_in(patch);
+        assert_eq!(cached.ams[0].tray[0].material.as_deref(), Some("PETG"));
+        assert_eq!(cached.ams[0].tray[0].color.as_deref(), Some("FF00FFFF"));
+        assert_eq!(cached.ams[0].tray[1].material.as_deref(), Some("PLA")); // cached
+        assert_eq!(cached.ams[0].tray[1].color.as_deref(), Some("00FF00FF")); // cached
+        assert_eq!(cached.ams[0].tray[2].color.as_deref(), Some("0000FFFF")); // cached
+        assert_eq!(cached.ams[0].tray[3].material.as_deref(), Some("ABS"));
+    }
+
+    #[test]
+    fn merge_accepts_patch_verbatim_when_no_cached_ams() {
+        // First sighting — accept the patch as-is even if it carries
+        // placeholders. A later real-data patch will refine.
+        let mut report = BambuReport::default();
+        let patch = BambuReport {
+            ams: Some(RawAmsState {
+                tray_now: Some(2),
+                ams: vec![RawAmsUnit {
+                    id: Some(0),
+                    tray: vec![placeholder_tray(0), placeholder_tray(1)],
+                }],
+            }),
+            ..Default::default()
+        };
+        report.merge(patch);
+        let ams = report.ams.expect("ams populated");
+        assert_eq!(ams.tray_now, Some(2));
+        assert_eq!(ams.ams[0].tray.len(), 2);
+    }
+
+    #[test]
+    fn merge_updates_tray_now_even_when_unit_data_is_placeholder() {
+        // Active-slot advancement is the one signal we trust from a
+        // placeholder push — `tray_now` is a scalar that BBL keeps
+        // accurate even when it doesn't bother re-sending the tray
+        // identities. Without this, the panel's active-slot ring
+        // would never move during a print.
+        let mut cached = RawAmsState {
+            tray_now: Some(0),
+            ams: vec![RawAmsUnit {
+                id: Some(0),
+                tray: vec![real_tray(0, "PLA", "FF0000FF")],
+            }],
+        };
+        let patch = RawAmsState {
+            tray_now: Some(3),
+            ams: vec![RawAmsUnit {
+                id: Some(0),
+                tray: vec![placeholder_tray(0)],
+            }],
+        };
+        cached.merge_in(patch);
+        assert_eq!(cached.tray_now, Some(3));
+        assert_eq!(cached.ams[0].tray[0].material.as_deref(), Some("PLA"));
+    }
+
+    #[test]
+    fn merge_appends_new_units_beyond_cached_length() {
+        // X1C with multiple AMS units can grow the unit list after
+        // initial connection. New units arriving in a patch should
+        // be appended; if all their trays are placeholders the
+        // append still happens (so the *positions* are reserved) but
+        // the trays carry no spool identity yet — a later real-data
+        // patch will fill them.
+        let mut cached = RawAmsState {
+            tray_now: None,
+            ams: vec![RawAmsUnit {
+                id: Some(0),
+                tray: vec![real_tray(0, "PLA", "FF0000FF")],
+            }],
+        };
+        let patch = RawAmsState {
+            tray_now: None,
+            ams: vec![
+                RawAmsUnit { id: Some(0), tray: vec![placeholder_tray(0)] },
+                RawAmsUnit { id: Some(1), tray: vec![real_tray(0, "PETG", "00FF00FF")] },
+            ],
+        };
+        cached.merge_in(patch);
+        assert_eq!(cached.ams.len(), 2);
+        // Cached unit's real tray preserved.
+        assert_eq!(cached.ams[0].tray[0].material.as_deref(), Some("PLA"));
+        // New unit's real tray appended.
+        assert_eq!(cached.ams[1].tray[0].material.as_deref(), Some("PETG"));
     }
 
     #[test]
