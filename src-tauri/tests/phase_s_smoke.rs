@@ -171,7 +171,6 @@ fn slice_fourcolor(
         },
         plate_ids: vec![1],
         printer_instance_id: instance_id.into(),
-        material_to_slot: std::collections::BTreeMap::new(),
     };
 
     run_slice_job_blocking(input, &registry, sink)
@@ -281,6 +280,117 @@ fn snappy_multi_color_slices_with_toolhead_changes() {
     );
 
     let _ = std::fs::remove_dir_all(gcode_path.parent().unwrap());
+}
+
+/// Material→slot binding routes a single-material print to the
+/// bound toolhead on a toolchanger.
+///
+/// Loads OrcaCube_v2 into a Project on snappy, binds model material
+/// 1 to T1's slot (extruder=1, slot=0), runs through
+/// `build_slice_input` (the production path), and verifies the
+/// emitted gcode contains `T1` toolchange markers.
+///
+/// Without the per-object `extruder_id` remap in `build_slice_input`,
+/// the cube would default to filament 1 and emit `T0` everywhere —
+/// the user reproduced this against the live UI before the remap
+/// landed. With the remap, material 1 → flat slot index 1 → libslic3r
+/// filament index 2 → T1.
+#[test]
+fn snappy_binding_routes_single_material_to_bound_toolhead() {
+    use n3o_slic3r_lib::core::printer::SlotRef;
+    use n3o_slic3r_lib::core::project::{PlateId, Project};
+    use n3o_slic3r_lib::core::scene::state::NewSceneObject;
+    use n3o_slic3r_lib::core::slice::input::build_slice_input;
+    use n3o_slic3r_lib::core::threemf::load_3mf;
+
+    let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    ensure_ffi_init();
+
+    let cube_path = workspace_root()
+        .join("external/OrcaSlicer/resources/handy_models/OrcaCube_v2.3mf");
+
+    // Build a Project the way the UI's scene_load_3mf does: load the
+    // 3mf, register every mesh + object on the active plate.
+    let project_3mf = load_3mf(&cube_path).expect("load OrcaCube");
+    let mut project = Project::default();
+    project.plates[0].printer_instance_id = Some("snappy".into());
+    let mesh_ids: Vec<_> = project_3mf
+        .meshes
+        .into_iter()
+        .map(|m| project.register_mesh(m))
+        .collect();
+    for obj in project_3mf.objects {
+        project.register_object(NewSceneObject {
+            mesh: mesh_ids[obj.mesh_idx],
+            transform: obj.transform,
+            name: obj.name,
+            visible: true,
+            extruder_id: obj.extruder_id,
+            parent: None,
+        });
+    }
+
+    // Force the M1 → T1 binding (override the auto-bound default).
+    project.plates[0]
+        .material_to_slot
+        .insert(1, SlotRef { extruder: 1, slot: 0 });
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "n3o-snappy-binding-{}",
+        std::process::id(),
+    ));
+    let (input, temp_3mf) = build_slice_input(
+        &project,
+        PlateId(1),
+        temp_dir.display().to_string(),
+    )
+    .expect("build_slice_input");
+
+    // The cube's recorded extruder in the temp .3mf must already be
+    // 2 (libslic3r 1-based filament index). Pin it here so a regression
+    // is caught even if the slice itself fails for unrelated reasons.
+    let reloaded = load_3mf(&temp_3mf).expect("reload temp 3mf");
+    assert!(
+        reloaded.objects.iter().any(|o| o.extruder_id == Some(2)),
+        "expected ≥1 object with remapped extruder_id=2, got {:?}",
+        reloaded.objects.iter().map(|o| o.extruder_id).collect::<Vec<_>>(),
+    );
+
+    let registry = JobRegistry::new();
+    let (sink, events) = collecting_sink();
+    run_slice_job_blocking(input, &registry, sink)
+        .expect("synchronous start");
+
+    let events = events.lock().unwrap();
+    if let Some(SliceEvent::JobFailed { error, .. }) =
+        events.iter().find(|e| matches!(e, SliceEvent::JobFailed { .. }))
+    {
+        panic!("slice failed: {error:?}");
+    }
+    let gcode_path = events
+        .iter()
+        .find_map(|e| match e {
+            SliceEvent::PlateFinished { output_path, .. } => Some(PathBuf::from(output_path)),
+            _ => None,
+        })
+        .expect("PlateFinished");
+
+    let gcode = std::fs::read_to_string(&gcode_path).expect("read gcode");
+    let t1_lines = gcode
+        .lines()
+        .filter(|l| l.trim() == "T1")
+        .count();
+    let t0_bare = gcode
+        .lines()
+        .filter(|l| l.trim() == "T0")
+        .count();
+    assert!(
+        t1_lines >= 1,
+        "expected ≥1 bare `T1` toolchange (M1 bound to T1), got {t1_lines} (T0 count: {t0_bare})",
+    );
+
+    let _ = std::fs::remove_dir_all(temp_dir);
+    let _ = std::fs::remove_file(temp_3mf);
 }
 
 /// Leg 3 (deferred): copy-vs-vendor binding.

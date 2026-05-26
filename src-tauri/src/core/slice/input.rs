@@ -30,7 +30,7 @@ use std::path::PathBuf;
 use crate::core::cascade::commands::{ContextJson, OverrideFileSpec};
 use crate::core::filament;
 use crate::core::filament::FilamentProfile;
-use crate::core::printer::{self, lookup_instance};
+use crate::core::printer::{self, lookup_instance, PrinterInstance};
 use crate::core::project::{PlateId, Project};
 use crate::core::scene::build_plate::{self, BuildPlate};
 use crate::core::scene::state::NewMesh;
@@ -219,8 +219,24 @@ pub fn build_slice_input(
     }
 
     // ── Temp 3MF write ────────────────────────────────────────
+    //
+    // Build the per-object extruder remap before writing the temp
+    // .3mf. libslic3r reads each object's `extruder` metadata as the
+    // 1-based *filament index* the object prints with; the per-print
+    // `filament_map` then translates filament-idx → physical extruder
+    // for toolchanger gcode + every `nozzle_temperature[i]`-style
+    // template substitution (Snapmaker U1's machine_start_gcode is
+    // `M104 T{initial_extruder} …` where `{initial_extruder}` is the
+    // filament index — *not* the post-`filament_map` physical
+    // extruder). To route "material N → T<m>" via the binding the
+    // object's recorded extruder must become the flat slot index
+    // corresponding to its bound slot; identity `filament_map` then
+    // routes filament-idx-i to physical extruder i. The remap is
+    // a project-side decision so it lives here, alongside the temp
+    // .3mf write that's the last point before libslic3r consumes
+    // the value.
     let temp_path = temp_3mf_path(plate_id);
-    let project_3mf = build_plate_geometry(project, plate_id)
+    let project_3mf = build_plate_geometry(project, plate_id, &instance)
         .expect("plate existence checked above");
     write_3mf(&project_3mf, &temp_path).map_err(|e| SliceInputError::TempWrite {
         path: temp_path.clone(),
@@ -246,10 +262,37 @@ pub fn build_slice_input(
         },
         plate_ids: vec![plate_id.0],
         printer_instance_id,
-        material_to_slot: plate.material_to_slot.clone(),
     };
 
     Ok((input, temp_path))
+}
+
+/// Map a model-material number to the 1-based libslic3r filament
+/// index for `instance`, honouring `plate.material_to_slot`.
+///
+/// Without a binding, identity: material N → filament N (cap at the
+/// instance's total slot count). With a binding, material N maps to
+/// the *flat slot index* of `material_to_slot[N]` (extruder-major
+/// order). `filament_map` stays identity downstream, so the gcode
+/// then emits `T<filament_idx - 1>` for the right physical extruder.
+fn material_to_filament_idx(
+    material: u8,
+    instance: &PrinterInstance,
+    material_to_slot: &std::collections::BTreeMap<u8, crate::core::printer::SlotRef>,
+) -> u8 {
+    if let Some(slot_ref) = material_to_slot.get(&material) {
+        // Sum slot counts of preceding extruders + slot index = flat
+        // 0-based, then +1 for libslic3r's 1-based filament index.
+        let preceding: usize = instance
+            .extruders
+            .iter()
+            .take(slot_ref.extruder as usize)
+            .map(|e| e.slots.len())
+            .sum();
+        (preceding + slot_ref.slot as usize + 1) as u8
+    } else {
+        material
+    }
 }
 
 /// Filter `project.meshes` + the named plate's objects into a
@@ -259,9 +302,15 @@ pub fn build_slice_input(
 /// Mesh filtering: only meshes referenced by this plate's objects
 /// are included, so the temp file stays minimal even on
 /// many-mesh projects.
+///
+/// `instance` is borrowed to walk the topology so per-object
+/// `extruder_id` (model material number) can be remapped to the
+/// flat slot index of the slot the material binds to. Default
+/// (identity material→slot) is a no-op.
 fn build_plate_geometry(
     project: &Project,
     plate_id: PlateId,
+    instance: &PrinterInstance,
 ) -> Option<crate::core::threemf::Project3mf> {
     let plate = project.plates.iter().find(|p| p.id == plate_id)?;
 
@@ -302,15 +351,30 @@ fn build_plate_geometry(
         .scene
         .objects
         .values()
-        .map(|obj| ProjectObject {
-            mesh_idx: mesh_id_to_idx[&obj.mesh],
-            transform: obj.transform,
-            name: obj.name.clone(),
-            extruder_id: obj.extruder_id,
-            // Plate id collapses to 1 in the temp file — libslic3r
-            // only sees one plate per slice job; the multi-plate
-            // shape is project-level, not slice-input-level.
-            plate_id: 1,
+        .map(|obj| {
+            // Remap material number → libslic3r filament index
+            // through the plate's `material_to_slot` binding.
+            //
+            // Objects without an explicit `extruder_id` default to
+            // material 1 elsewhere in the slice pipeline (the pre-
+            // slice gate, libslic3r's own object loader). The remap
+            // has to materialize that default first — otherwise an
+            // unannotated object passes through as `None` (= "default
+            // to filament 1") and libslic3r emits T0 regardless of
+            // the binding. After remap, that "filament 1" maps to the
+            // bound slot's flat index.
+            let material = obj.extruder_id.unwrap_or(1);
+            let remapped = material_to_filament_idx(material, instance, &plate.material_to_slot);
+            ProjectObject {
+                mesh_idx: mesh_id_to_idx[&obj.mesh],
+                transform: obj.transform,
+                name: obj.name.clone(),
+                extruder_id: Some(remapped),
+                // Plate id collapses to 1 in the temp file — libslic3r
+                // only sees one plate per slice job; the multi-plate
+                // shape is project-level, not slice-input-level.
+                plate_id: 1,
+            }
         })
         .collect();
 
@@ -461,7 +525,15 @@ mod tests {
     }
 
     #[test]
-    fn per_object_extruder_survives_temp_3mf_round_trip() {
+    fn per_object_extruder_remaps_through_material_binding() {
+        // Object authored with material 3 on bambi. `register_object`
+        // auto-binds material 3 to the third AMS-fed slot (AMS:3) via
+        // `ensure_default_material_slot_on_active` — that's
+        // `(extruder=0, slot=3)` in the bambi topology, flat slot
+        // index 3, libslic3r filament index 4 (1-based). The temp
+        // .3mf the slicer consumes should carry the remapped value so
+        // libslic3r's `{initial_extruder}`-style template substitution
+        // picks the right filament (AMS:3's loaded spool / color).
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         project.plates[0].printer_instance_id = Some("bambi".into());
@@ -481,7 +553,45 @@ mod tests {
         let reloaded =
             crate::core::threemf::load_3mf(&temp_path).expect("reload temp 3MF");
         assert_eq!(reloaded.objects.len(), 1);
-        assert_eq!(reloaded.objects[0].extruder_id, Some(3));
+        assert_eq!(reloaded.objects[0].extruder_id, Some(4));
+
+        std::fs::remove_file(&temp_path).ok();
+    }
+
+    #[test]
+    fn per_object_extruder_remaps_for_snappy_toolchanger() {
+        // Snappy's 4 extruders × 1 slot each. Bind material 1 to
+        // T1's slot (extruder=1, slot=0) — flat slot index 1, libslic3r
+        // filament index 2. The cube's per-object extruder in the
+        // temp 3mf must read 2 so libslic3r's start-gcode template
+        // substitutes `T2` for `{initial_extruder}`, then identity
+        // `filament_map` resolves filament-idx 2 → physical extruder 1
+        // = T1 in the emitted G-code.
+        use crate::core::printer::SlotRef;
+        let _registry = RegistryGuard::acquire();
+        let mut project = Project::default();
+        project.plates[0].printer_instance_id = Some("snappy".into());
+        let mesh_id = project.register_mesh(triangle_mesh());
+        project.register_object(NewSceneObject {
+            mesh: mesh_id,
+            transform: Transform::IDENTITY,
+            name: "cube-m1".into(),
+            visible: true,
+            extruder_id: Some(1),
+            parent: None,
+        });
+        // Override the auto-bind with an explicit "M1 → T1" binding.
+        project.plates[0]
+            .material_to_slot
+            .insert(1, SlotRef { extruder: 1, slot: 0 });
+
+        let (_, temp_path) =
+            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+
+        let reloaded =
+            crate::core::threemf::load_3mf(&temp_path).expect("reload temp 3MF");
+        assert_eq!(reloaded.objects.len(), 1);
+        assert_eq!(reloaded.objects[0].extruder_id, Some(2));
 
         std::fs::remove_file(&temp_path).ok();
     }

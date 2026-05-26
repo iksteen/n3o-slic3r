@@ -30,7 +30,7 @@ use super::{
 use crate::core::cascade::resolver::{resolve, MapContext};
 use crate::core::cascade::types::{Cascade, Predicate, Rule, SourceLocation};
 use crate::core::filament;
-use crate::core::printer::{PrinterInstance, SlotRef};
+use crate::core::printer::PrinterInstance;
 use crate::core::schema::schema_by_key;
 use slic3r_ffi::OptType;
 use std::collections::BTreeMap;
@@ -79,21 +79,9 @@ impl std::error::Error for ComposeError {}
 ///
 /// `plate_overrides` becomes the highest-precedence layer (the
 /// resolver's source-order tie-break makes later sources win).
-///
-/// `material_to_slot` drives the toolchanger-side `filament_map`
-/// rewrite: when a model material binds to a slot on a non-default
-/// extruder, the synthesized `filament_map` entry for that filament
-/// index points at the bound extruder so libslic3r emits the right
-/// `T<n>` in the gcode. Pass an empty map for the topology-default
-/// behavior (identity for the toolchanger case, all-1s for single-
-/// extruder + AMS). For single-extruder instances the binding has
-/// no observable effect on `filament_map` (every slot still maps to
-/// extruder 1) — AMS routing happens via the MQTT `ams_mapping`
-/// fields, not the cascade.
 pub fn compose_cascade(
     instance: &PrinterInstance,
     plate_overrides: &BTreeMap<String, String>,
-    material_to_slot: &BTreeMap<u8, SlotRef>,
 ) -> Result<Cascade, ComposeError> {
     if instance.extruders.is_empty() {
         return Err(ComposeError::NoExtruders(instance.id.clone()));
@@ -166,7 +154,7 @@ pub fn compose_cascade(
     //    that slot belongs to. We also force
     //    `filament_map_mode = "Manual"` so libslic3r treats the value
     //    as authoritative rather than auto-rebalancing.
-    let topology = assemble_filament_topology(instance, material_to_slot);
+    let topology = assemble_filament_topology(instance);
     if !topology.is_empty() {
         rules.push(Rule {
             when: Predicate::default(),
@@ -494,43 +482,19 @@ fn assemble_filament_colours(instance: &PrinterInstance) -> BTreeMap<String, Str
     out
 }
 
-/// Synthesize `filament_map` + `filament_map_mode` for the instance.
-///
-/// `filament_map[i]` is the 1-based extruder index that filament index
-/// `i` is printed on. Default ordering is extruder-major flat: filament
-/// index `i` lives at the i-th slot in flat order. `material_to_slot`
-/// overrides that on a per-material basis — if model material `(i+1)`
-/// binds to a slot at extruder `e`, `filament_map[i]` becomes `e + 1`.
-///
-/// For single-extruder instances (Bambu A1 + AMS Lite) every binding
-/// resolves to extruder 0 — the result stays all-`1`s, the same shape
-/// the topology default produces, so AMS routing via `ams_mapping`
-/// is unaffected. For toolchangers (Snapmaker U1) the override is the
-/// mechanism that translates "M1 → T1" into a `T1` toolchange.
-///
-/// Empty when the instance has no slots (caller skips the rule in
-/// that case).
+/// Synthesize `filament_map` + `filament_map_mode` from the instance's
+/// `extruders[].slots[]` topology. Walks slots in extruder-major order
+/// (= flat filament dimension libslic3r expects) and emits a 1-based
+/// extruder index per slot. Empty when the instance has no slots
+/// (the caller skips the rule in that case).
 fn assemble_filament_topology(
     instance: &PrinterInstance,
-    material_to_slot: &BTreeMap<u8, SlotRef>,
 ) -> BTreeMap<String, String> {
-    // Default extruder per filament index, walking slots in flat
-    // extruder-major order.
-    let default_extruder_per_slot: Vec<usize> = instance
-        .extruders
-        .iter()
-        .enumerate()
-        .flat_map(|(e_idx, ext)| std::iter::repeat(e_idx).take(ext.slots.len()))
-        .collect();
-
-    let mut filament_map: Vec<String> = Vec::with_capacity(default_extruder_per_slot.len());
-    for (i, default_extruder) in default_extruder_per_slot.iter().enumerate() {
-        let material = (i + 1) as u8;
-        let extruder_zero_based = material_to_slot
-            .get(&material)
-            .map(|slot_ref| slot_ref.extruder as usize)
-            .unwrap_or(*default_extruder);
-        filament_map.push((extruder_zero_based + 1).to_string());
+    let mut filament_map: Vec<String> = Vec::new();
+    for (e_idx, extruder) in instance.extruders.iter().enumerate() {
+        for _ in &extruder.slots {
+            filament_map.push((e_idx + 1).to_string());
+        }
     }
     let mut out = BTreeMap::new();
     if !filament_map.is_empty() {
@@ -643,7 +607,7 @@ mod tests {
     fn compose_bambi_yields_printer_nozzle_bed_filament_process_layers() {
         let _registry = RegistryGuard::acquire();
         let bambi = lookup_instance("bambi").expect("bambi present");
-        let cascade = compose_cascade(&bambi, &BTreeMap::new(), &BTreeMap::new()).expect("compose");
+        let cascade = compose_cascade(&bambi, &BTreeMap::new()).expect("compose");
 
         // Each layer contributes at least one rule. With 5 layers + nozzle
         // assembly + no plate overrides → ≥ 6 rules (printer, nozzle,
@@ -675,7 +639,7 @@ mod tests {
         // ConfigOptionVector deserialize splits on ','.
         let _registry = RegistryGuard::acquire();
         let snappy = lookup_instance("snappy").expect("snappy present");
-        let cascade = compose_cascade(&snappy, &BTreeMap::new(), &BTreeMap::new()).expect("compose");
+        let cascade = compose_cascade(&snappy, &BTreeMap::new()).expect("compose");
 
         // Find the synthesized extruder-vector rule.
         let vector_rule = cascade
@@ -694,7 +658,7 @@ mod tests {
     fn nozzle_vector_assembly_yields_single_value_for_a1_mini() {
         let _registry = RegistryGuard::acquire();
         let bambi = lookup_instance("bambi").expect("bambi present");
-        let cascade = compose_cascade(&bambi, &BTreeMap::new(), &BTreeMap::new()).expect("compose");
+        let cascade = compose_cascade(&bambi, &BTreeMap::new()).expect("compose");
         let vector_rule = cascade
             .rules
             .iter()
@@ -706,93 +670,12 @@ mod tests {
     }
 
     #[test]
-    fn filament_map_defaults_to_extruder_major_flat_order() {
-        // With no material bindings, the synthesized filament_map mirrors
-        // the topology: snappy's 4 single-slot extruders produce [1,2,3,4],
-        // bambi's 5 slots on one extruder produce [1,1,1,1,1].
-        let _registry = RegistryGuard::acquire();
-        let snappy = lookup_instance("snappy").expect("snappy present");
-        let snappy_cascade = compose_cascade(&snappy, &BTreeMap::new(), &BTreeMap::new())
-            .expect("compose snappy");
-        let snappy_map = snappy_cascade
-            .rules
-            .iter()
-            .find(|r| r.source.path.to_string_lossy() == "<filament-topology>")
-            .expect("topology rule present")
-            .set
-            .get("filament_map")
-            .expect("filament_map authored");
-        assert_eq!(snappy_map, "1,2,3,4");
-
-        let bambi = lookup_instance("bambi").expect("bambi present");
-        let bambi_cascade = compose_cascade(&bambi, &BTreeMap::new(), &BTreeMap::new())
-            .expect("compose bambi");
-        let bambi_map = bambi_cascade
-            .rules
-            .iter()
-            .find(|r| r.source.path.to_string_lossy() == "<filament-topology>")
-            .expect("topology rule present")
-            .set
-            .get("filament_map")
-            .expect("filament_map authored");
-        assert_eq!(bambi_map, "1,1,1,1,1");
-    }
-
-    #[test]
-    fn filament_map_rewrites_per_material_to_slot_for_toolchanger() {
-        // Snappy: 4 extruders × 1 slot each. Bind material 1 → T1's
-        // slot (extruder index 1). filament_map[0] should become 2
-        // (extruder 2 = T1) while filament_map[1..3] fall back to the
-        // topology default.
-        let _registry = RegistryGuard::acquire();
-        let snappy = lookup_instance("snappy").expect("snappy present");
-        let mut bindings = BTreeMap::new();
-        bindings.insert(1, SlotRef { extruder: 1, slot: 0 });
-        let cascade = compose_cascade(&snappy, &BTreeMap::new(), &bindings).expect("compose");
-        let map = cascade
-            .rules
-            .iter()
-            .find(|r| r.source.path.to_string_lossy() == "<filament-topology>")
-            .expect("topology rule present")
-            .set
-            .get("filament_map")
-            .expect("filament_map authored");
-        assert_eq!(map, "2,2,3,4");
-    }
-
-    #[test]
-    fn filament_map_for_single_extruder_stays_all_ones_regardless_of_bindings() {
-        // Bambi: 1 extruder × 5 slots (Ext + 4 AMS). Every binding lands
-        // on extruder 0, so filament_map stays [1,1,1,1,1] no matter how
-        // the user reorders M→slot. AMS routing happens via ams_mapping,
-        // not the cascade — this guards against future "smart" reorders
-        // breaking that contract.
-        let _registry = RegistryGuard::acquire();
-        let bambi = lookup_instance("bambi").expect("bambi present");
-        let mut bindings = BTreeMap::new();
-        // Wildly reorder: M1 → AMS:4, M2 → Ext, M3 → AMS:2, …
-        bindings.insert(1, SlotRef { extruder: 0, slot: 4 });
-        bindings.insert(2, SlotRef { extruder: 0, slot: 0 });
-        bindings.insert(3, SlotRef { extruder: 0, slot: 2 });
-        let cascade = compose_cascade(&bambi, &BTreeMap::new(), &bindings).expect("compose");
-        let map = cascade
-            .rules
-            .iter()
-            .find(|r| r.source.path.to_string_lossy() == "<filament-topology>")
-            .expect("topology rule present")
-            .set
-            .get("filament_map")
-            .expect("filament_map authored");
-        assert_eq!(map, "1,1,1,1,1");
-    }
-
-    #[test]
     fn plate_overrides_appended_as_last_rule() {
         let _registry = RegistryGuard::acquire();
         let bambi = lookup_instance("bambi").expect("bambi present");
         let mut overrides = BTreeMap::new();
         overrides.insert("layer_height".to_owned(), "0.12".to_owned());
-        let cascade = compose_cascade(&bambi, &overrides, &BTreeMap::new()).expect("compose");
+        let cascade = compose_cascade(&bambi, &overrides).expect("compose");
         let last = cascade.rules.last().expect("rules");
         assert_eq!(last.set.get("layer_height").map(String::as_str), Some("0.12"));
         assert_eq!(last.source.path.to_string_lossy(), "<plate-overrides>");
@@ -803,7 +686,7 @@ mod tests {
         let _registry = RegistryGuard::acquire();
         let mut bambi = lookup_instance("bambi").expect("bambi present");
         bambi.extruders[0].installed_nozzle.diameter_mm = 0.9; // not bundled
-        let err = compose_cascade(&bambi, &BTreeMap::new(), &BTreeMap::new()).unwrap_err();
+        let err = compose_cascade(&bambi, &BTreeMap::new()).unwrap_err();
         assert!(
             matches!(&err, ComposeError::UnknownNozzleFragment { sku, .. } if sku == "0.9"),
             "got {err:?}",
@@ -884,7 +767,7 @@ set.fan_speed = 30
         let _registry = RegistryGuard::acquire();
         let mut bambi = lookup_instance("bambi").expect("bambi present");
         bambi.printer_fragment_slug = "ghost".into();
-        let err = compose_cascade(&bambi, &BTreeMap::new(), &BTreeMap::new()).unwrap_err();
+        let err = compose_cascade(&bambi, &BTreeMap::new()).unwrap_err();
         assert_eq!(err, ComposeError::UnknownPrinterFragment("ghost".into()));
     }
 }

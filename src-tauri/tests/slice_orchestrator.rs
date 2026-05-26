@@ -110,7 +110,6 @@ fn bambi_input(model_path: String, output_dir: String, plate_ids: Vec<u32>) -> S
         },
         plate_ids,
         printer_instance_id: "bambi".into(),
-        material_to_slot: std::collections::BTreeMap::new(),
     }
 }
 
@@ -152,7 +151,6 @@ fn snappy_input(model_path: String, output_dir: String, plate_ids: Vec<u32>) -> 
         },
         plate_ids,
         printer_instance_id: "snappy".into(),
-        material_to_slot: std::collections::BTreeMap::new(),
     }
 }
 
@@ -302,7 +300,7 @@ fn snappy_orchestrator_compose_succeeds() {
     // dispatches separator choice on OptType (`;` for coStrings).
     ensure_ffi_init();
     let instance = lookup_instance("snappy").expect("snappy in instance library");
-    let cascade = compose_cascade(&instance, &BTreeMap::new(), &BTreeMap::new())
+    let cascade = compose_cascade(&instance, &BTreeMap::new())
         .expect("snappy cascade composes");
     assert!(!cascade.rules.is_empty(), "snappy cascade is empty");
     // Spot-check a per-extruder vector landed length-4 (one entry per
