@@ -74,7 +74,7 @@ status.
 | Pause / resume / stop commands | ✅ done | [PR-7b-6](phase-7/PR-7b-6%20U1%20commands.md) |
 | Per-toolhead independent nozzle/hotend cascade wiring | ✅ done | [PR-7b-7](phase-7/PR-7b-7%20Per-toolhead%20cascade.md) |
 | Frontend U1 state panel | ✅ done | [PR-7b-8](phase-7/PR-7b-8%20U1%20panel.md) |
-| Real-print smoke set (1/2/4-mat + tool-change stress) | 🟡 partial | [PR-7b-9](phase-7/PR-7b-9%20U1%20smoke.md) |
+| Real-print smoke set (1/2/4-mat + tool-change stress) | ✅ done | [PR-7b-9](phase-7/PR-7b-9%20U1%20smoke.md) |
 
 ### 7c — Filament sync + assignment (~2 weeks)
 

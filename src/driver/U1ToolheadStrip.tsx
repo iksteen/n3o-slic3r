@@ -105,7 +105,7 @@ export function U1ToolheadStrip({
       {cells.map((c) => (
         <div
           key={c.index}
-          className={`w-14 flex flex-col items-center gap-0.5 px-1 py-1 rounded-sm border border-border text-text-muted ${
+          className={`w-20 flex flex-col items-center gap-0.5 px-1 py-1 rounded-sm border border-border text-text-muted ${
             c.cssColor == null ? "border-dashed" : ""
           } ${c.isMounted ? "ring-2 ring-accent ring-offset-1" : ""}`}
           title={c.ariaLabel}
@@ -117,11 +117,8 @@ export function U1ToolheadStrip({
             }`}
             style={c.cssColor ? { background: c.cssColor } : undefined}
           />
-          <span className="text-[10px] font-mono leading-tight">
-            {c.materialLabel ?? "—"}
-          </span>
-          <span className="text-[10px] font-mono leading-tight">
-            T{c.index} {c.tempReadout}
+          <span className="text-[10px] font-mono leading-tight whitespace-nowrap">
+            T{c.index} {c.materialLabel ?? "—"} {c.tempReadout}
           </span>
         </div>
       ))}

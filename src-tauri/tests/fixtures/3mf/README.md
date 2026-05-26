@@ -11,6 +11,7 @@ need a Python interpreter.
 | Fixture | Source | Use |
 |---|---|---|
 | `two-cubes-2mat.3mf` | `two-cubes-2mat.py` | Two 20mm cubes, each with a BBS-flavor `<metadata key="extruder">` hint (cube A → material 1, cube B → material 2). Exercises the per-object extruder-hint → material→slot auto-bind path on multi-material printers (Snapmaker U1). |
+| `four-cubes-4mat.3mf` | `four-cubes-4mat.py` | Four 20mm cubes in a 2×2 grid, one per material (M1..M4). Sized for the Snapmaker U1's 4-toolhead toolchanger — a single print exercises every tool-change pair (PR-7b-9 smoke). |
 
 ## Regenerating
 

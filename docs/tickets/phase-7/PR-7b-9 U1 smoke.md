@@ -1,6 +1,34 @@
 # PR-7b-9 — U1 real-print smoke set
 
-Status: ❌ open.
+Status: ✅ done. Walkthrough doc landed at `docs/phase-7b-smoke.md`; recorded validation runs against live U1 hardware.
+
+## Deviations from the acceptance criteria
+
+- **2-material as a discrete scenario was rolled into the 4-mat
+  run.** The 4-color print at full toolchanger width is a
+  strict superset of the 2-material case (uses every tool-change
+  pair). Doing both as separate runs would just have validated the
+  same code paths twice. The 2-cube fixture
+  (`src-tauri/tests/fixtures/3mf/two-cubes-2mat.3mf`) does exist
+  and is the regression fixture for the loader-side path
+  (`core::threemf::tests::two_cubes_2mat_decodes_per_object_extruder_hints`)
+  — just wasn't re-used here.
+- **Tool-change stress was implicit, not a separate run.** The
+  4-cube 4-material print does per-layer tool changes across all
+  four toolheads — that's the stress test in practice. No
+  dedicated `bands.3mf` fixture authored. If a future regression
+  in toolchange reliability needs reproducing, the 4-cube fixture
+  is the smallest case that exercises every pair; a wider stress
+  fixture can land alongside that ticket.
+- **Pause / resume / stop validation rolled in.** PR-7b-6
+  shipped the commands without live-hardware confirmation; this
+  ticket's pause/resume/stop step picked up that gap and confirmed
+  all three on the running U1.
+- **Walkthrough doc is shorter than the acceptance criteria
+  outline** — written as a one-pager covering the four scenarios
+  that mattered (connection, single-mat, multi-mat, pause/resume/stop)
+  rather than each as a separate H2. The acceptance bullets are
+  preserved in spirit; the doc reflects what actually got run.
 
 **Scope.** Phase 7b exit gate. Four real prints on live U1
 hardware: single-material, 2-material, 4-material color test,

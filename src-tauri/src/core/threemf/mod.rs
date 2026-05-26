@@ -488,6 +488,29 @@ mod tests {
         assert_eq!(names, vec!["Cube A (T0)", "Cube B (T1)"]);
     }
 
+    fn four_cubes_fixture() -> PathBuf {
+        let crate_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+        PathBuf::from(crate_dir).join("tests/fixtures/3mf/four-cubes-4mat.3mf")
+    }
+
+    #[test]
+    fn four_cubes_4mat_decodes_per_object_extruder_hints() {
+        // Sibling to the 2-cube fixture but at the U1's full
+        // toolchanger width. Specifically exercises the case where
+        // every model material maps to a distinct physical
+        // toolhead; the 2-cube version can't catch a future bug
+        // that miscounts beyond 2.
+        let project = load_3mf(&four_cubes_fixture()).expect("load 4-cube fixture");
+        assert_eq!(project.objects.len(), 4, "four build items");
+        let extruders: Vec<Option<u8>> = project.objects.iter().map(|o| o.extruder_id).collect();
+        assert_eq!(extruders, vec![Some(1), Some(2), Some(3), Some(4)]);
+        let names: Vec<&str> = project.objects.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["Cube A (T0)", "Cube B (T1)", "Cube C (T2)", "Cube D (T3)"],
+        );
+    }
+
     fn orcacube_fixture() -> PathBuf {
         let crate_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
         let mut p = PathBuf::from(crate_dir);
