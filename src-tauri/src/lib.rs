@@ -36,16 +36,48 @@ pub fn run() {
             tracing::info!("libslic3r initialized");
 
             // Load the bundled profile tree from the Tauri resource dir
-            // (configured via tauri.conf.json::bundle.resources). The
-            // ProfileLibrary lazy fallback (workspace path baked in at
-            // compile time) is only meaningful for tests; a packaged
-            // binary needs this explicit init or it'd panic on the
-            // first cascade compose.
-            let resource_root = app
-                .path()
-                .resource_dir()
-                .expect("resource_dir")
-                .join("profiles/vendor");
+            // (configured via tauri.conf.json::bundle.resources), with
+            // an explicit `N3O_PROFILE_ROOT` env override for dev runs.
+            //
+            // Why the override exists: `tauri-build`'s copy of
+            // `bundle.resources` into `target/<profile>/` runs only on
+            // tracked-file changes and never prunes, so a source-tree
+            // restructure can leave stale fragments shadowing the right
+            // ones (see profile_library's same-slug collision warning
+            // for the failure mode). Dev passes
+            // `N3O_PROFILE_ROOT=./profiles/vendor` through the npm `tauri`
+            // script (`cross-env` in package.json) and reads straight from
+            // source; production never sets it and gets the bundled
+            // `resource_dir` path. The override is explicit so an unset
+            // env in prod doesn't silently fall back to a baked-in source
+            // path that won't exist on the user's machine.
+            //
+            // Relative override paths resolve against the workspace root
+            // baked in at compile time (one dir above `src-tauri`), not
+            // the binary's runtime CWD — Tauri's dev mode may set CWD to
+            // `src-tauri/`, so a naive `./profiles/vendor` resolved
+            // against process CWD would land at the wrong place.
+            let resource_root = if let Some(path_os) = std::env::var_os("N3O_PROFILE_ROOT") {
+                let path = std::path::PathBuf::from(&path_os);
+                let resolved = if path.is_absolute() {
+                    path
+                } else {
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .parent()
+                        .expect("workspace root above src-tauri")
+                        .join(path)
+                };
+                tracing::info!(
+                    path = %resolved.display(),
+                    "profile library: using N3O_PROFILE_ROOT override",
+                );
+                resolved
+            } else {
+                app.path()
+                    .resource_dir()
+                    .expect("resource_dir")
+                    .join("profiles/vendor")
+            };
             core::profile_library::init_from(resource_root);
             tracing::info!("profile library loaded");
 
