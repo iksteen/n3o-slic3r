@@ -968,5 +968,24 @@ M623
 
 
 '''
+# Prime/wipe tower position (left-front corner).
+# libslic3r's compiled default is (15, 220), calibrated for X1C-sized
+# beds (>= 220mm Y). The A1 mini is 180×180 — the default y=220 puts
+# the tower 40mm past the back wall and the Y axis grinds against
+# its stop during the priming move. Bambu Studio side-steps this by
+# auto-positioning the tower via its PartPlate GUI at model-load
+# time; we don't have PartPlate so the compiled default leaks through
+# unless we pin coordinates here.
+#
+# Back-left corner with margin matches Bambu Studio's typical A1
+# default placement. Tower footprint with `prime_tower_width = 35`
+# + 3mm brim = ~41×41, landing at (5..40, 130..165) with brim at
+# (2..43, 127..168) — well within the 180×180 bed.
+#
+# This is a per-printer band-aid. The longer-term fix is to make
+# tower position scene-state — visible + draggable like any other
+# object on the plate — tracked separately.
+wipe_tower_x = "5"
+wipe_tower_y = "130"
 wrapping_detection_gcode = ""
 wrapping_exclude_area = ""

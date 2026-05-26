@@ -90,6 +90,15 @@ status.
 | Multi-color paint UI binds to material indices | ❌ open | [PR-7c-8](phase-7/PR-7c-8%20Paint%20to%20material%20index.md) |
 | Phase 7 exit-criteria smoke + walkthrough doc | ❌ open | [PR-7c-9](phase-7/PR-7c-9%20Exit-criteria%20smoke.md) |
 
+### Follow-ups surfaced during Phase 7 smoke
+
+Issues caught while real-printing the smoke set; deferred to
+later phases (likely once plater-UX work catches up).
+
+| Item | Status | Ticket |
+|------|--------|--------|
+| Prime/wipe tower as a visible, movable scene object | 🧊 icebox | [PR-7-followup](phase-7/PR-7-followup-tower-scene-object.md) |
+
 ## Architecture invariant — drivers live behind one trait
 
 The two printer drivers (Bambu MQTT, U1 HTTP) share zero
