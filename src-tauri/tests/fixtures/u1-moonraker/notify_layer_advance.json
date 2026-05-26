@@ -1,0 +1,53 @@
+{
+  "jsonrpc": "2.0",
+  "method": "notify_status_update",
+  "params": [
+    {
+      "display_status": {
+        "progress": 0.34
+      },
+      "extruder1": {
+        "printing_e_pos": -0.7999999999999999
+      },
+      "gcode_move": {
+        "gcode_position": [
+          99.376,
+          99.376,
+          7.05,
+          -0.7999999999997272
+        ],
+        "position": [
+          99.15660225029899,
+          99.37763700619487,
+          6.996500000002335,
+          2834.690449999791
+        ],
+        "speed": 30000.0
+      },
+      "print_stats": {
+        "filament_used": 409.14112999988856,
+        "info": {
+          "current_layer": 33,
+          "total_layer": 100
+        },
+        "print_duration": 306.7356204789976,
+        "total_duration": 523.4149214159988
+      },
+      "toolhead": {
+        "estimated_print_time": 45890.80283488333,
+        "position": [
+          98.62317213936943,
+          93.1893020108586,
+          6.997504856550666,
+          2834.690449999791
+        ],
+        "print_time": 45893.46108233969
+      },
+      "virtual_sdcard": {
+        "file_position": 90866,
+        "progress": 0.29415230424592437
+      }
+    },
+    45903.862544888
+  ]
+}

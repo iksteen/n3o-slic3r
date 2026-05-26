@@ -1,0 +1,59 @@
+{
+  "jsonrpc": "2.0",
+  "method": "notify_status_update",
+  "params": [
+    {
+      "extruder1": {
+        "activating_move": false,
+        "switch_count": 209
+      },
+      "fan": {
+        "speed": 1.0
+      },
+      "gcode_move": {
+        "gcode_position": [
+          94.21939774970102,
+          249.99836299380513,
+          5.3035341406421255,
+          0.0
+        ],
+        "homing_origin": [
+          -0.2193977497010149,
+          0.0016370061948691728,
+          -0.05349999999766464,
+          0.0
+        ],
+        "position": [
+          94.0,
+          250.0,
+          5.250034140644461,
+          3201.195049999719
+        ]
+      },
+      "heater_bed": {
+        "power": 0.06840254735774817
+      },
+      "print_stats": {
+        "print_duration": 406.27294594300474,
+        "total_duration": 621.5239129210022
+      },
+      "toolhead": {
+        "estimated_print_time": 46569.357290583335,
+        "extruder": "extruder1",
+        "max_accel": 10000.0,
+        "position": [
+          94.0,
+          250.0,
+          5.307832576506108,
+          3201.195049999719
+        ],
+        "print_time": 46569.39758894167
+      },
+      "virtual_sdcard": {
+        "file_position": 284012,
+        "progress": 0.18627499849149862
+      }
+    },
+    46582.414895503
+  ]
+}

@@ -1,6 +1,29 @@
 # PR-7b-3 — U1 status parser → mounted toolhead + per-toolhead state
 
-Status: ❌ open.
+Status: ✅ done. Implementation in `src/core/driver/snapmaker/{status.rs,moonraker.rs,connection.rs}`; fixtures + cross-check tests in `src/core/driver/snapmaker/status.rs` (fixture section) and `tests/fixtures/u1-moonraker/`.
+
+## Deviations from the acceptance criteria
+
+- **No typed `U1Message` serde mirror.** The merge layer in
+  `moonraker.rs` works against untyped `serde_json::Value` because
+  the per-object shallow merge is naturally untyped (every object
+  is a free-form patch). A typed mirror would have to round-trip
+  through `serde_json::Value` anyway. Pragmatic call.
+- **No 1 Hz throttle in the worker.** Every `notify_status_update`
+  triggers a watch-channel publish. The watch channel keeps only
+  the latest value, so subscribers can't be overwhelmed; and the
+  decode/publish work per frame is cheap. Re-add a throttle if
+  empirical profiling shows it's needed — YAGNI for MVP.
+- **No `driver:toolhead_changed` per-field Tauri event.** The
+  current convention is one event (`driver:status_update`)
+  carrying the full snapshot; the frontend diffs against the
+  prior status to detect transitions. Adding a per-field event
+  would be a design departure; defer to PR-7b-8 (frontend panel)
+  if that ticket finds it needs more granular notifications.
+- **Layer count is surfaced** (`print_stats.info.{current,total}_layer`),
+  contrary to the "leave as None for MVP" note above. The decoder
+  attempts the read and falls back to `None` gracefully when
+  Moonraker's reply lacks the `info` sub-object (Klipper < 0.12).
 
 **Scope.** Take Moonraker's `notify_status_update` messages and
 merge into the typed `PrinterStatus` the trait surface exposes.

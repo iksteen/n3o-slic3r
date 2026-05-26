@@ -66,15 +66,15 @@ status.
 
 | Deliverable | Status | Ticket |
 |-------------|--------|--------|
-| U1 cascade TOML (4 toolheads, plates, start/end gcode) | ❌ open | [PR-7b-1](phase-7/PR-7b-1%20U1%20cascade.md) |
-| Moonraker WebSocket client + JSON-RPC + status subscribe | ❌ open | [PR-7b-2](phase-7/PR-7b-2%20U1%20HTTP%20client.md) |
-| Status parser → mounted toolhead + per-toolhead state | ❌ open | [PR-7b-3](phase-7/PR-7b-3%20U1%20status%20parser.md) |
+| U1 cascade TOML (4 toolheads, plates, start/end gcode) | ✅ done | [PR-7b-1](phase-7/PR-7b-1%20U1%20cascade.md) |
+| Moonraker WebSocket client + JSON-RPC + status subscribe | ✅ done | [PR-7b-2](phase-7/PR-7b-2%20U1%20HTTP%20client.md) |
+| Status parser → mounted toolhead + per-toolhead state | ✅ done | [PR-7b-3](phase-7/PR-7b-3%20U1%20status%20parser.md) |
 | Plain `.gcode` upload (multipart) + start-print | ✅ done | [PR-7b-4](phase-7/PR-7b-4%20U1%20send.md) |
-| Toolchanger G-code emission validation | ❌ open | [PR-7b-5](phase-7/PR-7b-5%20Toolchanger%20gcode.md) |
-| Pause / resume / stop commands | ❌ open | [PR-7b-6](phase-7/PR-7b-6%20U1%20commands.md) |
-| Per-toolhead independent nozzle/hotend cascade wiring | ❌ open | [PR-7b-7](phase-7/PR-7b-7%20Per-toolhead%20cascade.md) |
+| Toolchanger G-code emission validation | ✅ done | [PR-7b-5](phase-7/PR-7b-5%20Toolchanger%20gcode.md) |
+| Pause / resume / stop commands | ✅ done | [PR-7b-6](phase-7/PR-7b-6%20U1%20commands.md) |
+| Per-toolhead independent nozzle/hotend cascade wiring | ✅ done | [PR-7b-7](phase-7/PR-7b-7%20Per-toolhead%20cascade.md) |
 | Frontend U1 state panel | ❌ open | [PR-7b-8](phase-7/PR-7b-8%20U1%20panel.md) |
-| Real-print smoke set (1/2/4-mat + tool-change stress) | ❌ open | [PR-7b-9](phase-7/PR-7b-9%20U1%20smoke.md) |
+| Real-print smoke set (1/2/4-mat + tool-change stress) | 🟡 partial | [PR-7b-9](phase-7/PR-7b-9%20U1%20smoke.md) |
 
 ### 7c — Filament sync + assignment (~2 weeks)
 

@@ -546,4 +546,129 @@ mod tests {
             _ => panic!("decoder must not touch the connection field"),
         }
     }
+
+    // ---- file-based fixtures captured from a real Snapmaker U1 ----
+    //
+    // The inline `json!` tests above cover individual field shapes; the
+    // fixture tests cross-check that the decoder handles *real-world
+    // payload envelopes* the printer actually emits — including objects
+    // the inline cases don't bother to model (gcode_move, virtual_sdcard,
+    // print_task_config's full key set, etc.). See
+    // `tests/fixtures/u1-moonraker/README.md` for capture provenance.
+
+    const FIXTURES_DIR: &str = "tests/fixtures/u1-moonraker";
+
+    fn load_fixture(name: &str) -> Value {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(FIXTURES_DIR)
+            .join(name);
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read fixture {}: {e}", path.display()));
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|e| panic!("parse fixture {}: {e}", path.display()))
+    }
+
+    /// Subscribe-reply `result.status` map — the initial full-snapshot
+    /// shape `MoonrakerSession::connect` decodes via PR-7b-3's pipeline.
+    fn subscribe_initial() -> Map<String, Value> {
+        let fixture = load_fixture("subscribe_response.json");
+        fixture["result"]["status"]
+            .as_object()
+            .expect("subscribe fixture missing result.status")
+            .clone()
+    }
+
+    /// Pull the delta update map out of a `notify_status_update` fixture
+    /// (`params[0]` — same path `MoonrakerSession::next_status` uses).
+    fn notify_update(name: &str) -> Map<String, Value> {
+        let fixture = load_fixture(name);
+        fixture["params"][0]
+            .as_object()
+            .expect("notify fixture missing params[0]")
+            .clone()
+    }
+
+    /// Inline mirror of `MoonrakerSession::merge_status`. Pattern matches
+    /// `moonraker.rs::tests::merge` — both copies are tiny and keep the
+    /// tests honest by not depending on private production internals.
+    fn merge_status(into: &mut Map<String, Value>, update: &Map<String, Value>) {
+        for (key, value) in update {
+            match (into.get_mut(key), value) {
+                (Some(existing), Value::Object(patch)) if existing.is_object() => {
+                    let existing = existing.as_object_mut().expect("checked is_object");
+                    for (subkey, subvalue) in patch {
+                        existing.insert(subkey.clone(), subvalue.clone());
+                    }
+                }
+                _ => {
+                    into.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fixture_subscribe_decodes_full_snapshot() {
+        let snap = decode(&subscribe_initial(), ConnectionState::Connected);
+        // Capture happened immediately after a finished print, so state
+        // is `complete` rather than `standby` — exercises the Finished
+        // path, which the inline tests cover with a single-field json
+        // and which this fixture confirms also holds with the full
+        // surrounding payload.
+        let job = snap.job.expect("job present");
+        assert!(
+            matches!(job.state, JobState::Finished),
+            "expected Finished, got {:?}",
+            job.state,
+        );
+        assert_eq!(job.file_name.as_deref(), Some("plate-1.gcode"));
+        // U1 reports all 4 extruders regardless of which is docked.
+        assert_eq!(snap.temps.nozzles.len(), 4);
+        assert!(snap.temps.bed.current > 0.0);
+        match snap.extra {
+            DriverExtra::U1(extra) => {
+                // The post-print snapshot still reports the last-docked
+                // toolhead — extruder1 in this capture.
+                assert_eq!(extra.mounted_toolhead, Some(1));
+            }
+            _ => panic!("U1 driver must publish U1 extra"),
+        }
+    }
+
+    #[test]
+    fn fixture_layer_advance_merge_surfaces_current_layer() {
+        // Real layer-advance frames don't carry `print_stats.state` —
+        // only the delta. Merging into the subscribe baseline (which
+        // does have state) gives the decoder a complete picture, same
+        // as the production pipeline does over the WS.
+        let mut baseline = subscribe_initial();
+        let update = notify_update("notify_layer_advance.json");
+        merge_status(&mut baseline, &update);
+        let snap = decode(&baseline, ConnectionState::Connected);
+        let job = snap.job.expect("job present after merge");
+        // Fixture was chosen mid-print (current_layer > 5); the
+        // total_layer survives from the subscribe baseline because
+        // the delta only patches current_layer.
+        assert!(job.current_layer.unwrap_or(0) > 5);
+        assert_eq!(job.total_layers, Some(100));
+    }
+
+    #[test]
+    fn fixture_toolchange_merge_surfaces_mounted_toolhead() {
+        let mut baseline = subscribe_initial();
+        let update = notify_update("notify_toolchange.json");
+        merge_status(&mut baseline, &update);
+        let snap = decode(&baseline, ConnectionState::Connected);
+        match snap.extra {
+            DriverExtra::U1(extra) => {
+                // The toolchange fixture flips toolhead.extruder to
+                // "extruder1"; baseline already had "extruder1" too,
+                // but the test pins the post-merge value to confirm
+                // the decoder still reads it after a delta merge that
+                // touches the toolhead object.
+                assert_eq!(extra.mounted_toolhead, Some(1));
+            }
+            _ => panic!("U1 driver must publish U1 extra"),
+        }
+    }
 }
