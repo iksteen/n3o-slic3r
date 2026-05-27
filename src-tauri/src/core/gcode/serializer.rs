@@ -49,8 +49,9 @@ pub fn write_lines<W: Write>(lines: &[Line], mut out: W) -> io::Result<()> {
 }
 
 /// Convenience wrapper that materializes the output into a `String`.
-/// Used by tests; production callers prefer `write_lines` against a
-/// `BufWriter` so they don't allocate the whole thing.
+/// Handy for tests + small one-shots; non-trivial output should
+/// prefer [`write_lines`] against a `BufWriter` to avoid buffering
+/// the whole serialized gcode in memory.
 pub fn to_string(lines: &[Line]) -> String {
     let mut buf = Vec::new();
     // Writing to a Vec<u8> is infallible — unwrap is safe.

@@ -5,9 +5,9 @@
 //!
 //! Mirrors `infer_local_device_id` on the Bambu side: a startup-
 //! time round trip that turns a user-supplied LAN endpoint into a
-//! fully-shaped device entry. Used by the eventual driver-register
-//! path when [`crate::core::driver::traits::DriverConfig::U1`] is
-//! handed in without an explicit `serial`.
+//! fully-shaped device entry. Driver-register paths that receive
+//! a [`crate::core::driver::traits::DriverConfig::U1`] without an
+//! explicit `serial` resolve it through here first.
 //!
 //! Ported from `iksteen/bambu-overlay` `src/snapmaker/probe.rs`.
 

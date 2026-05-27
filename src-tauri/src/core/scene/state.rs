@@ -328,8 +328,8 @@ pub struct PlateSceneState {
 }
 
 /// 8 corners of a mesh's axis-aligned bounding box, as world-space
-/// `Vec3`s. Used by `Project`'s rotate / mirror / lay-flat /
-/// move-between-plates methods to compute transformed extents.
+/// `Vec3`s. Transform helper for computing post-rotation /
+/// post-mirror extents of an object's footprint.
 pub(crate) fn mesh_bb_corners(bb: &BoundingBox) -> [Vec3; 8] {
     let mn = [bb.min[0] as f32, bb.min[1] as f32, bb.min[2] as f32];
     let mx = [bb.max[0] as f32, bb.max[1] as f32, bb.max[2] as f32];

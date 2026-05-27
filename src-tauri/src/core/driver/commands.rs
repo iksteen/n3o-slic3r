@@ -229,11 +229,10 @@ pub async fn driver_send(
 }
 
 /// Wrap a raw G-code file on disk into a Bambu-flavored
-/// `.gcode.3mf` bundle byte buffer. Used by the plate-send
-/// commands as a stub for PR-7c-7's full sync-on-send pipeline:
-/// the bundle that PR-7c-7 emits will include per-AMS bindings
-/// + project metadata; this one just gets the bytes packaged
-/// well enough for the printer to read.
+/// `.gcode.3mf` bundle byte buffer. Minimum-viable packaging — the
+/// bytes are well-formed enough for the printer to accept, but
+/// per-AMS bindings and project-metadata enrichment are pending
+/// the sync-on-send work (Phase 7c).
 ///
 /// Runs on `spawn_blocking` because the writer is sync-IO + does
 /// per-entry MD5 work; calling it from an async command without

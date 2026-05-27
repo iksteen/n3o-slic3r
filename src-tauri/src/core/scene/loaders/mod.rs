@@ -80,9 +80,9 @@ pub fn load_mesh_from_path(path: &Path) -> Result<NewMesh, LoadError> {
 }
 
 /// Compute per-vertex normals by summing each triangle's face normal
-/// into its three vertices, then normalizing. Used by both the STL
-/// loader (which has per-face normals natively) and the OBJ loader
-/// when the file doesn't supply normals.
+/// into its three vertices, then normalizing. Synthesizes smooth-
+/// shading normals for loaders whose source format only carries
+/// per-face normals (STL) or none at all (OBJ without `vn` lines).
 ///
 /// Vertices laid out flat [x, y, z, x, y, z, ...]; indices triple
 /// (3 per triangle, ccw winding).

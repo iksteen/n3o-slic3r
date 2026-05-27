@@ -537,8 +537,8 @@ pub fn load_process_fragment(printer_slug: &str, process_slug: &str) -> Option<C
 }
 
 /// Every bundled process slug for `printer_slug`, in declaration
-/// order. Used by `create_instance` to pick a sensible default
-/// process fragment when seeding a fresh PrinterInstance.
+/// order. First entry is a reasonable default when seeding a
+/// fresh PrinterInstance.
 pub fn bundled_process_slugs_for_printer(printer_slug: &str) -> Vec<&'static str> {
     library()
         .process_fragments

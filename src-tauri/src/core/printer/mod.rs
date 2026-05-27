@@ -174,12 +174,11 @@ pub fn printer_instance_set_slot_color(
     Ok(updated)
 }
 
-/// Tauri command: the bundled filament catalog. Returns the
-/// cascade-context profiles (currently just `Generic PLA` —
-/// `base_type`-driven cascade-resolve fallback). Used by the
-/// slice-input builder; the slot picker uses
-/// [`filament_profile_list`] for the richer vendor-fragment
-/// surface instead.
+/// Tauri command: the bundled filament catalog — the cascade-
+/// context profiles (currently just `Generic PLA`, the
+/// `base_type`-driven cascade-resolve fallback). The slot picker
+/// reads [`filament_profile_list`] instead for the richer vendor-
+/// fragment surface.
 #[tauri::command]
 pub fn filament_catalog_list() -> Vec<FilamentProfile> {
     filament_bundled_catalog()

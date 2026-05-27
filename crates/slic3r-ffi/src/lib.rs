@@ -476,17 +476,17 @@ impl Drop for Model {
 //
 // `slice` takes a closure that fires on every libslic3r status tick
 // for the duration of *this* call. The closure is captured per-slice:
-// no global registration, no cross-slice contamination, safe for
-// concurrent slice() invocations on distinct (model, config) inputs
-// (modulo libslic3r's own thread-safety, which is a separate
-// question).
+// no global registration, no cross-slice contamination at the FFI
+// layer. See the per-fn docs on `slice` below for the libslic3r-
+// level thread-safety caveat (TL;DR: serialize at the application
+// layer; concurrent Print::process() calls SIGSEGV on heavier
+// workloads).
 //
-// Rust↔C bridge: box the closure as a trait object, pin it on the
-// stack via a `&mut`, pass the `&mut` address through C as the
-// `user_data` opaque pointer. The trampoline reconstructs the
-// trait-object reference from user_data and calls it. The Box stays
-// owned by the calling stack frame and drops automatically when
-// `slice` returns — no leaks, no global state, no need to clear.
+// Rust↔C bridge: pin the closure as a `&mut dyn FnMut` on the
+// stack and hand its address to C as opaque user_data. The
+// trampoline reconstructs the reference and calls it. No heap
+// allocation, no global state, no leak — the closure drops when
+// the `slice` call's stack frame unwinds.
 
 /// Trampoline registered with the C side per `slice` call. Treats
 /// `user_data` as a `*mut &mut dyn FnMut(i32, &str)` and invokes it.

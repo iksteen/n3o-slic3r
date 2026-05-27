@@ -1,5 +1,4 @@
-//! Pre-slice validation gate (PR-S-7 — replaces the PR-5-6
-//! gate that retired with the old MaterialBinding shape).
+//! Pre-slice validation gate.
 //!
 //! Walks every plate the caller asked to slice and checks that the
 //! per-plate `material_to_slot` map + the bound PrinterInstance are
@@ -7,16 +6,14 @@
 //!
 //! 1. Every model material referenced by an object on the plate has
 //!    a `material_to_slot` entry. (Auto-bind plants one on object
-//!    register; this catches plates loaded from disk before the
-//!    auto-bind path existed, or plates where the user explicitly
-//!    cleared an entry.)
+//!    register; this catches the edge case where the user explicitly
+//!    cleared an entry or a project file from disk lacks one.)
 //! 2. The mapped slot has a non-empty `filament_identity` on the
 //!    bound PrinterInstance — Bambu's firmware refuses prints with
 //!    an empty `filament_settings_id` in the CONFIG_BLOCK.
 //!
-//! Caller (the Tauri command layer / slice orchestrator) emits the
-//! first failing plate's issue list; the frontend surfaces it on
-//! the binding panel as inline errors.
+//! The slice orchestrator surfaces the first failing plate's issue
+//! list; the frontend renders inline errors on the binding panel.
 
 use std::collections::BTreeSet;
 
@@ -129,22 +126,22 @@ pub fn ams_bindings_for_plate(
         return Vec::new();
     };
 
-    // BBL firmware expects 1-based AMS-only slot indices (1..N for an
-    // N-slot AMS unit) in the `ams_bindings.ams_slot` field — these
-    // become the `M620 S<N>A` operands the print pre-loads. Direct-
-    // fed slots (the A1 mini's external spool) aren't AMS-addressable;
-    // material loading from a Direct slot is signaled via the
-    // separate `ams_mapping` field's `-1` sentinel and shouldn't
-    // appear in ams_bindings at all.
+    // BBL firmware expects 1-based AMS-only slot indices (1..N for
+    // an N-slot AMS unit) in the `ams_bindings.ams_slot` field —
+    // these become the `M620 S<N>A` operands the print pre-loads.
     //
-    // Earlier implementation walked the *full* flat slot grid
-    // (including Direct slots) with 1-based numbering — and Bambi's
-    // earlier `[Ext, AMS:1..4]` ordering inflated every AMS slot
-    // index by one. Material auto-bound to AMS:4 published
-    // ams_slot=5, which doesn't exist on the 4-slot AMS lite, and the
-    // firmware refused to load it ("filament loading error" on a
-    // real 4-color print). Now we filter to AMS-feed slots only and
-    // number within their extruder, 1-based.
+    // **Two rules this loop enforces:**
+    //   1. Direct-fed slots (the A1 mini's external spool) aren't
+    //      AMS-addressable. Material loading from a Direct slot is
+    //      signaled via the separate `ams_mapping` field's `-1`
+    //      sentinel and must NOT appear in ams_bindings at all.
+    //   2. The slot number is 1-based among AMS-feed slots only —
+    //      not the flat slot grid. Numbering the flat grid (Ext
+    //      counted as slot 0 or 1) inflates every AMS index by one
+    //      and pushes AMS:4 to ams_slot=5, which doesn't exist on
+    //      the 4-slot AMS lite; firmware refuses to load that with
+    //      "filament loading error" (observed on a real 4-color
+    //      print).
     let mut out = Vec::new();
     for (&material, &slot_ref) in &plate.material_to_slot {
         let Some(extruder) = instance.extruders.get(slot_ref.extruder as usize) else {

@@ -60,9 +60,9 @@ pub fn slice_cancel(job_id: JobId, jobs: State<JobRegistry>) -> Result<(), Strin
     Ok(())
 }
 
-/// Read the current cached status. Used by the renderer's
-/// reconnect path to rebuild slice-panel UI without waiting for
-/// the next progress tick.
+/// Read the current cached status snapshot for a job. Lets the
+/// frontend rebuild slice-panel state on reconnect without waiting
+/// for the next progress tick.
 #[tauri::command]
 #[tracing::instrument(skip(jobs))]
 pub fn slice_status(job_id: JobId, jobs: State<JobRegistry>) -> Result<JobStatus, String> {

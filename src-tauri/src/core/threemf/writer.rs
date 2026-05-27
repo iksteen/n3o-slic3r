@@ -10,14 +10,18 @@
 //! ```text
 //! [Content_Types].xml
 //! _rels/.rels
-//! 3D/3dmodel.model       — one <object> per mesh + <build> with
-//!                          one <item> per scene object
+//! 3D/3dmodel.model       — one <object> per scene object (solos)
+//!                          plus a <components>-wrapped <object> per
+//!                          multi-volume group; <build> emits one
+//!                          <item> per solo + per group.
 //! Metadata/model_settings.config
-//!                        — per-object name + extruder hint (BBS-flavor;
-//!                          OrcaSlicer accepts it too)
+//!                        — per-object name + extruder hint (BBS-
+//!                          flavor; OrcaSlicer accepts it too).
+//!                          Groups emit one outer <object> with N
+//!                          <part> children.
 //! Metadata/n3o_project_settings.config
-//!                        — our namespace placeholder. Phase 5
-//!                          populates with cascade overrides etc.
+//!                        — our namespace placeholder; not yet
+//!                          consumed on read.
 //! ```
 //!
 //! We deliberately *don't* split meshes into sibling
@@ -52,17 +56,17 @@ pub fn write_3mf(project: &Project3mf, output: &Path) -> Result<(), LoadError> {
 }
 
 /// Same as [`write_3mf`] but appends extra entries to the zip
-/// container. Used by `core::project::format::write_project`
-/// (PR-5-8) to embed `Metadata/n3o_project.json` alongside the
+/// container. The project-save path uses this to embed an n3o
+/// JSON skeleton (`Metadata/n3o_project.json`) alongside the
 /// standard 3MF geometry — foreign slicers (Bambu Studio,
 /// OrcaSlicer) ignore unrecognized `Metadata/*` entries, so the
 /// 3MF stays interoperable.
 ///
 /// `extras` keys are container-relative paths (e.g.
 /// `"Metadata/n3o_project.json"`); values are the raw body
-/// strings. Entries collide with the writer's own outputs (e.g.
-/// `3D/3dmodel.model`) at zip-author time; callers should pick
-/// distinct names.
+/// strings. Entries colliding with the writer's own outputs (e.g.
+/// `3D/3dmodel.model`) clash at zip-author time; callers should
+/// pick distinct names.
 pub fn write_3mf_with_extras(
     project: &Project3mf,
     extras: &std::collections::BTreeMap<String, String>,
@@ -277,14 +281,19 @@ fn model_xml(project: &Project3mf) -> String {
     // its own <object id="N" type="model"> regardless of solo/group
     // status; group wrappers below reference these via <components>.
     //
-    // Object id = `obj_idx + 1`. Two scene objects that share a mesh
-    // must still get distinct <object> resources or libslic3r will
-    // collapse their metadata (extruder hint, name) into one entry —
-    // we accept the on-disk mesh duplication for per-instance
-    // metadata correctness. Earlier behaviour deduped meshes and
-    // hit a HashMap-iteration-order bug where build-item /
-    // model-settings ids landed on different scene objects
-    // (random material-color swaps on a 4-cube/4-AMS print).
+    // Object id = `obj_idx + 1`.
+    //
+    // **Do not dedup meshes here.** model_settings metadata
+    // (extruder hint, name) is keyed by `<object id>`, so two scene
+    // objects sharing geometry still need distinct resources or
+    // libslic3r collapses their metadata into one entry. Mesh-share
+    // dedup would also require the build-item ↔ model-settings id
+    // schemes to stay aligned across non-deterministic source
+    // orderings — the previous attempt at it produced silent
+    // material-color swaps between random object pairs on a 4-cube
+    // 4-AMS print (HashMap iteration order vs sorted mesh-id
+    // order). The on-disk mesh duplication is the price for
+    // per-instance metadata correctness.
     for (obj_idx, obj) in project.objects.iter().enumerate() {
         let object_id = obj_idx as u32 + 1;
         let mesh = &project.meshes[obj.mesh_idx];
@@ -546,11 +555,13 @@ fn xml_escape_attr(s: &str) -> String {
     out
 }
 
-/// Used by tests + Phase 5 to assemble a `Project3mf` from a live
-/// scene. Pulled out so the writer doesn't depend on `SceneState`
-/// directly (keeps the layering clean — `core/threemf` doesn't
-/// import `core/scene` beyond the Mesh/Transform types it already
-/// uses through `NewMesh`).
+/// Assemble a [`Project3mf`] from a flat (meshes, objects, file
+/// metadata) tuple. Pre-computes the per-plate object-index
+/// listing the writer needs.
+///
+/// Lives here (not on `SceneState`) to keep the layering clean —
+/// `core/threemf` doesn't import `core/scene` beyond the
+/// Mesh/Transform types it already uses through `NewMesh`.
 pub fn project_from_objects(
     meshes: Vec<NewMesh>,
     objects: Vec<ProjectObject>,
@@ -646,9 +657,8 @@ mod tests {
         // that share mesh geometry but need distinct extruder hints
         // must each get their own `<object>` resource. The writer
         // duplicates the mesh content on disk to preserve per-
-        // instance metadata. (Earlier behaviour deduped meshes but
-        // then the build-item / model-settings id schemes diverged
-        // — see the resources-loop docstring for the regression.)
+        // instance metadata correctness — see the resources-loop
+        // docstring in `model_xml` for why dedup isn't safe here.
         let project = project_from_objects(
             vec![one_triangle_mesh()],
             vec![

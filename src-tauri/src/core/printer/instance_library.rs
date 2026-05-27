@@ -39,11 +39,13 @@ pub fn bundled_instances() -> Vec<PrinterInstance> {
 /// PrinterInstance id (`"bambi"`). Returns `None` for vendor profiles
 /// that don't yet have a corresponding bundled instance fixture.
 ///
-/// Lives here (not on `PrinterInstance` itself) because the bundled
-/// set is the authoritative mapping — PrinterInstances reference
-/// vendor profiles by name, and this function reverses that lookup.
-/// Used by plate bootstrap + printer rebinding to keep the legacy
-/// `Plate.printer` field in sync with the new `Plate.printer_instance_id`.
+/// Reverse lookup: given a vendor profile ref, return the id of the
+/// bundled `PrinterInstance` that wraps it. `None` if no bundled
+/// instance matches.
+///
+/// Lives here (not on `PrinterInstance`) because the bundled set is
+/// the authoritative mapping — instances reference vendor profiles
+/// by name, and this is the inverse.
 pub fn instance_id_for_vendor_profile(vendor_profile_ref: &str) -> Option<&'static str> {
     bundled_instances()
         .iter()
