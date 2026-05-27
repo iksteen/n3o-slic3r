@@ -354,7 +354,7 @@ function SlotChip({ slotId, slotIds, filament, onOpenPicker }) {
         onClick={() => onOpenPicker(slotId)}
         title={filament
           ? `${longLabel} · ${filament.brand || ""} ${filament.product || filament.label || ""}${filament.colorName ? " (" + filament.colorName + ")" : ""}\nClick to change`
-          : `${longLabel} — click to load filament`}
+          : `${longLabel} — click to assign filament`}
       >
         <span className="slot-pill-swatch" style={{ background: filament?.color || "transparent" }}/>
         <span className="slot-pill-label">{shortLabel}</span>

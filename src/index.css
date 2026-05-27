@@ -508,9 +508,6 @@
    * sync button — see `.slots-sync-label`. Ported from
    * docs/design/styles.css. */
   .sp-config-slots {
-    padding-top: 6px;
-    border-top: 1px dashed var(--hairline);
-    margin-top: 2px;
     gap: 5px;
     flex-wrap: wrap;
     row-gap: 5px;
@@ -685,6 +682,8 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--hairline);
   }
   .slot-binding-head {
     display: flex;
@@ -2446,7 +2445,394 @@
     font-size: 12px;
     color: var(--text-dim);
   }
+
+  /* ───────────────────────────────────────────────────────────────
+     Filament picker modal — three-pane drill (brand → product →
+     color) with a Custom-color swatch terminating the color grid.
+     Ported from docs/design/styles.css (PR-7c-3a).
+     ─────────────────────────────────────────────────────────────── */
+  .fp-modal-backdrop { z-index: 1100; }
+  .fp-modal {
+    width: min(960px, calc(100vw - 48px));
+    height: min(640px, calc(100vh - 48px));
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-lg);
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+    overflow: hidden;
+    animation: apmPopIn 180ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+
+  .fp-modal-head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    padding: 16px 20px 14px;
+    border-bottom: 1px solid var(--hairline);
+    gap: 12px;
+  }
+  .fp-modal-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 2px;
+  }
+  .fp-modal-title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .fp-modal-close {
+    width: 26px; height: 26px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 6px;
+    color: var(--text-dim);
+    background: transparent;
+    border: 0;
+    cursor: default;
+  }
+  .fp-modal-close:hover { background: var(--surface-2); color: var(--text); }
+
+  .fp-toolbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--surface);
+  }
+  .fp-search {
+    display: flex; align-items: center; gap: 8px;
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    height: 32px;
+    padding: 0 10px;
+  }
+  .fp-search:focus-within {
+    border-color: color-mix(in oklch, var(--accent) 50%, var(--border));
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 12%, transparent);
+  }
+  .fp-search .ico {
+    width: 14px; height: 14px;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+  .fp-search input {
+    flex: 1;
+    border: 0; outline: 0; background: transparent;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .fp-search input::placeholder { color: var(--text-dim); }
+  .fp-search-clear {
+    border: 0;
+    background: transparent;
+    color: var(--text-dim);
+    width: 18px; height: 18px;
+    border-radius: 9px;
+    cursor: default;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 14px;
+    padding: 0;
+  }
+  .fp-search-clear:hover { background: var(--surface-3); color: var(--text); }
+
+  .fp-material-chips {
+    display: flex; gap: 4px;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+  }
+  .fp-mat-chip {
+    height: 24px;
+    padding: 0 9px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    cursor: default;
+  }
+  .fp-mat-chip:hover { background: var(--surface-2); color: var(--text); }
+  .fp-mat-chip.active {
+    background: var(--text);
+    color: var(--bg);
+    border-color: var(--text);
+  }
+
+  .fp-body {
+    display: grid;
+    grid-template-columns: 200px 320px 1fr;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .fp-body > * { min-height: 0; overflow-y: auto; }
+  .fp-body > * + * { border-left: 1px solid var(--hairline); }
+
+  /* Brand rail */
+  .fp-brand-list {
+    list-style: none;
+    margin: 0; padding: 6px;
+    background: var(--bg);
+  }
+  .fp-brand-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: default;
+  }
+  .fp-brand-row:hover { background: var(--surface-2); }
+  .fp-brand-row.active {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 7px 9px;
+  }
+  .fp-brand-short {
+    width: 26px; height: 26px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 5px;
+    background: var(--surface-2);
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+  .fp-brand-row.active .fp-brand-short {
+    background: var(--text);
+    color: var(--bg);
+  }
+  .fp-brand-name-wrap { display: flex; flex-direction: column; min-width: 0; }
+  .fp-brand-name {
+    font-size: 12.5px;
+    color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fp-brand-count {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  /* Product list */
+  .fp-product-list {
+    list-style: none;
+    margin: 0; padding: 6px;
+  }
+  .fp-product-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px;
+    padding: 9px 10px;
+    border-radius: 6px;
+    cursor: default;
+  }
+  .fp-product-row:hover { background: var(--surface-2); }
+  .fp-product-row.active {
+    background: var(--accent-soft, color-mix(in oklch, var(--accent) 14%, transparent));
+  }
+  .fp-product-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+  .fp-product-name {
+    font-size: 13px;
+    color: var(--text);
+    font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fp-product-meta {
+    display: flex; align-items: center; gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    flex-wrap: wrap;
+  }
+  .fp-mat-tag {
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .fp-product-row.active .fp-mat-tag {
+    background: var(--text);
+    color: var(--bg);
+  }
+
+  /* Color grid */
+  .fp-color-pane {
+    display: flex; flex-direction: column;
+    padding: 14px 16px;
+    gap: 12px;
+  }
+  .fp-color-head {
+    display: flex; align-items: flex-start; justify-content: space-between;
+  }
+  .fp-color-product {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .fp-color-sub {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-dim);
+    margin-top: 2px;
+  }
+  .fp-color-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 8px;
+    padding-bottom: 8px;
+  }
+  .fp-color-swatch {
+    display: flex; flex-direction: column; align-items: stretch;
+    gap: 5px;
+    padding: 6px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: default;
+    text-align: left;
+  }
+  .fp-color-swatch:hover { background: var(--surface-2); border-color: var(--border-strong); }
+  .fp-color-swatch.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 18%, transparent);
+  }
+  .fp-color-chip {
+    height: 44px;
+    border-radius: 4px;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    box-shadow: inset 0 -10px 16px rgba(0, 0, 0, 0.10), inset 0 0 0 1px rgba(255, 255, 255, 0.20);
+  }
+  .fp-color-swatch.translucent .fp-color-chip {
+    background-image: linear-gradient(135deg, rgba(255, 255, 255, 0.5) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.5) 50%, rgba(255, 255, 255, 0.5) 75%, transparent 75%) !important;
+    background-size: 8px 8px !important;
+  }
+  .fp-color-name {
+    font-size: 11px;
+    color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* Custom-color swatch — terminates the color grid with an
+     affordance to open the native color picker. Idle state shows a
+     conic-rainbow chip with a "+" badge; once a custom color is
+     chosen, the chip shows that color and the label switches to its
+     hex. */
+  .fp-color-swatch-custom {
+    position: relative;
+  }
+  .fp-color-chip-rainbow {
+    background: conic-gradient(
+      from 0deg,
+      #ff5252, #ffb74d, #ffd54f, #aed581, #4fc3f7,
+      #7e57c2, #ec407a, #ff5252
+    );
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  }
+  .fp-color-chip-plus {
+    width: 16px; height: 16px;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 50%;
+    padding: 2px;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  }
+  .fp-color-swatch-custom .fp-color-name {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.02em;
+    color: var(--text-dim);
+  }
+  .fp-color-swatch-custom.active .fp-color-name {
+    color: var(--text);
+  }
+  .fp-color-native-input {
+    position: absolute;
+    inset: 0;
+    width: 0; height: 0;
+    padding: 0; margin: 0;
+    border: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .fp-color-empty { padding: 40px 0; text-align: center; }
+  .fp-empty {
+    padding: 24px 12px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-dim);
+    font-style: italic;
+  }
+
+  /* Footer */
+  .fp-modal-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px;
+    padding: 12px 18px;
+    border-top: 1px solid var(--hairline);
+    background: var(--surface);
+  }
+  .fp-preview {
+    display: flex; align-items: center; gap: 10px;
+    min-width: 0;
+    flex: 1;
+  }
+  .fp-preview-swatch {
+    width: 28px; height: 28px;
+    border-radius: 5px;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    box-shadow: inset 0 -6px 10px rgba(0, 0, 0, 0.12), inset 0 0 0 1px rgba(255, 255, 255, 0.20);
+    flex-shrink: 0;
+  }
+  .fp-preview-text {
+    display: flex; flex-direction: column; min-width: 0;
+  }
+  .fp-preview-product {
+    font-size: 12.5px;
+    color: var(--text);
+    font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fp-preview-color {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-dim);
+  }
+  .fp-modal-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+  /* icon-btn — shared bare button affordance used by the modal
+     close + (later) toolbar icon buttons. */
+  .icon-btn {
+    width: 22px; height: 22px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid transparent;
+    background: transparent;
+    border-radius: 4px;
+    color: var(--text-dim);
+    cursor: default;
+  }
+  .icon-btn:hover {
+    background: var(--surface-2);
+    color: var(--text);
+    border-color: var(--border);
+  }
 }
+
+/* Dark-theme tweaks for the picker swatches — borders on color
+   chips need brighter alpha to read against dark surfaces. */
+[data-theme="dark"] .fp-color-chip { border-color: rgba(255, 255, 255, 0.10); }
+[data-theme="dark"] .fp-preview-swatch { border-color: rgba(255, 255, 255, 0.18); }
 
 /* Animations referenced by the modal — placed outside @layer
    because keyframes don't participate in cascade layers. */

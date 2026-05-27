@@ -2993,6 +2993,54 @@ input, select, textarea { font-family: inherit; }
   color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+
+/* Custom-color swatch — terminates the color grid with an affordance to
+   open the native color picker. Idle state shows a conic-rainbow chip with
+   a "+" badge; once a custom color is chosen, the chip shows that color and
+   the label switches to its hex. */
+.fp-color-swatch-custom {
+  position: relative;
+}
+.fp-color-chip-rainbow {
+  background: conic-gradient(
+    from 0deg,
+    #ff5252, #ffb74d, #ffd54f, #aed581, #4fc3f7,
+    #7e57c2, #ec407a, #ff5252
+  );
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+}
+.fp-color-chip-plus {
+  width: 16px; height: 16px;
+  background: rgba(0,0,0,0.35);
+  border-radius: 50%;
+  padding: 2px;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.4);
+}
+.fp-color-swatch-custom .fp-color-name {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+}
+.fp-color-swatch-custom.active .fp-color-name {
+  color: var(--text);
+}
+.fp-color-native-input {
+  /* Native input drives the color value but stays invisible — the swatch is
+     the affordance. Sized to 0 with absolute positioning so layout isn't
+     affected and the button's own click region remains the trigger. */
+  position: absolute;
+  inset: 0;
+  width: 0; height: 0;
+  padding: 0; margin: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
 .fp-color-empty { padding: 40px 0; text-align: center; }
 .fp-empty {
   padding: 24px 12px;

@@ -10,10 +10,8 @@
 //     State machine: idle → syncing (spinner) → synced (✓, 900ms) →
 //     idle. Disabled while syncing.
 //   - SlotChip: one pill per slot — swatch + short label + material
-//     tag. Click opens a small filament-pick popover.
-//   - FilamentPopover: lightweight per-chip popover with the same
-//     filament list the old <select> dropdown had. Placeholder until
-//     the richer FilamentPickerModal (docs/design) lands.
+//     tag. Click opens the three-pane FilamentPickerModal (see
+//     ./FilamentPickerModal.tsx).
 //
 // Label conventions live in `printer/printerInstance.ts` — chips
 // read `deriveSlotShortLabel` for the chip face and the existing
@@ -26,12 +24,13 @@ import {
   type PrinterInstance,
   type SlotRef,
 } from "../printer/printerInstance";
+import {
+  FilamentPickerModal,
+  type FilamentPickerPick,
+} from "./FilamentPickerModal";
+import type { FilamentSummary } from "./filamentSummary";
 
-export interface FilamentSummary {
-  identity: string;
-  display_name: string;
-  base_type: string;
-}
+export type { FilamentSummary };
 
 const UNASSIGNED_SWATCH = "#9ca3af";
 
@@ -43,8 +42,10 @@ export interface SlotChipStripProps {
   /** Filaments the user can choose from. Display via `display_name`,
    *  store via `identity`. */
   filaments: FilamentSummary[];
-  /** Pick (or clear, with null) the filament loaded in a slot. */
-  onPickFilament: (ref: SlotRef, identity: string | null) => void;
+  /** Apply the modal's pick — both filament identity and slot color
+   *  in one call so the caller can route to its existing per-field
+   *  writers (setSlotFilament + setSlotColor). */
+  onApplyPick: (ref: SlotRef, pick: FilamentPickerPick) => void;
   /** Sync slot loadout from the printer. Returns a Promise so the
    *  button can show its in-flight spinner; resolves regardless of
    *  whether the driver actually round-tripped (the button just
@@ -57,7 +58,7 @@ export function SlotChipStrip({
   instance,
   slots,
   filaments,
-  onPickFilament,
+  onApplyPick,
   onSync,
 }: SlotChipStripProps): React.JSX.Element {
   const filamentByIdentity = new Map(
@@ -110,7 +111,7 @@ export function SlotChipStrip({
               }
               filamentLabel={filamentLabel}
               filaments={filaments}
-              onPickFilament={(identity) => onPickFilament(s.ref, identity)}
+              onApplyPick={(pick) => onApplyPick(s.ref, pick)}
             />
           );
         })
@@ -226,7 +227,8 @@ function SyncSlotsLabel({
 }
 
 // ─────────────────────────────────────────────────────────────────
-// SlotChip — one pill per (extruder, slot).
+// SlotChip — one pill per (extruder, slot). Click opens the
+// three-pane FilamentPickerModal.
 
 interface SlotChipProps {
   option: FlatSlotOption;
@@ -236,7 +238,7 @@ interface SlotChipProps {
    *  tooltip. `null` when the slot is empty. */
   filamentLabel: string | null;
   filaments: FilamentSummary[];
-  onPickFilament: (identity: string | null) => void;
+  onApplyPick: (pick: FilamentPickerPick) => void;
 }
 
 function SlotChip({
@@ -245,35 +247,23 @@ function SlotChip({
   materialTag,
   filamentLabel,
   filaments,
-  onPickFilament,
+  onApplyPick,
 }: SlotChipProps): React.JSX.Element {
   const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  // Dismiss on outside click.
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent): void => {
-      if (!wrapRef.current) return;
-      if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
 
   const empty = !option.filament_identity;
   const swatch = option.color ?? UNASSIGNED_SWATCH;
   const tooltip = empty
-    ? `${option.label} — click to load filament`
+    ? `${option.label} — click to assign filament`
     : `${option.label} — ${filamentLabel ?? option.filament_identity}\nClick to change`;
 
   return (
-    <div className="slot-chip-wrap" ref={wrapRef}>
+    <>
       <button
         className={`slot-pill${empty ? " empty" : ""}`}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(true)}
         title={tooltip}
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         aria-expanded={open}
       >
         <span
@@ -284,72 +274,18 @@ function SlotChip({
         <span className="slot-pill-material">{materialTag}</span>
       </button>
       {open && (
-        <FilamentPopover
-          currentIdentity={option.filament_identity}
+        <FilamentPickerModal
+          slotId={option.label}
           filaments={filaments}
-          onPick={(identity) => {
+          currentIdentity={option.filament_identity}
+          currentColor={option.color}
+          onPick={(pick) => {
             setOpen(false);
-            onPickFilament(identity);
+            onApplyPick(pick);
           }}
+          onClose={() => setOpen(false)}
         />
       )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────
-// FilamentPopover — minimal per-chip picker. Listed by display_name;
-// stores identity. Replaces the old `<select>` dropdown for chip-
-// flow. The richer FilamentPickerModal from `docs/design/` is a
-// separate future port.
-
-interface FilamentPopoverProps {
-  currentIdentity: string | null;
-  filaments: FilamentSummary[];
-  onPick: (identity: string | null) => void;
-}
-
-function FilamentPopover({
-  currentIdentity,
-  filaments,
-  onPick,
-}: FilamentPopoverProps): React.JSX.Element {
-  return (
-    <div className="printer-picker-menu slot-chip-popover" role="menu">
-      <button
-        type="button"
-        className={`ptpm-item${currentIdentity == null ? " active" : ""}`}
-        onClick={() => onPick(null)}
-      >
-        <span className="ptpm-name">— empty —</span>
-      </button>
-      {filaments.map((f) => (
-        <button
-          key={f.identity}
-          type="button"
-          className={`ptpm-item${f.identity === currentIdentity ? " active" : ""}`}
-          onClick={() => onPick(f.identity)}
-          title={`${f.display_name} · ${f.base_type}`}
-        >
-          <span className="ptpm-name">{f.display_name}</span>
-          <span className="ptpm-detail">{f.base_type}</span>
-        </button>
-      ))}
-      {currentIdentity != null &&
-        !filaments.some((f) => f.identity === currentIdentity) && (
-          // Slot may carry an identity not in the current bundled
-          // list (vendor profile renamed / removed). Surface it
-          // verbatim so the user can see what's bound + pick a
-          // replacement.
-          <button
-            type="button"
-            className="ptpm-item active"
-            onClick={() => onPick(currentIdentity)}
-          >
-            <span className="ptpm-name">{currentIdentity}</span>
-            <span className="ptpm-detail">unknown</span>
-          </button>
-        )}
-    </div>
+    </>
   );
 }

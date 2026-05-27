@@ -3004,6 +3004,54 @@ input, select, textarea { font-family: inherit; }
   color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+
+/* Custom-color swatch — terminates the color grid with an affordance to
+   open the native color picker. Idle state shows a conic-rainbow chip with
+   a "+" badge; once a custom color is chosen, the chip shows that color and
+   the label switches to its hex. */
+.fp-color-swatch-custom {
+  position: relative;
+}
+.fp-color-chip-rainbow {
+  background: conic-gradient(
+    from 0deg,
+    #ff5252, #ffb74d, #ffd54f, #aed581, #4fc3f7,
+    #7e57c2, #ec407a, #ff5252
+  );
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+}
+.fp-color-chip-plus {
+  width: 16px; height: 16px;
+  background: rgba(0,0,0,0.35);
+  border-radius: 50%;
+  padding: 2px;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.4);
+}
+.fp-color-swatch-custom .fp-color-name {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+}
+.fp-color-swatch-custom.active .fp-color-name {
+  color: var(--text);
+}
+.fp-color-native-input {
+  /* Native input drives the color value but stays invisible — the swatch is
+     the affordance. Sized to 0 with absolute positioning so layout isn't
+     affected and the button's own click region remains the trigger. */
+  position: absolute;
+  inset: 0;
+  width: 0; height: 0;
+  padding: 0; margin: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
 .fp-color-empty { padding: 40px 0; text-align: center; }
 .fp-empty {
   padding: 24px 12px;
@@ -4856,21 +4904,24 @@ function computeSlotIds({ extruders = 1, amsUnits = 0 } = {}) {
 
 // Compact label for a slot — what shows on the slot pill.
 // Hides the AMS-unit letter when there's only one AMS unit (no ambiguity).
+// Multi-extruder printers label their direct slots by toolhead (T1, T2…) —
+// in this build one toolhead = one extruder; richer topologies (a toolhead
+// with multiple extruders) are out of scope for now.
 function slotShortLabel(slotId, slotIds = []) {
   if (slotId === "ext") return "ext";
   const extMatch = slotId.match(/^ext:(\d+)$/);
-  if (extMatch) return `e${extMatch[1]}`;
+  if (extMatch) return `T${extMatch[1]}`;
   const amsMatch = slotId.match(/^AMS-([A-Z]):(\d+)$/);
   if (amsMatch) {
     const [, letter, idx] = amsMatch;
-    // If multiple AMS units present, show "A1", "B3", etc.
+    // If multiple AMS units present, show "A:1", "B:3", etc.
     // If only one, just show the slot number.
     const distinctUnits = new Set();
     slotIds.forEach(id => {
       const m = id.match(/^AMS-([A-Z]):/);
       if (m) distinctUnits.add(m[1]);
     });
-    return distinctUnits.size > 1 ? `${letter}${idx}` : idx;
+    return distinctUnits.size > 1 ? `${letter}:${idx}` : idx;
   }
   return slotId;
 }
@@ -4879,7 +4930,7 @@ function slotShortLabel(slotId, slotIds = []) {
 function slotLongLabel(slotId) {
   if (slotId === "ext") return "External spool";
   const extMatch = slotId.match(/^ext:(\d+)$/);
-  if (extMatch) return `Extruder ${extMatch[1]}`;
+  if (extMatch) return `Toolhead ${extMatch[1]}`;
   const amsMatch = slotId.match(/^AMS-([A-Z]):(\d+)$/);
   if (amsMatch) return `AMS ${amsMatch[1]} · slot ${amsMatch[2]}`;
   return slotId;
@@ -4907,82 +4958,133 @@ window.SLICER_DATA = {
 </script>
 <script type="text/babel" data-source="filament-catalog.jsx">
 // filament-catalog.jsx — A reasonably realistic catalog of filaments organized
-// by brand → product line → color. Used by the filament picker dialog.
+// by brand → product line. Used by the filament picker dialog.
 //
-// Each color is { name, hex }. Each product captures sensible default temps
-// (nozzleTemp / bedTemp) so they can seed a new filament's `print_temp` etc.
-// Materials are a small enum: PLA, PETG, ABS, ASA, TPU, PC, PA, PVB, HIPS.
+// Each product captures sensible default temps (nozzleTemp / bedTemp) so they
+// can seed a new filament's `print_temp` etc. Materials are a small enum:
+// PLA, PETG, ABS, ASA, TPU, PC, PA, PVB, HIPS.
+//
+// Color is decoupled from the product — every product can be ordered in any
+// color from STANDARD_PALETTE below. Real-world product-specific color
+// availability isn't modelled here; pick any color, get any color.
 
-// Master color list — products reference subsets of this by name.
-const COLOR_LIB = [
-  { name: "Pure White",        hex: "#F2EFE7" },
+// ───────── Standard color palette ─────────
+// Extensive shared palette used for every product across every brand. Grouped
+// loosely by hue family so the picker grid reads as a rainbow when rendered
+// in order.
+const STANDARD_PALETTE = [
+  // Whites & naturals
+  { name: "Pure White",        hex: "#F4F1EA" },
   { name: "Cool White",        hex: "#E8EBEC" },
   { name: "Jade White",        hex: "#F1ECD9" },
+  { name: "Cream",             hex: "#F2E6C9" },
+  { name: "Bone",              hex: "#E8DCC6" },
   { name: "Ivory",             hex: "#EDE2C4" },
+  { name: "Natural",           hex: "#E8DFC6" },
   { name: "Beige",             hex: "#D9CFB8" },
+
+  // Greys
   { name: "Light Grey",        hex: "#BFC3C7" },
-  { name: "Silver",            hex: "#A6ABB1" },
+  { name: "Silver",             hex: "#A6ABB1" },
   { name: "Cool Grey",         hex: "#7A8794" },
+  { name: "Slate",             hex: "#5B6772" },
+  { name: "Gunmetal",          hex: "#3E464F" },
   { name: "Charcoal",          hex: "#3A3E44" },
+
+  // Blacks
   { name: "Matte Black",       hex: "#1A1B1D" },
   { name: "Jet Black",         hex: "#0F1012" },
-  { name: "Espresso",          hex: "#3B2A22" },
+
+  // Browns & earths
+  { name: "Khaki",             hex: "#A39369" },
+  { name: "Sand",              hex: "#D6B97A" },
   { name: "Brown",             hex: "#7A4F2C" },
+  { name: "Espresso",          hex: "#3B2A22" },
+
+  // Metallics
+  { name: "Rose Gold",         hex: "#C58C7A" },
+  { name: "Copper",            hex: "#B86A3C" },
   { name: "Bronze",            hex: "#A37939" },
   { name: "Gold",              hex: "#C9A23E" },
-  { name: "Sand",              hex: "#D6B97A" },
-  { name: "Signal Red",        hex: "#C24B45" },
-  { name: "Burgundy",          hex: "#6F2A2A" },
+
+  // Reds
+  { name: "Salmon",            hex: "#E89788" },
   { name: "Coral",             hex: "#E2735B" },
+  { name: "Signal Red",        hex: "#C24B45" },
+  { name: "Crimson",           hex: "#9E2A2A" },
+  { name: "Burgundy",          hex: "#6F2A2A" },
+  { name: "Wine",              hex: "#4A1F2A" },
+
+  // Pinks
+  { name: "Pastel Pink",       hex: "#F0B6CB" },
+  { name: "Rose",              hex: "#D87099" },
+  { name: "Hot Pink",          hex: "#E2569D" },
+  { name: "Magenta",           hex: "#C13E94" },
+
+  // Oranges
+  { name: "Apricot",           hex: "#EEA56A" },
   { name: "Bright Orange",     hex: "#E07A2D" },
   { name: "Pumpkin",           hex: "#C45A1D" },
-  { name: "Sunflower",         hex: "#E8C13D" },
+
+  // Yellows
   { name: "Lemon",             hex: "#F2D852" },
+  { name: "Sunflower",         hex: "#E8C13D" },
+  { name: "Mustard",           hex: "#B89028" },
+
+  // Greens
   { name: "Lime",              hex: "#A3CB47" },
+  { name: "Yellow Green",      hex: "#8CB23A" },
+  { name: "Olive",             hex: "#6E7A2C" },
   { name: "Grass Green",       hex: "#5BA34B" },
-  { name: "Forest Green",      hex: "#2F6B3F" },
+  { name: "Sage",              hex: "#9DB28C" },
   { name: "Mint",              hex: "#7DC6A4" },
+  { name: "Emerald",           hex: "#2F8F5C" },
+  { name: "Forest Green",      hex: "#2F6B3F" },
+
+  // Cyans & teals
+  { name: "Aqua",              hex: "#5FCFD0" },
   { name: "Teal",              hex: "#2C8A8E" },
   { name: "Cyan",              hex: "#2BB6C2" },
+
+  // Blues
   { name: "Sky Blue",          hex: "#6FA8D6" },
+  { name: "Steel Blue",        hex: "#4A7CA8" },
+  { name: "Royal Blue",        hex: "#2E58C2" },
   { name: "Cobalt",            hex: "#2D55A6" },
   { name: "Navy",              hex: "#1E2F55" },
-  { name: "Indigo",            hex: "#3A2E80" },
+
+  // Purples & violets
+  { name: "Periwinkle",        hex: "#9AA3E0" },
+  { name: "Lavender",          hex: "#B79EE0" },
+  { name: "Lilac",             hex: "#9C7BC2" },
   { name: "Violet",            hex: "#7A5AE0" },
-  { name: "Magenta",           hex: "#C13E94" },
-  { name: "Hot Pink",          hex: "#E2569D" },
-  { name: "Pastel Pink",       hex: "#F0B6CB" },
-  { name: "Transparent",       hex: "#E8EEF0", translucent: true },
-  { name: "Translucent Blue",  hex: "#A8C8E8", translucent: true },
-  { name: "Translucent Red",   hex: "#E8A4A0", translucent: true },
-  { name: "Natural",           hex: "#E8DFC6" },
+  { name: "Indigo",            hex: "#3A2E80" },
+  { name: "Plum",              hex: "#5A2E66" },
+
+  // Translucents
+  { name: "Transparent",         hex: "#E8EEF0", translucent: true },
+  { name: "Translucent Blue",    hex: "#A8C8E8", translucent: true },
+  { name: "Translucent Red",     hex: "#E8A4A0", translucent: true },
+  { name: "Translucent Green",   hex: "#B5DDB8", translucent: true },
+  { name: "Translucent Yellow",  hex: "#EFE3A8", translucent: true },
+  { name: "Translucent Purple",  hex: "#C4AEDC", translucent: true },
 ];
 
-const C = (...names) => names.map(n => {
-  const c = COLOR_LIB.find(x => x.name === n);
-  if (!c) console.warn("Missing color in catalog:", n);
-  return c;
-}).filter(Boolean);
-
-// A broad palette many "consumer" products carry
-const BROAD = ["Pure White", "Cool White", "Light Grey", "Cool Grey", "Charcoal",
-               "Matte Black", "Jet Black", "Signal Red", "Burgundy", "Bright Orange",
-               "Sunflower", "Lime", "Forest Green", "Mint", "Cyan",
-               "Sky Blue", "Cobalt", "Navy", "Violet", "Magenta",
-               "Hot Pink", "Pastel Pink", "Brown", "Beige", "Gold"];
-
+// ───────── Brand & product catalog ─────────
+// Products no longer carry color lists — every product can be ordered in any
+// color from STANDARD_PALETTE.
 const FILAMENT_CATALOG = [
   {
     brand: "Generic",
     short: "GEN",
     note: "Open baseline profiles — no vendor calibration",
     products: [
-      { name: "PLA",      material: "PLA",  nozzleTemp: 215, bedTemp: 60,  colors: C(...BROAD) },
-      { name: "PETG",     material: "PETG", nozzleTemp: 240, bedTemp: 80,  colors: C(...BROAD, "Transparent") },
-      { name: "ABS",      material: "ABS",  nozzleTemp: 245, bedTemp: 100, colors: C("Pure White","Matte Black","Charcoal","Cool Grey","Signal Red","Cobalt","Bright Orange") },
-      { name: "ASA",      material: "ASA",  nozzleTemp: 250, bedTemp: 100, colors: C("Pure White","Matte Black","Cool Grey","Charcoal","Signal Red","Beige") },
-      { name: "TPU 95A",  material: "TPU",  nozzleTemp: 225, bedTemp: 50,  colors: C("Pure White","Matte Black","Cyan","Signal Red","Sunflower","Forest Green") },
-      { name: "HIPS",     material: "HIPS", nozzleTemp: 230, bedTemp: 95,  colors: C("Pure White","Matte Black","Natural") },
+      { name: "PLA",      material: "PLA",  nozzleTemp: 215, bedTemp: 60  },
+      { name: "PETG",     material: "PETG", nozzleTemp: 240, bedTemp: 80  },
+      { name: "ABS",      material: "ABS",  nozzleTemp: 245, bedTemp: 100 },
+      { name: "ASA",      material: "ASA",  nozzleTemp: 250, bedTemp: 100 },
+      { name: "TPU 95A",  material: "TPU",  nozzleTemp: 225, bedTemp: 50  },
+      { name: "HIPS",     material: "HIPS", nozzleTemp: 230, bedTemp: 95  },
     ],
   },
   {
@@ -4990,18 +5092,18 @@ const FILAMENT_CATALOG = [
     short: "BL",
     note: "First-party vendor profiles — AMS-compatible",
     products: [
-      { name: "PLA Basic",        material: "PLA",  nozzleTemp: 220, bedTemp: 55, colors: C("Jade White","Pure White","Matte Black","Charcoal","Cool Grey","Signal Red","Burgundy","Bright Orange","Sunflower","Lime","Forest Green","Mint","Cyan","Cobalt","Navy","Violet","Magenta","Hot Pink","Gold","Bronze","Sand") },
-      { name: "PLA Matte",        material: "PLA",  nozzleTemp: 220, bedTemp: 55, colors: C("Ivory","Matte Black","Cool Grey","Signal Red","Coral","Pumpkin","Lemon","Mint","Sky Blue","Indigo","Hot Pink","Pastel Pink","Espresso") },
-      { name: "PLA Silk",         material: "PLA",  nozzleTemp: 230, bedTemp: 55, colors: C("Pure White","Gold","Bronze","Signal Red","Forest Green","Sky Blue","Violet","Magenta") },
-      { name: "PLA-CF",           material: "PLA",  nozzleTemp: 240, bedTemp: 65, colors: C("Matte Black","Charcoal","Cool Grey") },
-      { name: "PETG HF",          material: "PETG", nozzleTemp: 245, bedTemp: 70, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Bright Orange","Sunflower","Forest Green","Cyan","Cobalt","Magenta") },
-      { name: "PETG Translucent", material: "PETG", nozzleTemp: 245, bedTemp: 70, colors: C("Transparent","Translucent Blue","Translucent Red") },
-      { name: "PETG-CF",          material: "PETG", nozzleTemp: 260, bedTemp: 80, colors: C("Matte Black","Charcoal") },
-      { name: "ABS",              material: "ABS",  nozzleTemp: 270, bedTemp: 100, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Cobalt") },
-      { name: "ASA",              material: "ASA",  nozzleTemp: 270, bedTemp: 100, colors: C("Pure White","Matte Black","Cool Grey","Charcoal","Signal Red") },
-      { name: "PA-CF",            material: "PA",   nozzleTemp: 290, bedTemp: 100, colors: C("Matte Black") },
-      { name: "PC FR",            material: "PC",   nozzleTemp: 280, bedTemp: 100, colors: C("Pure White","Matte Black","Transparent") },
-      { name: "Support for PLA",  material: "PLA",  nozzleTemp: 220, bedTemp: 55, colors: C("Natural") },
+      { name: "PLA Basic",        material: "PLA",  nozzleTemp: 220, bedTemp: 55  },
+      { name: "PLA Matte",        material: "PLA",  nozzleTemp: 220, bedTemp: 55  },
+      { name: "PLA Silk",         material: "PLA",  nozzleTemp: 230, bedTemp: 55  },
+      { name: "PLA-CF",           material: "PLA",  nozzleTemp: 240, bedTemp: 65  },
+      { name: "PETG HF",          material: "PETG", nozzleTemp: 245, bedTemp: 70  },
+      { name: "PETG Translucent", material: "PETG", nozzleTemp: 245, bedTemp: 70  },
+      { name: "PETG-CF",          material: "PETG", nozzleTemp: 260, bedTemp: 80  },
+      { name: "ABS",              material: "ABS",  nozzleTemp: 270, bedTemp: 100 },
+      { name: "ASA",              material: "ASA",  nozzleTemp: 270, bedTemp: 100 },
+      { name: "PA-CF",            material: "PA",   nozzleTemp: 290, bedTemp: 100 },
+      { name: "PC FR",            material: "PC",   nozzleTemp: 280, bedTemp: 100 },
+      { name: "Support for PLA",  material: "PLA",  nozzleTemp: 220, bedTemp: 55  },
     ],
   },
   {
@@ -5009,12 +5111,12 @@ const FILAMENT_CATALOG = [
     short: "PM",
     note: "Engineering-grade lineup",
     products: [
-      { name: "PolyTerra PLA",  material: "PLA",  nozzleTemp: 215, bedTemp: 60, colors: C("Ivory","Cool White","Matte Black","Charcoal","Cool Grey","Signal Red","Coral","Pumpkin","Sunflower","Mint","Forest Green","Sky Blue","Cobalt","Violet","Magenta","Pastel Pink","Espresso","Beige") },
-      { name: "PolyLite PLA",   material: "PLA",  nozzleTemp: 215, bedTemp: 60, colors: C(...BROAD) },
-      { name: "PolyLite PETG",  material: "PETG", nozzleTemp: 240, bedTemp: 80, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Sunflower","Forest Green","Cyan","Cobalt","Transparent") },
-      { name: "PolyMax PC",     material: "PC",   nozzleTemp: 270, bedTemp: 100, colors: C("Pure White","Matte Black","Transparent") },
-      { name: "PolyMide CoPA",  material: "PA",   nozzleTemp: 280, bedTemp: 90,  colors: C("Natural","Matte Black") },
-      { name: "PolyFlex TPU95", material: "TPU",  nozzleTemp: 225, bedTemp: 50,  colors: C("Pure White","Matte Black","Signal Red","Cyan","Sunflower") },
+      { name: "PolyTerra PLA",  material: "PLA",  nozzleTemp: 215, bedTemp: 60  },
+      { name: "PolyLite PLA",   material: "PLA",  nozzleTemp: 215, bedTemp: 60  },
+      { name: "PolyLite PETG",  material: "PETG", nozzleTemp: 240, bedTemp: 80  },
+      { name: "PolyMax PC",     material: "PC",   nozzleTemp: 270, bedTemp: 100 },
+      { name: "PolyMide CoPA",  material: "PA",   nozzleTemp: 280, bedTemp: 90  },
+      { name: "PolyFlex TPU95", material: "TPU",  nozzleTemp: 225, bedTemp: 50  },
     ],
   },
   {
@@ -5022,10 +5124,10 @@ const FILAMENT_CATALOG = [
     short: "PRU",
     note: "Prusa Research's in-house spec",
     products: [
-      { name: "PLA",  material: "PLA",  nozzleTemp: 215, bedTemp: 60, colors: C("Pure White","Matte Black","Charcoal","Cool Grey","Silver","Signal Red","Burgundy","Bright Orange","Sunflower","Lime","Forest Green","Mint","Cyan","Sky Blue","Cobalt","Navy","Violet","Magenta","Gold") },
-      { name: "PETG", material: "PETG", nozzleTemp: 240, bedTemp: 80, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Sunflower","Forest Green","Cyan","Cobalt","Transparent","Translucent Blue","Translucent Red") },
-      { name: "ASA",  material: "ASA",  nozzleTemp: 260, bedTemp: 100, colors: C("Pure White","Matte Black","Charcoal","Cool Grey","Signal Red") },
-      { name: "PVB",  material: "PVB",  nozzleTemp: 215, bedTemp: 75, colors: C("Transparent","Pure White","Matte Black") },
+      { name: "PLA",  material: "PLA",  nozzleTemp: 215, bedTemp: 60  },
+      { name: "PETG", material: "PETG", nozzleTemp: 240, bedTemp: 80  },
+      { name: "ASA",  material: "ASA",  nozzleTemp: 260, bedTemp: 100 },
+      { name: "PVB",  material: "PVB",  nozzleTemp: 215, bedTemp: 75  },
     ],
   },
   {
@@ -5033,10 +5135,10 @@ const FILAMENT_CATALOG = [
     short: "ES",
     note: "Budget-friendly, broad availability",
     products: [
-      { name: "PLA+",   material: "PLA",  nozzleTemp: 215, bedTemp: 60, colors: C(...BROAD) },
-      { name: "PETG",   material: "PETG", nozzleTemp: 245, bedTemp: 80, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Sunflower","Forest Green","Cobalt","Transparent") },
-      { name: "ABS+",   material: "ABS",  nozzleTemp: 240, bedTemp: 100, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Cobalt") },
-      { name: "eSilk",  material: "PLA",  nozzleTemp: 220, bedTemp: 60, colors: C("Gold","Bronze","Signal Red","Forest Green","Sky Blue","Magenta") },
+      { name: "PLA+",   material: "PLA",  nozzleTemp: 215, bedTemp: 60  },
+      { name: "PETG",   material: "PETG", nozzleTemp: 245, bedTemp: 80  },
+      { name: "ABS+",   material: "ABS",  nozzleTemp: 240, bedTemp: 100 },
+      { name: "eSilk",  material: "PLA",  nozzleTemp: 220, bedTemp: 60  },
     ],
   },
   {
@@ -5044,8 +5146,8 @@ const FILAMENT_CATALOG = [
     short: "OV",
     note: "Matte PLA specialist",
     products: [
-      { name: "PLA Matte", material: "PLA",  nozzleTemp: 220, bedTemp: 60, colors: C("Ivory","Matte Black","Cool Grey","Charcoal","Signal Red","Coral","Pumpkin","Sunflower","Mint","Forest Green","Sky Blue","Indigo","Hot Pink","Pastel Pink","Beige","Espresso") },
-      { name: "PETG",      material: "PETG", nozzleTemp: 240, bedTemp: 80, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Sunflower","Forest Green","Cobalt","Transparent") },
+      { name: "PLA Matte", material: "PLA",  nozzleTemp: 220, bedTemp: 60 },
+      { name: "PETG",      material: "PETG", nozzleTemp: 240, bedTemp: 80 },
     ],
   },
   {
@@ -5053,9 +5155,9 @@ const FILAMENT_CATALOG = [
     short: "SU",
     note: "Value tier",
     products: [
-      { name: "PLA Meta",  material: "PLA",  nozzleTemp: 200, bedTemp: 50, colors: C(...BROAD) },
-      { name: "PLA Silk",  material: "PLA",  nozzleTemp: 215, bedTemp: 55, colors: C("Gold","Bronze","Signal Red","Cyan","Magenta","Hot Pink") },
-      { name: "PETG",      material: "PETG", nozzleTemp: 240, bedTemp: 75, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Transparent") },
+      { name: "PLA Meta",  material: "PLA",  nozzleTemp: 200, bedTemp: 50 },
+      { name: "PLA Silk",  material: "PLA",  nozzleTemp: 215, bedTemp: 55 },
+      { name: "PETG",      material: "PETG", nozzleTemp: 240, bedTemp: 75 },
     ],
   },
   {
@@ -5063,11 +5165,11 @@ const FILAMENT_CATALOG = [
     short: "JP",
     note: "Composite & engineering focus",
     products: [
-      { name: "PETG-CF",  material: "PETG", nozzleTemp: 250, bedTemp: 80,  colors: C("Charcoal","Matte Black") },
-      { name: "PETG-GF",  material: "PETG", nozzleTemp: 250, bedTemp: 80,  colors: C("Charcoal","Matte Black","Natural") },
-      { name: "PLA Pro",  material: "PLA",  nozzleTemp: 220, bedTemp: 60,  colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Forest Green","Cobalt","Bronze") },
-      { name: "PA12-CF",  material: "PA",   nozzleTemp: 295, bedTemp: 100, colors: C("Matte Black") },
-      { name: "PC-CF",    material: "PC",   nozzleTemp: 290, bedTemp: 110, colors: C("Matte Black") },
+      { name: "PETG-CF",  material: "PETG", nozzleTemp: 250, bedTemp: 80  },
+      { name: "PETG-GF",  material: "PETG", nozzleTemp: 250, bedTemp: 80  },
+      { name: "PLA Pro",  material: "PLA",  nozzleTemp: 220, bedTemp: 60  },
+      { name: "PA12-CF",  material: "PA",   nozzleTemp: 295, bedTemp: 100 },
+      { name: "PC-CF",    material: "PC",   nozzleTemp: 290, bedTemp: 110 },
     ],
   },
 ];
@@ -5088,6 +5190,7 @@ function filamentSlug(brand, product, colorName) {
 
 window.FILAMENT_CATALOG = FILAMENT_CATALOG;
 window.CATALOG_MATERIALS = CATALOG_MATERIALS;
+window.STANDARD_PALETTE = STANDARD_PALETTE;
 window.filamentSlug = filamentSlug;
 
 </script>
@@ -6673,7 +6776,7 @@ function SlotChip({ slotId, slotIds, filament, onOpenPicker }) {
         onClick={() => onOpenPicker(slotId)}
         title={filament
           ? `${longLabel} · ${filament.brand || ""} ${filament.product || filament.label || ""}${filament.colorName ? " (" + filament.colorName + ")" : ""}\nClick to change`
-          : `${longLabel} — click to load filament`}
+          : `${longLabel} — click to assign filament`}
       >
         <span className="slot-pill-swatch" style={{ background: filament?.color || "transparent" }}/>
         <span className="slot-pill-label">{shortLabel}</span>
@@ -8519,12 +8622,20 @@ function FilamentPickerModal({
 }) {
   const catalog = window.FILAMENT_CATALOG;
   const materials = window.CATALOG_MATERIALS;
+  // Color is decoupled from product — every product can be ordered in every
+  // color from the shared standard palette.
+  const palette = window.STANDARD_PALETTE || [];
 
   const [query, setQuery] = useFPS("");
   const [materialFilter, setMaterialFilter] = useFPS(null); // string | null
   const [brandIdx, setBrandIdx] = useFPS(0);
   const [productIdx, setProductIdx] = useFPS(0);
   const [colorIdx, setColorIdx] = useFPS(0);
+  // Custom-color override. When set, supersedes the catalog color the user
+  // picked from the grid (colorIdx still tracks the swatch they're sitting on,
+  // so unsetting custom returns them to the same catalog color).
+  const [customColor, setCustomColor] = useFPS(null); // "#rrggbb" | null
+  const customInputRef = useFPR(null);
   const searchRef = useFPR(null);
 
   useFPE(() => { searchRef.current?.focus(); }, []);
@@ -8554,14 +8665,15 @@ function FilamentPickerModal({
     }).filter(b => b._matches.length > 0);
   }, [catalog, query, materialFilter]);
 
-  // Snap brand/product/color indices when filters change
+  // Snap brand/product indices when filters change. Color selection is
+  // preserved across brand/product switches — the palette is shared, so the
+  // user's chosen color stays put when they shop other filaments.
   useFPE(() => {
     if (visibleBrands.length === 0) return;
     const ok = visibleBrands.some(b => b._origIdx === brandIdx);
     if (!ok) {
       setBrandIdx(visibleBrands[0]._origIdx);
       setProductIdx(0);
-      setColorIdx(0);
     }
   }, [visibleBrands, brandIdx]);
 
@@ -8577,17 +8689,31 @@ function FilamentPickerModal({
   useFPE(() => {
     if (productIdx >= currentBrandProducts.length) {
       setProductIdx(0);
-      setColorIdx(0);
     }
   }, [currentBrandProducts.length, productIdx]);
 
+  // (Color selection is intentionally preserved across brand/product changes —
+  // the palette is shared and a custom hex is still meaningful for any product.)
+
   const currentProduct = currentBrandProducts[productIdx];
-  const currentColor = currentProduct?.colors[colorIdx];
+  const baseColor = palette[colorIdx];
+  // Effective color: the custom hex if set, otherwise the catalog color the
+  // user has highlighted.
+  const currentColor = customColor
+    ? { name: `Custom ${customColor.toUpperCase()}`, hex: customColor, translucent: false, _custom: true }
+    : baseColor;
 
   const handleUse = () => {
     if (!currentBrand || !currentProduct || !currentColor) return;
+    // For custom colors we still slug against the catalog name so each custom
+    // hex gets its own stable id (and round-trips to the same filament entry).
+    const slugSeed = currentColor._custom
+      ? `${currentBrand.brand}-${currentProduct.name}-custom-${currentColor.hex.replace("#","")}`
+      : null;
     const filament = {
-      id: window.filamentSlug(currentBrand.brand, currentProduct.name, currentColor.name),
+      id: slugSeed
+        ? window.filamentSlug(currentBrand.brand, currentProduct.name, `custom-${currentColor.hex.replace("#","")}`)
+        : window.filamentSlug(currentBrand.brand, currentProduct.name, currentColor.name),
       brand: currentBrand.brand,
       product: currentProduct.name,
       material: currentProduct.material,
@@ -8597,6 +8723,7 @@ function FilamentPickerModal({
       translucent: !!currentColor.translucent,
       nozzleTemp: currentProduct.nozzleTemp,
       bedTemp: currentProduct.bedTemp,
+      custom: !!currentColor._custom,
     };
     onPick(filament);
   };
@@ -8607,7 +8734,7 @@ function FilamentPickerModal({
         <header className="fp-modal-head">
           <div>
             <div className="fp-modal-eyebrow">Slot · {slotId}</div>
-            <h2 className="fp-modal-title">Load filament</h2>
+            <h2 className="fp-modal-title">Assign filament</h2>
           </div>
           <button className="icon-btn fp-modal-close" onClick={onClose} aria-label="Close">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -8655,7 +8782,7 @@ function FilamentPickerModal({
               <li
                 key={b.brand}
                 className={`fp-brand-row ${b._origIdx === brandIdx ? "active" : ""}`}
-                onClick={() => { setBrandIdx(b._origIdx); setProductIdx(0); setColorIdx(0); }}
+                onClick={() => { setBrandIdx(b._origIdx); setProductIdx(0); }}
               >
                 <span className="fp-brand-short">{b.short}</span>
                 <span className="fp-brand-name-wrap">
@@ -8675,22 +8802,14 @@ function FilamentPickerModal({
               <li
                 key={p.name}
                 className={`fp-product-row ${i === productIdx ? "active" : ""}`}
-                onClick={() => { setProductIdx(i); setColorIdx(0); }}
+                onClick={() => { setProductIdx(i); }}
               >
                 <span className="fp-product-main">
                   <span className="fp-product-name">{p.name}</span>
                   <span className="fp-product-meta">
                     <span className="fp-mat-tag">{p.material}</span>
                     <span>{p.nozzleTemp}°C / {p.bedTemp}°C bed</span>
-                    <span>·</span>
-                    <span>{p.colors.length} color{p.colors.length !== 1 ? "s" : ""}</span>
                   </span>
-                </span>
-                <span className="fp-product-color-dots">
-                  {p.colors.slice(0, 6).map((c, ci) => (
-                    <span key={ci} className="fp-product-dot" style={{ background: c.hex }} title={c.name}/>
-                  ))}
-                  {p.colors.length > 6 && <span className="fp-product-dot-more">+{p.colors.length - 6}</span>}
                 </span>
               </li>
             ))}
@@ -8706,22 +8825,54 @@ function FilamentPickerModal({
                 <div className="fp-color-head">
                   <div>
                     <div className="fp-color-product">{currentBrand.brand} {currentProduct.name}</div>
-                    <div className="fp-color-sub">{currentProduct.material} · {currentProduct.colors.length} color{currentProduct.colors.length !== 1 ? "s" : ""}</div>
+                    <div className="fp-color-sub">{currentProduct.material} · standard palette</div>
                   </div>
                 </div>
                 <div className="fp-color-grid">
-                  {currentProduct.colors.map((c, i) => (
+                  {palette.map((c, i) => (
                     <button
                       key={c.name}
-                      className={`fp-color-swatch ${i === colorIdx ? "active" : ""} ${c.translucent ? "translucent" : ""}`}
-                      onClick={() => setColorIdx(i)}
-                      onDoubleClick={() => { setColorIdx(i); setTimeout(handleUse, 0); }}
+                      className={`fp-color-swatch ${i === colorIdx && !customColor ? "active" : ""} ${c.translucent ? "translucent" : ""}`}
+                      onClick={() => { setColorIdx(i); setCustomColor(null); }}
+                      onDoubleClick={() => { setColorIdx(i); setCustomColor(null); setTimeout(handleUse, 0); }}
                       title={c.name}
                     >
                       <span className="fp-color-chip" style={{ background: c.hex }}/>
                       <span className="fp-color-name">{c.name}</span>
                     </button>
                   ))}
+                  {/* Custom color — opens native color picker. When a custom
+                      color is active, the chip shows that color; click again
+                      to re-open the picker, or pick a catalog swatch to drop
+                      back to a stock color. */}
+                  <button
+                    className={`fp-color-swatch fp-color-swatch-custom ${customColor ? "active" : ""}`}
+                    onClick={() => customInputRef.current?.click()}
+                    title={customColor ? `Custom ${customColor.toUpperCase()} — click to change` : "Pick a custom color"}
+                  >
+                    <span
+                      className={`fp-color-chip ${customColor ? "" : "fp-color-chip-rainbow"}`}
+                      style={customColor ? { background: customColor } : undefined}
+                    >
+                      {!customColor && (
+                        <svg className="fp-color-chip-plus" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+                          <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+                        </svg>
+                      )}
+                    </span>
+                    <span className="fp-color-name">
+                      {customColor ? customColor.toUpperCase() : "Custom…"}
+                    </span>
+                    <input
+                      ref={customInputRef}
+                      type="color"
+                      className="fp-color-native-input"
+                      value={customColor || baseColor?.hex || "#888888"}
+                      onChange={(e) => setCustomColor(e.target.value)}
+                      tabIndex={-1}
+                      aria-label="Pick a custom color"
+                    />
+                  </button>
                 </div>
               </>
             ) : (
@@ -8751,7 +8902,7 @@ function FilamentPickerModal({
               onClick={handleUse}
               disabled={!currentBrand || !currentProduct || !currentColor}
             >
-              Load into {slotId}
+              Assign to {slotId}
             </button>
           </div>
         </footer>

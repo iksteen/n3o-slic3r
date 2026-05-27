@@ -16,12 +16,20 @@ function FilamentPickerModal({
 }) {
   const catalog = window.FILAMENT_CATALOG;
   const materials = window.CATALOG_MATERIALS;
+  // Color is decoupled from product — every product can be ordered in every
+  // color from the shared standard palette.
+  const palette = window.STANDARD_PALETTE || [];
 
   const [query, setQuery] = useFPS("");
   const [materialFilter, setMaterialFilter] = useFPS(null); // string | null
   const [brandIdx, setBrandIdx] = useFPS(0);
   const [productIdx, setProductIdx] = useFPS(0);
   const [colorIdx, setColorIdx] = useFPS(0);
+  // Custom-color override. When set, supersedes the catalog color the user
+  // picked from the grid (colorIdx still tracks the swatch they're sitting on,
+  // so unsetting custom returns them to the same catalog color).
+  const [customColor, setCustomColor] = useFPS(null); // "#rrggbb" | null
+  const customInputRef = useFPR(null);
   const searchRef = useFPR(null);
 
   useFPE(() => { searchRef.current?.focus(); }, []);
@@ -51,14 +59,15 @@ function FilamentPickerModal({
     }).filter(b => b._matches.length > 0);
   }, [catalog, query, materialFilter]);
 
-  // Snap brand/product/color indices when filters change
+  // Snap brand/product indices when filters change. Color selection is
+  // preserved across brand/product switches — the palette is shared, so the
+  // user's chosen color stays put when they shop other filaments.
   useFPE(() => {
     if (visibleBrands.length === 0) return;
     const ok = visibleBrands.some(b => b._origIdx === brandIdx);
     if (!ok) {
       setBrandIdx(visibleBrands[0]._origIdx);
       setProductIdx(0);
-      setColorIdx(0);
     }
   }, [visibleBrands, brandIdx]);
 
@@ -74,17 +83,31 @@ function FilamentPickerModal({
   useFPE(() => {
     if (productIdx >= currentBrandProducts.length) {
       setProductIdx(0);
-      setColorIdx(0);
     }
   }, [currentBrandProducts.length, productIdx]);
 
+  // (Color selection is intentionally preserved across brand/product changes —
+  // the palette is shared and a custom hex is still meaningful for any product.)
+
   const currentProduct = currentBrandProducts[productIdx];
-  const currentColor = currentProduct?.colors[colorIdx];
+  const baseColor = palette[colorIdx];
+  // Effective color: the custom hex if set, otherwise the catalog color the
+  // user has highlighted.
+  const currentColor = customColor
+    ? { name: `Custom ${customColor.toUpperCase()}`, hex: customColor, translucent: false, _custom: true }
+    : baseColor;
 
   const handleUse = () => {
     if (!currentBrand || !currentProduct || !currentColor) return;
+    // For custom colors we still slug against the catalog name so each custom
+    // hex gets its own stable id (and round-trips to the same filament entry).
+    const slugSeed = currentColor._custom
+      ? `${currentBrand.brand}-${currentProduct.name}-custom-${currentColor.hex.replace("#","")}`
+      : null;
     const filament = {
-      id: window.filamentSlug(currentBrand.brand, currentProduct.name, currentColor.name),
+      id: slugSeed
+        ? window.filamentSlug(currentBrand.brand, currentProduct.name, `custom-${currentColor.hex.replace("#","")}`)
+        : window.filamentSlug(currentBrand.brand, currentProduct.name, currentColor.name),
       brand: currentBrand.brand,
       product: currentProduct.name,
       material: currentProduct.material,
@@ -94,6 +117,7 @@ function FilamentPickerModal({
       translucent: !!currentColor.translucent,
       nozzleTemp: currentProduct.nozzleTemp,
       bedTemp: currentProduct.bedTemp,
+      custom: !!currentColor._custom,
     };
     onPick(filament);
   };
@@ -104,7 +128,7 @@ function FilamentPickerModal({
         <header className="fp-modal-head">
           <div>
             <div className="fp-modal-eyebrow">Slot · {slotId}</div>
-            <h2 className="fp-modal-title">Load filament</h2>
+            <h2 className="fp-modal-title">Assign filament</h2>
           </div>
           <button className="icon-btn fp-modal-close" onClick={onClose} aria-label="Close">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -152,7 +176,7 @@ function FilamentPickerModal({
               <li
                 key={b.brand}
                 className={`fp-brand-row ${b._origIdx === brandIdx ? "active" : ""}`}
-                onClick={() => { setBrandIdx(b._origIdx); setProductIdx(0); setColorIdx(0); }}
+                onClick={() => { setBrandIdx(b._origIdx); setProductIdx(0); }}
               >
                 <span className="fp-brand-short">{b.short}</span>
                 <span className="fp-brand-name-wrap">
@@ -172,22 +196,14 @@ function FilamentPickerModal({
               <li
                 key={p.name}
                 className={`fp-product-row ${i === productIdx ? "active" : ""}`}
-                onClick={() => { setProductIdx(i); setColorIdx(0); }}
+                onClick={() => { setProductIdx(i); }}
               >
                 <span className="fp-product-main">
                   <span className="fp-product-name">{p.name}</span>
                   <span className="fp-product-meta">
                     <span className="fp-mat-tag">{p.material}</span>
                     <span>{p.nozzleTemp}°C / {p.bedTemp}°C bed</span>
-                    <span>·</span>
-                    <span>{p.colors.length} color{p.colors.length !== 1 ? "s" : ""}</span>
                   </span>
-                </span>
-                <span className="fp-product-color-dots">
-                  {p.colors.slice(0, 6).map((c, ci) => (
-                    <span key={ci} className="fp-product-dot" style={{ background: c.hex }} title={c.name}/>
-                  ))}
-                  {p.colors.length > 6 && <span className="fp-product-dot-more">+{p.colors.length - 6}</span>}
                 </span>
               </li>
             ))}
@@ -203,22 +219,54 @@ function FilamentPickerModal({
                 <div className="fp-color-head">
                   <div>
                     <div className="fp-color-product">{currentBrand.brand} {currentProduct.name}</div>
-                    <div className="fp-color-sub">{currentProduct.material} · {currentProduct.colors.length} color{currentProduct.colors.length !== 1 ? "s" : ""}</div>
+                    <div className="fp-color-sub">{currentProduct.material} · standard palette</div>
                   </div>
                 </div>
                 <div className="fp-color-grid">
-                  {currentProduct.colors.map((c, i) => (
+                  {palette.map((c, i) => (
                     <button
                       key={c.name}
-                      className={`fp-color-swatch ${i === colorIdx ? "active" : ""} ${c.translucent ? "translucent" : ""}`}
-                      onClick={() => setColorIdx(i)}
-                      onDoubleClick={() => { setColorIdx(i); setTimeout(handleUse, 0); }}
+                      className={`fp-color-swatch ${i === colorIdx && !customColor ? "active" : ""} ${c.translucent ? "translucent" : ""}`}
+                      onClick={() => { setColorIdx(i); setCustomColor(null); }}
+                      onDoubleClick={() => { setColorIdx(i); setCustomColor(null); setTimeout(handleUse, 0); }}
                       title={c.name}
                     >
                       <span className="fp-color-chip" style={{ background: c.hex }}/>
                       <span className="fp-color-name">{c.name}</span>
                     </button>
                   ))}
+                  {/* Custom color — opens native color picker. When a custom
+                      color is active, the chip shows that color; click again
+                      to re-open the picker, or pick a catalog swatch to drop
+                      back to a stock color. */}
+                  <button
+                    className={`fp-color-swatch fp-color-swatch-custom ${customColor ? "active" : ""}`}
+                    onClick={() => customInputRef.current?.click()}
+                    title={customColor ? `Custom ${customColor.toUpperCase()} — click to change` : "Pick a custom color"}
+                  >
+                    <span
+                      className={`fp-color-chip ${customColor ? "" : "fp-color-chip-rainbow"}`}
+                      style={customColor ? { background: customColor } : undefined}
+                    >
+                      {!customColor && (
+                        <svg className="fp-color-chip-plus" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+                          <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+                        </svg>
+                      )}
+                    </span>
+                    <span className="fp-color-name">
+                      {customColor ? customColor.toUpperCase() : "Custom…"}
+                    </span>
+                    <input
+                      ref={customInputRef}
+                      type="color"
+                      className="fp-color-native-input"
+                      value={customColor || baseColor?.hex || "#888888"}
+                      onChange={(e) => setCustomColor(e.target.value)}
+                      tabIndex={-1}
+                      aria-label="Pick a custom color"
+                    />
+                  </button>
                 </div>
               </>
             ) : (
@@ -248,7 +296,7 @@ function FilamentPickerModal({
               onClick={handleUse}
               disabled={!currentBrand || !currentProduct || !currentColor}
             >
-              Load into {slotId}
+              Assign to {slotId}
             </button>
           </div>
         </footer>

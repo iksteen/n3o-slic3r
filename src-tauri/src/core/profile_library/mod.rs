@@ -552,17 +552,23 @@ pub fn bundled_process_slugs_for_printer(printer_slug: &str) -> Vec<&'static str
 /// (matches the wire form stored in `SlotBinding.filament_identity`);
 /// `display_name` is the `filament_settings_id` field a human will
 /// recognize ("Bambu PLA Basic @BBL A1M"); `base_type` drives the
-/// swatch color in the picker.
+/// material tag in the picker. `vendor` groups products under a
+/// brand rail; `nozzle_temp` / `bed_temp` seed the per-product meta
+/// row in the filament picker.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FilamentFragmentSummary {
     pub identity: String,
     pub display_name: String,
     pub base_type: String,
+    pub vendor: String,
+    pub nozzle_temp: u32,
+    pub bed_temp: u32,
 }
 
 /// Enumerate every bundled vendor filament fragment. Parses the
-/// `filament_settings_id` + `filament_type` fields out of each
-/// fragment (stamped by the vendor converter, stable across regens).
+/// `filament_settings_id` + `filament_type` + `filament_vendor` +
+/// temperature fields out of each fragment (stamped by the vendor
+/// converter, stable across regens).
 pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
     library()
         .filament_order
@@ -573,8 +579,8 @@ pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
                 .get(slug)
                 .expect("filament_order index always present in fragments map");
             // The cascade.rules vec carries one unconditional rule
-            // for converter output; read `filament_settings_id` /
-            // `filament_type` out of its set.
+            // for converter output; read the surfaced fields out of
+            // its set.
             let set = cascade
                 .cascade
                 .rules
@@ -589,10 +595,30 @@ pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
                 .get("filament_type")
                 .cloned()
                 .unwrap_or_else(|| "PLA".to_owned());
+            let vendor = set
+                .get("filament_vendor")
+                .cloned()
+                .unwrap_or_else(|| "Generic".to_owned());
+            let nozzle_temp = set
+                .get("nozzle_temperature")
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(210);
+            // BBS fragments expose per-bed-type temps (hot_plate_temp,
+            // textured_plate_temp, etc.) but no single "bed_temp"
+            // field. The picker only wants a representative value, so
+            // prefer the generic `hot_plate_temp` (PEI / smooth) and
+            // fall back through textured / cool / supertack.
+            let bed_temp = ["hot_plate_temp", "textured_plate_temp", "cool_plate_temp", "supertack_plate_temp"]
+                .iter()
+                .find_map(|k| set.get(*k).and_then(|s| s.parse::<u32>().ok()))
+                .unwrap_or(60);
             FilamentFragmentSummary {
                 identity: slug.clone(),
                 display_name,
                 base_type,
+                vendor,
+                nozzle_temp,
+                bed_temp,
             }
         })
         .collect()

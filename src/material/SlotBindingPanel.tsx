@@ -19,12 +19,14 @@ import type { PlateId, PlateSnapshot } from "../viewport/types";
 import {
   flattenSlots,
   getPrinterInstance,
+  setSlotColor,
   setSlotFilament,
   type FlatSlotOption,
   type PrinterInstance,
   type SlotRef,
 } from "../printer/printerInstance";
-import { SlotChipStrip, type FilamentSummary } from "./SlotChipStrip";
+import { SlotChipStrip } from "./SlotChipStrip";
+import type { FilamentSummary } from "./filamentSummary";
 
 export interface SlotBindingPanelProps {
   plateId: PlateId | null;
@@ -128,11 +130,24 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
     return null;
   }
 
-  const onPickFilament = (slot: SlotRef, identity: string | null): void => {
+  const onApplyPick = (
+    slot: SlotRef,
+    pick: { identity: string; color: string },
+  ): void => {
     if (!instance) return;
-    void setSlotFilament(instance.id, slot.extruder, slot.slot, identity).catch(
-      (err) => console.error("[slot-binding] setSlotFilament failed", err),
-    );
+    // Two backend writes — the second runs after the first resolves
+    // so a fast-emitted `printer:instance_changed` between them
+    // doesn't show a half-updated state. Either failing is logged
+    // but we still try the other.
+    void setSlotFilament(instance.id, slot.extruder, slot.slot, pick.identity)
+      .catch((err) =>
+        console.error("[slot-binding] setSlotFilament failed", err),
+      )
+      .then(() =>
+        setSlotColor(instance.id, slot.extruder, slot.slot, pick.color).catch(
+          (err) => console.error("[slot-binding] setSlotColor failed", err),
+        ),
+      );
   };
 
   // Placeholder sync action — real driver round-trip lands in 7c-2.
@@ -174,7 +189,7 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
         instance={instance}
         slots={slots}
         filaments={filaments}
-        onPickFilament={onPickFilament}
+        onApplyPick={onApplyPick}
         onSync={onSyncSlots}
       />
 

@@ -369,21 +369,24 @@ function computeSlotIds({ extruders = 1, amsUnits = 0 } = {}) {
 
 // Compact label for a slot — what shows on the slot pill.
 // Hides the AMS-unit letter when there's only one AMS unit (no ambiguity).
+// Multi-extruder printers label their direct slots by toolhead (T1, T2…) —
+// in this build one toolhead = one extruder; richer topologies (a toolhead
+// with multiple extruders) are out of scope for now.
 function slotShortLabel(slotId, slotIds = []) {
   if (slotId === "ext") return "ext";
   const extMatch = slotId.match(/^ext:(\d+)$/);
-  if (extMatch) return `e${extMatch[1]}`;
+  if (extMatch) return `T${extMatch[1]}`;
   const amsMatch = slotId.match(/^AMS-([A-Z]):(\d+)$/);
   if (amsMatch) {
     const [, letter, idx] = amsMatch;
-    // If multiple AMS units present, show "A1", "B3", etc.
+    // If multiple AMS units present, show "A:1", "B:3", etc.
     // If only one, just show the slot number.
     const distinctUnits = new Set();
     slotIds.forEach(id => {
       const m = id.match(/^AMS-([A-Z]):/);
       if (m) distinctUnits.add(m[1]);
     });
-    return distinctUnits.size > 1 ? `${letter}${idx}` : idx;
+    return distinctUnits.size > 1 ? `${letter}:${idx}` : idx;
   }
   return slotId;
 }
@@ -392,7 +395,7 @@ function slotShortLabel(slotId, slotIds = []) {
 function slotLongLabel(slotId) {
   if (slotId === "ext") return "External spool";
   const extMatch = slotId.match(/^ext:(\d+)$/);
-  if (extMatch) return `Extruder ${extMatch[1]}`;
+  if (extMatch) return `Toolhead ${extMatch[1]}`;
   const amsMatch = slotId.match(/^AMS-([A-Z]):(\d+)$/);
   if (amsMatch) return `AMS ${amsMatch[1]} · slot ${amsMatch[2]}`;
   return slotId;

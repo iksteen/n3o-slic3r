@@ -1,80 +1,131 @@
 // filament-catalog.jsx — A reasonably realistic catalog of filaments organized
-// by brand → product line → color. Used by the filament picker dialog.
+// by brand → product line. Used by the filament picker dialog.
 //
-// Each color is { name, hex }. Each product captures sensible default temps
-// (nozzleTemp / bedTemp) so they can seed a new filament's `print_temp` etc.
-// Materials are a small enum: PLA, PETG, ABS, ASA, TPU, PC, PA, PVB, HIPS.
+// Each product captures sensible default temps (nozzleTemp / bedTemp) so they
+// can seed a new filament's `print_temp` etc. Materials are a small enum:
+// PLA, PETG, ABS, ASA, TPU, PC, PA, PVB, HIPS.
+//
+// Color is decoupled from the product — every product can be ordered in any
+// color from STANDARD_PALETTE below. Real-world product-specific color
+// availability isn't modelled here; pick any color, get any color.
 
-// Master color list — products reference subsets of this by name.
-const COLOR_LIB = [
-  { name: "Pure White",        hex: "#F2EFE7" },
+// ───────── Standard color palette ─────────
+// Extensive shared palette used for every product across every brand. Grouped
+// loosely by hue family so the picker grid reads as a rainbow when rendered
+// in order.
+const STANDARD_PALETTE = [
+  // Whites & naturals
+  { name: "Pure White",        hex: "#F4F1EA" },
   { name: "Cool White",        hex: "#E8EBEC" },
   { name: "Jade White",        hex: "#F1ECD9" },
+  { name: "Cream",             hex: "#F2E6C9" },
+  { name: "Bone",              hex: "#E8DCC6" },
   { name: "Ivory",             hex: "#EDE2C4" },
+  { name: "Natural",           hex: "#E8DFC6" },
   { name: "Beige",             hex: "#D9CFB8" },
+
+  // Greys
   { name: "Light Grey",        hex: "#BFC3C7" },
-  { name: "Silver",            hex: "#A6ABB1" },
+  { name: "Silver",             hex: "#A6ABB1" },
   { name: "Cool Grey",         hex: "#7A8794" },
+  { name: "Slate",             hex: "#5B6772" },
+  { name: "Gunmetal",          hex: "#3E464F" },
   { name: "Charcoal",          hex: "#3A3E44" },
+
+  // Blacks
   { name: "Matte Black",       hex: "#1A1B1D" },
   { name: "Jet Black",         hex: "#0F1012" },
-  { name: "Espresso",          hex: "#3B2A22" },
+
+  // Browns & earths
+  { name: "Khaki",             hex: "#A39369" },
+  { name: "Sand",              hex: "#D6B97A" },
   { name: "Brown",             hex: "#7A4F2C" },
+  { name: "Espresso",          hex: "#3B2A22" },
+
+  // Metallics
+  { name: "Rose Gold",         hex: "#C58C7A" },
+  { name: "Copper",            hex: "#B86A3C" },
   { name: "Bronze",            hex: "#A37939" },
   { name: "Gold",              hex: "#C9A23E" },
-  { name: "Sand",              hex: "#D6B97A" },
-  { name: "Signal Red",        hex: "#C24B45" },
-  { name: "Burgundy",          hex: "#6F2A2A" },
+
+  // Reds
+  { name: "Salmon",            hex: "#E89788" },
   { name: "Coral",             hex: "#E2735B" },
+  { name: "Signal Red",        hex: "#C24B45" },
+  { name: "Crimson",           hex: "#9E2A2A" },
+  { name: "Burgundy",          hex: "#6F2A2A" },
+  { name: "Wine",              hex: "#4A1F2A" },
+
+  // Pinks
+  { name: "Pastel Pink",       hex: "#F0B6CB" },
+  { name: "Rose",              hex: "#D87099" },
+  { name: "Hot Pink",          hex: "#E2569D" },
+  { name: "Magenta",           hex: "#C13E94" },
+
+  // Oranges
+  { name: "Apricot",           hex: "#EEA56A" },
   { name: "Bright Orange",     hex: "#E07A2D" },
   { name: "Pumpkin",           hex: "#C45A1D" },
-  { name: "Sunflower",         hex: "#E8C13D" },
+
+  // Yellows
   { name: "Lemon",             hex: "#F2D852" },
+  { name: "Sunflower",         hex: "#E8C13D" },
+  { name: "Mustard",           hex: "#B89028" },
+
+  // Greens
   { name: "Lime",              hex: "#A3CB47" },
+  { name: "Yellow Green",      hex: "#8CB23A" },
+  { name: "Olive",             hex: "#6E7A2C" },
   { name: "Grass Green",       hex: "#5BA34B" },
-  { name: "Forest Green",      hex: "#2F6B3F" },
+  { name: "Sage",              hex: "#9DB28C" },
   { name: "Mint",              hex: "#7DC6A4" },
+  { name: "Emerald",           hex: "#2F8F5C" },
+  { name: "Forest Green",      hex: "#2F6B3F" },
+
+  // Cyans & teals
+  { name: "Aqua",              hex: "#5FCFD0" },
   { name: "Teal",              hex: "#2C8A8E" },
   { name: "Cyan",              hex: "#2BB6C2" },
+
+  // Blues
   { name: "Sky Blue",          hex: "#6FA8D6" },
+  { name: "Steel Blue",        hex: "#4A7CA8" },
+  { name: "Royal Blue",        hex: "#2E58C2" },
   { name: "Cobalt",            hex: "#2D55A6" },
   { name: "Navy",              hex: "#1E2F55" },
-  { name: "Indigo",            hex: "#3A2E80" },
+
+  // Purples & violets
+  { name: "Periwinkle",        hex: "#9AA3E0" },
+  { name: "Lavender",          hex: "#B79EE0" },
+  { name: "Lilac",             hex: "#9C7BC2" },
   { name: "Violet",            hex: "#7A5AE0" },
-  { name: "Magenta",           hex: "#C13E94" },
-  { name: "Hot Pink",          hex: "#E2569D" },
-  { name: "Pastel Pink",       hex: "#F0B6CB" },
-  { name: "Transparent",       hex: "#E8EEF0", translucent: true },
-  { name: "Translucent Blue",  hex: "#A8C8E8", translucent: true },
-  { name: "Translucent Red",   hex: "#E8A4A0", translucent: true },
-  { name: "Natural",           hex: "#E8DFC6" },
+  { name: "Indigo",            hex: "#3A2E80" },
+  { name: "Plum",              hex: "#5A2E66" },
+
+  // Translucents
+  { name: "Transparent",         hex: "#E8EEF0", translucent: true },
+  { name: "Translucent Blue",    hex: "#A8C8E8", translucent: true },
+  { name: "Translucent Red",     hex: "#E8A4A0", translucent: true },
+  { name: "Translucent Green",   hex: "#B5DDB8", translucent: true },
+  { name: "Translucent Yellow",  hex: "#EFE3A8", translucent: true },
+  { name: "Translucent Purple",  hex: "#C4AEDC", translucent: true },
 ];
 
-const C = (...names) => names.map(n => {
-  const c = COLOR_LIB.find(x => x.name === n);
-  if (!c) console.warn("Missing color in catalog:", n);
-  return c;
-}).filter(Boolean);
-
-// A broad palette many "consumer" products carry
-const BROAD = ["Pure White", "Cool White", "Light Grey", "Cool Grey", "Charcoal",
-               "Matte Black", "Jet Black", "Signal Red", "Burgundy", "Bright Orange",
-               "Sunflower", "Lime", "Forest Green", "Mint", "Cyan",
-               "Sky Blue", "Cobalt", "Navy", "Violet", "Magenta",
-               "Hot Pink", "Pastel Pink", "Brown", "Beige", "Gold"];
-
+// ───────── Brand & product catalog ─────────
+// Products no longer carry color lists — every product can be ordered in any
+// color from STANDARD_PALETTE.
 const FILAMENT_CATALOG = [
   {
     brand: "Generic",
     short: "GEN",
     note: "Open baseline profiles — no vendor calibration",
     products: [
-      { name: "PLA",      material: "PLA",  nozzleTemp: 215, bedTemp: 60,  colors: C(...BROAD) },
-      { name: "PETG",     material: "PETG", nozzleTemp: 240, bedTemp: 80,  colors: C(...BROAD, "Transparent") },
-      { name: "ABS",      material: "ABS",  nozzleTemp: 245, bedTemp: 100, colors: C("Pure White","Matte Black","Charcoal","Cool Grey","Signal Red","Cobalt","Bright Orange") },
-      { name: "ASA",      material: "ASA",  nozzleTemp: 250, bedTemp: 100, colors: C("Pure White","Matte Black","Cool Grey","Charcoal","Signal Red","Beige") },
-      { name: "TPU 95A",  material: "TPU",  nozzleTemp: 225, bedTemp: 50,  colors: C("Pure White","Matte Black","Cyan","Signal Red","Sunflower","Forest Green") },
-      { name: "HIPS",     material: "HIPS", nozzleTemp: 230, bedTemp: 95,  colors: C("Pure White","Matte Black","Natural") },
+      { name: "PLA",      material: "PLA",  nozzleTemp: 215, bedTemp: 60  },
+      { name: "PETG",     material: "PETG", nozzleTemp: 240, bedTemp: 80  },
+      { name: "ABS",      material: "ABS",  nozzleTemp: 245, bedTemp: 100 },
+      { name: "ASA",      material: "ASA",  nozzleTemp: 250, bedTemp: 100 },
+      { name: "TPU 95A",  material: "TPU",  nozzleTemp: 225, bedTemp: 50  },
+      { name: "HIPS",     material: "HIPS", nozzleTemp: 230, bedTemp: 95  },
     ],
   },
   {
@@ -82,18 +133,18 @@ const FILAMENT_CATALOG = [
     short: "BL",
     note: "First-party vendor profiles — AMS-compatible",
     products: [
-      { name: "PLA Basic",        material: "PLA",  nozzleTemp: 220, bedTemp: 55, colors: C("Jade White","Pure White","Matte Black","Charcoal","Cool Grey","Signal Red","Burgundy","Bright Orange","Sunflower","Lime","Forest Green","Mint","Cyan","Cobalt","Navy","Violet","Magenta","Hot Pink","Gold","Bronze","Sand") },
-      { name: "PLA Matte",        material: "PLA",  nozzleTemp: 220, bedTemp: 55, colors: C("Ivory","Matte Black","Cool Grey","Signal Red","Coral","Pumpkin","Lemon","Mint","Sky Blue","Indigo","Hot Pink","Pastel Pink","Espresso") },
-      { name: "PLA Silk",         material: "PLA",  nozzleTemp: 230, bedTemp: 55, colors: C("Pure White","Gold","Bronze","Signal Red","Forest Green","Sky Blue","Violet","Magenta") },
-      { name: "PLA-CF",           material: "PLA",  nozzleTemp: 240, bedTemp: 65, colors: C("Matte Black","Charcoal","Cool Grey") },
-      { name: "PETG HF",          material: "PETG", nozzleTemp: 245, bedTemp: 70, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Bright Orange","Sunflower","Forest Green","Cyan","Cobalt","Magenta") },
-      { name: "PETG Translucent", material: "PETG", nozzleTemp: 245, bedTemp: 70, colors: C("Transparent","Translucent Blue","Translucent Red") },
-      { name: "PETG-CF",          material: "PETG", nozzleTemp: 260, bedTemp: 80, colors: C("Matte Black","Charcoal") },
-      { name: "ABS",              material: "ABS",  nozzleTemp: 270, bedTemp: 100, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Cobalt") },
-      { name: "ASA",              material: "ASA",  nozzleTemp: 270, bedTemp: 100, colors: C("Pure White","Matte Black","Cool Grey","Charcoal","Signal Red") },
-      { name: "PA-CF",            material: "PA",   nozzleTemp: 290, bedTemp: 100, colors: C("Matte Black") },
-      { name: "PC FR",            material: "PC",   nozzleTemp: 280, bedTemp: 100, colors: C("Pure White","Matte Black","Transparent") },
-      { name: "Support for PLA",  material: "PLA",  nozzleTemp: 220, bedTemp: 55, colors: C("Natural") },
+      { name: "PLA Basic",        material: "PLA",  nozzleTemp: 220, bedTemp: 55  },
+      { name: "PLA Matte",        material: "PLA",  nozzleTemp: 220, bedTemp: 55  },
+      { name: "PLA Silk",         material: "PLA",  nozzleTemp: 230, bedTemp: 55  },
+      { name: "PLA-CF",           material: "PLA",  nozzleTemp: 240, bedTemp: 65  },
+      { name: "PETG HF",          material: "PETG", nozzleTemp: 245, bedTemp: 70  },
+      { name: "PETG Translucent", material: "PETG", nozzleTemp: 245, bedTemp: 70  },
+      { name: "PETG-CF",          material: "PETG", nozzleTemp: 260, bedTemp: 80  },
+      { name: "ABS",              material: "ABS",  nozzleTemp: 270, bedTemp: 100 },
+      { name: "ASA",              material: "ASA",  nozzleTemp: 270, bedTemp: 100 },
+      { name: "PA-CF",            material: "PA",   nozzleTemp: 290, bedTemp: 100 },
+      { name: "PC FR",            material: "PC",   nozzleTemp: 280, bedTemp: 100 },
+      { name: "Support for PLA",  material: "PLA",  nozzleTemp: 220, bedTemp: 55  },
     ],
   },
   {
@@ -101,12 +152,12 @@ const FILAMENT_CATALOG = [
     short: "PM",
     note: "Engineering-grade lineup",
     products: [
-      { name: "PolyTerra PLA",  material: "PLA",  nozzleTemp: 215, bedTemp: 60, colors: C("Ivory","Cool White","Matte Black","Charcoal","Cool Grey","Signal Red","Coral","Pumpkin","Sunflower","Mint","Forest Green","Sky Blue","Cobalt","Violet","Magenta","Pastel Pink","Espresso","Beige") },
-      { name: "PolyLite PLA",   material: "PLA",  nozzleTemp: 215, bedTemp: 60, colors: C(...BROAD) },
-      { name: "PolyLite PETG",  material: "PETG", nozzleTemp: 240, bedTemp: 80, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Sunflower","Forest Green","Cyan","Cobalt","Transparent") },
-      { name: "PolyMax PC",     material: "PC",   nozzleTemp: 270, bedTemp: 100, colors: C("Pure White","Matte Black","Transparent") },
-      { name: "PolyMide CoPA",  material: "PA",   nozzleTemp: 280, bedTemp: 90,  colors: C("Natural","Matte Black") },
-      { name: "PolyFlex TPU95", material: "TPU",  nozzleTemp: 225, bedTemp: 50,  colors: C("Pure White","Matte Black","Signal Red","Cyan","Sunflower") },
+      { name: "PolyTerra PLA",  material: "PLA",  nozzleTemp: 215, bedTemp: 60  },
+      { name: "PolyLite PLA",   material: "PLA",  nozzleTemp: 215, bedTemp: 60  },
+      { name: "PolyLite PETG",  material: "PETG", nozzleTemp: 240, bedTemp: 80  },
+      { name: "PolyMax PC",     material: "PC",   nozzleTemp: 270, bedTemp: 100 },
+      { name: "PolyMide CoPA",  material: "PA",   nozzleTemp: 280, bedTemp: 90  },
+      { name: "PolyFlex TPU95", material: "TPU",  nozzleTemp: 225, bedTemp: 50  },
     ],
   },
   {
@@ -114,10 +165,10 @@ const FILAMENT_CATALOG = [
     short: "PRU",
     note: "Prusa Research's in-house spec",
     products: [
-      { name: "PLA",  material: "PLA",  nozzleTemp: 215, bedTemp: 60, colors: C("Pure White","Matte Black","Charcoal","Cool Grey","Silver","Signal Red","Burgundy","Bright Orange","Sunflower","Lime","Forest Green","Mint","Cyan","Sky Blue","Cobalt","Navy","Violet","Magenta","Gold") },
-      { name: "PETG", material: "PETG", nozzleTemp: 240, bedTemp: 80, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Sunflower","Forest Green","Cyan","Cobalt","Transparent","Translucent Blue","Translucent Red") },
-      { name: "ASA",  material: "ASA",  nozzleTemp: 260, bedTemp: 100, colors: C("Pure White","Matte Black","Charcoal","Cool Grey","Signal Red") },
-      { name: "PVB",  material: "PVB",  nozzleTemp: 215, bedTemp: 75, colors: C("Transparent","Pure White","Matte Black") },
+      { name: "PLA",  material: "PLA",  nozzleTemp: 215, bedTemp: 60  },
+      { name: "PETG", material: "PETG", nozzleTemp: 240, bedTemp: 80  },
+      { name: "ASA",  material: "ASA",  nozzleTemp: 260, bedTemp: 100 },
+      { name: "PVB",  material: "PVB",  nozzleTemp: 215, bedTemp: 75  },
     ],
   },
   {
@@ -125,10 +176,10 @@ const FILAMENT_CATALOG = [
     short: "ES",
     note: "Budget-friendly, broad availability",
     products: [
-      { name: "PLA+",   material: "PLA",  nozzleTemp: 215, bedTemp: 60, colors: C(...BROAD) },
-      { name: "PETG",   material: "PETG", nozzleTemp: 245, bedTemp: 80, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Sunflower","Forest Green","Cobalt","Transparent") },
-      { name: "ABS+",   material: "ABS",  nozzleTemp: 240, bedTemp: 100, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Cobalt") },
-      { name: "eSilk",  material: "PLA",  nozzleTemp: 220, bedTemp: 60, colors: C("Gold","Bronze","Signal Red","Forest Green","Sky Blue","Magenta") },
+      { name: "PLA+",   material: "PLA",  nozzleTemp: 215, bedTemp: 60  },
+      { name: "PETG",   material: "PETG", nozzleTemp: 245, bedTemp: 80  },
+      { name: "ABS+",   material: "ABS",  nozzleTemp: 240, bedTemp: 100 },
+      { name: "eSilk",  material: "PLA",  nozzleTemp: 220, bedTemp: 60  },
     ],
   },
   {
@@ -136,8 +187,8 @@ const FILAMENT_CATALOG = [
     short: "OV",
     note: "Matte PLA specialist",
     products: [
-      { name: "PLA Matte", material: "PLA",  nozzleTemp: 220, bedTemp: 60, colors: C("Ivory","Matte Black","Cool Grey","Charcoal","Signal Red","Coral","Pumpkin","Sunflower","Mint","Forest Green","Sky Blue","Indigo","Hot Pink","Pastel Pink","Beige","Espresso") },
-      { name: "PETG",      material: "PETG", nozzleTemp: 240, bedTemp: 80, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Sunflower","Forest Green","Cobalt","Transparent") },
+      { name: "PLA Matte", material: "PLA",  nozzleTemp: 220, bedTemp: 60 },
+      { name: "PETG",      material: "PETG", nozzleTemp: 240, bedTemp: 80 },
     ],
   },
   {
@@ -145,9 +196,9 @@ const FILAMENT_CATALOG = [
     short: "SU",
     note: "Value tier",
     products: [
-      { name: "PLA Meta",  material: "PLA",  nozzleTemp: 200, bedTemp: 50, colors: C(...BROAD) },
-      { name: "PLA Silk",  material: "PLA",  nozzleTemp: 215, bedTemp: 55, colors: C("Gold","Bronze","Signal Red","Cyan","Magenta","Hot Pink") },
-      { name: "PETG",      material: "PETG", nozzleTemp: 240, bedTemp: 75, colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Transparent") },
+      { name: "PLA Meta",  material: "PLA",  nozzleTemp: 200, bedTemp: 50 },
+      { name: "PLA Silk",  material: "PLA",  nozzleTemp: 215, bedTemp: 55 },
+      { name: "PETG",      material: "PETG", nozzleTemp: 240, bedTemp: 75 },
     ],
   },
   {
@@ -155,11 +206,11 @@ const FILAMENT_CATALOG = [
     short: "JP",
     note: "Composite & engineering focus",
     products: [
-      { name: "PETG-CF",  material: "PETG", nozzleTemp: 250, bedTemp: 80,  colors: C("Charcoal","Matte Black") },
-      { name: "PETG-GF",  material: "PETG", nozzleTemp: 250, bedTemp: 80,  colors: C("Charcoal","Matte Black","Natural") },
-      { name: "PLA Pro",  material: "PLA",  nozzleTemp: 220, bedTemp: 60,  colors: C("Pure White","Matte Black","Cool Grey","Signal Red","Forest Green","Cobalt","Bronze") },
-      { name: "PA12-CF",  material: "PA",   nozzleTemp: 295, bedTemp: 100, colors: C("Matte Black") },
-      { name: "PC-CF",    material: "PC",   nozzleTemp: 290, bedTemp: 110, colors: C("Matte Black") },
+      { name: "PETG-CF",  material: "PETG", nozzleTemp: 250, bedTemp: 80  },
+      { name: "PETG-GF",  material: "PETG", nozzleTemp: 250, bedTemp: 80  },
+      { name: "PLA Pro",  material: "PLA",  nozzleTemp: 220, bedTemp: 60  },
+      { name: "PA12-CF",  material: "PA",   nozzleTemp: 295, bedTemp: 100 },
+      { name: "PC-CF",    material: "PC",   nozzleTemp: 290, bedTemp: 110 },
     ],
   },
 ];
@@ -180,4 +231,5 @@ function filamentSlug(brand, product, colorName) {
 
 window.FILAMENT_CATALOG = FILAMENT_CATALOG;
 window.CATALOG_MATERIALS = CATALOG_MATERIALS;
+window.STANDARD_PALETTE = STANDARD_PALETTE;
 window.filamentSlug = filamentSlug;
