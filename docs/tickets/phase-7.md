@@ -52,7 +52,7 @@ the index plus phase-level status and notes.
 | `.gcode.3mf` upload + send-print command | ✅ done | [PR-7a-5](phase-7/PR-7a-5%20Bambu%20send.md) |
 | Pause / resume / stop commands | ✅ done | [PR-7a-6](phase-7/PR-7a-6%20Bambu%20commands.md) |
 | Frontend printer state panel + send button | ✅ done | [PR-7a-7](phase-7/PR-7a-7%20Bambu%20panel.md) |
-| Real-print smoke + walkthrough doc | ❌ open | [PR-7a-8](phase-7/PR-7a-8%20Bambu%20smoke.md) |
+| Real-print smoke + walkthrough doc | ✅ done | [PR-7a-8](phase-7/PR-7a-8%20Bambu%20smoke.md) |
 
 ### 7b — Snapmaker U1 (~2 weeks)
 

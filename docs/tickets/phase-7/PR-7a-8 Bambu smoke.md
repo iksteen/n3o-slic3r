@@ -1,6 +1,9 @@
 # PR-7a-8 — Bambu real-print smoke + walkthrough doc
 
-Status: ❌ open.
+Status: ✅ done. Walkthrough captured in `docs/phase-7a-smoke.md`; all
+four scenarios (single-color, multi-color AMS, external-spool only,
+external-spool + AMS mixed) ran to completion on live A1 mini
+hardware.
 
 **Scope.** Phase 7a exit gate. Mechanizes the
 "slice → send → print" loop on a real A1 mini, with both a
