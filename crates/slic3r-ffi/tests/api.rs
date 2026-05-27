@@ -463,3 +463,106 @@ fn slice_progress_callbacks_are_per_call_no_cross_contamination() {
     let _ = std::fs::remove_file(&out1);
     let _ = std::fs::remove_file(&out2);
 }
+
+/// Two slice() calls on two threads, real concurrent libslic3r runs.
+///
+/// The per-slice progress callback rework cleared the FFI-side
+/// blocker for concurrent slicing. This test answers the next
+/// question: does libslic3r itself tolerate two `Print::process()`
+/// calls running at the same time in the same process?
+///
+/// If it does: both threads succeed, both produce non-empty gcode,
+/// both closures fire only their own ticks.
+/// If it doesn't: this test surfaces the failure mode directly
+/// (crash, wrong-output, hang) instead of leaving it as a latent
+/// "we don't know" — gives us empirical data for the multi-plate
+/// parallelism design decision.
+///
+/// Skewed inputs (different layer heights, different output paths)
+/// so the two runs can't coincidentally collide on the same
+/// on-disk artifact or hash to identical workloads.
+#[test]
+fn two_concurrent_slices_in_separate_threads_both_succeed() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread;
+
+    ensure_init();
+
+    let make_inputs = |layer_height: &'static str, out_name: &'static str|
+        -> (Model, Config, std::path::PathBuf) {
+        let mut model = Model::new().expect("Model::new");
+        let mut config = Config::new().expect("Config::new");
+        model
+            .load_with_config(test_stl(), &mut config)
+            .expect("load 20mmbox-LF.stl");
+        config
+            .set("use_relative_e_distances", "0")
+            .expect("set use_relative_e_distances");
+        config
+            .set("layer_height", layer_height)
+            .expect("set layer_height");
+        let out_path = std::env::temp_dir().join(format!(
+            "n3o-concurrent-slice-{}-{}.gcode",
+            std::process::id(),
+            out_name,
+        ));
+        (model, config, out_path)
+    };
+
+    let (model_a, config_a, out_a) = make_inputs("0.20", "a");
+    let (model_b, config_b, out_b) = make_inputs("0.16", "b");
+
+    let ticks_a = Arc::new(AtomicUsize::new(0));
+    let ticks_b = Arc::new(AtomicUsize::new(0));
+    let ticks_a_for_cb = Arc::clone(&ticks_a);
+    let ticks_b_for_cb = Arc::clone(&ticks_b);
+    let out_a_for_thread = out_a.clone();
+    let out_b_for_thread = out_b.clone();
+
+    let handle_a = thread::spawn(move || {
+        slice(&model_a, &config_a, &out_a_for_thread, |_, _| {
+            ticks_a_for_cb.fetch_add(1, Ordering::Relaxed);
+        })
+    });
+    let handle_b = thread::spawn(move || {
+        slice(&model_b, &config_b, &out_b_for_thread, |_, _| {
+            ticks_b_for_cb.fetch_add(1, Ordering::Relaxed);
+        })
+    });
+
+    let result_a = handle_a.join().expect("thread A panicked");
+    let result_b = handle_b.join().expect("thread B panicked");
+
+    // Both slices must succeed. Either failing tells us libslic3r's
+    // not safely concurrent at the Print::process() level; the
+    // multi-plate parallelism plan would then need separate
+    // processes (or a slicer-side mutex).
+    result_a.expect("slice A failed under concurrent run");
+    result_b.expect("slice B failed under concurrent run");
+
+    // Both closures fired — neither was starved or routed to the
+    // other slice. The per-slice callback rework already proved
+    // this for sequential runs (sibling test above); this run pins
+    // it under genuine thread parallelism.
+    assert!(
+        ticks_a.load(Ordering::Relaxed) > 0,
+        "slice A's closure didn't fire",
+    );
+    assert!(
+        ticks_b.load(Ordering::Relaxed) > 0,
+        "slice B's closure didn't fire",
+    );
+
+    // Both gcode files written and non-empty. Verifying byte-level
+    // correctness against the sequential output is out of scope —
+    // we just care that both ran to completion and the writers
+    // didn't trample each other's output paths.
+    let bytes_a = std::fs::metadata(&out_a).map(|m| m.len()).unwrap_or(0);
+    let bytes_b = std::fs::metadata(&out_b).map(|m| m.len()).unwrap_or(0);
+    assert!(bytes_a > 0, "slice A produced no gcode");
+    assert!(bytes_b > 0, "slice B produced no gcode");
+
+    let _ = std::fs::remove_file(&out_a);
+    let _ = std::fs::remove_file(&out_b);
+}

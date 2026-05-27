@@ -25,6 +25,10 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};
+// Mutex remains for the per-test event-collecting sinks; the
+// process-global FFI_SLICE_LOCK is gone (slice progress callbacks
+// are per-call now; libslic3r concurrency verified by
+// crates/slic3r-ffi/tests/api.rs::two_concurrent_slices_*).
 
 use n3o_slic3r_lib::core::cascade::commands::{ContextJson, OverrideFileSpec};
 use n3o_slic3r_lib::core::filament::FilamentProfile;
@@ -43,10 +47,6 @@ fn ensure_ffi_init() {
     });
 }
 
-/// Process-global progress callback gate. `slic3r_ffi::
-/// set_slice_progress` is process-wide (single callback slot) so
-/// parallel slice tests must serialize.
-static FFI_SLICE_LOCK: Mutex<()> = Mutex::new(());
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -208,7 +208,6 @@ fn slice_fourcolor(
 /// `M620 SnA` AMS swap macro in the gcode body.
 #[test]
 fn bambi_multi_color_slices_with_filament_tracking() {
-    let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     ensure_ffi_init();
 
     let (gcode_path, summary) = slice_fourcolor("bambi", bambi_printer(), 5);
@@ -248,7 +247,6 @@ fn bambi_multi_color_slices_with_filament_tracking() {
 /// different printer_instance_id) holds end-to-end.
 #[test]
 fn snappy_multi_color_slices_with_toolhead_changes() {
-    let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     ensure_ffi_init();
 
     let (gcode_path, summary) = slice_fourcolor("snappy", snappy_printer(), 4);
@@ -305,7 +303,6 @@ fn snappy_binding_routes_single_material_to_bound_toolhead() {
     use n3o_slic3r_lib::core::slice::input::build_slice_input;
     use n3o_slic3r_lib::core::threemf::load_3mf;
 
-    let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     ensure_ffi_init();
 
     let cube_path = workspace_root()
@@ -420,7 +417,6 @@ fn cube_halves_slices_as_one_multivolume_object_no_floating_warning() {
     use n3o_slic3r_lib::core::slice::input::build_slice_input;
     use n3o_slic3r_lib::core::threemf::load_3mf;
 
-    let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     ensure_ffi_init();
 
     let fixture = workspace_root().join("src-tauri/tests/fixtures/3mf/cube-halves-2mat.3mf");
