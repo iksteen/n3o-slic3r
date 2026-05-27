@@ -20,7 +20,6 @@ pub mod cascade_safety;
 pub mod commands;
 pub mod errors;
 pub mod events;
-pub mod ffi_serial;
 pub mod input;
 pub mod job;
 pub mod orchestrator;
@@ -35,7 +34,7 @@ pub use orchestrator::{start_slice_job as start_slice_job_internal, SliceStartEr
 pub use summary::{build_summary, build_summary_from_bytes, PlateSummary};
 
 use serde::Serialize;
-use slic3r_ffi::{Config, Model};
+use slic3r_ffi::{slice, Config, Model};
 use std::path::PathBuf;
 
 #[derive(Serialize)]
@@ -62,7 +61,7 @@ pub fn slicer_slice(model_path: String, out_path: String) -> SliceResult {
         let mut model = Model::new()?;
         let mut config = Config::new()?;
         model.load_with_config(PathBuf::from(&model_path), &mut config)?;
-        ffi_serial::slice(&model, &config, PathBuf::from(&out_path), |_, _| {})?;
+        slice(&model, &config, PathBuf::from(&out_path), |_, _| {})?;
         Ok(())
     };
     match do_it() {

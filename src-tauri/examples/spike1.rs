@@ -14,8 +14,7 @@
 //!   cargo run -p n3o-slic3r --release --example spike1
 
 use serde::Deserialize;
-use n3o_slic3r_lib::core::slice::ffi_serial::slice;
-use slic3r_ffi::{init, Config, Error, ErrorKind, Model};
+use slic3r_ffi::{init, slice, Config, Error, ErrorKind, Model};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

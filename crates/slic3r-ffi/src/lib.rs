@@ -522,29 +522,31 @@ extern "C" fn progress_trampoline(
     cb(percent, stage_str);
 }
 
+/// Process-wide serialization mutex for [`slice`]. libslic3r isn't
+/// safe to drive concurrently at the `Print::process()` level —
+/// heavier multi-material workloads SIGSEGV when two slices race
+/// (fourcolor benchy + cube-halves + snappy 4-color, observed in
+/// CI May 2026). The lock is held for the duration of the slice
+/// call so libslic3r runs one slice at a time across the whole
+/// process — independent of thread count, job count, or test
+/// binary count.
+///
+/// Poison recovery: a previous slice that panicked leaves the lock
+/// poisoned, but the inner `()` carries no state, so we recover the
+/// guard and keep slicing.
+static SLICE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Slice `model` with `config`, writing G-code to `out_gcode_path`.
 ///
-/// Raw FFI passthrough — calls libslic3r directly with no
-/// serialization. The progress callback is per-call (no global
-/// state), but **libslic3r itself isn't generally thread-safe**:
-/// concurrent `slice` invocations on heavier workloads have been
-/// observed to SIGSEGV (multi-material fourcolor benchy + cube-
-/// halves + snappy 4-color all racing through `Print::process()`
-/// at once, May 2026). Two concurrent slices on small geometry
-/// (20mm cube each) survived 5/5 runs in the dedicated test
-/// (`two_concurrent_slices_in_separate_threads_both_succeed`),
-/// which is what makes this fail in subtle, workload-dependent
-/// ways instead of immediately.
-///
-/// **Production callers should not invoke this from more than one
-/// thread at a time.** The recommended pattern is an application-
-/// side wrapper that serializes calls behind a process-wide mutex.
-/// In this workspace that wrapper is
-/// `n3o_slic3r_lib::core::slice::ffi_serial::slice` — every test
-/// and orchestrator path goes through it. This raw FFI binding is
-/// kept opinionated-free so the FFI's own tests can exercise
-/// concurrent invocation against the unwrapped surface to verify
-/// the per-call callback wiring.
+/// Calls libslic3r through the FFI under the process-wide
+/// [`SLICE_LOCK`]; concurrent callers queue rather than race. The
+/// progress callback fires synchronously on the slicing thread,
+/// already serialized by libslic3r's C++-side per-slice mutex (see
+/// `crates/slic3r-ffi/ffi/slic3r_ffi.cpp` — `print.set_status_callback`
+/// lambda). Together the two locks give the `FnMut` callback the
+/// exclusive-access guarantee Rust requires, even though libslic3r
+/// fans `set_status` calls across many TBB worker threads inside a
+/// single slice.
 pub fn slice<P, F>(
     model: &Model,
     config: &Config,
@@ -555,6 +557,9 @@ where
     P: AsRef<Path>,
     F: FnMut(i32, &str),
 {
+    let _guard = SLICE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let p = CString::new(out_gcode_path.as_ref().to_string_lossy().as_bytes())
         .map_err(|_| Error { kind: ErrorKind::InvalidArg, message: Some("path has NUL".into()) })?;
     let mut err: *mut c_char = ptr::null_mut();

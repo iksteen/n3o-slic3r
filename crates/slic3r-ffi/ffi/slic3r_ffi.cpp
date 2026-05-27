@@ -10,6 +10,7 @@
 #include <libslic3r/PrintBase.hpp>
 #include <libslic3r/Utils.hpp>
 #include <libslic3r/GCode/GCodeProcessor.hpp>
+#include <libslic3r/Format/bbs_3mf.hpp>
 
 #include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
@@ -347,6 +348,16 @@ slic3r_status slic3r_init(const char* resources_dir, unsigned int log_level) {
         // equivalent so the shim has no wx dependency.
         Slic3r::set_temporary_dir(std::filesystem::temp_directory_path().string());
 
+        // Disable libslic3r's BBS auto-backup scheduler. It's a
+        // headless-irrelevant feature (GUI Plater opts into it via
+        // Model::set_need_backup; we never do). The singleton's
+        // background thread is harmless when idle, but this is a
+        // PR-7c-2 probe: if abort rate stays the same with interval=0
+        // the backup manager isn't the heap-corruption source we're
+        // hunting. Keep this call regardless of the probe outcome —
+        // there's no reason for a headless slicer to run backup ticks.
+        Slic3r::set_backup_interval(0);
+
         g_def_cache = std::make_unique<DefCache>();
         g_def_cache->build();
         g_initialized = true;
@@ -676,12 +687,30 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         // Install the caller-supplied progress callback on this
         // Print instance. The lambda captures progress_cb +
         // progress_user_data by value so the callback travels with
-        // the slice — concurrent slices on distinct Prints each
-        // carry their own. NULL cb → silent slice (suppresses
-        // libslic3r's stderr default).
+        // the slice; NULL cb → silent slice (suppresses libslic3r's
+        // stderr default).
+        //
+        // Serialize the call into Rust with a per-slice mutex.
+        // libslic3r's `Print::process` fans work out across many TBB
+        // worker threads (parallel_for over PrintObjects → infill,
+        // generate_support_material, etc.) and each one invokes
+        // `PrintBase::set_status` independently. The Rust callback is
+        // an `FnMut` whose `call_mut` requires exclusive access;
+        // concurrent invocation is UB and was caught in PR-7c-2 ASan
+        // as a heap-use-after-free in `ProgressThrottle::should_emit`
+        // (two workers racing on `last_stage: String` — one assigned
+        // a fresh `to_owned()` value, dropping the prior String's
+        // buffer while the other was still reading it inside memcmp).
+        //
+        // The mutex lives on slic3r_slice's stack; the lambda's
+        // lifetime is bounded by Print's destruction at end of scope
+        // (Print stores the std::function), so by-ref capture is
+        // safe.
+        std::mutex progress_mtx;
         if (progress_cb) {
             print.set_status_callback(
-                [progress_cb, progress_user_data](const PrintBase::SlicingStatus& s) {
+                [progress_cb, progress_user_data, &progress_mtx](const PrintBase::SlicingStatus& s) {
+                    std::lock_guard<std::mutex> lk(progress_mtx);
                     progress_cb(s.percent, s.text.c_str(), progress_user_data);
                 });
         } else {

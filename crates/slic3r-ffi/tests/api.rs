@@ -464,25 +464,26 @@ fn slice_progress_callbacks_are_per_call_no_cross_contamination() {
     let _ = std::fs::remove_file(&out2);
 }
 
-/// Two slice() calls on two threads, real concurrent libslic3r runs.
+/// Two slice() calls on two threads — must serialize cleanly through
+/// the process-wide [`SLICE_LOCK`] and both succeed.
 ///
-/// The per-slice progress callback rework cleared the FFI-side
-/// blocker for concurrent slicing. This test answers the next
-/// question: does libslic3r itself tolerate two `Print::process()`
-/// calls running at the same time in the same process?
-///
-/// If it does: both threads succeed, both produce non-empty gcode,
-/// both closures fire only their own ticks.
-/// If it doesn't: this test surfaces the failure mode directly
-/// (crash, wrong-output, hang) instead of leaving it as a latent
-/// "we don't know" — gives us empirical data for the multi-plate
-/// parallelism design decision.
+/// History: this test used to verify that libslic3r tolerated two
+/// `Print::process()` calls running concurrently. PR-7c-2's ASan
+/// hunt proved it doesn't — libslic3r fans `set_status` calls across
+/// many TBB workers and the FnMut progress callback can't survive
+/// that without a per-slice mutex (heap-use-after-free in
+/// `ProgressThrottle::should_emit`). The fix lives in two layers:
+/// a C++-side per-slice `std::mutex` around the progress callback,
+/// and a Rust-side process-wide `SLICE_LOCK` around the slice call.
+/// Under the lock, the two threads here queue cleanly rather than
+/// race, and the per-slice callback isolation the rework added is
+/// still validated: each thread's closure only sees its own ticks.
 ///
 /// Skewed inputs (different layer heights, different output paths)
 /// so the two runs can't coincidentally collide on the same
 /// on-disk artifact or hash to identical workloads.
 #[test]
-fn two_concurrent_slices_in_separate_threads_both_succeed() {
+fn two_slices_in_separate_threads_serialize_cleanly() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;

@@ -14,6 +14,23 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# AddressSanitizer build option — enable with `-DSLIC3R_FFI_ASAN=ON`.
+# Applied before `add_subdirectory(${ORCA_DIR})` so libslic3r inherits
+# the flags too (uninstrumented dependencies can't be checked). Use a
+# separate build directory (`build/slic3r-ffi-asan/`) to keep the
+# instrumented .so out of the normal cargo cache; load it at runtime
+# via `LD_LIBRARY_PATH` over the canonical build.
+#
+# Stack traces benefit from `-fno-omit-frame-pointer`;
+# `-fno-optimize-sibling-calls` keeps tail-call elision from collapsing
+# frames ASan needs.
+option(SLIC3R_FFI_ASAN "Build with AddressSanitizer" OFF)
+if(SLIC3R_FFI_ASAN)
+    message(STATUS "slic3r-ffi: AddressSanitizer ENABLED")
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer -fno-optimize-sibling-calls)
+    add_link_options(-fsanitize=address)
+endif()
+
 # OrcaSlicer's pre-built dep tree (Boost/CGAL/OCCT/TBB/...). The workspace's
 # scripts/build.sh deps target produces this once; we assume it exists here.
 if(NOT DEFINED CACHE{CMAKE_PREFIX_PATH} OR "${CMAKE_PREFIX_PATH}" STREQUAL "")

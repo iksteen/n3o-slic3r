@@ -324,3 +324,48 @@ Add a section here using the same shape: symptom, root cause with
 file:line, fix location in our shim. Future maintainers will thank
 you. The cost of writing a clear failure-mode entry is dwarfed by the
 cost of someone else rediscovering the same trap a year later.
+
+## Upstream bugs observed (not worked around)
+
+Bugs found in libslic3r that we've **not** patched — either because
+the impact is harmless to our use case, the fix is unclear, or it
+needs to land upstream rather than as a local diff. Recorded so we
+can surface them on submodule bumps and to file upstream PRs when
+time allows.
+
+### GCode emission writes uninitialized bytes to disk
+
+**Symptom**: valgrind reports `Syscall param write(buf) points to
+uninitialised byte(s)` from `Slic3r::GCode::GCodeOutputStream::write`
+at `GCode.cpp:6181`, fired by `fwrite` inside the gcode export
+pipeline. Triggered during the bambi multi-color slice in
+`phase_s_smoke`; expected to fire on any slice that exercises the
+same gcode-writing path.
+
+**Trace** (compact):
+
+```
+write (write.c:26)
+  ← fwrite (iofwrite.c:44)
+  ← Slic3r::GCode::GCodeOutputStream::write (GCode.cpp:6181)
+  ← Slic3r::GCode::GCodeOutputStream::writeln (GCode.cpp:6190)
+  ← Slic3r::GCode::_do_export (GCode.cpp:3101)
+  ← Slic3r::GCode::do_export (GCode.cpp:2093)
+  ← Slic3r::Print::export_gcode (Print.cpp:2586)
+```
+
+**Root cause**: somewhere upstream of `writeln`, a `std::string`
+emitted into the gcode body carries uninit bytes. Not traced to the
+specific call site (would need source instrumentation of
+`_do_export`'s ~hundred `writeln` calls).
+
+**Why not worked around**: the bytes that leak are part of gcode
+output the printer firmware tolerates (typically inside a comment or
+a numeric field that gets re-tokenized). No functional impact on
+sliced output we've seen. Fixing requires source-level changes inside
+libslic3r — too invasive for a local patch, better as an upstream
+issue / PR.
+
+**On submodule bump**: re-run valgrind on `phase_s_smoke` and confirm
+whether this is still present. If upstream fixed it, retire this
+entry.
