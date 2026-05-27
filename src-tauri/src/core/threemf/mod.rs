@@ -115,6 +115,13 @@ pub struct ProjectObject {
     pub extruder_id: Option<u8>,
     /// Plater id this part belongs to (1-based, matches BBS).
     pub plate_id: u32,
+    /// Multi-volume group identity. ProjectObjects sharing the same
+    /// `Some(id)` are volumes of one logical ModelObject. `None` =
+    /// solo. The writer collapses each group into a single
+    /// `<object>` with `<components>` (and per-volume `<part>`
+    /// metadata) so libslic3r reads it as one ModelObject with N
+    /// ModelVolumes, not N freestanding objects. Scoped per-document.
+    pub group_id: Option<u32>,
 }
 
 pub fn load_3mf(path: &Path) -> Result<Project3mf, LoadError> {
@@ -330,6 +337,10 @@ fn expand(
                 name: format!("object_{objectid}"),
                 extruder_id: None,
                 plate_id: 1,
+                // Default to solo; apply_bbs_metadata assigns a
+                // shared group_id when multiple leaves share one
+                // outer model_settings object (= BBS multi-volume).
+                group_id: None,
             });
         }
         core_spec::ObjectBody::Components(comps) => {
@@ -380,30 +391,53 @@ fn apply_bbs_metadata(settings: &bbs_meta::ModelSettings, objects: &mut [Project
         obj.extruder_id = part.extruder;
     }
 
+    // Plate assignments + group identity in a single walk.
+    //
     // Plate assignments: for each plate, every object_id in
-    // `object_ids` references an outer object. Phase 2's flatten
-    // result has all parts of a given outer object adjacent, in
-    // document order. We pin plate ids by walking `objects` in
-    // order and consuming one outer object's worth of parts at a
-    // time — but only when settings.plates is well-formed.
-    if !settings.plates.is_empty() {
-        let mut cursor = 0usize;
-        for outer in &settings.objects {
-            let part_count = outer.parts.len().max(1);
-            let plate = settings
+    // `object_ids` references an outer object. The flatten result
+    // has all parts of a given outer object adjacent, in document
+    // order — we pin plate ids by walking `objects` in order and
+    // consuming one outer object's worth of parts at a time.
+    //
+    // Group identity: outer objects with >1 part are BBS multi-
+    // volume groups (e.g. a single cube split into upper + lower
+    // color regions); their leaf ProjectObjects share a fresh
+    // group_id so the writer + slice path can collapse them back
+    // into one ModelObject with N ModelVolumes (without grouping,
+    // libslic3r treats each volume as a freestanding object and
+    // flags non-bed-touching ones as "floating regions").
+    let has_plate_info = !settings.plates.is_empty();
+    let mut cursor = 0usize;
+    let mut next_group_id: u32 = 1;
+    for outer in &settings.objects {
+        let part_count = outer.parts.len().max(1);
+        let plate = if has_plate_info {
+            settings
                 .plates
                 .iter()
                 .find(|p| p.object_ids.contains(&outer.id))
                 .map(|p| p.plater_id)
-                .unwrap_or(1);
-            for offset in 0..part_count {
-                if cursor + offset >= objects.len() {
-                    break;
-                }
+                .unwrap_or(1)
+        } else {
+            1
+        };
+        let group_id = if outer.parts.len() > 1 {
+            let id = next_group_id;
+            next_group_id += 1;
+            Some(id)
+        } else {
+            None
+        };
+        for offset in 0..part_count {
+            if cursor + offset >= objects.len() {
+                break;
+            }
+            if has_plate_info {
                 objects[cursor + offset].plate_id = plate;
             }
-            cursor += part_count;
+            objects[cursor + offset].group_id = group_id;
         }
+        cursor += part_count;
     }
 }
 
@@ -509,6 +543,57 @@ mod tests {
             names,
             vec!["Cube A (T0)", "Cube B (T1)", "Cube C (T2)", "Cube D (T3)"],
         );
+    }
+
+    fn cube_halves_fixture() -> PathBuf {
+        let crate_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+        PathBuf::from(crate_dir).join("tests/fixtures/3mf/cube-halves-2mat.3mf")
+    }
+
+    #[test]
+    fn cube_halves_2mat_decodes_multi_volume_extruder_hints() {
+        // Multi-volume single-object shape: one outer <object> with
+        // two <part> children, geometry side uses <components> to
+        // group two leaf meshes. Confirms the loader expands the
+        // component chain and zips the per-part extruder hints
+        // against the resulting two ProjectObjects in document order.
+        let project = load_3mf(&cube_halves_fixture()).expect("load cube-halves fixture");
+        assert_eq!(project.objects.len(), 2, "two volumes inside one group");
+        let extruders: Vec<Option<u8>> = project.objects.iter().map(|o| o.extruder_id).collect();
+        assert_eq!(extruders, vec![Some(1), Some(2)]);
+        let names: Vec<&str> = project.objects.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(names, vec!["Lower half (M1)", "Upper half (M2)"]);
+        // Both volumes land on plate 1.
+        let plates: std::collections::HashSet<u32> =
+            project.objects.iter().map(|o| o.plate_id).collect();
+        assert_eq!(plates, std::collections::HashSet::from([1]));
+        // And both volumes share a group_id — they're parts of one
+        // logical ModelObject. Without grouping, the writer would
+        // emit them as freestanding objects and libslic3r would
+        // flag the upper half as a "floating region" needing
+        // supports.
+        let group_a = project.objects[0].group_id;
+        let group_b = project.objects[1].group_id;
+        assert!(group_a.is_some(), "lower half should have a group_id");
+        assert_eq!(group_a, group_b, "both volumes belong to the same group");
+    }
+
+    #[test]
+    fn two_cubes_2mat_leaves_solos_ungrouped() {
+        // Sanity guard for the loader: when each outer model_settings
+        // <object> has exactly one <part>, the leaves are solo —
+        // group_id stays None and the writer emits them as
+        // freestanding objects (today's flat shape).
+        let project = load_3mf(&two_cubes_fixture()).expect("load 2-cube fixture");
+        assert_eq!(project.objects.len(), 2);
+        for obj in &project.objects {
+            assert!(
+                obj.group_id.is_none(),
+                "{} should be solo, got group_id={:?}",
+                obj.name,
+                obj.group_id,
+            );
+        }
     }
 
     fn orcacube_fixture() -> PathBuf {

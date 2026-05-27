@@ -430,6 +430,13 @@ fn build_plate_geometry(
                 // only sees one plate per slice job; the multi-plate
                 // shape is project-level, not slice-input-level.
                 plate_id: 1,
+                // Preserve group identity into the temp .3mf so the
+                // writer collapses multi-volume groups (BBS-style
+                // single ModelObject with N ModelVolumes) instead of
+                // emitting each volume as a freestanding object —
+                // otherwise libslic3r flags non-bed-touching volumes
+                // as "floating regions" needing supports.
+                group_id: obj.group_id,
             }
         })
         .collect();
@@ -603,6 +610,7 @@ mod tests {
             visible: true,
             extruder_id: Some(3),
             parent: None,
+            group_id: None,
         });
 
         let (input, temp_path) =
@@ -640,6 +648,7 @@ mod tests {
             visible: true,
             extruder_id: Some(1),
             parent: None,
+            group_id: None,
         });
         // Override the auto-bind with an explicit "M1 → T1" binding.
         project.plates[0]
@@ -695,6 +704,66 @@ mod tests {
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
         assert!(input.context.user_overrides.is_empty());
         assert!(input.context.project_overrides.is_empty());
+        std::fs::remove_file(&temp_path).ok();
+    }
+
+    #[test]
+    fn grouped_objects_emit_as_one_modelobject_in_temp_3mf() {
+        // Multi-volume groups (the cube-halves shape) must round-trip
+        // through build_slice_input → temp .3mf as ONE outer object
+        // with N parts. Otherwise libslic3r flags non-bed-touching
+        // volumes as "floating regions" needing supports — exactly
+        // the bug we hit on the cube-halves external-spool fixture.
+        let _registry = RegistryGuard::acquire();
+        let mut project = Project::default();
+        project.plates[0].printer_instance_id = Some("bambi".into());
+        let mesh_id = project.register_mesh(triangle_mesh());
+        // Two objects sharing group_id=42 with distinct extruder
+        // hints — same shape the cube-halves loader produces.
+        project.register_object(NewSceneObject {
+            mesh: mesh_id,
+            transform: Transform::IDENTITY,
+            name: "lower".into(),
+            visible: true,
+            extruder_id: Some(1),
+            parent: None,
+            group_id: Some(42),
+        });
+        project.register_object(NewSceneObject {
+            mesh: mesh_id,
+            transform: Transform::translation(glam::Vec3::new(0.0, 0.0, 10.0)),
+            name: "upper".into(),
+            visible: true,
+            extruder_id: Some(2),
+            parent: None,
+            group_id: Some(42),
+        });
+
+        let (_input, temp_path) =
+            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+
+        // Inspect the written temp .3mf — one build item, one
+        // <components> wrapper with two <component>s, one outer
+        // model_settings object with two parts.
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&temp_path).unwrap()).unwrap();
+        let mut model_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut zip.by_name("3D/3dmodel.model").unwrap(),
+            &mut model_xml,
+        )
+        .unwrap();
+        let mut settings_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut zip.by_name("Metadata/model_settings.config").unwrap(),
+            &mut settings_xml,
+        )
+        .unwrap();
+        assert_eq!(model_xml.matches("<item ").count(), 1);
+        assert_eq!(model_xml.matches("<components>").count(), 1);
+        assert_eq!(model_xml.matches("<component ").count(), 2);
+        assert_eq!(settings_xml.matches("<object id=").count(), 1);
+        assert_eq!(settings_xml.matches("<part ").count(), 2);
+
         std::fs::remove_file(&temp_path).ok();
     }
 

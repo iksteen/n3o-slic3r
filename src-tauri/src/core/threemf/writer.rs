@@ -147,6 +147,102 @@ fn rels_xml() -> String {
     .into()
 }
 
+/// One entry in [`Layout::build_units`] — what the writer emits as
+/// either a single flat `<item>` (solo) or as a `<components>`-grouped
+/// `<object>` + `<item>` (group). Both [`model_xml`] and
+/// [`model_settings_xml`] consume the same layout so the leaf
+/// `<object id>` ↔ part `<part id>` ↔ group `<object id>` ids stay
+/// consistent across the two files.
+enum BuildUnit {
+    /// One ProjectObject that's its own ModelObject. `object_idx` is
+    /// the index into `project.objects`; the leaf resource id is
+    /// `object_idx + 1`.
+    Solo { object_idx: usize },
+    /// >=2 ProjectObjects collapsed into one ModelObject with N
+    /// ModelVolumes. The wrapper resource id is `group_resource_id`
+    /// (allocated after all leaf ids); each member's leaf resource
+    /// id is `object_idx + 1` and is referenced by both
+    /// `<component objectid=>` (in 3dmodel.model) and
+    /// `<part id=>` (in model_settings.config).
+    Group {
+        group_resource_id: u32,
+        member_indices: Vec<usize>,
+    },
+}
+
+/// Pre-computed grouping pass used by [`model_xml`] and
+/// [`model_settings_xml`]. Buckets `project.objects` by `group_id`:
+/// `None` and single-member groups become [`BuildUnit::Solo`]; groups
+/// with ≥2 members become [`BuildUnit::Group`] with a resource id
+/// allocated above all leaf ids (so 3MF's "components reference
+/// previously-declared objects" ordering rule holds).
+struct Layout {
+    build_units: Vec<BuildUnit>,
+}
+
+impl Layout {
+    fn from_project(project: &Project3mf) -> Self {
+        // Walk the object list once, recording the first occurrence
+        // of each group_id and the leaf indices that belong to it.
+        // Solos and unique group_ids are emitted in their original
+        // position; multi-member groups attach to the position of
+        // their first member to keep build-item order deterministic.
+        let mut group_order: Vec<Option<u32>> = Vec::new();
+        let mut group_members: std::collections::BTreeMap<u32, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (idx, obj) in project.objects.iter().enumerate() {
+            match obj.group_id {
+                None => group_order.push(None),
+                Some(gid) => {
+                    let entry = group_members.entry(gid).or_default();
+                    if entry.is_empty() {
+                        group_order.push(Some(gid));
+                    }
+                    entry.push(idx);
+                }
+            }
+        }
+
+        // Group resource ids start above all leaf ids. Leaves use
+        // `idx + 1`; the first group is `project.objects.len() + 1`.
+        let mut next_group_id = project.objects.len() as u32 + 1;
+        let mut build_units: Vec<BuildUnit> = Vec::with_capacity(group_order.len());
+        let mut leaf_cursor = 0usize;
+        for entry in group_order {
+            match entry {
+                None => {
+                    build_units.push(BuildUnit::Solo {
+                        object_idx: leaf_cursor,
+                    });
+                    leaf_cursor += 1;
+                }
+                Some(gid) => {
+                    let members = group_members.remove(&gid).expect("group recorded");
+                    if members.len() == 1 {
+                        // A "group" of one is just a solo — emit as
+                        // flat, no wrapper. Keeps the output minimal
+                        // for projects that authored a unique
+                        // group_id but only one member ended up in it.
+                        build_units.push(BuildUnit::Solo {
+                            object_idx: members[0],
+                        });
+                    } else {
+                        let group_resource_id = next_group_id;
+                        next_group_id += 1;
+                        build_units.push(BuildUnit::Group {
+                            group_resource_id,
+                            member_indices: members,
+                        });
+                    }
+                    leaf_cursor += 1;
+                }
+            }
+        }
+        Layout { build_units }
+    }
+
+}
+
 fn model_xml(project: &Project3mf) -> String {
     let mut out = String::with_capacity(8 * 1024 + project.meshes.len() * 1024);
     out.push_str(
@@ -174,41 +270,79 @@ fn model_xml(project: &Project3mf) -> String {
         ));
     }
 
+    let layout = Layout::from_project(project);
+
     out.push_str(" <resources>\n");
-    // One <object> per scene object, with an inline <mesh>. The
-    // object id is `obj_idx + 1` and is shared with both the build
-    // item AND model_settings_xml below — per-object metadata in
-    // model_settings (extruder, name) is bound to the <object>
-    // resource id, so two scene objects that share a mesh must
-    // still get distinct <object> resources or libslic3r will
-    // collapse their metadata into one entry. We accept the mesh-
-    // duplication cost (each scene object writes its mesh
-    // geometry once, even when other objects share it) for the
-    // sake of per-instance metadata correctness.
+    // Pass 1 — leaf objects (mesh-bearing). Every ProjectObject gets
+    // its own <object id="N" type="model"> regardless of solo/group
+    // status; group wrappers below reference these via <components>.
     //
-    // Earlier the resources loop deduped meshes (one <object> per
-    // unique mesh, build items used `mesh_idx + 1`). That broke
-    // when `plate.scene.objects.values()` iteration order
-    // (HashMap, non-deterministic) diverged from the sorted
-    // mesh-id order: build items' `objectid` and model_settings'
-    // `object id` would land on different scene objects, so
-    // libslic3r placed object A's geometry at A's transform but
-    // applied object B's extruder hint to it. Manifested as
-    // material-color swaps between cubes at random.
+    // Object id = `obj_idx + 1`. Two scene objects that share a mesh
+    // must still get distinct <object> resources or libslic3r will
+    // collapse their metadata (extruder hint, name) into one entry —
+    // we accept the on-disk mesh duplication for per-instance
+    // metadata correctness. Earlier behaviour deduped meshes and
+    // hit a HashMap-iteration-order bug where build-item /
+    // model-settings ids landed on different scene objects
+    // (random material-color swaps on a 4-cube/4-AMS print).
     for (obj_idx, obj) in project.objects.iter().enumerate() {
         let object_id = obj_idx as u32 + 1;
         let mesh = &project.meshes[obj.mesh_idx];
         write_object_with_mesh(&mut out, object_id, mesh);
     }
+    // Pass 2 — group wrapper objects. Each is a meshless <object>
+    // with a <components> child that references the group's leaf
+    // objects. Per-volume world transforms live on the component
+    // entries; the wrapper itself + the build item are at identity.
+    // (A future "group has its own transform" refactor would factor
+    // out a shared parent transform — for now this is simpler and
+    // round-trip correct.)
+    for unit in &layout.build_units {
+        if let BuildUnit::Group {
+            group_resource_id,
+            member_indices,
+        } = unit
+        {
+            out.push_str(&format!(
+                "  <object id=\"{group_resource_id}\" type=\"model\">\n   <components>\n"
+            ));
+            for &member_idx in member_indices {
+                let leaf_id = member_idx as u32 + 1;
+                let xform = transform_to_3mf_string(&project.objects[member_idx].transform);
+                out.push_str(&format!(
+                    "    <component objectid=\"{leaf_id}\" transform=\"{xform}\"/>\n"
+                ));
+            }
+            out.push_str("   </components>\n  </object>\n");
+        }
+    }
     out.push_str(" </resources>\n");
 
     out.push_str(" <build>\n");
-    for (obj_idx, obj) in project.objects.iter().enumerate() {
-        let object_id = obj_idx as u32 + 1;
-        let transform = transform_to_3mf_string(&obj.transform);
-        out.push_str(&format!(
-            "  <item objectid=\"{object_id}\" transform=\"{transform}\" printable=\"1\"/>\n"
-        ));
+    for unit in &layout.build_units {
+        match unit {
+            BuildUnit::Solo { object_idx } => {
+                let object_id = *object_idx as u32 + 1;
+                let transform =
+                    transform_to_3mf_string(&project.objects[*object_idx].transform);
+                out.push_str(&format!(
+                    "  <item objectid=\"{object_id}\" transform=\"{transform}\" printable=\"1\"/>\n"
+                ));
+            }
+            BuildUnit::Group {
+                group_resource_id, ..
+            } => {
+                // Group transform is identity — per-component
+                // <component transform=> carries each volume's full
+                // world placement (see Pass 2 above).
+                let identity = transform_to_3mf_string(
+                    &crate::core::scene::transform::Transform::IDENTITY,
+                );
+                out.push_str(&format!(
+                    "  <item objectid=\"{group_resource_id}\" transform=\"{identity}\" printable=\"1\"/>\n"
+                ));
+            }
+        }
     }
     out.push_str(" </build>\n");
 
@@ -265,46 +399,99 @@ fn transform_to_3mf_string(t: &crate::core::scene::transform::Transform) -> Stri
 fn model_settings_xml(project: &Project3mf) -> String {
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<config>\n");
-    // For now we emit one BBS-style <object> per scene object so
-    // the per-object name + extruder hint round-trips. Multi-volume
-    // (<part>) emission is a Phase 5 concern when multi-material
-    // projects start authoring inside this app.
-    for (obj_idx, obj) in project.objects.iter().enumerate() {
-        let object_id = obj_idx as u32 + 1;
-        out.push_str(&format!("  <object id=\"{object_id}\">\n"));
-        out.push_str(&format!(
-            "    <metadata key=\"name\" value=\"{}\"/>\n",
-            xml_escape_attr(&obj.name),
-        ));
-        if let Some(extruder) = obj.extruder_id {
-            out.push_str(&format!(
-                "    <metadata key=\"extruder\" value=\"{extruder}\"/>\n"
-            ));
+    // One BBS-style outer <object> per build unit (solo or group),
+    // with <part> children — one per leaf for groups, one for solos.
+    // Outer <object id=> matches the resource id the build item
+    // references; each <part id=> matches the leaf object's
+    // <object id> in 3dmodel.model. BBS's reader uses the part id
+    // (`ID_ATTR` in bbs_3mf.cpp's `_handle_start_config_volume`) to
+    // correlate the part with its component subobject.
+    let layout = Layout::from_project(project);
+    for unit in &layout.build_units {
+        match unit {
+            BuildUnit::Solo { object_idx } => {
+                let object_id = *object_idx as u32 + 1;
+                let obj = &project.objects[*object_idx];
+                out.push_str(&format!("  <object id=\"{object_id}\">\n"));
+                out.push_str(&format!(
+                    "    <metadata key=\"name\" value=\"{}\"/>\n",
+                    xml_escape_attr(&obj.name),
+                ));
+                if let Some(extruder) = obj.extruder_id {
+                    out.push_str(&format!(
+                        "    <metadata key=\"extruder\" value=\"{extruder}\"/>\n"
+                    ));
+                }
+                // Emit a single <part> too so the BBS-flavor reader
+                // (which keys per-volume extruder off <part>) picks
+                // up the hint even on simple single-volume objects.
+                out.push_str("    <part id=\"1\" subtype=\"normal_part\">\n");
+                out.push_str(&format!(
+                    "      <metadata key=\"name\" value=\"{}\"/>\n",
+                    xml_escape_attr(&obj.name),
+                ));
+                if let Some(extruder) = obj.extruder_id {
+                    out.push_str(&format!(
+                        "      <metadata key=\"extruder\" value=\"{extruder}\"/>\n"
+                    ));
+                }
+                out.push_str("    </part>\n");
+                out.push_str("  </object>\n");
+            }
+            BuildUnit::Group {
+                group_resource_id,
+                member_indices,
+            } => {
+                out.push_str(&format!("  <object id=\"{group_resource_id}\">\n"));
+                // Group-level name = first member's name as a
+                // reasonable default. (Future: surface an
+                // explicit group name field on Project3mf.)
+                let first = &project.objects[member_indices[0]];
+                out.push_str(&format!(
+                    "    <metadata key=\"name\" value=\"{}\"/>\n",
+                    xml_escape_attr(&first.name),
+                ));
+                for &member_idx in member_indices {
+                    let leaf_id = member_idx as u32 + 1;
+                    let obj = &project.objects[member_idx];
+                    out.push_str(&format!(
+                        "    <part id=\"{leaf_id}\" subtype=\"normal_part\">\n"
+                    ));
+                    out.push_str(&format!(
+                        "      <metadata key=\"name\" value=\"{}\"/>\n",
+                        xml_escape_attr(&obj.name),
+                    ));
+                    if let Some(extruder) = obj.extruder_id {
+                        out.push_str(&format!(
+                            "      <metadata key=\"extruder\" value=\"{extruder}\"/>\n"
+                        ));
+                    }
+                    out.push_str("    </part>\n");
+                }
+                out.push_str("  </object>\n");
+            }
         }
-        // Emit a single <part> too so the BBS-flavor reader (which
-        // looks at parts for per-volume extruder) picks up the
-        // hint even on simple single-volume objects. Multi-volume
-        // emission is a Phase 5 concern.
-        out.push_str("    <part id=\"1\" subtype=\"normal_part\">\n");
-        out.push_str(&format!(
-            "      <metadata key=\"name\" value=\"{}\"/>\n",
-            xml_escape_attr(&obj.name),
-        ));
-        if let Some(extruder) = obj.extruder_id {
-            out.push_str(&format!(
-                "      <metadata key=\"extruder\" value=\"{extruder}\"/>\n"
-            ));
-        }
-        out.push_str("    </part>\n");
-        out.push_str("  </object>\n");
     }
     // Plate stanza so the BBS-flavor reader populates
-    // `plate_assignments`. Phase 5 wires per-plate object lists.
+    // `plate_assignments`. One <model_instance> per build unit on
+    // plate 1 (groups contribute one, not one-per-member).
     out.push_str("  <plate>\n");
     out.push_str("    <metadata key=\"plater_id\" value=\"1\"/>\n");
-    for (obj_idx, obj) in project.objects.iter().enumerate() {
-        if obj.plate_id == 1 {
-            let object_id = obj_idx as u32 + 1;
+    for unit in &layout.build_units {
+        let (object_id, plate_id) = match unit {
+            BuildUnit::Solo { object_idx } => (
+                *object_idx as u32 + 1,
+                project.objects[*object_idx].plate_id,
+            ),
+            BuildUnit::Group {
+                group_resource_id,
+                member_indices,
+            } => (
+                *group_resource_id,
+                project.objects[member_indices[0]].plate_id,
+            ),
+        };
+        if plate_id == 1 {
             out.push_str("    <model_instance>\n");
             out.push_str(&format!(
                 "      <metadata key=\"object_id\" value=\"{object_id}\"/>\n"
@@ -425,6 +612,7 @@ mod tests {
                 name: "tri".into(),
                 extruder_id: Some(2),
                 plate_id: 1,
+                group_id: None,
             }],
             std::collections::BTreeMap::new(),
         );
@@ -470,6 +658,7 @@ mod tests {
                     name: "a".into(),
                     extruder_id: Some(1),
                     plate_id: 1,
+                    group_id: None,
                 },
                 ProjectObject {
                     mesh_idx: 0,
@@ -477,6 +666,7 @@ mod tests {
                     name: "b".into(),
                     extruder_id: Some(2),
                     plate_id: 1,
+                    group_id: None,
                 },
             ],
             std::collections::BTreeMap::new(),
@@ -497,6 +687,104 @@ mod tests {
     }
 
     #[test]
+    fn round_trips_a_multi_volume_group() {
+        // A ProjectObject pair sharing a group_id should round-trip
+        // as one ModelObject with two ModelVolumes (BBS-style
+        // <components> + <part> children) — the libslic3r "floating
+        // regions" check fires per-ModelObject, so a stacked
+        // multi-volume object MUST come through as one object or the
+        // upper volume reads as freestanding-above-the-bed.
+        let project = project_from_objects(
+            vec![one_triangle_mesh(), one_triangle_mesh()],
+            vec![
+                ProjectObject {
+                    mesh_idx: 0,
+                    transform: Transform::IDENTITY,
+                    name: "lower".into(),
+                    extruder_id: Some(1),
+                    plate_id: 1,
+                    group_id: Some(7),
+                },
+                ProjectObject {
+                    mesh_idx: 1,
+                    transform: Transform::translation(glam::Vec3::new(0.0, 0.0, 10.0)),
+                    name: "upper".into(),
+                    extruder_id: Some(2),
+                    plate_id: 1,
+                    group_id: Some(7),
+                },
+            ],
+            std::collections::BTreeMap::new(),
+        );
+        let path = tempfile_3mf();
+        write_3mf(&project, &path).expect("write grouped");
+        let reloaded = super::super::load_3mf(&path).expect("re-read");
+
+        // Reload still flattens components back to two ProjectObjects
+        // (the loader's API surfaces leaves), but the BBS metadata
+        // says one outer object with two parts — so both volumes
+        // share a group_id and the extruder hints come through in
+        // document order. plate_assignments lists one outer object
+        // for plate 1, not two.
+        assert_eq!(reloaded.objects.len(), 2);
+        assert_eq!(reloaded.objects[0].extruder_id, Some(1));
+        assert_eq!(reloaded.objects[1].extruder_id, Some(2));
+        assert!(
+            reloaded.objects[0].group_id.is_some()
+                && reloaded.objects[0].group_id == reloaded.objects[1].group_id,
+            "both volumes should share a group_id on reload"
+        );
+
+        // Inspect the written XML directly — the loader flattens
+        // components back to leaves so it can't tell us how many
+        // outer <object> wrappers + build items the writer produced.
+        // The actual fix-the-floating-volume promise is "ONE build
+        // item, ONE outer model_settings object with TWO parts" —
+        // that's what libslic3r sees.
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+        let mut model_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut zip.by_name("3D/3dmodel.model").unwrap(),
+            &mut model_xml,
+        )
+        .unwrap();
+        let mut settings_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut zip.by_name("Metadata/model_settings.config").unwrap(),
+            &mut settings_xml,
+        )
+        .unwrap();
+
+        assert_eq!(
+            model_xml.matches("<item ").count(),
+            1,
+            "one build item for the group, not one-per-volume",
+        );
+        assert_eq!(
+            model_xml.matches("<components>").count(),
+            1,
+            "group wrapper emits a <components> element",
+        );
+        assert_eq!(
+            model_xml.matches("<component ").count(),
+            2,
+            "two component references for the two volumes",
+        );
+        assert_eq!(
+            settings_xml.matches("<object id=").count(),
+            1,
+            "one outer model_settings <object>, not one-per-volume",
+        );
+        assert_eq!(
+            settings_xml.matches("<part ").count(),
+            2,
+            "two <part> children carrying per-volume name + extruder",
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn round_trips_file_metadata() {
         let mut meta = std::collections::BTreeMap::new();
         meta.insert("Title".to_owned(), "test project".to_owned());
@@ -509,6 +797,7 @@ mod tests {
                 name: "tri".into(),
                 extruder_id: None,
                 plate_id: 1,
+                group_id: None,
             }],
             meta,
         );

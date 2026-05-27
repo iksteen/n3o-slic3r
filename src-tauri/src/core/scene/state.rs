@@ -155,6 +155,17 @@ pub struct SceneObject {
     /// grouping (Phase 5 multi-plate) builds on this.
     #[serde(default)]
     pub parent: Option<ObjectId>,
+    /// Multi-volume group identity. Objects sharing the same
+    /// `Some(id)` are volumes of one logical object (e.g. a cube
+    /// with upper + lower halves painted different colors). `None` =
+    /// solo object. Populated by the 3mf loader from BBS-style
+    /// `<components>` + per-`<part>` model_settings entries; the
+    /// writer and slice path emit groups as one ModelObject with
+    /// multiple ModelVolumes so libslic3r doesn't treat each volume
+    /// as a separate floating object. The id is scoped per-Project
+    /// and not stable across loads.
+    #[serde(default)]
+    pub group_id: Option<u32>,
 }
 
 /// Caller-builds-this shape for inserting a fresh mesh. No `id`
@@ -179,6 +190,9 @@ pub struct NewSceneObject {
     pub visible: bool,
     pub extruder_id: Option<u8>,
     pub parent: Option<ObjectId>,
+    /// See [`SceneObject::group_id`]. Loaders populate; most
+    /// procedural / user-add call sites pass `None`.
+    pub group_id: Option<u32>,
 }
 
 impl NewSceneObject {
@@ -192,6 +206,7 @@ impl NewSceneObject {
             visible: true,
             extruder_id: None,
             parent: None,
+            group_id: None,
         }
     }
 }

@@ -10,9 +10,7 @@
 //
 //   2. **Materials** (per-plate) — every model material referenced
 //      by an object on this plate with a slot picker. Writes via
-//      `project_set_material_slot`. Slot options grey out when
-//      picking would create a Bambu feed-mix conflict (Direct +
-//      Ams on the same extruder).
+//      `project_set_material_slot`.
 
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -21,7 +19,6 @@ import type { PlateId, PlateSnapshot } from "../viewport/types";
 import {
   flattenSlots,
   getPrinterInstance,
-  isFeedMixConflict,
   setSlotColor,
   setSlotFilament,
   type FlatSlotOption,
@@ -172,16 +169,6 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
     );
   };
 
-  const otherSlotsInUse = (excludeMaterial: number): FlatSlotOption[] => {
-    const used: FlatSlotOption[] = [];
-    for (const m of materials) {
-      if (m === excludeMaterial) continue;
-      const pick = slotForMaterial(m);
-      if (pick) used.push(pick);
-    }
-    return used;
-  };
-
   const onPickMaterialSlot = (material: number, slot: SlotRef): void => {
     void setMaterialSlot(plateId, material, slot).catch((err) =>
       console.error("[slot-binding] setMaterialSlot failed", err),
@@ -266,7 +253,6 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
           </div>
           {materials.map((mat) => {
             const current = slotForMaterial(mat);
-            const conflictWith = otherSlotsInUse(mat);
             const currentValue = current
               ? `${current.ref.extruder}:${current.ref.slot}`
               : "";
@@ -293,7 +279,6 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
                 >
                   <option value="">slot…</option>
                   {slots.map((s) => {
-                    const conflict = isFeedMixConflict(s, conflictWith);
                     const filEntry = s.filament_identity
                       ? filamentByIdentity.get(s.filament_identity)
                       : null;
@@ -304,11 +289,9 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
                       <option
                         key={`${s.ref.extruder}-${s.ref.slot}`}
                         value={`${s.ref.extruder}:${s.ref.slot}`}
-                        disabled={conflict}
                       >
                         {s.label}
                         {filamentLabel}
-                        {conflict ? " (feed conflict)" : ""}
                       </option>
                     );
                   })}

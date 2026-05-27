@@ -853,6 +853,7 @@ pub fn scene_load_3mf(
             visible: true,
             extruder_id: obj.extruder_id,
             parent: None,
+            group_id: obj.group_id,
         });
         let obj_clone = s.active_plate().scene.objects.get(&object_id).unwrap().clone();
         all_events.push(SceneEvent::ObjectAdded {
@@ -913,6 +914,7 @@ mod tests {
             visible: true,
             extruder_id: Some(2),
             parent: None,
+            group_id: None,
         });
 
         let snap = plate_snapshot(&p.plates[0]);

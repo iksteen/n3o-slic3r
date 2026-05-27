@@ -166,8 +166,10 @@ pub struct SlotBinding {
     #[serde(default)]
     pub label: String,
 
-    /// What feed path this slot uses. Drives the pre-slice
-    /// `PerExtruderFeedMix` check.
+    /// What feed path this slot uses. Drives the AMS-vs-Direct split
+    /// in `ams_bindings_for_plate` / `ams_mapping_for_plate` (Direct
+    /// slots emit the `{255, 0}` external-spool sentinel; AMS slots
+    /// emit the 1-based AMS-feed index).
     #[serde(default = "default_feed_kind")]
     pub feed: FeedKind,
 

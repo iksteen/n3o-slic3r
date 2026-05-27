@@ -13,19 +13,16 @@
 //! 2. The mapped slot has a non-empty `filament_identity` on the
 //!    bound PrinterInstance — Bambu's firmware refuses prints with
 //!    an empty `filament_settings_id` in the CONFIG_BLOCK.
-//! 3. Within a single extruder, the referenced slots do NOT mix
-//!    `FeedKind::Direct` and `FeedKind::Ams` — Bambu can't pull
-//!    from external + AMS in one job.
 //!
 //! Caller (the Tauri command layer / slice orchestrator) emits the
 //! first failing plate's issue list; the frontend surfaces it on
 //! the binding panel as inline errors.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::printer::{lookup_instance, FeedKind, SlotRef};
+use crate::core::printer::{lookup_instance, SlotRef};
 use crate::core::project::{PlateId, Project};
 
 /// One plate's worth of validation issues, surfaced together so the
@@ -75,14 +72,6 @@ pub enum SliceBlocker {
     SlotHasNoFilament {
         model_material: u8,
         slot: SlotRef,
-    },
-    /// Within one extruder, materials route to slots of mixed feed
-    /// kinds (some `Direct`, some `Ams`). Bambu can't pull from
-    /// both feed paths in one job.
-    PerExtruderFeedMix {
-        extruder: u8,
-        direct_slot: u8,
-        ams_slot: u8,
     },
 }
 
@@ -321,7 +310,6 @@ fn validate_plate(plate: &crate::core::project::model::Plate) -> Vec<SliceBlocke
 
     // Pass 2: each referenced material must have a slot, the slot
     // must be in range, and the slot must carry a filament.
-    let mut per_extruder_feeds: BTreeMap<u8, (Option<u8>, Option<u8>)> = BTreeMap::new();
     for mat in &referenced {
         let Some(&slot_ref) = plate.material_to_slot.get(mat) else {
             issues.push(SliceBlocker::UnmappedMaterial { model_material: *mat });
@@ -349,25 +337,6 @@ fn validate_plate(plate: &crate::core::project::model::Plate) -> Vec<SliceBlocke
             issues.push(SliceBlocker::SlotHasNoFilament {
                 model_material: *mat,
                 slot: slot_ref,
-            });
-        }
-        // Per-extruder feed-mix tracking. First Direct + first Ams
-        // slot indices per extruder; if both are populated when we
-        // finish the loop, that extruder is in conflict.
-        let entry = per_extruder_feeds.entry(slot_ref.extruder).or_insert((None, None));
-        match slot.feed {
-            FeedKind::Direct if entry.0.is_none() => entry.0 = Some(slot_ref.slot),
-            FeedKind::Ams if entry.1.is_none() => entry.1 = Some(slot_ref.slot),
-            _ => {}
-        }
-    }
-
-    for (extruder_idx, (direct, ams)) in &per_extruder_feeds {
-        if let (Some(d), Some(a)) = (direct, ams) {
-            issues.push(SliceBlocker::PerExtruderFeedMix {
-                extruder: *extruder_idx,
-                direct_slot: *d,
-                ams_slot: *a,
             });
         }
     }
@@ -407,6 +376,7 @@ mod tests {
             visible: true,
             extruder_id: Some(material),
             parent: None,
+            group_id: None,
         });
     }
 

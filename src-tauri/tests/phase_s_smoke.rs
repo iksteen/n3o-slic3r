@@ -329,6 +329,7 @@ fn snappy_binding_routes_single_material_to_bound_toolhead() {
             visible: true,
             extruder_id: obj.extruder_id,
             parent: None,
+            group_id: obj.group_id,
         });
     }
 
@@ -390,6 +391,111 @@ fn snappy_binding_routes_single_material_to_bound_toolhead() {
     assert!(
         t1_lines >= 1,
         "expected ≥1 bare `T1` toolchange (M1 bound to T1), got {t1_lines} (T0 count: {t0_bare})",
+    );
+
+    let _ = std::fs::remove_dir_all(temp_dir);
+    let _ = std::fs::remove_file(temp_3mf);
+}
+
+/// Multi-volume groups round-trip through the slice pipeline as one
+/// ModelObject, not as N freestanding objects. Loads
+/// `cube-halves-2mat.3mf` (BBS `<components>` + per-`<part>` extruder
+/// hints) on bambi, slices it, and asserts:
+///
+/// 1. No "floating regions" warning fired — the upper half's bottom
+///    face sits on the lower half's top face, which is what libslic3r
+///    must see when the two are volumes of one ModelObject. Without
+///    group preservation in the writer, libslic3r would treat the
+///    upper half as standalone at world Z=10..20 with nothing under
+///    it, fire `SharpTail`/`floating regions`, and surface
+///    "It seems object Upper half (M2) has floating regions" — the
+///    bug this guards against.
+/// 2. The gcode emits ≥1 AMS swap macro between M1 and M2 — proves
+///    the per-volume extruder hints survived the round-trip into
+///    libslic3r's per-region planning.
+#[test]
+fn cube_halves_slices_as_one_multivolume_object_no_floating_warning() {
+    use n3o_slic3r_lib::core::project::{PlateId, Project};
+    use n3o_slic3r_lib::core::scene::state::NewSceneObject;
+    use n3o_slic3r_lib::core::slice::input::build_slice_input;
+    use n3o_slic3r_lib::core::threemf::load_3mf;
+
+    let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    ensure_ffi_init();
+
+    let fixture = workspace_root().join("src-tauri/tests/fixtures/3mf/cube-halves-2mat.3mf");
+    let project_3mf = load_3mf(&fixture).expect("load cube-halves fixture");
+
+    let mut project = Project::default();
+    project.plates[0].printer_instance_id = Some("bambi".into());
+    let mesh_ids: Vec<_> = project_3mf
+        .meshes
+        .into_iter()
+        .map(|m| project.register_mesh(m))
+        .collect();
+    for obj in project_3mf.objects {
+        project.register_object(NewSceneObject {
+            mesh: mesh_ids[obj.mesh_idx],
+            transform: obj.transform,
+            name: obj.name,
+            visible: true,
+            extruder_id: obj.extruder_id,
+            parent: None,
+            group_id: obj.group_id,
+        });
+    }
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "n3o-cube-halves-{}",
+        std::process::id(),
+    ));
+    let (input, temp_3mf) = build_slice_input(
+        &project,
+        PlateId(1),
+        temp_dir.display().to_string(),
+    )
+    .expect("build_slice_input");
+
+    let registry = JobRegistry::new();
+    let (sink, events) = collecting_sink();
+    run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
+
+    let events = events.lock().unwrap();
+    if let Some(SliceEvent::JobFailed { error, .. }) =
+        events.iter().find(|e| matches!(e, SliceEvent::JobFailed { .. }))
+    {
+        panic!("slice failed: {error:?}");
+    }
+
+    // No floating-regions warning should fire. The orchestrator
+    // surfaces libslic3r warnings on PlateProgress events with
+    // negative percent — scan for the substring directly.
+    let floating_warning = events.iter().find(|e| match e {
+        SliceEvent::PlateProgress { stage, .. } => stage.contains("floating regions"),
+        _ => false,
+    });
+    assert!(
+        floating_warning.is_none(),
+        "libslic3r emitted a floating-regions warning — group preservation \
+         broke and the upper half is being treated as a freestanding object \
+         (warning was: {floating_warning:?})",
+    );
+
+    let gcode_path = events
+        .iter()
+        .find_map(|e| match e {
+            SliceEvent::PlateFinished { output_path, .. } => Some(PathBuf::from(output_path)),
+            _ => None,
+        })
+        .expect("PlateFinished");
+    let gcode = std::fs::read_to_string(&gcode_path).expect("read gcode");
+
+    // The two volumes use materials 1 and 2 — libslic3r emits an AMS
+    // swap macro (`M620 S<N>A`) when transitioning between them.
+    let swap_count = gcode.matches("M620").count();
+    assert!(
+        swap_count >= 1,
+        "expected ≥1 `M620` AMS swap in the gcode for a 2-material print, got {swap_count}",
     );
 
     let _ = std::fs::remove_dir_all(temp_dir);

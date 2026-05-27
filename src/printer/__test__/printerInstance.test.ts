@@ -3,8 +3,6 @@
 import { describe, expect, it } from "vitest";
 import {
   flattenSlots,
-  isFeedMixConflict,
-  type FlatSlotOption,
   type PrinterInstance,
 } from "../printerInstance";
 
@@ -100,39 +98,3 @@ describe("flattenSlots", () => {
   });
 });
 
-describe("isFeedMixConflict", () => {
-  const slots = flattenSlots(ams_a1_mini());
-  const ams1 = slots[0]!; // Ams
-  const ams2 = slots[1]!; // Ams
-  const ext = slots[4]!; // Direct
-
-  it("flags Direct → already-Ams-used on same extruder", () => {
-    expect(isFeedMixConflict(ext, [ams1])).toBe(true);
-  });
-
-  it("flags Ams → already-Direct-used on same extruder", () => {
-    expect(isFeedMixConflict(ams1, [ext])).toBe(true);
-  });
-
-  it("allows Ams + Ams on same extruder (AMS handles the swap)", () => {
-    expect(isFeedMixConflict(ams1, [ams2])).toBe(false);
-  });
-
-  it("allows mixed kinds across different extruders", () => {
-    // Synthesize a 2-extruder fixture, conflicts only matter
-    // per-extruder.
-    const otherExtAms: FlatSlotOption = {
-      ref: { extruder: 1, slot: 0 },
-      label: "T1 — AMS:1",
-      feed: "ams",
-      filament_identity: null,
-      color: null,
-    };
-    expect(isFeedMixConflict(ext, [otherExtAms])).toBe(false);
-  });
-
-  it("empty already-used → never a conflict", () => {
-    expect(isFeedMixConflict(ext, [])).toBe(false);
-    expect(isFeedMixConflict(ams1, [])).toBe(false);
-  });
-});

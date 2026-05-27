@@ -203,21 +203,3 @@ export function flattenSlots(instance: PrinterInstance): FlatSlotOption[] {
   return out;
 }
 
-/** Test whether picking `candidate` for one material while
- *  `already_used` slots are pinned elsewhere would create a Bambu
- *  feed-mix conflict (Direct + Ams on the same extruder). The picker
- *  uses this to grey out options. */
-export function isFeedMixConflict(
-  candidate: FlatSlotOption,
-  alreadyUsed: ReadonlyArray<FlatSlotOption>,
-): boolean {
-  for (const used of alreadyUsed) {
-    if (
-      used.ref.extruder === candidate.ref.extruder &&
-      used.feed !== candidate.feed
-    ) {
-      return true;
-    }
-  }
-  return false;
-}

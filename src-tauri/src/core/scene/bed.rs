@@ -228,6 +228,7 @@ mod tests {
             visible: true,
             extruder_id: None,
             parent: None,
+            group_id: None,
         };
         (obj, mesh)
     }

@@ -104,6 +104,7 @@ impl Project {
                 visible: new_obj.visible,
                 extruder_id,
                 parent: new_obj.parent,
+                group_id: new_obj.group_id,
             },
         );
         self.ensure_default_material_slot_on_active(extruder_id.unwrap_or(1));
@@ -684,6 +685,7 @@ impl Project {
             visible: true,
             extruder_id: None,
             parent: None,
+            group_id: None,
         });
 
         let plate_id = self.active_plate().id;
@@ -787,6 +789,7 @@ impl Project {
             visible: true,
             extruder_id: None,
             parent: None,
+            group_id: None,
         });
         let plate_id = self.active_plate().id;
         let obj_clone = self
@@ -1239,6 +1242,10 @@ impl Project {
             visible: original.visible,
             extruder_id: original.extruder_id,
             parent: original.parent,
+            // Duplicate breaks group membership — copying one volume
+            // of a multi-volume object yields a solo object, not a
+            // 3rd member of the source's group.
+            group_id: None,
         });
         let plate_id = self.active_plate().id;
         let cloned_obj = self
@@ -2079,6 +2086,7 @@ mod tests {
             visible: true,
             extruder_id: Some(2),
             parent: None,
+            group_id: None,
         });
         p.active_plate_mut().scene.gizmo.mode = GizmoMode::Translate;
 
@@ -3150,6 +3158,7 @@ mod tests {
             visible: true,
             extruder_id: Some(mat),
             parent: None,
+            group_id: None,
         })
     }
 

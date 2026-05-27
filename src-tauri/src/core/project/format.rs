@@ -200,6 +200,7 @@ pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoEr
                 name: obj.name.clone(),
                 extruder_id: obj.extruder_id,
                 plate_id: plate.id.0,
+                group_id: obj.group_id,
             });
         }
     }
@@ -329,6 +330,7 @@ pub fn plate_to_project_objects(
                 name: obj.name.clone(),
                 extruder_id: obj.extruder_id,
                 plate_id: plate.id.0,
+                group_id: obj.group_id,
             })
         })
         .collect()
