@@ -1,4 +1,4 @@
-//! Bundled printer instances (PR-S-3).
+//! Bundled printer instances.
 //!
 //! MVP hardcodes two physical printers the developer/test rigs use:
 //!
@@ -62,9 +62,9 @@ fn bambi() -> PrinterInstance {
         id: BAMBI_ID.to_owned(),
         display_name: "Bambi".to_owned(),
         vendor_profile_ref: "bambu-lab-a1-mini".to_owned(),
-        // PR-S-4 rework: slug is the printer model, NOT the per-nozzle
-        // variant. The nozzle SKU lives on the extruder state below;
-        // the composer loads `printer/<slug>/nozzles/<sku>.toml`.
+        // Slug is the printer model, NOT the per-nozzle variant.
+        // The nozzle SKU lives on the extruder state below; the
+        // composer loads `printer/<slug>/nozzles/<sku>.toml`.
         printer_fragment_slug: "bambu-lab-a1-mini".to_owned(),
         default_filament_fragment_slug: "bambu-pla-basic-bbl-a1m".to_owned(),
         default_process_fragment_slug: "0.20mm-standard-bbl-a1m".to_owned(),

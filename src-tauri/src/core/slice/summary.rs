@@ -1,9 +1,9 @@
-//! Post-slice summary extraction (PR-3-3 part 1).
+//! Post-slice summary extraction (part 1).
 //!
 //! Reads the comment header libslic3r writes at the top of every
 //! G-code file and surfaces the estimated time + filament use + layer
 //! count + bounding box as a typed `PlateSummary`. The orchestrator
-//! (PR-3-2) attaches this to every `slice:plate_finished` event so
+//! attaches this to every `slice:plate_finished` event so
 //! the UI can render the summary card without re-parsing the file.
 //!
 //! Owns the FR-SL-4 deliverable on the libslic3r-output side. The
@@ -68,7 +68,7 @@ pub struct PlateSummary {
 /// `; filament used [g] = …`, `; total layers count =` lines live
 /// at the end of the file, after the last `M84` / `M104 S0`. We
 /// collect every comment-prefixed line and feed the lot to
-/// PR-3-8's lenient header parser — same pattern catalog, broader
+/// lenient header parser — same pattern catalog, broader
 /// scan.
 pub fn build_summary(gcode_path: &Path) -> Result<PlateSummary, std::io::Error> {
     let file = std::fs::File::open(gcode_path)?;
@@ -89,7 +89,7 @@ pub fn build_summary_from_bytes(bytes: &[u8], gcode_path: &Path) -> PlateSummary
 
 /// Extract every `;`-prefixed and `(`-prefixed line from a G-code
 /// stream. Result is a synthetic "all comments concatenated" buffer
-/// — PR-3-8's parser doesn't care whether they were contiguous in
+/// — parser doesn't care whether they were contiguous in
 /// the source. Body lines (G-code commands, blank lines) are
 /// dropped.
 fn collect_comment_lines<R: BufRead>(input: R) -> Result<String, std::io::Error> {
@@ -261,7 +261,7 @@ G28\n";
         assert_eq!(summary.estimated_time_seconds, 4992);
         assert_eq!(summary.layer_count, 240);
         // Cura's filament-used line has no unit qualifier — it lands
-        // in PR-3-8's header but our summary's typed slots stay
+        // in header but our summary's typed slots stay
         // zero. Phase 6 may upgrade if Cura compatibility matters.
         assert!(summary.filament_used_grams.is_empty());
         let _ = std::fs::remove_file(&path);

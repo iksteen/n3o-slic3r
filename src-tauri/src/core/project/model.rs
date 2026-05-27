@@ -9,10 +9,10 @@
 //!   - the plate list + active plate (project navigation)
 //!   - cascade handle + project-wide override tier (cascade
 //!     resolution input)
-//!   - file metadata + source path (save/load — PR-5-8)
+//!   - file metadata + source path (save/load)
 //!   - scene-wide mesh storage + ID allocators (so cross-plate
-//!     references survive PR-5-11 move-between-plates without
-//!     a copy + ids stay unique across plates)
+//!     references survive move-between-plates without a copy +
+//!     ids stay unique across plates)
 //!
 //! Each [`Plate`] owns:
 //!   - its printer binding + build plate (cascade context input)
@@ -40,7 +40,7 @@ use crate::core::scene::state::{Mesh, MeshId, PlateSceneState};
 
 /// Opaque 1-based plate id. Stable across the plate list —
 /// reordering doesn't change the id, only the position. Survives
-/// save/load via [`PR-5-8`](super#).
+/// project save/load.
 ///
 /// Public Tauri commands address plates by `PlateId`, not by index
 /// — the frontend can hold a stable reference even when plates are
@@ -56,7 +56,7 @@ pub struct PlateId(pub u32);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     /// Stable per-project identifier; baked at construction so the
-    /// autosave path (PR-5-10) can use it to dedupe across
+    /// autosave path can use it to dedupe across
     /// concurrent app instances editing different projects.
     pub uuid: Uuid,
 
@@ -78,27 +78,27 @@ pub struct Project {
     pub user_overrides: HashMap<String, String>,
 
     /// File-level 3MF metadata: Title, Designer, License, …
-    /// Round-trips through PR-5-8's save/load. Keys mirror the
+    /// Round-trips through save/load. Keys mirror the
     /// `<metadata name="…">` element format from the 3MF Core
     /// spec.
     #[serde(default)]
     pub file_metadata: BTreeMap<String, String>,
 
-    /// Filesystem path the project came from / saves to.
-    /// `None` for in-memory projects that haven't been saved
-    /// yet (the PR-5-10 autosave still runs for those — the
-    /// autosave path is derived from `uuid`, not `source_path`).
+    /// Filesystem path the project came from / saves to. `None`
+    /// for in-memory projects that haven't been saved yet —
+    /// autosave still runs for those, using a `uuid`-derived
+    /// recovery path rather than `source_path`.
     #[serde(default)]
     pub source_path: Option<PathBuf>,
 
     /// Scene-wide mesh storage. Per-plate object references
     /// (`Plate.scene.objects[*].mesh`) resolve through this map.
-    /// Living scene-wide means PR-5-11's move-between-plates op
+    /// Living scene-wide means move-between-plates op
     /// doesn't have to copy mesh buffers across plates.
     #[serde(default)]
     pub meshes: HashMap<MeshId, Mesh>,
 
-    /// Primitive mesh cache (PR-2-7). Each (kind, params) tuple
+    /// Primitive mesh cache. Each (kind, params) tuple
     /// resolves to one MeshId so re-instancing the same procedural
     /// primitive — across plates as well as within a plate — yields
     /// multiple SceneObjects sharing geometry. Linear scan is fine
@@ -128,13 +128,13 @@ pub struct Plate {
     pub id: PlateId,
 
     /// Display name for the tab strip. Defaults to "Plate N";
-    /// user-renamable via PR-5-3.
+    /// user-renamable (tab strip dblclick).
     pub name: String,
 
     /// Project-tier overrides scoped to this plate. The cascade
     /// resolves each plate against the union of
     /// `Project.user_overrides` (applies everywhere) and this map
-    /// (applies only to this plate). PR-4-9's per-object overrides
+    /// (applies only to this plate). per-object overrides
     /// layer above both inside the plate's scene state.
     #[serde(default)]
     pub project_overrides: HashMap<String, String>,
@@ -173,10 +173,9 @@ pub struct Plate {
     pub metadata: PlateMetadata,
 
     /// The plate's scene contents. Real type lives in
-    /// `core::scene::state::PlateSceneState` (PR-5-2); `Plate`
-    /// composes it so PR-5-8's project `.3mf` save/load
-    /// round-trips the full per-plate scene alongside the plate
-    /// metadata.
+    /// `core::scene::state::PlateSceneState`; `Plate` composes it
+    /// so project `.3mf` save/load round-trips the full per-plate
+    /// scene alongside the plate metadata.
     #[serde(default)]
     pub scene: PlateSceneState,
 }
@@ -285,7 +284,7 @@ impl Plate {
     }
 
     /// Default name for a plate at the given 1-based position
-    /// — "Plate 1", "Plate 2", …. Users can rename via PR-5-3.
+    /// — "Plate 1", "Plate 2", …. Users can rename in the UI.
     pub fn default_name(position: u32) -> String {
         format!("Plate {position}")
     }

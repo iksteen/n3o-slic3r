@@ -8,7 +8,7 @@
 //!
 //! Event names follow `scene:<noun>_<verb>` (e.g.
 //! `scene:object_updated`). The frontend's `eventBridge.ts`
-//! (PR-2-9) matches on these to update the local mirror.
+//! matches on these to update the local mirror.
 
 use super::bed::{BedMesh, OutOfBoundsReason};
 use super::state::{
@@ -19,12 +19,12 @@ use serde::Serialize;
 
 /// One diff payload the renderer applies to its local mirror.
 ///
-/// **Variant convention (PR-5-2 phase C):** Every variant uses
-/// struct-shape fields (not tuple shape) so consumers can pattern
-/// match by name and so new fields can land without re-rolling
-/// the wire shape. Every plate-scoped variant carries
-/// `plate_id: PlateId` as the first field so the frontend mirror
-/// can route the event to the right per-plate cache.
+/// **Variant convention:** Every variant uses struct-shape fields
+/// (not tuple shape) so consumers can pattern match by name and so
+/// new fields can land without re-rolling the wire shape. Every
+/// plate-scoped variant carries `plate_id: PlateId` as the first
+/// field so the frontend mirror can route the event to the right
+/// per-plate cache.
 ///
 /// Scene-wide variants (mesh registry, project save/load) don't
 /// have `plate_id`.
@@ -46,8 +46,8 @@ pub enum SceneEvent {
         object: SceneObject,
     },
     /// Full updated object — simpler than diff compression for MVP.
-    /// PR-2-9 / PR-2-11 can introduce per-field diffs later if the
-    /// 5 ms p99 budget is tight.
+    /// Per-field diffs can replace this later if the 5 ms p99
+    /// budget gets tight.
     ObjectUpdated {
         plate_id: PlateId,
         object: SceneObject,
@@ -99,30 +99,30 @@ pub enum SceneEvent {
     /// Auto-arrange on a plate could not fit every visible object.
     /// Non-blocking; the placed objects still moved. UI flags the
     /// listed ids in the outliner so the user can resize / remove /
-    /// move to a different plate (PR-5-11).
+    /// move to a different plate.
     AutoArrangeOverflow {
         plate_id: PlateId,
         un_placed: Vec<ObjectId>,
     },
-    /// A new plate was added (PR-5-2). The frontend mirror
+    /// A new plate was added. The frontend mirror
     /// reads `plate_id` to track it; subsequent events on this
     /// plate carry the same id.
     PlateAdded {
         plate_id: PlateId,
     },
-    /// A plate was removed (PR-5-2). Pairs with
+    /// A plate was removed. Pairs with
     /// `ActivePlateChanged` when the removed plate was the active
     /// one (the rebalanced active plate's id ships separately).
     PlateRemoved {
         plate_id: PlateId,
     },
-    /// The active plate changed (PR-5-2). Emitted on explicit
+    /// The active plate changed. Emitted on explicit
     /// switches and on remove-of-active rebalancing.
     ActivePlateChanged {
         plate_id: PlateId,
     },
     /// One or more cascade overrides on a specific object changed
-    /// (PR-5-7). The frontend re-runs cascade resolution to refresh
+    ///. The frontend re-runs cascade resolution to refresh
     /// the panel — the event carries no value payload because the
     /// resolver re-reads the override map directly.
     ObjectOverridesChanged {
@@ -130,32 +130,32 @@ pub enum SceneEvent {
         object_id: ObjectId,
     },
     /// One or more project-tier overrides on a plate changed
-    /// (PR-5-9). Same shape as `ObjectOverridesChanged` minus the
+    ///. Same shape as `ObjectOverridesChanged` minus the
     /// object id — the cascade re-resolves with the updated plate
     /// override map.
     ProjectOverridesChanged {
         plate_id: PlateId,
     },
     /// A plate's metadata changed — cycle count, composition order,
-    /// or (post-PR-5-3) name (PR-5-5). The frontend re-reads the
+    /// or name. The frontend re-reads the
     /// plate's metadata via the project snapshot to refresh the tab
     /// badge / inputs.
     PlateMetadataChanged {
         plate_id: PlateId,
     },
-    /// A plate's material → slot routing changed (PR-S-7). The
+    /// A plate's material → slot routing changed. The
     /// frontend re-reads `plate.material_to_slot` via the snapshot
     /// to refresh the slot binding panel.
     MaterialSlotChanged {
         plate_id: PlateId,
     },
-    /// A project was written to disk (PR-5-8). `path` is the
+    /// A project was written to disk. `path` is the
     /// container the writer just produced. UI updates the window
     /// title + recent-files list.
     ProjectSaved {
         path: String,
     },
-    /// A project was loaded from disk (PR-5-8) — the in-memory
+    /// A project was loaded from disk — the in-memory
     /// `Project` state has been replaced wholesale. The frontend
     /// drops every cached plate / mesh / object and re-fetches via
     /// `scene_snapshot`.
@@ -167,7 +167,7 @@ pub enum SceneEvent {
 impl SceneEvent {
     /// The `scene:*` event name the Tauri layer emits this payload
     /// under. Matches the frontend's `eventBridge.ts` switch
-    /// statement in PR-2-9.
+    /// statement.
     pub fn name(&self) -> &'static str {
         match self {
             Self::MeshLoaded { .. } => "scene:mesh_loaded",
@@ -219,14 +219,14 @@ pub enum SelectMode {
 pub enum SceneOpError {
     UnknownObject(ObjectId),
     UnknownMesh(MeshId),
-    /// No plate with that id (PR-5-2).
+    /// No plate with that id.
     UnknownPlate(PlateId),
-    /// Tried to remove the only remaining plate (PR-5-2).
+    /// Tried to remove the only remaining plate.
     LastPlate,
     /// `move_object` was called with `from_plate == to_plate`
-    /// (PR-5-11). Caller should check the source/dest are distinct.
+    ///. Caller should check the source/dest are distinct.
     SamePlate(PlateId),
-    /// Plate metadata validation rejected the new value (PR-5-5).
+    /// Plate metadata validation rejected the new value.
     /// `message` carries the validator's explanation suitable for
     /// surfacing as a toast.
     InvalidPlateMetadata {
@@ -252,7 +252,7 @@ impl std::fmt::Display for SceneOpError {
     }
 }
 
-/// Result of a [`SceneState::move_object`] call (PR-5-11). The
+/// Result of a [`SceneState::move_object`] call. The
 /// frontend reads `repositioned` to surface a toast when the
 /// target's geometry forced the object away from its original
 /// world position.
@@ -279,7 +279,7 @@ pub enum RepositionReason {
     BelowBedSurface,
 }
 
-/// Outcome of a [`Project::rebind_plate_printer`] call (PR-5-4).
+/// Outcome of a [`Project::rebind_plate_printer`] call.
 /// Surfaces the from/to printer identities + any settings that no
 /// longer fit the new printer's bounds so the UI can decide what
 /// to warn about. `incompatible` / `clamped` are populated by a

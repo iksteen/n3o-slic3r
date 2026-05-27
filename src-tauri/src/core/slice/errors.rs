@@ -1,8 +1,8 @@
-//! Typed slice errors (PR-3-3 part 2).
+//! Typed slice errors (part 2).
 //!
 //! Wraps libslic3r's flat-string error returns with a typed
 //! `SliceError` that names the offending setting where possible.
-//! The orchestrator (PR-3-2) feeds the FFI's raw error message
+//! The orchestrator feeds the FFI's raw error message
 //! through [`classify_libslic3r_error`] before emitting the
 //! `slice:job_failed` event so the UI can render a specific
 //! diagnostic instead of just "slice failed".
@@ -45,7 +45,7 @@ pub enum SliceError {
         plate_id: Option<u32>,
         raw_message: String,
     },
-    /// User cancelled the slice via `slice_cancel` (PR-3-2).
+    /// User cancelled the slice via `slice_cancel`.
     Cancelled,
     /// Cascade resolved to values the safety gate flagged as
     /// dangerous to send to a printer: missing machine_start_gcode,
@@ -120,7 +120,7 @@ pub fn classify_libslic3r_error(raw: &str) -> SliceError {
     let lower = raw.to_lowercase();
 
     // Cancellation propagates through libslic3r as a generic
-    // `Cancelled` exception. PR-3-2's orchestrator can short-
+    // `Cancelled` exception. orchestrator can short-
     // circuit before this classifier runs, but if a worker
     // thread returns the message from the FFI we still want to
     // recognize it.

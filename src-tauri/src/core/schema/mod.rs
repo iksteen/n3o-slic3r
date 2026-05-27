@@ -3,14 +3,14 @@
 //! Wraps `slic3r_ffi::option_defs()` into a richer, cached representation
 //! that downstream Phase 1 modules consume:
 //!
-//! - **`cascade::loader`** (PR-1-2) reads the schema to validate predicate
+//! - **`cascade::loader`** reads the schema to validate predicate
 //!   dimensions and `set.*` keys at load time, so cascades with typos fail
 //!   with file:line errors rather than silently dropping settings at slice
 //!   time.
-//! - **`cascade_adapter`** (PR-1-6) reads `dimensional` to decide whether a
+//! - **`cascade_adapter`** reads `dimensional` to decide whether a
 //!   resolved logical key needs expansion across a dimension (bed temp →
 //!   14 per-plate-type keys) or maps 1:1.
-//! - **`printer::profile`** (PR-1-7) cross-references schema keys when
+//! - **`printer::profile`** cross-references schema keys when
 //!   declaring which options a printer profile fixes vs leaves cascade-set.
 //!
 //! Cache is built lazily on first access. `slic3r_ffi::init()` must be
@@ -31,7 +31,7 @@ use std::sync::OnceLock;
 ///
 /// This is the schema entry the resolver, adapter, and UI all consume.
 /// Built from `slic3r_ffi::OptionDef` plus a static binding table that
-/// marks dimensional axes (PR-1-6 territory).
+/// marks dimensional axes (territory).
 #[derive(Debug, Clone)]
 pub struct OptionSchema {
     pub key: String,
@@ -70,7 +70,7 @@ pub struct OptionSchema {
 /// key. See `docs/profiles.md` "Translating to libslic3r → Dimensional
 /// expansion" for the worked bed-temp example.
 ///
-/// Variants are added as the adapter (PR-1-6) surfaces them. Start small
+/// Variants are added as the adapter surfaces them. Start small
 /// — every variant means more adapter code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DimensionalKind {
@@ -83,10 +83,10 @@ pub enum DimensionalKind {
 
 /// Cascade-side logical keys — names the *resolver* understands that
 /// the *libslic3r option universe* doesn't. The cascade adapter
-/// (PR-1-6) expands each logical key into one or more libslic3r keys.
+/// expands each logical key into one or more libslic3r keys.
 ///
 /// Currently just `bed_temp` → `BedTempPerPlate` family. Validators
-/// (PR-1-2) check against this list as a sibling to `schema_by_key`
+/// check against this list as a sibling to `schema_by_key`
 /// so cascades that author `set.bed_temp = "65"` pass validation
 /// while typos like `set.bd_temp` still fail.
 pub const LOGICAL_KEYS: &[&str] = &["bed_temp"];

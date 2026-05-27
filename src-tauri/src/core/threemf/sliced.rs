@@ -1,4 +1,4 @@
-//! `.gcode.3mf` writer — Bambu sliced format (PR-3-10).
+//! `.gcode.3mf` writer — Bambu sliced format.
 //!
 //! The variant of 3MF the Bambu A1 mini accepts as send-format
 //! (per PRD FR-MP-4b): a 3MF container with embedded G-code blob(s),
@@ -8,8 +8,8 @@
 //! Reader-side support for drag-drop preview of `.gcode.3mf` is
 //! Phase 6 work; this module only writes. End-to-end validation
 //! (does the A1 mini actually accept what we ship?) happens at
-//! Phase 7a's first real print — the metadata catalog comes from
-//! PR-0.5-3's spike inventory but only a real print proves it
+//! Phase 7a's first real print — the metadata catalog was seeded
+//! from a captured-fixture spike but only a real print proves it
 //! correct.
 //!
 //! Scope cut allowed per Execution Plan §5: emit minimum-viable
@@ -17,7 +17,7 @@
 //! Thumbnails and AMS bindings are optional inputs — pass `None`
 //! and the writer omits them. Phase 7a re-fills with real data.
 //!
-//! The container infrastructure is shared with PR-3-9's project
+//! The container infrastructure is shared with project
 //! writer — same `zip` crate, same `Content_Types.xml` /
 //! `_rels/.rels` preamble.
 
@@ -58,12 +58,12 @@ pub struct SlicedPlate {
     /// would have referenced. Bambu's metadata file names follow
     /// `plate_<N>.*` per the same id.
     pub plate_id: u32,
-    /// G-code body bytes. PR-3-2's orchestrator will read this
+    /// G-code body bytes. orchestrator will read this
     /// from the output file libslic3r wrote; the test path
     /// synthesizes a small fixture. Embedded verbatim so a Phase 6
     /// reader can re-extract byte-equal.
     pub gcode: Vec<u8>,
-    /// Per-plate summary (PR-3-3). Goes into the plate JSON so the
+    /// Per-plate summary. Goes into the plate JSON so the
     /// printer's UI can render expected time / filament use without
     /// re-parsing the G-code.
     pub summary: PlateSummary,
@@ -89,7 +89,7 @@ pub struct AmsBinding {
 /// On any I/O / zip error the partial file is left in place — the
 /// caller can decide whether to clean up. The writer does NOT
 /// re-read the file to verify (the ticket's "validation: re-read
-/// and byte-match" step lives in PR-3-12's exit smoke, which has
+/// and byte-match" step lives in exit smoke, which has
 /// the full parser stack to do it cheaply).
 pub fn write_sliced_3mf(input: &SlicedProjectInput, output: &Path) -> Result<(), std::io::Error> {
     let file = File::create(output)?;
@@ -168,16 +168,16 @@ pub struct SlicedPlateRead {
 #[derive(Debug, Clone)]
 pub struct SlicedRead {
     /// One entry per plate found in the container, ordered by
-    /// plate_id ascending. MVP preview only renders the first plate
-    /// per PR-6-14; the rest are surfaced so a future multi-plate
+    /// plate_id ascending. MVP preview only renders the first
+    /// plate; the rest are surfaced so a future multi-plate
     /// picker can choose.
     pub plates: Vec<SlicedPlateRead>,
 }
 
 /// Open a `.gcode.3mf` and pull out every `plate_<N>.gcode` entry
-/// along with its sidecar metadata + thumbnail. Reader for PR-3-10's
-/// writer (`write_sliced_3mf`). Consumed by PR-6-14's drag-drop
-/// preview loader.
+/// along with its sidecar metadata + thumbnail. Inverse of
+/// [`write_sliced_3mf`]; the drag-drop preview loader consumes
+/// the result.
 ///
 /// Errors only on I/O / zip-corruption / missing G-code body; a
 /// missing JSON or PNG sidecar is tolerated (metadata=None /
@@ -320,11 +320,11 @@ fn model_xml(input: &SlicedProjectInput) -> String {
 
 /// Bambu's per-plate `plate_<N>.json` shape — print time + filament
 /// aggregates + bbox + AMS bindings + a few flags the firmware
-/// surfaces in the UI. JSON shape mirrors what PR-0.5-3 observed
-/// in real Bambu Studio output. Reader side ([`read_sliced_3mf`])
-/// deserializes the same shape so the preview UI can show
-/// estimated time + AMS bindings on `.gcode.3mf` drops without
-/// re-deriving them from the parsed G-code.
+/// surfaces in the UI. Mirrors the shape captured from real Bambu
+/// Studio output. The reader ([`read_sliced_3mf`]) deserializes
+/// the same shape so the preview UI can show estimated time + AMS
+/// bindings on `.gcode.3mf` drops without re-deriving them from
+/// the parsed G-code.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlicedPlateMetadata {
     pub plate_index: u32,

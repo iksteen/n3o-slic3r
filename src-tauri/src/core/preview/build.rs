@@ -1,5 +1,5 @@
 //! Preview IR build — walk a typed G-code stream into renderable
-//! segments (PR-6-4).
+//! segments.
 //!
 //! State machine over `&[Line]`:
 //!
@@ -21,7 +21,7 @@
 //!
 //! Determinism: segment order matches G-code command order;
 //! `source_line` is monotonically increasing within each
-//! `SegmentSet`. The hover-inspection raycast (PR-6-11) depends
+//! `SegmentSet`. The hover-inspection raycast depends
 //! on this.
 
 use crate::core::gcode::{FeatureType, Line, SemanticComment};

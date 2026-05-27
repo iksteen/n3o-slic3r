@@ -1,4 +1,4 @@
-//! Procedural primitives (PR-2-7).
+//! Procedural primitives.
 //!
 //! Generates mesh data for the five primitive types the object
 //! library exposes: cube, cylinder, sphere, cone, torus. Each

@@ -9,18 +9,18 @@
 //!
 //! Module layout:
 //!
-//! - **`context`** (PR-1-7): the slice-time `SlicingContext` the
-//!   cascade resolver consumes via its `Context` trait — composite
-//!   of active printer + plate + per-slot filaments. Built per
-//!   slice call from per-plate state; not stored.
+//! - **`context`**: the slice-time `SlicingContext` the cascade
+//!   resolver consumes via its `Context` trait — composite of
+//!   active printer + plate + per-slot filaments. Built per slice
+//!   call from per-plate state; not stored.
 //!
-//! - **`metadata`** (PR-5-1): `PlateMetadata` carrying cycle count
-//!   + composition order. PlateCycler-relevant.
+//! - **`metadata`**: `PlateMetadata` carrying cycle count +
+//!   composition order. PlateCycler-relevant.
 //!
-//! - **`model`** (PR-5-1): root `Project` + `Plate` + `PlateId`.
-//!   Each `Plate` composes `core::scene::state::PlateSceneState`
-//!   (PR-5-2) for its scene contents. The serializable shape
-//!   PR-5-8's `.3mf` save/load round-trips.
+//! - **`model`**: root `Project` + `Plate` + `PlateId`. Each
+//!   `Plate` composes `core::scene::state::PlateSceneState` for
+//!   its scene contents. The serializable shape `.3mf` save/load
+//!   round-trips.
 
 pub mod autosave;
 pub mod commands;

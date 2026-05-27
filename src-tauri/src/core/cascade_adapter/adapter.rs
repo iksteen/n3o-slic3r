@@ -16,7 +16,7 @@
 //!    from the active context's plate. This is the simplified
 //!    expansion from PR-0.5-1; the production "resolve per
 //!    hypothetical plate context" form is a forward task documented
-//!    in `docs/profiles.md` and PR-1-6's known limitations.
+//!    in `docs/profiles.md` and known limitations.
 //!
 //! Unknown-but-not-dropped keys (typos the manifest doesn't know
 //! about) surface as `AdaptDropEntry::UnknownKey` so the caller can

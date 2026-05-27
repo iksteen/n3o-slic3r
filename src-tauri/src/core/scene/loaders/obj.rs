@@ -1,9 +1,9 @@
-//! OBJ loader (PR-2-3).
+//! OBJ loader.
 //!
 //! Wavefront OBJ via the `tobj` crate. Multi-group OBJ files collapse
 //! to a single `Mesh` — per-volume extruder data lives in `.3mf`'s
-//! `model_settings.config` (PR-2-4), not OBJ groups. `.mtl` material
-//! libraries are ignored for MVP; PR-2-7's object library can
+//! `model_settings.config`, not OBJ groups. `.mtl` material
+//! libraries are ignored for MVP; object library can
 //! re-introduce them when the renderer cares about textures.
 
 use super::{compute_bounding_box, compute_vertex_normals, LoadError};

@@ -1,4 +1,4 @@
-//! Tauri command surface for the preview pipeline (PR-6-7).
+//! Tauri command surface for the preview pipeline.
 //!
 //! Five commands cover the renderer's full lifecycle:
 //!
@@ -46,7 +46,7 @@ use super::stats::{
 /// What `preview_load` returns. The frontend uses `layer_count`
 /// to clamp slider bounds, `extrusion_count` / `travel_count` /
 /// `retraction_count` to size buffer offsets, and `job_stats` to
-/// populate the full-job panel (PR-6-12) without a follow-up
+/// populate the full-job panel without a follow-up
 /// invoke.
 #[derive(Debug, Clone, Serialize)]
 pub struct PreviewLoadResponse {
@@ -74,7 +74,7 @@ pub fn preview_load(
     Ok(register_preview(&registry, PathBuf::from(&path), &src))
 }
 
-/// Drag-drop loader for Bambu `.gcode.3mf` containers (PR-6-14).
+/// Drag-drop loader for Bambu `.gcode.3mf` containers.
 ///
 /// Unpacks the 3MF, extracts the first plate's embedded G-code,
 /// runs the same parse+IR+stats pipeline as [`preview_load`], and
@@ -235,7 +235,7 @@ pub fn preview_layer_stats(
         .ok_or_else(|| format!("unknown preview handle {}", handle.0))
 }
 
-/// Hover-inspection lookup (PR-6-11). Given a segment index into
+/// Hover-inspection lookup. Given a segment index into
 /// the extrusions array (the raycast result), return the original
 /// gcode line text + position + speed + feature + layer + tool +
 /// extrusion volume.
@@ -319,7 +319,7 @@ pub fn preview_drop(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SegmentDetail {
     /// Source gcode line as the parser saw it, line ending
-    /// stripped. Used by the hover tooltip (PR-6-11) for
+    /// stripped. Used by the hover tooltip for
     /// `G1 X120.34 Y84.21 E0.0341 F1800`-style display.
     pub source_line_text: String,
     pub start: [f32; 3],

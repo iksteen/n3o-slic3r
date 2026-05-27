@@ -1,4 +1,4 @@
-//! Multi-slicer header metadata parser (PR-3-8).
+//! Multi-slicer header metadata parser.
 //!
 //! Reads the comment block at the top of a G-code file and pulls
 //! out typed estimates (time, filament use, layer count, slicer of
@@ -9,11 +9,12 @@
 //! foreign `.gcode` onto the viewport, see the stats panel populate
 //! immediately without needing to re-slice.
 //!
-//! PR-3-3 ships a libslic3r-specific scan that builds a `PlateSummary`
-//! from just-emitted slice output. This module overlaps a bit and is
-//! deliberately the more lenient generalization: every field is
-//! best-effort, no failures, all unknowns preserved in
-//! `raw_settings` so plugins can reach them by key.
+//! The slice/summary module owns the libslic3r-specific scan that
+//! builds a `PlateSummary` from just-emitted slice output. This
+//! module overlaps a bit and is deliberately the more lenient
+//! generalization: every field is best-effort, no failures, all
+//! unknowns preserved in `raw_settings` so plugins can reach them
+//! by key.
 
 use std::collections::BTreeMap;
 use std::io::BufRead;

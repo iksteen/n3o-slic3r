@@ -1,4 +1,4 @@
-//! Preview handle registry (PR-6-7).
+//! Preview handle registry.
 //!
 //! Tauri-managed state that owns every loaded G-code preview.
 //! Handle-based addressing lets the frontend reference a single
@@ -9,7 +9,7 @@
 //! (`Vec<Line>`) alongside the rendered IR. The line stream is
 //! ~5× the IR's size — a 50MB gcode produces ~250MB of in-memory
 //! Lines. The drop command frees both. Holding the lines is
-//! load-bearing for PR-6-11's hover inspection, which fetches
+//! load-bearing for hover inspection, which fetches
 //! the original gcode line via back-reference.
 
 use std::collections::HashMap;

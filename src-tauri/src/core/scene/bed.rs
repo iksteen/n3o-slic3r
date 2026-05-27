@@ -1,12 +1,12 @@
-//! Build-plate visualization + out-of-bounds check (PR-2-6).
+//! Build-plate visualization + out-of-bounds check.
 //!
 //! Owns the scene-side description of the active build plate: the
 //! build-volume bounding box, the grid spacing the renderer draws,
 //! the origin marker, and the printer's exclusion zones. Also the
-//! [`object_out_of_bounds`] check the transform ops in PR-2-5 use
-//! to emit non-blocking warnings.
+//! [`object_out_of_bounds`] check the transform ops use to emit
+//! non-blocking warnings.
 //!
-//! The renderer (PR-2-9) subscribes to the `scene:bed_changed`
+//! The renderer subscribes to the `scene:bed_changed`
 //! event the scene emits when the active printer changes. The
 //! cascade resolver never reads anything here — printer/build-volume
 //! data flows the other way (PrinterProfile → BedMesh → renderer).
@@ -25,8 +25,8 @@ pub struct BedMesh {
     /// draws the grid over the bottom face (z = `extents.min[2]`)
     /// and clips object-shadows against this.
     pub extents: BoundingBox,
-    /// Grid line spacing in millimeters. Default 10 mm; PR-2-9 may
-    /// make this user-configurable from the viewport overlay.
+    /// Grid line spacing in millimeters. Default 10 mm; a future
+    /// viewport overlay may make this user-configurable.
     pub grid_spacing: f64,
     /// Origin marker location, useful when a printer centers its
     /// coordinate system on the bed center rather than the corner.
@@ -55,7 +55,7 @@ pub enum OutOfBoundsReason {
     IntersectsExclusion { label: String },
     /// Object dips below the build plate (min Z < 0). This is the
     /// common case when the user rotates an object and forgets to
-    /// drop it back down — PR-2-5's lay_flat is the one-keystroke
+    /// drop it back down — lay_flat is the one-keystroke
     /// fix.
     BelowBuildPlate,
 }

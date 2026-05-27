@@ -1,4 +1,4 @@
-//! 3MF Core spec XML parser (PR-2-4).
+//! 3MF Core spec XML parser.
 //!
 //! Parses the `<model>` element documented at
 //! <https://3mf.io/specification/> — namespace

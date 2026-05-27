@@ -1,10 +1,10 @@
 //! Mutation methods for [`Project`].
 //!
 //! Each public method takes `&mut Project` and returns the events
-//! the renderer needs to apply (per the PR-2-2 contract: pure
-//! functions that return event lists; the Tauri layer emits each
-//! event via `Window::emit`). Tests bypass the Tauri layer and
-//! inspect the returned event list directly.
+//! the renderer needs to apply. The convention is "pure functions
+//! that return event lists; the Tauri layer emits each event via
+//! `Window::emit`". Tests bypass the Tauri layer and inspect the
+//! returned event list directly.
 //!
 //! Lives in a sibling file from [`super::model`] so the type
 //! definitions stay focused; this file has the mechanics.
@@ -31,7 +31,7 @@ use crate::core::scene::state::{
 };
 use crate::core::scene::transform::Transform;
 
-/// Upper bound on `Plate.name` byte length (PR-5-3). Holds back
+/// Upper bound on `Plate.name` byte length. Holds back
 /// pathological renames that would blow out the tab strip layout
 /// or balloon the project `.3mf` JSON skeleton; the actual UI
 /// budget is ~24 chars but we accept up to 200 to leave headroom
@@ -204,7 +204,7 @@ impl Project {
 
     /// Append a new plate. `instance_id` is optional — newly-added
     /// plates may stay unbound until the user picks a printer via
-    /// PR-5-4's picker. Returns the new plate's id paired with the
+    /// picker. Returns the new plate's id paired with the
     /// `PlateAdded` event the renderer subscribes to. Active plate
     /// is unchanged (the caller switches if desired).
     pub fn add_plate(
@@ -338,7 +338,7 @@ impl Project {
         Ok(vec![SceneEvent::ActivePlateChanged { plate_id: id }])
     }
 
-    // ---- Material → slot routing (PR-S-7) ------------------------
+    // ---- Material → slot routing ------------------------
 
     /// Upsert a `material → slot` mapping on `plate_id`. The slot
     /// reference is validated against the plate's bound
@@ -416,7 +416,7 @@ impl Project {
         Ok(vec![SceneEvent::MaterialSlotChanged { plate_id }])
     }
 
-    // ---- Plate metadata (PR-5-5) ----------------------------------
+    // ---- Plate metadata ----------------------------------
 
     /// Move a plate to position `order` in the composition queue,
     /// shifting sibling plates' `composition_order` to keep the
@@ -484,7 +484,7 @@ impl Project {
         Ok(events)
     }
 
-    /// Rename a plate (PR-5-3 tab strip dblclick-rename target).
+    /// Rename a plate (backs the tab-strip dblclick-rename UI).
     /// Trims surrounding whitespace, rejects an empty result and any
     /// name longer than [`PLATE_NAME_MAX`] bytes. No-op (no event)
     /// when the trimmed value matches the current name. Emits
@@ -569,11 +569,12 @@ impl Project {
         }])
     }
 
-    /// Rebind a plate to a different `PrinterInstance` (PR-5-4 —
-    /// the picker flow). The caller is responsible for resolving
-    /// the chosen instance's `PrinterProfile` via the registry;
-    /// keeping the registry lookup at the Tauri-command layer keeps
-    /// this mutation pure + testable without registry plumbing.
+    /// Rebind a plate to a different `PrinterInstance` (backs the
+    /// printer picker flow). The caller is responsible for
+    /// resolving the chosen instance's `PrinterProfile` via the
+    /// registry; keeping the registry lookup at the Tauri-command
+    /// layer keeps this mutation pure + testable without registry
+    /// plumbing.
     ///
     /// Updates `printer_instance_id` (the sole carrier of binding
     /// state) and recomputes the bed visualization. The bed itself
@@ -897,7 +898,7 @@ impl Project {
     /// Rotate an object around `axis` by `radians`. Pivot defaults
     /// to the object's current world-space center; explicit pivot
     /// via `pivot_override` is for the gizmo's "rotate around
-    /// custom point" mode (PR-2-10).
+    /// custom point" mode.
     pub fn rotate_object(
         &mut self,
         id: ObjectId,
@@ -1021,7 +1022,7 @@ impl Project {
     /// transform plate). Searches the 24 axis-aligned cube rotations
     /// and picks the one that produces the smallest Z extent —
     /// fast, deterministic, no mesh-face analysis. MVP per the
-    /// ticket; PR-2-7's library + Phase 4 UI can introduce
+    /// ticket; library + Phase 4 UI can introduce
     /// "lay flat on selected face" later when the user can pick a
     /// face from the viewport.
     pub fn lay_flat_object(
@@ -1107,7 +1108,7 @@ impl Project {
     }
 
     /// Replace an object's transform wholesale. Used by
-    /// auto-arrange (PR-2-8) and the gizmo's drag-finalization
+    /// auto-arrange and the gizmo's drag-finalization
     /// step.
     pub fn set_object_transform(
         &mut self,
@@ -1295,7 +1296,7 @@ impl Project {
         }]
     }
 
-    // ---- Per-object overrides (PR-5-7) ----------------------------
+    // ---- Per-object overrides ----------------------------
 
     /// Upsert one override on a specific (plate, object).
     pub fn object_override_set(
@@ -1323,7 +1324,7 @@ impl Project {
         }])
     }
 
-    // ---- Per-plate (project-tier) overrides (PR-5-9) -------------
+    // ---- Per-plate (project-tier) overrides -------------
 
     /// Upsert one project-tier override on a plate. Same shape as
     /// `object_override_set` but the override applies to the whole
@@ -1438,7 +1439,7 @@ impl Project {
         }])
     }
 
-    // ---- Move object between plates (PR-5-11) ---------------------
+    // ---- Move object between plates ---------------------
 
     /// Move an object from `from_plate` to `to_plate`, preserving
     /// its world-space transform when the target plate's build
@@ -2371,7 +2372,7 @@ mod tests {
             .any(|r| matches!(r, OutOfBoundsReason::BelowBuildPlate)));
     }
 
-    // ---- Plate list mutations (PR-5-2) ----------------------------
+    // ---- Plate list mutations ----------------------------
 
     #[test]
     fn default_project_has_one_plate_active_zero() {
@@ -2585,7 +2586,7 @@ mod tests {
         assert_eq!(p.meshes.len(), 1);
     }
 
-    // ---- Per-object overrides (PR-5-7) ----------------------------
+    // ---- Per-object overrides ----------------------------
 
     #[test]
     fn object_override_set_then_get_round_trips() {
@@ -2695,7 +2696,7 @@ mod tests {
         );
     }
 
-    // ---- Project-tier (per-plate) overrides (PR-5-9) -------------
+    // ---- Project-tier (per-plate) overrides -------------
 
     #[test]
     fn project_override_set_then_get_round_trips() {
@@ -2782,7 +2783,7 @@ mod tests {
         );
     }
 
-    // ---- move_object (PR-5-11) ------------------------------------
+    // ---- move_object ------------------------------------
 
     #[test]
     fn move_object_errors_on_same_plate() {
@@ -2852,7 +2853,7 @@ mod tests {
         assert!(center.z > 0.0 && center.z < 1.0);
     }
 
-    // ---- Per-plate printer (PR-5-4 backend) -----------------------
+    // ---- Per-plate printer --------------------------------------
 
     #[test]
     fn set_plate_printer_targets_specific_plate() {
@@ -2894,7 +2895,7 @@ mod tests {
         assert!(p.active_plate().scene.bed.is_some());
     }
 
-    // ---- rebind_plate_printer (PR-5-4 picker flow) ----------------
+    // ---- rebind_plate_printer (picker flow) ---------------------
 
     #[test]
     fn rebind_plate_printer_updates_binding_and_emits_events() {
@@ -2950,7 +2951,7 @@ mod tests {
         assert_eq!(err, SceneOpError::UnknownPlate(PlateId(99)));
     }
 
-    // ---- Plate rename (PR-5-3) -----------------------------------
+    // ---- Plate rename -----------------------------------
 
     #[test]
     fn set_plate_name_writes_and_emits() {
@@ -3025,7 +3026,7 @@ mod tests {
         assert_eq!(parsed.plates[0].name, "Calibration");
     }
 
-    // ---- Composition order (PR-5-5) -------------------------------
+    // ---- Composition order -------------------------------
 
     fn plate_orders(p: &Project) -> Vec<(PlateId, u32)> {
         p.plates
@@ -3132,7 +3133,7 @@ mod tests {
         assert_eq!(err, SceneOpError::UnknownPlate(PlateId(99)));
     }
 
-    // ---- Material → slot routing (PR-S-7) ------------------------
+    // ---- Material → slot routing ------------------------
 
     use crate::core::printer::SlotRef;
 

@@ -1,4 +1,4 @@
-//! Tauri commands that drive the scene side of [`Project`] (PR-2-2).
+//! Tauri commands that drive the scene side of [`Project`].
 //!
 //! Each command takes a `Window` + `State<Arc<Mutex<Project>>>`, locks
 //! the state, calls a pure `Project` mutation method, emits the
@@ -35,15 +35,13 @@ fn emit_all(window: &Window, events: &[SceneEvent]) {
     }
 }
 
-/// JSON-friendly snapshot of the entire project (PR-5-2 phase C
-/// wire shape). The frontend calls `scene_snapshot` on startup /
-/// reconnect to rebuild its local mirror from scratch; subsequent
-/// updates arrive as scoped `SceneEvent`s (each carrying its
-/// `plate_id`).
+/// JSON-friendly snapshot of the entire project. The frontend
+/// calls `scene_snapshot` on startup / reconnect to rebuild its
+/// local mirror from scratch; subsequent updates arrive as scoped
+/// `SceneEvent`s (each carrying its `plate_id`).
 ///
 /// Mesh buffers are *not* included — only their headers; the
-/// frontend fetches the buffers per-mesh via `scene_mesh_buffers`
-/// (see PR-2-2's mesh-transport refactor).
+/// frontend fetches the buffers per-mesh via `scene_mesh_buffers`.
 #[derive(Debug, Clone, Serialize)]
 pub struct SceneSnapshot {
     /// Stable per-project identifier baked at project creation.
@@ -256,7 +254,7 @@ pub fn scene_set_active_plate(
     Ok(())
 }
 
-/// Rename a plate (PR-5-3 — backs the tab strip dblclick-rename).
+/// Rename a plate (backs the tab strip dblclick-rename).
 /// Trims whitespace; rejects empty / over-`PLATE_NAME_MAX` results.
 /// No-op (no event) when the trimmed value matches the current name.
 #[tauri::command]
@@ -277,7 +275,7 @@ pub fn scene_rename_plate(
 }
 
 /// Upsert one per-object cascade override on a specific plate
-/// (PR-5-7 — replaces PR-4-9's stub `onSetObjectOverride`).
+/// (replaces stub `onSetObjectOverride`).
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_object_override_set(
@@ -317,9 +315,9 @@ pub fn scene_object_override_clear(
     Ok(())
 }
 
-/// Install a printer on the specified plate (PR-5-4 backend half).
-/// Pass `None` to clear that plate's bed. The cascade re-resolution
-/// triggers naturally from the BedChanged event flow.
+/// Install a printer on the specified plate. Pass `None` to clear
+/// that plate's bed. The cascade re-resolution triggers naturally
+/// from the BedChanged event flow.
 #[tauri::command]
 #[tracing::instrument(skip(state, window, printer))]
 pub fn scene_set_plate_printer(
@@ -337,7 +335,7 @@ pub fn scene_set_plate_printer(
     Ok(())
 }
 
-/// Bundled printer-profile catalog (PR-5-4). Returns the
+/// Bundled printer-profile catalog. Returns the
 /// display-ready summary the picker UI renders. Static data —
 /// no project state needed.
 #[tauri::command]
@@ -377,7 +375,7 @@ pub fn scene_rebind_plate_printer(
     Ok(report)
 }
 
-/// Move an object from one plate to another (PR-5-11). Returns
+/// Move an object from one plate to another. Returns
 /// a `MoveReport` describing whether the world-space position
 /// had to be reset (out-of-bounds, on-exclusion-zone, or
 /// below-bed on the target plate).
@@ -417,9 +415,9 @@ pub fn scene_object_override_clear_all(
     Ok(())
 }
 
-/// Upsert one project-tier cascade override on a plate (PR-5-9 —
-/// mirrors `scene_object_override_set` one tier up). Silent backend
-/// no-op when the value is unchanged.
+/// Upsert one project-tier cascade override on a plate. Mirrors
+/// `scene_object_override_set` one tier up. Silent backend no-op
+/// when the value is unchanged.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_project_override_set(
@@ -767,10 +765,9 @@ fn op_err_to_string(e: SceneOpError) -> String {
 
 /// Load a mesh from a file path (STL or OBJ) and register it as a
 /// scene object at origin. The path-based form is the only public
-/// load surface — caller-built mesh data (PR-2-7's procedural
-/// primitives) reaches the registry through the same path once
-/// PR-2-7 lands a `library_*` command set that emits to the loader
-/// pipeline.
+/// load surface today; procedural-primitive registration will
+/// eventually reach the same code path via a `library_*` command
+/// set.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_load_mesh_from_path(

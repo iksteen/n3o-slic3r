@@ -1,6 +1,6 @@
-//! G-code serializer (PR-3-7).
+//! G-code serializer.
 //!
-//! Inverse of PR-3-6's parser: given a slice of typed `Line` values
+//! Inverse of parser: given a slice of typed `Line` values
 //! that came from the parser, emit G-code byte-for-byte identical
 //! to what the parser was fed. The round-trip equality is the
 //! project's **independent oracle** for the slice loop (Execution

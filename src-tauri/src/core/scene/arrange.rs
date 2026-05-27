@@ -1,5 +1,5 @@
 //! Auto-arrange — single-plate, no-rotation greedy bin-packing
-//! (PR-2-8).
+//!.
 //!
 //! Reads each scene object's XY footprint (axis-aligned bbox of the
 //! mesh after its current transform), sorts by descending footprint
@@ -15,7 +15,7 @@
 //!
 //! "Cut candidate" per the Execution Plan §4 — implementer can drop
 //! this entirely if Phase 2 runs long. The user fallback is to
-//! place objects manually via the PR-2-5 transform ops.
+//! place objects manually via the transform ops.
 
 use super::bed::BedMesh;
 use super::state::{ObjectId, SceneObject};
@@ -136,7 +136,7 @@ pub fn plan_arrangement(state: &Project, bed: &BedMesh) -> ArrangeResult {
 }
 
 /// Apply a [`plan_arrangement`] result to the scene state. Calls
-/// `set_object_transform` per placed object so PR-2-5's OOB check
+/// `set_object_transform` per placed object so OOB check
 /// fires naturally — packing keeps objects on the bed but the user
 /// might have an object on a plate with a custom-shape exclusion
 /// zone, and the OOB event surfaces that correctly.

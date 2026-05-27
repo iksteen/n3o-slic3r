@@ -1,10 +1,10 @@
-//! Per-plate metadata (PR-5-1 / FR-MP-7).
+//! Per-plate metadata (FR-MP-7).
 //!
-//! Composition order rides out on the project `.3mf` save (PR-5-8).
-//! PR-5-11 (or Phase 9 polish) wires composition-order reordering;
-//! the composition plugin host (Phase 8) consumes it to drive the
-//! print queue. `cycle_count` was cut as MVP scope — it only ever
-//! had a Phase 8 plugin consumer (PlateCycler).
+//! Composition order rides out on the project `.3mf` save. A
+//! future polish pass wires composition-order reordering in the
+//! UI; the composition plugin host (Phase 8) consumes it to drive
+//! the print queue. `cycle_count` was cut as MVP scope — it only
+//! ever had a Phase 8 plugin consumer (PlateCycler).
 
 use serde::{Deserialize, Serialize};
 

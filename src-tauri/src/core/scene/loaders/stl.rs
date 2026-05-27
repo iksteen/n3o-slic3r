@@ -1,4 +1,4 @@
-//! STL loader (PR-2-3).
+//! STL loader.
 //!
 //! Reads both ASCII (`solid …`) and binary STL via the `stl_io` crate
 //! and produces a [`super::super::state::Mesh`] with computed

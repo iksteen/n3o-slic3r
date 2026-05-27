@@ -1,5 +1,5 @@
 //! Object library — catalog the UI's scaffolding panel reads from
-//! (PR-2-7).
+//!.
 //!
 //! Three sections:
 //! - **Primitives** — procedurally generated meshes (see

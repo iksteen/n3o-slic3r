@@ -88,7 +88,7 @@ impl U1Driver {
 
     /// The serial-derived device id, available after a successful
     /// `connect()`. Useful for cross-printer correlation in
-    /// multi-instance projects (PR-S-11 leg 2 territory).
+    /// multi-instance projects (leg 2 territory).
     #[allow(dead_code)] // surfaced once the UI needs it
     pub fn serial(&self) -> Option<&str> {
         self.serial.as_deref()

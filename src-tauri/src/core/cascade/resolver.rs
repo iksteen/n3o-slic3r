@@ -1,4 +1,4 @@
-//! Production cascade resolver (PR-1-3).
+//! Production cascade resolver.
 //!
 //! Replaces the throwaway resolver in `src-tauri/examples/spike1.rs`.
 //! Implements the *authored-cascade* tier of the two-phase resolution
@@ -64,7 +64,7 @@ impl Context for MapContext {
 /// `value` is the winning rule's set entry (the effective output);
 /// `winning_*` describes that winner; `matching_rules` lists every
 /// rule that matched the context for this key (winner + losers in
-/// source order). PR-1-5's trace tooling renders the losers list as
+/// source order). trace tooling renders the losers list as
 /// "specs that lost".
 #[derive(Debug, Clone)]
 pub struct ResolvedValue {

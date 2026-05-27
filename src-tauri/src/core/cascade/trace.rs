@@ -1,4 +1,4 @@
-//! Trace tooling: "why is X = 55?" answers (PR-1-5).
+//! Trace tooling: "why is X = 55?" answers.
 //!
 //! Consumes the `ResolvedOverrides` from `overrides::resolve_with_overrides`
 //! and produces a structured `Trace` for a single key — winner, losers
@@ -101,8 +101,8 @@ pub fn trace(resolved: &ResolvedOverrides, key: &str) -> Option<Trace> {
 }
 
 impl fmt::Display for Trace {
-    /// CLI pretty-print. Used by the PR-1-11 exit-smoke driver and the
-    /// future debug command. Format follows the PR-1-5 ticket sketch.
+    /// CLI pretty-print for the Phase 1 exit-smoke driver and the
+    /// eventual cascade debug command.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let src_label = match self.source {
             TraceSource::Cascade => "cascade",

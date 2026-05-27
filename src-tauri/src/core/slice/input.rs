@@ -1,4 +1,4 @@
-//! Scene-to-slice input builder (PR-6-1).
+//! Scene-to-slice input builder.
 //!
 //! Pure adapter that turns the live [`Project`]'s per-plate state
 //! into a [`SliceJobInput`] libslic3r can consume. Replaces the
@@ -10,7 +10,7 @@
 //!   context (printer + build plate + filaments + overrides), the
 //!   project's cascade handle, and the requested plate id.
 //! - The path to a freshly-written temp `.3mf` containing the
-//!   plate's geometry. The caller (PR-6-2's `slice_active_plate`
+//!   plate's geometry. The caller (`slice_active_plate`
 //!   Tauri command) is responsible for deleting it after the slice
 //!   job's terminal event.
 //!
@@ -20,9 +20,8 @@
 //!   "active object" at resolve time, while a slice run may touch
 //!   N objects with N distinct override sets. Wiring that through
 //!   the orchestrator's per-object resolve loop is a separate
-//!   ticket (likely a follow-up to PR-6-2). For now
-//!   `object_overrides` is left empty; project + user tier
-//!   overrides still apply globally.
+//!   ticket. For now `object_overrides` is left empty; project +
+//!   user tier overrides still apply globally.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -44,7 +43,7 @@ use super::job::SliceJobInput;
 pub enum SliceInputError {
     /// `plate_id` doesn't exist in `project.plates`.
     UnknownPlate(PlateId),
-    /// The plate has no printer binding — PR-5-4's picker must run
+    /// The plate has no printer binding — picker must run
     /// first.
     UnboundPrinter { plate_id: PlateId },
     /// Printer identity isn't in the bundled registry. Symptomatic
@@ -122,11 +121,11 @@ pub fn build_slice_input(
 
     // ── Printer instance routing ──────────────────────────────
     // Cascade composition happens in the orchestrator from this
-    // instance's per-bucket vendor fragments. PR-S-5c made the
-    // composer the only path; an unbound plate (no printer_instance_id)
+    // instance's per-bucket vendor fragments. The composer is the
+    // only slice path; an unbound plate (no printer_instance_id)
     // can't slice. The printer profile is derived from the
-    // instance's `vendor_profile_ref` — the per-plate binding no
-    // longer carries an identity of its own.
+    // instance's `vendor_profile_ref` — the per-plate binding has
+    // no separate identity of its own.
     let printer_instance_id = plate
         .printer_instance_id
         .clone()
@@ -477,7 +476,7 @@ fn encode_overrides_as_specs(
 }
 
 /// Build a unique temp-file path scoped to the requesting plate +
-/// process + monotonic nanos. PR-6-2's command deletes this file on
+/// process + monotonic nanos. command deletes this file on
 /// the slice job's terminal event.
 fn temp_3mf_path(plate_id: PlateId) -> PathBuf {
     let nanos = std::time::SystemTime::now()

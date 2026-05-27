@@ -1,8 +1,8 @@
 //! Mesh-file loaders.
 //!
-//! STL + OBJ for PR-2-3; .3mf (project shape) lands in PR-2-4 as a
-//! sibling submodule. Each loader produces a [`super::state::Mesh`]
-//! with computed normals + bounding box; format dispatch is by file
+//! STL + OBJ here; .3mf (project shape) lives in a sibling
+//! submodule. Each loader produces a [`super::state::Mesh`] with
+//! computed normals + bounding box; format dispatch is by file
 //! extension with a magic-byte fallback for STL's ASCII/binary
 //! variants.
 
@@ -66,7 +66,7 @@ impl std::error::Error for LoadError {
 }
 
 /// Dispatch a load by file extension. Surface used by
-/// `scene_load_mesh_from_path` (PR-2-2).
+/// `scene_load_mesh_from_path`.
 pub fn load_mesh_from_path(path: &Path) -> Result<NewMesh, LoadError> {
     let ext = path
         .extension()

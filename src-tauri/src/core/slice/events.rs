@@ -1,4 +1,4 @@
-//! Slice event payloads (PR-3-2).
+//! Slice event payloads.
 //!
 //! Mirrors the `scene:*` event-stream pattern: the orchestrator's
 //! worker thread emits a typed event per lifecycle transition + per

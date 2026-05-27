@@ -1,7 +1,7 @@
 //! Preview IR types — the renderable representation of a sliced
-//! G-code file (PR-6-4).
+//! G-code file.
 //!
-//! Designed so the frontend (PR-6-8's `GcodePreview`) can pack the
+//! Designed so the frontend (`GcodePreview`) can pack the
 //! payload into Three.js `BufferGeometry` attributes with minimal
 //! transformation:
 //!
@@ -9,12 +9,12 @@
 //!   2 vertices per segment = 6 floats per segment).
 //! - `layer_index` → `aLayer` attribute, one float per vertex,
 //!   the same value duplicated for both vertices of a segment so
-//!   the GPU shader-uniform layer-cull (PR-6-9) works per-segment.
+//!   the GPU shader-uniform layer-cull works per-segment.
 //! - `feature`, `speed`, `flow`, `tool` → per-segment scalars the
-//!   color encoder (PR-6-5) maps to per-vertex colors.
+//!   color encoder maps to per-vertex colors.
 //! - `source_line` → per-segment back-reference to the original
 //!   `gcode::Line` index, used by the hover-inspection raycast
-//!   (PR-6-11) to look up the source command.
+//!   to look up the source command.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,15 +23,15 @@ use crate::core::gcode::FeatureType;
 /// Self-contained renderable representation of a sliced G-code
 /// file. Built once per load by [`super::build_preview`]; the
 /// renderer caches it and swaps color attributes separately via
-/// PR-6-5's encoders.
+/// encoders.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct PreviewGeometry {
     pub extrusions: SegmentSet,
     pub travels: SegmentSet,
     pub retractions: Vec<RetractionMarker>,
     /// Layer index → first/last segment-index range in
-    /// `extrusions`. End is exclusive. Used by stats (PR-6-6) and
-    /// the CPU-side fallback of the layer slider (PR-6-9).
+    /// `extrusions`. End is exclusive. Used by stats and
+    /// the CPU-side fallback of the layer slider.
     pub layer_ranges: Vec<LayerRange>,
     /// Computed over extrusion segment endpoints only — travels
     /// (especially the wide skirt loops) would otherwise pull the
@@ -70,7 +70,7 @@ pub struct SegmentSet {
     /// `ToolChange` line. 0 when no tool change has happened.
     pub tool: Vec<u8>,
     /// Back-reference to the original `gcode::Line` index. Used
-    /// by PR-6-11's hover inspection to surface the source
+    /// by hover inspection to surface the source
     /// command for a raycast-hit segment.
     pub source_line: Vec<u32>,
 }
@@ -119,7 +119,7 @@ pub(crate) struct Segment {
 }
 
 /// Marker for a retract point — `E` decreased without an XY move.
-/// Used by PR-6-10's retraction-visibility toggle: rendered as a
+/// Used by retraction-visibility toggle: rendered as a
 /// small red dot at `position` when shown.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RetractionMarker {

@@ -1,11 +1,10 @@
-//! Tauri command surface for the slice orchestrator (PR-3-2).
+//! Tauri command surface for the slice orchestrator.
 //!
 //! Thin layer over [`super::orchestrator::start_slice_job`] +
 //! [`super::job::JobRegistry`]. Tauri-managed state is the registry
-//! itself; cascade lookups read the existing
-//! `Mutex<CascadeRegistry>` shipped in PR-1-9.
+//! itself; cascade lookups read the shared `Mutex<CascadeRegistry>`.
 //!
-//! ## `slice_active_plate` (PR-6-2)
+//! ## `slice_active_plate`
 //!
 //! The state-driven slice command. Takes an optional plate id
 //! (defaulting to the project's active plate), builds a
@@ -100,7 +99,7 @@ pub fn slice_active_plate(
             // guarantees `plates[active_plate]` is valid.
             p.plates[p.active_plate].id
         });
-        // Pre-slice gate (PR-S-7): refuse before any FS write if the
+        // Pre-slice gate: refuse before any FS write if the
         // plate's material→slot map + bound PrinterInstance aren't
         // coherent. Returns the first failing plate's issue list as
         // a serialized SliceStartError::SliceBlocked.

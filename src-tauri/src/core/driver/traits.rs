@@ -72,7 +72,7 @@ fn default_u1_port() -> u16 {
 
 /// What the caller hands to [`Driver::send`]. Each variant maps
 /// to the wire format the target printer expects — Bambu wants a
-/// `.gcode.3mf` bundle (PR-3-10), U1 wants raw G-code.
+/// `.gcode.3mf` bundle, U1 wants raw G-code.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum SendPayload {

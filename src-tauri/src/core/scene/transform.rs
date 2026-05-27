@@ -2,7 +2,7 @@
 //!
 //! Thin newtype over [`glam::Mat4`] with serde support + convenience
 //! constructors. The scene state stores the *accumulated* world-space
-//! transform for each object; PR-2-5's transform ops compose new
+//! transform for each object; transform ops compose new
 //! deltas onto this. The renderer applies the matrix verbatim — no
 //! transform math runs on the JS side.
 //!

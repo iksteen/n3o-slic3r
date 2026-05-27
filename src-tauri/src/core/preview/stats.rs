@@ -1,15 +1,13 @@
-//! Preview stats aggregation (PR-6-6).
+//! Preview stats aggregation.
 //!
-//! Walks the [`PreviewGeometry`] from PR-6-4 into per-layer and
-//! full-job summaries the stats panels (PR-6-12) render, plus a
-//! flat layer-time map the `ColorMode::LayerTime` encoder (PR-6-5)
-//! consumes.
+//! Walks the [`PreviewGeometry`] into per-layer and full-job
+//! summaries the stats panels render, plus a flat layer-time map
+//! the `ColorMode::LayerTime` encoder consumes.
 //!
 //! Pure functions over the IR — no I/O, no parsing. Costs:
 //! O(segments + layers) for `compute_layer_stats`; O(layers) for
 //! `compute_job_stats`. A 50MB G-code → ~3M segments → ~200ms on
-//! the dev hardware per the Phase 6 perf budget (PR-6-16
-//! benchmarks this).
+//! dev hardware (within the Phase 6 perf budget).
 
 use std::collections::HashMap;
 
@@ -82,7 +80,7 @@ const VARIABLE_HEIGHT_TOLERANCE_MM: f32 = 0.005;
 
 /// Walk the geometry's extrusion + travel segments and compute
 /// one [`PerLayerStats`] per layer range. Output is in
-/// `layer_index` order (the order PR-6-4's build pushes
+/// `layer_index` order (the order build pushes
 /// `layer_ranges` in is already monotonic).
 pub fn compute_layer_stats(geometry: &PreviewGeometry) -> Vec<PerLayerStats> {
     let mut out = Vec::with_capacity(geometry.layer_ranges.len());
@@ -210,7 +208,7 @@ pub fn compute_job_stats(
 }
 
 /// Flat `layer_index → duration_seconds` array. Consumed by the
-/// `ColorMode::LayerTime` encoder (PR-6-5). Length matches the
+/// `ColorMode::LayerTime` encoder. Length matches the
 /// max layer index + 1; missing layer indices fill with 0.
 pub fn layer_time_map(layer_stats: &[PerLayerStats]) -> Vec<f32> {
     let max_layer = layer_stats

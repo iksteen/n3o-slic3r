@@ -705,7 +705,7 @@ bed_temp = 45
         // bare-table-at-leaf case.
         let rules = parse(src).unwrap();
         // We desugar bed_temp.a as a set entry — that's fine; the
-        // schema check (PR-1-2 validation pass) catches if `bed_temp.a`
+        // schema check (validation pass) catches if `bed_temp.a`
         // isn't a real key. This test documents the desugaring rather
         // than asserting an error.
         assert_eq!(rules[0].set.len(), 1);

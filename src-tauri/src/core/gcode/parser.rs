@@ -1,7 +1,7 @@
-//! Streaming G-code parser (PR-3-6).
+//! Streaming G-code parser.
 //!
 //! Reads a byte stream into a sequence of typed `Line` values that
-//! the serializer (PR-3-7) can re-emit byte-for-byte. Streaming so
+//! the serializer can re-emit byte-for-byte. Streaming so
 //! a 50 MB file doesn't materialize at once; lenient by design so a
 //! single unknown M-command or malformed parameter doesn't abort
 //! the parse.

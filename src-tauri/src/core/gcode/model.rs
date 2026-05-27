@@ -1,12 +1,12 @@
-//! Typed G-code line model (PR-3-5).
+//! Typed G-code line model.
 //!
-//! The contract between PR-3-6's parser and PR-3-7's serializer —
+//! The contract between parser and serializer —
 //! and the surface every downstream consumer (Phase 6 preview,
 //! Phase 8 plugins) reads. Per FR-PL-4, plugins see a typed
 //! sequence of `Move` / `Comment` / `LayerChange` / `ToolChange` /
 //! `Other`, never raw strings.
 //!
-//! The model is byte-precise enough to let PR-3-7's serializer
+//! The model is byte-precise enough to let serializer
 //! round-trip the parser's output byte-for-byte. That's the
 //! project's independent oracle (Execution Plan §5 exit criteria);
 //! every field exists so a re-serialized line is indistinguishable
@@ -213,7 +213,7 @@ pub enum SemanticComment {
     /// `; estimated printing time = <duration>`.
     EstimatedTime(String),
     /// `; filament used [g] = <values>` etc. Raw string preserved;
-    /// PR-3-3 + PR-3-8 own the parsing into typed numbers.
+    /// the summary + header modules parse it into typed numbers.
     FilamentUsed(String),
     /// `; total layers count = <n>`.
     LayerCount(u32),
@@ -231,7 +231,7 @@ pub enum SemanticComment {
 /// with an `Other(String)` escape for forward compat. Parses from
 /// the Orca / Bambu canonical strings — see `FeatureType::parse`.
 ///
-/// `Hash + Eq` so the preview stats (PR-6-6) can bucket per-feature
+/// `Hash + Eq` so the preview stats can bucket per-feature
 /// durations in a HashMap.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FeatureType {

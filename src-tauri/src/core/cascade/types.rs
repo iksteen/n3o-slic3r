@@ -1,9 +1,9 @@
 //! Cascade intermediate representation.
 //!
-//! Parser output (PR-1-2) and resolver input (PR-1-3). Designed to be
+//! Parser output and resolver input. Designed to be
 //! cheap to clone and serializable for the Tauri command surface
-//! (PR-1-9). All source-location data carries through to the trace
-//! tooling (PR-1-5) so the UI can show "winner: filament-rule.toml:14".
+//!. All source-location data carries through to the trace
+//! tooling so the UI can show "winner: filament-rule.toml:14".
 
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -56,7 +56,7 @@ pub struct Predicate {
 /// `dimension` is the dotted-path key as authored (`"filament.type"`,
 /// `"plate.type"`, `"printer.model"`); the resolver looks it up against
 /// the live `Context`. `value` is preserved as-authored — the resolver
-/// (PR-1-3) interprets richer operator forms (`">= 0.6"`, `"!= Cool"`)
+/// interprets richer operator forms (`">= 0.6"`, `"!= Cool"`)
 /// from the value string rather than from a parser-level operator
 /// variant. Set membership uses the array form
 /// (`when.filament.type = ["PLA", "PETG"]`).

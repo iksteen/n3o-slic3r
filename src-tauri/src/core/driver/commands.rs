@@ -246,7 +246,7 @@ async fn wrap_gcode_as_3mf(
         let gcode_bytes = std::fs::read(&gcode_path)
             .map_err(|e| format!("read gcode at {gcode_path}: {e}"))?;
         let mut input = fixture_input(plate_id, gcode_bytes);
-        // Inject the per-plate AMS slot map (PR-S-7). For Bambi
+        // Inject the per-plate AMS slot map. For Bambi
         // standalone (1 slot, no AMS) this is `[{material: 1,
         // ams_slot: 1}]` — identity-shaped. For a future
         // AMS-equipped instance the picker drives the values.

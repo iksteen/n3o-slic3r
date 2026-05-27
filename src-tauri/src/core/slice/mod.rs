@@ -6,13 +6,13 @@
 //!
 //! Owns FR-SL-1 through FR-SL-5 (PRD §6.5). Module shape today:
 //!
-//! - **`summary`** (PR-3-3): `PlateSummary` + parser that builds it
+//! - **`summary`**: `PlateSummary` + parser that builds it
 //!   from libslic3r's emitted G-code header.
-//! - **`errors`** (PR-3-3): `SliceError` + `classify_libslic3r_error`
+//! - **`errors`**: `SliceError` + `classify_libslic3r_error`
 //!   table-driven catalog with setting-key extraction.
 //! - **`slicer_slice`** (Phase 0): one-shot synchronous command;
 //!   does NOT use the cascade, the progress callback, or the
-//!   summary/error pipeline. PR-3-2's orchestrator composes all of
+//!   summary/error pipeline. orchestrator composes all of
 //!   the above onto a worker thread; once that lands this command
 //!   becomes the legacy debug-panel path and may be removed.
 
@@ -51,8 +51,8 @@ pub struct SliceResult {
 ///
 /// **Legacy path — Phase 0 surface.** Single synchronous call, blocks
 /// the caller. Does NOT use the cascade resolver, does NOT fire the
-/// progress callback (PR-3-1), does NOT classify errors or build a
-/// `PlateSummary`. PR-3-2's orchestrator composes all of those onto
+/// progress callback, does NOT classify errors or build a
+/// `PlateSummary`. orchestrator composes all of those onto
 /// a worker thread; once that lands the debug panel migrates and
 /// this command may be removed.
 #[tauri::command]

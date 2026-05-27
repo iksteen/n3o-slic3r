@@ -1,4 +1,4 @@
-//! Tauri command surface for the cascade pipeline (PR-1-9).
+//! Tauri command surface for the cascade pipeline.
 //!
 //! Exposes load / resolve / trace / dimensions commands the frontend
 //! drives. Stateful — a `CascadeRegistry` lives in Tauri's
@@ -77,7 +77,7 @@ pub struct ContextJson {
     pub user_overrides: Vec<OverrideFileSpec>,
     #[serde(default)]
     pub project_overrides: Vec<OverrideFileSpec>,
-    /// Per-object cascade overrides (PR-5-7). When the panel is in
+    /// Per-object cascade overrides. When the panel is in
     /// the Object tab, this carries the active object's authored
     /// overrides; otherwise empty / absent. Highest-priority tier:
     /// beats both user and project overrides.
@@ -153,7 +153,7 @@ pub fn cascade_load(
     let cascade = Cascade { rules: all_rules };
 
     // Best-effort load-time validation. Use the default known
-    // dimensions for now; PR-1-7's typed Context will plug in the
+    // dimensions for now; typed Context will plug in the
     // project-active dimension list later.
     if let Err(errs) = validate_cascade(&cascade, &default_known_dimensions()) {
         let msg = errs
@@ -219,9 +219,9 @@ pub fn cascade_trace(
 }
 
 /// List the dotted predicate dimensions the cascade can target.
-/// Today static (from `default_known_dimensions`); PR-1-7's
-/// project model will derive this from the active context at the
-/// per-project level.
+/// Today static (from `default_known_dimensions`); will eventually
+/// derive from the active project's `Context` once the wire-up
+/// lands.
 #[tauri::command]
 #[tracing::instrument]
 pub fn cascade_context_dimensions() -> Vec<String> {

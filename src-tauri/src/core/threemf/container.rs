@@ -1,4 +1,4 @@
-//! 3MF container helpers (PR-2-4).
+//! 3MF container helpers.
 //!
 //! A 3MF file is just a zip archive with a fixed entry layout
 //! ([Content_Types].xml, `_rels/.rels`, `3D/3dmodel.model`, optional

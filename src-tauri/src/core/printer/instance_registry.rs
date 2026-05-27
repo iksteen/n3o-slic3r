@@ -1,4 +1,4 @@
-//! Mutable in-memory registry of [`PrinterInstance`]s (PR-S-7).
+//! Mutable in-memory registry of [`PrinterInstance`]s.
 //!
 //! Replaces the original `bundled_instances()`-as-source-of-truth
 //! pattern: the bundled fixtures now seed a writable registry at

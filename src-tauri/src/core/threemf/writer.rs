@@ -1,4 +1,4 @@
-//! 3MF project writer (PR-3-9).
+//! 3MF project writer.
 //!
 //! Inverse of the reader in `mod.rs`: given a [`Project3mf`] (or any
 //! data shaped like one), emit a valid 3MF Core spec container that

@@ -1,4 +1,4 @@
-//! Slice orchestrator worker (PR-3-2).
+//! Slice orchestrator worker.
 //!
 //! Spawns a worker thread that walks the [`SliceJobInput`]'s plate
 //! list, resolves the cascade + adapts to a libslic3r `Config` per
@@ -78,7 +78,7 @@ pub enum SliceStartError {
     /// or the instance's fragment slugs don't resolve to bundled
     /// cascade fragments.
     PrinterInstanceCompose(String),
-    /// Pre-slice validation gate (PR-S-7) refused the job. The
+    /// Pre-slice validation gate refused the job. The
     /// frontend renders the failure on the binding panel.
     SliceBlocked(super::pre_slice_gate::PlateValidationFailure),
 }
@@ -331,7 +331,7 @@ fn run_worker(
             }
         };
 
-        // Load the model. PR-3-9's project writer is the future
+        // Load the model. project writer is the future
         // path (scene → temp 3MF → load), but for MVP we slice
         // whatever file the caller pointed us at.
         let mut model = match Model::new() {

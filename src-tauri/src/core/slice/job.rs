@@ -1,4 +1,4 @@
-//! Slice job model + registry (PR-3-2).
+//! Slice job model + registry.
 //!
 //! The orchestrator's input shape, opaque handle, status snapshot,
 //! and the registry that owns in-flight jobs. The frontend builds a
@@ -33,13 +33,12 @@ pub struct JobId(pub u64);
 /// `cascade_trace`, so wire format stays consistent.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SliceJobInput {
-    /// Filesystem path of the model to slice. For MVP this is a
-    /// pre-existing file (STL / OBJ / 3MF) — the scene→file bridge
-    /// the UI uses is `scene_load_*` on the way in, and a future
-    /// PR-3-2 refinement will dump the live scene to a temp 3MF
-    /// via PR-3-9's writer so the user's plate-arranged scene
-    /// reaches libslic3r without round-tripping through disk
-    /// manually.
+    /// Filesystem path of the model to slice. The UI's `scene_load_*`
+    /// commands are the scene→file bridge on the way in; the
+    /// orchestrator now also dumps the live scene to a temp 3MF
+    /// via the writer for in-app slices so the user's plate-
+    /// arranged scene reaches libslic3r without a manual disk
+    /// round-trip.
     pub model_path: String,
     /// Directory to write G-code into. Output files land at
     /// `<output_dir>/plate_<N>.gcode`.
@@ -49,10 +48,10 @@ pub struct SliceJobInput {
     /// projects are Phase 5.
     pub plate_ids: Vec<u32>,
     /// Names the PrinterInstance whose per-bucket fragments compose
-    /// this job's cascade (PR-S-5b wiring + PR-S-5c burn). The
-    /// orchestrator looks the instance up in the bundled printer
-    /// library and composes a fresh cascade per job — no shared
-    /// registry, no preloaded monolithic cascade.
+    /// this job's cascade. The orchestrator looks the instance up
+    /// in the bundled printer library and composes a fresh cascade
+    /// per job — no shared registry, no preloaded monolithic
+    /// cascade.
     pub printer_instance_id: String,
     /// Per-material slot bindings: one entry per model material on
     /// the plate, in material-index order (material `i + 1` at

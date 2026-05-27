@@ -1,4 +1,4 @@
-//! Autosave + recovery (PR-5-10 / FR-MP-4 recovery half).
+//! Autosave + recovery (FR-MP-4 recovery half).
 //!
 //! Every `interval` seconds, snapshot the current [`Project`]
 //! state to `<autosave_dir>/<project-uuid>.3mf` so a crash or

@@ -1,7 +1,7 @@
 //! Schema-level validation pass over a parsed `Cascade`.
 //!
 //! Runs after `loader.rs` produces the IR. Surfaces three error
-//! classes (per PR-1-2 acceptance criteria):
+//! classes:
 //!
 //! - **Unknown set key** — `set.layer_hieght = "0.2"` doesn't match any
 //!   libslic3r option. Includes a fuzzy suggestion when an edit-distance
@@ -17,20 +17,21 @@
 //! invoke at slice time. CLI loads always validate.
 //!
 //! The "unknown predicate dimension" check accepts a caller-supplied
-//! list of valid dimensions, since the truth set lives in PR-1-7's
-//! context-state structures (printer / build_plate / filament) which
-//! aren't wired in yet. Hardcoded fallbacks for tests + a stub
-//! "default" set keep the validator usable before PR-1-7 lands.
+//! list of valid dimensions. The real source of truth is the active
+//! `Context`'s predicate-value key space, but the wire-up is
+//! pending; [`default_known_dimensions`] is a stub fallback that
+//! keeps tests + the validator usable in the meantime.
 
 use super::types::{Cascade, ConditionValue};
 use crate::core::cascade::loader::CascadeLoadError;
 use crate::core::schema::{is_known_cascade_key, schema_by_key};
 
 /// Predicate dimensions the cascade can use, scoped to a project's
-/// active context layout. Populated by PR-1-7 once context-state
-/// structures land. Tests + the default validator use
+/// active context layout. Tests + the default validator use
 /// [`default_known_dimensions`] which covers the canonical set
-/// (`printer.model`, `filament.type`, `plate.type`, etc.).
+/// (`printer.model`, `filament.type`, `plate.type`, etc.); the
+/// real per-project dimension list will eventually be derived from
+/// the active `Context`.
 #[derive(Debug, Clone)]
 pub struct KnownDimensions {
     pub dimensions: Vec<String>,
@@ -52,13 +53,14 @@ impl KnownDimensions {
     }
 }
 
-/// Canonical predicate-dimension set used by the resolver before PR-1-7
-/// lands. Matches the dotted keys produced by the spike resolver:
-/// `printer.model`, `filament.type`, `filament.name`, `plate.type`.
+/// Canonical predicate-dimension set the validator falls back to
+/// when no caller-supplied list is passed. Matches the dotted keys
+/// produced by the spike resolver: `printer.model`,
+/// `filament.type`, `filament.name`, `plate.type`.
 ///
-/// Once PR-1-7 ships, this should be replaced with the dimensions
-/// derived from the active `Context`'s `predicate_value`'s key
-/// space. The function name stays the same so callers don't churn.
+/// Stub: the real dimensions will be derived from the active
+/// `Context`'s `predicate_value` key space once the wire-up
+/// lands. The function name stays so callers don't churn.
 pub fn default_known_dimensions() -> KnownDimensions {
     KnownDimensions::new([
         "printer.model",
@@ -127,8 +129,8 @@ pub fn validate_cascade(
         // scopes are all valid targets for any rule today (every rule
         // applies at the (filament, plate, object) intersection per
         // docs/profiles.md), so the meaningful early check is just the
-        // FFF-vs-SLA gate. The richer object/print scope distinctions
-        // surface in PR-1-4 once project-level overrides exist.
+        // FFF-vs-SLA gate. Richer object/print scope distinctions can
+        // land later as the override tiers gain more constraints.
         for (key, _) in &rule.set {
             if let Some(schema) = schema_by_key(key) {
                 if schema.scope.0 != 0 && schema.scope.is_sla() && !schema.scope.is_fff() {

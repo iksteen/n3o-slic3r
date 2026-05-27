@@ -1,4 +1,4 @@
-//! Project `.3mf` save/load (PR-5-8).
+//! Project `.3mf` save/load.
 //!
 //! The project format is a standard 3MF zip with one extra entry:
 //! `Metadata/n3o_project.json` carrying the serialized [`Project`]
@@ -13,7 +13,7 @@
 //! - **Geometry** (mesh vertex / normal / index buffers, object
 //!   placements, plate assignments) lives in the standard 3MF
 //!   structure — foreign-slicer interop + a battle-tested
-//!   container format we already read + write (PR-2-4 / PR-3-9).
+//!   container format we already read + write.
 //! - **Project state** (bindings, plate metadata, project-tier
 //!   overrides, file metadata) lives in `Metadata/n3o_project.json`.
 //!   Just a `serde_json::to_string(&Project)` — the heavy mesh
@@ -545,9 +545,9 @@ mod tests {
 
     #[test]
     fn round_trip_three_plate_fixture_per_ticket_spec() {
-        // PR-5-12 exit-criteria flavor: 3 plates, one bound to
-        // each of two printers, per-plate metadata, material
-        // bindings. Verifies the full save/load shape.
+        // 3 plates, one bound to each of two printers, per-plate
+        // metadata, material bindings. Verifies the full save/load
+        // shape end-to-end.
         let mut p = Project::default();
         p.plates[0].printer_instance_id = Some(A1_MINI_INSTANCE.into());
         let (_b, _) = p.add_plate(Some(U1_INSTANCE.into()));

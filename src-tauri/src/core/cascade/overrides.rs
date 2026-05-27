@@ -1,4 +1,4 @@
-//! Override-tier resolution (PR-1-4).
+//! Override-tier resolution.
 //!
 //! Implements the *absolute-override* half of the two-phase resolution
 //! described in `docs/profiles.md` — user profile and project file
@@ -28,7 +28,7 @@ use std::path::Path;
 ///   2. **user** — `~/.config/n3o-slic3r/overrides/*.toml`-style files
 ///   3. **project** — overrides scoped to a project / plate
 ///   4. **object** — overrides scoped to a single object on a plate
-///      (PR-5-7). One map, not a file — the panel keeps it in
+///     . One map, not a file — the panel keeps it in
 ///      memory and passes it on each resolve.
 ///
 /// Within the user / project tiers, later source files win on ties.
@@ -36,7 +36,7 @@ use std::path::Path;
 pub struct OverrideTiers {
     pub user: Vec<FlatOverrides>,
     pub project: Vec<FlatOverrides>,
-    /// Per-object override tier (PR-5-7). `None` means "no active
+    /// Per-object override tier. `None` means "no active
     /// object" (panel viewing global settings); `Some(empty)` means
     /// "active object has no authored overrides". Both behave the
     /// same — neither contributes a winning value.
@@ -65,7 +65,7 @@ pub struct FlatOverrides {
 pub enum OverrideTier {
     User,
     Project,
-    /// Per-object overrides (PR-5-7). Highest priority — beats both
+    /// Per-object overrides. Highest priority — beats both
     /// user and project tiers when set.
     Object,
 }
@@ -257,7 +257,7 @@ fn apply_tier(
                             value: value.clone(),
                             // No cascade winner — synthesize a "no
                             // rule" placeholder. Trace tooling
-                            // (PR-1-5) distinguishes these from
+                            // distinguishes these from
                             // cascade-overridden entries via
                             // matching_rules.is_empty().
                             winning_rule: file.source.clone(),

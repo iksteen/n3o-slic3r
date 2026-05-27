@@ -1,4 +1,4 @@
-//! BambuStudio / OrcaSlicer 3MF metadata extensions (PR-2-4).
+//! BambuStudio / OrcaSlicer 3MF metadata extensions.
 //!
 //! BBS and Orca extend the standard 3MF container with two XML
 //! sidecars under `Metadata/`:

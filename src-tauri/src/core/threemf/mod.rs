@@ -2,16 +2,16 @@
 //!
 //! Three roles in one module:
 //!
-//! - **Project reader** (PR-2-4 — this file's `load_3mf`): loads a
+//! - **Project reader** (this file's `load_3mf`): loads a
 //!   `.3mf` as a *project* — geometry, object placements, per-part
 //!   extruder assignments, plate metadata — into a [`Project3mf`]
 //!   that the `scene_load_3mf` Tauri command ingests into scene
 //!   state.
-//! - **Project writer** (PR-3-9 — `writer::write_3mf`): the inverse,
+//! - **Project writer** (`writer::write_3mf`): the inverse,
 //!   producing an OrcaSlicer-compatible 3MF from a `Project3mf`.
 //!   Phase 5's project save format and the test oracle for the
 //!   reader.
-//! - **Sliced `.gcode.3mf` writer** (PR-3-10 — `sliced::write_sliced_3mf`):
+//! - **Sliced `.gcode.3mf` writer** (`sliced::write_sliced_3mf`):
 //!   the Bambu A1 mini send-format. Embeds G-code bodies + plate
 //!   metadata + thumbnails with BambuStudio-namespace metadata.
 //!   Consumed by the Phase 7a driver.
@@ -59,7 +59,7 @@ pub use writer::{project_from_objects, write_3mf, write_3mf_with_extras};
 /// Open a `.3mf` and read a single named entry, returning `None`
 /// when the entry is absent. Companion to [`write_3mf_with_extras`]
 /// for callers that need to peek at custom metadata (e.g.
-/// `Metadata/n3o_project.json` for PR-5-8's project save format)
+/// `Metadata/n3o_project.json` for project save format)
 /// without re-parsing the geometry.
 pub fn read_3mf_extra_entry(
     path: &Path,

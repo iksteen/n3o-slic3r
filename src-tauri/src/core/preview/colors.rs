@@ -1,7 +1,7 @@
-//! Color-mode encoders (PR-6-5).
+//! Color-mode encoders.
 //!
 //! Pure mapping `(SegmentSet, ColorMode, Palette, layer_times) →
-//! Vec<f32>` of per-vertex RGB colors. The renderer (PR-6-8) binds
+//! Vec<f32>` of per-vertex RGB colors. The renderer binds
 //! the result as a `color` vertex attribute on the extrusion
 //! `LineSegments`; travel + retraction colors are hardcoded
 //! frontend-side (flat grey + red dot) and don't flow through here.
@@ -39,7 +39,7 @@ pub enum ColorMode {
     Speed,
     /// Continuous: volumetric flow likewise.
     Flow,
-    /// Continuous: per-layer print duration from PR-6-6's stats.
+    /// Continuous: per-layer print duration from stats.
     LayerTime,
     /// Discrete: tool index 0..N → palette entry (modulo 8).
     Tool,

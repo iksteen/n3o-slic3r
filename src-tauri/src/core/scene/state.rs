@@ -131,7 +131,7 @@ pub struct MeshHeader {
 pub enum MeshProvenance {
     /// Loaded from a file on disk.
     File(String),
-    /// Procedural primitive (PR-2-7's object library).
+    /// Procedural primitive (object library).
     Primitive(String),
 }
 
@@ -146,9 +146,9 @@ pub struct SceneObject {
     #[serde(default = "default_visible")]
     pub visible: bool,
     /// Per-object filament/extruder assignment. `None` means
-    /// "inherits from project default"; multi-color 3MFs (per
-    /// PR-2-4) populate this from the source file's
-    /// `model_settings.config` extruder metadata.
+    /// "inherits from project default"; multi-color 3MFs populate
+    /// this from the source file's `model_settings.config`
+    /// extruder metadata.
     #[serde(default)]
     pub extruder_id: Option<u8>,
     /// Parent object — `None` for top-level objects. Hierarchical
@@ -299,11 +299,11 @@ pub struct ExclusionZone {
 /// Per-plate scene state — everything one plate owns: placed
 /// objects, selection, camera/gizmo, bed + exclusion zones,
 /// active-build-plate identity. Phase 5 turns the historically
-/// single-global scene into N of these (PR-5-2).
+/// single-global scene into N of these.
 ///
 /// Mesh data + the primitive-dedup cache + ID allocators are
 /// **not** here — they live scene-wide on [`SceneState`] so a
-/// move-between-plates op (PR-5-11) doesn't have to copy mesh
+/// move-between-plates op doesn't have to copy mesh
 /// buffers, and ids stay unique across plates.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlateSceneState {
@@ -313,12 +313,12 @@ pub struct PlateSceneState {
     pub gizmo: GizmoState,
     pub plate: Option<ActivePlate>,
     pub exclusion_zones: Vec<ExclusionZone>,
-    /// Active bed visualization + bounds (PR-2-6). `None` when no
+    /// Active bed visualization + bounds. `None` when no
     /// printer is selected yet for this plate — loading meshes
     /// still works, just without the out-of-bounds check or grid.
     #[serde(default)]
     pub bed: Option<super::bed::BedMesh>,
-    /// Per-object cascade overrides (PR-5-7). Outer key: object;
+    /// Per-object cascade overrides. Outer key: object;
     /// inner map: setting key → serialized libslic3r value. The
     /// resolver consumes this as the highest-priority tier when
     /// the panel resolves with the Object tab active. Empty for

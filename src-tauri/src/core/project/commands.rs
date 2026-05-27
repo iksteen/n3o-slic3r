@@ -58,7 +58,7 @@ pub fn project_set_plate_composition_order(
     Ok(())
 }
 
-/// Set (upsert) a `material → slot` mapping on a plate (PR-S-7).
+/// Set (upsert) a `material → slot` mapping on a plate.
 /// The slot reference is validated against the plate's bound
 /// PrinterInstance; out-of-range indices error with
 /// `InvalidPlateMetadata`.
@@ -99,7 +99,7 @@ pub fn project_clear_material_slot(
     Ok(())
 }
 
-// ---- Save / load (PR-5-8) ------------------------------------------
+// ---- Save / load ------------------------------------------
 
 /// Save the in-memory project to `path` as an n3o-slic3r `.3mf`.
 /// Overwrites the file if it exists. The project's `source_path`
@@ -178,7 +178,7 @@ pub fn project_load(
     Ok(returned)
 }
 
-// ---- Autosave (PR-5-10) --------------------------------------------
+// ---- Autosave --------------------------------------------
 
 /// Start the autosave worker if not already running. Idempotent.
 /// Uses [`autosave::default_autosave_dir`] for the on-disk

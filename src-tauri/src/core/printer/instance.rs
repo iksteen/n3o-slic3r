@@ -1,5 +1,5 @@
 //! Printer instance — user-binding-state overlay on top of a vendor
-//! [`PrinterProfile`] (PR-S-3).
+//! [`PrinterProfile`].
 //!
 //! A `PrinterInstance` represents a physical printer the user owns. It
 //! references a vendor profile by identity and carries the per-instance
@@ -86,7 +86,7 @@ pub struct PrinterInstance {
     pub bed: BedRef,
 
     /// Per-instance printer-bucket overrides. Empty for MVP. The runtime
-    /// cascade composer (PR-S-5) layers this on top of the vendor
+    /// cascade composer layers this on top of the vendor
     /// profile's printer cascade.
     #[serde(default)]
     pub config_overrides: std::collections::BTreeMap<String, String>,

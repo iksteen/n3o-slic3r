@@ -10,15 +10,14 @@
 //!
 //! Owns FR-CAS-1 through FR-CAS-13 (PRD §6.1). The submodules:
 //!
-//! - **`types`** (PR-1-2): the typed cascade IR — `Cascade`, `Rule`,
+//! - **`types`**: the typed cascade IR — `Cascade`, `Rule`,
 //!   `Predicate`, `SourceLocation`. Sharable across resolver, adapter,
 //!   trace tooling, and the Tauri command surface.
-//! - **`loader`** (PR-1-2): TOML parser that desugars the three
-//!   authoring forms (top-level keys, `[section.shorthand]`, `[[rule]]`)
-//!   into the IR and load-validates against the PR-1-1 schema.
-//!
-//! Resolver, override tiers, and trace tooling land in subsequent
-//! PR-1-3..-5 work.
+//! - **`loader`**: TOML parser that desugars the three authoring
+//!   forms (top-level keys, `[section.shorthand]`, `[[rule]]`)
+//!   into the IR and load-validates against the libslic3r schema.
+//! - **`resolver`**, **`overrides`**, **`trace`**: per-key
+//!   resolution, override tiers, and inspection tooling.
 
 pub mod commands;
 pub mod loader;
@@ -248,21 +247,21 @@ pub struct OptionSummary {
     /// for non-enum types. The frontend's DropdownInput consumes
     /// this directly — no per-key lookup needed at render time.
     pub enum_values: Vec<(String, String)>,
-    /// libslic3r tooltip text (FR-UI-6, PR-4-11's tooltip surface
+    /// libslic3r tooltip text (FR-UI-6, tooltip surface
     /// consumes this).
     pub tooltip: Option<String>,
     /// Simple / Advanced / Expert / Develop — drives the FR-UI-2
-    /// mode filter in PR-4-3.
+    /// mode filter on the settings panel.
     pub mode: OptMode,
-    /// Project / object / region scope bitmask — drives PR-4-9's
+    /// Project / object / region scope bitmask — drives the
     /// Object-tab "project-scope setting" read-only badge.
     pub scope: OptScopeFlags,
     /// Printer-capability predicate that gates this option's
-    /// visibility (PR-4-5 / FR-UI-7). `None` = always show. The
-    /// generic `slicer_options` command always returns the
-    /// predicate verbatim; `slicer_options_for_printer` returns
-    /// the same data plus a pre-evaluated `hidden` flag against
-    /// the supplied printer.
+    /// visibility (FR-UI-7). `None` = always show. The generic
+    /// `slicer_options` command always returns the predicate
+    /// verbatim; `slicer_options_for_printer` returns the same
+    /// data plus a pre-evaluated `hidden` flag against the
+    /// supplied printer.
     pub capability: Option<CapabilityPredicate>,
 }
 
@@ -307,7 +306,7 @@ fn matches_filter(d: &slic3r_ffi::OptionDef, needle: &str) -> bool {
         || d.label.as_deref().is_some_and(|s| s.to_lowercase().contains(needle))
 }
 
-/// Settings-panel-visible options: Process bucket only (PR-S-2). Printer
+/// Settings-panel-visible options: Process bucket only. Printer
 /// + filament editing lives on other surfaces; metadata keys
 /// (`compatible_printers`, `inherits`, …) and SLA-only keys have no
 /// bucket and are also excluded.
@@ -347,7 +346,7 @@ where
     items.sort_by_key(|item| display_order_of(key(item)).unwrap_or(u32::MAX));
 }
 
-/// Per-option printer-aware view (PR-4-5 / FR-UI-7). Same shape as
+/// Per-option printer-aware view (/ FR-UI-7). Same shape as
 /// [`OptionSummary`] plus a pre-evaluated `hidden` flag derived from
 /// the option's [`CapabilityPredicate`] against the supplied
 /// [`PrinterProfile`]. Frontend calls this once per printer-switch;
@@ -485,10 +484,11 @@ mod tests {
     #[test]
     fn a1_mini_shows_purge_tower_keys_via_printer_aware_view() {
         ensure_ffi();
-        // PR-S-2 filters the panel to Process bucket only — printer-bucket
-        // toolchanger geometry is no longer in scope here. The remaining
-        // capability-gated process-bucket keys are the purge-tower /
-        // prime-tower family, which AMS-style printers DO use.
+        // The panel filter narrows to the Process bucket — printer-
+        // bucket toolchanger geometry isn't in scope here. The
+        // remaining capability-gated process-bucket keys are the
+        // purge-tower / prime-tower family, which AMS-style
+        // printers DO use.
         let opts = slicer_options_for_printer(a1_mini(), None);
         let purge = opts
             .iter()
@@ -629,8 +629,8 @@ mod tests {
     #[test]
     fn printer_aware_view_completes_within_render_budget() {
         ensure_ffi();
-        // After PR-S-2 the panel surfaces Process-bucket options only
-        // (~345 keys vs ~624 before bucket filtering). Per the FR-UI
+        // The panel surfaces Process-bucket options only (~345 keys
+        // vs ~624 without bucket filtering). Per the FR-UI
         // 50 ms panel re-render budget, the full capability evaluation
         // pass must not dominate; debug allows 10× headroom.
         let start = std::time::Instant::now();

@@ -1,7 +1,7 @@
 //! Build plate descriptor.
 //!
 //! Phase 1 ships just the identity + libslic3r-side bed-type mapping
-//! the cascade adapter (PR-1-6) needs to set `curr_bed_type`. Phase
+//! the cascade adapter needs to set `curr_bed_type`. Phase
 //! 2's scene state extends this with mesh + adhesion + visual
 //! properties.
 

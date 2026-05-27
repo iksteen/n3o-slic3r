@@ -1,17 +1,17 @@
-//! Capability predicates for printer-aware option visibility (PR-4-1).
+//! Capability predicates for printer-aware option visibility.
 //!
 //! Each predicate names a printer-side capability that gates whether
-//! a given libslic3r option is meaningful for that printer. PR-4-5
-//! consumes the evaluation result to hide options from the settings
-//! panel when the active printer doesn't satisfy the predicate.
+//! a given libslic3r option is meaningful for that printer. The
+//! settings panel consumes the evaluation result to hide options
+//! when the active printer doesn't satisfy the predicate.
 //!
 //! ## Scoping decision
 //!
 //! Predicates are evaluated against [`PrinterProfile`] alone — no
 //! plate, no filament, no scene state. That keeps the
-//! `slicer_options_for_printer` Tauri command (PR-4-1 sub-deliverable)
-//! cheap and idempotent: a printer-switch invalidates the cached
-//! result; nothing else does.
+//! `slicer_options_for_printer` Tauri command cheap and idempotent:
+//! a printer-switch invalidates the cached result; nothing else
+//! does.
 //!
 //! ## Vocabulary stability
 //!
@@ -25,7 +25,7 @@
 //! - Cover a non-empty option set in libslic3r's catalog — adding a
 //!   predicate that nothing references is dead weight.
 //! - Have a tested A1 mini + Snapmaker U1 + synthetic-toolchanger
-//!   case in the PR-4-1 test suite.
+//!   case in the printer-aware-view test suite.
 
 use serde::{Deserialize, Serialize};
 
@@ -69,9 +69,9 @@ pub enum CapabilityPredicate {
     /// initial `PrinterProfile` doesn't carry a `has_chamber_heater`
     /// flag, so [`Self::satisfied_by`] returns `true` for this
     /// variant unconditionally. The predicate exists in the
-    /// vocabulary so PR-4-5 can wire the future profile field
-    /// without a cascade of schema migrations. PR-4-5 either adds
-    /// the field or this variant is dropped.
+    /// vocabulary so a future `PrinterProfile` extension can wire
+    /// the field in without a cascade of schema migrations; if no
+    /// such extension lands, drop this variant.
     RequiresChamberHeater,
 }
 
