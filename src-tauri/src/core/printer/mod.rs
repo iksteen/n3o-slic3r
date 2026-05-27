@@ -34,9 +34,10 @@ pub use registry::{bundled_catalog, default_printer_identity, lookup, CatalogEnt
 use crate::core::filament::{bundled_catalog as filament_bundled_catalog, FilamentProfile};
 use crate::core::profile_library::{list_filament_fragments, FilamentFragmentSummary};
 
-/// Tauri command: list every printer instance the user has access to
-/// (the bundled fixtures plus any future user-library entries). Drives
-/// the printer picker.
+/// Tauri command: list every printer instance the user has access
+/// to — i.e. whatever the user library on disk currently holds.
+/// Empty on first launch (the frontend renders the onboarding
+/// empty-state in that case). Drives the printer picker.
 #[tauri::command]
 pub fn printer_instance_list() -> Vec<PrinterInstance> {
     list_instances()

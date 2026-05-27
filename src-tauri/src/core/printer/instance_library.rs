@@ -1,51 +1,50 @@
-//! Bundled printer instances.
+//! Bundled printer instances — **test-only fixtures.**
 //!
-//! MVP hardcodes two physical printers the developer/test rigs use:
+//! Production never seeds from these. The on-disk user library
+//! (`instance_storage`) starts empty on first launch and the
+//! add-printer wizard writes the first instance. `bundled_instances()`
+//! is only reachable from tests that don't call `init_root`, where
+//! `instance_registry` falls back to this in-memory set so the wide
+//! test surface doesn't need temp-library plumbing per test.
+//!
+//! Two fixtures, one per MVP printer family. Adding more would mean
+//! widening every consumer test that asserts on a specific shape
+//! (slot counts, AMS topology); the user-library path is the right
+//! place for a third printer in production.
 //!
 //! - **Bambi** — Bambu A1 mini, 0.4mm stainless steel nozzle, Cool Plate
-//!   SuperTack bed. Single extruder, single slot (no AMS in this fixture).
-//! - **Snappy** — Snapmaker U1, 4 extruders, each with a 0.4mm stainless
-//!   steel nozzle and one slot. Textured PEI bed.
-//!
-//! These exist so the picker has something to point at while the user-
-//! library + add-instance UI is unbuilt. Both instances reference vendor
-//! profiles via [`crate::core::printer::bundled_catalog`] — the same
-//! [`PrinterProfile`]s the existing PrinterPicker has been using.
-//!
-//! Slot bindings start unbound (`filament_identity: None`); the
-//! slice-input builder falls back to "Generic PLA" for unbound slots
-//! until a filament picker lands.
+//!   SuperTack bed. Single extruder × 5 slots (4 AMS + 1 Ext).
+//! - **Snappy** — Snapmaker U1, 4 extruders × 1 slot each, 0.4mm
+//!   stainless steel nozzle per toolhead. Textured PEI bed.
 
 use super::instance::{
     BedRef, ExtruderState, FeedKind, NozzleMaterial, NozzleSku, PrinterInstance, SlotBinding,
 };
 
-/// Stable IDs for the bundled instances. Used as
-/// `Plate.printer_instance_id`.
+/// Stable IDs for the test-fixture instances. Tests pin these as
+/// `Plate.printer_instance_id` when they want to address bambi /
+/// snappy directly without going through whatever the on-disk
+/// library happens to hold.
 pub const BAMBI_ID: &str = "bambi";
 pub const SNAPPY_ID: &str = "snappy";
 
-/// Seed for the mutable in-memory registry — built fresh every call
-/// so callers can produce a clean reset list. Insertion order is the
-/// picker's display order. Once the registry initializes from this,
-/// subsequent `lookup_instance` calls read live (possibly user-
-/// mutated) state.
+/// In-memory fixture set the registry falls back to when no storage
+/// root has been registered — i.e. in tests. Built fresh every call
+/// so test setups can produce a clean reset list.
 pub fn bundled_instances() -> Vec<PrinterInstance> {
     vec![bambi(), snappy()]
 }
 
-/// Bridge from a legacy `PrinterBinding.printer_identity` (vendor
-/// profile slug like `"bambu-lab-a1-mini"`) to the matching bundled
-/// PrinterInstance id (`"bambi"`). Returns `None` for vendor profiles
-/// that don't yet have a corresponding bundled instance fixture.
+/// Reverse lookup: given a vendor profile ref (e.g.
+/// `"bambu-lab-a1-mini"`), return the id of the matching test-fixture
+/// `PrinterInstance` (`"bambi"`). `None` for vendor profiles with no
+/// fixture. Tests use this to bridge a `PrinterBinding`-shaped
+/// identity back to a fixture id without hardcoding the mapping at
+/// every call site.
 ///
-/// Reverse lookup: given a vendor profile ref, return the id of the
-/// bundled `PrinterInstance` that wraps it. `None` if no bundled
-/// instance matches.
-///
-/// Lives here (not on `PrinterInstance`) because the bundled set is
-/// the authoritative mapping — instances reference vendor profiles
-/// by name, and this is the inverse.
+/// Lives here because the fixture set is the authoritative mapping —
+/// instances reference vendor profiles by name, and this is the
+/// inverse.
 pub fn instance_id_for_vendor_profile(vendor_profile_ref: &str) -> Option<&'static str> {
     bundled_instances()
         .iter()

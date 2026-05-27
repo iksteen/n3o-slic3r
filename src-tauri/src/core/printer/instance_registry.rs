@@ -1,18 +1,20 @@
 //! Mutable in-memory registry of [`PrinterInstance`]s.
 //!
-//! Replaces the original `bundled_instances()`-as-source-of-truth
-//! pattern: the bundled fixtures now seed a writable registry at
-//! first access. User mutations (slot → filament bindings, nozzle
-//! swaps, connection settings) land here.
+//! Production loads from the on-disk user library
+//! ([`instance_storage`]) at first access; first launch starts
+//! empty. User mutations (slot → filament bindings, nozzle swaps,
+//! connection settings, printer add / remove) land here and
+//! persist back to disk through `instance_storage::persist`.
+//!
+//! Tests that never wire a storage root fall back to the in-memory
+//! fixtures from [`super::instance_library::bundled_instances`] —
+//! bambi + snappy — so the wide existing test surface doesn't need
+//! per-test temp-library plumbing.
 //!
 //! Storage shape: `Mutex<Vec<PrinterInstance>>` — small set, linear
 //! scan is fine and preserves insertion order for the picker. The
-//! `OnceLock` guards seed-once; subsequent calls lock + access.
-//!
-//! Persistence to disk is intentionally NOT here — MVP keeps the
-//! registry in-memory only. App restart resets bindings; that
-//! tradeoff is documented in the design doc § "User library
-//! persistence is post-MVP — superseded by `instance_storage`."
+//! `OnceLock` guards first-access load; subsequent calls lock +
+//! access.
 
 use std::sync::{Mutex, OnceLock};
 
@@ -32,8 +34,8 @@ fn registry() -> &'static Mutex<Vec<PrinterInstance>> {
         // by Tauri's `setup()` and starts empty on first launch (the
         // empty-state UI fires; create_instance writes the first
         // entry). Tests that never hit Tauri's setup fall back to
-        // the in-memory bundled fixtures so the wide test surface
-        // doesn't need temp-library plumbing.
+        // the in-memory test fixtures so the wide test surface
+        // doesn't need temp-library plumbing per test.
         let initial = match instance_storage::root() {
             Some(root) => instance_storage::load_from_disk(root).unwrap_or_else(|e| {
                 tracing::warn!(

@@ -77,12 +77,11 @@ fn hydrate_profile(base: &PrinterProfile, fragment_slug: &str) -> PrinterProfile
     profile
 }
 
-/// Identity of the bundled-default printer. Used to auto-bind a
-/// fresh plate to the bundled instance for that printer so first-
-/// launch slicing works without forcing the user through the
-/// picker.
-///
-/// Returns `None` only if the bundled catalog is empty.
+/// Identity of the first printer in the bundled vendor catalog
+/// (alphabetical by slug). Only test setups call this — production
+/// resolves the active plate's printer from the user library on
+/// disk via `instance_storage` instead. Returns `None` only if the
+/// vendor catalog itself is empty.
 pub fn default_printer_identity() -> Option<&'static str> {
     DEFAULT_IDENTITY.get_or_init(|| {
         bundled_catalog().into_iter().next().map(|e| e.identity)

@@ -81,10 +81,18 @@ pub fn run() {
             core::profile_library::init_from(resource_root);
             tracing::info!("profile library loaded");
 
-            // User-owned printer instance library. Seeded from the
-            // bundled fixtures on first launch; subsequent launches
-            // load whatever's on disk. Mutations (slot filament/color
-            // edits, future printer add/remove) persist back here.
+            // User-owned printer instance library. First launch
+            // starts empty — the frontend shows the onboarding
+            // empty-state, the add-printer wizard writes the first
+            // instance. Subsequent launches load whatever's on disk.
+            // Mutations (slot filament/color edits, printer add /
+            // remove) persist back here.
+            //
+            // There is no first-launch seeding from bundled
+            // fixtures. The `bundled_instances()` set in
+            // `core::printer::instance_library` is a test-only
+            // fallback that fires when `init_root` is never called
+            // (i.e. in unit tests that don't spin up Tauri).
             //
             // `config_dir()` is the platform base (`~/.config/` on
             // Linux, `~/Library/Application Support/` on macOS,
@@ -102,14 +110,14 @@ pub fn run() {
             core::printer::instance_storage::init_root(printers_root);
             tracing::info!("printer instance library initialized");
 
-            // Project state is constructed AFTER the storage roots are
-            // wired so its `Project::default()` (which auto-binds a
-            // printer instance, eagerly touching the registry) can
-            // load from the on-disk library instead of seeding the
-            // OnceLock with the in-memory bundled fixtures. Same
-            // reasoning for cascade — once both roots are live, the
-            // rest of the app's state managers see a fully initialized
-            // backend.
+            // Project state is constructed AFTER the storage roots
+            // are wired so its `Project::default()` (which eagerly
+            // touches the registry to look up the default printer)
+            // sees the real on-disk library, not a registry pinned
+            // to whatever happened to be in the OnceLock first.
+            // Same reasoning for cascade — once both roots are
+            // live, the rest of the app's state managers see a
+            // fully initialized backend.
             let project: Arc<Mutex<core::project::Project>> =
                 Arc::new(Mutex::new(core::project::Project::default()));
             app.manage(project);

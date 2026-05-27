@@ -14,8 +14,8 @@
 //! Test fallback: when no storage root is registered (the path tests
 //! take when they don't call `init_root`), the registry falls back to
 //! [`bundled_instances`](super::instance_library::bundled_instances)
-//! as an in-memory fixture — bambi + snappy — so the wide existing
-//! test surface doesn't need plumbing for a temp library per test.
+//! as an in-memory fixture — bambi + snappy. Production never
+//! reaches that path; the fixtures are not first-launch seed data.
 //!
 //! Layout: `<root>/<instance_id>.toml`. One instance per file so the
 //! user can drop in a single TOML to add a printer manually.
@@ -39,8 +39,9 @@ pub fn init_root(root: PathBuf) {
 }
 
 /// Current user-library directory, if one was registered. The
-/// instance registry calls this on first-access to decide whether to
-/// load from disk or fall back to the bundled set.
+/// instance registry calls this on first-access to decide whether
+/// to load from disk (production) or fall back to the in-memory
+/// test fixtures (tests that don't call `init_root`).
 pub fn root() -> Option<&'static Path> {
     ROOT.get().map(|p| p.as_path())
 }
@@ -48,7 +49,8 @@ pub fn root() -> Option<&'static Path> {
 /// Errors propagating up from a filesystem operation. Wrapped in
 /// `tracing::warn!` at the call sites — none of these are fatal:
 /// a persist failure leaves the in-memory state intact, a load
-/// failure falls back to the bundled set.
+/// failure starts the registry empty (same as a clean first
+/// launch).
 #[derive(Debug)]
 pub enum StorageError {
     Io(std::io::Error),

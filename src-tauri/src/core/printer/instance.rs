@@ -8,10 +8,12 @@
 //! the currently-loaded bed, and any per-instance config overrides
 //! (printer-bucket only; filament/process overrides live elsewhere).
 //!
-//! MVP scope: instances are bundled fixtures (Bambi + Snappy) loaded at
-//! startup. No persistence to user config yet; no UI to add or edit
-//! instances. The picker just sees the two fixtures. Subsequent tickets
-//! add the user-library file and the editor surfaces.
+//! Production stores instances as TOML files in the user library at
+//! `<config>/n3o-slic3r/printers/`. First launch starts empty; the
+//! add-printer wizard writes the first instance and edits round-trip
+//! through `instance_storage::persist`. Tests that don't wire a
+//! storage root fall back to the bambi + snappy fixtures from
+//! `instance_library`.
 //!
 //! See `docs/design/settings-model.md` §4 (Storage model — User library)
 //! for the durable-form intent.
@@ -38,9 +40,8 @@ pub struct PrinterInstance {
     /// project-side reference (`Plate.printer_instance_ref`).
     pub id: String,
 
-    /// Display name surfaced in pickers and panels. User-editable
-    /// future; for the bundled fixtures it's the friendly name
-    /// ("Bambi", "Snappy").
+    /// Display name surfaced in pickers and panels. User-editable.
+    /// Test fixtures use the friendly nicknames "Bambi" / "Snappy".
     pub display_name: String,
 
     /// Identity of the vendor [`PrinterProfile`] this instance is
