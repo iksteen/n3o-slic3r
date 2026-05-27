@@ -285,7 +285,9 @@ pub fn set_extruder_nozzle_diameter(
 ///       come first (`FeedKind::Ams`), the trailing slot is
 ///       `FeedKind::Direct` ("Ext").
 ///     - `N > 1` (toolchanger: U1, XL) — N extruders labelled
-///       `T0..T(N-1)`, each with one `FeedKind::Direct` slot. The
+///       `T1..TN` (1-based for display; the in-memory extruder
+///       vector and gcode tool numbers stay 0-based), each with
+///       one `FeedKind::Direct` slot. The
 ///       `ams_units` parameter is ignored for this branch; the
 ///       caller-side AMS picker is hidden when `ams_max == 0`.
 ///   - nozzle: each toolhead's `default_nozzle_diameter`, `Stainless`.
@@ -346,8 +348,10 @@ pub fn create_instance(
     // (U1, XL) get one extruder *per toolhead*, each with a single
     // Direct feed.
     let extruders: Vec<ExtruderState> = if profile.toolheads.len() > 1 {
-        // Toolchanger: one extruder per toolhead, labelled `T0..T(N-1)`,
-        // single Direct slot. `ams_units` is ignored — the modal
+        // Toolchanger: one extruder per toolhead, labelled `T1..TN`
+        // (1-based for display; the extruder vector's index and the
+        // gcode tool numbers stay 0-based), single Direct slot.
+        // `ams_units` is ignored — the modal
         // hides the AMS picker for `ams_max == 0` printers, so a
         // caller that somehow passes >0 here gets the same topology
         // (we already validated `ams_units <= ams_max` above).
@@ -358,7 +362,10 @@ pub fn create_instance(
             .map(|(i, toolhead)| {
                 let filament_slug = resolve_default_filament(toolhead.default_nozzle_diameter);
                 ExtruderState {
-                    label: format!("T{i}"),
+                    // 1-based for display — humans count from 1, gcode
+                    // tool numbers and the extruder vector's index
+                    // both stay 0-based internally.
+                    label: format!("T{}", i + 1),
                     installed_nozzle: NozzleSku {
                         diameter_mm: toolhead.default_nozzle_diameter as f32,
                         material: NozzleMaterial::Stainless,
@@ -780,13 +787,14 @@ mod tests {
     fn create_instance_toolchanger_emits_one_extruder_per_toolhead() {
         let _registry = RegistryGuard::acquire();
         // U1 has 4 toolheads → 4 extruders, each with one Direct
-        // slot, labelled T0..T3. AMS units are 0 (ams_max=0).
+        // slot, labelled T1..T4 (1-based for display). AMS units
+        // are 0 (ams_max=0).
         let inst = create_instance("snapmaker-u1", "Test U1".into(), 0)
             .expect("create snapmaker u1");
         assert_eq!(inst.extruders.len(), 4);
         for (i, ext) in inst.extruders.iter().enumerate() {
-            assert_eq!(ext.label, format!("T{i}"));
-            assert_eq!(ext.slots.len(), 1, "T{i} should have a single slot");
+            assert_eq!(ext.label, format!("T{}", i + 1));
+            assert_eq!(ext.slots.len(), 1, "T{} should have a single slot", i + 1);
             assert_eq!(ext.slots[0].feed, FeedKind::Direct);
             // Slot label is empty — extruder label carries identity.
             assert_eq!(ext.slots[0].label, "");
@@ -868,9 +876,9 @@ mod tests {
     #[test]
     fn set_extruder_nozzle_diameter_updates_in_place() {
         let _registry = RegistryGuard::acquire();
-        // Snappy is a 4-toolhead toolchanger — pick T2 and swap to
-        // a 0.6 nozzle so the assertion isn't confounded by the
-        // bundled default.
+        // Snappy is a 4-toolhead toolchanger — pick T3 (extruder
+        // index 2) and swap to a 0.6 nozzle so the assertion isn't
+        // confounded by the bundled default.
         let updated = set_extruder_nozzle_diameter("snappy", 2, 0.6)
             .expect("snappy has 4 extruders");
         assert_eq!(updated.extruders[2].installed_nozzle.diameter_mm, 0.6);

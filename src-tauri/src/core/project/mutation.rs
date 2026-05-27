@@ -126,9 +126,9 @@ impl Project {
     /// binding from a deleted object lingers in `material_to_slot`,
     /// and a naive modular pick happily doubles a *new* material
     /// onto the slot a previously-deleted material already claims —
-    /// e.g. Snappy with M1 manually pinned to T1, then loading a
-    /// 2-cube 2-material 3mf would auto-bind M2 to T1 as well
-    /// (collision) instead of T2. First-free-from-preferred avoids
+    /// e.g. Snappy with M1 manually pinned to T2, then loading a
+    /// 2-cube 2-material 3mf would auto-bind M2 to T2 as well
+    /// (collision) instead of T3. First-free-from-preferred avoids
     /// the collision; wrap-around at saturation preserves the
     /// previous behavior for the 5-materials-on-4-slots case.
     ///
@@ -3219,20 +3219,20 @@ mod tests {
     #[test]
     fn deleting_last_user_of_a_material_drops_its_slot_binding() {
         // The user's reproduction (rebuilt): on Snappy, add a cube
-        // for material 1, pin it to T1 manually, then delete the
+        // for material 1, pin it to T2 manually, then delete the
         // cube. The binding for M1 must NOT linger after its last
         // user vanishes — otherwise a subsequent multi-material load
-        // collides materials onto T1 (auto-bind's first-free-from-
-        // preferred still has T1 as "taken" and steers the new
+        // collides materials onto T2 (auto-bind's first-free-from-
+        // preferred still has T2 as "taken" and steers the new
         // material around it, but the panel would also still show
-        // M1 → T1 with no object to justify it: confusing UX, and
-        // the slice-time cascade keeps emitting toolchanges to T1
+        // M1 → T2 with no object to justify it: confusing UX, and
+        // the slice-time cascade keeps emitting toolchanges to T2
         // for a material nothing references).
         let mut p = Project::default();
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
         p.plates[0].printer_instance_id = Some("snappy".into());
         let cube = add_cube_with_material(&mut p, 1);
-        // User manually pins M1 → T1 (instead of the auto-bind's T0).
+        // User manually pins M1 → T2 (instead of the auto-bind's T1).
         p.plates[0]
             .material_to_slot
             .insert(1, SlotRef { extruder: 1, slot: 0 });
@@ -3270,15 +3270,15 @@ mod tests {
     #[test]
     fn auto_bind_skips_slot_already_pinned_by_user() {
         // Regression for the bug the user hit by hand: on Snappy
-        // (4 extruders × 1 slot), pin M1 → T1 manually, then add a
+        // (4 extruders × 1 slot), pin M1 → T2 manually, then add a
         // cube with material 2. The auto-bind's preferred slot for
-        // M2 is flat[(2-1) % 4] = T1 — same as M1's pin. Without
+        // M2 is flat[(2-1) % 4] = T2 — same as M1's pin. Without
         // the first-free-from-preferred policy, M2 would collide
-        // onto T1; with it, M2 advances to the next free slot (T2).
+        // onto T2; with it, M2 advances to the next free slot (T3).
         let mut p = Project::default();
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
         p.plates[0].printer_instance_id = Some("snappy".into());
-        // User pins M1 → T1 before adding any objects.
+        // User pins M1 → T2 before adding any objects.
         p.plates[0]
             .material_to_slot
             .insert(1, SlotRef { extruder: 1, slot: 0 });
@@ -3291,7 +3291,7 @@ mod tests {
         assert_eq!(
             p.plates[0].material_to_slot.get(&2),
             Some(&SlotRef { extruder: 2, slot: 0 }),
-            "M2's preferred T1 is taken by user pin; walks forward to T2",
+            "M2's preferred T2 is taken by user pin; walks forward to T3",
         );
     }
 

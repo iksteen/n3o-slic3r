@@ -70,6 +70,9 @@ function cellFromIndex(
   const isMounted = mounted != null && mounted === i;
   const tempReadout = formatTemp(nozzle);
   const mountedSuffix = isMounted ? " (mounted)" : "";
+  // Display label is 1-based — the cell index `i` and the firmware's
+  // `mounted_toolhead` stay 0-based internally.
+  const displayLabel = `T${i + 1}`;
   if (filament == null) {
     return {
       index: i,
@@ -77,7 +80,7 @@ function cellFromIndex(
       materialLabel: null,
       tempReadout,
       isMounted,
-      ariaLabel: `T${i}${mountedSuffix}: empty · ${tempReadout}`,
+      ariaLabel: `${displayLabel}${mountedSuffix}: empty · ${tempReadout}`,
     };
   }
   return {
@@ -86,7 +89,7 @@ function cellFromIndex(
     materialLabel: filament.material_type.slice(0, MATERIAL_LABEL_LIMIT),
     tempReadout,
     isMounted,
-    ariaLabel: `T${i}${mountedSuffix}: ${filament.material_type} · ${tempReadout}`,
+    ariaLabel: `${displayLabel}${mountedSuffix}: ${filament.material_type} · ${tempReadout}`,
   };
 }
 
@@ -118,7 +121,7 @@ export function U1ToolheadStrip({
             style={c.cssColor ? { background: c.cssColor } : undefined}
           />
           <span className="text-[10px] font-mono leading-tight whitespace-nowrap">
-            T{c.index} {c.materialLabel ?? "—"} {c.tempReadout}
+            T{c.index + 1} {c.materialLabel ?? "—"} {c.tempReadout}
           </span>
         </div>
       ))}

@@ -38,7 +38,7 @@ function snappy(): PrinterInstance {
     default_filament_fragment_slug: "snapmaker-pla-u1",
     default_process_fragment_slug: "0.20-standard-snapmaker-u1-0.4-nozzle",
     connection: null,
-    extruders: ["T0", "T1", "T2", "T3"].map((label) => ({
+    extruders: ["T1", "T2", "T3", "T4"].map((label) => ({
       label,
       installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
       slots: [
@@ -77,9 +77,9 @@ describe("flattenSlots", () => {
     expect(slots[0].ref).toEqual({ extruder: 0, slot: 0 });
   });
 
-  it("Snappy: 4 entries labeled by extruder (T0..T3) — solo slot label is empty", () => {
+  it("Snappy: 4 entries labeled by extruder (T1..T4) — solo slot label is empty", () => {
     const slots = flattenSlots(snappy());
-    expect(slots.map((s) => s.label)).toEqual(["T0", "T1", "T2", "T3"]);
+    expect(slots.map((s) => s.label)).toEqual(["T1", "T2", "T3", "T4"]);
     expect(slots.every((s) => s.feed === "direct")).toBe(true);
     expect(slots.map((s) => s.ref.extruder)).toEqual([0, 1, 2, 3]);
   });

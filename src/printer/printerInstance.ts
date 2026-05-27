@@ -41,8 +41,11 @@ export interface NozzleSku {
 }
 
 export interface ExtruderState {
-  /** Display label — "T0" / "T1" / "" (empty when the extruder is
-   *  solo and the slot's label carries the full identity). */
+  /** Display label — "T1" / "T2" / "" (empty when the extruder is
+   *  solo and the slot's label carries the full identity).
+   *  Numeric variants are 1-based for human display; the in-memory
+   *  position in `PrinterInstance.extruders` and the gcode tool
+   *  numbers stay 0-based internally. */
   label: string;
   installed_nozzle: NozzleSku;
   slots: SlotBinding[];

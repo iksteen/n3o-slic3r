@@ -39,7 +39,7 @@ function extra(
 describe("cellsFromU1", () => {
   it("always emits 4 cells regardless of input length", () => {
     // Printer reports only 2 toolheads loaded — the strip still
-    // renders 4 fixed cells (T0..T3) so the U1's hardware shape is
+    // renders 4 fixed cells (T1..T4) so the U1's hardware shape is
     // visible at a glance. Empty cells fill in for the unreported
     // slots.
     const cells = cellsFromU1(
@@ -137,7 +137,7 @@ describe("cellsFromU1", () => {
       extra([null, filament("Carbon Fiber PLA", "ABCDEFFF")], 1),
       temps([24, 215], [0, 220]),
     );
-    expect(cells[0].ariaLabel).toContain("T0");
+    expect(cells[0].ariaLabel).toContain("T1");
     expect(cells[0].ariaLabel).toContain("empty");
     expect(cells[1].ariaLabel).toContain("(mounted)");
     expect(cells[1].ariaLabel).toContain("Carbon Fiber PLA");

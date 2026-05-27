@@ -10,12 +10,13 @@
 //!   into [`JobState`]'s enum variants rather than free-form
 //!   strings.
 //! - Per-toolhead filaments land on [`U1Extra::toolhead_filaments`]
-//!   in T0..T3 order (one Option per slot), matching the
-//!   [`U1Filament`] shape PR-7a-1 reserved.
-//! - Per-toolhead temperatures land on [`Temps::nozzles`] in
-//!   T0..T3 order. Missing extruders are dropped, not padded; the
-//!   frontend reads `nozzles.len()` to know how many toolheads
-//!   the printer reports.
+//!   in 0-indexed extruder-position order (one Option per slot;
+//!   displayed as T1..T4 in the UI), matching the [`U1Filament`]
+//!   shape the driver trait reserves.
+//! - Per-toolhead temperatures land on [`Temps::nozzles`] in the
+//!   same 0-indexed order. Missing extruders are dropped, not
+//!   padded; the frontend reads `nozzles.len()` to know how many
+//!   toolheads the printer reports.
 
 use std::time::SystemTime;
 

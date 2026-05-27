@@ -161,10 +161,10 @@ fn snappy() -> PrinterInstance {
         default_process_fragment_slug: "0.20-standard-snapmaker-u1-0.4-nozzle".to_owned(),
         connection: None,
         extruders: vec![
-            extruder("T0", "#dc2626"),
-            extruder("T1", "#eab308"),
-            extruder("T2", "#111827"),
-            extruder("T3", "#f8fafc"),
+            extruder("T1", "#dc2626"),
+            extruder("T2", "#eab308"),
+            extruder("T3", "#111827"),
+            extruder("T4", "#f8fafc"),
         ],
         bed: BedRef {
             identity: "Textured PEI Plate".to_owned(),

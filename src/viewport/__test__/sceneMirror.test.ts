@@ -574,7 +574,9 @@ describe("SceneMirror spool-color paint", () => {
     // Snappy = 4 extruders × 1 slot. The user reports objects go
     // gray when routed to extruder 2+ via the material→slot picker.
     // Reproduce: plate bound to a Snappy-shaped instance, object
-    // with extruder_id=2 routed to slot (1, 0) = T1=yellow.
+    // with extruder_id=2 routed to slot (1, 0) = T2=yellow (display
+    // labels are 1-based; the extruder index in the tuple stays 0-
+    // based).
     const snappy: PrinterInstance = {
       id: "snappy",
       display_name: "Snappy",
@@ -584,10 +586,10 @@ describe("SceneMirror spool-color paint", () => {
       default_process_fragment_slug: "p",
       connection: null,
       extruders: [
-        { label: "T0", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#dc2626" }] },
-        { label: "T1", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#eab308" }] },
-        { label: "T2", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#111827" }] },
-        { label: "T3", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#f8fafc" }] },
+        { label: "T1", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#dc2626" }] },
+        { label: "T2", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#eab308" }] },
+        { label: "T3", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#111827" }] },
+        { label: "T4", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#f8fafc" }] },
       ],
       bed: { identity: "Snapmaker Textured PEI" },
       config_overrides: {},
@@ -609,13 +611,15 @@ describe("SceneMirror spool-color paint", () => {
       kind: "ObjectAdded",
       data: { plate_id: 1, object: obj },
     });
-    expect(mirror.objectColor(101)).toBe(0xeab308); // T1 yellow
+    expect(mirror.objectColor(101)).toBe(0xeab308); // T2 yellow
   });
 
-  it("Snappy: reroute material 1 to T2 via applyPlateRouting recolors to black", async () => {
+  it("Snappy: reroute material 1 to T3 via applyPlateRouting recolors to black", async () => {
     // The user's reported flow: extruder_id=null object (defaults
     // to material 1), Snappy plate, opens Materials section, picks
-    // T2 (extruder 2 / slot 0). Should render T2's color (#111827).
+    // T3 (extruder 2 / slot 0 — display labels are 1-based, the
+    // extruder index in the tuple stays 0-based). Should render
+    // T3's color (#111827).
     const snappy: PrinterInstance = {
       id: "snappy",
       display_name: "Snappy",
@@ -625,10 +629,10 @@ describe("SceneMirror spool-color paint", () => {
       default_process_fragment_slug: "p",
       connection: null,
       extruders: [
-        { label: "T0", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#dc2626" }] },
-        { label: "T1", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#eab308" }] },
-        { label: "T2", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#111827" }] },
-        { label: "T3", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#f8fafc" }] },
+        { label: "T1", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#dc2626" }] },
+        { label: "T2", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#eab308" }] },
+        { label: "T3", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#111827" }] },
+        { label: "T4", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#f8fafc" }] },
       ],
       bed: { identity: "Snapmaker Textured PEI" },
       config_overrides: {},
@@ -636,7 +640,7 @@ describe("SceneMirror spool-color paint", () => {
     const initialPlate: PlateSnapshot = {
       ...plateSnap(1),
       printer_instance_id: "snappy",
-      material_to_slot: { 1: { extruder: 0, slot: 0 } }, // auto-bind → T0
+      material_to_slot: { 1: { extruder: 0, slot: 0 } }, // auto-bind → T1
     };
     const mirror = new SceneMirror(async () => unitCubeBuffers());
     mirror.applyPrinterInstance(snappy);
@@ -649,13 +653,13 @@ describe("SceneMirror spool-color paint", () => {
       kind: "ObjectAdded",
       data: { plate_id: 1, object: sceneObjectAt(101, 1, 0) }, // extruder_id null
     });
-    expect(mirror.objectColor(101)).toBe(0xdc2626); // T0 red
+    expect(mirror.objectColor(101)).toBe(0xdc2626); // T1 red
 
-    // User picks T2 in the Materials section → backend writes
+    // User picks T3 in the Materials section → backend writes
     // material_to_slot[1] = {extruder: 2, slot: 0} → bridge re-fetches
     // snapshot and calls applyPlateRouting.
     mirror.applyPlateRouting(1, "snappy", { 1: { extruder: 2, slot: 0 } });
-    expect(mirror.objectColor(101)).toBe(0x111827); // T2 black
+    expect(mirror.objectColor(101)).toBe(0x111827); // T3 black
   });
 
   it("preserves spool color across selection cycle (deselect restores baseColor, not the default)", async () => {

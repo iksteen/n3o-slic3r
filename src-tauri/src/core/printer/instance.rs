@@ -77,9 +77,10 @@ pub struct PrinterInstance {
     #[serde(default)]
     pub connection: Option<ConnectionInfo>,
 
-    /// One entry per physical extruder (T0..T(N-1)). For shared-toolhead
-    /// printers (A1 mini, X1C) the vector has length 1; for tool changers
-    /// (U1, XL) the vector matches the toolhead count.
+    /// One entry per physical extruder, 0-indexed. Display labels are
+    /// 1-based (`T1..TN`); see [`ExtruderState::label`]. For shared-
+    /// toolhead printers (A1 mini, X1C) the vector has length 1; for
+    /// tool changers (U1, XL) the vector matches the toolhead count.
     pub extruders: Vec<ExtruderState>,
 
     /// Currently-loaded build plate. MVP: single value per instance.
@@ -98,10 +99,12 @@ pub struct PrinterInstance {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtruderState {
     /// Display label surfaced in the slot picker. Empty for
-    /// single-extruder printers where the slot's own label carries the
-    /// full identity; populated (e.g. `"T0"`, `"T1"`, `"Left"`) on
-    /// multi-extruder printers so the picker can disambiguate which
-    /// extruder a slot belongs to.
+    /// single-extruder printers where the slot's own label carries
+    /// the full identity; populated (e.g. `"T1"`, `"T2"`, `"Left"`)
+    /// on multi-extruder printers so the picker can disambiguate
+    /// which extruder a slot belongs to. Numeric variants use 1-based
+    /// numbering for display — the in-memory extruder vector and the
+    /// gcode tool numbers stay 0-based internally.
     #[serde(default)]
     pub label: String,
 

@@ -439,7 +439,7 @@ function TempsLine({
   if (temps == null) return null;
   // U1 reports 4 independent nozzles; their per-toolhead temps
   // render in `U1ToolheadStrip`. Showing `nozzles[0]` here would
-  // double the T0 reading. Bed temp is single-source either way.
+  // double the T1 reading. Bed temp is single-source either way.
   if (kind === "U1") {
     return (
       <span className="text-text-muted font-mono">
