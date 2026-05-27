@@ -117,12 +117,21 @@ pub enum CalibrationAvailability {
 /// material-flow entry is printer-specific (Bambu's flow test
 /// differs from Snapmaker's); other entries are shared.
 ///
-/// `resources_root` is the path to `external/OrcaSlicer/resources`;
-/// at runtime this resolves relative to the app's bundle. Tests pass
-/// the workspace-relative path.
+/// `calibration_root` is the path to our vendored calibration
+/// asset directory (`assets/calibration/` at the workspace root,
+/// shipped as `calibration/` in the Tauri bundle). Tests pass the
+/// workspace-relative path; production passes the runtime-resolved
+/// bundle path.
+///
+/// We vendor the fixtures locally rather than reading them from the
+/// OrcaSlicer submodule because upstream churn drops files we rely
+/// on (e.g. nightly-builds 2026-05-28 removed `OrcaCube_v2.3mf` in
+/// favor of `.drc`-only); decoupling the calibration set from
+/// submodule state means a libslic3r bump can't silently break our
+/// calibration list.
 pub fn list_calibration(
     printer_model: &str,
-    resources_root: &Path,
+    calibration_root: &Path,
 ) -> Vec<CalibrationDescriptor> {
     let mut out = Vec::new();
 
@@ -130,24 +139,24 @@ pub fn list_calibration(
         "dimension-cube",
         "Dimension Cube (Orca Cube v2)",
         "XYZ accuracy and dimensional check at known size.",
-        resources_root.join("handy_models/OrcaCube_v2.3mf"),
+        calibration_root.join("OrcaCube_v2.3mf"),
     ));
 
     out.push(check_calibration(
         "temperature-tower",
         "Temperature Tower",
         "Per-layer-band temperature sweep to find your filament's window.",
-        resources_root.join("calib/temperature_tower/temperature_tower.drc"),
+        calibration_root.join("temperature_tower.drc"),
     ));
 
     out.push(check_calibration(
         "stringing-tower",
         "Stringing / Retraction Tower",
         "Retraction tuning — minimize strings between towers.",
-        resources_root.join("calib/retraction/retraction_tower.drc"),
+        calibration_root.join("retraction_tower.drc"),
     ));
 
-    out.push(material_flow_for(printer_model, resources_root));
+    out.push(material_flow_for(printer_model, calibration_root));
 
     out
 }
@@ -158,14 +167,14 @@ pub fn list_calibration(
 /// we haven't sourced yet (the U1 ships with its own flow tower
 /// that differs structurally from Orca's pattern). When that lands
 /// the descriptor here updates.
-fn material_flow_for(printer_model: &str, resources_root: &Path) -> CalibrationDescriptor {
+fn material_flow_for(printer_model: &str, calibration_root: &Path) -> CalibrationDescriptor {
     let lower = printer_model.to_ascii_lowercase();
     if lower.contains("bambu") || lower.contains("a1") || lower.contains("x1") || lower.contains("p1") {
         check_calibration(
             "material-flow",
             "Material Flow (Orca-LinearFlow)",
             "Linear advance / flow rate tuning for Bambu printers.",
-            resources_root.join("calib/filament_flow/Orca-LinearFlow.3mf"),
+            calibration_root.join("Orca-LinearFlow.3mf"),
         )
     } else if lower.contains("snapmaker") || lower.contains("u1") {
         // No vendored Snapmaker flow fixture yet; surface a
@@ -175,7 +184,7 @@ fn material_flow_for(printer_model: &str, resources_root: &Path) -> CalibrationD
             display_name: "Material Flow (Snapmaker)".into(),
             description: "Per-toolhead flow calibration for Snapmaker U1.".into(),
             availability: CalibrationAvailability::MissingFromResources {
-                expected_at: resources_root.join("calib/filament_flow/snapmaker_u1_flow.3mf"),
+                expected_at: calibration_root.join("snapmaker_u1_flow.3mf"),
             },
         }
     } else {
@@ -183,7 +192,7 @@ fn material_flow_for(printer_model: &str, resources_root: &Path) -> CalibrationD
             "material-flow",
             "Material Flow (generic)",
             "Generic flow calibration via Orca's Linear Flow pattern.",
-            resources_root.join("calib/filament_flow/Orca-LinearFlow.3mf"),
+            calibration_root.join("Orca-LinearFlow.3mf"),
         )
     }
 }
@@ -273,25 +282,24 @@ mod tests {
         assert!(kinds.contains(&PrimitiveKind::Torus));
     }
 
-    fn workspace_orca_resources() -> PathBuf {
+    fn workspace_calibration_root() -> PathBuf {
         let crate_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
         let mut p = PathBuf::from(crate_dir);
         p.pop();
-        p.push("external/OrcaSlicer/resources");
+        p.push("assets/calibration");
         p
     }
 
     #[test]
     fn calibration_for_a1_mini_returns_four_entries() {
-        let root = workspace_orca_resources();
+        let root = workspace_calibration_root();
         if !root.exists() {
-            eprintln!("skipping: orca resources missing at {root:?}");
+            eprintln!("skipping: vendored calibration assets missing at {root:?}");
             return;
         }
         let cals = list_calibration("Bambu A1 mini", &root);
         assert_eq!(cals.len(), 4);
-        // Dimension cube + material flow should be Available
-        // (both 3MF, both shipped in the submodule).
+        // Dimension cube + material flow ship as .3mf → loadable.
         let dim = cals.iter().find(|c| c.id == "dimension-cube").unwrap();
         assert!(matches!(
             dim.availability,
@@ -302,7 +310,7 @@ mod tests {
             flow.availability,
             CalibrationAvailability::Available { .. }
         ));
-        // Temperature + stringing towers ship as .drc → unsupported.
+        // Temperature + stringing towers are still .drc → unsupported.
         let temp = cals.iter().find(|c| c.id == "temperature-tower").unwrap();
         assert!(matches!(
             temp.availability,
@@ -317,7 +325,7 @@ mod tests {
 
     #[test]
     fn calibration_for_snapmaker_u1_marks_flow_as_missing() {
-        let root = workspace_orca_resources();
+        let root = workspace_calibration_root();
         if !root.exists() {
             return;
         }

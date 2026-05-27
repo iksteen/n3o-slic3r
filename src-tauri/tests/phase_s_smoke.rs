@@ -304,8 +304,7 @@ fn snappy_binding_routes_single_material_to_bound_toolhead() {
 
     ensure_ffi_init();
 
-    let cube_path = workspace_root()
-        .join("external/OrcaSlicer/resources/handy_models/OrcaCube_v2.3mf");
+    let cube_path = workspace_root().join("assets/calibration/OrcaCube_v2.3mf");
 
     // Build a Project the way the UI's scene_load_3mf does: load the
     // 3mf, register every mesh + object on the active plate.

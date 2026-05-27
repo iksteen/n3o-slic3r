@@ -14,9 +14,10 @@ before_layer_change_gcode = ''';BEFORE_LAYER_CHANGE
 G92 E0
 TIMELAPSE_TAKE_FRAME
 DEFECT_DETECTION_DETECT'''
-change_filament_gcode = ''';===== date: 20251213=====================
-; Change Tool[previous_extruder] -> Tool[next_extruder] (layer [layer_num])
+change_filament_gcode = ''';===== date: 20260525 =====================
+; Change Tool[previous_extruder] -> Tool[next_extruder] (layer [layer_num] ; max_layer_z [max_layer_z] ; max_print_height [max_print_height])
 {
+local move_z = max_print_height;
 local max_speed_toolchange = 350.0;
 local wait_for_extruder_temp = true;
 position[2] = position[2] + 2.0;
@@ -24,8 +25,13 @@ local speed_toolchange = max_speed_toolchange;
 if travel_speed < max_speed_toolchange then
       speed_toolchange = travel_speed;
 endif
+
+if max_layer_z < (max_print_height - 1) then
+    move_z = z_offset + min(max_layer_z + 2, max_print_height);
+endif
+
 "G91
-G1 Z1.5 F1800
+G1 Z" + move_z + " F1800 ; Move nozzle just above tallest printed object
 G90
 ";
 "G1 F" + (speed_toolchange * 60) + "
@@ -70,8 +76,24 @@ layer_change_gcode = ''';AFTER_LAYER_CHANGE
 ;[layer_z]
 SET_PRINT_STATS_INFO TOTAL_LAYER={total_layer_count}
 SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num+1}'''
-machine_end_gcode = ''' PRINT_END
-TIMELAPSE_STOP'''
+machine_end_gcode = ''';===== date: 20260525 =====================
+; (layer [layer_num] ; max_layer_z [max_layer_z])
+{
+local move_z = max_print_height;
+
+if max_layer_z < (max_print_height - 1) then
+    move_z = z_offset + min(max_layer_z + 2, max_print_height);
+endif
+
+"G91
+G1 Z" + move_z + " F1800 ; Move nozzle just above tallest printed object
+G90
+; Triggering PBO Z Movement of: " + move_z + "
+PRINT_END
+TIMELAPSE_STOP
+";
+}
+'''
 machine_load_filament_time = "0"
 machine_max_acceleration_e = "5000,5000"
 machine_max_acceleration_extruding = "25000,25000"

@@ -32,7 +32,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../profiles/vendor": "profiles/vendor"
+      "../profiles/vendor": "profiles/vendor",
+      "../assets/calibration": "calibration"
     }
   }
 }

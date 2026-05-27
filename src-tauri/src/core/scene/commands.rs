@@ -479,12 +479,12 @@ pub fn library_primitives() -> Vec<super::library::PrimitiveDescriptor> {
 }
 
 #[tauri::command]
-#[tracing::instrument(skip(resources_root))]
+#[tracing::instrument(skip(calibration_root))]
 pub fn library_calibration(
     printer_model: String,
-    resources_root: String,
+    calibration_root: String,
 ) -> Vec<super::library::CalibrationDescriptor> {
-    super::library::list_calibration(&printer_model, std::path::Path::new(&resources_root))
+    super::library::list_calibration(&printer_model, std::path::Path::new(&calibration_root))
 }
 
 #[tauri::command]
