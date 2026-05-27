@@ -469,17 +469,14 @@ function bambiInstance(): PrinterInstance {
     connection: null,
     extruders: [
       {
-        label: "",
         installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
         slots: [
           {
-            label: "AMS:1",
             feed: "ams",
             filament_identity: "generic-pla",
             color: "#111827",
           },
           {
-            label: "Ext",
             feed: "direct",
             filament_identity: "generic-pla",
             color: "#dc2626",
@@ -586,10 +583,10 @@ describe("SceneMirror spool-color paint", () => {
       default_process_fragment_slug: "p",
       connection: null,
       extruders: [
-        { label: "T1", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#dc2626" }] },
-        { label: "T2", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#eab308" }] },
-        { label: "T3", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#111827" }] },
-        { label: "T4", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#f8fafc" }] },
+        { installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ feed: "direct", filament_identity: "generic-pla", color: "#dc2626" }] },
+        { installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ feed: "direct", filament_identity: "generic-pla", color: "#eab308" }] },
+        { installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ feed: "direct", filament_identity: "generic-pla", color: "#111827" }] },
+        { installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ feed: "direct", filament_identity: "generic-pla", color: "#f8fafc" }] },
       ],
       bed: { identity: "Snapmaker Textured PEI" },
       config_overrides: {},
@@ -629,10 +626,10 @@ describe("SceneMirror spool-color paint", () => {
       default_process_fragment_slug: "p",
       connection: null,
       extruders: [
-        { label: "T1", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#dc2626" }] },
-        { label: "T2", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#eab308" }] },
-        { label: "T3", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#111827" }] },
-        { label: "T4", installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ label: "", feed: "direct", filament_identity: "generic-pla", color: "#f8fafc" }] },
+        { installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ feed: "direct", filament_identity: "generic-pla", color: "#dc2626" }] },
+        { installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ feed: "direct", filament_identity: "generic-pla", color: "#eab308" }] },
+        { installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ feed: "direct", filament_identity: "generic-pla", color: "#111827" }] },
+        { installed_nozzle: { diameter_mm: 0.4, material: "stainless" }, slots: [{ feed: "direct", filament_identity: "generic-pla", color: "#f8fafc" }] },
       ],
       bed: { identity: "Snapmaker Textured PEI" },
       config_overrides: {},

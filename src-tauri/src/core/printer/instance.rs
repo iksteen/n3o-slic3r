@@ -77,10 +77,11 @@ pub struct PrinterInstance {
     #[serde(default)]
     pub connection: Option<ConnectionInfo>,
 
-    /// One entry per physical extruder, 0-indexed. Display labels are
-    /// 1-based (`T1..TN`); see [`ExtruderState::label`]. For shared-
-    /// toolhead printers (A1 mini, X1C) the vector has length 1; for
-    /// tool changers (U1, XL) the vector matches the toolhead count.
+    /// One entry per physical extruder, 0-indexed. For shared-
+    /// toolhead printers (A1 mini, X1C) the vector has length 1;
+    /// for tool changers (U1, XL) the vector matches the toolhead
+    /// count. The frontend renders these as 1-based display labels
+    /// (`T1..TN`) when there's more than one.
     pub extruders: Vec<ExtruderState>,
 
     /// Currently-loaded build plate. MVP: single value per instance.
@@ -96,18 +97,15 @@ pub struct PrinterInstance {
 
 /// Per-extruder state — currently-installed nozzle plus the filament
 /// feeds (slots) that pull into this extruder.
+///
+/// Display labels (`T1`, `T2`, `AMS:1`, `Ext`, …) are *not* stored
+/// here — the frontend derives them from the extruder position +
+/// total extruder count + per-slot `feed`. A runtime topology
+/// change (user attaches a second AMS unit, swaps a nozzle) needs
+/// only update the structural fields; the labels re-derive on the
+/// next render.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtruderState {
-    /// Display label surfaced in the slot picker. Empty for
-    /// single-extruder printers where the slot's own label carries
-    /// the full identity; populated (e.g. `"T1"`, `"T2"`, `"Left"`)
-    /// on multi-extruder printers so the picker can disambiguate
-    /// which extruder a slot belongs to. Numeric variants use 1-based
-    /// numbering for display — the in-memory extruder vector and the
-    /// gcode tool numbers stay 0-based internally.
-    #[serde(default)]
-    pub label: String,
-
     /// What's physically screwed into this extruder right now. The user
     /// confirms swaps in the UI; there's no firmware sensor for
     /// installed-nozzle SKU on consumer printers.
@@ -160,16 +158,12 @@ pub enum FeedKind {
 }
 
 /// Slot → filament binding. `None` = unbound (no filament picked).
+///
+/// Display labels (`"AMS:1"`, `"Ext"`, etc.) are *not* stored here
+/// — see [`ExtruderState`]'s note. The frontend derives them from
+/// position + `feed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlotBinding {
-    /// Display label surfaced in the slot picker. `"Direct"`, `"Ext"`,
-    /// `"AMS:1"` etc. — chosen by the bundled-instance fixture, user-
-    /// editable in a future printer-instance editor. Pure presentation;
-    /// routing/topology is driven by the `(extruder_idx, slot_idx)`
-    /// tuple and `feed`.
-    #[serde(default)]
-    pub label: String,
-
     /// What feed path this slot uses. Drives the AMS-vs-Direct split
     /// in `ams_bindings_for_plate` / `ams_mapping_for_plate` (Direct
     /// slots emit the `{255, 0}` external-spool sentinel; AMS slots
@@ -234,13 +228,11 @@ mod tests {
             default_process_fragment_slug: "0.20mm-standard-bbl-a1m".into(),
             connection: None,
             extruders: vec![ExtruderState {
-                label: String::new(),
                 installed_nozzle: NozzleSku {
                     diameter_mm: 0.4,
                     material: NozzleMaterial::Stainless,
                 },
                 slots: vec![SlotBinding {
-                    label: "Direct".into(),
                     feed: FeedKind::Direct,
                     filament_identity: None,
                     color: None,

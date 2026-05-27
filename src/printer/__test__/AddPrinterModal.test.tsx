@@ -2,12 +2,13 @@
 //
 // Component rendering / submit lifecycle needs a jsdom + RTL setup
 // we don't have (same pattern as `PrinterCredentialsDialog.test.ts`).
-// We pin the pure helpers `makeUniqueName` + `amsSlotLabels` so
-// regressions in the name-collision logic or the AMS topology
-// generator trip loudly.
+// We pin `makeUniqueName` so name-collision logic regressions trip
+// loudly. The AMS labelling convention lives in
+// `printerInstance.ts::deriveSlotLabel` and is covered by
+// `printerInstance.test.ts::flattenSlots`.
 
 import { describe, expect, it } from "vitest";
-import { amsSlotLabels, makeUniqueName } from "../AddPrinterModal";
+import { makeUniqueName } from "../AddPrinterModal";
 
 describe("makeUniqueName", () => {
   it("returns the base when nothing collides", () => {
@@ -33,42 +34,3 @@ describe("makeUniqueName", () => {
   });
 });
 
-describe("amsSlotLabels", () => {
-  it("returns just `Ext` for 0 AMS units", () => {
-    expect(amsSlotLabels(0)).toEqual(["Ext"]);
-  });
-
-  it("returns `Ext` + 4 unlettered AMS slots for 1 AMS unit", () => {
-    expect(amsSlotLabels(1)).toEqual([
-      "Ext",
-      "AMS:1",
-      "AMS:2",
-      "AMS:3",
-      "AMS:4",
-    ]);
-  });
-
-  it("disambiguates with letters when multiple AMS units are installed", () => {
-    expect(amsSlotLabels(3)).toEqual([
-      "Ext",
-      "AMS A:1",
-      "AMS A:2",
-      "AMS A:3",
-      "AMS A:4",
-      "AMS B:1",
-      "AMS B:2",
-      "AMS B:3",
-      "AMS B:4",
-      "AMS C:1",
-      "AMS C:2",
-      "AMS C:3",
-      "AMS C:4",
-    ]);
-  });
-
-  it("produces N*4 + 1 slots regardless of N", () => {
-    for (let n = 0; n <= 4; n++) {
-      expect(amsSlotLabels(n).length).toBe(n * 4 + 1);
-    }
-  });
-});

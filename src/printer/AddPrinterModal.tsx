@@ -31,24 +31,6 @@ export function makeUniqueName(base: string, existing: readonly string[]): strin
   return `${base} (${n})`;
 }
 
-/** Build the slot labels for a single-extruder N-AMS-unit topology.
- * Mirrors the Rust backend's `create_instance` topology so the
- * vitest fixture can pin the contract. Returns `[ "Ext", "AMS:1", … ]`
- * for one unit, `[ "Ext", "AMS A:1", … "AMS B:4" ]` for multiple. */
-export function amsSlotLabels(amsUnits: number): string[] {
-  const labels = ["Ext"];
-  for (let unit = 0; unit < amsUnits; unit++) {
-    for (let slot = 1; slot <= 4; slot++) {
-      const label =
-        amsUnits > 1
-          ? `AMS ${String.fromCharCode(65 + unit)}:${slot}`
-          : `AMS:${slot}`;
-      labels.push(label);
-    }
-  }
-  return labels;
-}
-
 export interface AddPrinterModalProps {
   catalog: PrinterCatalogEntry[];
   /** Display names already taken by registered instances —

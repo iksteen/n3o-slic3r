@@ -347,33 +347,27 @@ pub fn create_instance(
     // (single toolhead) get one extruder with N+1 slots; toolchangers
     // (U1, XL) get one extruder *per toolhead*, each with a single
     // Direct feed.
+    //
+    // Labels are left empty here; `PrinterInstance::populate_labels`
+    // fills them in at the end of construction (same call path the
+    // disk-load uses, so there's a single source of truth).
     let extruders: Vec<ExtruderState> = if profile.toolheads.len() > 1 {
-        // Toolchanger: one extruder per toolhead, labelled `T1..TN`
-        // (1-based for display; the extruder vector's index and the
-        // gcode tool numbers stay 0-based), single Direct slot.
-        // `ams_units` is ignored — the modal
-        // hides the AMS picker for `ams_max == 0` printers, so a
-        // caller that somehow passes >0 here gets the same topology
-        // (we already validated `ams_units <= ams_max` above).
+        // Toolchanger: one extruder per toolhead with a single
+        // Direct slot. `ams_units` is ignored — the modal hides the
+        // AMS picker for `ams_max == 0` printers, so a caller that
+        // somehow passes >0 here gets the same topology (we already
+        // validated `ams_units <= ams_max` above).
         profile
             .toolheads
             .iter()
-            .enumerate()
-            .map(|(i, toolhead)| {
+            .map(|toolhead| {
                 let filament_slug = resolve_default_filament(toolhead.default_nozzle_diameter);
                 ExtruderState {
-                    // 1-based for display — humans count from 1, gcode
-                    // tool numbers and the extruder vector's index
-                    // both stay 0-based internally.
-                    label: format!("T{}", i + 1),
                     installed_nozzle: NozzleSku {
                         diameter_mm: toolhead.default_nozzle_diameter as f32,
                         material: NozzleMaterial::Stainless,
                     },
                     slots: vec![SlotBinding {
-                        // Solo slot — the extruder label carries the
-                        // full identity, no per-slot label needed.
-                        label: String::new(),
                         feed: FeedKind::Direct,
                         filament_identity: Some(filament_slug),
                         color: None,
@@ -383,26 +377,17 @@ pub fn create_instance(
             .collect()
     } else {
         // AMS-style: one extruder, AMS-fed slots come first, the
-        // direct/Ext spool is the trailing slot. The extruder's
-        // solo so its label stays empty — the slot labels carry
-        // the identity. AMS-first ordering matches BBS's
-        // ams_mapping convention; see the doc comment on
-        // `create_instance`.
+        // direct/Ext spool is the trailing slot. AMS-first ordering
+        // matches BBS's ams_mapping convention; see the doc comment
+        // on `create_instance`.
         let toolhead = profile.toolheads.first();
         let default_nozzle_diameter =
             toolhead.map(|t| t.default_nozzle_diameter).unwrap_or(0.4);
         let filament_slug = resolve_default_filament(default_nozzle_diameter);
         let mut slots = Vec::new();
-        for unit in 0..ams_units {
-            for slot in 1..=4 {
-                let label = if ams_units > 1 {
-                    let letter = char::from(b'A' + unit as u8);
-                    format!("AMS {letter}:{slot}")
-                } else {
-                    format!("AMS:{slot}")
-                };
+        for _unit in 0..ams_units {
+            for _slot in 0..4 {
                 slots.push(SlotBinding {
-                    label,
                     feed: FeedKind::Ams,
                     filament_identity: Some(filament_slug.clone()),
                     color: None,
@@ -410,13 +395,11 @@ pub fn create_instance(
             }
         }
         slots.push(SlotBinding {
-            label: "Ext".to_owned(),
             feed: FeedKind::Direct,
             filament_identity: Some(filament_slug.clone()),
             color: None,
         });
         vec![ExtruderState {
-            label: String::new(),
             installed_nozzle: NozzleSku {
                 diameter_mm: default_nozzle_diameter as f32,
                 material: NozzleMaterial::Stainless,
@@ -773,12 +756,10 @@ mod tests {
         assert_eq!(inst.extruders.len(), 1);
         let slots = &inst.extruders[0].slots;
         assert_eq!(slots.len(), 5);
-        for (i, slot) in slots.iter().enumerate().take(4) {
+        for slot in slots.iter().take(4) {
             assert_eq!(slot.feed, FeedKind::Ams);
-            assert_eq!(slot.label, format!("AMS:{}", i + 1));
         }
         assert_eq!(slots[4].feed, FeedKind::Direct);
-        assert_eq!(slots[4].label, "Ext");
         // First supported bed becomes the default.
         assert!(!inst.bed.identity.is_empty());
     }
@@ -787,17 +768,14 @@ mod tests {
     fn create_instance_toolchanger_emits_one_extruder_per_toolhead() {
         let _registry = RegistryGuard::acquire();
         // U1 has 4 toolheads → 4 extruders, each with one Direct
-        // slot, labelled T1..T4 (1-based for display). AMS units
-        // are 0 (ams_max=0).
+        // slot. AMS units are 0 (ams_max=0). Display labels
+        // (`T1..T4`) live in the frontend.
         let inst = create_instance("snapmaker-u1", "Test U1".into(), 0)
             .expect("create snapmaker u1");
         assert_eq!(inst.extruders.len(), 4);
-        for (i, ext) in inst.extruders.iter().enumerate() {
-            assert_eq!(ext.label, format!("T{}", i + 1));
-            assert_eq!(ext.slots.len(), 1, "T{} should have a single slot", i + 1);
+        for ext in inst.extruders.iter() {
+            assert_eq!(ext.slots.len(), 1);
             assert_eq!(ext.slots[0].feed, FeedKind::Direct);
-            // Slot label is empty — extruder label carries identity.
-            assert_eq!(ext.slots[0].label, "");
             // Pre-bound to the nozzle's default filament (Snapmaker PLA).
             assert!(ext.slots[0].filament_identity.is_some());
         }
@@ -811,33 +789,29 @@ mod tests {
         let slots = &inst.extruders[0].slots;
         assert_eq!(slots.len(), 1, "0 AMS units → 1 direct slot");
         assert_eq!(slots[0].feed, FeedKind::Direct);
-        assert_eq!(slots[0].label, "Ext");
     }
 
     #[test]
-    fn create_instance_multi_ams_letters_disambiguate_slots() {
+    fn create_instance_single_ams_emits_four_ams_plus_ext_in_order() {
         let _registry = RegistryGuard::acquire();
-        // 3 AMS units on a fictional config: slots get "AMS A:1..4",
-        // "AMS B:1..4", "AMS C:1..4" prefixes. The A1 mini's ams_max
-        // is 1, so this would normally error — call directly with a
-        // forced value via the test backdoor. (We assert validation
-        // separately below.)
-        //
-        // For now exercise the labelling on the supported case (1 unit)
-        // and document the multi-AMS labelling expectation as a unit
-        // test against the helper indirectly when a higher ams_max
-        // printer ships.
+        // ams_units=1: 4 Ams-feed slots followed by the trailing
+        // Direct-feed external spool. AMS-first ordering matches
+        // BBS's ams_mapping convention. Display labels (AMS:1..4 /
+        // Ext) live in the frontend, derived from this structure.
         let inst = create_instance("bambu-lab-a1-mini", "Single AMS".into(), 1)
             .expect("ams_max=1 supports 1 unit");
-        let slot_labels: Vec<&str> = inst.extruders[0]
-            .slots
-            .iter()
-            .map(|s| s.label.as_str())
-            .collect();
-        // Single-AMS uses the un-lettered "AMS:N" form. AMS slots
-        // come first, Ext is trailing (matches BBS's ams_mapping
-        // convention).
-        assert_eq!(slot_labels, vec!["AMS:1", "AMS:2", "AMS:3", "AMS:4", "Ext"]);
+        let feeds: Vec<FeedKind> =
+            inst.extruders[0].slots.iter().map(|s| s.feed).collect();
+        assert_eq!(
+            feeds,
+            vec![
+                FeedKind::Ams,
+                FeedKind::Ams,
+                FeedKind::Ams,
+                FeedKind::Ams,
+                FeedKind::Direct,
+            ],
+        );
     }
 
     #[test]
@@ -914,9 +888,7 @@ mod tests {
         let slots = &bambi.extruders[0].slots;
         let ams: &SlotBinding = &slots[0];
         assert_eq!(ams.feed, FeedKind::Ams);
-        assert_eq!(ams.label, "AMS:1");
         let ext: &SlotBinding = &slots[4];
         assert_eq!(ext.feed, FeedKind::Direct);
-        assert_eq!(ext.label, "Ext");
     }
 }

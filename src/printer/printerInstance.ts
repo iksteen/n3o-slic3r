@@ -19,9 +19,6 @@ export interface SlotRef {
 }
 
 export interface SlotBinding {
-  /** Display label — "Direct" / "Ext" / "AMS:1" / "" (empty when
-   *  the extruder label is enough). */
-  label: string;
   feed: FeedKind;
   /** `null` when no filament is loaded in this slot. */
   filament_identity: string | null;
@@ -41,12 +38,6 @@ export interface NozzleSku {
 }
 
 export interface ExtruderState {
-  /** Display label — "T1" / "T2" / "" (empty when the extruder is
-   *  solo and the slot's label carries the full identity).
-   *  Numeric variants are 1-based for human display; the in-memory
-   *  position in `PrinterInstance.extruders` and the gcode tool
-   *  numbers stay 0-based internally. */
-  label: string;
   installed_nozzle: NozzleSku;
   slots: SlotBinding[];
 }
@@ -175,9 +166,11 @@ export async function deleteInstance(id: string): Promise<void> {
 }
 
 /** Compose a flat list of slot picker options across the instance's
- *  extruder × slot grid. The label combines extruder + slot labels
- *  with " — " when both are non-empty; one label alone otherwise.
- *  Includes the SlotRef so the picker can write back. */
+ *  extruder × slot grid. Labels are derived from structure (extruder
+ *  count, slot count, per-slot `feed`); they're not stored on the
+ *  instance so a runtime topology change (user attaches a second
+ *  AMS unit, swaps a nozzle) doesn't risk stale labels lingering
+ *  in memory. Includes the SlotRef so the picker can write back. */
 export interface FlatSlotOption {
   ref: SlotRef;
   label: string;
@@ -186,13 +179,73 @@ export interface FlatSlotOption {
   color: string | null;
 }
 
+/** Display label for an extruder, given its 0-based position and the
+ *  total number of extruders on the printer. Multi-extruder
+ *  printers (toolchangers) get 1-based `T1..TN`; single-extruder
+ *  printers get an empty label (the slot label carries identity). */
+export function deriveExtruderLabel(
+  extIdx: number,
+  totalExtruders: number,
+): string {
+  if (totalExtruders <= 1) return "";
+  return `T${extIdx + 1}`;
+}
+
+/** Display label for a slot, given its position within its extruder
+ *  + the full slot list for that extruder + total extruder count.
+ *  Single-slot extruders surface their identity through the extruder
+ *  label on multi-extruder printers, and through a `Direct` / `AMS:1`
+ *  feed-kind label on single-extruder printers. Multi-slot extruders
+ *  are AMS-style: Ams-feed slots numbered 1-based; if >4 of them
+ *  (multi-AMS-unit topology) prefix with a unit letter
+ *  (`AMS A:1..AMS B:4`); the trailing Direct-feed slot is `Ext`. */
+export function deriveSlotLabel(
+  slotIdx: number,
+  slots: readonly SlotBinding[],
+  totalExtruders: number,
+): string {
+  if (slots.length === 1) {
+    if (totalExtruders > 1) return "";
+    return slots[0].feed === "direct" ? "Direct" : "AMS:1";
+  }
+  const amsCount = slots.filter((s) => s.feed === "ams").length;
+  const multiUnit = amsCount > 4;
+  // Number Ams-feed slots 1-based across the extruder, optionally
+  // grouped into AMS-unit letters of 4.
+  let amsIdxInUnit = 0;
+  let unitIdx = 0;
+  for (let i = 0; i < slots.length; i++) {
+    const s = slots[i];
+    if (s.feed === "ams") {
+      if (amsIdxInUnit === 4) {
+        amsIdxInUnit = 0;
+        unitIdx += 1;
+      }
+      amsIdxInUnit += 1;
+      if (i === slotIdx) {
+        return multiUnit
+          ? `AMS ${String.fromCharCode(65 + unitIdx)}:${amsIdxInUnit}`
+          : `AMS:${amsIdxInUnit}`;
+      }
+    } else if (i === slotIdx) {
+      // Direct-feed slot in an AMS-style multi-slot extruder is
+      // the trailing external spool.
+      return "Ext";
+    }
+  }
+  return "";
+}
+
 export function flattenSlots(instance: PrinterInstance): FlatSlotOption[] {
   const out: FlatSlotOption[] = [];
+  const totalExt = instance.extruders.length;
   instance.extruders.forEach((ext, eIdx) => {
+    const extLabel = deriveExtruderLabel(eIdx, totalExt);
     ext.slots.forEach((slot, sIdx) => {
+      const slotLabel = deriveSlotLabel(sIdx, ext.slots, totalExt);
       const parts: string[] = [];
-      if (ext.label) parts.push(ext.label);
-      if (slot.label) parts.push(slot.label);
+      if (extLabel) parts.push(extLabel);
+      if (slotLabel) parts.push(slotLabel);
       const label = parts.length > 0 ? parts.join(" — ") : `Slot ${sIdx + 1}`;
       out.push({
         ref: { extruder: eIdx, slot: sIdx },

@@ -1,11 +1,12 @@
-// PR-S-7 — installed-nozzle picker.
+// Installed-nozzle picker.
 //
 // Chip + popover, one per extruder. Chip label is `Nozzle` for
-// single-extruder printers and `Nozzle T0` / `Nozzle T1` / … for
+// single-extruder printers and `Nozzle T1` / `Nozzle T2` / … for
 // multi-extruder printers (so multiple chips in the same row read
-// as a numbered set). Value shown on the chip is the diameter in
-// millimetres (e.g. `0.4 mm`). The popover lists every diameter
-// the printer profile bundled nozzle fragments for.
+// as a numbered set; 1-based for display, 0-based internally).
+// Value shown on the chip is the diameter in millimetres (e.g.
+// `0.4 mm`). The popover lists every diameter the printer profile
+// bundled nozzle fragments for.
 //
 // Material is out of scope for the MVP — the picker only writes
 // diameter swaps; the backend mutation preserves whatever material
@@ -14,13 +15,15 @@
 import { useEffect, useRef, useState } from "react";
 
 export interface NozzlePickerProps {
-  /** Multi-extruder printers show this in the chip label as `Nozzle T<idx>`. */
+  /** 0-based extruder position. Multi-extruder printers show
+   *  this in the chip label as `Nozzle T<idx + 1>` (1-based for
+   *  display). */
   extruderIdx: number;
   /** Total extruder count — drives whether the label is `Nozzle` (1) or
-   *  `Nozzle T<idx>` (>1) in the default form. */
+   *  `Nozzle T<idx + 1>` (>1) in the default form. */
   totalExtruders: number;
   /** Drop the `Nozzle` prefix from the chip label and popover title;
-   *  the chip reads just `T<idx>`. Used when chips sit under the
+   *  the chip reads just `T<idx + 1>`. Used when chips sit under the
    *  "Nozzles" section divider in the expanded layout (3+ extruders),
    *  where the section header already carries the noun. */
   compact?: boolean;
@@ -74,10 +77,13 @@ export function NozzlePicker({
     if (next !== value) onChange(next);
   };
 
+  // 1-based for display; the extruderIdx prop stays 0-based to
+  // match every other API surface that addresses extruders by
+  // position.
   const chipLabel = compact
-    ? `T${extruderIdx}`
+    ? `T${extruderIdx + 1}`
     : totalExtruders > 1
-      ? `Nozzle T${extruderIdx}`
+      ? `Nozzle T${extruderIdx + 1}`
       : "Nozzle";
   const isDefault = printerDefault != null && value === printerDefault;
 

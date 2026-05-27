@@ -17,10 +17,9 @@ function bambi(): PrinterInstance {
     connection: null,
     extruders: [
       {
-        label: "",
         installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
         slots: [
-          { label: "Direct", feed: "direct", filament_identity: null, color: null },
+          { feed: "direct", filament_identity: null, color: null },
         ],
       },
     ],
@@ -38,11 +37,10 @@ function snappy(): PrinterInstance {
     default_filament_fragment_slug: "snapmaker-pla-u1",
     default_process_fragment_slug: "0.20-standard-snapmaker-u1-0.4-nozzle",
     connection: null,
-    extruders: ["T1", "T2", "T3", "T4"].map((label) => ({
-      label,
+    extruders: [0, 1, 2, 3].map(() => ({
       installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
       slots: [
-        { label: "", feed: "direct" as const, filament_identity: null, color: null },
+        { feed: "direct" as const, filament_identity: null, color: null },
       ],
     })),
     bed: { identity: "Snapmaker Textured PEI" },
@@ -55,14 +53,13 @@ function ams_a1_mini(): PrinterInstance {
   // (AMS:1..4 + Ext). AMS-first ordering matches BBS's
   // ams_mapping convention; see the Rust-side `bambi()` fixture.
   const ext: PrinterInstance["extruders"][number] = {
-    label: "",
     installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
     slots: [
-      { label: "AMS:1", feed: "ams", filament_identity: null, color: null },
-      { label: "AMS:2", feed: "ams", filament_identity: null, color: null },
-      { label: "AMS:3", feed: "ams", filament_identity: null, color: null },
-      { label: "AMS:4", feed: "ams", filament_identity: null, color: null },
-      { label: "Ext", feed: "direct", filament_identity: null, color: null },
+      { feed: "ams", filament_identity: null, color: null },
+      { feed: "ams", filament_identity: null, color: null },
+      { feed: "ams", filament_identity: null, color: null },
+      { feed: "ams", filament_identity: null, color: null },
+      { feed: "direct", filament_identity: null, color: null },
     ],
   };
   return { ...bambi(), extruders: [ext] };
@@ -95,6 +92,33 @@ describe("flattenSlots", () => {
     ]);
     expect(slots.slice(0, 4).every((s) => s.feed === "ams")).toBe(true);
     expect(slots[4].feed).toBe("direct");
+  });
+
+  it("multi-AMS shape (>4 AMS slots): letter-prefix disambiguation", () => {
+    // 3 AMS units = 12 AMS slots + 1 Ext. Labels group into A:1..4,
+    // B:1..4, C:1..4. Ext trails.
+    const multi: PrinterInstance = {
+      ...bambi(),
+      extruders: [
+        {
+          installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
+          slots: [
+            ...Array.from({ length: 12 }, () => ({
+              feed: "ams" as const,
+              filament_identity: null,
+              color: null,
+            })),
+            { feed: "direct" as const, filament_identity: null, color: null },
+          ],
+        },
+      ],
+    };
+    expect(flattenSlots(multi).map((s) => s.label)).toEqual([
+      "AMS A:1", "AMS A:2", "AMS A:3", "AMS A:4",
+      "AMS B:1", "AMS B:2", "AMS B:3", "AMS B:4",
+      "AMS C:1", "AMS C:2", "AMS C:3", "AMS C:4",
+      "Ext",
+    ]);
   });
 });
 

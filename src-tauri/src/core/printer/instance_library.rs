@@ -70,7 +70,6 @@ fn bambi() -> PrinterInstance {
         connection: None,
         extruders: vec![ExtruderState {
             // Solo extruder — slot labels carry the full identity.
-            label: String::new(),
             installed_nozzle: NozzleSku {
                 diameter_mm: 0.4,
                 material: NozzleMaterial::Stainless,
@@ -96,31 +95,26 @@ fn bambi() -> PrinterInstance {
             // initial defaults rather than hardcoded values.
             slots: vec![
                 SlotBinding {
-                    label: "AMS:1".to_owned(),
                     feed: FeedKind::Ams,
                     filament_identity: Some("generic-pla".to_owned()),
                     color: Some("#111827".to_owned()),
                 },
                 SlotBinding {
-                    label: "AMS:2".to_owned(),
                     feed: FeedKind::Ams,
                     filament_identity: Some("generic-pla".to_owned()),
                     color: Some("#d4a017".to_owned()),
                 },
                 SlotBinding {
-                    label: "AMS:3".to_owned(),
                     feed: FeedKind::Ams,
                     filament_identity: Some("generic-pla".to_owned()),
                     color: Some("#5b21b6".to_owned()),
                 },
                 SlotBinding {
-                    label: "AMS:4".to_owned(),
                     feed: FeedKind::Ams,
                     filament_identity: Some("generic-pla".to_owned()),
                     color: Some("#ea580c".to_owned()),
                 },
                 SlotBinding {
-                    label: "Ext".to_owned(),
                     feed: FeedKind::Direct,
                     filament_identity: Some("generic-pla".to_owned()),
                     color: Some("#dc2626".to_owned()),
@@ -139,14 +133,12 @@ fn snappy() -> PrinterInstance {
     // in the topology so the feed-mixing gate is trivially satisfied
     // (one slot per extruder). Seeded colors are the physical spools
     // currently loaded in this fixture's printer.
-    let extruder = |label: &str, color: &str| ExtruderState {
-        label: label.to_owned(),
+    let extruder = |color: &str| ExtruderState {
         installed_nozzle: NozzleSku {
             diameter_mm: 0.4,
             material: NozzleMaterial::Stainless,
         },
         slots: vec![SlotBinding {
-            label: String::new(),
             feed: FeedKind::Direct,
             filament_identity: Some("generic-pla".to_owned()),
             color: Some(color.to_owned()),
@@ -161,10 +153,10 @@ fn snappy() -> PrinterInstance {
         default_process_fragment_slug: "0.20-standard-snapmaker-u1-0.4-nozzle".to_owned(),
         connection: None,
         extruders: vec![
-            extruder("T1", "#dc2626"),
-            extruder("T2", "#eab308"),
-            extruder("T3", "#111827"),
-            extruder("T4", "#f8fafc"),
+            extruder("#dc2626"),
+            extruder("#eab308"),
+            extruder("#111827"),
+            extruder("#f8fafc"),
         ],
         bed: BedRef {
             identity: "Textured PEI Plate".to_owned(),
@@ -203,13 +195,12 @@ mod tests {
             b.extruders[0].installed_nozzle.material,
             NozzleMaterial::Stainless,
         );
-        // A1 mini + AMS Lite: 5 slots — 4 Ams (`AMS:1`..`AMS:4`)
-        // followed by 1 Direct (`Ext`). AMS-first is cosmetic; see
-        // the comment in `bambi()`.
+        // A1 mini + AMS Lite: 5 slots — 4 Ams followed by 1 Direct.
+        // AMS-first is cosmetic; see the comment in `bambi()`. Slot
+        // display labels live in the frontend, not on these
+        // structs.
         let slots = &b.extruders[0].slots;
         assert_eq!(slots.len(), 5);
-        let labels: Vec<&str> = slots.iter().map(|s| s.label.as_str()).collect();
-        assert_eq!(labels, vec!["AMS:1", "AMS:2", "AMS:3", "AMS:4", "Ext"]);
         for ams in &slots[..4] {
             assert_eq!(ams.feed, FeedKind::Ams);
         }
