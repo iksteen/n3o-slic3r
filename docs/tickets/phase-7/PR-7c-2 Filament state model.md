@@ -1,6 +1,51 @@
 # PR-7c-2 — `FilamentState` per-printer model + driver hookup
 
-Status: ❌ open.
+Status: ✅ done (with mid-flight scope redirect).
+
+**What shipped (2026-05-27):**
+- Manual sync button on the slot chip strip pulls live driver
+  state into the bound PrinterInstance. Command:
+  `printer_instance_sync_from_driver(instance_id, driver_id)`
+  reads `driver.status().extra`, projects per-slot updates via
+  `core/printer/sync::resolve_updates`, writes through
+  `mutate_instance` (one atomic transaction, one
+  `printer:instance_changed` emit).
+- Bambu: exact `filament_id` (tray_info_idx) match against the
+  bundled `FilamentFragmentSummary.filament_id`; miss falls back
+  to `generic-<material>`. AMS trays + the external spool
+  (vt_tray) both routed.
+- U1: keep current identity when its base_type matches reported
+  material; mismatch falls back to `generic-<material>`. Color
+  always updates.
+- Resolver lives at `src-tauri/src/core/printer/sync.rs` with
+  the full Bambu/U1 fixture matrix as unit tests.
+
+**Scope redirect from the original spec:**
+- No new `FilamentState` model — the existing `PrinterInstance.
+  extruders[].slots` carries the state directly. Per the
+  redirect "slots are a representation of physical reality, not
+  model related so they can just be overwritten during sync,"
+  the override/reported split collapsed into one editable slot
+  with last-edit-wins semantics.
+- No automatic `driver:filament_updated` event flow. Sync is
+  manual-button-driven (per "syncing should always be manual by
+  the button we just created"). The sync button surfaces error
+  state via SyncSlotsLabel's triangle when no driver is
+  connected.
+- No serde split between override and reported — slot state is
+  authoritative and persists to the printer instance TOML.
+
+**Acceptance criteria (original, archived):**
+
+- New module `core/filament/state.rs`:
+  - `pub struct FilamentState { per_printer: HashMap<String, PrinterFilamentLoadout> }`
+    — keyed by `printer_identity`.
+  - `pub struct PrinterFilamentLoadout { slots: Vec<SlotState>, last_updated: SystemTime }`
+  - `pub struct SlotState { slot_index: u8, reported: Option<ReportedFilament>, override: Option<UserOverride> }`
+  - `pub struct ReportedFilament { material_type: String, color: String, sub_brand: Option<String>, source: ReportedSource }`
+    — `ReportedSource` is `Bambu` or `U1`.
+  - `pub struct UserOverride { profile_id: String, set_at: SystemTime }`
+    — profile_id is a `FilamentProfile` identity from PR-7c-1.
 
 **Scope.** The cross-cutting state model that ties printer-
 reported live filament state to project-level material bindings

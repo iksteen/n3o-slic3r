@@ -81,8 +81,8 @@ status.
 | Deliverable | Status | Ticket |
 |-------------|--------|--------|
 | Filament profile library + cascade integration | ✅ done | [PR-7c-1](phase-7/PR-7c-1%20Filament%20library.md) |
-| `FilamentState` per-printer model + driver hookup | ❌ open | [PR-7c-2](phase-7/PR-7c-2%20Filament%20state%20model.md) |
-| Filament state panel UI + manual override + badge | ❌ open | [PR-7c-3](phase-7/PR-7c-3%20Filament%20state%20UI.md) |
+| `FilamentState` per-printer model + driver hookup | ✅ done (scope redirect) | [PR-7c-2](phase-7/PR-7c-2%20Filament%20state%20model.md) |
+| Filament state panel UI + manual override + badge | ✅ done (scope redirect) | [PR-7c-3](phase-7/PR-7c-3%20Filament%20state%20UI.md) |
 | Mismatch detector (family / temp ±10°C / color) + warn-vs-block | ❌ open | [PR-7c-4](phase-7/PR-7c-4%20Mismatch%20detector.md) |
 | Auto-binding heuristic (family match on first assignment) | ❌ open | [PR-7c-5](phase-7/PR-7c-5%20Auto-binding.md) |
 | Per-(plate, printer) binding persistence | 🟡 partial | [PR-7c-6](phase-7/PR-7c-6%20Per-plate-printer%20bindings.md) |

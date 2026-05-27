@@ -1,6 +1,49 @@
 # PR-7c-3 — Filament state panel UI + manual override + badge
 
-Status: ❌ open.
+Status: ✅ done (with mid-flight scope redirect).
+
+**What shipped:**
+- `SlotChipStrip` (3ef0d66): horizontal pill row of slots in
+  SlotBindingPanel. One chip per (extruder, slot) with swatch +
+  short label (T1..TN / 1..4 / AMS A:1 etc. / Ext) + material
+  tag. Click opens the picker.
+- `FilamentPickerModal` (d253900): three-pane brand → product →
+  color drill. Brand rail from bundled vendor fragments
+  grouped by `filament_vendor`; product list with material tag
+  + temps; shared color palette + Custom swatch that opens the
+  native color picker.
+- `MaterialChip` + materials section rework (3f98cdd): chip
+  pill per (M<n>) showing the full material → slot → swatch →
+  filament → ×use-count chain with a slot-picker popover.
+- `SyncSlotsLabel`: the "Slots" row label doubles as the sync
+  button — idle → syncing → (synced ✓ | error ⚠) → idle state
+  machine. Error state when the printer's not connected.
+
+**Scope redirect from the original spec:**
+- No separate `FilamentStatePanel` mounted in PrinterPanel;
+  the UI lives in `SlotBindingPanel` (per-plate, per-bound-
+  printer) under the per-toolhead Nozzles divider, matching the
+  rest of the plate's settings strip.
+- No override badge or corner-triangle indicator — the
+  redirect collapsed override-vs-reported into one
+  last-edit-wins slot. The chip's swatch shows whatever's
+  current; sync overwrites; manual edit overwrites; symmetric.
+- `useFilamentState` hook replaced by direct use of
+  `getPrinterInstance` + `printer:instance_changed` event
+  listener.
+- Picker scope expanded: a custom-color swatch + per-product
+  meta in the modal weren't in the original spec but landed
+  during the design review.
+
+**Acceptance criteria (original, archived):**
+
+- New module `src/filament/`:
+  - `invokes.ts` — Tauri invoke wrappers for the
+    `filament_state_*` commands from PR-7c-2.
+  - `useFilamentState.ts` — React hook subscribing to
+    `driver:filament_updated`; returns the latest
+    `PrinterFilamentLoadout` for a given `printer_identity`.
+  - `FilamentStatePanel.tsx` — the component.
 
 **Scope.** UI surface for the FilamentState model. Per-printer
 panel showing the live loadout, with manual-override controls
