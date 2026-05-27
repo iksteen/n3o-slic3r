@@ -18,7 +18,8 @@
 //! Run from the workspace root:
 //!   cargo run -p n3o-slic3r --release --example spike3
 
-use slic3r_ffi::{init, slice, Config, Model};
+use n3o_slic3r_lib::core::slice::ffi_serial::slice;
+use slic3r_ffi::{init, Config, Model};
 use std::path::PathBuf;
 
 fn workspace_root() -> PathBuf {

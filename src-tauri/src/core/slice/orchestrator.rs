@@ -32,8 +32,18 @@
 //! call — no global registration, no cross-slice contamination. The
 //! orchestrator's worker thread owns the closure for the lifetime of
 //! one `slice` call; concurrent jobs (whenever they land) would each
-//! carry their own. (libslic3r's own thread-safety for concurrent
-//! `Print::process()` calls is a separate, unverified question.)
+//! carry their own.
+//!
+//! ## FFI serialization
+//!
+//! We call `super::ffi_serial::slice` rather than `slic3r_ffi::slice`
+//! directly. The wrapper takes a process-wide mutex around the FFI
+//! call because libslic3r itself isn't thread-safe at the
+//! `Print::process()` level — concurrent slices on heavier workloads
+//! SIGSEGV (observed in CI May 2026). The serialization is invisible
+//! to JobRegistry sequencing: single-job-at-a-time today still
+//! serializes naturally; multi-job-parallelism later will just queue
+//! on the same mutex until libslic3r is verified concurrent-safe.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -53,7 +63,8 @@ use crate::core::printer::lookup_instance;
 use crate::core::profile_library::compose_cascade;
 use crate::core::project::SlicingContext;
 use std::collections::BTreeMap;
-use slic3r_ffi::{slice, Model};
+use slic3r_ffi::Model;
+use super::ffi_serial::slice;
 
 /// Errors `start_slice_job` returns synchronously (before the
 /// worker thread spawns). Post-spawn errors flow out via the

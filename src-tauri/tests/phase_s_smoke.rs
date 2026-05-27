@@ -25,10 +25,10 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};
-// Mutex remains for the per-test event-collecting sinks; the
-// process-global FFI_SLICE_LOCK is gone (slice progress callbacks
-// are per-call now; libslic3r concurrency verified by
-// crates/slic3r-ffi/tests/api.rs::two_concurrent_slices_*).
+// Mutex is for the per-test event-collecting sinks only; the FFI
+// slice itself serializes inside
+// `n3o_slic3r_lib::core::slice::ffi_serial::slice` (which the
+// orchestrator routes through), so no test-side lock needed.
 
 use n3o_slic3r_lib::core::cascade::commands::{ContextJson, OverrideFileSpec};
 use n3o_slic3r_lib::core::filament::FilamentProfile;

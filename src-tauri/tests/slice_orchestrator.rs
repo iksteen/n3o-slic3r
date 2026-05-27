@@ -26,13 +26,6 @@ fn ensure_ffi_init() {
     });
 }
 
-/// Serializes tests that drive a real FFI slice — `slic3r_ffi::
-/// set_slice_progress` is process-global (only one callback at a time),
-/// so parallel slice tests race on it and one ends up missing all its
-/// progress events. Hold this mutex for the duration of any test that
-/// calls `run_slice_job_blocking`.
-static FFI_SLICE_LOCK: Mutex<()> = Mutex::new(());
-
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -158,7 +151,6 @@ fn snappy_input(model_path: String, output_dir: String, plate_ids: Vec<u32>) -> 
 
 #[test]
 fn bambi_slice_emits_started_progress_finished_with_summary() {
-    let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     ensure_ffi_init();
     let registry = JobRegistry::new();
     let (sink, events) = collecting_sink();
@@ -244,7 +236,6 @@ fn snappy_slice_emits_started_progress_finished_with_summary() {
     // `GCodeProcessor::update_slice_warnings` segfaults on the
     // default length-1 filament map (caught the first time this
     // test was written).
-    let _ffi_guard = FFI_SLICE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     ensure_ffi_init();
     let registry = JobRegistry::new();
     let (sink, events) = collecting_sink();

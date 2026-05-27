@@ -524,10 +524,27 @@ extern "C" fn progress_trampoline(
 
 /// Slice `model` with `config`, writing G-code to `out_gcode_path`.
 ///
-/// `progress` fires synchronously for every libslic3r status tick
-/// during this call. Pass a no-op closure (`|_, _| {}`) for a silent
-/// slice. The callback is per-call: concurrent `slice` invocations
-/// each carry their own callback, no shared state.
+/// Raw FFI passthrough — calls libslic3r directly with no
+/// serialization. The progress callback is per-call (no global
+/// state), but **libslic3r itself isn't generally thread-safe**:
+/// concurrent `slice` invocations on heavier workloads have been
+/// observed to SIGSEGV (multi-material fourcolor benchy + cube-
+/// halves + snappy 4-color all racing through `Print::process()`
+/// at once, May 2026). Two concurrent slices on small geometry
+/// (20mm cube each) survived 5/5 runs in the dedicated test
+/// (`two_concurrent_slices_in_separate_threads_both_succeed`),
+/// which is what makes this fail in subtle, workload-dependent
+/// ways instead of immediately.
+///
+/// **Production callers should not invoke this from more than one
+/// thread at a time.** The recommended pattern is an application-
+/// side wrapper that serializes calls behind a process-wide mutex.
+/// In this workspace that wrapper is
+/// `n3o_slic3r_lib::core::slice::ffi_serial::slice` — every test
+/// and orchestrator path goes through it. This raw FFI binding is
+/// kept opinionated-free so the FFI's own tests can exercise
+/// concurrent invocation against the unwrapped surface to verify
+/// the per-call callback wiring.
 pub fn slice<P, F>(
     model: &Model,
     config: &Config,

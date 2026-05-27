@@ -16,7 +16,8 @@
 //!       <input.3mf> <output.gcode.3mf>
 
 use n3o_slic3r_lib::core::threemf::{fixture_input, write_sliced_3mf};
-use slic3r_ffi::{init, slice, Config, Model};
+use n3o_slic3r_lib::core::slice::ffi_serial::slice;
+use slic3r_ffi::{init, Config, Model};
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
