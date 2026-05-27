@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 """Import an Orca/BBS filament leaf JSON into our cascade-fragment TOML.
 
+NOTE — STOPGAP SHAPE: this script emits one TOML fragment per
+(filament × printer × maybe-nozzle) tuple — the same granularity
+Orca/BBS uses upstream. That mirroring is wrong long-term: "Bambu
+PLA Basic" is one logical filament with per-printer/nozzle
+calibration deltas, not 30 separate filaments. The right shape is
+one rule-based fragment per filament, with conditional rules in the
+cascade DSL selecting the printer/nozzle-specific scalars. Replace
+this script with a one-pass converter that does that merge once the
+cascade resolver lands (docs/profiles.md, Phase 1).
+
+The bundled set we ship today is small enough (A1 mini + U1) that
+the duplication isn't visible in the picker. Expanding to multiple
+Bambu printers (X1C/P1S/H2D) without the rule-based collapse would
+list "Bambu PLA Basic" 8× under Bambu Lab — don't do that.
+
 Walks the `inherits` chain across vendor directories (Orca's
 filament library frequently inherits from BBL's `fdm_filament_pla` →
 `fdm_filament_common` chain, even when the leaf lives under
@@ -83,6 +98,13 @@ def build_filament_index(root: Path) -> dict[str, list[Path]]:
 
 def resolve_parent(name: str, leaf_dir: Path, index: dict[str, list[Path]]) -> Path:
     candidates = index.get(name)
+    if not candidates:
+        # Preset names in `inherits` can contain `/` (e.g.
+        # "Bambu Support For PLA/PETG @base") but disk filenames
+        # can't, so vendors substitute `-`. Try the substituted
+        # form before declaring the parent missing.
+        if "/" in name:
+            candidates = index.get(name.replace("/", "-"))
     if not candidates:
         raise FileNotFoundError(
             f"inherits parent `{name}` not found in any vendor's "
