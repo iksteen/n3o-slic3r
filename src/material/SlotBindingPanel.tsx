@@ -19,27 +19,12 @@ import type { PlateId, PlateSnapshot } from "../viewport/types";
 import {
   flattenSlots,
   getPrinterInstance,
-  setSlotColor,
   setSlotFilament,
   type FlatSlotOption,
   type PrinterInstance,
   type SlotRef,
 } from "../printer/printerInstance";
-
-/** Mirror of Rust's `core::profile_library::FilamentFragmentSummary`.
- *  The slot picker writes `identity` into `SlotBinding.filament_identity`;
- *  `display_name` is the human-readable label parsed out of the
- *  vendor fragment's `filament_settings_id`. */
-interface FilamentSummary {
-  identity: string;
-  display_name: string;
-  base_type: string;
-}
-
-/** Placeholder fill when a slot has no color assigned yet. The picker
- *  still renders as an `<input type="color">` so the user can paint
- *  it in; we just don't want to lie about a real value. */
-const UNASSIGNED_SWATCH = "#9ca3af";
+import { SlotChipStrip, type FilamentSummary } from "./SlotChipStrip";
 
 export interface SlotBindingPanelProps {
   plateId: PlateId | null;
@@ -150,12 +135,12 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
     );
   };
 
-  const onPickColor = (slot: SlotRef, color: string): void => {
-    if (!instance) return;
-    void setSlotColor(instance.id, slot.extruder, slot.slot, color).catch(
-      (err) => console.error("[slot-binding] setSlotColor failed", err),
-    );
-  };
+  // Placeholder sync action — real driver round-trip lands in 7c-2.
+  // Resolves after ~400ms so the SyncSlotsLabel spinner visually
+  // fires; the underlying slot state doesn't change until the
+  // driver-event listener exists to update it.
+  const onSyncSlots = (): Promise<void> =>
+    new Promise((r) => setTimeout(r, 400));
 
   // Find the FlatSlotOption that matches the plate's current
   // material→slot pick (if any).
@@ -183,66 +168,15 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
 
   return (
     <div className="slot-binding-panel">
-      {/* Section 1: per-instance slot → filament pickers */}
-      <div className="slot-binding-section">
-        <div className="slot-binding-head">
-          <span className="slot-binding-title">Slots</span>
-          <span className="slot-binding-sub">
-            {instance.display_name}
-          </span>
-        </div>
-        {slots.map((s) => {
-          const entry = s.filament_identity
-            ? filamentByIdentity.get(s.filament_identity)
-            : null;
-          const swatch = s.color ?? UNASSIGNED_SWATCH;
-          return (
-            <div
-              key={`slot-${s.ref.extruder}-${s.ref.slot}`}
-              className="slot-binding-row"
-            >
-              <span className="slot-binding-label">{s.label}</span>
-              <input
-                type="color"
-                className="slot-binding-swatch"
-                value={swatch}
-                onChange={(e) => onPickColor(s.ref, e.target.value)}
-                title={
-                  s.color
-                    ? `${s.label} spool color — click to change`
-                    : `${s.label} spool color — click to assign`
-                }
-                aria-label={`${s.label} spool color`}
-              />
-              <select
-                className="slot-binding-filament"
-                value={s.filament_identity ?? ""}
-                onChange={(e) =>
-                  onPickFilament(s.ref, e.target.value || null)
-                }
-                title={`Filament loaded in ${s.label}`}
-              >
-                <option value="">— empty —</option>
-                {filaments.map((f) => (
-                  <option key={f.identity} value={f.identity}>
-                    {f.display_name}
-                  </option>
-                ))}
-                {s.filament_identity && !entry && (
-                  // Loaded instance may carry an identity that isn't
-                  // in the current bundled list (vendor profile
-                  // renamed, removed, etc.) — surface verbatim so
-                  // the user can still see what's bound and pick
-                  // a replacement.
-                  <option value={s.filament_identity}>
-                    {s.filament_identity} (unknown)
-                  </option>
-                )}
-              </select>
-            </div>
-          );
-        })}
-      </div>
+      {/* Section 1: per-instance slot loadout — horizontal pill
+          strip + sync-button-as-row-label. */}
+      <SlotChipStrip
+        instance={instance}
+        slots={slots}
+        filaments={filaments}
+        onPickFilament={onPickFilament}
+        onSync={onSyncSlots}
+      />
 
       {/* Section 2: per-plate material → slot pickers */}
       {materials.length > 0 && (

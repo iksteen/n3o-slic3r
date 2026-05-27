@@ -502,6 +502,174 @@
     opacity: 0.85;
   }
 
+  /* ─────────── Slot chip strip (7c-3 UI) ─────────── */
+  /* Horizontal pill row replacing the old vertical Slots form. Each
+   * chip is one (extruder, slot) tuple. The "Slots" row label is a
+   * sync button — see `.slots-sync-label`. Ported from
+   * docs/design/styles.css. */
+  .sp-config-slots {
+    padding-top: 6px;
+    border-top: 1px dashed var(--hairline);
+    margin-top: 2px;
+    gap: 5px;
+    flex-wrap: wrap;
+    row-gap: 5px;
+  }
+  .sp-config-slots .config-row-label { flex-shrink: 0; }
+  .sp-config-slots-empty {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-dim);
+  }
+
+  /* `.config-row-label` is the per-row noun ("Slots", "Materials",
+   * future "Nozzles" inline form). Shared typography across rows
+   * so the strip reads as a list. */
+  .config-row-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+
+  .slot-chip-wrap { position: relative; display: inline-flex; }
+  .slot-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 6px 0 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    color: var(--text);
+    font-size: 11px;
+    cursor: default;
+    flex-shrink: 0;
+  }
+  .slot-pill:hover {
+    background: var(--surface-2);
+    border-color: var(--border-strong, var(--border));
+  }
+  .slot-pill.empty .slot-pill-swatch {
+    background: transparent !important;
+    border: 1px dashed var(--text-dim);
+    box-shadow: none;
+  }
+  .slot-pill-swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35);
+    flex-shrink: 0;
+  }
+  .slot-pill-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-dim);
+    letter-spacing: 0.02em;
+  }
+  .slot-pill-material {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .slot-pill.empty .slot-pill-material {
+    color: var(--text-dim);
+    background: transparent;
+  }
+
+  /* Slots row label doubles as the sync-from-printer button. Same
+   * typography as `.config-row-label` but with a hover affordance
+   * + three animated states: idle (static refresh glyph), syncing
+   * (spinning), synced (check, auto-reverts after 900ms). */
+  .slots-sync-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 2px 6px 2px 5px;
+    margin: 0 -6px 0 -5px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 120ms ease, background 120ms ease,
+      border-color 120ms ease;
+  }
+  .slots-sync-label:hover {
+    color: var(--text);
+    background: var(--surface-2);
+    border-color: var(--hairline);
+  }
+  .slots-sync-label:active {
+    transform: translateY(0.5px);
+  }
+  .slots-sync-label:focus-visible {
+    outline: none;
+    border-color: var(--accent, currentColor);
+  }
+  .slots-sync-ico {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 11px;
+    height: 11px;
+    color: var(--text-dim);
+    opacity: 0.85;
+    transition: color 120ms ease, opacity 120ms ease;
+  }
+  .slots-sync-label:hover .slots-sync-ico {
+    color: var(--text);
+    opacity: 1;
+  }
+  .slots-sync-label.state-syncing,
+  .slots-sync-label.state-synced {
+    cursor: default;
+    color: var(--text-dim);
+    background: transparent;
+    border-color: transparent;
+  }
+  .slots-sync-label.state-syncing .slots-sync-ico,
+  .slots-sync-label.state-synced .slots-sync-ico {
+    opacity: 1;
+  }
+  .slots-sync-label.state-syncing .slots-sync-ico {
+    color: var(--text);
+    animation: slots-sync-spin 0.9s linear infinite;
+  }
+  .slots-sync-label.state-synced .slots-sync-ico {
+    color: var(--accent-text, var(--text));
+  }
+  @keyframes slots-sync-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+  .slots-sync-label:disabled { pointer-events: none; }
+
+  /* Popover that opens on chip click — minimal filament picker,
+   * placeholder until the richer FilamentPickerModal port lands.
+   * Reuses `.printer-picker-menu` + `.ptpm-*` so the visual matches
+   * the printer/bed pickers. */
+  .slot-chip-popover {
+    min-width: 200px;
+    margin-top: 4px;
+  }
+
   /* ─────────── Slot binding panel (PR-S-7 UI) ─────────── */
   /* Two sections in the config strip: Slots (per-instance,
    * slot → filament) and Materials (per-plate, model material →

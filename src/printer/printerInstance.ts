@@ -191,14 +191,16 @@ export function deriveExtruderLabel(
   return `T${extIdx + 1}`;
 }
 
-/** Display label for a slot, given its position within its extruder
- *  + the full slot list for that extruder + total extruder count.
- *  Single-slot extruders surface their identity through the extruder
- *  label on multi-extruder printers, and through a `Direct` / `AMS:1`
- *  feed-kind label on single-extruder printers. Multi-slot extruders
- *  are AMS-style: Ams-feed slots numbered 1-based; if >4 of them
- *  (multi-AMS-unit topology) prefix with a unit letter
- *  (`AMS A:1..AMS B:4`); the trailing Direct-feed slot is `Ext`. */
+/** Long-form label for a slot, used in tooltips + the picker
+ *  dropdown. Slot-scope only (doesn't include the extruder label) —
+ *  `flattenSlots` combines this with the extruder label via " — ".
+ *
+ *  Single-slot extruders: surface identity through the extruder
+ *  label on multi-extruder printers, through a `Direct` / `AMS:1`
+ *  feed-kind label on single-extruder printers.
+ *  Multi-slot extruders are AMS-style: Ams-feed slots numbered
+ *  1-based; if >4 (multi-AMS-unit topology) prefix with a unit
+ *  letter (`AMS A:1..AMS B:4`); trailing Direct-feed slot is `Ext`. */
 export function deriveSlotLabel(
   slotIdx: number,
   slots: readonly SlotBinding[],
@@ -230,6 +232,63 @@ export function deriveSlotLabel(
     } else if (i === slotIdx) {
       // Direct-feed slot in an AMS-style multi-slot extruder is
       // the trailing external spool.
+      return "Ext";
+    }
+  }
+  return "";
+}
+
+/** Compact label for a slot pill — fits inside a 22px chip alongside
+ *  a swatch + material tag. The row containing the chip already
+ *  carries the noun ("Slots"), so each chip just needs its own
+ *  position identifier.
+ *
+ *  Rules — slightly different from [`deriveSlotLabel`]'s long form:
+ *  * Multi-extruder toolchanger (e.g. U1, XL): chip shows the
+ *    extruder label (`T1`, `T2`, …). Each extruder has one Direct
+ *    slot, so the extruder label is the slot identity.
+ *  * Single-extruder + 1 slot (bambi without AMS): chip shows
+ *    `Ext` (Direct) or `1` (AMS).
+ *  * Single-extruder + multi-slot AMS:
+ *    - One AMS unit: AMS slots are bare digits `1`, `2`, `3`, `4`.
+ *      Trailing Direct slot is `Ext`.
+ *    - Multiple AMS units: AMS slots get letter-prefixed `A:1`,
+ *      `B:3` (no space, with colon). Trailing Direct slot is `Ext`.
+ */
+export function deriveSlotShortLabel(
+  extIdx: number,
+  totalExtruders: number,
+  slotIdx: number,
+  slots: readonly SlotBinding[],
+): string {
+  // Toolchanger: each extruder is one slot, the chip shows the
+  // extruder identity (`T1`, `T2`, …).
+  if (totalExtruders > 1) {
+    return `T${extIdx + 1}`;
+  }
+  // Single-extruder + single slot — degenerate AMS-less printer.
+  if (slots.length === 1) {
+    return slots[0].feed === "direct" ? "Ext" : "1";
+  }
+  // Single-extruder + multi-slot AMS layout.
+  const amsCount = slots.filter((s) => s.feed === "ams").length;
+  const multiUnit = amsCount > 4;
+  let amsIdxInUnit = 0;
+  let unitIdx = 0;
+  for (let i = 0; i < slots.length; i++) {
+    const s = slots[i];
+    if (s.feed === "ams") {
+      if (amsIdxInUnit === 4) {
+        amsIdxInUnit = 0;
+        unitIdx += 1;
+      }
+      amsIdxInUnit += 1;
+      if (i === slotIdx) {
+        return multiUnit
+          ? `${String.fromCharCode(65 + unitIdx)}:${amsIdxInUnit}`
+          : `${amsIdxInUnit}`;
+      }
+    } else if (i === slotIdx) {
       return "Ext";
     }
   }

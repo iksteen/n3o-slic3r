@@ -2,8 +2,10 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  deriveSlotShortLabel,
   flattenSlots,
   type PrinterInstance,
+  type SlotBinding,
 } from "../printerInstance";
 
 function bambi(): PrinterInstance {
@@ -119,6 +121,45 @@ describe("flattenSlots", () => {
       "AMS C:1", "AMS C:2", "AMS C:3", "AMS C:4",
       "Ext",
     ]);
+  });
+});
+
+describe("deriveSlotShortLabel", () => {
+  // Helpers to keep test data shorter.
+  const ams: SlotBinding = { feed: "ams", filament_identity: null, color: null };
+  const dir: SlotBinding = { feed: "direct", filament_identity: null, color: null };
+
+  it("toolchanger: chip shows the extruder identity T1/T2/T3/T4", () => {
+    // 4 extruders × 1 Direct slot each — the chip face is the
+    // extruder label, not the slot's own.
+    expect(deriveSlotShortLabel(0, 4, 0, [dir])).toBe("T1");
+    expect(deriveSlotShortLabel(1, 4, 0, [dir])).toBe("T2");
+    expect(deriveSlotShortLabel(2, 4, 0, [dir])).toBe("T3");
+    expect(deriveSlotShortLabel(3, 4, 0, [dir])).toBe("T4");
+  });
+
+  it("single-extruder, single Direct slot: chip shows Ext", () => {
+    expect(deriveSlotShortLabel(0, 1, 0, [dir])).toBe("Ext");
+  });
+
+  it("single AMS unit: chip shows bare digit per AMS slot + Ext for the trailing Direct", () => {
+    // A1 mini + AMS Lite shape: 4 Ams + 1 Direct.
+    const slots = [ams, ams, ams, ams, dir];
+    expect(deriveSlotShortLabel(0, 1, 0, slots)).toBe("1");
+    expect(deriveSlotShortLabel(0, 1, 1, slots)).toBe("2");
+    expect(deriveSlotShortLabel(0, 1, 2, slots)).toBe("3");
+    expect(deriveSlotShortLabel(0, 1, 3, slots)).toBe("4");
+    expect(deriveSlotShortLabel(0, 1, 4, slots)).toBe("Ext");
+  });
+
+  it("multi AMS units: chip shows letter:digit prefix per AMS slot + Ext for the trailing Direct", () => {
+    // 2 AMS units = 8 AMS slots + 1 Ext.
+    const slots = [ams, ams, ams, ams, ams, ams, ams, ams, dir];
+    expect(deriveSlotShortLabel(0, 1, 0, slots)).toBe("A:1");
+    expect(deriveSlotShortLabel(0, 1, 3, slots)).toBe("A:4");
+    expect(deriveSlotShortLabel(0, 1, 4, slots)).toBe("B:1");
+    expect(deriveSlotShortLabel(0, 1, 7, slots)).toBe("B:4");
+    expect(deriveSlotShortLabel(0, 1, 8, slots)).toBe("Ext");
   });
 });
 
