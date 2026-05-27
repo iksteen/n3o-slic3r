@@ -25,6 +25,7 @@ import {
   type PrinterInstance,
   type SlotRef,
 } from "../printer/printerInstance";
+import { MaterialChip } from "./MaterialChip";
 import { SlotChipStrip } from "./SlotChipStrip";
 import type { FilamentSummary } from "./filamentSummary";
 
@@ -120,6 +121,17 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
 
   const materials = useMemo(() => referencedMaterials(plate), [plate]);
 
+  /** Object count per material (×N badge on each chip). */
+  const useCountByMaterial = useMemo(() => {
+    const counts = new Map<number, number>();
+    if (!plate) return counts;
+    for (const obj of plate.objects) {
+      const m = obj.extruder_id ?? 1;
+      counts.set(m, (counts.get(m) ?? 0) + 1);
+    }
+    return counts;
+  }, [plate]);
+
   const filamentByIdentity = useMemo(() => {
     const map = new Map<string, FilamentSummary>();
     for (const f of filaments) map.set(f.identity, f);
@@ -193,62 +205,36 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
         onSync={onSyncSlots}
       />
 
-      {/* Section 2: per-plate material → slot pickers */}
+      {/* Section 2: per-plate material → slot pickers. NOZZLES-
+          style divider, then one MaterialChip per referenced
+          material. */}
       {materials.length > 0 && (
-        <div className="slot-binding-section">
-          <div className="slot-binding-head">
-            <span className="slot-binding-title">Materials</span>
-            <span className="slot-binding-sub">on this plate</span>
+        <>
+          <div
+            className="sp-config-divider"
+            role="separator"
+            aria-label="Materials"
+            title="Each material referenced on this plate routes to one slot on the bound printer."
+          >
+            <span className="sp-config-divider-label">Materials</span>
           </div>
-          {materials.map((mat) => {
-            const current = slotForMaterial(mat);
-            const currentValue = current
-              ? `${current.ref.extruder}:${current.ref.slot}`
-              : "";
-            return (
-              <div key={`mat-${mat}`} className="slot-binding-row">
-                <span className="slot-binding-index">M{mat}</span>
-                <span className="slot-binding-arrow" aria-hidden>
-                  →
-                </span>
-                <select
-                  className="slot-binding-slot"
-                  value={currentValue}
-                  onChange={(e) => {
-                    if (!e.target.value) {
-                      onClearMaterialSlot(mat);
-                      return;
-                    }
-                    const [eIdx, sIdx] = e.target.value
-                      .split(":")
-                      .map((v) => Number.parseInt(v, 10));
-                    onPickMaterialSlot(mat, { extruder: eIdx, slot: sIdx });
-                  }}
-                  title="Physical slot on the bound printer"
-                >
-                  <option value="">slot…</option>
-                  {slots.map((s) => {
-                    const filEntry = s.filament_identity
-                      ? filamentByIdentity.get(s.filament_identity)
-                      : null;
-                    const filamentLabel = s.filament_identity
-                      ? ` — ${filEntry?.display_name ?? s.filament_identity}`
-                      : "";
-                    return (
-                      <option
-                        key={`${s.ref.extruder}-${s.ref.slot}`}
-                        value={`${s.ref.extruder}:${s.ref.slot}`}
-                      >
-                        {s.label}
-                        {filamentLabel}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-            );
-          })}
-        </div>
+          <div className="sp-config-row sp-config-materials">
+            {materials.map((mat) => (
+              <MaterialChip
+                key={`mat-${mat}`}
+                material={mat}
+                current={slotForMaterial(mat)}
+                slots={slots}
+                totalExtruders={instance.extruders.length}
+                extruderSlots={instance.extruders.map((e) => e.slots)}
+                filamentByIdentity={filamentByIdentity}
+                useCount={useCountByMaterial.get(mat) ?? 0}
+                onPickSlot={(slot) => onPickMaterialSlot(mat, slot)}
+                onClear={() => onClearMaterialSlot(mat)}
+              />
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

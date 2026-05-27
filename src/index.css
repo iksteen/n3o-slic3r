@@ -669,8 +669,10 @@
 
   /* ─────────── Slot binding panel (PR-S-7 UI) ─────────── */
   /* Two sections in the config strip: Slots (per-instance,
-   * slot → filament) and Materials (per-plate, model material →
-   * slot). Same row vocabulary across both for visual coherence. */
+   * slot → filament, via the SlotChipStrip) and Materials (per-plate,
+   * model material → slot, via MaterialChips under a NOZZLES-style
+   * divider). Top border separates the panel from the per-toolhead
+   * nozzle rows above. */
   .slot-binding-panel {
     display: flex;
     flex-direction: column;
@@ -678,130 +680,98 @@
     padding-top: 8px;
     border-top: 1px dashed var(--hairline);
   }
-  .slot-binding-section {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding-top: 6px;
-    border-top: 1px dashed var(--hairline);
-  }
-  .slot-binding-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    padding: 0 2px 3px;
-  }
-  .slot-binding-title {
-    font-size: 9.5px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-  }
-  .slot-binding-sub {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--text-muted);
-  }
-  .slot-binding-row {
-    display: grid;
-    grid-template-columns: auto auto 1fr;
-    align-items: center;
-    gap: 6px;
-    padding: 3px 4px;
-    border-radius: 5px;
-    min-height: 28px;
-  }
-  .slot-binding-row:hover { background: var(--surface-2); }
 
-  /* Slot rows: [label] [swatch] [filament select].
-   * Material rows: [M#] [arrow] [slot select]. Same grid template
-   * so both align under each other. */
-  .slot-binding-label {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    font-weight: 500;
+  /* Materials sub-section — full-width column of MaterialChip rows.
+   * Each chip is a clickable pill showing the full
+   * material → slot → filament chain at a glance, with a popover
+   * for re-routing. Ported from docs/design/styles.css. */
+  .sp-config-materials {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
+  .material-chip {
+    display: grid;
+    grid-template-columns: auto auto auto 14px 1fr auto 12px;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    height: 30px;
+    padding: 0 8px 0 5px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
     color: var(--text);
-    padding: 0 6px;
-    min-width: 52px;
+    font-size: 11.5px;
+    cursor: default;
     text-align: left;
   }
-  .slot-binding-index {
+  .material-chip:hover {
+    background: var(--surface-2);
+    border-color: var(--border-strong);
+  }
+  .material-id {
     font-family: var(--font-mono);
-    font-size: 11px;
     font-weight: 600;
-    color: var(--text-muted);
-    padding: 0 6px;
-    min-width: 52px;
-    text-align: left;
+    font-size: 10.5px;
+    letter-spacing: 0.02em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: hsl(var(--accent-hue, 175) 30% 92%);
+    color: hsl(var(--accent-hue, 175) 40% 30%);
   }
-  .slot-binding-arrow {
+  .material-arrow {
     color: var(--text-dim);
     font-size: 11px;
-    width: 14px;
-    text-align: center;
+    font-family: var(--font-mono);
   }
-  /* Color picker for the loaded spool. `<input type="color">` is
-   * styled to match the previous static disc swatch — round, subtle
-   * inner highlight — but is clickable to pop the native picker. */
-  .slot-binding-swatch {
-    width: 16px;
-    height: 16px;
-    padding: 0;
+  .material-slot {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .fil-swatch {
+    width: 14px; height: 14px;
     border-radius: 50%;
     border: 1px solid rgba(0, 0, 0, 0.15);
     box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.4);
-    background: transparent;
-    cursor: pointer;
-    appearance: none;
-    -webkit-appearance: none;
     flex-shrink: 0;
   }
-  .slot-binding-swatch::-webkit-color-swatch-wrapper { padding: 0; }
-  .slot-binding-swatch::-webkit-color-swatch {
-    border: none;
-    border-radius: 50%;
-  }
-  .slot-binding-swatch::-moz-color-swatch {
-    border: none;
-    border-radius: 50%;
-  }
-  .slot-binding-swatch:hover {
-    border-color: rgba(0, 0, 0, 0.35);
-  }
-  .slot-binding-swatch:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
-  }
-  .slot-binding-filament,
-  .slot-binding-slot {
-    height: 24px;
-    padding: 0 22px 0 6px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    font-family: var(--font-mono);
-    font-size: 11px;
+  .fil-label {
+    font-size: 11.5px;
     color: var(--text);
-    appearance: none;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'><path fill='none' stroke='%239AA0AA' stroke-width='1.5' d='M3 5l3 3 3-3'/></svg>");
-    background-repeat: no-repeat;
-    background-position: right 4px center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     min-width: 0;
-    width: 100%;
   }
-  .slot-binding-filament:hover,
-  .slot-binding-slot:hover { border-color: var(--border-strong); }
-  .slot-binding-filament:focus-visible,
-  .slot-binding-slot:focus-visible {
-    border-color: var(--accent);
-    outline: none;
-  }
-  /* Greyed-out look for disabled feed-mix-conflict options the
-   * browser already styles, but the rest of the select chrome should
-   * stay readable when the wrapping row is hovered. */
-  .slot-binding-slot option:disabled {
+  .fil-count {
+    font-family: var(--font-mono);
+    font-size: 10px;
     color: var(--text-dim);
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 8px;
+  }
+
+  /* Filament swatch inside the material slot-picker popover. */
+  .ptpm-swatch {
+    display: inline-block;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.4);
+    margin-right: 8px;
+    vertical-align: -2px;
+  }
+  .ptpm-item.ptpm-row.active {
+    background: var(--surface-2);
+  }
+  .material-menu {
+    /* Same chrome as the printer picker menu (.printer-picker-menu);
+     * this only needs to make sure the popover doesn't get clipped by
+     * the chip's own border radius. */
+    z-index: 50;
   }
 
   /* ─────────── Autosave recovery dialog (PR-5-10 UI) ─────────── */
@@ -2833,6 +2803,12 @@
    chips need brighter alpha to read against dark surfaces. */
 [data-theme="dark"] .fp-color-chip { border-color: rgba(255, 255, 255, 0.10); }
 [data-theme="dark"] .fp-preview-swatch { border-color: rgba(255, 255, 255, 0.18); }
+[data-theme="dark"] .fil-swatch,
+[data-theme="dark"] .ptpm-swatch { border-color: rgba(255, 255, 255, 0.2); }
+[data-theme="dark"] .material-id {
+  background: hsl(var(--accent-hue, 175) 30% 22%);
+  color: hsl(var(--accent-hue, 175) 50% 80%);
+}
 
 /* Animations referenced by the modal — placed outside @layer
    because keyframes don't participate in cascade layers. */
