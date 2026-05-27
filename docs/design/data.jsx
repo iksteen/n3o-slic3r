@@ -347,18 +347,24 @@ function countOverridesAtLayer(layerId) {
 // maps to a slot. Resolution goes: object.materialId → slot → filament.
 
 // Compute the ordered slot id list for a given hardware config.
+//
+// Ordering rule: when an AMS is attached (Bambu Lab style), the AMS slots are
+// the primary loadout the user picks from and the direct ext slot is the
+// overflow / fallback — so we list AMS first, ext at the end. Without an AMS,
+// ext slot(s) lead.
 function computeSlotIds({ extruders = 1, amsUnits = 0 } = {}) {
-  const ids = [];
+  const extIds = [];
   if (extruders <= 1) {
-    ids.push("ext");
+    extIds.push("ext");
   } else {
-    for (let i = 1; i <= extruders; i++) ids.push(`ext:${i}`);
+    for (let i = 1; i <= extruders; i++) extIds.push(`ext:${i}`);
   }
+  const amsIds = [];
   for (let u = 0; u < amsUnits; u++) {
     const letter = String.fromCharCode(65 + u); // A, B, C, D
-    for (let s = 1; s <= 4; s++) ids.push(`AMS-${letter}:${s}`);
+    for (let s = 1; s <= 4; s++) amsIds.push(`AMS-${letter}:${s}`);
   }
-  return ids;
+  return amsIds.length > 0 ? [...amsIds, ...extIds] : [...extIds, ...amsIds];
 }
 
 // Compact label for a slot — what shows on the slot pill.

@@ -31,6 +31,10 @@ function ObjectsPanel({
   printerName,
   countObjectOverrides,
   plateSize,
+  // Read-only mode (Preview): hides the add button, remove buttons, and
+  // library popover. Objects can still be clicked to select for visual
+  // cross-reference with the sliced canvas.
+  readOnly = false,
 }) {
   const [showLibrary, setShowLibrary] = useStateOP(false);
   const draggingRef = useRefOP(null);
@@ -78,20 +82,35 @@ function ObjectsPanel({
   };
 
   return (
-    <aside className="objects-panel">
+    <aside className={`objects-panel ${readOnly ? "readonly" : ""}`}>
       <div className="panel-head">
         <h3>Plate · {printerName}</h3>
-        <button className="icon-btn" title="Add object" onClick={() => setShowLibrary(s => !s)}>
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-            <path d="M6 1.5v9M1.5 6h9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-          </svg>
-        </button>
+        {readOnly ? (
+          <span className="panel-head-readonly-tag" title="Preview mode — switch to Prepare to edit">
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+              <rect x="2" y="5" width="8" height="6" rx="1" stroke="currentColor" strokeWidth="1.2"/>
+              <path d="M4 5V3.5a2 2 0 0 1 4 0V5" stroke="currentColor" strokeWidth="1.2"/>
+            </svg>
+            Read-only
+          </span>
+        ) : (
+          <button className="icon-btn" title="Add object" onClick={() => setShowLibrary(s => !s)}>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <path d="M6 1.5v9M1.5 6h9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+            </svg>
+          </button>
+        )}
       </div>
 
       <div className="object-list">
-        {objects.length === 0 && (
+        {objects.length === 0 && !readOnly && (
           <div className="empty-state">
             Drag an object from the library<br/>or click <span className="kbd-inline">+</span> to add one.
+          </div>
+        )}
+        {objects.length === 0 && readOnly && (
+          <div className="empty-state">
+            No objects on this plate.
           </div>
         )}
         {objects.map(obj => {
@@ -123,22 +142,24 @@ function ObjectsPanel({
                     {overrideCount}
                   </span>
                 )}
-                <button
-                  className="icon-btn"
-                  title="Remove"
-                  onClick={(e) => removeObject(obj.id, e)}
-                >
-                  <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-                    <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-                  </svg>
-                </button>
+                {!readOnly && (
+                  <button
+                    className="icon-btn"
+                    title="Remove"
+                    onClick={(e) => removeObject(obj.id, e)}
+                  >
+                    <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                      <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+                    </svg>
+                  </button>
+                )}
               </div>
             </div>
           );
         })}
       </div>
 
-      {showLibrary && (
+      {showLibrary && !readOnly && (
         <div className="add-menu" style={{ maxHeight: 320, overflowY: "auto" }}>
           {OBJECT_LIBRARY.map(group => (
             <React.Fragment key={group.section}>

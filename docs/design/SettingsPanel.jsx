@@ -417,6 +417,63 @@ function MaterialChip({ materialId, slotId, filament, useCount, filaments, slotI
   );
 }
 
+// "Slots" row label is the sync button — clicking it pulls the printer's
+// current spool loadout into the slicer. Label stays "Slots"; only the icon
+// animates: spinning while syncing, briefly flashing a check on success.
+// Button is disabled (non-interactive) for the duration of the sync.
+function SyncSlotsLabel({ printer, onSync }) {
+  const [state, setState] = useSPS("idle"); // idle | syncing | synced
+  const timerRef = useSPR(null);
+  useSPE(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+
+  const handleClick = () => {
+    if (state !== "idle") return;
+    setState("syncing");
+    Promise.resolve(onSync && onSync())
+      .catch(() => {})
+      .finally(() => {
+        // hold the spinner for a beat even if onSync resolves instantly
+        timerRef.current = setTimeout(() => {
+          setState("synced");
+          timerRef.current = setTimeout(() => setState("idle"), 900);
+        }, 650);
+      });
+  };
+
+  const title = state === "syncing"
+    ? `Syncing filament loadout from ${printer || "printer"}…`
+    : state === "synced"
+    ? `Filament loadout synced from ${printer || "printer"}`
+    : `Physical loadout — what each slot is spooled with right now.\nClick to sync from ${printer || "the printer"}.`;
+
+  return (
+    <button
+      className={`config-row-label slots-sync-label state-${state}`}
+      onClick={handleClick}
+      disabled={state !== "idle"}
+      title={title}
+      aria-label="Sync filaments from printer"
+      aria-busy={state === "syncing"}
+    >
+      <span className="slots-sync-ico" aria-hidden>
+        {state === "synced" ? (
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+            <path d="M2.5 6.5l2.2 2.2L9.5 3.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        ) : (
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+            <path d="M10 5.5A4 4 0 0 0 3 3.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            <path d="M10 1.5V3.5H8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            <path d="M2 6.5A4 4 0 0 0 9 8.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            <path d="M2 10.5V8.5H4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        )}
+      </span>
+      <span className="slots-sync-text">Slots</span>
+    </button>
+  );
+}
+
 // Per-extruder nozzle chip. With one extruder this is the classic "Nozzle"
 // chip; with multiple toolheads (Snapmaker U1, Prusa XL) we render one chip
 // per toolhead and number them T1, T2, …
@@ -462,6 +519,7 @@ function SettingsPanel({
   slotMap,
   materialMap,
   onOpenSlotPicker,
+  onSyncFilaments,
   setMaterialSlot,
   printerPresets,
   onSwapPrinter, onSwapBedPlate, onSwapNozzle, onSwapFilament,
@@ -747,7 +805,7 @@ function SettingsPanel({
           </div>
         )}
         <div className="sp-config-row sp-config-slots">
-          <span className="config-row-label" title="Physical loadout — what each slot is spooled with right now.">Slots</span>
+          <SyncSlotsLabel printer={printer} onSync={onSyncFilaments}/>
           {slotIds.length === 0 ? (
             <span className="dim" style={{ fontSize: 11, fontFamily: "var(--font-mono)" }}>
               no slots — printer has no extruders configured
