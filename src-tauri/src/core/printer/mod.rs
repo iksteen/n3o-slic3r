@@ -15,6 +15,7 @@ pub mod instance_storage;
 pub mod profile;
 pub mod registry;
 pub mod snapmaker;
+pub mod sync;
 
 pub use instance::{
     BedRef, ConnectionInfo, ExtruderState, FeedKind, NozzleMaterial, NozzleSku,
@@ -199,4 +200,67 @@ pub fn filament_catalog_list() -> Vec<FilamentProfile> {
 #[tauri::command]
 pub fn filament_profile_list() -> Vec<FilamentFragmentSummary> {
     list_filament_fragments()
+}
+
+/// Tauri command: pull the named printer's current spool loadout
+/// from the live driver into the instance's SlotBindings (PR-7c-2).
+///
+/// Resolver lives in [`crate::core::printer::sync`]; this command
+/// is the I/O wrapper — grab a status snapshot, project it into
+/// per-slot updates, write through `mutate_instance` so it's one
+/// atomic transaction that emits a single
+/// `printer:instance_changed` event.
+///
+/// Errors: unknown driver id, unknown instance id, driver returns
+/// no extra (shouldn't happen — every kind populates one). A
+/// driver that's disconnected still returns a cached status; the
+/// resolver simply finds no `ams` / empty `toolhead_filaments` and
+/// produces no updates. The frontend treats "no driver registered"
+/// as the disconnected case and renders the error triangle on the
+/// sync button without invoking this command.
+#[tauri::command]
+#[tracing::instrument(skip(registry, window))]
+pub async fn printer_instance_sync_from_driver(
+    instance_id: String,
+    driver_id: crate::core::driver::traits::DriverId,
+    registry: tauri::State<
+        '_,
+        std::sync::Arc<crate::core::driver::registry::DriverRegistry>,
+    >,
+    window: tauri::Window,
+) -> Result<PrinterInstance, String> {
+    let handle = registry
+        .get(driver_id)
+        .ok_or_else(|| format!("unknown driver id {}", driver_id.0))?;
+    let status = { handle.lock().await.status() };
+    let library = list_filament_fragments();
+    let instance = lookup_instance(&instance_id)
+        .ok_or_else(|| format!("unknown instance id {}", instance_id))?;
+    let updates =
+        crate::core::printer::sync::resolve_updates(&instance, &status.extra, &library);
+    if updates.is_empty() {
+        // Caller still gets a fresh snapshot back; the chip strip
+        // re-renders from it idempotently.
+        return Ok(instance);
+    }
+    let updated = crate::core::printer::instance_registry::mutate_instance(
+        &instance_id,
+        |inst| {
+            for u in &updates {
+                if let Some(ext) = inst.extruders.get_mut(u.extruder_idx) {
+                    if let Some(slot) = ext.slots.get_mut(u.slot_idx) {
+                        slot.filament_identity = u.filament_identity.clone();
+                        slot.color = Some(u.color.clone());
+                    }
+                }
+            }
+            Ok(())
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    use tauri::Emitter;
+    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
+        tracing::warn!(error = %e, "printer:instance_changed emit failed");
+    }
+    Ok(updated)
 }

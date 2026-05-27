@@ -554,7 +554,10 @@ pub fn bundled_process_slugs_for_printer(printer_slug: &str) -> Vec<&'static str
 /// recognize ("Bambu PLA Basic @BBL A1M"); `base_type` drives the
 /// material tag in the picker. `vendor` groups products under a
 /// brand rail; `nozzle_temp` / `bed_temp` seed the per-product meta
-/// row in the filament picker.
+/// row in the filament picker. `filament_id` is the vendor SKU
+/// stamped into the fragment (e.g. "GFA00" for Bambu PLA Basic) —
+/// driver-side sync (PR-7c-2) matches AMS-reported `tray_info_idx`
+/// against this to resolve a tray to a bundled fragment.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FilamentFragmentSummary {
     pub identity: String,
@@ -563,6 +566,7 @@ pub struct FilamentFragmentSummary {
     pub vendor: String,
     pub nozzle_temp: u32,
     pub bed_temp: u32,
+    pub filament_id: Option<String>,
 }
 
 /// Enumerate every bundled vendor filament fragment. Parses the
@@ -612,6 +616,15 @@ pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
                 .iter()
                 .find_map(|k| set.get(*k).and_then(|s| s.parse::<u32>().ok()))
                 .unwrap_or(60);
+            // Vendor SKU — stamped by the converter for fragments
+            // that have one (Bambu / Generic carry it; bespoke
+            // user-imported profiles may not). Empty strings are
+            // treated as absent.
+            let filament_id = set
+                .get("filament_id")
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_owned());
             FilamentFragmentSummary {
                 identity: slug.clone(),
                 display_name,
@@ -619,6 +632,7 @@ pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
                 vendor,
                 nozzle_temp,
                 bed_temp,
+                filament_id,
             }
         })
         .collect()

@@ -122,6 +122,13 @@ pub struct BambuReport {
     // --- AMS (PR-7a-4) ---
     #[serde(default)]
     pub ams: Option<RawAmsState>,
+    /// Virtual tray = external spool (the rear PTFE-tube feed).
+    /// Same shape as an AMS tray; the printer holds the
+    /// user-entered material + color even though the slot itself
+    /// has no RFID. Driver sync (PR-7c-2) consumes it for the
+    /// trailing Direct slot.
+    #[serde(default)]
+    pub vt_tray: Option<RawAmsTray>,
 }
 
 /// Wire-shape mirror of the `print.ams` sub-object. Decoded
@@ -172,6 +179,16 @@ pub struct RawAmsTray {
     /// filaments. Empty for solid spools.
     #[serde(default)]
     pub cols: Vec<String>,
+    /// Bambu's vendor SKU for the spool (e.g. "GFA00" for PLA
+    /// Basic). Stamped by the RFID read on tray insertion. Empty
+    /// string for untagged spools. PR-7c-2's sync resolver uses
+    /// this to look up the bundled fragment exactly.
+    #[serde(
+        default,
+        rename = "tray_info_idx",
+        deserialize_with = "de::optional_string"
+    )]
+    pub tray_info_idx: Option<String>,
 }
 
 impl RawAmsTray {
@@ -310,7 +327,18 @@ fn tray_identity(
         .map(|c| c.trim().to_owned())
         .filter(|c| !c.is_empty() && !is_transparent_black(c))
         .collect();
-    if material.is_none() && color.is_none() && sub_brand.is_none() && multi_colors.is_empty() {
+    let filament_id = t
+        .tray_info_idx
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    if material.is_none()
+        && color.is_none()
+        && sub_brand.is_none()
+        && multi_colors.is_empty()
+        && filament_id.is_none()
+    {
         return None;
     }
     Some(AmsFilament {
@@ -318,6 +346,7 @@ fn tray_identity(
         color: color.unwrap_or("").to_owned(),
         sub_brand,
         multi_colors,
+        filament_id,
     })
 }
 
@@ -366,6 +395,14 @@ impl BambuReport {
             match &mut self.ams {
                 None => self.ams = Some(patch_ams),
                 Some(cached) => cached.merge_in(patch_ams),
+            }
+        }
+        // vt_tray: same placeholder-aware gate. BBL emits empty
+        // patches during print startup; without the gate they'd
+        // wipe the cached external-spool identity.
+        if let Some(patch_vt) = patch.vt_tray {
+            if patch_vt.has_spool_data() {
+                self.vt_tray = Some(patch_vt);
             }
         }
     }
@@ -472,6 +509,14 @@ pub fn merge_into(snapshot: &mut PrinterStatus, msg: BambuReport) {
         // already last-write-wins on the raw shape.
         if let Some(raw) = msg.ams {
             extra.ams = Some(raw.to_typed());
+        }
+        // External spool (PR-7c-2): lower the raw vt_tray into
+        // the typed shape. The wire form mirrors a normal AMS
+        // tray, so we reuse `tray_identity` and drop the result
+        // into `external_spool`. `None`-shaped patches (no spool
+        // info) are filtered upstream by the spool-data gate.
+        if let Some(raw_vt) = msg.vt_tray {
+            extra.external_spool = tray_identity(&raw_vt);
         }
     }
 }
@@ -821,6 +866,7 @@ mod tests {
             color: Some("00000000".into()),
             sub_brand: None,
             cols: Vec::new(),
+            tray_info_idx: None,
         }
     }
 
@@ -831,6 +877,7 @@ mod tests {
             color: Some(color.into()),
             sub_brand: None,
             cols: Vec::new(),
+            tray_info_idx: None,
         }
     }
 
@@ -839,13 +886,13 @@ mod tests {
         assert!(real_tray(0, "PLA", "FF8800FF").has_spool_data());
         assert!(!placeholder_tray(0).has_spool_data());
         // Color alone is enough.
-        assert!(RawAmsTray { id: None, material: None, color: Some("FF0000FF".into()), sub_brand: None, cols: vec![] }.has_spool_data());
+        assert!(RawAmsTray { id: None, material: None, color: Some("FF0000FF".into()), sub_brand: None, cols: vec![], tray_info_idx: None }.has_spool_data());
         // Multi-color cols alone is enough.
-        assert!(RawAmsTray { id: None, material: None, color: None, sub_brand: None, cols: vec!["FF0000FF".into()] }.has_spool_data());
+        assert!(RawAmsTray { id: None, material: None, color: None, sub_brand: None, cols: vec!["FF0000FF".into()], tray_info_idx: None }.has_spool_data());
         // sub_brand alone is enough.
-        assert!(RawAmsTray { id: None, material: None, color: None, sub_brand: Some("Bambu PLA Basic".into()), cols: vec![] }.has_spool_data());
+        assert!(RawAmsTray { id: None, material: None, color: None, sub_brand: Some("Bambu PLA Basic".into()), cols: vec![], tray_info_idx: None }.has_spool_data());
         // All blanks / sentinels → empty.
-        assert!(!RawAmsTray { id: Some(0), material: Some("".into()), color: Some("000000".into()), sub_brand: Some("  ".into()), cols: vec!["00000000".into()] }.has_spool_data());
+        assert!(!RawAmsTray { id: Some(0), material: Some("".into()), color: Some("000000".into()), sub_brand: Some("  ".into()), cols: vec!["00000000".into()], tray_info_idx: None }.has_spool_data());
     }
 
     #[test]

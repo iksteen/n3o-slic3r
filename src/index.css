@@ -635,14 +635,16 @@
     opacity: 1;
   }
   .slots-sync-label.state-syncing,
-  .slots-sync-label.state-synced {
+  .slots-sync-label.state-synced,
+  .slots-sync-label.state-error {
     cursor: default;
     color: var(--text-dim);
     background: transparent;
     border-color: transparent;
   }
   .slots-sync-label.state-syncing .slots-sync-ico,
-  .slots-sync-label.state-synced .slots-sync-ico {
+  .slots-sync-label.state-synced .slots-sync-ico,
+  .slots-sync-label.state-error .slots-sync-ico {
     opacity: 1;
   }
   .slots-sync-label.state-syncing .slots-sync-ico {
@@ -651,6 +653,12 @@
   }
   .slots-sync-label.state-synced .slots-sync-ico {
     color: var(--accent-text, var(--text));
+  }
+  .slots-sync-label.state-error .slots-sync-ico {
+    /* Warm warning red — works on both light and dark surfaces.
+     * The triangle's "!" makes the meaning unambiguous; the color
+     * just reinforces it without going full destructive-red. */
+    color: oklch(0.6 0.18 27);
   }
   @keyframes slots-sync-spin {
     from { transform: rotate(0deg); }

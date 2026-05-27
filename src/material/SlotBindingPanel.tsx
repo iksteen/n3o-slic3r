@@ -25,6 +25,7 @@ import {
   type PrinterInstance,
   type SlotRef,
 } from "../printer/printerInstance";
+import { getDriverId } from "../driver/credentialsCache";
 import { MaterialChip } from "./MaterialChip";
 import { SlotChipStrip } from "./SlotChipStrip";
 import type { FilamentSummary } from "./filamentSummary";
@@ -162,12 +163,23 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
       );
   };
 
-  // Placeholder sync action — real driver round-trip lands in 7c-2.
-  // Resolves after ~400ms so the SyncSlotsLabel spinner visually
-  // fires; the underlying slot state doesn't change until the
-  // driver-event listener exists to update it.
-  const onSyncSlots = (): Promise<void> =>
-    new Promise((r) => setTimeout(r, 400));
+  // Manual sync — pulls the printer's current spool loadout into
+  // the instance via the live driver (PR-7c-2). Resolves a
+  // DriverId from the credentials cache (same key the header
+  // device controls use). Rejects when no driver is registered or
+  // when the backend command errors; SyncSlotsLabel turns that
+  // into the error-triangle state.
+  const onSyncSlots = async (): Promise<void> => {
+    if (!instance) throw new Error("no instance");
+    const driverId = getDriverId(instance.vendor_profile_ref);
+    if (driverId == null) {
+      throw new Error("printer not connected");
+    }
+    await invoke("printer_instance_sync_from_driver", {
+      instanceId: instance.id,
+      driverId,
+    });
+  };
 
   // Find the FlatSlotOption that matches the plate's current
   // material→slot pick (if any).

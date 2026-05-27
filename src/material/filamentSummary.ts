@@ -10,4 +10,8 @@ export interface FilamentSummary {
   vendor: string;
   nozzle_temp: number;
   bed_temp: number;
+  /** Vendor SKU (e.g. "GFA00" for Bambu PLA Basic). Driver sync
+   *  (PR-7c-2) uses this to translate AMS reports back into our
+   *  bundled identity. `null` for fragments that don't have one. */
+  filament_id: string | null;
 }

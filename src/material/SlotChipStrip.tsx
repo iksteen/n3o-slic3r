@@ -123,7 +123,7 @@ export function SlotChipStrip({
 // ─────────────────────────────────────────────────────────────────
 // SyncSlotsLabel — "Slots" row label that doubles as a sync button.
 
-type SyncState = "idle" | "syncing" | "synced";
+type SyncState = "idle" | "syncing" | "synced" | "error";
 
 interface SyncSlotsLabelProps {
   printerName: string;
@@ -135,6 +135,7 @@ function SyncSlotsLabel({
   onSync,
 }: SyncSlotsLabelProps): React.JSX.Element {
   const [state, setState] = useState<SyncState>("idle");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(
@@ -147,18 +148,33 @@ function SyncSlotsLabel({
   const handleClick = (): void => {
     if (state !== "idle") return;
     setState("syncing");
+    setErrorMsg(null);
+    let failed: string | null = null;
     Promise.resolve(onSync())
-      .catch(() => {
-        // Swallow — the visual goes to "synced" briefly either way
-        // so the user gets confirmation the button fired. Real
-        // error surfacing is a 7c-2 concern.
+      .catch((err: unknown) => {
+        // Capture the reason for the tooltip; the visual still
+        // settles via the timer below so the user perceives the
+        // click. The error-triangle state replaces the checkmark
+        // when this captured a failure.
+        failed =
+          typeof err === "string"
+            ? err
+            : err instanceof Error
+              ? err.message
+              : "sync failed";
       })
       .finally(() => {
-        // Hold the spinner for a beat even if onSync resolves
-        // instantly, so the user perceives the action.
         timerRef.current = setTimeout(() => {
-          setState("synced");
-          timerRef.current = setTimeout(() => setState("idle"), 900);
+          if (failed != null) {
+            setErrorMsg(failed);
+            setState("error");
+          } else {
+            setState("synced");
+          }
+          timerRef.current = setTimeout(() => {
+            setState("idle");
+            setErrorMsg(null);
+          }, 900);
         }, 650);
       });
   };
@@ -168,7 +184,9 @@ function SyncSlotsLabel({
       ? `Syncing filament loadout from ${printerName}…`
       : state === "synced"
         ? `Filament loadout synced from ${printerName}`
-        : `Physical loadout — what each slot is spooled with right now.\nClick to sync from ${printerName}.`;
+        : state === "error"
+          ? `Sync failed: ${errorMsg ?? "unknown error"}`
+          : `Physical loadout — what each slot is spooled with right now.\nClick to sync from ${printerName}.`;
 
   return (
     <button
@@ -189,6 +207,23 @@ function SyncSlotsLabel({
               strokeLinecap="round"
               strokeLinejoin="round"
             />
+          </svg>
+        ) : state === "error" ? (
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+            <path
+              d="M6 1.6L11 10.4H1z"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinejoin="round"
+              fill="none"
+            />
+            <path
+              d="M6 5v2.4"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+            <circle cx="6" cy="9" r="0.6" fill="currentColor" />
           </svg>
         ) : (
           <svg width="10" height="10" viewBox="0 0 12 12" fill="none">

@@ -33,9 +33,9 @@ describe("chipsFromAms", () => {
         {
           id: 0,
           trays: [
-            { id: 0, identity: { tray_type: "PLA", color: "FF0000FF", sub_brand: null, multi_colors: [] } },
+            { id: 0, identity: { tray_type: "PLA", color: "FF0000FF", sub_brand: null, multi_colors: [], filament_id: null } },
             { id: 1, identity: null },
-            { id: 2, identity: { tray_type: "PETG", color: "00FF00FF", sub_brand: null, multi_colors: [] } },
+            { id: 2, identity: { tray_type: "PETG", color: "00FF00FF", sub_brand: null, multi_colors: [], filament_id: null } },
             { id: 3, identity: null },
           ],
         },
@@ -59,8 +59,8 @@ describe("chipsFromAms", () => {
         {
           id: 0,
           trays: [
-            { id: 0, identity: { tray_type: "PLA", color: "FF0000FF", sub_brand: null, multi_colors: [] } },
-            { id: 1, identity: { tray_type: "PLA", color: "00FF00FF", sub_brand: null, multi_colors: [] } },
+            { id: 0, identity: { tray_type: "PLA", color: "FF0000FF", sub_brand: null, multi_colors: [], filament_id: null } },
+            { id: 1, identity: { tray_type: "PLA", color: "00FF00FF", sub_brand: null, multi_colors: [], filament_id: null } },
           ],
         },
       ],
@@ -77,13 +77,13 @@ describe("chipsFromAms", () => {
         {
           id: 0,
           trays: [
-            { id: 0, identity: { tray_type: "PLA", color: "FF0000FF", sub_brand: null, multi_colors: [] } },
+            { id: 0, identity: { tray_type: "PLA", color: "FF0000FF", sub_brand: null, multi_colors: [], filament_id: null } },
           ],
         },
         {
           id: 1,
           trays: [
-            { id: 0, identity: { tray_type: "ABS", color: "0000FFFF", sub_brand: null, multi_colors: [] } },
+            { id: 0, identity: { tray_type: "ABS", color: "0000FFFF", sub_brand: null, multi_colors: [], filament_id: null } },
           ],
         },
       ],
@@ -101,7 +101,7 @@ describe("chipsFromAms", () => {
         {
           id: 0,
           trays: [
-            { id: 0, identity: { tray_type: "PLA", color: "FF0000FF", sub_brand: null, multi_colors: [] } },
+            { id: 0, identity: { tray_type: "PLA", color: "FF0000FF", sub_brand: null, multi_colors: [], filament_id: null } },
           ],
         },
       ],

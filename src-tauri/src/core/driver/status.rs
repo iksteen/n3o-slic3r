@@ -114,6 +114,13 @@ pub struct BambuExtra {
     /// Populated by PR-7a-4. `None` until that ticket lands or
     /// when the printer reports no AMS.
     pub ams: Option<AmsState>,
+    /// External spool (the rear PTFE-tube "virtual tray"). Bambu
+    /// reports it in MQTT as `print.vt_tray`, alongside the AMS
+    /// state. Carries the user-entered material + color even though
+    /// the slot itself has no RFID — sync (PR-7c-2) uses it to
+    /// keep the Ext slot in step with the printer's display.
+    /// `None` until populated.
+    pub external_spool: Option<AmsFilament>,
 }
 
 /// AMS state placeholder. Real shape lands in PR-7a-4 with all
@@ -144,6 +151,13 @@ pub struct AmsFilament {
     pub color: String,
     pub sub_brand: Option<String>,
     pub multi_colors: Vec<String>,
+    /// Bambu's vendor SKU for the spool (e.g. "GFA00" for PLA
+    /// Basic), reported as `tray_info_idx` in the MQTT push.
+    /// PR-7c-2's sync resolver matches this against bundled
+    /// `FilamentFragmentSummary.filament_id` for an exact identity
+    /// lookup. `None` for trays that don't report one (untagged
+    /// spool, or older firmware).
+    pub filament_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
