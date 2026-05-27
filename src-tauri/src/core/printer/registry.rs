@@ -125,7 +125,15 @@ mod tests {
 
     #[test]
     fn default_picks_first_printer() {
-        assert_eq!(default_printer_identity(), Some("bambu-lab-a1-mini"));
+        // Returns the first identity in catalog order (which the
+        // library iterates in sorted-on-disk vendor → slug order).
+        // The specific identity isn't the property under test —
+        // adding a new printer that sorts earlier shouldn't break
+        // this — only that *some* catalog entry comes back, and it
+        // matches whichever one bundled_catalog yields first.
+        let first = bundled_catalog().into_iter().next().map(|e| e.identity);
+        assert_eq!(default_printer_identity(), first.as_deref());
+        assert!(default_printer_identity().is_some());
     }
 
     #[test]

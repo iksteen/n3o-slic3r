@@ -95,6 +95,15 @@ DEFAULT_DROPPED_META = frozenset({
     "default_materials",
 })
 
+# Subset of DEFAULT_DROPPED_META that the conflict check ignores —
+# keys vendors declare differently per nozzle SKU as a matter of
+# course (compat lists, picker default-profile hints, material
+# suggestions) but that nothing downstream reads back. Excludes
+# `default_bed_type` because main() extracts that value for
+# model.toml seeding, so a cross-SKU disagreement there is real and
+# should fail the import.
+CONFLICT_NOISE_KEYS = DEFAULT_DROPPED_META - frozenset({"default_bed_type"})
+
 # Keys that don't belong in either dimension but DO need to ride along
 # with the nozzle profile (e.g. SKU identity tag).
 NOZZLE_IDENTITY_KEYS = frozenset({
@@ -197,7 +206,22 @@ def discover_variants(machine_dir: Path, model: str) -> list[tuple[str, Path]]:
             continue
         if not p.stem.startswith(model):
             continue
-        suffix = p.stem[len(model):].strip()
+        suffix = p.stem[len(model):]
+        # The model name must be followed by whitespace and then the
+        # SKU — otherwise this is a longer model whose name is a
+        # prefix of the requested one ("Bambu Lab A1" vs "Bambu Lab
+        # A1 mini"). Without this guard, an import for the shorter
+        # name silently pulls in the longer name's leaves and the
+        # conflict check trips on legitimately divergent machine
+        # configs.
+        if not suffix or not suffix[0].isspace():
+            continue
+        suffix = suffix.strip()
+        # SKU prefix is either a digit (BBL: "0.4 nozzle") or `(`
+        # (Snapmaker: "(0.4 nozzle)"). Anything else is more model-
+        # name text we don't own.
+        if not (suffix[:1].isdigit() or suffix.startswith("(")):
+            continue
         if "nozzle" not in suffix.lower():
             continue
         try:
@@ -264,7 +288,19 @@ def detect_machine_conflicts(
     by_key: dict[str, dict[str, Any]] = {}
     for sku, decls in leaves.items():
         for k, v in decls.items():
+            # Skip keys outside the machine dimension. Per-extruder
+            # + nozzle-identity keys belong to the nozzle output
+            # (handled separately). Picker-UX hints that vendors
+            # legitimately declare differently per nozzle SKU also
+            # skip — they'd otherwise block valid imports — but
+            # only the ones nothing downstream reads back.
+            # `default_bed_type` is in DEFAULT_DROPPED_META too but
+            # main() extracts it for model.toml's `default_bed`, so
+            # an inconsistency there matters; it stays subject to
+            # the conflict check.
             if k in EXTRUDER_KEYS or k in NOZZLE_IDENTITY_KEYS:
+                continue
+            if k in CONFLICT_NOISE_KEYS:
                 continue
             by_key.setdefault(k, {})[sku] = v
 

@@ -1,0 +1,15 @@
+identity = "bambu-lab-a1"
+model = "Bambu Lab A1"
+default_bed = "Textured PEI Plate"
+brand = "Bambu Lab"
+brand_short = "B"
+# A1 ships with the full AMS unit (4 spools per unit) and can chain
+# up to 4 units = 16 slots, per Bambu's published spec. Mini ships
+# with AMS Lite (1 unit, 4 slots, no chaining).
+ams_max = 4
+ams_type = "AMS"
+
+[[toolheads]]
+default_nozzle_diameter = 0.4
+hotend_type = "stainless_steel"
+max_temp = 300.0

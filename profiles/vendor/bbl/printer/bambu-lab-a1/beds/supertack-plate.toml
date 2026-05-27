@@ -1,0 +1,4 @@
+# Supertack Plate (Bambu's Cool Plate SuperTack — libslic3r enum btSuperTack)
+
+identity = "Supertack Plate"
+curr_bed_type = "Supertack Plate"

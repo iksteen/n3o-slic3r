@@ -1,0 +1,4 @@
+# High Temp Plate (Bambu's "Smooth PEI" — libslic3r enum btPEI)
+
+identity = "High Temp Plate"
+curr_bed_type = "High Temp Plate"
