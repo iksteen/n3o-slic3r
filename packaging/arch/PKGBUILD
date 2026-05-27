@@ -1,0 +1,151 @@
+# Maintainer: Ingmar Steen <iksteen@gmail.com>
+#
+# Builds n3o-slic3r from the worktree this PKGBUILD lives under.
+# Run `makepkg -s` from packaging/arch/.
+#
+# prepare() snapshots the worktree (tracked + modified + untracked-
+# non-ignored, plus the OrcaSlicer submodule's working files) into
+# ${srcdir}/${pkgname}-${pkgver}/, so each makepkg run starts from a
+# fresh copy without reusing the workspace's target/, node_modules/,
+# or build/ caches.
+#
+# build() then builds OrcaSlicer's dep tree (Boost/CGAL/OCCT/TBB/
+# OpenVDB/...) from source inside the snapshot. This takes ~17 min
+# and dominates the package run, but the alternative — symlinking a
+# host-side prebuilt deps tree — would couple package output to host
+# state. Fresh build every time. No caching.
+#
+# Source-root layout: the snapshot lives at
+# ${srcdir}/${pkgname}-${pkgver}/ rather than bare ${srcdir} —
+# avoids a collision with the project's top-level src/ directory
+# (vite source) which would otherwise shadow makepkg's $srcdir.
+#
+# Package payload:
+#   - /usr/bin/n3o-slic3r
+#   - /usr/lib/libslic3r_ffi.so{,.0}
+#   - /usr/lib/<bundle-id>/resources/profiles/vendor/   (Tauri's deb)
+#   - /usr/share/applications/n3o-slic3r.desktop
+#   - /usr/share/icons/hicolor/.../n3o-slic3r.png
+#   - /usr/share/licenses/n3o-slic3r/LICENSE
+
+pkgname=n3o-slic3r
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Modern desktop slicer UI driving libslic3r via orca-slicer-ffi"
+arch=('x86_64')
+url="https://github.com/iksteen/n3o-slic3r"
+license=('AGPL-3.0-or-later')
+depends=(
+    'webkit2gtk-4.1'
+    'gtk3'
+    'libsoup3'
+    'librsvg'
+)
+makedepends=(
+    'rust'
+    'nodejs'
+    'npm'
+    'cmake'
+    'ninja'
+    'git'
+    'pkgconf'
+)
+options=(
+    # libslic3r's build sets its own optimization flags; don't let
+    # makepkg's default `lto` slow it down further or risk breakage.
+    '!lto'
+)
+source=()
+sha256sums=()
+
+prepare() {
+    local repo_root
+    local srcroot
+    repo_root="$(realpath "${startdir}/../..")"
+    srcroot="${srcdir}/${pkgname}-${pkgver}"
+
+    rm -rf "${srcroot}"
+    mkdir -p "${srcroot}"
+
+    # Snapshot the worktree by tar-piping git's view of it into the
+    # package source root. `--recurse-submodules` enumerates the
+    # OrcaSlicer submodule's tracked files so we get its full source
+    # without the per-workspace build artifacts (deps/build/, build/)
+    # a naive disk copy would slurp in. `--cached` only — commit-
+    # first discipline: uncommitted top-level or submodule edits do
+    # not make it into the package.
+    git -C "${repo_root}" ls-files -z --cached --recurse-submodules |
+      while IFS= read -r -d '' path; do
+          [[ -e "${repo_root}/${path}" ]] && printf '%s\0' "${path}"
+      done |
+      tar -C "${repo_root}" --null -T - -cf - |
+      tar -xf - -C "${srcroot}"
+}
+
+build() {
+    cd "${srcdir}/${pkgname}-${pkgver}"
+
+    # OrcaSlicer's heavy dep tree (Boost / CGAL / OCCT / TBB /
+    # OpenVDB / ...). Built from source inside the snapshot — no
+    # reuse of any host-side prebuilt copy. ~17 min on a fast
+    # machine.
+    #   -d: download + build the deps under deps/build/
+    #   -r: skip OrcaSlicer's >=10G RAM precheck (we trust the
+    #       packager to provision enough)
+    (cd external/OrcaSlicer && ./build_linux.sh -d -r)
+
+    # Frontend toolchain + the locally-pinned @tauri-apps/cli.
+    npm ci --no-audit --no-fund
+
+    # `tauri build` runs `npm run build` (vite → dist/), then `cargo
+    # build --release` for the desktop binary (which in turn drives
+    # the cmake build of libslic3r_ffi.so via the slic3r-ffi crate's
+    # build.rs), then the .deb bundler. We extract that .deb in
+    # package() so the Tauri-generated .desktop + icons + bundled
+    # resource layout come along for free.
+    #
+    # `Release` instead of the build.rs default `RelWithDebInfo` —
+    # makepkg's strip pass would drop the debug info anyway, and the
+    # smaller .so saves a fakeroot-time roundtrip.
+    export NODE_ENV=production
+    export N3O_SLIC3R_FFI_CMAKE_CONFIG=Release
+    npx --no-install tauri build --bundles deb
+}
+
+package() {
+    cd "${srcdir}/${pkgname}-${pkgver}"
+
+    # Locate the produced .deb. Tauri 2 names it `<productName>_<ver>_<arch>.deb`.
+    # The Cargo workspace puts `target/` at the workspace root (not under
+    # `src-tauri/`), so Tauri's bundler ends up here.
+    local deb
+    deb=$(find target/release/bundle/deb \
+        -maxdepth 1 -type f -name '*.deb' -print -quit)
+    if [[ -z "${deb}" ]]; then
+        echo "error: tauri deb bundle missing under target/release/bundle/deb" >&2
+        return 1
+    fi
+
+    # Crack the .deb (ar archive of debian-binary + control.tar + data.tar).
+    local stage="${srcdir}/.deb-stage"
+    rm -rf "${stage}" && mkdir -p "${stage}"
+    bsdtar -xf "${deb}" -C "${stage}"
+    bsdtar -xf "${stage}"/data.tar.* -C "${pkgdir}"
+
+    # libslic3r_ffi.so.0 is the FFI shim that the binary dlopens at
+    # runtime. Tauri's bundler ignores it (not a declared resource),
+    # and the rpath baked into the binary points at the cmake build
+    # dir on the *build* host — which doesn't exist on the install
+    # host. Installing the .so to /usr/lib/ makes ld.so find it
+    # through the standard cache, regardless of the stale rpath.
+    install -d "${pkgdir}/usr/lib"
+    install -Dm755 \
+        "build/slic3r-ffi/Release/libslic3r_ffi.so" \
+        "${pkgdir}/usr/lib/libslic3r_ffi.so.0"
+    ln -sfn libslic3r_ffi.so.0 "${pkgdir}/usr/lib/libslic3r_ffi.so"
+
+    install -Dm644 LICENSE.txt \
+        "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
+
+# vim: set ts=4 sw=4 et ft=PKGBUILD:

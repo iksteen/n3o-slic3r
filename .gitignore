@@ -17,10 +17,11 @@ dist-ssr
 # cargo workspace target
 /target/
 
-# makepkg artifacts (PKGBUILD lives at repo root; $pkgdir + output
-# .pkg.tar.zst land here even though the actual build runs under /tmp).
-/pkg/
-/*.pkg.tar.zst
+# makepkg artifacts. PKGBUILD lives at packaging/arch/, so $srcdir,
+# $pkgdir, and the output .pkg.tar.zst all land there.
+/packaging/arch/src/
+/packaging/arch/pkg/
+/packaging/arch/*.pkg.tar.zst
 
 # local environment overrides loaded by `npm run tauri dev` via dotenv-cli
 .env

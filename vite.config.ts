@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { configDefaults } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
@@ -37,7 +38,16 @@ export default defineConfig(async () => ({
         "**/target/**",        // cargo output
         "**/docs/**",          // design docs
         "**/scripts/**",       // shell helpers
+        "**/packaging/**",     // makepkg artifacts (root-only fakeroot mode bits)
       ],
     },
+  },
+  test: {
+    // Extend vitest's default excludes with the packaging tree.
+    // makepkg leaves root-owned, mode-0111 directories under
+    // packaging/arch/ (fakeroot $pkgdir) which vitest's test-file
+    // scanner trips over (EACCES). The whole packaging/ subtree is
+    // build output, never test source — safe to skip wholesale.
+    exclude: [...configDefaults.exclude, "**/packaging/**"],
   },
 }));
