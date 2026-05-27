@@ -61,7 +61,7 @@ pub fn slicer_slice(model_path: String, out_path: String) -> SliceResult {
         let mut model = Model::new()?;
         let mut config = Config::new()?;
         model.load_with_config(PathBuf::from(&model_path), &mut config)?;
-        slice(&model, &config, PathBuf::from(&out_path))?;
+        slice(&model, &config, PathBuf::from(&out_path), |_, _| {})?;
         Ok(())
     };
     match do_it() {

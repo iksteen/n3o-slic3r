@@ -332,7 +332,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     overlay(&config, &mut model_config, &resolved)?;
 
     eprintln!("\nslicing...");
-    match slice(&model, &model_config, &out_path) {
+    match slice(&model, &model_config, &out_path, |_, _| {}) {
         Ok(()) => {
             let bytes = std::fs::metadata(&out_path)?.len();
             eprintln!("ok — wrote {} ({} bytes)", out_path.display(), bytes);

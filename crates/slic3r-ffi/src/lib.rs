@@ -14,7 +14,7 @@ use std::ffi::{c_char, CStr, CString};
 use std::fmt;
 use std::path::Path;
 use std::ptr;
-use std::sync::Once;
+use std::sync::{Mutex, Once};
 
 // ---- Errors ----
 
@@ -472,88 +472,97 @@ impl Drop for Model {
     }
 }
 
-// ---- Slicing ----
-
-/// Slice `model` with `config`, writing G-code to `out_gcode_path`.
-pub fn slice<P: AsRef<Path>>(model: &Model, config: &Config, out_gcode_path: P) -> Result<()> {
-    let p = CString::new(out_gcode_path.as_ref().to_string_lossy().as_bytes())
-        .map_err(|_| Error { kind: ErrorKind::InvalidArg, message: Some("path has NUL".into()) })?;
-    let mut err: *mut c_char = ptr::null_mut();
-    // SAFETY: handles are valid; p lives through the call; err is an out-param we own on non-null return.
-    let status = unsafe { sys::slic3r_slice(model.raw, config.raw, p.as_ptr(), &mut err) };
-    unsafe { check_with_err(status, err) }
-}
-
-// ---- Slice progress callback ----
+// ---- Slicing + per-slice progress callback ----
 //
-// The C side stores one global function pointer + opaque user_data;
-// we own the closure on the Rust side and register a trampoline
-// that re-enters into it. The closure lives behind a Mutex so it
-// can be replaced from any thread; the slice itself is currently
-// synchronous so the callback fires on the slice thread.
+// `slice` takes a closure that fires on every libslic3r status tick
+// for the duration of *this* call. The closure is captured per-slice:
+// no global registration, no cross-slice contamination, safe for
+// concurrent slice() invocations on distinct (model, config) inputs
+// (modulo libslic3r's own thread-safety, which is a separate
+// question).
+//
+// Rust↔C bridge: box the closure as a trait object, pin it on the
+// stack via a `&mut`, pass the `&mut` address through C as the
+// `user_data` opaque pointer. The trampoline reconstructs the
+// trait-object reference from user_data and calls it. The Box stays
+// owned by the calling stack frame and drops automatically when
+// `slice` returns — no leaks, no global state, no need to clear.
 
-use std::sync::Mutex;
-
-type ProgressClosure = Box<dyn FnMut(i32, &str) + Send>;
-
-static PROGRESS_CALLBACK: Mutex<Option<ProgressClosure>> = Mutex::new(None);
-
-/// Internal trampoline registered with the C side. Calls the
-/// currently-installed Rust closure with the (percent, stage) tuple.
+/// Trampoline registered with the C side per `slice` call. Treats
+/// `user_data` as a `*mut &mut dyn FnMut(i32, &str)` and invokes it.
 ///
-/// SAFETY: `stage` must point to a NUL-terminated C string valid
-/// for the duration of the call (the C side guarantees this).
-/// `_user_data` is ignored — the closure pointer lives in our
-/// `PROGRESS_CALLBACK` static, not in user_data.
-extern "C" fn progress_trampoline(percent: i32, stage: *const c_char, _user_data: *mut std::ffi::c_void) {
+/// SAFETY:
+/// - `user_data` must be the `&mut &mut dyn FnMut` address passed to
+///   `slic3r_slice` from `slice` below; nothing else writes to that
+///   pointer. The closure outlives the slice call.
+/// - `stage` is NUL-terminated and valid for the duration of the
+///   call (guaranteed by the C side).
+extern "C" fn progress_trampoline(
+    percent: i32,
+    stage: *const c_char,
+    user_data: *mut std::ffi::c_void,
+) {
+    if user_data.is_null() {
+        return;
+    }
     let stage_str = if stage.is_null() {
         ""
     } else {
-        // SAFETY: caller (C side) guarantees stage is NUL-terminated.
+        // SAFETY: stage is NUL-terminated for the call's duration.
         match unsafe { CStr::from_ptr(stage) }.to_str() {
             Ok(s) => s,
             Err(_) => "",
         }
     };
-    if let Ok(mut guard) = PROGRESS_CALLBACK.lock() {
-        if let Some(cb) = guard.as_mut() {
-            cb(percent, stage_str);
-        }
-    }
+    // SAFETY: user_data is the `&mut &mut dyn FnMut` slot owned by
+    // the calling `slice` invocation; the reference is exclusive
+    // for the lifetime of the slice call.
+    let cb: &mut &mut dyn FnMut(i32, &str) =
+        unsafe { &mut *(user_data as *mut &mut dyn FnMut(i32, &str)) };
+    cb(percent, stage_str);
 }
 
-/// Register a Rust closure as the slice progress callback. The
-/// closure is invoked synchronously from `slice` on the calling
-/// thread for every progress tick libslic3r emits.
+/// Slice `model` with `config`, writing G-code to `out_gcode_path`.
 ///
-/// Replaces any previously registered callback. Pass `None` (via
-/// [`clear_slice_progress`]) to unregister, after which libslic3r
-/// emits silent slices.
-pub fn set_slice_progress<F>(callback: F)
+/// `progress` fires synchronously for every libslic3r status tick
+/// during this call. Pass a no-op closure (`|_, _| {}`) for a silent
+/// slice. The callback is per-call: concurrent `slice` invocations
+/// each carry their own callback, no shared state.
+pub fn slice<P, F>(
+    model: &Model,
+    config: &Config,
+    out_gcode_path: P,
+    mut progress: F,
+) -> Result<()>
 where
-    F: FnMut(i32, &str) + Send + 'static,
+    P: AsRef<Path>,
+    F: FnMut(i32, &str),
 {
-    let mut guard = PROGRESS_CALLBACK.lock().expect("progress callback mutex");
-    *guard = Some(Box::new(callback));
-    drop(guard);
-    // SAFETY: the trampoline + null user_data are static; the
-    // C side stores them globally and serializes registration
-    // against the slice thread via its own mutex.
-    unsafe {
-        sys::slic3r_set_slice_progress_cb(Some(progress_trampoline), ptr::null_mut());
-    }
-}
-
-/// Clear the slice progress callback. Subsequent slices run silent
-/// (no callback invocations and no stderr default).
-pub fn clear_slice_progress() {
-    // SAFETY: passing nullptr through the C API is the documented
-    // "unregister" semantics.
-    unsafe {
-        sys::slic3r_set_slice_progress_cb(None, ptr::null_mut());
-    }
-    let mut guard = PROGRESS_CALLBACK.lock().expect("progress callback mutex");
-    *guard = None;
+    let p = CString::new(out_gcode_path.as_ref().to_string_lossy().as_bytes())
+        .map_err(|_| Error { kind: ErrorKind::InvalidArg, message: Some("path has NUL".into()) })?;
+    let mut err: *mut c_char = ptr::null_mut();
+    // Pin the closure as a trait object on the stack and hand its
+    // address to C as opaque user_data. The double-reference
+    // (`&mut &mut dyn FnMut`) keeps the trait-object fat pointer
+    // addressable through a thin `*mut c_void`.
+    let mut cb_ref: &mut dyn FnMut(i32, &str) = &mut progress;
+    let user_data = &mut cb_ref as *mut &mut dyn FnMut(i32, &str) as *mut std::ffi::c_void;
+    // SAFETY:
+    // - handles are valid; p + user_data live through the call.
+    // - err is an out-param we own on non-null return.
+    // - the trampoline only dereferences user_data during the call;
+    //   `cb_ref` outlives it (stack frame lives until slice returns).
+    let status = unsafe {
+        sys::slic3r_slice(
+            model.raw,
+            config.raw,
+            p.as_ptr(),
+            Some(progress_trampoline),
+            user_data,
+            &mut err,
+        )
+    };
+    unsafe { check_with_err(status, err) }
 }
 
 // ---- Log sink ----

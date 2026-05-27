@@ -37,7 +37,9 @@ fn main() {
     //   config.set("layer_height", "0.2")?;
 
     println!("slicing {} -> {}", model_path.display(), out_path.display());
-    match slice(&model, &config, &out_path) {
+    match slice(&model, &config, &out_path, |percent, stage| {
+        println!("  [{percent:>3}%] {stage}");
+    }) {
         Ok(()) => println!("ok"),
         Err(e) => {
             eprintln!("slice failed: {e}");

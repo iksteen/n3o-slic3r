@@ -9,8 +9,8 @@
 //! and cmake builds libslic3r and the shim. Subsequent runs are fast.
 
 use slic3r_ffi::{
-    clear_log_sink, clear_slice_progress, init, option_def, option_defs, set_log_sink,
-    set_slice_progress, slice, version, Config, ErrorKind, LogLevel, Model, OptScope, OptType,
+    clear_log_sink, init, option_def, option_defs, set_log_sink, slice, version, Config,
+    ErrorKind, LogLevel, Model, OptType,
 };
 use std::path::PathBuf;
 use std::sync::Once;
@@ -25,15 +25,12 @@ fn ensure_init() {
     });
 }
 
-// Serialize slice-progress tests against each other. The FFI's
-// progress callback is process-global, so concurrent registration
-// from parallel test threads strands one test's callback before
-// its slice fires. `cargo test` defaults to parallel; without this
-// mutex tests pass under `--test-threads=1` but fail in the
-// default run.
-static SLICE_PROGRESS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-// Same rationale for the log sink — process-global registration.
+// The log sink IS still process-global (set_log_sink writes a global
+// fn pointer + user_data on the C side; the boost log sink stays
+// installed process-lifetime). Serialize log-sink tests against each
+// other so parallel registration doesn't cross-contaminate. Slice
+// progress no longer has this problem — the callback is passed into
+// slice() per call.
 static LOG_SINK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn test_stl() -> PathBuf {
@@ -257,20 +254,14 @@ fn load_with_config_stl_keeps_defaults() {
 
 #[test]
 fn slice_progress_callback_fires_with_monotonic_percent() {
-    use std::sync::{Arc, Mutex};
+    use std::cell::RefCell;
 
     ensure_init();
-    let _serial = SLICE_PROGRESS_LOCK.lock().expect("slice progress lock");
 
-    // Collect every (percent, stage) tick the slice emits.
-    let ticks: Arc<Mutex<Vec<(i32, String)>>> = Arc::new(Mutex::new(Vec::new()));
-    let ticks_for_cb = Arc::clone(&ticks);
-    set_slice_progress(move |percent, stage| {
-        ticks_for_cb
-            .lock()
-            .unwrap()
-            .push((percent, stage.to_owned()));
-    });
+    // Collect every (percent, stage) tick the slice emits. RefCell
+    // is fine here — the callback is captured per-slice and only
+    // fires from the calling thread (slice() is synchronous).
+    let ticks: RefCell<Vec<(i32, String)>> = RefCell::new(Vec::new());
 
     let mut model = Model::new().expect("Model::new");
     let mut config = Config::new().expect("Config::new");
@@ -290,13 +281,12 @@ fn slice_progress_callback_fires_with_monotonic_percent() {
         "n3o-slice-progress-test-{}.gcode",
         std::process::id(),
     ));
-    let slice_result = slice(&model, &config, &out_path);
-    // Detach the callback before asserting so a panicking assertion
-    // doesn't strand state for sibling tests.
-    clear_slice_progress();
-    slice_result.expect("slice OK");
+    slice(&model, &config, &out_path, |percent, stage| {
+        ticks.borrow_mut().push((percent, stage.to_owned()));
+    })
+    .expect("slice OK");
 
-    let ticks = ticks.lock().unwrap();
+    let ticks = ticks.borrow();
     assert!(
         ticks.len() > 5,
         "expected many progress ticks from libslic3r (got {})",
@@ -359,7 +349,7 @@ fn log_sink_receives_records_emitted_during_slice() {
         .expect("set use_relative_e_distances");
 
     let out_path = std::env::temp_dir().join("n3o-log-sink-test.gcode");
-    let slice_result = slice(&model, &config, &out_path);
+    let slice_result = slice(&model, &config, &out_path, |_, _| {});
     clear_log_sink();
     slice_result.expect("slice OK");
 
@@ -399,7 +389,7 @@ fn log_sink_can_be_unregistered() {
         .set("use_relative_e_distances", "0")
         .expect("set use_relative_e_distances");
     let out1 = std::env::temp_dir().join("n3o-log-sink-on.gcode");
-    slice(&model, &config, &out1).expect("slice 1");
+    slice(&model, &config, &out1, |_, _| {}).expect("slice 1");
     let ticks_after_first = *counter.lock().unwrap();
     assert!(
         ticks_after_first > 0,
@@ -408,7 +398,7 @@ fn log_sink_can_be_unregistered() {
 
     clear_log_sink();
     let out2 = std::env::temp_dir().join("n3o-log-sink-off.gcode");
-    slice(&model, &config, &out2).expect("slice 2");
+    slice(&model, &config, &out2, |_, _| {}).expect("slice 2");
     let ticks_after_second = *counter.lock().unwrap();
     assert_eq!(
         ticks_after_second, ticks_after_first,
@@ -421,18 +411,10 @@ fn log_sink_can_be_unregistered() {
 }
 
 #[test]
-fn slice_progress_callback_can_be_unregistered() {
-    use std::sync::{Arc, Mutex};
+fn slice_progress_callbacks_are_per_call_no_cross_contamination() {
+    use std::cell::Cell;
 
     ensure_init();
-    let _serial = SLICE_PROGRESS_LOCK.lock().expect("slice progress lock");
-
-    // First slice: callback active.
-    let ticks: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
-    let counter_for_cb = Arc::clone(&ticks);
-    set_slice_progress(move |_percent, _stage| {
-        *counter_for_cb.lock().unwrap() += 1;
-    });
 
     let mut model = Model::new().expect("Model::new");
     let mut config = Config::new().expect("Config::new");
@@ -442,23 +424,40 @@ fn slice_progress_callback_can_be_unregistered() {
     config
         .set("use_relative_e_distances", "0")
         .expect("set use_relative_e_distances");
-    let out1 = std::env::temp_dir().join("n3o-slice-progress-on.gcode");
-    slice(&model, &config, &out1).expect("slice 1");
-    let ticks_after_first = *ticks.lock().unwrap();
-    assert!(
-        ticks_after_first > 0,
-        "expected callback to fire while registered",
-    );
 
-    // Clear + second slice: counter does NOT advance.
-    clear_slice_progress();
-    let out2 = std::env::temp_dir().join("n3o-slice-progress-off.gcode");
-    slice(&model, &config, &out2).expect("slice 2");
-    let ticks_after_second = *ticks.lock().unwrap();
+    // Two consecutive slices, each with its own counter. After both
+    // run, each counter should reflect ONLY its own slice's ticks —
+    // not the other's. (The legacy "clear_slice_progress() makes the
+    // next slice silent" semantics no longer apply: there's no
+    // global registration to clear. Passing a closure means it fires
+    // for this slice; the next slice's separate closure fires only
+    // for its own ticks.)
+    let counter_a: Cell<usize> = Cell::new(0);
+    let out1 = std::env::temp_dir().join("n3o-slice-progress-a.gcode");
+    slice(&model, &config, &out1, |_, _| {
+        counter_a.set(counter_a.get() + 1);
+    })
+    .expect("slice A");
+    let ticks_a = counter_a.get();
+    assert!(ticks_a > 0, "slice A's closure should fire while running");
+
+    let counter_b: Cell<usize> = Cell::new(0);
+    let out2 = std::env::temp_dir().join("n3o-slice-progress-b.gcode");
+    slice(&model, &config, &out2, |_, _| {
+        counter_b.set(counter_b.get() + 1);
+    })
+    .expect("slice B");
+    let ticks_b = counter_b.get();
+    assert!(ticks_b > 0, "slice B's closure should fire while running");
+
+    // The critical assertion: slice A's counter was NOT advanced by
+    // slice B's ticks. Pre-rework this would have been the case
+    // because the trampoline read a Rust-side global that
+    // set_slice_progress mutated.
     assert_eq!(
-        ticks_after_second, ticks_after_first,
-        "callback fired after clear_slice_progress (delta = {})",
-        ticks_after_second - ticks_after_first,
+        counter_a.get(),
+        ticks_a,
+        "slice A's counter advanced during slice B — callbacks leaked across slices",
     );
 
     let _ = std::fs::remove_file(&out1);

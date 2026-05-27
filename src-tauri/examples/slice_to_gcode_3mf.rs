@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .suffix(".gcode")
         .tempfile()?;
     eprintln!("slicing → {}", tmp_gcode.path().display());
-    slice(&model, &config, tmp_gcode.path())?;
+    slice(&model, &config, tmp_gcode.path(), |_, _| {})?;
 
     let gcode_bytes = std::fs::read(tmp_gcode.path())?;
     eprintln!(

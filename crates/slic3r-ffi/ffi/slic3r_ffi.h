@@ -217,6 +217,23 @@ slic3r_status slic3r_model_load_with_config(slic3r_model_t* model,
 
 /* ---- Slicing ---- */
 
+/* Slice progress callback.
+ *
+ * Signature: invoked from inside slic3r_slice on libslic3r's slicing
+ * thread (which is the caller's thread today — slice() is synchronous).
+ * `percent` ranges 0..100; `stage` is libslic3r's human-readable
+ * status text ("Generating perimeters", "Generating support material",
+ * etc.) and lives only for the duration of the call (do NOT retain
+ * the pointer beyond the callback's return). `user_data` is whatever
+ * was passed alongside the callback in slic3r_slice; the FFI doesn't
+ * interpret it.
+ *
+ * The callback is bound per slic3r_slice call (passed in as
+ * progress_cb + progress_user_data parameters), so concurrent slice
+ * runs each carry their own callback with no shared state. Pass
+ * cb=NULL for a silent slice. */
+typedef void (*slic3r_progress_fn_t)(int percent, const char* stage, void* user_data);
+
 /* Slice model with config and write G-code to out_gcode_path.
  *
  * Pipeline:
@@ -226,6 +243,14 @@ slic3r_status slic3r_model_load_with_config(slic3r_model_t* model,
  * For single-object STLs this slices at the origin. For 3MFs, the objects'
  * embedded transforms are honored.
  *
+ * progress_cb (may be NULL) fires synchronously on every libslic3r
+ * status tick. progress_user_data is opaque and passed through to the
+ * callback verbatim. The callback is captured per-call — no global
+ * registration state — so concurrent slice runs on distinct
+ * (model, config) inputs each carry their own callback. (Whether
+ * libslic3r itself is safe to run concurrently is a separate
+ * question; the callback path is.)
+ *
  * out_err may be NULL. If non-NULL and the call fails, *out_err receives a
  * heap-allocated message; caller frees with slic3r_string_free.
  *
@@ -234,29 +259,9 @@ slic3r_status slic3r_model_load_with_config(slic3r_model_t* model,
 slic3r_status slic3r_slice(slic3r_model_t* model,
                             slic3r_config_t* config,
                             const char* out_gcode_path,
+                            slic3r_progress_fn_t progress_cb,
+                            void* progress_user_data,
                             char** out_err);
-
-/* Slice progress callback.
- *
- * Signature: invoked from inside slic3r_slice on libslic3r's slicing
- * thread (which is the caller's thread today — slice() is synchronous).
- * `percent` ranges 0..100; `stage` is libslic3r's human-readable
- * status text ("Generating perimeters", "Generating support material",
- * etc.) and lives only for the duration of the call (do NOT retain
- * the pointer beyond the callback's return). `user_data` is whatever
- * was passed at registration; the FFI doesn't interpret it.
- *
- * Threading: the callback fires synchronously while slic3r_slice is
- * running. If the consumer is on a worker thread, the callback runs
- * on that same worker thread. The Rust binding sends the events
- * across a channel to its main thread; consumers calling this C API
- * directly must handle their own synchronization.
- *
- * Registration is process-global — the most recent set_slice_progress_cb
- * applies to every subsequent slic3r_slice call. Pass cb=NULL to
- * unregister. */
-typedef void (*slic3r_progress_fn_t)(int percent, const char* stage, void* user_data);
-void slic3r_set_slice_progress_cb(slic3r_progress_fn_t cb, void* user_data);
 
 /* Log sink callback.
  *

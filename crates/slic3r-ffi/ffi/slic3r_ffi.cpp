@@ -50,18 +50,14 @@ void set_err(char** out_err, const std::string& msg) {
 
 // ---- Slice progress callback ----------------------------------------
 //
-// `slic3r_set_slice_progress_cb` registers a C function pointer +
-// opaque user_data globally. `slic3r_slice` installs a libslic3r
-// `set_status_callback` lambda that trampolines into it on every
-// progress tick. Mutex-guarded so the callback can be (re)set from
-// any thread; the progress callback itself fires on the slice
-// thread, which today is the caller's thread.
-//
-// Cleared (NULL cb) → libslic3r reverts to its default stderr
-// status output for that slice run.
-std::mutex g_progress_mutex;
-slic3r_progress_fn_t g_progress_cb = nullptr;
-void* g_progress_user_data = nullptr;
+// The progress callback is passed *into* `slic3r_slice` as a
+// (progress_cb, progress_user_data) pair. The slice captures them
+// directly into the libslic3r `set_status_callback` lambda for that
+// Print instance — no global state, no cross-slice contamination.
+// Earlier shape stored a process-global callback registered out-of-
+// band; that race-routed Print A's progress events to whoever last
+// registered, which made concurrent test runs flaky and ruled out
+// any future concurrent slicing.
 
 // ---- Log sink ------------------------------------------------------
 //
@@ -521,6 +517,8 @@ slic3r_status slic3r_model_load_with_config(slic3r_model_t* m,
 slic3r_status slic3r_slice(slic3r_model_t* model,
                             slic3r_config_t* config,
                             const char* out_path,
+                            slic3r_progress_fn_t progress_cb,
+                            void* progress_user_data,
                             char** out_err) {
     if (!model || !config || !out_path) return SLIC3R_ERR_INVALID_ARG;
     if (out_err) *out_err = nullptr;
@@ -675,26 +673,19 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         Print print;
         print.apply(model->model, cfg);
 
-        // Install the global progress trampoline if one was
-        // registered via slic3r_set_slice_progress_cb. The lambda
-        // captures by value so the slice can keep emitting even if
-        // a concurrent registration changes the global pointer
-        // mid-slice (rare; behavior: the in-flight slice finishes
-        // with its original callback).
-        {
-            std::lock_guard<std::mutex> lk(g_progress_mutex);
-            if (g_progress_cb) {
-                auto cb = g_progress_cb;
-                auto user = g_progress_user_data;
-                print.set_status_callback(
-                    [cb, user](const PrintBase::SlicingStatus& s) {
-                        cb(s.percent, s.text.c_str(), user);
-                    });
-            } else {
-                // Suppress libslic3r's stderr default — callers who
-                // didn't register a callback get a quiet slice.
-                print.set_status_silent();
-            }
+        // Install the caller-supplied progress callback on this
+        // Print instance. The lambda captures progress_cb +
+        // progress_user_data by value so the callback travels with
+        // the slice — concurrent slices on distinct Prints each
+        // carry their own. NULL cb → silent slice (suppresses
+        // libslic3r's stderr default).
+        if (progress_cb) {
+            print.set_status_callback(
+                [progress_cb, progress_user_data](const PrintBase::SlicingStatus& s) {
+                    progress_cb(s.percent, s.text.c_str(), progress_user_data);
+                });
+        } else {
+            print.set_status_silent();
         }
 
         // Print::is_BBL_printer() is a manually-set flag (Print.hpp:1143,
@@ -723,12 +714,6 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         set_err(out_err, e.what());
         return SLIC3R_ERR_SLICE;
     }
-}
-
-void slic3r_set_slice_progress_cb(slic3r_progress_fn_t cb, void* user_data) {
-    std::lock_guard<std::mutex> lk(g_progress_mutex);
-    g_progress_cb = cb;
-    g_progress_user_data = user_data;
 }
 
 void slic3r_set_log_sink(slic3r_log_fn_t cb, void* user_data) {

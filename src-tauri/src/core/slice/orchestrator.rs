@@ -28,12 +28,12 @@
 //!
 //! ## FFI progress callback ownership
 //!
-//! `slic3r_ffi::set_slice_progress` is process-global — only one
-//! callback can be registered at a time. The orchestrator's
-//! invariant: at most one job's worker thread is *inside*
-//! `slic3r_ffi::slice` at any moment. Sequential per-plate slicing
-//! holds this naturally; future parallel-job support would need
-//! per-job channels rather than the global callback.
+//! The progress callback is passed *into* `slic3r_ffi::slice` per
+//! call — no global registration, no cross-slice contamination. The
+//! orchestrator's worker thread owns the closure for the lifetime of
+//! one `slice` call; concurrent jobs (whenever they land) would each
+//! carry their own. (libslic3r's own thread-safety for concurrent
+//! `Print::process()` calls is a separate, unverified question.)
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -53,7 +53,7 @@ use crate::core::printer::lookup_instance;
 use crate::core::profile_library::compose_cascade;
 use crate::core::project::SlicingContext;
 use std::collections::BTreeMap;
-use slic3r_ffi::{clear_slice_progress, set_slice_progress, slice, Model};
+use slic3r_ffi::{slice, Model};
 
 /// Errors `start_slice_job` returns synchronously (before the
 /// worker thread spawns). Post-spawn errors flow out via the
@@ -339,11 +339,8 @@ fn run_worker(
             return;
         }
 
-        // Install the progress callback. The sink Arc is cloned
-        // into the closure so we can share it with both the worker
-        // body and the FFI's progress thread (which today is the
-        // same thread, but the Sync bound is documented as part of
-        // the sink's contract).
+        // Build the progress closure. Passed into slice() per-call
+        // so no global state to clear afterwards.
         //
         // libslic3r overloads the progress callback to also carry
         // warnings: percent = -1 with the warning text in `stage`
@@ -355,11 +352,11 @@ fn run_worker(
         // of the unhelpful cryptic summary.
         let sink_for_cb = sink.clone();
         let handle_for_cb = handle.clone();
-        let throttle = Arc::new(std::sync::Mutex::new(ProgressThrottle::default()));
+        let mut throttle = ProgressThrottle::default();
         let last_warning: Arc<std::sync::Mutex<Option<String>>> =
             Arc::new(std::sync::Mutex::new(None));
         let last_warning_for_cb = last_warning.clone();
-        set_slice_progress(move |percent, stage| {
+        let progress_cb = move |percent: i32, stage: &str| {
             handle_for_cb.set_status(JobStatus::Running {
                 plate_id,
                 percent,
@@ -370,10 +367,8 @@ fn run_worker(
                     *guard = Some(stage.to_owned());
                 }
             }
-            if let Ok(mut guard) = throttle.lock() {
-                if !guard.should_emit(percent, stage) {
-                    return;
-                }
+            if !throttle.should_emit(percent, stage) {
+                return;
             }
             sink_for_cb(SliceEvent::PlateProgress {
                 job_id,
@@ -381,14 +376,10 @@ fn run_worker(
                 percent,
                 stage: stage.to_owned(),
             });
-        });
+        };
 
         let output_path = job.output_dir.join(format!("plate_{plate_id}.gcode"));
-        let slice_result = slice(&model, &adapt_result.config, &output_path);
-        // Always tear down the callback before we move on so a
-        // subsequent plate (or another job) doesn't inherit the
-        // wrong job_id in its progress events.
-        clear_slice_progress();
+        let slice_result = slice(&model, &adapt_result.config, &output_path, progress_cb);
 
         match slice_result {
             Ok(()) => {
