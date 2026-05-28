@@ -12,6 +12,8 @@ dist
 dist-ssr
 *.local
 
+__pycache__
+
 # cmake output for the FFI .so (driven by crates/slic3r-ffi/build.rs)
 /build/
 # cargo workspace target

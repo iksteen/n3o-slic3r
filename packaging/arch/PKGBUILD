@@ -36,19 +36,26 @@ arch=('x86_64')
 url="https://github.com/iksteen/n3o-slic3r"
 license=('AGPL-3.0-or-later')
 depends=(
+    # Tauri webview. Verified via `pactree -u webkit2gtk-4.1` that
+    # every other NEEDED our binaries carry (gtk3, libsoup3,
+    # gdk-pixbuf2, cairo, glib2, dbus, openssl, fontconfig, zlib,
+    # expat, libjpeg-turbo, freetype2, hicolor-icon-theme) is
+    # transitive of this package. Non-base transitive deps don't
+    # need explicit declaration.
     'webkit2gtk-4.1'
-    'gtk3'
-    'libsoup3'
-    'librsvg'
 )
 makedepends=(
+    # base-devel members (pkgconf, make, gcc, etc.) are
+    # implicitly available at makepkg time — don't list them.
+    # The find_package libs above are runtime depends and are
+    # therefore already in the build chroot — no makedepends
+    # duplication.
     'rust'
     'nodejs'
     'npm'
     'cmake'
     'ninja'
     'git'
-    'pkgconf'
 )
 options=(
     # libslic3r's build sets its own optimization flags; don't let
@@ -86,13 +93,30 @@ build() {
     cd "${srcdir}/${pkgname}-${pkgver}"
 
     # OrcaSlicer's heavy dep tree (Boost / CGAL / OCCT / TBB /
-    # OpenVDB / ...). Built from source inside the snapshot — no
-    # reuse of any host-side prebuilt copy. ~17 min on a fast
-    # machine.
+    # OpenVDB / wxWidgets / ...). Built from source inside the
+    # snapshot — no reuse of any host-side prebuilt copy.
     #   -d: download + build the deps under deps/build/
     #   -r: skip OrcaSlicer's >=10G RAM precheck (we trust the
     #       packager to provision enough)
-    (cd external/OrcaSlicer && ./build_linux.sh -d -r)
+    #
+    # `-fpermissive` added to the deps' CXXFLAGS only: OCCT
+    # (src/StdPrs/StdPrs_BRepFont.cxx:465) has an
+    # unsigned-char* → const char* implicit conversion that
+    # modern GCC errors on. The OrcaSlicer build scripts use
+    # cmake's defaults; under makepkg's hardened CXXFLAGS the
+    # build fails on this. Upstream OCCT code, not ours, hence
+    # the deps-subshell scope rather than a patch.
+    #
+    # We *do not* pass FLATPAK=ON to skip wxWidgets: the savings
+    # (~5 min, ~1 GB during build) aren't worth the layout +
+    # `find_package(OpenSSL)` complications that flow from it,
+    # and the produced package size is unaffected (wxWidgets
+    # static .a's aren't shipped).
+    (
+        cd external/OrcaSlicer
+        export CXXFLAGS="${CXXFLAGS} -fpermissive"
+        ./build_linux.sh -d -r
+    )
 
     # Frontend toolchain + the locally-pinned @tauri-apps/cli.
     npm ci --no-audit --no-fund

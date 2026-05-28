@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Import an Orca/BBS process leaf JSON into our cascade-fragment TOML.
 
-Same shape as `import_filament_profile.py`. Walks the `inherits`
-chain across vendor directories (with same-vendor preference, since
-different vendors keep distinct `fdm_process_common.json` files with
-different values), flattens root-first, and emits a single TOML
-fragment.
+Walks the `inherits` chain across vendor directories (with same-vendor
+preference, since different vendors keep distinct
+`fdm_process_common.json` files with different values), flattens
+root-first, and emits a single TOML fragment.
 
 Backfills `print_settings_id` from the leaf's `name` field — Orca
 populates that at preset-load time, not as a static JSON field, so

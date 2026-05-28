@@ -597,6 +597,223 @@ For the record:
   for compound rules — mixed syntax. The `[[rule]]` form scales
   uniformly. Section shorthand kept for single-condition cases.
 
+## Post-MVP: filament / cascade maturation
+
+The MVP cascade ships with one printer-scope context (`printer.model`),
+the `plate.type` predicate, and filament leaves consolidated from
+upstream Orca/BBS via `scripts/import_filaments.py`. That
+gets us a working slice path — but the filament side is a faithful
+reflection of upstream's messy authoring model. Beyond MVP, the
+following four refactors clean it up. None are blockers; together they
+turn "we ship what upstream gave us" into "we ship a coherent
+filament/cascade story."
+
+All four depend on **sustained authoring effort**. The cascade DSL
+gives us the right vocabulary; the bottleneck is that someone has to
+write per-printer material-class tunings, curate plate-temp matrices,
+declare intent/capability mappings, and audit per-product chemistry
+deltas. Tooling helps but doesn't substitute.
+
+### (a) Per-extruder cascade resolution
+
+Filaments legitimately want extruder-variant-conditional settings:
+"on a High Flow extruder push 20 mm³/s, on a Standard direct-drive
+push 12." Upstream encodes this implicitly as comma-separated
+per-extruder arrays (`filament_max_volumetric_speed = "12,20"` —
+extruder 0 gets 12, extruder 1 gets 20, with the printer profile
+declaring which physical extruder sits at each index and what
+variant it is).
+
+That entanglement bled `filament_extruder_variant` into filament
+presets where it doesn't belong — it's a printer property. Our
+consolidator denies that key (see
+`scripts/import_filaments.py`'s `DENY_KEYS`) because
+baking `"Direct Drive Standard"` into a generic-PLA fragment forces
+a value the printer profile already owns and risks mis-routing on
+H2D-class printers.
+
+The clean cascade shape makes `extruder.variant` a predicate
+dimension:
+
+```toml
+[[rule]]
+when.extruder.variant = "Direct Drive High Flow"
+set.filament_max_volumetric_speed = "20"
+
+[[rule]]
+when.extruder.variant = "Direct Drive Standard"
+set.filament_max_volumetric_speed = "12"
+```
+
+Implementation work:
+
+1. **Cascade context** exposes per-extruder `extruder.variant` (and
+   probably `extruder.index`, `extruder.kind`) — not a global, not
+   a project key.
+
+2. **Resolver** runs once per active extruder with the per-extruder
+   context bound. Today it runs once per slice.
+
+3. **Adapter** gathers per-extruder scalar results into the
+   `coFloats`/`coStrings` arrays libslic3r consumes. Same kind of
+   dimensional pivot the adapter already does for libslic3r's
+   flat-config quirks.
+
+4. **Consolidator** pivots upstream's per-extruder arrays into
+   per-`when.extruder.variant` rules. Requires cross-referencing
+   the printer profile that defined the variant ordering, so the
+   consolidator becomes printer-aware in a way it isn't today.
+
+### (b) Plate-type cascade pivot
+
+Today every filament profile carries all six per-plate-type bed
+temps as flat keys: `cool_plate_temp`, `textured_cool_plate_temp`,
+`eng_plate_temp`, `hot_plate_temp`, `textured_plate_temp`,
+`supertack_plate_temp` (plus `_initial_layer` variants). At slice
+time libslic3r reads `curr_bed_type` (project scope, set by the
+Plater UI / `.3mf` plate config) and dispatches via
+`get_bed_temp_key()` to look up the matching key. So six
+plate-conditional values get pre-flattened into six always-present
+keys; if you author a new filament, you have to remember to set
+all six (and probably get five wrong).
+
+The clean cascade shape uses `plate.type` predicates:
+
+```toml
+bed_temp = 60
+bed_temp_initial_layer = 60
+
+[[rule]]
+when.plate.type = "Cool Plate"
+set.bed_temp = 35
+set.bed_temp_initial_layer = 35
+
+[[rule]]
+when.plate.type = "Engineering Plate"
+set.bed_temp = 60
+set.bed_temp_initial_layer = 60
+
+[[rule]]
+when.plate.type = "Textured PEI"
+set.bed_temp = 55
+set.bed_temp_initial_layer = 55
+```
+
+The composer flattens these back into the per-plate-temp keys
+libslic3r expects: for each known plate type, resolve cascade with
+`plate.type = X` bound, write the resolved `bed_temp` into
+`get_bed_temp_key(X)`. The filament author writes one logical key,
+the adapter generates the dispatch table libslic3r needs.
+
+Pre-req: curated authoring. The matrix of (filament family × plate
+material × temperature) is real work — most filaments have an
+opinion for cool plate / PEI / engineering plate, but the values
+need to come from somewhere (vendor docs, community testing, our
+own calibration). Upstream's per-plate-temp values are mostly
+BBL-tuned and partially copy-pasted across non-BBL leaves.
+
+### (c) Intent registry — bridging declarative flags and printer M-code
+
+Today `filament_start_gcode` carries templated M-code that uses
+filament-scope flags:
+
+```
+{if activate_air_filtration[current_extruder] && support_air_filtration}
+M106 P3 S{during_print_exhaust_fan_speed_num[current_extruder]}
+{endif}
+```
+
+So the filament profile carries *both* the intent
+(`activate_air_filtration = true`, `during_print_exhaust_fan_speed
+= 70`) *and* the implementation that emits the M-code. If a user
+authors a filament and forgets to paste that template chunk into a
+custom start gcode, the flag does nothing — silent breakage. And
+every printer that wants filtration has to template the same
+boilerplate into every filament that uses it.
+
+The clean separation:
+
+- **Filament declares intent**: `activate_air_filtration = true`,
+  `during_print_exhaust_fan_speed = 70`. Pure config values.
+- **Printer declares capability + M-code dialect**:
+  `supports_air_filtration = true`, an M-code template for "turn
+  on filtration." Owned by the printer profile since it's the
+  printer's dialect.
+- **Slicer gcode-emit layer bridges declaratively**: notices the
+  intent flag, checks the printer's capability, emits the
+  printer-side M-code template with the filament's value
+  substituted in.
+
+Needs a new layer between cascade resolution and final gcode
+emission — a small registry of known intents (filtration, chamber
+heating, AMS swaps, retraction-on-pause, idle hotend cooling) each
+with (filament-side intent key, printer-side capability key,
+printer-side template). Filament profiles stop carrying templated
+M-code; intent flags become purely declarative.
+
+The PRD's plugin system (FR-PL-*) overlaps — Lua post-processors
+via the `compose` hook can cover some cases. A core intent registry
+plus the plugin escape hatch for the long tail is probably the
+right split.
+
+### (d) Per-printer material-class authoring
+
+Today every (printer × material × brand) tuple is its own upstream
+leaf. Pick "Bambu PLA Basic" on an Elegoo Neptune 4 and you get
+Bambu's profile — which only has rules for Bambu printers. The
+Elegoo's PLA-specific hardware tunings (which Elegoo authored into
+their own "Generic PLA @Elegoo Neptune 4" leaf) don't apply,
+because the user picked a different filament identity. Result: the
+print uses Bambu's chemistry guesses with no printer tuning.
+
+The clean cascade shape splits two concerns onto two profile
+layers:
+
+- **Per-printer profile** carries rules tuning each material family
+  for that printer's hardware:
+  ```toml
+  # In Elegoo_Neptune_4/printer/machine.toml:
+  [[rule]]
+  when.material.class = "PLA"
+  set.nozzle_temperature = 220
+  set.hot_plate_temp = 60
+  set.filament_max_volumetric_speed = 22
+  set.slow_down_min_speed = 25
+  ```
+
+- **Per-filament profile** carries chemistry-only deltas relative
+  to the generic material family:
+  ```toml
+  # In Bambu_Lab/filament/bambu-pla-basic.toml:
+  [[rule]]
+  when.material.class = "PLA"
+  set.nozzle_temperature += 5    # Bambu PLA Basic prints 5° hotter
+  set.filament_flow_ratio = 0.98
+  ```
+
+Cascade resolution composes both. Pick (any brand, any PLA) on
+(any printer) and get the printer's PLA hardware tuning PLUS the
+filament's chemistry adjustments. No vendor's profile has to know
+about another vendor's printers — they only describe what they own.
+
+(`+=` isn't part of the MVP DSL but is a natural extension for
+delta-style rules. Until then, absolute values work.)
+
+Pre-req: data-side authoring. Per-printer material-class rules
+need to be written for each printer we support. Per-filament
+chemistry deltas need to be reauthored as deltas against a baseline
+rather than as full per-printer leaves. Roughly: one printer-side
+PLA/PETG/ABS/TPU tuning rule set per printer (~10-30 rules each);
+one chemistry-delta rule per filament product. Far less data than
+upstream's leaf explosion, but newly authored vs imported.
+
+This refactor is what makes cross-vendor filament selection
+*actually work*. Without it, users on non-BBL printers are stuck
+either with Generic PLA (which we consolidated from divergent
+upstream data) or with branded filaments that lack their printer's
+tunings. With it, every (printer × filament) pairing produces a
+coherent slice.
+
 ## Open: cascade `include:` directive (post-MVP)
 
 BambuStudio's machine profiles split G-code macros into sibling
