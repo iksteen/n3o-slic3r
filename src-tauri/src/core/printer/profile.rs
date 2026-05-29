@@ -13,7 +13,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrinterProfile {
     /// Human-readable model name. Surfaced as `printer.model` in
-    /// cascade predicates.
+    /// cascade predicates. **Derived** — hydrated by the registry
+    /// from `machine.toml::printer_model` (the cascade scalar that
+    /// drives every `when.printer.model = …` predicate). `model.toml`
+    /// no longer carries it; the registry's `hydrate_profile`
+    /// populates this field at load time. `#[serde(default)]` so
+    /// the envelope parses cleanly.
+    #[serde(default)]
     pub model: String,
 
     /// Manufacturer name (e.g. `"Bambu Lab"`, `"Snapmaker"`).
@@ -122,6 +128,13 @@ impl PrinterProfile {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Toolhead {
     pub default_nozzle_diameter: String,
+    /// Hotend material descriptor (`"stainless_steel"`,
+    /// `"hardened_steel"`, …). **Derived** — hydrated by the
+    /// registry from `nozzles/<default_nozzle_diameter>.toml::nozzle_type`,
+    /// since the nozzle profile is the per-SKU source of truth for
+    /// that string. `model.toml` no longer carries it.
+    /// `#[serde(default)]` so the toolhead block parses cleanly.
+    #[serde(default)]
     pub hotend_type: String,
     pub max_temp: f64,
 }

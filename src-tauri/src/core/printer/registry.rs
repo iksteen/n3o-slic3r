@@ -54,11 +54,14 @@ pub fn lookup(identity: &str) -> Option<PrinterProfile> {
 }
 
 /// Fill in the runtime-derived fields on a `PrinterProfile` — the
-/// per-printer bed list and the build volume parsed from the
-/// machine cascade's `printable_area` / `printable_height`. Kept
-/// as one place so the catalog walk + single-id `lookup` can't
-/// drift. `default_bed` is loaded by serde directly from
-/// `model.toml` and needs no hydration.
+/// per-printer bed list, available nozzle diameters, the build
+/// volume parsed from the machine cascade's `printable_area` /
+/// `printable_height`, the `default_bed` pulled from the machine
+/// cascade's `default_bed_type` scalar (libslic3r's documented
+/// home for the picker default), and each toolhead's `hotend_type`
+/// pulled from the per-nozzle profile (the SKU profile carries
+/// `nozzle_type` as its own source of truth). model.toml no longer
+/// duplicates any of these.
 fn hydrate_profile(base: &PrinterProfile, fragment_slug: &str) -> PrinterProfile {
     let mut profile = base.clone();
     profile.supported_build_plates =
@@ -73,6 +76,16 @@ fn hydrate_profile(base: &PrinterProfile, fragment_slug: &str) -> PrinterProfile
             .collect();
     if let Some(bv) = profile_library::build_volume_for_printer(fragment_slug) {
         profile.build_volume = bv;
+    }
+    if let Some(bed) = profile_library::default_bed_type_for(fragment_slug) {
+        profile.default_bed = Some(bed);
+    }
+    for toolhead in profile.toolheads.iter_mut() {
+        if let Some(nozzle_type) =
+            profile_library::nozzle_type_for(fragment_slug, &toolhead.default_nozzle_diameter)
+        {
+            toolhead.hotend_type = nozzle_type;
+        }
     }
     profile
 }

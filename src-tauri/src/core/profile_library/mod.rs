@@ -58,16 +58,11 @@ pub enum LibraryError {
     Io(PathBuf, std::io::Error),
     Toml(PathBuf, toml::de::Error),
     Cascade(PathBuf, CascadeLoadError),
-    /// `model.toml`'s `model` differs from the sibling `machine.toml`'s
-    /// `printer_model` scalar. The picker's `available_for` predicates
-    /// key off `printer_model`; a mismatch silently empties the
-    /// process/filament filters for the printer, so it's a fail-fast
-    /// at load time.
-    PrinterModelMismatch {
-        printer_dir: PathBuf,
-        model_toml_value: String,
-        machine_toml_value: String,
-    },
+    /// `machine.toml` exists for a printer but doesn't carry the
+    /// `printer_model` scalar that drives every cascade
+    /// `when.printer.model = …` predicate. Fail fast so a malformed
+    /// import doesn't silently empty the process/filament filters.
+    MissingPrinterModel { printer_dir: PathBuf },
 }
 
 impl std::fmt::Display for LibraryError {
@@ -77,15 +72,10 @@ impl std::fmt::Display for LibraryError {
             Self::Io(p, e) => write!(f, "io error reading `{}`: {e}", p.display()),
             Self::Toml(p, e) => write!(f, "parse error in `{}`: {e}", p.display()),
             Self::Cascade(p, e) => write!(f, "cascade load error in `{}`: {e}", p.display()),
-            Self::PrinterModelMismatch {
-                printer_dir,
-                model_toml_value,
-                machine_toml_value,
-            } => write!(
+            Self::MissingPrinterModel { printer_dir } => write!(
                 f,
-                "`{}`: model.toml declares model=`{model_toml_value}` but machine.toml \
-                 declares printer_model=`{machine_toml_value}` — picker predicates key \
-                 off printer_model; the two must match",
+                "`{}`: machine.toml does not declare a `printer_model` scalar — \
+                 every cascade `when.printer.model = …` predicate keys off it",
                 printer_dir.display(),
             ),
         }
@@ -268,33 +258,26 @@ impl ProfileLibrary {
                 let asset = read_cascade(root, &machine_path)?;
                 insert_fragment(&mut self.printer_fragments, slug.clone(), asset, "printer");
             }
-            // model.toml — catalog metadata.
+            // model.toml — catalog metadata. `model` is no longer
+            // authored here; we hydrate it from the machine cascade's
+            // `printer_model` scalar (the single source of truth that
+            // every `when.printer.model = …` predicate keys off).
+            // Same for `Toolhead.hotend_type` — derived later in
+            // `registry::hydrate_profile` from the per-nozzle profile.
             let meta_path = printer_dir.join("model.toml");
             if meta_path.is_file() {
                 let raw = std::fs::read_to_string(&meta_path)
                     .map_err(|e| LibraryError::Io(meta_path.clone(), e))?;
-                let envelope: PrinterProfileEnvelope =
+                let mut envelope: PrinterProfileEnvelope =
                     toml::from_str(&raw).map_err(|e| LibraryError::Toml(meta_path.clone(), e))?;
-                // Cross-check model.toml::model against the machine
-                // cascade's `printer_model` scalar. Both files name
-                // the same physical printer, but the picker's
-                // `available_for` predicates only consult
-                // `printer_model`; a drift between the two silently
-                // empties the process / filament filters for this
-                // printer. Fail fast at load.
-                if let Some(machine_asset) = self.printer_fragments.get(&slug) {
-                    if let Some(machine_printer_model) =
-                        fragment_set_value(&machine_asset.cascade, "printer_model")
-                    {
-                        if machine_printer_model != envelope.profile.model {
-                            return Err(LibraryError::PrinterModelMismatch {
-                                printer_dir: printer_dir.clone(),
-                                model_toml_value: envelope.profile.model.clone(),
-                                machine_toml_value: machine_printer_model,
-                            });
-                        }
-                    }
-                }
+                let machine_printer_model = self
+                    .printer_fragments
+                    .get(&slug)
+                    .and_then(|a| fragment_set_value(&a.cascade, "printer_model"))
+                    .ok_or_else(|| LibraryError::MissingPrinterModel {
+                        printer_dir: printer_dir.clone(),
+                    })?;
+                envelope.profile.model = machine_printer_model;
                 let identity = envelope.identity.unwrap_or_else(|| slug.clone());
                 self.catalog.push(PrinterCatalogEntry {
                     identity,
@@ -494,6 +477,18 @@ fn fragment_set_value(cascade: &Cascade, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The machine cascade's `default_bed_type` scalar — libslic3r's
+/// documented home for the printer's picker-default bed
+/// (PrintConfig.cpp:1072 registers it as a `coString` config key;
+/// Preset::get_default_bed_type reads it off the resolved
+/// `DynamicPrintConfig`). The registry hydrates
+/// `PrinterProfile.default_bed` from this so model.toml doesn't
+/// duplicate the value.
+pub fn default_bed_type_for(printer_slug: &str) -> Option<String> {
+    let cascade = load_printer_fragment(printer_slug)?;
+    fragment_set_value(&cascade, "default_bed_type")
 }
 
 /// Parse libslic3r's `printable_area` + `printable_height` for the
@@ -724,6 +719,20 @@ pub fn nozzle_default_process(printer_slug: &str, sku: &str) -> Option<String> {
         .get(&(printer_slug.to_owned(), sku.to_owned()))
         .and_then(|asset| asset.cascade.rules.iter().find(|r| r.is_default()))
         .and_then(|rule| rule.set.get("default_process_profile"))
+        .cloned()
+}
+
+/// The `nozzle_type` scalar from a nozzle.toml fragment — the
+/// hotend material descriptor (`"stainless_steel"`,
+/// `"hardened_steel"`, …). Used by `registry::hydrate_profile` to
+/// populate `Toolhead.hotend_type` so model.toml doesn't duplicate
+/// the same string the nozzle SKU profile already carries.
+pub fn nozzle_type_for(printer_slug: &str, sku: &str) -> Option<String> {
+    library()
+        .nozzle_fragments
+        .get(&(printer_slug.to_owned(), sku.to_owned()))
+        .and_then(|asset| asset.cascade.rules.iter().find(|r| r.is_default()))
+        .and_then(|rule| rule.set.get("nozzle_type"))
         .cloned()
 }
 
@@ -1058,34 +1067,43 @@ mod tests {
     }
 
     #[test]
-    fn model_toml_machine_toml_printer_model_mismatch_fails_load() {
-        // Catch the silent-empty-picker failure mode that previously
-        // shipped: model.toml::model and machine.toml::printer_model
-        // both name the same physical printer, but the picker's
-        // `available_for` predicates only consult printer_model. A
-        // drift between the two used to load cleanly and then silently
-        // empty the process filter for that printer.
+    fn machine_toml_missing_printer_model_fails_load() {
+        // `printer_model` in machine.toml is the single source of
+        // truth for the cascade's `when.printer.model = …`
+        // predicates; without it every picker filter silently
+        // empties. The loader hydrates `PrinterProfile.model` from
+        // this scalar, so its absence is fatal.
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path();
         let printer_dir = root.join("acme").join("printer").join("foo");
         std::fs::create_dir_all(&printer_dir).expect("mkdir printer dir");
         std::fs::write(
             printer_dir.join("machine.toml"),
-            "printer_model = \"Foo Pro\"\n",
+            "printable_area = \"0x0,1x0,1x1,0x1\"\n",
         )
         .expect("write machine.toml");
         std::fs::write(
             printer_dir.join("model.toml"),
-            "model = \"Foo\"\nbrand = \"Acme\"\ntoolheads = []\n",
+            "brand = \"Acme\"\ntoolheads = []\n",
         )
         .expect("write model.toml");
 
         let result = ProfileLibrary::load(root);
         match result {
-            Err(LibraryError::PrinterModelMismatch { .. }) => {}
-            Err(other) => panic!("expected PrinterModelMismatch, got {other:?}"),
-            Ok(_) => panic!("expected PrinterModelMismatch, got Ok"),
+            Err(LibraryError::MissingPrinterModel { .. }) => {}
+            Err(other) => panic!("expected MissingPrinterModel, got {other:?}"),
+            Ok(_) => panic!("expected MissingPrinterModel, got Ok"),
         }
+    }
+
+    #[test]
+    fn printer_profile_model_is_hydrated_from_machine_toml() {
+        // model.toml no longer carries `model`; the loader populates
+        // it from the sibling machine.toml's `printer_model` scalar.
+        let a1 = printer_catalog_lookup("bambu-lab-a1-mini").expect("a1 mini present");
+        assert_eq!(a1.profile.model, "Bambu Lab A1 mini");
+        let u1 = printer_catalog_lookup("snapmaker-u1").expect("u1 present");
+        assert_eq!(u1.profile.model, "Snapmaker U1");
     }
 
     #[test]

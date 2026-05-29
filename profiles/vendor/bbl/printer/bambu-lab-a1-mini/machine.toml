@@ -238,6 +238,7 @@ G392 S0
 
 M1007 S1
 '''
+default_bed_type = "Textured PEI Plate"
 enable_filament_ramming = "0"
 enable_long_retraction_when_cut = "2"
 enable_power_loss_recovery = "printer_configuration"
@@ -968,6 +969,11 @@ M623
 
 
 '''
+wrapping_detection_gcode = ""
+wrapping_exclude_area = ""
+
+# ---- Hand-curated scalars preserved across re-imports ----
+
 # Prime/wipe tower position (left-front corner).
 # libslic3r's compiled default is (15, 220), calibrated for X1C-sized
 # beds (>= 220mm Y). The A1 mini is 180×180 — the default y=220 puts
@@ -986,6 +992,5 @@ M623
 # tower position scene-state — visible + draggable like any other
 # object on the plate — tracked separately.
 wipe_tower_x = "5"
+
 wipe_tower_y = "130"
-wrapping_detection_gcode = ""
-wrapping_exclude_area = ""

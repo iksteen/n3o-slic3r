@@ -50,10 +50,43 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
+
+
+def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
+    """Write `content` to `path` atomically (temp file + os.replace).
+
+    The cargo dev/test loop reads these files concurrently with
+    re-imports; a non-atomic truncate-then-write leaves a partial-
+    content window where `ProfileLibrary::load` parses garbage TOML
+    and panics. Mirrors the same helper in `import_processes.py`.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding=encoding,
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    try:
+        tmp.write(content)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp.close()
+        os.replace(tmp.name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp.name)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 # Envelope metadata — describes the file, not the slicer config. Never
@@ -73,36 +106,32 @@ ENVELOPE_KEYS = frozenset({
 })
 
 # Catalog/picker metadata that travels in machine leaves but isn't
-# slicer config and doesn't belong in our cascade. Dropped by default.
+# slicer config and doesn't belong in our cascade. Both the
+# write-side filter (strips these from machine.toml) and the
+# conflict check (waives cross-SKU disagreement) consult this set —
+# vendors legitimately declare per-SKU variations on these keys
+# (`default_print_profile = "0.20mm Standard @BBL A1M 0.2 nozzle"`
+# differs across the 4 A1 mini nozzles) and `build_base_machine`'s
+# "first wins" collapse would otherwise ship a misleading arbitrary
+# scalar.
 #
 # `printer_model` is NOT in this set — it looks like metadata but
 # libslic3r's FFI uses it to gate vendor-specific validations (e.g.
 # `is_BBL_printer()` switches off Marlin-flavor checks). Dropping it
 # trips the "relative extruder addressing requires G92 E0 in
 # layer_gcode" validate.
+#
+# `default_bed_type` is also NOT in this set: libslic3r registers it
+# as a real config key (PrintConfig.cpp:1072, comAdvanced) and reads
+# it via Preset::get_default_bed_type. It belongs in the machine
+# cascade; the picker hydrates `PrinterProfile.default_bed` from
+# that scalar at load time.
 DEFAULT_DROPPED_META = frozenset({
     "default_print_profile",       # picker UX hint, broken for mixed-nozzle setups
     "upward_compatible_machine",   # libslic3r cross-printer compat artefact
-    # Picker / UX defaults that some leaves redundantly declare. The
-    # canonical source for `default_bed_type` is the model JSON, with
-    # the leaf chain as a fallback for vendors (e.g. Snapmaker) that
-    # only declare it there. main() extracts it into the model.toml
-    # `default_bed` field; this filter then keeps it out of the
-    # machine fragment. The other two are purely picker hints we
-    # don't consume.
-    "default_bed_type",
-    "not_support_bed_type",
-    "default_materials",
+    "not_support_bed_type",        # picker hint we don't consume
+    "default_materials",           # picker hint we don't consume
 })
-
-# Subset of DEFAULT_DROPPED_META that the conflict check ignores —
-# keys vendors declare differently per nozzle SKU as a matter of
-# course (compat lists, picker default-profile hints, material
-# suggestions) but that nothing downstream reads back. Excludes
-# `default_bed_type` because main() extracts that value for
-# model.toml seeding, so a cross-SKU disagreement there is real and
-# should fail the import.
-CONFLICT_NOISE_KEYS = DEFAULT_DROPPED_META - frozenset({"default_bed_type"})
 
 # Keys that don't belong in either dimension but DO need to ride along
 # with the nozzle profile (e.g. SKU identity tag).
@@ -292,15 +321,10 @@ def detect_machine_conflicts(
             # + nozzle-identity keys belong to the nozzle output
             # (handled separately). Picker-UX hints that vendors
             # legitimately declare differently per nozzle SKU also
-            # skip — they'd otherwise block valid imports — but
-            # only the ones nothing downstream reads back.
-            # `default_bed_type` is in DEFAULT_DROPPED_META too but
-            # main() extracts it for model.toml's `default_bed`, so
-            # an inconsistency there matters; it stays subject to
-            # the conflict check.
+            # skip — see DEFAULT_DROPPED_META's docstring.
             if k in EXTRUDER_KEYS or k in NOZZLE_IDENTITY_KEYS:
                 continue
-            if k in CONFLICT_NOISE_KEYS:
+            if k in DEFAULT_DROPPED_META:
                 continue
             by_key.setdefault(k, {})[sku] = v
 
@@ -431,6 +455,12 @@ def _value_to_toml_nozzle(v: Any, *, key: str) -> str:
 
 def write_base_machine(path: Path, kv: dict, *, source_root: str, slug: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Preserve any hand-curated top-level scalars the existing file
+    # carries that the importer doesn't re-emit (e.g. the A1 mini's
+    # `wipe_tower_x/y` workaround for libslic3r's X1C-sized default).
+    # Captures each preserved key's immediate preceding comment block
+    # so the load-bearing context survives the round-trip.
+    preserved = _read_preserved_machine_scalars(path, kv)
     header = [
         "# Base machine — keys shared across every nozzle variant.",
         f"# Generated by scripts/import_machine_profile.py from:",
@@ -443,7 +473,75 @@ def write_base_machine(path: Path, kv: dict, *, source_root: str, slug: str) -> 
         for k in sorted(kv)
         if k not in DEFAULT_DROPPED_META
     ]
-    path.write_text("\n".join(header + body) + "\n")
+    out_lines = header + body
+    if preserved:
+        out_lines.append("")
+        out_lines.append("# ---- Hand-curated scalars preserved across re-imports ----")
+        for comment_block, scalar_line in preserved:
+            out_lines.append("")
+            out_lines.extend(comment_block)
+            out_lines.append(scalar_line)
+    _atomic_write_text(path, "\n".join(out_lines) + "\n")
+
+
+def _read_preserved_machine_scalars(
+    path: Path, new_kv: dict
+) -> list[tuple[list[str], str]]:
+    '''Scan an existing machine.toml for top-level scalars whose keys
+    aren't in `new_kv`. Returns (preceding_comment_block, scalar_line)
+    pairs in original order. Skips multi-line values (triple-single
+    or triple-double quoted): those land in the script-emitted block
+    (keys the importer knows about), or get flagged if they're hand-
+    curated extras.'''
+    if not path.exists():
+        return []
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    new_keys = set(new_kv.keys())
+    scalar_re = re.compile(r'^([a-z_][a-z0-9_]*)\s*=\s*(.*)$')
+    triple_quote_re = re.compile(r"'''|\"\"\"")
+    preserved: list[tuple[list[str], str]] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        # Collect a contiguous comment block (and any single trailing
+        # blank line that separates it from the next key).
+        comment_buf: list[str] = []
+        while i < n and lines[i].lstrip().startswith("#"):
+            comment_buf.append(lines[i])
+            i += 1
+        # Drop the leading blank-line gutter — we want the comment
+        # block to attach directly to its key.
+        while comment_buf and not comment_buf[0].strip():
+            comment_buf.pop(0)
+        if i >= n:
+            break
+        line = lines[i]
+        if not line.strip():
+            i += 1
+            continue
+        m = scalar_re.match(line)
+        if not m:
+            i += 1
+            continue
+        key, value_head = m.group(1), m.group(2)
+        # Skip multi-line values entirely — heuristically detected by
+        # an opening triple-quote that isn't closed on the same line.
+        if triple_quote_re.search(value_head):
+            opens = triple_quote_re.findall(value_head)
+            if len(opens) % 2 == 1:
+                # Walk to the closing triple-quote.
+                while i + 1 < n:
+                    i += 1
+                    if triple_quote_re.search(lines[i]):
+                        break
+                i += 1
+                continue
+        i += 1
+        if key in new_keys or key in DEFAULT_DROPPED_META:
+            continue
+        preserved.append((comment_buf, line))
+    return preserved
 
 
 def write_nozzle_profile(path: Path, kv: dict, *, sku: str) -> None:
@@ -458,8 +556,15 @@ def write_nozzle_profile(path: Path, kv: dict, *, sku: str) -> None:
     # back to `generic-pla`. Strip the suffix so the seeded name
     # matches what the filament library actually exposes.
     kv = dict(kv)
-    if isinstance(kv.get("default_filament_profile"), str):
-        kv["default_filament_profile"] = kv["default_filament_profile"].split(" @", 1)[0]
+    # Upstream typically wraps the value as a length-1 vector
+    # (`["Bambu PLA Basic @BBL A1M 0.2 nozzle"]`) since every
+    # per-extruder key flows through the same coStrings serializer;
+    # handle both shapes so the strip survives that quirk.
+    raw = kv.get("default_filament_profile")
+    if isinstance(raw, list) and raw and isinstance(raw[0], str):
+        kv["default_filament_profile"] = [raw[0].split(" @", 1)[0]]
+    elif isinstance(raw, str):
+        kv["default_filament_profile"] = raw.split(" @", 1)[0]
     # Preserve any hand-curated or scripted scalars this file
     # carries that the importer doesn't know about — currently
     # `default_process_profile`, seeded by `scripts/import_processes.py`
@@ -491,7 +596,7 @@ def write_nozzle_profile(path: Path, kv: dict, *, sku: str) -> None:
     # of position.
     for k in sorted(preserved):
         body.append(f"{k} = {preserved[k]}")
-    path.write_text("\n".join(header + body) + "\n")
+    _atomic_write_text(path, "\n".join(header + body) + "\n")
 
 
 # ---- Main ----------------------------------------------------------
@@ -562,17 +667,16 @@ def main() -> None:
     # Build outputs.
     base_machine = build_base_machine(flat, leaf)
 
-    # Resolve the upstream `default_bed_type`. Prefer the model JSON
-    # (`<model>.json`, type "machine_model") — that's the canonical
-    # picker-side declaration. Fall back to the flattened leaf chain;
-    # some upstream profiles (e.g. Snapmaker U1) only declare it
-    # there. The value flows into `<slug>/model.toml` as `default_bed`;
-    # `write_base_machine` filters it out of the machine fragment
-    # via DEFAULT_DROPPED_META. Other model-JSON keys
-    # (`bed_model`, `bed_texture`, `family`, `machine_tech`, ...)
-    # are picker-UX hints we don't consume — never read.
+    # The model JSON's `default_bed_type` is the canonical picker-side
+    # declaration; some leaves redundantly carry it too, others don't.
+    # Inject the model_json value into base_machine when present —
+    # libslic3r registers `default_bed_type` as a real config key
+    # (PrintConfig.cpp:1072), reads it via Preset::get_default_bed_type,
+    # and we hydrate `PrinterProfile.default_bed` from this cascade
+    # scalar at load time. Other model-JSON keys (`bed_model`,
+    # `bed_texture`, `family`, `machine_tech`, …) are picker-UX hints
+    # we don't consume — never read.
     model_json = machine_dir / f"{args.model}.json"
-    default_bed: str | None = None
     if model_json.exists():
         try:
             mdoc = load_json(model_json)
@@ -582,11 +686,7 @@ def main() -> None:
             if mdoc.get("type") == "machine_model":
                 v = mdoc.get("default_bed_type")
                 if isinstance(v, str) and v:
-                    default_bed = v
-    if default_bed is None:
-        v = base_machine.get("default_bed_type")
-        if isinstance(v, str) and v:
-            default_bed = v
+                    base_machine["default_bed_type"] = v
 
     nozzle_profiles = {sku: build_nozzle_profile(flat[sku]) for sku in flat}
 
@@ -601,51 +701,6 @@ def main() -> None:
         p = nozzle_dir / f"{sku}.toml"
         write_nozzle_profile(p, kv, sku=sku)
         print(f"wrote {p} ({len(kv)} keys)")
-
-    # Seed `default_bed` into the hand-curated model.toml. The rest
-    # of that file (brand, ams_*, toolheads, build_volume,
-    # exclusion_zones) is curator territory and we leave it alone.
-    model_toml = args.toml_out / args.slug / "model.toml"
-    if model_toml.exists():
-        if update_model_toml_default_bed(model_toml, default_bed):
-            shown = "<stripped>" if default_bed is None else repr(default_bed)
-            print(f"updated {model_toml} default_bed = {shown}")
-    elif default_bed is not None:
-        print(
-            f"note: {model_json.relative_to(args.root)} declares "
-            f"default_bed_type={default_bed!r}; no {model_toml} "
-            f"exists yet — author it first."
-        )
-
-
-def update_model_toml_default_bed(path: Path, default_bed: str | None) -> bool:
-    """Edit `default_bed = "..."` on a hand-curated model.toml.
-
-    Preserves all other content + comments + layout. Inserts after
-    the `model = ...` line when the key is missing; strips the line
-    when `default_bed is None`. Returns True iff the file changed.
-    """
-    text = path.read_text(encoding="utf-8")
-    pattern = re.compile(r"^default_bed\s*=.*(?:\r?\n|$)", re.MULTILINE)
-    if default_bed is None:
-        new_text, n = pattern.subn("", text)
-        if n == 0:
-            return False
-    else:
-        replacement = f'default_bed = "{default_bed}"\n'
-        if pattern.search(text):
-            new_text = pattern.sub(replacement, text, count=1)
-        else:
-            model_pat = re.compile(r"^model\s*=.*(?:\r?\n|$)", re.MULTILINE)
-            m = model_pat.search(text)
-            if m:
-                new_text = text[: m.end()] + replacement + text[m.end():]
-            else:
-                new_text = replacement + text
-    if new_text == text:
-        return False
-    path.write_text(new_text, encoding="utf-8")
-    return True
 
 
 if __name__ == "__main__":

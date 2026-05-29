@@ -1,6 +1,3 @@
-identity = "snapmaker-u1"
-model = "Snapmaker U1"
-default_bed = "Textured PEI Plate"
 brand = "Snapmaker"
 brand_short = "S"
 # 4 magnetically-docked toolheads; each slot maps 1:1 to a physical
@@ -14,20 +11,16 @@ ams_max = 0
 # combination, but the MVP cascade fixtures assume uniform.
 [[toolheads]]
 default_nozzle_diameter = "0.4"
-hotend_type = "hardened_steel"
 max_temp = 300.0
 
 [[toolheads]]
 default_nozzle_diameter = "0.4"
-hotend_type = "hardened_steel"
 max_temp = 300.0
 
 [[toolheads]]
 default_nozzle_diameter = "0.4"
-hotend_type = "hardened_steel"
 max_temp = 300.0
 
 [[toolheads]]
 default_nozzle_diameter = "0.4"
-hotend_type = "hardened_steel"
 max_temp = 300.0
