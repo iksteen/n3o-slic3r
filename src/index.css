@@ -2684,6 +2684,13 @@
     font-weight: 500;
     color: var(--text);
   }
+  .psm-conn-test {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .psm-conn-test-ok { color: var(--ok); }
   .psm-footer {
     display: flex; align-items: center; justify-content: space-between;
     padding: 12px 18px;

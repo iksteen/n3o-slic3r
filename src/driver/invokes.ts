@@ -22,6 +22,14 @@ export function driverRegister(config: DriverConfig): Promise<DriverId> {
   return invoke<DriverId>("driver_register", { config });
 }
 
+/** Test a connection config without registering a driver. Resolves
+ *  when the transient connection reaches `Connected`; rejects with the
+ *  printer's reason (or a timeout message) otherwise. Nothing is
+ *  persisted and the reconciler is not touched. */
+export function driverTestConnection(config: DriverConfig): Promise<void> {
+  return invoke<void>("driver_test_connection", { config });
+}
+
 /** Disconnect + remove a driver from the registry. */
 export function driverUnregister(id: DriverId): Promise<void> {
   return invoke<void>("driver_unregister", { id });

@@ -35,6 +35,8 @@ import {
   type ConnectionFieldError,
 } from "./connectionValidation";
 import { usePrinterCatalog } from "./usePrinterCatalog";
+import { configForConnection } from "../driver/useDriverConnections";
+import { driverTestConnection } from "../driver/invokes";
 import type { PlateSnapshot } from "../viewport/types";
 
 /** Bambu printers need a LAN access code; U1 needs a Moonraker port.
@@ -830,6 +832,37 @@ function ConnectionSection({
   const portError = fieldError?.field === "port" ? fieldError.message : null;
   const codeError =
     fieldError?.field === "accessCode" ? fieldError.message : null;
+
+  // "Test connection" — spins up a transient backend driver against
+  // the current draft and reports the verdict inline. Independent of
+  // Save: it never persists. Disabled while the draft is invalid or a
+  // test is in flight.
+  const [test, setTest] = useState<
+    | { kind: "idle" }
+    | { kind: "testing" }
+    | { kind: "ok" }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+  // A prior verdict is stale the moment any connection field changes.
+  useEffect(() => {
+    setTest({ kind: "idle" });
+  }, [draft.host, draft.port, draft.accessCode]);
+  // Gate the button on the DRAFT's own validity rather than the
+  // parent's `fieldError` (which is suppressed during Forget mode) so
+  // we never test a blanked/half-entered connection.
+  const testConn = draftToConnection(driverKind, draft);
+  const testReady = testConn != null && validateConnectionInfo(testConn) == null;
+  const runTest = async (): Promise<void> => {
+    if (testConn == null) return;
+    setTest({ kind: "testing" });
+    try {
+      await driverTestConnection(configForConnection(testConn));
+      setTest({ kind: "ok" });
+    } catch (e) {
+      setTest({ kind: "error", message: String(e) });
+    }
+  };
+
   return (
     <div className="psm-section">
       <div className={`psm-field${changed.host ? " changed" : ""}`}>
@@ -950,6 +983,26 @@ function ConnectionSection({
           </div>
         </div>
       )}
+
+      <div className="psm-conn-test">
+        <button
+          type="button"
+          className="apm-btn"
+          onClick={() => void runTest()}
+          disabled={!testReady || test.kind === "testing"}
+          title="Try connecting with these settings without saving"
+        >
+          {test.kind === "testing" ? "Testing…" : "Test connection"}
+        </button>
+        {test.kind === "ok" && (
+          <span className="apm-name-hint psm-conn-test-ok">✓ Connected</span>
+        )}
+        {test.kind === "error" && (
+          <span className="apm-name-hint error" title={test.message}>
+            ✗ {test.message}
+          </span>
+        )}
+      </div>
 
       {canForget && (
         <button

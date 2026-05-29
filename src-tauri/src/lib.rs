@@ -211,6 +211,7 @@ pub fn run() {
             core::preview::commands::preview_segment_detail,
             core::preview::commands::preview_drop,
             core::driver::commands::driver_register,
+            core::driver::commands::driver_test_connection,
             core::driver::commands::driver_unregister,
             core::driver::commands::driver_list,
             core::driver::commands::driver_connect,

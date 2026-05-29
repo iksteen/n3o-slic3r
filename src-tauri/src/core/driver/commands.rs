@@ -133,6 +133,70 @@ pub async fn driver_register(
     }
 }
 
+/// Test a connection config WITHOUT registering a driver or touching
+/// the live registry. Builds a transient driver, connects, and waits
+/// for the connection to reach `Connected` (→ `Ok`) or `Disconnected`
+/// (→ `Err` with the printer's reason), tearing it down either way. A
+/// timeout guards against a silently-unreachable printer hanging the
+/// UI.
+///
+/// Backs the settings modal's "Test connection" button: the verdict is
+/// returned synchronously, nothing is persisted, and the
+/// auto-connection reconciler is not involved.
+#[tauri::command]
+#[tracing::instrument]
+pub async fn driver_test_connection(config: DriverConfig) -> Result<(), String> {
+    use super::status::ConnectionState;
+
+    // Generous cap covering Bambu's ~5-8s MQTT handshake; U1's HTTP
+    // probe is faster.
+    const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+    // Transient driver. DriverId(0) is fine — it's never inserted into
+    // the registry; the id only tags log spans / outgoing frames.
+    let mut driver: Box<dyn Driver> = match config {
+        DriverConfig::Bambu { host, access_code } => {
+            Box::new(BambuDriver::new(DriverId(0), BambuConfig { host, access_code }))
+        }
+        DriverConfig::U1 { host, port } => {
+            Box::new(U1Driver::new(DriverId(0), U1Config { host, port }))
+        }
+    };
+
+    // Subscribe before connecting and mark the initial pre-connect
+    // state seen, so the watch loop only reacts to transitions the
+    // connect actually drives (not the "not yet connected" baseline).
+    let mut rx = driver.subscribe_status();
+    let _ = rx.borrow_and_update();
+
+    // A hard failure inside connect() (e.g. U1's system_info probe
+    // against an unreachable host) surfaces immediately.
+    driver.connect().await.map_err(|e| e.to_string())?;
+
+    let verdict = tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            if rx.changed().await.is_err() {
+                return Err("driver stopped before reporting a connection".to_string());
+            }
+            match &rx.borrow_and_update().connection {
+                ConnectionState::Connected => return Ok(()),
+                ConnectionState::Disconnected { reason } => return Err(reason.clone()),
+                // Connecting / Reconnecting — keep waiting for a verdict.
+                _ => {}
+            }
+        }
+    })
+    .await;
+
+    // Always tear the transient driver down, whatever the verdict.
+    let _ = driver.disconnect().await;
+
+    match verdict {
+        Ok(inner) => inner,
+        Err(_elapsed) => Err("Timed out waiting for the printer to connect".to_string()),
+    }
+}
+
 /// Tear down + remove a driver. Calls `disconnect()` first.
 #[tauri::command]
 #[tracing::instrument(skip(registry))]
@@ -523,4 +587,26 @@ pub async fn driver_command(
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
     let mut d = handle.lock().await;
     d.command(cmd).await.map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// End-to-end error path for the test-connection command: an
+    /// unreachable U1 host makes the connect-time
+    /// `/machine/system_info` probe fail, so the command surfaces a
+    /// non-empty reason instead of hanging or panicking. (No driver is
+    /// registered — this exercises the transient build + teardown.)
+    #[tokio::test]
+    async fn test_connection_reports_failure_for_unreachable_u1() {
+        // Port 1 has nothing listening → the HTTP probe is refused
+        // fast, so connect() returns Err and the command reports it.
+        let config = DriverConfig::U1 {
+            host: "127.0.0.1".into(),
+            port: 1,
+        };
+        let err = driver_test_connection(config).await.unwrap_err();
+        assert!(!err.is_empty(), "expected a non-empty failure reason");
+    }
 }
