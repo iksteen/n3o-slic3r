@@ -26,14 +26,17 @@ pub use instance_library::{
 };
 pub use instance_registry::{
     create_instance, delete_instance, list_instances, lookup_instance, mutate_instance,
-    set_extruder_nozzle_diameter, set_instance_bed, set_slot_color, set_slot_filament,
-    InstanceMutError,
+    set_extruder_nozzle_diameter, set_instance_bed, set_instance_quality_profile,
+    set_slot_color, set_slot_filament, InstanceMutError,
 };
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
 pub use registry::{bundled_catalog, default_printer_identity, lookup, CatalogEntry};
 
 use crate::core::filament::{bundled_catalog as filament_bundled_catalog, FilamentProfile};
-use crate::core::profile_library::{list_filament_fragments, FilamentFragmentSummary};
+use crate::core::profile_library::{
+    list_filament_fragments, list_process_fragments, FilamentFragmentSummary,
+    ProcessFragmentSummary,
+};
 
 /// Tauri command: list every printer instance the user has access
 /// to — i.e. whatever the user library on disk currently holds.
@@ -121,10 +124,10 @@ pub fn printer_instance_delete(
 pub fn printer_instance_set_extruder_nozzle_diameter(
     id: String,
     extruder_idx: usize,
-    diameter_mm: f32,
+    diameter: String,
     window: tauri::Window,
 ) -> Result<PrinterInstance, String> {
-    let updated = set_extruder_nozzle_diameter(&id, extruder_idx, diameter_mm)
+    let updated = set_extruder_nozzle_diameter(&id, extruder_idx, diameter)
         .map_err(|e| e.to_string())?;
     use tauri::Emitter;
     if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
@@ -200,6 +203,60 @@ pub fn filament_catalog_list() -> Vec<FilamentProfile> {
 #[tauri::command]
 pub fn filament_profile_list() -> Vec<FilamentFragmentSummary> {
     list_filament_fragments()
+}
+
+/// Tauri command: change the process fragment ("Quality" picker)
+/// selected for an instance. Drives the cascade re-resolve via the
+/// `printer:instance_changed` event the bed and nozzle setters
+/// already use.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn printer_instance_set_quality_profile(
+    id: String,
+    quality_profile: String,
+    window: tauri::Window,
+) -> Result<PrinterInstance, String> {
+    let updated = set_instance_quality_profile(&id, quality_profile)
+        .map_err(|e| e.to_string())?;
+    use tauri::Emitter;
+    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
+        tracing::warn!(error = %e, "printer:instance_changed emit failed");
+    }
+    Ok(updated)
+}
+
+/// Tauri command: enumerate process fragments available for the
+/// active (printer, installed-nozzle-set). Drives the Quality
+/// picker chip in the settings panel — the frontend reads each
+/// fragment's `[meta] available_for` (loaded at startup) and only
+/// surfaces processes whose listing includes any installed nozzle.
+///
+/// `printer_fragment_slug` is the printer directory slug (e.g.
+/// `"bambu-lab-a1-mini"`); `printer_model` is the human printer
+/// name from `machine.toml` (e.g. `"Bambu Lab A1 mini"`) — the
+/// metadata's `available_for` rows key off the latter, while the
+/// on-disk fragments live under the former. Frontend already has
+/// both from the active `PrinterProfile`.
+///
+/// `installed_nozzle_diameters` is the unique set of nozzle
+/// diameters currently installed across the printer's extruders
+/// (single-extruder printers send `["0.4"]`; a U1 toolchanger with
+/// mixed nozzles sends `["0.4", "0.6"]`). A fragment matches when
+/// any constituent nozzle of its `available_for` entry (split on
+/// `+`) shares at least one diameter with the installed set —
+/// composite profiles like `0.4+0.6` surface whenever any of their
+/// nozzles is present.
+#[tauri::command]
+pub fn process_fragment_list(
+    printer_fragment_slug: String,
+    printer_model: String,
+    installed_nozzle_diameters: Vec<String>,
+) -> Vec<ProcessFragmentSummary> {
+    list_process_fragments(
+        &printer_fragment_slug,
+        &printer_model,
+        &installed_nozzle_diameters,
+    )
 }
 
 /// Tauri command: pull the named printer's current spool loadout

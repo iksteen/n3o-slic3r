@@ -56,14 +56,16 @@ pub struct PrinterProfile {
     pub supported_build_plates: Vec<String>,
 
     /// Nozzle diameters the printer ships fragments for, in
-    /// declaration order (e.g. `[0.2, 0.4, 0.6, 0.8]` for the A1
-    /// mini, `[0.4, 0.6]` for the U1). The NozzlePicker reads this
-    /// to populate its diameter menu. Hydrated by
-    /// `registry::hydrate_profile` from
+    /// declaration order (e.g. `["0.2", "0.4", "0.6", "0.8"]` for
+    /// the A1 mini, `["0.4", "0.6"]` for the U1). Stored as
+    /// **string symbols**, not floats — diameter is an identifier
+    /// the picker filters by exact match (and the nozzle.toml
+    /// filename derives from), never a quantity we arithmetic on.
+    /// Hydrated by `registry::hydrate_profile` from
     /// `profile_library::nozzle_skus_for(slug)`; `#[serde(default)]`
     /// so model.toml doesn't have to repeat it.
     #[serde(default)]
-    pub available_nozzle_diameters: Vec<f64>,
+    pub available_nozzle_diameters: Vec<String>,
 
     /// Default `curr_bed_type` enum value Orca's upstream
     /// `machine_model` JSON declares for this printer (e.g.
@@ -113,9 +115,13 @@ impl PrinterProfile {
 /// ships with / what `create_instance` seeds onto a fresh instance.
 /// The runtime `ExtruderState.installed_nozzle` holds the current
 /// nozzle; this field is *not* consulted at slice time.
+///
+/// `default_nozzle_diameter` is a string symbol ("0.4"), matching
+/// the on-disk nozzle.toml filename. See
+/// `PrinterProfile.available_nozzle_diameters` for the rationale.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Toolhead {
-    pub default_nozzle_diameter: f64,
+    pub default_nozzle_diameter: String,
     pub hotend_type: String,
     pub max_temp: f64,
 }
@@ -132,7 +138,7 @@ mod tests {
 
     fn bambu_a1_mini() -> PrinterProfile {
         PrinterProfile {
-            model: "Bambu A1 mini".into(),
+            model: "Bambu Lab A1 mini".into(),
             brand: "Bambu Lab".into(),
             brand_short: "B".into(),
             ams_max: 1,
@@ -145,9 +151,14 @@ mod tests {
                 "Engineering Plate".into(),
                 "Supertack Plate".into(),
             ],
-            available_nozzle_diameters: vec![0.2, 0.4, 0.6, 0.8],
+            available_nozzle_diameters: vec![
+                "0.2".into(),
+                "0.4".into(),
+                "0.6".into(),
+                "0.8".into(),
+            ],
             toolheads: vec![Toolhead {
-                default_nozzle_diameter: 0.4,
+                default_nozzle_diameter: "0.4".into(),
                 hotend_type: "stainless_steel".into(),
                 max_temp: 300.0,
             }],
@@ -164,9 +175,9 @@ mod tests {
         let p = bambu_a1_mini();
         let text = toml::to_string(&p).expect("serialize");
         let parsed: PrinterProfile = toml::from_str(&text).expect("deserialize");
-        assert_eq!(parsed.model, "Bambu A1 mini");
+        assert_eq!(parsed.model, "Bambu Lab A1 mini");
         assert_eq!(parsed.toolheads.len(), 1);
-        assert_eq!(parsed.toolheads[0].default_nozzle_diameter, 0.4);
+        assert_eq!(parsed.toolheads[0].default_nozzle_diameter, "0.4");
         assert_eq!(parsed.supported_build_plates.len(), 5);
     }
 }

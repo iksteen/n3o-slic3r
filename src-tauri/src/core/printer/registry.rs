@@ -69,7 +69,7 @@ fn hydrate_profile(base: &PrinterProfile, fragment_slug: &str) -> PrinterProfile
     profile.available_nozzle_diameters =
         profile_library::nozzle_skus_for(fragment_slug)
             .into_iter()
-            .filter_map(|sku| sku.parse::<f64>().ok())
+            .map(str::to_owned)
             .collect();
     if let Some(bv) = profile_library::build_volume_for_printer(fragment_slug) {
         profile.build_volume = bv;
@@ -101,7 +101,7 @@ mod tests {
         assert!(entries.iter().any(|e| e.identity == "bambu-lab-a1-mini"));
         assert!(entries.iter().any(|e| e.identity == "snapmaker-u1"));
         let a1 = entries.iter().find(|e| e.identity == "bambu-lab-a1-mini").unwrap();
-        assert_eq!(a1.profile.model, "Bambu A1 mini");
+        assert_eq!(a1.profile.model, "Bambu Lab A1 mini");
         let u1 = entries.iter().find(|e| e.identity == "snapmaker-u1").unwrap();
         assert_eq!(u1.profile.model, "Snapmaker U1");
     }
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn lookup_resolves_known_identities() {
         let a1 = lookup("bambu-lab-a1-mini").expect("a1 mini present");
-        assert_eq!(a1.model, "Bambu A1 mini");
+        assert_eq!(a1.model, "Bambu Lab A1 mini");
         assert_eq!(a1.toolheads.len(), 1);
 
         let u1 = lookup("snapmaker-u1").expect("u1 present");
@@ -142,7 +142,10 @@ mod tests {
         assert!(a1.profile.supported_build_plates.contains(&"Textured PEI Plate".into()));
         assert_eq!(a1.profile.toolheads.len(), 1);
         // A1 mini ships per-nozzle fragments for 0.2 / 0.4 / 0.6 / 0.8.
-        assert_eq!(a1.profile.available_nozzle_diameters, vec![0.2, 0.4, 0.6, 0.8]);
+        assert_eq!(
+            a1.profile.available_nozzle_diameters,
+            vec!["0.2", "0.4", "0.6", "0.8"],
+        );
         // Build volume is hydrated from the machine cascade's
         // `printable_area` / `printable_height`; A1 mini is 180³.
         assert_eq!(a1.profile.build_volume.max, [180.0, 180.0, 180.0]);

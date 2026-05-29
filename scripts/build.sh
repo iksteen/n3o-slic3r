@@ -25,7 +25,15 @@ case "${1:-deps}" in
         # `-r` skips OrcaSlicer's >=10G RAM precheck. The check is a
         # conservative heuristic; GitHub-hosted runners have ~7G RAM +
         # swap and complete the build successfully, just slower.
-        (cd "${ORCA_DIR}" && ./build_linux.sh -d -r)
+        #
+        # `-fpermissive` added to CXXFLAGS: OCCT
+        # (src/StdPrs/StdPrs_BRepFont.cxx:465 +
+        # src/GeomToStep/...) has unsigned-char* → const char*
+        # implicit conversions that GCC 16 rejects by default.
+        # Same workaround packaging/arch/PKGBUILD applies for the
+        # Arch package builds. Upstream OCCT code, not ours.
+        (cd "${ORCA_DIR}" && \
+         CXXFLAGS="${CXXFLAGS:-} -fpermissive" ./build_linux.sh -d -r)
         ;;
     *)
         echo "usage: $0 deps" >&2

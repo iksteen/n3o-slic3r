@@ -51,7 +51,7 @@ fn fourcolor_3mf() -> PathBuf {
 
 fn canonical_printer() -> PrinterProfile {
     PrinterProfile {
-        model: "Bambu A1 mini".into(),
+        model: "Bambu Lab A1 mini".into(),
         supported_build_plates: vec![
             "Cool".into(),
             "Textured PEI".into(),
@@ -60,7 +60,7 @@ fn canonical_printer() -> PrinterProfile {
             "SuperTack".into(),
         ],
         toolheads: vec![Toolhead {
-            default_nozzle_diameter: 0.4,
+            default_nozzle_diameter: "0.4".into(),
             hotend_type: "stainless_steel".into(),
             max_temp: 300.0,
         }],

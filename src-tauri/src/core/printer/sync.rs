@@ -244,12 +244,12 @@ mod tests {
             display_name: "Bambi".into(),
             vendor_profile_ref: "bambu-lab-a1-mini".into(),
             printer_fragment_slug: "bambu-lab-a1-mini".into(),
-            default_filament_fragment_slug: "bambu-pla-basic-bbl-a1m".into(),
-            default_process_fragment_slug: "0.20mm-standard-bbl-a1m".into(),
+            default_filament_fragment_slug: "bambu-pla-basic".into(),
+            quality_profile: "0.20mm-standard".into(),
             connection: None,
             extruders: vec![ExtruderState {
                 installed_nozzle: NozzleSku {
-                    diameter_mm: 0.4,
+                    diameter: "0.4".to_string(),
                     material: NozzleMaterial::Stainless,
                 },
                 slots: vec![
@@ -273,14 +273,14 @@ mod tests {
             display_name: "Snappy".into(),
             vendor_profile_ref: "snapmaker-u1".into(),
             printer_fragment_slug: "snapmaker-u1".into(),
-            default_filament_fragment_slug: "snapmaker-pla-u1".into(),
-            default_process_fragment_slug: "0.20-standard-snapmaker-u1-0.4-nozzle".into(),
+            default_filament_fragment_slug: "snapmaker-pla".into(),
+            quality_profile: "0.20-standard".into(),
             connection: None,
             extruders: vec![0, 1, 2, 3]
                 .into_iter()
                 .map(|_| ExtruderState {
                     installed_nozzle: NozzleSku {
-                        diameter_mm: 0.4,
+                        diameter: "0.4".to_string(),
                         material: NozzleMaterial::Stainless,
                     },
                     slots: vec![SlotBinding {

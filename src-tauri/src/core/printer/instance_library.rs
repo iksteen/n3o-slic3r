@@ -65,13 +65,13 @@ fn bambi() -> PrinterInstance {
         // The nozzle SKU lives on the extruder state below; the
         // composer loads `printer/<slug>/nozzles/<sku>.toml`.
         printer_fragment_slug: "bambu-lab-a1-mini".to_owned(),
-        default_filament_fragment_slug: "bambu-pla-basic-bbl-a1m".to_owned(),
-        default_process_fragment_slug: "0.20mm-standard-bbl-a1m".to_owned(),
+        default_filament_fragment_slug: "bambu-pla-basic".to_owned(),
+        quality_profile: "0.20mm-standard".to_owned(),
         connection: None,
         extruders: vec![ExtruderState {
             // Solo extruder — slot labels carry the full identity.
             installed_nozzle: NozzleSku {
-                diameter_mm: 0.4,
+                diameter: "0.4".to_string(),
                 material: NozzleMaterial::Stainless,
             },
             // A1 mini + AMS Lite: 4 `Ams`-feed slots followed by 1
@@ -135,7 +135,7 @@ fn snappy() -> PrinterInstance {
     // currently loaded in this fixture's printer.
     let extruder = |color: &str| ExtruderState {
         installed_nozzle: NozzleSku {
-            diameter_mm: 0.4,
+            diameter: "0.4".to_string(),
             material: NozzleMaterial::Stainless,
         },
         slots: vec![SlotBinding {
@@ -149,8 +149,8 @@ fn snappy() -> PrinterInstance {
         display_name: "Snappy".to_owned(),
         vendor_profile_ref: "snapmaker-u1".to_owned(),
         printer_fragment_slug: "snapmaker-u1".to_owned(),
-        default_filament_fragment_slug: "snapmaker-pla-u1".to_owned(),
-        default_process_fragment_slug: "0.20-standard-snapmaker-u1-0.4-nozzle".to_owned(),
+        default_filament_fragment_slug: "snapmaker-pla".to_owned(),
+        quality_profile: "0.20-standard".to_owned(),
         connection: None,
         extruders: vec![
             extruder("#dc2626"),
@@ -190,7 +190,7 @@ mod tests {
         let b = lookup_instance(BAMBI_ID).expect("bambi present");
         assert_eq!(b.vendor_profile_ref, "bambu-lab-a1-mini");
         assert_eq!(b.extruders.len(), 1);
-        assert_eq!(b.extruders[0].installed_nozzle.diameter_mm, 0.4);
+        assert_eq!(b.extruders[0].installed_nozzle.diameter, "0.4");
         assert_eq!(
             b.extruders[0].installed_nozzle.material,
             NozzleMaterial::Stainless,
@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(s.extruders.len(), 4);
         for extruder in &s.extruders {
             assert_eq!(extruder.slots.len(), 1);
-            assert_eq!(extruder.installed_nozzle.diameter_mm, 0.4);
+            assert_eq!(extruder.installed_nozzle.diameter, "0.4");
             assert_eq!(extruder.installed_nozzle.material, NozzleMaterial::Stainless);
         }
         assert_eq!(s.bed.identity, "Textured PEI Plate");

@@ -44,7 +44,7 @@ fn reference_profiles_resolve_canonical_pla_pei_context() {
     let filament = filament::registry::lookup("generic-pla")
         .expect("generic-pla in registry");
 
-    assert_eq!(printer.model, "Bambu A1 mini");
+    assert_eq!(printer.model, "Bambu Lab A1 mini");
     assert_eq!(plate.identity, "Textured PEI Plate");
     assert_eq!(filament.base_type, "PLA");
 

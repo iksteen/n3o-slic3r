@@ -159,13 +159,13 @@ mod tests {
 
     fn a1_mini_profile() -> PrinterProfile {
         PrinterProfile {
-            model: "Bambu A1 mini".into(),
+            model: "Bambu Lab A1 mini".into(),
             // AMS-fed: single toolhead but multi-material via AMS.
             // The change_filament_gcode requirement keys off this.
             ams_max: 1,
             supported_build_plates: vec!["Textured PEI".into()],
             toolheads: vec![Toolhead {
-                default_nozzle_diameter: 0.4,
+                default_nozzle_diameter: "0.4".to_string(),
                 hotend_type: "stainless_steel".into(),
                 max_temp: 300.0,
             }],

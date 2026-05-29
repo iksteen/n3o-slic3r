@@ -1,5 +1,5 @@
 identity = "bambu-lab-a1-mini"
-model = "Bambu A1 mini"
+model = "Bambu Lab A1 mini"
 default_bed = "Textured PEI Plate"
 brand = "Bambu Lab"
 brand_short = "B"
@@ -7,6 +7,6 @@ ams_max = 1
 ams_type = "AMS Lite"
 
 [[toolheads]]
-default_nozzle_diameter = 0.4
+default_nozzle_diameter = "0.4"
 hotend_type = "stainless_steel"
 max_temp = 300.0

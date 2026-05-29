@@ -25,7 +25,7 @@ fn ensure_ffi() {
 
 fn a1_mini() -> PrinterProfile {
     PrinterProfile {
-        model: "Bambu A1 mini".into(),
+        model: "Bambu Lab A1 mini".into(),
         ams_max: 1,
         supported_build_plates: vec![
             "Cool".into(),
@@ -35,7 +35,7 @@ fn a1_mini() -> PrinterProfile {
             "SuperTack".into(),
         ],
         toolheads: vec![Toolhead {
-            default_nozzle_diameter: 0.4,
+            default_nozzle_diameter: "0.4".into(),
             hotend_type: "stainless_steel".into(),
             max_temp: 300.0,
         }],
@@ -54,7 +54,7 @@ fn snapmaker_u1() -> PrinterProfile {
         supported_build_plates: vec!["Textured PEI".into()],
         toolheads: (0..4)
             .map(|_i| Toolhead {
-                default_nozzle_diameter: 0.4,
+                default_nozzle_diameter: "0.4".into(),
                 hotend_type: "stainless_steel".into(),
                 max_temp: 300.0,
             })

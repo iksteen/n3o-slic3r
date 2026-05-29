@@ -608,24 +608,10 @@ input, select, textarea { font-family: inherit; }
 .vp-tool svg { width: 14px; height: 14px; }
 .vp-sep { width: 1px; background: var(--border); margin: 4px 2px; }
 
-.viewport-corner {
-  position: absolute;
-  bottom: 12px; right: 12px;
-  display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--text-dim);
-  pointer-events: none;
-}
-.viewport-corner .axes {
+.viewport-axes {
   display: flex; gap: 8px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px 8px;
-  box-shadow: var(--shadow-sm);
 }
-.viewport-corner .axis { display: flex; align-items: center; gap: 4px; }
+.axis { display: flex; align-items: center; gap: 4px; }
 .axis-x { color: oklch(0.62 0.21 25); }
 .axis-y { color: oklch(0.62 0.18 145); }
 .axis-z { color: oklch(0.62 0.18 235); }
@@ -633,15 +619,132 @@ input, select, textarea { font-family: inherit; }
 .gizmo-hint {
   position: absolute;
   bottom: 12px; left: 12px;
+  display: inline-flex; align-items: center; gap: 8px;
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--text-dim);
-  padding: 4px 8px;
+  padding: 4px 10px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
   box-shadow: var(--shadow-sm);
 }
+.gizmo-hint .axes { display: inline-flex; gap: 8px; }
+.gizmo-hint .axis { font-weight: 600; }
+.gizmo-hint-sep { opacity: 0.45; }
+
+/* ───────── Console toggle + pane ───────── */
+.console-toggle {
+  position: absolute;
+  bottom: 12px; right: 12px;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 10px 0 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-sm);
+  cursor: default;
+  z-index: 11;
+}
+.console-toggle:hover { background: var(--surface-2); color: var(--text); }
+.console-toggle.open {
+  background: var(--surface-3);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.console-toggle svg { width: 13px; height: 13px; flex-shrink: 0; }
+.console-toggle-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 16px; height: 14px; padding: 0 4px;
+  margin-left: 2px;
+  border-radius: 7px;
+  font-size: 9.5px; font-weight: 600;
+  color: #fff;
+  line-height: 1;
+}
+.console-toggle-badge.error { background: var(--danger); }
+.console-toggle-badge.warn  { background: var(--warn); color: #2a1f00; }
+
+.console-pane {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 33vh;
+  display: flex; flex-direction: column;
+  background: var(--surface);
+  border-top: 1px solid var(--border-strong);
+  box-shadow: 0 -8px 24px rgba(15,17,21,0.08);
+  z-index: 10;
+}
+.console-pane-head {
+  display: flex; align-items: center; gap: 10px;
+  height: 28px; padding: 0 8px 0 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.console-pane-title {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.console-pane-count { color: var(--text-dim); }
+.console-pane-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 20px; padding: 0 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: default;
+}
+.console-pane-btn:hover {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+.console-pane-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0 6px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  background: var(--surface);
+}
+.console-empty {
+  padding: 12px;
+  color: var(--text-dim);
+  text-align: center;
+}
+.console-line {
+  display: grid;
+  grid-template-columns: 70px 54px 1fr;
+  gap: 10px;
+  padding: 2px 12px;
+  color: var(--text);
+}
+.console-line:hover { background: var(--surface-2); }
+.console-line-time { color: var(--text-dim); }
+.console-line-level {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  align-self: center;
+}
+.console-line-msg { white-space: pre-wrap; word-break: break-word; }
+.console-line-info  .console-line-level { color: var(--text-dim); }
+.console-line-warn  .console-line-level { color: var(--warn); }
+.console-line-warn  .console-line-msg   { color: var(--warn); }
+.console-line-error .console-line-level { color: var(--danger); }
+.console-line-error .console-line-msg   { color: var(--danger); }
 
 /* Drag-target highlight when dragging from object library */
 .viewport.drop-target::before {
@@ -1066,6 +1169,118 @@ input, select, textarea { font-family: inherit; }
   background: hsl(var(--accent-hue, 175) 30% 22%);
   color: hsl(var(--accent-hue, 175) 50% 80%);
 }
+/* ───────── Quality profile selector ─────────
+   Coarse print-quality preset dropdown sitting between the materials config
+   band and the granular settings editor. Scales to many (incl. user-defined)
+   profiles. */
+.sp-quality {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+  margin-top: 2px;
+  border-top: 1px dashed var(--hairline);
+}
+.sp-quality-label {
+  margin-right: 0;
+  flex-shrink: 0;
+}
+.sp-quality-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.sp-quality-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  cursor: default;
+  text-align: left;
+}
+.sp-quality-chip:hover { background: var(--surface-2); border-color: var(--border-strong); }
+.sp-quality-chip.open { background: var(--surface-2); border-color: var(--border-strong); }
+.sp-quality-chip-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.sp-quality-chip-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sp-quality-chip-h {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.sp-quality-chip .chev { display: flex; flex-shrink: 0; }
+
+.sp-quality-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0; right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.sp-quality-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 8px;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text);
+  cursor: default;
+  text-align: left;
+}
+.sp-quality-item:hover { background: var(--surface-2); }
+.sp-quality-item.active { background: var(--accent-soft); color: var(--accent-text); }
+.sp-quality-item-name { font-size: 12.5px; font-weight: 500; }
+.sp-quality-item-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.sp-quality-item-h {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.sp-quality-item.active .sp-quality-item-h { color: var(--accent-text); opacity: 0.85; }
+.sp-quality-item-note {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  min-width: 56px;
+  text-align: right;
+}
+.sp-quality-item.active .sp-quality-item-note { color: var(--accent-text); opacity: 0.85; }
+
 .sp-tabs {
   display: flex;
   padding: 8px 10px 0;
@@ -6439,6 +6654,16 @@ const ChevronChip = () => (
   </svg>
 );
 
+// Print-quality presets. Each maps to a base layer height; selecting one is
+// the coarse "how fine do you want this print" control that sits above the
+// 800+ granular settings below. Ordered fastest → finest.
+const QUALITY_PROFILES = [
+  { id: "draft",     name: "Draft",      layer: "0.28", note: "Fast" },
+  { id: "standard",  name: "Standard",   layer: "0.20", note: "Balanced" },
+  { id: "fine",      name: "Fine",       layer: "0.12", note: "Detailed" },
+  { id: "superfine", name: "Extra Fine", layer: "0.08", note: "Slowest" },
+];
+
 // ───────── fuzzy match (very small implementation) ─────────
 function fuzzyScore(needle, hay) {
   if (!needle) return 1;
@@ -6950,6 +7175,8 @@ function SettingsPanel({
   const [query, setQuery] = useSPS("");
   const [activeCat, setActiveCat] = useSPS(CATEGORIES[0].id);
   const [printerMenuOpen, setPrinterMenuOpen] = useSPS(false);
+  const [qualityProfile, setQualityProfile] = useSPS("standard");
+  const [qualityMenuOpen, setQualityMenuOpen] = useSPS(false);
   const scrollRef = useSPR(null);
   const inputRef = useSPR(null);
   const printerChipRef = useSPR(null);
@@ -6965,6 +7192,18 @@ function SettingsPanel({
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [printerMenuOpen]);
+
+  // Dismiss quality menu on outside click
+  useSPE(() => {
+    if (!qualityMenuOpen) return;
+    const onDoc = (e) => {
+      if (!e.target.closest(".sp-quality-menu") && !e.target.closest(".sp-quality-chip")) {
+        setQualityMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [qualityMenuOpen]);
 
   const objectAvailable = !!selectedObject;
 
@@ -7226,6 +7465,48 @@ function SettingsPanel({
             </div>
           </div>
         )}
+      <div className="sp-quality" role="row">
+        <span className="config-row-label sp-quality-label">Quality</span>
+        <div className="sp-quality-wrap">
+          {(() => {
+            const cur = QUALITY_PROFILES.find(p => p.id === qualityProfile) || QUALITY_PROFILES[0];
+            return (
+              <button
+                className={`sp-quality-chip ${qualityMenuOpen ? "open" : ""}`}
+                onClick={() => setQualityMenuOpen(o => !o)}
+                aria-haspopup="listbox"
+                aria-expanded={qualityMenuOpen}
+                title={`${cur.name} · ${cur.layer} mm layer height`}
+              >
+                <span className="sp-quality-chip-main">
+                  <span className="sp-quality-chip-name">{cur.name}</span>
+                  <span className="sp-quality-chip-h">{cur.layer} mm</span>
+                </span>
+                <span className="chev"><ChevronChip/></span>
+              </button>
+            );
+          })()}
+          {qualityMenuOpen && (
+            <div className="sp-quality-menu" role="listbox" onClick={(e) => e.stopPropagation()}>
+              {QUALITY_PROFILES.map(p => (
+                <button
+                  key={p.id}
+                  className={`sp-quality-item ${p.id === qualityProfile ? "active" : ""}`}
+                  role="option"
+                  aria-selected={p.id === qualityProfile}
+                  onClick={() => { setQualityProfile(p.id); setQualityMenuOpen(false); }}
+                >
+                  <span className="sp-quality-item-name">{p.name}</span>
+                  <span className="sp-quality-item-meta">
+                    <span className="sp-quality-item-h">{p.layer} mm</span>
+                    <span className="sp-quality-item-note">{p.note}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
         <div className="sp-config-row sp-config-slots">
           <SyncSlotsLabel printer={printer} onSync={onSyncFilaments}/>
           {slotIds.length === 0 ? (
@@ -10032,6 +10313,51 @@ function seedStatusFor(idx, printer) {
   return base;
 }
 
+// ─── Floating console pane ───
+// Sits along the bottom of the viewport (25vh). Auto-scrolls to the bottom
+// whenever new logs arrive, so the most recent message stays in view.
+function ConsolePane({ logs, onClose, onClear }) {
+  const scrollerRef = useRef(null);
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [logs]);
+
+  const fmtTime = (ts) => {
+    const d = new Date(ts);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  };
+
+  return (
+    <div className="console-pane" role="log" aria-label="Console">
+      <div className="console-pane-head">
+        <span className="console-pane-title">Console</span>
+        <span className="console-pane-count">{logs.length} entr{logs.length === 1 ? "y" : "ies"}</span>
+        <span style={{ flex: 1 }}/>
+        <button className="console-pane-btn" onClick={onClear} title="Clear console">Clear</button>
+        <button className="console-pane-btn" onClick={onClose} title="Hide console" aria-label="Close console">
+          <svg viewBox="0 0 12 12" width="11" height="11" fill="none" aria-hidden="true">
+            <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div className="console-pane-body" ref={scrollerRef}>
+        {logs.length === 0 && (
+          <div className="console-empty">— no messages —</div>
+        )}
+        {logs.map((l, i) => (
+          <div key={i} className={`console-line console-line-${l.level}`}>
+            <span className="console-line-time">{fmtTime(l.ts)}</span>
+            <span className="console-line-level">{l.level.toUpperCase()}</span>
+            <span className="console-line-msg">{l.msg}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [contextLayer, setContextLayer] = useState("project");
@@ -10051,6 +10377,28 @@ function App() {
   const [mode, setMode] = useState("prepare");
   const [selectedDeviceId, setSelectedDeviceId] = useState(null);
   const [showSendToPrinter, setShowSendToPrinter] = useState(false);
+
+  // ─── Console log ───
+  // Floating console pane at the bottom of the viewport. We keep a flat list
+  // of {ts, level, msg} entries; level is "info" | "warn" | "error". The
+  // toggle lives next to the drag-hint, bottom-right of the viewport.
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [logs, setLogs] = useState(() => {
+    const now = Date.now();
+    return [
+      { ts: now - 42000, level: "info",  msg: "n3o-slic3r v0.4.2 — ready" },
+      { ts: now - 41000, level: "info",  msg: "Loaded printer profile: Voron 2.4 350" },
+      { ts: now - 38500, level: "info",  msg: "Filament catalog synced · 18 spools" },
+      { ts: now - 22000, level: "warn",  msg: "Object \"bracket_v3\" has overhang of 58° without supports" },
+      { ts: now -  8200, level: "error", msg: "Failed to reach printer \"ender-5-shopfloor\" — connection refused" },
+      { ts: now -  1200, level: "info",  msg: "Plate \"Plate 1\" auto-arranged · 4 objects" },
+    ];
+  });
+  const pushLog = useCallback((level, msg) => {
+    setLogs(l => [...l, { ts: Date.now(), level, msg }].slice(-200));
+  }, []);
+  const errorLogCount = logs.filter(l => l.level === "error").length;
+  const warnLogCount = logs.filter(l => l.level === "warn").length;
 
   // ─── Simulated per-printer runtime status ───
   // Keyed by printerId: { status, progress, currentJob, queue, nozzleTemp,
@@ -10414,6 +10762,9 @@ function App() {
     handleStopDevice={handleStopDevice}
     handleSendPlateToPrinter={handleSendPlateToPrinter}
     handleJumpToPlate={handleJumpToPlate}
+    consoleOpen={consoleOpen} setConsoleOpen={setConsoleOpen}
+    logs={logs} setLogs={setLogs} pushLog={pushLog}
+    errorLogCount={errorLogCount} warnLogCount={warnLogCount}
   />;
 }
 
@@ -10440,6 +10791,9 @@ function SlicerWorkspace({
   printerStatus,
   handlePauseDevice, handleResumeDevice, handleStopDevice,
   handleSendPlateToPrinter, handleJumpToPlate,
+  consoleOpen, setConsoleOpen,
+  logs, setLogs, pushLog,
+  errorLogCount, warnLogCount,
 }) {
   // Derived: active plate + its slot accessors
   const activePlate = useMemo(
@@ -10596,7 +10950,11 @@ function SlicerWorkspace({
 
   const onSlice = () => {
     setSlicing(true);
-    setTimeout(() => setSlicing(false), 1800);
+    pushLog("info", `Slicing ${objects.length} object${objects.length !== 1 ? "s" : ""}…`);
+    setTimeout(() => {
+      setSlicing(false);
+      pushLog("info", "Slice complete · G-code ready");
+    }, 1800);
   };
 
   const onResetCamera = () => {
@@ -10768,17 +11126,41 @@ function SlicerWorkspace({
           </div>
 
           <div className="gizmo-hint">
-            Drag · LMB rotate · MMB pan · scroll zoom
-          </div>
-
-          <div className="viewport-corner">
-            <div className="axes">
+            <span className="axes" aria-label="Axes">
               <span className="axis axis-x">X</span>
               <span className="axis axis-y">Y</span>
               <span className="axis axis-z">Z</span>
-            </div>
-            <div>{plateSize[0]} × {plateSize[1]} × 250 mm</div>
+            </span>
+            <span className="gizmo-hint-sep" aria-hidden="true">·</span>
+            Drag · LMB rotate · MMB pan · scroll zoom
           </div>
+
+          {!consoleOpen && (
+            <button
+              className="console-toggle"
+              onClick={() => setConsoleOpen(true)}
+              title="Toggle console"
+            >
+              <svg viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <path d="M2.5 3.5l3 3-3 3M6.5 10h5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              <span>Console</span>
+              {errorLogCount > 0 && (
+                <span className="console-toggle-badge error">{errorLogCount}</span>
+              )}
+              {errorLogCount === 0 && warnLogCount > 0 && (
+                <span className="console-toggle-badge warn">{warnLogCount}</span>
+              )}
+            </button>
+          )}
+
+          {consoleOpen && (
+            <ConsolePane
+              logs={logs}
+              onClose={() => setConsoleOpen(false)}
+              onClear={() => setLogs([])}
+            />
+          )}
 
           {slicing && (
             <div style={{

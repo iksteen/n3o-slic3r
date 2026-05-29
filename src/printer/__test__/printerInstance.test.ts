@@ -15,11 +15,11 @@ function bambi(): PrinterInstance {
     vendor_profile_ref: "bambu-lab-a1-mini",
     printer_fragment_slug: "bambu-lab-a1-mini",
     default_filament_fragment_slug: "bambu-pla-basic-bbl-a1m",
-    default_process_fragment_slug: "0.20mm-standard-bbl-a1m",
+    quality_profile: "0.20mm-standard-bbl-a1m",
     connection: null,
     extruders: [
       {
-        installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
+        installed_nozzle: { diameter: "0.4", material: "stainless" },
         slots: [
           { feed: "direct", filament_identity: null, color: null },
         ],
@@ -37,10 +37,10 @@ function snappy(): PrinterInstance {
     vendor_profile_ref: "snapmaker-u1",
     printer_fragment_slug: "snapmaker-u1",
     default_filament_fragment_slug: "snapmaker-pla-u1",
-    default_process_fragment_slug: "0.20-standard-snapmaker-u1-0.4-nozzle",
+    quality_profile: "0.20-standard-snapmaker-u1-0.4-nozzle",
     connection: null,
     extruders: [0, 1, 2, 3].map(() => ({
-      installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
+      installed_nozzle: { diameter: "0.4", material: "stainless" },
       slots: [
         { feed: "direct" as const, filament_identity: null, color: null },
       ],
@@ -55,7 +55,7 @@ function ams_a1_mini(): PrinterInstance {
   // (AMS:1..4 + Ext). AMS-first ordering matches BBS's
   // ams_mapping convention; see the Rust-side `bambi()` fixture.
   const ext: PrinterInstance["extruders"][number] = {
-    installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
+    installed_nozzle: { diameter: "0.4", material: "stainless" },
     slots: [
       { feed: "ams", filament_identity: null, color: null },
       { feed: "ams", filament_identity: null, color: null },
@@ -103,7 +103,7 @@ describe("flattenSlots", () => {
       ...bambi(),
       extruders: [
         {
-          installed_nozzle: { diameter_mm: 0.4, material: "stainless" },
+          installed_nozzle: { diameter: "0.4", material: "stainless" },
           slots: [
             ...Array.from({ length: 12 }, () => ({
               feed: "ams" as const,

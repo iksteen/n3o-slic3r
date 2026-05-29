@@ -66,10 +66,14 @@ pub struct PrinterInstance {
     /// [`Bucket::Filament`](crate::core::profile_library::Bucket::Filament).
     pub default_filament_fragment_slug: String,
 
-    /// Default process fragment for plates that don't specify one.
-    /// MVP: every plate uses this default; future process binding
-    /// makes this overridable per plate.
-    pub default_process_fragment_slug: String,
+    /// Currently selected quality (process) profile for this
+    /// instance — the slug the Quality picker is bound to and the
+    /// cascade composer feeds into the slicer. Written by user
+    /// interaction (the picker) and by the nozzle-swap fallback
+    /// (`set_extruder_nozzle_diameter` resets it to the new
+    /// nozzle's `default_process_profile` when the current
+    /// selection becomes incompatible).
+    pub quality_profile: String,
 
     /// Network connection details. `None` when the user hasn't
     /// configured connection yet — the instance still works for slicing,
@@ -123,9 +127,15 @@ pub struct ExtruderState {
 /// vocabulary of (diameter, material) the printer supports — the
 /// printer profile's available nozzle catalog gates which SKUs are
 /// pickable per extruder.
+///
+/// `diameter` is a string symbol ("0.4", "0.25", "0.4+0.6") —
+/// never a number we arithmetic on. The cascade composer matches
+/// it to a `nozzles/<diameter>.toml` filename by exact-string
+/// lookup, and the Quality picker filters fragments by exact-set
+/// membership against `[meta] available_for` entries.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NozzleSku {
-    pub diameter_mm: f32,
+    pub diameter: String,
     pub material: NozzleMaterial,
 }
 
@@ -225,11 +235,11 @@ mod tests {
             vendor_profile_ref: "bambu-lab-a1-mini".into(),
             printer_fragment_slug: "bambu-lab-a1-mini".into(),
             default_filament_fragment_slug: "bambu-pla-basic-bbl-a1m".into(),
-            default_process_fragment_slug: "0.20mm-standard-bbl-a1m".into(),
+            quality_profile: "0.20mm-standard".into(),
             connection: None,
             extruders: vec![ExtruderState {
                 installed_nozzle: NozzleSku {
-                    diameter_mm: 0.4,
+                    diameter: "0.4".to_string(),
                     material: NozzleMaterial::Stainless,
                 },
                 slots: vec![SlotBinding {
@@ -247,7 +257,7 @@ mod tests {
         let parsed: PrinterInstance = serde_json::from_str(&json).expect("de");
         assert_eq!(parsed.id, "test");
         assert_eq!(parsed.extruders.len(), 1);
-        assert_eq!(parsed.extruders[0].installed_nozzle.diameter_mm, 0.4);
+        assert_eq!(parsed.extruders[0].installed_nozzle.diameter, "0.4");
         assert_eq!(
             parsed.extruders[0].installed_nozzle.material,
             NozzleMaterial::Stainless,

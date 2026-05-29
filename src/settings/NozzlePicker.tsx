@@ -27,25 +27,24 @@ export interface NozzlePickerProps {
    *  "Nozzles" section divider in the expanded layout (3+ extruders),
    *  where the section header already carries the noun. */
   compact?: boolean;
-  /** Currently-installed diameter on this extruder, in millimetres. */
-  value: number;
+  /** Currently-installed diameter on this extruder. String symbol
+   *  ("0.4"), not a number — see [NozzleSku.diameter] for why. */
+  value: string;
   /** Diameters the printer profile bundled nozzle fragments for. */
-  diameters: readonly number[];
-  onChange: (next: number) => void;
+  diameters: readonly string[];
+  onChange: (next: string) => void;
   /** Diameter the printer treats as its default (typically the
    *  `Toolhead.default_nozzle_diameter`). Renders the `default` badge
    *  on the matching popover entry. */
-  printerDefault?: number | null;
+  printerDefault?: string | null;
   disabled?: boolean;
 }
 
-/** Format a diameter for display — keeps 0.4 as `0.4 mm`, drops
- *  trailing zeros for cleaner integer cases (the picker doesn't ship
- *  those today but the formatter is forward-looking). */
-function formatDiameter(d: number): string {
-  // `toString` already drops trailing zeros for floats; explicit
-  // `parseFloat(d.toFixed(2))` would round but lose precision on
-  // exotic sizes. Trust the source list to be clean (0.2 / 0.4 / …).
+/** Format a diameter for display: "0.4" → "0.4 mm". The
+ *  diameter is already a clean symbol from the source list
+ *  (0.2 / 0.4 / 0.6 / 0.8 etc.); the formatter just appends
+ *  the unit. */
+function formatDiameter(d: string): string {
   return `${d} mm`;
 }
 
@@ -72,7 +71,7 @@ export function NozzlePicker({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [open]);
 
-  const pick = (next: number): void => {
+  const pick = (next: string): void => {
     setOpen(false);
     if (next !== value) onChange(next);
   };

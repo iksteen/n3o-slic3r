@@ -17,6 +17,16 @@ const ChevronChip = () => (
   </svg>
 );
 
+// Print-quality presets. Each maps to a base layer height; selecting one is
+// the coarse "how fine do you want this print" control that sits above the
+// 800+ granular settings below. Ordered fastest → finest.
+const QUALITY_PROFILES = [
+  { id: "draft",     name: "Draft",      layer: "0.28", note: "Fast" },
+  { id: "standard",  name: "Standard",   layer: "0.20", note: "Balanced" },
+  { id: "fine",      name: "Fine",       layer: "0.12", note: "Detailed" },
+  { id: "superfine", name: "Extra Fine", layer: "0.08", note: "Slowest" },
+];
+
 // ───────── fuzzy match (very small implementation) ─────────
 function fuzzyScore(needle, hay) {
   if (!needle) return 1;
@@ -528,6 +538,8 @@ function SettingsPanel({
   const [query, setQuery] = useSPS("");
   const [activeCat, setActiveCat] = useSPS(CATEGORIES[0].id);
   const [printerMenuOpen, setPrinterMenuOpen] = useSPS(false);
+  const [qualityProfile, setQualityProfile] = useSPS("standard");
+  const [qualityMenuOpen, setQualityMenuOpen] = useSPS(false);
   const scrollRef = useSPR(null);
   const inputRef = useSPR(null);
   const printerChipRef = useSPR(null);
@@ -543,6 +555,18 @@ function SettingsPanel({
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [printerMenuOpen]);
+
+  // Dismiss quality menu on outside click
+  useSPE(() => {
+    if (!qualityMenuOpen) return;
+    const onDoc = (e) => {
+      if (!e.target.closest(".sp-quality-menu") && !e.target.closest(".sp-quality-chip")) {
+        setQualityMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [qualityMenuOpen]);
 
   const objectAvailable = !!selectedObject;
 
@@ -804,6 +828,48 @@ function SettingsPanel({
             </div>
           </div>
         )}
+      <div className="sp-quality" role="row">
+        <span className="config-row-label sp-quality-label">Quality</span>
+        <div className="sp-quality-wrap">
+          {(() => {
+            const cur = QUALITY_PROFILES.find(p => p.id === qualityProfile) || QUALITY_PROFILES[0];
+            return (
+              <button
+                className={`sp-quality-chip ${qualityMenuOpen ? "open" : ""}`}
+                onClick={() => setQualityMenuOpen(o => !o)}
+                aria-haspopup="listbox"
+                aria-expanded={qualityMenuOpen}
+                title={`${cur.name} · ${cur.layer} mm layer height`}
+              >
+                <span className="sp-quality-chip-main">
+                  <span className="sp-quality-chip-name">{cur.name}</span>
+                  <span className="sp-quality-chip-h">{cur.layer} mm</span>
+                </span>
+                <span className="chev"><ChevronChip/></span>
+              </button>
+            );
+          })()}
+          {qualityMenuOpen && (
+            <div className="sp-quality-menu" role="listbox" onClick={(e) => e.stopPropagation()}>
+              {QUALITY_PROFILES.map(p => (
+                <button
+                  key={p.id}
+                  className={`sp-quality-item ${p.id === qualityProfile ? "active" : ""}`}
+                  role="option"
+                  aria-selected={p.id === qualityProfile}
+                  onClick={() => { setQualityProfile(p.id); setQualityMenuOpen(false); }}
+                >
+                  <span className="sp-quality-item-name">{p.name}</span>
+                  <span className="sp-quality-item-meta">
+                    <span className="sp-quality-item-h">{p.layer} mm</span>
+                    <span className="sp-quality-item-note">{p.note}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
         <div className="sp-config-row sp-config-slots">
           <SyncSlotsLabel printer={printer} onSync={onSyncFilaments}/>
           {slotIds.length === 0 ? (

@@ -43,9 +43,9 @@ export type PrinterProfileJson = {
   ams_type: string | null;
   supported_build_plates: string[];
   /** Nozzle diameters the printer ships per-nozzle fragments for
-   *  (e.g. `[0.2, 0.4, 0.6, 0.8]` for the A1 mini). Populates the
-   *  NozzlePicker's diameter menu. */
-  available_nozzle_diameters: number[];
+   *  (e.g. `["0.2", "0.4", "0.6", "0.8"]` for the A1 mini).
+   *  String symbols — see [NozzleSku.diameter] for why. */
+  available_nozzle_diameters: string[];
   /** Default `curr_bed_type` enum value the upstream Orca profile
    * declares for this printer. Frontend uses this when displaying
    * "the canonical default" hint; create_instance on the backend
@@ -53,7 +53,7 @@ export type PrinterProfileJson = {
    * legacy profiles that omit the field. */
   default_bed: string | null;
   toolheads: {
-    default_nozzle_diameter: number;
+    default_nozzle_diameter: string;
     hotend_type: string;
     max_temp: number;
   }[];

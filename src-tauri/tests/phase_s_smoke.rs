@@ -79,7 +79,7 @@ fn canonical_filament() -> FilamentProfile {
 
 fn bambi_printer() -> PrinterProfile {
     PrinterProfile {
-        model: "Bambu A1 mini".into(),
+        model: "Bambu Lab A1 mini".into(),
         supported_build_plates: vec![
             "Cool".into(),
             "Textured PEI".into(),
@@ -88,7 +88,7 @@ fn bambi_printer() -> PrinterProfile {
             "SuperTack".into(),
         ],
         toolheads: vec![Toolhead {
-            default_nozzle_diameter: 0.4,
+            default_nozzle_diameter: "0.4".into(),
             hotend_type: "stainless_steel".into(),
             max_temp: 300.0,
         }],
@@ -107,7 +107,7 @@ fn snappy_printer() -> PrinterProfile {
         supported_build_plates: vec!["Textured PEI Plate".into()],
         toolheads: (0..4)
             .map(|_| Toolhead {
-                default_nozzle_diameter: 0.4,
+                default_nozzle_diameter: "0.4".into(),
                 hotend_type: "hardened_steel".into(),
                 max_temp: 300.0,
             })

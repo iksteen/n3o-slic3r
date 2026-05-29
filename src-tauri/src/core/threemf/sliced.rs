@@ -39,7 +39,7 @@ const N3O_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug, Clone)]
 pub struct SlicedProjectInput {
     pub plates: Vec<SlicedPlate>,
-    /// Human-readable printer model name (e.g., "Bambu A1 mini").
+    /// Human-readable printer model name (e.g., "Bambu Lab A1 mini").
     /// Surfaces in Bambu's namespace metadata so the printer's
     /// firmware can sanity-check the job against the connected
     /// device.
@@ -491,7 +491,7 @@ fn xml_escape_attr(s: &str) -> String {
 /// smoke can build one without re-creating all the boilerplate.
 pub fn fixture_input(plate_id: u32, gcode: Vec<u8>) -> SlicedProjectInput {
     SlicedProjectInput {
-        printer_model: "Bambu A1 mini".into(),
+        printer_model: "Bambu Lab A1 mini".into(),
         file_metadata: std::collections::BTreeMap::new(),
         plates: vec![SlicedPlate {
             plate_id,
@@ -546,7 +546,7 @@ mod tests {
         let original_gcode = b";test\nG28\nG1 X1\n".to_vec();
         let thumb = vec![0x89, 0x50, 0x4E, 0x47];
         let input = SlicedProjectInput {
-            printer_model: "Bambu A1 mini".into(),
+            printer_model: "Bambu Lab A1 mini".into(),
             file_metadata: BTreeMap::new(),
             plates: vec![SlicedPlate {
                 plate_id: 1,
@@ -701,7 +701,7 @@ mod tests {
         summary.layer_count = 42;
         summary.filament_used_grams.insert(0, 4.21);
         let input = SlicedProjectInput {
-            printer_model: "Bambu A1 mini".into(),
+            printer_model: "Bambu Lab A1 mini".into(),
             file_metadata: std::collections::BTreeMap::new(),
             plates: vec![SlicedPlate {
                 plate_id: 1,
@@ -747,7 +747,7 @@ mod tests {
     #[test]
     fn multi_plate_writes_per_plate_files() {
         let input = SlicedProjectInput {
-            printer_model: "Bambu A1 mini".into(),
+            printer_model: "Bambu Lab A1 mini".into(),
             file_metadata: std::collections::BTreeMap::new(),
             plates: vec![
                 SlicedPlate {

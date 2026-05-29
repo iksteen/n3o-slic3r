@@ -175,7 +175,7 @@ mod tests {
 
     fn a1_mini() -> PrinterProfile {
         PrinterProfile {
-            model: "Bambu A1 mini".into(),
+            model: "Bambu Lab A1 mini".into(),
             // AMS-fed: one toolhead, one or more AMS units. The
             // capability predicates read multi-material status off
             // `ams_max`, so it must be set explicitly for tests that
@@ -183,7 +183,7 @@ mod tests {
             ams_max: 1,
             supported_build_plates: vec!["Textured PEI".into()],
             toolheads: vec![Toolhead {
-                default_nozzle_diameter: 0.4,
+                default_nozzle_diameter: "0.4".to_string(),
                 hotend_type: "stainless_steel".into(),
                 max_temp: 300.0,
             }],
@@ -202,7 +202,7 @@ mod tests {
             supported_build_plates: vec!["Textured PEI".into()],
             toolheads: (0..4)
                 .map(|_i| Toolhead {
-                    default_nozzle_diameter: 0.4,
+                    default_nozzle_diameter: "0.4".to_string(),
                     hotend_type: "stainless_steel".into(),
                     max_temp: 300.0,
                 })
@@ -221,7 +221,7 @@ mod tests {
             model: "Voron 2.4 350".into(),
             supported_build_plates: vec!["Textured PEI".into()],
             toolheads: vec![Toolhead {
-                default_nozzle_diameter: 0.4,
+                default_nozzle_diameter: "0.4".to_string(),
                 hotend_type: "stainless_steel".into(),
                 max_temp: 300.0,
             }],

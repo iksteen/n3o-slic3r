@@ -448,6 +448,35 @@ def write_base_machine(path: Path, kv: dict, *, source_root: str, slug: str) -> 
 
 def write_nozzle_profile(path: Path, kv: dict, *, sku: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Upstream `default_filament_profile` carries an `@<printer>`
+    # suffix (e.g. "Bambu PLA Basic @BBL A1M") naming the per-
+    # printer leaf the filament inherited from. Our consolidator
+    # merges those leaves into one cross-printer filament fragment
+    # named by the bare product ("Bambu PLA Basic"), so the suffix
+    # would point at a fragment that no longer exists — the picker's
+    # `filament_slug_by_display_name` lookup would silently fall
+    # back to `generic-pla`. Strip the suffix so the seeded name
+    # matches what the filament library actually exposes.
+    kv = dict(kv)
+    if isinstance(kv.get("default_filament_profile"), str):
+        kv["default_filament_profile"] = kv["default_filament_profile"].split(" @", 1)[0]
+    # Preserve any hand-curated or scripted scalars this file
+    # carries that the importer doesn't know about — currently
+    # `default_process_profile`, seeded by `scripts/import_processes.py`
+    # as part of the Quality-picker backfill. Re-importing the
+    # machine profile (e.g. after bumping the upstream submodule)
+    # used to wipe that line because EXTRUDER_KEYS doesn't list it;
+    # capture it before the overwrite and re-insert after.
+    preserved: dict[str, str] = {}
+    if path.exists():
+        existing = path.read_text(encoding="utf-8")
+        m = re.search(
+            r"^default_process_profile\s*=\s*(.+?)\s*$",
+            existing,
+            re.MULTILINE,
+        )
+        if m:
+            preserved["default_process_profile"] = m.group(1).strip()
     header = [
         f"# Nozzle SKU `{sku}` — per-extruder values.",
         "# The composer replicates these into extruders_count-length",
@@ -456,6 +485,12 @@ def write_nozzle_profile(path: Path, kv: dict, *, sku: str) -> None:
         "",
     ]
     body = [f"{k} = {_value_to_toml_nozzle(kv[k], key=k)}" for k in sorted(kv)]
+    # Preserved scalars go at the end so they're not interleaved with
+    # the importer-managed block; the cascade loader's default-rule
+    # synthesis treats every top-level scalar uniformly regardless
+    # of position.
+    for k in sorted(preserved):
+        body.append(f"{k} = {preserved[k]}")
     path.write_text("\n".join(header + body) + "\n")
 
 

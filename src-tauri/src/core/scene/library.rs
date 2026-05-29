@@ -297,7 +297,7 @@ mod tests {
             eprintln!("skipping: vendored calibration assets missing at {root:?}");
             return;
         }
-        let cals = list_calibration("Bambu A1 mini", &root);
+        let cals = list_calibration("Bambu Lab A1 mini", &root);
         assert_eq!(cals.len(), 4);
         // Dimension cube + material flow ship as .3mf → loadable.
         let dim = cals.iter().find(|c| c.id == "dimension-cube").unwrap();

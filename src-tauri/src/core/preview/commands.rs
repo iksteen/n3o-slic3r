@@ -582,7 +582,7 @@ mod tests {
             ams_bindings: vec![],
         };
         let input = SlicedProjectInput {
-            printer_model: "Bambu A1 mini".into(),
+            printer_model: "Bambu Lab A1 mini".into(),
             file_metadata: std::collections::BTreeMap::new(),
             plates: vec![plate1, plate2],
         };

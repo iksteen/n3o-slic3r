@@ -58,6 +58,16 @@ pub enum LibraryError {
     Io(PathBuf, std::io::Error),
     Toml(PathBuf, toml::de::Error),
     Cascade(PathBuf, CascadeLoadError),
+    /// `model.toml`'s `model` differs from the sibling `machine.toml`'s
+    /// `printer_model` scalar. The picker's `available_for` predicates
+    /// key off `printer_model`; a mismatch silently empties the
+    /// process/filament filters for the printer, so it's a fail-fast
+    /// at load time.
+    PrinterModelMismatch {
+        printer_dir: PathBuf,
+        model_toml_value: String,
+        machine_toml_value: String,
+    },
 }
 
 impl std::fmt::Display for LibraryError {
@@ -67,6 +77,17 @@ impl std::fmt::Display for LibraryError {
             Self::Io(p, e) => write!(f, "io error reading `{}`: {e}", p.display()),
             Self::Toml(p, e) => write!(f, "parse error in `{}`: {e}", p.display()),
             Self::Cascade(p, e) => write!(f, "cascade load error in `{}`: {e}", p.display()),
+            Self::PrinterModelMismatch {
+                printer_dir,
+                model_toml_value,
+                machine_toml_value,
+            } => write!(
+                f,
+                "`{}`: model.toml declares model=`{model_toml_value}` but machine.toml \
+                 declares printer_model=`{machine_toml_value}` — picker predicates key \
+                 off printer_model; the two must match",
+                printer_dir.display(),
+            ),
         }
     }
 }
@@ -96,6 +117,22 @@ pub struct PrinterCatalogEntry {
     pub fragment_slug: String,
 }
 
+/// One `(printer, nozzle)` pair a process fragment applies to,
+/// derived at picker time from the fragment's `[[rule]]` predicates.
+/// Each rule with `when.printer.model = …` + `when.nozzle.diameter = …`
+/// contributes one entry per (model, nozzle) combination (the OR-list
+/// form `when.printer.model = ["A", "B"]` expands).
+///
+/// Surfaced on the wire so a future UI can show "also fits …" hints;
+/// the picker itself uses it to filter by the active installed-nozzle
+/// set (union rule, with composite specs like `"0.4+0.6"` splitting
+/// on `+`).
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+pub struct ProcessAvailability {
+    pub printer: String,
+    pub nozzle: String,
+}
+
 /// Snapshot of every parseable profile fragment on disk, plus the
 /// printer catalog. Built once at startup; lookups borrow from this.
 pub struct ProfileLibrary {
@@ -109,6 +146,8 @@ pub struct ProfileLibrary {
     nozzle_order: BTreeMap<String, Vec<String>>,
     /// Per-printer bed identity declaration order (UI presentation).
     bed_order: BTreeMap<String, Vec<String>>,
+    /// Per-printer process-slug declaration order (UI presentation).
+    process_order: BTreeMap<String, Vec<String>>,
     /// Filament slug declaration order (UI presentation).
     filament_order: Vec<String>,
 
@@ -176,6 +215,7 @@ impl ProfileLibrary {
             process_fragments: HashMap::new(),
             nozzle_order: BTreeMap::new(),
             bed_order: BTreeMap::new(),
+            process_order: BTreeMap::new(),
             filament_order: Vec::new(),
             catalog: Vec::new(),
         };
@@ -235,6 +275,26 @@ impl ProfileLibrary {
                     .map_err(|e| LibraryError::Io(meta_path.clone(), e))?;
                 let envelope: PrinterProfileEnvelope =
                     toml::from_str(&raw).map_err(|e| LibraryError::Toml(meta_path.clone(), e))?;
+                // Cross-check model.toml::model against the machine
+                // cascade's `printer_model` scalar. Both files name
+                // the same physical printer, but the picker's
+                // `available_for` predicates only consult
+                // `printer_model`; a drift between the two silently
+                // empties the process / filament filters for this
+                // printer. Fail fast at load.
+                if let Some(machine_asset) = self.printer_fragments.get(&slug) {
+                    if let Some(machine_printer_model) =
+                        fragment_set_value(&machine_asset.cascade, "printer_model")
+                    {
+                        if machine_printer_model != envelope.profile.model {
+                            return Err(LibraryError::PrinterModelMismatch {
+                                printer_dir: printer_dir.clone(),
+                                model_toml_value: envelope.profile.model.clone(),
+                                machine_toml_value: machine_printer_model,
+                            });
+                        }
+                    }
+                }
                 let identity = envelope.identity.unwrap_or_else(|| slug.clone());
                 self.catalog.push(PrinterCatalogEntry {
                     identity,
@@ -268,10 +328,14 @@ impl ProfileLibrary {
                     let asset = read_cascade(root, &f)?;
                     insert_fragment(
                         &mut self.process_fragments,
-                        (slug.clone(), process_slug),
+                        (slug.clone(), process_slug.clone()),
                         asset,
                         "process",
                     );
+                    self.process_order
+                        .entry(slug.clone())
+                        .or_default()
+                        .push(process_slug);
                 }
             }
             // beds/<name>.toml — identity comes from inside the file.
@@ -577,20 +641,26 @@ pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
     library()
         .filament_order
         .iter()
-        .map(|slug| {
+        .filter_map(|slug| {
             let cascade = library()
                 .filament_fragments
                 .get(slug)
                 .expect("filament_order index always present in fragments map");
             // The cascade.rules vec carries one unconditional rule
             // for converter output; read the surfaced fields out of
-            // its set.
-            let set = cascade
-                .cascade
-                .rules
-                .first()
-                .map(|r| &r.set)
-                .expect("filament fragment carries at least one rule");
+            // its set. A fragment with no rules (e.g. metadata-only
+            // file that all the picker scalars happened to skip) is
+            // skipped here rather than panicking the picker IPC.
+            let set = match cascade.cascade.rules.first() {
+                Some(r) => &r.set,
+                None => {
+                    tracing::warn!(
+                        slug = %slug,
+                        "filament fragment carries no rules; skipping in picker list",
+                    );
+                    return None;
+                }
+            };
             let display_name = set
                 .get("filament_settings_id")
                 .cloned()
@@ -625,7 +695,7 @@ pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_owned());
-            FilamentFragmentSummary {
+            Some(FilamentFragmentSummary {
                 identity: slug.clone(),
                 display_name,
                 base_type,
@@ -633,9 +703,148 @@ pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
                 nozzle_temp,
                 bed_temp,
                 filament_id,
-            }
+            })
         })
         .collect()
+}
+
+/// The `default_process_profile` slug declared in a nozzle.toml
+/// fragment, if any. Drives the Quality picker's rule-1 default —
+/// each nozzle profile registers its preferred process; the picker
+/// uses that when seeding a fresh instance and when the user's
+/// current process becomes incompatible after a nozzle swap.
+///
+/// Read from the nozzle cascade's unconditional default rule
+/// (cascade load already places top-level scalars there). Returns
+/// `None` when the nozzle fragment is unknown or doesn't declare
+/// a default.
+pub fn nozzle_default_process(printer_slug: &str, sku: &str) -> Option<String> {
+    library()
+        .nozzle_fragments
+        .get(&(printer_slug.to_owned(), sku.to_owned()))
+        .and_then(|asset| asset.cascade.rules.iter().find(|r| r.is_default()))
+        .and_then(|rule| rule.set.get("default_process_profile"))
+        .cloned()
+}
+
+/// One row in the Quality picker's dropdown for the active
+/// (printer, nozzle). `slug` is the wire identity the frontend
+/// writes back via `printer_instance_set_quality_profile`;
+/// `display_name` and `layer_height_mm` are picker presentation;
+/// `available_for` carries the full set of (printer, nozzle) combos
+/// the fragment supports so a future UI can show "also fits …" hints.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProcessFragmentSummary {
+    pub slug: String,
+    pub display_name: String,
+    pub layer_height_mm: Option<f32>,
+    pub available_for: Vec<ProcessAvailability>,
+}
+
+/// Enumerate process fragments available for the active
+/// (printer, set-of-installed-nozzles). `printer_fragment_slug` is
+/// the printer directory slug (e.g. `"bambu-lab-a1-mini"`);
+/// `printer_model` is the human printer name from `machine.toml`
+/// (e.g. `"Bambu Lab A1 mini"`) — the metadata's `available_for`
+/// rows key off the latter, while the on-disk fragments live under
+/// the former.
+///
+/// `installed_nozzle_diameters` lists the unique nozzle diameters
+/// currently installed across the printer's extruders (e.g.
+/// `["0.4"]` for an A1 mini, `["0.4", "0.6"]` for a mixed-nozzle
+/// U1). A fragment matches when any nozzle in its `available_for`
+/// entry (split on `+` for composite specs like `"0.4+0.6"`) shares
+/// at least one diameter with the installed set. Composite profiles
+/// surface alongside single-nozzle ones whenever any of their
+/// constituent nozzles is installed.
+pub fn list_process_fragments(
+    printer_fragment_slug: &str,
+    printer_model: &str,
+    installed_nozzle_diameters: &[String],
+) -> Vec<ProcessFragmentSummary> {
+    let lib = library();
+    let order = match lib.process_order.get(printer_fragment_slug) {
+        Some(order) => order,
+        None => return Vec::new(),
+    };
+    let installed: std::collections::HashSet<&str> = installed_nozzle_diameters
+        .iter()
+        .map(String::as_str)
+        .collect();
+    order
+        .iter()
+        .filter_map(|process_slug| {
+            let asset = lib
+                .process_fragments
+                .get(&(printer_fragment_slug.to_owned(), process_slug.clone()))?;
+            let available_for = derive_process_availability(&asset.cascade);
+            let matches = available_for.iter().any(|a| {
+                a.printer == printer_model
+                    && a.nozzle
+                        .split('+')
+                        .any(|n| installed.contains(n))
+            });
+            if !matches {
+                return None;
+            }
+            let default_rule = asset.cascade.rules.iter().find(|r| r.is_default());
+            let display_name = default_rule
+                .and_then(|r| r.set.get("print_settings_id"))
+                .cloned()
+                .unwrap_or_else(|| process_slug.clone());
+            let layer_height_mm = default_rule
+                .and_then(|r| r.set.get("layer_height"))
+                .and_then(|s| s.parse::<f32>().ok());
+            Some(ProcessFragmentSummary {
+                slug: process_slug.clone(),
+                display_name,
+                layer_height_mm,
+                available_for,
+            })
+        })
+        .collect()
+}
+
+/// Walk a process fragment's `[[rule]]` blocks and collect every
+/// `(printer.model, nozzle.diameter)` combination they target. OR-list
+/// predicates (`when.printer.model = ["A", "B"]`) expand into one
+/// availability entry per printer; rules without both dimensions are
+/// skipped (a fragment without a printer.model predicate isn't a
+/// printer-bound process and can't surface for any printer).
+fn derive_process_availability(cascade: &Cascade) -> Vec<ProcessAvailability> {
+    use crate::core::cascade::types::ConditionValue;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for rule in &cascade.rules {
+        let mut printers: Vec<&str> = Vec::new();
+        let mut nozzle: Option<&str> = None;
+        for cond in &rule.when.conditions {
+            match cond.dimension.as_str() {
+                "printer.model" => match &cond.value {
+                    ConditionValue::Scalar(s) => printers.push(s.as_str()),
+                    ConditionValue::Array(xs) => {
+                        printers.extend(xs.iter().map(String::as_str))
+                    }
+                },
+                "nozzle.diameter" => {
+                    if let ConditionValue::Scalar(s) = &cond.value {
+                        nozzle = Some(s.as_str());
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(n) = nozzle else { continue };
+        for p in printers {
+            if seen.insert((p.to_owned(), n.to_owned())) {
+                out.push(ProcessAvailability {
+                    printer: p.to_owned(),
+                    nozzle: n.to_owned(),
+                });
+            }
+        }
+    }
+    out
 }
 
 /// Printer catalog — one entry per `model.toml` found on disk.
@@ -652,6 +861,87 @@ pub fn printer_catalog_lookup(identity: &str) -> Option<&'static PrinterCatalogE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_process_fragments_returns_a1m_04_set() {
+        // The A1 mini + 0.4 nozzle pairing should match every
+        // bundled process whose `[meta] available_for` contains
+        // (Bambu Lab A1 mini, 0.4). Upstream BBL ships 10 such
+        // leaves; the consolidator preserves them as named slugs
+        // with the same available_for, so this list is stable.
+        let summaries = list_process_fragments(
+            "bambu-lab-a1-mini",
+            "Bambu Lab A1 mini",
+            &["0.4".to_string()],
+        );
+        assert_eq!(
+            summaries.len(),
+            10,
+            "expected 10 process fragments for A1 mini + 0.4 nozzle, got {} ({:?})",
+            summaries.len(),
+            summaries.iter().map(|s| &s.slug).collect::<Vec<_>>(),
+        );
+        assert!(summaries.iter().any(|s| s.slug == "0.20mm-standard"));
+        assert!(summaries.iter().any(|s| s.slug == "0.20mm-strength"));
+    }
+
+    #[test]
+    fn list_process_fragments_unions_multi_nozzle_u1() {
+        // U1 mixed-nozzle setup ([0.4, 0.6]) — the picker should
+        // surface every process whose `available_for` includes any
+        // installed nozzle (union rule). That covers single-nozzle
+        // "0.4" and "0.6" processes PLUS upstream's composite
+        // "0.4+0.6" profile (the filter splits on `+`).
+        let summaries = list_process_fragments(
+            "snapmaker-u1",
+            "Snapmaker U1",
+            &["0.4".to_string(), "0.6".to_string()],
+        );
+        let slugs: Vec<&str> = summaries.iter().map(|s| s.slug.as_str()).collect();
+        assert!(
+            slugs.contains(&"0.20-standard"),
+            "U1 mixed should see 0.20-standard (covers single 0.4, \
+             single 0.6, and composite 0.4+0.6 contexts); got {slugs:?}",
+        );
+        let has_06_anywhere = summaries.iter().any(|s| {
+            s.available_for.iter().any(|a| {
+                a.printer == "Snapmaker U1"
+                    && a.nozzle.split('+').any(|n| n == "0.6")
+            })
+        });
+        assert!(
+            has_06_anywhere,
+            "U1 mixed should include at least one fragment whose \
+             available_for mentions 0.6 nozzle; got {slugs:?}",
+        );
+    }
+
+    #[test]
+    fn list_process_fragments_filters_by_active_nozzle_set() {
+        // Single-nozzle setup: A1 mini with just 0.4 only sees
+        // fragments whose `available_for` for this printer mentions
+        // 0.4 somewhere (either as a single-nozzle "0.4" or as a
+        // constituent of a composite like "0.4+x"). Fragments
+        // targeting other nozzles only (e.g. "0.6", "0.8") must not
+        // surface.
+        let summaries = list_process_fragments(
+            "bambu-lab-a1-mini",
+            "Bambu Lab A1 mini",
+            &["0.4".to_string()],
+        );
+        for s in &summaries {
+            let has_04 = s.available_for.iter().any(|a| {
+                a.printer == "Bambu Lab A1 mini"
+                    && a.nozzle.split('+').any(|n| n == "0.4")
+            });
+            assert!(
+                has_04,
+                "fragment `{}` surfaced for A1 mini 0.4 but its \
+                 available_for never mentions 0.4: {:?}",
+                s.slug, s.available_for,
+            );
+        }
+    }
 
     #[test]
     fn every_bundled_fragment_parses() {
@@ -753,7 +1043,7 @@ mod tests {
         assert!(load_bed_fragment("ghost", "Cool Plate").is_none());
         assert!(load_bed_fragment("bambu-lab-a1-mini", "Ghost Plate").is_none());
         assert!(load_filament_fragment("ghost").is_none());
-        assert!(load_process_fragment("ghost", "0.20mm-standard-bbl-a1m").is_none());
+        assert!(load_process_fragment("ghost", "0.20mm-standard").is_none());
         assert!(load_process_fragment("bambu-lab-a1-mini", "ghost").is_none());
     }
 
@@ -763,8 +1053,39 @@ mod tests {
         assert!(cat.iter().any(|e| e.identity == "bambu-lab-a1-mini"));
         assert!(cat.iter().any(|e| e.identity == "snapmaker-u1"));
         let bambu = printer_catalog_lookup("bambu-lab-a1-mini").expect("a1 mini");
-        assert_eq!(bambu.profile.model, "Bambu A1 mini");
+        assert_eq!(bambu.profile.model, "Bambu Lab A1 mini");
         assert_eq!(bambu.fragment_slug, "bambu-lab-a1-mini");
+    }
+
+    #[test]
+    fn model_toml_machine_toml_printer_model_mismatch_fails_load() {
+        // Catch the silent-empty-picker failure mode that previously
+        // shipped: model.toml::model and machine.toml::printer_model
+        // both name the same physical printer, but the picker's
+        // `available_for` predicates only consult printer_model. A
+        // drift between the two used to load cleanly and then silently
+        // empty the process filter for that printer.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let printer_dir = root.join("acme").join("printer").join("foo");
+        std::fs::create_dir_all(&printer_dir).expect("mkdir printer dir");
+        std::fs::write(
+            printer_dir.join("machine.toml"),
+            "printer_model = \"Foo Pro\"\n",
+        )
+        .expect("write machine.toml");
+        std::fs::write(
+            printer_dir.join("model.toml"),
+            "model = \"Foo\"\nbrand = \"Acme\"\ntoolheads = []\n",
+        )
+        .expect("write model.toml");
+
+        let result = ProfileLibrary::load(root);
+        match result {
+            Err(LibraryError::PrinterModelMismatch { .. }) => {}
+            Err(other) => panic!("expected PrinterModelMismatch, got {other:?}"),
+            Ok(_) => panic!("expected PrinterModelMismatch, got Ok"),
+        }
     }
 
     #[test]

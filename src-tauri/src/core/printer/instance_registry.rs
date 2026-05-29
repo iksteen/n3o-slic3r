@@ -118,6 +118,17 @@ pub enum InstanceMutError {
     },
     /// `create_instance` was called with an empty display name.
     EmptyDisplayName,
+    /// Requested nozzle diameter isn't in the bound printer profile's
+    /// `available_nozzle_diameters`. Surfaced by
+    /// [`set_extruder_nozzle_diameter`]; the picker only offers
+    /// diameters from that list so a typed error here means a hand-
+    /// edited instance file or a future driver-side sync wrote
+    /// something the catalog doesn't bundle.
+    UnsupportedNozzleDiameter {
+        instance_id: String,
+        printer_identity: String,
+        diameter: String,
+    },
 }
 
 impl std::fmt::Display for InstanceMutError {
@@ -169,6 +180,14 @@ impl std::fmt::Display for InstanceMutError {
                 "printer `{identity}` supports at most {max} AMS unit(s); {requested} requested",
             ),
             Self::EmptyDisplayName => write!(f, "display name must not be empty"),
+            Self::UnsupportedNozzleDiameter {
+                instance_id,
+                printer_identity,
+                diameter,
+            } => write!(
+                f,
+                "instance `{instance_id}` printer `{printer_identity}` does not bundle nozzle diameter `{diameter}`",
+            ),
         }
     }
 }
@@ -235,13 +254,16 @@ pub fn set_slot_color(
 
 /// Change the diameter of the nozzle currently installed on the named
 /// extruder. Material stays as-is — the picker MVP only surfaces
-/// diameter swaps. The caller-side popover only offers diameters from
-/// the printer profile's `available_nozzle_diameters`, so no validation
-/// against the bundled catalog happens here.
+/// diameter swaps.
+///
+/// Validates the new diameter against the bound printer profile's
+/// `available_nozzle_diameters` so a hand-edited instance file or a
+/// future driver-side sync that writes a diameter the catalog doesn't
+/// bundle gets a typed error instead of an opaque slice-time failure.
 pub fn set_extruder_nozzle_diameter(
     id: &str,
     extruder_idx: usize,
-    diameter_mm: f32,
+    diameter: String,
 ) -> Result<PrinterInstance, InstanceMutError> {
     mutate_instance(id, |inst| {
         let extruder_count = inst.extruders.len();
@@ -252,7 +274,67 @@ pub fn set_extruder_nozzle_diameter(
                 extruders: extruder_count,
             },
         )?;
-        extruder.installed_nozzle.diameter_mm = diameter_mm;
+        // Resolve the bound profile up front: it's the authority on
+        // which diameters this printer accepts AND it carries the
+        // model.toml string the picker's `available_for` predicates
+        // key off (needed below for the rule-3 fallback). Missing the
+        // profile is a structural error worth surfacing, not silently
+        // overwriting `quality_profile` with the empty-string-model
+        // fallback that an `unwrap_or_default` would produce.
+        let profile = super::lookup(&inst.vendor_profile_ref).ok_or_else(|| {
+            InstanceMutError::PrinterProfileNotFound {
+                instance_id: id.to_owned(),
+                printer_identity: inst.vendor_profile_ref.clone(),
+            }
+        })?;
+        if !profile
+            .available_nozzle_diameters
+            .iter()
+            .any(|d| d == &diameter)
+        {
+            return Err(InstanceMutError::UnsupportedNozzleDiameter {
+                instance_id: id.to_owned(),
+                printer_identity: inst.vendor_profile_ref.clone(),
+                diameter,
+            });
+        }
+        extruder.installed_nozzle.diameter = diameter.clone();
+
+        // Quality-picker rule 3: when nozzle changes, if the
+        // currently selected process is no longer compatible with
+        // the new installed-nozzle set, fall back to the swapped-to
+        // nozzle's `default_process_profile`. Compatibility is the
+        // same union rule the picker uses
+        // (`list_process_fragments`): a process matches when its
+        // `available_for` nozzle spec (split on `+`) shares any
+        // diameter with the installed set.
+        let installed: Vec<String> = inst
+            .extruders
+            .iter()
+            .map(|e| e.installed_nozzle.diameter.clone())
+            .collect();
+        let printer_slug = inst.printer_fragment_slug.clone();
+        let compatible = crate::core::profile_library::list_process_fragments(
+            &printer_slug,
+            &profile.model,
+            &installed,
+        );
+        let still_compatible = compatible
+            .iter()
+            .any(|s| s.slug == inst.quality_profile);
+        if !still_compatible {
+            let fallback = crate::core::profile_library::nozzle_default_process(
+                &printer_slug,
+                &diameter,
+            );
+            if let Some(slug) = fallback {
+                inst.quality_profile = slug;
+            }
+            // If no fallback exists (nozzle.toml lacks
+            // default_process_profile), leave the slug alone — the
+            // picker will surface it as "unbound" (raw slug
+            // displayed) and the user can pick another.
+        }
         Ok(())
     })
 }
@@ -334,13 +416,13 @@ pub fn create_instance(
     // named filament isn't in our library — every vendor ships a
     // Generic PLA fragment so the slice path always has *something*
     // to resolve against.
-    let resolve_default_filament = |nozzle_diameter: f64| -> String {
-        let sku = format!("{:.1}", nozzle_diameter);
-        crate::core::profile_library::default_filament_profile_for(printer_identity, &sku)
-            .and_then(|name| {
-                crate::core::profile_library::filament_slug_by_display_name(&name)
-            })
-            .unwrap_or_else(|| "generic-pla".to_owned())
+    let resolve_default_filament = |nozzle_diameter: &str| -> String {
+        crate::core::profile_library::default_filament_profile_for(
+            printer_identity,
+            nozzle_diameter,
+        )
+        .and_then(|name| crate::core::profile_library::filament_slug_by_display_name(&name))
+        .unwrap_or_else(|| "generic-pla".to_owned())
     };
 
     // Topology branches on toolhead count. AMS-style printers
@@ -361,10 +443,10 @@ pub fn create_instance(
             .toolheads
             .iter()
             .map(|toolhead| {
-                let filament_slug = resolve_default_filament(toolhead.default_nozzle_diameter);
+                let filament_slug = resolve_default_filament(&toolhead.default_nozzle_diameter);
                 ExtruderState {
                     installed_nozzle: NozzleSku {
-                        diameter_mm: toolhead.default_nozzle_diameter as f32,
+                        diameter: toolhead.default_nozzle_diameter.clone(),
                         material: NozzleMaterial::Stainless,
                     },
                     slots: vec![SlotBinding {
@@ -381,9 +463,10 @@ pub fn create_instance(
         // matches BBS's ams_mapping convention; see the doc comment
         // on `create_instance`.
         let toolhead = profile.toolheads.first();
-        let default_nozzle_diameter =
-            toolhead.map(|t| t.default_nozzle_diameter).unwrap_or(0.4);
-        let filament_slug = resolve_default_filament(default_nozzle_diameter);
+        let default_nozzle_diameter: String = toolhead
+            .map(|t| t.default_nozzle_diameter.clone())
+            .unwrap_or_else(|| "0.4".to_owned());
+        let filament_slug = resolve_default_filament(&default_nozzle_diameter);
         let mut slots = Vec::new();
         for _unit in 0..ams_units {
             for _slot in 0..4 {
@@ -401,7 +484,7 @@ pub fn create_instance(
         });
         vec![ExtruderState {
             installed_nozzle: NozzleSku {
-                diameter_mm: default_nozzle_diameter as f32,
+                diameter: default_nozzle_diameter,
                 material: NozzleMaterial::Stainless,
             },
             slots,
@@ -414,7 +497,7 @@ pub fn create_instance(
     let default_filament_slug = profile
         .toolheads
         .first()
-        .map(|t| resolve_default_filament(t.default_nozzle_diameter))
+        .map(|t| resolve_default_filament(&t.default_nozzle_diameter))
         .unwrap_or_else(|| "generic-pla".to_owned());
 
     // Bed: prefer the upstream-declared default when it's actually
@@ -428,12 +511,43 @@ pub fn create_instance(
         .cloned()
         .or_else(|| profile.supported_build_plates.first().cloned())
         .unwrap_or_default();
-    let default_process_fragment_slug =
-        crate::core::profile_library::bundled_process_slugs_for_printer(printer_identity)
+    // Default process: ask the first toolhead's nozzle.toml what it
+    // recommends (rule 1 in the Quality-picker design). If that
+    // nozzle doesn't declare a default, fall back to whatever
+    // process slug is registered first for this printer (HashMap
+    // iteration order — non-deterministic, but better than empty).
+    let first_nozzle_sku = profile
+        .toolheads
+        .first()
+        .map(|t| t.default_nozzle_diameter.clone());
+    let quality_profile = first_nozzle_sku
+        .as_deref()
+        .and_then(|sku| {
+            crate::core::profile_library::nozzle_default_process(printer_identity, sku)
+        })
+        .unwrap_or_else(|| {
+            // Falling back to HashMap iteration order — non-
+            // deterministic, depends on hash seeds. Warn so the
+            // gap (nozzle.toml missing `default_process_profile`)
+            // doesn't stay silent: the user sees the wrong
+            // process pre-selected and the picker offers no
+            // remedy except "select something else."
+            let fallback = crate::core::profile_library::bundled_process_slugs_for_printer(
+                printer_identity,
+            )
             .into_iter()
             .next()
             .unwrap_or("")
             .to_owned();
+            tracing::warn!(
+                printer = %printer_identity,
+                nozzle = first_nozzle_sku.as_deref().unwrap_or("<no toolhead>"),
+                fallback_slug = %fallback,
+                "nozzle.toml has no `default_process_profile`; \
+                 picker will start on an unstable fallback slug",
+            );
+            fallback
+        });
 
     let instance = PrinterInstance {
         id: Uuid::new_v4().to_string(),
@@ -441,7 +555,7 @@ pub fn create_instance(
         vendor_profile_ref: printer_identity.to_owned(),
         printer_fragment_slug: printer_identity.to_owned(),
         default_filament_fragment_slug: default_filament_slug,
-        default_process_fragment_slug,
+        quality_profile,
         connection: None,
         extruders,
         bed: BedRef { identity: bed_identity },
@@ -520,6 +634,22 @@ pub fn set_instance_bed(
             });
         }
         inst.bed.identity = bed_identity;
+        Ok(())
+    })
+}
+
+/// Set the instance's selected process fragment slug. No validation
+/// against the bundled process catalog here — the picker is the
+/// validating surface (it only offers fragments it found in the
+/// library for the active printer + nozzle). Writing through this
+/// path emits the same `printer:instance_changed` event the bed and
+/// nozzle setters do, so the cascade preview re-resolves.
+pub fn set_instance_quality_profile(
+    id: &str,
+    quality_profile: String,
+) -> Result<PrinterInstance, InstanceMutError> {
+    mutate_instance(id, |inst| {
+        inst.quality_profile = quality_profile;
         Ok(())
     })
 }
@@ -853,22 +983,102 @@ mod tests {
         // Snappy is a 4-toolhead toolchanger — pick T3 (extruder
         // index 2) and swap to a 0.6 nozzle so the assertion isn't
         // confounded by the bundled default.
-        let updated = set_extruder_nozzle_diameter("snappy", 2, 0.6)
+        let updated = set_extruder_nozzle_diameter("snappy", 2, "0.6".to_string())
             .expect("snappy has 4 extruders");
-        assert_eq!(updated.extruders[2].installed_nozzle.diameter_mm, 0.6);
+        assert_eq!(updated.extruders[2].installed_nozzle.diameter, "0.6");
         // Material is preserved — the picker only writes diameter.
         let material = updated.extruders[2].installed_nozzle.material;
         let again =
             lookup_instance("snappy").expect("snappy present after mutation");
-        assert_eq!(again.extruders[2].installed_nozzle.diameter_mm, 0.6);
+        assert_eq!(again.extruders[2].installed_nozzle.diameter, "0.6");
         assert_eq!(again.extruders[2].installed_nozzle.material, material);
+    }
+
+    #[test]
+    fn set_extruder_nozzle_diameter_resets_incompatible_quality_profile() {
+        // Quality-picker rule 3: a nozzle swap that invalidates the
+        // currently selected process auto-falls-back to the new
+        // nozzle's `default_process_profile`.
+        //
+        // Bambi (A1 mini, single extruder) starts with a 0.4 nozzle
+        // and `0.20mm-standard` (a 0.4-only process). Swap to 0.6
+        // — the only nozzle now installed is 0.6, the previous
+        // process targets only 0.4, so the fallback kicks in and
+        // `quality_profile` becomes the 0.6 nozzle's default
+        // (`0.30mm-standard`).
+        let _registry = RegistryGuard::acquire();
+        // Seed the state we want.
+        let _ = mutate_instance("bambi", |inst| {
+            inst.extruders[0].installed_nozzle.diameter = "0.4".to_string();
+            inst.quality_profile = "0.20mm-standard".to_string();
+            Ok(())
+        })
+        .expect("bambi present");
+        let updated = set_extruder_nozzle_diameter("bambi", 0, "0.6".to_string())
+            .expect("bambi has 1 extruder");
+        assert_eq!(updated.extruders[0].installed_nozzle.diameter, "0.6");
+        assert_eq!(
+            updated.quality_profile, "0.30mm-standard",
+            "0.6 nozzle's default (`0.30mm-standard`) should replace \
+             the incompatible 0.4-only `0.20mm-standard`",
+        );
+    }
+
+    #[test]
+    fn set_extruder_nozzle_diameter_keeps_compatible_quality_profile() {
+        // Counterpart to the fallback test: if the current process
+        // is still valid on the post-swap installed-nozzle set, the
+        // quality_profile is preserved.
+        //
+        // Discriminating setup: snappy (U1, 4 toolheads, all 0.4)
+        // seeded with `0.20-quality` — a 0.4-only U1 process.
+        // Swap T1's nozzle 0.4 → 0.6: the installed set becomes
+        // [0.6, 0.4, 0.4, 0.4]; the union rule keeps `0.20-quality`
+        // compatible because 0.4 is still installed. The
+        // counterfactual (reset fires) would replace the slug with
+        // 0.6's `default_process_profile` (`0.20-standard`), which
+        // differs from the seeded `0.20-quality`, so the assertion
+        // genuinely discriminates between the two code paths.
+        let _registry = RegistryGuard::acquire();
+        let _ = mutate_instance("snappy", |inst| {
+            for ext in inst.extruders.iter_mut() {
+                ext.installed_nozzle.diameter = "0.4".to_string();
+            }
+            inst.quality_profile = "0.20-quality".to_string();
+            Ok(())
+        })
+        .expect("snappy present");
+        let updated = set_extruder_nozzle_diameter("snappy", 0, "0.6".to_string())
+            .expect("snappy has 4 extruders");
+        assert_eq!(updated.extruders[0].installed_nozzle.diameter, "0.6");
+        assert_eq!(
+            updated.quality_profile, "0.20-quality",
+            "0.20-quality is still compatible with the mixed [0.6, 0.4, …] \
+             installed set (union rule via the remaining 0.4 toolheads); \
+             quality_profile must not be reset to the destination nozzle's default",
+        );
+    }
+
+    #[test]
+    fn set_extruder_nozzle_diameter_rejects_unbundled_diameter() {
+        // The picker only ever offers diameters from
+        // `available_nozzle_diameters`; a typed error here surfaces
+        // hand-edited instance state or a driver sync that writes a
+        // diameter the catalog doesn't bundle.
+        let _registry = RegistryGuard::acquire();
+        let err =
+            set_extruder_nozzle_diameter("bambi", 0, "1.0".to_string()).unwrap_err();
+        assert!(
+            matches!(err, InstanceMutError::UnsupportedNozzleDiameter { .. }),
+            "expected UnsupportedNozzleDiameter, got {err:?}",
+        );
     }
 
     #[test]
     fn set_extruder_nozzle_diameter_errors_on_bad_extruder() {
         let _registry = RegistryGuard::acquire();
         // Bambi has 1 extruder (AMS-fed single toolhead); index 1 is OOB.
-        let err = set_extruder_nozzle_diameter("bambi", 1, 0.4).unwrap_err();
+        let err = set_extruder_nozzle_diameter("bambi", 1, "0.4".to_string()).unwrap_err();
         assert!(matches!(
             err,
             InstanceMutError::BadExtruder { extruders: 1, extruder_idx: 1, .. },

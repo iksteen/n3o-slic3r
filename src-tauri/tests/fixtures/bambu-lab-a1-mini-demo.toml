@@ -1,4 +1,4 @@
-# Bambu A1 mini — *demo* cascade (resolver fixture only)
+# Bambu Lab A1 mini — *demo* cascade (resolver fixture only)
 #
 # Phase 1 reference profile — minimal hand-authored cascade
 # demonstrating the three syntactic forms (top-level default, section
@@ -16,7 +16,7 @@
 # values.
 #
 # Context shape (provided by SlicingContext):
-#   printer.model = "Bambu A1 mini"
+#   printer.model = "Bambu Lab A1 mini"
 #   plate.type    = one of Cool / Textured PEI / Smooth PEI /
 #                   Engineering / SuperTack
 #   filament.type = one of PLA / PETG / ABS / ...

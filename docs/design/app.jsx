@@ -216,6 +216,51 @@ function seedStatusFor(idx, printer) {
   return base;
 }
 
+// ─── Floating console pane ───
+// Sits along the bottom of the viewport (25vh). Auto-scrolls to the bottom
+// whenever new logs arrive, so the most recent message stays in view.
+function ConsolePane({ logs, onClose, onClear }) {
+  const scrollerRef = useRef(null);
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [logs]);
+
+  const fmtTime = (ts) => {
+    const d = new Date(ts);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  };
+
+  return (
+    <div className="console-pane" role="log" aria-label="Console">
+      <div className="console-pane-head">
+        <span className="console-pane-title">Console</span>
+        <span className="console-pane-count">{logs.length} entr{logs.length === 1 ? "y" : "ies"}</span>
+        <span style={{ flex: 1 }}/>
+        <button className="console-pane-btn" onClick={onClear} title="Clear console">Clear</button>
+        <button className="console-pane-btn" onClick={onClose} title="Hide console" aria-label="Close console">
+          <svg viewBox="0 0 12 12" width="11" height="11" fill="none" aria-hidden="true">
+            <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div className="console-pane-body" ref={scrollerRef}>
+        {logs.length === 0 && (
+          <div className="console-empty">— no messages —</div>
+        )}
+        {logs.map((l, i) => (
+          <div key={i} className={`console-line console-line-${l.level}`}>
+            <span className="console-line-time">{fmtTime(l.ts)}</span>
+            <span className="console-line-level">{l.level.toUpperCase()}</span>
+            <span className="console-line-msg">{l.msg}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [contextLayer, setContextLayer] = useState("project");
@@ -235,6 +280,28 @@ function App() {
   const [mode, setMode] = useState("prepare");
   const [selectedDeviceId, setSelectedDeviceId] = useState(null);
   const [showSendToPrinter, setShowSendToPrinter] = useState(false);
+
+  // ─── Console log ───
+  // Floating console pane at the bottom of the viewport. We keep a flat list
+  // of {ts, level, msg} entries; level is "info" | "warn" | "error". The
+  // toggle lives next to the drag-hint, bottom-right of the viewport.
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [logs, setLogs] = useState(() => {
+    const now = Date.now();
+    return [
+      { ts: now - 42000, level: "info",  msg: "n3o-slic3r v0.4.2 — ready" },
+      { ts: now - 41000, level: "info",  msg: "Loaded printer profile: Voron 2.4 350" },
+      { ts: now - 38500, level: "info",  msg: "Filament catalog synced · 18 spools" },
+      { ts: now - 22000, level: "warn",  msg: "Object \"bracket_v3\" has overhang of 58° without supports" },
+      { ts: now -  8200, level: "error", msg: "Failed to reach printer \"ender-5-shopfloor\" — connection refused" },
+      { ts: now -  1200, level: "info",  msg: "Plate \"Plate 1\" auto-arranged · 4 objects" },
+    ];
+  });
+  const pushLog = useCallback((level, msg) => {
+    setLogs(l => [...l, { ts: Date.now(), level, msg }].slice(-200));
+  }, []);
+  const errorLogCount = logs.filter(l => l.level === "error").length;
+  const warnLogCount = logs.filter(l => l.level === "warn").length;
 
   // ─── Simulated per-printer runtime status ───
   // Keyed by printerId: { status, progress, currentJob, queue, nozzleTemp,
@@ -598,6 +665,9 @@ function App() {
     handleStopDevice={handleStopDevice}
     handleSendPlateToPrinter={handleSendPlateToPrinter}
     handleJumpToPlate={handleJumpToPlate}
+    consoleOpen={consoleOpen} setConsoleOpen={setConsoleOpen}
+    logs={logs} setLogs={setLogs} pushLog={pushLog}
+    errorLogCount={errorLogCount} warnLogCount={warnLogCount}
   />;
 }
 
@@ -624,6 +694,9 @@ function SlicerWorkspace({
   printerStatus,
   handlePauseDevice, handleResumeDevice, handleStopDevice,
   handleSendPlateToPrinter, handleJumpToPlate,
+  consoleOpen, setConsoleOpen,
+  logs, setLogs, pushLog,
+  errorLogCount, warnLogCount,
 }) {
   // Derived: active plate + its slot accessors
   const activePlate = useMemo(
@@ -780,7 +853,11 @@ function SlicerWorkspace({
 
   const onSlice = () => {
     setSlicing(true);
-    setTimeout(() => setSlicing(false), 1800);
+    pushLog("info", `Slicing ${objects.length} object${objects.length !== 1 ? "s" : ""}…`);
+    setTimeout(() => {
+      setSlicing(false);
+      pushLog("info", "Slice complete · G-code ready");
+    }, 1800);
   };
 
   const onResetCamera = () => {
@@ -952,17 +1029,41 @@ function SlicerWorkspace({
           </div>
 
           <div className="gizmo-hint">
-            Drag · LMB rotate · MMB pan · scroll zoom
-          </div>
-
-          <div className="viewport-corner">
-            <div className="axes">
+            <span className="axes" aria-label="Axes">
               <span className="axis axis-x">X</span>
               <span className="axis axis-y">Y</span>
               <span className="axis axis-z">Z</span>
-            </div>
-            <div>{plateSize[0]} × {plateSize[1]} × 250 mm</div>
+            </span>
+            <span className="gizmo-hint-sep" aria-hidden="true">·</span>
+            Drag · LMB rotate · MMB pan · scroll zoom
           </div>
+
+          {!consoleOpen && (
+            <button
+              className="console-toggle"
+              onClick={() => setConsoleOpen(true)}
+              title="Toggle console"
+            >
+              <svg viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <path d="M2.5 3.5l3 3-3 3M6.5 10h5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              <span>Console</span>
+              {errorLogCount > 0 && (
+                <span className="console-toggle-badge error">{errorLogCount}</span>
+              )}
+              {errorLogCount === 0 && warnLogCount > 0 && (
+                <span className="console-toggle-badge warn">{warnLogCount}</span>
+              )}
+            </button>
+          )}
+
+          {consoleOpen && (
+            <ConsolePane
+              logs={logs}
+              onClose={() => setConsoleOpen(false)}
+              onClear={() => setLogs([])}
+            />
+          )}
 
           {slicing && (
             <div style={{

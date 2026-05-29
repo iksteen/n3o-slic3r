@@ -13,21 +13,21 @@ ams_max = 0
 # 0.4mm hardened-steel set per FR-SU-6; the data model permits any
 # combination, but the MVP cascade fixtures assume uniform.
 [[toolheads]]
-default_nozzle_diameter = 0.4
+default_nozzle_diameter = "0.4"
 hotend_type = "hardened_steel"
 max_temp = 300.0
 
 [[toolheads]]
-default_nozzle_diameter = 0.4
+default_nozzle_diameter = "0.4"
 hotend_type = "hardened_steel"
 max_temp = 300.0
 
 [[toolheads]]
-default_nozzle_diameter = 0.4
+default_nozzle_diameter = "0.4"
 hotend_type = "hardened_steel"
 max_temp = 300.0
 
 [[toolheads]]
-default_nozzle_diameter = 0.4
+default_nozzle_diameter = "0.4"
 hotend_type = "hardened_steel"
 max_temp = 300.0

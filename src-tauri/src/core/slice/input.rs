@@ -532,7 +532,7 @@ mod tests {
                 .expect("build");
 
         assert_eq!(input.plate_ids, vec![1]);
-        assert_eq!(input.context.printer.model, "Bambu A1 mini");
+        assert_eq!(input.context.printer.model, "Bambu Lab A1 mini");
         // The bambi instance ships with Supertack Plate; reads off the
         // instance, not off a per-binding override.
         assert_eq!(input.context.plate.identity, "Supertack Plate");

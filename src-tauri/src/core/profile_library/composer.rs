@@ -206,7 +206,7 @@ pub fn compose_cascade(
 
     // 2. Per-extruder nozzle fragments → vector assembly.
     //    Load one nozzle fragment per extruder using its
-    //    `installed_nozzle.diameter_mm` as the SKU. Then merge their
+    //    `installed_nozzle.diameter` as the SKU. Then merge their
     //    scalar values into per-key vectors and synthesize one cascade
     //    rule whose set contains those vector strings.
     let nozzle_vectors = assemble_nozzle_vectors(instance)?;
@@ -310,15 +310,15 @@ pub fn compose_cascade(
     }
 
     // 5. Process fragment — printer-bound, looked up by
-    //    `(printer_fragment_slug, default_process_fragment_slug)`.
+    //    `(printer_fragment_slug, quality_profile)`.
     let process = load_process_fragment(
         &instance.printer_fragment_slug,
-        &instance.default_process_fragment_slug,
+        &instance.quality_profile,
     )
     .ok_or_else(|| ComposeError::UnknownProcessFragment(format!(
         "{}/{}",
         instance.printer_fragment_slug,
-        instance.default_process_fragment_slug,
+        instance.quality_profile,
     )))?;
     rules.extend(process.rules);
 
@@ -645,19 +645,12 @@ fn escape_string_cstyle(s: &str) -> String {
     out
 }
 
-/// Format a NozzleSku for fragment lookup. Currently just the
-/// diameter as the SKU string (matches the converter's filename
-/// convention). Future: incorporate material when we author
-/// hotend-material-specific nozzle files.
+/// Format a NozzleSku for fragment lookup. Returns the diameter
+/// string verbatim (matches the on-disk `nozzles/<diameter>.toml`
+/// filename convention). Future: incorporate material when we
+/// author hotend-material-specific nozzle files.
 fn nozzle_sku_string(nozzle: &crate::core::printer::NozzleSku) -> String {
-    // Trim trailing zero on round diameters: 0.4 not 0.400000.
-    let d = nozzle.diameter_mm;
-    if (d - d.round()).abs() < 1e-6 {
-        format!("{:.0}", d)
-    } else {
-        // One decimal place for 0.2/0.4/0.6/0.8 etc.
-        format!("{:.1}", d)
-    }
+    nozzle.diameter.clone()
 }
 
 #[cfg(test)]
@@ -767,7 +760,7 @@ mod tests {
     fn missing_nozzle_fragment_errors_with_useful_message() {
         let _registry = RegistryGuard::acquire();
         let mut bambi = lookup_instance("bambi").expect("bambi present");
-        bambi.extruders[0].installed_nozzle.diameter_mm = 0.9; // not bundled
+        bambi.extruders[0].installed_nozzle.diameter = "0.9".to_string(); // not bundled
         let err = compose_cascade(&bambi, &[], &BTreeMap::new()).unwrap_err();
         assert!(
             matches!(&err, ComposeError::UnknownNozzleFragment { sku, .. } if sku == "0.9"),

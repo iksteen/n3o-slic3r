@@ -27,7 +27,13 @@ import {
 import { SlotBindingPanel } from "../material/SlotBindingPanel";
 import { BuildPlateSelector } from "./BuildPlateSelector";
 import { NozzlePicker } from "./NozzlePicker";
+import { QualityPicker } from "./QualityPicker";
 import { chunkExtruders, nozzlesInline } from "./nozzleLayout";
+import {
+  listProcessFragments,
+  setInstanceQualityProfile,
+  type ProcessFragmentSummary,
+} from "./processFragment";
 import type { PlateSnapshot } from "../viewport/types";
 
 /** Locate the active plate in a session snapshot, or `null`
@@ -177,6 +183,62 @@ export function SettingsPanelHost({
   }, [instanceId]);
   const instanceBed = instance?.bed.identity ?? null;
 
+  // Quality picker — process fragments available for the active
+  // (printer, installed-nozzle-set). The Quality chip surfaces
+  // every process whose `available_for` includes any installed
+  // nozzle (union rule, so composite profiles like `0.4+0.6` show
+  // alongside single-nozzle ones whenever any of their nozzles is
+  // present). Selection writes back via
+  // `printer_instance_set_quality_profile`; the backend
+  // emits the same `printer:instance_changed` event the bed +
+  // nozzle setters do.
+  //
+  // The installed-nozzle list is computed across every extruder
+  // (deduped + sorted) and joined into a stable comma-string. We
+  // dep the effect on the *string* form (and the scalar slug +
+  // model the listProcessFragments call needs) rather than on the
+  // `instance` object itself: instance gets a fresh identity on
+  // every printer:instance_changed event (slot color, slot binding,
+  // bed swap), and listing it in deps re-fires the IPC call even
+  // when none of the inputs the picker actually consumes changed.
+  // Primitive-string deps compare by value via Object.is, so an
+  // unchanged installed set is correctly a no-op.
+  const installedNozzleKey = useMemo(() => {
+    if (!instance) return "";
+    const set = new Set<string>();
+    for (const ext of instance.extruders) {
+      set.add(ext.installed_nozzle.diameter);
+    }
+    return [...set].sort().join(",");
+  }, [instance]);
+  const printerFragmentSlug = instance?.printer_fragment_slug ?? null;
+  const printerModel = activeProfile?.model ?? null;
+  const [processOptions, setProcessOptions] = useState<
+    readonly ProcessFragmentSummary[]
+  >([]);
+  useEffect(() => {
+    if (!printerFragmentSlug || !printerModel || !installedNozzleKey) {
+      setProcessOptions([]);
+      return;
+    }
+    let cancelled = false;
+    void listProcessFragments(
+      printerFragmentSlug,
+      printerModel,
+      installedNozzleKey.split(","),
+    )
+      .then((opts) => {
+        if (!cancelled) setProcessOptions(opts);
+      })
+      .catch((err) => {
+        console.error("[settings] listProcessFragments failed", err);
+        if (!cancelled) setProcessOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [printerFragmentSlug, printerModel, installedNozzleKey]);
+
   const extruderCount = instance?.extruders.length ?? 0;
   const inlineNozzles = nozzlesInline(extruderCount);
   const nozzleRows = chunkExtruders(extruderCount);
@@ -192,7 +254,7 @@ export function SettingsPanelHost({
         extruderIdx={extruderIdx}
         totalExtruders={extruderCount}
         compact={compact}
-        value={installed.diameter_mm}
+        value={installed.diameter}
         diameters={activeProfile.available_nozzle_diameters}
         printerDefault={defaultDiameter}
         onChange={(next) => {
@@ -254,6 +316,27 @@ export function SettingsPanelHost({
             {row.map((i) => renderNozzlePicker(i, true))}
           </div>
         ))}
+        {instance && instanceId && (
+          <div className="sp-quality">
+            <span className="config-row-label sp-quality-label">Quality</span>
+            <div className="sp-quality-wrap">
+              <QualityPicker
+                value={instance.quality_profile}
+                options={processOptions}
+                onChange={(next) => {
+                  void setInstanceQualityProfile(instanceId, next).catch(
+                    (err) => {
+                      console.error(
+                        "[settings] setInstanceQualityProfile failed",
+                        err,
+                      );
+                    },
+                  );
+                }}
+              />
+            </div>
+          </div>
+        )}
         <SlotBindingPanel
           plateId={plate?.plate_id ?? null}
           plate={plate}

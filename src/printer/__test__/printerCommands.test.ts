@@ -25,7 +25,7 @@ describe("printerCatalog", () => {
       supported_build_plates: ["Textured PEI"],
       toolheads: [
         {
-          default_nozzle_diameter: 0.4,
+          default_nozzle_diameter: "0.4",
           hotend_type: "stainless_steel",
           max_temp: 300,
         },

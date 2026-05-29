@@ -28,7 +28,12 @@ export interface SlotBinding {
 }
 
 export interface NozzleSku {
-  diameter_mm: number;
+  /** Nozzle diameter as a **string symbol** ("0.4", "0.25",
+   *  "0.4+0.6") — never a number. The cascade composer matches
+   *  it to a `nozzles/<diameter>.toml` filename by exact-string
+   *  lookup, and the Quality picker filters fragments by exact-set
+   *  membership; arithmetic on it would be a category error. */
+  diameter: string;
   material:
     | "brass"
     | "hardened"
@@ -59,7 +64,7 @@ export interface PrinterInstance {
   vendor_profile_ref: string;
   printer_fragment_slug: string;
   default_filament_fragment_slug: string;
-  default_process_fragment_slug: string;
+  quality_profile: string;
   connection: ConnectionInfo | null;
   extruders: ExtruderState[];
   bed: BedRef;
@@ -116,16 +121,17 @@ export async function setSlotColor(
 }
 
 /** Change the diameter of the nozzle currently installed on the
- *  named extruder. Material is preserved — the picker only writes
- *  diameter swaps in the MVP. Emits `printer:instance_changed`. */
+ *  named extruder. `diameter` is a string symbol ("0.4", "0.25")
+ *  — see [NozzleSku.diameter] for why. Material is preserved.
+ *  Emits `printer:instance_changed`. */
 export async function setExtruderNozzleDiameter(
   id: string,
   extruderIdx: number,
-  diameterMm: number,
+  diameter: string,
 ): Promise<PrinterInstance> {
   return invoke<PrinterInstance>(
     "printer_instance_set_extruder_nozzle_diameter",
-    { id, extruderIdx, diameterMm },
+    { id, extruderIdx, diameter },
   );
 }
 

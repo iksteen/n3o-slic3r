@@ -70,10 +70,10 @@ fn load_reference_cascade() -> Cascade {
 fn a1_mini_pla_pei_context() -> SlicingContext {
     SlicingContext::new(
         Arc::new(PrinterProfile {
-            model: "Bambu A1 mini".into(),
+            model: "Bambu Lab A1 mini".into(),
             supported_build_plates: vec!["Textured PEI".into()],
             toolheads: vec![Toolhead {
-                default_nozzle_diameter: 0.4,
+                default_nozzle_diameter: "0.4".into(),
                 hotend_type: "stainless_steel".into(),
                 max_temp: 300.0,
             }],
@@ -103,7 +103,7 @@ fn four_slot_context() -> SlicingContext {
             supported_build_plates: vec!["Textured PEI".into()],
             toolheads: (0..4)
                 .map(|i| Toolhead {
-                    default_nozzle_diameter: if i % 2 == 0 { 0.4 } else { 0.6 },
+                    default_nozzle_diameter: if i % 2 == 0 { "0.4".into() } else { "0.6".into() },
                     hotend_type: "hardened_steel".into(),
                     max_temp: 300.0,
                 })
