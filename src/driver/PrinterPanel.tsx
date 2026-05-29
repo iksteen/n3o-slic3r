@@ -206,12 +206,15 @@ export function PrinterPanel(props: PrinterPanelProps): React.JSX.Element {
   // (status still "connecting", driver mid-job) flag it so the user
   // knows the link is re-establishing while Pause/Stop stay live.
   const reconnecting = summaryStatus !== "connected";
+  const reconnectReason = connection?.reason ?? null;
   return (
     <div className="flex items-center gap-2 text-xs">
       {reconnecting && (
         <span
           className="text-amber-500"
-          title="Connection dropped — reconnecting. Pause/Stop may report an error until the link is back; live updates resume once reconnected."
+          title={`Connection dropped — reconnecting${
+            reconnectReason ? ` (${reconnectReason})` : ""
+          }. Pause/Stop may report an error until the link is back; live updates resume once reconnected.`}
         >
           Reconnecting…
         </span>

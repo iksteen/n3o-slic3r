@@ -446,30 +446,18 @@ pub async fn printer_instance_sync_from_driver(
         .ok_or_else(|| format!("unknown driver id {}", driver_id.0))?;
     let status = { handle.lock().await.status() };
     let library = list_filament_fragments();
-    let instance = lookup_instance(&instance_id)
-        .ok_or_else(|| format!("unknown instance id {}", instance_id))?;
-    let updates =
-        crate::core::printer::sync::resolve_updates(&instance, &status.extra, &library);
-    if updates.is_empty() {
-        // Caller still gets a fresh snapshot back; the chip strip
-        // re-renders from it idempotently.
-        return Ok(instance);
-    }
-    let updated = crate::core::printer::instance_registry::mutate_instance(
+
+    // Reconcile AMS-unit count + per-slot loadout in one atomic
+    // mutation (single lock + persist). The topology/eligibility
+    // policy lives in the sync module alongside the rest of the
+    // driver-report translation.
+    let updated = crate::core::printer::sync::apply_from_driver(
         &instance_id,
-        |inst| {
-            for u in &updates {
-                if let Some(ext) = inst.extruders.get_mut(u.extruder_idx) {
-                    if let Some(slot) = ext.slots.get_mut(u.slot_idx) {
-                        slot.filament_identity = u.filament_identity.clone();
-                        slot.color = Some(u.color.clone());
-                    }
-                }
-            }
-            Ok(())
-        },
+        &status.extra,
+        &library,
     )
     .map_err(|e| e.to_string())?;
+
     use tauri::Emitter;
     if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
         tracing::warn!(error = %e, "printer:instance_changed emit failed");

@@ -201,7 +201,10 @@ async fn run_worker(
             _ = &mut shutdown_rx => return,
         };
 
-        match session {
+        // The reason the session ended — threaded into the
+        // Reconnecting status so the UI / test-connection can report
+        // why rather than a bare countdown.
+        let reason = match session {
             Ok(mut session) => {
                 // Reset backoff on every successful connect — a
                 // healthy printer that disconnects briefly should
@@ -225,25 +228,31 @@ async fn run_worker(
                         }
                         Ok(None) => {
                             // Clean server close → reconnect cycle.
-                            break;
+                            break "the printer closed the connection".to_string();
                         }
                         Err(e) => {
                             warn!(?e, host = %host, port, "Moonraker session failed");
-                            break;
+                            // `e` is a DriverError whose Display already
+                            // names the cause (network/auth/protocol) —
+                            // surface it verbatim, matching the Bambu side
+                            // rather than double-prefixing.
+                            break e.to_string();
                         }
                     }
                 }
             }
             Err(e) => {
                 warn!(?e, host = %host, port, "Moonraker connect failed");
+                e.to_string()
             }
-        }
+        };
 
         // Publish the upcoming reconnect window so the UI can show
         // a countdown rather than a generic "disconnected".
         status_tx.send_modify(|s| {
             s.connection = ConnectionState::Reconnecting {
                 in_seconds: backoff.as_secs() as u32,
+                reason,
             };
             s.last_updated = std::time::SystemTime::now();
         });

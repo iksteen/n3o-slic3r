@@ -39,7 +39,7 @@ export type DriverConfig =
 export type ConnectionState =
   | { state: "Connecting" }
   | { state: "Connected" }
-  | { state: "Reconnecting"; data: { in_seconds: number } }
+  | { state: "Reconnecting"; data: { in_seconds: number; reason: string } }
   | { state: "Disconnected"; data: { reason: string } };
 
 /** Mirror of `JobState` (`#[serde(tag="state", content="reason")]`).

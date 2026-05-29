@@ -16,7 +16,7 @@
 // close-button, footer Cancel). With unsaved edits, it shows the
 // `psm-discard-overlay` card (Keep editing / Discard / Save & close).
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ModalBackdrop, ModalCloseButton } from "../ui/Modal";
 import { useModalDismiss } from "../ui/useModalDismiss";
 import { AmsPicker } from "./AmsPicker";
@@ -843,23 +843,34 @@ function ConnectionSection({
     | { kind: "ok" }
     | { kind: "error"; message: string }
   >({ kind: "idle" });
-  // A prior verdict is stale the moment any connection field changes.
+  // Monotonic id identifying the in-flight test. Bumped both when a
+  // connection field changes and when a new test starts, so a test
+  // that resolves AFTER the user has edited a field is discarded
+  // rather than painting a stale verdict against the new draft.
+  const testRunRef = useRef(0);
+  // A prior verdict is stale the moment any connection field changes;
+  // bumping the run id also invalidates any in-flight test.
   useEffect(() => {
+    testRunRef.current += 1;
     setTest({ kind: "idle" });
   }, [draft.host, draft.port, draft.accessCode]);
-  // Gate the button on the DRAFT's own validity rather than the
-  // parent's `fieldError` (which is suppressed during Forget mode) so
-  // we never test a blanked/half-entered connection.
-  const testConn = draftToConnection(driverKind, draft);
-  const testReady = testConn != null && validateConnectionInfo(testConn) == null;
+  // Gate the button on the DRAFT's own validity (via the shared
+  // helper) rather than the parent's `fieldError`, which is suppressed
+  // during Forget mode — so we never test a blanked/half-entered
+  // connection.
+  const testReady = validateDraftConnection(driverKind, draft) == null;
   const runTest = async (): Promise<void> => {
-    if (testConn == null) return;
+    const conn = draftToConnection(driverKind, draft);
+    if (conn == null) return;
+    const runId = (testRunRef.current += 1);
     setTest({ kind: "testing" });
     try {
-      await driverTestConnection(configForConnection(testConn));
-      setTest({ kind: "ok" });
+      await driverTestConnection(configForConnection(conn));
+      if (testRunRef.current === runId) setTest({ kind: "ok" });
     } catch (e) {
-      setTest({ kind: "error", message: String(e) });
+      if (testRunRef.current === runId) {
+        setTest({ kind: "error", message: String(e) });
+      }
     }
   };
 

@@ -611,7 +611,10 @@ async fn event_loop(
                         let delay = backoff_seconds(backoff_idx);
                         backoff_idx = (backoff_idx + 1).min(RECONNECT_BACKOFFS.len());
                         status_tx.send_modify(|s| {
-                            s.connection = ConnectionState::Reconnecting { in_seconds: delay };
+                            s.connection = ConnectionState::Reconnecting {
+                                in_seconds: delay,
+                                reason: "the printer closed the connection".to_string(),
+                            };
                             s.last_updated = std::time::SystemTime::now();
                         });
                         tokio::time::sleep(Duration::from_secs(delay as u64)).await;
@@ -619,12 +622,17 @@ async fn event_loop(
                     Err(e) => {
                         // Network error — rumqttc surfaces these
                         // through the same poll loop; we treat as
-                        // transient + backoff.
+                        // transient + backoff. `e` carries the real
+                        // cause (e.g. a refused CONNECT on a bad access
+                        // code), so thread it into the status.
                         let delay = backoff_seconds(backoff_idx);
                         backoff_idx = (backoff_idx + 1).min(RECONNECT_BACKOFFS.len());
                         tracing::warn!(error = %e, backoff_secs = delay, "bambu poll error");
                         status_tx.send_modify(|s| {
-                            s.connection = ConnectionState::Reconnecting { in_seconds: delay };
+                            s.connection = ConnectionState::Reconnecting {
+                                in_seconds: delay,
+                                reason: e.to_string(),
+                            };
                             s.last_updated = std::time::SystemTime::now();
                         });
                         tokio::time::sleep(Duration::from_secs(delay as u64)).await;

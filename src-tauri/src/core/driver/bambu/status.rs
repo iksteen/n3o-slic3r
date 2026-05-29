@@ -501,12 +501,13 @@ pub fn merge_into(snapshot: &mut PrinterStatus, msg: BambuReport) {
         if let Some(f) = msg.fan_speed {
             extra.fan_speed = Some(f as f32);
         }
-        // AMS (PR-7a-4): replace the typed shape entirely on
-        // each delta. Bambu sends full AMS state in pushall
-        // snapshots; deltas during printing also carry the
-        // full state. Per-tray spool-aware merge (overlay's
-        // model) is overkill for our needs — the parent merge
-        // already last-write-wins on the raw shape.
+        // AMS: lower the (already placeholder-gated) raw AMS into the
+        // typed shape. The caller is expected to feed a report whose
+        // AMS was accumulated through `BambuReport::merge` (the live
+        // `run_worker` does), so the spool-aware gate has already
+        // dropped BBL's startup placeholder/empty pushes; here we just
+        // convert. Replacing wholesale is correct because the gated
+        // `raw` is the full cached state, not a raw per-message delta.
         if let Some(raw) = msg.ams {
             extra.ams = Some(raw.to_typed());
         }
@@ -560,6 +561,13 @@ pub async fn run_worker(
     // Snapshot we accumulate deltas into between ticks.
     let mut pending: Option<PrinterStatus> = None;
     let mut dirty = false;
+    // Raw report accumulator. Each delta is merged through
+    // `BambuReport::merge` so the spool-aware AMS gate
+    // (`RawAmsState::merge_in`) drops BBL's placeholder/empty pushes
+    // during print startup instead of letting them clobber the cached
+    // AMS state. We then lower the accumulated report into the typed
+    // snapshot, so `extra.ams` only ever reflects gated, real state.
+    let mut acc = BambuReport::default();
 
     loop {
         tokio::select! {
@@ -576,7 +584,12 @@ pub async fn run_worker(
                         let snapshot = pending.get_or_insert_with(
                             || status_tx.borrow().clone(),
                         );
-                        merge_into(snapshot, msg.print);
+                        // Accumulate through the gated merge, then
+                        // lower the full accumulated report. Scalars
+                        // are last-write-wins (re-applying is
+                        // idempotent); AMS is placeholder-gated.
+                        acc.merge(msg.print);
+                        merge_into(snapshot, acc.clone());
                         // Connection state can't go backwards from
                         // Connected; reset to Connected on first
                         // successful merge in case backoff left a
@@ -928,6 +941,50 @@ mod tests {
         assert_eq!(cached.ams[0].tray[0].color.as_deref(), Some("FF0000FF"));
         assert_eq!(cached.ams[0].tray[2].material.as_deref(), Some("PLA"));
         assert_eq!(cached.ams[0].tray[3].material.as_deref(), Some("ABS"));
+    }
+
+    #[test]
+    fn worker_accumulation_keeps_typed_ams_through_placeholder_push() {
+        // Mirrors run_worker's pipeline: accumulate raw reports via
+        // BambuReport::merge, then lower the accumulated report via
+        // merge_into. A placeholder push after a real pushall must not
+        // wipe the TYPED extra.ams (regression: the worker used to call
+        // merge_into per-message, bypassing the gate, so a startup
+        // placeholder cleared the AMS state the sync/UI read).
+        let mut acc = BambuReport::default();
+        acc.merge(BambuReport {
+            ams: Some(RawAmsState {
+                tray_now: Some(0),
+                ams: vec![RawAmsUnit {
+                    id: Some(0),
+                    tray: vec![real_tray(0, "PLA", "FF0000FF")],
+                }],
+            }),
+            ..Default::default()
+        });
+        acc.merge(BambuReport {
+            ams: Some(RawAmsState {
+                tray_now: Some(0),
+                ams: vec![RawAmsUnit {
+                    id: Some(0),
+                    tray: vec![placeholder_tray(0)],
+                }],
+            }),
+            ..Default::default()
+        });
+        let mut snap =
+            PrinterStatus::disconnected_for(DriverExtra::Bambu(BambuExtra::default()));
+        merge_into(&mut snap, acc.clone());
+        let DriverExtra::Bambu(extra) = &snap.extra else {
+            panic!("expected Bambu extra");
+        };
+        let ams = extra.ams.as_ref().expect("ams present after merge");
+        assert_eq!(ams.units.len(), 1, "unit count preserved");
+        assert_eq!(ams.units[0].trays.len(), 1);
+        assert!(
+            ams.units[0].trays[0].identity.is_some(),
+            "real spool identity survived the placeholder push",
+        );
     }
 
     #[test]

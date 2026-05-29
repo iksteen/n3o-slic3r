@@ -540,10 +540,13 @@ mod tests {
     fn decode_threads_caller_supplied_connection_state() {
         let p = decode(
             &status(json!({ "print_stats": { "state": "standby" } })),
-            ConnectionState::Reconnecting { in_seconds: 5 },
+            ConnectionState::Reconnecting { in_seconds: 5, reason: "boom".into() },
         );
         match p.connection {
-            ConnectionState::Reconnecting { in_seconds } => assert_eq!(in_seconds, 5),
+            ConnectionState::Reconnecting { in_seconds, reason } => {
+                assert_eq!(in_seconds, 5);
+                assert_eq!(reason, "boom");
+            }
             _ => panic!("decoder must not touch the connection field"),
         }
     }

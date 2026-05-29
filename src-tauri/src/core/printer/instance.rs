@@ -107,6 +107,25 @@ pub struct PrinterInstance {
 /// layout from this constant; the frontend mirror is `amsUnitsOf`.
 pub const AMS_SLOTS_PER_UNIT: usize = 4;
 
+impl PrinterInstance {
+    /// Number of installed AMS units, derived from the slot topology:
+    /// each unit contributes `AMS_SLOTS_PER_UNIT` `FeedKind::Ams`
+    /// slots on the first extruder. Mirrors the frontend `amsUnitsOf`.
+    /// Used by the driver-sync path to reconcile the configured AMS
+    /// count against the printer's reported physical loadout.
+    pub fn ams_units(&self) -> u32 {
+        let Some(extruder) = self.extruders.first() else {
+            return 0;
+        };
+        let ams_slots = extruder
+            .slots
+            .iter()
+            .filter(|s| matches!(s.feed, FeedKind::Ams))
+            .count();
+        (ams_slots / AMS_SLOTS_PER_UNIT) as u32
+    }
+}
+
 /// Per-extruder state — currently-installed nozzle plus the filament
 /// feeds (slots) that pull into this extruder.
 ///

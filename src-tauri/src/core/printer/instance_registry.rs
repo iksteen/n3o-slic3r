@@ -936,7 +936,10 @@ pub fn update_instance(
 /// printer (`toolheads.len() == 1` and `ams_max > 0`) and the count
 /// within `ams_max`. No mutation; pairs with [`rebuild_ams_slots`] so
 /// `update_instance` can run all validation before mutating anything.
-fn validate_ams_request(
+/// `pub(crate)` so the driver-sync reconcile (`sync::apply_from_driver`)
+/// can gate an AMS-count change on the same eligibility/bound rule
+/// without re-deriving the predicate.
+pub(crate) fn validate_ams_request(
     inst: &PrinterInstance,
     id: &str,
     ams_units: u32,
@@ -969,13 +972,17 @@ fn validate_ams_request(
 /// Infallible — the caller MUST have already passed
 /// [`validate_ams_request`]. Preserves overlapping bindings by feed
 /// kind; seeds new slots from the instance's default filament.
-fn rebuild_ams_slots(inst: &mut PrinterInstance, id: &str, ams_units: u32) {
+/// `pub(crate)` so `sync::apply_from_driver` can reconcile the AMS
+/// topology inside its own `mutate_instance` closure.
+pub(crate) fn rebuild_ams_slots(inst: &mut PrinterInstance, id: &str, ams_units: u32) {
     let target_slot_count =
         (ams_units as usize) * super::instance::AMS_SLOTS_PER_UNIT + 1;
-    let extruder = inst
-        .extruders
-        .get_mut(0)
-        .expect("AMS-style printer has at least one extruder");
+    // An AMS-style instance is expected to have at least one extruder,
+    // but a hand-edited / corrupt instance file might not — no-op
+    // rather than panic, since there's no extruder to rebuild slots on.
+    let Some(extruder) = inst.extruders.get_mut(0) else {
+        return;
+    };
     let current_slot_count = extruder.slots.len();
     if current_slot_count == target_slot_count {
         return;

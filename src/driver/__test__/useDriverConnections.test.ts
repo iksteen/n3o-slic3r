@@ -166,7 +166,7 @@ describe("summaryFor (picker-chip status derivation)", () => {
       ],
       runtimeStatus: [
         ["a", { state: "Connecting" }],
-        ["b", { state: "Reconnecting", data: { in_seconds: 5 } }],
+        ["b", { state: "Reconnecting", data: { in_seconds: 5, reason: "boom" } }],
       ],
     });
     expect(summaryForTests("a", conn).status).toBe("connecting");

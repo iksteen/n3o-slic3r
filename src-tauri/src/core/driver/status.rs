@@ -44,8 +44,13 @@ pub enum ConnectionState {
     Connecting,
     Connected,
     /// Currently waiting before the next reconnect attempt.
+    /// `reason` carries the failure that triggered the backoff (the
+    /// driver's last connect/poll error) so the UI and the
+    /// test-connection command can report why rather than a bare
+    /// "reconnecting".
     Reconnecting {
         in_seconds: u32,
+        reason: String,
     },
     Disconnected {
         reason: String,

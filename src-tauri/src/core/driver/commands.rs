@@ -92,6 +92,22 @@ fn spawn_status_bridge(
 /// `useDriverStatus` hook can react without polling.
 ///
 /// U1 path stubbed — PR-7b-2 lands it.
+/// Construct the concrete driver for a [`DriverConfig`] variant.
+/// Shared by [`driver_register`] (which inserts it into the registry +
+/// spawns the status bridge) and [`driver_test_connection`] (which
+/// drives a throwaway instance and discards it), so the per-kind
+/// construction lives in one place.
+fn build_driver(id: DriverId, config: DriverConfig) -> Box<dyn Driver> {
+    match config {
+        DriverConfig::Bambu { host, access_code } => {
+            Box::new(BambuDriver::new(id, BambuConfig { host, access_code }))
+        }
+        DriverConfig::U1 { host, port } => {
+            Box::new(U1Driver::new(id, U1Config { host, port }))
+        }
+    }
+}
+
 #[tauri::command]
 #[tracing::instrument(skip(registry, app))]
 pub async fn driver_register(
@@ -99,38 +115,19 @@ pub async fn driver_register(
     app: AppHandle,
     registry: State<'_, Arc<DriverRegistry>>,
 ) -> Result<DriverId, String> {
-    match config {
-        DriverConfig::Bambu { host, access_code } => {
-            let bambu_config = BambuConfig { host, access_code };
-            // `register_with` allocates the id atomically with
-            // insertion so the driver's internal `id()` matches
-            // the registry's id (drivers use it for log spans +
-            // outgoing protocol frames).
-            let mut bridge_rx = None;
-            let id = registry.register_with(|id| {
-                let driver = BambuDriver::new(id, bambu_config);
-                bridge_rx = Some(driver.subscribe_status());
-                Box::new(driver) as Box<dyn Driver>
-            });
-            if let Some(rx) = bridge_rx {
-                spawn_status_bridge(app, id, rx);
-            }
-            Ok(id)
-        }
-        DriverConfig::U1 { host, port } => {
-            let u1_config = U1Config { host, port };
-            let mut bridge_rx = None;
-            let id = registry.register_with(|id| {
-                let driver = U1Driver::new(id, u1_config);
-                bridge_rx = Some(driver.subscribe_status());
-                Box::new(driver) as Box<dyn Driver>
-            });
-            if let Some(rx) = bridge_rx {
-                spawn_status_bridge(app, id, rx);
-            }
-            Ok(id)
-        }
+    // `register_with` allocates the id atomically with insertion so the
+    // driver's internal `id()` matches the registry's id (drivers use
+    // it for log spans + outgoing protocol frames).
+    let mut bridge_rx = None;
+    let id = registry.register_with(|id| {
+        let driver = build_driver(id, config);
+        bridge_rx = Some(driver.subscribe_status());
+        driver
+    });
+    if let Some(rx) = bridge_rx {
+        spawn_status_bridge(app, id, rx);
     }
+    Ok(id)
 }
 
 /// Test a connection config WITHOUT registering a driver or touching
@@ -154,14 +151,7 @@ pub async fn driver_test_connection(config: DriverConfig) -> Result<(), String> 
 
     // Transient driver. DriverId(0) is fine — it's never inserted into
     // the registry; the id only tags log spans / outgoing frames.
-    let mut driver: Box<dyn Driver> = match config {
-        DriverConfig::Bambu { host, access_code } => {
-            Box::new(BambuDriver::new(DriverId(0), BambuConfig { host, access_code }))
-        }
-        DriverConfig::U1 { host, port } => {
-            Box::new(U1Driver::new(DriverId(0), U1Config { host, port }))
-        }
-    };
+    let mut driver = build_driver(DriverId(0), config);
 
     // Subscribe before connecting and mark the initial pre-connect
     // state seen, so the watch loop only reacts to transitions the
@@ -181,8 +171,19 @@ pub async fn driver_test_connection(config: DriverConfig) -> Result<(), String> 
             match &rx.borrow_and_update().connection {
                 ConnectionState::Connected => return Ok(()),
                 ConnectionState::Disconnected { reason } => return Err(reason.clone()),
-                // Connecting / Reconnecting — keep waiting for a verdict.
-                _ => {}
+                // On a FRESH connect the path is Connecting → Connected
+                // (success) or Connecting → Reconnecting (the attempt
+                // failed and the driver is backing off). For a one-shot
+                // test there's nothing to wait for once it's retrying —
+                // report the failure reason the driver threaded into
+                // Reconnecting rather than hanging to the 15s timeout.
+                // (A wrong Bambu access code lands here, not in
+                // Disconnected.)
+                ConnectionState::Reconnecting { reason, .. } => {
+                    return Err(reason.clone());
+                }
+                // Connecting — keep waiting for the verdict.
+                ConnectionState::Connecting => {}
             }
         }
     })

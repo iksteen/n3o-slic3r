@@ -43,6 +43,48 @@ pub struct SlotUpdate {
     pub color: String,
 }
 
+/// Reconcile an instance to a driver status report in one atomic
+/// mutation: first match the AMS-unit count to the reported physical
+/// loadout, then fill the (resized) slots with the reported filament
+/// identities + colors. Single registry lock, single persist.
+///
+/// AMS-count eligibility (AMS-style printer, count within `ams_max`)
+/// is delegated to [`instance_registry::validate_ams_request`] — a
+/// non-AMS printer or an over-`ams_max` report fails that check, which
+/// we treat as "leave the count alone" rather than re-deriving the
+/// predicate here. A shrink is allowed (`rebuild_ams_slots` preserves
+/// overlapping bindings); transient/placeholder driver reports are
+/// already filtered upstream in the status pipeline.
+pub fn apply_from_driver(
+    instance_id: &str,
+    extra: &DriverExtra,
+    library: &[FilamentFragmentSummary],
+) -> Result<PrinterInstance, crate::core::printer::instance_registry::InstanceMutError> {
+    use crate::core::printer::instance_registry as reg;
+    reg::mutate_instance(instance_id, |inst| {
+        if let Some(reported) = ams_units_reported(extra) {
+            if reported != inst.ams_units()
+                && reg::validate_ams_request(inst, instance_id, reported, None).is_ok()
+            {
+                reg::rebuild_ams_slots(inst, instance_id, reported);
+            }
+        }
+        // Resolve against the (possibly resized) topology, then apply.
+        // `resolve_updates` returns an owned Vec, so the immutable
+        // borrow of `inst` ends before the mutating loop.
+        let updates = resolve_updates(inst, extra, library);
+        for u in &updates {
+            if let Some(ext) = inst.extruders.get_mut(u.extruder_idx) {
+                if let Some(slot) = ext.slots.get_mut(u.slot_idx) {
+                    slot.filament_identity = u.filament_identity.clone();
+                    slot.color = Some(u.color.clone());
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
 /// Resolve a driver-report into per-slot updates for `instance`.
 /// Slots the driver didn't report (or couldn't report — Bambu's
 /// external spool isn't on the AMS bus) are absent from the output;
@@ -55,6 +97,24 @@ pub fn resolve_updates(
     match extra {
         DriverExtra::Bambu(b) => resolve_bambu(instance, b, library),
         DriverExtra::U1(u) => resolve_u1(instance, u, library),
+    }
+}
+
+/// The number of AMS units the driver currently reports, when it
+/// reports an AMS state at all. `Some(n)` lets the sync reconcile the
+/// instance's AMS-unit count to the physical loadout before resolving
+/// per-slot updates.
+///
+/// `None` means "leave the count alone": either the printer has no
+/// AMS topology to sync (U1 toolchanger), or it hasn't reported an
+/// AMS state yet — and we must not destructively zero the AMS slots
+/// off a not-yet-populated status snapshot. The external spool alone
+/// (Bambu `vt_tray` with no AMS) is therefore NOT treated as "0 AMS
+/// units".
+pub fn ams_units_reported(extra: &DriverExtra) -> Option<u32> {
+    match extra {
+        DriverExtra::Bambu(b) => b.ams.as_ref().map(|a| a.units.len() as u32),
+        DriverExtra::U1(_) => None,
     }
 }
 
@@ -383,6 +443,41 @@ mod tests {
                 filament_id: filament_id.map(str::to_owned),
             }),
         }
+    }
+
+    #[test]
+    fn ams_units_reported_counts_bambu_units() {
+        let extra = DriverExtra::Bambu(BambuExtra {
+            ams: Some(AmsState {
+                units: vec![
+                    AmsUnit { id: 0, trays: vec![] },
+                    AmsUnit { id: 1, trays: vec![] },
+                ],
+                active_slot: None,
+            }),
+            ..Default::default()
+        });
+        assert_eq!(ams_units_reported(&extra), Some(2));
+    }
+
+    #[test]
+    fn ams_units_reported_is_none_without_an_ams_state() {
+        // External spool only (AMS detached / not yet reported) must
+        // NOT read as "0 units" — the sync leaves the count alone.
+        let extra = DriverExtra::Bambu(BambuExtra {
+            ams: None,
+            external_spool: Some(AmsFilament::default()),
+            ..Default::default()
+        });
+        assert_eq!(ams_units_reported(&extra), None);
+    }
+
+    #[test]
+    fn ams_units_reported_is_none_for_u1() {
+        assert_eq!(
+            ams_units_reported(&DriverExtra::U1(U1Extra::default())),
+            None,
+        );
     }
 
     #[test]

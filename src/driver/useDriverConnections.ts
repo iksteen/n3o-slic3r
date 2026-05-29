@@ -256,8 +256,16 @@ function summaryFor(
         case "Connected":
           return { status: "connected", driverId: entry.id, reason: null };
         case "Connecting":
-        case "Reconnecting":
           return { status: "connecting", driverId: entry.id, reason: null };
+        case "Reconnecting":
+          // Carry the driver's reconnect reason so the panel can show
+          // why the link dropped while it retries (status stays
+          // "connecting" — the picker dot doesn't distinguish).
+          return {
+            status: "connecting",
+            driverId: entry.id,
+            reason: entry.runtime.data.reason,
+          };
         case "Disconnected":
           return {
             status: "failed",
