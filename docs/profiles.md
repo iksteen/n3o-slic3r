@@ -784,7 +784,7 @@ layers:
 - **Per-filament profile** carries chemistry-only deltas relative
   to the generic material family:
   ```toml
-  # In Bambu_Lab/filament/bambu-pla-basic.toml:
+  # In bbl/filament/bambu-pla-basic.toml:
   [[rule]]
   when.material.class = "PLA"
   set.nozzle_temperature += 5    # Bambu PLA Basic prints 5° hotter

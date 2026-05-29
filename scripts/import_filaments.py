@@ -17,10 +17,10 @@ Input shape — Orca/BBS per-(filament × printer × maybe-nozzle) leaves:
 
 Output shape — one rule-based cascade fragment per logical filament:
 
-    profiles/vendor/Bambu_Lab/filament/bambu-pla-basic.toml
-    profiles/vendor/Generic/filament/generic-pla.toml
-    profiles/vendor/Generic/filament/generic-pla-silk.toml
-    profiles/vendor/Snapmaker/filament/snapmaker-pla.toml
+    profiles/vendor/bbl/filament/bambu-pla-basic.toml
+    profiles/vendor/generic/filament/generic-pla.toml
+    profiles/vendor/generic/filament/generic-pla-silk.toml
+    profiles/vendor/snapmaker/filament/snapmaker-pla.toml
     ...
 
 Bucket-extraction strategy depends on `--brand`:
@@ -72,7 +72,7 @@ Usage:
 
     import_filaments.py \\
         --root external/OrcaSlicer/resources/profiles \\
-        --out profiles/vendor/Bambu_Lab/filament \\
+        --out profiles/vendor/bbl/filament \\
         --brand "Bambu Lab"
 
 Existing files in the output dir are NOT removed automatically.
@@ -667,7 +667,7 @@ def main() -> None:
     ap.add_argument("--root", type=Path, required=True,
                     help="profiles tree root (e.g. external/OrcaSlicer/resources/profiles)")
     ap.add_argument("--out", type=Path, required=True,
-                    help="output directory (e.g. profiles/vendor/Generic/filament)")
+                    help="output directory (e.g. profiles/vendor/generic/filament)")
     ap.add_argument("--brand", default="Generic",
                     help="filament_vendor value to filter leaves by, also "
                          "selects the bucket-extraction strategy. 'Generic' "
