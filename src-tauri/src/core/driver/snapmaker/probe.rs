@@ -26,8 +26,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// returns under `system_info` is ignored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct U1SystemInfo {
-    /// Stable identifier the user-library entry can persist
-    /// (`PrinterInstance.connection.serial` when populated). U1
+    /// Stable identifier the driver resolves at connect time and
+    /// holds for the session (used for cross-printer correlation). U1
     /// firmware always reports this; an empty string is rejected.
     pub serial: String,
     /// Friendly name from Snapmaker's product info — populated as

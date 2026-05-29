@@ -17,6 +17,7 @@ import { buildContextJson } from "./buildContextJson";
 import { makeObjectOverrideCallbacks } from "./overrideCommands";
 import { makeProjectOverrideCallbacks } from "./projectOverrideCommands";
 import { PrinterPicker } from "../printer/PrinterPicker";
+import type { ConnectionSummary } from "../driver/useDriverConnections";
 import { usePrinterCatalog } from "../printer/usePrinterCatalog";
 import {
   getPrinterInstance,
@@ -78,9 +79,16 @@ export interface SettingsPanelHostProps {
   session: ProjectSession;
   /** All registered PrinterInstances — populates the picker. */
   instances: PrinterInstance[];
+  /** Per-(instance.id) auto-connection summary from
+   *  useDriverConnections. Drives the picker chip's status-dot
+   *  indicator and each row's right-side status. */
+  connections: Record<string, ConnectionSummary>;
   /** Open the add-printer modal (the picker's "+ New printer…"
    *  entry fires this; App.tsx owns the modal). */
   onAddPrinter: () => void;
+  /** Open the per-printer settings modal for the given instance.
+   *  Wired from the cog button next to each row in PrinterPicker. */
+  onEditPrinter: (instanceId: string) => void;
   /** Active-slot index plumbed into `buildContextJson` for the
    * cascade resolve. The settings panel itself no longer surfaces a
    * slot picker (PR-S-2 filtered to Process bucket — no per-
@@ -92,7 +100,9 @@ export interface SettingsPanelHostProps {
 export function SettingsPanelHost({
   session,
   instances,
+  connections,
   onAddPrinter,
+  onEditPrinter,
   activeSlot = 0,
 }: SettingsPanelHostProps) {
   const plate = useMemo(() => activePlate(session), [session]);
@@ -279,7 +289,9 @@ export function SettingsPanelHost({
             plateId={plate?.plate_id ?? null}
             instances={instances}
             activeInstanceId={plate?.printer_instance_id ?? null}
+            connections={connections}
             onAddPrinter={onAddPrinter}
+            onEditPrinter={onEditPrinter}
           />
           {plate?.printer_identity && activeProfile && instanceId && instanceBed && (
             <BuildPlateSelector
@@ -340,6 +352,17 @@ export function SettingsPanelHost({
         <SlotBindingPanel
           plateId={plate?.plate_id ?? null}
           plate={plate}
+          driverId={
+            // Only hand the sync path a driver id when the connection
+            // is actually `connected`. summaryFor still surfaces the
+            // (old) driver id during a queued replace with status
+            // "connecting" — dispatching a sync against that
+            // about-to-be-torn-down driver is the bug we're avoiding.
+            instanceId != null &&
+            connections[instanceId]?.status === "connected"
+              ? (connections[instanceId]?.driverId ?? null)
+              : null
+          }
         />
       </div>
       <SettingsPanel

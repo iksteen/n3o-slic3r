@@ -76,49 +76,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
-import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
-
-
-def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
-    """Write `content` to `path` atomically (temp file + os.replace).
-
-    Two callers in this script overwrite TOML files the running
-    `cargo dev / test` may read concurrently. A non-atomic truncate-
-    then-write leaves a partial-content window where the reader sees
-    an invalid TOML and `ProfileLibrary::load` panics. `os.replace`
-    is atomic on POSIX and on Windows for same-volume renames; the
-    `tempfile` is created in the destination directory so the
-    rename never crosses volumes.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # delete=False so we control cleanup after the rename; mode "w"
-    # for text + the same encoding the caller wanted.
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding=encoding,
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        delete=False,
-    )
-    try:
-        tmp.write(content)
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp.close()
-        os.replace(tmp.name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp.name)
-        except FileNotFoundError:
-            pass
-        raise
 from typing import Any
+
+from _atomic_io import atomic_write_text
 
 
 ENVELOPE_KEYS = frozenset({
@@ -462,7 +426,7 @@ def emit_fragment(
             for k, hv in sig:
                 lines.append(f"set.{k} = {value_to_toml(_unhash(hv))}")
 
-    _atomic_write_text(out_path, "\n".join(lines) + "\n")
+    atomic_write_text(out_path, "\n".join(lines) + "\n")
 
 
 def backfill_nozzle_default_process(
@@ -506,7 +470,7 @@ def backfill_nozzle_default_process(
                 new_text = replacement + text
     if new_text == text:
         return False
-    _atomic_write_text(nozzle_path, new_text)
+    atomic_write_text(nozzle_path, new_text)
     return True
 
 

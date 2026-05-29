@@ -655,6 +655,33 @@ impl Project {
         Ok((report, events))
     }
 
+    /// Clear a plate's printer binding (`printer_instance_id = None`)
+    /// and drop the cached bed visualization. Used when the only
+    /// remaining instance is deleted — the user lands on the
+    /// add-printer empty state and we don't want stale UUIDs
+    /// dangling on plates the next add must rebind. Slot bindings
+    /// are also cleared (no printer = no slots).
+    ///
+    /// No-op when the plate isn't currently bound (still emits
+    /// the events so subscribers can re-render defensively).
+    pub fn unbind_plate_printer(
+        &mut self,
+        plate_id: PlateId,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let idx = self
+            .plate_index(plate_id)
+            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        self.plates[idx].printer_instance_id = None;
+        self.plates[idx].material_to_slot.clear();
+        // Reuse the bed-viz path with no profile — clears the bed
+        // and exclusion zones on the plate.
+        let mut events = self
+            .set_plate_printer(plate_id, None)
+            .expect("plate id was validated above");
+        events.push(SceneEvent::PlateMetadataChanged { plate_id });
+        Ok(events)
+    }
+
     // ---- Mesh / object load + place -------------------------------
 
     /// Register a mesh and place one default `SceneObject` at

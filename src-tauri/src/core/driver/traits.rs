@@ -32,7 +32,13 @@ impl fmt::Display for DriverId {
 /// Which protocol/printer family a driver implements. Used by
 /// the registry to decide what `DriverConfig` variant to expect +
 /// by the frontend to pick the right credentials dialog.
+///
+/// Serializes as lowercase (`"bambu"` / `"u1"`) — the project uses
+/// lowercase identifiers across the wire and in authored TOML
+/// (`model.toml::driver_kind`), matching `ConnectionInfo`'s
+/// `snake_case` tagging.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DriverKind {
     Bambu,
     U1,
@@ -50,19 +56,11 @@ pub enum DriverConfig {
         /// 8-char code shown on the printer LCD under network
         /// settings.
         access_code: String,
-        /// Device serial. Optional — when omitted, PR-7a-2's
-        /// connect path probes the peer cert CN.
-        #[serde(default)]
-        serial: Option<String>,
     },
     U1 {
         host: String,
         #[serde(default = "default_u1_port")]
         port: u16,
-        /// Probed via `/machine/system_info` at connect time
-        /// when omitted.
-        #[serde(default)]
-        serial: Option<String>,
     },
 }
 
@@ -244,7 +242,6 @@ mod tests {
         let cfg = DriverConfig::U1 {
             host: "192.168.1.42".into(),
             port: 80,
-            serial: None,
         };
         let s = serde_json::to_string(&cfg).unwrap();
         // Frontend sees `{ "kind": "U1", "data": { … } }`.

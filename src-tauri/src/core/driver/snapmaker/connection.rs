@@ -47,17 +47,13 @@ const RECONNECT_MAX: Duration = Duration::from_secs(30);
 pub struct U1Config {
     pub host: String,
     pub port: u16,
-    /// If the user supplied a serial, the driver trusts it and
-    /// skips the `/machine/system_info` probe at connect time.
-    /// Otherwise [`connect`](Driver::connect) probes lazily.
-    pub serial: Option<String>,
 }
 
 pub struct U1Driver {
     id: DriverId,
     config: U1Config,
-    /// Resolved serial — populated by `connect()` either from
-    /// `config.serial` or via the system_info probe.
+    /// Resolved serial — populated by `connect()` via the
+    /// `/machine/system_info` probe.
     serial: Option<String>,
     /// Status publisher. Cloned across `subscribe_status` callers.
     status_tx: watch::Sender<PrinterStatus>,
@@ -119,17 +115,13 @@ impl Driver for U1Driver {
         }
         self.publish_state(ConnectionState::Connecting);
 
-        // Probe the serial unless the caller already supplied one.
-        // We fail loud here rather than letting the worker race —
-        // a wrong host yields a clean "could not reach printer at
-        // <host>" instead of "connecting…" stuck forever.
-        let serial = if let Some(s) = &self.config.serial {
-            s.clone()
-        } else {
-            probe::probe_system_info(&self.config.host, self.config.port)
-                .await?
-                .serial
-        };
+        // Probe the serial via /machine/system_info. We fail loud
+        // here rather than letting the worker race — a wrong host
+        // yields a clean "could not reach printer at <host>" instead
+        // of "connecting…" stuck forever.
+        let serial = probe::probe_system_info(&self.config.host, self.config.port)
+            .await?
+            .serial;
         self.serial = Some(serial);
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -278,16 +270,24 @@ mod tests {
     use tokio::sync::oneshot;
     use tokio_tungstenite::tungstenite::Message;
 
-    /// Local mock Moonraker server. Accepts one WS connection, replies
-    /// to the `printer.objects.subscribe` request with an arbitrary
-    /// initial status, then optionally pushes one `notify_status_update`
-    /// before returning. Bound to ephemeral port so tests don't race.
+    /// Local mock Moonraker server. Serves two endpoints on the same
+    /// port: the HTTP `GET /machine/system_info` probe (driven by
+    /// `probe_serial` — `Some` → 200 with that serial, `None` → 404 so
+    /// the probe fails cleanly) and the status WebSocket. The WS path
+    /// replies to the `printer.objects.subscribe` request with
+    /// `initial_status`, then optionally pushes one
+    /// `notify_status_update`. Bound to an ephemeral port so tests
+    /// don't race. Connections are dispatched by peeking the request
+    /// line, so the same listener handles the connect-time probe and
+    /// the subsequent WS worker.
     async fn start_mock_moonraker(
         initial_status: serde_json::Value,
         notify: Option<serde_json::Value>,
+        probe_serial: Option<&str>,
     ) -> (String, u16, oneshot::Sender<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let probe_serial = probe_serial.map(str::to_owned);
         let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
             loop {
@@ -298,7 +298,43 @@ mod tests {
                 let Ok((stream, _peer)) = accept else { continue };
                 let initial_status = initial_status.clone();
                 let notify = notify.clone();
+                let probe_serial = probe_serial.clone();
                 tokio::spawn(async move {
+                    // Dispatch on the request line without consuming it
+                    // (TcpStream::peek leaves the bytes for the WS
+                    // handshake). The HTTP probe targets
+                    // `/machine/system_info`; the worker opens `GET /`.
+                    let mut peek = [0u8; 256];
+                    let n = match stream.peek(&mut peek).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => n,
+                    };
+                    if String::from_utf8_lossy(&peek[..n])
+                        .starts_with("GET /machine/system_info")
+                    {
+                        use tokio::io::AsyncWriteExt;
+                        let (status_line, body) = match &probe_serial {
+                            Some(serial) => (
+                                "200 OK",
+                                json!({ "result": { "system_info": { "product_info": {
+                                    "serial_number": serial,
+                                    "device_name": "Mock U1",
+                                }}}})
+                                .to_string(),
+                            ),
+                            None => ("404 Not Found", String::new()),
+                        };
+                        let resp = format!(
+                            "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\n\
+                             Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body,
+                        );
+                        let mut stream = stream;
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                        let _ = stream.flush().await;
+                        return;
+                    }
                     let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
                         return;
                     };
@@ -384,17 +420,9 @@ mod tests {
         let update = json!({
             "print_stats": { "state": "printing", "filename": "Cube.gcode" }
         });
-        let (host, port, _stop) = start_mock_moonraker(initial, Some(update)).await;
-        let mut driver = U1Driver::new(
-            DriverId(99),
-            U1Config {
-                host,
-                port,
-                // Bypass /machine/system_info — saves the test from
-                // mounting a second mock endpoint.
-                serial: Some("mock-serial".into()),
-            },
-        );
+        let (host, port, _stop) =
+            start_mock_moonraker(initial, Some(update), Some("mock-serial")).await;
+        let mut driver = U1Driver::new(DriverId(99), U1Config { host, port });
         driver.connect().await.expect("connect");
 
         // Wait for the streamed update to land — implies both the
@@ -410,16 +438,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connect_with_unknown_serial_probes_system_info() {
-        // No serial in config → driver must call /machine/system_info
-        // before opening the WS. We stand up only the WS endpoint so
-        // the probe fails — the driver should surface that error
-        // cleanly without spawning a worker.
-        let (host, port, _stop) = start_mock_moonraker(json!({}), None).await;
-        let mut driver = U1Driver::new(
-            DriverId(100),
-            U1Config { host, port, serial: None },
-        );
+    async fn connect_probes_system_info_and_surfaces_probe_failure() {
+        // connect() always probes /machine/system_info before opening
+        // the WS. Here the mock returns 404 for the probe, so the
+        // driver should surface that error cleanly without spawning a
+        // worker.
+        let (host, port, _stop) = start_mock_moonraker(json!({}), None, None).await;
+        let mut driver = U1Driver::new(DriverId(100), U1Config { host, port });
         let err = driver.connect().await.unwrap_err();
         assert!(
             matches!(err, DriverError::Network(_) | DriverError::Protocol(_)),
@@ -434,12 +459,10 @@ mod tests {
         let (host, port, _stop) = start_mock_moonraker(
             json!({ "print_stats": { "state": "standby" } }),
             None,
+            Some("mock"),
         )
         .await;
-        let mut driver = U1Driver::new(
-            DriverId(101),
-            U1Config { host, port, serial: Some("mock".into()) },
-        );
+        let mut driver = U1Driver::new(DriverId(101), U1Config { host, port });
         driver.connect().await.unwrap();
         // First disconnect tears down.
         driver.disconnect().await.unwrap();
@@ -455,7 +478,6 @@ mod tests {
             U1Config {
                 host: "127.0.0.1".into(),
                 port: 1,
-                serial: Some("mock".into()),
             },
         );
         // Driver doesn't need to be connected for this — the variant

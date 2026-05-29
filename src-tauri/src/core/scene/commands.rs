@@ -23,7 +23,7 @@ use tauri::{Emitter, State, Window};
 
 /// Emit each event on the given window. Errors are dropped — a
 /// dropped frontend connection shouldn't fail a command.
-fn emit_all(window: &Window, events: &[SceneEvent]) {
+pub(crate) fn emit_all(window: &Window, events: &[SceneEvent]) {
     for event in events {
         if let Err(e) = window.emit(event.name(), event) {
             tracing::warn!(
@@ -373,6 +373,27 @@ pub fn scene_rebind_plate_printer(
     drop(s);
     emit_all(&window, &events);
     Ok(report)
+}
+
+/// Clear a plate's printer binding. Companion to
+/// `scene_rebind_plate_printer` for the case where there's no
+/// fallback printer to rebind to — e.g. the user deleted the last
+/// registered instance and the workspace is about to transition
+/// to the add-printer empty state.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_unbind_plate_printer(
+    plate_id: PlateId,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s
+        .unbind_plate_printer(plate_id)
+        .map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
 }
 
 /// Move an object from one plate to another. Returns

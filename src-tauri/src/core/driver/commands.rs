@@ -100,16 +100,8 @@ pub async fn driver_register(
     registry: State<'_, Arc<DriverRegistry>>,
 ) -> Result<DriverId, String> {
     match config {
-        DriverConfig::Bambu {
-            host,
-            access_code,
-            serial,
-        } => {
-            let bambu_config = BambuConfig {
-                host,
-                access_code,
-                serial,
-            };
+        DriverConfig::Bambu { host, access_code } => {
+            let bambu_config = BambuConfig { host, access_code };
             // `register_with` allocates the id atomically with
             // insertion so the driver's internal `id()` matches
             // the registry's id (drivers use it for log spans +
@@ -125,8 +117,8 @@ pub async fn driver_register(
             }
             Ok(id)
         }
-        DriverConfig::U1 { host, port, serial } => {
-            let u1_config = U1Config { host, port, serial };
+        DriverConfig::U1 { host, port } => {
+            let u1_config = U1Config { host, port };
             let mut bridge_rx = None;
             let id = registry.register_with(|id| {
                 let driver = U1Driver::new(id, u1_config);

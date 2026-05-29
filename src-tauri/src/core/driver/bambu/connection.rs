@@ -41,13 +41,12 @@ const KEEPALIVE: Duration = Duration::from_secs(60);
 const RECONNECT_BACKOFFS: &[u32] = &[1, 2, 4, 8, 16];
 const RECONNECT_CAP_SECS: u32 = 60;
 
-/// Connection-level configuration. The serial is optional —
-/// when `None`, the connect path probes the peer cert CN.
+/// Connection-level configuration. The device serial is not
+/// supplied here — `connect()` always probes it from the peer cert CN.
 #[derive(Debug, Clone)]
 pub struct BambuConfig {
     pub host: String,
     pub access_code: String,
-    pub serial: Option<String>,
 }
 
 /// The driver itself. Stored in the [`super::super::DriverRegistry`]
@@ -146,12 +145,8 @@ impl Driver for BambuDriver {
         }
         self.set_connection_state(ConnectionState::Connecting);
 
-        // Probe the serial unless the caller already supplied one.
-        let device_id = if let Some(s) = &self.config.serial {
-            s.clone()
-        } else {
-            super::device_id::probe(&self.config.host, 8883).await?
-        };
+        // Probe the device serial from the peer cert CN.
+        let device_id = super::device_id::probe(&self.config.host, 8883).await?;
         self.device_id = Some(device_id.clone());
 
         // rumqttc options.
@@ -675,7 +670,6 @@ mod tests {
             BambuConfig {
                 host: "192.0.2.1".into(),
                 access_code: "00000000".into(),
-                serial: None,
             },
         );
         match driver.status().connection {
@@ -692,7 +686,6 @@ mod tests {
             BambuConfig {
                 host: "x".into(),
                 access_code: "y".into(),
-                serial: None,
             },
         );
         assert_eq!(d.id(), DriverId(7));

@@ -59,6 +59,11 @@ export type PrinterProfileJson = {
   }[];
   build_volume: { min: [number, number, number]; max: [number, number, number] };
   exclusion_zones: { min: [number, number, number]; max: [number, number, number] }[];
+  /** Which driver implementation talks to this printer (`null` when
+   *  n3o ships no driver for it). Authored in each printer's
+   *  `model.toml` (`driver_kind = "bambu" | "u1"`). Drives the
+   *  picker's Connection-tab visibility. */
+  driver_kind: "bambu" | "u1" | null;
 };
 
 export type BuildPlateJson = {

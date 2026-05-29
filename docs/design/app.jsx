@@ -100,6 +100,23 @@ const PRINTER_PROFILES = [
   { id: "creality_ender_3", brand: "Creality", brandShort: "CR", model: "Ender 3 V3 KE",plateSize: [220,220,250], bedPlate: "PC Spring Steel", nozzle: "0.4 mm brass",    extruders: 1, amsMax: 0 },
 ];
 
+// Hardware profiles n3o can talk to over the network. Mirrors CONNECTION_SPECS
+// in PrinterSettingsModal — printers off this list have no connection settings,
+// so their indicator stays grey.
+const NETWORK_PROFILE_IDS = new Set(["bambu_a1", "bambu_a1_mini", "snapmaker_u1"]);
+function isValidIPv4(ip) {
+  const m = String(ip || "").trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  return !!m && m.slice(1).every(o => Number(o) >= 0 && Number(o) <= 255);
+}
+// Resolve a printer to one of: "none" | "connecting" | "connected" | "failed".
+// "none" when the printer can't connect or has no IP set; otherwise the live
+// status comes from the connStatus map (a brief "connecting" then settle).
+function resolveConnStatus(printer, connStatus) {
+  if (!printer || !NETWORK_PROFILE_IDS.has(printer.profileId)) return "none";
+  if (!printer.connection || !printer.connection.ip) return "none";
+  return connStatus[printer.id] || "connecting";
+}
+
 // Demo objects to seed the first plate so the slicer doesn't look empty after
 // onboarding. Filament ids reference INITIAL_FILAMENTS.
 const SEED_OBJECTS_FIRST_PLATE = [
@@ -274,6 +291,35 @@ function App() {
   const [editingPrinterId, setEditingPrinterId] = useState(null);
   const [filamentPickerSlot, setFilamentPickerSlot] = useState(null); // slotId currently being edited
   const cameraResetRef = useRef(null);
+
+  // ─── Live printer connection status ───
+  // printerId → "connecting" | "connected" | "failed". Printers that aren't
+  // network-capable or have no IP set simply aren't in the map (→ grey "none").
+  // When a network printer gains/changes an IP we show "connecting" briefly,
+  // then settle to "connected" (valid IPv4) or "failed" (malformed address).
+  const [connStatus, setConnStatus] = useState({});
+  const connTimers = useRef({});
+  const connSignature = useMemo(() => printers
+    .filter(p => NETWORK_PROFILE_IDS.has(p.profileId) && p.connection?.ip)
+    .map(p => `${p.id}:${p.connection.ip}`).join("|"), [printers]);
+  useEffect(() => {
+    const connectable = printers.filter(p => NETWORK_PROFILE_IDS.has(p.profileId) && p.connection?.ip);
+    const connectableIds = new Set(connectable.map(p => p.id));
+    setConnStatus(prev => {
+      const next = {};
+      for (const id of connectableIds) next[id] = prev[id] || "connecting";
+      return next;
+    });
+    connectable.forEach(p => {
+      if (connTimers.current[p.id]) clearTimeout(connTimers.current[p.id]);
+      const ok = isValidIPv4(p.connection.ip);
+      connTimers.current[p.id] = setTimeout(() => {
+        setConnStatus(prev => ({ ...prev, [p.id]: ok ? "connected" : "failed" }));
+        delete connTimers.current[p.id];
+      }, 1400);
+    });
+  }, [connSignature]);
+  useEffect(() => () => { Object.values(connTimers.current).forEach(clearTimeout); }, []);
 
   // ─── Navigation: three primary modes ───
   // 'prepare' = editor, 'preview' = sliced result, 'devices' = fleet monitor.
@@ -643,6 +689,7 @@ function App() {
     contextLayer={contextLayer} setContextLayer={setContextLayer}
     printers={printers} setPrinters={setPrinters}
     plates={plates} setPlates={setPlates}
+    connStatus={connStatus}
     activePlateId={activePlateId} setActivePlateId={setActivePlateId}
     filaments={filaments}
     setFilaments={setFilaments}
@@ -676,6 +723,7 @@ function SlicerWorkspace({
   contextLayer, setContextLayer,
   printers, setPrinters,
   plates, setPlates,
+  connStatus,
   activePlateId, setActivePlateId,
   filaments,
   setFilaments,
@@ -713,6 +761,10 @@ function SlicerWorkspace({
   const userOverrides = activePlate.userOverrides;
   const plateSize = activePlate.plateSize;
   const printer = activePlate.printer;
+  const printerConnStatus = resolveConnStatus(
+    printers.find(p => p.name === printer),
+    connStatus
+  );
   const bedPlate = activePlate.bedPlate;
   const nozzle = activePlate.nozzle;
   const slotMap = activePlate.slotMap || {};
@@ -1104,6 +1156,7 @@ function SlicerWorkspace({
           objects={objects}
           filaments={filaments}
           printer={printer}
+          printerConnStatus={printerConnStatus}
           bedPlate={bedPlate}
           nozzle={nozzle}
           extruders={activePlate.extruders || 1}

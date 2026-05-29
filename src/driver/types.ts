@@ -12,8 +12,11 @@
 /** `#[serde(transparent)] pub struct DriverId(pub u64)` — bare integer on the wire. */
 export type DriverId = number;
 
-/** Mirror of `DriverKind`. External-tagged on the wire. */
-export type DriverKind = "Bambu" | "U1";
+/** Mirror of `DriverKind` (`#[serde(rename_all = "snake_case")]`) —
+ *  lowercase on the wire. NOTE: the separate `DriverConfig` /
+ *  `DriverExtra` enums below stay PascalCase-tagged; only the
+ *  driver-kind discriminator is lowercase. */
+export type DriverKind = "bambu" | "u1";
 
 /** Mirror of `DriverConfig` (`#[serde(tag="kind", content="data")]`). */
 export type DriverConfig =
@@ -22,7 +25,6 @@ export type DriverConfig =
       data: {
         host: string;
         access_code: string;
-        serial: string | null;
       };
     }
   | {
@@ -30,7 +32,6 @@ export type DriverConfig =
       data: {
         host: string;
         port: number;
-        serial: string | null;
       };
     };
 

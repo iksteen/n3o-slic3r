@@ -63,6 +63,12 @@ pub enum LibraryError {
     /// `when.printer.model = …` predicate. Fail fast so a malformed
     /// import doesn't silently empty the process/filament filters.
     MissingPrinterModel { printer_dir: PathBuf },
+    /// A catalog printer's `machine.toml` doesn't carry the
+    /// `default_bed_type` scalar that `PrinterProfile.default_bed`
+    /// hydrates from. Fail fast so a malformed import doesn't
+    /// silently fall back to the first supported plate as the
+    /// instance default.
+    MissingDefaultBedType { printer_dir: PathBuf },
 }
 
 impl std::fmt::Display for LibraryError {
@@ -76,6 +82,13 @@ impl std::fmt::Display for LibraryError {
                 f,
                 "`{}`: machine.toml does not declare a `printer_model` scalar — \
                  every cascade `when.printer.model = …` predicate keys off it",
+                printer_dir.display(),
+            ),
+            Self::MissingDefaultBedType { printer_dir } => write!(
+                f,
+                "`{}`: machine.toml does not declare a `default_bed_type` scalar — \
+                 `PrinterProfile.default_bed` hydrates from it; without it a new \
+                 instance would silently default to the first supported plate",
                 printer_dir.display(),
             ),
         }
@@ -278,6 +291,20 @@ impl ProfileLibrary {
                         printer_dir: printer_dir.clone(),
                     })?;
                 envelope.profile.model = machine_printer_model;
+                // `default_bed` is hydrated (in `registry::hydrate_profile`)
+                // from the machine cascade's `default_bed_type` scalar. Fail
+                // fast at load if it's absent rather than letting
+                // `create_instance` silently seed the first supported plate.
+                if self
+                    .printer_fragments
+                    .get(&slug)
+                    .and_then(|a| fragment_set_value(&a.cascade, "default_bed_type"))
+                    .is_none()
+                {
+                    return Err(LibraryError::MissingDefaultBedType {
+                        printer_dir: printer_dir.clone(),
+                    });
+                }
                 let identity = envelope.identity.unwrap_or_else(|| slug.clone());
                 self.catalog.push(PrinterCatalogEntry {
                     identity,

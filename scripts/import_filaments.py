@@ -88,6 +88,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from _atomic_io import atomic_write_text
+
 
 ENVELOPE_KEYS = frozenset({
     "type",
@@ -653,8 +655,7 @@ def emit_fragment(
                 lines.append(f"set.{key} = {value_to_toml(_unhash(hashable_value))}")
         lines.append("")
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines))
+    atomic_write_text(out_path, "\n".join(lines))
 
 
 # ---- Main ----

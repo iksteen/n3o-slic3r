@@ -26,8 +26,9 @@ pub use instance_library::{
 };
 pub use instance_registry::{
     create_instance, delete_instance, list_instances, lookup_instance, mutate_instance,
-    set_extruder_nozzle_diameter, set_instance_bed, set_instance_quality_profile,
-    set_slot_color, set_slot_filament, InstanceMutError,
+    set_extruder_nozzle_diameter, set_instance_ams_units, set_instance_bed,
+    set_instance_connection, set_instance_display_name, set_instance_quality_profile,
+    set_slot_color, set_slot_filament, update_instance, InstanceMutError, InstancePatch,
 };
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
 pub use registry::{bundled_catalog, default_printer_identity, lookup, CatalogEntry};
@@ -113,6 +114,160 @@ pub fn printer_instance_delete(
         tracing::warn!(error = %e, "printer:instance_changed emit failed");
     }
     Ok(())
+}
+
+/// Tauri command: atomically rebind or unbind a set of plates and
+/// then delete a `PrinterInstance`. Closes the partial-commit
+/// window the old frontend orchestration had: a sequential or
+/// parallel rebind loop followed by `delete_instance` left a
+/// fragile gap where some plates had been moved while the delete
+/// itself could still fail.
+///
+/// `fallback_instance_id` is `Some` when a fallback printer
+/// exists (plates get rebound to it) and `None` for the
+/// last-printer-delete flow (plates get unbound — their
+/// `printer_instance_id` becomes `None` and the bed visualization
+/// is cleared).
+///
+/// Single registry + project lock, single batch of scene events.
+/// Plates not in `plate_ids` are untouched.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn printer_instance_delete_with_reassign(
+    id: String,
+    fallback_instance_id: Option<String>,
+    plate_ids: Vec<crate::core::project::PlateId>,
+    state: tauri::State<
+        '_,
+        std::sync::Arc<std::sync::Mutex<crate::core::project::Project>>,
+    >,
+    window: tauri::Window,
+) -> Result<(), String> {
+    // Resolve the fallback's profile up-front so the per-plate
+    // rebind doesn't have to repeat the catalog lookup. Lookup
+    // failure surfaces as a typed error before any project state
+    // mutates.
+    let fallback = if let Some(fid) = fallback_instance_id.as_deref() {
+        let inst = lookup_instance(fid)
+            .ok_or_else(|| format!("no printer instance with id `{fid}`"))?;
+        let profile = lookup(&inst.vendor_profile_ref).ok_or_else(|| {
+            format!(
+                "printer instance `{fid}` references unknown vendor profile `{}`",
+                inst.vendor_profile_ref,
+            )
+        })?;
+        Some((fid.to_owned(), profile))
+    } else {
+        None
+    };
+
+    let mut all_events = Vec::new();
+    {
+        let mut project = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+        for plate_id in plate_ids {
+            let events = match &fallback {
+                Some((fid, profile)) => {
+                    project
+                        .rebind_plate_printer(plate_id, fid.clone(), profile)
+                        .map(|(_report, events)| events)
+                        .map_err(|e| e.to_string())?
+                }
+                None => project
+                    .unbind_plate_printer(plate_id)
+                    .map_err(|e| e.to_string())?,
+            };
+            all_events.extend(events);
+        }
+    }
+    delete_instance(&id).map_err(|e| e.to_string())?;
+    crate::core::scene::commands::emit_all(&window, &all_events);
+    use tauri::Emitter;
+    if let Err(e) = window.emit("printer:instance_changed", &id) {
+        tracing::warn!(error = %e, "printer:instance_changed emit failed");
+    }
+    Ok(())
+}
+
+/// Tauri command: rename the instance. Trims whitespace and rejects
+/// empty (mirrors `create_instance`'s validation). Emits
+/// `printer:instance_changed` so consumers re-list.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn printer_instance_set_display_name(
+    id: String,
+    display_name: String,
+    window: tauri::Window,
+) -> Result<PrinterInstance, String> {
+    let updated =
+        set_instance_display_name(&id, display_name).map_err(|e| e.to_string())?;
+    use tauri::Emitter;
+    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
+        tracing::warn!(error = %e, "printer:instance_changed emit failed");
+    }
+    Ok(updated)
+}
+
+/// Tauri command: change the AMS-unit count on an AMS-style printer.
+/// Re-derives slot topology + preserves existing bindings positionally;
+/// shrinks drop overflow bindings with a `tracing::warn!`. Rejects
+/// for toolchangers and for values above `profile.ams_max`.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn printer_instance_set_ams_units(
+    id: String,
+    ams_units: u32,
+    window: tauri::Window,
+) -> Result<PrinterInstance, String> {
+    let updated =
+        set_instance_ams_units(&id, ams_units).map_err(|e| e.to_string())?;
+    use tauri::Emitter;
+    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
+        tracing::warn!(error = %e, "printer:instance_changed emit failed");
+    }
+    Ok(updated)
+}
+
+/// Tauri command: atomic multi-field update. Applies the patch
+/// under one registry lock (one persist + one
+/// `printer:instance_changed` emit). The settings modal uses this
+/// instead of issuing three sequential per-field IPCs (display
+/// name + AMS units + connection) — collapses the partial-success
+/// window where one mutator succeeded and a later one threw.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn printer_instance_update(
+    id: String,
+    patch: InstancePatch,
+    window: tauri::Window,
+) -> Result<PrinterInstance, String> {
+    let updated = update_instance(&id, patch).map_err(|e| e.to_string())?;
+    use tauri::Emitter;
+    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
+        tracing::warn!(error = %e, "printer:instance_changed emit failed");
+    }
+    Ok(updated)
+}
+
+/// Tauri command: write (or clear) the instance's network connection
+/// settings. Persisted via `instance_storage`; the reactive driver
+/// manager (`useDriverConnections`) reconciles the live driver
+/// registry off the resulting `printer:instance_changed` event.
+/// Rejects a `ConnectionInfo` whose variant doesn't match the
+/// printer's `driver_kind`.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn printer_instance_set_connection(
+    id: String,
+    connection: Option<ConnectionInfo>,
+    window: tauri::Window,
+) -> Result<PrinterInstance, String> {
+    let updated =
+        set_instance_connection(&id, connection).map_err(|e| e.to_string())?;
+    use tauri::Emitter;
+    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
+        tracing::warn!(error = %e, "printer:instance_changed emit failed");
+    }
+    Ok(updated)
 }
 
 /// Tauri command: change the diameter of the nozzle currently

@@ -13,6 +13,7 @@
 // setSlotColor).
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useModalDismiss } from "../ui/useModalDismiss";
 import {
   FILAMENT_COLOR_PALETTE,
   paletteEntryForHex,
@@ -140,13 +141,7 @@ export function FilamentPickerModal({
     searchRef.current?.focus();
   }, []);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useModalDismiss(onClose, { active: true });
 
   // Color persists across brand / product navigation — palette
   // entries are product-agnostic and the user's color intent

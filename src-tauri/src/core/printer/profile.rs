@@ -90,6 +90,19 @@ pub struct PrinterProfile {
     /// `toolheads.len() > 1` is toolchanger.
     pub toolheads: Vec<Toolhead>,
 
+    /// Which driver implementation (if any) talks to this printer.
+    /// `None` means n3o has no driver for it — the picker shows a
+    /// "not configured" hint and the Connection tab in the
+    /// settings modal is hidden. **Authored** in each printer's
+    /// `model.toml` (`driver_kind = "bambu" | "u1"`); the registry
+    /// carries it through unchanged. `#[serde(default)]` so a
+    /// printer that ships without a driver can omit the field and
+    /// resolve to `None`. The connection setters
+    /// (`set_instance_connection` / `update_instance`) enforce that a
+    /// saved `ConnectionInfo` variant matches this kind.
+    #[serde(default)]
+    pub driver_kind: Option<crate::core::driver::traits::DriverKind>,
+
     /// Hydrated by the registry from the machine cascade's
     /// `printable_area` (XY corners polygon) + `printable_height`.
     /// `#[serde(default)]` so model.toml doesn't repeat what the
@@ -180,6 +193,7 @@ mod tests {
                 max: [180.0, 180.0, 180.0],
             },
             exclusion_zones: vec![],
+            driver_kind: Some(crate::core::driver::traits::DriverKind::Bambu),
         }
     }
 

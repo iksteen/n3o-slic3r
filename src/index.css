@@ -76,6 +76,8 @@
   --accent-text: var(--color-accent-text);
   --warn: var(--color-warn);
   --warn-soft: var(--color-warn-soft);
+  --danger: var(--color-danger);
+  --danger-soft: var(--color-danger-soft);
   --ok: var(--color-ok);
   --shadow-sm: 0 1px 0 rgba(15,17,21,0.04), 0 1px 2px rgba(15,17,21,0.04);
   --shadow-md: 0 1px 0 rgba(15,17,21,0.04), 0 4px 12px rgba(15,17,21,0.06);
@@ -434,7 +436,42 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
     display: block;
+  }
+  /* Bottom-row wrapper hosting the chip value + the right-aligned
+     connection-status dot. */
+  .chip-value-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+  }
+  .conn-indicator {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-left: auto;
+    background: #9aa0aa;
+    box-shadow: 0 0 0 2px color-mix(in srgb, #9aa0aa 20%, transparent);
+  }
+  .conn-indicator.conn-connecting {
+    background: var(--warn);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 24%, transparent);
+    animation: connPulse 1s ease-in-out infinite;
+  }
+  .conn-indicator.conn-connected {
+    background: oklch(0.62 0.15 150);
+    box-shadow: 0 0 0 2px oklch(0.62 0.15 150 / 0.22);
+  }
+  .conn-indicator.conn-failed {
+    background: var(--danger);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 24%, transparent);
+  }
+  @keyframes connPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
   }
 
   /* Printer picker popover (PR-5-4). Mirror of design's
@@ -449,7 +486,9 @@
     box-shadow: var(--shadow-lg);
     padding: 4px;
     z-index: 60;
-    min-width: 240px;
+    /* Comfortably fits "Bambu Lab A1 mini · Bambu Lab A1 mini" +
+       the cog without elision; expands as needed beyond that. */
+    min-width: 320px;
     display: flex;
     flex-direction: column;
     gap: 1px;
@@ -2395,6 +2434,337 @@
     background: var(--surface-3);
     color: var(--text-dim);
     border-color: var(--border);
+  }
+  .apm-btn.danger {
+    background: var(--danger);
+    color: white;
+    border-color: var(--danger);
+  }
+  .apm-btn.danger:hover {
+    background: color-mix(in oklch, var(--danger) 90%, black);
+  }
+  .apm-btn.danger:disabled {
+    background: color-mix(in oklch, var(--danger) 60%, var(--surface-2));
+    color: white;
+    border-color: transparent;
+  }
+
+  /* Picker row with a per-row cog: the row is a grid (name | cog),
+     the name+detail block lives inside a child button. */
+  .ptpm-item.ptpm-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 2px;
+    align-items: stretch;
+    padding: 0;
+    background: transparent;
+  }
+  .ptpm-row .ptpm-row-main {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    background: transparent;
+    border: 0;
+    border-radius: 5px;
+    color: inherit;
+    font-family: inherit;
+    text-align: left;
+    cursor: default;
+  }
+  .ptpm-row .ptpm-row-main:hover { background: var(--surface-2); }
+  .ptpm-cog {
+    flex-shrink: 0;
+    width: 24px; height: 24px;
+    /* Row is a 1fr|auto grid with align-items:stretch (so hover
+       paints the full row height on row-main). The cog has a
+       fixed 24px height, so without align-self:center it sticks
+       to the top of its cell. */
+    align-self: center;
+    margin-right: 4px;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: default;
+    transition: background 100ms, color 100ms;
+  }
+  .ptpm-cog:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+
+  /* ── Printer settings modal ── (mirror of docs/design/styles.css; */
+  /* class names from the mockup so the JSX port stays 1:1.) */
+  .printer-settings-modal {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 14px;
+    box-shadow: 0 30px 80px rgba(15,17,21,0.22), 0 4px 12px rgba(15,17,21,0.10);
+    width: min(820px, 100%);
+    max-height: min(700px, calc(100vh - 48px));
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    overflow: hidden;
+    position: relative;
+    animation: apmPopIn 180ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  .psm-header {
+    display: grid;
+    grid-template-columns: 44px 1fr auto;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 20px 14px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .psm-header-mark {
+    width: 44px; height: 44px;
+    border-radius: 9px;
+    background: var(--bm, oklch(0.58 0.05 240));
+    color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    position: relative;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12), inset 0 -8px 14px rgba(0,0,0,0.18);
+  }
+  .psm-header-mark::after {
+    content: ""; position: absolute;
+    inset: 7px;
+    background: repeating-linear-gradient(45deg, transparent 0 2px, rgba(255,255,255,0.18) 2px 3px);
+    border-radius: 4px;
+    pointer-events: none;
+  }
+  .psm-header-mark > span { position: relative; z-index: 1; }
+  .psm-header-text { min-width: 0; }
+  .psm-header-text h2 {
+    margin: 0 0 2px;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--text);
+  }
+  .psm-header-text p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .psm-profile-label { color: var(--text); }
+  .psm-mono {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text);
+  }
+  .psm-body {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .psm-nav {
+    display: flex; flex-direction: column;
+    gap: 1px;
+    padding: 12px 8px;
+    border-right: 1px solid var(--hairline);
+    background: var(--surface-2);
+    overflow-y: auto;
+  }
+  .psm-nav-item {
+    display: grid;
+    grid-template-columns: 20px 1fr auto;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    text-align: left;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    cursor: default;
+  }
+  .psm-nav-item:hover { background: var(--surface-3); color: var(--text); }
+  .psm-nav-item.active {
+    background: var(--surface);
+    color: var(--text);
+    font-weight: 500;
+    box-shadow: var(--shadow-sm);
+  }
+  .psm-nav-icon {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-dim);
+    text-align: center;
+  }
+  .psm-nav-item.active .psm-nav-icon { color: var(--accent-text); }
+  .psm-nav-item.dirty { color: var(--text); font-weight: 500; }
+  .psm-nav-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+
+  /* Per-field changed marker — bold the label + accent dot. The
+     extra `.apm-ams-label` selector handles the AMS field, whose
+     label is rendered inside AmsPicker itself (no outer <label>
+     wrapper, to avoid duplicating the title). */
+  .psm-field.changed > label,
+  .psm-field.changed .apm-ams-label,
+  .psm-limit-cell.changed > label {
+    font-weight: 600;
+    color: var(--text);
+  }
+  .psm-field.changed > label::after,
+  .psm-field.changed .apm-ams-label::after,
+  .psm-limit-cell.changed > label::after {
+    content: "";
+    display: inline-block;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .psm-content {
+    overflow-y: auto;
+    padding: 20px 24px;
+    min-height: 0;
+  }
+  .psm-section {
+    display: flex; flex-direction: column;
+    gap: 18px;
+  }
+  .psm-field { display: flex; flex-direction: column; gap: 6px; }
+  .psm-field label {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .psm-readonly {
+    background: var(--surface-2);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 8px 12px;
+  }
+  .psm-readonly-row {
+    display: flex; justify-content: space-between;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--hairline);
+    font-size: 12px;
+  }
+  .psm-readonly-row:last-child { border-bottom: 0; }
+  .psm-readonly-row > span:first-child { color: var(--text-dim); }
+  .psm-conn-note {
+    display: flex;
+    gap: 10px;
+    padding: 11px 13px;
+    background: var(--warn-soft);
+    border: 1px solid color-mix(in oklch, var(--warn) 45%, transparent);
+    border-radius: 8px;
+    color: var(--text);
+  }
+  .psm-conn-note-ico {
+    flex-shrink: 0;
+    margin-top: 1px;
+    color: var(--warn);
+  }
+  .psm-conn-note-body {
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .psm-conn-note-body strong { font-weight: 600; }
+  .psm-conn-note-body span { color: var(--text-muted); }
+  .psm-conn-note-body em {
+    font-style: normal;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .psm-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 18px;
+    border-top: 1px solid var(--hairline);
+    background: var(--surface);
+    gap: 12px;
+  }
+  .psm-delete-trigger {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 0 12px;
+    height: 32px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-size: 12.5px;
+    cursor: default;
+    transition: background 100ms, color 100ms;
+  }
+  .psm-delete-trigger:hover {
+    background: oklch(from var(--danger) 0.97 0.04 h);
+    color: var(--danger);
+    border-color: oklch(from var(--danger) 0.85 0.06 h);
+  }
+  [data-theme="dark"] .psm-delete-trigger:hover {
+    background: oklch(from var(--danger) 0.22 0.06 h);
+    color: oklch(from var(--danger) 0.75 0.12 h);
+  }
+  .psm-delete-trigger:disabled {
+    color: var(--text-dim);
+    cursor: not-allowed;
+  }
+  .psm-delete-trigger:disabled:hover {
+    background: transparent;
+    color: var(--text-dim);
+    border-color: transparent;
+  }
+  .psm-discard-overlay {
+    position: absolute;
+    inset: 0;
+    background: color-mix(in srgb, var(--surface) 55%, transparent);
+    backdrop-filter: blur(2px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    z-index: 5;
+    animation: apmFadeIn 120ms ease both;
+  }
+  .psm-discard-card {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    box-shadow: 0 24px 60px rgba(15,17,21,0.28), 0 3px 10px rgba(15,17,21,0.12);
+    width: min(380px, 100%);
+    padding: 20px 20px 16px;
+    animation: apmPopIn 160ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  .psm-discard-title {
+    margin: 0 0 6px;
+    font-size: 14.5px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .psm-discard-body {
+    margin: 0 0 16px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--text-muted);
+  }
+  .psm-discard-body strong { color: var(--text); font-weight: 600; }
+  .psm-discard-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .psm-discard-actions .apm-btn {
+    width: 100%;
+    justify-content: center;
+    display: flex;
+    align-items: center;
   }
 
   /* Empty-state onboarding */

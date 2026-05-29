@@ -21,10 +21,12 @@ use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
 
 use super::instance::{
-    BedRef, ExtruderState, FeedKind, NozzleMaterial, NozzleSku, PrinterInstance, SlotBinding,
+    BedRef, ConnectionInfo, ExtruderState, FeedKind, NozzleMaterial, NozzleSku, PrinterInstance,
+    SlotBinding,
 };
 use super::instance_library::bundled_instances;
 use super::instance_storage;
+use crate::core::driver::traits::DriverKind;
 
 static REGISTRY: OnceLock<Mutex<Vec<PrinterInstance>>> = OnceLock::new();
 
@@ -129,6 +131,27 @@ pub enum InstanceMutError {
         printer_identity: String,
         diameter: String,
     },
+    /// A connection was written whose `ConnectionInfo` variant
+    /// doesn't match the instance's printer `driver_kind` (e.g. a
+    /// Bambu connection on a U1 instance). The UI gates this by
+    /// driver kind, but the command boundary enforces it too so a
+    /// hand-edited / secondary caller can't persist a connection the
+    /// reconciler would drive with the wrong-kind driver. `expected`
+    /// is the printer's declared driver kind (`"none"` when it ships
+    /// no driver); `got` is the connection variant.
+    ConnectionDriverMismatch {
+        instance_id: String,
+        printer_identity: String,
+        expected: &'static str,
+        got: &'static str,
+    },
+    /// A connection's field *content* is unusable — empty host, a
+    /// Bambu access code that isn't 8 digits, or a U1 port of 0. The
+    /// settings form validates these in `connectionValidation.ts`,
+    /// but the command boundary enforces them too so a hand-edited
+    /// instance file or secondary caller can't persist a connection
+    /// the reconciler would then drive into a doomed connect.
+    InvalidConnection { instance_id: String, message: String },
 }
 
 impl std::fmt::Display for InstanceMutError {
@@ -187,6 +210,22 @@ impl std::fmt::Display for InstanceMutError {
             } => write!(
                 f,
                 "instance `{instance_id}` printer `{printer_identity}` does not bundle nozzle diameter `{diameter}`",
+            ),
+            Self::ConnectionDriverMismatch {
+                instance_id,
+                printer_identity,
+                expected,
+                got,
+            } => write!(
+                f,
+                "instance `{instance_id}` printer `{printer_identity}` expects a `{expected}` connection; got `{got}`",
+            ),
+            Self::InvalidConnection {
+                instance_id,
+                message,
+            } => write!(
+                f,
+                "instance `{instance_id}` connection is invalid: {message}",
             ),
         }
     }
@@ -469,7 +508,7 @@ pub fn create_instance(
         let filament_slug = resolve_default_filament(&default_nozzle_diameter);
         let mut slots = Vec::new();
         for _unit in 0..ams_units {
-            for _slot in 0..4 {
+            for _slot in 0..super::instance::AMS_SLOTS_PER_UNIT {
                 slots.push(SlotBinding {
                     feed: FeedKind::Ams,
                     filament_identity: Some(filament_slug.clone()),
@@ -650,6 +689,359 @@ pub fn set_instance_quality_profile(
 ) -> Result<PrinterInstance, InstanceMutError> {
     mutate_instance(id, |inst| {
         inst.quality_profile = quality_profile;
+        Ok(())
+    })
+}
+
+/// Change the AMS-unit count on an AMS-style printer. Re-derives the
+/// topology of `extruders[0].slots` to `(ams_units * 4 + 1)` —
+/// matching `create_instance`'s layout — and preserves existing
+/// bindings positionally where the new range overlaps the old one.
+///
+/// Bindings on slots that no longer exist (after a shrink) are
+/// silently dropped after a `tracing::warn!` per drop so the user
+/// can audit the loss. Slots added on a grow are seeded with the
+/// instance's `default_filament_fragment_slug` (same as
+/// `create_instance` does on first creation).
+///
+/// Validates:
+///   - The bound profile resolves (else `PrinterProfileNotFound`).
+///   - The printer is AMS-style (`toolheads.len() == 1` and
+///     `ams_max > 0`) — toolchanger printers don't have AMS-driven
+///     topology, so the call is rejected with `AmsCountExceeded`
+///     citing the `ams_max == 0` constraint.
+///   - `ams_units <= profile.ams_max` (else `AmsCountExceeded`).
+pub fn set_instance_ams_units(
+    id: &str,
+    ams_units: u32,
+) -> Result<PrinterInstance, InstanceMutError> {
+    mutate_instance(id, |inst| apply_ams_units(inst, id, ams_units, None))
+}
+
+/// Write the instance's network connection settings (or clear them
+/// with `None`). Persisted via `instance_storage` so the same
+/// physical printer's connection survives across app restarts.
+/// The reactive driver-registry manager
+/// (`src/driver/useDriverConnections.ts`) observes the resulting
+/// `printer:instance_changed` event and reconciles registered
+/// drivers against the new state — register/disconnect/replace
+/// happen automatically; no separate UI gesture needed.
+pub fn set_instance_connection(
+    id: &str,
+    connection: Option<ConnectionInfo>,
+) -> Result<PrinterInstance, InstanceMutError> {
+    mutate_instance(id, |inst| {
+        if let Some(conn) = &connection {
+            validate_connection(inst, conn)?;
+        }
+        inst.connection = connection.clone();
+        Ok(())
+    })
+}
+
+/// Variant of a `ConnectionInfo` as a lowercase wire token, matching
+/// the `DriverKind` serialization.
+fn connection_kind_token(conn: &ConnectionInfo) -> &'static str {
+    match conn {
+        ConnectionInfo::Bambu { .. } => "bambu",
+        ConnectionInfo::U1 { .. } => "u1",
+    }
+}
+
+fn driver_kind_token(kind: Option<DriverKind>) -> &'static str {
+    match kind {
+        Some(DriverKind::Bambu) => "bambu",
+        Some(DriverKind::U1) => "u1",
+        None => "none",
+    }
+}
+
+/// Reject a `ConnectionInfo` whose variant doesn't match the
+/// instance's printer `driver_kind` (authored in `model.toml`). This
+/// is the *kind* half of the command-boundary check; field content is
+/// validated separately in `validate_connection_content`, and both
+/// run via `validate_connection`. The settings modal already gates
+/// connection edits by driver kind, but the command boundary enforces
+/// it too so a hand-edited instance file or any future secondary
+/// caller can't persist a connection the reconciler would then drive
+/// with the wrong-kind driver. Looks the profile up the same way
+/// `set_instance_bed` / `set_extruder_nozzle_diameter` do — a missing
+/// profile is the structural `PrinterProfileNotFound`, not a silent
+/// pass.
+fn validate_connection_kind(
+    inst: &PrinterInstance,
+    conn: &ConnectionInfo,
+) -> Result<(), InstanceMutError> {
+    let profile = super::lookup(&inst.vendor_profile_ref).ok_or_else(|| {
+        InstanceMutError::PrinterProfileNotFound {
+            instance_id: inst.id.clone(),
+            printer_identity: inst.vendor_profile_ref.clone(),
+        }
+    })?;
+    let ok = matches!(
+        (profile.driver_kind, conn),
+        (Some(DriverKind::Bambu), ConnectionInfo::Bambu { .. })
+            | (Some(DriverKind::U1), ConnectionInfo::U1 { .. })
+    );
+    if !ok {
+        return Err(InstanceMutError::ConnectionDriverMismatch {
+            instance_id: inst.id.clone(),
+            printer_identity: inst.vendor_profile_ref.clone(),
+            expected: driver_kind_token(profile.driver_kind),
+            got: connection_kind_token(conn),
+        });
+    }
+    Ok(())
+}
+
+/// Reject a connection whose field *content* is unusable. Mirrors the
+/// frontend `connectionValidation.ts` rules (non-empty host; Bambu
+/// access code = 8 digits; U1 port in 1..=65535 — `u16` already caps
+/// the upper bound, so only 0 is out of range) so the picker dot and
+/// this command boundary agree on what "valid" means.
+fn validate_connection_content(
+    inst: &PrinterInstance,
+    conn: &ConnectionInfo,
+) -> Result<(), InstanceMutError> {
+    let invalid = |message: &str| InstanceMutError::InvalidConnection {
+        instance_id: inst.id.clone(),
+        message: message.to_owned(),
+    };
+    match conn {
+        ConnectionInfo::Bambu {
+            host, access_code, ..
+        } => {
+            if host.trim().is_empty() {
+                return Err(invalid("host is required"));
+            }
+            let code = access_code.trim();
+            if code.len() != 8 || !code.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(invalid("access code must be 8 digits"));
+            }
+        }
+        ConnectionInfo::U1 { host, port, .. } => {
+            if host.trim().is_empty() {
+                return Err(invalid("host is required"));
+            }
+            if *port == 0 {
+                return Err(invalid("port must be between 1 and 65535"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Full command-boundary connection validation: the variant must
+/// match the printer's `driver_kind` AND the field content must be
+/// usable. Both `set_instance_connection` and `update_instance` route
+/// every persisted connection through this.
+fn validate_connection(
+    inst: &PrinterInstance,
+    conn: &ConnectionInfo,
+) -> Result<(), InstanceMutError> {
+    validate_connection_kind(inst, conn)?;
+    validate_connection_content(inst, conn)?;
+    Ok(())
+}
+
+/// Patch shape for the composite `update_instance` mutator. Each
+/// field is `Option`-wrapped: `None` = leave unchanged; `Some` =
+/// apply. The outer `Option<ConnectionInfo>` (for `connection`)
+/// has its own `Some(None)` semantics: explicitly clear the
+/// saved connection. Serde `flatten` on the wire would conflate
+/// these states, so the Tauri command takes a dedicated struct
+/// with a `clear_connection: bool` companion flag.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct InstancePatch {
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub ams_units: Option<u32>,
+    /// New connection to install (only consulted when
+    /// `clear_connection` is false). Leaving both fields default
+    /// leaves the connection untouched.
+    #[serde(default)]
+    pub connection: Option<super::instance::ConnectionInfo>,
+    /// Set the persisted connection to `None` regardless of
+    /// `connection`. Mutually exclusive with passing a non-null
+    /// `connection`; if both are present, `clear_connection`
+    /// wins.
+    #[serde(default)]
+    pub clear_connection: bool,
+}
+
+/// Apply a multi-field patch atomically. Single registry lock,
+/// single persist, single `printer:instance_changed` emit. The
+/// settings modal collapses its three sequential mutators
+/// (display_name + ams_units + connection) into this one IPC.
+///
+/// Atomic: ALL validation (name, AMS request, connection kind +
+/// content) runs against a read-only snapshot BEFORE any field is
+/// mutated. Only once everything is known-good does the mutating
+/// closure assign the fields. This matters because `mutate_instance`
+/// isn't transactional across fields — a validation error mid-closure
+/// would otherwise strand an earlier in-memory mutation (e.g. the
+/// rename) that never gets persisted, diverging memory from disk.
+///
+/// Applied fields:
+///   1. Display name (whitespace-trimmed, non-empty).
+///   2. AMS units (re-derives slot topology).
+///   3. Connection (replaced wholesale, or cleared if
+///      `clear_connection` is set).
+pub fn update_instance(
+    id: &str,
+    patch: InstancePatch,
+) -> Result<PrinterInstance, InstanceMutError> {
+    let trimmed_name = patch.display_name.as_deref().map(str::trim);
+    if matches!(trimmed_name, Some(s) if s.is_empty()) {
+        return Err(InstanceMutError::EmptyDisplayName);
+    }
+    let trimmed_name = trimmed_name.map(str::to_owned);
+
+    // Validate the fallible fields against a read-only snapshot before
+    // mutating anything. vendor_profile_ref and the bound profile are
+    // immutable, so validating against the snapshot is sound even
+    // though `mutate_instance` re-locks the registry afterwards.
+    let validating_connection = !patch.clear_connection && patch.connection.is_some();
+    if patch.ams_units.is_some() || validating_connection {
+        let inst = lookup_instance(id)
+            .ok_or_else(|| InstanceMutError::UnknownInstance { id: id.to_owned() })?;
+        if let Some(ams_units) = patch.ams_units {
+            validate_ams_request(&inst, id, ams_units, None)?;
+        }
+        if let Some(conn) = &patch.connection {
+            if !patch.clear_connection {
+                validate_connection(&inst, conn)?;
+            }
+        }
+    }
+
+    mutate_instance(id, |inst| {
+        if let Some(name) = trimmed_name {
+            inst.display_name = name;
+        }
+        if let Some(ams_units) = patch.ams_units {
+            rebuild_ams_slots(inst, id, ams_units);
+        }
+        if patch.clear_connection {
+            inst.connection = None;
+        } else if let Some(conn) = patch.connection {
+            inst.connection = Some(conn);
+        }
+        Ok(())
+    })
+}
+
+/// Validate an AMS-units request against the bound profile — AMS-style
+/// printer (`toolheads.len() == 1` and `ams_max > 0`) and the count
+/// within `ams_max`. No mutation; pairs with [`rebuild_ams_slots`] so
+/// `update_instance` can run all validation before mutating anything.
+fn validate_ams_request(
+    inst: &PrinterInstance,
+    id: &str,
+    ams_units: u32,
+    profile: Option<&crate::core::printer::profile::PrinterProfile>,
+) -> Result<(), InstanceMutError> {
+    let profile = match profile {
+        Some(p) => p,
+        None => &super::lookup(&inst.vendor_profile_ref).ok_or_else(|| {
+            InstanceMutError::PrinterProfileNotFound {
+                instance_id: id.to_owned(),
+                printer_identity: inst.vendor_profile_ref.clone(),
+            }
+        })?,
+    };
+    if profile.toolheads.len() != 1
+        || profile.ams_max == 0
+        || ams_units > profile.ams_max
+    {
+        return Err(InstanceMutError::AmsCountExceeded {
+            identity: inst.vendor_profile_ref.clone(),
+            requested: ams_units,
+            max: profile.ams_max,
+        });
+    }
+    Ok(())
+}
+
+/// Rebuild `inst.extruders[0].slots` for `ams_units` AMS units (each
+/// `AMS_SLOTS_PER_UNIT` slots) plus one trailing `Direct` slot.
+/// Infallible — the caller MUST have already passed
+/// [`validate_ams_request`]. Preserves overlapping bindings by feed
+/// kind; seeds new slots from the instance's default filament.
+fn rebuild_ams_slots(inst: &mut PrinterInstance, id: &str, ams_units: u32) {
+    let target_slot_count =
+        (ams_units as usize) * super::instance::AMS_SLOTS_PER_UNIT + 1;
+    let extruder = inst
+        .extruders
+        .get_mut(0)
+        .expect("AMS-style printer has at least one extruder");
+    let current_slot_count = extruder.slots.len();
+    if current_slot_count == target_slot_count {
+        return;
+    }
+    let default_slug = Some(inst.default_filament_fragment_slug.clone());
+    let mut new_slots: Vec<SlotBinding> = Vec::with_capacity(target_slot_count);
+    for new_idx in 0..target_slot_count {
+        let last = new_idx + 1 == target_slot_count;
+        let target_feed = if last { FeedKind::Direct } else { FeedKind::Ams };
+        let source_idx = if last {
+            current_slot_count.checked_sub(1)
+        } else if new_idx < current_slot_count.saturating_sub(1) {
+            Some(new_idx)
+        } else {
+            None
+        };
+        let slot = match source_idx.and_then(|i| extruder.slots.get(i)) {
+            Some(prior) if prior.feed == target_feed => prior.clone(),
+            _ => SlotBinding {
+                feed: target_feed,
+                filament_identity: default_slug.clone(),
+                color: None,
+            },
+        };
+        new_slots.push(slot);
+    }
+    if current_slot_count > target_slot_count {
+        let dropped = current_slot_count - target_slot_count;
+        tracing::warn!(
+            instance_id = %id,
+            dropped_slots = dropped,
+            from = current_slot_count,
+            to = target_slot_count,
+            "ams_units shrink dropped slot bindings",
+        );
+    }
+    extruder.slots = new_slots;
+}
+
+/// Validate + rebuild in one step. Used by `set_instance_ams_units`,
+/// which mutates a single field so there's no cross-field atomicity to
+/// preserve. `update_instance` instead calls the two halves separately
+/// so all validation runs before any field is mutated.
+fn apply_ams_units(
+    inst: &mut PrinterInstance,
+    id: &str,
+    ams_units: u32,
+    profile: Option<&crate::core::printer::profile::PrinterProfile>,
+) -> Result<(), InstanceMutError> {
+    validate_ams_request(inst, id, ams_units, profile)?;
+    rebuild_ams_slots(inst, id, ams_units);
+    Ok(())
+}
+
+/// Rename the instance. Mirrors `create_instance`'s validation:
+/// trims whitespace and rejects empty.
+pub fn set_instance_display_name(
+    id: &str,
+    display_name: String,
+) -> Result<PrinterInstance, InstanceMutError> {
+    let trimmed = display_name.trim().to_owned();
+    if trimmed.is_empty() {
+        return Err(InstanceMutError::EmptyDisplayName);
+    }
+    mutate_instance(id, |inst| {
+        inst.display_name = trimmed.clone();
         Ok(())
     })
 }
@@ -1083,6 +1475,215 @@ mod tests {
             err,
             InstanceMutError::BadExtruder { extruders: 1, extruder_idx: 1, .. },
         ));
+    }
+
+    #[test]
+    fn set_instance_display_name_trims_and_rejects_empty() {
+        let _registry = RegistryGuard::acquire();
+        let updated = set_instance_display_name("bambi", "  Lab Mini  ".to_string())
+            .expect("rename ok");
+        assert_eq!(updated.display_name, "Lab Mini");
+        // Persistence round-trip via lookup.
+        let again = lookup_instance("bambi").expect("bambi present");
+        assert_eq!(again.display_name, "Lab Mini");
+
+        let err = set_instance_display_name("bambi", "   ".to_string()).unwrap_err();
+        assert!(matches!(err, InstanceMutError::EmptyDisplayName));
+    }
+
+    #[test]
+    fn set_instance_ams_units_grow_seeds_new_slots_from_default_filament() {
+        // Bambi (A1 mini, ams_max=1) starts at ams_units=1 — 5 slots
+        // (4 AMS + Ext). Bumping to 1 is a no-op, but a fresh test
+        // starts with whatever the bundled fixture seeded. Shrink to
+        // 0 first, then grow to 1 — the new AMS slots inherit
+        // `default_filament_fragment_slug`.
+        let _registry = RegistryGuard::acquire();
+        let shrunk = set_instance_ams_units("bambi", 0).expect("shrink ok");
+        assert_eq!(shrunk.extruders[0].slots.len(), 1);
+        assert_eq!(shrunk.extruders[0].slots[0].feed, FeedKind::Direct);
+
+        let grown = set_instance_ams_units("bambi", 1).expect("grow ok");
+        let slots = &grown.extruders[0].slots;
+        assert_eq!(slots.len(), 5);
+        for ams_slot in slots.iter().take(4) {
+            assert_eq!(ams_slot.feed, FeedKind::Ams);
+            assert_eq!(
+                ams_slot.filament_identity.as_deref(),
+                Some(grown.default_filament_fragment_slug.as_str()),
+                "newly-seeded AMS slot inherits the instance's default filament",
+            );
+        }
+        assert_eq!(slots[4].feed, FeedKind::Direct);
+    }
+
+    #[test]
+    fn set_instance_ams_units_shrink_preserves_overlapping_bindings() {
+        let _registry = RegistryGuard::acquire();
+        // Bambi ships at ams_units=1 (5 slots). Stamp a custom
+        // binding into AMS:1 and the Ext slot, then shrink to 0
+        // (1 slot remains — the trailing Direct). The Direct slot
+        // pairs with the old last slot, so its binding survives.
+        let _ = mutate_instance("bambi", |inst| {
+            inst.extruders[0].slots[0].filament_identity = Some("ams-one".into());
+            inst.extruders[0].slots[4].filament_identity = Some("ext-trail".into());
+            Ok(())
+        })
+        .expect("bambi present");
+        let shrunk = set_instance_ams_units("bambi", 0).expect("shrink ok");
+        let slot = &shrunk.extruders[0].slots[0];
+        assert_eq!(slot.feed, FeedKind::Direct);
+        assert_eq!(
+            slot.filament_identity.as_deref(),
+            Some("ext-trail"),
+            "trailing Direct slot survives the AMS-drop",
+        );
+    }
+
+    #[test]
+    fn set_instance_ams_units_rejects_above_ams_max() {
+        let _registry = RegistryGuard::acquire();
+        // Bambi's ams_max is 1; requesting 2 hits the typed error.
+        let err = set_instance_ams_units("bambi", 2).unwrap_err();
+        assert!(
+            matches!(err, InstanceMutError::AmsCountExceeded { max: 1, requested: 2, .. }),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn set_instance_ams_units_rejects_for_toolchanger() {
+        let _registry = RegistryGuard::acquire();
+        // Snappy (U1) has 4 toolheads and ams_max=0 — AMS-units
+        // editing isn't meaningful. Any non-zero count is rejected;
+        // even 0 is rejected since ams_max==0 collapses the valid
+        // range to an empty set.
+        let err = set_instance_ams_units("snappy", 0).unwrap_err();
+        assert!(
+            matches!(err, InstanceMutError::AmsCountExceeded { max: 0, .. }),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn set_instance_connection_round_trip_and_clear() {
+        use super::super::instance::ConnectionInfo;
+        let _registry = RegistryGuard::acquire();
+        let bambu = ConnectionInfo::Bambu {
+            host: "192.168.1.42".to_string(),
+            access_code: "12345678".to_string(),
+        };
+        let updated =
+            set_instance_connection("bambi", Some(bambu)).expect("set bambu conn");
+        assert!(matches!(
+            updated.connection,
+            Some(ConnectionInfo::Bambu { ref host, .. }) if host == "192.168.1.42",
+        ));
+        let cleared = set_instance_connection("bambi", None).expect("clear");
+        assert!(cleared.connection.is_none());
+
+        let u1 = ConnectionInfo::U1 {
+            host: "snappy.local".to_string(),
+            port: 8080,
+        };
+        let updated = set_instance_connection("snappy", Some(u1)).expect("set u1 conn");
+        match updated.connection {
+            Some(ConnectionInfo::U1 { host, port }) => {
+                assert_eq!(host, "snappy.local");
+                assert_eq!(port, 8080);
+            }
+            other => panic!("expected U1 connection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_instance_connection_rejects_mismatched_driver_kind() {
+        use super::super::instance::ConnectionInfo;
+        let _registry = RegistryGuard::acquire();
+        // bambi is an A1 mini (driver_kind = bambu); a U1 connection
+        // must be refused at the command boundary even though the UI
+        // would never offer it.
+        let wrong = ConnectionInfo::U1 {
+            host: "snappy.local".to_string(),
+            port: 80,
+        };
+        let err = set_instance_connection("bambi", Some(wrong)).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                InstanceMutError::ConnectionDriverMismatch { expected: "bambu", got: "u1", .. }
+            ),
+            "got {err:?}",
+        );
+        // The mismatch must not have been persisted.
+        assert!(lookup_instance("bambi").expect("bambi present").connection.is_none());
+
+        // The symmetric case: a Bambu connection on the U1 instance.
+        let wrong = ConnectionInfo::Bambu {
+            host: "10.0.0.5".to_string(),
+            access_code: "12345678".to_string(),
+        };
+        let err = update_instance(
+            "snappy",
+            InstancePatch {
+                connection: Some(wrong),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                InstanceMutError::ConnectionDriverMismatch { expected: "u1", got: "bambu", .. }
+            ),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn set_instance_connection_rejects_invalid_content() {
+        use super::super::instance::ConnectionInfo;
+        let _registry = RegistryGuard::acquire();
+        // Right kind, but empty host — must be refused on content.
+        let empty_host = ConnectionInfo::Bambu {
+            host: "   ".to_string(),
+            access_code: "12345678".to_string(),
+        };
+        let err = set_instance_connection("bambi", Some(empty_host)).unwrap_err();
+        assert!(
+            matches!(err, InstanceMutError::InvalidConnection { .. }),
+            "got {err:?}",
+        );
+        // Right kind, but a non-8-digit access code.
+        let bad_code = ConnectionInfo::Bambu {
+            host: "192.168.1.42".to_string(),
+            access_code: "abc123".to_string(),
+        };
+        let err = set_instance_connection("bambi", Some(bad_code)).unwrap_err();
+        assert!(
+            matches!(err, InstanceMutError::InvalidConnection { .. }),
+            "got {err:?}",
+        );
+        // U1 port 0 is out of range.
+        let bad_port = ConnectionInfo::U1 {
+            host: "snappy.local".to_string(),
+            port: 0,
+        };
+        let err = update_instance(
+            "snappy",
+            InstancePatch {
+                connection: Some(bad_port),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, InstanceMutError::InvalidConnection { .. }),
+            "got {err:?}",
+        );
+        // None of the rejects persisted anything.
+        assert!(lookup_instance("bambi").expect("bambi").connection.is_none());
+        assert!(lookup_instance("snappy").expect("snappy").connection.is_none());
     }
 
     /// Sanity: the FeedKind + SlotBinding shape round-trips through

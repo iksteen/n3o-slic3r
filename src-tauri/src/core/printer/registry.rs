@@ -87,6 +87,11 @@ fn hydrate_profile(base: &PrinterProfile, fragment_slug: &str) -> PrinterProfile
             toolhead.hotend_type = nozzle_type;
         }
     }
+    // `driver_kind` is authored directly in `model.toml` (parsed into
+    // `base.driver_kind`), so it carries through the clone untouched.
+    // A printer whose `model.toml` omits it resolves to `None` — we
+    // ship no driver for it and the settings modal hides its
+    // Connection tab.
     profile
 }
 
@@ -146,6 +151,19 @@ mod tests {
         let first = bundled_catalog().into_iter().next().map(|e| e.identity);
         assert_eq!(default_printer_identity(), first.as_deref());
         assert!(default_printer_identity().is_some());
+    }
+
+    #[test]
+    fn driver_kind_declared_in_model_toml() {
+        // driver_kind is authored in each printer's model.toml. Pinning
+        // so a future Prusa/Voron/Creality landing without a driver
+        // (model.toml omits the field → None) doesn't accidentally
+        // inherit Bambu (the old App.tsx hand-rolled fallback).
+        use super::super::super::driver::traits::DriverKind;
+        let a1 = lookup("bambu-lab-a1-mini").expect("a1 mini present");
+        assert_eq!(a1.driver_kind, Some(DriverKind::Bambu));
+        let u1 = lookup("snapmaker-u1").expect("u1 present");
+        assert_eq!(u1.driver_kind, Some(DriverKind::U1));
     }
 
     #[test]

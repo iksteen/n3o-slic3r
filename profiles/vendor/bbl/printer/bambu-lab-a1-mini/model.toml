@@ -1,5 +1,6 @@
 brand = "Bambu Lab"
 brand_short = "B"
+driver_kind = "bambu"
 ams_max = 1
 ams_type = "AMS Lite"
 

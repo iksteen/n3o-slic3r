@@ -99,6 +99,14 @@ pub struct PrinterInstance {
     pub config_overrides: std::collections::BTreeMap<String, String>,
 }
 
+/// AMS slot topology: each installed AMS unit contributes exactly
+/// this many `FeedKind::Ams` slots on the first extruder, and one
+/// trailing `FeedKind::Direct` slot ("Ext") is always present. So an
+/// AMS-style printer with `n` units has `n * AMS_SLOTS_PER_UNIT + 1`
+/// slots. `apply_ams_units` and `create_instance` both build the
+/// layout from this constant; the frontend mirror is `amsUnitsOf`.
+pub const AMS_SLOTS_PER_UNIT: usize = 4;
+
 /// Per-extruder state — currently-installed nozzle plus the filament
 /// feeds (slots) that pull into this extruder.
 ///
@@ -211,16 +219,21 @@ pub struct BedRef {
     pub identity: String,
 }
 
-/// Network connection details for sending prints.
+/// Network connection details for sending prints. Driver-tagged so
+/// each kind only carries the fields it needs — Bambu needs an
+/// 8-digit LAN access code; U1 needs a Moonraker port (usually 80).
+///
+/// Device serial is intentionally NOT persisted here: the drivers
+/// resolve it at connect time (Bambu via mDNS, U1 via
+/// `/machine/system_info`), and nothing in the UI ever authored it.
+/// Keeping it out of the stored connection avoids a dead round-tripped
+/// field and a stale-serial footgun. The runtime [`DriverConfig`] still
+/// carries an optional serial for the probe/trust path.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConnectionInfo {
-    pub host: String,
-    pub serial: String,
-    pub access_code: String,
-    /// True when the printer's "LAN Mode With Developer Tools Enabled"
-    /// is on (Bambu-specific; bypasses RSA-SHA256 payload signing).
-    /// Currently required for our Bambu driver to send.
-    pub dev_mode: bool,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ConnectionInfo {
+    Bambu { host: String, access_code: String },
+    U1 { host: String, port: u16 },
 }
 
 #[cfg(test)]

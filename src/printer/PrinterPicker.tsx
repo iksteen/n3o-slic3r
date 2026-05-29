@@ -14,7 +14,20 @@ import { useEffect, useRef, useState } from "react";
 import { usePrinterCatalog } from "./usePrinterCatalog";
 import { rebindPlatePrinter } from "./printerCommands";
 import type { PrinterInstance } from "./printerInstance";
+import type {
+  ConnectionStatus,
+  ConnectionSummary,
+} from "../driver/useDriverConnections";
 import type { PlateId } from "../viewport/types";
+
+/** Tooltip copy for each picker-chip status — mirrors the mockup's
+ *  CONN_LABELS map. */
+const CONN_LABELS: Record<ConnectionStatus, string> = {
+  none: "No connection configured",
+  connecting: "Connecting…",
+  connected: "Connected",
+  failed: "Connection failed",
+};
 
 export interface PrinterPickerProps {
   /** Active plate the picker rebinds. `null` disables the
@@ -24,15 +37,26 @@ export interface PrinterPickerProps {
   instances: PrinterInstance[];
   /** Currently-bound PrinterInstance id, or `null` for unbound. */
   activeInstanceId: string | null;
+  /** Per-(instance.id) auto-connection summary. Drives the chip's
+   *  bottom-row status dot (none / connecting / connected /
+   *  failed) and the per-row dot in the popover. */
+  connections: Record<string, ConnectionSummary>;
   /** Opens the add-printer modal. */
   onAddPrinter: () => void;
+  /** Opens the per-printer settings modal for the row's instance.
+   * Called when the user clicks the cog next to a printer. The
+   * App-level handler mounts `PrinterSettingsModal` scoped to
+   * `instanceId`. */
+  onEditPrinter?: (instanceId: string) => void;
 }
 
 export function PrinterPicker({
   plateId,
   instances,
   activeInstanceId,
+  connections,
   onAddPrinter,
+  onEditPrinter,
 }: PrinterPickerProps) {
   const { entries: catalog } = usePrinterCatalog();
   const [open, setOpen] = useState(false);
@@ -67,6 +91,17 @@ export function PrinterPicker({
 
   const activeInstance = instances.find((i) => i.id === activeInstanceId) ?? null;
   const chipLabel = activeInstance?.display_name ?? "No printer";
+  const activeSummary =
+    activeInstance != null ? connections[activeInstance.id] : null;
+  const activeStatus: ConnectionStatus = activeSummary?.status ?? "none";
+  // For `failed`, append the reconciler's reason ("host unreachable",
+  // "access denied", …) so the user can tell what went wrong without
+  // re-opening the settings modal. Other statuses use the static
+  // label — no extra context to surface.
+  const activeTooltip =
+    activeStatus === "failed" && activeSummary?.reason
+      ? `${CONN_LABELS.failed}: ${activeSummary.reason}`
+      : CONN_LABELS[activeStatus];
 
   return (
     <div className="config-chip-wrap" ref={wrapRef}>
@@ -89,7 +124,16 @@ export function PrinterPicker({
             ▾
           </span>
         </span>
-        <span className="chip-value">{chipLabel}</span>
+        <span className="chip-value-row">
+          <span className="chip-value">{chipLabel}</span>
+          {activeInstance != null && (
+            <span
+              className={`conn-indicator conn-${activeStatus}`}
+              title={activeTooltip}
+              aria-label={activeTooltip}
+            />
+          )}
+        </span>
       </button>
       {open && (
         <div className="printer-picker-menu" role="menu">
@@ -103,17 +147,44 @@ export function PrinterPicker({
               catalog.find((e) => e.identity === inst.vendor_profile_ref)
                 ?.profile.model ?? inst.vendor_profile_ref;
             return (
-              <button
+              <div
                 key={inst.id}
-                type="button"
                 role="menuitemradio"
                 aria-checked={isActive}
-                className={`ptpm-item${isActive ? " active" : ""}`}
-                onClick={() => selectInstance(inst.id)}
+                className={`ptpm-item ptpm-row${isActive ? " active" : ""}`}
               >
-                <span className="ptpm-name">{inst.display_name}</span>
-                <span className="ptpm-detail">{model}</span>
-              </button>
+                <button
+                  type="button"
+                  className="ptpm-row-main"
+                  onClick={() => selectInstance(inst.id)}
+                  title={`Bind ${inst.display_name} to this plate`}
+                >
+                  <span className="ptpm-name">{inst.display_name}</span>
+                  <span className="ptpm-detail">{model}</span>
+                </button>
+                {onEditPrinter && (
+                  <button
+                    type="button"
+                    className="ptpm-cog"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpen(false);
+                      onEditPrinter(inst.id);
+                    }}
+                    title={`Settings for ${inst.display_name}`}
+                    aria-label={`Settings for ${inst.display_name}`}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                      <path
+                        d="M7 4.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM7 1v1.5M7 11.5V13M3.5 3.5l1 1M9.5 9.5l1 1M1 7h1.5M11.5 7H13M3.5 10.5l1-1M9.5 4.5l1-1"
+                        stroke="currentColor"
+                        strokeWidth="1.2"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </button>
+                )}
+              </div>
             );
           })}
           <button

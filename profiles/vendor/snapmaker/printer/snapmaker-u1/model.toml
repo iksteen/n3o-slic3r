@@ -1,5 +1,6 @@
 brand = "Snapmaker"
 brand_short = "S"
+driver_kind = "u1"
 # 4 magnetically-docked toolheads; each slot maps 1:1 to a physical
 # toolhead (vs the A1 mini's AMS feeding a single toolhead). The
 # extruder count is read off `len(toolheads)` at load time.
@@ -7,8 +8,11 @@ brand_short = "S"
 ams_max = 0
 
 # One toolhead per slot. Defaults assume the as-shipped 4× identical
-# 0.4mm hardened-steel set per FR-SU-6; the data model permits any
-# combination, but the MVP cascade fixtures assume uniform.
+# 0.4mm set; the data model permits any combination, but the MVP
+# cascade fixtures assume uniform. Hotend material is no longer
+# authored here — it's derived in `registry::hydrate_profile` from
+# the per-nozzle profile (`nozzles/0.4.toml::nozzle_type`, which is
+# stainless_steel for the U1's stock toolhead).
 [[toolheads]]
 default_nozzle_diameter = "0.4"
 max_temp = 300.0

@@ -10,6 +10,14 @@ const {
   computeSlotIds, slotShortLabel, slotLongLabel,
 } = window.SLICER_DATA;
 
+// Connection-indicator tooltip copy, keyed by status.
+const CONN_LABELS = {
+  none:       "No connection configured",
+  connecting: "Connecting…",
+  connected:  "Connected",
+  failed:     "Connection failed",
+};
+
 // tiny chevron used on dropdown chips
 const ChevronChip = () => (
   <svg width="9" height="9" viewBox="0 0 10 10" fill="none" style={{ opacity: 0.55, flexShrink: 0 }}>
@@ -520,7 +528,7 @@ function SettingsPanel({
   objects,                 // all objects on the plate
   filaments,
   // config-strip props
-  printer, bedPlate, nozzle,
+  printer, printerConnStatus = "none", bedPlate, nozzle,
   extruders = 1,
   nozzles,                 // optional per-extruder array; falls back to [nozzle] × extruders
   filamentsInUse,
@@ -727,7 +735,14 @@ function SettingsPanel({
                 <span className="chip-label">Printer</span>
                 <span className="chev"><ChevronChip/></span>
               </span>
-              <span className="chip-value" title={printer}>{printer}</span>
+              <span className="chip-value-row">
+                <span className="chip-value" title={printer}>{printer}</span>
+                <span
+                  className={`conn-indicator conn-${printerConnStatus}`}
+                  title={CONN_LABELS[printerConnStatus] || CONN_LABELS.none}
+                  aria-label={CONN_LABELS[printerConnStatus] || CONN_LABELS.none}
+                />
+              </span>
             </button>
             {printerMenuOpen && printerPresets && (
               <div className="printer-picker-menu" onClick={(e) => e.stopPropagation()}>

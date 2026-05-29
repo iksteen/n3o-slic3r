@@ -12,6 +12,9 @@
 // confirms when valid, Esc cancels.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AmsPicker } from "./AmsPicker";
+import { ModalBackdrop, ModalCloseButton } from "../ui/Modal";
+import { useModalDismiss } from "../ui/useModalDismiss";
 import type { PrinterCatalogEntry } from "./printerCommands";
 
 export interface AddPrinterResult {
@@ -121,47 +124,20 @@ export function AddPrinterModal({
 
   // Esc-to-close. Enter is wired on the name input directly so it
   // doesn't fire while focus is in the search box.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useModalDismiss(onClose, { active: true });
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div
-        className="add-printer-modal"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="apm-title"
-      >
+    <ModalBackdrop
+      onDismiss={onClose}
+      cardClassName="add-printer-modal"
+      ariaLabelledBy="apm-title"
+    >
         <header className="apm-header">
           <div className="apm-header-text">
             <h2 id="apm-title">Add a printer</h2>
             <p>Pick a profile to base it on. Everything is editable later.</p>
           </div>
-          <button
-            type="button"
-            className="apm-close"
-            onClick={onClose}
-            aria-label="Close"
-            title="Close (Esc)"
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path
-                d="M3 3l8 8M11 3l-8 8"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-              />
-            </svg>
-          </button>
+          <ModalCloseButton onClick={onClose} />
         </header>
 
         <div className="apm-body">
@@ -392,100 +368,10 @@ export function AddPrinterModal({
             </button>
           </div>
         </footer>
-      </div>
-    </div>
+    </ModalBackdrop>
   );
 }
 
-interface AmsPickerProps {
-  amsMax: number;
-  amsType: string;
-  value: number;
-  onChange: (units: number) => void;
-}
-
-function AmsPicker({ amsMax, amsType, value, onChange }: AmsPickerProps) {
-  const isToggle = amsMax === 1;
-  const totalSlots = value * 4 + 1;
-  const counterText =
-    value === 0
-      ? "No AMS"
-      : value === 1
-        ? `1 × ${amsType} · 4 slots`
-        : `${value} × ${amsType} · ${value * 4} slots`;
-  return (
-    <div className="apm-ams">
-      <div className="apm-ams-head">
-        <span className="apm-ams-label">{amsType} configuration</span>
-        <span className="apm-ams-counter">
-          {counterText}
-          {value > 0 && (
-            <span className="apm-ams-counter-dim">
-              {" "}
-              (+ ext spool = {totalSlots})
-            </span>
-          )}
-        </span>
-      </div>
-      {isToggle ? (
-        <div className="apm-ams-toggle">
-          <button
-            type="button"
-            className={`apm-ams-tile ${value === 0 ? "active" : ""}`}
-            onClick={() => onChange(0)}
-          >
-            <span className="apm-ams-tile-num">0</span>
-            <span className="apm-ams-tile-label">No AMS</span>
-          </button>
-          <button
-            type="button"
-            className={`apm-ams-tile ${value === 1 ? "active" : ""}`}
-            onClick={() => onChange(1)}
-          >
-            <span className="apm-ams-tile-num">1</span>
-            <span className="apm-ams-tile-label">With {amsType}</span>
-            <span className="apm-ams-tile-dots">
-              {[0, 1, 2, 3].map((i) => (
-                <span key={i} className="apm-ams-tile-dot" />
-              ))}
-            </span>
-          </button>
-        </div>
-      ) : (
-        <div className="apm-ams-row">
-          {Array.from({ length: amsMax + 1 }, (_, i) => (
-            <button
-              key={i}
-              type="button"
-              className={`apm-ams-tile ${value === i ? "active" : ""}`}
-              onClick={() => onChange(i)}
-              title={
-                i === 0 ? `No ${amsType} installed` : `${i} × ${amsType} (${i * 4} slots)`
-              }
-            >
-              <span className="apm-ams-tile-num">{i}</span>
-              <span className="apm-ams-tile-label">
-                {i === 0 ? "None" : `${i} unit${i > 1 ? "s" : ""}`}
-              </span>
-              {i > 0 && (
-                <span className="apm-ams-tile-dots">
-                  {[0, 1, 2, 3].map((d) => (
-                    <span key={d} className="apm-ams-tile-dot" />
-                  ))}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="apm-name-hint">
-        {value === 0
-          ? "Filaments load directly into the extruder via an external spool. You can attach an AMS later from the printer's settings."
-          : `Each ${amsType} holds 4 spools and feeds them to the toolhead automatically. You'll route project materials to slots once a plate exists.`}
-      </div>
-    </div>
-  );
-}
 
 // Brand color hexes (mirror styles.css [data-brand] tokens but as
 // concrete values so the SVG renders correctly even on themes that

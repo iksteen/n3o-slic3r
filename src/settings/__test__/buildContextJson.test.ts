@@ -27,6 +27,7 @@ const PRINTER: PrinterProfileJson = {
   ],
   build_volume: { min: [0, 0, 0], max: [180, 180, 180] },
   exclusion_zones: [],
+  driver_kind: "bambu",
 };
 
 describe("overridesToFileSpec", () => {

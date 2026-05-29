@@ -50,44 +50,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
-
-def _atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
-    """Write `content` to `path` atomically (temp file + os.replace).
-
-    The cargo dev/test loop reads these files concurrently with
-    re-imports; a non-atomic truncate-then-write leaves a partial-
-    content window where `ProfileLibrary::load` parses garbage TOML
-    and panics. Mirrors the same helper in `import_processes.py`.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding=encoding,
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        delete=False,
-    )
-    try:
-        tmp.write(content)
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp.close()
-        os.replace(tmp.name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp.name)
-        except FileNotFoundError:
-            pass
-        raise
-
+from _atomic_io import atomic_write_text
 
 # Envelope metadata — describes the file, not the slicer config. Never
 # emitted.
@@ -481,7 +449,7 @@ def write_base_machine(path: Path, kv: dict, *, source_root: str, slug: str) -> 
             out_lines.append("")
             out_lines.extend(comment_block)
             out_lines.append(scalar_line)
-    _atomic_write_text(path, "\n".join(out_lines) + "\n")
+    atomic_write_text(path, "\n".join(out_lines) + "\n")
 
 
 def _read_preserved_machine_scalars(
@@ -596,7 +564,7 @@ def write_nozzle_profile(path: Path, kv: dict, *, sku: str) -> None:
     # of position.
     for k in sorted(preserved):
         body.append(f"{k} = {preserved[k]}")
-    _atomic_write_text(path, "\n".join(header + body) + "\n")
+    atomic_write_text(path, "\n".join(header + body) + "\n")
 
 
 # ---- Main ----------------------------------------------------------

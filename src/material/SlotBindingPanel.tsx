@@ -25,7 +25,7 @@ import {
   type PrinterInstance,
   type SlotRef,
 } from "../printer/printerInstance";
-import { getDriverId } from "../driver/credentialsCache";
+import type { DriverId } from "../driver/types";
 import { MaterialChip } from "./MaterialChip";
 import { SlotChipStrip } from "./SlotChipStrip";
 import type { FilamentSummary } from "./filamentSummary";
@@ -33,6 +33,12 @@ import type { FilamentSummary } from "./filamentSummary";
 export interface SlotBindingPanelProps {
   plateId: PlateId | null;
   plate: PlateSnapshot | null;
+  /** Live driver id for the bound printer instance, owned by
+   *  `useDriverConnections` and threaded through App.tsx →
+   *  SettingsPanelHost. `null` when the bound printer has no
+   *  usable connection; the Sync button rejects with the
+   *  error-triangle state in that case. */
+  driverId: DriverId | null;
 }
 
 /** The 1-based model material indices referenced by objects on the
@@ -65,7 +71,7 @@ async function clearMaterialSlot(
   await invoke("project_clear_material_slot", { plateId, modelMaterial });
 }
 
-export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
+export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelProps) {
   const instanceId = plate?.printer_instance_id ?? null;
   const [instance, setInstance] = useState<PrinterInstance | null>(null);
   const [filaments, setFilaments] = useState<FilamentSummary[]>([]);
@@ -164,14 +170,13 @@ export function SlotBindingPanel({ plateId, plate }: SlotBindingPanelProps) {
   };
 
   // Manual sync — pulls the printer's current spool loadout into
-  // the instance via the live driver (PR-7c-2). Resolves a
-  // DriverId from the credentials cache (same key the header
-  // device controls use). Rejects when no driver is registered or
-  // when the backend command errors; SyncSlotsLabel turns that
-  // into the error-triangle state.
+  // the instance via the live driver (PR-7c-2). The driverId
+  // prop is the reactive snapshot from `useDriverConnections`,
+  // threaded through SettingsPanelHost. Rejects when no driver
+  // is registered or when the backend command errors;
+  // SyncSlotsLabel turns that into the error-triangle state.
   const onSyncSlots = async (): Promise<void> => {
     if (!instance) throw new Error("no instance");
-    const driverId = getDriverId(instance.vendor_profile_ref);
     if (driverId == null) {
       throw new Error("printer not connected");
     }

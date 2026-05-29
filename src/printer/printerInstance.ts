@@ -51,12 +51,15 @@ export interface BedRef {
   identity: string;
 }
 
-export interface ConnectionInfo {
-  host: string;
-  serial: string;
-  access_code: string;
-  dev_mode: boolean;
-}
+/** Per-driver connection settings, mirroring Rust's tagged-enum
+ *  `ConnectionInfo`. The `kind` discriminator switches the field
+ *  set — Bambu carries an 8-digit LAN access code; U1 carries a
+ *  Moonraker port (usually 80). Device serial is NOT stored here: the
+ *  drivers probe it at connect time, so it's a runtime-only concern
+ *  on `DriverConfig`, not part of the persisted connection. */
+export type ConnectionInfo =
+  | { kind: "bambu"; host: string; access_code: string }
+  | { kind: "u1"; host: string; port: number };
 
 export interface PrinterInstance {
   id: string;
@@ -74,6 +77,18 @@ export interface PrinterInstance {
 /** Bundled (and future user-library) instances the picker offers. */
 export async function listPrinterInstances(): Promise<PrinterInstance[]> {
   return invoke<PrinterInstance[]>("printer_instance_list");
+}
+
+/** Derive the AMS-unit count from an instance's slot topology.
+ *  Counts AMS-feed slots on the first extruder and divides by 4
+ *  (every AMS unit ships exactly 4 slots; the trailing slot is
+ *  always direct-fed). Matches the backend's `create_instance` /
+ *  `set_instance_ams_units` formula: `ams_units * 4 + 1` total
+ *  slots, AMS-first ordering. */
+export function amsUnitsOf(instance: PrinterInstance): number {
+  const slots = instance.extruders[0]?.slots ?? [];
+  const amsSlots = slots.filter((s) => s.feed === "ams").length;
+  return Math.floor(amsSlots / 4);
 }
 
 /** Snapshot a single instance by id. Returns `null` when the id
@@ -169,6 +184,98 @@ export async function createInstance(
  *  them and the picker surfaces them as "unbound." */
 export async function deleteInstance(id: string): Promise<void> {
   return invoke("printer_instance_delete", { id });
+}
+
+/** Atomic delete + rebind: hand the backend the plate IDs to
+ *  rebind (with the fallback id) or unbind (when fallback is
+ *  null), then the instance to delete. One registry+project
+ *  lock; either everything commits or nothing does. The frontend
+ *  no longer has a partial-commit window between a sequential
+ *  rebind loop and the delete itself. */
+export async function deleteInstanceWithReassign(
+  id: string,
+  fallbackInstanceId: string | null,
+  plateIds: number[],
+): Promise<void> {
+  return invoke("printer_instance_delete_with_reassign", {
+    id,
+    fallbackInstanceId,
+    plateIds,
+  });
+}
+
+/** Rename an instance. Trims whitespace and rejects empty
+ *  (backend-side; the modal validates locally too). Emits
+ *  `printer:instance_changed`. */
+export async function setInstanceDisplayName(
+  id: string,
+  displayName: string,
+): Promise<PrinterInstance> {
+  return invoke<PrinterInstance>("printer_instance_set_display_name", {
+    id,
+    displayName,
+  });
+}
+
+/** Change the AMS-unit count on an AMS-style printer. Re-derives the
+ *  slot topology (`(amsUnits * 4 + 1)`); preserved bindings stay
+ *  positional, dropped bindings warn server-side. Rejects for
+ *  toolchangers and for values above `profile.ams_max`. Emits
+ *  `printer:instance_changed`. */
+export async function setInstanceAmsUnits(
+  id: string,
+  amsUnits: number,
+): Promise<PrinterInstance> {
+  return invoke<PrinterInstance>("printer_instance_set_ams_units", {
+    id,
+    amsUnits,
+  });
+}
+
+/** Write (or clear, with `null`) the instance's network connection.
+ *  The on-disk user library persists this so the same physical
+ *  printer's connection survives across app restarts. Emits
+ *  `printer:instance_changed`. */
+export async function setInstanceConnection(
+  id: string,
+  connection: ConnectionInfo | null,
+): Promise<PrinterInstance> {
+  return invoke<PrinterInstance>("printer_instance_set_connection", {
+    id,
+    connection,
+  });
+}
+
+/** Atomic multi-field update — applied under one registry lock,
+ *  with one persist + one printer:instance_changed emit. Omit a
+ *  field (or leave it undefined) to leave it unchanged. Setting
+ *  To CLEAR a connection use `clearConnection: true` — NOT
+ *  `connection: null`. The backend treats a null/omitted
+ *  `connection` as "leave unchanged" (serde collapses it to
+ *  `None`), so only `clearConnection` actually clears; the type
+ *  below omits `| null` to keep that the single clear path. The
+ *  settings modal calls this once on Save instead of issuing three
+ *  per-field IPCs in sequence — closing the partial-success window
+ *  where one mutator landed and a later one threw. */
+export interface InstancePatch {
+  displayName?: string;
+  amsUnits?: number;
+  connection?: ConnectionInfo;
+  clearConnection?: boolean;
+}
+export async function updateInstance(
+  id: string,
+  patch: InstancePatch,
+): Promise<PrinterInstance> {
+  return invoke<PrinterInstance>("printer_instance_update", {
+    id,
+    patch: {
+      display_name: patch.displayName,
+      ams_units: patch.amsUnits,
+      connection: patch.connection,
+      clear_connection: patch.clearConnection ?? false,
+    },
+  });
 }
 
 /** Compose a flat list of slot picker options across the instance's

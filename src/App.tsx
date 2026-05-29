@@ -17,6 +17,7 @@ import {
 import { PreviewWorkspace } from "./preview/PreviewWorkspace";
 import { useSlicePreviewBridge } from "./preview/useSlicePreviewBridge";
 import { PrinterPanel } from "./driver/PrinterPanel";
+import { useDriverConnections } from "./driver/useDriverConnections";
 import { usePrinterInstances } from "./printer/usePrinterInstances";
 import { usePrinterCatalog } from "./printer/usePrinterCatalog";
 import { PrintersEmptyState } from "./printer/PrintersEmptyState";
@@ -24,6 +25,7 @@ import {
   AddPrinterModal,
   type AddPrinterResult,
 } from "./printer/AddPrinterModal";
+import { PrinterSettingsModal } from "./printer/PrinterSettingsModal";
 import { createInstance } from "./printer/printerInstance";
 import { rebindPlatePrinter } from "./printer/printerCommands";
 import "./App.css";
@@ -40,6 +42,10 @@ function App() {
   const printers = usePrinterInstances();
   const printerCatalog = usePrinterCatalog();
   const [showAddPrinter, setShowAddPrinter] = useState(false);
+  /** ID of the printer instance whose settings modal is open, or
+   *  `null` when the modal isn't shown. The cog button in
+   *  PrinterPicker sets this. */
+  const [editingPrinterId, setEditingPrinterId] = useState<string | null>(null);
 
   const activePlate =
     session.snapshot?.plates.find(
@@ -58,24 +64,25 @@ function App() {
   const lastSliceOutputPath =
     activePlateId != null ? lastSliceOutput.pathForPlate(activePlateId) : null;
   const printerIdentity = activePlate?.printer_identity ?? null;
-  // PR-7b-7 — derive the active plate's driver kind from its
-  // bound printer instance so PrinterPanel + the credentials
-  // dialog can branch between Bambu (LAN MQTT) and U1 (Moonraker
-  // HTTP+WS). Brittle: keyed on the fragment slug prefix because
-  // PrinterInstance / PrinterProfile don't yet carry an explicit
-  // `kind` field. Tracked for a clean refactor once the profile-
-  // editor UI lands.
   const activeInstance =
     activePlate?.printer_instance_id != null
       ? (printers.instances.find(
           (i) => i.id === activePlate.printer_instance_id,
         ) ?? null)
       : null;
-  const driverKind: "Bambu" | "U1" | null = activeInstance
-    ? activeInstance.printer_fragment_slug.startsWith("snapmaker-")
-      ? "U1"
-      : "Bambu"
-    : null;
+  // Auto-connect / reconnect / disconnect every printer instance
+  // whenever its persisted connection settings change. Drivers
+  // outlive the React tree (module-scoped). The summary is keyed
+  // by instance.id (UUID) so two instances of the same printer
+  // model get distinct drivers. Feeds the active connection
+  // summary to PrinterPanel (it picks the driver id off it + the
+  // status branches the empty-state copy) and the per-printer
+  // status dot to PrinterPicker.
+  const driverConnections = useDriverConnections(printers.instances);
+  const activeConnection =
+    activeInstance != null
+      ? (driverConnections[activeInstance.id] ?? null)
+      : null;
 
   // Auto-switch to preview on slice completion, unless the user
   // has manually toggled out of preview during this session.
@@ -143,13 +150,28 @@ function App() {
         result.amsUnits,
       );
       setShowAddPrinter(false);
-      // Auto-bind to the active plate (matches the design's "always
-      // auto-bind" choice for the picker flow). Empty-state path
-      // takes this same code with the bootstrap plate as the
-      // active one.
-      if (activePlateId != null) {
-        await rebindPlatePrinter(activePlateId, inst.id);
+      // Auto-bind: every plate without a current printer binding
+      // gets the new one. Covers two cases together —
+      //   (a) Empty-state flow (deleted-last-printer or first
+      //       launch): every plate is unbound; all bind to the
+      //       new printer.
+      //   (b) Picker flow with extra unbound plates lying around:
+      //       same.
+      // The active plate is rebound regardless (matches the
+      // design's "always auto-bind the active plate after a
+      // create" choice). Other plates already bound to a different
+      // printer stay put.
+      const snapshot = session.snapshot;
+      const targets = new Set<number>();
+      if (activePlateId != null) targets.add(activePlateId);
+      if (snapshot) {
+        for (const plate of snapshot.plates) {
+          if (plate.printer_instance_id == null) targets.add(plate.plate_id);
+        }
       }
+      await Promise.all(
+        [...targets].map((plateId) => rebindPlatePrinter(plateId, inst.id)),
+      );
     } catch (err) {
       console.error("[printer] create failed", err);
     }
@@ -176,7 +198,7 @@ function App() {
         />
         <PrinterPanel
           printerIdentity={printerIdentity}
-          driverKind={driverKind}
+          connection={activeConnection}
           plateId={activePlateId}
           lastSliceOutputPath={lastSliceOutputPath}
         />
@@ -246,7 +268,9 @@ function App() {
             <SettingsPanelHost
               session={session}
               instances={printers.instances}
+              connections={driverConnections}
               onAddPrinter={() => setShowAddPrinter(true)}
+              onEditPrinter={(id) => setEditingPrinterId(id)}
             />
           )}
         </div>
@@ -262,6 +286,27 @@ function App() {
           onClose={() => setShowAddPrinter(false)}
         />
       )}
+
+      {editingPrinterId &&
+        (() => {
+          const editing = printers.instances.find(
+            (i) => i.id === editingPrinterId,
+          );
+          if (!editing) {
+            // Instance vanished out from under us (deleted in
+            // another window? race?). Drop the modal state on
+            // the next render — guard the mount, not the state.
+            return null;
+          }
+          return (
+            <PrinterSettingsModal
+              instance={editing}
+              instances={printers.instances}
+              plates={session.snapshot?.plates ?? []}
+              onClose={() => setEditingPrinterId(null)}
+            />
+          );
+        })()}
 
       <footer className="statusbar">
         <span className="dot" aria-hidden />
