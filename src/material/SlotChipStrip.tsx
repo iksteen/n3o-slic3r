@@ -152,10 +152,7 @@ function SyncSlotsLabel({
     let failed: string | null = null;
     Promise.resolve(onSync())
       .catch((err: unknown) => {
-        // Capture the reason for the tooltip; the visual still
-        // settles via the timer below so the user perceives the
-        // click. The error-triangle state replaces the checkmark
-        // when this captured a failure.
+        // Capture the reason for the error-triangle tooltip.
         failed =
           typeof err === "string"
             ? err
@@ -164,18 +161,19 @@ function SyncSlotsLabel({
               : "sync failed";
       })
       .finally(() => {
+        // Settle to the result as soon as the sync resolves — the
+        // real driver readout is fast, so no artificial hold. Show
+        // the ✓/✗ briefly, then revert to idle.
+        if (failed != null) {
+          setErrorMsg(failed);
+          setState("error");
+        } else {
+          setState("synced");
+        }
         timerRef.current = setTimeout(() => {
-          if (failed != null) {
-            setErrorMsg(failed);
-            setState("error");
-          } else {
-            setState("synced");
-          }
-          timerRef.current = setTimeout(() => {
-            setState("idle");
-            setErrorMsg(null);
-          }, 900);
-        }, 650);
+          setState("idle");
+          setErrorMsg(null);
+        }, 900);
       });
   };
 
