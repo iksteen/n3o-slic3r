@@ -32,6 +32,7 @@ pub use hooks::{
 };
 pub use host::{user_plugins_dir, Hook, LoadedPlugin, PluginHost, PluginSummary};
 pub use manifest::{
-    HookKind, ManifestError, PluginManifest, PrinterCompat, SettingDecl, SettingKind, SettingValue,
+    HookKind, ManifestError, PluginManifest, PluginScope, PrinterCompat, SettingDecl, SettingKind,
+    SettingValue,
 };
 pub use runtime::PluginRuntime;

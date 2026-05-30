@@ -72,6 +72,10 @@ pub struct PluginSummary {
     pub hooks: Vec<String>,
     /// `None` means "any printer"; `Some(list)` restricts to models.
     pub printers: Option<Vec<String>>,
+    /// Cascade levels this plugin may be enabled/configured at
+    /// (`"global"` / `"project"` / `"plate"`), canonical order. The
+    /// panel offers a control only at these scopes.
+    pub scopes: Vec<String>,
     pub enabled: bool,
     pub last_error: Option<String>,
 }
@@ -184,6 +188,7 @@ impl PluginHost {
                     PrinterCompat::Any => None,
                     PrinterCompat::Models(m) => Some(m.clone()),
                 },
+                scopes: p.manifest.scopes.iter().map(|s| s.as_str().to_string()).collect(),
                 enabled: p.enabled,
                 last_error: p.last_error.clone(),
             })

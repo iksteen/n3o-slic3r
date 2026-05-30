@@ -51,6 +51,49 @@ pub enum PrinterCompat {
     Models(Vec<String>),
 }
 
+/// A cascade level a plugin's activation (`enabled`) and its declared
+/// settings may be set at. A plugin declares the subset it's meaningful
+/// for via the manifest `scopes` field; the UI offers controls only at
+/// declared scopes and a cascade override at an undeclared scope is
+/// ignored at resolve. Ordered low → high so a `scopes` list renders
+/// and resolves deterministically; this is *not* the override
+/// precedence (that's plate > project > global at resolve time).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PluginScope {
+    /// App-wide default (the Plugins-panel toggle), across all projects.
+    Global,
+    /// Per-project override (rides `Project.user_overrides`).
+    Project,
+    /// Per-plate override (rides `Plate.project_overrides`).
+    Plate,
+}
+
+impl PluginScope {
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "global" => Some(Self::Global),
+            "project" => Some(Self::Project),
+            "plate" => Some(Self::Plate),
+            _ => None,
+        }
+    }
+
+    /// The manifest/string name (`"global"`, `"project"`, `"plate"`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Project => "project",
+            Self::Plate => "plate",
+        }
+    }
+
+    /// All scopes in canonical order — the default when a manifest omits
+    /// (or empties) `scopes`.
+    pub fn all() -> Vec<Self> {
+        vec![Self::Global, Self::Project, Self::Plate]
+    }
+}
+
 /// The declared type of a plugin setting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingKind {
@@ -101,8 +144,19 @@ pub struct PluginManifest {
     pub entry: String,
     pub hooks: Vec<HookKind>,
     pub printer_compatibility: PrinterCompat,
+    /// Cascade levels this plugin's activation + settings may be set at,
+    /// in canonical order. Defaults to all scopes when the manifest
+    /// omits `scopes`. Never empty.
+    pub scopes: Vec<PluginScope>,
     pub description: Option<String>,
     pub settings: BTreeMap<String, SettingDecl>,
+}
+
+impl PluginManifest {
+    /// Whether this plugin's activation/settings may be set at `scope`.
+    pub fn allows_scope(&self, scope: PluginScope) -> bool {
+        self.scopes.contains(&scope)
+    }
 }
 
 /// Why a `plugin.toml` was rejected. `PartialEq` so tests can assert on
@@ -125,6 +179,8 @@ pub enum ManifestError {
     EmptyHooks,
     #[error("unknown hook `{0}` (expected one of: pre_slice, post_slice, pre_send)")]
     UnknownHook(String),
+    #[error("unknown scope `{0}` (expected one of: global, project, plate)")]
+    UnknownScope(String),
     #[error("setting `{key}`: {reason}")]
     BadSetting { key: String, reason: String },
     #[error("duplicate plugin name `{0}` (declared by more than one plugin directory)")]
@@ -140,6 +196,7 @@ struct RawManifest {
     entry: Option<String>,
     hooks: Option<Vec<String>>,
     printer_compatibility: Option<Vec<String>>,
+    scopes: Option<Vec<String>>,
     description: Option<String>,
     #[serde(default)]
     settings: BTreeMap<String, RawSettingDecl>,
@@ -196,6 +253,29 @@ fn validate(raw: RawManifest, plugin_dir: &Path) -> Result<PluginManifest, Manif
         Some(list) => PrinterCompat::Models(list),
     };
 
+    // `scopes`: omitted or empty → all scopes. An explicit list is
+    // validated, de-duplicated, and returned in canonical order (so the
+    // resolved field doesn't depend on the manifest's listing order).
+    let scopes = match raw.scopes {
+        None => PluginScope::all(),
+        Some(list) if list.is_empty() => PluginScope::all(),
+        Some(list) => {
+            let mut seen = std::collections::BTreeSet::new();
+            for s in &list {
+                match PluginScope::from_str(s) {
+                    Some(scope) => {
+                        seen.insert(scope);
+                    }
+                    None => return Err(ManifestError::UnknownScope(s.clone())),
+                }
+            }
+            PluginScope::all()
+                .into_iter()
+                .filter(|s| seen.contains(s))
+                .collect()
+        }
+    };
+
     let mut settings = BTreeMap::new();
     for (key, decl) in raw.settings {
         let validated = validate_setting(&key, decl)?;
@@ -208,6 +288,7 @@ fn validate(raw: RawManifest, plugin_dir: &Path) -> Result<PluginManifest, Manif
         entry,
         hooks,
         printer_compatibility,
+        scopes,
         description: raw.description,
         settings,
     })
@@ -324,6 +405,7 @@ mod tests {
         entry = "main.lua"
         hooks = ["post_slice"]
         printer_compatibility = ["Bambu Lab A1 mini"]
+        scopes = ["plate", "global"]
         description = "auto-eject on completion"
 
         [settings.swap_gcode]
@@ -344,9 +426,70 @@ mod tests {
             m.printer_compatibility,
             PrinterCompat::Models(vec!["Bambu Lab A1 mini".into()])
         );
+        // De-duplicated + canonical order (listed "plate","global").
+        assert_eq!(m.scopes, vec![PluginScope::Global, PluginScope::Plate]);
+        assert!(m.allows_scope(PluginScope::Plate));
+        assert!(!m.allows_scope(PluginScope::Project));
         let s = &m.settings["swap_gcode"];
         assert_eq!(s.kind, SettingKind::String);
         assert_eq!(s.default, SettingValue::String("M400".into()));
+    }
+
+    #[test]
+    fn defaults_scopes_to_all_when_omitted() {
+        let src = r#"
+            name = "p"
+            version = "1.0.0"
+            entry = "main.lua"
+            hooks = ["pre_slice"]
+        "#;
+        let (_tmp, dir) = plugin_dir(src, "main.lua");
+        assert_eq!(
+            parse_manifest(src, &dir).unwrap().scopes,
+            PluginScope::all()
+        );
+    }
+
+    #[test]
+    fn empty_scopes_defaults_to_all() {
+        let src = r#"name="p"
+version="1.0.0"
+entry="main.lua"
+hooks=["pre_slice"]
+scopes=[]"#;
+        let (_tmp, dir) = plugin_dir(src, "main.lua");
+        assert_eq!(
+            parse_manifest(src, &dir).unwrap().scopes,
+            PluginScope::all()
+        );
+    }
+
+    #[test]
+    fn dedups_and_orders_scopes() {
+        let src = r#"name="p"
+version="1.0.0"
+entry="main.lua"
+hooks=["pre_slice"]
+scopes=["plate","global","plate"]"#;
+        let (_tmp, dir) = plugin_dir(src, "main.lua");
+        assert_eq!(
+            parse_manifest(src, &dir).unwrap().scopes,
+            vec![PluginScope::Global, PluginScope::Plate]
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_scope() {
+        let src = r#"name="p"
+version="1.0.0"
+entry="main.lua"
+hooks=["pre_slice"]
+scopes=["galaxy"]"#;
+        let (_tmp, dir) = plugin_dir(src, "main.lua");
+        assert_eq!(
+            parse_manifest(src, &dir),
+            Err(ManifestError::UnknownScope("galaxy".into()))
+        );
     }
 
     #[test]

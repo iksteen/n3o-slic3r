@@ -12,6 +12,65 @@ settings.
 Owns **FR-PL-6** (plugin-declared settings in the cascade UI) and
 **FR-PL-9** (Plugins panel).
 
+## Enablement model (decided 2026-05-30)
+
+The original ticket left "enabled state / scope" undefined. Decided:
+
+**Two separate axes.** Don't conflate them (today's single `enabled`
+bool does):
+
+- **Health** — loaded vs errored. Host-managed, session, global:
+  auto-disable on a runtime error, `reload` to recover, surfaced in the
+  panel as a status. Not a user activation control.
+- **Activation** — does the user want it to run, and where. A
+  cascade-resolved `plugin.<name>.enabled` (bool).
+
+**Activation rides the cascade.** `plugin.<name>.enabled` is a synthetic
+plugin setting that resolves through the same override tiers as plugin
+settings (FR-PL-6), so global / per-project / per-plate all fall out of
+one mechanism. Precedence (highest wins): **plate → project →
+global-default → manifest-default (`true`)**. Because overrides are
+two-way, a global `true` can be flipped to `false` for one plate (the
+"enable globally, disable for this plate" requirement) and vice-versa.
+
+**Plugins declare their applicable scopes.** A new manifest field
+`scopes` lists which cascade levels a plugin's `enabled` flag *and* its
+`[settings.*]` may be set at — vocabulary `global` / `project` /
+`plate`. Default when omitted: all three. A plugin only meaningful
+app-wide declares `scopes = ["global"]`; the UI then offers no
+project/plate control for it and an override at those tiers is ignored
+at resolve. (Printer applicability stays a separate axis —
+`printer_compatibility`, now enforced; see below.)
+
+**Dispatch gating is per-plate.** The orchestrator already resolves the
+cascade per plate; it computes the plate's **active plugin set** =
+plugins that are (a) healthy, (b) `plugin.<name>.enabled` resolves
+`true`, (c) `printer_compatibility` matches the plate's printer model,
+and hands that set to `host.dispatch`. This unifies enablement +
+printer enforcement in one place. `printer_compatibility` is now
+**enforced** (was informational + a Lua self-guard). pre-send has no
+per-plate cascade context, so it gates on health + global-default
+enabled + printer (driver_kind→model); per-plate enable doesn't apply to
+a whole-job send (document the boundary).
+
+**Persistence.**
+- **global** default: a new plugin-state file in the data dir
+  (`data_dir`), per-plugin `{ enabled, settings }`. Replaces today's
+  session-only in-memory default (which is why a dropped-in plugin
+  silently re-enabled every restart). Written by the panel toggle / the
+  global settings edit.
+- **project / plate**: ride the existing `.3mf` (`Project.user_overrides`
+  / `Plate.project_overrides`) as `plugin.<name>.enabled` +
+  `plugin.<name>.<key>` keys.
+
+**Build order (this ticket now splits — bigger than the original ~3d):**
+1. Manifest `scopes` field (vocab + parse + validate + surface).
+2. Enablement-as-cascade-setting + per-plate active-set gating in the
+   orchestrator + `printer_compatibility` enforcement.
+3. Global plugin-state persistence; resolved plugin-setting values
+   handed to hooks (replacing the manifest-default reads in 8-5..8-7).
+4. Frontend: Plugins panel + settings category + per-scope controls.
+
 **Acceptance criteria.**
 
 - **Backend — plugin settings into the cascade:**
