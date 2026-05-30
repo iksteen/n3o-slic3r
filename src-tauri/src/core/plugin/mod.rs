@@ -1,10 +1,22 @@
 //! Lua plugin host.
 //!
 //! Embeds Lua 5.4 via mlua, sandboxed (no `io`, `os.execute`,
-//! `package` access by default). Loads plugin manifests, dispatches
-//! pre-slice / post-slice / pre-send / compose hooks, exposes
+//! `package`, or `debug` access). Will load plugin manifests,
+//! dispatch pre-slice / post-slice / pre-send hooks, and expose
 //! read-only views of project / typed-gcode / filament state.
 //!
-//! Owns FR-PL-1 through FR-PL-9 (PRD §6.9). Implementation lands in
-//! Phase 8. The platecycler plugin (compose hook) is the MVP's proof
-//! point for the plugin architecture.
+//! Owns FR-PL-1 through FR-PL-9 (PRD §6.9), minus the compose hook
+//! (FR-PL-5), which is deferred post-MVP.
+//!
+//! This module currently holds the foundation: [`sandbox`] builds the
+//! restricted runtime, and [`PluginRuntime`] loads a single plugin
+//! chunk and calls its functions under instruction + memory bounds.
+//! The manifest loader, the multi-plugin host + hook dispatch, and the
+//! typed-G-code bindings build on top of this primitive.
+
+mod error;
+mod runtime;
+mod sandbox;
+
+pub use error::PluginError;
+pub use runtime::PluginRuntime;
