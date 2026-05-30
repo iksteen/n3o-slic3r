@@ -174,6 +174,7 @@ function resolveConnStatus(printer, connStatus) {
 const SEED_OBJECTS_FIRST_PLATE = [
   {
     id: "obj_seed_1", name: "front_mount_v3.stl",   kind: "stl_mount",  x: -45, y: -30, rotZ: 0, materialId: "M1",
+    groupId: "grp_mount", groupName: "Mount assembly",
     overrides: { infill_density: 45, wall_count: 5, print_temp: 235 },
   },
   {
@@ -182,6 +183,7 @@ const SEED_OBJECTS_FIRST_PLATE = [
   },
   {
     id: "obj_seed_3", name: "fan_bracket_r2.stl",   kind: "stl_bracket",x: -20, y: 40,  rotZ: 0.5, materialId: "M1",
+    groupId: "grp_mount", groupName: "Mount assembly",
     overrides: { support_enable: true, support_density: 25, adhesion_type: "brim", brim_width: 12 },
   },
 ];
@@ -353,6 +355,73 @@ function ConsolePane({ logs, onClose, onClear }) {
             <span className="console-line-level">{l.level.toUpperCase()}</span>
             <span className="console-line-msg">{l.msg}</span>
           </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ───────── Slicing progress (non-blocking corner window) ─────────
+// Anchored to the lower-left of the viewport. Does NOT cover the canvas or
+// trap pointer events — the user can keep panning/orbiting while the slice
+// runs. Drives a determinate progress sweep and steps through the slicer's
+// real pipeline stages so the readout feels alive rather than a spinner.
+const SLICE_STAGES = [
+  "Healing mesh",
+  "Perimeters",
+  "Top & bottom",
+  "Infill",
+  "Supports",
+  "Generating G-code",
+];
+
+function SlicingWindow({ objectCount, durationMs = 1700 }) {
+  const { useState, useEffect, useRef } = React;
+  const [pct, setPct] = useState(0);
+  const rafRef = useRef(0);
+
+  useEffect(() => {
+    const start = performance.now();
+    const tick = (now) => {
+      // Ease-out so the bar decelerates as it lands — reads less mechanical.
+      const lin = Math.min(1, (now - start) / durationMs);
+      const eased = 1 - Math.pow(1 - lin, 2.2);
+      setPct(Math.round(eased * 100));
+      if (lin < 1) rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [durationMs]);
+
+  const stageIdx = Math.min(
+    SLICE_STAGES.length - 1,
+    Math.floor((pct / 100) * SLICE_STAGES.length)
+  );
+
+  return (
+    <div className="slicing-window" role="status" aria-live="polite">
+      <div className="slicing-window-head">
+        <span className="slicing-window-spinner" aria-hidden="true"/>
+        <span className="slicing-window-title">Slicing</span>
+        <span className="slicing-window-count">
+          {objectCount} object{objectCount !== 1 ? "s" : ""}
+        </span>
+        <span className="slicing-window-pct">{pct}%</span>
+      </div>
+      <div className="slicing-window-track">
+        <div className="slicing-window-fill" style={{ width: `${pct}%` }}/>
+      </div>
+      <div className="slicing-window-stages">
+        {SLICE_STAGES.map((s, i) => (
+          <span
+            key={s}
+            className={
+              "slicing-window-stage" +
+              (i < stageIdx ? " done" : i === stageIdx ? " active" : "")
+            }
+          >
+            {s}
+          </span>
         ))}
       </div>
     </div>
@@ -1203,28 +1272,7 @@ function SlicerWorkspace({
           )}
 
           {slicing && (
-            <div style={{
-              position: "absolute", inset: 0, background: "rgba(15,17,21,0.45)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              backdropFilter: "blur(2px)",
-              zIndex: 20,
-            }}>
-              <div style={{
-                background: "var(--surface)", padding: "18px 22px", borderRadius: 10,
-                boxShadow: "var(--shadow-lg)",
-                fontFamily: "var(--font-mono)", fontSize: 13,
-                display: "flex", flexDirection: "column", gap: 8, minWidth: 280,
-              }}>
-                <div>Slicing {objects.length} object{objects.length !== 1 ? "s" : ""}…</div>
-                <div style={{ height: 4, background: "var(--surface-3)", borderRadius: 2, overflow: "hidden" }}>
-                  <div style={{
-                    height: "100%", width: "60%", background: "var(--accent)",
-                    animation: "progress 1.6s ease-in-out infinite",
-                  }}/>
-                </div>
-                <div className="dim" style={{ fontSize: 11 }}>Walls · Top/Bottom · Infill · Support · G-code</div>
-              </div>
-            </div>
+            <SlicingWindow objectCount={objects.length} />
           )}
         </div>
 
