@@ -183,6 +183,104 @@
   }
   .tb-btn:disabled { opacity: 0.45; }
 
+  /* ─────────── Brand / project dropdown menus ─────────── */
+  .brand-menu-wrap {
+    position: relative;
+    display: inline-flex;
+  }
+  /* `.brand` is a <button> here — strip the default button chrome. */
+  .brand-menu-wrap > button.brand {
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    color: inherit;
+  }
+  .tb-chevron {
+    opacity: 0.55;
+    margin-left: 2px;
+  }
+  .brand-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 220px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    box-shadow: var(--shadow-lg);
+    padding: 5px;
+    z-index: 200;
+  }
+  .brand-menu-app {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 9px 9px;
+    border-bottom: 1px solid var(--hairline);
+    margin-bottom: 4px;
+  }
+  .brand-menu-app-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .tb-file-menu-wrap {
+    position: relative;
+  }
+  .tb-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    min-width: 240px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    box-shadow: var(--shadow-lg);
+    padding: 4px;
+    z-index: 200;
+    font-size: 12.5px;
+  }
+  .tb-menu-section {
+    padding: 6px 10px 2px;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    font-weight: 500;
+  }
+  .tb-menu-item {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 10px;
+    background: transparent;
+    border: 0;
+    border-radius: 5px;
+    color: var(--text);
+    cursor: pointer;
+    text-align: left;
+  }
+  .tb-menu-item:hover {
+    background: var(--surface-2);
+  }
+  .tb-menu-divider {
+    height: 1px;
+    background: var(--hairline);
+    margin: 4px 6px;
+  }
+  .tb-menu-count {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--accent-text);
+    background: var(--accent-soft);
+    border-radius: 8px;
+    padding: 1px 7px;
+  }
+
   /* ─────────── Status bar ─────────── */
   .statusbar {
     display: flex;
