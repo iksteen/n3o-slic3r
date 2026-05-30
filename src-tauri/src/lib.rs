@@ -147,8 +147,6 @@ pub fn run() {
             core::scene::commands::scene_object_duplicate,
             core::scene::commands::scene_object_mirror,
             core::scene::commands::scene_object_lay_flat,
-            core::scene::commands::scene_gizmo_set,
-            core::scene::commands::scene_camera_set,
             core::scene::commands::scene_set_active_printer,
             core::scene::commands::scene_load_default_printer,
             core::scene::commands::scene_add_plate,
@@ -218,9 +216,7 @@ pub fn run() {
             core::driver::commands::driver_disconnect,
             core::driver::commands::driver_status,
             core::driver::commands::driver_send,
-            core::driver::commands::driver_dry_send,
             core::driver::commands::driver_send_plate,
-            core::driver::commands::driver_dry_send_plate,
             core::driver::commands::driver_export_plate,
             core::driver::commands::driver_command,
         ])

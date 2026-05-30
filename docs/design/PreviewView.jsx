@@ -236,28 +236,13 @@ function PreviewInfoPanel({ plate, sliceStats, filaments, slotMap, materialMap, 
         <span>{sliceStats.bbox.x.toFixed(0)} × {sliceStats.bbox.y.toFixed(0)} × {sliceStats.bbox.z.toFixed(0)} mm</span>
         <span className="dim">{sliceStats.bbox.objects} obj</span>
       </div>
-
-      <div className="preview-actions">
-        <button className="preview-btn ghost" onClick={onReslice}>
-          <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-            <path d="M2 6a4 4 0 1 0 1.2-2.8M2 1.5v3h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-          Re-slice
-        </button>
-        <button className="preview-btn primary" onClick={onSendToPrinter}>
-          <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-            <path d="M2 7l4 4 4-4M6 1v10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-          Send to printer
-        </button>
-      </div>
     </aside>
   );
 }
 
 // ───────── PreviewView root ─────────
 
-function PreviewView({ plate, filaments, onSendToPrinter, onReslice, onExitPreview, objectsPanel }) {
+function PreviewView({ plate, filaments, onSendToPrinter, onReslice, onExitPreview, settingsPanel }) {
   const { useState, useMemo } = React;
 
   // Mock slice stats derived from the plate's actual contents.
@@ -273,7 +258,15 @@ function PreviewView({ plate, filaments, onSendToPrinter, onReslice, onExitPrevi
 
   return (
     <div className="preview-workspace">
-      {objectsPanel}
+      {/* Left sidebar — the sliced result, in place of the object list. */}
+      <PreviewInfoPanel
+        plate={plate}
+        sliceStats={sliceStats}
+        filaments={filaments}
+        onSendToPrinter={onSendToPrinter}
+        onReslice={onReslice}
+      />
+
       <div className="viewport viewport-preview">
         <SlicedPreview
           plateSize={plate.plateSize}
@@ -299,12 +292,6 @@ function PreviewView({ plate, filaments, onSendToPrinter, onReslice, onExitPrevi
               Preview
             </button>
           </div>
-        </div>
-
-        {/* Top-left mode badge */}
-        <div className="preview-mode-badge">
-          <span className="preview-mode-dot"/>
-          Sliced · top-down
         </div>
 
         {/* Layer slider */}
@@ -334,13 +321,8 @@ function PreviewView({ plate, filaments, onSendToPrinter, onReslice, onExitPrevi
         </div>
       </div>
 
-      <PreviewInfoPanel
-        plate={plate}
-        sliceStats={sliceStats}
-        filaments={filaments}
-        onSendToPrinter={onSendToPrinter}
-        onReslice={onReslice}
-      />
+      {/* Right — the full settings panel, read-only in preview. */}
+      {settingsPanel}
     </div>
   );
 }

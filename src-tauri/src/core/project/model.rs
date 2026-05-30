@@ -21,7 +21,7 @@
 //!   - its metadata (cycle count, composition order)
 //!   - its scene contents
 //!     (`core::scene::state::PlateSceneState` — objects, selection,
-//!     gizmo, camera, bed, exclusion zones, per-object overrides)
+//!     bed, exclusion zones, per-object overrides)
 //!
 //! Mutation methods live in [`super::mutation`] to keep this file
 //! focused on the type shape. Project-level mutations

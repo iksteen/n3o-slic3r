@@ -9,8 +9,7 @@
 use super::events::{MirrorAxis, MoveReport, SceneEvent, SceneOpError, SelectMode};
 use super::bed::BedMesh;
 use super::state::{
-    ActivePlate, CameraState, ExclusionZone, GizmoState, MeshHeader, MeshId, ObjectId,
-    SceneObject,
+    ActivePlate, ExclusionZone, MeshHeader, MeshId, ObjectId, SceneObject,
 };
 use crate::core::printer::profile::PrinterProfile;
 use crate::core::project::{PlateId, Project};
@@ -69,8 +68,8 @@ pub struct SceneSnapshot {
 
 /// Per-plate slice of the snapshot — everything one plate's UI
 /// surface needs to render: identity / name / printer / metadata /
-/// bindings + scene contents (objects, selection, camera, gizmo,
-/// bed, exclusion zones, project + per-object overrides).
+/// bindings + scene contents (objects, selection, bed, exclusion
+/// zones, project + per-object overrides).
 #[derive(Debug, Clone, Serialize)]
 pub struct PlateSnapshot {
     // ---- Plate identity / metadata ----------------------------
@@ -97,8 +96,6 @@ pub struct PlateSnapshot {
     // ---- Per-plate scene contents -----------------------------
     pub objects: Vec<SceneObject>,
     pub selection: Vec<ObjectId>,
-    pub camera: CameraState,
-    pub gizmo: GizmoState,
     /// Active build plate identity + transform on this plate
     /// (the bed surface selection — distinct from the
     /// multi-plate `plate_id` field above).
@@ -155,8 +152,6 @@ fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
         project_overrides: plate.project_overrides.clone(),
         objects: plate.scene.objects.values().cloned().collect(),
         selection,
-        camera: plate.scene.camera.clone(),
-        gizmo: plate.scene.gizmo.clone(),
         build_plate: plate.scene.plate.clone(),
         exclusion_zones: plate.scene.exclusion_zones.clone(),
         bed: plate.scene.bed.clone(),
@@ -750,34 +745,6 @@ pub fn scene_object_duplicate(
     drop(s);
     emit_all(&window, &events);
     Ok(new_id)
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn scene_gizmo_set(
-    gizmo: GizmoState,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.set_gizmo(gizmo);
-    drop(s);
-    emit_all(&window, &events);
-    Ok(())
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn scene_camera_set(
-    camera: CameraState,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.set_camera(camera);
-    drop(s);
-    emit_all(&window, &events);
-    Ok(())
 }
 
 fn op_err_to_string(e: SceneOpError) -> String {

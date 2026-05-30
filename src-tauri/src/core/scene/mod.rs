@@ -1,8 +1,10 @@
 //! Renderer-agnostic 3D scene state.
 //!
 //! Authoritative model for the 3D viewport: mesh registry, per-object
-//! transforms and metadata, hierarchy, selection state, gizmo state,
-//! camera state, exclusion-zone data per the active plate's printer.
+//! transforms and metadata, hierarchy, selection state, and
+//! exclusion-zone data per the active plate's printer. (Transform mode
+//! is renderer-local; camera and gizmo-pivot scene state were removed
+//! as dormant view-state — see PRD §9.2.)
 //! The frontend renderer (Three.js for MVP, possibly wgpu later) is a
 //! read-only consumer that reflects state changes via Tauri events;
 //! all mutations enter through commands defined here.
@@ -41,7 +43,7 @@ pub use bed::{bed_for_printer, object_out_of_bounds, BedMesh, BoundsAxis, OutOfB
 pub use build_plate::BuildPlate;
 pub use events::{MirrorAxis, SceneEvent, SceneOpError, SelectMode};
 pub use state::{
-    ActivePlate, CameraState, ExclusionZone, GizmoMode, GizmoState, Mesh, MeshId,
-    MeshProvenance, ObjectId, PlateSceneState, ProjectionMode, SceneObject,
+    ActivePlate, ExclusionZone, Mesh, MeshId, MeshProvenance, ObjectId,
+    PlateSceneState, SceneObject,
 };
 pub use transform::Transform;

@@ -35,8 +35,6 @@ const EVENT_NAMES = [
   "scene:object_updated",
   "scene:object_removed",
   "scene:selection_changed",
-  "scene:gizmo_changed",
-  "scene:camera_changed",
   "scene:bed_changed",
   "scene:object_out_of_bounds",
   "scene:non_uniform_scale",

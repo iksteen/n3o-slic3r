@@ -431,7 +431,7 @@ Model materials are abstract extruder indices (1..N) assigned to objects, paint 
 
 - **core/project.** Project model, plate/printer binding, plate metadata (cycle counts), material bindings, persistence.
 
-- **core/scene.** Renderer-agnostic 3D scene state per AD-8 / FR-3D-7. Owns mesh registry, per-object transforms and metadata, selection and gizmo state, camera state, exclusion-zone data. Exposes Tauri commands for mutations and emits typed events for view sync. The frontend renderer (Three.js for MVP) consumes events; it does not hold authoritative state.
+- **core/scene.** Renderer-agnostic 3D scene state per AD-8 / FR-3D-7. Owns mesh registry, per-object transforms and metadata, selection, exclusion-zone data. Exposes Tauri commands for mutations and emits typed events for view sync. The frontend renderer (Three.js for MVP) consumes events; it does not hold authoritative state. (Gizmo and camera state were dormant view-state and have been removed from the scene model — see §9.2; re-add them here when a pivot-setting UI or persisted-view feature is actually built.)
 
 - **core/slice.** FFI wrapper, slice orchestration, progress events.
 
@@ -583,7 +583,7 @@ Decision: the authoritative 3D scene model (objects with mesh handles, transform
 
 - **Performance contract:** the Rust state model must support ≥1000 objects in a scene without state operations exceeding 5ms p99 (selection, transform application, scene-diff computation). The renderer's frame budget (FR-3D-5: 30fps on 20M-tri scene) is a *renderer* concern; state-side budget is separate.
 
-- **What this is *not*:** it is not a ban on the renderer caching derived data. Three.js's scene graph, GPU buffers, BVH for picking — all fine as renderer-internal caches keyed off the authoritative state. The rule is about *ownership of the truth*, not about avoiding caches.
+- **What this is *not*:** it is not a ban on the renderer caching derived data. Three.js's scene graph, GPU buffers, BVH for picking — all fine as renderer-internal caches keyed off the authoritative state. The rule is about *ownership of the truth*, not about avoiding caches. The line is *observable, persisted scene truth* vs. *ephemeral view UI*. Concretely: the gizmo's active transform *mode* (translate/rotate/scale) is renderer-local — it never affects geometry, slice output, or the saved project, so it lives in the viewport (`App`), not `core/scene`. The gizmo *pivot* override was removed from the scene model for now (no pivot-setting UI shipped); re-add a `core/scene` pivot field + setter command when one does. The `rotate_object` mutation still takes an optional explicit-pivot argument as a transform primitive. **Camera state** was likewise removed from `core/scene`: the renderer owns its Three.js camera and frames from the bed, and never synced or restored a persisted camera. To ship "restore per-plate view on reopen," re-add a camera field + a `scene_camera_set` the renderer commits on orbit-end and reads back on load.
 
 - **Out-of-scope for MVP but architecturally enabled:** scriptable scene operations (Lua plugins inspecting/mutating scene state via the same command surface the renderer uses), headless rendering for thumbnails, alternate renderers (a side-by-side wgpu viewport, an SVG top-down view for plate previews) — all become tractable when state is renderer-agnostic.
 

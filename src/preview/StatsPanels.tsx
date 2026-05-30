@@ -10,6 +10,7 @@
 
 import { useEffect, useMemo } from "react";
 
+import { formatDuration } from "../ui/formatDuration";
 import type {
   FullJobStats,
   HeaderMetadata,
@@ -32,7 +33,7 @@ export function FullJobStatsPanel({
   sliced,
 }: FullJobStatsPanelProps) {
   const headerTime = header.estimated_time;
-  const computedTime = formatDuration(stats.total_duration_seconds);
+  const computedTime = formatDuration(stats.total_duration_seconds, "—");
   const slicedMeta = sliced?.plate_metadata ?? null;
   const time =
     slicedMeta?.estimated_time_text || headerTime || computedTime;
@@ -169,7 +170,7 @@ export function PerLayerStatsPanel({
       <div className="stats-panel-row">
         <span className="stats-panel-label">Time</span>
         <span className="stats-panel-value">
-          {formatDuration(stats.duration_seconds)}
+          {formatDuration(stats.duration_seconds, "—")}
         </span>
       </div>
       <div className="stats-panel-row">
@@ -200,7 +201,7 @@ function FeatureBars({
         // Rust side keys feature_breakdown by FeatureType::as_token()
         // (see core/preview/stats.rs::feature_key).
         return (
-          <div className="feature-bar" key={feat} title={`${feat}: ${formatDuration(secs)} (${pct.toFixed(1)}%)`}>
+          <div className="feature-bar" key={feat} title={`${feat}: ${formatDuration(secs, "—")} (${pct.toFixed(1)}%)`}>
             <span className="feature-bar-label">{feat}</span>
             <div className="feature-bar-track">
               <div
@@ -255,12 +256,3 @@ function FilamentRows({
   );
 }
 
-function formatDuration(seconds: number): string {
-  if (seconds <= 0) return "—";
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = Math.floor(seconds % 60);
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${secs}s`;
-  return `${secs}s`;
-}

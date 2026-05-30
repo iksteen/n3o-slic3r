@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { ViewportCanvas } from "./viewport/ViewportCanvas";
+import type { GizmoMode } from "./viewport/types";
 import { SlicePanel } from "./slice/SlicePanel";
 import { useLastSliceOutput } from "./slice/useLastSliceOutput";
 import { PlateTabs } from "./plates/PlateTabs";
@@ -10,13 +10,11 @@ import {
   useAutosaveRecoveryGate,
 } from "./project/AutosaveRecoveryDialog";
 import { autosaveEnable } from "./project/autosaveCommands";
-import {
-  SettingsPanelHost,
-  useSettingsPanelVisible,
-} from "./settings/SettingsPanelHost";
+import { SettingsPanelHost } from "./settings/SettingsPanelHost";
 import { PreviewWorkspace } from "./preview/PreviewWorkspace";
 import { useSlicePreviewBridge } from "./preview/useSlicePreviewBridge";
-import { PrinterPanel } from "./driver/PrinterPanel";
+import { SendControls } from "./driver/SendControls";
+import { DevicesView } from "./driver/DevicesView";
 import { useDriverConnections } from "./driver/useDriverConnections";
 import { usePrinterInstances } from "./printer/usePrinterInstances";
 import { usePrinterCatalog } from "./printer/usePrinterCatalog";
@@ -30,21 +28,20 @@ import { createInstance } from "./printer/printerInstance";
 import { rebindPlatePrinter } from "./printer/printerCommands";
 import "./App.css";
 
-type SlicerInfo = { version: string; option_count: number };
-
 function App() {
-  const [info, setInfo] = useState<SlicerInfo | null>(null);
-  const [showDebug, setShowDebug] = useState(false);
-  const [panelVisible, setPanelVisible] = useSettingsPanelVisible();
-  const [mode, setMode] = useState<"scene" | "preview">("scene");
+  const [mode, setMode] = useState<"scene" | "preview" | "devices">("scene");
+  // Gizmo transform mode lives here (not in ViewportCanvas) so it
+  // survives the unmount/remount ViewportCanvas undergoes on
+  // prepare↔preview↔devices switches.
+  const [gizmoMode, setGizmoMode] = useState<GizmoMode>("Translate");
   const session = useProjectSession();
   const recovery = useAutosaveRecoveryGate();
   const printers = usePrinterInstances();
   const printerCatalog = usePrinterCatalog();
   const [showAddPrinter, setShowAddPrinter] = useState(false);
   /** ID of the printer instance whose settings modal is open, or
-   *  `null` when the modal isn't shown. The cog button in
-   *  PrinterPicker sets this. */
+   *  `null` when the modal isn't shown. Set by the per-printer
+   *  settings cog (Devices view / settings panel). */
   const [editingPrinterId, setEditingPrinterId] = useState<string | null>(null);
 
   const activePlate =
@@ -74,29 +71,49 @@ function App() {
   // whenever its persisted connection settings change. Drivers
   // outlive the React tree (module-scoped). The summary is keyed
   // by instance.id (UUID) so two instances of the same printer
-  // model get distinct drivers. Feeds the active connection
-  // summary to PrinterPanel (it picks the driver id off it + the
-  // status branches the empty-state copy) and the per-printer
-  // status dot to PrinterPicker.
+  // model get distinct drivers. Feeds the active connection summary
+  // to SendControls (which picks the driver id off it) and the
+  // Devices view (per-printer monitor + status dot).
   const driverConnections = useDriverConnections(printers.instances);
   const activeConnection =
     activeInstance != null
       ? (driverConnections[activeInstance.id] ?? null)
       : null;
 
-  // Auto-switch to preview on slice completion, unless the user
-  // has manually toggled out of preview during this session.
+  const canPreview = bridge.activePreview != null;
+  const showPreview = mode === "preview" && canPreview;
+  const showDevices = mode === "devices";
+
+  // Auto-switch to preview on slice completion — unless the user has
+  // manually toggled out of preview this session, or is currently in
+  // the Devices monitor (a background/queued slice finishing must not
+  // yank them out of the fleet view). The functional updater reads the
+  // live mode rather than a closed-over copy.
   const userToggledOutRef = useRef(false);
   useEffect(() => {
     bridge.enableAutoSwitch(!userToggledOutRef.current);
     bridge.onPreviewReady(() => {
-      if (!userToggledOutRef.current) {
-        setMode("preview");
-      }
+      if (userToggledOutRef.current) return;
+      setMode((current) => (current === "devices" ? current : "preview"));
     });
   }, [bridge]);
 
-  // Keyboard shortcut: `P` toggles between scene and preview.
+  const goPrepare = (): void => {
+    userToggledOutRef.current = true;
+    setMode("scene");
+  };
+  const goPreview = (): void => {
+    if (!canPreview) return;
+    userToggledOutRef.current = false;
+    setMode("preview");
+  };
+
+  // Keyboard shortcut: `P` toggles the G-code preview. From preview it
+  // returns to prepare; from any non-preview mode (scene OR devices) it
+  // enters preview, but only when a slice exists — entering "preview"
+  // with canPreview false would leave mode and the render desynced.
+  // Depends on canPreview so the listener never reads a stale value;
+  // the functional updater keeps `mode` itself fresh.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== "p" && e.key !== "P") return;
@@ -104,33 +121,54 @@ function App() {
       const tag = el?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if ((el as HTMLElement | null)?.isContentEditable) return;
-      togglePreview();
+      setMode((current) => {
+        if (current === "preview") {
+          userToggledOutRef.current = true;
+          return "scene";
+        }
+        if (!canPreview) return current;
+        userToggledOutRef.current = false;
+        return "preview";
+      });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // togglePreview captures setMode; safe with empty deps.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [canPreview]);
 
-  const togglePreview = (): void => {
-    setMode((current) => {
-      if (current === "preview") {
-        userToggledOutRef.current = true;
-        return "scene";
-      }
-      userToggledOutRef.current = false;
-      return "preview";
-    });
-  };
-
-  const canPreview = bridge.activePreview != null;
-  const showPreview = mode === "preview" && canPreview;
-
-  useEffect(() => {
-    invoke<SlicerInfo>("slicer_info")
-      .then(setInfo)
-      .catch(() => undefined);
-  }, []);
+  // Prepare/Preview segmented toggle. Lives in the canvas toolbar:
+  // rendered as the leading item of the viewport toolbar in prepare
+  // mode, and as a standalone overlay over the preview workspace —
+  // the toolbar itself (ViewportCanvas) is unmounted in preview, so
+  // the toggle has to ride along separately to stay reachable.
+  const modeToggle = (
+    <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden pointer-events-auto">
+      <button
+        type="button"
+        className={`px-3 py-1 ${
+          !showPreview ? "bg-neutral-700" : "hover:bg-neutral-700/60"
+        }`}
+        onClick={goPrepare}
+        title="Prepare (P)"
+      >
+        Prepare
+      </button>
+      <button
+        type="button"
+        className={`px-3 py-1 ${
+          showPreview
+            ? "bg-neutral-700"
+            : canPreview
+              ? "hover:bg-neutral-700/60"
+              : "opacity-40 cursor-not-allowed"
+        }`}
+        onClick={goPreview}
+        disabled={!canPreview}
+        title={canPreview ? "G-code preview (P)" : "Slice the active plate first"}
+      >
+        Preview
+      </button>
+    </div>
+  );
 
   // Enable the autosave worker on launch. Safe to fire before the
   // recovery dialog resolves — the worker writes to the new
@@ -192,52 +230,28 @@ function App() {
           n3o-slic3r
         </span>
         <span className="tb-spacer" />
-        <SlicePanel
-          snapshot={session.snapshot}
-          activePlate={activePlate}
-        />
-        <PrinterPanel
-          printerIdentity={printerIdentity}
-          connection={activeConnection}
-          plateId={activePlateId}
-          lastSliceOutputPath={lastSliceOutputPath}
-        />
-        {info && (
-          <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: "10.5px" }}>
-            {info.version} · {info.option_count} options
-          </span>
+        {!showDevices && (
+          <>
+            <SlicePanel
+              snapshot={session.snapshot}
+              activePlate={activePlate}
+            />
+            <SendControls
+              printerIdentity={printerIdentity}
+              connection={activeConnection}
+              plateId={activePlateId}
+              lastSliceOutputPath={lastSliceOutputPath}
+            />
+          </>
         )}
-        <button
-          type="button"
-          className={`tb-btn${showPreview ? " active" : ""}`}
-          onClick={togglePreview}
-          disabled={!canPreview && mode === "scene"}
-          title={
-            canPreview
-              ? "Toggle G-code preview (P)"
-              : "Slice the active plate first"
-          }
-        >
-          Preview <span className="kbd">P</span>
-        </button>
-        <button
-          type="button"
-          className="tb-btn"
-          onClick={() => setPanelVisible(!panelVisible)}
-          title="Toggle settings panel (persists across reloads)"
-        >
-          {panelVisible ? "Hide settings" : "Settings"}
-        </button>
-        <button
-          type="button"
-          className="tb-btn"
-          onClick={() => setShowDebug((v) => !v)}
-        >
-          {showDebug ? "Hide debug" : "Debug"}
-        </button>
       </header>
 
-      <PlateTabs />
+      <PlateTabs
+        devicesActive={showDevices}
+        deviceCount={printers.instances.length}
+        onSelectDevices={() => setMode("devices")}
+        onSelectPlate={() => setMode("scene")}
+      />
 
       {session.error ? (
         <div className="sp-error" role="alert" style={{ margin: "8px 14px" }}>
@@ -248,23 +262,35 @@ function App() {
           catalog={printerCatalog.entries}
           onAdd={() => setShowAddPrinter(true)}
         />
+      ) : showDevices ? (
+        <DevicesView
+          instances={printers.instances}
+          connections={driverConnections}
+          onAddPrinter={() => setShowAddPrinter(true)}
+          onEditPrinter={(id) => setEditingPrinterId(id)}
+        />
       ) : (
-        <div
-          className={`workspace ${
-            showPreview ? "preview-mode" : panelVisible ? "" : "no-panel"
-          }`}
-        >
+        <div className={`workspace ${showPreview ? "preview-mode" : ""}`}>
           <main style={{ position: "relative", minWidth: 0 }}>
             {showPreview ? (
-              <PreviewWorkspace
-                preview={bridge.activePreview}
-                bedExtents={bedExtents}
-              />
+              <>
+                <PreviewWorkspace
+                  preview={bridge.activePreview}
+                  bedExtents={bedExtents}
+                />
+                <div className="absolute top-2 left-2 flex pointer-events-none">
+                  {modeToggle}
+                </div>
+              </>
             ) : (
-              <ViewportCanvas />
+              <ViewportCanvas
+                leading={modeToggle}
+                gizmoMode={gizmoMode}
+                onGizmoMode={setGizmoMode}
+              />
             )}
           </main>
-          {!showPreview && panelVisible && (
+          {!showPreview && (
             <SettingsPanelHost
               session={session}
               instances={printers.instances}
@@ -318,78 +344,8 @@ function App() {
             : "—"}
         </span>
         <span className="spacer" />
-        {showDebug && <DebugPanel />}
       </footer>
     </div>
-  );
-}
-
-type OptionSummary = {
-  key: string;
-  ty: string;
-  label: string | null;
-  category: string | null;
-  default_value: string | null;
-};
-
-type SliceResult = { ok: boolean; out_path: string; error: string | null };
-
-function DebugPanel() {
-  const [filter, setFilter] = useState("");
-  const [options, setOptions] = useState<OptionSummary[]>([]);
-  const [modelPath, setModelPath] = useState("");
-  const [outPath] = useState("/tmp/n3o-out.gcode");
-  const [sliceMsg, setSliceMsg] = useState("");
-
-  async function loadOptions() {
-    const opts = await invoke<OptionSummary[]>("slicer_options", { filter });
-    setOptions(opts.slice(0, 50));
-  }
-
-  async function doSlice() {
-    setSliceMsg("slicing…");
-    const r = await invoke<SliceResult>("slicer_slice", { modelPath, outPath });
-    setSliceMsg(r.ok ? `wrote ${r.out_path}` : `error: ${r.error}`);
-  }
-
-  // Debug panel renders inline in the status row as a popover-like inline
-  // text block. Kept minimal — it's a developer affordance, not user UX.
-  return (
-    <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-      <input
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
-        placeholder="opt filter"
-        style={{
-          background: "var(--surface-2)",
-          border: "1px solid var(--border)",
-          borderRadius: 4,
-          padding: "1px 6px",
-          fontSize: 10.5,
-          width: 120,
-        }}
-      />
-      <button type="button" className="tb-btn" style={{ height: 20, padding: "0 8px", fontSize: 10.5 }} onClick={() => void loadOptions()}>
-        opts ({options.length})
-      </button>
-      <input
-        value={modelPath}
-        onChange={(e) => setModelPath(e.target.value)}
-        placeholder="model.stl"
-        style={{
-          background: "var(--surface-2)",
-          border: "1px solid var(--border)",
-          borderRadius: 4,
-          padding: "1px 6px",
-          fontSize: 10.5,
-          width: 140,
-        }}
-      />
-      <button type="button" className="tb-btn" style={{ height: 20, padding: "0 8px", fontSize: 10.5 }} disabled={!modelPath} onClick={() => void doSlice()}>
-        slice
-      </button>
-      {sliceMsg && <span style={{ color: "var(--text-dim)" }}>{sliceMsg}</span>}
-    </span>
   );
 }
 

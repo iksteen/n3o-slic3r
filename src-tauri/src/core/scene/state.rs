@@ -1,5 +1,5 @@
 //! Per-plate scene-state types + scene-primitive types (mesh, object,
-//! camera, gizmo, bed).
+//! bed).
 //!
 //! [`PlateSceneState`] is the per-plate scene contents one entry of
 //! [`crate::core::project::Project::plates`] carries via
@@ -215,66 +215,6 @@ fn default_visible() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CameraState {
-    /// World-space camera position.
-    pub position: [f32; 3],
-    /// Look-at target.
-    pub target: [f32; 3],
-    /// World-space up vector. Z-up by convention (matches libslic3r
-    /// + the build plate's Z=0 origin).
-    pub up: [f32; 3],
-    pub projection: ProjectionMode,
-    /// Vertical field of view in radians, used by perspective.
-    pub fov_y_radians: f32,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ProjectionMode {
-    Perspective,
-    /// Cut candidate per the Execution Plan; keep the enum variant
-    /// so the renderer doesn't have to special-case its absence.
-    Orthographic,
-}
-
-impl Default for CameraState {
-    fn default() -> Self {
-        Self {
-            position: [200.0, -200.0, 200.0],
-            target: [0.0, 0.0, 0.0],
-            up: [0.0, 0.0, 1.0],
-            projection: ProjectionMode::Perspective,
-            fov_y_radians: std::f32::consts::FRAC_PI_4,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GizmoState {
-    pub mode: GizmoMode,
-    /// World-space pivot point for rotation/scale ops. `None` =
-    /// pivot at the selected object's center (the resolver computes
-    /// it at apply time).
-    pub pivot: Option<[f32; 3]>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum GizmoMode {
-    None,
-    Translate,
-    Rotate,
-    Scale,
-}
-
-impl Default for GizmoState {
-    fn default() -> Self {
-        Self {
-            mode: GizmoMode::None,
-            pivot: None,
-        }
-    }
-}
-
 /// The active build plate's identity + transform. MVP ships one;
 /// Phase 5 extends this to a `Vec<ActivePlate>`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,7 +237,7 @@ pub struct ExclusionZone {
 }
 
 /// Per-plate scene state — everything one plate owns: placed
-/// objects, selection, camera/gizmo, bed + exclusion zones,
+/// objects, selection, bed + exclusion zones,
 /// active-build-plate identity. Phase 5 turns the historically
 /// single-global scene into N of these.
 ///
@@ -309,8 +249,6 @@ pub struct ExclusionZone {
 pub struct PlateSceneState {
     pub objects: HashMap<ObjectId, SceneObject>,
     pub selection: HashSet<ObjectId>,
-    pub camera: CameraState,
-    pub gizmo: GizmoState,
     pub plate: Option<ActivePlate>,
     pub exclusion_zones: Vec<ExclusionZone>,
     /// Active bed visualization + bounds. `None` when no

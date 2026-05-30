@@ -22,8 +22,6 @@ import {
 } from "../gizmo";
 import { SceneMirror } from "../sceneMirror";
 import type {
-  CameraState,
-  GizmoState,
   MeshHeader,
   PlateSnapshot,
   SceneObject,
@@ -48,15 +46,7 @@ function unitCubeBuffers() {
   };
 }
 
-const DEFAULT_CAMERA: CameraState = {
-  position: [200, -200, 200],
-  target: [0, 0, 0],
-  up: [0, 0, 1],
-  fov_degrees: 45,
-  projection: "Perspective",
-};
 
-const DEFAULT_GIZMO: GizmoState = { mode: "None", pivot: null };
 
 function plateSnap(id = 1): PlateSnapshot {
   return {
@@ -69,8 +59,6 @@ function plateSnap(id = 1): PlateSnapshot {
     project_overrides: {},
     objects: [],
     selection: [],
-    camera: DEFAULT_CAMERA,
-    gizmo: DEFAULT_GIZMO,
     build_plate: null,
     exclusion_zones: [],
     bed: null,

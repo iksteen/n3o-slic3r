@@ -26,8 +26,8 @@ use crate::core::scene::events::{
 };
 use crate::core::scene::primitives::{self, PrimitiveKind, PrimitiveParams};
 use crate::core::scene::state::{
-    mesh_bb_corners, z_extent, CameraState, GizmoState, Mesh, MeshId, MeshProvenance,
-    NewMesh, NewSceneObject, ObjectId, SceneObject,
+    mesh_bb_corners, z_extent, Mesh, MeshId, MeshProvenance, NewMesh,
+    NewSceneObject, ObjectId, SceneObject,
 };
 use crate::core::scene::transform::Transform;
 
@@ -923,9 +923,8 @@ impl Project {
     }
 
     /// Rotate an object around `axis` by `radians`. Pivot defaults
-    /// to the object's current world-space center; explicit pivot
-    /// via `pivot_override` is for the gizmo's "rotate around
-    /// custom point" mode.
+    /// to the object's current world-space center; `pivot_override`
+    /// rotates around an explicit world-space point instead.
     pub fn rotate_object(
         &mut self,
         id: ObjectId,
@@ -1290,37 +1289,6 @@ impl Project {
                 object: cloned_obj,
             }],
         ))
-    }
-
-    /// Set the gizmo mode + pivot on the active plate. Returns one
-    /// event when state actually changed.
-    pub fn set_gizmo(&mut self, new_gizmo: GizmoState) -> Vec<SceneEvent> {
-        let active = self.active_plate;
-        let plate_id = self.plates[active].id;
-        let plate = &mut self.plates[active].scene;
-        if (plate.gizmo.mode == new_gizmo.mode)
-            && (plate.gizmo.pivot == new_gizmo.pivot)
-        {
-            return Vec::new();
-        }
-        plate.gizmo = new_gizmo.clone();
-        vec![SceneEvent::GizmoChanged {
-            plate_id,
-            gizmo: new_gizmo,
-        }]
-    }
-
-    /// Replace the camera state on the active plate. Always emits
-    /// an event (camera state's equality check is expensive enough
-    /// to skip).
-    pub fn set_camera(&mut self, camera: CameraState) -> Vec<SceneEvent> {
-        let active = self.active_plate;
-        let plate_id = self.plates[active].id;
-        self.plates[active].scene.camera = camera.clone();
-        vec![SceneEvent::CameraChanged {
-            plate_id,
-            camera,
-        }]
     }
 
     // ---- Per-object overrides ----------------------------
@@ -1805,7 +1773,7 @@ fn cube_rotations() -> Vec<Quat> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::scene::state::{GizmoMode, MeshProvenance};
+    use crate::core::scene::state::MeshProvenance;
 
     // ---- Fixtures --------------------------------------------------
 
@@ -2091,19 +2059,6 @@ mod tests {
     }
 
     #[test]
-    fn gizmo_change_no_op_emits_nothing() {
-        let mut p = Project::default();
-        let initial = p.active_plate().scene.gizmo.clone();
-        let events = p.set_gizmo(initial);
-        assert!(events.is_empty());
-        let mut next = p.active_plate().scene.gizmo.clone();
-        next.mode = GizmoMode::Rotate;
-        let events = p.set_gizmo(next);
-        assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], SceneEvent::GizmoChanged { .. }));
-    }
-
-    #[test]
     fn project_round_trips_via_json() {
         let mut p = Project::default();
         let mesh_id = p.register_mesh(unit_cube_mesh());
@@ -2116,7 +2071,6 @@ mod tests {
             parent: None,
             group_id: None,
         });
-        p.active_plate_mut().scene.gizmo.mode = GizmoMode::Translate;
 
         let json = serde_json::to_string(&p).unwrap();
         let parsed: Project = serde_json::from_str(&json).unwrap();
@@ -2125,7 +2079,6 @@ mod tests {
         let obj = parsed.active_plate().scene.objects.values().next().unwrap();
         assert_eq!(obj.name, "test-cube");
         assert_eq!(obj.extruder_id, Some(2));
-        assert_eq!(parsed.active_plate().scene.gizmo.mode, GizmoMode::Translate);
     }
 
     // ---- Mirror + scale + lay_flat --------------------------------

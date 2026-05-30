@@ -28,7 +28,7 @@ import {
 import type { DriverId } from "../driver/types";
 import { MaterialChip } from "./MaterialChip";
 import { SlotChipStrip } from "./SlotChipStrip";
-import type { FilamentSummary } from "./filamentSummary";
+import { useFilamentCatalog } from "./useFilamentCatalog";
 
 export interface SlotBindingPanelProps {
   plateId: PlateId | null;
@@ -74,7 +74,8 @@ async function clearMaterialSlot(
 export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelProps) {
   const instanceId = plate?.printer_instance_id ?? null;
   const [instance, setInstance] = useState<PrinterInstance | null>(null);
-  const [filaments, setFilaments] = useState<FilamentSummary[]>([]);
+  const { list: filaments, byIdentity: filamentByIdentity } =
+    useFilamentCatalog();
 
   // Pull the live instance state. Refetches whenever the bound id
   // changes, or when the backend emits `printer:instance_changed`
@@ -104,23 +105,6 @@ export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelP
     };
   }, [instanceId]);
 
-  // Pull the bundled vendor filament fragments once per mount. The
-  // list is small + stable; no refetch trigger needed until user-
-  // library editing lands.
-  useEffect(() => {
-    let cancelled = false;
-    void invoke<FilamentSummary[]>("filament_profile_list")
-      .then((list) => {
-        if (!cancelled) setFilaments(list);
-      })
-      .catch((err) =>
-        console.error("[slot-binding] filament_profile_list failed", err),
-      );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const slots = useMemo<FlatSlotOption[]>(
     () => (instance ? flattenSlots(instance) : []),
     [instance],
@@ -139,11 +123,6 @@ export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelP
     return counts;
   }, [plate]);
 
-  const filamentByIdentity = useMemo(() => {
-    const map = new Map<string, FilamentSummary>();
-    for (const f of filaments) map.set(f.identity, f);
-    return map;
-  }, [filaments]);
 
   if (!plateId || !plate || !instance) {
     return null;

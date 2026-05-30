@@ -18,7 +18,6 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use super::bambu::connection::{BambuConfig, BambuDriver};
-use super::dryrun::{neuter_gcode, neuter_gcode_3mf};
 use super::registry::{DriverRegistry, DriverSummary};
 use super::snapmaker::{U1Config, U1Driver};
 use super::status::PrinterStatus;
@@ -457,122 +456,6 @@ pub async fn driver_send_plate(
     };
     let mut d = handle.lock().await;
     d.send(payload).await.map_err(|e| e.to_string())
-}
-
-/// Dry-run variant of [`driver_send_plate`]. Same dispatch as the
-/// send path, but the G-code is routed through the dry-run neuter
-/// (strips E values, comments out heater commands) before send so
-/// the printer exercises every XY motion cold with zero filament
-/// flow.
-///
-/// - **Bambu** → wrap + [`neuter_gcode_3mf`] + send as `Gcode3mf`.
-/// - **U1**    → read + [`neuter_gcode`] on the raw stream + send
-///               as `Gcode` with a `-dryrun.gcode` file name so the
-///               operator can tell the two on disk apart.
-#[tauri::command]
-#[tracing::instrument(skip(registry, project))]
-pub async fn driver_dry_send_plate(
-    id: DriverId,
-    plate_id: u32,
-    gcode_path: String,
-    registry: State<'_, Arc<DriverRegistry>>,
-    project: State<'_, Arc<Mutex<Project>>>,
-) -> Result<SendHandle, String> {
-    let handle = registry
-        .get(id)
-        .ok_or_else(|| format!("unknown driver id {}", id.0))?;
-    let kind = handle.lock().await.kind();
-    match kind {
-        DriverKind::Bambu => {
-            let ams = collect_ams_bindings(&project, plate_id);
-            let (use_ams, ams_mapping, ams_mapping2) =
-                collect_ams_mapping(&project, plate_id);
-            let wrapped = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
-            let neutered =
-                tauri::async_runtime::spawn_blocking(move || neuter_gcode_3mf(&wrapped))
-                    .await
-                    .map_err(|e| format!("neuter task join: {e}"))?
-                    .map_err(|e| format!("neuter bundle: {e}"))?;
-            let mut d = handle.lock().await;
-            d.send(SendPayload::Gcode3mf {
-                bytes: neutered,
-                plate_id,
-                use_ams,
-                ams_mapping,
-                ams_mapping2,
-            })
-            .await
-            .map_err(|e| e.to_string())
-        }
-        DriverKind::U1 => {
-            let bytes = read_gcode_bytes(gcode_path).await?;
-            let neutered = tauri::async_runtime::spawn_blocking(move || {
-                let s = std::str::from_utf8(&bytes)
-                    .map_err(|e| format!("gcode is not utf-8: {e}"))?;
-                Ok::<_, String>(neuter_gcode(s).into_bytes())
-            })
-            .await
-            .map_err(|e| format!("neuter task join: {e}"))??;
-            let mut d = handle.lock().await;
-            d.send(SendPayload::Gcode {
-                bytes: neutered,
-                file_name: format!("plate-{plate_id}-dryrun.gcode"),
-            })
-            .await
-            .map_err(|e| e.to_string())
-        }
-    }
-}
-
-/// Motion-only dry-run variant of [`driver_send`]. Neuters the
-/// payload's G-code (strips E values, comments out heater commands)
-/// before forwarding to the driver — the printer goes through every
-/// XY motion without heating or extruding. Use as the first send
-/// against a newly-paired printer to confirm the toolpath without
-/// risking the bed.
-///
-/// Branches on payload variant: Bambu `.gcode.3mf` bundles route
-/// through [`neuter_gcode_3mf`] (unzip → neuter inner G-code →
-/// rezip + md5 fixup); U1 raw G-code routes through [`neuter_gcode`]
-/// directly.
-#[tauri::command]
-#[tracing::instrument(skip(registry, payload), fields(payload_kind = ?std::mem::discriminant(&payload)))]
-pub async fn driver_dry_send(
-    id: DriverId,
-    payload: SendPayload,
-    registry: State<'_, Arc<DriverRegistry>>,
-) -> Result<SendHandle, String> {
-    let neutered_payload = match payload {
-        SendPayload::Gcode3mf {
-            bytes,
-            plate_id,
-            use_ams,
-            ams_mapping,
-            ams_mapping2,
-        } => {
-            let neutered = neuter_gcode_3mf(&bytes).map_err(|e| e.to_string())?;
-            SendPayload::Gcode3mf {
-                bytes: neutered,
-                plate_id,
-                use_ams,
-                ams_mapping,
-                ams_mapping2,
-            }
-        }
-        SendPayload::Gcode { bytes, file_name } => {
-            let s = std::str::from_utf8(&bytes)
-                .map_err(|e| format!("gcode is not utf-8: {e}"))?;
-            SendPayload::Gcode {
-                bytes: neuter_gcode(s).into_bytes(),
-                file_name,
-            }
-        }
-    };
-    let handle = registry
-        .get(id)
-        .ok_or_else(|| format!("unknown driver id {}", id.0))?;
-    let mut d = handle.lock().await;
-    d.send(neutered_payload).await.map_err(|e| e.to_string())
 }
 
 /// Pause / resume / stop the current print.

@@ -1,9 +1,10 @@
 // Color-mode picker for the preview (PR-6-13).
 //
-// Segmented control over the 5 color modes + a small palette
-// toggle. State is owned via useColorModePicker() with
-// localStorage persistence — survives reloads, restores the
-// last-active mode on the next preview.
+// Radio group over the 5 color modes + a palette checkbox
+// (checked = slicer-classic, unchecked = CVD-safe default).
+// State is owned via useColorModePicker() with localStorage
+// persistence — survives reloads, restores the last-active mode
+// on the next preview.
 
 import { useCallback, useEffect, useState } from "react";
 
@@ -34,40 +35,35 @@ export function ColorModePicker({
   return (
     <div className="color-mode-picker">
       <div
-        className="color-mode-buttons"
+        className="color-mode-options"
         role="radiogroup"
         aria-label="Color mode"
       >
         {MODES.map((m) => (
-          <button
-            key={m.mode}
-            type="button"
-            role="radio"
-            aria-checked={mode === m.mode}
-            className={`color-mode-button${mode === m.mode ? " active" : ""}`}
-            onClick={() => onChange({ mode: m.mode, palette })}
-          >
-            {m.label}
-          </button>
+          <label key={m.mode} className="color-mode-option">
+            <input
+              type="radio"
+              name="preview-color-mode"
+              checked={mode === m.mode}
+              onChange={() => onChange({ mode: m.mode, palette })}
+            />
+            <span>{m.label}</span>
+          </label>
         ))}
       </div>
-      <button
-        type="button"
+      <label
         className="palette-toggle"
-        onClick={() =>
-          onChange({
-            mode,
-            palette: palette === "Default" ? "Classic" : "Default",
-          })
-        }
-        title={
-          palette === "Default"
-            ? "CVD-safe Okabe-Ito + viridis palette (toggle to slicer-classic)"
-            : "Slicer-classic palette (toggle to CVD-safe default)"
-        }
+        title="Use the slicer-classic palette instead of the CVD-safe Okabe-Ito + viridis default"
       >
-        Palette: {palette === "Default" ? "CVD-safe" : "Classic"}
-      </button>
+        <input
+          type="checkbox"
+          checked={palette === "Classic"}
+          onChange={(e) =>
+            onChange({ mode, palette: e.target.checked ? "Classic" : "Default" })
+          }
+        />
+        <span>Classic palette</span>
+      </label>
     </div>
   );
 }

@@ -22,7 +22,6 @@
 
 pub mod bambu;
 pub mod commands;
-pub mod dryrun;
 pub mod registry;
 pub mod snapmaker;
 pub mod status;

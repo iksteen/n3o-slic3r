@@ -118,14 +118,6 @@ export function PreviewWorkspace({ preview, bedExtents }: PreviewWorkspaceProps)
     <>
       <div className="preview-workspace">
         <div className="preview-canvas-region">
-          <div className="preview-toolbar">
-            <ColorModePicker
-              mode={colorState.mode}
-              palette={colorState.palette}
-              onChange={setColorState}
-            />
-            <VisibilityToggles value={visState} onChange={setVisState} />
-          </div>
           <div className="preview-canvas-host">
             <GcodePreview
               preview={activePreview}
@@ -168,6 +160,14 @@ export function PreviewWorkspace({ preview, bedExtents }: PreviewWorkspaceProps)
         </div>
         {activePreview && (
           <aside className="preview-stats-column">
+            <div className="preview-controls">
+              <ColorModePicker
+                mode={colorState.mode}
+                palette={colorState.palette}
+                onChange={setColorState}
+              />
+              <VisibilityToggles value={visState} onChange={setVisState} />
+            </div>
             <FullJobStatsPanel
               stats={activePreview.job_stats}
               header={activePreview.header}

@@ -13,20 +13,18 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
-  frameBox,
   initialFrameForBed,
   makeControls,
-  makeOrthographicCamera,
   makePerspectiveCamera,
 } from "./cameraControls";
 import { attachEventBridge, tauriMeshBufferProvider } from "./eventBridge";
 import { createGizmo, type GizmoApi } from "./gizmo";
 import { SceneMirror } from "./sceneMirror";
-import type { GizmoMode, ObjectId, ProjectionMode } from "./types";
+import type { GizmoMode, ObjectId } from "./types";
 
 interface ToastMessage {
   id: number;
@@ -36,13 +34,25 @@ interface ToastMessage {
 
 let nextToastId = 1;
 
-export function ViewportCanvas() {
+export function ViewportCanvas({
+  leading,
+  gizmoMode,
+  onGizmoMode,
+}: {
+  leading?: ReactNode;
+  /** Active transform mode. Owned by App (not backend scene state, not
+   *  this component) so it survives the unmount/remount this component
+   *  goes through on prepare↔preview↔devices mode switches. */
+  gizmoMode: GizmoMode;
+  onGizmoMode: (mode: GizmoMode) => void;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mirrorRef = useRef<SceneMirror | null>(null);
-  const [projection, setProjection] = useState<ProjectionMode>("Perspective");
+  // Live gizmo handle, so the always-visible toolbar buttons can drive
+  // the gizmo's transform mode directly (mode is renderer-local — held
+  // in App, not round-tripped through backend scene state).
+  const gizmoRef = useRef<GizmoApi | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
-  const [selectedIds, setSelectedIds] = useState<ObjectId[]>([]);
-  const [gizmoMode, setGizmoMode] = useState<GizmoMode>("None");
 
   useEffect(() => {
     const container = containerRef.current;
@@ -72,9 +82,8 @@ export function ViewportCanvas() {
     scene.add(fill);
 
     let aspect = container.clientWidth / Math.max(container.clientHeight, 1);
-    let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera =
-      makePerspectiveCamera(aspect);
-    let controls: OrbitControls = makeControls(camera, renderer.domElement);
+    const camera = makePerspectiveCamera(aspect);
+    const controls: OrbitControls = makeControls(camera, renderer.domElement);
 
     // Mirror + groups.
     const mirror = new SceneMirror(tauriMeshBufferProvider());
@@ -95,6 +104,7 @@ export function ViewportCanvas() {
       const dragging = (ev as { value: boolean }).value;
       controls.enabled = !dragging;
     });
+    gizmoRef.current = gizmo;
 
     // ---- Event bridge -------------------------------------------------
     //
@@ -132,36 +142,26 @@ export function ViewportCanvas() {
           break;
         case "SelectionChanged":
           if (evt.data.plate_id !== activeId) break;
-          setSelectedIds([...evt.data.selected]);
           gizmo.setSelection(evt.data.selected);
-          break;
-        case "GizmoChanged":
-          if (evt.data.plate_id !== activeId) break;
-          setGizmoMode(evt.data.gizmo.mode);
-          gizmo.setMode(evt.data.gizmo.mode);
-          gizmo.setPivotOverride(evt.data.gizmo.pivot);
           break;
         case "BedChanged":
           if (evt.data.plate_id !== activeId) break;
           if (evt.data.bed) {
-            initialFrameForBed(camera, controls, evt.data.bed, aspect);
+            initialFrameForBed(camera, controls, evt.data.bed);
           }
           break;
         case "ActivePlateChanged": {
           // The active plate just changed — re-sync the viewport's
-          // gizmo + selection + camera framing from the new plate's
-          // cached state so the workspace matches.
+          // selection + camera framing from the new plate's cached
+          // state so the workspace matches. (Transform mode is
+          // App-owned and survives the switch.)
           const plate = mirror.activePlate();
           if (plate) {
-            setSelectedIds(Array.from(plate.selection).sort((a, b) => a - b));
             gizmo.setSelection(
               Array.from(plate.selection).sort((a, b) => a - b),
             );
-            setGizmoMode(plate.gizmo.mode);
-            gizmo.setMode(plate.gizmo.mode);
-            gizmo.setPivotOverride(plate.gizmo.pivot);
             if (plate.bed) {
-              initialFrameForBed(camera, controls, plate.bed, aspect);
+              initialFrameForBed(camera, controls, plate.bed);
             }
           }
           break;
@@ -194,17 +194,8 @@ export function ViewportCanvas() {
       const h = Math.max(container.clientHeight, 1);
       aspect = w / h;
       renderer.setSize(w, h, false);
-      if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
-        const p = camera as THREE.PerspectiveCamera;
-        p.aspect = aspect;
-        p.updateProjectionMatrix();
-      } else {
-        const ortho = camera as THREE.OrthographicCamera;
-        const half = (ortho.top - ortho.bottom) * 0.5;
-        ortho.left = -half * aspect;
-        ortho.right = half * aspect;
-        ortho.updateProjectionMatrix();
-      }
+      camera.aspect = aspect;
+      camera.updateProjectionMatrix();
     };
     onResize();
     const resizeObserver = new ResizeObserver(onResize);
@@ -265,54 +256,6 @@ export function ViewportCanvas() {
     };
     raf = requestAnimationFrame(render);
 
-    // ---- "Frame all" + projection toggle expose via window for the
-    //      surrounding React UI to call into. Refs would be cleaner but
-    //      this lets the buttons live in App.tsx without prop drilling
-    //      through every level. For Phase 2 MVP, fine.
-    (window as unknown as N3OViewportApi).__n3o_viewport = {
-      frameAll: () => {
-        const box = new THREE.Box3();
-        let any = false;
-        mirror.objectGroup.traverse((node) => {
-          if ((node as THREE.Mesh).isMesh) {
-            const m = node as THREE.Mesh;
-            m.updateMatrixWorld(true);
-            if (m.geometry.boundingBox) {
-              const b = m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld);
-              box.union(b);
-              any = true;
-            }
-          }
-        });
-        if (!any && mirror.bed) {
-          box.set(
-            new THREE.Vector3(...mirror.bed.extents.min),
-            new THREE.Vector3(...mirror.bed.extents.max),
-          );
-          any = true;
-        }
-        if (any) {
-          frameBox(camera, controls, box, aspect);
-        }
-      },
-      switchProjection: (mode) => {
-        const target = controls.target.clone();
-        const offset = camera.position.clone().sub(target);
-        if (mode === "Orthographic" && (camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
-          camera = makeOrthographicCamera(aspect, 200);
-        } else if (mode === "Perspective" && !(camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
-          camera = makePerspectiveCamera(aspect);
-        } else {
-          return;
-        }
-        camera.position.copy(target).add(offset);
-        camera.lookAt(target);
-        controls.dispose();
-        controls = makeControls(camera, renderer.domElement);
-        controls.target.copy(target);
-      },
-    };
-
     return () => {
       cancelAnimationFrame(raf);
       renderer.domElement.removeEventListener("click", onClick);
@@ -320,6 +263,7 @@ export function ViewportCanvas() {
       resizeObserver.disconnect();
       detachToastsListener();
       if (detachBridge) void detachBridge();
+      gizmoRef.current = null;
       gizmo.dispose();
       controls.dispose();
       mirror.clear();
@@ -327,7 +271,6 @@ export function ViewportCanvas() {
       if (renderer.domElement.parentElement === container) {
         container.removeChild(renderer.domElement);
       }
-      delete (window as unknown as N3OViewportApi).__n3o_viewport;
     };
 
     function pushToast(level: ToastMessage["level"], text: string) {
@@ -337,26 +280,44 @@ export function ViewportCanvas() {
         setToasts((prev) => prev.filter((t) => t.id !== id));
       }, 4000);
     }
-    // selectedIds is used elsewhere; no warn-suppress needed.
   }, []);
 
-  const switchProjection = (mode: ProjectionMode) => {
-    setProjection(mode);
-    (window as unknown as N3OViewportApi).__n3o_viewport?.switchProjection(mode);
-  };
+  // Apply the active transform mode to the live gizmo — on mount (after
+  // the setup effect created the gizmo and set gizmoRef), on every
+  // toolbar change, and after a remount with an App-preserved mode.
+  useEffect(() => {
+    gizmoRef.current?.setMode(gizmoMode);
+  }, [gizmoMode]);
 
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" />
       <div className="absolute top-2 left-2 flex flex-col gap-1 pointer-events-none">
         <div className="flex gap-2 pointer-events-auto">
-          <button
-            type="button"
-            className="bg-neutral-800/90 text-neutral-100 text-xs px-3 py-1 rounded shadow"
-            onClick={() => (window as unknown as N3OViewportApi).__n3o_viewport?.frameAll()}
-          >
-            Frame all
-          </button>
+          {leading}
+          <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
+            {(
+              [
+                ["Translate", "T"],
+                ["Rotate", "R"],
+                ["Scale", "S"],
+              ] as [GizmoMode, string][]
+            ).map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                className={`px-3 py-1 ${
+                  gizmoMode === mode
+                    ? "bg-neutral-700"
+                    : "hover:bg-neutral-700/60"
+                }`}
+                onClick={() => onGizmoMode(mode)}
+                title={`Gizmo: ${mode}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className="bg-neutral-800/90 text-neutral-100 text-xs px-3 py-1 rounded shadow"
@@ -412,58 +373,7 @@ export function ViewportCanvas() {
           >
             Load…
           </button>
-          <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
-            {(["Perspective", "Orthographic"] as ProjectionMode[]).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={`px-3 py-1 ${
-                  projection === mode
-                    ? "bg-neutral-700"
-                    : "hover:bg-neutral-700/60"
-                }`}
-                onClick={() => switchProjection(mode)}
-              >
-                {mode === "Perspective" ? "P" : "O"}
-              </button>
-            ))}
-          </div>
         </div>
-        {selectedIds.length > 0 && (
-          <div className="flex gap-2 pointer-events-auto">
-            <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
-              {(
-                [
-                  ["None", "·"],
-                  ["Translate", "T"],
-                  ["Rotate", "R"],
-                  ["Scale", "S"],
-                ] as [GizmoMode, string][]
-              ).map(([mode, label]) => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={`px-3 py-1 ${
-                    gizmoMode === mode
-                      ? "bg-neutral-700"
-                      : "hover:bg-neutral-700/60"
-                  }`}
-                  onClick={() => {
-                    void invoke("scene_gizmo_set", {
-                      gizmo: { mode, pivot: null },
-                    });
-                  }}
-                  title={`Gizmo: ${mode}`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <div className="bg-neutral-800/90 text-neutral-100 text-xs px-3 py-1 rounded shadow">
-              {selectedIds.length} selected · Del to remove
-            </div>
-          </div>
-        )}
       </div>
       <div className="absolute bottom-2 right-2 flex flex-col gap-1 pointer-events-none">
         {toasts.map((t) => (
@@ -485,9 +395,3 @@ export function ViewportCanvas() {
   );
 }
 
-interface N3OViewportApi {
-  __n3o_viewport?: {
-    frameAll: () => void;
-    switchProjection: (mode: ProjectionMode) => void;
-  };
-}

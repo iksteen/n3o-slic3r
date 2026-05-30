@@ -11,7 +11,113 @@
 // Cross-axis: "Last printed from" lets users jump back to the originating
 // plate in Prepare mode.
 
+const { computeSlotIds: dvComputeSlotIds, slotShortLabel: dvSlotShortLabel, slotLongLabel: dvSlotLongLabel } = window.SLICER_DATA;
+
 // ───────── Helpers ─────────
+
+// Resolve which filament is spooled into each physical slot of a printer.
+//
+// The loadout is the printer's OWN driver status — the spools physically
+// sitting in its AMS / on its toolheads, reported back over the connection.
+// It lives on the printer object (`printer.loadout`: slotId → spool descriptor
+// or null), independent of any plate. (The slicer's per-plate slotMap is a
+// separate copy the user syncs FROM this.)
+//
+// Returns { known, slots: [{ slotId, isExt, shortLabel, longLabel, filament }],
+// nozzleFilaments } where nozzleFilaments aligns 1:1 with the status'
+// nozzleTemps for direct-extruder machines. On AMS printers the single nozzle
+// is fed by whichever AMS spool is active, so its color is ambiguous → null.
+function computeLoadout(printer, status) {
+  const slotIds = dvComputeSlotIds({
+    extruders: printer.extruders || 1,
+    amsUnits: printer.amsUnits || 0,
+  });
+  const loadout = printer.loadout || null;
+  const resolve = (sid) => (loadout && loadout[sid]) ? loadout[sid] : null;
+
+  // The printer reports which slot is physically engaged at the nozzle — the
+  // tool the grabber currently holds (multi-toolhead) or the spool primed up
+  // to the hotend (AMS / single extruder). That's a persistent hardware state,
+  // so it's reported whenever the printer is online, not just while printing.
+  // `feeding` narrows that to "actually extruding right now" (printing).
+  const offline = status && status.status === "offline";
+  const activeSlotId = (status && !offline) ? (status.activeSlotId || null) : null;
+  const feeding = status && status.status === "printing";
+  const activeFilament = activeSlotId ? resolve(activeSlotId) : null;
+
+  const slots = slotIds.map(sid => ({
+    slotId: sid,
+    isExt: sid === "ext" || sid.startsWith("ext:"),
+    active: sid === activeSlotId,
+    shortLabel: dvSlotShortLabel(sid, slotIds),
+    longLabel: dvSlotLongLabel(sid),
+    filament: resolve(sid),
+  }));
+
+  // Nozzle → filament mapping for the temp pills.
+  //   • AMS machines have ONE nozzle fed by whichever AMS/ext spool is engaged,
+  //     so its color is the active slot's filament (the primed spool, even idle).
+  //   • Direct-extruder machines map each nozzle 1:1 to its toolhead's slot.
+  const hasAms = (printer.amsUnits || 0) > 0;
+  const extSlots = slots.filter(s => s.isExt);
+  const nozzleFilaments = (status && status.nozzleTemps ? status.nozzleTemps : [])
+    .map((_, i) => hasAms ? (i === 0 ? activeFilament : null) : (extSlots[i] ? extSlots[i].filament : null));
+
+  return { known: !!loadout, slots, nozzleFilaments, hasAms, activeSlotId, activeFilament, feeding };
+}
+
+// One spool row in the loadout panel. The active (engaged) slot is marked with
+// the accent row highlight — the filament type stays visible either way.
+function LoadoutRow({ slot }) {
+  const f = slot.filament;
+  const active = slot.active && !!f;
+  return (
+    <div className={`device-loadout-row ${f ? "" : "empty"} ${active ? "active" : ""}`} title={f
+      ? `${slot.longLabel} · ${f.brand || ""} ${f.product || f.label || ""}${f.colorName ? " (" + f.colorName + ")" : ""}${active ? " — currently engaged" : ""}`
+      : `${slot.longLabel} — empty`}>
+      <span className="device-loadout-swatch" style={{ background: f ? f.color : "transparent" }}/>
+      <span className="device-loadout-slot">{slot.shortLabel}</span>
+      <span className="device-loadout-name">{f ? (f.colorName || f.label) : "Empty"}</span>
+      <span className="device-loadout-mat">{f ? f.material : "—"}</span>
+    </div>
+  );
+}
+
+// Filament loadout panel — what each physical slot is spooled with.
+function LoadoutPanel({ status, loadout }) {
+  if (status.status === "offline") {
+    return (
+      <div className="device-loadout">
+        <div className="device-loadout-header">
+          <span>Filament loadout</span>
+        </div>
+        <div className="device-loadout-empty dim">Unknown — printer offline.</div>
+      </div>
+    );
+  }
+  if (!loadout.known) {
+    return (
+      <div className="device-loadout">
+        <div className="device-loadout-header">
+          <span>Filament loadout</span>
+        </div>
+        <div className="device-loadout-empty dim">No recent slice on this printer — loadout unknown.</div>
+      </div>
+    );
+  }
+  const loadedCount = loadout.slots.filter(s => s.filament).length;
+  return (
+    <div className="device-loadout">
+      <div className="device-loadout-header">
+        <span>Filament loadout</span>
+        <span className="device-loadout-count">{loadedCount}/{loadout.slots.length}</span>
+      </div>
+      <div className="device-loadout-list">
+        {loadout.slots.map(s => <LoadoutRow key={s.slotId} slot={s}/>)}
+      </div>
+    </div>
+  );
+}
 
 function statusMeta(status) {
   switch (status) {
@@ -131,12 +237,23 @@ function CameraPanel({ device, status }) {
 
 // ───────── Stats column ─────────
 
-function TempPill({ label, current, target, compact }) {
+function TempPill({ label, current, target, compact, filament }) {
   const heating = current < target - 1;
   const cooling = current > target + 1 && target === 0;
   return (
     <div className={`device-temp ${compact ? "compact" : ""} ${heating ? "heating" : ""} ${cooling ? "cooling" : ""}`}>
-      <div className="device-temp-label">{label}</div>
+      <div className="device-temp-label">
+        {filament !== undefined && (
+          <span
+            className={`device-temp-swatch ${filament ? "" : "empty"}`}
+            style={{ background: filament ? filament.color : "transparent" }}
+            title={filament
+              ? `${filament.label}${filament.colorName ? " · " + filament.colorName : ""}`
+              : "No filament loaded"}
+          />
+        )}
+        {label}
+      </div>
       <div className="device-temp-value">
         <span className="device-temp-current">{Math.round(current)}°</span>
         <span className="device-temp-arrow">→</span>
@@ -149,7 +266,7 @@ function TempPill({ label, current, target, compact }) {
   );
 }
 
-function StatsColumn({ status }) {
+function StatsColumn({ status, loadout }) {
   if (status.status === "offline") {
     return (
       <div className="device-stats device-stats-offline">
@@ -158,6 +275,7 @@ function StatsColumn({ status }) {
     );
   }
   const nozzles = status.nozzleTemps || [];
+  const nozzleFils = (loadout && loadout.nozzleFilaments) || [];
   const multi = nozzles.length > 1;
   return (
     <div className="device-stats">
@@ -166,12 +284,12 @@ function StatsColumn({ status }) {
           <div className="device-temp-group-label">Nozzles</div>
           <div className={`device-temp-grid n-${nozzles.length}`}>
             {nozzles.map((nt, i) => (
-              <TempPill key={i} label={`T${i + 1}`} current={nt.current ?? 24} target={nt.target ?? 0} compact/>
+              <TempPill key={i} label={`T${i + 1}`} current={nt.current ?? 24} target={nt.target ?? 0} compact filament={nozzleFils[i] || null}/>
             ))}
           </div>
         </div>
       ) : (
-        <TempPill label="Nozzle" current={nozzles[0]?.current ?? 24} target={nozzles[0]?.target ?? 0}/>
+        <TempPill label="Nozzle" current={nozzles[0]?.current ?? 24} target={nozzles[0]?.target ?? 0} filament={loadout ? (nozzleFils[0] || null) : undefined}/>
       )}
       <TempPill label="Bed" current={status.bedTemp?.current ?? 23} target={status.bedTemp?.target ?? 0}/>
       <div className="device-fan">
@@ -239,38 +357,6 @@ function CurrentJobPanel({ status, onJumpToPlate }) {
   );
 }
 
-// ───────── Queue ─────────
-
-function QueuePanel({ status }) {
-  const queue = status.queue || [];
-  return (
-    <div className="device-queue">
-      <div className="device-queue-header">
-        <span>Up next</span>
-        <span className="device-queue-count">{queue.length}</span>
-      </div>
-      {queue.length === 0 ? (
-        <div className="device-queue-empty dim">Queue is empty.</div>
-      ) : (
-        <ol className="device-queue-list">
-          {queue.map((q, i) => (
-            <li key={i} className="device-queue-item">
-              <span className="device-queue-num">{i + 1}</span>
-              <span className="device-queue-name">{q.name}</span>
-              <span className="device-queue-dur dim">{fmtDuration(q.durationMs)}</span>
-              <button className="device-queue-remove" title="Remove from queue">
-                <svg width="9" height="9" viewBox="0 0 12 12" fill="none">
-                  <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-                </svg>
-              </button>
-            </li>
-          ))}
-        </ol>
-      )}
-    </div>
-  );
-}
-
 // ───────── Monitor (right pane) ─────────
 
 function DeviceMonitor({ device, status, onPause, onResume, onStop, onJumpToPlate, onEditPrinter }) {
@@ -284,6 +370,7 @@ function DeviceMonitor({ device, status, onPause, onResume, onStop, onJumpToPlat
   const meta = statusMeta(status.status);
   const printing = status.status === "printing";
   const paused = status.status === "paused";
+  const loadout = computeLoadout(device, status);
   return (
     <div className="device-monitor">
       <div className="device-monitor-header">
@@ -293,10 +380,6 @@ function DeviceMonitor({ device, status, onPause, onResume, onStop, onJumpToPlat
           <div className="device-monitor-sub">
             <span className={`device-status-dot ${meta.cls}`}/>
             <span className={`device-monitor-state ${meta.cls}`}>{meta.label}</span>
-            <span className="dim">·</span>
-            <span>{device.bedPlate}</span>
-            <span className="dim">·</span>
-            <span>{device.extruders} toolhead{device.extruders !== 1 ? "s" : ""}</span>
           </div>
         </div>
 
@@ -341,8 +424,8 @@ function DeviceMonitor({ device, status, onPause, onResume, onStop, onJumpToPlat
           <CurrentJobPanel status={status} onJumpToPlate={onJumpToPlate}/>
         </div>
         <div className="device-monitor-right">
-          <StatsColumn status={status}/>
-          <QueuePanel status={status}/>
+          <StatsColumn status={status} loadout={loadout}/>
+          <LoadoutPanel status={status} loadout={loadout}/>
         </div>
       </div>
     </div>

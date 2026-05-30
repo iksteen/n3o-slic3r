@@ -81,22 +81,6 @@ export function driverSendPlate(
   });
 }
 
-/** Dry-run variant of `driverSendPlate`: bundle is wrapped, then
- * neutered (E values stripped, heaters commented out) before
- * upload. Printer exercises every XY motion with zero filament
- * flow. */
-export function driverDrySendPlate(
-  id: DriverId,
-  plateId: number,
-  gcodePath: string,
-): Promise<SendHandle> {
-  return invoke<SendHandle>("driver_dry_send_plate", {
-    id,
-    plateId,
-    gcodePath,
-  });
-}
-
 /** Diagnostic: wrap the plate's gcode into the same `.gcode.3mf`
  * bundle the send path produces and write it to disk. Lets us
  * grab exactly what we'd send for offline diffing against BBS /

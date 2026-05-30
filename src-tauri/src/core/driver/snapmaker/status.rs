@@ -62,14 +62,43 @@ fn decode_job(status: &Map<String, Value>) -> Option<JobProgress> {
         current_layer,
         total_layers,
         percent,
-        // Klipper doesn't expose a vendor-blessed ETA — `print_stats.
-        // print_duration` gives us elapsed-so-far but no remaining
-        // time forecast. Surfacing a fake ETA would mislead more
-        // than help. Leave it None; the frontend can derive from
-        // `percent` + elapsed if it wants a rough estimate.
-        eta_seconds: None,
+        eta_seconds: estimate_eta_seconds(status, percent),
         state,
     })
+}
+
+/// Estimate remaining print time for the U1.
+///
+/// Klipper/Moonraker exposes no native remaining-time field — only
+/// `print_stats.print_duration` (elapsed seconds) and
+/// `display_status.progress` (a 0..1 fraction). We linearly extrapolate
+/// the remaining time from those, the same fallback Mainsail/Fluidd use
+/// for their "file" estimate: `remaining = elapsed * (100/pct - 1)`.
+///
+/// It's only a rough forecast (assumes uniform pace) — early readings
+/// run high and converge as the print progresses — but showing a rough
+/// number beats showing nothing. We surface it from the first real
+/// progress tick: `print_duration` is `0` during heating (Klipper only
+/// starts it at first extrusion), so the `elapsed > 0` guard naturally
+/// keeps the field at "—" through warmup without a progress floor. The
+/// only gates are `pct > 0` (the ratio divides by it) and a `< 99.5%`
+/// ceiling, above which there's nothing useful left to show and
+/// rounding noise dominates. Idle / no `print_duration` → `None` → "—".
+fn estimate_eta_seconds(status: &Map<String, Value>, percent: Option<f32>) -> Option<u64> {
+    let pct = percent?;
+    if pct <= 0.0 || pct >= 99.5 {
+        return None;
+    }
+    let elapsed = get_f64(status, "print_stats", "print_duration")?;
+    if elapsed <= 0.0 {
+        return None;
+    }
+    let remaining = elapsed * (100.0 / pct as f64 - 1.0);
+    if remaining.is_finite() && remaining >= 0.0 {
+        Some(remaining.round() as u64)
+    } else {
+        None
+    }
 }
 
 /// Maps `print_stats.state` (Klipper's lower-case strings) into
@@ -332,15 +361,65 @@ mod tests {
     }
 
     #[test]
-    fn eta_is_always_none() {
-        // Klipper doesn't expose a forecast; decoder MUST NOT
-        // fake one. Pinned so we notice if someone "fixes" this.
+    fn eta_extrapolated_from_elapsed_and_progress() {
+        // Klipper has no native forecast, so we linearly extrapolate
+        // from print_duration + progress: 300s elapsed at 25% →
+        // remaining = 300 * (100/25 - 1) = 900s.
         let p = decoded(json!({
-            "print_stats": {
-                "state": "printing",
-                "print_duration": 300.0,
-            }
+            "print_stats": { "state": "printing", "print_duration": 300.0 },
+            "display_status": { "progress": 0.25 },
         }));
+        assert_eq!(p.job.unwrap().eta_seconds, Some(900));
+    }
+
+    #[test]
+    fn eta_none_without_progress() {
+        // print_duration present but no progress fraction → can't
+        // extrapolate → None (renders as "—").
+        let p = decoded(json!({
+            "print_stats": { "state": "printing", "print_duration": 300.0 },
+        }));
+        assert!(p.job.unwrap().eta_seconds.is_none());
+    }
+
+    #[test]
+    fn eta_shown_from_first_real_progress_tick() {
+        // No progress floor: as soon as there's positive progress AND
+        // elapsed time, show a (rough, high) estimate rather than "—".
+        // 5s at 0.1% → 5 * (100/0.1 - 1) = 4995s.
+        let early = decoded(json!({
+            "print_stats": { "state": "printing", "print_duration": 5.0 },
+            "display_status": { "progress": 0.001 },
+        }));
+        assert_eq!(early.job.unwrap().eta_seconds, Some(4995));
+    }
+
+    #[test]
+    fn eta_none_during_heating_and_above_ceiling() {
+        // Heating: progress > 0 but print_duration still 0 (Klipper
+        // starts it at first extrusion) → "—" until printing begins.
+        let heating = decoded(json!({
+            "print_stats": { "state": "printing", "print_duration": 0.0 },
+            "display_status": { "progress": 0.002 },
+        }));
+        assert!(heating.job.unwrap().eta_seconds.is_none());
+        // Near-complete: nothing useful left to show.
+        let late = decoded(json!({
+            "print_stats": { "state": "printing", "print_duration": 3600.0 },
+            "display_status": { "progress": 0.999 },
+        }));
+        assert!(late.job.unwrap().eta_seconds.is_none());
+    }
+
+    #[test]
+    fn eta_none_when_idle_no_elapsed() {
+        // Standby / no print_duration → None even if a stale progress
+        // value lingers.
+        let p = decoded(json!({
+            "print_stats": { "state": "standby" },
+            "display_status": { "progress": 0.4 },
+        }));
+        // Idle still produces a job (state present), but no ETA.
         assert!(p.job.unwrap().eta_seconds.is_none());
     }
 
@@ -674,5 +753,26 @@ mod tests {
             }
             _ => panic!("U1 driver must publish U1 extra"),
         }
+    }
+
+    #[test]
+    fn fixture_eta_extrapolates_from_real_print_duration() {
+        // The captured subscribe fixture is a real U1 payload with
+        // print_stats.print_duration present (≈919s). Force it mid-
+        // print (state=printing, progress 0.5) and confirm the decoder
+        // extrapolates remaining from the real elapsed value:
+        // 919.377 * (100/50 - 1) = 919.377 → rounds to 919.
+        let mut baseline = subscribe_initial();
+        merge_status(
+            &mut baseline,
+            &status(json!({
+                "print_stats": { "state": "printing" },
+                "display_status": { "progress": 0.5 },
+            })),
+        );
+        let job = decode(&baseline, ConnectionState::Connected)
+            .job
+            .expect("job present");
+        assert_eq!(job.eta_seconds, Some(919));
     }
 }

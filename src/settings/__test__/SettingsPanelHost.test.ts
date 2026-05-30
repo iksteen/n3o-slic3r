@@ -5,7 +5,7 @@
 // projection: snapshot → active plate → selected object → panel
 // shape, plus the localStorage-backed visibility toggle.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   activePlate,
   allObjectsForPanel,
@@ -14,21 +14,11 @@ import {
 import type { ProjectSession } from "../../project/useProjectSession";
 import { SESSION_EVENT_NAMES } from "../../project/useProjectSession";
 import type {
-  CameraState,
-  GizmoState,
   PlateSnapshot,
   SceneObject,
   SceneSnapshot,
 } from "../../viewport/types";
 
-const CAMERA: CameraState = {
-  position: [200, -200, 200],
-  target: [0, 0, 0],
-  up: [0, 0, 1],
-  fov_degrees: 45,
-  projection: "Perspective",
-};
-const GIZMO: GizmoState = { mode: "None", pivot: null };
 
 function obj(id: number, name: string): SceneObject {
   return {
@@ -58,8 +48,6 @@ function plate(opts: {
     project_overrides: {},
     objects: opts.objects ?? [],
     selection: opts.selection ?? [],
-    camera: CAMERA,
-    gizmo: GIZMO,
     build_plate: null,
     exclusion_zones: [],
     bed: null,
@@ -158,46 +146,6 @@ describe("allObjectsForPanel", () => {
 
   it("returns an empty list on a null plate", () => {
     expect(allObjectsForPanel(null)).toEqual([]);
-  });
-});
-
-describe("useSettingsPanelVisible (localStorage)", () => {
-  // We can't exercise the hook's React effect without a DOM, but
-  // we can pin the storage-key contract — the value we read on
-  // mount must match what we write on toggle.
-  beforeEach(() => {
-    // Node global; vitest's default env doesn't ship localStorage,
-    // so stub one for these tests.
-    const store = new Map<string, string>();
-    (globalThis as { localStorage?: Storage }).localStorage = {
-      getItem: (k: string) => store.get(k) ?? null,
-      setItem: (k: string, v: string) => {
-        store.set(k, v);
-      },
-      removeItem: (k: string) => {
-        store.delete(k);
-      },
-      clear: () => store.clear(),
-      key: () => null,
-      length: 0,
-    };
-    // window also needs to exist for the hook's safety guard.
-    (globalThis as { window?: { localStorage: Storage } }).window = {
-      localStorage: globalThis.localStorage,
-    };
-  });
-  afterEach(() => {
-    delete (globalThis as { window?: unknown }).window;
-    delete (globalThis as { localStorage?: unknown }).localStorage;
-  });
-
-  it("uses the documented storage key for round-trip persistence", () => {
-    // Pin the key — changing it would silently lose existing
-    // users' toggle preference on next launch.
-    window.localStorage.setItem("n3o.settingsPanelVisible", "false");
-    expect(window.localStorage.getItem("n3o.settingsPanelVisible")).toBe(
-      "false",
-    );
   });
 });
 

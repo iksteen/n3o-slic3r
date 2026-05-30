@@ -11,9 +11,7 @@
 //! matches on these to update the local mirror.
 
 use super::bed::{BedMesh, OutOfBoundsReason};
-use super::state::{
-    CameraState, GizmoState, MeshHeader, MeshId, ObjectId, SceneObject,
-};
+use super::state::{MeshHeader, MeshId, ObjectId, SceneObject};
 use crate::core::project::model::PlateId;
 use serde::Serialize;
 
@@ -59,14 +57,6 @@ pub enum SceneEvent {
     SelectionChanged {
         plate_id: PlateId,
         selected: Vec<ObjectId>,
-    },
-    GizmoChanged {
-        plate_id: PlateId,
-        gizmo: GizmoState,
-    },
-    CameraChanged {
-        plate_id: PlateId,
-        camera: CameraState,
     },
     /// A plate's bed payload changed (printer switch on this
     /// plate). Renderer redraws the grid + origin marker +
@@ -175,8 +165,6 @@ impl SceneEvent {
             Self::ObjectUpdated { .. } => "scene:object_updated",
             Self::ObjectRemoved { .. } => "scene:object_removed",
             Self::SelectionChanged { .. } => "scene:selection_changed",
-            Self::GizmoChanged { .. } => "scene:gizmo_changed",
-            Self::CameraChanged { .. } => "scene:camera_changed",
             Self::BedChanged { .. } => "scene:bed_changed",
             Self::ObjectOutOfBounds { .. } => "scene:object_out_of_bounds",
             Self::NonUniformScale { .. } => "scene:non_uniform_scale",

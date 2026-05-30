@@ -54,22 +54,12 @@ export interface SceneObject {
   parent: ObjectId | null;
 }
 
-export type ProjectionMode = "Perspective" | "Orthographic";
 
-export interface CameraState {
-  position: [number, number, number];
-  target: [number, number, number];
-  up: [number, number, number];
-  fov_degrees: number;
-  projection: ProjectionMode;
-}
-
-export type GizmoMode = "None" | "Translate" | "Rotate" | "Scale";
-
-export interface GizmoState {
-  mode: GizmoMode;
-  pivot: [number, number, number] | null;
-}
+// Transform-tool mode is renderer-local UI state (not part of the
+// backend scene model). It lives here only because the viewport's
+// gizmo + toolbar use it. There is no "off" mode — the gizmo simply
+// detaches when nothing is selected.
+export type GizmoMode = "Translate" | "Rotate" | "Scale";
 
 export interface ExclusionZone {
   label: string;
@@ -130,8 +120,6 @@ export interface PlateSnapshot {
   // Per-plate scene contents
   objects: SceneObject[];
   selection: ObjectId[];
-  camera: CameraState;
-  gizmo: GizmoState;
   /** Active build plate identity + transform on this plate (the
    * bed surface selection — distinct from the multi-plate
    * `plate_id` field above). */
@@ -179,14 +167,6 @@ export type SceneEvent =
   | {
       kind: "SelectionChanged";
       data: { plate_id: PlateId; selected: ObjectId[] };
-    }
-  | {
-      kind: "GizmoChanged";
-      data: { plate_id: PlateId; gizmo: GizmoState };
-    }
-  | {
-      kind: "CameraChanged";
-      data: { plate_id: PlateId; camera: CameraState };
     }
   | {
       kind: "BedChanged";

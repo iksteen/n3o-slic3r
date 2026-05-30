@@ -79,12 +79,12 @@ input, select, textarea { font-family: inherit; }
 }
 .workspace {
   display: grid;
-  grid-template-columns: 240px 1fr 420px;
+  grid-template-columns: 280px 1fr 420px;
   min-height: 0;
   overflow: hidden;
 }
 @media (max-width: 1400px) {
-  .workspace { grid-template-columns: 220px 1fr 380px; }
+  .workspace { grid-template-columns: 260px 1fr 380px; }
 }
 
 /* ───────── Plate Tabs ───────── */
@@ -757,6 +757,44 @@ input, select, textarea { font-family: inherit; }
   display: grid;
   grid-template-rows: auto auto auto auto 1fr;
   min-height: 0;
+}
+
+/* Read-only mode (shown in Preview). Keep navigation — category rail, tabs,
+   search, scrolling — but lock every value-mutating control. The banner is an
+   extra leading grid row, so prepend an auto track to keep the layout aligned. */
+.settings-panel.readonly {
+  grid-template-rows: auto auto auto auto auto 1fr;
+}
+.sp-readonly-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--hairline);
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+.sp-readonly-banner svg { flex-shrink: 0; color: var(--text-dim); }
+.sp-readonly-banner b { color: var(--text); font-weight: 600; }
+/* The config strip and per-setting controls are non-interactive; navigation
+   (tabs, search, category rail, scroll) stays live. */
+.settings-panel.readonly .sp-config { pointer-events: none; }
+.settings-panel.readonly .sp-config,
+.settings-panel.readonly .set-value,
+.settings-panel.readonly .config-chip,
+.settings-panel.readonly .slot-pill,
+.settings-panel.readonly .material-chip { opacity: 0.72; }
+.settings-panel.readonly .set-value { pointer-events: none; }
+.settings-panel.readonly .val-toggle.disabled,
+.settings-panel.readonly .val-select:disabled,
+.settings-panel.readonly .val-input:disabled {
+  cursor: default;
+  opacity: 1;
+}
+.settings-panel.readonly .val-select:disabled,
+.settings-panel.readonly .val-input:disabled {
+  color: var(--text-muted);
+  -webkit-text-fill-color: var(--text-muted);
+  background: var(--surface-2);
 }
 
 .sp-config {
@@ -3638,8 +3676,8 @@ input, select, textarea { font-family: inherit; }
 /* Make the preview view's toolbar live in the same spot the editor uses. */
 .viewport-preview .viewport-toolbar {
   position: absolute;
-  top: 14px;
-  left: 14px;
+  top: 12px;
+  left: 12px;
   z-index: 5;
 }
 
@@ -3703,12 +3741,12 @@ input, select, textarea { font-family: inherit; }
 
 .preview-workspace {
   display: grid;
-  grid-template-columns: 240px 1fr 340px;
+  grid-template-columns: 280px 1fr 420px;
   min-height: 0;
   overflow: hidden;
 }
 @media (max-width: 1400px) {
-  .preview-workspace { grid-template-columns: 220px 1fr 300px; }
+  .preview-workspace { grid-template-columns: 260px 1fr 380px; }
 }
 
 /* Read-only Objects panel in Preview: dim affordances, drop the lower
@@ -3906,7 +3944,7 @@ input, select, textarea { font-family: inherit; }
 
 /* Slice info sidebar */
 .preview-info {
-  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   background: var(--surface);
   display: flex;
   flex-direction: column;
@@ -4520,6 +4558,112 @@ input, select, textarea { font-family: inherit; }
   background: oklch(0.62 0.10 235);
   transition: width 0.3s ease;
 }
+
+/* ─── Nozzle loaded-filament swatch ─── */
+.device-temp-label {
+  display: flex; align-items: center; gap: 6px;
+}
+.device-temp-swatch {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  border: 1px solid rgba(0,0,0,0.18);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.25);
+  flex-shrink: 0;
+}
+.device-temp.compact .device-temp-swatch { width: 8px; height: 8px; }
+.device-temp-swatch.empty {
+  background: transparent !important;
+  border: 1px dashed var(--text-dim);
+  box-shadow: none;
+}
+[data-theme="dark"] .device-temp-swatch { border-color: rgba(255,255,255,0.22); }
+
+/* ─── Filament loadout panel ─── */
+.device-loadout {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex; flex-direction: column;
+  gap: 8px;
+}
+.device-loadout-header {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.device-loadout-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0;
+}
+.device-loadout-empty {
+  font-size: 12px;
+  padding: 6px 0 2px;
+}
+.device-loadout-list {
+  display: flex; flex-direction: column;
+  gap: 2px;
+}
+.device-loadout-row {
+  display: grid;
+  grid-template-columns: 16px 30px 1fr auto;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 0;
+  border-top: 1px solid var(--hairline);
+}
+.device-loadout-row:first-child { border-top: 0; }
+.device-loadout-swatch {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(0,0,0,0.18);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.25);
+}
+[data-theme="dark"] .device-loadout-swatch { border-color: rgba(255,255,255,0.22); }
+.device-loadout-row.empty .device-loadout-swatch {
+  background: transparent !important;
+  border: 1px dashed var(--text-dim);
+  box-shadow: none;
+}
+.device-loadout-slot {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.device-loadout-name {
+  font-size: 12.5px;
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.device-loadout-row.empty .device-loadout-name { color: var(--text-dim); }
+.device-loadout-mat {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Active slot — the spool currently engaged at the nozzle / held by the
+   grabber. Marked with the accent row highlight; the filament type stays
+   visible in the row. */
+.device-loadout-row.active {
+  background: var(--accent-soft);
+  border-radius: 6px;
+  margin: 0 -6px;
+  padding-left: 6px; padding-right: 6px;
+  border-top-color: transparent;
+}
+.device-loadout-row.active + .device-loadout-row { border-top-color: transparent; }
+.device-loadout-row.active .device-loadout-slot { color: var(--accent-text); }
+.device-loadout-row.active .device-loadout-name { color: var(--accent-text); font-weight: 500; }
+.device-loadout-row.active .device-loadout-mat { color: color-mix(in oklch, var(--accent-text) 80%, transparent); }
 
 /* ─── Current job ─── */
 

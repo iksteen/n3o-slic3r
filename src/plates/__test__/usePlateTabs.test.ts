@@ -11,21 +11,11 @@
 import { describe, expect, it } from "vitest";
 import { projectSnapshot, PLATE_TAB_EVENT_NAMES } from "../usePlateTabs";
 import type {
-  CameraState,
-  GizmoState,
   PlateSnapshot,
   SceneObject,
   SceneSnapshot,
 } from "../../viewport/types";
 
-const DEFAULT_CAMERA: CameraState = {
-  position: [200, -200, 200],
-  target: [0, 0, 0],
-  up: [0, 0, 1],
-  fov_degrees: 45,
-  projection: "Perspective",
-};
-const DEFAULT_GIZMO: GizmoState = { mode: "None", pivot: null };
 
 function plateSnap(opts: {
   id: number;
@@ -52,8 +42,6 @@ function plateSnap(opts: {
     project_overrides: {},
     objects: Array.from({ length: opts.objects ?? 0 }, (_, i) => obj(i + 1)),
     selection: [],
-    camera: DEFAULT_CAMERA,
-    gizmo: DEFAULT_GIZMO,
     build_plate: null,
     exclusion_zones: [],
     bed: null,

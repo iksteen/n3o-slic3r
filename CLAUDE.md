@@ -52,13 +52,26 @@ later costs more than it had to.
 
 - **3D scene state lives in Rust, not in the renderer.** The
   authoritative scene model (objects, transforms, mesh data,
-  selection, gizmo, camera) is a renderer-agnostic data structure in
-  `core/scene/`. Three.js is a read-only consumer that reflects state
-  events into pixels. All scene mutations go through Tauri commands;
-  the renderer never owns state. This is so we can swap renderers
-  (Phase 2 risk: if webview 3D performance is insufficient, we
-  switch to wgpu in a native window) without rewriting state
-  management. See PRD FR-3D-7 and AD-8 for the full design.
+  selection) is a renderer-agnostic data structure in `core/scene/`.
+  Three.js is a read-only consumer that reflects state events into
+  pixels. All scene mutations go through Tauri commands; the renderer
+  never owns state. This is so we can swap renderers (Phase 2 risk:
+  if webview 3D performance is insufficient, we switch to wgpu in a
+  native window) without rewriting state management. See PRD FR-3D-7
+  and AD-8 for the full design. **What is NOT in the scene model
+  (ripped out as dormant view-state; re-add when actually wired):**
+  - *Gizmo* — there is none. The active *transform mode*
+    (translate/rotate/scale) is renderer-local UI state owned by
+    `App`. The gizmo *pivot* override (`GizmoState`, `GizmoChanged`,
+    `set_gizmo`) is gone; re-add a `core/scene` pivot field + setter
+    command if a pivot-setting UI is built. (`rotate_object` still
+    takes an optional explicit-pivot arg as a transform primitive.)
+  - *Camera* — there is no `CameraState`/`ProjectionMode` in the
+    scene model. The renderer owns its own Three.js camera and frames
+    from the bed (`initialFrameForBed`); it never synced or restored
+    a persisted camera. To add "restore per-plate view on reopen,"
+    re-add a `core/scene` camera field + a `scene_camera_set` that the
+    renderer commits on orbit-end and reads back on load.
 
 - **Configs are pure data.** No embedded code, no expressions, no
   template strings. The rule cascade (PRD §6.1, docs/profiles.md)

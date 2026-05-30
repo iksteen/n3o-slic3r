@@ -24,7 +24,24 @@ import {
 } from "./plateCommands";
 import type { PlateId } from "../viewport/types";
 
-export function PlateTabs() {
+export interface PlateTabsProps {
+  /** True when the workspace is in fleet-monitor (Devices) mode — the
+   *  right-aligned Devices tab is the active one and no plate tab is. */
+  devicesActive: boolean;
+  /** Printer count shown on the Devices tab. */
+  deviceCount: number;
+  /** Enter Devices mode (right-aligned tab click). */
+  onSelectDevices: () => void;
+  /** Leave Devices mode when a plate is selected (back to Prepare). */
+  onSelectPlate: () => void;
+}
+
+export function PlateTabs({
+  devicesActive,
+  deviceCount,
+  onSelectDevices,
+  onSelectPlate,
+}: PlateTabsProps) {
   const { plates, activePlateId, loading } = usePlateTabs();
   const [editingId, setEditingId] = useState<PlateId | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -61,6 +78,7 @@ export function PlateTabs() {
   }
 
   const handleAddPlate = (): void => {
+    onSelectPlate();
     void addPlate(null)
       .then((newId) => {
         // Auto-switch to the freshly-added plate so the user
@@ -95,7 +113,7 @@ export function PlateTabs() {
       </button>
       <div className="plate-tabs-scroll">
         {plates.map((plate) => {
-          const isActive = plate.id === activePlateId;
+          const isActive = !devicesActive && plate.id === activePlateId;
           const isEditing = editingId === plate.id;
           return (
             <div
@@ -105,8 +123,13 @@ export function PlateTabs() {
               className={`plate-tab${isActive ? " active" : ""}`}
               onClick={() => {
                 if (isEditing) return;
-                if (plate.id === activePlateId) return;
-                void setActivePlate(plate.id);
+                // Selecting a plate leaves Devices mode. Skip the
+                // setActivePlate IPC only when it's already active AND
+                // we weren't in Devices mode.
+                onSelectPlate();
+                if (plate.id !== activePlateId) {
+                  void setActivePlate(plate.id);
+                }
               }}
             >
               <span className="plate-tab-icon" title="Build plate" aria-hidden>
@@ -183,6 +206,38 @@ export function PlateTabs() {
           );
         })}
       </div>
+      {/* Right-aligned context tab: switches the workspace into the
+          fleet-monitor (Devices) mode. */}
+      <button
+        type="button"
+        role="tab"
+        aria-selected={devicesActive}
+        className={`plate-tab plate-tab-devices${devicesActive ? " active" : ""}`}
+        onClick={onSelectDevices}
+        title="Devices — monitor and control your printers"
+      >
+        <span className="plate-tab-icon" aria-hidden>
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+            <rect
+              x="1.5"
+              y="2.5"
+              width="11"
+              height="7"
+              rx="1"
+              stroke="currentColor"
+              strokeWidth="1.1"
+            />
+            <path
+              d="M4.5 11.5h5M7 9.5v2"
+              stroke="currentColor"
+              strokeWidth="1.1"
+              strokeLinecap="round"
+            />
+          </svg>
+        </span>
+        <span className="plate-tab-name">Devices</span>
+        <span className="plate-tab-meta">{deviceCount}</span>
+      </button>
     </div>
   );
 }

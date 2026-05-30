@@ -4,14 +4,14 @@
 // The renderer holds **no** authoritative state per AD-8. This module
 // is a passive reflector: events come in via `applyEvent`, the
 // Three.js side updates, and the renderer paints whatever the mirror
-// currently says. Selection, transforms, gizmo state — all owned by
+// currently says. Selection and transforms — all owned by
 // Rust.
 //
 // **Shape (PR-5-2 phase C):**
 //   - `SceneMirror` is the project-level root. Holds the scene-wide
 //     mesh registry + project metadata + a `Map<PlateId, PlateMirror>`.
 //   - `PlateMirror` is one plate's worth of scene state — objects,
-//     selection, camera, gizmo, bed, exclusion zones. Each owns its
+//     selection, bed, exclusion zones. Each owns its
 //     own internal `THREE.Group` for objects + bed.
 //   - The viewport adds `mirror.objectGroup` + `mirror.bedGroup` to
 //     its scene. These are stable top-level groups whose **single
@@ -25,8 +25,6 @@
 import * as THREE from "three";
 import type {
   BedMesh,
-  CameraState,
-  GizmoState,
   MeshHeader,
   MeshId,
   ObjectId,
@@ -83,16 +81,6 @@ interface MeshRecord {
   header: MeshHeader;
 }
 
-const DEFAULT_CAMERA: CameraState = {
-  position: [200, -200, 200],
-  target: [0, 0, 0],
-  up: [0, 0, 1],
-  fov_degrees: 45,
-  projection: "Perspective",
-};
-
-const DEFAULT_GIZMO: GizmoState = { mode: "None", pivot: null };
-
 /** One plate's mirror state. Owns its own object + bed groups; the
  * top-level `SceneMirror` swaps these in/out as the active plate
  * changes. Per-plate metadata + bindings cached here too so the
@@ -123,8 +111,6 @@ export class PlateMirror {
   // Per-plate scene state.
   objects = new Map<ObjectId, ObjectRecord>();
   selection = new Set<ObjectId>();
-  camera: CameraState = DEFAULT_CAMERA;
-  gizmo: GizmoState = DEFAULT_GIZMO;
   bed: BedMesh | null = null;
 
   constructor(plateId: PlateId, snap?: PlateSnapshot) {
@@ -138,10 +124,6 @@ export class PlateMirror {
     this.materialToSlot = snap?.material_to_slot ?? {};
     this.projectOverrides = snap?.project_overrides ?? {};
     this.objectOverrides = snap?.object_overrides ?? {};
-    if (snap) {
-      this.camera = snap.camera;
-      this.gizmo = snap.gizmo;
-    }
   }
 
   /** Dispose every Three.js resource this plate owns. Called when
@@ -221,12 +203,6 @@ export class SceneMirror {
   // throwing — the renderer should keep painting even in the
   // brief window between mirror construction and snapshot apply.
 
-  get camera(): CameraState {
-    return this.activePlate()?.camera ?? DEFAULT_CAMERA;
-  }
-  get gizmo(): GizmoState {
-    return this.activePlate()?.gizmo ?? DEFAULT_GIZMO;
-  }
   get bed(): BedMesh | null {
     return this.activePlate()?.bed ?? null;
   }
@@ -270,8 +246,8 @@ export class SceneMirror {
     }
 
     // Plates, in declaration order. Each PlateMirror constructor
-    // captures the snapshot's metadata + bindings + camera +
-    // gizmo + project_overrides + object_overrides. We then
+    // captures the snapshot's metadata + bindings +
+    // project_overrides + object_overrides. We then
     // synthesize per-object adds + selection + bed events so the
     // Three.js scene graph populates.
     for (const plateSnap of snapshot.plates) {
@@ -328,16 +304,6 @@ export class SceneMirror {
           "SelectionChanged",
         );
         if (plate) this.setSelectionOnPlate(plate, event.data.selected);
-        break;
-      }
-      case "GizmoChanged": {
-        const plate = this.requirePlate(event.data.plate_id, "GizmoChanged");
-        if (plate) plate.gizmo = event.data.gizmo;
-        break;
-      }
-      case "CameraChanged": {
-        const plate = this.requirePlate(event.data.plate_id, "CameraChanged");
-        if (plate) plate.camera = event.data.camera;
         break;
       }
       case "BedChanged": {

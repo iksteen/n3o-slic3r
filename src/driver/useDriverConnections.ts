@@ -34,6 +34,7 @@ import type {
   PrinterInstance,
 } from "../printer/printerInstance";
 import { isConnectionUsable } from "../printer/connectionValidation";
+import { forgetDriver } from "./useDriverStatus";
 
 // Re-export so existing importers (and the reconciler test) keep
 // reaching it through this module. The definition lives in
@@ -432,6 +433,9 @@ async function unregisterDriver(
 ): Promise<void> {
   ENTRIES.delete(identity);
   DRIVER_TO_IDENTITY.delete(driverId);
+  // Driver ids are monotonic and never reused, so drop the status
+  // store's cached entry — nothing will read this id again.
+  forgetDriver(driverId);
   bumpAndNotify();
   try {
     await driverDisconnect(driverId);
@@ -457,6 +461,7 @@ async function replaceDriver(
 ): Promise<void> {
   ENTRIES.delete(identity);
   DRIVER_TO_IDENTITY.delete(oldId);
+  forgetDriver(oldId);
   bumpAndNotify();
   try {
     await driverDisconnect(oldId);
@@ -473,8 +478,9 @@ async function replaceDriver(
 
 /** Reactive driver-registry manager. Mount once at the App level;
  *  pass the full instance list. Returns a `Record<instance.id,
- *  ConnectionSummary>` snapshot — both the picker (for the dot
- *  indicator) and PrinterPanel (for the driver id) read off this.
+ *  ConnectionSummary>` snapshot — the picker (dot indicator), the
+ *  Devices view (per-printer monitor), and SendControls (driver id)
+ *  all read off this.
  *
  *  Re-runs the reconciler whenever the connection signatures of any
  *  instance change. Connection-irrelevant edits (slot color, bed

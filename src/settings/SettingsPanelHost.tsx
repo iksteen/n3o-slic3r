@@ -382,30 +382,3 @@ export function SettingsPanelHost({
   );
 }
 
-/** localStorage key for the panel visibility toggle. */
-const VISIBLE_KEY = "n3o.settingsPanelVisible";
-
-/** Whether the settings panel is shown — persisted to localStorage
- * so the preference survives a reload. Default `true`. */
-export function useSettingsPanelVisible(): [boolean, (v: boolean) => void] {
-  const [visible, setVisible] = useState<boolean>(() => {
-    if (typeof window === "undefined") return true;
-    try {
-      const raw = window.localStorage.getItem(VISIBLE_KEY);
-      if (raw === null) return true;
-      return raw === "true";
-    } catch {
-      return true;
-    }
-  });
-  const set = (v: boolean) => {
-    setVisible(v);
-    try {
-      window.localStorage.setItem(VISIBLE_KEY, String(v));
-    } catch {
-      // localStorage unavailable (privacy mode); preference doesn't
-      // persist but the toggle still works in-session.
-    }
-  };
-  return [visible, set];
-}

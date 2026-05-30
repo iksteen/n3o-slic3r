@@ -8,8 +8,6 @@
 import { describe, expect, it } from "vitest";
 import { SceneMirror } from "../sceneMirror";
 import type {
-  CameraState,
-  GizmoState,
   MeshHeader,
   PlateSnapshot,
   SceneObject,
@@ -55,15 +53,7 @@ function sceneObjectAt(id: number, mesh: number, tx: number): SceneObject {
   };
 }
 
-const DEFAULT_CAMERA: CameraState = {
-  position: [200, -200, 200],
-  target: [0, 0, 0],
-  up: [0, 0, 1],
-  fov_degrees: 45,
-  projection: "Perspective",
-};
 
-const DEFAULT_GIZMO: GizmoState = { mode: "None", pivot: null };
 
 function plateSnap(id: number, objects: SceneObject[] = []): PlateSnapshot {
   return {
@@ -76,8 +66,6 @@ function plateSnap(id: number, objects: SceneObject[] = []): PlateSnapshot {
     project_overrides: {},
     objects,
     selection: [],
-    camera: DEFAULT_CAMERA,
-    gizmo: DEFAULT_GIZMO,
     build_plate: null,
     exclusion_zones: [],
     bed: null,

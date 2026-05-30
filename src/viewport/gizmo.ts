@@ -29,7 +29,6 @@ const ROTATE_SNAP_DEG = 15;
 export interface GizmoApi {
   setMode(mode: GizmoMode): void;
   setSelection(ids: ObjectId[]): void;
-  setPivotOverride(pivot: [number, number, number] | null): void;
   dispose(): void;
   /** Underlying TransformControls. The viewport adds it as a helper
    *  to the scene + listens to dragging-changed for OrbitControls
@@ -57,9 +56,8 @@ export function createGizmo(deps: GizmoDeps): GizmoApi {
   const helper = controls.getHelper();
   deps.scene.add(helper);
 
-  let mode: GizmoMode = "None";
+  let mode: GizmoMode = "Translate";
   let selected: ObjectId[] = [];
-  let pivotOverride: [number, number, number] | null = null;
   /** Matrix captured at drag start; used to compute the *final*
    * matrix that gets committed via Tauri. */
   let dragStartMatrix: THREE.Matrix4 | null = null;
@@ -93,12 +91,12 @@ export function createGizmo(deps: GizmoDeps): GizmoApi {
   }
 
   function refresh() {
-    if (mode === "None" || selected.length === 0) {
+    if (selected.length === 0) {
       controls.detach();
       helper.visible = false;
       return;
     }
-    const target = pickAttachTarget(deps.mirror, selected, pivotOverride);
+    const target = pickAttachTarget(deps.mirror, selected);
     if (!target) {
       controls.detach();
       helper.visible = false;
@@ -117,10 +115,6 @@ export function createGizmo(deps: GizmoDeps): GizmoApi {
     },
     setSelection(ids) {
       selected = [...ids];
-      refresh();
-    },
-    setPivotOverride(p) {
-      pivotOverride = p;
       refresh();
     },
     dispose() {
@@ -154,7 +148,6 @@ export function createGizmo(deps: GizmoDeps): GizmoApi {
 function pickAttachTarget(
   mirror: SceneMirror,
   selected: ObjectId[],
-  pivotOverride: [number, number, number] | null,
 ): THREE.Object3D | null {
   // Find the first selected object's Three.js mesh on the **active
   // plate**. PR-5-2 phase C routes the gizmo to the active plate
@@ -162,18 +155,7 @@ function pickAttachTarget(
   // object that lives on a non-visible plate).
   for (const id of selected) {
     const mesh = mirror.findActiveMesh(id);
-    if (mesh) {
-      if (pivotOverride) {
-        // Apply pivot override by translating the mesh's matrix so
-        // its origin aligns with the override before attach. We
-        // don't actually mutate the world matrix — TransformControls
-        // grabs the object's `position` for translate gizmos, so
-        // overriding the pivot is a Phase 4+ concern that needs a
-        // proxy Object3D. For MVP we ignore pivotOverride and let
-        // the gizmo sit at the mesh's natural origin.
-      }
-      return mesh;
-    }
+    if (mesh) return mesh;
   }
   return null;
 }
@@ -218,7 +200,7 @@ export function pickAttachTargetForTest(
   mirror: SceneMirror,
   selected: ObjectId[],
 ): THREE.Object3D | null {
-  return pickAttachTarget(mirror, selected, null);
+  return pickAttachTarget(mirror, selected);
 }
 
 /** Snapshot of the SceneObject's transform — used by tests to

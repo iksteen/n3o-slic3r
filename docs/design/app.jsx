@@ -59,6 +59,58 @@ function buildInitialSlotMap(printer) {
   return map;
 }
 
+// Physical spool loadout — the printer's OWN driver status. This is what the
+// machine reports back over its connection (and what the "Sync slots" button
+// pulls FROM into a plate's slotMap). It is a property of the printer, not of
+// any plate: the spools physically sit in the AMS / on the toolheads.
+//
+// Stored as slotId → spool descriptor (or null for an empty slot). We keep the
+// full descriptor here rather than a library id so a printer's reported state
+// is self-contained and independent of the user's slicer filament library.
+const PHYS_SPOOLS = [
+  { brand: "Bambu Lab", product: "PLA Basic",     label: "PLA Basic",        material: "PLA",  colorName: "Signal Red",   color: "#C24B45" },
+  { brand: "Bambu Lab", product: "PLA Matte",     label: "PLA Matte",        material: "PLA",  colorName: "Jet Black",    color: "#0F1012" },
+  { brand: "Polymaker", product: "PolyTerra PLA", label: "PolyTerra PLA",    material: "PLA",  colorName: "Sky Blue",     color: "#6FA8D6" },
+  { brand: "Prusament", product: "PETG",          label: "Prusament PETG",   material: "PETG", colorName: "Lime",         color: "#A3CB47" },
+  { brand: "Overture",  product: "PLA Matte",     label: "Overture PLA Matte",material: "PLA", colorName: "Bright Orange",color: "#E07A2D" },
+  { brand: "eSUN",      product: "PLA+",          label: "eSUN PLA+",        material: "PLA",  colorName: "Violet",       color: "#7A5AE0" },
+  { brand: "Generic",   product: "PLA",           label: "Generic PLA",      material: "PLA",  colorName: "Pure White",   color: "#F4F1EA" },
+  { brand: "Bambu Lab", product: "PETG HF",       label: "PETG HF",          material: "PETG", colorName: "Cool Grey",    color: "#7A8794" },
+];
+
+// Seed a believable physical loadout for a newly-added printer. `idx` rotates
+// the spool selection so different machines in the fleet read differently.
+// One AMS slot is left empty to exercise the "(if any)" empty-slot state.
+function seedPrinterLoadout(printer, idx = 0) {
+  const slotIds = computeSlotIds({
+    extruders: printer.extruders || 1,
+    amsUnits: printer.amsUnits || 0,
+  });
+  const loadout = {};
+  slotIds.forEach((slotId, i) => {
+    // Leave the 4th slot of the first AMS unit empty for realism.
+    if (/^AMS-A:4$/.test(slotId)) { loadout[slotId] = null; return; }
+    loadout[slotId] = PHYS_SPOOLS[(idx + i) % PHYS_SPOOLS.length];
+  });
+  return loadout;
+}
+
+// Reconcile a printer's loadout with a new slot topology (e.g. AMS units added
+// or removed): keep spools in slots that still exist, drop the rest, and seed
+// freshly-appeared slots.
+function reconcileLoadout(prevLoadout, printer, idx = 0) {
+  const slotIds = computeSlotIds({
+    extruders: printer.extruders || 1,
+    amsUnits: printer.amsUnits || 0,
+  });
+  const fresh = seedPrinterLoadout(printer, idx);
+  const next = {};
+  slotIds.forEach(slotId => {
+    next[slotId] = (prevLoadout && slotId in prevLoadout) ? prevLoadout[slotId] : fresh[slotId];
+  });
+  return next;
+}
+
 // Material → slot binding. The .3mf file labels regions M1, M2, … (the
 // project's logical materials); the user maps each to whichever slot they
 // want it printed from. M1 by convention is the default for new objects.
@@ -176,6 +228,26 @@ const MOCK_FILES = [
   "balcony-clip-v4.gcode", "desk-grommet.gcode", "fan-bracket-r2.gcode",
   "cable-cover.gcode", "calibration-cube.gcode", "spool-holder.gcode",
 ];
+// Which physical slot is *currently feeding the nozzle* — the printer's live
+// "active filament" report. On a multi-toolhead machine (U1, Prusa XL) this is
+// whichever toolhead is laying the current layer; on an AMS machine (A1 mini)
+// it's whichever AMS spool (or the ext spool) is routed to the single nozzle.
+// We pick the first loaded slot for direct-extruder printers (so it lines up
+// with the hot toolhead) and rotate by `idx` for AMS printers so different
+// machines in the fleet read differently. Returns null when nothing is loaded.
+function activeSlotFor(printer, idx = 0) {
+  if (!printer) return null;
+  const slotIds = computeSlotIds({
+    extruders: printer.extruders || 1,
+    amsUnits: printer.amsUnits || 0,
+  });
+  const loadout = printer.loadout || {};
+  const loaded = slotIds.filter(sid => loadout[sid]);
+  if (!loaded.length) return slotIds[0] || null;
+  const hasAms = (printer.amsUnits || 0) > 0;
+  return hasAms ? loaded[idx % loaded.length] : loaded[0];
+}
+
 function seedStatusFor(idx, printer) {
   // Per-toolhead nozzles. Snapmaker U1 has 4, Prusa XL has up to 5;
   // most printers have 1. Each toolhead gets its own temp pill.
@@ -190,15 +262,23 @@ function seedStatusFor(idx, printer) {
     nozzleTemps: idleNozzles,
     bedTemp:    { current: 23, target: 0 },
     fanSpeed: 0,
+    // Even when idle, a slot stays physically engaged — the toolhead grabber
+    // holds a tool, or filament is primed up to the hotend. The printer keeps
+    // reporting it; only an offline machine reports nothing.
+    activeSlotId: activeSlotFor(printer, idx),
     error: null,
   };
   const slot = idx % 3;
   if (slot === 1) {
-    // Printing — for multi-toolhead printers, mark only T1 as actively hot
-    // and the rest as idle. That mirrors how real multi-toolhead printers
-    // work: only the toolheads in use for the current layer are warm.
+    // The printer reports which slot is currently feeding the nozzle.
+    const activeSlotId = activeSlotFor(printer, idx);
+    // On a direct-extruder machine the active slot IS a toolhead — mark that
+    // toolhead's nozzle hot and leave the rest idle. (AMS machines have one
+    // nozzle, so this collapses to T1.)
+    const extMatch = typeof activeSlotId === "string" && activeSlotId.match(/^ext:(\d+)$/);
+    const activeExtIdx = (!(printer?.amsUnits > 0) && extMatch) ? (parseInt(extMatch[1], 10) - 1) : 0;
     const printingNozzles = idleNozzles.map((_, i) =>
-      i === 0
+      i === activeExtIdx
         ? { current: 215, target: 220 }
         : { current: 24, target: 0 }
     );
@@ -207,6 +287,7 @@ function seedStatusFor(idx, printer) {
       status: "printing",
       progress: 18 + Math.random() * 30,
       nozzleTemps: printingNozzles,
+      activeSlotId,
       bedTemp:    { current: 58,  target: 60 },
       fanSpeed: 80,
       currentJob: {
@@ -383,6 +464,7 @@ function App() {
                 nozzleTemps: nozzleTemps.map(nt => ({ ...nt, target: 0 })),
                 bedTemp: { current: bedTemp.current, target: 0 },
                 fanSpeed: 0,
+                // Filament stays primed/engaged after the job ends — keep activeSlotId.
               };
             }
           } else {
@@ -425,6 +507,7 @@ function App() {
     if (!profile) return;
     const printerId = `prn_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const installedAms = Math.max(0, Math.min(amsUnits ?? 0, profile.amsMax || 0));
+    const loadoutIdx = printers.length;
     const newPrinter = {
       id: printerId,
       name,
@@ -443,6 +526,8 @@ function App() {
       endGcode: DEFAULT_END_GCODE,
       limits: { ...DEFAULT_LIMITS },
     };
+    // The printer reports its own physical spool loadout (driver status).
+    newPrinter.loadout = seedPrinterLoadout(newPrinter, loadoutIdx);
     setPrinters(prev => {
       const next = [...prev, newPrinter];
       if (prev.length === 0) {
@@ -488,7 +573,16 @@ function App() {
   // If amsUnits changes, sync that too and prune any slotMap / materialMap
   // entries that now reference removed slots.
   const handleUpdatePrinter = useCallback((id, patch) => {
-    setPrinters(prev => prev.map(p => p.id === id ? { ...p, ...patch } : p));
+    setPrinters(prev => prev.map((p, i) => {
+      if (p.id !== id) return p;
+      const updated = { ...p, ...patch };
+      // If the slot topology changed, reconcile the physical loadout so it
+      // keeps spools in surviving slots and seeds any new ones.
+      if (patch.amsUnits !== undefined && patch.amsUnits !== p.amsUnits) {
+        updated.loadout = reconcileLoadout(p.loadout, updated, i);
+      }
+      return updated;
+    }));
     if (patch.name || patch.nozzle || patch.amsUnits !== undefined) {
       setPlates(prev => prev.map(plate => {
         if (plate.printerId !== id) return plate;
@@ -574,6 +668,7 @@ function App() {
         nozzleTemps: (prev[id].nozzleTemps || []).map(nt => ({ ...nt, target: 0 })),
         bedTemp:    { ...prev[id].bedTemp,    target: 0 },
         fanSpeed: 0,
+        // Filament stays primed/engaged after stopping — keep activeSlotId.
       },
     } : prev);
   }, []);
@@ -604,11 +699,15 @@ function App() {
           [printerId]: { ...cur, queue: [...(cur.queue || []), { name: job.name, durationMs: job.durationMs }] },
         };
       }
-      // Start immediately. Heat only T1 by default — real per-extruder
+      // Start immediately. Heat the active toolhead — real per-extruder
       // targets would come from the slice header; this prototype keeps it
       // simple.
+      const printer = printers.find(p => p.id === printerId);
+      const activeSlotId = activeSlotFor(printer, 1);
+      const extMatch = typeof activeSlotId === "string" && activeSlotId.match(/^ext:(\d+)$/);
+      const activeExtIdx = (!(printer?.amsUnits > 0) && extMatch) ? (parseInt(extMatch[1], 10) - 1) : 0;
       const nozzleTemps = (cur.nozzleTemps || [{ current: 24, target: 0 }])
-        .map((nt, i) => i === 0 ? { current: nt.current ?? 24, target: 220 } : { current: nt.current ?? 24, target: 0 });
+        .map((nt, i) => i === activeExtIdx ? { current: nt.current ?? 24, target: 220 } : { current: nt.current ?? 24, target: 0 });
       return {
         ...prev,
         [printerId]: {
@@ -617,6 +716,7 @@ function App() {
           progress: 0,
           currentJob: job,
           nozzleTemps,
+          activeSlotId,
           bedTemp:    { current: cur.bedTemp?.current ?? 23,    target: 60 },
           fanSpeed: 80,
           error: null,
@@ -626,7 +726,7 @@ function App() {
     setSelectedDeviceId(printerId);
     setShowSendToPrinter(false);
     setMode("devices");
-  }, [plates]);
+  }, [plates, printers]);
 
   // Jump from a device's current job back to its source plate in Prepare.
   const handleJumpToPlate = useCallback((plateId) => {
@@ -1063,21 +1163,6 @@ function SlicerWorkspace({
                 <rect x="6" y="6" width="6" height="6" stroke="currentColor" strokeWidth="1.2"/>
               </svg>
             </button>
-            <div className="vp-sep"/>
-            <button className="vp-tool" title="Auto-arrange">
-              <svg viewBox="0 0 14 14" fill="none">
-                <rect x="1.5" y="1.5" width="4" height="4" stroke="currentColor" strokeWidth="1.2"/>
-                <rect x="8.5" y="1.5" width="4" height="4" stroke="currentColor" strokeWidth="1.2"/>
-                <rect x="1.5" y="8.5" width="4" height="4" stroke="currentColor" strokeWidth="1.2"/>
-                <rect x="8.5" y="8.5" width="4" height="4" stroke="currentColor" strokeWidth="1.2"/>
-              </svg>
-            </button>
-            <button className="vp-tool" title="Layer preview">
-              <svg viewBox="0 0 14 14" fill="none">
-                <path d="M1.5 4l5.5 3 5.5-3-5.5-3-5.5 3z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
-                <path d="M1.5 7l5.5 3 5.5-3M1.5 10l5.5 3 5.5-3" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
-              </svg>
-            </button>
           </div>
 
           <div className="gizmo-hint">
@@ -1186,19 +1271,40 @@ function SlicerWorkspace({
           onSendToPrinter={() => setShowSendToPrinter(true)}
           onReslice={onSlice}
           onExitPreview={() => setMode("prepare")}
-          objectsPanel={
-            <ObjectsPanel
+          settingsPanel={
+            <SettingsPanel
+              readOnly={true}
+              contextLayer={contextLayer}
+              setContextLayer={setContextLayer}
+              selectedObject={objects.find(o => o.id === selectedId) || null}
+              setObjectOverride={setObjectOverride}
+              resetObjectOverride={resetObjectOverride}
+              accountabilityMode={t.accountability}
+              searchMode={t.search}
+              userOverrides={userOverrides}
+              setUserOverrides={setUserOverrides}
               objects={objects}
-              setObjects={setObjects}
-              selectedId={selectedId}
-              setSelectedId={setSelectedId}
               filaments={filaments}
+              printer={printer}
+              printerConnStatus={printerConnStatus}
+              bedPlate={bedPlate}
+              nozzle={nozzle}
+              extruders={activePlate.extruders || 1}
+              nozzles={activePlate.nozzles}
+              filamentsInUse={materialsInUse}
+              materialsInUse={materialsInUse}
+              slotIds={slotIds}
               slotMap={slotMap}
               materialMap={materialMap}
-              printerName={printer}
-              countObjectOverrides={countObjectOverrides}
-              plateSize={plateSize}
-              readOnly={true}
+              onOpenSlotPicker={(slotId) => setFilamentPickerSlot(slotId)}
+              onSyncFilaments={() => new Promise(r => setTimeout(r, 400))}
+              setMaterialSlot={setMaterialSlot}
+              printerPresets={printerPickerEntries}
+              onSwapPrinter={(printerId) => setPlatePrinter(activePlateId, printerId)}
+              onEditPrinter={(printerId) => setEditingPrinterId(printerId)}
+              onSwapBedPlate={noop("bedPlate")}
+              onSwapNozzle={noop("nozzle")}
+              onSwapFilament={(id) => console.log("[swap] filament", id)}
             />
           }
         />

@@ -136,6 +136,7 @@ function formatVal(v, unit) {
 
 // ───────── Setting Row ─────────
 function SettingRow({
+  readOnly = false,
   setting,
   contextLayer,
   selectedObject,         // present when contextLayer === "object"
@@ -205,6 +206,7 @@ function SettingRow({
 
   // Writes go to the layer matching the current tab.
   const handleChange = (newVal) => {
+    if (readOnly) return;
     if (contextLayer === "object" && selectedObject) {
       onSetObjectOverride(setting.id, newVal);
     } else {
@@ -212,6 +214,7 @@ function SettingRow({
     }
   };
   const handleReset = () => {
+    if (readOnly) return;
     if (contextLayer === "object" && selectedObject) {
       onResetObjectOverride(setting.id);
     } else {
@@ -246,13 +249,13 @@ function SettingRow({
     if (setting.type === "toggle") {
       return (
         <div className="val-toggle-wrap">
-          <div className={`val-toggle ${value ? "on" : ""}`} onClick={() => handleChange(!value)}/>
+          <div className={`val-toggle ${value ? "on" : ""} ${readOnly ? "disabled" : ""}`} onClick={() => handleChange(!value)}/>
         </div>
       );
     }
     if (setting.type === "select") {
       return (
-        <select className="val-select" value={value} onChange={(e) => handleChange(e.target.value)}>
+        <select className="val-select" value={value} disabled={readOnly} onChange={(e) => handleChange(e.target.value)}>
           {(setting.options || []).map(o => <option key={o} value={o}>{o}</option>)}
         </select>
       );
@@ -266,6 +269,7 @@ function SettingRow({
           step={setting.step || 1}
           min={setting.min}
           max={setting.max}
+          disabled={readOnly}
           onChange={(e) => handleChange(parseFloat(e.target.value))}
         />
         {setting.unit && <span className="val-unit">{setting.unit}</span>}
@@ -321,7 +325,7 @@ function SettingRow({
         )}
       </div>
 
-      {hasValueAtContext && (
+      {hasValueAtContext && !readOnly && (
         <button
           className="reset-btn show"
           title={`Reset ${LAYER_BY_ID[contextLayer].label} override (falls back to inherited value)`}
@@ -516,6 +520,7 @@ function NozzleChip({ index, total, nozzle, onClick }) {
 
 // ───────── Settings Panel root ─────────
 function SettingsPanel({
+  readOnly = false,
   contextLayer,
   setContextLayer,
   selectedObject,
@@ -721,7 +726,16 @@ function SettingsPanel({
   const totalMatches = filteredCategories.reduce((n, c) => n + c._settings.length, 0);
 
   return (
-    <aside className="settings-panel">
+    <aside className={`settings-panel ${readOnly ? "readonly" : ""}`}>
+      {readOnly && (
+        <div className="sp-readonly-banner" title="Settings are locked while viewing the sliced result. Switch to Prepare to edit.">
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <rect x="2.5" y="6" width="9" height="6.5" rx="1.2" stroke="currentColor" strokeWidth="1.3"/>
+            <path d="M4.5 6V4.5a2.5 2.5 0 0 1 5 0V6" stroke="currentColor" strokeWidth="1.3"/>
+          </svg>
+          <span>Read-only — sliced preview. Switch to <b>Prepare</b> to edit.</span>
+        </div>
+      )}
       <div className="sp-config">
         <div className="sp-config-row">
           <div className="config-chip-wrap" ref={printerChipRef}>
@@ -1025,6 +1039,7 @@ function SettingsPanel({
               {cat._settings.map(setting => (
                 <SettingRow
                   key={setting.id}
+                  readOnly={readOnly}
                   setting={setting}
                   contextLayer={contextLayer}
                   selectedObject={contextLayer === "object" ? selectedObject : null}
