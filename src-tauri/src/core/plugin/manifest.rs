@@ -31,6 +31,15 @@ impl HookKind {
             _ => None,
         }
     }
+
+    /// The manifest/string name for this hook (`"pre_slice"`, …).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PreSlice => "pre_slice",
+            Self::PostSlice => "post_slice",
+            Self::PreSend => "pre_send",
+        }
+    }
 }
 
 /// Which printers a plugin applies to. `Any` (the default, or an

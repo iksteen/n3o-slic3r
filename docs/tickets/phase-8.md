@@ -93,7 +93,7 @@ closes at 8-5, the rest are largely independent:
 |-------------|--------|--------|
 | mlua (Lua 5.4, vendored) + sandboxed runtime + chunk load/call | ✅ done | [PR-8-1](phase-8/PR-8-1%20mlua%20foundation.md) |
 | Plugin manifest (TOML) schema + plugins-folder discovery + validation | ✅ done | [PR-8-2](phase-8/PR-8-2%20Manifest%20and%20discovery.md) |
-| `PluginHost`: load manifested plugins, dispatch hooks, error isolation | ❌ open | [PR-8-3](phase-8/PR-8-3%20Plugin%20host%20and%20dispatch.md) |
+| `PluginHost`: load manifested plugins, dispatch hooks, error isolation | ✅ done | [PR-8-3](phase-8/PR-8-3%20Plugin%20host%20and%20dispatch.md) |
 | Typed G-code Lua bindings (lines/layers/commands, insert/replace/remove/append) | ❌ open | [PR-8-4](phase-8/PR-8-4%20Gcode%20bindings.md) |
 | post-slice hook wired into the slice pipeline + beep/pause example plugins | ❌ open | [PR-8-5](phase-8/PR-8-5%20Post-slice%20hook.md) |
 | pre-slice + pre-send hooks wired + bed-temp-by-range example | ❌ open | [PR-8-6](phase-8/PR-8-6%20Pre-slice%20and%20pre-send.md) |

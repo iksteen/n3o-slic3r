@@ -14,14 +14,17 @@
 //! The manifest loader, the multi-plugin host + hook dispatch, and the
 //! typed-G-code bindings build on top of this primitive.
 
+pub mod commands;
 mod discovery;
 mod error;
+mod host;
 mod manifest;
 mod runtime;
 mod sandbox;
 
 pub use discovery::{discover, DiscoveredPlugin, MANIFEST_FILE};
 pub use error::PluginError;
+pub use host::{user_plugins_dir, Hook, LoadedPlugin, PluginHost, PluginSummary};
 pub use manifest::{
     HookKind, ManifestError, PluginManifest, PrinterCompat, SettingDecl, SettingKind, SettingValue,
 };

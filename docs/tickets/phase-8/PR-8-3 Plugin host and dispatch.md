@@ -1,6 +1,24 @@
 # PR-8-3 — `PluginHost` + hook dispatch + error isolation
 
-Status: ❌ open.
+Status: ✅ done.
+
+**Implementation notes.**
+- Plugins are keyed in a `BTreeMap<name, _>`, which gives both the
+  deterministic lexical dispatch order and **last-root-wins** dedup —
+  a user plugin overrides a bundled one of the same name (roots are
+  loaded bundled-first, user-second).
+- The `Hook` trait's `invoke` returns `(Value, Option<PluginError>)`
+  and hands back the *input* value on error, so the host folds without
+  needing a `Clone` bound and skips a failed plugin's transform cleanly.
+- `plugin:changed` is emitted by the mutating commands
+  (`set_enabled` / `reload`). A mid-dispatch auto-disable mutates host
+  state but does **not** emit yet — the orchestrator that calls
+  `dispatch` (PR-8-5) will trigger the panel refresh.
+- mlua's `send` feature is enabled so `Lua: Send` and the host can live
+  in `State<Arc<Mutex<PluginHost>>>`; all registered closures are Send.
+- Roots are wired in `lib.rs`: bundled `plugins/` (a `profiles/`
+  sibling; `N3O_PLUGIN_ROOT` dev override mirrors `N3O_PROFILE_ROOT`) +
+  `~/.local/share/n3o-slic3r/plugins`.
 
 **Scope.** The multi-plugin host: take the discovered plugins, load
 each into a sandboxed `PluginRuntime`, and dispatch a named hook to

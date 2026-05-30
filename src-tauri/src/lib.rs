@@ -123,6 +123,38 @@ pub fn run() {
             app.manage(project);
             app.manage(core::project::autosave::AutosaveHandle::new());
 
+            // Plugin host. Two roots, bundled first then user, so a
+            // user plugin overrides a bundled one of the same name:
+            //   - bundled: a `plugins/` dir alongside the bundled
+            //     `profiles/` (resource dir in a packaged build;
+            //     `N3O_PLUGIN_ROOT` override for dev, same shape as
+            //     `N3O_PROFILE_ROOT`).
+            //   - user: `~/.local/share/n3o-slic3r/plugins`.
+            // Loading runs each plugin's Lua top level in its sandbox;
+            // a load failure keeps the plugin in the host as errored.
+            let bundled_plugins = if let Some(path_os) = std::env::var_os("N3O_PLUGIN_ROOT") {
+                let path = std::path::PathBuf::from(&path_os);
+                if path.is_absolute() {
+                    path
+                } else {
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .parent()
+                        .expect("workspace root above src-tauri")
+                        .join(path)
+                }
+            } else {
+                app.path()
+                    .resource_dir()
+                    .expect("resource_dir")
+                    .join("plugins")
+            };
+            let plugin_host = core::plugin::PluginHost::load(&[
+                bundled_plugins,
+                core::plugin::user_plugins_dir(),
+            ]);
+            app.manage(Arc::new(Mutex::new(plugin_host)));
+            tracing::info!("plugin host loaded");
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -219,6 +251,9 @@ pub fn run() {
             core::driver::commands::driver_send_plate,
             core::driver::commands::driver_export_plate,
             core::driver::commands::driver_command,
+            core::plugin::commands::plugin_list,
+            core::plugin::commands::plugin_set_enabled,
+            core::plugin::commands::plugin_reload,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

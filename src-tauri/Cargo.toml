@@ -71,7 +71,10 @@ futures-util = "0.3"
 # runtime guarantee. The host runs untrusted plugin code in a sandbox
 # (see core/plugin/sandbox.rs): only string/table/math/coroutine
 # stdlib, no io/os/package/debug.
-mlua = { version = "0.11", features = ["lua54", "vendored"] }
+# `send` makes `Lua: Send` so the PluginHost can live in shared Tauri
+# state (Arc<Mutex<PluginHost>>); it requires registered Rust closures
+# to be Send, which ours are.
+mlua = { version = "0.11", features = ["lua54", "vendored", "send"] }
 # Plugin manifest version validation (Phase 8). Used only to confirm a
 # manifest's `version` parses as semver; the string is stored verbatim.
 semver = "1"
