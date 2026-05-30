@@ -47,15 +47,23 @@ impl GcodeHandle {
     }
 }
 
+/// Lock the shared line buffer, recovering the guard if the mutex was
+/// poisoned by a panic mid-edit. The buffer is only ever touched from
+/// one plugin call at a time, so recovering is safe — and it keeps a
+/// stray panic from wedging every later access.
+fn lock_lines(cell: &GcodeCell) -> std::sync::MutexGuard<'_, Vec<Line>> {
+    cell.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 impl UserData for GcodeHandle {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         // #g and g:len()
-        methods.add_meta_method(MetaMethod::Len, |_, this, ()| Ok(this.lines.lock().unwrap().len()));
-        methods.add_method("len", |_, this, ()| Ok(this.lines.lock().unwrap().len()));
+        methods.add_meta_method(MetaMethod::Len, |_, this, ()| Ok(lock_lines(&this.lines).len()));
+        methods.add_method("len", |_, this, ()| Ok(lock_lines(&this.lines).len()));
 
         // g:line(i) — 1-based; nil when out of range (reads are lenient).
         methods.add_method("line", |lua, this, i: usize| {
-            let lines = this.lines.lock().unwrap();
+            let lines = lock_lines(&this.lines);
             match i.checked_sub(1).filter(|&z| z < lines.len()) {
                 Some(z) => Ok(Some(line_to_table(lua, &lines[z])?)),
                 None => Ok(None),
@@ -63,11 +71,14 @@ impl UserData for GcodeHandle {
         });
 
         // g:lines() — stateful iterator: `for line in g:lines() do …`.
+        // Indexes the live buffer by cursor; treat it as a read
+        // iterator (mutating the buffer mid-iteration shifts indices —
+        // use g:layers() for mutate-while-iterating).
         methods.add_method("lines", |lua, this, ()| {
             let lines = this.lines.clone();
             let cursor = Arc::new(AtomicUsize::new(0));
             lua.create_function(move |lua, ()| {
-                let guard = lines.lock().unwrap();
+                let guard = lock_lines(&lines);
                 let i = cursor.fetch_add(1, Ordering::Relaxed);
                 if i < guard.len() {
                     Ok(Some(line_to_table(lua, &guard[i])?))
@@ -77,23 +88,30 @@ impl UserData for GcodeHandle {
             })
         });
 
-        // g:layers() — iterator over layer spans segmented on LayerChange.
+        // g:layers() — iterator over layers segmented on LayerChange.
+        //
+        // Recomputes the k-th layer's position against the LIVE buffer
+        // on every step, so a plugin that inserts/removes while
+        // iterating (e.g. a pause at several layers) still gets correct
+        // `first_line`/`last_line` for later layers — the positions
+        // shift as it edits. Cost is O(lines) per step; a plugin that
+        // walks every layer of a huge file is O(lines × layers), but
+        // the common "act on a few layers" case is cheap.
         methods.add_method("layers", |lua, this, ()| {
-            let layers = Arc::new(compute_layers(&this.lines.lock().unwrap()));
+            let lines = this.lines.clone();
             let cursor = Arc::new(AtomicUsize::new(0));
             lua.create_function(move |lua, ()| {
-                let i = cursor.fetch_add(1, Ordering::Relaxed);
-                match layers.get(i) {
-                    Some(layer) => {
-                        let t = lua.create_table()?;
-                        t.set("index", layer.index)?;
-                        set_opt_num(&t, "z", layer.z)?;
-                        t.set("first_line", layer.first_line)?;
-                        t.set("last_line", layer.last_line)?;
-                        Ok(Some(t))
-                    }
-                    None => Ok(None),
-                }
+                let guard = lock_lines(&lines);
+                let k = cursor.fetch_add(1, Ordering::Relaxed);
+                let Some(layer) = nth_layer(&guard, k) else {
+                    return Ok(None);
+                };
+                let t = lua.create_table()?;
+                t.set("index", layer.index)?;
+                set_opt_num(&t, "z", layer.z)?;
+                t.set("first_line", layer.first_line)?;
+                t.set("last_line", layer.last_line)?;
+                Ok(Some(t))
             })
         });
 
@@ -101,17 +119,23 @@ impl UserData for GcodeHandle {
         // expand to several lines) or a constructed table.
         methods.add_method("append", |_, this, value: Value| {
             let new = value_to_lines(value)?;
-            this.lines.lock().unwrap().extend(new);
+            let mut lines = lock_lines(&this.lines);
+            // The current last line gains a successor — make sure it's
+            // newline-terminated so the two don't merge on serialize.
+            let end = lines.len();
+            ensure_terminated(&mut lines, end);
+            lines.extend(new);
             Ok(())
         });
 
         methods.add_method("insert", |_, this, (i, value): (usize, Value)| {
             let new = value_to_lines(value)?;
-            let mut lines = this.lines.lock().unwrap();
+            let mut lines = lock_lines(&this.lines);
             let idx = i.checked_sub(1).ok_or_else(|| index_err(i))?;
             if idx > lines.len() {
                 return Err(index_err(i));
             }
+            ensure_terminated(&mut lines, idx);
             for (k, line) in new.into_iter().enumerate() {
                 lines.insert(idx + k, line);
             }
@@ -120,12 +144,13 @@ impl UserData for GcodeHandle {
 
         methods.add_method("replace", |_, this, (i, value): (usize, Value)| {
             let new = value_to_lines(value)?;
-            let mut lines = this.lines.lock().unwrap();
+            let mut lines = lock_lines(&this.lines);
             let idx = i
                 .checked_sub(1)
                 .filter(|&z| z < lines.len())
                 .ok_or_else(|| index_err(i))?;
             lines.remove(idx);
+            ensure_terminated(&mut lines, idx);
             for (k, line) in new.into_iter().enumerate() {
                 lines.insert(idx + k, line);
             }
@@ -133,7 +158,7 @@ impl UserData for GcodeHandle {
         });
 
         methods.add_method("remove", |_, this, i: usize| {
-            let mut lines = this.lines.lock().unwrap();
+            let mut lines = lock_lines(&this.lines);
             let idx = i
                 .checked_sub(1)
                 .filter(|&z| z < lines.len())
@@ -142,6 +167,55 @@ impl UserData for GcodeHandle {
             Ok(())
         });
     }
+}
+
+/// Ensure the line at `idx - 1` (the line that will precede freshly
+/// inserted content) is newline-terminated, so inserting after an
+/// unterminated final line can't merge the two on serialize.
+fn ensure_terminated(lines: &mut [Line], idx: usize) {
+    if idx == 0 {
+        return;
+    }
+    if let Some(prev) = lines.get_mut(idx - 1) {
+        if prev.line_ending().is_empty() {
+            prev.set_line_ending("\n");
+        }
+    }
+}
+
+/// Resolve the `k`-th layer (0-based, by LayerChange occurrence order)
+/// against the current buffer: its `LayerChange` position becomes
+/// `first_line` (1-based), and the line just before the next
+/// LayerChange (or the buffer end) becomes `last_line`.
+struct LayerInfo {
+    index: u32,
+    z: Option<f32>,
+    first_line: usize,
+    last_line: usize,
+}
+
+fn nth_layer(lines: &[Line], k: usize) -> Option<LayerInfo> {
+    let mut seen = 0usize;
+    let mut found: Option<(usize, u32, Option<f32>)> = None;
+    let mut next_pos: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if let Line::LayerChange(lc) = line {
+            if seen == k {
+                found = Some((i, lc.index, lc.z));
+            } else if seen == k + 1 {
+                next_pos = Some(i);
+                break;
+            }
+            seen += 1;
+        }
+    }
+    let (pos, index, z) = found?;
+    Some(LayerInfo {
+        index,
+        z,
+        first_line: pos + 1,
+        last_line: next_pos.unwrap_or(lines.len()),
+    })
 }
 
 fn index_err(i: usize) -> mlua::Error {
@@ -273,23 +347,13 @@ fn table_to_line(t: &Table) -> LuaResult<Line> {
             } else {
                 CommentStyle::Semicolon
             };
-            Ok(Line::Comment(Comment {
-                raw,
-                style,
-                semantic: None,
-                raw_offset: 0,
-                line_ending: "\n".to_string(),
-            }))
+            Ok(Line::Comment(Comment::new(raw, style)))
         }
         "other" => {
             let raw: String = t.get("raw").map_err(|_| {
                 mlua::Error::RuntimeError("other line needs a `raw` field".to_string())
             })?;
-            Ok(Line::Other(Other {
-                raw,
-                raw_offset: 0,
-                line_ending: "\n".to_string(),
-            }))
+            Ok(Line::Other(Other::new(raw)))
         }
         other => Err(mlua::Error::RuntimeError(format!(
             "cannot build a `{other}` line from a table; pass move / tool / layer lines as a raw G-code string"
@@ -298,47 +362,9 @@ fn table_to_line(t: &Table) -> LuaResult<Line> {
 }
 
 fn ensure_newline(line: &mut Line) {
-    if !line.line_ending().is_empty() {
-        return;
+    if line.line_ending().is_empty() {
+        line.set_line_ending("\n");
     }
-    match line {
-        Line::Move(m) => m.line_ending = "\n".into(),
-        Line::Comment(c) => c.line_ending = "\n".into(),
-        Line::LayerChange(l) => l.line_ending = "\n".into(),
-        Line::ToolChange(t) => t.line_ending = "\n".into(),
-        Line::Other(o) => o.line_ending = "\n".into(),
-    }
-}
-
-struct LayerInfo {
-    index: u32,
-    z: Option<f32>,
-    /// 1-based line number where the layer's `LayerChange` marker sits.
-    first_line: usize,
-    /// 1-based line number of the layer's last line (just before the
-    /// next `LayerChange`, or the end of the file).
-    last_line: usize,
-}
-
-fn compute_layers(lines: &[Line]) -> Vec<LayerInfo> {
-    let starts: Vec<(usize, u32, Option<f32>)> = lines
-        .iter()
-        .enumerate()
-        .filter_map(|(i, line)| match line {
-            Line::LayerChange(lc) => Some((i, lc.index, lc.z)),
-            _ => None,
-        })
-        .collect();
-    starts
-        .iter()
-        .enumerate()
-        .map(|(k, &(pos, index, z))| LayerInfo {
-            index,
-            z,
-            first_line: pos + 1,
-            last_line: starts.get(k + 1).map(|n| n.0).unwrap_or(lines.len()),
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -445,6 +471,45 @@ G1 X10 Y10 E1.0
         let pause = lines.iter().position(|l| *l == "M601").unwrap();
         let marker = lines.iter().position(|l| *l == ";LAYER:1").unwrap();
         assert_eq!(pause, marker + 1, "pause should sit at the layer boundary");
+    }
+
+    #[test]
+    fn inserts_at_multiple_layers_stay_aligned_under_mutation() {
+        // The classic trap: insert at every layer while iterating.
+        // g:layers() recomputes positions live, so the second insert
+        // lands at the (shifted) layer-1 boundary, not a stale offset.
+        let out = run(r#"function go(g)
+            for layer in g:layers() do
+                g:insert(layer.first_line, "; MARK " .. layer.index)
+            end
+        end"#);
+        let lines: Vec<&str> = out.lines().collect();
+        // Each MARK sits immediately after its own ;LAYER comment.
+        for idx in [0, 1] {
+            let layer = lines
+                .iter()
+                .position(|l| *l == format!(";LAYER:{idx}"))
+                .unwrap();
+            assert_eq!(
+                lines[layer + 1],
+                format!("; MARK {idx}"),
+                "MARK {idx} should sit just after ;LAYER:{idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn append_does_not_merge_with_an_unterminated_last_line() {
+        // A file whose final line has no trailing newline.
+        let src = "G1 X0 Y0 F1200\nM84";
+        let rt = PluginRuntime::load(r#"function go(g) g:append("M300 S440 P200") end"#, "t")
+            .unwrap();
+        let handle = GcodeHandle::new(parse_str(src));
+        let cell = handle.cell();
+        let _: Option<()> = rt.call("go", handle).unwrap();
+        let out = to_string(&cell.lock().unwrap());
+        assert!(out.contains("M84\n"), "prior line should gain a newline");
+        assert!(!out.contains("M84M300"), "lines must not merge: {out:?}");
     }
 
     #[test]

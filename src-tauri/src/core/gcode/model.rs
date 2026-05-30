@@ -70,6 +70,21 @@ impl Line {
             Self::Other(o) => &o.line_ending,
         }
     }
+
+    /// Set this line's line ending across whichever variant it is.
+    /// Callers that splice in new lines (the plugin G-code bindings)
+    /// use this to keep separators correct without matching on the
+    /// variant themselves.
+    pub fn set_line_ending(&mut self, ending: impl Into<String>) {
+        let ending = ending.into();
+        match self {
+            Self::Move(m) => m.line_ending = ending,
+            Self::Comment(c) => c.line_ending = ending,
+            Self::LayerChange(l) => l.line_ending = ending,
+            Self::ToolChange(t) => t.line_ending = ending,
+            Self::Other(o) => o.line_ending = ending,
+        }
+    }
 }
 
 /// A `G0` / `G1` / `G2` / `G3` line — the actual extruder motion.
@@ -182,6 +197,21 @@ pub struct Comment {
     pub semantic: Option<SemanticComment>,
     pub raw_offset: u64,
     pub line_ending: String,
+}
+
+impl Comment {
+    /// Build a synthetic comment line (no source offset, newline-
+    /// terminated, no recognized semantic). For programmatic insertion
+    /// — e.g. plugins building a comment to splice into G-code.
+    pub fn new(raw: impl Into<String>, style: CommentStyle) -> Self {
+        Self {
+            raw: raw.into(),
+            style,
+            semantic: None,
+            raw_offset: 0,
+            line_ending: "\n".to_string(),
+        }
+    }
 }
 
 /// Comment delimiter style. Marlin/Klipper use both `;` (rest of
@@ -375,6 +405,19 @@ pub struct Other {
     pub raw: String,
     pub raw_offset: u64,
     pub line_ending: String,
+}
+
+impl Other {
+    /// Build a synthetic catch-all line (no source offset, newline-
+    /// terminated). For programmatic insertion — e.g. a plugin
+    /// splicing in a raw command line.
+    pub fn new(raw: impl Into<String>) -> Self {
+        Self {
+            raw: raw.into(),
+            raw_offset: 0,
+            line_ending: "\n".to_string(),
+        }
+    }
 }
 
 #[cfg(test)]

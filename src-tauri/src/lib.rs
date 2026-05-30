@@ -12,6 +12,46 @@ use std::sync::{Arc, Mutex};
 
 use slic3r_ffi::init;
 
+/// Resolve a bundled-resource root: `<resource_dir>/<subdir>` for a
+/// packaged build, overridable via `$env_key`.
+///
+/// The override exists because `tauri-build`'s copy of `bundle.resources`
+/// into `target/<profile>/` runs only on tracked-file changes and never
+/// prunes, so a source-tree restructure can leave stale files shadowing
+/// the right ones. Dev runs pass an env override (e.g.
+/// `N3O_PROFILE_ROOT=./profiles/vendor` via the npm `tauri` script) and
+/// read straight from source; production never sets it and gets the
+/// bundled `resource_dir` path.
+///
+/// A relative override resolves against the workspace root baked in at
+/// compile time (one dir above `src-tauri`), not the runtime CWD —
+/// Tauri's dev mode may set CWD to `src-tauri/`, so a naive
+/// `./profiles/vendor` against process CWD would land in the wrong place.
+fn resource_root<R: tauri::Runtime, M: tauri::Manager<R>>(
+    mgr: &M,
+    env_key: &str,
+    subdir: &str,
+) -> std::path::PathBuf {
+    if let Some(path_os) = std::env::var_os(env_key) {
+        let path = std::path::PathBuf::from(&path_os);
+        let resolved = if path.is_absolute() {
+            path
+        } else {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .expect("workspace root above src-tauri")
+                .join(path)
+        };
+        tracing::info!(env = env_key, path = %resolved.display(), "using resource-root override");
+        resolved
+    } else {
+        mgr.path()
+            .resource_dir()
+            .expect("resource_dir")
+            .join(subdir)
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize the tracing subscriber before anything that might emit
@@ -57,28 +97,8 @@ pub fn run() {
             // the binary's runtime CWD — Tauri's dev mode may set CWD to
             // `src-tauri/`, so a naive `./profiles/vendor` resolved
             // against process CWD would land at the wrong place.
-            let resource_root = if let Some(path_os) = std::env::var_os("N3O_PROFILE_ROOT") {
-                let path = std::path::PathBuf::from(&path_os);
-                let resolved = if path.is_absolute() {
-                    path
-                } else {
-                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                        .parent()
-                        .expect("workspace root above src-tauri")
-                        .join(path)
-                };
-                tracing::info!(
-                    path = %resolved.display(),
-                    "profile library: using N3O_PROFILE_ROOT override",
-                );
-                resolved
-            } else {
-                app.path()
-                    .resource_dir()
-                    .expect("resource_dir")
-                    .join("profiles/vendor")
-            };
-            core::profile_library::init_from(resource_root);
+            let profiles_root = resource_root(app, "N3O_PROFILE_ROOT", "profiles/vendor");
+            core::profile_library::init_from(profiles_root);
             tracing::info!("profile library loaded");
 
             // User-owned printer instance library. First launch
@@ -127,27 +147,11 @@ pub fn run() {
             // user plugin overrides a bundled one of the same name:
             //   - bundled: a `plugins/` dir alongside the bundled
             //     `profiles/` (resource dir in a packaged build;
-            //     `N3O_PLUGIN_ROOT` override for dev, same shape as
-            //     `N3O_PROFILE_ROOT`).
+            //     `N3O_PLUGIN_ROOT` dev override).
             //   - user: `~/.local/share/n3o-slic3r/plugins`.
             // Loading runs each plugin's Lua top level in its sandbox;
             // a load failure keeps the plugin in the host as errored.
-            let bundled_plugins = if let Some(path_os) = std::env::var_os("N3O_PLUGIN_ROOT") {
-                let path = std::path::PathBuf::from(&path_os);
-                if path.is_absolute() {
-                    path
-                } else {
-                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                        .parent()
-                        .expect("workspace root above src-tauri")
-                        .join(path)
-                }
-            } else {
-                app.path()
-                    .resource_dir()
-                    .expect("resource_dir")
-                    .join("plugins")
-            };
+            let bundled_plugins = resource_root(app, "N3O_PLUGIN_ROOT", "plugins");
             let plugin_host = core::plugin::PluginHost::load(&[
                 bundled_plugins,
                 core::plugin::user_plugins_dir(),

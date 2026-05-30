@@ -102,6 +102,32 @@ closes at 8-5, the rest are largely independent:
 | Plugin-declared settings in the cascade UI + Plugins panel (frontend) | ❌ open | [PR-8-9](phase-8/PR-8-9%20Settings%20and%20panel.md) |
 | Hot reload (folder watcher) + plugin authoring guide + exit-criteria smoke | ❌ open | [PR-8-10](phase-8/PR-8-10%20Hot%20reload%20and%20guide.md) |
 
+## Review pass (after PR-8-5)
+
+A code review over PR-8-1…8-5 surfaced ten findings; nine were fixed,
+one deferred:
+
+- **Robustness:** all plugin mutex locks are now poison-tolerant
+  (recover the guard) and `apply_post_slice` holds the host lock only
+  for the Lua dispatch (file I/O + parse/serialize run unlocked) — a
+  panicking plugin can no longer wedge the host or block plugin UI
+  commands during file work.
+- **Correctness:** `g:layers()` recomputes positions live, so inserting
+  at multiple layers while iterating stays aligned; inserting after an
+  unterminated final line no longer merges them; `validate_entry` now
+  `canonicalize()`s the entry and rejects symlinks escaping the plugin
+  dir.
+- **UX:** re-enabling a plugin clears its stale `last_error`; non-UTF-8
+  output gets a clear "plugins skipped" warning.
+- **Cleanup:** shared `core::paths::data_dir()` (autosave + plugins) and
+  a `resource_root()` helper in `lib.rs`; the G-code bindings use new
+  `Comment::new`/`Other::new`/`Line::set_line_ending` instead of reaching
+  into model internals.
+- **Deferred (#10):** `apply_post_slice` does a full read→parse→
+  serialize round-trip and clones the lines per plugin — heavy on a
+  50 MB plate. Noted in code; optimize if large multi-material jobs
+  feel it.
+
 ## Exit criteria (Execution_Plan §10, adjusted)
 
 - A non-Rust developer can take an example plugin, edit it, and have it

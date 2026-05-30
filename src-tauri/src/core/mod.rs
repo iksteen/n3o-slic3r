@@ -12,6 +12,7 @@ pub mod driver;
 pub mod filament;
 pub mod gcode;
 pub mod logging;
+pub mod paths;
 pub mod plugin;
 pub mod preview;
 pub mod printer;

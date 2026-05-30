@@ -303,21 +303,29 @@ fn apply_post_slice(
     let Some(host) = host else {
         return;
     };
-    let mut host = match host.lock() {
-        Ok(h) => h,
-        Err(_) => {
-            tracing::warn!("plugin host mutex poisoned; skipping post-slice hook");
-            return;
-        }
-    };
-    if !host.any_hook(HookKind::PostSlice) {
+
+    // Cheap gate, held only for the check: nothing to do unless an
+    // enabled plugin declares the hook.
+    if !lock_host(host).any_hook(HookKind::PostSlice) {
         return;
     }
 
+    // Read + parse OUTSIDE the host lock (only the Lua dispatch below
+    // needs it), so plugin UI commands aren't blocked by the file I/O.
+    //
+    // Cost note: this reads the whole plate to a String, parses it to a
+    // typed `Vec<Line>`, and re-serializes below — a full round-trip
+    // even for a one-line edit, and `PostSliceHook` clones the lines
+    // per plugin. Fine at MVP scale; revisit if large multi-material
+    // jobs feel the transient allocation.
     let src = match std::fs::read_to_string(output_path) {
         Ok(s) => s,
         Err(e) => {
-            tracing::warn!(error = %e, path = %output_path.display(), "post-slice: read failed");
+            tracing::warn!(
+                error = %e,
+                path = %output_path.display(),
+                "post-slice plugins skipped: G-code output is not readable UTF-8 text",
+            );
             return;
         }
     };
@@ -331,13 +339,24 @@ fn apply_post_slice(
             object_count: None,
         },
     };
-    let edited = host.dispatch(&hook, parse_str(&src));
+
+    // Dispatch runs untrusted plugin Lua; hold the host lock only for
+    // that. The lock is poison-tolerant so a panicking plugin can't
+    // wedge the host for the rest of the process.
+    let edited = lock_host(host).dispatch(&hook, parse_str(&src));
+
     let new_src = to_string(&edited);
     if new_src != src {
         if let Err(e) = std::fs::write(output_path, &new_src) {
             tracing::warn!(error = %e, path = %output_path.display(), "post-slice: write failed");
         }
     }
+}
+
+/// Lock the plugin host, recovering the guard if a plugin panic
+/// poisoned it (the buffer's edits are per-call, so recovery is safe).
+fn lock_host(host: &PluginHostRef) -> std::sync::MutexGuard<'_, PluginHost> {
+    host.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Sequential per-plate worker. Holds the `JobHandle` for cancel +

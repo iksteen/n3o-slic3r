@@ -200,6 +200,12 @@ impl PluginHost {
                 plugin.last_error.as_deref().unwrap_or("unknown error"),
             )));
         }
+        // Re-enabling a plugin that auto-disabled on a runtime error is
+        // a fresh chance — clear the stale error so the panel doesn't
+        // show an enabled plugin permanently flagged with a past failure.
+        if enabled {
+            plugin.last_error = None;
+        }
         plugin.enabled = enabled;
         Ok(())
     }
@@ -285,21 +291,9 @@ fn errored_in_place(prior: &LoadedPlugin, error: String) -> LoadedPlugin {
 }
 
 /// User plugins directory: `$XDG_DATA_HOME` (or `~/.local/share`) +
-/// `/n3o-slic3r/plugins`. Mirrors the autosave convention.
+/// `/n3o-slic3r/plugins`. Same data-root convention as autosaves.
 pub fn user_plugins_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("n3o-slic3r").join("plugins");
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home)
-            .join(".local")
-            .join("share")
-            .join("n3o-slic3r")
-            .join("plugins");
-    }
-    std::env::temp_dir().join("n3o-slic3r").join("plugins")
+    crate::core::paths::data_dir("plugins")
 }
 
 #[cfg(test)]
@@ -397,6 +391,28 @@ mod tests {
 
         let out2 = host.dispatch(&StubHook, "again".to_string());
         assert_eq!(out2, "again-good");
+    }
+
+    #[test]
+    fn reenable_after_error_clears_last_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(
+            tmp.path(),
+            "kaboom",
+            r#"["post_slice"]"#,
+            r#"function on_post_slice(s) error("boom") end"#,
+        );
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+        let _ = host.dispatch(&StubHook, "x".to_string());
+        assert!(host.list()[0].last_error.is_some());
+
+        host.set_enabled("kaboom", true).unwrap();
+        let summary = &host.list()[0];
+        assert!(summary.enabled);
+        assert!(
+            summary.last_error.is_none(),
+            "re-enabling should clear the stale error"
+        );
     }
 
     #[test]

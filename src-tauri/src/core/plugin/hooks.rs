@@ -65,7 +65,12 @@ impl Hook for PostSliceHook {
         let cell = handle.cell();
         match runtime.call::<_, ()>("on_post_slice", (handle, self.plate.clone())) {
             Ok(_) => {
-                let edited = cell.lock().expect("gcode cell poisoned").clone();
+                // Recover the guard if a panic mid-edit poisoned the
+                // cell, so one bad plugin can't wedge the host.
+                let edited = cell
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
                 (edited, None)
             }
             Err(e) => (lines, Some(e)),

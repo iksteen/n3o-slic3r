@@ -231,8 +231,21 @@ fn validate_entry(entry: &str, plugin_dir: &Path) -> Result<(), ManifestError> {
     if rel.extension().and_then(|e| e.to_str()) != Some("lua") {
         return Err(bad("must end in .lua"));
     }
-    if !plugin_dir.join(rel).is_file() {
+    let full = plugin_dir.join(rel);
+    if !full.is_file() {
         return Err(bad("file not found"));
+    }
+    // The component scan rejects `..` in the manifest string, but a
+    // symlink could still point the entry outside the plugin dir.
+    // Resolve symlinks and confirm the target stays inside.
+    let canonical_entry = full
+        .canonicalize()
+        .map_err(|e| bad(&format!("cannot resolve: {e}")))?;
+    let canonical_dir = plugin_dir
+        .canonicalize()
+        .map_err(|e| bad(&format!("cannot resolve plugin dir: {e}")))?;
+    if !canonical_entry.starts_with(&canonical_dir) {
+        return Err(bad("resolves outside the plugin directory"));
     }
     Ok(())
 }
@@ -423,6 +436,30 @@ hooks=["pre_slice"]"#;
         let (_tmp, dir) = plugin_dir(src, "");
         assert!(matches!(
             parse_manifest(src, &dir),
+            Err(ManifestError::BadEntry(_, _))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_entry_symlink_escaping_the_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A target file OUTSIDE the plugin directory.
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("evil.lua");
+        std::fs::write(&target, "-- evil").unwrap();
+
+        let src = r#"name="p"
+version="1.0.0"
+entry="main.lua"
+hooks=["post_slice"]"#;
+        std::fs::write(tmp.path().join("plugin.toml"), src).unwrap();
+        // main.lua is a symlink pointing out of the plugin dir — the
+        // `..` scan can't see it, but canonicalize must.
+        std::os::unix::fs::symlink(&target, tmp.path().join("main.lua")).unwrap();
+
+        assert!(matches!(
+            parse_manifest(src, tmp.path()),
             Err(ManifestError::BadEntry(_, _))
         ));
     }
