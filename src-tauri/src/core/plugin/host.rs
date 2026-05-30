@@ -80,6 +80,57 @@ pub struct PluginSummary {
     pub last_error: Option<String>,
 }
 
+/// Per-dispatch gate deciding which plugins may run for *this* plate or
+/// send. Distinct from a plugin's **health** (`LoadedPlugin.enabled` /
+/// `last_error`, which the host manages): the gate is the user-intent
+/// **activation** axis plus printer applicability, supplied per dispatch
+/// by the caller (the orchestrator resolves it per plate from the
+/// cascade).
+#[derive(Debug, Default)]
+pub struct DispatchGate {
+    /// Active printer model, for `printer_compatibility` enforcement.
+    /// `None` skips the printer check (a context with no bound model).
+    pub printer_model: Option<String>,
+    /// Resolved `plugin.<name>.enabled` activation, keyed by plugin
+    /// name. A plugin absent from the map uses its default (enabled).
+    /// An empty map therefore runs every plugin at its default.
+    pub activation: std::collections::BTreeMap<String, bool>,
+}
+
+impl DispatchGate {
+    /// A permissive gate: no printer filter, every plugin at its default
+    /// activation. The plain `dispatch` / `any_hook` use this, so they
+    /// behave exactly as before gating existed.
+    pub fn all() -> Self {
+        Self::default()
+    }
+}
+
+/// Whether `model` satisfies a plugin's declared printer compatibility.
+fn printer_matches(compat: &PrinterCompat, model: &str) -> bool {
+    match compat {
+        PrinterCompat::Any => true,
+        PrinterCompat::Models(list) => list.iter().any(|m| m == model),
+    }
+}
+
+/// Whether a plugin may run under `gate`: it must be **healthy** (loaded
+/// and not auto-disabled by an error), **printer-compatible** with the
+/// gate's model (when one is supplied), and **activated** (its
+/// `plugin.<name>.enabled` resolves true, defaulting to true when the
+/// gate doesn't mention it). Hook membership is checked separately.
+fn is_active(p: &LoadedPlugin, gate: &DispatchGate) -> bool {
+    if !p.enabled || p.runtime.is_none() {
+        return false;
+    }
+    if let Some(model) = &gate.printer_model {
+        if !printer_matches(&p.manifest.printer_compatibility, model) {
+            return false;
+        }
+    }
+    gate.activation.get(&p.manifest.name).copied().unwrap_or(true)
+}
+
 /// Owns every discovered plugin and dispatches hooks across them.
 pub struct PluginHost {
     /// Name-sorted; later-discovered roots override earlier ones on a
@@ -133,16 +184,29 @@ impl PluginHost {
         }
     }
 
-    /// Fold `value` through every enabled plugin that declares the
-    /// hook, in name order. Plugin failures are isolated (recorded +
-    /// the plugin auto-disabled) and never surface to the caller.
+    /// Fold `value` through every enabled plugin that declares the hook,
+    /// in name order, with a permissive gate (no printer filter, all
+    /// default-activated). Equivalent to the pre-gating behaviour.
     pub fn dispatch<H: Hook>(&mut self, hook: &H, value: H::Value) -> H::Value {
+        self.dispatch_gated(hook, value, &DispatchGate::all())
+    }
+
+    /// Fold `value` through every plugin that declares the hook **and**
+    /// passes `gate` (healthy + printer-compatible + activated), in name
+    /// order. Plugin failures are isolated (recorded + the plugin
+    /// auto-disabled) and never surface to the caller.
+    pub fn dispatch_gated<H: Hook>(
+        &mut self,
+        hook: &H,
+        value: H::Value,
+        gate: &DispatchGate,
+    ) -> H::Value {
         let kind = hook.kind();
         let mut current = value;
         for i in 0..self.plugins.len() {
             {
                 let p = &self.plugins[i];
-                if !p.enabled || p.runtime.is_none() || !p.manifest.hooks.contains(&kind) {
+                if !is_active(p, gate) || !p.manifest.hooks.contains(&kind) {
                     continue;
                 }
             }
@@ -167,13 +231,20 @@ impl PluginHost {
         current
     }
 
-    /// Whether any enabled, loaded plugin declares `kind`. Lets a
-    /// caller skip building a hook payload entirely when nothing would
-    /// run (e.g. the orchestrator avoids re-parsing G-code).
+    /// Whether any enabled, loaded plugin declares `kind` (permissive
+    /// gate). Lets a caller skip building a hook payload entirely when
+    /// nothing would run (e.g. the orchestrator avoids re-parsing G-code).
     pub fn any_hook(&self, kind: HookKind) -> bool {
+        self.any_active_hook(kind, &DispatchGate::all())
+    }
+
+    /// As [`Self::any_hook`], but only counts plugins that pass `gate`
+    /// (healthy + printer-compatible + activated) — so the orchestrator
+    /// skips the G-code round-trip when nothing would run for this plate.
+    pub fn any_active_hook(&self, kind: HookKind, gate: &DispatchGate) -> bool {
         self.plugins
             .iter()
-            .any(|p| p.enabled && p.runtime.is_some() && p.manifest.hooks.contains(&kind))
+            .any(|p| is_active(p, gate) && p.manifest.hooks.contains(&kind))
     }
 
     /// Summaries for the Plugins panel.
@@ -466,6 +537,72 @@ mod tests {
         assert_eq!(summary.name, "broken");
         assert!(!summary.enabled);
         assert!(summary.last_error.is_some());
+    }
+
+    #[test]
+    fn gate_skips_printer_incompatible_plugin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("a1-only");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(MANIFEST_FILE),
+            "name=\"a1-only\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\n\
+             hooks=[\"post_slice\"]\nprinter_compatibility=[\"Bambu Lab A1 mini\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("main.lua"),
+            r#"function on_post_slice(s) return s .. "-a1" end"#,
+        )
+        .unwrap();
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+
+        // Wrong printer → skipped (and any_active_hook reports nothing).
+        let wrong = DispatchGate {
+            printer_model: Some("Snapmaker U1".into()),
+            ..Default::default()
+        };
+        assert_eq!(host.dispatch_gated(&StubHook, "x".into(), &wrong), "x");
+        assert!(!host.any_active_hook(HookKind::PostSlice, &wrong));
+
+        // Right printer → runs.
+        let right = DispatchGate {
+            printer_model: Some("Bambu Lab A1 mini".into()),
+            ..Default::default()
+        };
+        assert_eq!(host.dispatch_gated(&StubHook, "x".into(), &right), "x-a1");
+
+        // No model supplied → printer check skipped, runs.
+        assert_eq!(
+            host.dispatch_gated(&StubHook, "x".into(), &DispatchGate::all()),
+            "x-a1"
+        );
+    }
+
+    #[test]
+    fn gate_skips_deactivated_plugin() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(
+            tmp.path(),
+            "p",
+            r#"["post_slice"]"#,
+            r#"function on_post_slice(s) return s .. "-p" end"#,
+        );
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+
+        // Activation resolves false → skipped.
+        let off = DispatchGate {
+            printer_model: None,
+            activation: [("p".to_string(), false)].into_iter().collect(),
+        };
+        assert_eq!(host.dispatch_gated(&StubHook, "x".into(), &off), "x");
+        assert!(!host.any_active_hook(HookKind::PostSlice, &off));
+
+        // Absent from the map → default-activated, runs.
+        assert_eq!(
+            host.dispatch_gated(&StubHook, "x".into(), &DispatchGate::all()),
+            "x-p"
+        );
     }
 
     #[test]

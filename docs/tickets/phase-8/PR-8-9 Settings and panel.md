@@ -64,9 +64,19 @@ a whole-job send (document the boundary).
   `plugin.<name>.<key>` keys.
 
 **Build order (this ticket now splits — bigger than the original ~3d):**
-1. Manifest `scopes` field (vocab + parse + validate + surface).
-2. Enablement-as-cascade-setting + per-plate active-set gating in the
-   orchestrator + `printer_compatibility` enforcement.
+1. ✅ Manifest `scopes` field (vocab + parse + validate + surface).
+2. ✅ Enablement-as-cascade-setting + per-plate active-set gating in the
+   orchestrator + `printer_compatibility` enforcement. Activation is
+   resolved **directly from the override tiers** (`plugin.<name>.enabled`,
+   user < project < object precedence, default true) rather than through
+   `cascade::resolve` — a plugin key has no authored cascade rule and
+   must not reach the libslic3r adapter. A per-plate `DispatchGate`
+   (printer model + activation map) gates `dispatch`/`any_hook`; the
+   plain methods stay as permissive wrappers. printer_compatibility is
+   enforced for pre/post-slice (model from the slice context) and
+   pre-send (model resolved from the plate's instance). pre-send carries
+   no per-plate activation (a send is whole-job) — that and the global
+   tier land in step 3.
 3. Global plugin-state persistence; resolved plugin-setting values
    handed to hooks (replacing the manifest-default reads in 8-5..8-7).
 4. Frontend: Plugins panel + settings category + per-scope controls.

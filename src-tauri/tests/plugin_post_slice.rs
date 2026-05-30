@@ -385,6 +385,28 @@ fn platecycler_eject_macro_in_real_slice() {
     );
 }
 
+/// End-to-end activation gating: a `plugin.platecycler.enabled = false`
+/// override in the job's tiers turns the plugin off for the slice — the
+/// eject macro is absent even though the plugin is loaded and the
+/// printer model matches.
+#[test]
+fn platecycler_disabled_by_activation_override_in_real_slice() {
+    ensure_ffi_init();
+    let host = Arc::new(Mutex::new(host_for_example("platecycler")));
+    let (mut input, registry, _out) = slice_input(vec![1]);
+    input
+        .context
+        .object_overrides
+        .insert("plugin.platecycler.enabled".into(), "false".into());
+    let (sink, events) = collecting_sink();
+    run_slice_job_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
+    let g = output_gcode(&events);
+    assert!(
+        !g.contains("; n3o:platecycler"),
+        "a plugin deactivated via override must not append its macro"
+    );
+}
+
 /// A plugin that errors on one plate must not break the others: the job
 /// completes every plate, the erroring plugin is isolated.
 #[test]

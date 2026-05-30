@@ -30,7 +30,9 @@ pub use error::PluginError;
 pub use hooks::{
     PayloadKind, PlateMeta, PostSliceHook, PreSendHook, PreSliceContext, PreSliceHook, SendTarget,
 };
-pub use host::{user_plugins_dir, Hook, LoadedPlugin, PluginHost, PluginSummary};
+pub use host::{
+    user_plugins_dir, DispatchGate, Hook, LoadedPlugin, PluginHost, PluginSummary,
+};
 pub use manifest::{
     HookKind, ManifestError, PluginManifest, PluginScope, PrinterCompat, SettingDecl, SettingKind,
     SettingValue,

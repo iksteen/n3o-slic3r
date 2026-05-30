@@ -208,6 +208,11 @@ pub struct ResolvedJob {
     /// the pre/post-slice plugin hooks. Empty when the instance can't
     /// be resolved (plugins then see no slots — offline-safe).
     pub filament: crate::core::plugin::FilamentLoadout,
+    /// Resolved `plugin.<name>.enabled` activation, extracted from the
+    /// job's override tiers at prep. Feeds the per-plate `DispatchGate`
+    /// so a plugin can be turned off (or on) per project/plate. A plugin
+    /// absent here uses its default (enabled).
+    pub plugin_activation: std::collections::BTreeMap<String, bool>,
 }
 
 #[cfg(test)]

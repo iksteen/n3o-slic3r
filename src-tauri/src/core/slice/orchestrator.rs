@@ -52,11 +52,15 @@ use super::errors::{classify_libslic3r_error, SliceError};
 use super::events::SliceEvent;
 use super::job::{JobHandle, JobId, JobRegistry, JobStatus, ResolvedJob, SliceJobInput};
 use super::summary::build_summary;
-use crate::core::cascade::{self, types::Cascade, Resolved, ResolvedValue, SourceLocation};
+use crate::core::cascade::commands::ContextJson;
+use crate::core::cascade::{
+    self, parse_override_str, types::Cascade, Resolved, ResolvedValue, SourceLocation,
+};
 use crate::core::cascade_adapter::{adapt, Manifest};
 use crate::core::gcode::{parse_str, to_string};
 use crate::core::plugin::{
-    FilamentLoadout, HookKind, PlateMeta, PluginHost, PostSliceHook, PreSliceContext, PreSliceHook,
+    DispatchGate, FilamentLoadout, HookKind, PlateMeta, PluginHost, PostSliceHook, PreSliceContext,
+    PreSliceHook,
 };
 use crate::core::printer::lookup_instance;
 use crate::core::profile_library::compose_cascade;
@@ -229,6 +233,10 @@ fn prepare_job(
     let handle = JobHandle::new();
     registry.insert(job_id, handle.clone());
 
+    // Resolve plugin activation from the job's override tiers up front
+    // (before `input` is partly moved into `resolved`).
+    let plugin_activation = resolve_plugin_activation(&input.context);
+
     let resolved = ResolvedJob {
         model_path: PathBuf::from(&input.model_path),
         output_dir,
@@ -236,6 +244,7 @@ fn prepare_job(
         cascade,
         context,
         filament,
+        plugin_activation,
     };
     Ok((job_id, resolved, handle))
 }
@@ -317,14 +326,15 @@ fn apply_post_slice(
     plate_id: u32,
     ctx: &SlicingContext,
     filament: &FilamentLoadout,
+    gate: &DispatchGate,
 ) {
     let Some(host) = host else {
         return;
     };
 
     // Cheap gate, held only for the check: nothing to do unless an
-    // enabled plugin declares the hook.
-    if !lock_host(host).any_hook(HookKind::PostSlice) {
+    // active plugin (this printer + activated) declares the hook.
+    if !lock_host(host).any_active_hook(HookKind::PostSlice, gate) {
         return;
     }
 
@@ -362,7 +372,7 @@ fn apply_post_slice(
     // Dispatch runs untrusted plugin Lua; hold the host lock only for
     // that. The lock is poison-tolerant so a panicking plugin can't
     // wedge the host for the rest of the process.
-    let edited = lock_host(host).dispatch(&hook, parse_str(&src));
+    let edited = lock_host(host).dispatch_gated(&hook, parse_str(&src), gate);
 
     let new_src = to_string(&edited);
     if new_src != src {
@@ -403,11 +413,12 @@ fn apply_pre_slice(
     resolved: &mut Resolved,
     ctx: &SlicingContext,
     filament: &FilamentLoadout,
+    gate: &DispatchGate,
 ) {
     let Some(host) = host else {
         return;
     };
-    if !lock_host(host).any_hook(HookKind::PreSlice) {
+    if !lock_host(host).any_active_hook(HookKind::PreSlice, gate) {
         return;
     }
 
@@ -425,7 +436,7 @@ fn apply_pre_slice(
     };
     // Dispatch (untrusted Lua) is the panic-prone step; it runs before
     // `resolved` is touched, so a panic leaves the cascade unchanged.
-    let edited = lock_host(host).dispatch(&hook, settings);
+    let edited = lock_host(host).dispatch_gated(&hook, settings, gate);
     apply_pre_slice_result(resolved, edited);
 }
 
@@ -463,6 +474,49 @@ fn lock_host(host: &PluginHostRef) -> std::sync::MutexGuard<'_, PluginHost> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Pull `plugin.<name>.enabled` activation out of the job's override
+/// tiers (user < project < object precedence). Plugin activation rides
+/// the *same* override tiers as plugin settings, but is resolved here
+/// directly rather than through `cascade::resolve` + `adapt`: a plugin
+/// key has no authored cascade rule (its value comes only from the
+/// override tiers plus the manifest default, applied by the gate), and
+/// it must never reach the libslic3r adapter, which only knows real
+/// slicer keys. The result feeds the per-plate [`DispatchGate`].
+fn resolve_plugin_activation(ctx: &ContextJson) -> BTreeMap<String, bool> {
+    let mut out = BTreeMap::new();
+    // File tiers (TOML bodies): user first, then project, so project
+    // wins on a clash — matching the cascade override precedence.
+    for spec in ctx.user_overrides.iter().chain(ctx.project_overrides.iter()) {
+        if let Ok(flat) = parse_override_str(&spec.content, Path::new(&spec.label)) {
+            for (k, v) in &flat.entries {
+                absorb_activation(&mut out, k, v);
+            }
+        }
+    }
+    // Object tier (already a flat string map) is highest precedence.
+    for (k, v) in &ctx.object_overrides {
+        absorb_activation(&mut out, k, v);
+    }
+    out
+}
+
+/// Record `key`/`value` into the activation map if it's a
+/// `plugin.<name>.enabled` flag with a boolean value. Plugin names are
+/// kebab-case (no dots), so the prefix/suffix strip is unambiguous.
+fn absorb_activation(out: &mut BTreeMap<String, bool>, key: &str, value: &str) {
+    if let Some(name) = key.strip_prefix("plugin.").and_then(|r| r.strip_suffix(".enabled")) {
+        match value.trim() {
+            "true" | "1" => {
+                out.insert(name.to_string(), true);
+            }
+            "false" | "0" => {
+                out.insert(name.to_string(), false);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Sequential per-plate worker. Holds the `JobHandle` for cancel +
 /// status updates. Emits every lifecycle event through `sink`.
 fn run_worker(
@@ -473,6 +527,15 @@ fn run_worker(
     host: Option<PluginHostRef>,
 ) {
     let mut last_plate_in_progress: Option<u32> = None;
+
+    // The dispatch gate is the same for every plate in this job — one
+    // bound printer model + one resolved activation set. Build it once
+    // and hand it to both slice hooks; it gates which plugins run
+    // (printer-compatible + activated, on top of host health).
+    let gate = DispatchGate {
+        printer_model: Some(job.context.printer.model.clone()),
+        activation: job.plugin_activation.clone(),
+    };
 
     for &plate_id in &job.plate_ids {
         if handle.is_cancelled() {
@@ -501,7 +564,7 @@ fn run_worker(
         // by catch_unwind for the same reason as post-slice — a panic
         // must not silently kill the worker thread.
         let pre = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            apply_pre_slice(&host, &mut resolved_cascade, &job.context, &job.filament);
+            apply_pre_slice(&host, &mut resolved_cascade, &job.context, &job.filament, &gate);
         }));
         if pre.is_err() {
             tracing::error!(
@@ -618,7 +681,14 @@ fn run_worker(
                 // plate keeps libslic3r's unmodified G-code and the
                 // slice completes normally.
                 let post = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    apply_post_slice(&host, &output_path, plate_id, &job.context, &job.filament);
+                    apply_post_slice(
+                        &host,
+                        &output_path,
+                        plate_id,
+                        &job.context,
+                        &job.filament,
+                        &gate,
+                    );
                 }));
                 if post.is_err() {
                     tracing::error!(
@@ -770,5 +840,54 @@ mod tests {
         // duration check.
         t.last_emit_at = Some(Instant::now() - Duration::from_millis(100));
         assert!(t.should_emit(10, "Slicing"));
+    }
+
+    #[test]
+    fn resolve_plugin_activation_reads_tiers_with_precedence() {
+        use crate::core::cascade::commands::OverrideFileSpec;
+        use crate::core::printer::profile::PrinterProfile;
+        use crate::core::scene::build_plate::BuildPlate;
+        use std::collections::HashMap;
+
+        let spec = |s: &str| OverrideFileSpec {
+            label: "<test>".into(),
+            content: s.into(),
+        };
+        // Object tier (highest): turns bravo on, charlie off. Keys are
+        // flat strings, exactly as object overrides arrive.
+        let object: HashMap<String, String> = [
+            ("plugin.bravo.enabled".to_string(), "true".to_string()),
+            ("plugin.charlie.enabled".to_string(), "false".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let ctx = ContextJson {
+            printer: PrinterProfile::default(),
+            plate: BuildPlate {
+                identity: String::new(),
+                libslic3r_curr_bed_type: String::new(),
+            },
+            filaments: vec![],
+            active_slot: 0,
+            // Dotted keys must be quoted in TOML to stay flat.
+            user_overrides: vec![spec(
+                "\"plugin.alpha.enabled\" = false\n\"plugin.bravo.enabled\" = false",
+            )],
+            project_overrides: vec![spec(
+                "\"plugin.bravo.enabled\" = false\n\"plugin.notabool.enabled\" = \"maybe\"",
+            )],
+            object_overrides: object,
+        };
+
+        let act = resolve_plugin_activation(&ctx);
+        assert_eq!(act.get("alpha"), Some(&false), "user tier");
+        assert_eq!(
+            act.get("bravo"),
+            Some(&true),
+            "object tier wins over project + user"
+        );
+        assert_eq!(act.get("charlie"), Some(&false), "object tier");
+        assert_eq!(act.get("notabool"), None, "non-boolean value ignored");
     }
 }

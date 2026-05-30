@@ -25,7 +25,7 @@ use super::traits::{
     Driver, DriverConfig, DriverId, DriverKind, PrinterCommand, SendHandle, SendPayload,
 };
 use crate::core::plugin::commands::PluginHostState;
-use crate::core::plugin::{HookKind, PayloadKind, PreSendHook, SendTarget};
+use crate::core::plugin::{DispatchGate, HookKind, PayloadKind, PreSendHook, SendTarget};
 use crate::core::project::{PlateId, Project};
 use crate::core::slice::pre_slice_gate::{ams_bindings_for_plate, ams_mapping_for_plate};
 use crate::core::threemf::{fixture_input, write_sliced_3mf, AmsBinding};
@@ -447,7 +447,11 @@ pub async fn driver_send_plate(
     };
     // Pre-send plugin hook: let plugins transform the bytes about to go
     // to the printer (sync — no await while the host lock is held).
-    let payload = apply_pre_send(plugin_host.inner(), payload, plate_id, kind);
+    // Resolve the plate's printer model so the hook enforces
+    // `printer_compatibility` (a plugin scoped to another model is
+    // skipped even without a Lua self-guard).
+    let printer_model = plate_printer_model(&project, plate_id);
+    let payload = apply_pre_send(plugin_host.inner(), payload, plate_id, kind, printer_model);
     let mut d = handle.lock().await;
     d.send(payload).await.map_err(|e| e.to_string())
 }
@@ -455,14 +459,36 @@ pub async fn driver_send_plate(
 /// Run the pre-send hook over `payload`, swapping in any plugin-edited
 /// bytes. No-op when no plugin declares the hook; a panic in plugin Lua
 /// is caught and the original bytes are sent unchanged.
+/// Resolve the printer model bound to `plate_id`, for pre-send
+/// `printer_compatibility` enforcement. `None` when the plate isn't
+/// bound or the instance/profile can't be resolved — the printer check
+/// is then simply skipped (the gate treats `None` as "any").
+fn plate_printer_model(project: &Mutex<Project>, plate_id: u32) -> Option<String> {
+    let inst_id = {
+        let p = project.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        p.plate(PlateId(plate_id))?.printer_instance_id.clone()?
+    };
+    let inst = crate::core::printer::lookup_instance(&inst_id)?;
+    let profile = crate::core::printer::lookup(&inst.vendor_profile_ref)?;
+    Some(profile.model.clone())
+}
+
 fn apply_pre_send(
     host: &PluginHostState,
     payload: SendPayload,
     plate_id: u32,
     kind: DriverKind,
+    printer_model: Option<String>,
 ) -> SendPayload {
     let lock = || host.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if !lock().any_hook(HookKind::PreSend) {
+    // Per-plate plugin activation doesn't apply to a whole-job send, so
+    // the gate carries only the printer model (for compatibility);
+    // global-default activation arrives with the plugin-state file.
+    let gate = DispatchGate {
+        printer_model,
+        activation: Default::default(),
+    };
+    if !lock().any_active_hook(HookKind::PreSend, &gate) {
         return payload;
     }
 
@@ -485,7 +511,7 @@ fn apply_pre_send(
         },
     };
     let edited = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        lock().dispatch(&hook, bytes.clone())
+        lock().dispatch_gated(&hook, bytes.clone(), &gate)
     })) {
         Ok(b) => b,
         Err(_) => {
@@ -576,7 +602,7 @@ mod tests {
             bytes: b"G1 X0".to_vec(),
             file_name: "plate-7.gcode".into(),
         };
-        match apply_pre_send(&host, payload, 7, DriverKind::U1) {
+        match apply_pre_send(&host, payload, 7, DriverKind::U1, None) {
             SendPayload::Gcode { bytes, file_name } => {
                 assert_eq!(bytes, b"G1 X0\n; via u1".to_vec());
                 assert_eq!(file_name, "plate-7.gcode", "file_name preserved");
@@ -597,7 +623,7 @@ mod tests {
             ams_mapping: vec![],
             ams_mapping2: vec![],
         };
-        match apply_pre_send(&host, payload, 3, DriverKind::Bambu) {
+        match apply_pre_send(&host, payload, 3, DriverKind::Bambu, None) {
             SendPayload::Gcode3mf {
                 bytes,
                 plate_id,
