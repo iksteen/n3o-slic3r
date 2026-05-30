@@ -153,6 +153,18 @@ more, now fixed:
   Lua hardcodes the layer; the knob did nothing) — re-add when PR-8-9
   wires plugin settings.
 
+The **PR-8-8 review** surfaced a sandbox gap (now closed): the read-only
+metatable guards on host objects (the filament snapshot tables) could be
+bypassed because the base library still exposed `rawset` /
+`getmetatable` / `setmetatable`. `rawset` writes past `__newindex`;
+`getmetatable`/`setmetatable` could read or replace a guard metatable.
+The sandbox now strips all three (`sandbox.rs`), so metamethod-based
+read-only enforcement is unbypassable by construction — a binding stays
+safe even if it forgets a per-object `__metatable` lock. `rawget` /
+`rawequal` / `rawlen` stay (no bypass value). The `settings` userdata
+was already immune (`rawset` errors on userdata); this hardens the
+table-based bindings.
+
 ## Exit criteria (Execution_Plan §10, adjusted)
 
 - A non-Rust developer can take an example plugin, edit it, and have it

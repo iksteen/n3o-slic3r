@@ -521,6 +521,30 @@ mod tests {
     }
 
     #[test]
+    fn rawset_cannot_bypass_the_slot_read_only_guard() {
+        // The sandbox strips `rawset`, so the `__newindex`-based guard on
+        // the snapshot tables can't be bypassed: calling rawset errors
+        // (nil value), and clean-by-copy discards the whole edit.
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(
+            tmp.path(),
+            "rawmutator",
+            r#"["post_slice"]"#,
+            r#"function on_post_slice(g, plate, filament)
+                 g:append("; ran")
+                 rawset(filament:slots()[1], "index", 99)
+               end"#,
+        );
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+        let hook = PostSliceHook {
+            plate: plate(),
+            filament: loadout(),
+        };
+        let out = to_string(&host.dispatch(&hook, parse_str(GCODE)));
+        assert_eq!(out, GCODE);
+    }
+
+    #[test]
     fn loadout_from_instance_resolves_bound_filament() {
         // Use a bundled fixture instance; assert the loadout walks its
         // slots and resolves at least one bound filament's type from the

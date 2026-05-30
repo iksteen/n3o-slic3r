@@ -7,11 +7,25 @@
 //!
 //! Deny-list (never loaded, or stripped): `io`, the real `os`
 //! (`execute` / `getenv` / `remove` / `rename` / `exit` / …),
-//! `package` / `require`, `debug`, and the base-library dynamic
-//! loaders `load` / `loadstring` / `loadfile` / `dofile`. The first
-//! three groups are simply not loaded via the `StdLib` selection; the
-//! loaders ride in the always-present base library, so we strip them
-//! explicitly.
+//! `package` / `require`, `debug`, the base-library dynamic loaders
+//! `load` / `loadstring` / `loadfile` / `dofile`, and the
+//! metamethod-bypass / metatable-manipulation globals `rawset` /
+//! `getmetatable` / `setmetatable`. The first three groups are simply
+//! not loaded via the `StdLib` selection; the rest ride in the
+//! always-present base library, so we strip them explicitly.
+//!
+//! ## Why strip `rawset` / `getmetatable` / `setmetatable`
+//!
+//! Host objects handed to plugins enforce read-only / validated access
+//! through metatables (`__index` / `__newindex`) — e.g. the immutable
+//! filament-loadout snapshot tables, the validated `settings` userdata.
+//! `rawset` writes straight past `__newindex`; `getmetatable` could read
+//! a guard metatable to reach the table it proxies; `setmetatable` could
+//! replace it. Removing all three makes those metamethod guards
+//! unbypassable by construction, so a binding stays safe even if it
+//! forgets a per-object `__metatable` lock. `rawget` / `rawequal` /
+//! `rawlen` stay — they can't mutate a guarded table or reach data a
+//! hidden metatable holds, and they're occasionally useful.
 //!
 //! Resource bounds (instruction budget, memory limit) live on the
 //! `PluginRuntime` in `runtime.rs`, not here — this module only shapes
@@ -26,8 +40,18 @@ use super::error::PluginError;
 
 /// Base-library globals that ship with every Lua state regardless of
 /// the `StdLib` selection and that we strip: arbitrary-string code
-/// loading and filesystem loaders.
-const DENIED_BASE_GLOBALS: &[&str] = &["load", "loadstring", "loadfile", "dofile"];
+/// loading + filesystem loaders, and the metamethod-bypass / metatable-
+/// manipulation functions that would let a plugin defeat the read-only
+/// metatable guards on host objects (see the module doc).
+const DENIED_BASE_GLOBALS: &[&str] = &[
+    "load",
+    "loadstring",
+    "loadfile",
+    "dofile",
+    "rawset",
+    "getmetatable",
+    "setmetatable",
+];
 
 /// Build a fresh sandboxed Lua runtime. The caller (`PluginRuntime`)
 /// layers instruction + memory limits on top before running anything.

@@ -174,6 +174,9 @@ mod tests {
                     and os.getenv == nil
                     and os.remove == nil
                     and os.exit == nil
+                    and rawset == nil
+                    and getmetatable == nil
+                    and setmetatable == nil
             end
             "#,
             "probe",

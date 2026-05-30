@@ -16,10 +16,10 @@
 //! reachable from Lua, so a plugin can never write filament state back
 //! into the slice (FR-PL-7). The `filament` handle is immutable
 //! userdata — assignment raises. The per-slot / printer tables returned
-//! by `slots()`/`slot()`/`printer()` are fresh snapshots whose normal
-//! `=` assignment path raises via `__newindex` (catching honest
-//! mistakes); a plugin *can* `rawset` a key onto its own copy, but that
-//! mutation is local to that throwaway table and never propagates.
+//! by `slots()`/`slot()`/`printer()` are fresh snapshots whose `=`
+//! assignment path raises via `__newindex`; the sandbox strips `rawset`
+//! / `getmetatable` / `setmetatable` (see `sandbox.rs`), so that guard
+//! can't be bypassed — the snapshots are effectively immutable from Lua.
 //!
 //! ```lua
 //! function on_post_slice(gcode, plate, filament)
@@ -145,17 +145,13 @@ fn read_only_err() -> mlua::Error {
 /// reads through to `data` and rejects `=` assignment. Because the proxy
 /// itself holds no keys, even assigning an *existing* field name routes
 /// through `__newindex` and raises (a plain table's `__newindex` fires
-/// only for absent keys). `__metatable = false` hides the metatable from
-/// `getmetatable` so the read-through `data` table can't be reached and
-/// mutated that way.
+/// only for absent keys).
 ///
-/// This is not bulletproof immutability: `rawset` bypasses `__newindex`
-/// by design and can shadow a key on the proxy itself. That's
-/// acceptable here because the proxy is a throwaway snapshot built fresh
-/// per call — a `rawset` mutates only the plugin's local copy and never
-/// reaches the host's `Arc<FilamentLoadout>`, which is never handed to
-/// Lua. The guard exists to catch honest `slot.foo = x` mistakes, not to
-/// sandbox a hostile plugin (the sandbox owns that).
+/// The metatable is `__metatable = false` so even with `getmetatable`
+/// present it stays hidden; together with the sandbox stripping `rawset`
+/// / `setmetatable` (see `sandbox.rs`) there's no Lua path to mutate the
+/// proxy or reach the `data` table behind it. The `data` table itself is
+/// never returned to Lua directly.
 fn read_only_proxy(lua: &Lua, data: Table) -> LuaResult<Table> {
     let proxy = lua.create_table()?;
     let mt = lua.create_table()?;

@@ -52,11 +52,10 @@ into the dispatch (and the pre-send context).
   cannot write filament state back into the slice (the FR-PL-7
   guarantee). The handle is immutable userdata (assignment raises). The
   per-slot/printer tables are fresh per-call snapshots whose `=`
-  assignment path raises via `__newindex` (`__metatable = false` hides
-  the read-through table). Not bulletproof against `rawset` — which by
-  design bypasses `__newindex` — but a `rawset` only shadows a key on
-  the plugin's throwaway copy and never reaches host state; the guard
-  catches honest mistakes, the sandbox owns hostile plugins.
+  assignment path raises via `__newindex`. The sandbox strips `rawset` /
+  `getmetatable` / `setmetatable` (a follow-up hardening — see the
+  Phase 8 review-pass note), so that guard can't be bypassed and the
+  snapshots are effectively immutable from Lua.
 - **Offline-safe:** when the instance can't be resolved the loadout is
   empty — `slots()` returns `{}`, `count()` is 0, no error. (Today the
   instance always resolves, since `resolve_cascade` already proved it;
