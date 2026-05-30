@@ -488,9 +488,9 @@ Runs in parallel with Phase 7 since it has no printer dependency, and reuses the
 
 - Lua bindings to live filament state from Phase 7c (read-only): per-slot identity, loaded flag, mismatch state. Enables material-aware plugins.
 
-- Hook dispatch at pre-slice, post-slice, pre-send, and compose. The compose hook (FR-PL-5) is the project-level hook that receives all sliced plates plus project metadata and returns a transformed bundle.
+- Hook dispatch at pre-slice, post-slice, and pre-send. *(The compose hook — FR-PL-5 — is **deferred to post-MVP**; see §16 and `docs/tickets/phase-8.md`.)*
 
-- Compose hook API: 3MF-level read/write (thumbnails, filament aggregates, print time totals), plate composition order, plate count transformation. Designed to support PlateCycler-style workflows.
+- ~~Compose hook API: 3MF-level read/write, plate composition order, plate count transformation.~~ **Deferred to post-MVP.** Its only intended MVP consumer (platecycler) was simplified to a post-slice macro append that doesn't require it, so building a cross-plate transform with no MVP consumer is cut.
 
 - Plugin-declared settings integrated into the cascade UI under a Plugins category. Plate-level metadata (cycle counts, composition order) editable in the plate tab UI.
 
@@ -498,7 +498,7 @@ Runs in parallel with Phase 7 since it has no printer dependency, and reuses the
 
 - Plugins panel in UI: enabled state, errors, per-printer scoping.
 
-- **Flagship example plugin — platecycler.** Port the existing platecycler Python tool to a Lua plugin using the compose hook. Reads per-plate cycle_count metadata, concatenates plate G-codes with the Chitu PlateCycler swap macro between them, rewrites 3MF metadata aggregates. Validated end-to-end on the project lead's A1 mini + PlateCycler hardware.
+- **Flagship example plugin — platecycler** *(simplified 2026-05-30).* A **post-slice** plugin that appends the Chitu PlateCycler eject/swap macro to the tail of a single plate's G-code, so the finished plate auto-ejects and a fresh one loads on print completion. Not the original multi-plate concatenation (that needed the now-deferred compose hook); no 3MF rewriting, no Python/Pillow dependency. Validated end-to-end on the project lead's A1 mini + PlateCycler hardware.
 
 - Three smaller example plugins exercising the per-plate hooks: 'beep at layer N' (post-slice), 'insert pause at layer N' (post-slice), 'rewrite bed temperature by range' (pre-slice).
 
@@ -649,6 +649,10 @@ Out of scope for this plan, but worth listing so MVP decisions don't paint into 
 - Paint-on supports and modifier meshes.
 
 - Plugin marketplace and signed plugin distribution.
+
+- **Compose hook (FR-PL-5)** — the project-level plugin hook receiving all sliced plates + metadata and returning a transformed bundle (3MF metadata read/write, plate composition order, plate-count transform). Deferred from the MVP (2026-05-30) once the MVP platecycler was simplified to a post-slice macro append, leaving compose with no MVP consumer.
+
+- **Multi-plate batch platecycler** — the original concatenate-N-plates-into-one-job behavior (cycle counts, swap macro between plates, 3MF aggregate rewriting), which the compose hook enables. The MVP ships only the single-plate post-slice macro append.
 
 - WASM plugin runtime alongside Lua.
 

@@ -378,11 +378,11 @@ Model materials are abstract extruder indices (1..N) assigned to objects, paint 
 
 - **FR-PL-2.** Plugin manifest (TOML) declares name, version, hooks, printer compatibility, exposed settings.
 
-- **FR-PL-3.** Hook points: pre-slice (read/modify settings), post-slice (read/modify G-code per plate), pre-send (per-printer transforms), and compose (project-level hook that runs after all plates are sliced, with access to all plate G-codes and project metadata, producing a transformed project bundle).
+- **FR-PL-3.** Hook points: pre-slice (read/modify settings), post-slice (read/modify G-code per plate), pre-send (per-printer transforms), and compose (project-level hook that runs after all plates are sliced, with access to all plate G-codes and project metadata, producing a transformed project bundle). **Compose is deferred to post-MVP** (2026-05-30; see `docs/tickets/phase-8.md`) — the MVP ships pre-slice / post-slice / pre-send only. Its sole intended MVP consumer, platecycler, was simplified to a post-slice macro append that doesn't need it.
 
 - **FR-PL-4.** Structured G-code API: plugins see a typed sequence of Move / Comment / LayerChange / ToolChange / Other, not raw strings.
 
-- **FR-PL-5.** Compose hook API: plugins implementing compose receive an array of (plate, typed-gcode, metadata) inputs and return a transformed project bundle. The API includes read/write access to 3MF-level metadata (thumbnails, filament aggregates, print time totals) and to the plate composition order. Compose plugins can emit a different plate count than they received. This is the mechanism that supports PlateCycler-style workflows on the A1 mini.
+- **FR-PL-5.** *(Deferred to post-MVP — 2026-05-30; see `docs/tickets/phase-8.md`.)* Compose hook API: plugins implementing compose receive an array of (plate, typed-gcode, metadata) inputs and return a transformed project bundle. The API includes read/write access to 3MF-level metadata (thumbnails, filament aggregates, print time totals) and to the plate composition order. Compose plugins can emit a different plate count than they received. This was the mechanism intended to support multi-plate PlateCycler batch workflows; the MVP platecycler instead appends the PlateCycler swap macro at post-slice (single plate auto-ejects on completion), so no compose hook is needed for the MVP and this API moves to v1.1.
 
 - **FR-PL-6.** Plugin-declared settings appear in the settings UI under a Plugins category, participate in the cascade. Plate-level settings (cycle counts, composition order) are exposed by compose plugins via plate metadata, not via the global settings cascade.
 
