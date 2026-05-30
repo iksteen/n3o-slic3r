@@ -119,12 +119,23 @@ reason from contrary priors.
   external dependencies.
 - **`platecycler` is owned in-house.** The MVP ships it as a Lua
   plugin using the compose hook (FR-PL-5).
-- **The cascade resolver is *not* yet built.** Design is locked
-  (`docs/profiles.md`); implementation is Phase 1 of the execution
-  plan. Today, slicing goes through `Config::new() →
-  load_with_config(3mf) → slice` — the pre-`apply` normalization in
-  the shim is doing duty that the real resolver and adapter will
-  eventually own.
+- **The cascade resolver *is* built** (corrected 2026-05-30; this
+  bullet previously said it wasn't). The rule-cascade resolver lives
+  in `src-tauri/src/core/cascade/` (`resolver`, `loader`, `overrides`,
+  `trace`, `validate`) and the libslic3r translation in
+  `src-tauri/src/core/cascade_adapter/` (`adapter` does the
+  `bed_temp` → per-plate-type dimensional expansion + `curr_bed_type`
+  set). `tests/reference_profiles.rs` exercises it end-to-end. Design
+  of record is still `docs/profiles.md`.
+  - **OPEN / unverified:** whether the live *slice* path
+    (`core/slice/input.rs` → `orchestrator.rs`) actually routes
+    through the resolver+adapter, or still slices from the input
+    `.3mf`'s embedded config + the shim's pre-`apply` normalization.
+    A 2026-05-30 U1 slice (`plate-1.gcode.3mf`) emitted baseline
+    `hot_plate_temp=60` (not the `Snapmaker U1` rule's `55`), which
+    suggests the slice did **not** apply our consolidated filament
+    fragments — trace `slice/input.rs` before assuming the resolver
+    feeds the slicer. Update this bullet once confirmed.
 
 ## Project shape and build
 

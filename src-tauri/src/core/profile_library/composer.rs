@@ -202,6 +202,20 @@ pub fn compose_cascade(
     //    are deliberately absent here; they come from step 2).
     let printer = load_printer_fragment(&instance.printer_fragment_slug)
         .ok_or_else(|| ComposeError::UnknownPrinterFragment(instance.printer_fragment_slug.clone()))?;
+    // Global predicate dimensions filament fragments may key on, needed
+    // by step 4's per-slot resolve. `printer_model` is the machine
+    // cascade's `printer_model` scalar (the same value `when.printer.model
+    // = …` predicates match on — see registry hydration); `plate_type`
+    // is the loaded bed's identity (= `when.plate.type`). Captured here,
+    // before `printer.rules` is moved into `rules` below, so the per-slot
+    // filament context is complete and printer/plate-keyed filament rules
+    // actually fire at compose time.
+    let printer_model = printer
+        .rules
+        .iter()
+        .find_map(|r| r.set.get("printer_model").cloned())
+        .unwrap_or_default();
+    let plate_type = instance.bed.identity.clone();
     rules.extend(printer.rules);
 
     // 2. Per-extruder nozzle fragments → vector assembly.
@@ -268,7 +282,8 @@ pub fn compose_cascade(
     //    Without this fan-out the toolchanger (U1) and AMS-fed
     //    (Bambi) printers both end up emitting `filament: 1` even
     //    with N slots bound — no tool changes in the output gcode.
-    let filament_vectors = assemble_filament_vectors(instance, &filaments)?;
+    let filament_vectors =
+        assemble_filament_vectors(instance, &filaments, &printer_model, &plate_type)?;
     if !filament_vectors.is_empty() {
         rules.push(Rule {
             when: Predicate::default(),
@@ -421,6 +436,8 @@ fn assemble_nozzle_vectors(
 fn assemble_filament_vectors(
     instance: &PrinterInstance,
     filaments: &[FilamentEntry<'_>],
+    printer_model: &str,
+    plate_type: &str,
 ) -> Result<BTreeMap<String, String>, ComposeError> {
     let mut per_filament: Vec<BTreeMap<String, String>> = Vec::new();
     for entry in filaments {
@@ -431,11 +448,13 @@ fn assemble_filament_vectors(
         let cascade = load_filament_fragment(slug).ok_or_else(|| {
             ComposeError::UnknownFilamentFragment(slug.to_owned())
         })?;
-        // Resolve against this slot's filament context so conditional
-        // rules in the fragment can match on `when.filament.*`
-        // predicates. Falls through to the unconditional default rule
-        // when no filament profile is registered for this slug.
-        let slot_ctx = slot_filament_context(slug);
+        // Resolve against this slot's *complete* context — the global
+        // dimensions (printer.model, plate.type) plus this slot's
+        // filament.* — so conditional rules in the fragment match
+        // whether they key on `when.filament.*` OR `when.printer.model`
+        // / `when.plate.type`. Falls through to the unconditional default
+        // rule when no filament profile is registered for this slug.
+        let slot_ctx = slot_filament_context(slug, printer_model, plate_type);
         let scalars: BTreeMap<String, String> = resolve(&cascade, &slot_ctx)
             .into_iter()
             .map(|(k, v)| (k, v.value))
@@ -517,16 +536,33 @@ fn assemble_flush_defaults(
 }
 
 /// Build the slot-scoped resolver context for a single filament slug.
-/// Populates the `filament.*` predicates the resolver consults
-/// (mirrors `SlicingContext`'s `Context` impl) so conditional rules
-/// inside a filament fragment can fire per-slot.
+/// Carries the global dimensions (`printer.model`, `plate.type`) plus
+/// this slot's `filament.*` predicates, mirroring `SlicingContext`'s
+/// `Context` impl so conditional rules inside a filament fragment fire
+/// per-slot whether they key on filament, printer, or plate.
+///
+/// The global dimensions are essential: the bundled vendor filament
+/// fragments carry per-printer overrides as `[[rule]]
+/// when.printer.model = "Snapmaker U1"` blocks (e.g. the U1's bed temp
+/// + nozzle temp). Resolving with only `filament.*` predicates — as an
+/// earlier version did — silently dropped every such rule, leaving the
+/// U1 with baseline filament values (and a cold bed). The per-slot
+/// fan-out means we resolve N times (one per bound slot) to build the
+/// per-slot vectors libslic3r wants; each resolve must see the full
+/// context, not just the filament part.
 ///
 /// Unknown slugs (e.g. an instance bound to a filament identity that
-/// isn't in the registry yet) get an empty context — the fragment's
-/// unconditional default rule still matches, conditional rules
-/// silently don't.
-fn slot_filament_context(slug: &str) -> MapContext {
+/// isn't in the registry yet) still get the global dimensions — the
+/// fragment's unconditional default rule and any printer/plate-keyed
+/// rules match; only `filament.*`-keyed conditionals silently don't.
+fn slot_filament_context(slug: &str, printer_model: &str, plate_type: &str) -> MapContext {
     let mut ctx = MapContext::new();
+    if !printer_model.is_empty() {
+        ctx.set("printer.model", printer_model);
+    }
+    if !plate_type.is_empty() {
+        ctx.set("plate.type", plate_type);
+    }
     if let Some(profile) = filament::lookup(slug) {
         ctx.set("filament.type", profile.base_type);
         ctx.set("filament.name", profile.identity);
@@ -730,6 +766,56 @@ mod tests {
     }
 
     #[test]
+    fn u1_filament_fragment_printer_rule_fires_at_compose_time() {
+        // Regression for the U1 cold-bed bug. The snapmaker-pla fragment
+        // carries its U1 overrides as a `[[rule]] when.printer.model =
+        // "Snapmaker U1"` block (nozzle_temperature 220, hot_plate_temp
+        // 55, textured_plate_temp 55 vs baseline 210 / 60 / 0). The
+        // compose-time per-slot resolution must see `printer.model` so
+        // that rule fires — without it the baseline leaks through and the
+        // bed never heats (the active plate's curr_bed_type = "Textured
+        // PEI Plate" reads textured_plate_temp).
+        //
+        // Bind all 4 U1 toolheads to snapmaker-pla explicitly: the
+        // bundled `snappy` fixture defaults to generic-pla, which has no
+        // U1 rule, so the binding must be set to exercise the
+        // printer-keyed fragment rule.
+        let _registry = RegistryGuard::acquire();
+        let mut snappy = lookup_instance("snappy").expect("snappy present");
+        assert_eq!(snappy.bed.identity, "Textured PEI Plate");
+        for ext in snappy.extruders.iter_mut() {
+            for slot in ext.slots.iter_mut() {
+                slot.filament_identity = Some("snapmaker-pla".to_owned());
+            }
+        }
+
+        let cascade = compose_cascade(&snappy, &[], &BTreeMap::new()).expect("compose");
+        let fil = cascade
+            .rules
+            .iter()
+            .find(|r| r.source.path.to_string_lossy() == "<filament-vector-assembly>")
+            .expect("filament-vector rule present");
+
+        // 4 slots all snapmaker-pla → length-4 vectors of the U1 value.
+        assert_eq!(
+            fil.set.get("nozzle_temperature").map(String::as_str),
+            Some("220,220,220,220"),
+            "U1 rule should override nozzle_temperature (220), not baseline 210",
+        );
+        assert_eq!(
+            fil.set.get("hot_plate_temp").map(String::as_str),
+            Some("55,55,55,55"),
+            "U1 rule should override hot_plate_temp (55), not baseline 60",
+        );
+        assert_eq!(
+            fil.set.get("textured_plate_temp").map(String::as_str),
+            Some("55,55,55,55"),
+            "U1 rule should set textured_plate_temp (55) — the bed-temp fix; \
+             curr_bed_type = Textured PEI Plate reads this key",
+        );
+    }
+
+    #[test]
     fn nozzle_vector_assembly_yields_single_value_for_a1_mini() {
         let _registry = RegistryGuard::acquire();
         let bambi = lookup_instance("bambi").expect("bambi present");
@@ -773,22 +859,44 @@ mod tests {
         use crate::core::cascade::resolver::Context;
         // A bundled filament with known shape — generic-pla is shipped
         // by the converter under profiles/vendor/generic/filament/.
-        let ctx = slot_filament_context("generic-pla");
+        let ctx = slot_filament_context("generic-pla", "Snapmaker U1", "Textured PEI Plate");
         assert_eq!(ctx.predicate_value("filament.type"), Some("PLA"));
         // filament.name carries the FilamentProfile.identity string,
         // not the slug — the bundled generic PLA is labeled "Generic PLA".
         assert!(ctx.predicate_value("filament.name").is_some());
+        // The global dimensions must also be present so a fragment's
+        // `when.printer.model` / `when.plate.type` rules fire at compose
+        // time (regression guard for the U1 bed-temp bug).
+        assert_eq!(ctx.predicate_value("printer.model"), Some("Snapmaker U1"));
+        assert_eq!(ctx.predicate_value("plate.type"), Some("Textured PEI Plate"));
     }
 
     #[test]
-    fn slot_filament_context_unknown_slug_is_empty() {
+    fn slot_filament_context_unknown_slug_keeps_global_dimensions() {
         use crate::core::cascade::resolver::Context;
-        // Unknown slug — context has no predicates set; conditional
-        // rules in fragments simply don't match, the unconditional
-        // default rule still does.
-        let ctx = slot_filament_context("not-a-real-filament-ever");
+        // Unknown slug — no `filament.*` predicates, but the global
+        // dimensions still land so printer/plate-keyed rules match and
+        // the unconditional default rule does too.
+        let ctx = slot_filament_context(
+            "not-a-real-filament-ever",
+            "Snapmaker U1",
+            "Textured PEI Plate",
+        );
         assert!(ctx.predicate_value("filament.type").is_none());
         assert!(ctx.predicate_value("filament.name").is_none());
+        assert_eq!(ctx.predicate_value("printer.model"), Some("Snapmaker U1"));
+        assert_eq!(ctx.predicate_value("plate.type"), Some("Textured PEI Plate"));
+    }
+
+    #[test]
+    fn slot_filament_context_omits_empty_global_dimensions() {
+        use crate::core::cascade::resolver::Context;
+        // Empty printer_model/plate_type (e.g. a non-slice caller that
+        // doesn't have them) must not set blank predicates — a rule
+        // keyed on `printer.model = ""` should never match.
+        let ctx = slot_filament_context("generic-pla", "", "");
+        assert!(ctx.predicate_value("printer.model").is_none());
+        assert!(ctx.predicate_value("plate.type").is_none());
     }
 
     #[test]
