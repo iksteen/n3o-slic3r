@@ -2,9 +2,11 @@
 //! payload (typed G-code, …) to the [`Hook`] fold by marshalling it
 //! across the Lua boundary.
 
+use std::collections::BTreeMap;
+
 use mlua::{IntoLua, Lua, Result as LuaResult, Value};
 
-use super::bindings::GcodeHandle;
+use super::bindings::{GcodeHandle, SettingsHandle};
 use super::error::PluginError;
 use super::host::Hook;
 use super::manifest::HookKind;
@@ -78,6 +80,156 @@ impl Hook for PostSliceHook {
     }
 }
 
+// ---- pre-slice ----------------------------------------------------
+
+/// Read-only context handed to a pre-slice hook as its second arg.
+#[derive(Debug, Clone)]
+pub struct PreSliceContext {
+    pub printer_model: String,
+    pub plate: String,
+    /// Number of physical toolheads (1 for a single-hotend printer like
+    /// the A1 mini, regardless of AMS filament slots). Not the AMS slot
+    /// count — that isn't available at this layer.
+    pub toolhead_count: usize,
+}
+
+impl IntoLua for PreSliceContext {
+    fn into_lua(self, lua: &Lua) -> LuaResult<Value> {
+        let t = lua.create_table()?;
+        t.set("printer_model", self.printer_model)?;
+        t.set("plate", self.plate)?;
+        t.set("toolhead_count", self.toolhead_count)?;
+        Ok(Value::Table(t))
+    }
+}
+
+/// The pre-slice hook: each plugin's `on_pre_slice(settings, context)`
+/// reads/writes the resolved settings (key→string) before the cascade
+/// adapter hands config to libslic3r. Clean-by-copy isolation, same as
+/// post-slice.
+pub struct PreSliceHook {
+    pub context: PreSliceContext,
+}
+
+impl Hook for PreSliceHook {
+    type Value = BTreeMap<String, String>;
+
+    fn kind(&self) -> HookKind {
+        HookKind::PreSlice
+    }
+
+    fn invoke(
+        &self,
+        runtime: &PluginRuntime,
+        settings: BTreeMap<String, String>,
+    ) -> (BTreeMap<String, String>, Option<PluginError>) {
+        let handle = SettingsHandle::new(settings.clone());
+        let cell = handle.cell();
+        match runtime.call::<_, ()>("on_pre_slice", (handle, self.context.clone())) {
+            Ok(_) => {
+                let edited = cell
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                (edited, None)
+            }
+            Err(e) => (settings, Some(e)),
+        }
+    }
+}
+
+// ---- pre-send -----------------------------------------------------
+
+/// Which kind of send buffer a pre-send hook is looking at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PayloadKind {
+    /// Raw G-code body (U1) — editable text.
+    Gcode,
+    /// A `.gcode.3mf` bundle (Bambu) — opaque bytes; most plugins no-op.
+    Gcode3mf,
+}
+
+impl PayloadKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Gcode => "gcode",
+            Self::Gcode3mf => "gcode_3mf",
+        }
+    }
+}
+
+/// Read-only target info handed to a pre-send hook.
+#[derive(Debug, Clone)]
+pub struct SendTarget {
+    pub driver_kind: String,
+    pub plate_id: u32,
+}
+
+impl IntoLua for SendTarget {
+    fn into_lua(self, lua: &Lua) -> LuaResult<Value> {
+        let t = lua.create_table()?;
+        t.set("driver_kind", self.driver_kind)?;
+        t.set("plate_id", self.plate_id)?;
+        Ok(Value::Table(t))
+    }
+}
+
+/// The payload table passed to `on_pre_send`: `{ kind = …, bytes = … }`.
+struct SendPayloadArg {
+    kind: PayloadKind,
+    bytes: Vec<u8>,
+}
+
+impl IntoLua for SendPayloadArg {
+    fn into_lua(self, lua: &Lua) -> LuaResult<Value> {
+        let t = lua.create_table()?;
+        t.set("kind", self.kind.as_str())?;
+        t.set("bytes", lua.create_string(&self.bytes)?)?;
+        Ok(Value::Table(t))
+    }
+}
+
+/// The pre-send hook: `on_pre_send(payload, target)` may return
+/// replacement bytes (a Lua string) for the buffer about to be sent, or
+/// `nil`/nothing to leave it unchanged. Folded across plugins.
+pub struct PreSendHook {
+    pub kind: PayloadKind,
+    pub target: SendTarget,
+}
+
+impl Hook for PreSendHook {
+    type Value = Vec<u8>;
+
+    fn kind(&self) -> HookKind {
+        HookKind::PreSend
+    }
+
+    fn invoke(&self, runtime: &PluginRuntime, bytes: Vec<u8>) -> (Vec<u8>, Option<PluginError>) {
+        let arg = SendPayloadArg {
+            kind: self.kind,
+            bytes: bytes.clone(),
+        };
+        match runtime.call::<_, Value>("on_pre_send", (arg, self.target.clone())) {
+            // A returned Lua string replaces the buffer.
+            Ok(Some(Value::String(s))) => (s.as_bytes().to_vec(), None),
+            // Absent function or an explicit nil return → intentional
+            // no-op, leave the bytes unchanged.
+            Ok(None) | Ok(Some(Value::Nil)) => (bytes, None),
+            // Any other return type is almost certainly an author
+            // mistake (e.g. forgot tostring) — surface it rather than
+            // silently dropping the edit.
+            Ok(Some(other)) => (
+                bytes,
+                Some(PluginError::BadReturn(format!(
+                    "on_pre_send must return a string or nil, got {}",
+                    other.type_name()
+                ))),
+            ),
+            Err(e) => (bytes, Some(e)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,12 +237,12 @@ mod tests {
     use crate::core::plugin::{PluginHost, MANIFEST_FILE};
     use std::path::Path;
 
-    fn write_plugin(root: &Path, name: &str, lua: &str) {
+    fn write_plugin(root: &Path, name: &str, hooks: &str, lua: &str) {
         let dir = root.join(name);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(MANIFEST_FILE),
-            format!("name=\"{name}\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nhooks=[\"post_slice\"]\n"),
+            format!("name=\"{name}\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nhooks={hooks}\n"),
         )
         .unwrap();
         std::fs::write(dir.join("main.lua"), lua).unwrap();
@@ -113,6 +265,7 @@ mod tests {
         write_plugin(
             tmp.path(),
             "tagger",
+            r#"["post_slice"]"#,
             r#"function on_post_slice(g, plate)
                  g:append("; sliced for " .. plate.printer_model)
                end"#,
@@ -130,6 +283,7 @@ mod tests {
         write_plugin(
             tmp.path(),
             "broken",
+            r#"["post_slice"]"#,
             r#"function on_post_slice(g, plate) g:append("X"); error("boom") end"#,
         );
         let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
@@ -137,5 +291,90 @@ mod tests {
         let out = to_string(&host.dispatch(&hook, parse_str(GCODE)));
         // Clean-by-copy: the partial append is discarded on error.
         assert_eq!(out, GCODE);
+    }
+
+    fn pre_slice_ctx() -> PreSliceContext {
+        PreSliceContext {
+            printer_model: "Test Printer".into(),
+            plate: "Textured PEI".into(),
+            toolhead_count: 1,
+        }
+    }
+
+    #[test]
+    fn pre_slice_hook_edits_settings_through_the_host() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(
+            tmp.path(),
+            "clamp",
+            r#"["pre_slice"]"#,
+            r#"function on_pre_slice(settings, ctx)
+                 -- read + write an existing key, add a new one, and
+                 -- try to nil one (which must be a no-op).
+                 if tonumber(settings.bed_temp) > 60 then settings.bed_temp = "60" end
+                 settings.note = ctx.printer_model
+                 settings.keep_me = nil
+               end"#,
+        );
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+        let hook = PreSliceHook {
+            context: pre_slice_ctx(),
+        };
+        let settings: BTreeMap<String, String> = [
+            ("bed_temp".to_string(), "99".to_string()),
+            ("keep_me".to_string(), "x".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let out = host.dispatch(&hook, settings);
+        assert_eq!(out.get("bed_temp").map(String::as_str), Some("60"));
+        assert_eq!(out.get("note").map(String::as_str), Some("Test Printer"));
+        assert_eq!(
+            out.get("keep_me").map(String::as_str),
+            Some("x"),
+            "assigning nil must not remove a setting"
+        );
+    }
+
+    #[test]
+    fn erroring_pre_slice_plugin_leaves_settings_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(
+            tmp.path(),
+            "broken",
+            r#"["pre_slice"]"#,
+            r#"function on_pre_slice(s, ctx) s.bed_temp = "1"; error("boom") end"#,
+        );
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+        let hook = PreSliceHook {
+            context: pre_slice_ctx(),
+        };
+        let settings: BTreeMap<String, String> =
+            [("bed_temp".to_string(), "55".to_string())].into_iter().collect();
+        let out = host.dispatch(&hook, settings);
+        assert_eq!(out.get("bed_temp").map(String::as_str), Some("55"));
+    }
+
+    #[test]
+    fn pre_send_hook_rewrites_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(
+            tmp.path(),
+            "rewriter",
+            r#"["pre_send"]"#,
+            r#"function on_pre_send(payload, target)
+                 return payload.bytes .. ";; sent to " .. target.driver_kind
+               end"#,
+        );
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+        let hook = PreSendHook {
+            kind: PayloadKind::Gcode,
+            target: SendTarget {
+                driver_kind: "u1".into(),
+                plate_id: 1,
+            },
+        };
+        let out = host.dispatch(&hook, b"G1 X0\n".to_vec());
+        assert_eq!(out, b"G1 X0\n;; sent to u1".to_vec());
     }
 }

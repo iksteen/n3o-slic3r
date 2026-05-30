@@ -1,0 +1,5 @@
+name = "rewrite-bed-temp"
+version = "0.1.0"
+entry = "main.lua"
+hooks = ["pre_slice"]
+description = "Clamp the resolved bed temperature into a fixed band."

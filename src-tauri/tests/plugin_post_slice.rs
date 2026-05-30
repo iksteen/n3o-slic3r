@@ -193,6 +193,52 @@ fn post_slice_plugins_inject_into_real_gcode() {
     );
 }
 
+/// A pre-slice plugin's edit to a resolved setting reaches libslic3r:
+/// force the bed temperature to a distinctive value and confirm it
+/// lands in the real G-code's bed-heat command.
+#[test]
+fn pre_slice_plugin_rewrites_bed_temp_in_real_gcode() {
+    ensure_ffi_init();
+
+    let (input, registry, _out) = slice_input(vec![1]);
+    let (sink, events) = collecting_sink();
+    run_slice_job_blocking(input, &registry, sink).expect("baseline slice");
+    let baseline = output_gcode(&events);
+    assert!(
+        !baseline.contains("M140 S42") && !baseline.contains("M190 S42"),
+        "baseline bed temp shouldn't already be 42"
+    );
+
+    let plugins = tempfile::tempdir().unwrap();
+    let dir = plugins.path().join("force-bed");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("plugin.toml"),
+        "name=\"force-bed\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nhooks=[\"pre_slice\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("main.lua"),
+        r#"function on_pre_slice(s, ctx) s.bed_temp = "42" end"#,
+    )
+    .unwrap();
+
+    let host = Arc::new(Mutex::new(PluginHost::load(&[plugins.path().to_path_buf()])));
+    let (input, registry, _out) = slice_input(vec![1]);
+    let (sink, events) = collecting_sink();
+    run_slice_job_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
+    let with_plugin = output_gcode(&events);
+
+    assert_ne!(
+        with_plugin, baseline,
+        "the pre-slice edit should change the output"
+    );
+    assert!(
+        with_plugin.contains("M140 S42") || with_plugin.contains("M190 S42"),
+        "bed_temp=42 should reach libslic3r as a 42C bed-heat command"
+    );
+}
+
 /// A plugin that errors on one plate must not break the others: the job
 /// completes every plate, the erroring plugin is isolated.
 #[test]

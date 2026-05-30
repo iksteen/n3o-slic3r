@@ -1,6 +1,51 @@
 # PR-8-6 — pre-slice + pre-send hooks
 
-Status: ❌ open.
+Status: ✅ done.
+
+**Implementation notes.**
+- **pre-slice** exposes the resolved cascade as a `SettingsHandle`
+  userdata with `__index`/`__newindex`, so a plugin reads/writes
+  `settings.bed_temp` like a table (string values; a number is
+  stringified, `nil` removes). Wired in `run_worker` after
+  `cascade::resolve`, before the safety gate + adapt; edits fold back
+  into the `Resolved` map (new keys get a synthetic `<plugin:pre_slice>`
+  source — cosmetic, since `adapt` only reads key+value). catch_unwind
+  guarded like post-slice.
+- **pre-send** runs in `driver_send_plate` just before `Driver::send`,
+  passing `{ kind, bytes }` + a `{ driver_kind, plate_id }` target; the
+  plugin returns replacement bytes (a Lua string) or nil. Clean-by-copy,
+  catch_unwind guarded.
+- Example `rewrite-bed-temp` (pre-slice) clamps the resolved bed temp.
+- Verified via G-code: a pre-slice plugin forcing `bed_temp = "42"`
+  produces an `M140/M190 S42` bed-heat command in the real slice output.
+
+**Review fixes (pre-commit review).**
+- `PreSliceContext.slot_count` → `toolhead_count` — it was physical
+  toolhead count (1 on an AMS-fed A1 mini), not the AMS slot count the
+  name implied.
+- Settings are **modify/add only**: `__newindex` takes strings (an
+  integer is stringified exactly; a float is rejected so the plugin
+  formats it with `tostring()` rather than getting
+  `"0.30000000000000004"`); assigning `nil` is a no-op, and the
+  fold-back no longer drops keys — so a plugin can't silently remove a
+  setting and fall back to a libslic3r default.
+- pre-send is **skipped for `.gcode.3mf`** (Bambu) — a text-editing
+  plugin would corrupt the opaque zip; it runs on raw U1 G-code only.
+- pre-send now **surfaces a non-string return** as a `BadReturn` error
+  (plugin disabled) instead of silently dropping the edit.
+- Added an `apply_pre_send` unit test (the driver wiring was untested):
+  DriverKind→string mapping, field preservation, and the 3mf skip.
+
+**Deviations from the ticket.**
+- No "retry with pre-hook settings if the adapter rejects the plugin's
+  edit" — a plugin's edit flows through the normal path; a bad value is
+  caught by the existing cascade safety gate / libslic3r (slice fails),
+  not silently smuggled. Simpler; the smuggle-protection still holds.
+- pre-send `target` exposes `driver_kind` + `plate_id`, **not**
+  `printer_model` (would need a project→instance lookup in the send
+  path) — add it if a plugin needs it.
+- pre-send is wired into `driver_send_plate` (the production send path),
+  not the lower-level `driver_send`.
 
 **Scope.** The remaining two hook points. **pre-slice** lets a plugin
 read and modify the resolved settings before the cascade adapter hands

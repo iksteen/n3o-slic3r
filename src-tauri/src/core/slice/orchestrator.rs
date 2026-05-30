@@ -52,10 +52,12 @@ use super::errors::{classify_libslic3r_error, SliceError};
 use super::events::SliceEvent;
 use super::job::{JobHandle, JobId, JobRegistry, JobStatus, ResolvedJob, SliceJobInput};
 use super::summary::build_summary;
-use crate::core::cascade::{self, types::Cascade};
+use crate::core::cascade::{self, types::Cascade, Resolved, ResolvedValue, SourceLocation};
 use crate::core::cascade_adapter::{adapt, Manifest};
 use crate::core::gcode::{parse_str, to_string};
-use crate::core::plugin::{HookKind, PlateMeta, PluginHost, PostSliceHook};
+use crate::core::plugin::{
+    HookKind, PlateMeta, PluginHost, PostSliceHook, PreSliceContext, PreSliceHook,
+};
 use crate::core::printer::lookup_instance;
 use crate::core::profile_library::compose_cascade;
 use crate::core::project::SlicingContext;
@@ -376,6 +378,61 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Run the pre-slice plugin hook over the resolved cascade, applying
+/// any plugin edits back into `resolved` before the adapter + safety
+/// gate run. No-op when no host is wired or no plugin declares the hook.
+fn apply_pre_slice(host: &Option<PluginHostRef>, resolved: &mut Resolved, ctx: &SlicingContext) {
+    let Some(host) = host else {
+        return;
+    };
+    if !lock_host(host).any_hook(HookKind::PreSlice) {
+        return;
+    }
+
+    let settings: BTreeMap<String, String> = resolved
+        .iter()
+        .map(|(k, v)| (k.clone(), v.value.clone()))
+        .collect();
+    let hook = PreSliceHook {
+        context: PreSliceContext {
+            printer_model: ctx.printer.model.clone(),
+            plate: ctx.plate.identity.clone(),
+            toolhead_count: ctx.printer.toolheads.len(),
+        },
+    };
+    // Dispatch (untrusted Lua) is the panic-prone step; it runs before
+    // `resolved` is touched, so a panic leaves the cascade unchanged.
+    let edited = lock_host(host).dispatch(&hook, settings);
+    apply_pre_slice_result(resolved, edited);
+}
+
+/// Fold a plugin-edited settings map back into the resolved cascade:
+/// update existing values and insert new keys (attributed to a
+/// synthetic plugin source). Plugins can't remove keys (settings are
+/// modify/add only), so nothing is dropped. The adapter only reads
+/// key + value, so the synthetic trace is cosmetic.
+fn apply_pre_slice_result(resolved: &mut Resolved, edited: BTreeMap<String, String>) {
+    for (key, value) in edited {
+        match resolved.get_mut(&key) {
+            Some(rv) => rv.value = value,
+            None => {
+                resolved.insert(
+                    key,
+                    ResolvedValue {
+                        value,
+                        winning_rule: SourceLocation {
+                            path: PathBuf::from("<plugin:pre_slice>"),
+                            line: 0,
+                        },
+                        winning_specificity: 0,
+                        matching_rules: Vec::new(),
+                    },
+                );
+            }
+        }
+    }
+}
+
 /// Lock the plugin host, recovering the guard if a plugin panic
 /// poisoned it (the buffer's edits are per-call, so recovery is safe).
 fn lock_host(host: &PluginHostRef) -> std::sync::MutexGuard<'_, PluginHost> {
@@ -413,7 +470,18 @@ fn run_worker(
         // Resolve + adapt fresh per plate. Multi-plate projects
         // (Phase 5) may want per-plate cascade overrides; today the
         // context is the same per plate.
-        let resolved_cascade = cascade::resolve(&job.cascade, &job.context);
+        let mut resolved_cascade = cascade::resolve(&job.cascade, &job.context);
+
+        // Pre-slice plugin hook: let plugins read/modify the resolved
+        // settings before the adapter + safety gate see them. Guarded
+        // by catch_unwind for the same reason as post-slice — a panic
+        // must not silently kill the worker thread.
+        let pre = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            apply_pre_slice(&host, &mut resolved_cascade, &job.context);
+        }));
+        if pre.is_err() {
+            tracing::error!(plate_id, "pre-slice plugin hook panicked; using resolved settings");
+        }
 
         // Safety gate (cascade_safety.rs): refuses slice when the
         // resolved cascade is missing machine_start_gcode /

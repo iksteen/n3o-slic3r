@@ -24,6 +24,8 @@ use super::status::PrinterStatus;
 use super::traits::{
     Driver, DriverConfig, DriverId, DriverKind, PrinterCommand, SendHandle, SendPayload,
 };
+use crate::core::plugin::commands::PluginHostState;
+use crate::core::plugin::{HookKind, PayloadKind, PreSendHook, SendTarget};
 use crate::core::project::{PlateId, Project};
 use crate::core::slice::pre_slice_gate::{ams_bindings_for_plate, ams_mapping_for_plate};
 use crate::core::threemf::{fixture_input, write_sliced_3mf, AmsBinding};
@@ -409,13 +411,14 @@ pub async fn driver_export_plate(
 ///   the print in the same multipart upload (see
 ///   `core/driver/snapmaker/http.rs`).
 #[tauri::command]
-#[tracing::instrument(skip(registry, project))]
+#[tracing::instrument(skip(registry, project, plugin_host))]
 pub async fn driver_send_plate(
     id: DriverId,
     plate_id: u32,
     gcode_path: String,
     registry: State<'_, Arc<DriverRegistry>>,
     project: State<'_, Arc<Mutex<Project>>>,
+    plugin_host: State<'_, PluginHostState>,
 ) -> Result<SendHandle, String> {
     let handle = registry
         .get(id)
@@ -442,8 +445,74 @@ pub async fn driver_send_plate(
             }
         }
     };
+    // Pre-send plugin hook: let plugins transform the bytes about to go
+    // to the printer (sync — no await while the host lock is held).
+    let payload = apply_pre_send(plugin_host.inner(), payload, plate_id, kind);
     let mut d = handle.lock().await;
     d.send(payload).await.map_err(|e| e.to_string())
+}
+
+/// Run the pre-send hook over `payload`, swapping in any plugin-edited
+/// bytes. No-op when no plugin declares the hook; a panic in plugin Lua
+/// is caught and the original bytes are sent unchanged.
+fn apply_pre_send(
+    host: &PluginHostState,
+    payload: SendPayload,
+    plate_id: u32,
+    kind: DriverKind,
+) -> SendPayload {
+    let lock = || host.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !lock().any_hook(HookKind::PreSend) {
+        return payload;
+    }
+
+    let (payload_kind, bytes) = match &payload {
+        SendPayload::Gcode { bytes, .. } => (PayloadKind::Gcode, bytes.clone()),
+        // A `.gcode.3mf` bundle is an opaque zip; letting a text-editing
+        // plugin (e.g. one written for U1 raw G-code) rewrite its bytes
+        // would silently corrupt the archive. Skip pre-send for it for
+        // now — editing the bundle is an advanced, opt-in concern.
+        SendPayload::Gcode3mf { .. } => return payload,
+    };
+    let hook = PreSendHook {
+        kind: payload_kind,
+        target: SendTarget {
+            driver_kind: match kind {
+                DriverKind::Bambu => "bambu".to_string(),
+                DriverKind::U1 => "u1".to_string(),
+            },
+            plate_id,
+        },
+    };
+    let edited = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        lock().dispatch(&hook, bytes.clone())
+    })) {
+        Ok(b) => b,
+        Err(_) => {
+            tracing::error!("pre-send plugin hook panicked; sending unmodified payload");
+            bytes
+        }
+    };
+
+    match payload {
+        SendPayload::Gcode { file_name, .. } => SendPayload::Gcode {
+            bytes: edited,
+            file_name,
+        },
+        SendPayload::Gcode3mf {
+            plate_id,
+            use_ams,
+            ams_mapping,
+            ams_mapping2,
+            ..
+        } => SendPayload::Gcode3mf {
+            bytes: edited,
+            plate_id,
+            use_ams,
+            ams_mapping,
+            ams_mapping2,
+        },
+    }
 }
 
 /// Pause / resume / stop the current print.
@@ -480,5 +549,66 @@ mod tests {
         };
         let err = driver_test_connection(config).await.unwrap_err();
         assert!(!err.is_empty(), "expected a non-empty failure reason");
+    }
+
+    fn host_with_pre_send(lua: &str) -> PluginHostState {
+        use crate::core::plugin::PluginHost;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("p");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("plugin.toml"),
+            "name=\"p\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nhooks=[\"pre_send\"]\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("main.lua"), lua).unwrap();
+        // `load` reads the entry Lua into the runtime, so the temp dir
+        // can drop right after.
+        Arc::new(Mutex::new(PluginHost::load(&[tmp.path().to_path_buf()])))
+    }
+
+    #[test]
+    fn apply_pre_send_rewrites_gcode_and_preserves_fields() {
+        let host = host_with_pre_send(
+            r#"function on_pre_send(p, t) return p.bytes .. "\n; via " .. t.driver_kind end"#,
+        );
+        let payload = SendPayload::Gcode {
+            bytes: b"G1 X0".to_vec(),
+            file_name: "plate-7.gcode".into(),
+        };
+        match apply_pre_send(&host, payload, 7, DriverKind::U1) {
+            SendPayload::Gcode { bytes, file_name } => {
+                assert_eq!(bytes, b"G1 X0\n; via u1".to_vec());
+                assert_eq!(file_name, "plate-7.gcode", "file_name preserved");
+            }
+            other => panic!("expected Gcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_pre_send_skips_gcode_3mf_bundle() {
+        // Even a clobbering plugin can't touch the opaque bundle.
+        let host = host_with_pre_send(r#"function on_pre_send(p, t) return "CLOBBERED" end"#);
+        let original = vec![0x50, 0x4b, 0x03, 0x04]; // "PK\x03\x04" zip header
+        let payload = SendPayload::Gcode3mf {
+            bytes: original.clone(),
+            plate_id: 3,
+            use_ams: true,
+            ams_mapping: vec![],
+            ams_mapping2: vec![],
+        };
+        match apply_pre_send(&host, payload, 3, DriverKind::Bambu) {
+            SendPayload::Gcode3mf {
+                bytes,
+                plate_id,
+                use_ams,
+                ..
+            } => {
+                assert_eq!(bytes, original, ".gcode.3mf bytes must be untouched");
+                assert_eq!(plate_id, 3);
+                assert!(use_ams);
+            }
+            other => panic!("expected Gcode3mf, got {other:?}"),
+        }
     }
 }

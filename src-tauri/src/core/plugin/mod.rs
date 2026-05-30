@@ -27,7 +27,9 @@ mod sandbox;
 pub use bindings::{GcodeCell, GcodeHandle};
 pub use discovery::{discover, DiscoveredPlugin, MANIFEST_FILE};
 pub use error::PluginError;
-pub use hooks::{PlateMeta, PostSliceHook};
+pub use hooks::{
+    PayloadKind, PlateMeta, PostSliceHook, PreSendHook, PreSliceContext, PreSliceHook, SendTarget,
+};
 pub use host::{user_plugins_dir, Hook, LoadedPlugin, PluginHost, PluginSummary};
 pub use manifest::{
     HookKind, ManifestError, PluginManifest, PrinterCompat, SettingDecl, SettingKind, SettingValue,
