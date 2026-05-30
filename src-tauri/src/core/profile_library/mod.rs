@@ -627,7 +627,7 @@ pub fn bundled_process_slugs_for_printer(printer_slug: &str) -> Vec<&'static str
     library()
         .process_fragments
         .keys()
-        .filter_map(|(p, slug)| (p == printer_slug).then(|| slug.as_str()))
+        .filter_map(|(p, slug)| (p == printer_slug).then_some(slug.as_str()))
         .collect()
 }
 

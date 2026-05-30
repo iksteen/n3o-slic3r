@@ -169,11 +169,11 @@ enum BuildUnit {
     /// `object_idx + 1`.
     Solo { object_idx: usize },
     /// >=2 ProjectObjects collapsed into one ModelObject with N
-    /// ModelVolumes. The wrapper resource id is `group_resource_id`
-    /// (allocated after all leaf ids); each member's leaf resource
-    /// id is `object_idx + 1` and is referenced by both
-    /// `<component objectid=>` (in 3dmodel.model) and
-    /// `<part id=>` (in model_settings.config).
+    /// > ModelVolumes. The wrapper resource id is `group_resource_id`
+    /// > (allocated after all leaf ids); each member's leaf resource
+    /// > id is `object_idx + 1` and is referenced by both
+    /// > `<component objectid=>` (in 3dmodel.model) and
+    /// > `<part id=>` (in model_settings.config).
     Group {
         group_resource_id: u32,
         member_indices: Vec<usize>,

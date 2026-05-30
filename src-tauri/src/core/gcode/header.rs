@@ -523,7 +523,7 @@ G28\n\
         assert_eq!(meta.estimated_time.as_deref(), Some("1h"));
         // The comment after G28 is past the header block and should
         // not contaminate raw_settings.
-        assert!(meta.raw_settings.get("ignored").is_none());
+        assert!(!meta.raw_settings.contains_key("ignored"));
     }
 
     #[test]

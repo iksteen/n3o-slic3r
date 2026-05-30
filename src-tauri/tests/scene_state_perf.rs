@@ -154,8 +154,6 @@ fn snapshot_clone_under_50ms_on_1000_object_scene() {
         let _objects: Vec<_> = scene.objects.values().cloned().collect();
         let _bed = scene.bed.clone();
         let _selection: Vec<_> = scene.selection.iter().copied().collect();
-        let _camera = scene.camera.clone();
-        let _gizmo = scene.gizmo.clone();
     });
     println!("snapshot mean={:?} p99={:?}", mean, p99);
     assert!(

@@ -540,10 +540,12 @@ mod tests {
 
     #[test]
     fn read_sliced_round_trips_gcode_metadata_and_thumbnail() {
-        let mut summary = PlateSummary::default();
-        summary.layer_count = 7;
-        summary.estimated_time_seconds = 123;
-        summary.estimated_time_text = "2m 3s".into();
+        let mut summary = PlateSummary {
+            layer_count: 7,
+            estimated_time_seconds: 123,
+            estimated_time_text: "2m 3s".into(),
+            ..Default::default()
+        };
         summary.filament_used_grams.insert(0, 1.5);
         let original_gcode = b";test\nG28\nG1 X1\n".to_vec();
         let thumb = vec![0x89, 0x50, 0x4E, 0x47];
@@ -697,10 +699,12 @@ mod tests {
 
     #[test]
     fn plate_json_carries_summary_fields() {
-        let mut summary = PlateSummary::default();
-        summary.estimated_time_seconds = 1234;
-        summary.estimated_time_text = "20m 34s".into();
-        summary.layer_count = 42;
+        let mut summary = PlateSummary {
+            estimated_time_seconds: 1234,
+            estimated_time_text: "20m 34s".into(),
+            layer_count: 42,
+            ..Default::default()
+        };
         summary.filament_used_grams.insert(0, 4.21);
         let input = SlicedProjectInput {
             printer_model: "Bambu Lab A1 mini".into(),

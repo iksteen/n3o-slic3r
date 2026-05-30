@@ -145,7 +145,7 @@ impl Driver for U1Driver {
             // would block disconnect on the worker's scheduler
             // tick. The watch sender drops with `self` and any
             // subscribers see the channel close.
-            let _ = task;
+            drop(task);
         }
         self.publish_state(ConnectionState::Disconnected {
             reason: "disconnect() called".into(),

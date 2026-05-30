@@ -316,10 +316,11 @@ fn scan_model_instance(
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Empty(ref e)) if e.name().as_ref() == b"metadata" => {
-                if attr_string(e, b"key").as_deref() == Some("object_id") {
-                    object_id = attr_string(e, b"value").and_then(|s| s.parse().ok());
-                }
+            Ok(Event::Empty(ref e))
+                if e.name().as_ref() == b"metadata"
+                    && attr_string(e, b"key").as_deref() == Some("object_id") =>
+            {
+                object_id = attr_string(e, b"value").and_then(|s| s.parse().ok());
             }
             Ok(Event::Start(ref e)) if e.name().as_ref() == b"metadata" => {
                 if attr_string(e, b"key").as_deref() == Some("object_id") {

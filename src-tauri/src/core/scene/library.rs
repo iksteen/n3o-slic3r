@@ -121,32 +121,27 @@ pub fn list_calibration(
     printer_model: &str,
     calibration_root: &Path,
 ) -> Vec<CalibrationDescriptor> {
-    let mut out = Vec::new();
-
-    out.push(check_calibration(
-        "dimension-cube",
-        "Dimension Cube (Orca Cube v2)",
-        "XYZ accuracy and dimensional check at known size.",
-        calibration_root.join("OrcaCube_v2.3mf"),
-    ));
-
-    out.push(check_calibration(
-        "temperature-tower",
-        "Temperature Tower",
-        "Per-layer-band temperature sweep to find your filament's window.",
-        calibration_root.join("temperature_tower.drc"),
-    ));
-
-    out.push(check_calibration(
-        "stringing-tower",
-        "Stringing / Retraction Tower",
-        "Retraction tuning — minimize strings between towers.",
-        calibration_root.join("retraction_tower.drc"),
-    ));
-
-    out.push(material_flow_for(printer_model, calibration_root));
-
-    out
+    vec![
+        check_calibration(
+            "dimension-cube",
+            "Dimension Cube (Orca Cube v2)",
+            "XYZ accuracy and dimensional check at known size.",
+            calibration_root.join("OrcaCube_v2.3mf"),
+        ),
+        check_calibration(
+            "temperature-tower",
+            "Temperature Tower",
+            "Per-layer-band temperature sweep to find your filament's window.",
+            calibration_root.join("temperature_tower.drc"),
+        ),
+        check_calibration(
+            "stringing-tower",
+            "Stringing / Retraction Tower",
+            "Retraction tuning — minimize strings between towers.",
+            calibration_root.join("retraction_tower.drc"),
+        ),
+        material_flow_for(printer_model, calibration_root),
+    ]
 }
 
 /// Resolve the right material-flow fixture per printer. Bambu A1

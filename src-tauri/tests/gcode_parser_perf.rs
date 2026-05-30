@@ -51,7 +51,7 @@ fn synthetic_gcode(target_bytes: usize) -> Vec<u8> {
     while buf.len() < target_bytes {
         writeln!(&mut buf, ";LAYER:{layer}").unwrap();
         writeln!(&mut buf, ";Z:{z:.3}").unwrap();
-        if layer % 10 == 0 {
+        if layer.is_multiple_of(10) {
             writeln!(&mut buf, "T{}", layer % 4).unwrap();
         }
         for (i, feature) in features.iter().enumerate() {

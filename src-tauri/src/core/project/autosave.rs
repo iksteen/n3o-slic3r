@@ -298,7 +298,7 @@ pub fn scan_recoveries(dir: &Path) -> std::io::Result<Vec<AutosaveEntry>> {
             size_bytes: meta.len(),
         });
     }
-    entries.sort_by(|a, b| b.modified_unix_secs.cmp(&a.modified_unix_secs));
+    entries.sort_by_key(|b| std::cmp::Reverse(b.modified_unix_secs));
     Ok(entries)
 }
 

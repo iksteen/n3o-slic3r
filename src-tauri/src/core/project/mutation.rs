@@ -730,7 +730,7 @@ impl Project {
     /// [`Self::load_mesh`] so file-imported meshes get the same
     /// "land on the bed, centered" treatment as procedural ones.
     fn lift_and_center_transform(&self, mesh_id: MeshId) -> Transform {
-        let mesh_bb = self.meshes.get(&mesh_id).unwrap().bounding_box.clone();
+        let mesh_bb = self.meshes.get(&mesh_id).unwrap().bounding_box;
         let lift_z = -mesh_bb.min[2] as f32;
         let (shift_x, shift_y) = match &self.active_plate().scene.bed {
             Some(bed) => {
@@ -925,7 +925,6 @@ impl Project {
                 .get(&obj.mesh)
                 .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
                 .bounding_box
-                .clone()
         };
 
         let plate_id = self.plates[active].id;
@@ -1045,7 +1044,6 @@ impl Project {
                 .get(&obj.mesh)
                 .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
                 .bounding_box
-                .clone()
         };
         let local_corners = mesh_bb_corners(&mesh_bb);
         let local_center = Vec3::new(
@@ -1451,8 +1449,7 @@ impl Project {
             .meshes
             .get(&object.mesh)
             .ok_or(SceneOpError::UnknownMesh(object.mesh))?
-            .bounding_box
-            .clone();
+            .bounding_box;
         let (final_obj, reposition_reason) = match (
             self.plates[from_idx].scene.bed.as_ref(),
             self.plates[to_idx].scene.bed.as_ref(),
@@ -1583,8 +1580,7 @@ impl Project {
             .meshes
             .get(&obj.mesh)
             .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
-            .bounding_box
-            .clone();
+            .bounding_box;
         let local_center = Vec3::new(
             ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32,
             ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32,
@@ -2571,7 +2567,7 @@ mod tests {
 
         p.object_override_clear(active_id, obj, "infill_density")
             .unwrap();
-        assert!(p.plates[0].scene.object_overrides.get(&obj).is_none());
+        assert!(!p.plates[0].scene.object_overrides.contains_key(&obj));
     }
 
     #[test]
@@ -2596,7 +2592,7 @@ mod tests {
             .unwrap();
         let events = p.object_override_clear_all(active_id, obj).unwrap();
         assert_eq!(events.len(), 1);
-        assert!(p.plates[0].scene.object_overrides.get(&obj).is_none());
+        assert!(!p.plates[0].scene.object_overrides.contains_key(&obj));
     }
 
     #[test]
@@ -2679,7 +2675,7 @@ mod tests {
             .unwrap();
         let events = p.project_override_clear(PlateId(1), "k").unwrap();
         assert_eq!(events.len(), 1);
-        assert!(p.plates[0].project_overrides.get("k").is_none());
+        assert!(!p.plates[0].project_overrides.contains_key("k"));
     }
 
     #[test]
@@ -2776,7 +2772,7 @@ mod tests {
         p.object_override_set(PlateId(1), obj, "layer_height".into(), "0.12".into())
             .unwrap();
         p.move_object(PlateId(1), id_b, obj).unwrap();
-        assert!(p.plates[0].scene.object_overrides.get(&obj).is_none());
+        assert!(!p.plates[0].scene.object_overrides.contains_key(&obj));
         let landed = p.plates[1].scene.object_overrides.get(&obj).unwrap();
         assert_eq!(landed["layer_height"], "0.12");
     }

@@ -536,10 +536,12 @@ mod tests {
 
         // Build a tiny synthetic .gcode.3mf with two plates so we
         // also exercise the multi-plate path.
-        let mut summary = PlateSummary::default();
-        summary.layer_count = 2;
-        summary.estimated_time_seconds = 60;
-        summary.estimated_time_text = "1m".into();
+        let summary = PlateSummary {
+            layer_count: 2,
+            estimated_time_seconds: 60,
+            estimated_time_text: "1m".into(),
+            ..Default::default()
+        };
         let plate1 = SlicedPlate {
             plate_id: 1,
             gcode: fixture_gcode().into_bytes(),

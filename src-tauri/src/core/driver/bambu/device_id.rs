@@ -77,10 +77,9 @@ mod tests {
     /// our extractor on a known cert.
     #[test]
     fn extract_cn_finds_bbl_ca_cn() {
-        let pem = super::super::tls::connector()
+        super::super::tls::connector()
             .map(|_| ())
             .expect("connector builds");
-        let _ = pem;
         // We can't easily get the embedded CA out without re-
         // parsing the PEM. Just sanity-check the parse path on a
         // small self-signed test cert generated inline if one is

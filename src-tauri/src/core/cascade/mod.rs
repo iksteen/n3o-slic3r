@@ -310,8 +310,8 @@ fn matches_filter(d: &slic3r_ffi::OptionDef, needle: &str) -> bool {
             .is_some_and(|s| s.to_lowercase().contains(needle))
 }
 
-/// Settings-panel-visible options: Process bucket only. Printer
-/// + filament editing lives on other surfaces; metadata keys
+/// Settings-panel-visible options: Process bucket only. Printer +
+/// filament editing lives on other surfaces; metadata keys
 /// (`compatible_printers`, `inherits`, …) and SLA-only keys have no
 /// bucket and are also excluded.
 fn is_panel_visible(d: &slic3r_ffi::OptionDef) -> bool {

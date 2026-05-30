@@ -170,12 +170,12 @@ impl Default for BoundingBox {
 
 impl BoundingBox {
     pub fn extend(&mut self, p: [f32; 3]) {
-        for axis in 0..3 {
-            if p[axis] < self.min[axis] {
-                self.min[axis] = p[axis];
+        for (axis, &coord) in p.iter().enumerate() {
+            if coord < self.min[axis] {
+                self.min[axis] = coord;
             }
-            if p[axis] > self.max[axis] {
-                self.max[axis] = p[axis];
+            if coord > self.max[axis] {
+                self.max[axis] = coord;
             }
         }
     }

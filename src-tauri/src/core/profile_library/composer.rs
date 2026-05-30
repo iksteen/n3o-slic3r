@@ -552,8 +552,8 @@ fn assemble_flush_defaults(
 ///
 /// The global dimensions are essential: the bundled vendor filament
 /// fragments carry per-printer overrides as `[[rule]]
-/// when.printer.model = "Snapmaker U1"` blocks (e.g. the U1's bed temp
-/// + nozzle temp). Resolving with only `filament.*` predicates — as an
+/// when.printer.model = "Snapmaker U1"` blocks (e.g. the U1's bed temp +
+/// nozzle temp). Resolving with only `filament.*` predicates — as an
 /// earlier version did — silently dropped every such rule, leaving the
 /// U1 with baseline filament values (and a cold bed). The per-slot
 /// fan-out means we resolve N times (one per bound slot) to build the

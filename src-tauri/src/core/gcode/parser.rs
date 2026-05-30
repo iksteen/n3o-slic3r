@@ -213,8 +213,7 @@ impl<R: BufRead> LineIter<R> {
         }
 
         // Whole-line `;…` comment.
-        if trimmed.starts_with(';') {
-            let content = &trimmed[1..];
+        if let Some(content) = trimmed.strip_prefix(';') {
             let semantic = parse_semantic_comment(content, &mut self.last_seen_z);
             let semantic_for_synth = semantic.clone();
             let line = Line::Comment(Comment {

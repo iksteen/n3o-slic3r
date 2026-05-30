@@ -529,8 +529,8 @@ struct ProjectFileBody<'a> {
 ///     pushall request. Flip status to Connected.
 ///   - Publish to report topic → forward bytes to the parser's
 ///     channel.
-///   - Disconnect → flip status to Reconnecting + sleep backoff
-///     + retry. (rumqttc's event loop will re-attempt on its
+///   - Disconnect → flip status to Reconnecting + sleep backoff +
+///     retry. (rumqttc's event loop will re-attempt on its
 ///     own; we don't recreate the client — overlay relies on
 ///     the same behavior.)
 ///   - Shutdown signal → drain the client + exit.

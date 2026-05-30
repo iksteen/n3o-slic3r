@@ -214,13 +214,13 @@ impl OptMode {
 pub struct OptScope(pub u32);
 
 impl OptScope {
-    pub const PRINT: Self = Self(sys::SLIC3R_SCOPE_PRINT as u32);
-    pub const OBJECT: Self = Self(sys::SLIC3R_SCOPE_OBJECT as u32);
-    pub const REGION: Self = Self(sys::SLIC3R_SCOPE_REGION as u32);
-    pub const SLA_PRINT: Self = Self(sys::SLIC3R_SCOPE_SLA_PRINT as u32);
-    pub const SLA_OBJECT: Self = Self(sys::SLIC3R_SCOPE_SLA_OBJECT as u32);
-    pub const SLA_MATERIAL: Self = Self(sys::SLIC3R_SCOPE_SLA_MATERIAL as u32);
-    pub const SLA_PRINTER: Self = Self(sys::SLIC3R_SCOPE_SLA_PRINTER as u32);
+    pub const PRINT: Self = Self(sys::SLIC3R_SCOPE_PRINT);
+    pub const OBJECT: Self = Self(sys::SLIC3R_SCOPE_OBJECT);
+    pub const REGION: Self = Self(sys::SLIC3R_SCOPE_REGION);
+    pub const SLA_PRINT: Self = Self(sys::SLIC3R_SCOPE_SLA_PRINT);
+    pub const SLA_OBJECT: Self = Self(sys::SLIC3R_SCOPE_SLA_OBJECT);
+    pub const SLA_MATERIAL: Self = Self(sys::SLIC3R_SCOPE_SLA_MATERIAL);
+    pub const SLA_PRINTER: Self = Self(sys::SLIC3R_SCOPE_SLA_PRINTER);
 
     /// True if `other`'s bits are all set on `self`.
     pub fn contains(self, other: Self) -> bool {
@@ -565,10 +565,9 @@ extern "C" fn progress_trampoline(
         ""
     } else {
         // SAFETY: stage is NUL-terminated for the call's duration.
-        match unsafe { CStr::from_ptr(stage) }.to_str() {
-            Ok(s) => s,
-            Err(_) => "",
-        }
+        unsafe { CStr::from_ptr(stage) }
+            .to_str()
+            .unwrap_or_default()
     };
     // SAFETY: user_data is the `&mut &mut dyn FnMut` slot owned by
     // the calling `slice` invocation; the reference is exclusive
@@ -691,10 +690,9 @@ extern "C" fn log_trampoline(
         ""
     } else {
         // SAFETY: caller (C side) guarantees message is NUL-terminated.
-        match unsafe { CStr::from_ptr(message) }.to_str() {
-            Ok(s) => s,
-            Err(_) => "",
-        }
+        unsafe { CStr::from_ptr(message) }
+            .to_str()
+            .unwrap_or_default()
     };
     let level = LogLevel::from_raw(severity);
     if let Ok(mut guard) = LOG_CALLBACK.lock() {

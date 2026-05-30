@@ -352,10 +352,12 @@ fn synthetic_foreign_gcode(generator: &str) -> String {
 /// here is the same shape.
 #[test]
 fn phase6_smoke_gcode_3mf_round_trip() {
-    let mut summary = PlateSummary::default();
-    summary.layer_count = 2;
-    summary.estimated_time_seconds = 60;
-    summary.estimated_time_text = "1m".into();
+    let mut summary = PlateSummary {
+        layer_count: 2,
+        estimated_time_seconds: 60,
+        estimated_time_text: "1m".into(),
+        ..Default::default()
+    };
     summary.filament_used_grams.insert(0, 2.5);
 
     let plate1 = SlicedPlate {

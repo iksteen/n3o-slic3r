@@ -131,7 +131,7 @@ pub fn validate_cascade(
         // docs/profiles.md), so the meaningful early check is just the
         // FFF-vs-SLA gate. Richer object/print scope distinctions can
         // land later as the override tiers gain more constraints.
-        for (key, _) in &rule.set {
+        for key in rule.set.keys() {
             if let Some(schema) = schema_by_key(key) {
                 if schema.scope.0 != 0 && schema.scope.is_sla() && !schema.scope.is_fff() {
                     errors.push(CascadeLoadError::InvalidShape {
@@ -163,7 +163,7 @@ fn suggest_set_key(unknown: &str) -> Option<&'static str> {
     let mut best: Option<(&'static str, usize)> = None;
     for entry in schema {
         let d = edit_distance(unknown, &entry.key);
-        if d <= 2 && best.map_or(true, |(_, bd)| d < bd) {
+        if d <= 2 && best.is_none_or(|(_, bd)| d < bd) {
             best = Some((entry.key.as_str(), d));
         }
     }
@@ -176,7 +176,7 @@ fn suggest_dimension<'a>(unknown: &str, dims: &'a KnownDimensions) -> Option<&'a
     let mut best: Option<(&'a str, usize)> = None;
     for d in &dims.dimensions {
         let dist = edit_distance(unknown, d);
-        if dist <= 2 && best.map_or(true, |(_, bd)| dist < bd) {
+        if dist <= 2 && best.is_none_or(|(_, bd)| dist < bd) {
             best = Some((d.as_str(), dist));
         }
     }

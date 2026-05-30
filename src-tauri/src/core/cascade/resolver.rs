@@ -258,7 +258,7 @@ set.bed_temp = 55
         let cascade = parse(src);
         let resolved = resolve(&cascade, &pla_pei_ctx());
         assert!(
-            resolved.get("bed_temp").is_none(),
+            !resolved.contains_key("bed_temp"),
             "PETG rule doesn't fire for PLA context"
         );
     }

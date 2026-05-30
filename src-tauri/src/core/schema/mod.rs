@@ -130,7 +130,7 @@ struct SchemaCache {
 static CACHE: OnceLock<SchemaCache> = OnceLock::new();
 
 fn cache() -> &'static SchemaCache {
-    CACHE.get_or_init(|| build_cache())
+    CACHE.get_or_init(build_cache)
 }
 
 fn build_cache() -> SchemaCache {

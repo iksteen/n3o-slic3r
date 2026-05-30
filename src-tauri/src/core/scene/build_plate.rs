@@ -38,8 +38,7 @@ pub fn lookup(identity: &str) -> Option<BuildPlate> {
     let lib = crate::core::profile_library::printer_catalog();
     let known = lib.iter().any(|entry| {
         crate::core::profile_library::bundled_beds_for_printer(&entry.fragment_slug)
-            .iter()
-            .any(|id| *id == identity)
+            .contains(&identity)
     });
     if known {
         Some(BuildPlate {

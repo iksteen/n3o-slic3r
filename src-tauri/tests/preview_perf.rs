@@ -60,7 +60,7 @@ fn synthetic_gcode(target_bytes: usize) -> String {
     while buf.len() < target_bytes {
         writeln!(&mut buf, ";LAYER_CHANGE").unwrap();
         writeln!(&mut buf, ";Z:{z:.3}").unwrap();
-        if layer % 10 == 0 {
+        if layer.is_multiple_of(10) {
             writeln!(&mut buf, "T{}", layer % 4).unwrap();
         }
         for (i, feature) in features.iter().enumerate() {
@@ -105,7 +105,7 @@ fn build_preview_under_2s_on_5mb_synthetic() {
     );
 
     assert!(
-        geom.extrusions.len() > 0,
+        !geom.extrusions.is_empty(),
         "IR build yielded zero extrusions"
     );
     assert!(
@@ -132,7 +132,7 @@ fn stats_under_500ms_on_5mb_synthetic() {
         elapsed,
     );
 
-    assert!(layer_stats.len() > 0, "stats yielded zero layers");
+    assert!(!layer_stats.is_empty(), "stats yielded zero layers");
     assert!(job_stats.layer_count > 0);
     assert!(
         elapsed.as_millis() < 500,

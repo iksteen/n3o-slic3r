@@ -209,7 +209,7 @@ fn parse_duration_seconds(text: &str) -> Option<u64> {
 /// from a `filament used` line. Yields one f64 per extruder slot.
 fn parse_comma_floats(value: &str) -> Vec<f64> {
     value
-        .split(|c: char| c == ',' || c == ';')
+        .split([',', ';'])
         .map(|s| s.trim().parse::<f64>().unwrap_or(0.0))
         .collect()
 }
@@ -235,7 +235,7 @@ mod tests {
 G28\n";
         let path = write_tempfile(src);
         let summary = build_summary(&path).expect("ok");
-        assert_eq!(summary.estimated_time_seconds, 1 * 3600 + 23 * 60 + 45);
+        assert_eq!(summary.estimated_time_seconds, 3600 + 23 * 60 + 45);
         assert_eq!(summary.estimated_time_text, "1h 23m 45s");
         assert_eq!(summary.filament_used_grams.get(&0), Some(&4.21));
         assert_eq!(summary.filament_used_grams.get(&1), Some(&3.10));

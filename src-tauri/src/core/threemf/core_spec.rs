@@ -119,13 +119,10 @@ pub fn parse_model(bytes: &[u8], source: &std::path::Path) -> Result<ModelDoc, L
                 }
                 _ => {}
             },
-            Ok(Event::Empty(ref e)) => match local_name(e.name()) {
-                b"item" => {
-                    let item = parse_build_item(e)?;
-                    build_items.push(item);
-                }
-                _ => {}
-            },
+            Ok(Event::Empty(ref e)) if local_name(e.name()) == b"item" => {
+                let item = parse_build_item(e)?;
+                build_items.push(item);
+            }
             Ok(Event::Eof) => break,
             Err(err) => {
                 return Err(LoadError::Parse {

@@ -287,7 +287,7 @@ pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
                 threemf_mesh_count: geometry.meshes.len(),
             });
         }
-        for (id, new_mesh) in mesh_id_order.iter().zip(geometry.meshes.into_iter()) {
+        for (id, new_mesh) in mesh_id_order.iter().zip(geometry.meshes) {
             let mesh = project.meshes.get_mut(id).expect("walked id set");
             mesh.vertices = new_mesh.vertices;
             mesh.normals = new_mesh.normals;

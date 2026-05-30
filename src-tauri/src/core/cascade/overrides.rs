@@ -27,8 +27,8 @@ use std::path::Path;
 ///   1. authored cascade (resolved by `resolve()`)
 ///   2. **user** — `~/.config/n3o-slic3r/overrides/*.toml`-style files
 ///   3. **project** — overrides scoped to a project / plate
-///   4. **object** — overrides scoped to a single object on a plate
-///     . One map, not a file — the panel keeps it in
+///   4. **object** — overrides scoped to a single object on a plate.
+///      One map, not a file — the panel keeps it in
 ///      memory and passes it on each resolve.
 ///
 /// Within the user / project tiers, later source files win on ties.
