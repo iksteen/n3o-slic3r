@@ -853,11 +853,16 @@ mod tests {
             label: "<test>".into(),
             content: s.into(),
         };
-        // Object tier (highest): turns bravo on, charlie off. Keys are
-        // flat strings, exactly as object overrides arrive.
+        // Object tier (highest): flips bravo on; turns charlie off;
+        // flips delta off over a lower-tier true (false-over-true
+        // direction); exercises the "1"/"0" spellings. Keys are flat
+        // strings, exactly as object overrides arrive.
         let object: HashMap<String, String> = [
             ("plugin.bravo.enabled".to_string(), "true".to_string()),
             ("plugin.charlie.enabled".to_string(), "false".to_string()),
+            ("plugin.delta.enabled".to_string(), "false".to_string()),
+            ("plugin.echo.enabled".to_string(), "1".to_string()),
+            ("plugin.foxtrot.enabled".to_string(), "0".to_string()),
         ]
         .into_iter()
         .collect();
@@ -872,7 +877,8 @@ mod tests {
             active_slot: 0,
             // Dotted keys must be quoted in TOML to stay flat.
             user_overrides: vec![spec(
-                "\"plugin.alpha.enabled\" = false\n\"plugin.bravo.enabled\" = false",
+                "\"plugin.alpha.enabled\" = false\n\"plugin.bravo.enabled\" = false\n\
+                 \"plugin.delta.enabled\" = true",
             )],
             project_overrides: vec![spec(
                 "\"plugin.bravo.enabled\" = false\n\"plugin.notabool.enabled\" = \"maybe\"",
@@ -888,6 +894,13 @@ mod tests {
             "object tier wins over project + user"
         );
         assert_eq!(act.get("charlie"), Some(&false), "object tier");
+        assert_eq!(
+            act.get("delta"),
+            Some(&false),
+            "higher tier false wins over lower tier true"
+        );
+        assert_eq!(act.get("echo"), Some(&true), "\"1\" parses as true");
+        assert_eq!(act.get("foxtrot"), Some(&false), "\"0\" parses as false");
         assert_eq!(act.get("notabool"), None, "non-boolean value ignored");
     }
 }

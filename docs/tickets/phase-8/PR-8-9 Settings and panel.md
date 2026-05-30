@@ -25,22 +25,32 @@ bool does):
 - **Activation** — does the user want it to run, and where. A
   cascade-resolved `plugin.<name>.enabled` (bool).
 
-**Activation rides the cascade.** `plugin.<name>.enabled` is a synthetic
-plugin setting that resolves through the same override tiers as plugin
-settings (FR-PL-6), so global / per-project / per-plate all fall out of
-one mechanism. Precedence (highest wins): **plate → project →
-global-default → manifest-default (`true`)**. Because overrides are
+**Activation rides the override tiers.** `plugin.<name>.enabled` is a
+synthetic plugin flag that resolves through the **same override tiers**
+as plugin settings (FR-PL-6) — so global / per-project / per-plate all
+fall out of one mechanism. Precedence (highest wins): **plate → project
+→ global-default → manifest-default (`true`)**. Because overrides are
 two-way, a global `true` can be flipped to `false` for one plate (the
 "enable globally, disable for this plate" requirement) and vice-versa.
+It is resolved **directly from the override tiers, not via
+`cascade::resolve`** (step 2): a plugin key has no authored cascade rule,
+so the tiers + the manifest default are its only sources, and routing it
+through the cascade would only feed unknown `plugin.*` keys to the
+libslic3r adapter (which drops them). Implementation note, not a
+behavioural difference.
 
 **Plugins declare their applicable scopes.** A new manifest field
 `scopes` lists which cascade levels a plugin's `enabled` flag *and* its
 `[settings.*]` may be set at — vocabulary `global` / `project` /
 `plate`. Default when omitted: all three. A plugin only meaningful
-app-wide declares `scopes = ["global"]`; the UI then offers no
-project/plate control for it and an override at those tiers is ignored
-at resolve. (Printer applicability stays a separate axis —
-`printer_compatibility`, now enforced; see below.)
+app-wide declares `scopes = ["global"]`; the UI offers no project/plate
+control for it and an override at those tiers should be ignored at
+resolve. **Not yet enforced (deferred):** step 1 parses + surfaces
+`scopes`, but step 2's activation resolver does not consult it — an
+override at any tier currently takes effect regardless of declared
+scope. Scope-gating lands with the settings resolver (step 3/4), where
+the UI also stops offering the disallowed tiers. (Printer applicability
+stays a separate axis — `printer_compatibility`, now enforced.)
 
 **Dispatch gating is per-plate.** The orchestrator already resolves the
 cascade per plate; it computes the plate's **active plugin set** =
@@ -76,9 +86,19 @@ a whole-job send (document the boundary).
    enforced for pre/post-slice (model from the slice context) and
    pre-send (model resolved from the plate's instance). pre-send carries
    no per-plate activation (a send is whole-job) — that and the global
-   tier land in step 3.
+   tier land in step 3. **Transient gap until step 3:** with no global
+   tier yet, a plugin "disabled" globally in the panel still runs at
+   send time (pre-send has only the empty activation map); only
+   per-plate/project *overrides* suppress it today, and only on the
+   slice hooks. Not final behaviour.
 3. Global plugin-state persistence; resolved plugin-setting values
    handed to hooks (replacing the manifest-default reads in 8-5..8-7).
+   **Unify, don't duplicate:** step 2's `resolve_plugin_activation`
+   hand-rolls the user→project→object tier-walk + TOML parse for the
+   `.enabled` flag. Plugin settings (`plugin.<name>.<key>`, typed) ride
+   the *same* tiers with the same precedence and adapter-bypass — extract
+   one `plugin.*`-namespace resolver returning a typed map, with
+   `.enabled` as a consumer, rather than copying the walk.
 4. Frontend: Plugins panel + settings category + per-scope controls.
 
 **Acceptance criteria.**

@@ -12,9 +12,9 @@
 -- hardware; a wrong coordinate can crash the toolhead. It becomes a
 -- plugin-declared setting once plugin settings are wired.
 --
--- Self-guards on the printer model: `printer_compatibility` in the
--- manifest isn't enforced by the host yet, so the plugin must not
--- append a Chitu macro to some other printer's G-code itself.
+-- Self-guards on the printer model as defense-in-depth: the host now
+-- enforces `printer_compatibility` (a plugin scoped to another model is
+-- never dispatched for it), so this Lua check is belt-and-suspenders.
 --
 -- Placement matters: Bambu wraps the runnable G-code in a
 -- `; EXECUTABLE_BLOCK_START` / `; EXECUTABLE_BLOCK_END` pair and the

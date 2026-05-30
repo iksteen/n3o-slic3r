@@ -594,6 +594,48 @@ mod tests {
     }
 
     #[test]
+    fn apply_pre_send_skips_printer_incompatible_plugin() {
+        use crate::core::plugin::PluginHost;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("u1-only");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("plugin.toml"),
+            "name=\"u1-only\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\n\
+             hooks=[\"pre_send\"]\nprinter_compatibility=[\"Snapmaker U1\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("main.lua"),
+            r#"function on_pre_send(p, t) return "CLOBBERED" end"#,
+        )
+        .unwrap();
+        let host: PluginHostState = Arc::new(Mutex::new(PluginHost::load(&[tmp
+            .path()
+            .to_path_buf()])));
+
+        let mk = || SendPayload::Gcode {
+            bytes: b"G1 X0".to_vec(),
+            file_name: "p.gcode".into(),
+        };
+        // Wrong printer model → the U1-only plugin is skipped (gate
+        // enforces printer_compatibility), payload unchanged.
+        match apply_pre_send(&host, mk(), 1, DriverKind::U1, Some("Bambu Lab A1 mini".into())) {
+            SendPayload::Gcode { bytes, .. } => {
+                assert_eq!(bytes, b"G1 X0".to_vec(), "incompatible plugin skipped")
+            }
+            other => panic!("expected Gcode, got {other:?}"),
+        }
+        // Matching model → it runs and clobbers the bytes.
+        match apply_pre_send(&host, mk(), 1, DriverKind::U1, Some("Snapmaker U1".into())) {
+            SendPayload::Gcode { bytes, .. } => {
+                assert_eq!(bytes, b"CLOBBERED".to_vec(), "compatible plugin ran")
+            }
+            other => panic!("expected Gcode, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn apply_pre_send_rewrites_gcode_and_preserves_fields() {
         let host = host_with_pre_send(
             r#"function on_pre_send(p, t) return p.bytes .. "\n; via " .. t.driver_kind end"#,
