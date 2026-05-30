@@ -1,6 +1,34 @@
 # PR-8-7 — platecycler plugin (post-slice macro append)
 
-Status: ❌ open.
+Status: ✅ done (software; hardware smoke pending).
+
+**Implementation notes.**
+- `examples/plugins/platecycler/` — a post-slice plugin (not auto-loaded
+  bundled, so it doesn't eject on every print; opt-in by copying to the
+  user plugins dir). `printer_compatibility = ["Bambu Lab A1 mini"]`
+  plus a Lua self-guard on `plate.printer_model`, since the host doesn't
+  enforce `printer_compatibility` in dispatch yet.
+- The `DEFAULT_SWAP_GCODE` macro is transcribed from the platecycler
+  tool (`platecycler.py`); the plugin + smoke doc warn to verify it
+  against the source before running on hardware.
+- **Placement (review fix):** the macro is **inserted just before
+  `; EXECUTABLE_BLOCK_END`, not appended at the tail.** A pre-commit
+  review verified against a real A1 mini slice that appending past END
+  leaves the macro outside the firmware's runnable block — the plate
+  would never eject. It now lands inside the block (after the slice's
+  end-G-code, before END), matching where the platecycler tool's
+  multi-plate concat puts it.
+- Idempotent via a `; n3o:platecycler` sentinel; the scan walks back
+  from the tail (the END marker + sentinel sit just before the trailing
+  config block) rather than the whole file.
+- Hardware smoke method in `docs/phase-8-platecycler-smoke.md` (result
+  pending the real run).
+
+**Not changed (the user's macro domain, doc warns to verify):** the
+macro runs after the slice's `M18` stepper-disable (matches the tool's
+proven multi-plate flow) and travels to `Z186` (> the 180 mm print
+height — the PlateCycler legitimately clears the plate above print
+height).
 
 **Scope.** The flagship plugin and the architecture's proof point — in
 its **redefined, simplified form** (see `phase-8.md` decision 2):

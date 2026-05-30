@@ -1,0 +1,6 @@
+name = "platecycler"
+version = "0.1.0"
+entry = "main.lua"
+hooks = ["post_slice"]
+printer_compatibility = ["Bambu Lab A1 mini"]
+description = "Auto-eject the finished plate (Chitu PlateCycler) at print end."

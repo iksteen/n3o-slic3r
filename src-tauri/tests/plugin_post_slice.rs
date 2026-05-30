@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex, Once};
 
 use n3o_slic3r_lib::core::cascade::commands::ContextJson;
 use n3o_slic3r_lib::core::filament::FilamentProfile;
-use n3o_slic3r_lib::core::plugin::PluginHost;
+use n3o_slic3r_lib::core::gcode::{parse_str, to_string};
+use n3o_slic3r_lib::core::plugin::{PlateMeta, PluginHost, PostSliceHook};
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
 use n3o_slic3r_lib::core::scene::build_plate::BuildPlate;
 use n3o_slic3r_lib::core::slice::{
@@ -137,7 +138,7 @@ fn output_gcode(events: &Arc<Mutex<Vec<SliceEvent>>>) -> String {
 
 #[test]
 fn post_slice_plugins_inject_into_real_gcode() {
-    use n3o_slic3r_lib::core::gcode::{parse_str, to_string, Line};
+    use n3o_slic3r_lib::core::gcode::Line;
 
     ensure_ffi_init();
 
@@ -236,6 +237,101 @@ fn pre_slice_plugin_rewrites_bed_temp_in_real_gcode() {
     assert!(
         with_plugin.contains("M140 S42") || with_plugin.contains("M190 S42"),
         "bed_temp=42 should reach libslic3r as a 42C bed-heat command"
+    );
+}
+
+/// Load a single bundled example plugin in isolation (copied into a
+/// fresh temp root, so sibling examples don't also load).
+fn host_for_example(name: &str) -> PluginHost {
+    let src = workspace_root().join("examples/plugins").join(name);
+    let tmp = tempfile::tempdir().unwrap();
+    let dst = tmp.path().join(name);
+    std::fs::create_dir_all(&dst).unwrap();
+    for f in ["plugin.toml", "main.lua"] {
+        std::fs::copy(src.join(f), dst.join(f)).unwrap();
+    }
+    // `load` reads the entry Lua into the runtime; the temp dir can drop.
+    PluginHost::load(&[tmp.path().to_path_buf()])
+}
+
+fn a1_mini_plate() -> PlateMeta {
+    PlateMeta {
+        plate_id: 1,
+        printer_model: "Bambu Lab A1 mini".into(),
+        bed_type: Some("Textured PEI".into()),
+        object_count: None,
+    }
+}
+
+/// The platecycler plugin appends its eject macro once, and re-running
+/// the hook over already-cycled G-code is a no-op (idempotent sentinel).
+#[test]
+fn platecycler_inserts_eject_macro_inside_executable_block_idempotently() {
+    let mut host = host_for_example("platecycler");
+    let hook = PostSliceHook {
+        plate: a1_mini_plate(),
+    };
+    // Mirror Bambu structure: runnable block ends at EXECUTABLE_BLOCK_END,
+    // then a trailing config/footer the firmware ignores.
+    let gcode = "; EXECUTABLE_BLOCK_START\nG1 X0 Y0 F1200\nM104 S0\nM18 X Y Z\n\
+                 ; EXECUTABLE_BLOCK_END\n; filament used [g] = 1.0\n";
+
+    let out1 = to_string(&host.dispatch(&hook, parse_str(gcode)));
+    assert!(out1.contains("; n3o:platecycler"), "sentinel inserted");
+    assert!(out1.contains("G0 Y186.5 F2000"), "eject macro inserted");
+    // The macro must be INSIDE the executable block (before END), or the
+    // firmware would ignore it and the plate would never eject.
+    let sentinel = out1.find("; n3o:platecycler").unwrap();
+    let end = out1.rfind("EXECUTABLE_BLOCK_END").unwrap();
+    assert!(sentinel < end, "macro must sit before EXECUTABLE_BLOCK_END");
+
+    let out2 = to_string(&host.dispatch(&hook, parse_str(&out1)));
+    assert_eq!(
+        out1.matches("; n3o:platecycler").count(),
+        1,
+        "exactly one eject sequence"
+    );
+    assert_eq!(out2, out1, "re-running must not double-insert");
+}
+
+/// The plugin's printer self-guard: it does nothing for a non-A1-mini
+/// plate (printer_compatibility isn't host-enforced yet).
+#[test]
+fn platecycler_skips_non_a1_mini() {
+    let mut host = host_for_example("platecycler");
+    let hook = PostSliceHook {
+        plate: PlateMeta {
+            printer_model: "Snapmaker U1".into(),
+            ..a1_mini_plate()
+        },
+    };
+    let gcode = "G1 X0 Y0 F1200\n";
+    let out = to_string(&host.dispatch(&hook, parse_str(gcode)));
+    assert_eq!(out, gcode, "no eject macro on a different printer");
+}
+
+/// Verify-via-G-code: a real A1 mini slice with the platecycler plugin
+/// active carries the eject sequence at the tail.
+#[test]
+fn platecycler_eject_macro_in_real_slice() {
+    ensure_ffi_init();
+    let host = Arc::new(Mutex::new(host_for_example("platecycler")));
+    let (input, registry, _out) = slice_input(vec![1]);
+    let (sink, events) = collecting_sink();
+    run_slice_job_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
+    let g = output_gcode(&events);
+
+    assert!(g.contains("; n3o:platecycler"), "sentinel present");
+    assert!(g.contains("G0 Y186.5 F2000"), "eject macro present");
+    // It must land inside the executable block (before the END marker),
+    // not past it where the firmware would ignore it.
+    let sentinel = g.find("; n3o:platecycler").unwrap();
+    let end = g
+        .rfind("EXECUTABLE_BLOCK_END")
+        .expect("real A1 mini slice has an executable-block end marker");
+    assert!(
+        sentinel < end,
+        "eject macro must sit inside the executable block, before END"
     );
 }
 

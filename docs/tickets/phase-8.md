@@ -97,7 +97,7 @@ closes at 8-5, the rest are largely independent:
 | Typed G-code Lua bindings (lines/layers/commands, insert/replace/remove/append) | ✅ done | [PR-8-4](phase-8/PR-8-4%20Gcode%20bindings.md) |
 | post-slice hook wired into the slice pipeline + beep/pause example plugins | ✅ done | [PR-8-5](phase-8/PR-8-5%20Post-slice%20hook.md) |
 | pre-slice + pre-send hooks wired + bed-temp-by-range example | ✅ done | [PR-8-6](phase-8/PR-8-6%20Pre-slice%20and%20pre-send.md) |
-| **platecycler plugin** (post-slice macro append) + A1 mini hardware smoke | ❌ open | [PR-8-7](phase-8/PR-8-7%20platecycler%20plugin.md) |
+| **platecycler plugin** (post-slice macro append) + A1 mini hardware smoke | ✅ done (sw) | [PR-8-7](phase-8/PR-8-7%20platecycler%20plugin.md) |
 | Read-only filament-state Lua bindings (per-slot identity/loaded/mismatch) | ❌ open | [PR-8-8](phase-8/PR-8-8%20Filament%20state%20bindings.md) |
 | Plugin-declared settings in the cascade UI + Plugins panel (frontend) | ❌ open | [PR-8-9](phase-8/PR-8-9%20Settings%20and%20panel.md) |
 | Hot reload (folder watcher) + plugin authoring guide + exit-criteria smoke | ❌ open | [PR-8-10](phase-8/PR-8-10%20Hot%20reload%20and%20guide.md) |
