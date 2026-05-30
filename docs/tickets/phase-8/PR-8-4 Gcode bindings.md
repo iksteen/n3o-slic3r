@@ -1,6 +1,25 @@
 # PR-8-4 — Typed G-code Lua bindings
 
-Status: ❌ open.
+Status: ✅ done.
+
+**Corrections found while implementing** (the model wins over this
+ticket's guesses — PRD §11.3):
+- **`move.feature` dropped.** The typed `gcode::Move` carries no
+  feature field — feature classification lives on preceding `;TYPE:`
+  comments (`SemanticComment::FeatureType`), threaded separately by
+  `parse_with_feature_context`. So the move view exposes `kind / x / y
+  / z / e / f / command / travel` and a plugin that wants the feature
+  reads the comment lines (a comment view exposes `semantic =
+  "feature_type"`).
+- **Line views are Lua tables, not a userdata proxy.** Materialized per
+  access (`g:line(i)` / `g:lines()`), which is friendlier for authors
+  (`line.kind`, `line.x`) and only allocates for lines actually
+  touched.
+- **`layer.first_line` is the `LayerChange` marker line**, which the
+  parser places *after* the visible `;LAYER:n` comment (the marker is
+  zero-width and serializes to nothing — that's how the round-trip
+  stays byte-identical). Inserting at `first_line` lands content at the
+  layer boundary.
 
 **Scope.** Expose the typed G-code model (`core/gcode`) to Lua so a
 post-slice plugin manipulates a structured sequence — `Move` /
@@ -29,8 +48,8 @@ Owns **FR-PL-4** (structured G-code API).
   - A **line view** exposes `kind` (`"move"|"comment"|"layer_change"
     |"tool_change"|"other"`) and kind-specific read fields:
     - move: `x`,`y`,`z`,`e`,`f`, `command` (`G0`/`G1`/`G2`/`G3`),
-      `feature` (the `FeatureType` as a string, when annotated),
-      `travel` (bool: `E` absent/≤0).
+      `travel` (bool: `E` absent/≤0). *(No `feature` — see the
+      corrections note above; it isn't on the typed `Move`.)*
     - comment: `text`, `style`, `semantic` (the `SemanticComment`
       variant name when classified).
     - layer_change: `z`, `source`.
