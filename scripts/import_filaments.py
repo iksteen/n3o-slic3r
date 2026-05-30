@@ -151,6 +151,64 @@ DENY_KEYS = frozenset({
     "filament_extruder_variant",
 })
 
+# ---- Compatibility overrides for upstream authoring bugs ----
+#
+# libslic3r selects the bed-temperature key by the active plate's
+# `curr_bed_type` (`Preset::get_bed_temp_key()` → `cool_plate_temp`,
+# `eng_plate_temp`, `textured_plate_temp`, `hot_plate_temp`, …). Some
+# upstream vendor profiles author the bed temp *only* under
+# `hot_plate_temp`, even for printers whose physical/default plate maps
+# to a different `curr_bed_type`. The active plate then reads the
+# unauthored sibling key (`0`) and the bed never heats.
+#
+# These are genuine upstream bugs we can't fix in their tree, so we
+# compensate at import time: for the affected printer, mirror the
+# authored source plate-temp family into the target family that its
+# `curr_bed_type` actually selects. Keyed by the `printer.model` string
+# as it appears in `compatible_printers`; only fills a target that's
+# absent or a zero sentinel, so a genuinely-authored value is never
+# clobbered.
+#
+# Snapmaker U1: ships a swappable textured PEI plate (the only/default
+# plate), so its bed identity resolves to `curr_bed_type = "Textured
+# PEI Plate"` → `textured_plate_temp`. Upstream Snapmaker filament
+# leaves only set `hot_plate_temp` and leave `textured_plate_temp = 0`
+# (verified against the generated fragments). Mirror hot → textured.
+COMPAT_PLATE_TEMP_MIRROR: dict[str, list[tuple[str, str]]] = {
+    "Snapmaker U1": [
+        ("hot_plate_temp", "textured_plate_temp"),
+        ("hot_plate_temp_initial_layer", "textured_plate_temp_initial_layer"),
+    ],
+}
+
+
+def _is_zero_temp(v: Any) -> bool:
+    """A plate-temp value that means "unset" — empty, or every
+    per-extruder element is `0`. Plate temps are vector-typed, so the
+    value may be a scalar string or a list (`"0"`, `["0"]`, `["0","0"]`)."""
+    elems = v if isinstance(v, list) else [v]
+    return all(str(e).strip() in ("", "0") for e in elems)
+
+
+def apply_compat_plate_temp_mirror(
+    per_printer_values: dict[str, dict[str, Any]],
+) -> None:
+    """In-place: for each affected printer, copy the authored source
+    plate-temp key into the target key its `curr_bed_type` selects,
+    unless the target already carries a real (non-zero) value."""
+    for printer_model, values in per_printer_values.items():
+        mirrors = COMPAT_PLATE_TEMP_MIRROR.get(printer_model)
+        if not mirrors:
+            continue
+        for src_key, dst_key in mirrors:
+            src = values.get(src_key)
+            if src is None or _is_zero_temp(src):
+                continue
+            dst = values.get(dst_key)
+            if dst is None or _is_zero_temp(dst):
+                values[dst_key] = list(src) if isinstance(src, list) else src
+
+
 NOZZLE_SUFFIX_RE = re.compile(r" 0\.\d+ nozzle$")
 SUFFIX_RE = re.compile(r" @(.+)$")
 GENERIC_TOKEN_RE = re.compile(r"\bGeneric\b")
@@ -558,6 +616,12 @@ def consolidate_bucket(
         per_printer_full[printer_model][key] = value
     if not per_printer_full:
         return None
+
+    # Compensate for upstream bed-temp authoring bugs before baseline
+    # so the mirrored value rides the affected printer's own column
+    # (e.g. U1's hot_plate_temp=55, not the bucket baseline) into the
+    # right curr_bed_type key.
+    apply_compat_plate_temp_mirror(per_printer_full)
 
     # Phase 2: most-common-value baseline per key.
     baseline_scalars = find_majority_baseline(per_printer_full)
