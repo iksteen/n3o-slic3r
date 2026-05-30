@@ -150,8 +150,11 @@ export function SettingsPanel(props: SettingsPanelProps) {
 
   // The right-aligned Plugins tab swaps the whole settings body for the
   // plate-level plugin manager. Independent of the project/object
-  // editing-context tabs.
+  // editing-context tabs. `onPluginTab` also guards the surface
+  // vanishing (no active plate) — the latch can stay set, but the tab is
+  // only "on" while the surface exists, so a normal tab stays highlighted.
   const [pluginTabActive, setPluginTabActive] = useState(false);
+  const onPluginTab = pluginTabActive && pluginSurface != null;
 
   // Mode filter UI is parked pending a redesign; pin to "advanced"
   // — "expert" pulls in G-code / machine-limits noise most users
@@ -298,8 +301,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
           <button
             type="button"
             role="tab"
-            aria-selected={!pluginTabActive && contextLayer === "project"}
-            className={`sp-tab${!pluginTabActive && contextLayer === "project" ? " active" : ""}`}
+            aria-selected={!onPluginTab && contextLayer === "project"}
+            className={`sp-tab${!onPluginTab && contextLayer === "project" ? " active" : ""}`}
             onClick={() => {
               setPluginTabActive(false);
               setContextLayer("project");
@@ -310,9 +313,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
           <button
             type="button"
             role="tab"
-            aria-selected={!pluginTabActive && contextLayer === "object"}
+            aria-selected={!onPluginTab && contextLayer === "object"}
             disabled={!objectTabAvailable}
-            className={`sp-tab${!pluginTabActive && contextLayer === "object" ? " active" : ""}`}
+            className={`sp-tab${!onPluginTab && contextLayer === "object" ? " active" : ""}`}
             onClick={() =>
               objectTabAvailable &&
               (setPluginTabActive(false), setContextLayer("object"))
@@ -331,8 +334,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
               <button
                 type="button"
                 role="tab"
-                aria-selected={pluginTabActive}
-                className={`sp-tab${pluginTabActive ? " active" : ""}`}
+                aria-selected={onPluginTab}
+                className={`sp-tab${onPluginTab ? " active" : ""}`}
                 style={{ "--tab-hue": 340 } as React.CSSProperties}
                 onClick={() => setPluginTabActive(true)}
                 title="Plugins enabled for this plate (overrides Global and Project)"
@@ -363,7 +366,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
             elsewhere. */}
         <div
           className="search-wrap"
-          style={pluginTabActive ? { display: "none" } : undefined}
+          style={onPluginTab ? { display: "none" } : undefined}
         >
           <div className="search-input">
             <input
@@ -386,7 +389,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
         </div>
       </header>
 
-      {pluginTabActive && pluginSurface ? (
+      {onPluginTab && pluginSurface ? (
         <div className="sp-plugins-scroll">
           <PluginManager
             level="plate"

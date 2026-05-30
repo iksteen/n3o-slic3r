@@ -361,11 +361,6 @@ impl PluginHost {
         self.global_settings = settings;
     }
 
-    /// A plugin's resolved global activation (default true when unset).
-    pub fn globally_enabled(&self, name: &str) -> bool {
-        self.global_enabled.get(name).copied().unwrap_or(true)
-    }
-
     /// Summaries for the Plugins panel.
     pub fn list(&self) -> Vec<PluginSummary> {
         self.plugins

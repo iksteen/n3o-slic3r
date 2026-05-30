@@ -139,9 +139,14 @@ function PluginField({
             value={value}
             step="any"
             disabled={disabled}
-            onChange={(e) =>
-              onChange(e.target.value === "" ? "" : Number(e.target.value))
-            }
+            onChange={(e) => {
+              // Only commit a real number — an empty/partial field must
+              // not store a wrong-typed "" override (which would read
+              // back as 0). The field re-asserts the last value until a
+              // valid number is typed.
+              const n = Number(e.target.value);
+              if (e.target.value !== "" && Number.isFinite(n)) onChange(n);
+            }}
           />
         </div>
       </div>
