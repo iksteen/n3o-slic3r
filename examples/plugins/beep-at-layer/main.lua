@@ -3,8 +3,8 @@
 -- A tiny post-slice example: iterate the sliced G-code's layers and,
 -- at the chosen layer, insert a beep command right at the boundary.
 --
--- The layer is hardcoded for now; once plugin-declared settings are
--- wired into the cascade, the `layer` setting in plugin.toml drives it.
+-- The layer is a constant for now; it becomes a plugin-declared
+-- setting once those are wired into the cascade.
 local LAYER = 1
 
 function on_post_slice(gcode, plate)

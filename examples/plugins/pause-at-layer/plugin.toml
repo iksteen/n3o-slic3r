@@ -2,9 +2,7 @@ name = "pause-at-layer"
 version = "0.1.0"
 entry = "main.lua"
 hooks = ["post_slice"]
-description = "Pause the print at the start of a configured layer."
-
-[settings.layer]
-type = "number"
-default = 1
-label = "Layer"
+description = "Pause the print at the start of a fixed layer."
+# A plugin-declared `[settings.layer]` will move here once plugin
+# settings are wired into the cascade; until then the layer is a
+# constant in main.lua (a dead setting here would just mislead).

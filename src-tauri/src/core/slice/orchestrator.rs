@@ -347,10 +347,33 @@ fn apply_post_slice(
 
     let new_src = to_string(&edited);
     if new_src != src {
-        if let Err(e) = std::fs::write(output_path, &new_src) {
-            tracing::warn!(error = %e, path = %output_path.display(), "post-slice: write failed");
+        // Atomic replace (write sibling temp + rename) so a failed or
+        // partial write can't leave a truncated .gcode that the summary
+        // and preview then read as if it were the finished slice. On
+        // failure the original stays intact.
+        if let Err(e) = atomic_write(output_path, new_src.as_bytes()) {
+            tracing::warn!(
+                error = %e,
+                path = %output_path.display(),
+                "post-slice: write failed; G-code left as sliced",
+            );
         }
     }
+}
+
+/// Write `bytes` to `path` atomically: stage to a sibling temp file,
+/// then rename over `path` (atomic within a directory on POSIX). The
+/// original is untouched unless the rename succeeds.
+fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tmp_os = path.as_os_str().to_owned();
+    tmp_os.push(".n3o-tmp");
+    let tmp = PathBuf::from(tmp_os);
+    std::fs::write(&tmp, bytes)?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Lock the plugin host, recovering the guard if a plugin panic
@@ -492,7 +515,22 @@ fn run_worker(
                 // plate's G-code before the summary + preview see it.
                 // No-op (and near-zero cost) when no host is wired or
                 // no plugin declares the hook.
-                apply_post_slice(&host, &output_path, plate_id, &job.context);
+                //
+                // Guarded by catch_unwind: a panic inside untrusted
+                // plugin Lua must not unwind the worker thread (that
+                // would silently lose the slice — no terminal event, UI
+                // stuck "Running", temp file leaked). On a panic the
+                // plate keeps libslic3r's unmodified G-code and the
+                // slice completes normally.
+                let post = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    apply_post_slice(&host, &output_path, plate_id, &job.context);
+                }));
+                if post.is_err() {
+                    tracing::error!(
+                        plate_id,
+                        "post-slice plugin hook panicked; using unmodified G-code",
+                    );
+                }
 
                 let summary = build_summary(&output_path).unwrap_or_else(|e| {
                     tracing::warn!(

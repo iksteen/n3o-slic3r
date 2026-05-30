@@ -90,11 +90,14 @@ fn collecting_sink() -> (EventSink, Arc<Mutex<Vec<SliceEvent>>>) {
     (sink, bucket)
 }
 
-fn slice_input(tag: &str) -> (SliceJobInput, JobRegistry) {
-    let temp_dir = std::env::temp_dir().join(format!("n3o-post-slice-{tag}-{}", std::process::id()));
+/// A slice job over `plate_ids`, writing into a fresh unique temp dir
+/// (returned so it outlives the slice — the orchestrator writes into it
+/// and the test reads back).
+fn slice_input(plate_ids: Vec<u32>) -> (SliceJobInput, JobRegistry, tempfile::TempDir) {
+    let out = tempfile::tempdir().expect("temp dir");
     let input = SliceJobInput {
         model_path: cube_stl().display().to_string(),
-        output_dir: temp_dir.display().to_string(),
+        output_dir: out.path().display().to_string(),
         context: ContextJson {
             printer: canonical_printer(),
             plate: canonical_plate(),
@@ -104,11 +107,20 @@ fn slice_input(tag: &str) -> (SliceJobInput, JobRegistry) {
             project_overrides: vec![],
             object_overrides: std::collections::HashMap::new(),
         },
-        plate_ids: vec![1],
+        plate_ids,
         printer_instance_id: "bambi".into(),
         material_layout: vec![],
     };
-    (input, JobRegistry::new())
+    (input, JobRegistry::new(), out)
+}
+
+fn plate_finished_count(events: &Arc<Mutex<Vec<SliceEvent>>>) -> usize {
+    events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|e| matches!(e, SliceEvent::PlateFinished { .. }))
+        .count()
 }
 
 fn output_gcode(events: &Arc<Mutex<Vec<SliceEvent>>>) -> String {
@@ -125,21 +137,48 @@ fn output_gcode(events: &Arc<Mutex<Vec<SliceEvent>>>) -> String {
 
 #[test]
 fn post_slice_plugins_inject_into_real_gcode() {
+    use n3o_slic3r_lib::core::gcode::{parse_str, to_string, Line};
+
     ensure_ffi_init();
 
     // Baseline: no plugins → libslic3r output has neither injection.
-    let (input, registry) = slice_input("baseline");
+    let (input, registry, _out) = slice_input(vec![1]);
     let (sink, events) = collecting_sink();
     run_slice_job_blocking(input, &registry, sink).expect("baseline slice");
     let baseline = output_gcode(&events);
+    // Negative control for BOTH plugins' exact injected strings.
     assert!(
         !baseline.contains("M300 S440 P200"),
-        "baseline slice shouldn't contain the plugin's beep"
+        "baseline shouldn't contain the beep"
+    );
+    assert!(
+        !baseline.contains("M0 ; n3o pause-at-layer"),
+        "baseline shouldn't contain the pause"
+    );
+    // Sanity: the example plugins target layer index 1, so the slice
+    // must actually have >= 2 layers or the test proves nothing.
+    let layer_count = parse_str(&baseline)
+        .iter()
+        .filter(|l| matches!(l, Line::LayerChange(_)))
+        .count();
+    assert!(
+        layer_count >= 2,
+        "fixture must slice to >= 2 layers (got {layer_count}); the example plugins target layer 1"
+    );
+    // Real-output round-trip: parse→serialize of libslic3r's own G-code
+    // is byte-identical, so a no-op plugin leaves the file untouched
+    // (apply_post_slice only rewrites when the bytes differ). This is
+    // the contract the orchestrator's "skip write on no change" relies
+    // on, tested against REAL output rather than a hand-written sample.
+    assert_eq!(
+        to_string(&parse_str(&baseline)),
+        baseline,
+        "parse→serialize of real libslic3r G-code must be byte-identical"
     );
 
     // With the example plugins active, their commands appear.
     let host = Arc::new(Mutex::new(PluginHost::load(&[example_plugins_root()])));
-    let (input, registry) = slice_input("plugins");
+    let (input, registry, _out) = slice_input(vec![1]);
     let (sink, events) = collecting_sink();
     run_slice_job_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
     let with_plugins = output_gcode(&events);
@@ -151,5 +190,40 @@ fn post_slice_plugins_inject_into_real_gcode() {
     assert!(
         with_plugins.contains("M0 ; n3o pause-at-layer"),
         "pause-at-layer should have injected its pause"
+    );
+}
+
+/// A plugin that errors on one plate must not break the others: the job
+/// completes every plate, the erroring plugin is isolated.
+#[test]
+fn erroring_plugin_does_not_break_a_multi_plate_job() {
+    ensure_ffi_init();
+
+    // A bundled-style plugin dir holding one always-erroring plugin.
+    let plugins = tempfile::tempdir().unwrap();
+    let dir = plugins.path().join("boom");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("plugin.toml"),
+        "name=\"boom\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nhooks=[\"post_slice\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("main.lua"),
+        r#"function on_post_slice(g, plate) error("boom") end"#,
+    )
+    .unwrap();
+
+    let host = Arc::new(Mutex::new(PluginHost::load(&[plugins.path().to_path_buf()])));
+    let (input, registry, _out) = slice_input(vec![1, 2]);
+    let (sink, events) = collecting_sink();
+    run_slice_job_blocking_with_plugins(input, &registry, sink, host)
+        .expect("multi-plate slice should start");
+
+    // Both plates finished despite the plugin erroring on the first.
+    assert_eq!(
+        plate_finished_count(&events),
+        2,
+        "an erroring plugin must not stop later plates"
     );
 }

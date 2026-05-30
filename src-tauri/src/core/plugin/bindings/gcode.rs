@@ -91,12 +91,15 @@ impl UserData for GcodeHandle {
         // g:layers() — iterator over layers segmented on LayerChange.
         //
         // Recomputes the k-th layer's position against the LIVE buffer
-        // on every step, so a plugin that inserts/removes while
-        // iterating (e.g. a pause at several layers) still gets correct
-        // `first_line`/`last_line` for later layers — the positions
-        // shift as it edits. Cost is O(lines) per step; a plugin that
-        // walks every layer of a huge file is O(lines × layers), but
-        // the common "act on a few layers" case is cheap.
+        // on every step, so a plugin that inserts/removes *ordinary*
+        // lines while iterating (e.g. a pause at several layers) still
+        // gets correct `first_line`/`last_line` for later layers — the
+        // positions shift as it edits. Inserting or removing
+        // `LayerChange` lines mid-iteration is NOT supported: it changes
+        // the layer count/order out from under the cursor and will
+        // re-visit or skip layers. Cost is O(lines) per step; walking
+        // every layer of a huge file is O(lines × layers), but the
+        // common "act on a few layers" case is cheap.
         methods.add_method("layers", |lua, this, ()| {
             let lines = this.lines.clone();
             let cursor = Arc::new(AtomicUsize::new(0));
@@ -190,7 +193,13 @@ fn ensure_terminated(lines: &mut [Line], idx: usize) {
 struct LayerInfo {
     index: u32,
     z: Option<f32>,
+    /// 1-based line of this layer's `LayerChange` marker.
     first_line: usize,
+    /// 1-based line just before the next layer's marker (its `;LAYER`
+    /// comment), or the buffer end for the final layer. Note this is
+    /// the next layer's *comment* line, not strictly this layer's last
+    /// extrusion — the parser emits a `;LAYER` comment ahead of each
+    /// synthetic marker.
     last_line: usize,
 }
 

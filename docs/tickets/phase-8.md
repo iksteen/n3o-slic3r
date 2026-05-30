@@ -128,6 +128,26 @@ one deferred:
   50 MB plate. Noted in code; optimize if large multi-material jobs
   feel it.
 
+An unbiased **second pass** (fresh reviewers, post-hardening) caught
+more, now fixed:
+- A panic inside post-slice plugin Lua used to unwind the worker thread
+  silently (no terminal event → UI stuck "Running", temp file leaked).
+  `apply_post_slice` is now wrapped in `catch_unwind`: a panic leaves
+  the plate's unmodified G-code and the slice completes normally.
+- The G-code rewrite is now **atomic** (write sibling temp + rename), so
+  a failed/partial write can't leave a truncated `.gcode` that the
+  summary/preview consume as a finished slice.
+- The live-recompute `g:layers()` is correct for ordinary inserts but
+  not for inserting/removing `LayerChange` lines mid-iteration — the
+  comment now scopes that honestly (was overclaiming).
+- Tests gained: a real-output parse→serialize **byte-identity** check
+  (proves the no-op passthrough on actual libslic3r G-code), a
+  **multi-plate plugin-error isolation** test, an `M0` negative control,
+  a ≥2-layer fixture guard, and unique temp dirs.
+- Example plugins dropped their **dead `[settings.layer]`** block (the
+  Lua hardcodes the layer; the knob did nothing) — re-add when PR-8-9
+  wires plugin settings.
+
 ## Exit criteria (Execution_Plan §10, adjusted)
 
 - A non-Rust developer can take an example plugin, edit it, and have it
