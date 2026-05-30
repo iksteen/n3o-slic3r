@@ -99,14 +99,20 @@ a whole-job send (document the boundary).
    closed — pre-send dispatch goes through the host, which applies the
    global tier). `PluginSummary` gained `globally_enabled` (the panel
    toggle's state, separate from the `enabled` health flag).
-   - **Still open:** resolved plugin-*setting values* handed to hooks
-     (replacing the manifest-default reads in 8-5..8-7), and global
-     plugin *settings* in `config.toml`. **Unify, don't duplicate:**
-     step 2's `resolve_plugin_activation` hand-rolls the
-     user→project→object tier-walk + TOML parse for the `.enabled` flag;
-     typed settings ride the *same* tiers — extract one `plugin.*`
-     resolver returning a typed map (with `.enabled` as one consumer)
-     rather than copying the walk.
+   - **Settings delivery — ✅ done.** A single unified resolver
+     (`core/plugin/resolve.rs`) computes each plugin's activation **and**
+     settings from the per-level overrides (the dispatch gate now carries
+     the raw `project`/`plate` flat maps; the host resolves per plugin
+     with its manifests + global tier). Resolved settings reach the hook
+     as a read-only, manifest-typed **`settings` global** in the plugin's
+     own runtime (`PluginRuntime::install_settings` +
+     `bindings/plugin_settings`). The beep/pause examples now read
+     `settings.layer`. The activation-gated promotion rule is enforced
+     here (host test: an inherit-level setting doesn't promote).
+   - **Still open:** global plugin *settings* in `config.toml`
+     (`[plugins.settings.<name>]` — the resolver already accepts them,
+     passed empty today) and migrating the platecycler `swap_gcode` to a
+     declared setting (its default is a large multi-line G-code block).
 
 ### Settings-cascade model (decided 2026-05-31)
 

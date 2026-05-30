@@ -152,11 +152,13 @@ mod tests {
 
     #[test]
     fn level_for_prefix_does_not_cross_match() {
-        let entries: BTreeMap<String, String> =
-            [("plugin.foo-bar.enabled", "true"), ("plugin.foo-bar.k", "v")]
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
+        let entries: BTreeMap<String, String> = [
+            ("plugin.foo-bar.enabled", "true"),
+            ("plugin.foo-bar.k", "v"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
         // Plugin "foo" must NOT pick up "foo-bar" keys.
         let foo = level_for("foo", &entries);
         assert_eq!(foo.activation, None);

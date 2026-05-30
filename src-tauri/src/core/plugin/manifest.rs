@@ -157,6 +157,34 @@ impl PluginManifest {
     pub fn allows_scope(&self, scope: PluginScope) -> bool {
         self.scopes.contains(&scope)
     }
+
+    /// Declared setting defaults as flat strings (the cascade value
+    /// vocabulary), keyed by setting key — the always-present base for
+    /// settings resolution.
+    pub fn setting_defaults(&self) -> BTreeMap<String, String> {
+        self.settings
+            .iter()
+            .map(|(k, d)| (k.clone(), d.default.as_override_string()))
+            .collect()
+    }
+}
+
+impl SettingValue {
+    /// Render as the flat override string (matches the cascade
+    /// vocabulary: a whole number prints without a fractional part).
+    pub fn as_override_string(&self) -> String {
+        match self {
+            SettingValue::String(s) => s.clone(),
+            SettingValue::Number(n) => {
+                if n.fract() == 0.0 && n.is_finite() {
+                    format!("{}", *n as i64)
+                } else {
+                    format!("{n}")
+                }
+            }
+            SettingValue::Bool(b) => b.to_string(),
+        }
+    }
 }
 
 /// Why a `plugin.toml` was rejected. `PartialEq` so tests can assert on

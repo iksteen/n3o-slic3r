@@ -141,30 +141,9 @@ fn read_only_err() -> mlua::Error {
     mlua::Error::RuntimeError("filament state is read-only".into())
 }
 
-/// Wrap `data` in a read-only proxy: an empty table whose metatable
-/// reads through to `data` and rejects `=` assignment. Because the proxy
-/// itself holds no keys, even assigning an *existing* field name routes
-/// through `__newindex` and raises (a plain table's `__newindex` fires
-/// only for absent keys).
-///
-/// The metatable is `__metatable = false` so even with `getmetatable`
-/// present it stays hidden; together with the sandbox stripping `rawset`
-/// / `setmetatable` (see `sandbox.rs`) there's no Lua path to mutate the
-/// proxy or reach the `data` table behind it. The `data` table itself is
-/// never returned to Lua directly.
+/// Wrap `data` in the shared read-only proxy (see [`super::read_only`]).
 fn read_only_proxy(lua: &Lua, data: Table) -> LuaResult<Table> {
-    let proxy = lua.create_table()?;
-    let mt = lua.create_table()?;
-    mt.set("__index", data)?;
-    mt.set(
-        "__newindex",
-        lua.create_function(|_, (_, _, _): (Table, Value, Value)| -> LuaResult<()> {
-            Err(read_only_err())
-        })?,
-    )?;
-    mt.set("__metatable", false)?;
-    proxy.set_metatable(Some(mt))?;
-    Ok(proxy)
+    super::read_only(lua, data, "filament state")
 }
 
 /// Build the read-only Lua table for one slot. Unbound/unknown fields

@@ -21,9 +21,11 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use super::bindings::build_settings_table;
 use super::discovery::{discover, DiscoveredPlugin, MANIFEST_FILE};
 use super::error::PluginError;
 use super::manifest::{parse_manifest, HookKind, PluginManifest, PrinterCompat};
+use super::resolve::{self, ResolvedPlugin};
 use super::runtime::PluginRuntime;
 
 /// One plugin as the host holds it.
@@ -98,16 +100,20 @@ pub struct DispatchGate {
     /// Active printer model, for `printer_compatibility` enforcement.
     /// `None` skips the printer check (a context with no bound model).
     pub printer_model: Option<String>,
-    /// Resolved `plugin.<name>.enabled` activation, keyed by plugin
-    /// name. A plugin absent from the map uses its default (enabled).
-    /// An empty map therefore runs every plugin at its default.
-    pub activation: std::collections::BTreeMap<String, bool>,
+    /// Flat `plugin.*` override entries for the **project** level
+    /// (cascade *user* tier). The host resolves each plugin's per-level
+    /// activation + settings from these and `plate` (see
+    /// [`super::resolve`]). Empty = no project-level overrides.
+    pub project: BTreeMap<String, String>,
+    /// Flat `plugin.*` override entries for the **plate** level (cascade
+    /// *project* tier).
+    pub plate: BTreeMap<String, String>,
 }
 
 impl DispatchGate {
-    /// A permissive gate: no printer filter, every plugin at its default
-    /// activation. The plain `dispatch` / `any_hook` use this, so they
-    /// behave exactly as before gating existed.
+    /// A permissive gate: no printer filter, no per-level overrides
+    /// (every plugin resolves to its global/default activation). The
+    /// plain `dispatch` / `any_hook` use this.
     pub fn all() -> Self {
         Self::default()
     }
@@ -119,28 +125,6 @@ fn printer_matches(compat: &PrinterCompat, model: &str) -> bool {
         PrinterCompat::Any => true,
         PrinterCompat::Models(list) => list.iter().any(|m| m == model),
     }
-}
-
-/// Whether a plugin may run under `gate`: it must be **healthy** (loaded
-/// and not auto-disabled by an error), **printer-compatible** with the
-/// gate's model (when one is supplied), and **activated**. Activation
-/// resolves the per-slice override tier (`gate.activation`) over the
-/// `global` tier (the host's persisted map), over the manifest default
-/// (true). Hook membership is checked separately.
-fn is_active(p: &LoadedPlugin, gate: &DispatchGate, global: &BTreeMap<String, bool>) -> bool {
-    if !p.enabled || p.runtime.is_none() {
-        return false;
-    }
-    if let Some(model) = &gate.printer_model {
-        if !printer_matches(&p.manifest.printer_compatibility, model) {
-            return false;
-        }
-    }
-    gate.activation
-        .get(&p.manifest.name)
-        .or_else(|| global.get(&p.manifest.name))
-        .copied()
-        .unwrap_or(true)
 }
 
 /// Owns every discovered plugin and dispatches hooks across them.
@@ -224,16 +208,35 @@ impl PluginHost {
         let kind = hook.kind();
         let mut current = value;
         for i in 0..self.plugins.len() {
-            {
+            // Resolve this plugin's config (activation + settings) and
+            // decide whether it runs this hook.
+            let resolved = {
                 let p = &self.plugins[i];
-                if !is_active(p, gate, &self.global_enabled) || !p.manifest.hooks.contains(&kind) {
+                if !p.manifest.hooks.contains(&kind) {
                     continue;
                 }
-            }
-            // Borrow the runtime only for the invoke, then release it
-            // so the error path can mutate the plugin's state.
+                match self.plugin_runs(p, gate) {
+                    Some(r) => r,
+                    None => continue,
+                }
+            };
+            // Borrow the runtime only for settings-install + invoke, then
+            // release it so the error path can mutate the plugin's state.
             let (next, err) = {
-                let runtime = self.plugins[i].runtime.as_ref().expect("checked above");
+                let p = &self.plugins[i];
+                let runtime = p.runtime.as_ref().expect("plugin_runs checked runtime");
+                // Install the plugin's typed, read-only `settings` global
+                // before the hook runs. A build failure isn't the
+                // plugin's fault — log and run with the prior settings.
+                if let Err(e) = runtime.install_settings(|lua| {
+                    build_settings_table(lua, &p.manifest.settings, &resolved.settings)
+                }) {
+                    tracing::warn!(
+                        plugin = %p.manifest.name,
+                        error = %e,
+                        "failed to install plugin settings",
+                    );
+                }
                 hook.invoke(runtime, current)
             };
             current = next;
@@ -251,6 +254,49 @@ impl PluginHost {
         current
     }
 
+    /// Resolve `p`'s effective config (activation + settings) under
+    /// `gate` via [`super::resolve`]: per-level activation (global tier
+    /// from `global_enabled`, project/plate from the gate) and the
+    /// activation-gated settings overlay over the manifest defaults.
+    fn resolve_plugin(&self, p: &LoadedPlugin, gate: &DispatchGate) -> ResolvedPlugin {
+        let name = &p.manifest.name;
+        let project = resolve::level_for(name, &gate.project);
+        let plate = resolve::level_for(name, &gate.plate);
+        let global_on = self.global_enabled.get(name).copied();
+        // Global-level plugin *settings* (config `[plugins.settings]`)
+        // are a follow-up; for now the global level contributes only its
+        // on/off, not setting values.
+        let global_settings = BTreeMap::new();
+        resolve::resolve(
+            global_on,
+            &global_settings,
+            &project,
+            &plate,
+            &p.manifest.setting_defaults(),
+        )
+    }
+
+    /// `Some(resolved)` when `p` should run under `gate` — **healthy**
+    /// (loaded, not auto-disabled), **printer-compatible**, and
+    /// **effectively activated** — else `None`. Hook membership is
+    /// checked by the caller.
+    fn plugin_runs(&self, p: &LoadedPlugin, gate: &DispatchGate) -> Option<ResolvedPlugin> {
+        if !p.enabled || p.runtime.is_none() {
+            return None;
+        }
+        if let Some(model) = &gate.printer_model {
+            if !printer_matches(&p.manifest.printer_compatibility, model) {
+                return None;
+            }
+        }
+        let resolved = self.resolve_plugin(p, gate);
+        if resolved.enabled {
+            Some(resolved)
+        } else {
+            None
+        }
+    }
+
     /// Whether any enabled, loaded plugin declares `kind` (permissive
     /// gate). Lets a caller skip building a hook payload entirely when
     /// nothing would run (e.g. the orchestrator avoids re-parsing G-code).
@@ -264,7 +310,7 @@ impl PluginHost {
     pub fn any_active_hook(&self, kind: HookKind, gate: &DispatchGate) -> bool {
         self.plugins
             .iter()
-            .any(|p| is_active(p, gate, &self.global_enabled) && p.manifest.hooks.contains(&kind))
+            .any(|p| p.manifest.hooks.contains(&kind) && self.plugin_runs(p, gate).is_some())
     }
 
     /// Set one plugin's **global** activation (the persisted lowest
@@ -629,10 +675,13 @@ mod tests {
         );
         let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
 
-        // Activation resolves false → skipped.
+        // Activation resolves false at the plate level → skipped.
         let off = DispatchGate {
             printer_model: None,
-            activation: [("p".to_string(), false)].into_iter().collect(),
+            plate: [("plugin.p.enabled".to_string(), "false".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
         };
         assert_eq!(host.dispatch_gated(&StubHook, "x".into(), &off), "x");
         assert!(!host.any_active_hook(HookKind::PostSlice, &off));
@@ -661,17 +710,67 @@ mod tests {
         assert!(!host.any_active_hook(HookKind::PostSlice, &DispatchGate::all()));
         assert!(!host.list()[0].globally_enabled);
 
-        // A per-slice override (project/plate tier) wins over the global
-        // tier and re-enables it.
+        // A per-slice override (plate tier) wins over the global tier and
+        // re-enables it.
         let on = DispatchGate {
             printer_model: None,
-            activation: [("p".to_string(), true)].into_iter().collect(),
+            plate: [("plugin.p.enabled".to_string(), "true".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
         };
         assert_eq!(host.dispatch_gated(&StubHook, "x".into(), &on), "x-p");
 
         // Re-enabling globally runs it again under the permissive gate.
         host.set_global_enabled("p", true);
         assert_eq!(host.dispatch(&StubHook, "x".into()), "x-p");
+    }
+
+    #[test]
+    fn settings_global_promotes_only_at_explicit_on_levels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("tagger");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(MANIFEST_FILE),
+            "name=\"tagger\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nhooks=[\"post_slice\"]\n\n\
+             [settings.tag]\ntype=\"string\"\ndefault=\"DEF\"\n",
+        )
+        .unwrap();
+        // The plugin echoes its resolved `tag` setting.
+        std::fs::write(
+            dir.join("main.lua"),
+            r#"function on_post_slice(s) return s .. ":" .. settings.tag end"#,
+        )
+        .unwrap();
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+
+        // No override → manifest default.
+        assert_eq!(host.dispatch(&StubHook, "x".into()), "x:DEF");
+
+        // Plate explicitly on + tag set → the value is promoted.
+        let on = DispatchGate {
+            plate: [
+                ("plugin.tagger.enabled".to_string(), "true".to_string()),
+                ("plugin.tagger.tag".to_string(), "OVR".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        assert_eq!(host.dispatch_gated(&StubHook, "x".into(), &on), "x:OVR");
+
+        // Plate inherit (no enabled key) but tag set → NOT promoted: the
+        // plugin still runs (effective-on via the global default) but
+        // resolves to the manifest default, because the plate isn't
+        // explicitly `on`. This is the backend enforcing the rule.
+        let inherit = DispatchGate {
+            plate: [("plugin.tagger.tag".to_string(), "INH".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(host.dispatch_gated(&StubHook, "x".into(), &inherit), "x:DEF");
     }
 
     #[test]

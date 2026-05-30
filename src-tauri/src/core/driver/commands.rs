@@ -481,12 +481,12 @@ fn apply_pre_send(
     printer_model: Option<String>,
 ) -> SendPayload {
     let lock = || host.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    // Per-plate plugin activation doesn't apply to a whole-job send, so
-    // the gate carries only the printer model (for compatibility);
-    // global-default activation arrives with the plugin-state file.
+    // Per-plate/project plugin activation doesn't apply to a whole-job
+    // send, so the gate carries no per-level overrides — only the printer
+    // model (for compatibility). The host still applies the global tier.
     let gate = DispatchGate {
         printer_model,
-        activation: Default::default(),
+        ..Default::default()
     };
     if !lock().any_active_hook(HookKind::PreSend, &gate) {
         return payload;

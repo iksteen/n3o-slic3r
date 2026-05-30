@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};
 
-use n3o_slic3r_lib::core::cascade::commands::ContextJson;
+use n3o_slic3r_lib::core::cascade::commands::{ContextJson, OverrideFileSpec};
 use n3o_slic3r_lib::core::filament::FilamentProfile;
 use n3o_slic3r_lib::core::gcode::{parse_str, to_string};
 use n3o_slic3r_lib::core::plugin::{FilamentLoadout, PlateMeta, PluginHost, PostSliceHook};
@@ -394,10 +394,11 @@ fn platecycler_disabled_by_activation_override_in_real_slice() {
     ensure_ffi_init();
     let host = Arc::new(Mutex::new(host_for_example("platecycler")));
     let (mut input, registry, _out) = slice_input(vec![1]);
-    input
-        .context
-        .object_overrides
-        .insert("plugin.platecycler.enabled".into(), "false".into());
+    // Disable the plugin at the plate level (cascade project tier).
+    input.context.project_overrides.push(OverrideFileSpec {
+        label: "<test>".into(),
+        content: "\"plugin.platecycler.enabled\" = false".into(),
+    });
     let (sink, events) = collecting_sink();
     run_slice_job_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
     let g = output_gcode(&events);

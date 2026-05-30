@@ -88,6 +88,23 @@ impl PluginRuntime {
         })
     }
 
+    /// Build a value in this runtime's Lua via `build` and install it as
+    /// the global `settings` for the next hook call. Keeps the runtime
+    /// ignorant of manifest/host types — the host supplies the builder
+    /// (which knows the plugin's declared settings + resolved values).
+    pub fn install_settings<F>(&self, build: F) -> Result<(), PluginError>
+    where
+        F: FnOnce(&Lua) -> mlua::Result<mlua::Table>,
+    {
+        let table =
+            build(&self.lua).map_err(|e| PluginError::Runtime(format!("build settings: {e}")))?;
+        self.lua
+            .globals()
+            .set("settings", table)
+            .map_err(|e| PluginError::Runtime(format!("set settings global: {e}")))?;
+        Ok(())
+    }
+
     /// Call a global Lua function by name under a fresh instruction
     /// budget. Returns `Ok(None)` when the function isn't defined, so
     /// optional hooks are cheap to probe.
