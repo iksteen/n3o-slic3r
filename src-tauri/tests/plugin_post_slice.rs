@@ -177,8 +177,14 @@ fn post_slice_plugins_inject_into_real_gcode() {
         "parse→serialize of real libslic3r G-code must be byte-identical"
     );
 
-    // With the example plugins active, their commands appear.
+    // With the example plugins active, their commands appear. Plugins
+    // are opt-in, so enable the two this test asserts on.
     let host = Arc::new(Mutex::new(PluginHost::load(&[example_plugins_root()])));
+    {
+        let mut h = host.lock().unwrap();
+        h.set_global_enabled("beep-at-layer", true);
+        h.set_global_enabled("pause-at-layer", true);
+    }
     let (input, registry, _out) = slice_input(vec![1]);
     let (sink, events) = collecting_sink();
     run_slice_job_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
@@ -227,6 +233,7 @@ fn pre_slice_plugin_rewrites_bed_temp_in_real_gcode() {
     let host = Arc::new(Mutex::new(PluginHost::load(&[plugins
         .path()
         .to_path_buf()])));
+    host.lock().unwrap().set_global_enabled("force-bed", true);
     let (input, registry, _out) = slice_input(vec![1]);
     let (sink, events) = collecting_sink();
     run_slice_job_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
@@ -253,7 +260,10 @@ fn host_for_example(name: &str) -> PluginHost {
         std::fs::copy(src.join(f), dst.join(f)).unwrap();
     }
     // `load` reads the entry Lua into the runtime; the temp dir can drop.
-    PluginHost::load(&[tmp.path().to_path_buf()])
+    // Plugins are opt-in (off by default), so enable the one under test.
+    let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+    host.set_global_enabled(name, true);
+    host
 }
 
 fn a1_mini_plate() -> PlateMeta {
@@ -432,6 +442,7 @@ fn erroring_plugin_does_not_break_a_multi_plate_job() {
     let host = Arc::new(Mutex::new(PluginHost::load(&[plugins
         .path()
         .to_path_buf()])));
+    host.lock().unwrap().set_global_enabled("boom", true);
     let (input, registry, _out) = slice_input(vec![1, 2]);
     let (sink, events) = collecting_sink();
     run_slice_job_blocking_with_plugins(input, &registry, sink, host)

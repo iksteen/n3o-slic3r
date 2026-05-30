@@ -248,7 +248,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(MANIFEST_FILE),
-            format!("name=\"{name}\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nhooks={hooks}\n"),
+            format!(
+                "name=\"{name}\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\n\
+                 hooks={hooks}\nenabled_by_default=true\n"
+            ),
         )
         .unwrap();
         std::fs::write(dir.join("main.lua"), lua).unwrap();

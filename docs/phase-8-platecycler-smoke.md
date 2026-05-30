@@ -31,8 +31,11 @@ verification happens deliberately.
    cp -r examples/plugins/platecycler ~/.local/share/n3o-slic3r/plugins/
    ```
    (Or point `N3O_PLUGIN_ROOT` at `examples/plugins` for a dev run.)
-   Confirm it shows up enabled in the Plugins panel once that lands
-   (PR-8-9); until then it loads enabled by default.
+   Plugins are **off by default** (opt-in) — enable platecycler in the
+   Plugins panel (the brand menu's "Global plugins…", or per-plate via
+   the settings panel's Plugins tab). It only ships an
+   `enabled_by_default = true` if the manifest declares it, which the
+   example does not.
 
 2. Load a small model, bind the plate to the **Bambu Lab A1 mini**, and
    slice. The plugin's printer self-guard only fires for that model.

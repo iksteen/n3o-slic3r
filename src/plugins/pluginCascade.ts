@@ -156,10 +156,11 @@ export function resolveActivation(
       enabled = false;
       source = lvl;
     } else if (i === 0) {
-      // Root level, inherit → built-in default. `global` is binary so
-      // it never lands here; a non-global root (e.g. plate-only
-      // plugin) defaults off.
-      enabled = false;
+      // Root level, inherit → the manifest opt-in default. `global` is
+      // binary so it never lands here (readActivation returns its
+      // resolved on/off); only a non-global root (e.g. a plate-only
+      // plugin) does, and it defaults to `enabled_by_default`.
+      enabled = plugin.enabled_by_default;
       source = "default";
     }
     // else: inherit from above — carry forward.

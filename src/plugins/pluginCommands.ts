@@ -46,6 +46,9 @@ export interface PluginSummary {
   enabled: boolean;
   /** Global-level enablement (the cascade root's resolved value). */
   globally_enabled: boolean;
+  /** The manifest opt-in default — the floor for the root activation
+   *  when nothing is set (plugins are off unless this is true). */
+  enabled_by_default: boolean;
   settings: SettingSummary[];
   /** Resolved global-level setting values, keyed by setting key.
    *  Absent keys fall back to the setting's `default`. */

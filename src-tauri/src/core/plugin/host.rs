@@ -97,9 +97,12 @@ pub struct PluginSummary {
     /// recover. Distinct from `globally_enabled`.
     pub enabled: bool,
     /// **Global activation**: the user's persisted on/off for this
-    /// plugin (the panel toggle), default true. A healthy plugin with
-    /// `globally_enabled = false` simply doesn't run.
+    /// plugin (the panel toggle), defaulting to `enabled_by_default`. A
+    /// healthy plugin with `globally_enabled = false` simply doesn't run.
     pub globally_enabled: bool,
+    /// The manifest's opt-in default (`enabled_by_default`) — the floor
+    /// the UI uses for a plugin's root activation when nothing is set.
+    pub enabled_by_default: bool,
     /// Declared settings (for the Plugins UI to render controls).
     pub settings: Vec<SettingSummary>,
     /// Current global-tier setting values (key → value), so the UI shows
@@ -293,6 +296,7 @@ impl PluginHost {
         let empty = BTreeMap::new();
         let global_settings = self.global_settings.get(name).unwrap_or(&empty);
         resolve::resolve(
+            p.manifest.enabled_by_default,
             global_on,
             global_settings,
             &project,
@@ -376,7 +380,12 @@ impl PluginHost {
                 },
                 scopes: p.manifest.scopes.iter().map(|s| s.as_str().to_string()).collect(),
                 enabled: p.enabled,
-                globally_enabled: self.global_enabled.get(&p.manifest.name).copied().unwrap_or(true),
+                globally_enabled: self
+                    .global_enabled
+                    .get(&p.manifest.name)
+                    .copied()
+                    .unwrap_or(p.manifest.enabled_by_default),
+                enabled_by_default: p.manifest.enabled_by_default,
                 settings: p
                     .manifest
                     .settings
@@ -536,7 +545,8 @@ mod tests {
         std::fs::write(
             dir.join(MANIFEST_FILE),
             format!(
-                "name=\"{name}\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nhooks={hooks}\n"
+                "name=\"{name}\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\n\
+                 hooks={hooks}\nenabled_by_default=true\n"
             ),
         )
         .unwrap();
@@ -679,7 +689,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(MANIFEST_FILE),
-            "name=\"a1-only\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\n\
+            "name=\"a1-only\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nenabled_by_default=true\n\
              hooks=[\"post_slice\"]\nprinter_compatibility=[\"Bambu Lab A1 mini\"]\n",
         )
         .unwrap();
@@ -781,8 +791,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(MANIFEST_FILE),
-            "name=\"tagger\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nhooks=[\"post_slice\"]\n\n\
-             [settings.tag]\ntype=\"string\"\ndefault=\"DEF\"\n",
+            "name=\"tagger\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nenabled_by_default=true\n\
+             hooks=[\"post_slice\"]\n\n[settings.tag]\ntype=\"string\"\ndefault=\"DEF\"\n",
         )
         .unwrap();
         // The plugin echoes its resolved `tag` setting.
@@ -828,8 +838,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(MANIFEST_FILE),
-            "name=\"tagger\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nhooks=[\"post_slice\"]\n\n\
-             [settings.tag]\ntype=\"string\"\ndefault=\"DEF\"\n",
+            "name=\"tagger\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nenabled_by_default=true\n\
+             hooks=[\"post_slice\"]\n\n[settings.tag]\ntype=\"string\"\ndefault=\"DEF\"\n",
         )
         .unwrap();
         std::fs::write(

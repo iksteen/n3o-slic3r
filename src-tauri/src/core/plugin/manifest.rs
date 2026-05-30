@@ -148,6 +148,11 @@ pub struct PluginManifest {
     /// in canonical order. Defaults to all scopes when the manifest
     /// omits `scopes`. Never empty.
     pub scopes: Vec<PluginScope>,
+    /// Whether the plugin is on at the global tier when nothing's been
+    /// set. Defaults to **false** — plugins are opt-in: dropping one in
+    /// doesn't run it until enabled, unless the manifest declares
+    /// `enabled_by_default = true`.
+    pub enabled_by_default: bool,
     pub description: Option<String>,
     pub settings: BTreeMap<String, SettingDecl>,
 }
@@ -225,6 +230,7 @@ struct RawManifest {
     hooks: Option<Vec<String>>,
     printer_compatibility: Option<Vec<String>>,
     scopes: Option<Vec<String>>,
+    enabled_by_default: Option<bool>,
     description: Option<String>,
     #[serde(default)]
     settings: BTreeMap<String, RawSettingDecl>,
@@ -317,6 +323,7 @@ fn validate(raw: RawManifest, plugin_dir: &Path) -> Result<PluginManifest, Manif
         hooks,
         printer_compatibility,
         scopes,
+        enabled_by_default: raw.enabled_by_default.unwrap_or(false),
         description: raw.description,
         settings,
     })

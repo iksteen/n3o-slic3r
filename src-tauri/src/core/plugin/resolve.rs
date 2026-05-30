@@ -75,27 +75,32 @@ pub fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
-/// Resolve a plugin's effective config. `global_on`: `None` = the global
-/// default (on); `Some(false)` = globally off. `defaults`: the plugin's
-/// manifest setting defaults (the always-present base).
+/// Resolve a plugin's effective config. `default_on`: the manifest
+/// floor (`enabled_by_default`) used when nothing is set at any tier —
+/// `false` makes plugins opt-in. `global_on`: `Some` = explicit global
+/// enable/disable, `None` = unset (falls to `default_on`). `defaults`:
+/// the plugin's manifest setting defaults (the always-present base).
 pub fn resolve(
+    default_on: bool,
     global_on: Option<bool>,
     global_settings: &BTreeMap<String, String>,
     project: &PluginLevel,
     plate: &PluginLevel,
     defaults: &BTreeMap<String, String>,
 ) -> ResolvedPlugin {
-    // Effective activation: first explicit value, finest level first.
+    // Effective activation: first explicit value, finest level first,
+    // else the manifest default.
     let enabled = plate
         .activation
         .or(project.activation)
         .or(global_on)
-        .unwrap_or(true);
+        .unwrap_or(default_on);
 
     // Settings: defaults, then each *explicitly-on* level overlaid
-    // coarse → fine. Global is "on" unless explicitly off.
+    // coarse → fine. Global is "on" when explicitly true, or unset and
+    // the manifest defaults on.
     let mut settings = defaults.clone();
-    if global_on != Some(false) {
+    if global_on.unwrap_or(default_on) {
         overlay(&mut settings, global_settings);
     }
     if project.activation == Some(true) {
@@ -181,9 +186,34 @@ mod tests {
             .collect();
         let project = lvl(None, &[]);
         let plate = lvl(None, &[("swap", "C")]);
-        let r = resolve(None, &global_settings, &project, &plate, &defaults());
+        // Manifest defaults on (enabled_by_default = true) and nothing
+        // is set, so it runs at the global value.
+        let r = resolve(true, None, &global_settings, &project, &plate, &defaults());
         assert!(r.enabled, "effective on via inheritance");
         assert_eq!(r.settings.get("swap").map(String::as_str), Some("A"));
+    }
+
+    #[test]
+    fn defaults_off_when_nothing_set() {
+        // The opt-in default: enabled_by_default = false and no tier sets
+        // it → off, and the global settings don't promote.
+        let global_settings = [("swap".to_string(), "A".to_string())]
+            .into_iter()
+            .collect();
+        let r = resolve(
+            false,
+            None,
+            &global_settings,
+            &lvl(None, &[]),
+            &lvl(None, &[]),
+            &defaults(),
+        );
+        assert!(!r.enabled, "off by default");
+        assert_eq!(
+            r.settings.get("swap").map(String::as_str),
+            Some("DEFAULT"),
+            "global settings don't promote when global is off",
+        );
     }
 
     #[test]
@@ -193,7 +223,7 @@ mod tests {
             .collect();
         let project = lvl(Some(true), &[("swap", "B")]);
         let plate = lvl(Some(true), &[("swap", "C")]);
-        let r = resolve(Some(true), &global_settings, &project, &plate, &defaults());
+        let r = resolve(false, Some(true), &global_settings, &project, &plate, &defaults());
         assert!(r.enabled);
         assert_eq!(r.settings.get("swap").map(String::as_str), Some("C"));
     }
@@ -207,7 +237,7 @@ mod tests {
             .collect();
         let project = lvl(Some(true), &[("swap", "B")]);
         let plate = lvl(None, &[]);
-        let r = resolve(Some(false), &global_settings, &project, &plate, &defaults());
+        let r = resolve(false, Some(false), &global_settings, &project, &plate, &defaults());
         assert!(r.enabled, "project on overrides global off");
         assert_eq!(r.settings.get("swap").map(String::as_str), Some("B"));
     }
@@ -216,7 +246,7 @@ mod tests {
     fn plate_off_deactivates_even_if_lower_levels_on() {
         let project = lvl(Some(true), &[("swap", "B")]);
         let plate = lvl(Some(false), &[]);
-        let r = resolve(Some(true), &BTreeMap::new(), &project, &plate, &defaults());
+        let r = resolve(false, Some(true), &BTreeMap::new(), &project, &plate, &defaults());
         assert!(!r.enabled, "plate off wins");
     }
 
@@ -224,6 +254,7 @@ mod tests {
     fn settings_floor_is_always_the_manifest_default() {
         // Nothing overridden anywhere → the default survives.
         let r = resolve(
+            true,
             None,
             &BTreeMap::new(),
             &lvl(None, &[]),
