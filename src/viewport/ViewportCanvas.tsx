@@ -34,6 +34,55 @@ interface ToastMessage {
 
 let nextToastId = 1;
 
+// Transform-gizmo mode icons, ported from the design mockup
+// (docs/design/app.jsx vp-toolbar): move arrows, a rotate arc, and a
+// scale corner-handle pair.
+const GIZMO_ICONS: Record<GizmoMode, ReactNode> = {
+  Translate: (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3" />
+    </svg>
+  ),
+  Rotate: (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M21 12a9 9 0 1 1-3-6.7" />
+      <path d="M21 3v5h-5" />
+    </svg>
+  ),
+  Scale: (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3 3h7M3 3v7M3 3l7 7M21 21h-7M21 21v-7M21 21l-7-7" />
+    </svg>
+  ),
+};
+
 export function ViewportCanvas({
   leading,
   gizmoMode,
@@ -296,25 +345,21 @@ export function ViewportCanvas({
         <div className="flex gap-2 pointer-events-auto">
           {leading}
           <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
-            {(
-              [
-                ["Translate", "T"],
-                ["Rotate", "R"],
-                ["Scale", "S"],
-              ] as [GizmoMode, string][]
-            ).map(([mode, label]) => (
+            {(["Translate", "Rotate", "Scale"] as GizmoMode[]).map((mode) => (
               <button
                 key={mode}
                 type="button"
-                className={`px-3 py-1 ${
+                className={`px-2 py-1.5 ${
                   gizmoMode === mode
                     ? "bg-neutral-700"
                     : "hover:bg-neutral-700/60"
                 }`}
                 onClick={() => onGizmoMode(mode)}
                 title={`Gizmo: ${mode}`}
+                aria-label={mode}
+                aria-pressed={gizmoMode === mode}
               >
-                {label}
+                {GIZMO_ICONS[mode]}
               </button>
             ))}
           </div>
