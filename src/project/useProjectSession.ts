@@ -40,6 +40,7 @@ export const SESSION_EVENT_NAMES = [
   "scene:selection_changed",
   "scene:object_overrides_changed",
   "scene:project_overrides_changed",
+  "scene:user_overrides_changed",
   "scene:bed_changed",
   "project:loaded",
 ] as const;

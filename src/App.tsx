@@ -28,6 +28,17 @@ import {
 import { PrinterSettingsModal } from "./printer/PrinterSettingsModal";
 import { createInstance } from "./printer/printerInstance";
 import { rebindPlatePrinter } from "./printer/printerCommands";
+import { usePlugins } from "./plugins/usePlugins";
+import { BrandMenu, ProjectMenu } from "./plugins/TopBarPluginMenus";
+import { PluginsModal } from "./plugins/PluginsModal";
+import {
+  globalPluginWriters,
+  projectPluginWriters,
+} from "./plugins/pluginWriters";
+import {
+  countActiveAtLevel,
+  type CascadeSources,
+} from "./plugins/pluginCascade";
 import "./App.css";
 
 function App() {
@@ -52,6 +63,10 @@ function App() {
    *  `null` when the modal isn't shown. Set by the per-printer
    *  settings cog (Devices view / settings panel). */
   const [editingPrinterId, setEditingPrinterId] = useState<string | null>(null);
+  // Plugin catalog (health + global state); re-fetched on plugin:changed.
+  const pluginList = usePlugins();
+  const [showGlobalPlugins, setShowGlobalPlugins] = useState(false);
+  const [showProjectPlugins, setShowProjectPlugins] = useState(false);
 
   const activePlate =
     session.snapshot?.plates.find(
@@ -64,6 +79,24 @@ function App() {
         max: activePlate.bed.extents.max,
       }
     : null;
+
+  // Plugin override sources for the menus' counts + modals: project
+  // level = the project-wide user overrides, plate level = the active
+  // plate's overrides.
+  const pluginSources: CascadeSources = {
+    projectOverrides: session.snapshot?.user_overrides ?? {},
+    plateOverrides: activePlate?.project_overrides,
+  };
+  const globalPluginCount = countActiveAtLevel(
+    pluginList.plugins,
+    "global",
+    pluginSources,
+  );
+  const projectPluginCount = countActiveAtLevel(
+    pluginList.plugins,
+    "project",
+    pluginSources,
+  );
 
   const bridge = useSlicePreviewBridge(activePlateId ?? null);
   // Slice-job state lives here (not in SlicePanel) so the topbar button
@@ -246,10 +279,16 @@ function App() {
         <AutosaveRecoveryDialog onResolved={recovery.markResolved} />
       )}
       <header className="topbar">
-        <span className="brand">
-          <span className="brand-mark" aria-hidden />
-          n3o-slic3r
-        </span>
+        <BrandMenu
+          onOpenGlobalPlugins={() => setShowGlobalPlugins(true)}
+          globalPluginCount={globalPluginCount}
+        />
+        {session.snapshot && (
+          <ProjectMenu
+            onOpenProjectPlugins={() => setShowProjectPlugins(true)}
+            projectPluginCount={projectPluginCount}
+          />
+        )}
         <span className="tb-spacer" />
         {!showDevices && (
           <>
@@ -374,6 +413,26 @@ function App() {
             />
           );
         })()}
+
+      {showGlobalPlugins && (
+        <PluginsModal
+          level="global"
+          plugins={pluginList.plugins}
+          sources={pluginSources}
+          writers={globalPluginWriters()}
+          onClose={() => setShowGlobalPlugins(false)}
+        />
+      )}
+
+      {showProjectPlugins && (
+        <PluginsModal
+          level="project"
+          plugins={pluginList.plugins}
+          sources={pluginSources}
+          writers={projectPluginWriters()}
+          onClose={() => setShowProjectPlugins(false)}
+        />
+      )}
 
       <footer className="statusbar">
         <span className="dot" aria-hidden />

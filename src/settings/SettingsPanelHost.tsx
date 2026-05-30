@@ -12,7 +12,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { ProjectSession } from "../project/useProjectSession";
-import { SettingsPanel, type PlateObjectStub } from "./SettingsPanel";
+import {
+  SettingsPanel,
+  type PlateObjectStub,
+  type PluginPlateSurface,
+} from "./SettingsPanel";
+import { usePlugins } from "../plugins/usePlugins";
+import { platePluginWriters } from "../plugins/pluginWriters";
 import { buildContextJson } from "./buildContextJson";
 import { makeObjectOverrideCallbacks } from "./overrideCommands";
 import { makeProjectOverrideCallbacks } from "./projectOverrideCommands";
@@ -115,6 +121,24 @@ export function SettingsPanelHost({
     plate && selected ? plate.object_overrides[selected.id] ?? {} : {};
 
   const allObjects = useMemo(() => allObjectsForPanel(plate), [plate]);
+
+  // Plate-level plugin surface for the panel's Plugins tab. Note the
+  // cascade-tier name remap: the plugin "project" level is the project-
+  // wide user overrides, the plugin "plate" level is this plate's
+  // project_overrides.
+  const pluginList = usePlugins();
+  const pluginSurface = useMemo<PluginPlateSurface | null>(() => {
+    if (!plate) return null;
+    return {
+      plugins: pluginList.plugins,
+      sources: {
+        projectOverrides: userOverrides,
+        plateOverrides: projectOverrides,
+      },
+      writers: platePluginWriters(plate.plate_id),
+      plateName: plate.name,
+    };
+  }, [plate, pluginList.plugins, userOverrides, projectOverrides]);
 
   // Pick the printer profile for cascade resolution from the active
   // plate's bound instance (the snapshot's derived
@@ -377,6 +401,7 @@ export function SettingsPanelHost({
         onSetProjectOverride={projectCbs.onSetProjectOverride}
         onClearProjectOverride={projectCbs.onClearProjectOverride}
         allObjects={allObjects}
+        pluginSurface={pluginSurface}
       />
     </div>
   );

@@ -64,6 +64,21 @@ import {
   writeStoredDiffMode,
   type DiffMode,
 } from "./diff";
+import { PluginManager, type PluginWriters } from "../plugins/PluginManager";
+import {
+  countActiveAtLevel,
+  type CascadeSources,
+} from "../plugins/pluginCascade";
+import type { PluginSummary } from "../plugins/pluginCommands";
+
+/** The plate-level plugin surface, rendered in the right-aligned
+ *  Plugins tab. Built by the panel host from the active plate. */
+export interface PluginPlateSurface {
+  plugins: PluginSummary[];
+  sources: CascadeSources;
+  writers: PluginWriters;
+  plateName: string | null;
+}
 
 export interface SettingsPanelProps {
   /** Active printer profile. `null` = no printer selected; the panel
@@ -94,6 +109,9 @@ export interface SettingsPanelProps {
    *  Project-tab rows. Empty by default — PR-5's project model
    *  populates. */
   allObjects?: ReadonlyArray<PlateObjectStub>;
+  /** Plate-level plugin surface (the right-aligned Plugins tab). When
+   *  omitted the tab isn't shown. */
+  pluginSurface?: PluginPlateSurface | null;
 }
 
 /** Per-object override info for the objects-overriding badge. */
@@ -127,7 +145,13 @@ export function SettingsPanel(props: SettingsPanelProps) {
     onSetProjectOverride,
     onClearProjectOverride,
     allObjects = [],
+    pluginSurface = null,
   } = props;
+
+  // The right-aligned Plugins tab swaps the whole settings body for the
+  // plate-level plugin manager. Independent of the project/object
+  // editing-context tabs.
+  const [pluginTabActive, setPluginTabActive] = useState(false);
 
   // Mode filter UI is parked pending a redesign; pin to "advanced"
   // — "expert" pulls in G-code / machine-limits noise most users
@@ -274,19 +298,25 @@ export function SettingsPanel(props: SettingsPanelProps) {
           <button
             type="button"
             role="tab"
-            aria-selected={contextLayer === "project"}
-            className={`sp-tab${contextLayer === "project" ? " active" : ""}`}
-            onClick={() => setContextLayer("project")}
+            aria-selected={!pluginTabActive && contextLayer === "project"}
+            className={`sp-tab${!pluginTabActive && contextLayer === "project" ? " active" : ""}`}
+            onClick={() => {
+              setPluginTabActive(false);
+              setContextLayer("project");
+            }}
           >
             Project
           </button>
           <button
             type="button"
             role="tab"
-            aria-selected={contextLayer === "object"}
+            aria-selected={!pluginTabActive && contextLayer === "object"}
             disabled={!objectTabAvailable}
-            className={`sp-tab${contextLayer === "object" ? " active" : ""}`}
-            onClick={() => objectTabAvailable && setContextLayer("object")}
+            className={`sp-tab${!pluginTabActive && contextLayer === "object" ? " active" : ""}`}
+            onClick={() =>
+              objectTabAvailable &&
+              (setPluginTabActive(false), setContextLayer("object"))
+            }
             title={
               objectTabAvailable
                 ? `Per-object overrides for ${selectedObject!.name}`
@@ -295,6 +325,31 @@ export function SettingsPanel(props: SettingsPanelProps) {
           >
             {objectTabAvailable ? `Object: ${selectedObject!.name}` : "Object"}
           </button>
+          {pluginSurface && (
+            <>
+              <div className="sp-tabs-spacer" />
+              <button
+                type="button"
+                role="tab"
+                aria-selected={pluginTabActive}
+                className={`sp-tab${pluginTabActive ? " active" : ""}`}
+                style={{ "--tab-hue": 340 } as React.CSSProperties}
+                onClick={() => setPluginTabActive(true)}
+                title="Plugins enabled for this plate (overrides Global and Project)"
+              >
+                <span className="sp-tab-dot" />
+                Plugins
+                {(() => {
+                  const n = countActiveAtLevel(
+                    pluginSurface.plugins,
+                    "plate",
+                    pluginSurface.sources,
+                  );
+                  return n > 0 ? <span className="sp-tab-count">{n}</span> : null;
+                })()}
+              </button>
+            </>
+          )}
         </div>
         {/* Mode filter (Simple / Advanced / Expert / Develop) and the
             diff tabs are intentionally not rendered yet; the user is
@@ -306,7 +361,10 @@ export function SettingsPanel(props: SettingsPanelProps) {
             extruder options surfaced here for a slot picker to act
             on. Filament/printer-bucket editing surfaces live
             elsewhere. */}
-        <div className="search-wrap">
+        <div
+          className="search-wrap"
+          style={pluginTabActive ? { display: "none" } : undefined}
+        >
           <div className="search-input">
             <input
               type="search"
@@ -328,6 +386,18 @@ export function SettingsPanel(props: SettingsPanelProps) {
         </div>
       </header>
 
+      {pluginTabActive && pluginSurface ? (
+        <div className="sp-plugins-scroll">
+          <PluginManager
+            level="plate"
+            plugins={pluginSurface.plugins}
+            sources={pluginSurface.sources}
+            writers={pluginSurface.writers}
+            plateName={pluginSurface.plateName}
+          />
+        </div>
+      ) : (
+        <>
       {resolveError && (
         <div className="sp-error" role="alert">
           cascade resolve failed: {resolveError}
@@ -412,6 +482,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
               : []
           }
         />
+      )}
+        </>
       )}
     </section>
   );
