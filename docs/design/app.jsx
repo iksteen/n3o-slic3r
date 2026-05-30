@@ -915,6 +915,26 @@ function SlicerWorkspace({
   logs, setLogs, pushLog,
   errorLogCount, warnLogCount,
 }) {
+  // Multi-level cascading plugin enablement (Global → Project → Plate) + a
+  // single shared per-plugin config. Saved with the project in a real build;
+  // kept in workspace state for the prototype.
+  const [pluginEnablement, setPluginEnablement] = useState(() => window.defaultPluginEnablement());
+  const [pluginConfig, setPluginConfig] = useState(() => window.defaultPluginConfig());
+  const [showGlobalPlugins, setShowGlobalPlugins] = useState(false);
+  const [showProjectPlugins, setShowProjectPlugins] = useState(false);
+
+  // Cmd/Ctrl+Shift+P opens the project-level plugins manager.
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === "p" || e.key === "P")) {
+        e.preventDefault();
+        setShowProjectPlugins(v => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // Derived: active plate + its slot accessors
   const activePlate = useMemo(
     () => plates.find(p => p.id === activePlateId) || plates[0],
@@ -1142,6 +1162,10 @@ function SlicerWorkspace({
         projectName="untitled.3mf"
         primary={primaryAction}
         secondary={secondaryAction}
+        onOpenGlobalPlugins={() => setShowGlobalPlugins(true)}
+        onOpenProjectPlugins={() => setShowProjectPlugins(true)}
+        globalPluginCount={window.countPluginsEnabledAtLevel(pluginEnablement, "global", activePlateId)}
+        projectPluginCount={window.countPluginsEnabledAtLevel(pluginEnablement, "project", activePlateId)}
       />
 
       <PlateTabs
@@ -1308,6 +1332,12 @@ function SlicerWorkspace({
           onSwapBedPlate={noop("bedPlate")}
           onSwapNozzle={noop("nozzle")}
           onSwapFilament={(id) => console.log("[swap] filament", id)}
+          pluginEnablement={pluginEnablement}
+          setPluginEnablement={setPluginEnablement}
+          pluginConfig={pluginConfig}
+          setPluginConfig={setPluginConfig}
+          activePlateId={activePlateId}
+          activePlateName={activePlate.name}
         />
       </div>
       )}
@@ -1353,6 +1383,12 @@ function SlicerWorkspace({
               onSwapBedPlate={noop("bedPlate")}
               onSwapNozzle={noop("nozzle")}
               onSwapFilament={(id) => console.log("[swap] filament", id)}
+              pluginEnablement={pluginEnablement}
+              setPluginEnablement={setPluginEnablement}
+              pluginConfig={pluginConfig}
+              setPluginConfig={setPluginConfig}
+              activePlateId={activePlateId}
+              activePlateName={activePlate.name}
             />
           }
         />
@@ -1450,6 +1486,34 @@ function SlicerWorkspace({
           statusMap={printerStatus}
           onSend={(printerId) => handleSendPlateToPrinter(activePlate.id, printerId)}
           onClose={() => setShowSendToPrinter(false)}
+        />
+      )}
+
+      {showGlobalPlugins && (
+        <PluginsModal
+          level="global"
+          projectName="untitled.3mf"
+          plateId={activePlateId}
+          plateName={activePlate.name}
+          enablement={pluginEnablement}
+          setEnablement={setPluginEnablement}
+          config={pluginConfig}
+          setConfig={setPluginConfig}
+          onClose={() => setShowGlobalPlugins(false)}
+        />
+      )}
+
+      {showProjectPlugins && (
+        <PluginsModal
+          level="project"
+          projectName="untitled.3mf"
+          plateId={activePlateId}
+          plateName={activePlate.name}
+          enablement={pluginEnablement}
+          setEnablement={setPluginEnablement}
+          config={pluginConfig}
+          setConfig={setPluginConfig}
+          onClose={() => setShowProjectPlugins(false)}
         />
       )}
 

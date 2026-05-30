@@ -390,16 +390,6 @@ function ObjectsPanel({
           <span className="k">Objects</span>
           <span className="v">{objects.length}</span>
         </div>
-        <div className="plate-stat-row">
-          <span className="k">Est. material</span>
-          <span className="v">{(objects.length * 12.4).toFixed(1)} g</span>
-        </div>
-        <div className="plate-stat-row">
-          <span className="k">Est. time</span>
-          <span className="v">
-            {objects.length === 0 ? "—" : `${Math.floor(objects.length * 0.42 + 0.6)}h ${((objects.length * 25) % 60).toString().padStart(2,"0")}m`}
-          </span>
-        </div>
       </div>
     </aside>
   );

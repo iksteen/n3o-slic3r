@@ -547,8 +547,13 @@ function SettingsPanel({
   printerPresets,
   onSwapPrinter, onSwapBedPlate, onSwapNozzle, onSwapFilament,
   onEditPrinter,
+  // plugins (plate-level surface)
+  pluginEnablement, setPluginEnablement, pluginConfig, setPluginConfig,
+  activePlateId, activePlateName,
 }) {
   const [query, setQuery] = useSPS("");
+  const [pluginTabActive, setPluginTabActive] = useSPS(false);
+  const PluginManagerComp = window.PluginManager;
   const [activeCat, setActiveCat] = useSPS(CATEGORIES[0].id);
   const [printerMenuOpen, setPrinterMenuOpen] = useSPS(false);
   const [qualityProfile, setQualityProfile] = useSPS("standard");
@@ -945,26 +950,43 @@ function SettingsPanel({
 
       <div className="sp-tabs">
         <button
-          className={`sp-tab ${contextLayer === "project" ? "active" : ""}`}
+          className={`sp-tab ${!pluginTabActive && contextLayer === "project" ? "active" : ""}`}
           style={{ "--tab-hue": LAYER_BY_ID.project.hue }}
-          onClick={() => setContextLayer("project")}
+          onClick={() => { setPluginTabActive(false); setContextLayer("project"); }}
         >
           <span className="sp-tab-dot"/>
           Project
         </button>
         <button
-          className={`sp-tab ${contextLayer === "object" ? "active" : ""}`}
+          className={`sp-tab ${!pluginTabActive && contextLayer === "object" ? "active" : ""}`}
           style={{ "--tab-hue": LAYER_BY_ID.object.hue }}
-          onClick={() => objectAvailable && setContextLayer("object")}
+          onClick={() => objectAvailable && (setPluginTabActive(false), setContextLayer("object"))}
           disabled={!objectAvailable}
           title={objectAvailable ? `Per-object overrides for ${selectedObject.name}` : "Select an object on the plate to edit per-object overrides"}
         >
           <span className="sp-tab-dot"/>
           Object
         </button>
+        <div className="sp-tabs-spacer"/>
+        {pluginEnablement && (
+          <button
+            className={`sp-tab ${pluginTabActive ? "active" : ""}`}
+            style={{ "--tab-hue": 340 }}
+            onClick={() => setPluginTabActive(true)}
+            title="Plugins enabled for this plate (overrides Global and Project)"
+          >
+            <span className="sp-tab-dot"/>
+            Plugins
+            {(() => {
+              const n = window.countPluginsEnabledAtLevel
+                ? window.countPluginsEnabledAtLevel(pluginEnablement, "plate", activePlateId) : 0;
+              return n > 0 ? <span className="sp-tab-count">{n}</span> : null;
+            })()}
+          </button>
+        )}
       </div>
 
-      <div className="search-wrap">
+      <div className="search-wrap" style={pluginTabActive ? { display: "none" } : undefined}>
         <div className="search-input">
           <svg className="ico" viewBox="0 0 14 14" fill="none">
             <circle cx="6" cy="6" r="4.2" stroke="currentColor" strokeWidth="1.4"/>
@@ -993,6 +1015,20 @@ function SettingsPanel({
         )}
       </div>
 
+      {pluginTabActive ? (
+        <div className="sp-plugins-scroll">
+          <PluginManagerComp
+            level="plate"
+            plateId={activePlateId}
+            plateName={activePlateName}
+            enablement={pluginEnablement}
+            setEnablement={setPluginEnablement}
+            config={pluginConfig}
+            setConfig={setPluginConfig}
+            readOnly={readOnly}
+          />
+        </div>
+      ) : (
       <div className="settings-body">
         <div className="cat-rail">
           {CATEGORIES.map(cat => {
@@ -1059,6 +1095,7 @@ function SettingsPanel({
           ))}
         </div>
       </div>
+      )}
     </aside>
   );
 }

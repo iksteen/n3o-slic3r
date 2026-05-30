@@ -9,10 +9,16 @@ function TopBar({
   projectName,
   primary,    // { label, onClick, kind?: 'primary'|'ghost', title?, icon? }
   secondary,  // optional second button { label, onClick, title? }
+  onOpenGlobalPlugins,   // brand menu → global plugins
+  onOpenProjectPlugins,  // project menu → project plugins
+  globalPluginCount = 0,
+  projectPluginCount = 0,
 }) {
   const { useState, useRef, useEffect } = React;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [brandOpen, setBrandOpen] = useState(false);
   const menuRef = useRef(null);
+  const brandRef = useRef(null);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -23,11 +29,50 @@ function TopBar({
     return () => document.removeEventListener("mousedown", onDown);
   }, [menuOpen]);
 
+  useEffect(() => {
+    if (!brandOpen) return;
+    const onDown = (e) => {
+      if (brandRef.current && !brandRef.current.contains(e.target)) setBrandOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [brandOpen]);
+
   return (
     <header className="topbar">
-      <div className="brand">
-        <div className="brand-mark"/>
-        n3o-slic3r
+      <div className="brand-menu-wrap" ref={brandRef}>
+        <button
+          className={`brand-btn ${brandOpen ? "open" : ""}`}
+          onClick={() => setBrandOpen(v => !v)}
+          title="n3o-slic3r"
+        >
+          <div className="brand-mark"/>
+          n3o-slic3r
+          <svg className="brand-caret" width="9" height="9" viewBox="0 0 10 10" fill="none">
+            <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+
+        {brandOpen && (
+          <div className="brand-menu" onClick={() => setBrandOpen(false)}>
+            <div className="brand-menu-app">
+              <div className="brand-mark"/>
+              <span className="brand-menu-app-name">n3o-slic3r</span>
+              <span className="brand-menu-app-ver">v0.4.1</span>
+            </div>
+            {onOpenGlobalPlugins && (
+              <button className="tb-menu-item" onClick={onOpenGlobalPlugins}>
+                <span>Global plugins…</span>
+                {globalPluginCount > 0 && <span className="tb-menu-count">{globalPluginCount}</span>}
+              </button>
+            )}
+            <button className="tb-menu-item dim">
+              <span>Preferences…</span><span className="kbd">⌘,</span>
+            </button>
+            <div className="tb-menu-divider"/>
+            <button className="tb-menu-item dim"><span>About n3o-slic3r</span></button>
+          </div>
+        )}
       </div>
       <div className="brand-divider"/>
 
@@ -83,6 +128,17 @@ function TopBar({
             <button className="tb-menu-item">
               <span>Export G-code…</span>
             </button>
+            {onOpenProjectPlugins && (
+              <>
+                <div className="tb-menu-section">Project</div>
+                <button className="tb-menu-item" onClick={onOpenProjectPlugins}>
+                  <span>Plugins…</span>
+                  {projectPluginCount > 0
+                    ? <span className="tb-menu-count">{projectPluginCount}</span>
+                    : <span className="kbd">⌘⇧P</span>}
+                </button>
+              </>
+            )}
             <div className="tb-menu-divider"/>
             <button className="tb-menu-item dim">
               <span>Preferences…</span><span className="kbd">⌘,</span>

@@ -366,6 +366,51 @@ input, select, textarea { font-family: inherit; }
 }
 .brand-divider { width: 1px; height: 22px; background: var(--border); margin: 0 6px; }
 
+/* Brand wordmark is an app-menu trigger */
+.brand-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 30px; padding: 0 8px 0 6px;
+  background: transparent; border: 1px solid transparent; border-radius: 7px;
+  font: inherit; color: var(--text);
+  font-weight: 600; letter-spacing: -0.01em; font-size: 14px;
+  margin-right: 6px; cursor: default;
+  transition: background 100ms, border-color 100ms;
+}
+.brand-btn:hover { background: var(--surface-2); }
+.brand-btn.open { background: var(--surface-2); border-color: var(--border); }
+.brand-btn .brand-caret { opacity: 0.5; margin-left: -1px; }
+.brand-menu-wrap { position: relative; display: inline-flex; }
+.brand-menu {
+  position: absolute; top: calc(100% + 6px); left: 0;
+  min-width: 220px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  padding: 5px;
+  z-index: 200;
+  animation: apmPopIn 140ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.brand-menu-app {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 9px 9px;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 4px;
+}
+.brand-menu-app .brand-mark { width: 20px; height: 20px; }
+.brand-menu-app-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.brand-menu-app-ver { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); margin-left: auto; }
+
+/* count tag on "Plugins…" menu items */
+.tb-menu-item .tb-menu-count {
+  font-family: var(--font-mono);
+  font-size: 10px; font-weight: 600;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 8px;
+  padding: 1px 7px;
+}
+
 .layer-chips {
   display: flex; gap: 4px; align-items: center;
   background: var(--surface-2);
@@ -1602,6 +1647,16 @@ input, select, textarea { font-family: inherit; }
   border-radius: 0;
 }
 .sp-tab:hover:not(:disabled) { color: var(--text); }
+.sp-tab-count {
+  font-family: var(--font-mono);
+  font-size: 9.5px; font-weight: 600;
+  color: var(--text-muted);
+  background: var(--surface-3);
+  border-radius: 7px; padding: 1px 5px;
+  margin-left: 1px;
+}
+.sp-tab.active .sp-tab-count { color: hsl(var(--tab-hue) 55% 40%); background: hsl(var(--tab-hue) 70% 92%); }
+[data-theme="dark"] .sp-tab.active .sp-tab-count { color: hsl(var(--tab-hue) 70% 75%); background: hsl(var(--tab-hue) 40% 25%); }
 .sp-tab.active {
   color: var(--text);
   border-bottom-color: hsl(var(--tab-hue) 70% 55%);
@@ -3270,6 +3325,237 @@ input, select, textarea { font-family: inherit; }
 .apm-btn.danger:hover {
   background: oklch(from var(--danger) calc(l - 0.05) c h);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Plugins — multi-level cascading enablement (Global/Project/Plate)
+   ═══════════════════════════════════════════════════════════════ */
+.plugins-modal {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: 0 30px 80px rgba(15,17,21,0.22), 0 4px 12px rgba(15,17,21,0.10);
+  width: min(740px, 100%);
+  max-height: min(740px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  overflow: hidden;
+  animation: apmPopIn 180ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.plg-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 15px 16px 14px 18px;
+  border-bottom: 1px solid var(--hairline);
+}
+.plg-header-mark {
+  width: 38px; height: 38px; flex-shrink: 0;
+  border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  background: oklch(0.95 0.045 var(--lvl-hue, 215));
+  color: oklch(0.48 0.16 var(--lvl-hue, 215));
+}
+[data-theme="dark"] .plg-header-mark {
+  background: oklch(0.32 0.08 var(--lvl-hue, 215));
+  color: oklch(0.84 0.12 var(--lvl-hue, 215));
+}
+.plg-header-text { flex: 1; min-width: 0; }
+.plg-header-text h2 {
+  margin: 0 0 2px;
+  font-size: 16px; font-weight: 600; letter-spacing: -0.01em;
+  color: var(--text);
+}
+.plg-header-text p { margin: 0; font-size: 12px; color: var(--text-muted); }
+
+.plg-modal-body { overflow-y: auto; min-height: 0; }
+
+/* Intro banner — explains the level + cascade direction */
+.plg-intro {
+  display: flex; gap: 10px; align-items: flex-start;
+  margin: 14px 16px 4px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: oklch(0.975 0.022 var(--lvl-hue, 215));
+  border: 1px solid oklch(0.91 0.04 var(--lvl-hue, 215));
+}
+[data-theme="dark"] .plg-intro {
+  background: oklch(0.26 0.05 var(--lvl-hue, 215));
+  border-color: oklch(0.36 0.07 var(--lvl-hue, 215));
+}
+.plg-intro-dot {
+  width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; flex-shrink: 0;
+  background: oklch(0.6 0.16 var(--lvl-hue, 215));
+}
+.plg-intro-text { font-size: 11.5px; line-height: 1.5; color: var(--text-muted); }
+.plg-intro-text b { color: var(--text); font-weight: 600; }
+
+.plg-manager { padding-bottom: 8px; }
+.plg-group { padding: 0 14px; }
+.plg-group-label {
+  font-family: var(--font-mono);
+  font-size: 9.5px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 13px 4px 7px;
+}
+
+/* ── Plugin row ── */
+.plg-row2 {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  margin-bottom: 7px;
+  overflow: hidden;
+  transition: border-color 120ms;
+}
+.plg-row2.is-on { border-color: color-mix(in oklch, var(--accent) 28%, var(--border)); }
+.plg-row2-main {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 11px; align-items: center;
+  padding: 11px 13px;
+}
+.plg-row2-text { min-width: 0; }
+.plg-row2-head { display: flex; align-items: center; gap: 8px; }
+.plg-row2-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.plg-row2-sum { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; line-height: 1.4; }
+.plg-row2-meta { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+
+/* availability pips */
+.plg-avail { display: inline-flex; gap: 3px; }
+.plg-avail-pip {
+  font-family: var(--font-mono);
+  font-size: 8.5px; font-weight: 700; letter-spacing: 0.02em;
+  padding: 2px 4px; border-radius: 4px; min-width: 15px; text-align: center;
+}
+.plg-avail-pip.on { background: var(--surface-3); color: var(--text-muted); }
+.plg-avail-pip.off { color: var(--text-dim); opacity: 0.35; }
+.plg-avail-pip.here.on { background: var(--accent-soft); color: var(--accent-text); }
+
+/* provenance chip */
+.plg-prov { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
+.plg-prov-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
+.plg-prov.on .plg-prov-dot { background: oklch(0.62 0.16 145); }
+.plg-prov.set { color: var(--text); }
+.plg-prov-down {
+  font-family: var(--font-mono); font-size: 10px;
+  color: oklch(0.5 0.13 55); background: oklch(0.96 0.045 65);
+  padding: 1px 6px; border-radius: 7px;
+}
+[data-theme="dark"] .plg-prov-down { color: oklch(0.78 0.12 65); background: oklch(0.3 0.07 65); }
+
+.plg-config-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10.5px; color: var(--text-muted);
+  background: transparent; border: 0; padding: 0; cursor: default;
+}
+.plg-config-toggle:hover { color: var(--text); }
+.plg-config-toggle svg { transition: transform 120ms; }
+.plg-config-toggle.open svg { transform: rotate(180deg); }
+
+/* segmented level control */
+.plev-seg {
+  display: inline-flex; gap: 2px; flex-shrink: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+}
+.plev-seg.readonly { opacity: 0.55; pointer-events: none; }
+.plev-seg-btn {
+  height: 24px; padding: 0 11px;
+  border: 0; border-radius: 6px;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 500;
+  color: var(--text-muted);
+  cursor: default;
+  transition: background 100ms, color 100ms;
+}
+.plev-seg-btn:hover { color: var(--text); }
+.plev-seg-btn.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
+.plev-seg-btn.active.on { background: oklch(0.95 0.07 145); color: oklch(0.42 0.15 145); }
+[data-theme="dark"] .plev-seg-btn.active.on { background: oklch(0.34 0.09 145); color: oklch(0.82 0.14 145); }
+.plev-seg-btn.active.off { color: var(--text-muted); }
+
+/* row config disclosure */
+.plg-row2-config {
+  border-top: 1px solid var(--hairline);
+  background: var(--surface-2);
+  padding: 13px;
+  display: flex; flex-direction: column; gap: 13px;
+}
+.plg-config-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-bottom: -2px;
+}
+.plg-config-status {
+  font-family: var(--font-mono);
+  font-size: 9.5px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.plg-row2-config:not(.locked) .plg-config-status { color: var(--accent-text); }
+.plg-config-reset {
+  font-size: 10.5px; color: var(--text-muted);
+  background: transparent; border: 0; padding: 0; cursor: default;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.plg-config-reset:hover { color: var(--text); }
+.plg-row2-config.locked .plg-field { opacity: 0.6; }
+.plg-field-tag {
+  font-family: var(--font-mono);
+  font-size: 8.5px; font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 5px; padding: 1px 5px;
+  margin-left: 6px;
+}
+.plg-field label.is-override { color: var(--text); }
+.plg-config-note {
+  font-size: 11px; color: var(--text-dim);
+  background: var(--surface-3); border-radius: 6px; padding: 7px 9px;
+}
+.plg-field { display: flex; flex-direction: column; gap: 6px; }
+.plg-field label { font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em; color: var(--text-muted); }
+.plg-toggle-row { flex-direction: row; align-items: center; justify-content: space-between; }
+.plg-event-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.plg-event-chip {
+  height: 28px; padding: 0 11px;
+  border: 1px solid var(--border); border-radius: 14px;
+  background: var(--surface); color: var(--text-muted);
+  font-size: 11.5px; font-weight: 500; cursor: default;
+  transition: background 100ms, color 100ms, border-color 100ms;
+}
+.plg-event-chip:hover { border-color: var(--border-strong); }
+.plg-event-chip.on { background: var(--accent-soft); border-color: color-mix(in oklch, var(--accent) 30%, transparent); color: var(--accent-text); }
+
+/* unavailable-at-this-level footer note */
+.plg-unavailable { padding: 6px 18px 18px; }
+.plg-unavailable-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.plg-unavailable-item {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--text-dim);
+  background: var(--surface-2); border: 1px dashed var(--border);
+  border-radius: 7px; padding: 4px 9px;
+}
+
+/* modal footer */
+.plg-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 11px 18px;
+  border-top: 1px solid var(--hairline);
+  background: var(--surface);
+  gap: 12px;
+}
+.plg-foot-hint { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-dim); }
+.plg-footer-right { display: flex; align-items: center; gap: 14px; }
+.plg-enabled-count { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+
+/* Inline (settings-panel plate tab) host */
+.sp-plugins-scroll { overflow-y: auto; min-height: 0; }
+.sp-plugins-scroll .plg-intro { margin: 12px 12px 4px; }
+.sp-plugins-scroll .plg-group { padding: 0 12px; }
+.sp-plugins-scroll .plg-unavailable { padding: 6px 14px 16px; }
 
 /* ═══════════════════════════════════════════════════════════════
    Printer-picker row updates — cog (settings) button
@@ -7317,16 +7603,6 @@ function ObjectsPanel({
           <span className="k">Objects</span>
           <span className="v">{objects.length}</span>
         </div>
-        <div className="plate-stat-row">
-          <span className="k">Est. material</span>
-          <span className="v">{(objects.length * 12.4).toFixed(1)} g</span>
-        </div>
-        <div className="plate-stat-row">
-          <span className="k">Est. time</span>
-          <span className="v">
-            {objects.length === 0 ? "—" : `${Math.floor(objects.length * 0.42 + 0.6)}h ${((objects.length * 25) % 60).toString().padStart(2,"0")}m`}
-          </span>
-        </div>
       </div>
     </aside>
   );
@@ -7886,8 +8162,13 @@ function SettingsPanel({
   printerPresets,
   onSwapPrinter, onSwapBedPlate, onSwapNozzle, onSwapFilament,
   onEditPrinter,
+  // plugins (plate-level surface)
+  pluginEnablement, setPluginEnablement, pluginConfig, setPluginConfig,
+  activePlateId, activePlateName,
 }) {
   const [query, setQuery] = useSPS("");
+  const [pluginTabActive, setPluginTabActive] = useSPS(false);
+  const PluginManagerComp = window.PluginManager;
   const [activeCat, setActiveCat] = useSPS(CATEGORIES[0].id);
   const [printerMenuOpen, setPrinterMenuOpen] = useSPS(false);
   const [qualityProfile, setQualityProfile] = useSPS("standard");
@@ -8284,26 +8565,43 @@ function SettingsPanel({
 
       <div className="sp-tabs">
         <button
-          className={`sp-tab ${contextLayer === "project" ? "active" : ""}`}
+          className={`sp-tab ${!pluginTabActive && contextLayer === "project" ? "active" : ""}`}
           style={{ "--tab-hue": LAYER_BY_ID.project.hue }}
-          onClick={() => setContextLayer("project")}
+          onClick={() => { setPluginTabActive(false); setContextLayer("project"); }}
         >
           <span className="sp-tab-dot"/>
           Project
         </button>
         <button
-          className={`sp-tab ${contextLayer === "object" ? "active" : ""}`}
+          className={`sp-tab ${!pluginTabActive && contextLayer === "object" ? "active" : ""}`}
           style={{ "--tab-hue": LAYER_BY_ID.object.hue }}
-          onClick={() => objectAvailable && setContextLayer("object")}
+          onClick={() => objectAvailable && (setPluginTabActive(false), setContextLayer("object"))}
           disabled={!objectAvailable}
           title={objectAvailable ? `Per-object overrides for ${selectedObject.name}` : "Select an object on the plate to edit per-object overrides"}
         >
           <span className="sp-tab-dot"/>
           Object
         </button>
+        <div className="sp-tabs-spacer"/>
+        {pluginEnablement && (
+          <button
+            className={`sp-tab ${pluginTabActive ? "active" : ""}`}
+            style={{ "--tab-hue": 340 }}
+            onClick={() => setPluginTabActive(true)}
+            title="Plugins enabled for this plate (overrides Global and Project)"
+          >
+            <span className="sp-tab-dot"/>
+            Plugins
+            {(() => {
+              const n = window.countPluginsEnabledAtLevel
+                ? window.countPluginsEnabledAtLevel(pluginEnablement, "plate", activePlateId) : 0;
+              return n > 0 ? <span className="sp-tab-count">{n}</span> : null;
+            })()}
+          </button>
+        )}
       </div>
 
-      <div className="search-wrap">
+      <div className="search-wrap" style={pluginTabActive ? { display: "none" } : undefined}>
         <div className="search-input">
           <svg className="ico" viewBox="0 0 14 14" fill="none">
             <circle cx="6" cy="6" r="4.2" stroke="currentColor" strokeWidth="1.4"/>
@@ -8332,6 +8630,20 @@ function SettingsPanel({
         )}
       </div>
 
+      {pluginTabActive ? (
+        <div className="sp-plugins-scroll">
+          <PluginManagerComp
+            level="plate"
+            plateId={activePlateId}
+            plateName={activePlateName}
+            enablement={pluginEnablement}
+            setEnablement={setPluginEnablement}
+            config={pluginConfig}
+            setConfig={setPluginConfig}
+            readOnly={readOnly}
+          />
+        </div>
+      ) : (
       <div className="settings-body">
         <div className="cat-rail">
           {CATEGORIES.map(cat => {
@@ -8398,6 +8710,7 @@ function SettingsPanel({
           ))}
         </div>
       </div>
+      )}
     </aside>
   );
 }
@@ -8417,10 +8730,16 @@ function TopBar({
   projectName,
   primary,    // { label, onClick, kind?: 'primary'|'ghost', title?, icon? }
   secondary,  // optional second button { label, onClick, title? }
+  onOpenGlobalPlugins,   // brand menu → global plugins
+  onOpenProjectPlugins,  // project menu → project plugins
+  globalPluginCount = 0,
+  projectPluginCount = 0,
 }) {
   const { useState, useRef, useEffect } = React;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [brandOpen, setBrandOpen] = useState(false);
   const menuRef = useRef(null);
+  const brandRef = useRef(null);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -8431,11 +8750,50 @@ function TopBar({
     return () => document.removeEventListener("mousedown", onDown);
   }, [menuOpen]);
 
+  useEffect(() => {
+    if (!brandOpen) return;
+    const onDown = (e) => {
+      if (brandRef.current && !brandRef.current.contains(e.target)) setBrandOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [brandOpen]);
+
   return (
     <header className="topbar">
-      <div className="brand">
-        <div className="brand-mark"/>
-        n3o-slic3r
+      <div className="brand-menu-wrap" ref={brandRef}>
+        <button
+          className={`brand-btn ${brandOpen ? "open" : ""}`}
+          onClick={() => setBrandOpen(v => !v)}
+          title="n3o-slic3r"
+        >
+          <div className="brand-mark"/>
+          n3o-slic3r
+          <svg className="brand-caret" width="9" height="9" viewBox="0 0 10 10" fill="none">
+            <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
+
+        {brandOpen && (
+          <div className="brand-menu" onClick={() => setBrandOpen(false)}>
+            <div className="brand-menu-app">
+              <div className="brand-mark"/>
+              <span className="brand-menu-app-name">n3o-slic3r</span>
+              <span className="brand-menu-app-ver">v0.4.1</span>
+            </div>
+            {onOpenGlobalPlugins && (
+              <button className="tb-menu-item" onClick={onOpenGlobalPlugins}>
+                <span>Global plugins…</span>
+                {globalPluginCount > 0 && <span className="tb-menu-count">{globalPluginCount}</span>}
+              </button>
+            )}
+            <button className="tb-menu-item dim">
+              <span>Preferences…</span><span className="kbd">⌘,</span>
+            </button>
+            <div className="tb-menu-divider"/>
+            <button className="tb-menu-item dim"><span>About n3o-slic3r</span></button>
+          </div>
+        )}
       </div>
       <div className="brand-divider"/>
 
@@ -8491,6 +8849,17 @@ function TopBar({
             <button className="tb-menu-item">
               <span>Export G-code…</span>
             </button>
+            {onOpenProjectPlugins && (
+              <>
+                <div className="tb-menu-section">Project</div>
+                <button className="tb-menu-item" onClick={onOpenProjectPlugins}>
+                  <span>Plugins…</span>
+                  {projectPluginCount > 0
+                    ? <span className="tb-menu-count">{projectPluginCount}</span>
+                    : <span className="kbd">⌘⇧P</span>}
+                </button>
+              </>
+            )}
             <div className="tb-menu-divider"/>
             <button className="tb-menu-item dim">
               <span>Preferences…</span><span className="kbd">⌘,</span>
@@ -10213,6 +10582,619 @@ function statusMetaInline(status) {
 }
 
 window.SendToPrinterModal = SendToPrinterModal;
+
+</script>
+<script type="text/babel" data-source="PluginManager.jsx">
+// PluginManager.jsx — multi-level, cascading plugin enablement.
+//
+// THE MODEL
+//   Plugins can be enabled at three levels that cascade:
+//       Global  →  Project  →  Plate
+//   Each plugin self-declares which levels it's *available* at (`levels`).
+//   At each available level enablement is tri-state:
+//       "on" | "off" | <unset = inherit from the level above>
+//   The first available level for a plugin is its ROOT (no inherit — unset
+//   there means the built-in default, which is off unless `defaultGlobal`).
+//   A lower level always overrides a higher one, so a plugin enabled globally
+//   can be explicitly switched off on a single plate.
+//
+// One <PluginManager> renders the list for a given level; <PluginsModal> wraps
+// it for the menu-launched Global/Project surfaces, while the Plate surface
+// embeds <PluginManager> directly inside the settings panel.
+
+const PLUGIN_LEVEL_ORDER = ["global", "project", "plate"];
+
+const PLUGIN_LEVEL_META = {
+  global:  { label: "Global",  short: "G", blurb: "Every project on this machine", hue: 215 },
+  project: { label: "Project", short: "P", blurb: "This .3mf file",                hue: 285 },
+  plate:   { label: "Plate",   short: "PL", blurb: "Just the active plate",        hue: 340 },
+};
+
+const PLUGIN_CATALOG = [
+  {
+    id: "mesh_doctor",
+    name: "Mesh Doctor",
+    category: "Geometry",
+    glyph: "△",
+    author: "n3o labs",
+    version: "3.0.2",
+    levels: ["global", "project", "plate"],
+    defaultGlobal: true,
+    summary: "Repairs non-manifold edges and flipped normals before slicing.",
+    fields: [
+      { key: "strength", kind: "select", label: "Repair strength", options: ["Conservative", "Balanced", "Aggressive"], default: "Balanced" },
+      { key: "fillHoles", kind: "toggle", label: "Fill holes", default: true },
+    ],
+  },
+  {
+    id: "arc_welder",
+    name: "Arc Welder",
+    category: "Post-processing",
+    glyph: "◜",
+    author: "n3o labs",
+    version: "2.1.0",
+    levels: ["global", "project", "plate"],
+    summary: "Replaces short G1 runs with smooth G2/G3 arcs — smaller files, cleaner curves.",
+    fields: [
+      { key: "tolerance", kind: "number", label: "Path tolerance", unit: "mm", default: 0.05, min: 0.01, max: 0.5, step: 0.01 },
+      { key: "firmware", kind: "select", label: "Target firmware", options: ["Marlin 2.x", "Klipper", "RepRapFirmware"], default: "Marlin 2.x" },
+    ],
+  },
+  {
+    id: "octoprint",
+    name: "OctoPrint Upload",
+    category: "Output",
+    glyph: "☁",
+    author: "OctoPrint",
+    version: "0.9.5",
+    levels: ["global", "project", "plate"],
+    summary: "Sends sliced G-code to an OctoPrint server, optionally starting the print.",
+    fields: [
+      { key: "url", kind: "text", label: "Server URL", placeholder: "http://octopi.local" },
+      { key: "apiKey", kind: "secret", label: "API key" },
+      { key: "autostart", kind: "toggle", label: "Start print after upload", default: false },
+    ],
+  },
+  {
+    id: "pushover",
+    name: "Pushover Notify",
+    category: "Notifications",
+    glyph: "✦",
+    author: "community",
+    version: "1.0.1",
+    levels: ["global", "project"],
+    summary: "Push a phone notification on slice and print milestones. Account-wide — no per-plate setup.",
+    fields: [
+      { key: "userKey", kind: "secret", label: "User key" },
+      { key: "events", kind: "events", label: "Notify me when…", options: ["Slice complete", "Print finished", "Error / fault"], default: ["Slice complete", "Print finished"] },
+    ],
+  },
+  {
+    id: "timelapse",
+    name: "Time-lapse Hook",
+    category: "Output",
+    glyph: "▦",
+    author: "community",
+    version: "1.1.0",
+    levels: ["project", "plate"],
+    summary: "Adds a per-layer snapshot trigger so OctoPrint/Moonraker can build a time-lapse.",
+    fields: [
+      { key: "park", kind: "toggle", label: "Park toolhead for each frame", default: true },
+    ],
+  },
+  {
+    id: "filament_change",
+    name: "Filament Change (M600)",
+    category: "Post-processing",
+    glyph: "⇅",
+    author: "community",
+    version: "1.4.0",
+    levels: ["plate"],
+    summary: "Inserts an M600 color-change pause at chosen layers. Layers are specific to a plate.",
+    fields: [
+      { key: "layers", kind: "text", label: "Pause at layers", placeholder: "e.g. 24, 60, 142" },
+      { key: "beep", kind: "toggle", label: "Beep when paused", default: true },
+    ],
+  },
+  {
+    id: "cal_tower",
+    name: "Calibration Tower",
+    category: "Calibration",
+    glyph: "≣",
+    author: "n3o labs",
+    version: "2.3.0",
+    levels: ["plate"],
+    summary: "Generates a parametric test tower banded over the active plate.",
+    fields: [
+      { key: "type", kind: "select", label: "Tower type", options: ["Temperature", "Retraction", "Flow"], default: "Temperature" },
+      { key: "start", kind: "number", label: "Start value", default: 220, step: 1 },
+      { key: "end", kind: "number", label: "End value", default: 190, step: 1 },
+    ],
+  },
+];
+
+const PLUGIN_CATEGORY_ORDER = ["Geometry", "Post-processing", "Output", "Calibration", "Notifications"];
+
+// ───────── State builders ─────────
+
+function defaultPluginEnablement() {
+  const global = {};
+  PLUGIN_CATALOG.forEach(p => {
+    if (p.levels.includes("global") && p.defaultGlobal) global[p.id] = "on";
+  });
+  return { global, project: {}, plate: {} };
+}
+
+function defaultPluginConfig() {
+  // Config overrides are stored per level (mirrors enablement). Field defaults
+  // live in the catalog and are applied at resolve time, so these start empty.
+  return { global: {}, project: {}, plate: {} };
+}
+
+// Catalog field defaults as a plain object for a plugin.
+function pluginConfigDefaults(p) {
+  const v = {};
+  (p.fields || []).forEach(f => {
+    v[f.key] = f.default !== undefined
+      ? (Array.isArray(f.default) ? [...f.default] : f.default)
+      : (f.kind === "toggle" ? false : f.kind === "events" ? [] : "");
+  });
+  return v;
+}
+
+// Levels a plugin participates in, in cascade order.
+function pluginLevels(p) {
+  return PLUGIN_LEVEL_ORDER.filter(l => p.levels.includes(l));
+}
+
+// Read the raw stored override for a plugin at a level ("on"|"off"|undefined).
+function readLevel(enablement, level, pluginId, plateId) {
+  if (level === "plate") return enablement.plate?.[plateId]?.[pluginId];
+  return enablement[level]?.[pluginId];
+}
+
+// Read a plugin's stored config overrides at one level (object or undefined).
+function readConfigLevel(config, level, pluginId, plateId) {
+  if (level === "plate") return config.plate?.[plateId]?.[pluginId];
+  return config[level]?.[pluginId];
+}
+
+// Resolve a plugin's effective config as seen at `uptoLevel`. Starts from the
+// catalog defaults, then layers on overrides from each level — BUT only from
+// levels where the plugin is explicitly enabled ("on"). A level set to inherit
+// or off contributes nothing to config, because config is only overridable
+// where you've deliberately turned the plugin on.
+function resolvePluginConfig(enablement, config, p, plateId, uptoLevel) {
+  const order = pluginLevels(p);
+  const cap = uptoLevel ? PLUGIN_LEVEL_ORDER.indexOf(uptoLevel) : Infinity;
+  const result = pluginConfigDefaults(p);
+  order.forEach(lvl => {
+    if (PLUGIN_LEVEL_ORDER.indexOf(lvl) > cap) return;
+    if (readLevel(enablement, lvl, p.id, plateId) !== "on") return;
+    const stored = readConfigLevel(config, lvl, p.id, plateId);
+    if (stored) Object.keys(stored).forEach(k => { result[k] = stored[k]; });
+  });
+  return result;
+}
+
+// The deepest level at/above `uptoLevel` where the plugin is explicitly on —
+// i.e. the level that "owns" the effective config. null if none are on.
+function configOwnerLevel(enablement, p, plateId, uptoLevel) {
+  const order = pluginLevels(p);
+  const cap = PLUGIN_LEVEL_ORDER.indexOf(uptoLevel);
+  let owner = null;
+  order.forEach(lvl => {
+    if (PLUGIN_LEVEL_ORDER.indexOf(lvl) <= cap && readLevel(enablement, lvl, p.id, plateId) === "on") owner = lvl;
+  });
+  return owner;
+}
+
+// Resolve the effective state of a plugin as seen *at* `uptoLevel`, walking
+// the cascade. Returns { enabled, source } where source is the level that
+// decided it, or "default".
+function resolvePlugin(enablement, p, plateId, uptoLevel) {
+  const order = pluginLevels(p);
+  const cap = uptoLevel ? PLUGIN_LEVEL_ORDER.indexOf(uptoLevel) : Infinity;
+  let enabled = false, source = "default";
+  order.forEach((lvl, i) => {
+    if (PLUGIN_LEVEL_ORDER.indexOf(lvl) > cap) return;
+    const raw = readLevel(enablement, lvl, p.id, plateId);
+    if (raw === "on") { enabled = true; source = lvl; }
+    else if (raw === "off") { enabled = false; source = lvl; }
+    else if (i === 0) { enabled = !!p.defaultGlobal && lvl === "global"; source = enabled ? "default" : "default"; }
+    // else: inherit — carry forward
+  });
+  return { enabled, source };
+}
+
+// Does any level BELOW `level` carry an explicit override for this plugin?
+function hasDownstreamOverride(enablement, p, level) {
+  const order = pluginLevels(p);
+  const idx = order.indexOf(level);
+  for (let i = idx + 1; i < order.length; i++) {
+    const lvl = order[i];
+    if (lvl === "plate") {
+      const plates = enablement.plate || {};
+      if (Object.values(plates).some(pp => pp && pp[p.id] !== undefined)) return lvl;
+    } else if (enablement[lvl]?.[p.id] !== undefined) {
+      return lvl;
+    }
+  }
+  return null;
+}
+
+function countPluginsEnabledAtLevel(enablement, level, plateId) {
+  return PLUGIN_CATALOG.filter(p => p.levels.includes(level))
+    .filter(p => resolvePlugin(enablement, p, plateId, level).enabled).length;
+}
+
+// ───────── Config field control ─────────
+
+function PluginField({ field, value, onChange, disabled, overridden }) {
+  const lbl = (
+    <label className={overridden ? "is-override" : ""}>
+      {field.label}
+      {overridden && <span className="plg-field-tag">set here</span>}
+    </label>
+  );
+  if (field.kind === "toggle") {
+    return (
+      <div className="plg-field plg-toggle-row">
+        {lbl}
+        <div className={`val-toggle ${value ? "on" : ""} ${disabled ? "disabled" : ""}`}
+             onClick={() => !disabled && onChange(!value)} role="switch" aria-checked={!!value}/>
+      </div>
+    );
+  }
+  if (field.kind === "select") {
+    return (
+      <div className="plg-field">
+        {lbl}
+        <select className="val-select" value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
+          {field.options.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      </div>
+    );
+  }
+  if (field.kind === "number") {
+    return (
+      <div className="plg-field">
+        {lbl}
+        <div className="psm-limit-input">
+          <input type="number" value={value ?? ""} step={field.step ?? 1} min={field.min} max={field.max}
+                 disabled={disabled}
+                 onChange={(e) => onChange(e.target.value === "" ? "" : Number(e.target.value))}/>
+          {field.unit && <span className="psm-limit-unit">{field.unit}</span>}
+        </div>
+      </div>
+    );
+  }
+  if (field.kind === "events") {
+    const sel = Array.isArray(value) ? value : [];
+    return (
+      <div className="plg-field">
+        {lbl}
+        <div className="plg-event-chips">
+          {field.options.map(opt => (
+            <button key={opt} type="button" disabled={disabled}
+                    className={`plg-event-chip ${sel.includes(opt) ? "on" : ""}`}
+                    onClick={() => onChange(sel.includes(opt) ? sel.filter(o => o !== opt) : [...sel, opt])}>
+              {opt}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="plg-field">
+      {lbl}
+      <div className="apm-name-input">
+        <input type={field.kind === "secret" ? "password" : "text"} value={value ?? ""}
+               placeholder={field.placeholder || ""} autoComplete="off" spellCheck={false} disabled={disabled}
+               onChange={(e) => onChange(e.target.value)}/>
+      </div>
+    </div>
+  );
+}
+
+// ───────── Level enablement control (segmented tri-state) ─────────
+
+function LevelControl({ isRoot, value, onChange, readOnly }) {
+  // value: "on" | "off" | "inherit"
+  const segs = isRoot
+    ? [{ v: "on", label: "On" }, { v: "off", label: "Off" }]
+    : [{ v: "inherit", label: "Inherit" }, { v: "on", label: "On" }, { v: "off", label: "Off" }];
+  const cur = value === "on" ? "on" : value === "off" ? "off" : (isRoot ? "off" : "inherit");
+  return (
+    <div className={`plev-seg ${readOnly ? "readonly" : ""}`} role="group">
+      {segs.map(s => (
+        <button key={s.v} type="button"
+                className={`plev-seg-btn ${cur === s.v ? "active" : ""} ${s.v}`}
+                onClick={() => !readOnly && onChange(s.v)}>
+          {s.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ───────── Availability badges ─────────
+
+function LevelBadges({ plugin, activeLevel }) {
+  return (
+    <span className="plg-avail" title={`Available at: ${plugin.levels.map(l => PLUGIN_LEVEL_META[l].label).join(", ")}`}>
+      {PLUGIN_LEVEL_ORDER.map(l => {
+        const on = plugin.levels.includes(l);
+        return (
+          <span key={l}
+                className={`plg-avail-pip ${on ? "on" : "off"} ${l === activeLevel ? "here" : ""}`}>
+            {PLUGIN_LEVEL_META[l].short}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+// ───────── One plugin row ─────────
+
+function PluginRow({ plugin, level, plateId, enablement, setEnablement, config, setConfig, readOnly }) {
+  const { useState } = React;
+  const [open, setOpen] = useState(false);
+
+  const order = pluginLevels(plugin);
+  const isRoot = order[0] === level;
+  const raw = readLevel(enablement, level, plugin.id, plateId);
+  const here = raw === "on" ? "on" : raw === "off" ? "off" : "inherit";
+
+  const resolved = resolvePlugin(enablement, plugin, plateId, level);
+  const downstream = hasDownstreamOverride(enablement, plugin, level);
+
+  const setLevelValue = (v) => {
+    setEnablement(prev => {
+      const next = { ...prev };
+      if (level === "plate") {
+        const plates = { ...(next.plate || {}) };
+        const cur = { ...(plates[plateId] || {}) };
+        if (v === "inherit") delete cur[plugin.id]; else cur[plugin.id] = v;
+        plates[plateId] = cur;
+        next.plate = plates;
+      } else {
+        const lvl = { ...(next[level] || {}) };
+        if (v === "inherit") delete lvl[plugin.id]; else lvl[plugin.id] = v;
+        next[level] = lvl;
+      }
+      return next;
+    });
+  };
+
+  const setFieldValue = (key, val) => {
+    setConfig(prev => {
+      const next = { ...prev };
+      if (level === "plate") {
+        const plates = { ...(next.plate || {}) };
+        const cur = { ...(plates[plateId] || {}) };
+        cur[plugin.id] = { ...(cur[plugin.id] || {}), [key]: val };
+        plates[plateId] = cur;
+        next.plate = plates;
+      } else {
+        const lvl = { ...(next[level] || {}) };
+        lvl[plugin.id] = { ...(lvl[plugin.id] || {}), [key]: val };
+        next[level] = lvl;
+      }
+      return next;
+    });
+  };
+
+  const resetFieldOverrides = () => {
+    setConfig(prev => {
+      const next = { ...prev };
+      if (level === "plate") {
+        const plates = { ...(next.plate || {}) };
+        const cur = { ...(plates[plateId] || {}) };
+        delete cur[plugin.id];
+        plates[plateId] = cur;
+        next.plate = plates;
+      } else {
+        const lvl = { ...(next[level] || {}) };
+        delete lvl[plugin.id];
+        next[level] = lvl;
+      }
+      return next;
+    });
+  };
+
+  // Config is only OVERRIDABLE where the plugin is explicitly On at this level.
+  const editableHere = here === "on" && !readOnly;
+  const effectiveConfig = resolvePluginConfig(enablement, config, plugin, plateId, level);
+  const localCfg = readConfigLevel(config, level, plugin.id, plateId) || {};
+  const owner = configOwnerLevel(enablement, plugin, plateId, level);
+
+  // Provenance label.
+  let prov;
+  if (resolved.source === "default") prov = "Default · off";
+  else if (resolved.source === level) prov = `${resolved.enabled ? "On" : "Off"} · set here`;
+  else prov = `${resolved.enabled ? "On" : "Off"} · from ${PLUGIN_LEVEL_META[resolved.source].label}`;
+
+  return (
+    <div className={`plg-row2 ${resolved.enabled ? "is-on" : "is-off"}`}>
+      <div className="plg-row2-main">
+        <div className="plg-row2-text">
+          <div className="plg-row2-head">
+            <span className="plg-row2-name">{plugin.name}</span>
+            <LevelBadges plugin={plugin} activeLevel={level}/>
+          </div>
+          <div className="plg-row2-sum">{plugin.summary}</div>
+          <div className="plg-row2-meta">
+            <span className={`plg-prov ${resolved.enabled ? "on" : "off"} ${resolved.source === level ? "set" : ""}`}>
+              <span className="plg-prov-dot"/>{prov}
+            </span>
+            {downstream && (
+              <span className="plg-prov-down" title={`Overridden at ${PLUGIN_LEVEL_META[downstream].label} level`}>
+                overridden at {PLUGIN_LEVEL_META[downstream].label.toLowerCase()}
+              </span>
+            )}
+            {plugin.fields && plugin.fields.length > 0 && (
+              <button type="button" className={`plg-config-toggle ${open ? "open" : ""}`} onClick={() => setOpen(o => !o)}>
+                <svg width="9" height="9" viewBox="0 0 10 10" fill="none"><path d="M2 3.5l3 3 3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                Configure
+              </button>
+            )}
+          </div>
+        </div>
+        <LevelControl isRoot={isRoot} value={here} onChange={setLevelValue} readOnly={readOnly}/>
+      </div>
+
+      {open && plugin.fields && plugin.fields.length > 0 && (
+        <div className={`plg-row2-config ${editableHere ? "" : "locked"}`}>
+          <div className="plg-config-bar">
+            <span className="plg-config-status">
+              {editableHere
+                ? "Editable here"
+                : owner
+                  ? `Inherited · configured at ${PLUGIN_LEVEL_META[owner].label}`
+                  : "Defaults"}
+            </span>
+            {editableHere && Object.keys(localCfg).length > 0 && (
+              <button type="button" className="plg-config-reset" onClick={resetFieldOverrides}>
+                Reset to inherited
+              </button>
+            )}
+          </div>
+          {!editableHere && (
+            <div className="plg-config-note">
+              {readOnly
+                ? "Read-only preview."
+                : here === "off"
+                  ? `Off at ${PLUGIN_LEVEL_META[level].label} — settings don't apply here.`
+                  : `Turn this plugin On at ${PLUGIN_LEVEL_META[level].label} to override its settings here.`}
+            </div>
+          )}
+          {plugin.fields.map(f => (
+            <PluginField key={f.key} field={f} value={effectiveConfig[f.key]}
+                         overridden={editableHere && localCfg[f.key] !== undefined}
+                         onChange={(v) => setFieldValue(f.key, v)} disabled={!editableHere}/>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ───────── Manager (level-scoped list) ─────────
+
+function PluginManager({ level, plateId, plateName, enablement, setEnablement, config, setConfig, readOnly }) {
+  const meta = PLUGIN_LEVEL_META[level];
+  const available = PLUGIN_CATALOG.filter(p => p.levels.includes(level));
+  const groups = PLUGIN_CATEGORY_ORDER
+    .map(cat => ({ cat, items: available.filter(p => p.category === cat) }))
+    .filter(g => g.items.length);
+  const unavailable = PLUGIN_CATALOG.filter(p => !p.levels.includes(level));
+
+  return (
+    <div className="plg-manager">
+      <div className="plg-intro" style={{ "--lvl-hue": meta.hue }}>
+        <span className="plg-intro-dot"/>
+        <div className="plg-intro-text">
+          <b>{meta.label} plugins{level === "plate" && plateName ? ` · ${plateName}` : ""}</b>
+          <span> — {level === "global"
+            ? "the baseline for every project. Projects and plates inherit these unless they override."
+            : level === "project"
+              ? "inherits from Global. Anything set here overrides Global for this project and cascades to its plates."
+              : "inherits from Project. Anything set here applies to just this plate and overrides everything above."}</span>
+        </div>
+      </div>
+
+      {groups.map(g => (
+        <div className="plg-group" key={g.cat}>
+          <div className="plg-group-label">{g.cat}</div>
+          {g.items.map(p => (
+            <PluginRow key={p.id} plugin={p} level={level} plateId={plateId}
+                       enablement={enablement} setEnablement={setEnablement}
+                       config={config} setConfig={setConfig} readOnly={readOnly}/>
+          ))}
+        </div>
+      ))}
+
+      {unavailable.length > 0 && (
+        <div className="plg-unavailable">
+          <div className="plg-group-label">Not available at this level</div>
+          <div className="plg-unavailable-list">
+            {unavailable.map(p => (
+              <span className="plg-unavailable-item" key={p.id}
+                    title={`${p.name} can only be enabled at: ${p.levels.map(l => PLUGIN_LEVEL_META[l].label).join(", ")}`}>
+                {p.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ───────── Modal wrapper (Global / Project surfaces) ─────────
+
+function PluginsModal({ level, projectName, plateName, plateId, enablement, setEnablement, config, setConfig, onClose }) {
+  const { useEffect } = React;
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const meta = PLUGIN_LEVEL_META[level];
+  const count = countPluginsEnabledAtLevel(enablement, level, plateId);
+  const total = PLUGIN_CATALOG.filter(p => p.levels.includes(level)).length;
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="plugins-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="plg-title">
+        <header className="plg-header">
+          <div className="plg-header-mark" style={{ "--lvl-hue": meta.hue }} aria-hidden="true">
+            <svg width="19" height="19" viewBox="0 0 16 16" fill="none">
+              <path d="M6 2v2M10 2v2M4 4h8v3a4 4 0 0 1-4 4 4 4 0 0 1-4-4V4zM8 11v3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </div>
+          <div className="plg-header-text">
+            <h2 id="plg-title">{meta.label} plugins</h2>
+            <p>{level === "global" ? "Applies to every project on this machine." : `Scoped to ${projectName}. Inherits from Global.`}</p>
+          </div>
+          <button className="apm-close" onClick={onClose} aria-label="Close" title="Close (Esc)">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+          </button>
+        </header>
+
+        <div className="plg-modal-body">
+          <PluginManager level={level} plateId={plateId} plateName={plateName}
+                         enablement={enablement} setEnablement={setEnablement}
+                         config={config} setConfig={setConfig}/>
+        </div>
+
+        <footer className="plg-footer">
+          <span className="plg-foot-hint">Lower levels override higher ones. Unset = inherit.</span>
+          <div className="plg-footer-right">
+            <span className="plg-enabled-count">{count} of {total} active here</span>
+            <button className="apm-btn primary" onClick={onClose} type="button">Done</button>
+          </div>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, {
+  PLUGIN_CATALOG,
+  PLUGIN_LEVEL_META,
+  defaultPluginEnablement,
+  defaultPluginConfig,
+  resolvePlugin,
+  resolvePluginConfig,
+  countPluginsEnabledAtLevel,
+  PluginManager,
+  PluginsModal,
+});
 
 </script>
 <script type="text/babel" data-source="PreviewView.jsx">
@@ -11997,6 +12979,26 @@ function SlicerWorkspace({
   logs, setLogs, pushLog,
   errorLogCount, warnLogCount,
 }) {
+  // Multi-level cascading plugin enablement (Global → Project → Plate) + a
+  // single shared per-plugin config. Saved with the project in a real build;
+  // kept in workspace state for the prototype.
+  const [pluginEnablement, setPluginEnablement] = useState(() => window.defaultPluginEnablement());
+  const [pluginConfig, setPluginConfig] = useState(() => window.defaultPluginConfig());
+  const [showGlobalPlugins, setShowGlobalPlugins] = useState(false);
+  const [showProjectPlugins, setShowProjectPlugins] = useState(false);
+
+  // Cmd/Ctrl+Shift+P opens the project-level plugins manager.
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === "p" || e.key === "P")) {
+        e.preventDefault();
+        setShowProjectPlugins(v => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // Derived: active plate + its slot accessors
   const activePlate = useMemo(
     () => plates.find(p => p.id === activePlateId) || plates[0],
@@ -12224,6 +13226,10 @@ function SlicerWorkspace({
         projectName="untitled.3mf"
         primary={primaryAction}
         secondary={secondaryAction}
+        onOpenGlobalPlugins={() => setShowGlobalPlugins(true)}
+        onOpenProjectPlugins={() => setShowProjectPlugins(true)}
+        globalPluginCount={window.countPluginsEnabledAtLevel(pluginEnablement, "global", activePlateId)}
+        projectPluginCount={window.countPluginsEnabledAtLevel(pluginEnablement, "project", activePlateId)}
       />
 
       <PlateTabs
@@ -12390,6 +13396,12 @@ function SlicerWorkspace({
           onSwapBedPlate={noop("bedPlate")}
           onSwapNozzle={noop("nozzle")}
           onSwapFilament={(id) => console.log("[swap] filament", id)}
+          pluginEnablement={pluginEnablement}
+          setPluginEnablement={setPluginEnablement}
+          pluginConfig={pluginConfig}
+          setPluginConfig={setPluginConfig}
+          activePlateId={activePlateId}
+          activePlateName={activePlate.name}
         />
       </div>
       )}
@@ -12435,6 +13447,12 @@ function SlicerWorkspace({
               onSwapBedPlate={noop("bedPlate")}
               onSwapNozzle={noop("nozzle")}
               onSwapFilament={(id) => console.log("[swap] filament", id)}
+              pluginEnablement={pluginEnablement}
+              setPluginEnablement={setPluginEnablement}
+              pluginConfig={pluginConfig}
+              setPluginConfig={setPluginConfig}
+              activePlateId={activePlateId}
+              activePlateName={activePlate.name}
             />
           }
         />
@@ -12532,6 +13550,34 @@ function SlicerWorkspace({
           statusMap={printerStatus}
           onSend={(printerId) => handleSendPlateToPrinter(activePlate.id, printerId)}
           onClose={() => setShowSendToPrinter(false)}
+        />
+      )}
+
+      {showGlobalPlugins && (
+        <PluginsModal
+          level="global"
+          projectName="untitled.3mf"
+          plateId={activePlateId}
+          plateName={activePlate.name}
+          enablement={pluginEnablement}
+          setEnablement={setPluginEnablement}
+          config={pluginConfig}
+          setConfig={setPluginConfig}
+          onClose={() => setShowGlobalPlugins(false)}
+        />
+      )}
+
+      {showProjectPlugins && (
+        <PluginsModal
+          level="project"
+          projectName="untitled.3mf"
+          plateId={activePlateId}
+          plateName={activePlate.name}
+          enablement={pluginEnablement}
+          setEnablement={setPluginEnablement}
+          config={pluginConfig}
+          setConfig={setPluginConfig}
+          onClose={() => setShowProjectPlugins(false)}
         />
       )}
 
