@@ -138,6 +138,11 @@ pub struct PluginHost {
     /// manifest default (enabled). This is **activation**, separate from
     /// a plugin's **health** (`LoadedPlugin.enabled`).
     global_enabled: BTreeMap<String, bool>,
+    /// Global per-plugin **setting** values (the global tier of the
+    /// settings cascade), keyed by plugin name then setting key, in the
+    /// flat string vocabulary. From `config.toml`'s
+    /// `[plugins.settings.<name>]`.
+    global_settings: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl PluginHost {
@@ -147,6 +152,7 @@ impl PluginHost {
         Self {
             plugins: Vec::new(),
             global_enabled: BTreeMap::new(),
+            global_settings: BTreeMap::new(),
         }
     }
 
@@ -185,6 +191,7 @@ impl PluginHost {
         Self {
             plugins: by_name.into_values().collect(),
             global_enabled: BTreeMap::new(),
+            global_settings: BTreeMap::new(),
         }
     }
 
@@ -263,13 +270,11 @@ impl PluginHost {
         let project = resolve::level_for(name, &gate.project);
         let plate = resolve::level_for(name, &gate.plate);
         let global_on = self.global_enabled.get(name).copied();
-        // Global-level plugin *settings* (config `[plugins.settings]`)
-        // are a follow-up; for now the global level contributes only its
-        // on/off, not setting values.
-        let global_settings = BTreeMap::new();
+        let empty = BTreeMap::new();
+        let global_settings = self.global_settings.get(name).unwrap_or(&empty);
         resolve::resolve(
             global_on,
-            &global_settings,
+            global_settings,
             &project,
             &plate,
             &p.manifest.setting_defaults(),
@@ -320,10 +325,16 @@ impl PluginHost {
         self.global_enabled.insert(name.to_string(), enabled);
     }
 
-    /// Replace the whole global-activation map (startup, from
-    /// `config.toml`).
-    pub fn apply_global_enabled(&mut self, map: BTreeMap<String, bool>) {
-        self.global_enabled = map;
+    /// Replace the whole global tier (startup, or after a config edit):
+    /// per-plugin enable/disable and global setting values, both from
+    /// `config.toml`.
+    pub fn apply_global(
+        &mut self,
+        enabled: BTreeMap<String, bool>,
+        settings: BTreeMap<String, BTreeMap<String, String>>,
+    ) {
+        self.global_enabled = enabled;
+        self.global_settings = settings;
     }
 
     /// A plugin's resolved global activation (default true when unset).
@@ -771,6 +782,40 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(host.dispatch_gated(&StubHook, "x".into(), &inherit), "x:DEF");
+    }
+
+    #[test]
+    fn global_settings_feed_the_resolver() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("tagger");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(MANIFEST_FILE),
+            "name=\"tagger\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nhooks=[\"post_slice\"]\n\n\
+             [settings.tag]\ntype=\"string\"\ndefault=\"DEF\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("main.lua"),
+            r#"function on_post_slice(s) return s .. ":" .. settings.tag end"#,
+        )
+        .unwrap();
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+
+        // Default before any global setting is applied.
+        assert_eq!(host.dispatch(&StubHook, "x".into()), "x:DEF");
+
+        // A global-tier setting value resolves through (no overrides).
+        let settings: BTreeMap<String, BTreeMap<String, String>> = [(
+            "tagger".to_string(),
+            [("tag".to_string(), "GLOBAL".to_string())]
+                .into_iter()
+                .collect(),
+        )]
+        .into_iter()
+        .collect();
+        host.apply_global(BTreeMap::new(), settings);
+        assert_eq!(host.dispatch(&StubHook, "x".into()), "x:GLOBAL");
     }
 
     #[test]

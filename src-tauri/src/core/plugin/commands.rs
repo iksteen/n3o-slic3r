@@ -62,6 +62,48 @@ pub fn plugin_set_global_enabled(
     Ok(())
 }
 
+/// Set a plugin's **global** setting value (the global tier of the
+/// settings cascade) and persist it to `config.toml`. Per-project /
+/// per-plate overrides still win over it (where the plugin is on there).
+/// `value` is a scalar (string / number / bool), typed per the panel's
+/// rendered control.
+#[tauri::command]
+pub fn plugin_set_global_setting(
+    name: String,
+    key: String,
+    value: serde_json::Value,
+    host: State<'_, PluginHostState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let typed = json_to_toml_scalar(&value)
+        .ok_or_else(|| "setting value must be a string, number, or bool".to_string())?;
+    // Persist first, then re-seed the live host's global tier from disk.
+    crate::core::config::set_plugin_setting(&name, &key, typed).map_err(|e| e.to_string())?;
+    let cfg = crate::core::config::load();
+    let settings = cfg.plugins.settings_as_strings();
+    lock_host(&host).apply_global(cfg.plugins.enabled, settings);
+    let _ = app.emit(CHANGED_EVENT, ());
+    Ok(())
+}
+
+/// Convert a JSON scalar from the frontend into the matching TOML scalar
+/// for `config.toml`. `None` for non-scalars (arrays/objects/null).
+fn json_to_toml_scalar(v: &serde_json::Value) -> Option<toml::Value> {
+    use serde_json::Value as J;
+    Some(match v {
+        J::String(s) => toml::Value::String(s.clone()),
+        J::Bool(b) => toml::Value::Boolean(*b),
+        J::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                toml::Value::Integer(i)
+            } else {
+                toml::Value::Float(n.as_f64()?)
+            }
+        }
+        _ => return None,
+    })
+}
+
 #[tauri::command]
 pub fn plugin_reload(
     name: String,

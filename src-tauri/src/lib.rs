@@ -156,9 +156,11 @@ pub fn run() {
                 bundled_plugins,
                 core::plugin::user_plugins_dir(),
             ]);
-            // Seed the global activation tier from config.toml so a
-            // user's disable survives restart (and suppresses on send).
-            plugin_host.apply_global_enabled(core::config::load().plugins.enabled);
+            // Seed the global tier (enable/disable + setting values) from
+            // config.toml so a user's choices survive restart.
+            let cfg = core::config::load();
+            let settings = cfg.plugins.settings_as_strings();
+            plugin_host.apply_global(cfg.plugins.enabled, settings);
             app.manage(Arc::new(Mutex::new(plugin_host)));
             tracing::info!("plugin host loaded");
 
@@ -261,6 +263,7 @@ pub fn run() {
             core::plugin::commands::plugin_list,
             core::plugin::commands::plugin_set_enabled,
             core::plugin::commands::plugin_set_global_enabled,
+            core::plugin::commands::plugin_set_global_setting,
             core::plugin::commands::plugin_reload,
         ])
         .run(tauri::generate_context!())

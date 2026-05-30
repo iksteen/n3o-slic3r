@@ -35,6 +35,50 @@ pub struct PluginsConfig {
     /// global tier beneath any per-project / per-plate override.
     #[serde(default)]
     pub enabled: BTreeMap<String, bool>,
+    /// Global per-plugin **setting** values — the global tier of the
+    /// settings cascade — keyed by plugin name then setting key
+    /// (`[plugins.settings.<name>]`). Values are typed in the file
+    /// (`layer = 10`); they're flattened to the cascade's string
+    /// vocabulary for resolution.
+    #[serde(default)]
+    pub settings: BTreeMap<String, BTreeMap<String, toml::Value>>,
+}
+
+impl PluginsConfig {
+    /// Global plugin settings flattened to the cascade string
+    /// vocabulary, keyed by plugin name then setting key — the shape the
+    /// host's global tier + the resolver consume.
+    pub fn settings_as_strings(&self) -> BTreeMap<String, BTreeMap<String, String>> {
+        self.settings
+            .iter()
+            .map(|(name, kv)| {
+                let flat = kv
+                    .iter()
+                    .map(|(k, v)| (k.clone(), toml_scalar_to_string(v)))
+                    .collect();
+                (name.clone(), flat)
+            })
+            .collect()
+    }
+}
+
+/// Render a scalar TOML value to the cascade's flat-string vocabulary (a
+/// whole float prints without a fractional part, matching how overrides
+/// are flattened). Non-scalars fall back to TOML's own `to_string`.
+fn toml_scalar_to_string(v: &toml::Value) -> String {
+    match v {
+        toml::Value::String(s) => s.clone(),
+        toml::Value::Integer(i) => i.to_string(),
+        toml::Value::Float(f) => {
+            if f.fract() == 0.0 && f.is_finite() {
+                format!("{}", *f as i64)
+            } else {
+                format!("{f}")
+            }
+        }
+        toml::Value::Boolean(b) => b.to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// Path to `config.toml`.
@@ -58,6 +102,17 @@ pub fn save(cfg: &AppConfig) -> io::Result<()> {
 pub fn set_plugin_enabled(name: &str, enabled: bool) -> io::Result<()> {
     let mut cfg = load();
     cfg.plugins.enabled.insert(name.to_string(), enabled);
+    save(&cfg)
+}
+
+/// Set one plugin's global setting value and persist (load-modify-save).
+pub fn set_plugin_setting(name: &str, key: &str, value: toml::Value) -> io::Result<()> {
+    let mut cfg = load();
+    cfg.plugins
+        .settings
+        .entry(name.to_string())
+        .or_default()
+        .insert(key.to_string(), value);
     save(&cfg)
 }
 
@@ -118,6 +173,25 @@ mod tests {
         assert_eq!(loaded.plugins.enabled.get("platecycler"), Some(&false));
         // Hyphenated plugin names round-trip as bare TOML keys.
         assert_eq!(loaded.plugins.enabled.get("beep-at-layer"), Some(&true));
+    }
+
+    #[test]
+    fn round_trips_and_flattens_plugin_settings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+
+        let mut cfg = AppConfig::default();
+        let kv = cfg.plugins.settings.entry("beep-at-layer".into()).or_default();
+        kv.insert("layer".into(), toml::Value::Integer(10));
+        kv.insert("tag".into(), toml::Value::String("hi".into()));
+        save_to(&cfg, &path).unwrap();
+
+        let loaded = load_from(&path);
+        assert_eq!(loaded, cfg, "typed values round-trip");
+        // Flattened to the cascade string vocabulary the resolver wants.
+        let flat = loaded.plugins.settings_as_strings();
+        assert_eq!(flat["beep-at-layer"]["layer"], "10");
+        assert_eq!(flat["beep-at-layer"]["tag"], "hi");
     }
 
     #[test]

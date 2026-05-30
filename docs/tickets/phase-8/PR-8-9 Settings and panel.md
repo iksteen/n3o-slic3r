@@ -109,10 +109,14 @@ a whole-job send (document the boundary).
      `bindings/plugin_settings`). The beep/pause examples now read
      `settings.layer`. The activation-gated promotion rule is enforced
      here (host test: an inherit-level setting doesn't promote).
-   - **Still open:** global plugin *settings* in `config.toml`
-     (`[plugins.settings.<name>]` — the resolver already accepts them,
-     passed empty today) and migrating the platecycler `swap_gcode` to a
-     declared setting (its default is a large multi-line G-code block).
+   - **Global settings — ✅ done.** `config.toml` now has
+     `[plugins.settings.<name>]` (typed values); they load into the
+     host's global tier at startup and feed the resolver. The
+     `plugin_set_global_setting` command persists + re-seeds the host.
+     The settings cascade is now complete across all three tiers.
+   - **Still open (optional):** migrating the platecycler `swap_gcode`
+     to a declared setting (its default is a large multi-line G-code
+     block; works fine as a Lua constant today).
 
 ### Settings-cascade model (decided 2026-05-31)
 
