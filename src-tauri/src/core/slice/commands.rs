@@ -17,14 +17,15 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::events::SliceEvent;
 use super::input::{build_slice_input, SliceInputError};
 use super::job::{JobId, JobRegistry, JobStatus, SliceJobInput};
 use super::orchestrator::{
-    start_slice_job as run_start, start_slice_job_with_sink, EventSink, SliceStartError,
+    start_slice_job as run_start, start_slice_job_with_sink_and_plugins, EventSink, SliceStartError,
 };
+use crate::core::plugin::commands::PluginHostState;
 use super::pre_slice_gate::validate_pre_slice;
 use crate::core::project::{PlateId, Project};
 
@@ -122,13 +123,21 @@ pub fn slice_active_plate(
     // file cleanup that fires on the first terminal event. The
     // cleanup itself is best-effort — a missing file is a debug
     // log, not an error (the OS may have GC'd temp dirs).
+    // Grab the plugin host (Arc clone) before app_handle moves into
+    // the sink; `None` if it isn't managed (shouldn't happen in the
+    // running app, but keeps this path test-friendly).
+    let host = app_handle
+        .try_state::<PluginHostState>()
+        .map(|s| s.inner().clone());
     let sink = cleanup_sink(app_handle, temp_path.clone());
-    start_slice_job_with_sink(input, jobs.inner(), sink).map_err(|e: SliceStartError| {
-        // Spawn failed → no worker, no terminal event, so
-        // cleanup never fires. Best-effort delete here too.
-        let _ = std::fs::remove_file(&temp_path);
-        e.to_string()
-    })
+    start_slice_job_with_sink_and_plugins(input, jobs.inner(), sink, host).map_err(
+        |e: SliceStartError| {
+            // Spawn failed → no worker, no terminal event, so
+            // cleanup never fires. Best-effort delete here too.
+            let _ = std::fs::remove_file(&temp_path);
+            e.to_string()
+        },
+    )
 }
 
 /// Compose a sink that (a) emits each event on the AppHandle's Tauri

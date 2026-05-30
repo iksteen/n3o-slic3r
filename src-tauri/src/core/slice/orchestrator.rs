@@ -41,7 +41,7 @@
 //! libslic3r is verified concurrent-safe.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -54,11 +54,18 @@ use super::job::{JobHandle, JobId, JobRegistry, JobStatus, ResolvedJob, SliceJob
 use super::summary::build_summary;
 use crate::core::cascade::{self, types::Cascade};
 use crate::core::cascade_adapter::{adapt, Manifest};
+use crate::core::gcode::{parse_str, to_string};
+use crate::core::plugin::{HookKind, PlateMeta, PluginHost, PostSliceHook};
 use crate::core::printer::lookup_instance;
 use crate::core::profile_library::compose_cascade;
 use crate::core::project::SlicingContext;
 use slic3r_ffi::{slice, Model};
 use std::collections::BTreeMap;
+
+/// Shared plugin host the worker dispatches the post-slice hook
+/// through. `None` when no host is wired (tests / tooling) — the
+/// post-slice step is then skipped entirely.
+pub type PluginHostRef = Arc<Mutex<PluginHost>>;
 
 /// Errors `start_slice_job` returns synchronously (before the
 /// worker thread spawns). Post-spawn errors flow out via the
@@ -149,7 +156,15 @@ pub fn start_slice_job(
     app_handle: AppHandle,
     registry: &JobRegistry,
 ) -> Result<JobId, SliceStartError> {
-    start_slice_job_with_sink(input, registry, app_handle_sink(app_handle))
+    let host = plugin_host_from_app(&app_handle);
+    spawn_worker(input, registry, app_handle_sink(app_handle), host)
+}
+
+/// Pull the managed plugin host off the app, or `None` when it isn't
+/// managed (headless tests). Cheap Arc clone.
+fn plugin_host_from_app(app: &AppHandle) -> Option<PluginHostRef> {
+    use tauri::Manager;
+    app.try_state::<PluginHostRef>().map(|s| s.inner().clone())
 }
 
 /// Production sink — emits each event on the matching Tauri
@@ -164,16 +179,13 @@ fn app_handle_sink(app: AppHandle) -> EventSink {
     })
 }
 
-/// Testable orchestrator entry — same as [`start_slice_job`] but
-/// takes a generic event sink instead of a Tauri AppHandle. The
-/// integration test under `src-tauri/tests/slice_orchestrator.rs`
-/// uses this to capture every event into a `Vec` without spinning
-/// up a Tauri runtime.
-pub fn start_slice_job_with_sink(
+/// Shared pre-flight: validate, resolve the cascade + context,
+/// materialize the output dir, allocate the job, and register its
+/// handle. Both the spawning and blocking entries build on this.
+fn prepare_job(
     input: SliceJobInput,
     registry: &JobRegistry,
-    sink: EventSink,
-) -> Result<JobId, SliceStartError> {
+) -> Result<(JobId, ResolvedJob, Arc<JobHandle>), SliceStartError> {
     if input.plate_ids.is_empty() {
         return Err(SliceStartError::NoPlatesRequested);
     }
@@ -208,61 +220,135 @@ pub fn start_slice_job_with_sink(
         cascade,
         context,
     };
+    Ok((job_id, resolved, handle))
+}
 
-    let handle_for_worker = handle.clone();
+/// Testable orchestrator entry — same as [`start_slice_job`] but
+/// takes a generic event sink instead of a Tauri AppHandle. The
+/// integration test under `src-tauri/tests/slice_orchestrator.rs`
+/// uses this to capture every event into a `Vec` without spinning
+/// up a Tauri runtime. No plugin host (no post-slice hook).
+pub fn start_slice_job_with_sink(
+    input: SliceJobInput,
+    registry: &JobRegistry,
+    sink: EventSink,
+) -> Result<JobId, SliceStartError> {
+    spawn_worker(input, registry, sink, None)
+}
+
+/// As [`start_slice_job_with_sink`], but dispatches the post-slice hook
+/// through `host`. The production slice path uses this.
+pub fn start_slice_job_with_sink_and_plugins(
+    input: SliceJobInput,
+    registry: &JobRegistry,
+    sink: EventSink,
+    host: Option<PluginHostRef>,
+) -> Result<JobId, SliceStartError> {
+    spawn_worker(input, registry, sink, host)
+}
+
+fn spawn_worker(
+    input: SliceJobInput,
+    registry: &JobRegistry,
+    sink: EventSink,
+    host: Option<PluginHostRef>,
+) -> Result<JobId, SliceStartError> {
+    let (job_id, resolved, handle) = prepare_job(input, registry)?;
     let sink = Arc::new(sink);
     thread::Builder::new()
         .name(format!("n3o-slice-{}", job_id.0))
-        .spawn(move || run_worker(job_id, resolved, sink, handle_for_worker))
+        .spawn(move || run_worker(job_id, resolved, sink, handle, host))
         .expect("spawn slice worker");
-
     Ok(job_id)
 }
 
 /// Synchronous variant for tests + tooling: runs the worker on the
-/// calling thread instead of spawning. The test harness uses this
-/// to keep assertions inline with slice progress.
+/// calling thread instead of spawning. No plugin host.
 pub fn run_slice_job_blocking(
     input: SliceJobInput,
     registry: &JobRegistry,
     sink: EventSink,
 ) -> Result<JobId, SliceStartError> {
-    if input.plate_ids.is_empty() {
-        return Err(SliceStartError::NoPlatesRequested);
-    }
-    let cascade = resolve_cascade(&input)?;
-    let context = SlicingContext {
-        printer: Arc::new(input.context.printer.clone()),
-        plate: Arc::new(input.context.plate.clone()),
-        filaments: input
-            .context
-            .filaments
-            .clone()
-            .into_iter()
-            .map(Arc::new)
-            .collect(),
-        active_slot: input.context.active_slot,
-    };
-    let output_dir = PathBuf::from(&input.output_dir);
-    std::fs::create_dir_all(&output_dir)
-        .map_err(|e| SliceStartError::OutputDirInvalid(format!("{}: {e}", output_dir.display())))?;
-    let job_id = registry.alloc_id();
-    let handle = JobHandle::new();
-    registry.insert(job_id, handle.clone());
-    let resolved = ResolvedJob {
-        model_path: PathBuf::from(&input.model_path),
-        output_dir,
-        plate_ids: input.plate_ids,
-        cascade,
-        context,
-    };
-    run_worker(job_id, resolved, Arc::new(sink), handle);
+    let (job_id, resolved, handle) = prepare_job(input, registry)?;
+    run_worker(job_id, resolved, Arc::new(sink), handle, None);
     Ok(job_id)
+}
+
+/// Blocking variant with a plugin host — used by the post-slice
+/// integration test to drive a real slice through a real plugin.
+pub fn run_slice_job_blocking_with_plugins(
+    input: SliceJobInput,
+    registry: &JobRegistry,
+    sink: EventSink,
+    host: PluginHostRef,
+) -> Result<JobId, SliceStartError> {
+    let (job_id, resolved, handle) = prepare_job(input, registry)?;
+    run_worker(job_id, resolved, Arc::new(sink), handle, Some(host));
+    Ok(job_id)
+}
+
+/// Run the post-slice plugin hook over a plate's freshly-written
+/// G-code, rewriting the file in place if any plugin changed it.
+///
+/// Skips all work (no parse, no read) when no host is wired or no
+/// enabled plugin declares the hook. On the no-mutation path the
+/// re-serialized bytes equal the original, so the file is left
+/// untouched — the output stays byte-identical to libslic3r's.
+fn apply_post_slice(
+    host: &Option<PluginHostRef>,
+    output_path: &Path,
+    plate_id: u32,
+    ctx: &SlicingContext,
+) {
+    let Some(host) = host else {
+        return;
+    };
+    let mut host = match host.lock() {
+        Ok(h) => h,
+        Err(_) => {
+            tracing::warn!("plugin host mutex poisoned; skipping post-slice hook");
+            return;
+        }
+    };
+    if !host.any_hook(HookKind::PostSlice) {
+        return;
+    }
+
+    let src = match std::fs::read_to_string(output_path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, path = %output_path.display(), "post-slice: read failed");
+            return;
+        }
+    };
+    let hook = PostSliceHook {
+        plate: PlateMeta {
+            plate_id,
+            printer_model: ctx.printer.model.clone(),
+            bed_type: Some(ctx.plate.identity.clone()),
+            // The orchestrator slices a model file and doesn't count
+            // objects today; surface it as unknown rather than wrong.
+            object_count: None,
+        },
+    };
+    let edited = host.dispatch(&hook, parse_str(&src));
+    let new_src = to_string(&edited);
+    if new_src != src {
+        if let Err(e) = std::fs::write(output_path, &new_src) {
+            tracing::warn!(error = %e, path = %output_path.display(), "post-slice: write failed");
+        }
+    }
 }
 
 /// Sequential per-plate worker. Holds the `JobHandle` for cancel +
 /// status updates. Emits every lifecycle event through `sink`.
-fn run_worker(job_id: JobId, job: ResolvedJob, sink: Arc<EventSink>, handle: Arc<JobHandle>) {
+fn run_worker(
+    job_id: JobId,
+    job: ResolvedJob,
+    sink: Arc<EventSink>,
+    handle: Arc<JobHandle>,
+    host: Option<PluginHostRef>,
+) {
     let mut last_plate_in_progress: Option<u32> = None;
 
     for &plate_id in &job.plate_ids {
@@ -383,6 +469,12 @@ fn run_worker(job_id: JobId, job: ResolvedJob, sink: Arc<EventSink>, handle: Arc
 
         match slice_result {
             Ok(()) => {
+                // Post-slice plugin hook: let plugins read/modify the
+                // plate's G-code before the summary + preview see it.
+                // No-op (and near-zero cost) when no host is wired or
+                // no plugin declares the hook.
+                apply_post_slice(&host, &output_path, plate_id, &job.context);
+
                 let summary = build_summary(&output_path).unwrap_or_else(|e| {
                     tracing::warn!(
                         error = %e,

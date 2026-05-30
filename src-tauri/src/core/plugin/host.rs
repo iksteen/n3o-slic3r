@@ -47,14 +47,21 @@ pub trait Hook {
     type Value;
 
     /// Manifest hook this corresponds to — selects which plugins run.
-    fn kind() -> HookKind;
+    fn kind(&self) -> HookKind;
 
     /// Run one plugin's hook with the current value, returning the
     /// (possibly transformed) value plus an optional error. On error,
     /// implementors **return the input value unchanged** so the host
     /// can continue the chain with it; a plugin that declares the hook
     /// but defines no function is a no-op (also returns the input).
-    fn invoke(runtime: &PluginRuntime, value: Self::Value) -> (Self::Value, Option<PluginError>);
+    ///
+    /// `&self` so the hook can carry per-dispatch context (e.g. the
+    /// plate metadata a post-slice hook hands to each plugin).
+    fn invoke(
+        &self,
+        runtime: &PluginRuntime,
+        value: Self::Value,
+    ) -> (Self::Value, Option<PluginError>);
 }
 
 /// Serializable view of a plugin for the `plugin_list` command.
@@ -122,11 +129,11 @@ impl PluginHost {
         }
     }
 
-    /// Fold `value` through every enabled plugin that declares `H`'s
+    /// Fold `value` through every enabled plugin that declares the
     /// hook, in name order. Plugin failures are isolated (recorded +
     /// the plugin auto-disabled) and never surface to the caller.
-    pub fn dispatch<H: Hook>(&mut self, value: H::Value) -> H::Value {
-        let kind = H::kind();
+    pub fn dispatch<H: Hook>(&mut self, hook: &H, value: H::Value) -> H::Value {
+        let kind = hook.kind();
         let mut current = value;
         for i in 0..self.plugins.len() {
             {
@@ -139,7 +146,7 @@ impl PluginHost {
             // so the error path can mutate the plugin's state.
             let (next, err) = {
                 let runtime = self.plugins[i].runtime.as_ref().expect("checked above");
-                H::invoke(runtime, current)
+                hook.invoke(runtime, current)
             };
             current = next;
             if let Some(e) = err {
@@ -154,6 +161,15 @@ impl PluginHost {
             }
         }
         current
+    }
+
+    /// Whether any enabled, loaded plugin declares `kind`. Lets a
+    /// caller skip building a hook payload entirely when nothing would
+    /// run (e.g. the orchestrator avoids re-parsing G-code).
+    pub fn any_hook(&self, kind: HookKind) -> bool {
+        self.plugins
+            .iter()
+            .any(|p| p.enabled && p.runtime.is_some() && p.manifest.hooks.contains(&kind))
     }
 
     /// Summaries for the Plugins panel.
@@ -295,10 +311,14 @@ mod tests {
     struct StubHook;
     impl Hook for StubHook {
         type Value = String;
-        fn kind() -> HookKind {
+        fn kind(&self) -> HookKind {
             HookKind::PostSlice
         }
-        fn invoke(runtime: &PluginRuntime, value: String) -> (String, Option<PluginError>) {
+        fn invoke(
+            &self,
+            runtime: &PluginRuntime,
+            value: String,
+        ) -> (String, Option<PluginError>) {
             match runtime.call::<_, String>("on_post_slice", value.clone()) {
                 Ok(Some(next)) => (next, None),
                 Ok(None) => (value, None),
@@ -344,7 +364,7 @@ mod tests {
         );
 
         let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
-        let out = host.dispatch::<StubHook>("start".to_string());
+        let out = host.dispatch(&StubHook, "start".to_string());
         assert_eq!(out, "start-alpha-bravo");
     }
 
@@ -365,7 +385,7 @@ mod tests {
         );
 
         let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
-        let out = host.dispatch::<StubHook>("start".to_string());
+        let out = host.dispatch(&StubHook, "start".to_string());
         // The bad plugin's transform is skipped, the good one's applies.
         assert_eq!(out, "start-good");
 
@@ -375,7 +395,7 @@ mod tests {
         assert!(!bad.enabled);
         assert!(bad.last_error.is_some());
 
-        let out2 = host.dispatch::<StubHook>("again".to_string());
+        let out2 = host.dispatch(&StubHook, "again".to_string());
         assert_eq!(out2, "again-good");
     }
 
@@ -389,7 +409,7 @@ mod tests {
             r#"function on_post_slice(s) while true do end end"#,
         );
         let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
-        let out = host.dispatch::<StubHook>("x".to_string());
+        let out = host.dispatch(&StubHook, "x".to_string());
         assert_eq!(out, "x"); // unchanged — runaway aborted + skipped
         assert!(!host.list()[0].enabled);
     }
@@ -405,9 +425,9 @@ mod tests {
         );
         let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
         host.set_enabled("p", false).unwrap();
-        assert_eq!(host.dispatch::<StubHook>("a".into()), "a");
+        assert_eq!(host.dispatch(&StubHook, "a".into()), "a");
         host.set_enabled("p", true).unwrap();
-        assert_eq!(host.dispatch::<StubHook>("a".into()), "a-p");
+        assert_eq!(host.dispatch(&StubHook, "a".into()), "a-p");
     }
 
     #[test]
@@ -437,7 +457,7 @@ mod tests {
             r#"function on_post_slice(s) return s .. "-v1" end"#,
         );
         let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
-        assert_eq!(host.dispatch::<StubHook>("x".into()), "x-v1");
+        assert_eq!(host.dispatch(&StubHook, "x".into()), "x-v1");
 
         std::fs::write(
             tmp.path().join("edit-me").join("main.lua"),
@@ -445,6 +465,6 @@ mod tests {
         )
         .unwrap();
         host.reload("edit-me").unwrap();
-        assert_eq!(host.dispatch::<StubHook>("x".into()), "x-v2");
+        assert_eq!(host.dispatch(&StubHook, "x".into()), "x-v2");
     }
 }

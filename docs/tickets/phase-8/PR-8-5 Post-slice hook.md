@@ -1,6 +1,39 @@
 # PR-8-5 — post-slice hook wired into the slice pipeline
 
-Status: ❌ open.
+Status: ✅ done.
+
+**Implementation notes.**
+- The `Hook` trait went **instance-based** (`&self`) so a hook can
+  carry per-dispatch context — `PostSliceHook` holds the `PlateMeta`
+  it hands each plugin as the second Lua arg.
+- **Clean-by-copy isolation:** each plugin gets a fresh `GcodeHandle`
+  over a clone of the current lines; edits are adopted only on success,
+  so a plugin that errors part-way leaves the prior lines untouched.
+- **No-op passthrough** is enforced by comparing re-serialized bytes to
+  the original and skipping the write when equal — output stays
+  byte-identical to libslic3r's when nothing mutates. `any_hook`
+  short-circuits before any parse when no enabled plugin declares the
+  hook.
+- The host is threaded as `Option<PluginHostRef>` through new
+  `*_and_plugins` / `*_with_plugins` orchestrator entry points;
+  `start_slice_job` pulls it off the app state via `try_state`, so the
+  existing host-less test entry points (and their ~8 callers) are
+  untouched.
+- `plate.object_count` is `nil` — the orchestrator slices a model file
+  and doesn't count objects (surfaced as unknown rather than a wrong 0).
+- **Example plugins live in `examples/plugins/`, not the auto-loaded
+  bundled `plugins/` dir** — a beep/pause plugin enabled by default
+  would fire on every slice. They're reference + test fixtures; the
+  opt-in story for shipping enabled bundled plugins is a later concern
+  (PR-8-9).
+- **Mid-dispatch auto-disable does not emit `plugin:changed` yet.** The
+  host state is updated (the panel will see it on next `plugin_list`),
+  but live event emission needs the `AppHandle` in the worker and there
+  is no panel to refresh until PR-8-9 — deferred to there.
+
+Verified via G-code: an integration test slices a real cube with the
+example plugins active and greps the output for the injected `M300` /
+`M0`, plus a no-plugin baseline that lacks them.
 
 **Scope.** The phase's **first end-to-end vertical slice**: wire the
 `PluginHost`'s post-slice dispatch into the slice orchestrator so a

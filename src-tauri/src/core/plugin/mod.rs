@@ -18,6 +18,7 @@ mod bindings;
 pub mod commands;
 mod discovery;
 mod error;
+mod hooks;
 mod host;
 mod manifest;
 mod runtime;
@@ -26,6 +27,7 @@ mod sandbox;
 pub use bindings::{GcodeCell, GcodeHandle};
 pub use discovery::{discover, DiscoveredPlugin, MANIFEST_FILE};
 pub use error::PluginError;
+pub use hooks::{PlateMeta, PostSliceHook};
 pub use host::{user_plugins_dir, Hook, LoadedPlugin, PluginHost, PluginSummary};
 pub use manifest::{
     HookKind, ManifestError, PluginManifest, PrinterCompat, SettingDecl, SettingKind, SettingValue,

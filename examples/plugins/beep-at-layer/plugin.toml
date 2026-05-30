@@ -1,0 +1,10 @@
+name = "beep-at-layer"
+version = "0.1.0"
+entry = "main.lua"
+hooks = ["post_slice"]
+description = "Beep (M300) at the start of a configured layer."
+
+[settings.layer]
+type = "number"
+default = 1
+label = "Layer"
