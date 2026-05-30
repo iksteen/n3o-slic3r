@@ -2472,6 +2472,7 @@ dependencies = [
  "quick-xml 0.36.2",
  "reqwest 0.12.28",
  "rumqttc",
+ "semver",
  "serde",
  "serde_json",
  "slic3r-ffi",

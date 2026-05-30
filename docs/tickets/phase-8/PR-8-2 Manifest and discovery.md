@@ -1,6 +1,13 @@
 # PR-8-2 — Plugin manifest + discovery
 
-Status: ❌ open.
+Status: ✅ done.
+
+**Note on the implementation.** Discovery validates manifests but
+**defers reading the entry `.lua` source to load time** (the host's
+job) — it only confirms the entry file exists. The two-step
+`RawManifest` → `validate()` → `PluginManifest` split keeps serde
+permissive and gives every failure a typed `ManifestError`. `semver`
+is used only to validate the `version` string (stored verbatim).
 
 **Scope.** Define how a plugin declares itself and how the app finds
 plugins on disk. A plugin is a directory containing a `plugin.toml`

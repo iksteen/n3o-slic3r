@@ -72,6 +72,9 @@ futures-util = "0.3"
 # (see core/plugin/sandbox.rs): only string/table/math/coroutine
 # stdlib, no io/os/package/debug.
 mlua = { version = "0.11", features = ["lua54", "vendored"] }
+# Plugin manifest version validation (Phase 8). Used only to confirm a
+# manifest's `version` parses as semver; the string is stored verbatim.
+semver = "1"
 
 [dev-dependencies]
 # HTTP/WebSocket fixture servers for the U1 driver unit tests
