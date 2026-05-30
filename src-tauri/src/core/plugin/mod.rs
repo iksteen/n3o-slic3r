@@ -32,7 +32,7 @@ pub use hooks::{
     PayloadKind, PlateMeta, PostSliceHook, PreSendHook, PreSliceContext, PreSliceHook, SendTarget,
 };
 pub use host::{
-    user_plugins_dir, DispatchGate, Hook, LoadedPlugin, PluginHost, PluginSummary,
+    user_plugins_dir, DispatchGate, Hook, LoadedPlugin, PluginHost, PluginSummary, SettingSummary,
 };
 pub use manifest::{
     HookKind, ManifestError, PluginManifest, PluginScope, PrinterCompat, SettingDecl, SettingKind,

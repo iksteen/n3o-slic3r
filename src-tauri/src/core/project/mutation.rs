@@ -1351,6 +1351,31 @@ impl Project {
         Ok(vec![SceneEvent::ProjectOverridesChanged { plate_id }])
     }
 
+    /// Upsert one **user-tier** (project-wide) override. This is
+    /// `Project.user_overrides` — the least-specific override tier,
+    /// above the authored cascade and below the plate/object tiers. The
+    /// project-level plugin surface writes `plugin.<name>.*` keys here.
+    /// Silent no-op (no event) when the value is unchanged.
+    pub fn user_override_set(
+        &mut self,
+        key: String,
+        value: String,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        if self.user_overrides.get(&key) == Some(&value) {
+            return Ok(Vec::new());
+        }
+        self.user_overrides.insert(key, value);
+        Ok(vec![SceneEvent::UserOverridesChanged])
+    }
+
+    /// Drop one user-tier override key. Silent no-op when absent.
+    pub fn user_override_clear(&mut self, key: &str) -> Result<Vec<SceneEvent>, SceneOpError> {
+        if self.user_overrides.remove(key).is_none() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![SceneEvent::UserOverridesChanged])
+    }
+
     /// Drop one override key from a specific (plate, object).
     /// Silent no-op (no event) when the override wasn't present.
     /// When the last override on an object is cleared, the
@@ -2632,6 +2657,30 @@ mod tests {
                 .unwrap_err(),
             SceneOpError::UnknownObject(ObjectId(9999)),
         );
+    }
+
+    // ---- User-tier (project-wide) overrides -------------
+
+    #[test]
+    fn user_override_set_then_clear_round_trips() {
+        let mut p = Project::default();
+        let events = p
+            .user_override_set("plugin.platecycler.enabled".into(), "true".into())
+            .unwrap();
+        assert!(matches!(events.as_slice(), [SceneEvent::UserOverridesChanged]));
+        assert_eq!(
+            p.user_overrides.get("plugin.platecycler.enabled").map(|s| s.as_str()),
+            Some("true"),
+        );
+        // Unchanged value → silent no-op.
+        assert!(p
+            .user_override_set("plugin.platecycler.enabled".into(), "true".into())
+            .unwrap()
+            .is_empty());
+        // Clear removes it and emits.
+        let cleared = p.user_override_clear("plugin.platecycler.enabled").unwrap();
+        assert!(matches!(cleared.as_slice(), [SceneEvent::UserOverridesChanged]));
+        assert!(p.user_overrides.is_empty());
     }
 
     // ---- Project-tier (per-plate) overrides -------------

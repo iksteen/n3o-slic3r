@@ -478,6 +478,39 @@ pub fn scene_project_override_clear_all(
     Ok(())
 }
 
+/// Upsert one user-tier (project-wide) override. The project-level
+/// plugin surface writes `plugin.<name>.*` keys here; project-wide so no
+/// plate id. Silent no-op when unchanged.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_user_override_set(
+    key: String,
+    value: String,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s.user_override_set(key, value).map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
+/// Drop one user-tier override key. Silent no-op when absent.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_user_override_clear(
+    key: String,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s.user_override_clear(&key).map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
 #[tauri::command]
 #[tracing::instrument]
 pub fn library_primitives() -> Vec<super::library::PrimitiveDescriptor> {

@@ -200,6 +200,8 @@ pub fn run() {
             core::scene::commands::scene_project_override_set,
             core::scene::commands::scene_project_override_clear,
             core::scene::commands::scene_project_override_clear_all,
+            core::scene::commands::scene_user_override_set,
+            core::scene::commands::scene_user_override_clear,
             core::scene::commands::scene_move_object,
             core::scene::commands::scene_set_plate_printer,
             core::scene::commands::scene_rebind_plate_printer,

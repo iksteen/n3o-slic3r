@@ -104,7 +104,7 @@ pub enum SettingKind {
 }
 
 impl SettingKind {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::String => "string",
             Self::Number => "number",

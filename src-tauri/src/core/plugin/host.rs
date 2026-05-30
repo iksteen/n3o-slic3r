@@ -66,6 +66,20 @@ pub trait Hook {
     ) -> (Self::Value, Option<PluginError>);
 }
 
+/// One declared plugin setting, surfaced to the Plugins UI so it can
+/// render the right control and show the default.
+#[derive(Debug, Serialize)]
+pub struct SettingSummary {
+    pub key: String,
+    /// `"string"` / `"number"` / `"bool"` / `"enum"`.
+    pub kind: String,
+    pub label: Option<String>,
+    /// Manifest default, as the flat string the cascade uses.
+    pub default: String,
+    /// Allowed values for an `enum`; empty otherwise.
+    pub values: Vec<String>,
+}
+
 /// Serializable view of a plugin for the `plugin_list` command.
 #[derive(Debug, Serialize)]
 pub struct PluginSummary {
@@ -86,6 +100,12 @@ pub struct PluginSummary {
     /// plugin (the panel toggle), default true. A healthy plugin with
     /// `globally_enabled = false` simply doesn't run.
     pub globally_enabled: bool,
+    /// Declared settings (for the Plugins UI to render controls).
+    pub settings: Vec<SettingSummary>,
+    /// Current global-tier setting values (key → value), so the UI shows
+    /// what's set at the global level. Absent keys use the declared
+    /// default.
+    pub global_settings: BTreeMap<String, String>,
     pub last_error: Option<String>,
 }
 
@@ -357,6 +377,23 @@ impl PluginHost {
                 scopes: p.manifest.scopes.iter().map(|s| s.as_str().to_string()).collect(),
                 enabled: p.enabled,
                 globally_enabled: self.global_enabled.get(&p.manifest.name).copied().unwrap_or(true),
+                settings: p
+                    .manifest
+                    .settings
+                    .iter()
+                    .map(|(key, decl)| SettingSummary {
+                        key: key.clone(),
+                        kind: decl.kind.as_str().to_string(),
+                        label: decl.label.clone(),
+                        default: decl.default.as_override_string(),
+                        values: decl.values.clone(),
+                    })
+                    .collect(),
+                global_settings: self
+                    .global_settings
+                    .get(&p.manifest.name)
+                    .cloned()
+                    .unwrap_or_default(),
                 last_error: p.last_error.clone(),
             })
             .collect()

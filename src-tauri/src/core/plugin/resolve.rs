@@ -63,12 +63,14 @@ pub fn level_for(name: &str, entries: &BTreeMap<String, String>) -> PluginLevel 
     level
 }
 
-/// Parse a flat override value as a bool (`true`/`1`, `false`/`0`),
-/// `None` for anything else (an unparseable activation reads as inherit).
+/// Parse a flat override value as a bool (`true`/`on`/`1`,
+/// `false`/`off`/`0`), `None` for anything else (an unparseable
+/// activation reads as inherit). `on`/`off` mirror the UI's tri-state
+/// vocabulary so either form round-trips through the override tiers.
 pub fn parse_bool(value: &str) -> Option<bool> {
     match value.trim() {
-        "true" | "1" => Some(true),
-        "false" | "0" => Some(false),
+        "true" | "on" | "1" => Some(true),
+        "false" | "off" | "0" => Some(false),
         _ => None,
     }
 }
