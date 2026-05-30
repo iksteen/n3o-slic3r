@@ -41,6 +41,27 @@ pub fn plugin_set_enabled(
     Ok(())
 }
 
+/// Set a plugin's **global** activation (the panel's on/off toggle) and
+/// persist it to `config.toml`. This is the global tier — per-project /
+/// per-plate overrides still win over it. Distinct from
+/// `plugin_set_enabled`, which flips the session **health** flag.
+#[tauri::command]
+pub fn plugin_set_global_enabled(
+    name: String,
+    enabled: bool,
+    host: State<'_, PluginHostState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    // Persist first, then update the live host: if the config write
+    // fails, disk and memory both stay at the prior value (consistent
+    // and retryable) rather than the session honoring a toggle that
+    // won't survive restart.
+    crate::core::config::set_plugin_enabled(&name, enabled).map_err(|e| e.to_string())?;
+    lock_host(&host).set_global_enabled(&name, enabled);
+    let _ = app.emit(CHANGED_EVENT, ());
+    Ok(())
+}
+
 #[tauri::command]
 pub fn plugin_reload(
     name: String,

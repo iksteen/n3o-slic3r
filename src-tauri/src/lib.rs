@@ -152,10 +152,13 @@ pub fn run() {
             // Loading runs each plugin's Lua top level in its sandbox;
             // a load failure keeps the plugin in the host as errored.
             let bundled_plugins = resource_root(app, "N3O_PLUGIN_ROOT", "plugins");
-            let plugin_host = core::plugin::PluginHost::load(&[
+            let mut plugin_host = core::plugin::PluginHost::load(&[
                 bundled_plugins,
                 core::plugin::user_plugins_dir(),
             ]);
+            // Seed the global activation tier from config.toml so a
+            // user's disable survives restart (and suppresses on send).
+            plugin_host.apply_global_enabled(core::config::load().plugins.enabled);
             app.manage(Arc::new(Mutex::new(plugin_host)));
             tracing::info!("plugin host loaded");
 
@@ -257,6 +260,7 @@ pub fn run() {
             core::driver::commands::driver_command,
             core::plugin::commands::plugin_list,
             core::plugin::commands::plugin_set_enabled,
+            core::plugin::commands::plugin_set_global_enabled,
             core::plugin::commands::plugin_reload,
         ])
         .run(tauri::generate_context!())

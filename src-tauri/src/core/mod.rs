@@ -8,6 +8,7 @@
 
 pub mod cascade;
 pub mod cascade_adapter;
+pub mod config;
 pub mod driver;
 pub mod filament;
 pub mod gcode;

@@ -86,20 +86,29 @@ a whole-job send (document the boundary).
    enforced for pre/post-slice (model from the slice context) and
    pre-send (model resolved from the plate's instance). pre-send carries
    no per-plate activation (a send is whole-job) — that and the global
-   tier land in step 3. **Transient gap until step 3:** with no global
-   tier yet, a plugin "disabled" globally in the panel still runs at
-   send time (pre-send has only the empty activation map); only
-   per-plate/project *overrides* suppress it today, and only on the
-   slice hooks. Not final behaviour.
-3. Global plugin-state persistence; resolved plugin-setting values
-   handed to hooks (replacing the manifest-default reads in 8-5..8-7).
-   **Unify, don't duplicate:** step 2's `resolve_plugin_activation`
-   hand-rolls the user→project→object tier-walk + TOML parse for the
-   `.enabled` flag. Plugin settings (`plugin.<name>.<key>`, typed) ride
-   the *same* tiers with the same precedence and adapter-bypass — extract
-   one `plugin.*`-namespace resolver returning a typed map, with
-   `.enabled` as a consumer, rather than copying the walk.
+   tier land in step 3.
+3. **Global enable/disable layer — ✅ done (settings-value half open).**
+   The global activation tier now lives in
+   `$XDG_CONFIG_HOME/n3o-slic3r/config.toml` (`core/config.rs`,
+   `[plugins.enabled]` name→bool). The host holds a `global_enabled`
+   map, seeded from config at startup (`lib.rs`) and updated by the
+   `plugin_set_global_enabled` command (writes config + emits
+   `plugin:changed`). `is_active` resolves **override tier → global tier
+   → manifest default (true)**, so a globally-disabled plugin is skipped
+   on **both** slice and send (the step-2 "still runs on send" gap is
+   closed — pre-send dispatch goes through the host, which applies the
+   global tier). `PluginSummary` gained `globally_enabled` (the panel
+   toggle's state, separate from the `enabled` health flag).
+   - **Still open:** resolved plugin-*setting values* handed to hooks
+     (replacing the manifest-default reads in 8-5..8-7), and global
+     plugin *settings* in `config.toml`. **Unify, don't duplicate:**
+     step 2's `resolve_plugin_activation` hand-rolls the
+     user→project→object tier-walk + TOML parse for the `.enabled` flag;
+     typed settings ride the *same* tiers — extract one `plugin.*`
+     resolver returning a typed map (with `.enabled` as one consumer)
+     rather than copying the walk.
 4. Frontend: Plugins panel + settings category + per-scope controls.
+   `plugin_set_global_enabled` is the panel toggle's backend.
 
 **Acceptance criteria.**
 

@@ -76,7 +76,14 @@ pub struct PluginSummary {
     /// (`"global"` / `"project"` / `"plate"`), canonical order. The
     /// panel offers a control only at these scopes.
     pub scopes: Vec<String>,
+    /// **Health**: loaded and not auto-disabled by a runtime error. A
+    /// `false` here with a `last_error` is the errored state; reload to
+    /// recover. Distinct from `globally_enabled`.
     pub enabled: bool,
+    /// **Global activation**: the user's persisted on/off for this
+    /// plugin (the panel toggle), default true. A healthy plugin with
+    /// `globally_enabled = false` simply doesn't run.
+    pub globally_enabled: bool,
     pub last_error: Option<String>,
 }
 
@@ -116,10 +123,11 @@ fn printer_matches(compat: &PrinterCompat, model: &str) -> bool {
 
 /// Whether a plugin may run under `gate`: it must be **healthy** (loaded
 /// and not auto-disabled by an error), **printer-compatible** with the
-/// gate's model (when one is supplied), and **activated** (its
-/// `plugin.<name>.enabled` resolves true, defaulting to true when the
-/// gate doesn't mention it). Hook membership is checked separately.
-fn is_active(p: &LoadedPlugin, gate: &DispatchGate) -> bool {
+/// gate's model (when one is supplied), and **activated**. Activation
+/// resolves the per-slice override tier (`gate.activation`) over the
+/// `global` tier (the host's persisted map), over the manifest default
+/// (true). Hook membership is checked separately.
+fn is_active(p: &LoadedPlugin, gate: &DispatchGate, global: &BTreeMap<String, bool>) -> bool {
     if !p.enabled || p.runtime.is_none() {
         return false;
     }
@@ -128,7 +136,11 @@ fn is_active(p: &LoadedPlugin, gate: &DispatchGate) -> bool {
             return false;
         }
     }
-    gate.activation.get(&p.manifest.name).copied().unwrap_or(true)
+    gate.activation
+        .get(&p.manifest.name)
+        .or_else(|| global.get(&p.manifest.name))
+        .copied()
+        .unwrap_or(true)
 }
 
 /// Owns every discovered plugin and dispatches hooks across them.
@@ -136,6 +148,12 @@ pub struct PluginHost {
     /// Name-sorted; later-discovered roots override earlier ones on a
     /// name clash (user plugins shadow bundled ones).
     plugins: Vec<LoadedPlugin>,
+    /// Global per-plugin activation, keyed by name — the lowest
+    /// activation tier (under per-project / per-plate overrides),
+    /// persisted in `config.toml`. A plugin absent here uses its
+    /// manifest default (enabled). This is **activation**, separate from
+    /// a plugin's **health** (`LoadedPlugin.enabled`).
+    global_enabled: BTreeMap<String, bool>,
 }
 
 impl PluginHost {
@@ -144,6 +162,7 @@ impl PluginHost {
     pub fn empty() -> Self {
         Self {
             plugins: Vec::new(),
+            global_enabled: BTreeMap::new(),
         }
     }
 
@@ -181,6 +200,7 @@ impl PluginHost {
         }
         Self {
             plugins: by_name.into_values().collect(),
+            global_enabled: BTreeMap::new(),
         }
     }
 
@@ -206,7 +226,7 @@ impl PluginHost {
         for i in 0..self.plugins.len() {
             {
                 let p = &self.plugins[i];
-                if !is_active(p, gate) || !p.manifest.hooks.contains(&kind) {
+                if !is_active(p, gate, &self.global_enabled) || !p.manifest.hooks.contains(&kind) {
                     continue;
                 }
             }
@@ -244,7 +264,25 @@ impl PluginHost {
     pub fn any_active_hook(&self, kind: HookKind, gate: &DispatchGate) -> bool {
         self.plugins
             .iter()
-            .any(|p| is_active(p, gate) && p.manifest.hooks.contains(&kind))
+            .any(|p| is_active(p, gate, &self.global_enabled) && p.manifest.hooks.contains(&kind))
+    }
+
+    /// Set one plugin's **global** activation (the persisted lowest
+    /// tier). In-memory only — the command layer persists to
+    /// `config.toml`. Affects every subsequent dispatch (slice + send).
+    pub fn set_global_enabled(&mut self, name: &str, enabled: bool) {
+        self.global_enabled.insert(name.to_string(), enabled);
+    }
+
+    /// Replace the whole global-activation map (startup, from
+    /// `config.toml`).
+    pub fn apply_global_enabled(&mut self, map: BTreeMap<String, bool>) {
+        self.global_enabled = map;
+    }
+
+    /// A plugin's resolved global activation (default true when unset).
+    pub fn globally_enabled(&self, name: &str) -> bool {
+        self.global_enabled.get(name).copied().unwrap_or(true)
     }
 
     /// Summaries for the Plugins panel.
@@ -261,6 +299,7 @@ impl PluginHost {
                 },
                 scopes: p.manifest.scopes.iter().map(|s| s.as_str().to_string()).collect(),
                 enabled: p.enabled,
+                globally_enabled: self.global_enabled.get(&p.manifest.name).copied().unwrap_or(true),
                 last_error: p.last_error.clone(),
             })
             .collect()
@@ -603,6 +642,36 @@ mod tests {
             host.dispatch_gated(&StubHook, "x".into(), &DispatchGate::all()),
             "x-p"
         );
+    }
+
+    #[test]
+    fn global_disable_skips_plugin_and_override_re_enables() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(
+            tmp.path(),
+            "p",
+            r#"["post_slice"]"#,
+            r#"function on_post_slice(s) return s .. "-p" end"#,
+        );
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+
+        // Globally disabled → skipped even under a permissive gate.
+        host.set_global_enabled("p", false);
+        assert_eq!(host.dispatch(&StubHook, "x".into()), "x");
+        assert!(!host.any_active_hook(HookKind::PostSlice, &DispatchGate::all()));
+        assert!(!host.list()[0].globally_enabled);
+
+        // A per-slice override (project/plate tier) wins over the global
+        // tier and re-enables it.
+        let on = DispatchGate {
+            printer_model: None,
+            activation: [("p".to_string(), true)].into_iter().collect(),
+        };
+        assert_eq!(host.dispatch_gated(&StubHook, "x".into(), &on), "x-p");
+
+        // Re-enabling globally runs it again under the permissive gate.
+        host.set_global_enabled("p", true);
+        assert_eq!(host.dispatch(&StubHook, "x".into()), "x-p");
     }
 
     #[test]
