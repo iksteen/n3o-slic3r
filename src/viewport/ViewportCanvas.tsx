@@ -420,6 +420,17 @@ export function ViewportCanvas({
           </button>
         </div>
       </div>
+      <div className="gizmo-hint pointer-events-none">
+        <span className="axes" aria-label="Axes">
+          <span className="axis axis-x">X</span>
+          <span className="axis axis-y">Y</span>
+          <span className="axis axis-z">Z</span>
+        </span>
+        <span className="gizmo-hint-sep" aria-hidden>
+          ·
+        </span>
+        Drag · LMB rotate · RMB pan · scroll zoom
+      </div>
       <div className="absolute bottom-2 right-2 flex flex-col gap-1 pointer-events-none">
         {toasts.map((t) => (
           <div

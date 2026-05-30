@@ -4,7 +4,7 @@
 // Per-plate handle cache so plate-switching while in preview
 // mode flips to the cached preview instead of re-loading. Also
 // listens for the `slice:plate_finished` event to auto-load the
-// gcode + (optionally) auto-switch the App's mode.
+// gcode and fire `onPreviewReady` so App can switch to preview.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -24,13 +24,11 @@ export interface SlicePreviewBridge {
   /** Preview-load response for the active plate. `null` when
    * no slice has finished for the active plate yet. */
   activePreview: PreviewLoadResponse | null;
-  /** Auto-switch the App's mode to preview when the slice
-   * finishes. Set by App.tsx based on whether the user has
-   * manually toggled out of preview during this run. */
-  enableAutoSwitch: (enabled: boolean) => void;
-  /** Fires when a fresh preview lands. App.tsx flips
-   * `mode = "preview"` from this when auto-switch is enabled. */
-  onPreviewReady: (callback: () => void) => void;
+  /** Fires when a fresh preview lands, with the plate it was sliced
+   * for. App.tsx flips `mode = "preview"` from this — but only when
+   * that plate is the active one, so a slice finishing for a tab the
+   * user has navigated away from doesn't yank the view. */
+  onPreviewReady: (callback: (plateId: number) => void) => void;
   /** Drop the cached preview for a given plate. Called when
    * removing a plate from the project. */
   forgetPlate: (plateId: number) => void;
@@ -45,8 +43,7 @@ export function useSlicePreviewBridge(
   const cacheRef = useRef<Map<number, PreviewLoadResponse>>(new Map());
   const [tick, setTick] = useState(0); // force re-render when cache mutates
 
-  const autoSwitchRef = useRef<boolean>(true);
-  const readyCallbackRef = useRef<(() => void) | null>(null);
+  const readyCallbackRef = useRef<((plateId: number) => void) | null>(null);
 
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
@@ -69,8 +66,8 @@ export function useSlicePreviewBridge(
             .then((res) => {
               cacheRef.current.set(plateId, res);
               setTick((t) => t + 1);
-              if (autoSwitchRef.current && readyCallbackRef.current) {
-                readyCallbackRef.current();
+              if (readyCallbackRef.current) {
+                readyCallbackRef.current(plateId);
               }
             })
             .catch((err) =>
@@ -96,13 +93,12 @@ export function useSlicePreviewBridge(
   const activePreview =
     activePlateId != null ? cacheRef.current.get(activePlateId) ?? null : null;
 
-  const enableAutoSwitch = useCallback((enabled: boolean) => {
-    autoSwitchRef.current = enabled;
-  }, []);
-
-  const onPreviewReady = useCallback((callback: () => void) => {
-    readyCallbackRef.current = callback;
-  }, []);
+  const onPreviewReady = useCallback(
+    (callback: (plateId: number) => void) => {
+      readyCallbackRef.current = callback;
+    },
+    [],
+  );
 
   const forgetPlate = useCallback((plateId: number) => {
     const prior = cacheRef.current.get(plateId);
@@ -113,5 +109,5 @@ export function useSlicePreviewBridge(
     }
   }, []);
 
-  return { activePreview, enableAutoSwitch, onPreviewReady, forgetPlate };
+  return { activePreview, onPreviewReady, forgetPlate };
 }

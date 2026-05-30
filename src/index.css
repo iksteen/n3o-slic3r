@@ -326,6 +326,127 @@
   }
   .plate-tab-add:hover { background: var(--surface); color: var(--text); }
 
+  /* ─────────── Viewport overlay ─────────── */
+  /* Axis colors + the lower-left gizmo hint, ported from the design's
+   * `.gizmo-hint` block in docs/design/styles.css. Sits over the
+   * Three.js canvas inside the `relative` viewport container. */
+  .axis-x { color: oklch(0.62 0.21 25); }
+  .axis-y { color: oklch(0.62 0.18 145); }
+  .axis-z { color: oklch(0.62 0.18 235); }
+
+  .gizmo-hint {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-dim);
+    padding: 4px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: var(--shadow-sm);
+  }
+  .gizmo-hint .axes { display: inline-flex; gap: 8px; }
+  .gizmo-hint .axis { font-weight: 600; }
+  .gizmo-hint-sep { opacity: 0.45; }
+
+  /* ─────────── Slicing progress — non-blocking corner window ───────────
+   * Ported from the design's `.slicing-window` block (docs/design/
+   * styles.css). Floats over the viewport's lower-left while a slice
+   * is in flight; `pointer-events: none` so it never traps canvas
+   * interaction. The Cancel control stays in the topbar — this window
+   * is read-only progress. */
+  .slicing-window {
+    position: absolute;
+    left: 12px;
+    bottom: 50px;
+    z-index: 12;
+    width: 248px;
+    padding: 11px 13px 12px;
+    background: color-mix(in oklch, var(--surface) 88%, transparent);
+    -webkit-backdrop-filter: blur(10px) saturate(1.3);
+    backdrop-filter: blur(10px) saturate(1.3);
+    border: 1px solid var(--border-strong);
+    border-radius: 9px;
+    box-shadow: var(--shadow-lg);
+    animation: slicing-window-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
+    pointer-events: none;
+  }
+  @keyframes slicing-window-in {
+    from { opacity: 0; transform: translateY(6px) scale(0.98); }
+    to   { opacity: 1; transform: none; }
+  }
+  .slicing-window-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 9px;
+  }
+  .slicing-window-spinner {
+    width: 11px;
+    height: 11px;
+    flex-shrink: 0;
+    border: 1.6px solid color-mix(in oklch, var(--accent) 28%, transparent);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: slicing-window-spin 0.7s linear infinite;
+  }
+  @keyframes slicing-window-spin { to { transform: rotate(360deg); } }
+  .slicing-window-title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    color: var(--text);
+  }
+  .slicing-window-count {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+  .slicing-window-pct {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--accent-text);
+    font-variant-numeric: tabular-nums;
+  }
+  .slicing-window-track {
+    height: 4px;
+    background: var(--surface-3);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .slicing-window-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 0.12s linear;
+  }
+  .slicing-window-stages {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    margin-top: 9px;
+  }
+  .slicing-window-stage {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    color: var(--text-dim);
+    opacity: 0.5;
+    transition: color 0.2s, opacity 0.2s;
+  }
+  .slicing-window-stage.done { color: var(--text-muted); opacity: 0.85; }
+  .slicing-window-stage.active {
+    color: var(--accent-text);
+    opacity: 1;
+    font-weight: 600;
+  }
+
   /* ─────────── Settings panel chrome ─────────── */
   .sp-host {
     display: grid;

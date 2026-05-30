@@ -159,7 +159,7 @@ export function SendControls({
         type="button"
         onClick={() => void handleSend()}
         disabled={!sendEnabled}
-        className="px-2 py-1 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 rounded text-xs font-medium text-white"
+        className="tb-btn primary"
         title={
           sendEnabled
             ? "Send to printer"
@@ -174,7 +174,7 @@ export function SendControls({
         type="button"
         onClick={() => void handleExport()}
         disabled={!exportEnabled}
-        className="px-2 py-1 border border-border rounded text-xs hover:bg-surface-2 disabled:opacity-40"
+        className="tb-btn"
         title="Save the .gcode.3mf bundle we'd send to disk (diagnostic)"
       >
         Export

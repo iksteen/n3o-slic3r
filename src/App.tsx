@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ViewportCanvas } from "./viewport/ViewportCanvas";
 import type { GizmoMode } from "./viewport/types";
 import { SlicePanel } from "./slice/SlicePanel";
+import { SlicingWindow } from "./slice/SlicingWindow";
+import { useSliceJob } from "./slice/useSliceJob";
 import { useLastSliceOutput } from "./slice/useLastSliceOutput";
 import { PlateTabs } from "./plates/PlateTabs";
 import { useProjectSession } from "./project/useProjectSession";
@@ -34,6 +36,13 @@ function App() {
   // survives the unmount/remount ViewportCanvas undergoes on
   // prepare↔preview↔devices switches.
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>("Translate");
+  // Object count frozen at the moment a slice is submitted — what the
+  // backend actually snapshots and slices (build_slice_input). Held
+  // here so the progress window's count stays put across tab switches
+  // and event timing, rather than tracking the live front tab. `null`
+  // until the first slice this session (and on a resume-from-reload,
+  // which bypasses the submit path — handled by the lookup fallback).
+  const [sliceObjectCount, setSliceObjectCount] = useState<number | null>(null);
   const session = useProjectSession();
   const recovery = useAutosaveRecoveryGate();
   const printers = usePrinterInstances();
@@ -57,6 +66,21 @@ function App() {
     : null;
 
   const bridge = useSlicePreviewBridge(activePlateId ?? null);
+  // Slice-job state lives here (not in SlicePanel) so the topbar button
+  // and the floating SlicingWindow over the canvas read one job, and so
+  // the event subscription survives the topbar unmounting in Devices.
+  const slice = useSliceJob();
+  // Resume-only fallback for the progress window's object count: on a
+  // reload mid-slice the submit path didn't run, so `sliceObjectCount`
+  // is null — look the slicing plate up by the resumed job's plate_id.
+  // (`plate_id` is null only in the brief pre-PlateStarted window.) In
+  // the normal flow `sliceObjectCount` wins and this isn't consulted.
+  const slicingPlate =
+    slice.state.plate_id != null
+      ? (session.snapshot?.plates.find(
+          (p) => p.plate_id === slice.state.plate_id,
+        ) ?? null)
+      : null;
   const lastSliceOutput = useLastSliceOutput();
   const lastSliceOutputPath =
     activePlateId != null ? lastSliceOutput.pathForPlate(activePlateId) : null;
@@ -84,27 +108,26 @@ function App() {
   const showPreview = mode === "preview" && canPreview;
   const showDevices = mode === "devices";
 
-  // Auto-switch to preview on slice completion — unless the user has
-  // manually toggled out of preview this session, or is currently in
-  // the Devices monitor (a background/queued slice finishing must not
-  // yank them out of the fleet view). The functional updater reads the
-  // live mode rather than a closed-over copy.
-  const userToggledOutRef = useRef(false);
+  // Auto-switch to preview on slice completion — but only for the plate
+  // the user is actually looking at. A slice finishing for a tab they
+  // switched away from must not flip the view (the active plate has no
+  // preview, so "preview" mode would render nothing), and a
+  // background/queued slice finishing must not yank them out of the
+  // Devices monitor. `activePlateId` is in the deps so the callback
+  // always closes over the current active plate; the functional updater
+  // reads the live mode rather than a closed-over copy.
   useEffect(() => {
-    bridge.enableAutoSwitch(!userToggledOutRef.current);
-    bridge.onPreviewReady(() => {
-      if (userToggledOutRef.current) return;
+    bridge.onPreviewReady((plateId) => {
+      if (plateId !== activePlateId) return;
       setMode((current) => (current === "devices" ? current : "preview"));
     });
-  }, [bridge]);
+  }, [bridge, activePlateId]);
 
   const goPrepare = (): void => {
-    userToggledOutRef.current = true;
     setMode("scene");
   };
   const goPreview = (): void => {
     if (!canPreview) return;
-    userToggledOutRef.current = false;
     setMode("preview");
   };
 
@@ -123,11 +146,9 @@ function App() {
       if ((el as HTMLElement | null)?.isContentEditable) return;
       setMode((current) => {
         if (current === "preview") {
-          userToggledOutRef.current = true;
           return "scene";
         }
         if (!canPreview) return current;
-        userToggledOutRef.current = false;
         return "preview";
       });
     };
@@ -235,6 +256,17 @@ function App() {
             <SlicePanel
               snapshot={session.snapshot}
               activePlate={activePlate}
+              state={slice.state}
+              start={() => {
+                // Freeze the count for the plate being sliced (the
+                // active plate — slice_active_plate targets it) at
+                // submit time, so the progress window shows what's
+                // actually being sliced regardless of later tab
+                // switches.
+                setSliceObjectCount(activePlate?.objects.length ?? 0);
+                return slice.start();
+              }}
+              cancel={slice.cancel}
             />
             <SendControls
               printerIdentity={printerIdentity}
@@ -289,6 +321,15 @@ function App() {
                 onGizmoMode={setGizmoMode}
               />
             )}
+            {/* Floating slice-progress window — positioned against this
+                `relative` <main>, lower-left, over whichever canvas is
+                active. Renders only while a slice is in flight. */}
+            <SlicingWindow
+              state={slice.state}
+              objectCount={
+                sliceObjectCount ?? slicingPlate?.objects.length ?? 0
+              }
+            />
           </main>
           {!showPreview && (
             <SettingsPanelHost
