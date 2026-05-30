@@ -17,13 +17,20 @@ fn main() {
         std::process::exit(2);
     }
     let model_path = PathBuf::from(&args[1]);
-    let out_path = args.get(2).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp/out.gcode"));
+    let out_path = args
+        .get(2)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp/out.gcode"));
 
     // Resources dir is the OrcaSlicer resources/ tree. Only needed if you load
     // STEP files or use font embossing — STL/3MF works without it.
-    let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../external/OrcaSlicer/resources");
-    let resources = if resources.exists() { Some(resources) } else { None };
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../external/OrcaSlicer/resources");
+    let resources = if resources.exists() {
+        Some(resources)
+    } else {
+        None
+    };
 
     init(resources.as_deref(), 3).expect("init failed");
 
@@ -32,7 +39,9 @@ fn main() {
     // load_with_config seeds the config from the file's embedded settings
     // when present (3MF carries a full printer profile). STL/OBJ/STEP have
     // no embedded config and slice against FullPrintConfig defaults.
-    model.load_with_config(&model_path, &mut config).expect("model load");
+    model
+        .load_with_config(&model_path, &mut config)
+        .expect("model load");
     // Override anything afterwards if needed:
     //   config.set("layer_height", "0.2")?;
 

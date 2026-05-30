@@ -22,7 +22,7 @@ use super::registry::{DriverRegistry, DriverSummary};
 use super::snapmaker::{U1Config, U1Driver};
 use super::status::PrinterStatus;
 use super::traits::{
-    Driver, DriverConfig, DriverId, DriverKind, SendHandle, SendPayload, PrinterCommand,
+    Driver, DriverConfig, DriverId, DriverKind, PrinterCommand, SendHandle, SendPayload,
 };
 use crate::core::project::{PlateId, Project};
 use crate::core::slice::pre_slice_gate::{ams_bindings_for_plate, ams_mapping_for_plate};
@@ -67,10 +67,7 @@ fn spawn_status_bridge(
             if app
                 .emit(
                     "driver:status_update",
-                    StatusUpdateEvent {
-                        driver_id,
-                        status,
-                    },
+                    StatusUpdateEvent { driver_id, status },
                 )
                 .is_err()
             {
@@ -101,9 +98,7 @@ fn build_driver(id: DriverId, config: DriverConfig) -> Box<dyn Driver> {
         DriverConfig::Bambu { host, access_code } => {
             Box::new(BambuDriver::new(id, BambuConfig { host, access_code }))
         }
-        DriverConfig::U1 { host, port } => {
-            Box::new(U1Driver::new(id, U1Config { host, port }))
-        }
+        DriverConfig::U1 { host, port } => Box::new(U1Driver::new(id, U1Config { host, port })),
     }
 }
 
@@ -299,8 +294,8 @@ async fn wrap_gcode_as_3mf(
     ams_bindings: Vec<AmsBinding>,
 ) -> Result<Vec<u8>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let gcode_bytes = std::fs::read(&gcode_path)
-            .map_err(|e| format!("read gcode at {gcode_path}: {e}"))?;
+        let gcode_bytes =
+            std::fs::read(&gcode_path).map_err(|e| format!("read gcode at {gcode_path}: {e}"))?;
         let mut input = fixture_input(plate_id, gcode_bytes);
         // Inject the per-plate AMS slot map. For Bambi
         // standalone (1 slot, no AMS) this is `[{material: 1,
@@ -315,8 +310,7 @@ async fn wrap_gcode_as_3mf(
             .map_err(|e| format!("create temp bundle: {e}"))?;
         write_sliced_3mf(&input, tmp.path())
             .map_err(|e| format!("write .gcode.3mf bundle: {e}"))?;
-        std::fs::read(tmp.path())
-            .map_err(|e| format!("read back .gcode.3mf bundle: {e}"))
+        std::fs::read(tmp.path()).map_err(|e| format!("read back .gcode.3mf bundle: {e}"))
     })
     .await
     .map_err(|e| format!("wrap task join: {e}"))?
@@ -328,8 +322,7 @@ async fn wrap_gcode_as_3mf(
 /// responsive.
 async fn read_gcode_bytes(gcode_path: String) -> Result<Vec<u8>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        std::fs::read(&gcode_path)
-            .map_err(|e| format!("read gcode at {gcode_path}: {e}"))
+        std::fs::read(&gcode_path).map_err(|e| format!("read gcode at {gcode_path}: {e}"))
     })
     .await
     .map_err(|e| format!("read task join: {e}"))?
@@ -339,10 +332,7 @@ async fn read_gcode_bytes(gcode_path: String) -> Result<Vec<u8>, String> {
 /// the send/dry-send path. Returns an empty vec when the plate isn't
 /// found or has no mappings — both safe defaults the firmware
 /// tolerates on a single-slot, no-AMS print.
-fn collect_ams_bindings(
-    project: &Mutex<Project>,
-    plate_id: u32,
-) -> Vec<AmsBinding> {
+fn collect_ams_bindings(project: &Mutex<Project>, plate_id: u32) -> Vec<AmsBinding> {
     let Ok(p) = project.lock() else {
         return Vec::new();
     };
@@ -395,8 +385,7 @@ pub async fn driver_export_plate(
     let ams = collect_ams_bindings(&project, plate_id);
     let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
     tauri::async_runtime::spawn_blocking(move || {
-        std::fs::write(&output_path, &bytes)
-            .map_err(|e| format!("write {output_path}: {e}"))
+        std::fs::write(&output_path, &bytes).map_err(|e| format!("write {output_path}: {e}"))
     })
     .await
     .map_err(|e| format!("export task join: {e}"))?
@@ -435,8 +424,7 @@ pub async fn driver_send_plate(
     let payload = match kind {
         DriverKind::Bambu => {
             let ams = collect_ams_bindings(&project, plate_id);
-            let (use_ams, ams_mapping, ams_mapping2) =
-                collect_ams_mapping(&project, plate_id);
+            let (use_ams, ams_mapping, ams_mapping2) = collect_ams_mapping(&project, plate_id);
             let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
             SendPayload::Gcode3mf {
                 bytes,

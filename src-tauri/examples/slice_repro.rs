@@ -143,7 +143,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("---");
     eprintln!("total events: {}", events.len());
     for ev in events.iter() {
-        if let SliceEvent::JobFailed { plate_id, error, .. } = ev {
+        if let SliceEvent::JobFailed {
+            plate_id, error, ..
+        } = ev
+        {
             eprintln!("JOB FAILED on plate {plate_id}");
             eprintln!("SliceError variant: {error:?}");
             eprintln!("Display: {error}");

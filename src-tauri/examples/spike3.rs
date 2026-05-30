@@ -60,7 +60,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "nozzle_diameter",
     ] {
         let v = config.get(key).unwrap_or_else(|_| "<missing>".into());
-        let display = if v.len() > 80 { format!("{}…", &v[..80]) } else { v };
+        let display = if v.len() > 80 {
+            format!("{}…", &v[..80])
+        } else {
+            v
+        };
         eprintln!("  {key:30} = {display}");
     }
 

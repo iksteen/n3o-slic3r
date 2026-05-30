@@ -15,15 +15,15 @@
 //! later if Phase 4's UI shows the resolver hot path.
 
 use n3o_slic3r_lib::core::cascade::{resolve_with_overrides, Cascade, OverrideTiers};
-use n3o_slic3r_lib::core::printer::lookup_instance;
-use n3o_slic3r_lib::core::profile_library::compose_cascade;
-use std::collections::BTreeMap;
 use n3o_slic3r_lib::core::cascade_adapter::{adapt_with_overrides, Manifest};
 use n3o_slic3r_lib::core::filament::FilamentProfile;
+use n3o_slic3r_lib::core::printer::lookup_instance;
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
+use n3o_slic3r_lib::core::profile_library::compose_cascade;
 use n3o_slic3r_lib::core::project::SlicingContext;
 use n3o_slic3r_lib::core::scene::build_plate::BuildPlate;
 use slic3r_ffi::init;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Once;
 use std::time::{Duration, Instant};
@@ -103,7 +103,11 @@ fn four_slot_context() -> SlicingContext {
             supported_build_plates: vec!["Textured PEI".into()],
             toolheads: (0..4)
                 .map(|i| Toolhead {
-                    default_nozzle_diameter: if i % 2 == 0 { "0.4".into() } else { "0.6".into() },
+                    default_nozzle_diameter: if i % 2 == 0 {
+                        "0.4".into()
+                    } else {
+                        "0.6".into()
+                    },
                     hotend_type: "hardened_steel".into(),
                     max_temp: 300.0,
                 })

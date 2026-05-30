@@ -62,12 +62,8 @@ impl Context for SlicingContext {
             "plate.type" => Some(&self.plate.identity),
             "filament.type" => self.active_filament().map(|f| f.base_type.as_str()),
             "filament.name" => self.active_filament().map(|f| f.identity.as_str()),
-            "filament.vendor" => {
-                self.active_filament().and_then(|f| f.vendor.as_deref())
-            }
-            "filament.color" => {
-                self.active_filament().and_then(|f| f.color.as_deref())
-            }
+            "filament.vendor" => self.active_filament().and_then(|f| f.vendor.as_deref()),
+            "filament.color" => self.active_filament().and_then(|f| f.color.as_deref()),
             _ => None,
         }
     }
@@ -120,13 +116,15 @@ mod tests {
 
     #[test]
     fn canonical_a1_pla_pei_predicates() {
-        let ctx = SlicingContext::new(
-            a1_mini(),
-            textured_pei(),
-            vec![pla("PLA Cyan", "#0A2989")],
+        let ctx = SlicingContext::new(a1_mini(), textured_pei(), vec![pla("PLA Cyan", "#0A2989")]);
+        assert_eq!(
+            ctx.predicate_value("printer.model"),
+            Some("Bambu Lab A1 mini")
         );
-        assert_eq!(ctx.predicate_value("printer.model"), Some("Bambu Lab A1 mini"));
-        assert_eq!(ctx.predicate_value("plate.type"), Some("Textured PEI Plate"));
+        assert_eq!(
+            ctx.predicate_value("plate.type"),
+            Some("Textured PEI Plate")
+        );
         assert_eq!(ctx.predicate_value("filament.type"), Some("PLA"));
         assert_eq!(ctx.predicate_value("filament.name"), Some("PLA Cyan"));
         assert_eq!(ctx.predicate_value("filament.color"), Some("#0A2989"));
@@ -177,11 +175,7 @@ set.bed_temp = 65
             )
             .unwrap(),
         };
-        let ctx = SlicingContext::new(
-            a1_mini(),
-            textured_pei(),
-            vec![pla("PLA Cyan", "#0A2989")],
-        );
+        let ctx = SlicingContext::new(a1_mini(), textured_pei(), vec![pla("PLA Cyan", "#0A2989")]);
         let resolved = resolve(&cascade, &ctx);
         assert_eq!(
             resolved.get("bed_temp").map(|v| v.value.as_str()),

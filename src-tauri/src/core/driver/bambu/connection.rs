@@ -80,9 +80,7 @@ pub struct BambuDriver {
 
 impl BambuDriver {
     pub fn new(id: DriverId, config: BambuConfig) -> Self {
-        let initial = PrinterStatus::disconnected_for(DriverExtra::Bambu(
-            BambuExtra::default(),
-        ));
+        let initial = PrinterStatus::disconnected_for(DriverExtra::Bambu(BambuExtra::default()));
         let (status_tx, status_rx) = watch::channel(initial);
         Self {
             id,
@@ -102,7 +100,9 @@ impl BambuDriver {
     /// command. Wraps as a stringified u64 — Bambu expects
     /// string-typed sequence ids.
     fn next_sequence_id(&self) -> String {
-        self.sequence_counter.fetch_add(1, Ordering::SeqCst).to_string()
+        self.sequence_counter
+            .fetch_add(1, Ordering::SeqCst)
+            .to_string()
     }
 
     /// The serial-derived device id, available after a
@@ -177,10 +177,7 @@ impl Driver for BambuDriver {
         let _ = &self.raw_messages_rx;
 
         let status_tx_for_worker = self.status_tx.clone();
-        let worker_task = tokio::spawn(super::status::run_worker(
-            raw_rx,
-            status_tx_for_worker,
-        ));
+        let worker_task = tokio::spawn(super::status::run_worker(raw_rx, status_tx_for_worker));
         self.tasks.push(worker_task);
 
         // rumqttc event loop task (PR-7a-2).
@@ -249,14 +246,8 @@ impl Driver for BambuDriver {
                 ));
             }
         };
-        let client = self
-            .client
-            .clone()
-            .ok_or(DriverError::NotConnected)?;
-        let device_id = self
-            .device_id
-            .clone()
-            .ok_or(DriverError::NotConnected)?;
+        let client = self.client.clone().ok_or(DriverError::NotConnected)?;
+        let device_id = self.device_id.clone().ok_or(DriverError::NotConnected)?;
 
         // Unique remote name keeps concurrent sends from
         // colliding + makes it easy to grep server-side logs
@@ -429,9 +420,9 @@ impl Driver for BambuDriver {
                 }
             }
         };
-        tokio::time::timeout(deadline, wait).await.map_err(|_| {
-            DriverError::Protocol(format!("no ack for {verb} within 10s"))
-        })?
+        tokio::time::timeout(deadline, wait)
+            .await
+            .map_err(|_| DriverError::Protocol(format!("no ack for {verb} within 10s")))?
     }
 }
 
@@ -441,8 +432,7 @@ impl Driver for BambuDriver {
 fn state_satisfies(actual: &JobState, expected: &JobState) -> bool {
     match (actual, expected) {
         (JobState::Failed(_), JobState::Failed(_)) => true,
-        (JobState::Finished, JobState::Failed(_))
-        | (JobState::Failed(_), JobState::Finished) => {
+        (JobState::Finished, JobState::Failed(_)) | (JobState::Failed(_), JobState::Finished) => {
             // Stop ack can land as either Finished or Failed
             // depending on whether the printer finishes the
             // current layer before stopping.
@@ -705,10 +695,22 @@ mod tests {
         use crate::core::slice::pre_slice_gate::AmsMappingV2;
         let mapping: Vec<i8> = vec![0, 1, 2, 3];
         let mapping2: Vec<AmsMappingV2> = vec![
-            AmsMappingV2 { ams_id: 0, slot_id: 0 },
-            AmsMappingV2 { ams_id: 0, slot_id: 1 },
-            AmsMappingV2 { ams_id: 0, slot_id: 2 },
-            AmsMappingV2 { ams_id: 0, slot_id: 3 },
+            AmsMappingV2 {
+                ams_id: 0,
+                slot_id: 0,
+            },
+            AmsMappingV2 {
+                ams_id: 0,
+                slot_id: 1,
+            },
+            AmsMappingV2 {
+                ams_id: 0,
+                slot_id: 2,
+            },
+            AmsMappingV2 {
+                ams_id: 0,
+                slot_id: 3,
+            },
         ];
         let cmd = ProjectFileCommand {
             print: ProjectFileBody {

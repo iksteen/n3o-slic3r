@@ -26,9 +26,7 @@ use super::stats::{FullJobStats, PerLayerStats};
 
 /// Opaque handle issued by [`PreviewRegistry::insert`]. 1-based;
 /// `0` is reserved as "no preview".
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct PreviewHandle(pub u64);
 
@@ -80,11 +78,7 @@ impl PreviewRegistry {
     /// closure. Holds the registry lock for the closure's lifetime
     /// — keep the closure short. Returns whatever the closure
     /// returns, or `None` when the handle is unknown.
-    pub fn with<R>(
-        &self,
-        handle: PreviewHandle,
-        f: impl FnOnce(&LoadedPreview) -> R,
-    ) -> Option<R> {
+    pub fn with<R>(&self, handle: PreviewHandle, f: impl FnOnce(&LoadedPreview) -> R) -> Option<R> {
         let guard = self.slots.lock().ok()?;
         guard.get(&handle).map(f)
     }
@@ -149,8 +143,7 @@ mod tests {
         let r = PreviewRegistry::new();
         let h = r.alloc_id();
         r.insert(h, empty_preview());
-        let layer_count =
-            r.with(h, |p| p.job_stats.layer_count).expect("present");
+        let layer_count = r.with(h, |p| p.job_stats.layer_count).expect("present");
         assert_eq!(layer_count, 0);
         assert!(r.remove(h));
         assert!(r.with(h, |_| ()).is_none(), "removed slot is gone");

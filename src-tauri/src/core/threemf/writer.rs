@@ -79,7 +79,13 @@ pub fn write_3mf_with_extras(
     let mut zip = ZipWriter::new(file);
     let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
-    write_entry(&mut zip, "[Content_Types].xml", &content_types_xml(), opts, output)?;
+    write_entry(
+        &mut zip,
+        "[Content_Types].xml",
+        &content_types_xml(),
+        opts,
+        output,
+    )?;
     write_entry(&mut zip, "_rels/.rels", &rels_xml(), opts, output)?;
     write_entry(
         &mut zip,
@@ -244,7 +250,6 @@ impl Layout {
         }
         Layout { build_units }
     }
-
 }
 
 fn model_xml(project: &Project3mf) -> String {
@@ -332,8 +337,7 @@ fn model_xml(project: &Project3mf) -> String {
         match unit {
             BuildUnit::Solo { object_idx } => {
                 let object_id = *object_idx as u32 + 1;
-                let transform =
-                    transform_to_3mf_string(&project.objects[*object_idx].transform);
+                let transform = transform_to_3mf_string(&project.objects[*object_idx].transform);
                 out.push_str(&format!(
                     "  <item objectid=\"{object_id}\" transform=\"{transform}\" printable=\"1\"/>\n"
                 ));
@@ -344,9 +348,8 @@ fn model_xml(project: &Project3mf) -> String {
                 // Group transform is identity — per-component
                 // <component transform=> carries each volume's full
                 // world placement (see Pass 2 above).
-                let identity = transform_to_3mf_string(
-                    &crate::core::scene::transform::Transform::IDENTITY,
-                );
+                let identity =
+                    transform_to_3mf_string(&crate::core::scene::transform::Transform::IDENTITY);
                 out.push_str(&format!(
                     "  <item objectid=\"{group_resource_id}\" transform=\"{identity}\" printable=\"1\"/>\n"
                 ));

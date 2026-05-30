@@ -9,8 +9,8 @@
 //! and cmake builds libslic3r and the shim. Subsequent runs are fast.
 
 use slic3r_ffi::{
-    clear_log_sink, init, option_def, option_defs, set_log_sink, slice, version, Config,
-    ErrorKind, LogLevel, Model, OptType,
+    clear_log_sink, init, option_def, option_defs, set_log_sink, slice, version, Config, ErrorKind,
+    LogLevel, Model, OptType,
 };
 use std::path::PathBuf;
 use std::sync::Once;
@@ -96,33 +96,55 @@ fn option_scope_classifies_known_keys() {
     // layer_height is declared in PrintObjectConfig (FFF per-object) AND in
     // SLAPrintObjectConfig — bitmask should reflect both.
     let lh = option_def("layer_height").expect("layer_height");
-    assert!(lh.scope.is_object(),
-        "layer_height should be OBJECT-scoped, got {:?}", lh.scope);
+    assert!(
+        lh.scope.is_object(),
+        "layer_height should be OBJECT-scoped, got {:?}",
+        lh.scope
+    );
 
     // wall_filament is in PrintRegionConfig.
     let wf = option_def("wall_filament").expect("wall_filament");
-    assert!(wf.scope.is_region(),
-        "wall_filament should be REGION-scoped, got {:?}", wf.scope);
-    assert!(!wf.scope.is_object(),
-        "wall_filament should NOT be OBJECT-scoped, got {:?}", wf.scope);
+    assert!(
+        wf.scope.is_region(),
+        "wall_filament should be REGION-scoped, got {:?}",
+        wf.scope
+    );
+    assert!(
+        !wf.scope.is_object(),
+        "wall_filament should NOT be OBJECT-scoped, got {:?}",
+        wf.scope
+    );
 
     // gcode_flavor is in GCodeConfig, which is a parent of PrintConfig.
     let gf = option_def("gcode_flavor").expect("gcode_flavor");
-    assert!(gf.scope.is_print(),
-        "gcode_flavor should be PRINT-scoped, got {:?}", gf.scope);
-    assert!(!gf.scope.is_object(),
-        "gcode_flavor should NOT be OBJECT-scoped, got {:?}", gf.scope);
-    assert!(!gf.scope.is_region(),
-        "gcode_flavor should NOT be REGION-scoped, got {:?}", gf.scope);
+    assert!(
+        gf.scope.is_print(),
+        "gcode_flavor should be PRINT-scoped, got {:?}",
+        gf.scope
+    );
+    assert!(
+        !gf.scope.is_object(),
+        "gcode_flavor should NOT be OBJECT-scoped, got {:?}",
+        gf.scope
+    );
+    assert!(
+        !gf.scope.is_region(),
+        "gcode_flavor should NOT be REGION-scoped, got {:?}",
+        gf.scope
+    );
 
     // SLA-only example.
     let exp = option_def("exposure_time").expect("exposure_time");
-    assert!(exp.scope.is_sla_material(),
-        "exposure_time should be SLA_MATERIAL-scoped, got {:?}", exp.scope);
-    assert!(exp.scope.is_sla(),
-        "exposure_time should report is_sla()");
-    assert!(!exp.scope.is_fff(),
-        "exposure_time should NOT report is_fff()");
+    assert!(
+        exp.scope.is_sla_material(),
+        "exposure_time should be SLA_MATERIAL-scoped, got {:?}",
+        exp.scope
+    );
+    assert!(exp.scope.is_sla(), "exposure_time should report is_sla()");
+    assert!(
+        !exp.scope.is_fff(),
+        "exposure_time should NOT report is_fff()"
+    );
 }
 
 #[test]
@@ -180,7 +202,10 @@ fn coenums_have_default_values() {
             assert!(
                 d.enum_values.iter().any(|v| v == part),
                 "{}: default {:?} contains {:?} which is not in enum_values {:?}",
-                d.key, default, part, d.enum_values,
+                d.key,
+                default,
+                part,
+                d.enum_values,
             );
         }
     }
@@ -198,7 +223,9 @@ fn config_set_get_roundtrip() {
 fn config_set_unknown_key() {
     ensure_init();
     let mut cfg = Config::new().expect("Config::new");
-    let err = cfg.set("definitely_not_a_real_setting_12345", "1").unwrap_err();
+    let err = cfg
+        .set("definitely_not_a_real_setting_12345", "1")
+        .unwrap_err();
     assert_eq!(err.kind, ErrorKind::UnknownKey);
 }
 
@@ -228,7 +255,9 @@ fn config_validate_runs_cleanly() {
 fn model_load_missing_file_is_io_error() {
     ensure_init();
     let mut m = Model::new().expect("Model::new");
-    let err = m.load("/nonexistent/no_such_dir/no_such_file.stl").unwrap_err();
+    let err = m
+        .load("/nonexistent/no_such_dir/no_such_file.stl")
+        .unwrap_err();
     assert_eq!(err.kind, ErrorKind::Io);
 }
 
@@ -247,7 +276,8 @@ fn load_with_config_stl_keeps_defaults() {
     let mut cfg = Config::new().expect("Config::new");
     let before = cfg.get("layer_height").expect("get before");
     let mut m = Model::new().expect("Model::new");
-    m.load_with_config(test_stl(), &mut cfg).expect("load_with_config");
+    m.load_with_config(test_stl(), &mut cfg)
+        .expect("load_with_config");
     let after = cfg.get("layer_height").expect("get after");
     assert_eq!(before, after, "STL load should not modify config");
 }
@@ -328,10 +358,7 @@ fn log_sink_receives_records_emitted_during_slice() {
     let records: Arc<Mutex<Vec<(LogLevel, String)>>> = Arc::new(Mutex::new(Vec::new()));
     let records_for_cb = Arc::clone(&records);
     set_log_sink(move |level, msg| {
-        records_for_cb
-            .lock()
-            .unwrap()
-            .push((level, msg.to_owned()));
+        records_for_cb.lock().unwrap().push((level, msg.to_owned()));
     });
 
     // Drive a slice — libslic3r emits a handful of BOOST_LOG_TRIVIAL
@@ -401,7 +428,8 @@ fn log_sink_can_be_unregistered() {
     slice(&model, &config, &out2, |_, _| {}).expect("slice 2");
     let ticks_after_second = *counter.lock().unwrap();
     assert_eq!(
-        ticks_after_second, ticks_after_first,
+        ticks_after_second,
+        ticks_after_first,
         "callback fired after clear_log_sink (delta = {})",
         ticks_after_second - ticks_after_first,
     );
@@ -484,14 +512,15 @@ fn slice_progress_callbacks_are_per_call_no_cross_contamination() {
 /// on-disk artifact or hash to identical workloads.
 #[test]
 fn two_slices_in_separate_threads_serialize_cleanly() {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::thread;
 
     ensure_init();
 
-    let make_inputs = |layer_height: &'static str, out_name: &'static str|
-        -> (Model, Config, std::path::PathBuf) {
+    let make_inputs = |layer_height: &'static str,
+                       out_name: &'static str|
+     -> (Model, Config, std::path::PathBuf) {
         let mut model = Model::new().expect("Model::new");
         let mut config = Config::new().expect("Config::new");
         model

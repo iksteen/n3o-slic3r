@@ -44,7 +44,10 @@ impl MapContext {
         V: Into<String>,
     {
         Self {
-            map: iter.into_iter().map(|(k, v)| (k.into(), v.into())).collect(),
+            map: iter
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
         }
     }
 
@@ -99,8 +102,7 @@ pub fn format_when(conditions: &[Condition]) -> String {
                 let _ = write!(out, "{} = \"{}\"", cond.dimension, s);
             }
             ConditionValue::Array(items) => {
-                let quoted: Vec<String> =
-                    items.iter().map(|s| format!("\"{s}\"")).collect();
+                let quoted: Vec<String> = items.iter().map(|s| format!("\"{s}\"")).collect();
                 let _ = write!(out, "{} in [{}]", cond.dimension, quoted.join(", "));
             }
         }
@@ -266,7 +268,10 @@ set.bed_temp = 55
         let src = "[[rule]]\nwhen.filament.type = [\"PLA\", \"PETG\"]\nset.bed_temp = 55\n";
         let cascade = parse(src);
         let resolved = resolve(&cascade, &pla_pei_ctx());
-        assert_eq!(resolved.get("bed_temp").map(|v| v.value.as_str()), Some("55"));
+        assert_eq!(
+            resolved.get("bed_temp").map(|v| v.value.as_str()),
+            Some("55")
+        );
     }
 
     #[test]

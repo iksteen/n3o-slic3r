@@ -67,11 +67,19 @@ pub fn slicer_slice(model_path: String, out_path: String) -> SliceResult {
     match do_it() {
         Ok(()) => {
             tracing::info!(out = %out_path, "slice ok");
-            SliceResult { ok: true, out_path, error: None }
+            SliceResult {
+                ok: true,
+                out_path,
+                error: None,
+            }
         }
         Err(e) => {
             tracing::error!(error = %e, "slice failed");
-            SliceResult { ok: false, out_path, error: Some(format!("{e}")) }
+            SliceResult {
+                ok: false,
+                out_path,
+                error: Some(format!("{e}")),
+            }
         }
     }
 }

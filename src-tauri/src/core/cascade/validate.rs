@@ -146,7 +146,6 @@ pub fn validate_cascade(
                 }
             }
         }
-
     }
 
     if errors.is_empty() {
@@ -209,9 +208,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
             } else {
                 1
             };
-            curr[j] = (curr[j - 1] + 1)
-                .min(prev[j] + 1)
-                .min(prev[j - 1] + cost);
+            curr[j] = (curr[j - 1] + 1).min(prev[j] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }
@@ -299,8 +296,10 @@ set.bed_temperature_formula = \"by_first_filament\"
     fn empty_predicate_array_is_caught() {
         let src = "[[rule]]\nwhen.filament.type = []\nset.layer_height = 0.2\n";
         let errs = parse_and_validate(src).expect_err("empty array should be flagged");
-        let array_err = errs.iter().find(|e| matches!(e,
-            CascadeLoadError::InvalidShape { message, .. } if message.contains("empty array")));
+        let array_err = errs.iter().find(|e| {
+            matches!(e,
+            CascadeLoadError::InvalidShape { message, .. } if message.contains("empty array"))
+        });
         assert!(array_err.is_some(), "empty-array predicate is flagged");
     }
 

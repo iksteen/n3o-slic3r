@@ -34,14 +34,14 @@ fn main() {
     // mid-build (run 26332210186 failed at `'No space left on
     // device'` in MeshBoolean.cpp.o).
     println!("cargo:rerun-if-env-changed=N3O_SLIC3R_FFI_CMAKE_CONFIG");
-    let cmake_config = env::var("N3O_SLIC3R_FFI_CMAKE_CONFIG")
-        .unwrap_or_else(|_| "RelWithDebInfo".into());
+    let cmake_config =
+        env::var("N3O_SLIC3R_FFI_CMAKE_CONFIG").unwrap_or_else(|_| "RelWithDebInfo".into());
     let cmake_config = cmake_config.as_str();
 
     // ---- Sanity check: deps must be built ----
 
-    let deps_prefix = workspace_root
-        .join("external/OrcaSlicer/deps/build/OrcaSlicer_dep/usr/local");
+    let deps_prefix =
+        workspace_root.join("external/OrcaSlicer/deps/build/OrcaSlicer_dep/usr/local");
     if !deps_prefix.exists() {
         panic!(
             "OrcaSlicer's dependency tree is not built yet ({} missing).\n\
@@ -56,9 +56,12 @@ fn main() {
     std::fs::create_dir_all(&cmake_build_dir).expect("create cmake build dir");
     run(
         Command::new("cmake")
-            .arg("-S").arg(&manifest_dir)
-            .arg("-B").arg(&cmake_build_dir)
-            .arg("-G").arg("Ninja Multi-Config")
+            .arg("-S")
+            .arg(&manifest_dir)
+            .arg("-B")
+            .arg(&cmake_build_dir)
+            .arg("-G")
+            .arg("Ninja Multi-Config")
             .env("CMAKE_POLICY_VERSION_MINIMUM", "3.5"),
         "cmake configure",
     );
@@ -67,9 +70,12 @@ fn main() {
 
     run(
         Command::new("cmake")
-            .arg("--build").arg(&cmake_build_dir)
-            .arg("--config").arg(cmake_config)
-            .arg("--target").arg("slic3r_ffi"),
+            .arg("--build")
+            .arg(&cmake_build_dir)
+            .arg("--config")
+            .arg(cmake_config)
+            .arg("--target")
+            .arg("slic3r_ffi"),
         "cmake build slic3r_ffi",
     );
 
@@ -79,9 +85,18 @@ fn main() {
 
     let header = manifest_dir.join("ffi").join("slic3r_ffi.h");
     println!("cargo:rerun-if-changed={}", header.display());
-    println!("cargo:rerun-if-changed={}", manifest_dir.join("ffi/slic3r_ffi.cpp").display());
-    println!("cargo:rerun-if-changed={}", manifest_dir.join("ffi/nanosvg_impl.cpp").display());
-    println!("cargo:rerun-if-changed={}", manifest_dir.join("CMakeLists.txt").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("ffi/slic3r_ffi.cpp").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("ffi/nanosvg_impl.cpp").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("CMakeLists.txt").display()
+    );
 
     let bindings = bindgen::Builder::default()
         .header(header.to_string_lossy())
@@ -94,7 +109,9 @@ fn main() {
         .expect("failed to generate bindings for slic3r_ffi.h");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    bindings.write_to_file(out_dir.join("bindings.rs")).expect("write bindings.rs");
+    bindings
+        .write_to_file(out_dir.join("bindings.rs"))
+        .expect("write bindings.rs");
 
     // ---- Link directives ----
 
@@ -111,6 +128,8 @@ fn main() {
 }
 
 fn run(cmd: &mut Command, label: &str) {
-    let status = cmd.status().unwrap_or_else(|e| panic!("{label} failed to spawn: {e}"));
+    let status = cmd
+        .status()
+        .unwrap_or_else(|e| panic!("{label} failed to spawn: {e}"));
     assert!(status.success(), "{label} failed (exit {status:?})");
 }

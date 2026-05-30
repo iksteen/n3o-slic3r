@@ -167,8 +167,7 @@ pub struct Plate {
     /// `BTreeMap` (not `HashMap`) so the wire form stays deterministic
     /// for save/load + diff displays.
     #[serde(default)]
-    pub material_to_slot:
-        std::collections::BTreeMap<u8, crate::core::printer::SlotRef>,
+    pub material_to_slot: std::collections::BTreeMap<u8, crate::core::printer::SlotRef>,
 
     pub metadata: PlateMetadata,
 
@@ -392,8 +391,7 @@ mod tests {
         p.plates[0]
             .project_overrides
             .insert("layer_height".into(), "0.12".into());
-        p.user_overrides
-            .insert("travel_speed".into(), "300".into());
+        p.user_overrides.insert("travel_speed".into(), "300".into());
         p.file_metadata
             .insert("Title".into(), "Test Project".into());
 
@@ -411,7 +409,10 @@ mod tests {
             Some("0.12"),
         );
         assert_eq!(
-            parsed.user_overrides.get("travel_speed").map(|s| s.as_str()),
+            parsed
+                .user_overrides
+                .get("travel_speed")
+                .map(|s| s.as_str()),
             Some("300"),
         );
         assert_eq!(

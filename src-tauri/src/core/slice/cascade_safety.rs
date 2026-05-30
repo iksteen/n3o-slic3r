@@ -45,11 +45,7 @@ pub fn validate_resolved_cascade(
     // Acceleration envelope — without it, libslic3r's defaults
     // can exceed the printer's mechanical limits → skipped steps,
     // layer shift, possible belt damage.
-    require_positive_first(
-        resolved,
-        "machine_max_acceleration_extruding",
-        &mut issues,
-    );
+    require_positive_first(resolved, "machine_max_acceleration_extruding", &mut issues);
 
     // Nozzle temperature ≤ the active toolhead's max_temp. We
     // pick the FIRST toolhead's max_temp as the global ceiling —
@@ -57,12 +53,7 @@ pub fn validate_resolved_cascade(
     // when we add per-slot validation it goes through this same
     // function with an extra `slot` parameter.
     if let Some(max_temp) = printer.toolheads.first().map(|t| t.max_temp) {
-        require_temp_within(
-            resolved,
-            "nozzle_temperature",
-            max_temp,
-            &mut issues,
-        );
+        require_temp_within(resolved, "nozzle_temperature", max_temp, &mut issues);
         require_temp_within(
             resolved,
             "nozzle_temperature_initial_layer",
@@ -107,12 +98,7 @@ fn require_positive_first(resolved: &Resolved, key: &str, issues: &mut Vec<Strin
     }
 }
 
-fn require_temp_within(
-    resolved: &Resolved,
-    key: &str,
-    max_temp: f64,
-    issues: &mut Vec<String>,
-) {
+fn require_temp_within(resolved: &Resolved, key: &str, max_temp: f64, issues: &mut Vec<String>) {
     let Some(rv) = resolved.get(key) else {
         // Missing temp keys aren't safety-critical for the gate —
         // libslic3r enforces its own per-filament-profile range.
@@ -132,8 +118,8 @@ fn require_temp_within(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::cascade::{MatchingRule, ResolvedValue};
     use crate::core::cascade::SourceLocation;
+    use crate::core::cascade::{MatchingRule, ResolvedValue};
     use crate::core::printer::profile::{BoundingBox, Toolhead};
     use std::path::PathBuf;
 
@@ -269,6 +255,10 @@ mod tests {
         // the UI can show the user the complete picture.
         let r = Resolved::new(); // empty — everything's missing
         let err = validate_resolved_cascade(&r, &a1_mini_profile()).unwrap_err();
-        assert!(err.len() >= 4, "expected ≥4 issues, got {}: {err:?}", err.len());
+        assert!(
+            err.len() >= 4,
+            "expected ≥4 issues, got {}: {err:?}",
+            err.len()
+        );
     }
 }

@@ -96,9 +96,7 @@ impl CapabilityPredicate {
             // Toolchangers skip purging because they swap heads;
             // single-material printers don't purge because they only
             // print one filament.
-            Self::RequiresPurgeTower => {
-                printer.toolheads.len() == 1 && printer.ams_max > 0
-            }
+            Self::RequiresPurgeTower => printer.toolheads.len() == 1 && printer.ams_max > 0,
 
             Self::RequiresBblPrinter => printer.model.starts_with("Bambu"),
 
@@ -146,9 +144,7 @@ pub fn capability_for_key(key: &str) -> Option<CapabilityPredicate> {
         | "extruder_clearance_height_to_lid"
         | "extruder_clearance_radius"
         | "machine_load_filament_time"
-        | "machine_unload_filament_time" => {
-            Some(CapabilityPredicate::RequiresToolchanger)
-        }
+        | "machine_unload_filament_time" => Some(CapabilityPredicate::RequiresToolchanger),
 
         // Bambu-vendor-only. The catalog grows as we discover more
         // BBS-namespaced keys; for the MVP we gate the ones that

@@ -24,8 +24,8 @@
 //! consumes.
 
 use super::{
-    load_bed_fragment, load_filament_fragment, load_nozzle_fragment,
-    load_printer_fragment, load_process_fragment,
+    load_bed_fragment, load_filament_fragment, load_nozzle_fragment, load_printer_fragment,
+    load_process_fragment,
 };
 use crate::core::cascade::resolver::{resolve, MapContext};
 use crate::core::cascade::types::{Cascade, Predicate, Rule, SourceLocation};
@@ -78,8 +78,14 @@ fn resolve_layout<'a>(
                     slot: Some(slot),
                     extruder_index: slot_ref.extruder,
                 })
-                .unwrap_or(FilamentEntry { slot: None, extruder_index: 0 }),
-            None => FilamentEntry { slot: None, extruder_index: 0 },
+                .unwrap_or(FilamentEntry {
+                    slot: None,
+                    extruder_index: 0,
+                }),
+            None => FilamentEntry {
+                slot: None,
+                extruder_index: 0,
+            },
         })
         .collect()
 }
@@ -106,10 +112,7 @@ fn slot_layout(instance: &PrinterInstance) -> Vec<FilamentEntry<'_>> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComposeError {
     UnknownPrinterFragment(String),
-    UnknownNozzleFragment {
-        printer_slug: String,
-        sku: String,
-    },
+    UnknownNozzleFragment { printer_slug: String, sku: String },
     UnknownBedFragment(String),
     UnknownFilamentFragment(String),
     UnknownProcessFragment(String),
@@ -123,7 +126,10 @@ impl std::fmt::Display for ComposeError {
                 write!(f, "no bundled printer fragment for slug `{s}`")
             }
             Self::UnknownNozzleFragment { printer_slug, sku } => {
-                write!(f, "no bundled nozzle fragment for printer `{printer_slug}` SKU `{sku}`")
+                write!(
+                    f,
+                    "no bundled nozzle fragment for printer `{printer_slug}` SKU `{sku}`"
+                )
             }
             Self::UnknownBedFragment(s) => write!(f, "no bundled bed fragment for slug `{s}`"),
             Self::UnknownFilamentFragment(s) => {
@@ -200,8 +206,9 @@ pub fn compose_cascade(
 
     // 1. Printer fragment — machine globals only (per-extruder keys
     //    are deliberately absent here; they come from step 2).
-    let printer = load_printer_fragment(&instance.printer_fragment_slug)
-        .ok_or_else(|| ComposeError::UnknownPrinterFragment(instance.printer_fragment_slug.clone()))?;
+    let printer = load_printer_fragment(&instance.printer_fragment_slug).ok_or_else(|| {
+        ComposeError::UnknownPrinterFragment(instance.printer_fragment_slug.clone())
+    })?;
     // Global predicate dimensions filament fragments may key on, needed
     // by step 4's per-slot resolve. `printer_model` is the machine
     // cascade's `printer_model` scalar (the same value `when.printer.model
@@ -266,11 +273,12 @@ pub fn compose_cascade(
     //    where the identity matches libslic3r's `curr_bed_type` enum
     //    value verbatim.
     let bed = load_bed_fragment(&instance.printer_fragment_slug, &instance.bed.identity)
-        .ok_or_else(|| ComposeError::UnknownBedFragment(format!(
-            "{}/{}",
-            instance.printer_fragment_slug,
-            instance.bed.identity,
-        )))?;
+        .ok_or_else(|| {
+            ComposeError::UnknownBedFragment(format!(
+                "{}/{}",
+                instance.printer_fragment_slug, instance.bed.identity,
+            ))
+        })?;
     rules.extend(bed.rules);
 
     // 4. Per-slot filament fragments → vector assembly.
@@ -326,15 +334,13 @@ pub fn compose_cascade(
 
     // 5. Process fragment — printer-bound, looked up by
     //    `(printer_fragment_slug, quality_profile)`.
-    let process = load_process_fragment(
-        &instance.printer_fragment_slug,
-        &instance.quality_profile,
-    )
-    .ok_or_else(|| ComposeError::UnknownProcessFragment(format!(
-        "{}/{}",
-        instance.printer_fragment_slug,
-        instance.quality_profile,
-    )))?;
+    let process = load_process_fragment(&instance.printer_fragment_slug, &instance.quality_profile)
+        .ok_or_else(|| {
+            ComposeError::UnknownProcessFragment(format!(
+                "{}/{}",
+                instance.printer_fragment_slug, instance.quality_profile,
+            ))
+        })?;
     rules.extend(process.rules);
 
     // 6. Plate overrides — virtual source so trace UI can name them.
@@ -364,12 +370,13 @@ fn assemble_nozzle_vectors(
         Vec::with_capacity(instance.extruders.len());
     for extruder in &instance.extruders {
         let sku = nozzle_sku_string(&extruder.installed_nozzle);
-        let cascade = load_nozzle_fragment(&instance.printer_fragment_slug, &sku).ok_or_else(
-            || ComposeError::UnknownNozzleFragment {
-                printer_slug: instance.printer_fragment_slug.clone(),
-                sku: sku.clone(),
-            },
-        )?;
+        let cascade =
+            load_nozzle_fragment(&instance.printer_fragment_slug, &sku).ok_or_else(|| {
+                ComposeError::UnknownNozzleFragment {
+                    printer_slug: instance.printer_fragment_slug.clone(),
+                    sku: sku.clone(),
+                }
+            })?;
         // A nozzle fragment is a single unconditional default rule
         // (the converter never emits [[rule]] blocks).
         let scalars = cascade
@@ -445,9 +452,8 @@ fn assemble_filament_vectors(
             .slot
             .and_then(|s| s.filament_identity.as_deref())
             .unwrap_or(&instance.default_filament_fragment_slug);
-        let cascade = load_filament_fragment(slug).ok_or_else(|| {
-            ComposeError::UnknownFilamentFragment(slug.to_owned())
-        })?;
+        let cascade = load_filament_fragment(slug)
+            .ok_or_else(|| ComposeError::UnknownFilamentFragment(slug.to_owned()))?;
         // Resolve against this slot's *complete* context — the global
         // dimensions (printer.model, plate.type) plus this slot's
         // filament.* — so conditional rules in the fragment match
@@ -467,8 +473,7 @@ fn assemble_filament_vectors(
     }
 
     // Union of all keys seen across filament entries.
-    let mut all_keys: std::collections::BTreeSet<String> =
-        std::collections::BTreeSet::new();
+    let mut all_keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for scalars in &per_filament {
         for k in scalars.keys() {
             all_keys.insert(k.clone());
@@ -524,7 +529,11 @@ fn assemble_flush_defaults(
     for _ in 0..heads_count {
         for row in 0..filament_count {
             for col in 0..filament_count {
-                let v = if row == col { 0.0 } else { DEFAULT_FLUSH_OFF_DIAG_MM3 };
+                let v = if row == col {
+                    0.0
+                } else {
+                    DEFAULT_FLUSH_OFF_DIAG_MM3
+                };
                 matrix.push(format!("{v}"));
             }
         }
@@ -598,7 +607,10 @@ fn assemble_filament_colours(filaments: &[FilamentEntry<'_>]) -> BTreeMap<String
         .collect();
     let mut out = BTreeMap::new();
     if !values.is_empty() {
-        out.insert("filament_colour".to_owned(), join_for_key("filament_colour", &values));
+        out.insert(
+            "filament_colour".to_owned(),
+            join_for_key("filament_colour", &values),
+        );
     }
     out
 }
@@ -607,9 +619,7 @@ fn assemble_filament_colours(filaments: &[FilamentEntry<'_>]) -> BTreeMap<String
 /// cascade's filament layout. Each entry contributes the 1-based
 /// extruder index it should feed from. Empty when the layout is
 /// empty (the caller skips the rule in that case).
-fn assemble_filament_topology(
-    filaments: &[FilamentEntry<'_>],
-) -> BTreeMap<String, String> {
+fn assemble_filament_topology(filaments: &[FilamentEntry<'_>]) -> BTreeMap<String, String> {
     let mut filament_map: Vec<String> = Vec::new();
     for entry in filaments {
         filament_map.push((entry.extruder_index as usize + 1).to_string());
@@ -731,16 +741,26 @@ mod tests {
 
         let all_keys: std::collections::BTreeSet<&String> =
             cascade.rules.iter().flat_map(|r| r.set.keys()).collect();
-        assert!(all_keys.contains(&"printable_height".to_owned()),
-                "printer-bucket key missing");
-        assert!(all_keys.contains(&"nozzle_diameter".to_owned()),
-                "per-extruder nozzle key missing from composition");
-        assert!(all_keys.contains(&"curr_bed_type".to_owned()),
-                "bed-fragment key missing");
-        assert!(all_keys.contains(&"nozzle_temperature".to_owned()),
-                "filament-bucket key missing");
-        assert!(all_keys.contains(&"layer_height".to_owned()),
-                "process-bucket key missing");
+        assert!(
+            all_keys.contains(&"printable_height".to_owned()),
+            "printer-bucket key missing"
+        );
+        assert!(
+            all_keys.contains(&"nozzle_diameter".to_owned()),
+            "per-extruder nozzle key missing from composition"
+        );
+        assert!(
+            all_keys.contains(&"curr_bed_type".to_owned()),
+            "bed-fragment key missing"
+        );
+        assert!(
+            all_keys.contains(&"nozzle_temperature".to_owned()),
+            "filament-bucket key missing"
+        );
+        assert!(
+            all_keys.contains(&"layer_height".to_owned()),
+            "process-bucket key missing"
+        );
     }
 
     #[test]
@@ -825,7 +845,10 @@ mod tests {
             .iter()
             .find(|r| r.source.path.to_string_lossy() == "<extruder-vector-assembly>")
             .expect("extruder-vector rule present");
-        let diameter = vector_rule.set.get("nozzle_diameter").expect("diameter present");
+        let diameter = vector_rule
+            .set
+            .get("nozzle_diameter")
+            .expect("diameter present");
         // A1 mini has 1 extruder → no semicolons in the vector string.
         assert_eq!(diameter, "0.4");
     }
@@ -838,7 +861,10 @@ mod tests {
         overrides.insert("layer_height".to_owned(), "0.12".to_owned());
         let cascade = compose_cascade(&bambi, &[], &overrides).expect("compose");
         let last = cascade.rules.last().expect("rules");
-        assert_eq!(last.set.get("layer_height").map(String::as_str), Some("0.12"));
+        assert_eq!(
+            last.set.get("layer_height").map(String::as_str),
+            Some("0.12")
+        );
         assert_eq!(last.source.path.to_string_lossy(), "<plate-overrides>");
     }
 
@@ -868,7 +894,10 @@ mod tests {
         // `when.printer.model` / `when.plate.type` rules fire at compose
         // time (regression guard for the U1 bed-temp bug).
         assert_eq!(ctx.predicate_value("printer.model"), Some("Snapmaker U1"));
-        assert_eq!(ctx.predicate_value("plate.type"), Some("Textured PEI Plate"));
+        assert_eq!(
+            ctx.predicate_value("plate.type"),
+            Some("Textured PEI Plate")
+        );
     }
 
     #[test]
@@ -885,7 +914,10 @@ mod tests {
         assert!(ctx.predicate_value("filament.type").is_none());
         assert!(ctx.predicate_value("filament.name").is_none());
         assert_eq!(ctx.predicate_value("printer.model"), Some("Snapmaker U1"));
-        assert_eq!(ctx.predicate_value("plate.type"), Some("Textured PEI Plate"));
+        assert_eq!(
+            ctx.predicate_value("plate.type"),
+            Some("Textured PEI Plate")
+        );
     }
 
     #[test]
@@ -942,7 +974,10 @@ set.fan_speed = 30
             .into_iter()
             .map(|(k, v)| (k, v.value))
             .collect();
-        assert_eq!(petg_scalars.get("fan_speed").map(String::as_str), Some("30"));
+        assert_eq!(
+            petg_scalars.get("fan_speed").map(String::as_str),
+            Some("30")
+        );
     }
 
     #[test]

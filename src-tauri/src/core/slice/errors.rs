@@ -34,10 +34,7 @@ pub enum SliceError {
     },
     /// Mesh geometry libslic3r couldn't slice (degenerate, empty,
     /// non-manifold beyond its repair threshold).
-    InvalidGeometry {
-        reason: String,
-        raw_message: String,
-    },
+    InvalidGeometry { reason: String, raw_message: String },
     /// Object positioned (partly) outside the printer's build
     /// volume. `plate_id` carries the plate where the offending
     /// object sits, when the orchestrator can provide it.
@@ -380,8 +377,11 @@ mod tests {
 
     #[test]
     fn classifies_cancellation() {
-        for raw in ["Slicing was cancelled", "slicing cancelled by user", "Cancelled"]
-        {
+        for raw in [
+            "Slicing was cancelled",
+            "slicing cancelled by user",
+            "Cancelled",
+        ] {
             let err = classify_libslic3r_error(raw);
             assert_eq!(err, SliceError::Cancelled, "for input {raw:?}");
         }

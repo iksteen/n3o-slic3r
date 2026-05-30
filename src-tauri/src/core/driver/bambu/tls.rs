@@ -73,8 +73,7 @@ mod tests {
     /// re-copy from bambu-overlay's `device_tls.rs:14-37`.
     #[test]
     fn embedded_ca_parses() {
-        Certificate::from_pem(BBL_CA_CERT_PEM.as_bytes())
-            .expect("embedded BBL CA should parse");
+        Certificate::from_pem(BBL_CA_CERT_PEM.as_bytes()).expect("embedded BBL CA should parse");
     }
 
     #[test]

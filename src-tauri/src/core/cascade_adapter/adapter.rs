@@ -44,19 +44,12 @@ pub struct AdaptResult {
 #[serde(tag = "kind")]
 pub enum AdaptEvent {
     /// Orca typo silently remapped to its canonical spelling.
-    Remapped {
-        from: String,
-        to: String,
-    },
+    Remapped { from: String, to: String },
     /// OrcaSlicer-only key dropped per the manifest.
-    Dropped {
-        key: String,
-    },
+    Dropped { key: String },
     /// Key isn't in the libslic3r schema *and* isn't in the manifest
     /// drop list. Likely a typo the manifest doesn't know about.
-    UnknownKey {
-        key: String,
-    },
+    UnknownKey { key: String },
     /// `Config::set` rejected the value (parse error). The value
     /// itself is captured in the event for trace + UI.
     ParseValueError {
@@ -201,16 +194,12 @@ fn push_key(
     };
 
     if manifest.is_dropped(&effective_key) {
-        events.push(AdaptEvent::Dropped {
-            key: effective_key,
-        });
+        events.push(AdaptEvent::Dropped { key: effective_key });
         return;
     }
 
     if schema_by_key(&effective_key).is_none() {
-        events.push(AdaptEvent::UnknownKey {
-            key: effective_key,
-        });
+        events.push(AdaptEvent::UnknownKey { key: effective_key });
         return;
     }
 
@@ -219,9 +208,7 @@ fn push_key(
         Err(e) if e.kind == ErrorKind::UnknownKey => {
             // Schema said yes but libslic3r said no — schema desync.
             // Should be rare; surface as UnknownKey for diagnosis.
-            events.push(AdaptEvent::UnknownKey {
-                key: effective_key,
-            });
+            events.push(AdaptEvent::UnknownKey { key: effective_key });
         }
         Err(e) => events.push(AdaptEvent::ParseValueError {
             key: effective_key,
@@ -300,15 +287,14 @@ mod tests {
         let resolved = resolved_from([("layer_height", "0.2"), ("wall_loops", "2")]);
         let manifest = Manifest::build();
         let result = adapt(&resolved, &ctx_pei(), &manifest).unwrap();
-        assert_eq!(
-            result.config.get("layer_height").unwrap_or_default(),
-            "0.2"
-        );
+        assert_eq!(result.config.get("layer_height").unwrap_or_default(), "0.2");
         assert_eq!(result.config.get("wall_loops").unwrap_or_default(), "2");
         // No unexpected events for these clean identity entries.
         assert!(
-            result.events.iter().all(|e| matches!(e,
-                AdaptEvent::CurrBedTypeSet { .. } | AdaptEvent::BedTempExpanded { .. })),
+            result.events.iter().all(|e| matches!(
+                e,
+                AdaptEvent::CurrBedTypeSet { .. } | AdaptEvent::BedTempExpanded { .. }
+            )),
             "unexpected events: {:#?}",
             result.events
         );
@@ -319,22 +305,23 @@ mod tests {
         ensure_ffi();
         let resolved = resolved_from([
             ("layer_height", "0.2"),
-            ("hotend_cooling_rate", "2"),    // dropped
+            ("hotend_cooling_rate", "2"),     // dropped
             ("filament_scarf_height", "0.1"), // dropped
         ]);
         let manifest = Manifest::build();
         let result = adapt(&resolved, &ctx_pei(), &manifest).unwrap();
-        let dropped: Vec<&str> = result.events.iter().filter_map(|e| match e {
-            AdaptEvent::Dropped { key } => Some(key.as_str()),
-            _ => None,
-        }).collect();
+        let dropped: Vec<&str> = result
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                AdaptEvent::Dropped { key } => Some(key.as_str()),
+                _ => None,
+            })
+            .collect();
         assert!(dropped.contains(&"hotend_cooling_rate"));
         assert!(dropped.contains(&"filament_scarf_height"));
         // layer_height not in drop list — should have made it through.
-        assert_eq!(
-            result.config.get("layer_height").unwrap_or_default(),
-            "0.2"
-        );
+        assert_eq!(result.config.get("layer_height").unwrap_or_default(), "0.2");
     }
 
     #[test]
@@ -343,13 +330,23 @@ mod tests {
         let resolved = resolved_from([("inital_layer_height", "0.3")]);
         let manifest = Manifest::build();
         let result = adapt(&resolved, &ctx_pei(), &manifest).unwrap();
-        let remapped: Vec<(&str, &str)> = result.events.iter().filter_map(|e| match e {
-            AdaptEvent::Remapped { from, to } => Some((from.as_str(), to.as_str())),
-            _ => None,
-        }).collect();
-        assert_eq!(remapped, vec![("inital_layer_height", "initial_layer_height")]);
+        let remapped: Vec<(&str, &str)> = result
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                AdaptEvent::Remapped { from, to } => Some((from.as_str(), to.as_str())),
+                _ => None,
+            })
+            .collect();
         assert_eq!(
-            result.config.get("initial_layer_height").unwrap_or_default(),
+            remapped,
+            vec![("inital_layer_height", "initial_layer_height")]
+        );
+        assert_eq!(
+            result
+                .config
+                .get("initial_layer_height")
+                .unwrap_or_default(),
             "0.3"
         );
     }
@@ -367,8 +364,10 @@ mod tests {
                 "{plate_key} should receive the broadcast"
             );
         }
-        let expansion_event = result.events.iter().any(|e| matches!(e,
-            AdaptEvent::BedTempExpanded { value, .. } if value == "65"));
+        let expansion_event = result.events.iter().any(|e| {
+            matches!(e,
+            AdaptEvent::BedTempExpanded { value, .. } if value == "65")
+        });
         assert!(expansion_event);
     }
 
@@ -382,9 +381,11 @@ mod tests {
             result.config.get("curr_bed_type").unwrap_or_default(),
             "Textured PEI Plate"
         );
-        let curr_bed_event = result.events.iter().any(|e| matches!(e,
+        let curr_bed_event = result.events.iter().any(|e| {
+            matches!(e,
             AdaptEvent::CurrBedTypeSet { plate_type, libslic3r_value }
-            if plate_type == "Textured PEI" && libslic3r_value == "Textured PEI Plate"));
+            if plate_type == "Textured PEI" && libslic3r_value == "Textured PEI Plate")
+        });
         assert!(curr_bed_event);
     }
 
@@ -394,10 +395,14 @@ mod tests {
         let resolved = resolved_from([("totally_made_up_key", "x")]);
         let manifest = Manifest::build();
         let result = adapt(&resolved, &ctx_pei(), &manifest).unwrap();
-        let unknown: Vec<&str> = result.events.iter().filter_map(|e| match e {
-            AdaptEvent::UnknownKey { key } => Some(key.as_str()),
-            _ => None,
-        }).collect();
+        let unknown: Vec<&str> = result
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                AdaptEvent::UnknownKey { key } => Some(key.as_str()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(unknown, vec!["totally_made_up_key"]);
     }
 }

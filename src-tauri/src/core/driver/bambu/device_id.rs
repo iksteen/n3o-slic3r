@@ -25,32 +25,25 @@ pub async fn probe(host: &str, port: u16) -> Result<String, DriverError> {
     let address = format!("{host}:{port}");
     let tcp = tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect(&address))
         .await
-        .map_err(|_| {
-            DriverError::Network(format!("timed out connecting to {address}"))
-        })?
+        .map_err(|_| DriverError::Network(format!("timed out connecting to {address}")))?
         .map_err(|e| DriverError::Network(format!("connect to {address}: {e}")))?;
 
     let connector = super::tls::connector().map_err(DriverError::Other)?;
     let connector = TokioTlsConnector::from(connector);
     let socket = tokio::time::timeout(PROBE_TIMEOUT, connector.connect(host, tcp))
         .await
-        .map_err(|_| {
-            DriverError::Network(format!("timed out handshaking with {address}"))
-        })?
+        .map_err(|_| DriverError::Network(format!("timed out handshaking with {address}")))?
         .map_err(|e| DriverError::Network(format!("TLS handshake with {address}: {e}")))?;
 
     let cert = socket
         .get_ref()
         .peer_certificate()
         .map_err(|e| DriverError::Protocol(format!("read peer cert: {e}")))?
-        .ok_or_else(|| {
-            DriverError::Protocol("printer presented no cert".into())
-        })?;
+        .ok_or_else(|| DriverError::Protocol("printer presented no cert".into()))?;
 
     extract_cn(&cert).ok_or_else(|| {
         DriverError::Protocol(
-            "peer cert has no Subject Common Name; cannot derive device id"
-                .into(),
+            "peer cert has no Subject Common Name; cannot derive device id".into(),
         )
     })
 }

@@ -24,17 +24,13 @@ use std::collections::{HashMap, HashSet};
 /// Opaque mesh identifier. Monotonic across the registry's lifetime;
 /// never reused even after a mesh is freed. Surfaced to the frontend
 /// as a string-encoded number via the standard serde representation.
-#[derive(
-    Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct MeshId(pub u64);
 
 /// Opaque scene-object identifier. Same monotonic-never-reused
 /// semantics as `MeshId`.
-#[derive(
-    Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ObjectId(pub u64);
 
@@ -298,5 +294,3 @@ pub(crate) fn z_extent(corners: &[Vec3; 8], xform: &glam::Mat4) -> (f32, f32) {
     }
     (min_z, max_z)
 }
-
-

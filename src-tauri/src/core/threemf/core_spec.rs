@@ -414,9 +414,11 @@ mod tests {
 
     #[test]
     fn parses_single_triangle_object() {
-        let doc = parse_model(TRIANGLE_MODEL.as_bytes(), Path::new("test.model"))
-            .expect("parse");
-        assert_eq!(doc.metadata, vec![("Title".to_string(), "test".to_string())]);
+        let doc = parse_model(TRIANGLE_MODEL.as_bytes(), Path::new("test.model")).expect("parse");
+        assert_eq!(
+            doc.metadata,
+            vec![("Title".to_string(), "test".to_string())]
+        );
         let obj = doc.objects.get(&1).expect("object 1");
         match &obj.body {
             ObjectBody::Mesh { vertices, indices } => {
@@ -454,8 +456,8 @@ mod tests {
 
     #[test]
     fn parses_component_references_with_paths() {
-        let doc = parse_model(COMPONENT_MODEL.as_bytes(), Path::new("3dmodel.model"))
-            .expect("parse");
+        let doc =
+            parse_model(COMPONENT_MODEL.as_bytes(), Path::new("3dmodel.model")).expect("parse");
         let obj = doc.objects.get(&9).expect("object 9");
         let comps = match &obj.body {
             ObjectBody::Components(c) => c,

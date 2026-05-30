@@ -144,7 +144,12 @@ fn build_cache() -> SchemaCache {
             .enum_values
             .iter()
             .cloned()
-            .zip(def.enum_labels.iter().cloned().chain(std::iter::repeat(String::new())))
+            .zip(
+                def.enum_labels
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::repeat(String::new())),
+            )
             .collect();
         let schema = OptionSchema {
             key: def.key.clone(),
@@ -265,8 +270,9 @@ mod tests {
     fn all_bed_temp_keys_are_tagged_dimensional() {
         ensure_ffi();
         for key in BED_TEMP_KEYS {
-            let s = schema_by_key(key)
-                .unwrap_or_else(|| panic!("{key} not in libslic3r schema — BED_TEMP_KEYS out of sync"));
+            let s = schema_by_key(key).unwrap_or_else(|| {
+                panic!("{key} not in libslic3r schema — BED_TEMP_KEYS out of sync")
+            });
             assert_eq!(
                 s.dimensional,
                 Some(DimensionalKind::BedTempPerPlate),
@@ -278,7 +284,10 @@ mod tests {
     #[test]
     fn schema_by_key_returns_none_for_typos() {
         ensure_ffi();
-        assert!(schema_by_key("layer_hieght").is_none(), "typo lookup returns None");
+        assert!(
+            schema_by_key("layer_hieght").is_none(),
+            "typo lookup returns None"
+        );
         assert!(schema_by_key("").is_none(), "empty key returns None");
     }
 }

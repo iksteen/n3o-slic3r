@@ -217,7 +217,10 @@ mod tests {
         for extruder in &s.extruders {
             assert_eq!(extruder.slots.len(), 1);
             assert_eq!(extruder.installed_nozzle.diameter, "0.4");
-            assert_eq!(extruder.installed_nozzle.material, NozzleMaterial::Stainless);
+            assert_eq!(
+                extruder.installed_nozzle.material,
+                NozzleMaterial::Stainless
+            );
         }
         assert_eq!(s.bed.identity, "Textured PEI Plate");
     }

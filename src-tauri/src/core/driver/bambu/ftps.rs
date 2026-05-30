@@ -40,14 +40,9 @@ pub fn connect(host: &str, access_code: &str) -> Result<NativeTlsFtpStream, Driv
     } else {
         format!("{host}:{FTPS_PORT}")
     };
-    let connector =
-        NativeTlsConnector::from(super::tls::connector().map_err(DriverError::Other)?);
-    let mut client = NativeTlsFtpStream::connect_secure_implicit(
-        address.as_str(),
-        connector,
-        host,
-    )
-    .map_err(|e| DriverError::Network(format!("FTPS connect {address}: {e}")))?;
+    let connector = NativeTlsConnector::from(super::tls::connector().map_err(DriverError::Other)?);
+    let mut client = NativeTlsFtpStream::connect_secure_implicit(address.as_str(), connector, host)
+        .map_err(|e| DriverError::Network(format!("FTPS connect {address}: {e}")))?;
     client
         .get_ref()
         .set_read_timeout(Some(FTP_TIMEOUT))
@@ -82,4 +77,3 @@ pub fn upload(
         .map_err(|e| DriverError::Network(format!("FTPS STOR {remote_name}: {e}")))?;
     Ok(remote_name.to_owned())
 }
-

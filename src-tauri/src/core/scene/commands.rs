@@ -6,14 +6,12 @@
 //! for the *behavior* live in `core::project::mutation` against the
 //! pure methods; this file only validates the Tauri plumbing.
 
-use super::events::{MirrorAxis, MoveReport, SceneEvent, SceneOpError, SelectMode};
 use super::bed::BedMesh;
-use super::state::{
-    ActivePlate, ExclusionZone, MeshHeader, MeshId, ObjectId, SceneObject,
-};
+use super::events::{MirrorAxis, MoveReport, SceneEvent, SceneOpError, SelectMode};
+use super::state::{ActivePlate, ExclusionZone, MeshHeader, MeshId, ObjectId, SceneObject};
+use super::transform::Transform;
 use crate::core::printer::profile::PrinterProfile;
 use crate::core::project::{PlateId, Project};
-use super::transform::Transform;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -89,8 +87,7 @@ pub struct PlateSnapshot {
     /// Plate's material → slot routing. The slot-binding panel
     /// reads this to render the per-material slot picker; auto-bind
     /// populates it on object register.
-    pub material_to_slot:
-        std::collections::BTreeMap<u8, crate::core::printer::SlotRef>,
+    pub material_to_slot: std::collections::BTreeMap<u8, crate::core::printer::SlotRef>,
     pub project_overrides: std::collections::HashMap<String, String>,
 
     // ---- Per-plate scene contents -----------------------------
@@ -102,10 +99,8 @@ pub struct PlateSnapshot {
     pub build_plate: Option<ActivePlate>,
     pub exclusion_zones: Vec<ExclusionZone>,
     pub bed: Option<BedMesh>,
-    pub object_overrides: std::collections::HashMap<
-        ObjectId,
-        std::collections::HashMap<String, String>,
-    >,
+    pub object_overrides:
+        std::collections::HashMap<ObjectId, std::collections::HashMap<String, String>>,
 }
 
 /// Snapshot of the scene state. Frontend calls this on startup /
@@ -223,9 +218,7 @@ pub fn scene_remove_plate(
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s
-        .remove_plate(plate_id)
-        .map_err(|e| e.to_string())?;
+    let events = s.remove_plate(plate_id).map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -241,9 +234,7 @@ pub fn scene_set_active_plate(
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s
-        .set_active_plate(plate_id)
-        .map_err(|e| e.to_string())?;
+    let events = s.set_active_plate(plate_id).map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -354,13 +345,12 @@ pub fn scene_rebind_plate_printer(
 ) -> Result<crate::core::scene::events::PrinterChangeReport, String> {
     let instance = crate::core::printer::lookup_instance(&instance_id)
         .ok_or_else(|| format!("no printer instance with id `{instance_id}`"))?;
-    let profile = crate::core::printer::lookup(&instance.vendor_profile_ref)
-        .ok_or_else(|| {
-            format!(
-                "printer instance `{instance_id}` references unknown vendor profile `{}`",
-                instance.vendor_profile_ref,
-            )
-        })?;
+    let profile = crate::core::printer::lookup(&instance.vendor_profile_ref).ok_or_else(|| {
+        format!(
+            "printer instance `{instance_id}` references unknown vendor profile `{}`",
+            instance.vendor_profile_ref,
+        )
+    })?;
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let (report, events) = s
         .rebind_plate_printer(plate_id, instance_id, &profile)
@@ -596,10 +586,7 @@ pub fn scene_select(
 /// Clear the selection.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
-pub fn scene_deselect(
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
+pub fn scene_deselect(window: Window, state: State<Arc<Mutex<Project>>>) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s.deselect_all();
     drop(s);
@@ -840,7 +827,13 @@ pub fn scene_load_3mf(
             parent: None,
             group_id: obj.group_id,
         });
-        let obj_clone = s.active_plate().scene.objects.get(&object_id).unwrap().clone();
+        let obj_clone = s
+            .active_plate()
+            .scene
+            .objects
+            .get(&object_id)
+            .unwrap()
+            .clone();
         all_events.push(SceneEvent::ObjectAdded {
             plate_id: active_plate_id,
             object: obj_clone,
@@ -868,9 +861,9 @@ pub fn scene_load_3mf(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::printer::profile::BoundingBox;
     use crate::core::project::{PlateId, Project};
     use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
-    use crate::core::printer::profile::BoundingBox;
     use crate::core::scene::transform::Transform;
 
     fn unit_cube_mesh() -> NewMesh {

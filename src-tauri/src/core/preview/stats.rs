@@ -132,8 +132,7 @@ pub fn compute_layer_stats(geometry: &PreviewGeometry) -> Vec<PerLayerStats> {
         // Travels for this layer.
         if let Some(travel_idxs) = travel_buckets.get(&range.layer_index) {
             for &i in travel_idxs {
-                let length =
-                    segment_length(&geometry.travels.positions, i);
+                let length = segment_length(&geometry.travels.positions, i);
                 let speed = geometry.travels.speed[i];
                 if speed > stats.max_speed {
                     stats.max_speed = speed;
@@ -211,11 +210,7 @@ pub fn compute_job_stats(
 /// `ColorMode::LayerTime` encoder. Length matches the
 /// max layer index + 1; missing layer indices fill with 0.
 pub fn layer_time_map(layer_stats: &[PerLayerStats]) -> Vec<f32> {
-    let max_layer = layer_stats
-        .iter()
-        .map(|s| s.layer_index)
-        .max()
-        .unwrap_or(0);
+    let max_layer = layer_stats.iter().map(|s| s.layer_index).max().unwrap_or(0);
     let mut out = vec![0.0_f32; (max_layer + 1) as usize];
     for ls in layer_stats {
         out[ls.layer_index as usize] = ls.duration_seconds;
@@ -226,9 +221,7 @@ pub fn layer_time_map(layer_stats: &[PerLayerStats]) -> Vec<f32> {
 /// Walk the IR's travel segments once and bucket them by the
 /// `layer_index` they were emitted on. Each segment's layer comes
 /// from the per-vertex attribute (same value for both vertices).
-fn bucket_travels_by_layer(
-    geometry: &PreviewGeometry,
-) -> HashMap<u32, Vec<usize>> {
+fn bucket_travels_by_layer(geometry: &PreviewGeometry) -> HashMap<u32, Vec<usize>> {
     let mut buckets: HashMap<u32, Vec<usize>> = HashMap::new();
     for i in 0..geometry.travels.len() {
         let layer = geometry.travels.layer_index[i * 2] as u32;
@@ -259,16 +252,15 @@ fn extrusion_amount_mm(segments: &super::ir::SegmentSet, seg: usize) -> f32 {
     let flow = segments.flow[seg];
     let vol_mm3 = flow * duration;
     // Inverse of build.rs's flow formula: ΔE = vol / cross-section.
-    const CROSS_SECTION: f32 =
-        std::f32::consts::PI * (1.75 * 0.5) * (1.75 * 0.5);
+    const CROSS_SECTION: f32 = std::f32::consts::PI * (1.75 * 0.5) * (1.75 * 0.5);
     vol_mm3 / CROSS_SECTION
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::preview::build::build_preview;
     use crate::core::gcode::parse_str;
+    use crate::core::preview::build::build_preview;
 
     fn build_stats(src: &str) -> (PreviewGeometry, Vec<PerLayerStats>, FullJobStats) {
         let lines = parse_str(src);
@@ -373,25 +365,11 @@ mod tests {
         let (_, ls, js) = build_stats(src);
         // Tool 0 extruded 1.0mm of filament; tool 1 extruded 1.0mm
         // (delta from 1.0 to 2.0).
-        assert!(
-            (ls[0].filament_used_mm.get(&0).copied().unwrap_or(0.0) - 1.0)
-                .abs()
-                < 1e-2,
-        );
-        assert!(
-            (ls[0].filament_used_mm.get(&1).copied().unwrap_or(0.0) - 1.0)
-                .abs()
-                < 1e-2,
-        );
+        assert!((ls[0].filament_used_mm.get(&0).copied().unwrap_or(0.0) - 1.0).abs() < 1e-2,);
+        assert!((ls[0].filament_used_mm.get(&1).copied().unwrap_or(0.0) - 1.0).abs() < 1e-2,);
         // Job totals match.
-        assert!(
-            (js.filament_used_mm.get(&0).copied().unwrap_or(0.0) - 1.0).abs()
-                < 1e-2,
-        );
-        assert!(
-            (js.filament_used_mm.get(&1).copied().unwrap_or(0.0) - 1.0).abs()
-                < 1e-2,
-        );
+        assert!((js.filament_used_mm.get(&0).copied().unwrap_or(0.0) - 1.0).abs() < 1e-2,);
+        assert!((js.filament_used_mm.get(&1).copied().unwrap_or(0.0) - 1.0).abs() < 1e-2,);
     }
 
     #[test]

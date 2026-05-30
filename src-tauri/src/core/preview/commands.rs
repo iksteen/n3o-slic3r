@@ -31,17 +31,13 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::{ipc::Response, State};
 
-use crate::core::gcode::{
-    parse_str, FeatureType, HeaderMetadata, Line, Move,
-};
+use crate::core::gcode::{parse_str, FeatureType, HeaderMetadata, Line, Move};
 
 use super::build::build_preview;
 use super::colors::{encode_colors, ColorMode, Palette};
 use super::ir::BoundingBox;
 use super::registry::{LoadedPreview, PreviewHandle, PreviewRegistry};
-use super::stats::{
-    compute_job_stats, compute_layer_stats, FullJobStats, PerLayerStats,
-};
+use super::stats::{compute_job_stats, compute_layer_stats, FullJobStats, PerLayerStats};
 
 /// What `preview_load` returns. The frontend uses `layer_count`
 /// to clamp slider bounds, `extrusion_count` / `travel_count` /
@@ -69,8 +65,7 @@ pub fn preview_load(
     path: String,
     registry: State<Arc<PreviewRegistry>>,
 ) -> Result<PreviewLoadResponse, String> {
-    let src = std::fs::read_to_string(&path)
-        .map_err(|e| format!("read {path}: {e}"))?;
+    let src = std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))?;
     Ok(register_preview(&registry, PathBuf::from(&path), &src))
 }
 
@@ -97,9 +92,7 @@ pub fn preview_load_gcode_3mf(
     let read = crate::core::threemf::read_sliced_3mf(std::path::Path::new(&path))
         .map_err(|e| format!("read {path}: {e}"))?;
     if read.plates.is_empty() {
-        return Err(format!(
-            "{path}: no Metadata/plate_<N>.gcode entries found"
-        ));
+        return Err(format!("{path}: no Metadata/plate_<N>.gcode entries found"));
     }
     let plate_count = read.plates.len() as u32;
     if plate_count > 1 {
@@ -282,8 +275,7 @@ pub fn preview_segment_detail(
             let extrusion_mm = if segs.speed[i] > 1e-6 {
                 let duration = length / segs.speed[i];
                 let vol_mm3 = segs.flow[i] * duration;
-                const CROSS_SECTION: f32 =
-                    std::f32::consts::PI * (1.75 * 0.5) * (1.75 * 0.5);
+                const CROSS_SECTION: f32 = std::f32::consts::PI * (1.75 * 0.5) * (1.75 * 0.5);
                 vol_mm3 / CROSS_SECTION
             } else {
                 0.0
@@ -355,11 +347,7 @@ fn euclidean(a: [f32; 3], b: [f32; 3]) -> f32 {
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
-fn pack_buffers(
-    preview: &LoadedPreview,
-    color_mode: ColorMode,
-    palette: Palette,
-) -> Vec<u8> {
+fn pack_buffers(preview: &LoadedPreview, color_mode: ColorMode, palette: Palette) -> Vec<u8> {
     let layer_times = preview
         .layer_stats
         .iter()
@@ -482,8 +470,7 @@ mod tests {
             lines,
         };
 
-        let bytes =
-            pack_buffers(&preview, ColorMode::Feature, Palette::Default);
+        let bytes = pack_buffers(&preview, ColorMode::Feature, Palette::Default);
         let ext_count = preview.geometry.extrusions.len();
         let tra_count = preview.geometry.travels.len();
         let ret_count = preview.geometry.retractions.len();
@@ -491,8 +478,7 @@ mod tests {
         //   extrusion positions 6, colors 6, layers 2 → 14 floats
         //   travel positions 6, layers 2 → 8 floats
         //   retraction position 3, layer 1 → 4 floats
-        let expected_floats =
-            ext_count * (6 + 6 + 2) + tra_count * (6 + 2) + ret_count * 4;
+        let expected_floats = ext_count * (6 + 6 + 2) + tra_count * (6 + 2) + ret_count * 4;
         assert_eq!(bytes.len(), expected_floats * 4);
     }
 
@@ -524,16 +510,8 @@ mod tests {
                 let source_line = segs.source_line[i] as usize;
                 Ok(SegmentDetail {
                     source_line_text: line_raw_text(&p.lines[source_line]),
-                    start: [
-                        segs.positions[0],
-                        segs.positions[1],
-                        segs.positions[2],
-                    ],
-                    end: [
-                        segs.positions[3],
-                        segs.positions[4],
-                        segs.positions[5],
-                    ],
+                    start: [segs.positions[0], segs.positions[1], segs.positions[2]],
+                    end: [segs.positions[3], segs.positions[4], segs.positions[5]],
                     speed: segs.speed[i],
                     feature: segs.feature[i].clone(),
                     layer_index: segs.layer_index[0] as u32,
@@ -554,9 +532,7 @@ mod tests {
     #[test]
     fn gcode_3mf_round_trip_loads_first_plate_with_metadata() {
         use crate::core::slice::PlateSummary;
-        use crate::core::threemf::{
-            write_sliced_3mf, AmsBinding, SlicedPlate, SlicedProjectInput,
-        };
+        use crate::core::threemf::{write_sliced_3mf, AmsBinding, SlicedPlate, SlicedProjectInput};
 
         // Build a tiny synthetic .gcode.3mf with two plates so we
         // also exercise the multi-plate path.
@@ -608,7 +584,10 @@ mod tests {
         assert_eq!(meta.estimated_time_text, "1m");
         assert_eq!(meta.ams_bindings.len(), 1);
         assert_eq!(meta.ams_bindings[0].ams_slot, 3);
-        assert_eq!(plate.thumbnail_png.as_deref(), Some([0xDE, 0xAD].as_slice()));
+        assert_eq!(
+            plate.thumbnail_png.as_deref(),
+            Some([0xDE, 0xAD].as_slice())
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -624,10 +603,7 @@ mod tests {
                 header: HeaderMetadata::default(),
                 geometry: super::super::ir::PreviewGeometry::default(),
                 layer_stats: vec![],
-                job_stats: compute_job_stats(
-                    &super::super::ir::PreviewGeometry::default(),
-                    &[],
-                ),
+                job_stats: compute_job_stats(&super::super::ir::PreviewGeometry::default(), &[]),
                 lines: vec![],
             },
         );

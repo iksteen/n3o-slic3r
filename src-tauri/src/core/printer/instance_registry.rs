@@ -151,7 +151,10 @@ pub enum InstanceMutError {
     /// but the command boundary enforces them too so a hand-edited
     /// instance file or secondary caller can't persist a connection
     /// the reconciler would then drive into a doomed connect.
-    InvalidConnection { instance_id: String, message: String },
+    InvalidConnection {
+        instance_id: String,
+        message: String,
+    },
 }
 
 impl std::fmt::Display for InstanceMutError {
@@ -306,13 +309,14 @@ pub fn set_extruder_nozzle_diameter(
 ) -> Result<PrinterInstance, InstanceMutError> {
     mutate_instance(id, |inst| {
         let extruder_count = inst.extruders.len();
-        let extruder = inst.extruders.get_mut(extruder_idx).ok_or(
-            InstanceMutError::BadExtruder {
-                instance_id: id.to_owned(),
-                extruder_idx,
-                extruders: extruder_count,
-            },
-        )?;
+        let extruder =
+            inst.extruders
+                .get_mut(extruder_idx)
+                .ok_or(InstanceMutError::BadExtruder {
+                    instance_id: id.to_owned(),
+                    extruder_idx,
+                    extruders: extruder_count,
+                })?;
         // Resolve the bound profile up front: it's the authority on
         // which diameters this printer accepts AND it carries the
         // model.toml string the picker's `available_for` predicates
@@ -358,14 +362,10 @@ pub fn set_extruder_nozzle_diameter(
             &profile.model,
             &installed,
         );
-        let still_compatible = compatible
-            .iter()
-            .any(|s| s.slug == inst.quality_profile);
+        let still_compatible = compatible.iter().any(|s| s.slug == inst.quality_profile);
         if !still_compatible {
-            let fallback = crate::core::profile_library::nozzle_default_process(
-                &printer_slug,
-                &diameter,
-            );
+            let fallback =
+                crate::core::profile_library::nozzle_default_process(&printer_slug, &diameter);
             if let Some(slug) = fallback {
                 inst.quality_profile = slug;
             }
@@ -561,9 +561,7 @@ pub fn create_instance(
         .map(|t| t.default_nozzle_diameter.clone());
     let quality_profile = first_nozzle_sku
         .as_deref()
-        .and_then(|sku| {
-            crate::core::profile_library::nozzle_default_process(printer_identity, sku)
-        })
+        .and_then(|sku| crate::core::profile_library::nozzle_default_process(printer_identity, sku))
         .unwrap_or_else(|| {
             // Falling back to HashMap iteration order — non-
             // deterministic, depends on hash seeds. Warn so the
@@ -571,13 +569,12 @@ pub fn create_instance(
             // doesn't stay silent: the user sees the wrong
             // process pre-selected and the picker offers no
             // remedy except "select something else."
-            let fallback = crate::core::profile_library::bundled_process_slugs_for_printer(
-                printer_identity,
-            )
-            .into_iter()
-            .next()
-            .unwrap_or("")
-            .to_owned();
+            let fallback =
+                crate::core::profile_library::bundled_process_slugs_for_printer(printer_identity)
+                    .into_iter()
+                    .next()
+                    .unwrap_or("")
+                    .to_owned();
             tracing::warn!(
                 printer = %printer_identity,
                 nozzle = first_nozzle_sku.as_deref().unwrap_or("<no toolhead>"),
@@ -597,7 +594,9 @@ pub fn create_instance(
         quality_profile,
         connection: None,
         extruders,
-        bed: BedRef { identity: bed_identity },
+        bed: BedRef {
+            identity: bed_identity,
+        },
         config_overrides: Default::default(),
     };
 
@@ -954,10 +953,7 @@ pub(crate) fn validate_ams_request(
             }
         })?,
     };
-    if profile.toolheads.len() != 1
-        || profile.ams_max == 0
-        || ams_units > profile.ams_max
-    {
+    if profile.toolheads.len() != 1 || profile.ams_max == 0 || ams_units > profile.ams_max {
         return Err(InstanceMutError::AmsCountExceeded {
             identity: inst.vendor_profile_ref.clone(),
             requested: ams_units,
@@ -975,8 +971,7 @@ pub(crate) fn validate_ams_request(
 /// `pub(crate)` so `sync::apply_from_driver` can reconcile the AMS
 /// topology inside its own `mutate_instance` closure.
 pub(crate) fn rebuild_ams_slots(inst: &mut PrinterInstance, id: &str, ams_units: u32) {
-    let target_slot_count =
-        (ams_units as usize) * super::instance::AMS_SLOTS_PER_UNIT + 1;
+    let target_slot_count = (ams_units as usize) * super::instance::AMS_SLOTS_PER_UNIT + 1;
     // An AMS-style instance is expected to have at least one extruder,
     // but a hand-edited / corrupt instance file might not — no-op
     // rather than panic, since there's no extruder to rebuild slots on.
@@ -991,7 +986,11 @@ pub(crate) fn rebuild_ams_slots(inst: &mut PrinterInstance, id: &str, ams_units:
     let mut new_slots: Vec<SlotBinding> = Vec::with_capacity(target_slot_count);
     for new_idx in 0..target_slot_count {
         let last = new_idx + 1 == target_slot_count;
-        let target_feed = if last { FeedKind::Direct } else { FeedKind::Ams };
+        let target_feed = if last {
+            FeedKind::Direct
+        } else {
+            FeedKind::Ams
+        };
         let source_idx = if last {
             current_slot_count.checked_sub(1)
         } else if new_idx < current_slot_count.saturating_sub(1) {
@@ -1067,20 +1066,24 @@ where
 {
     mutate_instance(id, |inst| {
         let extruder_count = inst.extruders.len();
-        let extruder = inst.extruders.get_mut(extruder_idx).ok_or(
-            InstanceMutError::BadExtruder {
+        let extruder =
+            inst.extruders
+                .get_mut(extruder_idx)
+                .ok_or(InstanceMutError::BadExtruder {
+                    instance_id: id.to_owned(),
+                    extruder_idx,
+                    extruders: extruder_count,
+                })?;
+        let slot_count = extruder.slots.len();
+        let slot = extruder
+            .slots
+            .get_mut(slot_idx)
+            .ok_or(InstanceMutError::BadSlot {
                 instance_id: id.to_owned(),
                 extruder_idx,
-                extruders: extruder_count,
-            },
-        )?;
-        let slot_count = extruder.slots.len();
-        let slot = extruder.slots.get_mut(slot_idx).ok_or(InstanceMutError::BadSlot {
-            instance_id: id.to_owned(),
-            extruder_idx,
-            slot_idx,
-            slots: slot_count,
-        })?;
+                slot_idx,
+                slots: slot_count,
+            })?;
         f(slot);
         Ok(())
     })
@@ -1133,7 +1136,9 @@ impl RegistryGuard {
     /// its lock. Poison-tolerant: a previous test that panicked
     /// while holding the lock doesn't wedge subsequent tests.
     pub fn acquire() -> Self {
-        let lock = TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let lock = TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_to_bundled_inner();
         Self { _lock: lock }
     }
@@ -1159,8 +1164,8 @@ fn reset_to_bundled_inner() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::instance::{FeedKind, SlotBinding};
+    use super::*;
 
     #[test]
     fn list_returns_bundled_set() {
@@ -1194,8 +1199,7 @@ mod tests {
             Some("Generic PLA".into()),
         );
         // Clear path.
-        let cleared =
-            set_slot_filament("bambi", 0, 0, None).expect("clear should succeed");
+        let cleared = set_slot_filament("bambi", 0, 0, None).expect("clear should succeed");
         assert_eq!(cleared.extruders[0].slots[0].filament_identity, None);
     }
 
@@ -1213,7 +1217,11 @@ mod tests {
         let err = set_slot_filament("bambi", 5, 0, Some("PLA".into())).unwrap_err();
         assert!(matches!(
             err,
-            InstanceMutError::BadExtruder { extruders: 1, extruder_idx: 5, .. },
+            InstanceMutError::BadExtruder {
+                extruders: 1,
+                extruder_idx: 5,
+                ..
+            },
         ));
     }
 
@@ -1224,7 +1232,11 @@ mod tests {
         let err = set_slot_filament("snappy", 0, 3, Some("PLA".into())).unwrap_err();
         assert!(matches!(
             err,
-            InstanceMutError::BadSlot { slots: 1, slot_idx: 3, .. },
+            InstanceMutError::BadSlot {
+                slots: 1,
+                slot_idx: 3,
+                ..
+            },
         ));
     }
 
@@ -1235,17 +1247,21 @@ mod tests {
         // with `#d4a017`). Registry persistence itself is covered
         // by `set_slot_filament_mutates_in_place_and_persists_across_lookups`.
         let _registry = RegistryGuard::acquire();
-        let identity_before = lookup_instance("bambi")
-            .expect("bambi present")
-            .extruders[0]
-            .slots[1]
-            .filament_identity
-            .clone();
-        let updated = set_slot_color("bambi", 0, 1, Some("#ff8800".into()))
-            .expect("bambi AMS:2 exists");
-        assert_eq!(updated.extruders[0].slots[1].color.as_deref(), Some("#ff8800"));
+        let identity_before = lookup_instance("bambi").expect("bambi present").extruders[0].slots
+            [1]
+        .filament_identity
+        .clone();
+        let updated =
+            set_slot_color("bambi", 0, 1, Some("#ff8800".into())).expect("bambi AMS:2 exists");
+        assert_eq!(
+            updated.extruders[0].slots[1].color.as_deref(),
+            Some("#ff8800")
+        );
         // Filament identity stays untouched — color is its own field.
-        assert_eq!(updated.extruders[0].slots[1].filament_identity, identity_before);
+        assert_eq!(
+            updated.extruders[0].slots[1].filament_identity,
+            identity_before
+        );
         let cleared = set_slot_color("bambi", 0, 1, None).expect("clear ok");
         assert_eq!(cleared.extruders[0].slots[1].color, None);
     }
@@ -1276,8 +1292,8 @@ mod tests {
     fn create_instance_builds_topology_from_ams_units() {
         let _registry = RegistryGuard::acquire();
         // 1 AMS = 5 slots: AMS:1..4 (Ams) + Ext (Direct).
-        let inst = create_instance("bambu-lab-a1-mini", "Garage A1".into(), 1)
-            .expect("create with 1 AMS");
+        let inst =
+            create_instance("bambu-lab-a1-mini", "Garage A1".into(), 1).expect("create with 1 AMS");
         assert_eq!(inst.display_name, "Garage A1");
         assert_eq!(inst.vendor_profile_ref, "bambu-lab-a1-mini");
         // UUIDv4 string shape: 36 chars with hyphens.
@@ -1299,8 +1315,8 @@ mod tests {
         // U1 has 4 toolheads → 4 extruders, each with one Direct
         // slot. AMS units are 0 (ams_max=0). Display labels
         // (`T1..T4`) live in the frontend.
-        let inst = create_instance("snapmaker-u1", "Test U1".into(), 0)
-            .expect("create snapmaker u1");
+        let inst =
+            create_instance("snapmaker-u1", "Test U1".into(), 0).expect("create snapmaker u1");
         assert_eq!(inst.extruders.len(), 4);
         for ext in inst.extruders.iter() {
             assert_eq!(ext.slots.len(), 1);
@@ -1329,8 +1345,7 @@ mod tests {
         // Ext) live in the frontend, derived from this structure.
         let inst = create_instance("bambu-lab-a1-mini", "Single AMS".into(), 1)
             .expect("ams_max=1 supports 1 unit");
-        let feeds: Vec<FeedKind> =
-            inst.extruders[0].slots.iter().map(|s| s.feed).collect();
+        let feeds: Vec<FeedKind> = inst.extruders[0].slots.iter().map(|s| s.feed).collect();
         assert_eq!(
             feeds,
             vec![
@@ -1346,16 +1361,21 @@ mod tests {
     #[test]
     fn create_instance_validates_ams_max_and_identity_and_name() {
         let _registry = RegistryGuard::acquire();
-        let too_many =
-            create_instance("bambu-lab-a1-mini", "Too many".into(), 2).unwrap_err();
-        assert!(
-            matches!(too_many, InstanceMutError::AmsCountExceeded { requested: 2, max: 1, .. }),
-        );
-        let unknown =
-            create_instance("nope-printer", "Nope".into(), 0).unwrap_err();
-        assert!(matches!(unknown, InstanceMutError::UnknownPrinterIdentity { .. }));
-        let blank =
-            create_instance("bambu-lab-a1-mini", "   ".into(), 0).unwrap_err();
+        let too_many = create_instance("bambu-lab-a1-mini", "Too many".into(), 2).unwrap_err();
+        assert!(matches!(
+            too_many,
+            InstanceMutError::AmsCountExceeded {
+                requested: 2,
+                max: 1,
+                ..
+            }
+        ),);
+        let unknown = create_instance("nope-printer", "Nope".into(), 0).unwrap_err();
+        assert!(matches!(
+            unknown,
+            InstanceMutError::UnknownPrinterIdentity { .. }
+        ));
+        let blank = create_instance("bambu-lab-a1-mini", "   ".into(), 0).unwrap_err();
         assert!(matches!(blank, InstanceMutError::EmptyDisplayName));
     }
 
@@ -1372,7 +1392,11 @@ mod tests {
         let err = set_slot_color("snappy", 0, 3, Some("#fff".into())).unwrap_err();
         assert!(matches!(
             err,
-            InstanceMutError::BadSlot { slots: 1, slot_idx: 3, .. },
+            InstanceMutError::BadSlot {
+                slots: 1,
+                slot_idx: 3,
+                ..
+            },
         ));
     }
 
@@ -1387,8 +1411,7 @@ mod tests {
         assert_eq!(updated.extruders[2].installed_nozzle.diameter, "0.6");
         // Material is preserved — the picker only writes diameter.
         let material = updated.extruders[2].installed_nozzle.material;
-        let again =
-            lookup_instance("snappy").expect("snappy present after mutation");
+        let again = lookup_instance("snappy").expect("snappy present after mutation");
         assert_eq!(again.extruders[2].installed_nozzle.diameter, "0.6");
         assert_eq!(again.extruders[2].installed_nozzle.material, material);
     }
@@ -1465,8 +1488,7 @@ mod tests {
         // hand-edited instance state or a driver sync that writes a
         // diameter the catalog doesn't bundle.
         let _registry = RegistryGuard::acquire();
-        let err =
-            set_extruder_nozzle_diameter("bambi", 0, "1.0".to_string()).unwrap_err();
+        let err = set_extruder_nozzle_diameter("bambi", 0, "1.0".to_string()).unwrap_err();
         assert!(
             matches!(err, InstanceMutError::UnsupportedNozzleDiameter { .. }),
             "expected UnsupportedNozzleDiameter, got {err:?}",
@@ -1480,15 +1502,19 @@ mod tests {
         let err = set_extruder_nozzle_diameter("bambi", 1, "0.4".to_string()).unwrap_err();
         assert!(matches!(
             err,
-            InstanceMutError::BadExtruder { extruders: 1, extruder_idx: 1, .. },
+            InstanceMutError::BadExtruder {
+                extruders: 1,
+                extruder_idx: 1,
+                ..
+            },
         ));
     }
 
     #[test]
     fn set_instance_display_name_trims_and_rejects_empty() {
         let _registry = RegistryGuard::acquire();
-        let updated = set_instance_display_name("bambi", "  Lab Mini  ".to_string())
-            .expect("rename ok");
+        let updated =
+            set_instance_display_name("bambi", "  Lab Mini  ".to_string()).expect("rename ok");
         assert_eq!(updated.display_name, "Lab Mini");
         // Persistence round-trip via lookup.
         let again = lookup_instance("bambi").expect("bambi present");
@@ -1553,7 +1579,14 @@ mod tests {
         // Bambi's ams_max is 1; requesting 2 hits the typed error.
         let err = set_instance_ams_units("bambi", 2).unwrap_err();
         assert!(
-            matches!(err, InstanceMutError::AmsCountExceeded { max: 1, requested: 2, .. }),
+            matches!(
+                err,
+                InstanceMutError::AmsCountExceeded {
+                    max: 1,
+                    requested: 2,
+                    ..
+                }
+            ),
             "got {err:?}",
         );
     }
@@ -1580,8 +1613,7 @@ mod tests {
             host: "192.168.1.42".to_string(),
             access_code: "12345678".to_string(),
         };
-        let updated =
-            set_instance_connection("bambi", Some(bambu)).expect("set bambu conn");
+        let updated = set_instance_connection("bambi", Some(bambu)).expect("set bambu conn");
         assert!(matches!(
             updated.connection,
             Some(ConnectionInfo::Bambu { ref host, .. }) if host == "192.168.1.42",
@@ -1618,12 +1650,19 @@ mod tests {
         assert!(
             matches!(
                 err,
-                InstanceMutError::ConnectionDriverMismatch { expected: "bambu", got: "u1", .. }
+                InstanceMutError::ConnectionDriverMismatch {
+                    expected: "bambu",
+                    got: "u1",
+                    ..
+                }
             ),
             "got {err:?}",
         );
         // The mismatch must not have been persisted.
-        assert!(lookup_instance("bambi").expect("bambi present").connection.is_none());
+        assert!(lookup_instance("bambi")
+            .expect("bambi present")
+            .connection
+            .is_none());
 
         // The symmetric case: a Bambu connection on the U1 instance.
         let wrong = ConnectionInfo::Bambu {
@@ -1641,7 +1680,11 @@ mod tests {
         assert!(
             matches!(
                 err,
-                InstanceMutError::ConnectionDriverMismatch { expected: "u1", got: "bambu", .. }
+                InstanceMutError::ConnectionDriverMismatch {
+                    expected: "u1",
+                    got: "bambu",
+                    ..
+                }
             ),
             "got {err:?}",
         );
@@ -1689,8 +1732,14 @@ mod tests {
             "got {err:?}",
         );
         // None of the rejects persisted anything.
-        assert!(lookup_instance("bambi").expect("bambi").connection.is_none());
-        assert!(lookup_instance("snappy").expect("snappy").connection.is_none());
+        assert!(lookup_instance("bambi")
+            .expect("bambi")
+            .connection
+            .is_none());
+        assert!(lookup_instance("snappy")
+            .expect("snappy")
+            .connection
+            .is_none());
     }
 
     /// Sanity: the FeedKind + SlotBinding shape round-trips through

@@ -37,12 +37,10 @@ fn ensure_ffi() {
 fn reference_profiles_resolve_canonical_pla_pei_context() {
     ensure_ffi();
 
-    let printer = printer_registry::lookup("bambu-lab-a1-mini")
-        .expect("bambu-lab-a1-mini in registry");
-    let plate = build_plate::lookup("Textured PEI Plate")
-        .expect("Textured PEI Plate in registry");
-    let filament = filament::registry::lookup("generic-pla")
-        .expect("generic-pla in registry");
+    let printer =
+        printer_registry::lookup("bambu-lab-a1-mini").expect("bambu-lab-a1-mini in registry");
+    let plate = build_plate::lookup("Textured PEI Plate").expect("Textured PEI Plate in registry");
+    let filament = filament::registry::lookup("generic-pla").expect("generic-pla in registry");
 
     assert_eq!(printer.model, "Bambu Lab A1 mini");
     assert_eq!(plate.identity, "Textured PEI Plate");
@@ -58,9 +56,15 @@ fn reference_profiles_resolve_canonical_pla_pei_context() {
             .expect("parse cascade"),
     };
 
-    validate_cascade(&cascade, &KnownDimensions::new(
-        ["printer.model", "filament.type", "filament.name", "plate.type"],
-    ))
+    validate_cascade(
+        &cascade,
+        &KnownDimensions::new([
+            "printer.model",
+            "filament.type",
+            "filament.name",
+            "plate.type",
+        ]),
+    )
     .expect("reference cascade validates against the schema");
 
     let resolved = resolve(&cascade, &ctx);
@@ -81,7 +85,17 @@ fn reference_profiles_resolve_canonical_pla_pei_context() {
     assert_eq!(bed_temp.value, "65");
     assert_eq!(bed_temp.winning_specificity, 2);
 
-    let specs: Vec<usize> = bed_temp.matching_rules.iter().map(|m| m.specificity).collect();
-    assert!(specs.contains(&1), "spec-1 plate rule is a loser: {specs:?}");
-    assert!(specs.contains(&2), "spec-2 winner is in matching_rules: {specs:?}");
+    let specs: Vec<usize> = bed_temp
+        .matching_rules
+        .iter()
+        .map(|m| m.specificity)
+        .collect();
+    assert!(
+        specs.contains(&1),
+        "spec-1 plate rule is a loser: {specs:?}"
+    );
+    assert!(
+        specs.contains(&2),
+        "spec-2 winner is in matching_rules: {specs:?}"
+    );
 }

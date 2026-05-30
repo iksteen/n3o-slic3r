@@ -121,16 +121,18 @@ pub fn load_override_file(path: &Path) -> Result<FlatOverrides, CascadeLoadError
 }
 
 pub fn parse_override_str(src: &str, path: &Path) -> Result<FlatOverrides, CascadeLoadError> {
-    let parsed: toml::Value = src
-        .parse::<toml::Value>()
-        .map_err(|e| CascadeLoadError::TomlParse {
+    let parsed: toml::Value =
+        src.parse::<toml::Value>()
+            .map_err(|e| CascadeLoadError::TomlParse {
+                path: path.into(),
+                message: e.to_string(),
+            })?;
+    let root = parsed
+        .as_table()
+        .ok_or_else(|| CascadeLoadError::TomlParse {
             path: path.into(),
-            message: e.to_string(),
+            message: "expected a table at the file root".into(),
         })?;
-    let root = parsed.as_table().ok_or_else(|| CascadeLoadError::TomlParse {
-        path: path.into(),
-        message: "expected a table at the file root".into(),
-    })?;
 
     let mut entries = BTreeMap::new();
     for (key, value) in root {
@@ -207,11 +209,7 @@ fn base_entry_to_with_trace(v: ResolvedValue) -> ResolvedWithTrace {
     }
 }
 
-fn apply_tier(
-    out: &mut ResolvedOverrides,
-    files: &[FlatOverrides],
-    tier: OverrideTier,
-) {
+fn apply_tier(out: &mut ResolvedOverrides, files: &[FlatOverrides], tier: OverrideTier) {
     for file in files {
         for (key, value) in &file.entries {
             let entry = OverrideTraceEntry {
@@ -383,9 +381,7 @@ set.bed_temp = 55
 
     #[test]
     fn user_override_behaves_like_project_except_tier_marker() {
-        let cascade = parse_cascade(
-            "[[rule]]\nwhen.filament.type = \"PLA\"\nset.bed_temp = 55\n",
-        );
+        let cascade = parse_cascade("[[rule]]\nwhen.filament.type = \"PLA\"\nset.bed_temp = 55\n");
         let user = parse_override("bed_temp = 50\n", "user.toml");
         let overrides = OverrideTiers {
             user: vec![user],
@@ -412,7 +408,10 @@ set.bed_temp = 55
         let result = resolve_with_overrides(&cascade, &overrides, &pla_pei());
         let v = result.get("bed_temp").unwrap();
         assert_eq!(v.value, "45", "project wins");
-        assert_eq!(v.override_source.as_ref().unwrap().tier, OverrideTier::Project);
+        assert_eq!(
+            v.override_source.as_ref().unwrap().tier,
+            OverrideTier::Project
+        );
         assert_eq!(
             v.cascade_fallback.as_deref(),
             Some("55"),
@@ -430,9 +429,7 @@ set.bed_temp = 55
                 path: Path::new("<object>").into(),
                 line: 0,
             },
-            entries: [("bed_temp".into(), "40".into())]
-                .into_iter()
-                .collect(),
+            entries: [("bed_temp".into(), "40".into())].into_iter().collect(),
         };
         let overrides = OverrideTiers {
             user: vec![user],
@@ -442,7 +439,10 @@ set.bed_temp = 55
         let result = resolve_with_overrides(&cascade, &overrides, &pla_pei());
         let v = result.get("bed_temp").unwrap();
         assert_eq!(v.value, "40", "object tier wins above project");
-        assert_eq!(v.override_source.as_ref().unwrap().tier, OverrideTier::Object);
+        assert_eq!(
+            v.override_source.as_ref().unwrap().tier,
+            OverrideTier::Object
+        );
         // cascade_fallback is recorded on first override, which is
         // user — so the fallback is the cascade-resolved value, NOT
         // the user/project intermediates.
@@ -471,11 +471,17 @@ set.bed_temp = 55
         // Object overrode layer_height...
         let lh = result.get("layer_height").unwrap();
         assert_eq!(lh.value, "0.10");
-        assert_eq!(lh.override_source.as_ref().unwrap().tier, OverrideTier::Object);
+        assert_eq!(
+            lh.override_source.as_ref().unwrap().tier,
+            OverrideTier::Object
+        );
         // ...but project still wins bed_temp.
         let bt = result.get("bed_temp").unwrap();
         assert_eq!(bt.value, "45");
-        assert_eq!(bt.override_source.as_ref().unwrap().tier, OverrideTier::Project);
+        assert_eq!(
+            bt.override_source.as_ref().unwrap().tier,
+            OverrideTier::Project
+        );
     }
 
     #[test]
@@ -490,7 +496,10 @@ set.bed_temp = 55
         let result = resolve_with_overrides(&cascade, &overrides, &pla_pei());
         let v = result.get("bed_temp").unwrap();
         assert_eq!(v.value, "60");
-        assert!(v.cascade_fallback.is_none(), "no fallback (cascade didn't set it)");
+        assert!(
+            v.cascade_fallback.is_none(),
+            "no fallback (cascade didn't set it)"
+        );
         assert!(v.matching_rules.is_empty(), "no matching cascade rules");
     }
 
@@ -525,7 +534,10 @@ bed_temp = 50
 nozzle_diameter = [\"0.4\", \"0.6\"]
 ";
         let parsed = parse_override(src, "o.toml");
-        assert_eq!(parsed.entries.get("bed_temp").map(String::as_str), Some("50"));
+        assert_eq!(
+            parsed.entries.get("bed_temp").map(String::as_str),
+            Some("50")
+        );
         // Vectors get comma-joined like in the cascade loader.
         assert_eq!(
             parsed.entries.get("nozzle_diameter").map(String::as_str),

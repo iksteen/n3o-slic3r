@@ -117,14 +117,12 @@ impl MoonrakerSession {
                 // Binary / control frames aren't part of Moonraker's
                 // protocol contract; tungstenite handles pong replies
                 // for us, we just skip the frames here.
-                Message::Binary(_)
-                | Message::Ping(_)
-                | Message::Pong(_)
-                | Message::Frame(_) => continue,
+                Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
+                    continue
+                }
             };
-            let value: Value = serde_json::from_str(&text).map_err(|e| {
-                DriverError::Protocol(format!("Moonraker WS sent non-JSON: {e}"))
-            })?;
+            let value: Value = serde_json::from_str(&text)
+                .map_err(|e| DriverError::Protocol(format!("Moonraker WS sent non-JSON: {e}")))?;
             if value.get("method").and_then(Value::as_str) != Some("notify_status_update") {
                 continue;
             }
@@ -174,14 +172,12 @@ impl MoonrakerSession {
                         "Moonraker closed before subscribe response".into(),
                     ));
                 }
-                Message::Binary(_)
-                | Message::Ping(_)
-                | Message::Pong(_)
-                | Message::Frame(_) => continue,
+                Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
+                    continue
+                }
             };
-            let value: Value = serde_json::from_str(&text).map_err(|e| {
-                DriverError::Protocol(format!("Moonraker WS sent non-JSON: {e}"))
-            })?;
+            let value: Value = serde_json::from_str(&text)
+                .map_err(|e| DriverError::Protocol(format!("Moonraker WS sent non-JSON: {e}")))?;
             if value.get("id").and_then(Value::as_u64) != Some(id) {
                 // Out-of-band notification arrived before our
                 // subscribe response; ignore + keep waiting.
@@ -292,10 +288,8 @@ mod tests {
             .as_object()
             .cloned()
             .expect("initial must be an object");
-        let patch_map: Map<String, Value> = patch
-            .as_object()
-            .cloned()
-            .expect("patch must be an object");
+        let patch_map: Map<String, Value> =
+            patch.as_object().cloned().expect("patch must be an object");
         // Inline copy of MoonrakerSession::merge_status — the
         // function is private, this keeps the test honest by
         // mirroring the production path byte-for-byte.

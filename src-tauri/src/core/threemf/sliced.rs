@@ -96,7 +96,12 @@ pub fn write_sliced_3mf(input: &SlicedProjectInput, output: &Path) -> Result<(),
     let mut zip = ZipWriter::new(file);
     let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
-    write_entry(&mut zip, "[Content_Types].xml", content_types_xml().as_bytes(), opts)?;
+    write_entry(
+        &mut zip,
+        "[Content_Types].xml",
+        content_types_xml().as_bytes(),
+        opts,
+    )?;
     write_entry(&mut zip, "_rels/.rels", rels_xml().as_bytes(), opts)?;
     write_entry(
         &mut zip,
@@ -214,8 +219,7 @@ pub fn read_sliced_3mf(path: &Path) -> Result<SlicedRead, std::io::Error> {
             Some(bytes) => serde_json::from_slice::<SlicedPlateMetadata>(&bytes).ok(),
             None => None,
         };
-        let thumbnail_png =
-            read_entry_bytes(&mut zip, &format!("Metadata/plate_{plate_id}.png"))?;
+        let thumbnail_png = read_entry_bytes(&mut zip, &format!("Metadata/plate_{plate_id}.png"))?;
         plates.push(SlicedPlateRead {
             plate_id,
             gcode,
@@ -238,9 +242,7 @@ fn read_entry_bytes(
             Ok(Some(buf))
         }
         Err(zip::result::ZipError::FileNotFound) => Ok(None),
-        Err(e) => Err(std::io::Error::other(format!(
-            "read zip entry {name}: {e}"
-        ))),
+        Err(e) => Err(std::io::Error::other(format!("read zip entry {name}: {e}"))),
     }
 }
 
@@ -393,8 +395,8 @@ fn gcode_md5_hex(bytes: &[u8]) -> String {
 fn md5_compute(bytes: &[u8]) -> [u8; 16] {
     let s = [
         7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
-        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6,
-        10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
     ];
     let k: [u32; 64] = [
         0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613,

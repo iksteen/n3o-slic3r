@@ -16,12 +16,11 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 
-use crate::core::driver::status::{
-    ConnectionState, DriverExtra, JobProgress, JobState,
-    PrinterStatus, TempReading,
-};
 #[cfg(test)]
 use crate::core::driver::status::BambuExtra;
+use crate::core::driver::status::{
+    ConnectionState, DriverExtra, JobProgress, JobState, PrinterStatus, TempReading,
+};
 
 mod de {
     //! Number-or-string-coerced optional fields. Bambu's API
@@ -44,9 +43,7 @@ mod de {
         }
     }
 
-    pub(super) fn optional_i64<'de, D: Deserializer<'de>>(
-        d: D,
-    ) -> Result<Option<i64>, D::Error> {
+    pub(super) fn optional_i64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
         match Value::deserialize(d)? {
             Value::Null => Ok(None),
             Value::Number(n) => Ok(n.as_i64().or_else(|| n.as_f64().map(|f| f as i64))),
@@ -55,9 +52,7 @@ mod de {
         }
     }
 
-    pub(super) fn optional_f64<'de, D: Deserializer<'de>>(
-        d: D,
-    ) -> Result<Option<f64>, D::Error> {
+    pub(super) fn optional_f64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
         match Value::deserialize(d)? {
             Value::Null => Ok(None),
             Value::Number(n) => Ok(n.as_f64()),
@@ -73,15 +68,27 @@ mod de {
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct BambuReport {
     // --- Job ---
-    #[serde(default, rename = "gcode_state", deserialize_with = "de::optional_string")]
+    #[serde(
+        default,
+        rename = "gcode_state",
+        deserialize_with = "de::optional_string"
+    )]
     pub status_text: Option<String>,
     #[serde(default, rename = "mc_percent", deserialize_with = "de::optional_f64")]
     pub percent: Option<f64>,
-    #[serde(default, rename = "gcode_file", deserialize_with = "de::optional_string")]
+    #[serde(
+        default,
+        rename = "gcode_file",
+        deserialize_with = "de::optional_string"
+    )]
     pub filename: Option<String>,
     #[serde(default, rename = "layer_num", deserialize_with = "de::optional_i64")]
     pub layer_num: Option<i64>,
-    #[serde(default, rename = "total_layer_num", deserialize_with = "de::optional_i64")]
+    #[serde(
+        default,
+        rename = "total_layer_num",
+        deserialize_with = "de::optional_i64"
+    )]
     pub total_layer_num: Option<i64>,
     #[serde(
         default,
@@ -91,17 +98,33 @@ pub struct BambuReport {
     pub remaining_minutes: Option<f64>,
 
     // --- Temps ---
-    #[serde(default, rename = "nozzle_temper", deserialize_with = "de::optional_f64")]
+    #[serde(
+        default,
+        rename = "nozzle_temper",
+        deserialize_with = "de::optional_f64"
+    )]
     pub nozzle_temper: Option<f64>,
-    #[serde(default, rename = "nozzle_target_temper", deserialize_with = "de::optional_f64")]
+    #[serde(
+        default,
+        rename = "nozzle_target_temper",
+        deserialize_with = "de::optional_f64"
+    )]
     pub nozzle_target_temper: Option<f64>,
     #[serde(default, rename = "bed_temper", deserialize_with = "de::optional_f64")]
     pub bed_temper: Option<f64>,
-    #[serde(default, rename = "bed_target_temper", deserialize_with = "de::optional_f64")]
+    #[serde(
+        default,
+        rename = "bed_target_temper",
+        deserialize_with = "de::optional_f64"
+    )]
     pub bed_target_temper: Option<f64>,
     /// Not in bambu-overlay's model; added because PR-7a-3 calls
     /// it out + enclosed printers will surface it.
-    #[serde(default, rename = "chamber_temper", deserialize_with = "de::optional_f64")]
+    #[serde(
+        default,
+        rename = "chamber_temper",
+        deserialize_with = "de::optional_f64"
+    )]
     pub chamber_temper: Option<f64>,
 
     // --- Bambu extras ---
@@ -116,7 +139,11 @@ pub struct BambuReport {
     pub current_stage: Option<i64>,
     #[serde(default, rename = "print_error", deserialize_with = "de::optional_i64")]
     pub print_error: Option<i64>,
-    #[serde(default, rename = "cooling_fan_speed", deserialize_with = "de::optional_f64")]
+    #[serde(
+        default,
+        rename = "cooling_fan_speed",
+        deserialize_with = "de::optional_f64"
+    )]
     pub fan_speed: Option<f64>,
 
     // --- AMS (PR-7a-4) ---
@@ -158,12 +185,20 @@ pub struct RawAmsUnit {
 pub struct RawAmsTray {
     #[serde(default, deserialize_with = "de::optional_i64")]
     pub id: Option<i64>,
-    #[serde(default, rename = "tray_type", deserialize_with = "de::optional_string")]
+    #[serde(
+        default,
+        rename = "tray_type",
+        deserialize_with = "de::optional_string"
+    )]
     pub material: Option<String>,
     /// Bambu reports an empty/loaded color as `"00000000"` (fully
     /// transparent black). The normalizer in `to_typed` treats
     /// that as "no spool loaded" — the tray is empty.
-    #[serde(default, rename = "tray_color", deserialize_with = "de::optional_string")]
+    #[serde(
+        default,
+        rename = "tray_color",
+        deserialize_with = "de::optional_string"
+    )]
     pub color: Option<String>,
     /// Bambu's spool-specific identifier — varies by firmware
     /// path. Stored as-is. (Overlay reads `tray_sub_brands` —
@@ -204,12 +239,13 @@ impl RawAmsTray {
     /// to emit `Some(AmsFilament)` — kept separate so the merge
     /// gate doesn't have to allocate.
     pub fn has_spool_data(&self) -> bool {
-        let has_text = |opt: &Option<String>| {
-            opt.as_deref().map(str::trim).is_some_and(|s| !s.is_empty())
-        };
-        let has_color = self.color.as_deref().map(str::trim).is_some_and(|s| {
-            !s.is_empty() && !is_transparent_black(s)
-        });
+        let has_text =
+            |opt: &Option<String>| opt.as_deref().map(str::trim).is_some_and(|s| !s.is_empty());
+        let has_color = self
+            .color
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|s| !s.is_empty() && !is_transparent_black(s));
         let has_multi_color = self
             .cols
             .iter()
@@ -294,7 +330,10 @@ impl RawAmsState {
                     .iter()
                     .enumerate()
                     .map(|(tidx, t)| AmsTray {
-                        id: t.id.and_then(|i| u8::try_from(i).ok()).unwrap_or(tidx as u8),
+                        id: t
+                            .id
+                            .and_then(|i| u8::try_from(i).ok())
+                            .unwrap_or(tidx as u8),
                         identity: tray_identity(t),
                     })
                     .collect(),
@@ -304,11 +343,13 @@ impl RawAmsState {
     }
 }
 
-fn tray_identity(
-    t: &RawAmsTray,
-) -> Option<crate::core::driver::status::AmsFilament> {
+fn tray_identity(t: &RawAmsTray) -> Option<crate::core::driver::status::AmsFilament> {
     use crate::core::driver::status::AmsFilament;
-    let material = t.material.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let material = t
+        .material
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let color = t
         .color
         .as_deref()
@@ -420,8 +461,7 @@ pub struct BambuMessage {
 /// Decode raw MQTT payload bytes into a typed `BambuMessage`.
 /// Returns the parsed value or a parse error string.
 pub fn parse_message(bytes: &[u8]) -> Result<BambuMessage, String> {
-    serde_json::from_slice(bytes)
-        .map_err(|e| format!("bambu report parse: {e}"))
+    serde_json::from_slice(bytes).map_err(|e| format!("bambu report parse: {e}"))
 }
 
 /// Apply a `BambuReport` delta to the live `PrinterStatus`
@@ -445,10 +485,7 @@ pub fn merge_into(snapshot: &mut PrinterStatus, msg: BambuReport) {
         job.state = map_state(s);
     }
     if let Some(file) = msg.filename {
-        snapshot
-            .job
-            .get_or_insert(default_job())
-            .file_name = Some(file);
+        snapshot.job.get_or_insert(default_job()).file_name = Some(file);
     }
     if let Some(n) = msg.layer_num {
         snapshot.job.get_or_insert(default_job()).current_layer = Some(n as u32);
@@ -462,8 +499,7 @@ pub fn merge_into(snapshot: &mut PrinterStatus, msg: BambuReport) {
     if let Some(m) = msg.remaining_minutes {
         // Bambu's `mc_remaining_time` is in minutes per their
         // protocol notes — convert to seconds for `PrinterStatus`.
-        snapshot.job.get_or_insert(default_job()).eta_seconds =
-            Some((m * 60.0) as u64);
+        snapshot.job.get_or_insert(default_job()).eta_seconds = Some((m * 60.0) as u64);
     }
 
     // Temps.
@@ -554,8 +590,7 @@ pub async fn run_worker(
     mut raw_rx: mpsc::Receiver<Vec<u8>>,
     status_tx: watch::Sender<PrinterStatus>,
 ) {
-    let mut interval =
-        tokio::time::interval(std::time::Duration::from_millis(1000));
+    let mut interval = tokio::time::interval(std::time::Duration::from_millis(1000));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     // Snapshot we accumulate deltas into between ticks.
@@ -623,12 +658,14 @@ mod tests {
     fn parse_handles_string_or_number_for_layer_num() {
         let msg_num: BambuMessage = serde_json::from_value(json!({
             "print": { "layer_num": 42 }
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(msg_num.print.layer_num, Some(42));
 
         let msg_str: BambuMessage = serde_json::from_value(json!({
             "print": { "layer_num": "42" }
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(msg_str.print.layer_num, Some(42));
     }
 
@@ -665,9 +702,7 @@ mod tests {
 
     #[test]
     fn merge_into_populates_job_progress() {
-        let mut snap = PrinterStatus::disconnected_for(DriverExtra::Bambu(
-            BambuExtra::default(),
-        ));
+        let mut snap = PrinterStatus::disconnected_for(DriverExtra::Bambu(BambuExtra::default()));
         let report = BambuReport {
             status_text: Some("RUNNING".into()),
             layer_num: Some(5),
@@ -687,9 +722,7 @@ mod tests {
 
     #[test]
     fn merge_into_populates_temps_and_bambu_extra() {
-        let mut snap = PrinterStatus::disconnected_for(DriverExtra::Bambu(
-            BambuExtra::default(),
-        ));
+        let mut snap = PrinterStatus::disconnected_for(DriverExtra::Bambu(BambuExtra::default()));
         let report = BambuReport {
             nozzle_temper: Some(205.5),
             nozzle_target_temper: Some(210.0),
@@ -720,9 +753,7 @@ mod tests {
 
     #[test]
     fn merge_into_advances_last_updated() {
-        let mut snap = PrinterStatus::disconnected_for(DriverExtra::Bambu(
-            BambuExtra::default(),
-        ));
+        let mut snap = PrinterStatus::disconnected_for(DriverExtra::Bambu(BambuExtra::default()));
         let before = snap.last_updated;
         std::thread::sleep(std::time::Duration::from_millis(5));
         merge_into(&mut snap, BambuReport::default());
@@ -752,7 +783,8 @@ mod tests {
                     }]
                 }
             }
-        })).unwrap();
+        }))
+        .unwrap();
         let raw = msg.print.ams.expect("ams present");
         let typed = raw.to_typed();
         assert_eq!(typed.active_slot, Some(2));
@@ -785,7 +817,8 @@ mod tests {
                     }]
                 }
             }
-        })).unwrap();
+        }))
+        .unwrap();
         let typed = msg.print.ams.unwrap().to_typed();
         assert!(typed.units[0].trays[0].identity.is_some());
         assert!(typed.units[0].trays[1].identity.is_some());
@@ -812,7 +845,8 @@ mod tests {
                     }]
                 }
             }
-        })).unwrap();
+        }))
+        .unwrap();
         let typed = msg.print.ams.unwrap().to_typed();
         let id = typed.units[0].trays[0].identity.as_ref().unwrap();
         assert_eq!(id.multi_colors.len(), 3);
@@ -833,16 +867,15 @@ mod tests {
                     ]
                 }
             }
-        })).unwrap();
+        }))
+        .unwrap();
         let typed = msg.print.ams.unwrap().to_typed();
         assert_eq!(typed.active_slot, Some(5));
     }
 
     #[test]
     fn merge_into_populates_typed_ams_under_bambu_extra() {
-        let mut snap = PrinterStatus::disconnected_for(DriverExtra::Bambu(
-            BambuExtra::default(),
-        ));
+        let mut snap = PrinterStatus::disconnected_for(DriverExtra::Bambu(BambuExtra::default()));
         let report: BambuReport = serde_json::from_value(json!({
             "ams": {
                 "tray_now": 0,
@@ -853,14 +886,17 @@ mod tests {
                     ]
                 }]
             }
-        })).unwrap();
+        }))
+        .unwrap();
         merge_into(&mut snap, report);
         match snap.extra {
             DriverExtra::Bambu(extra) => {
                 let ams = extra.ams.expect("ams populated");
                 assert_eq!(ams.active_slot, Some(0));
-                assert_eq!(ams.units[0].trays[0]
-                    .identity.as_ref().unwrap().color, "FF8800FF");
+                assert_eq!(
+                    ams.units[0].trays[0].identity.as_ref().unwrap().color,
+                    "FF8800FF"
+                );
             }
             _ => panic!("expected Bambu extra"),
         }
@@ -899,13 +935,45 @@ mod tests {
         assert!(real_tray(0, "PLA", "FF8800FF").has_spool_data());
         assert!(!placeholder_tray(0).has_spool_data());
         // Color alone is enough.
-        assert!(RawAmsTray { id: None, material: None, color: Some("FF0000FF".into()), sub_brand: None, cols: vec![], tray_info_idx: None }.has_spool_data());
+        assert!(RawAmsTray {
+            id: None,
+            material: None,
+            color: Some("FF0000FF".into()),
+            sub_brand: None,
+            cols: vec![],
+            tray_info_idx: None
+        }
+        .has_spool_data());
         // Multi-color cols alone is enough.
-        assert!(RawAmsTray { id: None, material: None, color: None, sub_brand: None, cols: vec!["FF0000FF".into()], tray_info_idx: None }.has_spool_data());
+        assert!(RawAmsTray {
+            id: None,
+            material: None,
+            color: None,
+            sub_brand: None,
+            cols: vec!["FF0000FF".into()],
+            tray_info_idx: None
+        }
+        .has_spool_data());
         // sub_brand alone is enough.
-        assert!(RawAmsTray { id: None, material: None, color: None, sub_brand: Some("Bambu PLA Basic".into()), cols: vec![], tray_info_idx: None }.has_spool_data());
+        assert!(RawAmsTray {
+            id: None,
+            material: None,
+            color: None,
+            sub_brand: Some("Bambu PLA Basic".into()),
+            cols: vec![],
+            tray_info_idx: None
+        }
+        .has_spool_data());
         // All blanks / sentinels → empty.
-        assert!(!RawAmsTray { id: Some(0), material: Some("".into()), color: Some("000000".into()), sub_brand: Some("  ".into()), cols: vec!["00000000".into()], tray_info_idx: None }.has_spool_data());
+        assert!(!RawAmsTray {
+            id: Some(0),
+            material: Some("".into()),
+            color: Some("000000".into()),
+            sub_brand: Some("  ".into()),
+            cols: vec!["00000000".into()],
+            tray_info_idx: None
+        }
+        .has_spool_data());
     }
 
     #[test]
@@ -972,8 +1040,7 @@ mod tests {
             }),
             ..Default::default()
         });
-        let mut snap =
-            PrinterStatus::disconnected_for(DriverExtra::Bambu(BambuExtra::default()));
+        let mut snap = PrinterStatus::disconnected_for(DriverExtra::Bambu(BambuExtra::default()));
         merge_into(&mut snap, acc.clone());
         let DriverExtra::Bambu(extra) = &snap.extra else {
             panic!("expected Bambu extra");
@@ -1010,8 +1077,8 @@ mod tests {
                 id: Some(0),
                 tray: vec![
                     real_tray(0, "PETG", "FF00FFFF"), // updates [0]
-                    placeholder_tray(1),               // preserve cached [1]
-                    placeholder_tray(2),               // preserve cached [2]
+                    placeholder_tray(1),              // preserve cached [1]
+                    placeholder_tray(2),              // preserve cached [2]
                     real_tray(3, "ABS", "00FFFFFF"),  // updates [3]
                 ],
             }],
@@ -1090,8 +1157,14 @@ mod tests {
         let patch = RawAmsState {
             tray_now: None,
             ams: vec![
-                RawAmsUnit { id: Some(0), tray: vec![placeholder_tray(0)] },
-                RawAmsUnit { id: Some(1), tray: vec![real_tray(0, "PETG", "00FF00FF")] },
+                RawAmsUnit {
+                    id: Some(0),
+                    tray: vec![placeholder_tray(0)],
+                },
+                RawAmsUnit {
+                    id: Some(1),
+                    tray: vec![real_tray(0, "PETG", "00FF00FF")],
+                },
             ],
         };
         cached.merge_in(patch);
@@ -1105,11 +1178,11 @@ mod tests {
     #[test]
     fn is_transparent_black_classifies_known_sentinels() {
         assert!(is_transparent_black("00000000"));
-        assert!(is_transparent_black("000000"));   // 6-hex form
-        assert!(is_transparent_black("#000000"));  // with hash
+        assert!(is_transparent_black("000000")); // 6-hex form
+        assert!(is_transparent_black("#000000")); // with hash
         assert!(!is_transparent_black("FF0000FF"));
         assert!(!is_transparent_black("000001FF")); // not exactly 000000
-        assert!(!is_transparent_black("000000FF"));  // alpha != 00
+        assert!(!is_transparent_black("000000FF")); // alpha != 00
     }
 
     #[test]

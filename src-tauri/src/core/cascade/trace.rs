@@ -114,10 +114,7 @@ impl fmt::Display for Trace {
             writeln!(
                 f,
                 "  override: tier={} at {} → set.{} = {}",
-                override_entry.tier,
-                override_entry.source,
-                self.key,
-                override_entry.value,
+                override_entry.tier, override_entry.source, self.key, override_entry.value,
             )?;
         }
 
@@ -130,11 +127,7 @@ impl fmt::Display for Trace {
             writeln!(
                 f,
                 "  {label:<16}  spec={} {} at {} → set.{} = {}",
-                winner.specificity,
-                winner.when_summary,
-                winner.source,
-                self.key,
-                winner.set_value,
+                winner.specificity, winner.when_summary, winner.source, self.key, winner.set_value,
             )?;
         }
 
@@ -142,11 +135,7 @@ impl fmt::Display for Trace {
             writeln!(
                 f,
                 "  loser:            spec={} {} at {} → set.{} = {}",
-                loser.specificity,
-                loser.when_summary,
-                loser.source,
-                self.key,
-                loser.set_value,
+                loser.specificity, loser.when_summary, loser.source, self.key, loser.set_value,
             )?;
         }
 

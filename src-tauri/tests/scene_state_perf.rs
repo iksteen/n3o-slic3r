@@ -19,9 +19,9 @@
 //! `#[test]` instead of criterion to keep the regression gate
 //! inside the normal `cargo test --release` invocation.
 
+use n3o_slic3r_lib::core::project::Project;
 use n3o_slic3r_lib::core::scene::events::SelectMode;
 use n3o_slic3r_lib::core::scene::primitives::{PrimitiveKind, PrimitiveParams};
-use n3o_slic3r_lib::core::project::Project;
 use n3o_slic3r_lib::core::scene::state::ObjectId;
 use std::time::{Duration, Instant};
 

@@ -45,7 +45,9 @@ impl fmt::Display for LoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
-            Self::Parse { path, message } => write!(f, "{}: parse error: {message}", path.display()),
+            Self::Parse { path, message } => {
+                write!(f, "{}: parse error: {message}", path.display())
+            }
             Self::UnsupportedExtension { path } => write!(
                 f,
                 "{}: unsupported extension (expected .stl or .obj)",

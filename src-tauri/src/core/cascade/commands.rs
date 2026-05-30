@@ -146,8 +146,8 @@ pub fn cascade_load(
 ) -> Result<CascadeHandle, String> {
     let mut all_rules = Vec::new();
     for f in &files {
-        let rules = parse_cascade_str(&f.content, Path::new(&f.label))
-            .map_err(|e| e.to_string())?;
+        let rules =
+            parse_cascade_str(&f.content, Path::new(&f.label)).map_err(|e| e.to_string())?;
         all_rules.extend(rules);
     }
     let cascade = Cascade { rules: all_rules };
@@ -167,7 +167,6 @@ pub fn cascade_load(
     let mut registry = state.lock().map_err(|e| format!("registry lock: {e}"))?;
     Ok(registry.insert(cascade))
 }
-
 
 /// Resolve a previously-loaded cascade against the supplied context.
 /// Returns the full `ResolvedOverrides` map serialized into JSON.
@@ -361,5 +360,4 @@ mod tests {
         let reg = registry.lock().unwrap();
         assert!(reg.get(9999).is_none());
     }
-
 }

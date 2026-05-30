@@ -88,15 +88,18 @@ fn write_line<W: Write>(line: &Line, out: &mut W) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::parser::parse_str;
+    use super::*;
 
     /// The whole point of the serializer: parse → serialize is the
     /// identity on the byte level.
     fn assert_round_trip(src: &str) {
         let lines = parse_str(src);
         let out = to_string(&lines);
-        assert_eq!(out, src, "byte round-trip failed:\n--- source ---\n{src}\n--- emitted ---\n{out}\n");
+        assert_eq!(
+            out, src,
+            "byte round-trip failed:\n--- source ---\n{src}\n--- emitted ---\n{out}\n"
+        );
     }
 
     #[test]

@@ -110,7 +110,7 @@ endsolid triangle
         let mut bytes = Vec::with_capacity(84 + 50);
         bytes.extend_from_slice(&[0u8; 80]); // header (non-"solid" so the sniffer takes the binary branch)
         bytes.extend_from_slice(&1u32.to_le_bytes()); // 1 face
-        // face normal (ignored — we recompute)
+                                                      // face normal (ignored — we recompute)
         for f in [0.0f32, 0.0, 1.0] {
             bytes.extend_from_slice(&f.to_le_bytes());
         }

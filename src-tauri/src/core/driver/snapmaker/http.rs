@@ -131,9 +131,10 @@ mod tests {
             // wrapper picked the multipart path (not, say, a JSON
             // body).
             .and(header_exists("content-type"))
-            .respond_with(ResponseTemplate::new(201).set_body_json(
-                serde_json::json!({ "result": { "print_started": true } }),
-            ))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .set_body_json(serde_json::json!({ "result": { "print_started": true } })),
+            )
             .mount(&server)
             .await;
         let (host, port) = host_port(&server);
@@ -149,9 +150,10 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/server/files/upload"))
-            .respond_with(ResponseTemplate::new(409).set_body_json(
-                serde_json::json!({ "error": { "message": "file exists" } }),
-            ))
+            .respond_with(
+                ResponseTemplate::new(409)
+                    .set_body_json(serde_json::json!({ "error": { "message": "file exists" } })),
+            )
             .mount(&server)
             .await;
         let (host, port) = host_port(&server);
@@ -164,7 +166,9 @@ mod tests {
     #[tokio::test]
     async fn upload_unreachable_host_maps_to_network_error() {
         // Reserved port — nothing should be listening.
-        let err = upload_and_start("127.0.0.1", 1, "x.gcode", vec![]).await.unwrap_err();
+        let err = upload_and_start("127.0.0.1", 1, "x.gcode", vec![])
+            .await
+            .unwrap_err();
         assert!(matches!(err, DriverError::Network(_)), "{err:?}");
     }
 
@@ -175,13 +179,15 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/printer/print/pause"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({ "result": "ok" }),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "result": "ok" })),
+            )
             .mount(&server)
             .await;
         let (host, port) = host_port(&server);
-        send_command(&host, port, PrinterCommand::Pause).await.unwrap();
+        send_command(&host, port, PrinterCommand::Pause)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -189,13 +195,15 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/printer/print/resume"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({ "result": "ok" }),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "result": "ok" })),
+            )
             .mount(&server)
             .await;
         let (host, port) = host_port(&server);
-        send_command(&host, port, PrinterCommand::Resume).await.unwrap();
+        send_command(&host, port, PrinterCommand::Resume)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -206,13 +214,15 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/printer/print/cancel"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({ "result": "ok" }),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "result": "ok" })),
+            )
             .mount(&server)
             .await;
         let (host, port) = host_port(&server);
-        send_command(&host, port, PrinterCommand::Stop).await.unwrap();
+        send_command(&host, port, PrinterCommand::Stop)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -223,13 +233,16 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/printer/print/pause"))
-            .respond_with(ResponseTemplate::new(400).set_body_json(
-                serde_json::json!({ "error": { "message": "not printing" } }),
-            ))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(serde_json::json!({ "error": { "message": "not printing" } })),
+            )
             .mount(&server)
             .await;
         let (host, port) = host_port(&server);
-        let err = send_command(&host, port, PrinterCommand::Pause).await.unwrap_err();
+        let err = send_command(&host, port, PrinterCommand::Pause)
+            .await
+            .unwrap_err();
         match err {
             DriverError::Protocol(msg) => assert!(msg.contains("pause"), "got {msg}"),
             other => panic!("expected Protocol, got {other:?}"),

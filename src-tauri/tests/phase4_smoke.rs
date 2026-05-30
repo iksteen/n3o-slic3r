@@ -9,9 +9,7 @@
 
 use std::sync::Once;
 
-use n3o_slic3r_lib::core::cascade::{
-    slicer_options, slicer_options_for_printer, OptMode,
-};
+use n3o_slic3r_lib::core::cascade::{slicer_options, slicer_options_for_printer, OptMode};
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
 use n3o_slic3r_lib::core::schema::CapabilityPredicate;
 use slic3r_ffi::init as ffi_init;

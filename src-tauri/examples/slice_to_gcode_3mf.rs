@@ -21,12 +21,14 @@ use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let input = PathBuf::from(args.next().ok_or(
-        "usage: slice_to_gcode_3mf <input.3mf> <output.gcode.3mf>",
-    )?);
-    let output = PathBuf::from(args.next().ok_or(
-        "usage: slice_to_gcode_3mf <input.3mf> <output.gcode.3mf>",
-    )?);
+    let input = PathBuf::from(
+        args.next()
+            .ok_or("usage: slice_to_gcode_3mf <input.3mf> <output.gcode.3mf>")?,
+    );
+    let output = PathBuf::from(
+        args.next()
+            .ok_or("usage: slice_to_gcode_3mf <input.3mf> <output.gcode.3mf>")?,
+    );
 
     init(None, 3).map_err(|e| format!("libslic3r init: {e}"))?;
 
@@ -40,9 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Slice to a temp raw .gcode; we'll wrap it into a .gcode.3mf
     // bundle next. Same two-step our driver's send path does.
-    let tmp_gcode = tempfile::Builder::new()
-        .suffix(".gcode")
-        .tempfile()?;
+    let tmp_gcode = tempfile::Builder::new().suffix(".gcode").tempfile()?;
     eprintln!("slicing → {}", tmp_gcode.path().display());
     slice(&model, &config, tmp_gcode.path(), |_, _| {})?;
 
@@ -56,14 +56,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `core::driver::commands::wrap_gcode_as_3mf` — fixture_input
     // for a single plate, plate_id = 1.
     let input_struct = fixture_input(1, gcode_bytes);
-    write_sliced_3mf(&input_struct, &output)
-        .map_err(|e| format!("write .gcode.3mf: {e}"))?;
+    write_sliced_3mf(&input_struct, &output).map_err(|e| format!("write .gcode.3mf: {e}"))?;
 
     let bundle_bytes = std::fs::metadata(&output)?.len();
-    eprintln!(
-        "ok — wrote {} ({} bytes)",
-        output.display(),
-        bundle_bytes,
-    );
+    eprintln!("ok — wrote {} ({} bytes)", output.display(), bundle_bytes,);
     Ok(())
 }

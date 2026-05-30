@@ -348,11 +348,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Re-set every key from our resolved config on top of the model's
 /// embedded config. Cheap workaround for not having a Config::merge in
 /// the FFI surface today — the finding doc captures this as a gap.
-fn overlay(
-    _from: &Config,
-    into: &mut Config,
-    resolved: &Context,
-) -> Result<(), Error> {
+fn overlay(_from: &Config, into: &mut Config, resolved: &Context) -> Result<(), Error> {
     for (k, v) in resolved {
         if k == "bed_temp" {
             continue;

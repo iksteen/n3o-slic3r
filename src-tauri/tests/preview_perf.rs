@@ -47,7 +47,12 @@ fn synthetic_gcode(target_bytes: usize) -> String {
 
     let mut layer = 0u32;
     let mut z = 0.2_f32;
-    let features = ["Perimeter", "External perimeter", "Internal infill", "Solid infill"];
+    let features = [
+        "Perimeter",
+        "External perimeter",
+        "Internal infill",
+        "Solid infill",
+    ];
     let mut x = 100.0_f32;
     let mut y = 100.0_f32;
     let mut e = 0.0_f32;
@@ -99,7 +104,10 @@ fn build_preview_under_2s_on_5mb_synthetic() {
         (src.len() as f64 / 1_048_576.0) / elapsed.as_secs_f64(),
     );
 
-    assert!(geom.extrusions.len() > 0, "IR build yielded zero extrusions");
+    assert!(
+        geom.extrusions.len() > 0,
+        "IR build yielded zero extrusions"
+    );
     assert!(
         elapsed.as_millis() < 2000,
         "parse + build_preview took {:?} on 5 MB synthetic (debug budget: 2000 ms; \
@@ -139,8 +147,7 @@ fn encode_colors_under_400ms_per_mode_on_5mb_synthetic() {
     let lines = parse_str(&src);
     let geom = build_preview(&lines);
     let layer_stats = compute_layer_stats(&geom);
-    let layer_times: Vec<f32> =
-        layer_stats.iter().map(|s| s.duration_seconds).collect();
+    let layer_times: Vec<f32> = layer_stats.iter().map(|s| s.duration_seconds).collect();
 
     for mode in [
         ColorMode::Feature,
@@ -150,12 +157,7 @@ fn encode_colors_under_400ms_per_mode_on_5mb_synthetic() {
         ColorMode::Tool,
     ] {
         let start = Instant::now();
-        let colors = encode_colors(
-            &geom.extrusions,
-            mode,
-            Palette::Default,
-            Some(&layer_times),
-        );
+        let colors = encode_colors(&geom.extrusions, mode, Palette::Default, Some(&layer_times));
         let elapsed = start.elapsed();
         println!(
             "encode_colors({:?}): {} floats in {:?}",

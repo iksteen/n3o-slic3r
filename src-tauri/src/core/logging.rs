@@ -15,8 +15,7 @@ use std::env;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 pub fn init() {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let json = env::var("LOG_FORMAT")
         .map(|v| v.eq_ignore_ascii_case("json"))
@@ -26,7 +25,10 @@ pub fn init() {
     // call is set-once across the process — guard with .try_init() so a
     // duplicate call (e.g. in tests) is a no-op rather than a panic.
     if json {
-        let layer = fmt::layer().json().with_target(true).with_current_span(true);
+        let layer = fmt::layer()
+            .json()
+            .with_target(true)
+            .with_current_span(true);
         let _ = tracing_subscriber::registry()
             .with(env_filter)
             .with(layer)

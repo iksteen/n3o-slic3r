@@ -44,8 +44,7 @@ use crate::core::scene::loaders::LoadError;
 use crate::core::scene::state::{MeshId, NewMesh};
 use crate::core::scene::transform::Transform;
 use crate::core::threemf::{
-    load_3mf, project_from_objects, read_3mf_extra_entry, write_3mf_with_extras,
-    ProjectObject,
+    load_3mf, project_from_objects, read_3mf_extra_entry, write_3mf_with_extras, ProjectObject,
 };
 
 /// Schema version baked into every written project. Bump on
@@ -185,15 +184,17 @@ pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoEr
     let mut geometry_objects: Vec<ProjectObject> = Vec::new();
     for plate in &project.plates {
         for obj in plate.scene.objects.values() {
-            let mesh_idx = mesh_id_to_idx.get(&obj.mesh).copied().ok_or_else(|| {
-                ProjectIoError::Json {
-                    path: output.into(),
-                    message: format!(
-                        "object {} references unknown mesh {}",
-                        obj.id.0, obj.mesh.0,
-                    ),
-                }
-            })?;
+            let mesh_idx =
+                mesh_id_to_idx
+                    .get(&obj.mesh)
+                    .copied()
+                    .ok_or_else(|| ProjectIoError::Json {
+                        path: output.into(),
+                        message: format!(
+                            "object {} references unknown mesh {}",
+                            obj.id.0, obj.mesh.0,
+                        ),
+                    })?;
             geometry_objects.push(ProjectObject {
                 mesh_idx,
                 transform: obj.transform,
@@ -252,16 +253,12 @@ pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoEr
 /// is the surface for "save to a different path."
 pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
     // 1. JSON skeleton.
-    let raw = read_3mf_extra_entry(input, METADATA_FILENAME)?.ok_or_else(|| {
-        ProjectIoError::NotAProjectFile {
-            path: input.into(),
-        }
+    let raw = read_3mf_extra_entry(input, METADATA_FILENAME)?
+        .ok_or_else(|| ProjectIoError::NotAProjectFile { path: input.into() })?;
+    let file: ProjectFile = serde_json::from_slice(&raw).map_err(|e| ProjectIoError::Json {
+        path: input.into(),
+        message: format!("parse: {e}"),
     })?;
-    let file: ProjectFile =
-        serde_json::from_slice(&raw).map_err(|e| ProjectIoError::Json {
-            path: input.into(),
-            message: format!("parse: {e}"),
-        })?;
     if file.format_version != FORMAT_VERSION {
         return Err(ProjectIoError::SchemaMismatch {
             found: file.format_version,
@@ -390,16 +387,14 @@ mod tests {
     #[test]
     fn round_trip_preserves_plate_metadata_and_bindings() {
         let mut p = Project::default();
-        p.user_overrides
-            .insert("travel_speed".into(), "300".into());
+        p.user_overrides.insert("travel_speed".into(), "300".into());
         p.file_metadata
             .insert("Title".into(), "Fixture Project".into());
         // Plate 0: printer + bindings + project override.
         p.plates[0].printer_instance_id = Some(A1_MINI_INSTANCE.into());
-        p.plates[0].project_overrides.insert(
-            "layer_height".into(),
-            "0.12".into(),
-        );
+        p.plates[0]
+            .project_overrides
+            .insert("layer_height".into(), "0.12".into());
         // Add a second plate so the list-shape survives.
         p.add_plate(None);
 
@@ -408,7 +403,10 @@ mod tests {
         let parsed = read_project(&path).expect("read");
 
         assert_eq!(
-            parsed.user_overrides.get("travel_speed").map(|s| s.as_str()),
+            parsed
+                .user_overrides
+                .get("travel_speed")
+                .map(|s| s.as_str()),
             Some("300"),
         );
         assert_eq!(
@@ -562,10 +560,7 @@ mod tests {
             .iter()
             .map(|pl| pl.printer_instance_id.as_deref().unwrap_or("<unbound>"))
             .collect();
-        assert_eq!(
-            instances,
-            vec![A1_MINI_INSTANCE, U1_INSTANCE, U1_INSTANCE],
-        );
+        assert_eq!(instances, vec![A1_MINI_INSTANCE, U1_INSTANCE, U1_INSTANCE],);
         std::fs::remove_file(&path).ok();
     }
 }

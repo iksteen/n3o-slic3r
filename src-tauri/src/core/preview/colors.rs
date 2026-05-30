@@ -241,12 +241,12 @@ fn feature_color(feature: &FeatureType, palette: Palette) -> [f32; 3] {
             // Slicer-conventional: warm-cool assignment from
             // OrcaSlicer's default feature legend.
             FeatureType::ExternalPerimeter => [0.91, 0.27, 0.27], // red
-            FeatureType::Perimeter => [1.0, 0.55, 0.0],          // orange
-            FeatureType::Infill => [0.13, 0.55, 0.85],          // blue
-            FeatureType::SolidInfill => [0.35, 0.78, 0.96],     // light blue
-            FeatureType::TopSolidInfill => [1.0, 0.9, 0.2],     // yellow
-            FeatureType::Bridge => [0.6, 0.4, 0.8],             // purple
-            FeatureType::Support => [0.4, 0.7, 0.4],            // green
+            FeatureType::Perimeter => [1.0, 0.55, 0.0],           // orange
+            FeatureType::Infill => [0.13, 0.55, 0.85],            // blue
+            FeatureType::SolidInfill => [0.35, 0.78, 0.96],       // light blue
+            FeatureType::TopSolidInfill => [1.0, 0.9, 0.2],       // yellow
+            FeatureType::Bridge => [0.6, 0.4, 0.8],               // purple
+            FeatureType::Support => [0.4, 0.7, 0.4],              // green
             FeatureType::Skirt | FeatureType::Brim => [0.6, 0.6, 0.6],
             FeatureType::Travel => [0.5, 0.5, 0.5],
             FeatureType::Other(_) => [0.5, 0.5, 0.5],
@@ -378,7 +378,9 @@ mod tests {
         for axis in 0..3 {
             assert!(
                 (c[axis] - lowest[axis]).abs() < 1e-3,
-                "axis {axis}: got {} expected {}", c[axis], lowest[axis],
+                "axis {axis}: got {} expected {}",
+                c[axis],
+                lowest[axis],
             );
         }
         // Segment 1 (speed=100, the max) → viridis[last] (yellow).
@@ -386,7 +388,9 @@ mod tests {
         for axis in 0..3 {
             assert!(
                 (c[6 + axis] - highest[axis]).abs() < 1e-3,
-                "axis {axis}: got {} expected {}", c[6 + axis], highest[axis],
+                "axis {axis}: got {} expected {}",
+                c[6 + axis],
+                highest[axis],
             );
         }
     }

@@ -142,9 +142,7 @@ pub struct DriverSummary {
 mod tests {
     use super::*;
     use crate::core::driver::status::{BambuExtra, DriverExtra, PrinterStatus};
-    use crate::core::driver::traits::{
-        DriverError, PrinterCommand, SendHandle, SendPayload,
-    };
+    use crate::core::driver::traits::{DriverError, PrinterCommand, SendHandle, SendPayload};
     use async_trait::async_trait;
     use tokio::sync::watch;
 

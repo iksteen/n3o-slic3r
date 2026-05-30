@@ -222,9 +222,7 @@ mod tests {
 
     #[test]
     fn printer_status_serde_round_trip_preserves_last_updated() {
-        let status = PrinterStatus::disconnected_for(DriverExtra::Bambu(
-            BambuExtra::default(),
-        ));
+        let status = PrinterStatus::disconnected_for(DriverExtra::Bambu(BambuExtra::default()));
         let s = serde_json::to_string(&status).unwrap();
         let back: PrinterStatus = serde_json::from_str(&s).unwrap();
         // millisecond precision lost intentionally — sub-ms

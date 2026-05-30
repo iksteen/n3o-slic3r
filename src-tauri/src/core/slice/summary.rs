@@ -81,8 +81,7 @@ pub fn build_summary(gcode_path: &Path) -> Result<PlateSummary, std::io::Error> 
 /// path the orchestrator could take if libslic3r ever gives us the
 /// G-code in memory (PRD §8.3's pending FFI extension).
 pub fn build_summary_from_bytes(bytes: &[u8], gcode_path: &Path) -> PlateSummary {
-    let comment_block =
-        collect_comment_lines(std::io::Cursor::new(bytes)).unwrap_or_default();
+    let comment_block = collect_comment_lines(std::io::Cursor::new(bytes)).unwrap_or_default();
     let parsed = parse_all_metadata(comment_block.as_bytes());
     summary_from_header(&parsed, gcode_path)
 }
@@ -128,9 +127,7 @@ fn summary_from_header(header: &HeaderMetadata, output_path: &Path) -> PlateSumm
             // normalize to mm3 for our typed slot.
             "cm3" => {
                 for (i, v) in per_extruder.into_iter().enumerate() {
-                    summary
-                        .filament_used_mm3
-                        .insert(i as u8, v * 1000.0);
+                    summary.filament_used_mm3.insert(i as u8, v * 1000.0);
                 }
                 continue;
             }
@@ -274,10 +271,13 @@ G28\n\
 G1 X0\n";
         let path = write_tempfile(src);
         let summary = build_summary(&path).expect("ok");
-        assert_eq!(summary, PlateSummary {
-            output_path: summary.output_path.clone(),
-            ..PlateSummary::default()
-        });
+        assert_eq!(
+            summary,
+            PlateSummary {
+                output_path: summary.output_path.clone(),
+                ..PlateSummary::default()
+            }
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -342,8 +342,7 @@ G1 X0\n";
         src.push_str("; filament used [mm] = 4814.50\n");
         src.push_str("; filament used [cm3] = 11.58\n");
 
-        let summary =
-            build_summary_from_bytes(src.as_bytes(), Path::new("(in-memory)"));
+        let summary = build_summary_from_bytes(src.as_bytes(), Path::new("(in-memory)"));
         assert_eq!(summary.layer_count, 235, "footer layer count reached");
         assert_eq!(summary.estimated_time_seconds, 2 * 3600 + 7);
         assert_eq!(

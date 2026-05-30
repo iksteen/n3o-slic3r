@@ -55,10 +55,7 @@ pub enum SliceInputError {
     /// instances mutated through the normal commands (those validate
     /// at set-time) but a hand-edited on-disk instance file could
     /// trip it.
-    UnsupportedBuildPlate {
-        plate_id: PlateId,
-        identity: String,
-    },
+    UnsupportedBuildPlate { plate_id: PlateId, identity: String },
     /// The plate has no objects. Slicing an empty plate is always
     /// the user's mistake — surface early rather than letting
     /// libslic3r emit "no geometry" two seconds in.
@@ -77,10 +74,9 @@ impl std::fmt::Display for SliceInputError {
                 "plate {} has no printer bound; pick one first",
                 plate_id.0,
             ),
-            Self::PrinterNotInRegistry { identity } => write!(
-                f,
-                "printer identity `{identity}` not in bundled registry",
-            ),
+            Self::PrinterNotInRegistry { identity } => {
+                write!(f, "printer identity `{identity}` not in bundled registry",)
+            }
             Self::UnsupportedBuildPlate { plate_id, identity } => write!(
                 f,
                 "plate {}: build plate `{identity}` not supported by the bound printer",
@@ -92,7 +88,11 @@ impl std::fmt::Display for SliceInputError {
                 plate_id.0,
             ),
             Self::TempWrite { path, message } => {
-                write!(f, "couldn't write slice input at {}: {message}", path.display())
+                write!(
+                    f,
+                    "couldn't write slice input at {}: {message}",
+                    path.display()
+                )
             }
         }
     }
@@ -130,9 +130,8 @@ pub fn build_slice_input(
         .printer_instance_id
         .clone()
         .ok_or(SliceInputError::UnboundPrinter { plate_id })?;
-    let instance = lookup_instance(&printer_instance_id).ok_or(
-        SliceInputError::UnboundPrinter { plate_id },
-    )?;
+    let instance = lookup_instance(&printer_instance_id)
+        .ok_or(SliceInputError::UnboundPrinter { plate_id })?;
     let printer_profile = printer::lookup(&instance.vendor_profile_ref).ok_or_else(|| {
         SliceInputError::PrinterNotInRegistry {
             identity: instance.vendor_profile_ref.clone(),
@@ -228,8 +227,7 @@ pub fn build_slice_input(
         // always resolvable, even before the user picks a slot.
         let mut layout: Vec<Option<crate::core::printer::SlotRef>> =
             Vec::with_capacity(material_count);
-        let mut filaments: Vec<FilamentProfile> =
-            Vec::with_capacity(material_count);
+        let mut filaments: Vec<FilamentProfile> = Vec::with_capacity(material_count);
         for material in 1..=material_count as u8 {
             let slot_ref = plate.material_to_slot.get(&material).copied();
             layout.push(slot_ref);
@@ -256,14 +254,9 @@ pub fn build_slice_input(
     };
 
     // ── Overrides ─────────────────────────────────────────────
-    let user_overrides = encode_overrides_as_specs(
-        "user-overrides.toml",
-        &project.user_overrides,
-    );
-    let project_overrides = encode_overrides_as_specs(
-        "project-overrides.toml",
-        &plate.project_overrides,
-    );
+    let user_overrides = encode_overrides_as_specs("user-overrides.toml", &project.user_overrides);
+    let project_overrides =
+        encode_overrides_as_specs("project-overrides.toml", &plate.project_overrides);
 
     // ── Temp 3MF write ────────────────────────────────────────
     //
@@ -283,8 +276,8 @@ pub fn build_slice_input(
     // .3mf write that's the last point before libslic3r consumes
     // the value.
     let temp_path = temp_3mf_path(plate_id);
-    let project_3mf = build_plate_geometry(project, plate_id, &instance)
-        .expect("plate existence checked above");
+    let project_3mf =
+        build_plate_geometry(project, plate_id, &instance).expect("plate existence checked above");
     write_3mf(&project_3mf, &temp_path).map_err(|e| SliceInputError::TempWrite {
         path: temp_path.clone(),
         message: format!("{e}"),
@@ -453,10 +446,7 @@ fn build_plate_geometry(
 ///
 /// Returns an empty `Vec` for empty input — the cascade's override
 /// parser is happy with a zero-spec list.
-fn encode_overrides_as_specs(
-    label: &str,
-    map: &HashMap<String, String>,
-) -> Vec<OverrideFileSpec> {
+fn encode_overrides_as_specs(label: &str, map: &HashMap<String, String>) -> Vec<OverrideFileSpec> {
     if map.is_empty() {
         return Vec::new();
     }
@@ -495,9 +485,9 @@ fn temp_3mf_path(plate_id: PlateId) -> PathBuf {
 mod tests {
     use super::*;
     use crate::core::printer::instance_registry::RegistryGuard;
+    use crate::core::printer::profile::BoundingBox;
     use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
     use crate::core::scene::transform::Transform;
-    use crate::core::printer::profile::BoundingBox;
 
     fn triangle_mesh() -> NewMesh {
         NewMesh {
@@ -528,15 +518,17 @@ mod tests {
         let _registry = RegistryGuard::acquire();
         let project = one_plate_project_with_cube();
         let (input, temp_path) =
-            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
-                .expect("build");
+            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert_eq!(input.plate_ids, vec![1]);
         assert_eq!(input.context.printer.model, "Bambu Lab A1 mini");
         // The bambi instance ships with Supertack Plate; reads off the
         // instance, not off a per-binding override.
         assert_eq!(input.context.plate.identity, "Supertack Plate");
-        assert_eq!(input.context.plate.libslic3r_curr_bed_type, "Supertack Plate");
+        assert_eq!(
+            input.context.plate.libslic3r_curr_bed_type,
+            "Supertack Plate"
+        );
         assert!(temp_path.exists(), "temp file written");
         assert_eq!(input.model_path, temp_path.to_string_lossy());
 
@@ -547,7 +539,10 @@ mod tests {
         assert_eq!(input.context.filaments.len(), 1);
         assert_eq!(input.context.filaments[0].identity, "generic-pla");
         assert_eq!(input.material_layout.len(), 1);
-        assert!(input.material_layout[0].is_some(), "M1 auto-binds to an AMS slot");
+        assert!(
+            input.material_layout[0].is_some(),
+            "M1 auto-binds to an AMS slot"
+        );
 
         std::fs::remove_file(&temp_path).ok();
     }
@@ -576,7 +571,10 @@ mod tests {
         assert_eq!(input.plate_ids, vec![2]);
         assert_eq!(input.context.printer.model, "Snapmaker U1");
         assert_eq!(input.context.plate.identity, "Textured PEI Plate");
-        assert_eq!(input.context.plate.libslic3r_curr_bed_type, "Textured PEI Plate");
+        assert_eq!(
+            input.context.plate.libslic3r_curr_bed_type,
+            "Textured PEI Plate"
+        );
         // Snappy is a toolchanger (>1 extruder) → legacy per-slot
         // cascade: 4 extruders × 1 slot = 4 filaments. AMS-style
         // printers (single extruder) would use one filament per
@@ -615,8 +613,7 @@ mod tests {
         let (input, temp_path) =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
-        let reloaded =
-            crate::core::threemf::load_3mf(&temp_path).expect("reload temp 3MF");
+        let reloaded = crate::core::threemf::load_3mf(&temp_path).expect("reload temp 3MF");
         assert_eq!(reloaded.objects.len(), 1);
         assert_eq!(reloaded.objects[0].extruder_id, Some(3));
         // material_layout has one entry per material; material 3 → 3
@@ -650,15 +647,18 @@ mod tests {
             group_id: None,
         });
         // Override the auto-bind with an explicit "M1 → T1" binding.
-        project.plates[0]
-            .material_to_slot
-            .insert(1, SlotRef { extruder: 1, slot: 0 });
+        project.plates[0].material_to_slot.insert(
+            1,
+            SlotRef {
+                extruder: 1,
+                slot: 0,
+            },
+        );
 
         let (input, temp_path) =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
-        let reloaded =
-            crate::core::threemf::load_3mf(&temp_path).expect("reload temp 3MF");
+        let reloaded = crate::core::threemf::load_3mf(&temp_path).expect("reload temp 3MF");
         assert_eq!(reloaded.objects.len(), 1);
         assert_eq!(reloaded.objects[0].extruder_id, Some(2));
         // Toolchangers fall back to the legacy slot-fanned cascade
@@ -789,7 +789,9 @@ mod tests {
             .expect_err("no printer bound");
         assert!(matches!(
             err,
-            SliceInputError::UnboundPrinter { plate_id: PlateId(1) }
+            SliceInputError::UnboundPrinter {
+                plate_id: PlateId(1)
+            }
         ));
     }
 
@@ -803,7 +805,9 @@ mod tests {
             .expect_err("empty scene");
         assert!(matches!(
             err,
-            SliceInputError::EmptyScene { plate_id: PlateId(1) }
+            SliceInputError::EmptyScene {
+                plate_id: PlateId(1)
+            }
         ));
     }
 
@@ -831,10 +835,7 @@ mod tests {
         // No manual restore: `RegistryGuard::Drop` resets to bundled
         // before the next test sees the registry, regardless of any
         // failure path through this body.
-        assert!(matches!(
-            err,
-            SliceInputError::UnsupportedBuildPlate { .. }
-        ));
+        assert!(matches!(err, SliceInputError::UnsupportedBuildPlate { .. }));
     }
 
     #[test]
@@ -877,8 +878,7 @@ mod tests {
         // Build for plate 1; the temp file should carry only mesh_a.
         let (_, temp_path) =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
-        let reloaded =
-            crate::core::threemf::load_3mf(&temp_path).expect("reload");
+        let reloaded = crate::core::threemf::load_3mf(&temp_path).expect("reload");
         assert_eq!(reloaded.meshes.len(), 1, "plate 2's mesh excluded");
         assert_eq!(reloaded.objects.len(), 1);
         assert_eq!(reloaded.objects[0].name, "a");

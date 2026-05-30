@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex, Once};
 
 use n3o_slic3r_lib::core::cascade::commands::ContextJson;
 use n3o_slic3r_lib::core::filament::FilamentProfile;
-use n3o_slic3r_lib::core::gcode::{parse_str, parse_all_metadata, SlicerOrigin};
+use n3o_slic3r_lib::core::gcode::{parse_all_metadata, parse_str, SlicerOrigin};
 use n3o_slic3r_lib::core::preview::{
     build::build_preview,
     colors::{encode_colors, ColorMode, Palette},
@@ -252,7 +252,10 @@ fn phase6_smoke_slice_to_preview_pipeline() {
             lines,
         },
     );
-    assert!(reg.with(handle, |_| ()).is_some(), "step 7: handle missing after insert");
+    assert!(
+        reg.with(handle, |_| ()).is_some(),
+        "step 7: handle missing after insert"
+    );
     assert!(reg.remove(handle), "step 7: drop should report success");
     assert!(
         reg.with(handle, |_| ()).is_none(),
@@ -279,8 +282,16 @@ fn phase6_smoke_slice_to_preview_pipeline() {
 fn phase6_smoke_foreign_slicer_headers() {
     for (origin_name, generator, expected) in [
         ("orca", "OrcaSlicer 2.3.0", SlicerOrigin::Orca),
-        ("prusa", "PrusaSlicer 2.7.4+linux", SlicerOrigin::PrusaSlicer),
-        ("cura", "Ultimaker Cura SteamEngine 5.6.0", SlicerOrigin::Cura),
+        (
+            "prusa",
+            "PrusaSlicer 2.7.4+linux",
+            SlicerOrigin::PrusaSlicer,
+        ),
+        (
+            "cura",
+            "Ultimaker Cura SteamEngine 5.6.0",
+            SlicerOrigin::Cura,
+        ),
     ] {
         let src = synthetic_foreign_gcode(generator);
         let header = parse_all_metadata(src.as_bytes());
@@ -384,14 +395,23 @@ fn phase6_smoke_gcode_3mf_round_trip() {
     assert_eq!(meta.estimated_time_text, "1m");
     assert_eq!(meta.ams_bindings.len(), 1);
     assert_eq!(meta.ams_bindings[0].ams_slot, 2);
-    assert!(plate1.thumbnail_png.is_some(), "step 6: plate1 thumbnail missing");
-    assert!(read.plates[1].thumbnail_png.is_none(), "step 6: plate2 thumbnail expected None");
+    assert!(
+        plate1.thumbnail_png.is_some(),
+        "step 6: plate1 thumbnail missing"
+    );
+    assert!(
+        read.plates[1].thumbnail_png.is_none(),
+        "step 6: plate2 thumbnail expected None"
+    );
 
     // Preview pipeline acceptance for the embedded G-code.
     let src = std::str::from_utf8(&plate1.gcode).unwrap();
     let lines = parse_str(src);
     let geom = build_preview(&lines);
-    assert!(!geom.extrusions.is_empty(), "step 6: embedded gcode yielded zero extrusions");
+    assert!(
+        !geom.extrusions.is_empty(),
+        "step 6: embedded gcode yielded zero extrusions"
+    );
 
     let _ = std::fs::remove_file(&path);
 }

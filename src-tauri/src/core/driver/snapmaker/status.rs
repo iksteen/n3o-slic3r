@@ -154,7 +154,11 @@ fn decode_temps(status: &Map<String, Value>) -> Temps {
                 .unwrap_or(0.0) as f32,
         })
         .collect();
-    Temps { nozzles, bed, chamber: None }
+    Temps {
+        nozzles,
+        bed,
+        chamber: None,
+    }
 }
 
 fn decode_extra(status: &Map<String, Value>) -> U1Extra {
@@ -193,9 +197,7 @@ fn decode_toolhead_filaments(status: &Map<String, Value>) -> Vec<Option<U1Filame
         .iter()
         .enumerate()
         .map(|(idx, color_value)| {
-            let color = color_value
-                .as_str()
-                .and_then(normalize_rgba)?;
+            let color = color_value.as_str().and_then(normalize_rgba)?;
             let material_type = types
                 .and_then(|list| list.get(idx))
                 .and_then(Value::as_str)
@@ -262,19 +264,31 @@ mod tests {
     #[test]
     fn decode_maps_each_klipper_state_variant() {
         assert!(matches!(
-            decoded(json!({ "print_stats": { "state": "standby" } })).job.unwrap().state,
+            decoded(json!({ "print_stats": { "state": "standby" } }))
+                .job
+                .unwrap()
+                .state,
             JobState::Idle,
         ));
         assert!(matches!(
-            decoded(json!({ "print_stats": { "state": "printing" } })).job.unwrap().state,
+            decoded(json!({ "print_stats": { "state": "printing" } }))
+                .job
+                .unwrap()
+                .state,
             JobState::Printing,
         ));
         assert!(matches!(
-            decoded(json!({ "print_stats": { "state": "paused" } })).job.unwrap().state,
+            decoded(json!({ "print_stats": { "state": "paused" } }))
+                .job
+                .unwrap()
+                .state,
             JobState::Paused,
         ));
         assert!(matches!(
-            decoded(json!({ "print_stats": { "state": "complete" } })).job.unwrap().state,
+            decoded(json!({ "print_stats": { "state": "complete" } }))
+                .job
+                .unwrap()
+                .state,
             JobState::Finished,
         ));
     }
@@ -515,7 +529,10 @@ mod tests {
                 assert_eq!(t0.material_type, "PLA");
                 let t2 = extra.toolhead_filaments[2].as_ref().unwrap();
                 assert_eq!(t2.material_type, "PETG");
-                assert_eq!(extra.toolhead_filaments[3].as_ref().unwrap().material_type, "TPU");
+                assert_eq!(
+                    extra.toolhead_filaments[3].as_ref().unwrap().material_type,
+                    "TPU"
+                );
             }
             _ => panic!("U1 driver must publish U1 extra"),
         }
@@ -619,7 +636,10 @@ mod tests {
     fn decode_threads_caller_supplied_connection_state() {
         let p = decode(
             &status(json!({ "print_stats": { "state": "standby" } })),
-            ConnectionState::Reconnecting { in_seconds: 5, reason: "boom".into() },
+            ConnectionState::Reconnecting {
+                in_seconds: 5,
+                reason: "boom".into(),
+            },
         );
         match p.connection {
             ConnectionState::Reconnecting { in_seconds, reason } => {

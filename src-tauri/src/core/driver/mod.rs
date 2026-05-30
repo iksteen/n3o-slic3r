@@ -29,10 +29,9 @@ pub mod traits;
 
 pub use registry::DriverRegistry;
 pub use status::{
-    ConnectionState, DriverExtra, JobProgress, JobState, PrinterStatus,
-    TempReading, Temps,
+    ConnectionState, DriverExtra, JobProgress, JobState, PrinterStatus, TempReading, Temps,
 };
 pub use traits::{
-    Driver, DriverConfig, DriverError, DriverId, DriverKind, PrinterCommand,
-    SendHandle, SendPayload,
+    Driver, DriverConfig, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle,
+    SendPayload,
 };

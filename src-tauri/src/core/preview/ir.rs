@@ -91,8 +91,12 @@ impl SegmentSet {
     /// out of build_preview's main loop.
     pub(crate) fn push(&mut self, seg: Segment) {
         self.positions.extend_from_slice(&[
-            seg.start[0], seg.start[1], seg.start[2],
-            seg.end[0], seg.end[1], seg.end[2],
+            seg.start[0],
+            seg.start[1],
+            seg.start[2],
+            seg.end[0],
+            seg.end[1],
+            seg.end[2],
         ]);
         self.layer_index.push(seg.layer as f32);
         self.layer_index.push(seg.layer as f32);

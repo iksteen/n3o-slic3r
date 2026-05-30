@@ -64,16 +64,14 @@ pub fn lookup(identity: &str) -> Option<PrinterProfile> {
 /// duplicates any of these.
 fn hydrate_profile(base: &PrinterProfile, fragment_slug: &str) -> PrinterProfile {
     let mut profile = base.clone();
-    profile.supported_build_plates =
-        profile_library::bundled_beds_for_printer(fragment_slug)
-            .into_iter()
-            .map(str::to_owned)
-            .collect();
-    profile.available_nozzle_diameters =
-        profile_library::nozzle_skus_for(fragment_slug)
-            .into_iter()
-            .map(str::to_owned)
-            .collect();
+    profile.supported_build_plates = profile_library::bundled_beds_for_printer(fragment_slug)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    profile.available_nozzle_diameters = profile_library::nozzle_skus_for(fragment_slug)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
     if let Some(bv) = profile_library::build_volume_for_printer(fragment_slug) {
         profile.build_volume = bv;
     }
@@ -101,13 +99,12 @@ fn hydrate_profile(base: &PrinterProfile, fragment_slug: &str) -> PrinterProfile
 /// disk via `instance_storage` instead. Returns `None` only if the
 /// vendor catalog itself is empty.
 pub fn default_printer_identity() -> Option<&'static str> {
-    DEFAULT_IDENTITY.get_or_init(|| {
-        bundled_catalog().into_iter().next().map(|e| e.identity)
-    }).as_deref()
+    DEFAULT_IDENTITY
+        .get_or_init(|| bundled_catalog().into_iter().next().map(|e| e.identity))
+        .as_deref()
 }
 
-static DEFAULT_IDENTITY: std::sync::OnceLock<Option<String>> =
-    std::sync::OnceLock::new();
+static DEFAULT_IDENTITY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
 #[cfg(test)]
 mod tests {
@@ -118,9 +115,15 @@ mod tests {
         let entries = bundled_catalog();
         assert!(entries.iter().any(|e| e.identity == "bambu-lab-a1-mini"));
         assert!(entries.iter().any(|e| e.identity == "snapmaker-u1"));
-        let a1 = entries.iter().find(|e| e.identity == "bambu-lab-a1-mini").unwrap();
+        let a1 = entries
+            .iter()
+            .find(|e| e.identity == "bambu-lab-a1-mini")
+            .unwrap();
         assert_eq!(a1.profile.model, "Bambu Lab A1 mini");
-        let u1 = entries.iter().find(|e| e.identity == "snapmaker-u1").unwrap();
+        let u1 = entries
+            .iter()
+            .find(|e| e.identity == "snapmaker-u1")
+            .unwrap();
         assert_eq!(u1.profile.model, "Snapmaker U1");
     }
 
@@ -169,8 +172,14 @@ mod tests {
     #[test]
     fn catalog_entry_carries_full_profile_for_panel_resolve() {
         let entries = bundled_catalog();
-        let a1 = entries.iter().find(|e| e.identity == "bambu-lab-a1-mini").unwrap();
-        assert!(a1.profile.supported_build_plates.contains(&"Textured PEI Plate".into()));
+        let a1 = entries
+            .iter()
+            .find(|e| e.identity == "bambu-lab-a1-mini")
+            .unwrap();
+        assert!(a1
+            .profile
+            .supported_build_plates
+            .contains(&"Textured PEI Plate".into()));
         assert_eq!(a1.profile.toolheads.len(), 1);
         // A1 mini ships per-nozzle fragments for 0.2 / 0.4 / 0.6 / 0.8.
         assert_eq!(
@@ -181,7 +190,10 @@ mod tests {
         // `printable_area` / `printable_height`; A1 mini is 180³.
         assert_eq!(a1.profile.build_volume.max, [180.0, 180.0, 180.0]);
 
-        let u1 = entries.iter().find(|e| e.identity == "snapmaker-u1").unwrap();
+        let u1 = entries
+            .iter()
+            .find(|e| e.identity == "snapmaker-u1")
+            .unwrap();
         assert_eq!(u1.profile.toolheads.len(), 4);
         // U1 cascade: printable_area "0.5x1,270.5x1,270.5x271,0.5x271",
         // printable_height "270.05".

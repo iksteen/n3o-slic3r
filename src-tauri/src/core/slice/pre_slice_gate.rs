@@ -66,10 +66,7 @@ pub enum SliceBlocker {
     },
     /// The mapped slot has no filament bound — Bambu firmware
     /// rejects prints with empty filament_settings_id.
-    SlotHasNoFilament {
-        model_material: u8,
-        slot: SlotRef,
-    },
+    SlotHasNoFilament { model_material: u8, slot: SlotRef },
 }
 
 /// Validate that every plate in `plate_ids` (that exists on
@@ -177,7 +174,10 @@ pub struct AmsMappingV2 {
 }
 
 impl AmsMappingV2 {
-    pub const UNUSED: Self = Self { ams_id: 255, slot_id: 255 };
+    pub const UNUSED: Self = Self {
+        ams_id: 255,
+        slot_id: 255,
+    };
 }
 
 /// Compute the Bambu MQTT `project_file` AMS routing fields for a
@@ -267,7 +267,10 @@ pub fn ams_mapping_for_plate(
                     .filter(|s| s.feed == FeedKind::Ams)
                     .count() as u8;
                 mapping[filament_index] = ams_slot as i8;
-                mapping2[filament_index] = AmsMappingV2 { ams_id: 0, slot_id: ams_slot };
+                mapping2[filament_index] = AmsMappingV2 {
+                    ams_id: 0,
+                    slot_id: ams_slot,
+                };
                 any_ams = true;
             }
             FeedKind::Direct => {
@@ -275,7 +278,10 @@ pub fn ams_mapping_for_plate(
                 // `{255, 0}` so the firmware distinguishes "bound to
                 // external spool" from "padding/unused".
                 mapping[filament_index] = -1;
-                mapping2[filament_index] = AmsMappingV2 { ams_id: 255, slot_id: 0 };
+                mapping2[filament_index] = AmsMappingV2 {
+                    ams_id: 255,
+                    slot_id: 0,
+                };
             }
         }
     }
@@ -309,7 +315,9 @@ fn validate_plate(plate: &crate::core::project::model::Plate) -> Vec<SliceBlocke
     // must be in range, and the slot must carry a filament.
     for mat in &referenced {
         let Some(&slot_ref) = plate.material_to_slot.get(mat) else {
-            issues.push(SliceBlocker::UnmappedMaterial { model_material: *mat });
+            issues.push(SliceBlocker::UnmappedMaterial {
+                model_material: *mat,
+            });
             continue;
         };
         let extruders = instance.extruders.len();
@@ -345,11 +353,11 @@ fn validate_plate(plate: &crate::core::project::model::Plate) -> Vec<SliceBlocke
 mod tests {
     use super::*;
     use crate::core::printer::instance_registry::RegistryGuard;
+    use crate::core::printer::profile::BoundingBox;
     use crate::core::printer::set_slot_filament;
     use crate::core::printer::SlotRef;
     use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
     use crate::core::scene::transform::Transform;
-    use crate::core::printer::profile::BoundingBox;
 
     fn unit_cube() -> NewMesh {
         NewMesh {
@@ -393,7 +401,10 @@ mod tests {
         p.plates[0].printer_instance_id = None;
         add_cube(&mut p, 1);
         let err = validate_pre_slice(&p, &[1]).unwrap_err();
-        assert!(err.issues.iter().any(|i| matches!(i, SliceBlocker::UnboundPrinter)));
+        assert!(err
+            .issues
+            .iter()
+            .any(|i| matches!(i, SliceBlocker::UnboundPrinter)));
     }
 
     #[test]
@@ -438,9 +449,13 @@ mod tests {
         add_cube(&mut p, 1);
         // Plant a stale slot reference — pretend a project file
         // carries an extruder index that no longer exists.
-        p.plates[0]
-            .material_to_slot
-            .insert(1, SlotRef { extruder: 5, slot: 0 });
+        p.plates[0].material_to_slot.insert(
+            1,
+            SlotRef {
+                extruder: 5,
+                slot: 0,
+            },
+        );
         let err = validate_pre_slice(&p, &[1]).unwrap_err();
         assert!(err
             .issues
@@ -512,9 +527,13 @@ mod tests {
         let mut p = Project::default();
         // Override the auto-bind: pin M1 to Ext.
         add_cube(&mut p, 1);
-        p.plates[0]
-            .material_to_slot
-            .insert(1, SlotRef { extruder: 0, slot: 4 });
+        p.plates[0].material_to_slot.insert(
+            1,
+            SlotRef {
+                extruder: 0,
+                slot: 4,
+            },
+        );
         let bindings = ams_bindings_for_plate(&p.plates[0]);
         assert!(bindings.is_empty(), "got {bindings:?}");
     }
@@ -539,10 +558,34 @@ mod tests {
         let (use_ams, mapping, mapping2) = ams_mapping_for_plate(&p.plates[0]);
         assert!(use_ams);
         assert_eq!(mapping, vec![0, 1, 2, 3]);
-        assert_eq!(mapping2[0], AmsMappingV2 { ams_id: 0, slot_id: 0 });
-        assert_eq!(mapping2[1], AmsMappingV2 { ams_id: 0, slot_id: 1 });
-        assert_eq!(mapping2[2], AmsMappingV2 { ams_id: 0, slot_id: 2 });
-        assert_eq!(mapping2[3], AmsMappingV2 { ams_id: 0, slot_id: 3 });
+        assert_eq!(
+            mapping2[0],
+            AmsMappingV2 {
+                ams_id: 0,
+                slot_id: 0
+            }
+        );
+        assert_eq!(
+            mapping2[1],
+            AmsMappingV2 {
+                ams_id: 0,
+                slot_id: 1
+            }
+        );
+        assert_eq!(
+            mapping2[2],
+            AmsMappingV2 {
+                ams_id: 0,
+                slot_id: 2
+            }
+        );
+        assert_eq!(
+            mapping2[3],
+            AmsMappingV2 {
+                ams_id: 0,
+                slot_id: 3
+            }
+        );
     }
 
     #[test]
@@ -562,16 +605,44 @@ mod tests {
         }
         // Override the auto-bound M4 → AMS:4: pin to Ext (slot 4 in
         // bambi's AMS-first layout).
-        p.plates[0]
-            .material_to_slot
-            .insert(4, SlotRef { extruder: 0, slot: 4 });
+        p.plates[0].material_to_slot.insert(
+            4,
+            SlotRef {
+                extruder: 0,
+                slot: 4,
+            },
+        );
         let (use_ams, mapping, mapping2) = ams_mapping_for_plate(&p.plates[0]);
         assert!(use_ams);
         assert_eq!(mapping, vec![0, 1, 2, -1]);
-        assert_eq!(mapping2[0], AmsMappingV2 { ams_id: 0, slot_id: 0 });
-        assert_eq!(mapping2[1], AmsMappingV2 { ams_id: 0, slot_id: 1 });
-        assert_eq!(mapping2[2], AmsMappingV2 { ams_id: 0, slot_id: 2 });
-        assert_eq!(mapping2[3], AmsMappingV2 { ams_id: 255, slot_id: 0 });
+        assert_eq!(
+            mapping2[0],
+            AmsMappingV2 {
+                ams_id: 0,
+                slot_id: 0
+            }
+        );
+        assert_eq!(
+            mapping2[1],
+            AmsMappingV2 {
+                ams_id: 0,
+                slot_id: 1
+            }
+        );
+        assert_eq!(
+            mapping2[2],
+            AmsMappingV2 {
+                ams_id: 0,
+                slot_id: 2
+            }
+        );
+        assert_eq!(
+            mapping2[3],
+            AmsMappingV2 {
+                ams_id: 255,
+                slot_id: 0
+            }
+        );
     }
 
     #[test]
@@ -590,17 +661,37 @@ mod tests {
         }
         // Explicit pins — auto-bind order varies with insertion
         // sequence; force the bindings the test cares about.
-        p.plates[0]
-            .material_to_slot
-            .insert(1, SlotRef { extruder: 0, slot: 4 }); // Ext
-        p.plates[0]
-            .material_to_slot
-            .insert(2, SlotRef { extruder: 0, slot: 0 }); // AMS:1
+        p.plates[0].material_to_slot.insert(
+            1,
+            SlotRef {
+                extruder: 0,
+                slot: 4,
+            },
+        ); // Ext
+        p.plates[0].material_to_slot.insert(
+            2,
+            SlotRef {
+                extruder: 0,
+                slot: 0,
+            },
+        ); // AMS:1
         let (use_ams, mapping, mapping2) = ams_mapping_for_plate(&p.plates[0]);
         assert!(use_ams);
         assert_eq!(mapping, vec![-1, 0]);
-        assert_eq!(mapping2[0], AmsMappingV2 { ams_id: 255, slot_id: 0 });
-        assert_eq!(mapping2[1], AmsMappingV2 { ams_id: 0, slot_id: 0 });
+        assert_eq!(
+            mapping2[0],
+            AmsMappingV2 {
+                ams_id: 255,
+                slot_id: 0
+            }
+        );
+        assert_eq!(
+            mapping2[1],
+            AmsMappingV2 {
+                ams_id: 0,
+                slot_id: 0
+            }
+        );
     }
 
     #[test]
@@ -615,13 +706,23 @@ mod tests {
         let _registry = RegistryGuard::acquire();
         let mut p = Project::default();
         add_cube(&mut p, 1);
-        p.plates[0]
-            .material_to_slot
-            .insert(1, SlotRef { extruder: 0, slot: 4 });
+        p.plates[0].material_to_slot.insert(
+            1,
+            SlotRef {
+                extruder: 0,
+                slot: 4,
+            },
+        );
         let (use_ams, mapping, mapping2) = ams_mapping_for_plate(&p.plates[0]);
         assert!(!use_ams);
         assert_eq!(mapping, vec![-1]);
-        assert_eq!(mapping2, vec![AmsMappingV2 { ams_id: 255, slot_id: 0 }]);
+        assert_eq!(
+            mapping2,
+            vec![AmsMappingV2 {
+                ams_id: 255,
+                slot_id: 0
+            }]
+        );
     }
 
     #[test]

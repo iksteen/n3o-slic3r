@@ -199,22 +199,43 @@ mod tests {
             use_ams: true,
             ams_mapping: vec![-1, 0],
             ams_mapping2: vec![
-                AmsMappingV2 { ams_id: 255, slot_id: 0 },
-                AmsMappingV2 { ams_id: 0, slot_id: 0 },
+                AmsMappingV2 {
+                    ams_id: 255,
+                    slot_id: 0,
+                },
+                AmsMappingV2 {
+                    ams_id: 0,
+                    slot_id: 0,
+                },
             ],
         };
         let s = serde_json::to_string(&bambu).unwrap();
         let back: SendPayload = serde_json::from_str(&s).unwrap();
         match back {
-            SendPayload::Gcode3mf { plate_id, bytes, use_ams, ams_mapping, ams_mapping2 } => {
+            SendPayload::Gcode3mf {
+                plate_id,
+                bytes,
+                use_ams,
+                ams_mapping,
+                ams_mapping2,
+            } => {
                 assert_eq!(plate_id, 1);
                 assert_eq!(bytes, vec![1, 2, 3]);
                 assert!(use_ams);
                 assert_eq!(ams_mapping, vec![-1, 0]);
-                assert_eq!(ams_mapping2, vec![
-                    AmsMappingV2 { ams_id: 255, slot_id: 0 },
-                    AmsMappingV2 { ams_id: 0, slot_id: 0 },
-                ]);
+                assert_eq!(
+                    ams_mapping2,
+                    vec![
+                        AmsMappingV2 {
+                            ams_id: 255,
+                            slot_id: 0
+                        },
+                        AmsMappingV2 {
+                            ams_id: 0,
+                            slot_id: 0
+                        },
+                    ]
+                );
             }
             _ => panic!("variant"),
         }

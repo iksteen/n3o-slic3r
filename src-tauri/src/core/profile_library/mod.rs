@@ -62,13 +62,17 @@ pub enum LibraryError {
     /// `printer_model` scalar that drives every cascade
     /// `when.printer.model = …` predicate. Fail fast so a malformed
     /// import doesn't silently empty the process/filament filters.
-    MissingPrinterModel { printer_dir: PathBuf },
+    MissingPrinterModel {
+        printer_dir: PathBuf,
+    },
     /// A catalog printer's `machine.toml` doesn't carry the
     /// `default_bed_type` scalar that `PrinterProfile.default_bed`
     /// hydrates from. Fail fast so a malformed import doesn't
     /// silently fall back to the first supported plate as the
     /// instance default.
-    MissingDefaultBedType { printer_dir: PathBuf },
+    MissingDefaultBedType {
+        printer_dir: PathBuf,
+    },
 }
 
 impl std::fmt::Display for LibraryError {
@@ -165,8 +169,7 @@ static LIBRARY: OnceLock<ProfileLibrary> = OnceLock::new();
 /// are no-ops (`OnceLock` only initializes the first time).
 pub fn init_from(root: PathBuf) {
     let _ = LIBRARY.get_or_init(|| {
-        ProfileLibrary::load(&root)
-            .unwrap_or_else(|e| panic!("profile library load failed: {e}"))
+        ProfileLibrary::load(&root).unwrap_or_else(|e| panic!("profile library load failed: {e}"))
     });
 }
 
@@ -242,7 +245,12 @@ impl ProfileLibrary {
             for f in read_sorted_files(&filament_root)? {
                 let slug = file_stem(&f);
                 let asset = read_cascade(root, &f)?;
-                insert_fragment(&mut self.filament_fragments, slug.clone(), asset, "filament");
+                insert_fragment(
+                    &mut self.filament_fragments,
+                    slug.clone(),
+                    asset,
+                    "filament",
+                );
                 if !self.filament_order.contains(&slug) {
                     self.filament_order.push(slug);
                 }
@@ -324,10 +332,7 @@ impl ProfileLibrary {
                         asset,
                         "nozzle",
                     );
-                    self.nozzle_order
-                        .entry(slug.clone())
-                        .or_default()
-                        .push(sku);
+                    self.nozzle_order.entry(slug.clone()).or_default().push(sku);
                 }
             }
             // processes/<slug>.toml — printer-bound process presets.
@@ -352,10 +357,10 @@ impl ProfileLibrary {
             let beds_dir = printer_dir.join("beds");
             if beds_dir.is_dir() {
                 for f in read_sorted_files(&beds_dir)? {
-                    let raw = std::fs::read_to_string(&f)
-                        .map_err(|e| LibraryError::Io(f.clone(), e))?;
-                    let probe: BedIdentityProbe = toml::from_str(&raw)
-                        .map_err(|e| LibraryError::Toml(f.clone(), e))?;
+                    let raw =
+                        std::fs::read_to_string(&f).map_err(|e| LibraryError::Io(f.clone(), e))?;
+                    let probe: BedIdentityProbe =
+                        toml::from_str(&raw).map_err(|e| LibraryError::Toml(f.clone(), e))?;
                     let identity = probe.identity;
                     let asset = parse_cascade(root, &f, &raw)?;
                     insert_fragment(
@@ -444,19 +449,15 @@ fn read_cascade(root: &Path, path: &Path) -> Result<CascadeAsset, LibraryError> 
     parse_cascade(root, path, &raw)
 }
 
-fn parse_cascade(
-    root: &Path,
-    path: &Path,
-    raw: &str,
-) -> Result<CascadeAsset, LibraryError> {
+fn parse_cascade(root: &Path, path: &Path, raw: &str) -> Result<CascadeAsset, LibraryError> {
     // Trace UI uses this path verbatim; show it relative to the
     // vendor root so traces stay readable across machines.
     let relative = path
         .strip_prefix(root)
         .map(Path::to_path_buf)
         .unwrap_or_else(|_| path.to_path_buf());
-    let rules = parse_cascade_str(raw, &relative)
-        .map_err(|e| LibraryError::Cascade(path.to_owned(), e))?;
+    let rules =
+        parse_cascade_str(raw, &relative).map_err(|e| LibraryError::Cascade(path.to_owned(), e))?;
     Ok(CascadeAsset {
         cascade: Cascade { rules },
         source_path: relative.display().to_string(),
@@ -565,10 +566,7 @@ fn parse_build_volume(
 /// Returns the preset's `filament_settings_id` string (e.g.
 /// `"Bambu PLA Basic @BBL A1M"`); callers map this to a fragment slug
 /// via [`filament_slug_by_display_name`].
-pub fn default_filament_profile_for(
-    printer_slug: &str,
-    sku: &str,
-) -> Option<String> {
+pub fn default_filament_profile_for(printer_slug: &str, sku: &str) -> Option<String> {
     let cascade = load_nozzle_fragment(printer_slug, sku)?;
     fragment_set_value(&cascade, "default_filament_profile")
 }
@@ -704,10 +702,15 @@ pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
             // field. The picker only wants a representative value, so
             // prefer the generic `hot_plate_temp` (PEI / smooth) and
             // fall back through textured / cool / supertack.
-            let bed_temp = ["hot_plate_temp", "textured_plate_temp", "cool_plate_temp", "supertack_plate_temp"]
-                .iter()
-                .find_map(|k| set.get(*k).and_then(|s| s.parse::<u32>().ok()))
-                .unwrap_or(60);
+            let bed_temp = [
+                "hot_plate_temp",
+                "textured_plate_temp",
+                "cool_plate_temp",
+                "supertack_plate_temp",
+            ]
+            .iter()
+            .find_map(|k| set.get(*k).and_then(|s| s.parse::<u32>().ok()))
+            .unwrap_or(60);
             // Vendor SKU — stamped by the converter for fragments
             // that have one (Bambu / Generic carry it; bespoke
             // user-imported profiles may not). Empty strings are
@@ -815,10 +818,7 @@ pub fn list_process_fragments(
                 .get(&(printer_fragment_slug.to_owned(), process_slug.clone()))?;
             let available_for = derive_process_availability(&asset.cascade);
             let matches = available_for.iter().any(|a| {
-                a.printer == printer_model
-                    && a.nozzle
-                        .split('+')
-                        .any(|n| installed.contains(n))
+                a.printer == printer_model && a.nozzle.split('+').any(|n| installed.contains(n))
             });
             if !matches {
                 return None;
@@ -858,9 +858,7 @@ fn derive_process_availability(cascade: &Cascade) -> Vec<ProcessAvailability> {
             match cond.dimension.as_str() {
                 "printer.model" => match &cond.value {
                     ConditionValue::Scalar(s) => printers.push(s.as_str()),
-                    ConditionValue::Array(xs) => {
-                        printers.extend(xs.iter().map(String::as_str))
-                    }
+                    ConditionValue::Array(xs) => printers.extend(xs.iter().map(String::as_str)),
                 },
                 "nozzle.diameter" => {
                     if let ConditionValue::Scalar(s) = &cond.value {
@@ -940,10 +938,9 @@ mod tests {
              single 0.6, and composite 0.4+0.6 contexts); got {slugs:?}",
         );
         let has_06_anywhere = summaries.iter().any(|s| {
-            s.available_for.iter().any(|a| {
-                a.printer == "Snapmaker U1"
-                    && a.nozzle.split('+').any(|n| n == "0.6")
-            })
+            s.available_for
+                .iter()
+                .any(|a| a.printer == "Snapmaker U1" && a.nozzle.split('+').any(|n| n == "0.6"))
         });
         assert!(
             has_06_anywhere,
@@ -967,8 +964,7 @@ mod tests {
         );
         for s in &summaries {
             let has_04 = s.available_for.iter().any(|a| {
-                a.printer == "Bambu Lab A1 mini"
-                    && a.nozzle.split('+').any(|n| n == "0.4")
+                a.printer == "Bambu Lab A1 mini" && a.nozzle.split('+').any(|n| n == "0.4")
             });
             assert!(
                 has_04,
@@ -987,10 +983,16 @@ mod tests {
             assert!(load_printer_fragment(slug).is_some(), "printer {slug}");
         }
         for (printer, sku) in library().nozzle_fragments.keys() {
-            assert!(load_nozzle_fragment(printer, sku).is_some(), "nozzle {printer}/{sku}");
+            assert!(
+                load_nozzle_fragment(printer, sku).is_some(),
+                "nozzle {printer}/{sku}"
+            );
         }
         for (printer, identity) in library().bed_fragments.keys() {
-            assert!(load_bed_fragment(printer, identity).is_some(), "bed {printer}/{identity}");
+            assert!(
+                load_bed_fragment(printer, identity).is_some(),
+                "bed {printer}/{identity}"
+            );
         }
         for slug in library().filament_fragments.keys() {
             assert!(load_filament_fragment(slug).is_some(), "filament {slug}");
@@ -1019,7 +1021,10 @@ mod tests {
     fn a1_mini_0_4_nozzle_carries_scalar_diameter() {
         let cascade = load_nozzle_fragment("bambu-lab-a1-mini", "0.4").expect("0.4 nozzle");
         let rule = &cascade.rules[0];
-        let diameter = rule.set.get("nozzle_diameter").expect("nozzle_diameter present");
+        let diameter = rule
+            .set
+            .get("nozzle_diameter")
+            .expect("nozzle_diameter present");
         assert_eq!(diameter, "0.4");
     }
 
@@ -1027,17 +1032,26 @@ mod tests {
     fn u1_0_4_nozzle_is_also_scalar_despite_4_extruders() {
         let cascade = load_nozzle_fragment("snapmaker-u1", "0.4").expect("U1 0.4 nozzle");
         let rule = &cascade.rules[0];
-        let diameter = rule.set.get("nozzle_diameter").expect("nozzle_diameter present");
+        let diameter = rule
+            .set
+            .get("nozzle_diameter")
+            .expect("nozzle_diameter present");
         assert_eq!(diameter, "0.4");
     }
 
     #[test]
     fn supertack_bed_carries_curr_bed_type_enum_value() {
-        let cascade = load_bed_fragment("bambu-lab-a1-mini", "Supertack Plate")
-            .expect("supertack bed");
+        let cascade =
+            load_bed_fragment("bambu-lab-a1-mini", "Supertack Plate").expect("supertack bed");
         let rule = &cascade.rules[0];
-        assert_eq!(rule.set.get("curr_bed_type").map(String::as_str), Some("Supertack Plate"));
-        assert_eq!(rule.set.get("identity").map(String::as_str), Some("Supertack Plate"));
+        assert_eq!(
+            rule.set.get("curr_bed_type").map(String::as_str),
+            Some("Supertack Plate")
+        );
+        assert_eq!(
+            rule.set.get("identity").map(String::as_str),
+            Some("Supertack Plate")
+        );
     }
 
     #[test]
@@ -1045,8 +1059,9 @@ mod tests {
         // Order is file-system sort order (alphabetical by file
         // name), not authoring intent. Don't pin to a specific
         // ordering — pin to set membership instead.
-        let beds: std::collections::BTreeSet<&str> =
-            bundled_beds_for_printer("bambu-lab-a1-mini").into_iter().collect();
+        let beds: std::collections::BTreeSet<&str> = bundled_beds_for_printer("bambu-lab-a1-mini")
+            .into_iter()
+            .collect();
         assert_eq!(
             beds,
             [
@@ -1059,7 +1074,10 @@ mod tests {
             .into_iter()
             .collect(),
         );
-        assert_eq!(bundled_beds_for_printer("snapmaker-u1"), vec!["Textured PEI Plate"]);
+        assert_eq!(
+            bundled_beds_for_printer("snapmaker-u1"),
+            vec!["Textured PEI Plate"]
+        );
         assert!(bundled_beds_for_printer("ghost-printer").is_empty());
     }
 
@@ -1155,25 +1173,35 @@ mod tests {
         }
 
         let captured: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-        let writer = TestWriter { buf: captured.clone() };
+        let writer = TestWriter {
+            buf: captured.clone(),
+        };
         let subscriber = tracing_subscriber::fmt()
             .with_writer(move || writer.clone())
             .with_max_level(tracing::Level::WARN)
             .finish();
-        let lib = with_default(subscriber, || ProfileLibrary::load(root))
-            .expect("load");
+        let lib = with_default(subscriber, || ProfileLibrary::load(root)).expect("load");
 
         // Last-wins: zulu beats alpha alphabetically.
         let frag = lib.filament_fragments.get("generic-pla").expect("present");
         assert!(
-            frag.cascade.rules[0].set.get("filament_settings_id").unwrap()
+            frag.cascade.rules[0]
+                .set
+                .get("filament_settings_id")
+                .unwrap()
                 .contains("zulu"),
             "later vendor still wins (preserves prior behavior)",
         );
 
         let log = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
-        assert!(log.contains("filament fragment slug collision"), "got: {log}");
-        assert!(log.contains("alpha"), "prior source named in warning: {log}");
+        assert!(
+            log.contains("filament fragment slug collision"),
+            "got: {log}"
+        );
+        assert!(
+            log.contains("alpha"),
+            "prior source named in warning: {log}"
+        );
         assert!(log.contains("zulu"), "new source named in warning: {log}");
     }
 

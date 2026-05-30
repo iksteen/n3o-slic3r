@@ -97,13 +97,8 @@ fn build_exit_fixture() -> Project {
     let mesh_a = p.register_mesh(triangle_mesh());
     let obj_a = p.register_object(NewSceneObject::at_origin(mesh_a, "plate1-cube"));
     // Object-tier override the exit criterion calls out.
-    p.object_override_set(
-        PlateId(1),
-        obj_a,
-        "enable_support".into(),
-        "1".into(),
-    )
-    .expect("plate 1 object-tier override");
+    p.object_override_set(PlateId(1), obj_a, "enable_support".into(), "1".into())
+        .expect("plate 1 object-tier override");
 
     // ── Plate 2 → U1, with a project-tier override ──
     let (id2, _) = p.add_plate(None);
@@ -124,8 +119,7 @@ fn build_exit_fixture() -> Project {
     p.register_object(NewSceneObject::at_origin(mesh_c, "plate3-20mmbox-stub"));
 
     // ── User-tier override (project-wide) ──
-    p.user_overrides
-        .insert("travel_speed".into(), "300".into());
+    p.user_overrides.insert("travel_speed".into(), "300".into());
 
     // ── File metadata for the .3mf Title/Designer/License ──
     p.file_metadata
@@ -175,11 +169,7 @@ fn phase5_smoke_3plate_save_reload_roundtrip() {
     let plates_inst: Vec<&str> = reloaded
         .plates
         .iter()
-        .map(|pl| {
-            pl.printer_instance_id
-                .as_deref()
-                .unwrap_or("<unbound>")
-        })
+        .map(|pl| pl.printer_instance_id.as_deref().unwrap_or("<unbound>"))
         .collect();
     assert_eq!(
         plates_inst,
@@ -222,7 +212,10 @@ fn phase5_smoke_3plate_save_reload_roundtrip() {
 
     // 4d. User-tier override (project-wide).
     assert_eq!(
-        reloaded.user_overrides.get("travel_speed").map(|s| s.as_str()),
+        reloaded
+            .user_overrides
+            .get("travel_speed")
+            .map(|s| s.as_str()),
         Some("300"),
         "step 4d: user-tier override must round-trip",
     );

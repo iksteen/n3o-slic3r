@@ -46,7 +46,6 @@ fn ensure_ffi_init() {
     });
 }
 
-
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -155,7 +154,9 @@ fn slice_fourcolor(
         context: ContextJson {
             printer,
             plate: canonical_plate(),
-            filaments: (0..filaments_in_context).map(|_| canonical_filament()).collect(),
+            filaments: (0..filaments_in_context)
+                .map(|_| canonical_filament())
+                .collect(),
             active_slot: 0,
             user_overrides: vec![],
             project_overrides: vec![OverrideFileSpec {
@@ -179,22 +180,29 @@ fn slice_fourcolor(
     let events = events.lock().unwrap();
     // Surface the failure cause cleanly instead of unwrapping past
     // a JobFailed event.
-    if let Some(SliceEvent::JobFailed { error, .. }) =
-        events.iter().find(|e| matches!(e, SliceEvent::JobFailed { .. }))
+    if let Some(SliceEvent::JobFailed { error, .. }) = events
+        .iter()
+        .find(|e| matches!(e, SliceEvent::JobFailed { .. }))
     {
         panic!("{instance_id}: slice failed: {error:?}");
     }
     let (path, summary) = events
         .iter()
         .find_map(|e| match e {
-            SliceEvent::PlateFinished { output_path, summary, .. } => {
-                Some((PathBuf::from(output_path), summary.clone()))
-            }
+            SliceEvent::PlateFinished {
+                output_path,
+                summary,
+                ..
+            } => Some((PathBuf::from(output_path), summary.clone())),
             _ => None,
         })
         .unwrap_or_else(|| panic!("{instance_id}: no PlateFinished in event stream"));
 
-    assert!(path.exists(), "{instance_id}: gcode missing at {}", path.display());
+    assert!(
+        path.exists(),
+        "{instance_id}: gcode missing at {}",
+        path.display()
+    );
     (path, summary)
 }
 
@@ -211,7 +219,11 @@ fn bambi_multi_color_slices_with_filament_tracking() {
 
     let (gcode_path, summary) = slice_fourcolor("bambi", bambi_printer(), 5);
 
-    let used = summary.filament_used_grams.values().filter(|v| **v > 0.0).count();
+    let used = summary
+        .filament_used_grams
+        .values()
+        .filter(|v| **v > 0.0)
+        .count();
     assert!(
         used >= 2,
         "expected ≥2 non-zero filament entries (multi-color tracking), got {used}: {:?}",
@@ -250,7 +262,11 @@ fn snappy_multi_color_slices_with_toolhead_changes() {
 
     let (gcode_path, summary) = slice_fourcolor("snappy", snappy_printer(), 4);
 
-    let used = summary.filament_used_grams.values().filter(|v| **v > 0.0).count();
+    let used = summary
+        .filament_used_grams
+        .values()
+        .filter(|v| **v > 0.0)
+        .count();
     assert!(
         used >= 2,
         "expected ≥2 non-zero filament entries (multi-color tracking), got {used}: {:?}",
@@ -329,20 +345,17 @@ fn snappy_binding_routes_single_material_to_bound_toolhead() {
     }
 
     // Force the M1 → T1 binding (override the auto-bound default).
-    project.plates[0]
-        .material_to_slot
-        .insert(1, SlotRef { extruder: 1, slot: 0 });
+    project.plates[0].material_to_slot.insert(
+        1,
+        SlotRef {
+            extruder: 1,
+            slot: 0,
+        },
+    );
 
-    let temp_dir = std::env::temp_dir().join(format!(
-        "n3o-snappy-binding-{}",
-        std::process::id(),
-    ));
-    let (input, temp_3mf) = build_slice_input(
-        &project,
-        PlateId(1),
-        temp_dir.display().to_string(),
-    )
-    .expect("build_slice_input");
+    let temp_dir = std::env::temp_dir().join(format!("n3o-snappy-binding-{}", std::process::id(),));
+    let (input, temp_3mf) = build_slice_input(&project, PlateId(1), temp_dir.display().to_string())
+        .expect("build_slice_input");
 
     // The cube's recorded extruder in the temp .3mf must already be
     // 2 (libslic3r 1-based filament index = bound flat slot 1 + 1
@@ -352,17 +365,21 @@ fn snappy_binding_routes_single_material_to_bound_toolhead() {
     assert!(
         reloaded.objects.iter().any(|o| o.extruder_id == Some(2)),
         "expected ≥1 object with remapped extruder_id=2, got {:?}",
-        reloaded.objects.iter().map(|o| o.extruder_id).collect::<Vec<_>>(),
+        reloaded
+            .objects
+            .iter()
+            .map(|o| o.extruder_id)
+            .collect::<Vec<_>>(),
     );
 
     let registry = JobRegistry::new();
     let (sink, events) = collecting_sink();
-    run_slice_job_blocking(input, &registry, sink)
-        .expect("synchronous start");
+    run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
 
     let events = events.lock().unwrap();
-    if let Some(SliceEvent::JobFailed { error, .. }) =
-        events.iter().find(|e| matches!(e, SliceEvent::JobFailed { .. }))
+    if let Some(SliceEvent::JobFailed { error, .. }) = events
+        .iter()
+        .find(|e| matches!(e, SliceEvent::JobFailed { .. }))
     {
         panic!("slice failed: {error:?}");
     }
@@ -375,14 +392,8 @@ fn snappy_binding_routes_single_material_to_bound_toolhead() {
         .expect("PlateFinished");
 
     let gcode = std::fs::read_to_string(&gcode_path).expect("read gcode");
-    let t1_lines = gcode
-        .lines()
-        .filter(|l| l.trim() == "T1")
-        .count();
-    let t0_bare = gcode
-        .lines()
-        .filter(|l| l.trim() == "T0")
-        .count();
+    let t1_lines = gcode.lines().filter(|l| l.trim() == "T1").count();
+    let t0_bare = gcode.lines().filter(|l| l.trim() == "T0").count();
     assert!(
         t1_lines >= 1,
         "expected ≥1 bare `T1` toolchange (M1 bound to T1), got {t1_lines} (T0 count: {t0_bare})",
@@ -439,24 +450,18 @@ fn cube_halves_slices_as_one_multivolume_object_no_floating_warning() {
         });
     }
 
-    let temp_dir = std::env::temp_dir().join(format!(
-        "n3o-cube-halves-{}",
-        std::process::id(),
-    ));
-    let (input, temp_3mf) = build_slice_input(
-        &project,
-        PlateId(1),
-        temp_dir.display().to_string(),
-    )
-    .expect("build_slice_input");
+    let temp_dir = std::env::temp_dir().join(format!("n3o-cube-halves-{}", std::process::id(),));
+    let (input, temp_3mf) = build_slice_input(&project, PlateId(1), temp_dir.display().to_string())
+        .expect("build_slice_input");
 
     let registry = JobRegistry::new();
     let (sink, events) = collecting_sink();
     run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
 
     let events = events.lock().unwrap();
-    if let Some(SliceEvent::JobFailed { error, .. }) =
-        events.iter().find(|e| matches!(e, SliceEvent::JobFailed { .. }))
+    if let Some(SliceEvent::JobFailed { error, .. }) = events
+        .iter()
+        .find(|e| matches!(e, SliceEvent::JobFailed { .. }))
     {
         panic!("slice failed: {error:?}");
     }

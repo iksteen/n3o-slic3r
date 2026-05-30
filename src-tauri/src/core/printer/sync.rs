@@ -22,9 +22,7 @@
 //! user's manual edits stand. See
 //! `memory/project_filament_id_sources.md` for the policy.
 
-use crate::core::driver::status::{
-    AmsFilament, DriverExtra, U1Extra, U1Filament,
-};
+use crate::core::driver::status::{AmsFilament, DriverExtra, U1Extra, U1Filament};
 use crate::core::printer::instance::{PrinterInstance, SlotBinding};
 use crate::core::profile_library::FilamentFragmentSummary;
 
@@ -233,7 +231,10 @@ fn resolve_u1_identity(
     // the user's manual pick of a specific brand+product stands.
     if let Some(slug) = current.filament_identity.as_deref() {
         if let Some(entry) = library.iter().find(|f| f.identity == slug) {
-            if entry.base_type.eq_ignore_ascii_case(&filament.material_type) {
+            if entry
+                .base_type
+                .eq_ignore_ascii_case(&filament.material_type)
+            {
                 return Some(slug.to_owned());
             }
         }
@@ -241,10 +242,7 @@ fn resolve_u1_identity(
     generic_identity_for(&filament.material_type, library)
 }
 
-fn generic_identity_for(
-    material: &str,
-    library: &[FilamentFragmentSummary],
-) -> Option<String> {
+fn generic_identity_for(material: &str, library: &[FilamentFragmentSummary]) -> Option<String> {
     // Match on the exact slug `generic-<material lowercased>` —
     // the convention is `generic-pla` for the base variant with
     // suffixes like `-cf` / `-silk` for specialty composites. A
@@ -269,12 +267,11 @@ fn slot_at_index_is_ams_feed(
         .unwrap_or(false)
 }
 
-fn first_direct_slot(
-    extruder: &crate::core::printer::instance::ExtruderState,
-) -> Option<usize> {
-    extruder.slots.iter().position(|s| {
-        matches!(s.feed, crate::core::printer::instance::FeedKind::Direct)
-    })
+fn first_direct_slot(extruder: &crate::core::printer::instance::ExtruderState) -> Option<usize> {
+    extruder
+        .slots
+        .iter()
+        .position(|s| matches!(s.feed, crate::core::printer::instance::FeedKind::Direct))
 }
 
 /// Convert Bambu's `RRGGBBAA` (no `#`) to our `#RRGGBB` CSS form.
@@ -290,12 +287,10 @@ fn hex8_to_css(rrggbbaa: &str) -> String {
 mod tests {
     use super::*;
     use crate::core::driver::status::{
-        AmsFilament, AmsState, AmsTray, AmsUnit, BambuExtra, DriverExtra,
-        U1Extra, U1Filament,
+        AmsFilament, AmsState, AmsTray, AmsUnit, BambuExtra, DriverExtra, U1Extra, U1Filament,
     };
     use crate::core::printer::instance::{
-        BedRef, ExtruderState, FeedKind, NozzleMaterial, NozzleSku, PrinterInstance,
-        SlotBinding,
+        BedRef, ExtruderState, FeedKind, NozzleMaterial, NozzleSku, PrinterInstance, SlotBinding,
     };
 
     fn bambi() -> PrinterInstance {
@@ -313,11 +308,31 @@ mod tests {
                     material: NozzleMaterial::Stainless,
                 },
                 slots: vec![
-                    SlotBinding { feed: FeedKind::Ams, filament_identity: None, color: None },
-                    SlotBinding { feed: FeedKind::Ams, filament_identity: None, color: None },
-                    SlotBinding { feed: FeedKind::Ams, filament_identity: None, color: None },
-                    SlotBinding { feed: FeedKind::Ams, filament_identity: None, color: None },
-                    SlotBinding { feed: FeedKind::Direct, filament_identity: None, color: None },
+                    SlotBinding {
+                        feed: FeedKind::Ams,
+                        filament_identity: None,
+                        color: None,
+                    },
+                    SlotBinding {
+                        feed: FeedKind::Ams,
+                        filament_identity: None,
+                        color: None,
+                    },
+                    SlotBinding {
+                        feed: FeedKind::Ams,
+                        filament_identity: None,
+                        color: None,
+                    },
+                    SlotBinding {
+                        feed: FeedKind::Ams,
+                        filament_identity: None,
+                        color: None,
+                    },
+                    SlotBinding {
+                        feed: FeedKind::Direct,
+                        filament_identity: None,
+                        color: None,
+                    },
                 ],
             }],
             bed: BedRef {
@@ -450,8 +465,14 @@ mod tests {
         let extra = DriverExtra::Bambu(BambuExtra {
             ams: Some(AmsState {
                 units: vec![
-                    AmsUnit { id: 0, trays: vec![] },
-                    AmsUnit { id: 1, trays: vec![] },
+                    AmsUnit {
+                        id: 0,
+                        trays: vec![],
+                    },
+                    AmsUnit {
+                        id: 1,
+                        trays: vec![],
+                    },
                 ],
                 active_slot: None,
             }),
@@ -483,32 +504,42 @@ mod tests {
     #[test]
     fn bambu_exact_filament_id_match_resolves_to_bundled_slug() {
         let inst = bambi();
-        let ams = ams_with_trays(vec![
-            tray_with(0, Some("GFA00"), "PLA", "FF0000FF"),
-        ]);
-        let updates = resolve_updates(&inst, &DriverExtra::Bambu(BambuExtra {
-            ams: Some(ams),
-            ..Default::default()
-        }), &lib());
+        let ams = ams_with_trays(vec![tray_with(0, Some("GFA00"), "PLA", "FF0000FF")]);
+        let updates = resolve_updates(
+            &inst,
+            &DriverExtra::Bambu(BambuExtra {
+                ams: Some(ams),
+                ..Default::default()
+            }),
+            &lib(),
+        );
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].extruder_idx, 0);
         assert_eq!(updates[0].slot_idx, 0);
-        assert_eq!(updates[0].filament_identity.as_deref(), Some("bambu-pla-basic-bbl-a1m"));
+        assert_eq!(
+            updates[0].filament_identity.as_deref(),
+            Some("bambu-pla-basic-bbl-a1m")
+        );
         assert_eq!(updates[0].color, "#ff0000");
     }
 
     #[test]
     fn bambu_unknown_filament_id_falls_back_to_generic_material() {
         let inst = bambi();
-        let ams = ams_with_trays(vec![
-            tray_with(0, Some("UNKNOWN"), "PETG", "AABBCCFF"),
-        ]);
-        let updates = resolve_updates(&inst, &DriverExtra::Bambu(BambuExtra {
-            ams: Some(ams),
-            ..Default::default()
-        }), &lib());
+        let ams = ams_with_trays(vec![tray_with(0, Some("UNKNOWN"), "PETG", "AABBCCFF")]);
+        let updates = resolve_updates(
+            &inst,
+            &DriverExtra::Bambu(BambuExtra {
+                ams: Some(ams),
+                ..Default::default()
+            }),
+            &lib(),
+        );
         assert_eq!(updates.len(), 1);
-        assert_eq!(updates[0].filament_identity.as_deref(), Some("generic-petg"));
+        assert_eq!(
+            updates[0].filament_identity.as_deref(),
+            Some("generic-petg")
+        );
         assert_eq!(updates[0].color, "#aabbcc");
     }
 
@@ -518,10 +549,14 @@ mod tests {
         // tray-info edit, but no RFID tag means no filament_id.
         let inst = bambi();
         let ams = ams_with_trays(vec![tray_with(1, None, "PLA", "112233FF")]);
-        let updates = resolve_updates(&inst, &DriverExtra::Bambu(BambuExtra {
-            ams: Some(ams),
-            ..Default::default()
-        }), &lib());
+        let updates = resolve_updates(
+            &inst,
+            &DriverExtra::Bambu(BambuExtra {
+                ams: Some(ams),
+                ..Default::default()
+            }),
+            &lib(),
+        );
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].slot_idx, 1);
         // Exact match miss → generic PLA (untagged or unknown SKU
@@ -533,10 +568,14 @@ mod tests {
     fn bambu_empty_trays_produce_no_updates() {
         let inst = bambi();
         let ams = ams_with_trays(vec![empty_tray(0), empty_tray(1)]);
-        let updates = resolve_updates(&inst, &DriverExtra::Bambu(BambuExtra {
-            ams: Some(ams),
-            ..Default::default()
-        }), &lib());
+        let updates = resolve_updates(
+            &inst,
+            &DriverExtra::Bambu(BambuExtra {
+                ams: Some(ams),
+                ..Default::default()
+            }),
+            &lib(),
+        );
         assert!(updates.is_empty());
     }
 
@@ -548,10 +587,14 @@ mod tests {
         // exclusively by `external_spool` (vt_tray).
         let inst = bambi();
         let ams = ams_with_trays(vec![tray_with(4, Some("GFA00"), "PLA", "ABCDEFFF")]);
-        let updates = resolve_updates(&inst, &DriverExtra::Bambu(BambuExtra {
-            ams: Some(ams),
-            ..Default::default()
-        }), &lib());
+        let updates = resolve_updates(
+            &inst,
+            &DriverExtra::Bambu(BambuExtra {
+                ams: Some(ams),
+                ..Default::default()
+            }),
+            &lib(),
+        );
         assert!(updates.is_empty());
     }
 
@@ -583,7 +626,10 @@ mod tests {
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].extruder_idx, 0);
         assert_eq!(updates[0].slot_idx, 4);
-        assert_eq!(updates[0].filament_identity.as_deref(), Some("generic-petg"));
+        assert_eq!(
+            updates[0].filament_identity.as_deref(),
+            Some("generic-petg")
+        );
         assert_eq!(updates[0].color, "#112233");
     }
 
@@ -604,7 +650,10 @@ mod tests {
         );
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].slot_idx, 4);
-        assert_eq!(updates[0].filament_identity.as_deref(), Some("bambu-pla-basic-bbl-a1m"));
+        assert_eq!(
+            updates[0].filament_identity.as_deref(),
+            Some("bambu-pla-basic-bbl-a1m")
+        );
     }
 
     #[test]
@@ -628,8 +677,7 @@ mod tests {
     #[test]
     fn u1_matching_material_keeps_current_identity() {
         let mut inst = snappy();
-        inst.extruders[0].slots[0].filament_identity =
-            Some("bambu-pla-basic-bbl-a1m".into());
+        inst.extruders[0].slots[0].filament_identity = Some("bambu-pla-basic-bbl-a1m".into());
         let extra = U1Extra {
             toolhead_filaments: vec![Some(U1Filament {
                 material_type: "PLA".into(),
@@ -641,15 +689,17 @@ mod tests {
         assert_eq!(updates.len(), 1);
         // Same identity returned — keeps the user's pick when
         // material matches.
-        assert_eq!(updates[0].filament_identity.as_deref(), Some("bambu-pla-basic-bbl-a1m"));
+        assert_eq!(
+            updates[0].filament_identity.as_deref(),
+            Some("bambu-pla-basic-bbl-a1m")
+        );
         assert_eq!(updates[0].color, "#224466");
     }
 
     #[test]
     fn u1_mismatched_material_resets_to_generic() {
         let mut inst = snappy();
-        inst.extruders[0].slots[0].filament_identity =
-            Some("bambu-pla-basic-bbl-a1m".into());
+        inst.extruders[0].slots[0].filament_identity = Some("bambu-pla-basic-bbl-a1m".into());
         let extra = U1Extra {
             toolhead_filaments: vec![Some(U1Filament {
                 material_type: "PETG".into(),
@@ -659,7 +709,10 @@ mod tests {
         };
         let updates = resolve_updates(&inst, &DriverExtra::U1(extra), &lib());
         assert_eq!(updates.len(), 1);
-        assert_eq!(updates[0].filament_identity.as_deref(), Some("generic-petg"));
+        assert_eq!(
+            updates[0].filament_identity.as_deref(),
+            Some("generic-petg")
+        );
     }
 
     #[test]
@@ -711,9 +764,15 @@ mod tests {
         let extra = U1Extra {
             toolhead_filaments: vec![
                 None,
-                Some(U1Filament { material_type: "PLA".into(), color: "010203FF".into() }),
+                Some(U1Filament {
+                    material_type: "PLA".into(),
+                    color: "010203FF".into(),
+                }),
                 None,
-                Some(U1Filament { material_type: "PETG".into(), color: "040506FF".into() }),
+                Some(U1Filament {
+                    material_type: "PETG".into(),
+                    color: "040506FF".into(),
+                }),
             ],
             ..Default::default()
         };

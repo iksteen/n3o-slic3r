@@ -21,11 +21,11 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
-use n3o_slic3r_lib::core::scene::events::SceneEvent;
-use n3o_slic3r_lib::core::threemf::load_3mf;
-use n3o_slic3r_lib::core::scene::primitives::{PrimitiveKind, PrimitiveParams};
 use n3o_slic3r_lib::core::project::Project;
+use n3o_slic3r_lib::core::scene::events::SceneEvent;
+use n3o_slic3r_lib::core::scene::primitives::{PrimitiveKind, PrimitiveParams};
 use n3o_slic3r_lib::core::scene::state::NewSceneObject;
+use n3o_slic3r_lib::core::threemf::load_3mf;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -59,25 +59,47 @@ fn step_1_set_active_printer_emits_bed_changed() {
     let bed_set = events
         .iter()
         .any(|e| matches!(e, SceneEvent::BedChanged { bed: Some(_), .. }));
-    assert!(bed_set, "set_active_printer should emit a populated BedChanged");
-    assert!(state.active_plate().scene.bed.is_some(), "scene state has the bed cached");
+    assert!(
+        bed_set,
+        "set_active_printer should emit a populated BedChanged"
+    );
+    assert!(
+        state.active_plate().scene.bed.is_some(),
+        "scene state has the bed cached"
+    );
 }
 
 #[test]
 fn step_2_library_primitive_lands_on_plate() {
     let mut state = Project::default();
     state.set_active_printer(Some(&a1_mini()));
-    let (_mesh_id, obj_id, events) =
-        state.add_from_primitive(PrimitiveKind::Cube, PrimitiveParams::defaults_for(PrimitiveKind::Cube));
-    let obj = state.active_plate().scene.objects.get(&obj_id).expect("registered");
+    let (_mesh_id, obj_id, events) = state.add_from_primitive(
+        PrimitiveKind::Cube,
+        PrimitiveParams::defaults_for(PrimitiveKind::Cube),
+    );
+    let obj = state
+        .active_plate()
+        .scene
+        .objects
+        .get(&obj_id)
+        .expect("registered");
     let mesh = state.meshes.get(&obj.mesh).expect("registered");
     // Cube primitive bbox is [-10, 10] cubed by default; after the
     // add_from_primitive auto-lift, the world-space min Z should be
     // 0 (rests on the plate).
     let mut min_z = f32::INFINITY;
-    for &x in &[mesh.bounding_box.min[0] as f32, mesh.bounding_box.max[0] as f32] {
-        for &y in &[mesh.bounding_box.min[1] as f32, mesh.bounding_box.max[1] as f32] {
-            for &z in &[mesh.bounding_box.min[2] as f32, mesh.bounding_box.max[2] as f32] {
+    for &x in &[
+        mesh.bounding_box.min[0] as f32,
+        mesh.bounding_box.max[0] as f32,
+    ] {
+        for &y in &[
+            mesh.bounding_box.min[1] as f32,
+            mesh.bounding_box.max[1] as f32,
+        ] {
+            for &z in &[
+                mesh.bounding_box.min[2] as f32,
+                mesh.bounding_box.max[2] as f32,
+            ] {
                 let p = obj.transform.apply_point(glam::Vec3::new(x, y, z));
                 if p.z < min_z {
                     min_z = p.z;
@@ -85,7 +107,10 @@ fn step_2_library_primitive_lands_on_plate() {
             }
         }
     }
-    assert!(min_z.abs() < 1e-4, "cube should rest on plate (min_z={min_z})");
+    assert!(
+        min_z.abs() < 1e-4,
+        "cube should rest on plate (min_z={min_z})"
+    );
     // No OOB warning expected.
     let oob = events
         .iter()
@@ -158,7 +183,13 @@ fn step_5_scene_snapshot_round_trips_after_full_setup() {
     );
     // Snapshot via the same shape `scene_snapshot` would assemble.
     let meshes: Vec<_> = state.meshes.values().map(|m| m.header()).collect();
-    let objects: Vec<_> = state.active_plate().scene.objects.values().cloned().collect();
+    let objects: Vec<_> = state
+        .active_plate()
+        .scene
+        .objects
+        .values()
+        .cloned()
+        .collect();
     assert!(!meshes.is_empty());
     assert!(!objects.is_empty());
     // Each header should match an object's mesh ref.
@@ -214,7 +245,11 @@ fn step_7_selection_and_delete_round_trip() {
         .filter(|e| matches!(e, SceneEvent::ObjectRemoved { .. }))
         .count();
     assert_eq!(removed, 2);
-    assert_eq!(state.active_plate().scene.objects.len(), 0, "both objects gone");
+    assert_eq!(
+        state.active_plate().scene.objects.len(),
+        0,
+        "both objects gone"
+    );
 }
 
 #[test]

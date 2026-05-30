@@ -26,9 +26,7 @@
 
 use crate::core::gcode::{FeatureType, Line, SemanticComment};
 
-use super::ir::{
-    BoundingBox, LayerRange, PreviewGeometry, RetractionMarker, Segment,
-};
+use super::ir::{BoundingBox, LayerRange, PreviewGeometry, RetractionMarker, Segment};
 
 /// Filament diameter assumed when converting `ΔE` (mm of filament
 /// off the spool) to volumetric flow (mm³). 1.75mm is the
@@ -110,8 +108,8 @@ pub fn build_preview(lines: &[Line]) -> PreviewGeometry {
                 }
 
                 let delta_e = target_e - state.e;
-                let xy_moved = (target_x - state.x).abs() > 1e-6
-                    || (target_y - state.y).abs() > 1e-6;
+                let xy_moved =
+                    (target_x - state.x).abs() > 1e-6 || (target_y - state.y).abs() > 1e-6;
                 let z_moved = (target_z - state.z).abs() > 1e-6;
 
                 let start = [prev.0, prev.1, prev.2];
@@ -342,7 +340,11 @@ mod tests {
         let g = build(src);
         assert_eq!(g.extrusions.len(), 1);
         assert_eq!(g.travels.len(), 2, "first + last moves are travels");
-        assert_eq!(g.retractions.len(), 1, "E=0 from E=0.5 with no XY → retract");
+        assert_eq!(
+            g.retractions.len(),
+            1,
+            "E=0 from E=0.5 with no XY → retract"
+        );
         assert!((g.retractions[0].amount_mm - 0.5).abs() < 1e-3);
     }
 

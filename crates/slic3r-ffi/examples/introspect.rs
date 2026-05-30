@@ -25,7 +25,11 @@ fn main() {
     for d in &defs {
         if d.ty == OptType::Enum && shown < 5 {
             println!("  {} ({})", d.key, d.label.as_deref().unwrap_or(""));
-            for (k, l) in d.enum_values.iter().zip(d.enum_labels.iter().chain(std::iter::repeat(&String::new()))) {
+            for (k, l) in d.enum_values.iter().zip(
+                d.enum_labels
+                    .iter()
+                    .chain(std::iter::repeat(&String::new())),
+            ) {
                 println!("      {k:<24} {l}");
             }
             shown += 1;

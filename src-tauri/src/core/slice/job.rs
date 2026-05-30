@@ -97,14 +97,9 @@ pub enum JobStatus {
     /// `error` is a string representation of the typed
     /// `SliceError` (the typed value already rode out via the
     /// `slice:job_failed` event).
-    Failed {
-        plate_id: u32,
-        error: String,
-    },
+    Failed { plate_id: u32, error: String },
     /// User cancelled.
-    Cancelled {
-        plate_id_in_progress: Option<u32>,
-    },
+    Cancelled { plate_id_in_progress: Option<u32> },
 }
 
 /// Shared handle between the orchestrator command thread and the

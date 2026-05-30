@@ -147,12 +147,7 @@ fn cube(w: f32, d: f32, h: f32) -> NewMesh {
     };
 
     emit(
-        [
-            [-hx, -hy, hz],
-            [hx, -hy, hz],
-            [hx, hy, hz],
-            [-hx, hy, hz],
-        ],
+        [[-hx, -hy, hz], [hx, -hy, hz], [hx, hy, hz], [-hx, hy, hz]],
         [0.0, 0.0, 1.0],
     );
     emit(
@@ -165,12 +160,7 @@ fn cube(w: f32, d: f32, h: f32) -> NewMesh {
         [0.0, 0.0, -1.0],
     );
     emit(
-        [
-            [hx, -hy, -hz],
-            [hx, hy, -hz],
-            [hx, hy, hz],
-            [hx, -hy, hz],
-        ],
+        [[hx, -hy, -hz], [hx, hy, -hz], [hx, hy, hz], [hx, -hy, hz]],
         [1.0, 0.0, 0.0],
     );
     emit(
@@ -183,12 +173,7 @@ fn cube(w: f32, d: f32, h: f32) -> NewMesh {
         [-1.0, 0.0, 0.0],
     );
     emit(
-        [
-            [hx, hy, -hz],
-            [-hx, hy, -hz],
-            [-hx, hy, hz],
-            [hx, hy, hz],
-        ],
+        [[hx, hy, -hz], [-hx, hy, -hz], [-hx, hy, hz], [hx, hy, hz]],
         [0.0, 1.0, 0.0],
     );
     emit(
@@ -382,11 +367,7 @@ fn cone(radius: f32, height: f32, segments: u32) -> NewMesh {
         normals.extend_from_slice(&[cx * nr_side, cy * nr_side, nz_side]);
     }
     for i in 0..segs as u32 {
-        indices.extend_from_slice(&[
-            base_ring_start + i,
-            base_ring_start + i + 1,
-            apex_start + i,
-        ]);
+        indices.extend_from_slice(&[base_ring_start + i, base_ring_start + i + 1, apex_start + i]);
     }
 
     // Bottom cap (faces down).

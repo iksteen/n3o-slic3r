@@ -20,8 +20,8 @@
 use super::bed::BedMesh;
 use super::state::{ObjectId, SceneObject};
 use super::transform::Transform;
-use crate::core::project::Project;
 use crate::core::printer::profile::BoundingBox;
+use crate::core::project::Project;
 use glam::Vec3;
 
 /// Spacing between adjacent placed objects, in millimeters. Matches
@@ -117,7 +117,8 @@ pub fn plan_arrangement(state: &Project, bed: &BedMesh) -> ArrangeResult {
             // Preserve Z: this packer only moves in XY. The object's
             // existing transform stays intact otherwise.
             let new_xform = Transform::from_mat4(
-                glam::Mat4::from_translation(Vec3::new(dx, dy, 0.0)) * entry.obj.transform.to_mat4(),
+                glam::Mat4::from_translation(Vec3::new(dx, dy, 0.0))
+                    * entry.obj.transform.to_mat4(),
             );
             placed.push((entry.id, new_xform));
             // Advance the row cursor + bump row_top if this object
@@ -322,7 +323,12 @@ mod tests {
         // No OOB events should have fired.
         let oob_count = events
             .iter()
-            .filter(|e| matches!(e, super::super::events::SceneEvent::ObjectOutOfBounds { .. }))
+            .filter(|e| {
+                matches!(
+                    e,
+                    super::super::events::SceneEvent::ObjectOutOfBounds { .. }
+                )
+            })
             .count();
         assert_eq!(oob_count, 0, "arrange should keep everything on plate");
     }

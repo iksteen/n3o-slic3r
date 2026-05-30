@@ -49,11 +49,7 @@ pub fn list_primitives() -> Vec<PrimitiveDescriptor> {
             kind: Cylinder,
             display_name: "Cylinder".into(),
             default_params: PrimitiveParams::defaults_for(Cylinder),
-            fields: vec![
-                "radius".into(),
-                "height".into(),
-                "radial_segments".into(),
-            ],
+            fields: vec!["radius".into(), "height".into(), "radial_segments".into()],
         },
         PrimitiveDescriptor {
             kind: Sphere,
@@ -65,21 +61,13 @@ pub fn list_primitives() -> Vec<PrimitiveDescriptor> {
             kind: Cone,
             display_name: "Cone".into(),
             default_params: PrimitiveParams::defaults_for(Cone),
-            fields: vec![
-                "radius".into(),
-                "height".into(),
-                "radial_segments".into(),
-            ],
+            fields: vec!["radius".into(), "height".into(), "radial_segments".into()],
         },
         PrimitiveDescriptor {
             kind: Torus,
             display_name: "Torus".into(),
             default_params: PrimitiveParams::defaults_for(Torus),
-            fields: vec![
-                "width".into(),
-                "radius".into(),
-                "radial_segments".into(),
-            ],
+            fields: vec!["width".into(), "radius".into(), "radial_segments".into()],
         },
     ]
 }
@@ -169,7 +157,11 @@ pub fn list_calibration(
 /// the descriptor here updates.
 fn material_flow_for(printer_model: &str, calibration_root: &Path) -> CalibrationDescriptor {
     let lower = printer_model.to_ascii_lowercase();
-    if lower.contains("bambu") || lower.contains("a1") || lower.contains("x1") || lower.contains("p1") {
+    if lower.contains("bambu")
+        || lower.contains("a1")
+        || lower.contains("x1")
+        || lower.contains("p1")
+    {
         check_calibration(
             "material-flow",
             "Material Flow (Orca-LinearFlow)",
@@ -211,9 +203,7 @@ fn check_calibration(
             .and_then(|s| s.to_str())
             .map(|s| s.to_owned());
         match ext.as_deref() {
-            Some("3mf") | Some("stl") | Some("obj") => {
-                CalibrationAvailability::Available { path }
-            }
+            Some("3mf") | Some("stl") | Some("obj") => CalibrationAvailability::Available { path },
             Some(e) => CalibrationAvailability::UnsupportedFormat {
                 path,
                 format: e.to_owned(),

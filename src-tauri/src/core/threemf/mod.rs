@@ -51,8 +51,8 @@ mod sliced;
 mod writer;
 
 pub use sliced::{
-    fixture_input, md5_hex, read_sliced_3mf, write_sliced_3mf, AmsBinding,
-    SlicedPlate, SlicedPlateMetadata, SlicedPlateRead, SlicedProjectInput, SlicedRead,
+    fixture_input, md5_hex, read_sliced_3mf, write_sliced_3mf, AmsBinding, SlicedPlate,
+    SlicedPlateMetadata, SlicedPlateRead, SlicedProjectInput, SlicedRead,
 };
 pub use writer::{project_from_objects, write_3mf, write_3mf_with_extras};
 
@@ -61,10 +61,7 @@ pub use writer::{project_from_objects, write_3mf, write_3mf_with_extras};
 /// for callers that need to peek at custom metadata (e.g.
 /// `Metadata/n3o_project.json` for project save format)
 /// without re-parsing the geometry.
-pub fn read_3mf_extra_entry(
-    path: &Path,
-    entry: &str,
-) -> Result<Option<Vec<u8>>, LoadError> {
+pub fn read_3mf_extra_entry(path: &Path, entry: &str) -> Result<Option<Vec<u8>>, LoadError> {
     let mut container = container::Container::open(path)?;
     container.read_opt(entry)
 }
@@ -130,7 +127,10 @@ pub fn load_3mf(path: &Path) -> Result<Project3mf, LoadError> {
     // PrusaSlicer-flavor detection: presence of `Slic3r_PE_model.config`
     // means we'd need to read different metadata. Out of scope for
     // MVP — fail with a guidance message.
-    if container.read_opt("Metadata/Slic3r_PE_model.config")?.is_some() {
+    if container
+        .read_opt("Metadata/Slic3r_PE_model.config")?
+        .is_some()
+    {
         return Err(LoadError::Parse {
             path: path.into(),
             message: "PrusaSlicer-flavor 3MF detected — re-save through OrcaSlicer for full \
@@ -493,7 +493,10 @@ mod tests {
             project.objects.iter().map(|o| o.plate_id).collect();
         assert_eq!(plates, std::collections::HashSet::from([1]));
         // Designer attribution survives.
-        assert_eq!(project.file_metadata.get("Designer").map(|s| s.as_str()), Some("jansonne"));
+        assert_eq!(
+            project.file_metadata.get("Designer").map(|s| s.as_str()),
+            Some("jansonne")
+        );
     }
 
     fn two_cubes_fixture() -> PathBuf {
@@ -648,8 +651,8 @@ mod tests {
         {
             let f = std::fs::File::create(&path).expect("create");
             let mut zip = zip::ZipWriter::new(f);
-            let opts: zip::write::FileOptions<()> =
-                zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
             zip.start_file("Metadata/Slic3r_PE_model.config", opts)
                 .unwrap();
             std::io::Write::write_all(&mut zip, b"<config/>").unwrap();

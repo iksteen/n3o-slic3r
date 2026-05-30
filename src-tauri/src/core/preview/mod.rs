@@ -34,14 +34,12 @@ pub mod stats;
 pub use build::build_preview;
 pub use colors::{encode_colors, ColorMode, Palette};
 pub use commands::{
-    preview_buffers, preview_drop, preview_layer_stats, preview_load,
-    preview_segment_detail, PreviewLoadResponse, SegmentDetail,
+    preview_buffers, preview_drop, preview_layer_stats, preview_load, preview_segment_detail,
+    PreviewLoadResponse, SegmentDetail,
 };
-pub use ir::{
-    BoundingBox, LayerRange, PreviewGeometry, RetractionMarker, SegmentSet,
-};
+pub use ir::{BoundingBox, LayerRange, PreviewGeometry, RetractionMarker, SegmentSet};
 pub use registry::{LoadedPreview, PreviewHandle, PreviewRegistry};
 pub use stats::{
-    compute_job_stats, compute_layer_stats, layer_time_map, FullJobStats,
-    HeightStats, PerLayerStats,
+    compute_job_stats, compute_layer_stats, layer_time_map, FullJobStats, HeightStats,
+    PerLayerStats,
 };

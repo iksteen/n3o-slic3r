@@ -101,10 +101,7 @@ fn collecting_sink() -> (EventSink, Arc<Mutex<Vec<SliceEvent>>>) {
 fn slice_cube_to_gcode() -> (PathBuf, Vec<u8>) {
     let registry = JobRegistry::new();
     let (sink, events) = collecting_sink();
-    let temp_dir = std::env::temp_dir().join(format!(
-        "n3o-phase3-smoke-{}",
-        std::process::id(),
-    ));
+    let temp_dir = std::env::temp_dir().join(format!("n3o-phase3-smoke-{}", std::process::id(),));
 
     let input = SliceJobInput {
         model_path: cube_stl().display().to_string(),
@@ -258,7 +255,10 @@ fn phase3_smoke_3mf_roundtrip() {
         // Fixture isn't required for unrelated tests; skip with a
         // clear message rather than fail the whole suite if someone
         // checked out without examples/spike3/.
-        eprintln!("skipping 3MF round-trip: fixture missing at {}", path.display());
+        eprintln!(
+            "skipping 3MF round-trip: fixture missing at {}",
+            path.display()
+        );
         return;
     }
     let original = load_3mf(&path).expect("load original");
@@ -297,7 +297,12 @@ fn phase3_smoke_3mf_roundtrip() {
     // floats exactly because the writer goes through string formatting,
     // but identical counts + identical plate assignments are the
     // structural-equivalence the exit criterion asks for.
-    for (i, (orig, back)) in original.meshes.iter().zip(reloaded.meshes.iter()).enumerate() {
+    for (i, (orig, back)) in original
+        .meshes
+        .iter()
+        .zip(reloaded.meshes.iter())
+        .enumerate()
+    {
         assert_eq!(
             back.vertices.len(),
             orig.vertices.len(),

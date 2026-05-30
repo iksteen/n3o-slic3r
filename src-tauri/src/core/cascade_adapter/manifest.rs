@@ -114,8 +114,14 @@ pub const DROP_LIST: &[&str] = &[
 pub const TYPO_REMAP: &[(&str, &str)] = &[
     ("detraction_speed", "deretraction_speed"),
     ("inital_layer_height", "initial_layer_height"),
-    ("nozzle_temperature_intial_layer", "nozzle_temperature_initial_layer"),
-    ("tree_support_bramch_diameter_angle", "tree_support_branch_diameter_angle"),
+    (
+        "nozzle_temperature_intial_layer",
+        "nozzle_temperature_initial_layer",
+    ),
+    (
+        "tree_support_bramch_diameter_angle",
+        "tree_support_branch_diameter_angle",
+    ),
     // wall_infill_order is in DROP_LIST today; once libslic3r exposes
     // a canonical version, add the remap here.
 ];

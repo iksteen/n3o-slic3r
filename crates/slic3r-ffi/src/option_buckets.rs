@@ -103,7 +103,10 @@ const OPTION_BUCKETS: &[(&str, OptBucket)] = &[
     ("enable_pressure_advance", OptBucket::Filament),
     ("enable_prime_tower", OptBucket::Process),
     ("enable_support", OptBucket::Process),
-    ("enable_tower_interface_cooldown_during_tower", OptBucket::Process),
+    (
+        "enable_tower_interface_cooldown_during_tower",
+        OptBucket::Process,
+    ),
     ("enable_tower_interface_features", OptBucket::Process),
     ("enable_wrapping_detection", OptBucket::Process),
     ("enforce_support_layers", OptBucket::Process),
@@ -123,7 +126,10 @@ const OPTION_BUCKETS: &[(&str, OptBucket)] = &[
     ("extruder_printable_height", OptBucket::Printer),
     ("extruder_type", OptBucket::Printer),
     ("extruder_variant_list", OptBucket::Printer),
-    ("extrusion_rate_smoothing_external_perimeter_only", OptBucket::Process),
+    (
+        "extrusion_rate_smoothing_external_perimeter_only",
+        OptBucket::Process,
+    ),
     ("fan_cooling_layer_time", OptBucket::Filament),
     ("fan_kickstart", OptBucket::Printer),
     ("fan_max_speed", OptBucket::Filament),
@@ -170,7 +176,10 @@ const OPTION_BUCKETS: &[(&str, OptBucket)] = &[
     ("filament_retract_lift_enforce", OptBucket::Filament),
     ("filament_retract_restart_extra", OptBucket::Filament),
     ("filament_retract_when_changing_layer", OptBucket::Filament),
-    ("filament_retraction_distances_when_cut", OptBucket::Filament),
+    (
+        "filament_retraction_distances_when_cut",
+        OptBucket::Filament,
+    ),
     ("filament_retraction_length", OptBucket::Filament),
     ("filament_retraction_minimum_travel", OptBucket::Filament),
     ("filament_retraction_speed", OptBucket::Filament),
@@ -182,8 +191,14 @@ const OPTION_BUCKETS: &[(&str, OptBucket)] = &[
     ("filament_stamping_loading_speed", OptBucket::Filament),
     ("filament_start_gcode", OptBucket::Filament),
     ("filament_toolchange_delay", OptBucket::Filament),
-    ("filament_tower_interface_pre_extrusion_dist", OptBucket::Filament),
-    ("filament_tower_interface_pre_extrusion_length", OptBucket::Filament),
+    (
+        "filament_tower_interface_pre_extrusion_dist",
+        OptBucket::Filament,
+    ),
+    (
+        "filament_tower_interface_pre_extrusion_length",
+        OptBucket::Filament,
+    ),
     ("filament_tower_interface_print_temp", OptBucket::Filament),
     ("filament_tower_interface_purge_volume", OptBucket::Filament),
     ("filament_tower_ironing_area", OptBucket::Filament),
@@ -207,7 +222,10 @@ const OPTION_BUCKETS: &[(&str, OptBucket)] = &[
     ("full_fan_speed_layer", OptBucket::Filament),
     ("fuzzy_skin", OptBucket::Process),
     ("fuzzy_skin_first_layer", OptBucket::Process),
-    ("fuzzy_skin_layers_between_ripple_offset", OptBucket::Process),
+    (
+        "fuzzy_skin_layers_between_ripple_offset",
+        OptBucket::Process,
+    ),
     ("fuzzy_skin_mode", OptBucket::Process),
     ("fuzzy_skin_noise_type", OptBucket::Process),
     ("fuzzy_skin_octaves", OptBucket::Process),
@@ -336,7 +354,10 @@ const OPTION_BUCKETS: &[(&str, OptBucket)] = &[
     ("max_resonance_avoidance_speed", OptBucket::Printer),
     ("max_travel_detour_distance", OptBucket::Process),
     ("max_volumetric_extrusion_rate_slope", OptBucket::Process),
-    ("max_volumetric_extrusion_rate_slope_segment_length", OptBucket::Process),
+    (
+        "max_volumetric_extrusion_rate_slope_segment_length",
+        OptBucket::Process,
+    ),
     ("min_bead_width", OptBucket::Process),
     ("min_feature_size", OptBucket::Process),
     ("min_layer_height", OptBucket::Printer),
@@ -345,7 +366,10 @@ const OPTION_BUCKETS: &[(&str, OptBucket)] = &[
     ("min_skirt_length", OptBucket::Process),
     ("min_width_top_surface", OptBucket::Process),
     ("minimum_sparse_infill_area", OptBucket::Process),
-    ("mmu_segmented_region_interlocking_depth", OptBucket::Process),
+    (
+        "mmu_segmented_region_interlocking_depth",
+        OptBucket::Process,
+    ),
     ("mmu_segmented_region_max_width", OptBucket::Process),
     ("notes", OptBucket::Process),
     ("nozzle_diameter", OptBucket::Printer),
@@ -485,7 +509,10 @@ const OPTION_BUCKETS: &[(&str, OptBucket)] = &[
     ("slow_down_min_speed", OptBucket::Filament),
     ("slowdown_for_curled_perimeters", OptBucket::Process),
     ("small_area_infill_flow_compensation", OptBucket::Process),
-    ("small_area_infill_flow_compensation_model", OptBucket::Process),
+    (
+        "small_area_infill_flow_compensation_model",
+        OptBucket::Process,
+    ),
     ("small_perimeter_speed", OptBucket::Process),
     ("small_perimeter_threshold", OptBucket::Process),
     ("solid_infill_direction", OptBucket::Process),
@@ -550,7 +577,10 @@ const OPTION_BUCKETS: &[(&str, OptBucket)] = &[
     ("temperature_vitrification", OptBucket::Filament),
     ("template_custom_gcode", OptBucket::Printer),
     ("textured_cool_plate_temp", OptBucket::Filament),
-    ("textured_cool_plate_temp_initial_layer", OptBucket::Filament),
+    (
+        "textured_cool_plate_temp_initial_layer",
+        OptBucket::Filament,
+    ),
     ("textured_plate_temp", OptBucket::Filament),
     ("textured_plate_temp_initial_layer", OptBucket::Filament),
     ("thick_bridges", OptBucket::Process),
@@ -654,18 +684,21 @@ mod tests {
     fn binary_search_relies_on_sorted_keys() {
         let mut last = "";
         for (key, _) in OPTION_BUCKETS {
-            assert!(*key > last, "OPTION_BUCKETS must be sorted; {key} <= {last}");
+            assert!(
+                *key > last,
+                "OPTION_BUCKETS must be sorted; {key} <= {last}"
+            );
             last = key;
         }
     }
 
     #[test]
     fn known_keys_resolve() {
-        assert_eq!(bucket_of("layer_height"),     Some(OptBucket::Process));
-        assert_eq!(bucket_of("nozzle_diameter"),  Some(OptBucket::Printer));
+        assert_eq!(bucket_of("layer_height"), Some(OptBucket::Process));
+        assert_eq!(bucket_of("nozzle_diameter"), Some(OptBucket::Printer));
         assert_eq!(bucket_of("nozzle_temperature"), Some(OptBucket::Filament));
-        assert_eq!(bucket_of("filament_type"),    Some(OptBucket::Filament));
+        assert_eq!(bucket_of("filament_type"), Some(OptBucket::Filament));
         assert_eq!(bucket_of("machine_max_speed_x"), Some(OptBucket::Printer));
-        assert_eq!(bucket_of("nonexistent_key"),  None);
+        assert_eq!(bucket_of("nonexistent_key"), None);
     }
 }

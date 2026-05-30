@@ -472,22 +472,13 @@ mod tests {
         );
         assert_eq!(FeatureType::parse("Internal infill"), FeatureType::Infill);
         assert_eq!(FeatureType::parse("infill"), FeatureType::Infill);
-        assert_eq!(
-            FeatureType::parse("Solid infill"),
-            FeatureType::SolidInfill
-        );
+        assert_eq!(FeatureType::parse("Solid infill"), FeatureType::SolidInfill);
         assert_eq!(
             FeatureType::parse("Top solid infill"),
             FeatureType::TopSolidInfill
         );
-        assert_eq!(
-            FeatureType::parse("Bridge infill"),
-            FeatureType::Bridge
-        );
-        assert_eq!(
-            FeatureType::parse("Support material"),
-            FeatureType::Support
-        );
+        assert_eq!(FeatureType::parse("Bridge infill"), FeatureType::Bridge);
+        assert_eq!(FeatureType::parse("Support material"), FeatureType::Support);
         assert_eq!(FeatureType::parse("Skirt"), FeatureType::Skirt);
         assert_eq!(FeatureType::parse("Brim"), FeatureType::Brim);
         assert_eq!(FeatureType::parse("Travel"), FeatureType::Travel);
@@ -495,10 +486,7 @@ mod tests {
 
     #[test]
     fn feature_type_parse_is_case_and_whitespace_insensitive() {
-        assert_eq!(
-            FeatureType::parse("  PERIMETER  "),
-            FeatureType::Perimeter
-        );
+        assert_eq!(FeatureType::parse("  PERIMETER  "), FeatureType::Perimeter);
         assert_eq!(
             FeatureType::parse("external perimeter"),
             FeatureType::ExternalPerimeter

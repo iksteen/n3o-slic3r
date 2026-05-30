@@ -148,9 +148,7 @@ fn transformed_bbox(obj: &super::state::SceneObject, mesh: &super::state::Mesh) 
     for &x in &[bb.min[0] as f32, bb.max[0] as f32] {
         for &y in &[bb.min[1] as f32, bb.max[1] as f32] {
             for &z in &[bb.min[2] as f32, bb.max[2] as f32] {
-                let p = obj
-                    .transform
-                    .apply_point(glam::Vec3::new(x, y, z));
+                let p = obj.transform.apply_point(glam::Vec3::new(x, y, z));
                 for (axis, v) in [p.x as f64, p.y as f64, p.z as f64].iter().enumerate() {
                     if *v < min[axis] {
                         min[axis] = *v;
@@ -261,7 +259,9 @@ mod tests {
         let reasons = object_out_of_bounds(&obj, &mesh, &bed);
         assert!(reasons.iter().any(|r| matches!(
             r,
-            OutOfBoundsReason::OutOfBuildVolume { axis: BoundsAxis::X }
+            OutOfBoundsReason::OutOfBuildVolume {
+                axis: BoundsAxis::X
+            }
         )));
     }
 

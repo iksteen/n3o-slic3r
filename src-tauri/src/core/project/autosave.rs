@@ -175,11 +175,7 @@ impl Drop for AutosaveHandle {
     }
 }
 
-fn autosave_loop(
-    project: Arc<Mutex<Project>>,
-    config: AutosaveConfig,
-    stop: Arc<AtomicBool>,
-) {
+fn autosave_loop(project: Arc<Mutex<Project>>, config: AutosaveConfig, stop: Arc<AtomicBool>) {
     let mut last_hash: Option<u64> = None;
     loop {
         std::thread::park_timeout(config.interval);
@@ -280,11 +276,7 @@ pub fn scan_recoveries(dir: &Path) -> std::io::Result<Vec<AutosaveEntry>> {
     for raw in read_dir {
         let entry = raw?;
         let path = entry.path();
-        let Some(stem) = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(str::to_owned)
-        else {
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else {
             continue;
         };
         if path.extension().and_then(|e| e.to_str()) != Some("3mf") {
@@ -387,8 +379,8 @@ mod tests {
 
     #[test]
     fn scan_recoveries_missing_dir_returns_empty_not_err() {
-        let entries = scan_recoveries(Path::new("/nonexistent-n3o-test-dir"))
-            .expect("not an error");
+        let entries =
+            scan_recoveries(Path::new("/nonexistent-n3o-test-dir")).expect("not an error");
         assert!(entries.is_empty());
     }
 
@@ -475,7 +467,9 @@ mod tests {
         let project = Arc::new(Mutex::new(Project::default()));
         let handle = AutosaveHandle::new();
         let config = AutosaveConfig::new(dir.path().to_path_buf());
-        handle.start(project.clone(), config.clone()).expect("start 1");
+        handle
+            .start(project.clone(), config.clone())
+            .expect("start 1");
         handle.start(project, config).expect("start 2 — no-op");
         assert!(handle.is_running());
         handle.stop();

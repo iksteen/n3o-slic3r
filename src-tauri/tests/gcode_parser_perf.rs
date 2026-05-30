@@ -38,7 +38,12 @@ fn synthetic_gcode(target_bytes: usize) -> Vec<u8> {
 
     let mut layer = 0u32;
     let mut z = 0.0_f32;
-    let features = ["Perimeter", "External perimeter", "Internal infill", "Solid infill"];
+    let features = [
+        "Perimeter",
+        "External perimeter",
+        "Internal infill",
+        "Solid infill",
+    ];
     let mut x = 100.0_f32;
     let mut y = 100.0_f32;
     let mut e = 0.0_f32;
@@ -80,7 +85,9 @@ fn parser_under_750ms_on_5mb_synthetic() {
     let _ = parse_lines(fixture.as_slice()).count();
 
     let start = Instant::now();
-    let count = parse_lines(fixture.as_slice()).filter_map(Result::ok).count();
+    let count = parse_lines(fixture.as_slice())
+        .filter_map(Result::ok)
+        .count();
     let elapsed = start.elapsed();
     println!(
         "parsed {} lines from {} bytes in {:?} ({:.1} MB/s)",
@@ -175,5 +182,8 @@ fn parser_classifies_every_line_in_synthetic_fixture() {
     assert!(layers > 0);
     assert!(tools > 0);
     // M104, M140, G28 should land in Other (4 header-ish non-comment lines).
-    assert!(others >= 3, "expected M-commands + G28 in Other, got {others}");
+    assert!(
+        others >= 3,
+        "expected M-commands + G28 in Other, got {others}"
+    );
 }

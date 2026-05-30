@@ -37,8 +37,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("bambu-lab-a1-mini missing from registry")?;
     let plate = build_plate::lookup("Textured PEI Plate")
         .ok_or("Textured PEI Plate missing from registry")?;
-    let filament = filament_registry::lookup("generic-pla")
-        .ok_or("generic-pla missing from registry")?;
+    let filament =
+        filament_registry::lookup("generic-pla").ok_or("generic-pla missing from registry")?;
     println!(
         "  printer:  {} ({} toolheads, ams_max={})",
         printer.model,
@@ -63,8 +63,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         rules: parse_cascade_str(&src, Path::new("bambu-lab-a1-mini-demo.toml"))?,
     };
     println!("  cascade: {} rules parsed", cascade.rules.len());
-    let known_dims =
-        KnownDimensions::new(["printer.model", "filament.type", "filament.name", "plate.type"]);
+    let known_dims = KnownDimensions::new([
+        "printer.model",
+        "filament.type",
+        "filament.name",
+        "plate.type",
+    ]);
     validate_cascade(&cascade, &known_dims).map_err(|errs| {
         let summary = errs
             .iter()
@@ -129,7 +133,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let layer_height_in_config = adapt_result.config.get("layer_height").unwrap_or_default();
-    let hot_plate_temp_in_config = adapt_result.config.get("hot_plate_temp").unwrap_or_default();
+    let hot_plate_temp_in_config = adapt_result
+        .config
+        .get("hot_plate_temp")
+        .unwrap_or_default();
     let curr_bed_type_in_config = adapt_result.config.get("curr_bed_type").unwrap_or_default();
     println!(
         "  Config spot-check: layer_height={:?}, hot_plate_temp={:?}, curr_bed_type={:?}",

@@ -26,9 +26,7 @@ use tokio::task::JoinHandle;
 use tracing::warn;
 
 use super::{http, moonraker::MoonrakerSession, probe, status as status_decode};
-use crate::core::driver::status::{
-    ConnectionState, DriverExtra, PrinterStatus, U1Extra,
-};
+use crate::core::driver::status::{ConnectionState, DriverExtra, PrinterStatus, U1Extra};
 use crate::core::driver::traits::{
     Driver, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle, SendPayload,
 };
@@ -166,8 +164,7 @@ impl Driver for U1Driver {
     async fn send(&mut self, payload: SendPayload) -> Result<SendHandle, DriverError> {
         match payload {
             SendPayload::Gcode { bytes, file_name } => {
-                http::upload_and_start(&self.config.host, self.config.port, &file_name, bytes)
-                    .await
+                http::upload_and_start(&self.config.host, self.config.port, &file_name, bytes).await
             }
             SendPayload::Gcode3mf { .. } => Err(DriverError::Other(
                 "U1 expects raw G-code (SendPayload::Gcode); .gcode.3mf is Bambu-only".into(),
@@ -304,7 +301,9 @@ mod tests {
                     r = listener.accept() => r,
                     _ = &mut stop_rx => return,
                 };
-                let Ok((stream, _peer)) = accept else { continue };
+                let Ok((stream, _peer)) = accept else {
+                    continue;
+                };
                 let initial_status = initial_status.clone();
                 let notify = notify.clone();
                 let probe_serial = probe_serial.clone();
@@ -318,9 +317,7 @@ mod tests {
                         Ok(0) | Err(_) => return,
                         Ok(n) => n,
                     };
-                    if String::from_utf8_lossy(&peek[..n])
-                        .starts_with("GET /machine/system_info")
-                    {
+                    if String::from_utf8_lossy(&peek[..n]).starts_with("GET /machine/system_info") {
                         use tokio::io::AsyncWriteExt;
                         let (status_line, body) = match &probe_serial {
                             Some(serial) => (
@@ -352,7 +349,9 @@ mod tests {
                     // path completes.
                     let req_id = loop {
                         let Some(msg) = ws.next().await else { return };
-                        let Ok(Message::Text(text)) = msg else { continue };
+                        let Ok(Message::Text(text)) = msg else {
+                            continue;
+                        };
                         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
                         if v.get("method").and_then(|m| m.as_str())
                             == Some("printer.objects.subscribe")
@@ -391,11 +390,7 @@ mod tests {
     /// Wait for `predicate` to return Some on the driver's published
     /// status, or fail the test after `timeout`. Polls the watch
     /// `changed()` signal so we don't hot-spin.
-    async fn wait_for<F, T>(
-        driver: &U1Driver,
-        timeout: Duration,
-        mut predicate: F,
-    ) -> T
+    async fn wait_for<F, T>(driver: &U1Driver, timeout: Duration, mut predicate: F) -> T
     where
         F: FnMut(&PrinterStatus) -> Option<T>,
     {
@@ -438,7 +433,10 @@ mod tests {
         // initial subscribe response and the notify_status_update
         // were decoded + published.
         let job = wait_for(&driver, Duration::from_secs(3), |s| {
-            s.job.as_ref().filter(|j| j.file_name.as_deref() == Some("Cube.gcode")).cloned()
+            s.job
+                .as_ref()
+                .filter(|j| j.file_name.as_deref() == Some("Cube.gcode"))
+                .cloned()
         })
         .await;
         assert!(matches!(job.state, JobState::Printing));

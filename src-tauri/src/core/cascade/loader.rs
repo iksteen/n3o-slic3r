@@ -103,16 +103,18 @@ pub fn load_cascade(paths: &[&Path]) -> Result<Cascade, CascadeLoadError> {
 /// Parse a single cascade file's contents into a list of `Rule`s.
 /// Exposed for tests + future UI live-editing.
 pub fn parse_cascade_str(src: &str, path: &Path) -> Result<Vec<Rule>, CascadeLoadError> {
-    let parsed: toml::Value = src.parse::<toml::Value>().map_err(|e| {
-        CascadeLoadError::TomlParse {
+    let parsed: toml::Value =
+        src.parse::<toml::Value>()
+            .map_err(|e| CascadeLoadError::TomlParse {
+                path: path.into(),
+                message: e.to_string(),
+            })?;
+    let root = parsed
+        .as_table()
+        .ok_or_else(|| CascadeLoadError::TomlParse {
             path: path.into(),
-            message: e.to_string(),
-        }
-    })?;
-    let root = parsed.as_table().ok_or_else(|| CascadeLoadError::TomlParse {
-        path: path.into(),
-        message: "expected a table at the file root".into(),
-    })?;
+            message: "expected a table at the file root".into(),
+        })?;
 
     let header_lines = scan_header_lines(src);
     let mut rules: Vec<Rule> = Vec::new();
@@ -159,13 +161,15 @@ fn parse_rule_array(
     header_lines: &HeaderLines,
     rules: &mut Vec<Rule>,
 ) -> Result<(), CascadeLoadError> {
-    let rule_array = value.as_array().ok_or_else(|| CascadeLoadError::InvalidShape {
-        location: SourceLocation {
-            path: path.into(),
-            line: 1,
-        },
-        message: "`rule` must be an array of tables (`[[rule]]`)".into(),
-    })?;
+    let rule_array = value
+        .as_array()
+        .ok_or_else(|| CascadeLoadError::InvalidShape {
+            location: SourceLocation {
+                path: path.into(),
+                line: 1,
+            },
+            message: "`rule` must be an array of tables (`[[rule]]`)".into(),
+        })?;
     for (idx, rule_value) in rule_array.iter().enumerate() {
         let line = header_lines.rule_lines.get(idx).copied().unwrap_or(1);
         let source = SourceLocation {
@@ -274,21 +278,22 @@ fn parse_explicit_rule(
     for (key, value) in table {
         match key.as_str() {
             "when" => {
-                let when_table = value.as_table().ok_or_else(|| {
-                    CascadeLoadError::InvalidShape {
-                        location: source.clone(),
-                        message: "`when` must be a table (use `when.dim = \"v\"` form)".into(),
-                    }
-                })?;
+                let when_table =
+                    value
+                        .as_table()
+                        .ok_or_else(|| CascadeLoadError::InvalidShape {
+                            location: source.clone(),
+                            message: "`when` must be a table (use `when.dim = \"v\"` form)".into(),
+                        })?;
                 collect_conditions(when_table, String::new(), &mut conditions, &source)?;
             }
             "set" => {
-                let set_table = value.as_table().ok_or_else(|| {
-                    CascadeLoadError::InvalidShape {
+                let set_table = value
+                    .as_table()
+                    .ok_or_else(|| CascadeLoadError::InvalidShape {
                         location: source.clone(),
                         message: "`set` must be a table (use `set.key = value` form)".into(),
-                    }
-                })?;
+                    })?;
                 collect_set(set_table, String::new(), &mut set, &source)?;
             }
             other => {
@@ -457,9 +462,7 @@ fn value_to_set_string(
                 path: path.into(),
                 line,
             },
-            message: format!(
-                "set.{key} must be a leaf value (scalar or array), not a table"
-            ),
+            message: format!("set.{key} must be a leaf value (scalar or array), not a table"),
         }),
         toml::Value::Datetime(_) => Err(CascadeLoadError::InvalidShape {
             location: SourceLocation {
@@ -593,10 +596,8 @@ mod tests {
         // Form A: top-level default + section shorthand
         let a = parse("bed_temp = 50\n[filament.type.PLA]\nbed_temp = 45\n").unwrap();
         // Form B: top-level default + explicit [[rule]]
-        let b = parse(
-            "bed_temp = 50\n[[rule]]\nwhen.filament.type = \"PLA\"\nset.bed_temp = 45\n",
-        )
-        .unwrap();
+        let b = parse("bed_temp = 50\n[[rule]]\nwhen.filament.type = \"PLA\"\nset.bed_temp = 45\n")
+            .unwrap();
         // Form C: two [[rule]] blocks (no top-level)
         let c = parse(
             "[[rule]]\nset.bed_temp = 50\n[[rule]]\nwhen.filament.type = \"PLA\"\nset.bed_temp = 45\n",

@@ -155,10 +155,8 @@ fn bambi_slice_emits_started_progress_finished_with_summary() {
     let registry = JobRegistry::new();
     let (sink, events) = collecting_sink();
 
-    let temp_dir = std::env::temp_dir().join(format!(
-        "n3o-slice-orch-test-{}",
-        std::process::id(),
-    ));
+    let temp_dir =
+        std::env::temp_dir().join(format!("n3o-slice-orch-test-{}", std::process::id(),));
 
     let input = bambi_input(
         test_stl().display().to_string(),
@@ -173,7 +171,10 @@ fn bambi_slice_emits_started_progress_finished_with_summary() {
     // Expected sequence (modulo many PlateProgress in the middle):
     // PlateStarted → PlateProgress×N → PlateFinished → JobFinished.
     assert!(
-        matches!(events.first(), Some(SliceEvent::PlateStarted { plate_id: 1, .. })),
+        matches!(
+            events.first(),
+            Some(SliceEvent::PlateStarted { plate_id: 1, .. })
+        ),
         "first event should be PlateStarted, got {:?}",
         events.first(),
     );
@@ -240,10 +241,8 @@ fn snappy_slice_emits_started_progress_finished_with_summary() {
     let registry = JobRegistry::new();
     let (sink, events) = collecting_sink();
 
-    let temp_dir = std::env::temp_dir().join(format!(
-        "n3o-slice-orch-snappy-{}",
-        std::process::id(),
-    ));
+    let temp_dir =
+        std::env::temp_dir().join(format!("n3o-slice-orch-snappy-{}", std::process::id(),));
 
     let input = snappy_input(
         test_stl().display().to_string(),
@@ -256,7 +255,10 @@ fn snappy_slice_emits_started_progress_finished_with_summary() {
 
     let events = events.lock().unwrap();
     assert!(
-        matches!(events.first(), Some(SliceEvent::PlateStarted { plate_id: 1, .. })),
+        matches!(
+            events.first(),
+            Some(SliceEvent::PlateStarted { plate_id: 1, .. })
+        ),
         "first event should be PlateStarted, got {:?}",
         events.first(),
     );
@@ -293,8 +295,8 @@ fn snappy_orchestrator_compose_succeeds() {
     // dispatches separator choice on OptType (`;` for coStrings).
     ensure_ffi_init();
     let instance = lookup_instance("snappy").expect("snappy in instance library");
-    let cascade = compose_cascade(&instance, &[], &BTreeMap::new())
-        .expect("snappy cascade composes");
+    let cascade =
+        compose_cascade(&instance, &[], &BTreeMap::new()).expect("snappy cascade composes");
     assert!(!cascade.rules.is_empty(), "snappy cascade is empty");
     // Spot-check a per-extruder vector landed length-4 (one entry per
     // U1 toolhead): the composer assembles `nozzle_diameter` from each
@@ -305,7 +307,11 @@ fn snappy_orchestrator_compose_succeeds() {
         .find_map(|r| r.set.get("nozzle_diameter"))
         .expect("nozzle_diameter assembled into the cascade");
     let parts: Vec<&str> = set.split(',').collect();
-    assert_eq!(parts.len(), 4, "expected 4-element nozzle_diameter vector, got {set:?}");
+    assert_eq!(
+        parts.len(),
+        4,
+        "expected 4-element nozzle_diameter vector, got {set:?}"
+    );
 
     // And per-slot filament vectors fan out to length-4 (one per AMS/
     // toolchanger slot). `filament_diameter` is a coFloats key present
@@ -356,7 +362,10 @@ fn empty_plate_list_errors_synchronously() {
 
     let err = run_slice_job_blocking(input, &registry, sink).expect_err("ok");
     use n3o_slic3r_lib::core::slice::SliceStartError;
-    assert!(matches!(err, SliceStartError::NoPlatesRequested), "got {err:?}");
+    assert!(
+        matches!(err, SliceStartError::NoPlatesRequested),
+        "got {err:?}"
+    );
 }
 
 #[test]

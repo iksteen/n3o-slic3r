@@ -407,7 +407,13 @@ fn split_kv(content: &str) -> Option<(String, String)> {
         return None;
     }
     let key_ok = key.chars().all(|c| {
-        c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' || c == '[' || c == ']' || c == ' '
+        c.is_ascii_alphanumeric()
+            || c == '_'
+            || c == '-'
+            || c == '.'
+            || c == '['
+            || c == ']'
+            || c == ' '
     });
     if !key_ok {
         return None;
@@ -432,10 +438,7 @@ M104 S210\n";
         let meta = parse_header_str(src);
         assert_eq!(meta.slicer, Some(SlicerOrigin::Orca));
         assert_eq!(meta.slicer_version.as_deref(), Some("2.3.0"));
-        assert_eq!(
-            meta.estimated_time.as_deref(),
-            Some("1h 23m 45s"),
-        );
+        assert_eq!(meta.estimated_time.as_deref(), Some("1h 23m 45s"),);
         assert_eq!(meta.filament_used.len(), 2);
         assert_eq!(meta.filament_used[0].unit, "g");
         assert_eq!(meta.filament_used[0].value, "4.21, 3.10");
@@ -536,12 +539,15 @@ G28\n\
     #[test]
     fn detect_origin_handles_unknown_and_known() {
         assert_eq!(detect_origin("OrcaSlicer 2.3.0"), SlicerOrigin::Orca);
-        assert_eq!(detect_origin("BambuStudio-01.05"), SlicerOrigin::BambuStudio);
-        assert_eq!(detect_origin("PrusaSlicer-2.7.4"), SlicerOrigin::PrusaSlicer);
         assert_eq!(
-            detect_origin("Cura SteamEngine"),
-            SlicerOrigin::Cura,
+            detect_origin("BambuStudio-01.05"),
+            SlicerOrigin::BambuStudio
         );
+        assert_eq!(
+            detect_origin("PrusaSlicer-2.7.4"),
+            SlicerOrigin::PrusaSlicer
+        );
+        assert_eq!(detect_origin("Cura SteamEngine"), SlicerOrigin::Cura,);
         assert!(matches!(
             detect_origin("Ye Olde Slicer 1.0"),
             SlicerOrigin::Unknown(_)

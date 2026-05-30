@@ -110,7 +110,11 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn body(serial: Option<&str>, device_name: Option<&str>, machine_type: Option<&str>) -> serde_json::Value {
+    fn body(
+        serial: Option<&str>,
+        device_name: Option<&str>,
+        machine_type: Option<&str>,
+    ) -> serde_json::Value {
         let mut product = serde_json::Map::new();
         if let Some(s) = serial {
             product.insert("serial_number".into(), s.into());
@@ -213,11 +217,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/machine/system_info"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body(
-                Some("   "),
-                None,
-                None,
-            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body(Some("   "), None, None)))
             .mount(&server)
             .await;
         let (host, port) = host_port(&server);

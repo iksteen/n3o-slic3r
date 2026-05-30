@@ -116,13 +116,9 @@ pub fn project_save(
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     let p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    format::write_project(&p, std::path::Path::new(&path))
-        .map_err(|e| e.to_string())?;
+    format::write_project(&p, std::path::Path::new(&path)).map_err(|e| e.to_string())?;
     drop(p);
-    emit_all(
-        &window,
-        &[SceneEvent::ProjectSaved { path: path.clone() }],
-    );
+    emit_all(&window, &[SceneEvent::ProjectSaved { path: path.clone() }]);
     Ok(())
 }
 
@@ -138,14 +134,10 @@ pub fn project_save_as(
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    format::write_project(&p, std::path::Path::new(&path))
-        .map_err(|e| e.to_string())?;
+    format::write_project(&p, std::path::Path::new(&path)).map_err(|e| e.to_string())?;
     p.source_path = Some(PathBuf::from(&path));
     drop(p);
-    emit_all(
-        &window,
-        &[SceneEvent::ProjectSaved { path: path.clone() }],
-    );
+    emit_all(&window, &[SceneEvent::ProjectSaved { path: path.clone() }]);
     Ok(())
 }
 
@@ -164,17 +156,13 @@ pub fn project_load(
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<Project, String> {
-    let loaded = format::read_project(std::path::Path::new(&path))
-        .map_err(|e| e.to_string())?;
+    let loaded = format::read_project(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
     let returned = loaded.clone();
     {
         let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
         *p = loaded;
     }
-    emit_all(
-        &window,
-        &[SceneEvent::ProjectLoaded { path: path.clone() }],
-    );
+    emit_all(&window, &[SceneEvent::ProjectLoaded { path: path.clone() }]);
     Ok(returned)
 }
 

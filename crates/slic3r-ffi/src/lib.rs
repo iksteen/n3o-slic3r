@@ -41,13 +41,13 @@ impl ErrorKind {
         match s {
             sys::SLIC3R_OK => None,
             sys::SLIC3R_ERR_INVALID_ARG => Some(Self::InvalidArg),
-            sys::SLIC3R_ERR_NOT_INIT    => Some(Self::NotInitialized),
+            sys::SLIC3R_ERR_NOT_INIT => Some(Self::NotInitialized),
             sys::SLIC3R_ERR_UNKNOWN_KEY => Some(Self::UnknownKey),
             sys::SLIC3R_ERR_PARSE_VALUE => Some(Self::ParseValue),
-            sys::SLIC3R_ERR_IO          => Some(Self::Io),
-            sys::SLIC3R_ERR_VALIDATE    => Some(Self::Validate),
-            sys::SLIC3R_ERR_SLICE       => Some(Self::Slice),
-            _                           => Some(Self::Internal),
+            sys::SLIC3R_ERR_IO => Some(Self::Io),
+            sys::SLIC3R_ERR_VALIDATE => Some(Self::Validate),
+            sys::SLIC3R_ERR_SLICE => Some(Self::Slice),
+            _ => Some(Self::Internal),
         }
     }
 }
@@ -56,7 +56,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.message {
             Some(msg) => write!(f, "{:?}: {msg}", self.kind),
-            None      => write!(f, "{:?}", self.kind),
+            None => write!(f, "{:?}", self.kind),
         }
     }
 }
@@ -148,46 +148,59 @@ pub enum OptType {
 impl OptType {
     fn from_raw(v: sys::slic3r_opt_type) -> Self {
         match v {
-            sys::SLIC3R_OPT_NONE               => Self::None,
-            sys::SLIC3R_OPT_FLOAT              => Self::Float,
-            sys::SLIC3R_OPT_FLOATS             => Self::Floats,
-            sys::SLIC3R_OPT_INT                => Self::Int,
-            sys::SLIC3R_OPT_INTS               => Self::Ints,
-            sys::SLIC3R_OPT_STRING             => Self::String,
-            sys::SLIC3R_OPT_STRINGS            => Self::Strings,
-            sys::SLIC3R_OPT_PERCENT            => Self::Percent,
-            sys::SLIC3R_OPT_PERCENTS           => Self::Percents,
-            sys::SLIC3R_OPT_FLOAT_OR_PERCENT   => Self::FloatOrPercent,
+            sys::SLIC3R_OPT_NONE => Self::None,
+            sys::SLIC3R_OPT_FLOAT => Self::Float,
+            sys::SLIC3R_OPT_FLOATS => Self::Floats,
+            sys::SLIC3R_OPT_INT => Self::Int,
+            sys::SLIC3R_OPT_INTS => Self::Ints,
+            sys::SLIC3R_OPT_STRING => Self::String,
+            sys::SLIC3R_OPT_STRINGS => Self::Strings,
+            sys::SLIC3R_OPT_PERCENT => Self::Percent,
+            sys::SLIC3R_OPT_PERCENTS => Self::Percents,
+            sys::SLIC3R_OPT_FLOAT_OR_PERCENT => Self::FloatOrPercent,
             sys::SLIC3R_OPT_FLOATS_OR_PERCENTS => Self::FloatsOrPercents,
-            sys::SLIC3R_OPT_POINT              => Self::Point,
-            sys::SLIC3R_OPT_POINTS             => Self::Points,
-            sys::SLIC3R_OPT_POINT3             => Self::Point3,
-            sys::SLIC3R_OPT_BOOL               => Self::Bool,
-            sys::SLIC3R_OPT_BOOLS              => Self::Bools,
-            sys::SLIC3R_OPT_ENUM               => Self::Enum,
-            sys::SLIC3R_OPT_ENUMS              => Self::Enums,
-            other                              => Self::Unknown(other),
+            sys::SLIC3R_OPT_POINT => Self::Point,
+            sys::SLIC3R_OPT_POINTS => Self::Points,
+            sys::SLIC3R_OPT_POINT3 => Self::Point3,
+            sys::SLIC3R_OPT_BOOL => Self::Bool,
+            sys::SLIC3R_OPT_BOOLS => Self::Bools,
+            sys::SLIC3R_OPT_ENUM => Self::Enum,
+            sys::SLIC3R_OPT_ENUMS => Self::Enums,
+            other => Self::Unknown(other),
         }
     }
 
     pub fn is_vector(&self) -> bool {
-        matches!(self,
-            Self::Floats | Self::Ints | Self::Strings | Self::Percents |
-            Self::FloatsOrPercents | Self::Points | Self::Bools | Self::Enums)
+        matches!(
+            self,
+            Self::Floats
+                | Self::Ints
+                | Self::Strings
+                | Self::Percents
+                | Self::FloatsOrPercents
+                | Self::Points
+                | Self::Bools
+                | Self::Enums
+        )
     }
 }
 
 /// Mirrors `slic3r_opt_mode`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OptMode { Simple, Advanced, Expert, Develop }
+pub enum OptMode {
+    Simple,
+    Advanced,
+    Expert,
+    Develop,
+}
 
 impl OptMode {
     fn from_raw(v: sys::slic3r_opt_mode) -> Self {
         match v {
-            sys::SLIC3R_MODE_SIMPLE   => Self::Simple,
+            sys::SLIC3R_MODE_SIMPLE => Self::Simple,
             sys::SLIC3R_MODE_ADVANCED => Self::Advanced,
-            sys::SLIC3R_MODE_DEVELOP  => Self::Develop,
-            _                         => Self::Expert,
+            sys::SLIC3R_MODE_DEVELOP => Self::Develop,
+            _ => Self::Expert,
         }
     }
 }
@@ -201,26 +214,40 @@ impl OptMode {
 pub struct OptScope(pub u32);
 
 impl OptScope {
-    pub const PRINT: Self        = Self(sys::SLIC3R_SCOPE_PRINT as u32);
-    pub const OBJECT: Self       = Self(sys::SLIC3R_SCOPE_OBJECT as u32);
-    pub const REGION: Self       = Self(sys::SLIC3R_SCOPE_REGION as u32);
-    pub const SLA_PRINT: Self    = Self(sys::SLIC3R_SCOPE_SLA_PRINT as u32);
-    pub const SLA_OBJECT: Self   = Self(sys::SLIC3R_SCOPE_SLA_OBJECT as u32);
+    pub const PRINT: Self = Self(sys::SLIC3R_SCOPE_PRINT as u32);
+    pub const OBJECT: Self = Self(sys::SLIC3R_SCOPE_OBJECT as u32);
+    pub const REGION: Self = Self(sys::SLIC3R_SCOPE_REGION as u32);
+    pub const SLA_PRINT: Self = Self(sys::SLIC3R_SCOPE_SLA_PRINT as u32);
+    pub const SLA_OBJECT: Self = Self(sys::SLIC3R_SCOPE_SLA_OBJECT as u32);
     pub const SLA_MATERIAL: Self = Self(sys::SLIC3R_SCOPE_SLA_MATERIAL as u32);
-    pub const SLA_PRINTER: Self  = Self(sys::SLIC3R_SCOPE_SLA_PRINTER as u32);
+    pub const SLA_PRINTER: Self = Self(sys::SLIC3R_SCOPE_SLA_PRINTER as u32);
 
     /// True if `other`'s bits are all set on `self`.
     pub fn contains(self, other: Self) -> bool {
         (self.0 & other.0) == other.0 && other.0 != 0
     }
 
-    pub fn is_print(self)        -> bool { self.contains(Self::PRINT) }
-    pub fn is_object(self)       -> bool { self.contains(Self::OBJECT) }
-    pub fn is_region(self)       -> bool { self.contains(Self::REGION) }
-    pub fn is_sla_print(self)    -> bool { self.contains(Self::SLA_PRINT) }
-    pub fn is_sla_object(self)   -> bool { self.contains(Self::SLA_OBJECT) }
-    pub fn is_sla_material(self) -> bool { self.contains(Self::SLA_MATERIAL) }
-    pub fn is_sla_printer(self)  -> bool { self.contains(Self::SLA_PRINTER) }
+    pub fn is_print(self) -> bool {
+        self.contains(Self::PRINT)
+    }
+    pub fn is_object(self) -> bool {
+        self.contains(Self::OBJECT)
+    }
+    pub fn is_region(self) -> bool {
+        self.contains(Self::REGION)
+    }
+    pub fn is_sla_print(self) -> bool {
+        self.contains(Self::SLA_PRINT)
+    }
+    pub fn is_sla_object(self) -> bool {
+        self.contains(Self::SLA_OBJECT)
+    }
+    pub fn is_sla_material(self) -> bool {
+        self.contains(Self::SLA_MATERIAL)
+    }
+    pub fn is_sla_printer(self) -> bool {
+        self.contains(Self::SLA_PRINTER)
+    }
 
     /// True for any FFF scope (Print / Object / Region).
     pub fn is_fff(self) -> bool {
@@ -229,8 +256,9 @@ impl OptScope {
 
     /// True for any SLA scope.
     pub fn is_sla(self) -> bool {
-        self.0 & (Self::SLA_PRINT.0 | Self::SLA_OBJECT.0
-                | Self::SLA_MATERIAL.0 | Self::SLA_PRINTER.0) != 0
+        self.0
+            & (Self::SLA_PRINT.0 | Self::SLA_OBJECT.0 | Self::SLA_MATERIAL.0 | Self::SLA_PRINTER.0)
+            != 0
     }
 }
 
@@ -265,17 +293,17 @@ pub use option_display_order::display_order_of;
 /// but copying keeps the consumer ergonomics simple.
 #[derive(Debug, Clone)]
 pub struct OptionDef {
-    pub key:        String,
-    pub ty:         OptType,
-    pub label:      Option<String>,
+    pub key: String,
+    pub ty: OptType,
+    pub label: Option<String>,
     pub full_label: Option<String>,
-    pub tooltip:    Option<String>,
-    pub category:   Option<String>,
-    pub sidetext:   Option<String>,
+    pub tooltip: Option<String>,
+    pub category: Option<String>,
+    pub sidetext: Option<String>,
     pub default_serialized: Option<String>,
-    pub mode:       OptMode,
-    pub readonly:   bool,
-    pub multiline:  bool,
+    pub mode: OptMode,
+    pub readonly: bool,
+    pub multiline: bool,
     pub enum_values: Vec<String>,
     pub enum_labels: Vec<String>,
     pub min: f64,
@@ -288,7 +316,11 @@ pub struct OptionDef {
 }
 
 unsafe fn maybe_cstr(p: *const c_char) -> Option<String> {
-    if p.is_null() { None } else { Some(CStr::from_ptr(p).to_string_lossy().into_owned()) }
+    if p.is_null() {
+        None
+    } else {
+        Some(CStr::from_ptr(p).to_string_lossy().into_owned())
+    }
 }
 
 impl OptionDef {
@@ -312,14 +344,14 @@ impl OptionDef {
             Self {
                 key: CStr::from_ptr(raw.key).to_string_lossy().into_owned(),
                 ty: OptType::from_raw(raw.type_),
-                label:      maybe_cstr(raw.label),
+                label: maybe_cstr(raw.label),
                 full_label: maybe_cstr(raw.full_label),
-                tooltip:    maybe_cstr(raw.tooltip),
-                category:   maybe_cstr(raw.category),
-                sidetext:   maybe_cstr(raw.sidetext),
+                tooltip: maybe_cstr(raw.tooltip),
+                category: maybe_cstr(raw.category),
+                sidetext: maybe_cstr(raw.sidetext),
                 default_serialized: maybe_cstr(raw.default_serialized),
                 mode: OptMode::from_raw(raw.mode),
-                readonly:  raw.readonly  != 0,
+                readonly: raw.readonly != 0,
                 multiline: raw.multiline != 0,
                 enum_values,
                 enum_labels,
@@ -351,7 +383,10 @@ pub fn option_defs() -> Vec<OptionDef> {
 
 /// Look up a single option by key.
 pub fn option_def(key: &str) -> Result<OptionDef> {
-    let ckey = CString::new(key).map_err(|_| Error { kind: ErrorKind::InvalidArg, message: Some("key contains NUL".into()) })?;
+    let ckey = CString::new(key).map_err(|_| Error {
+        kind: ErrorKind::InvalidArg,
+        message: Some("key contains NUL".into()),
+    })?;
     let mut raw: sys::slic3r_option_def_t = unsafe { std::mem::zeroed() };
     // SAFETY: ckey lives through the call; raw is an out-param.
     let status = unsafe { sys::slic3r_option_def_lookup(ckey.as_ptr(), &mut raw) };
@@ -373,15 +408,24 @@ impl Config {
         // SAFETY: shim handles the allocation; null means OOM or NotInitialized.
         let raw = unsafe { sys::slic3r_config_new() };
         if raw.is_null() {
-            return Err(Error { kind: ErrorKind::NotInitialized, message: Some("did you call init()?".into()) });
+            return Err(Error {
+                kind: ErrorKind::NotInitialized,
+                message: Some("did you call init()?".into()),
+            });
         }
         Ok(Self { raw })
     }
 
     /// Set an option by key, using libslic3r's serialized value form.
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let k = CString::new(key).map_err(|_| Error { kind: ErrorKind::InvalidArg, message: Some("key has NUL".into()) })?;
-        let v = CString::new(value).map_err(|_| Error { kind: ErrorKind::InvalidArg, message: Some("value has NUL".into()) })?;
+        let k = CString::new(key).map_err(|_| Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("key has NUL".into()),
+        })?;
+        let v = CString::new(value).map_err(|_| Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("value has NUL".into()),
+        })?;
         // SAFETY: self.raw is a valid handle; k and v live through the call.
         let status = unsafe { sys::slic3r_config_set(self.raw, k.as_ptr(), v.as_ptr()) };
         check(status)
@@ -389,7 +433,10 @@ impl Config {
 
     /// Read the current serialized value of an option.
     pub fn get(&self, key: &str) -> Result<String> {
-        let k = CString::new(key).map_err(|_| Error { kind: ErrorKind::InvalidArg, message: Some("key has NUL".into()) })?;
+        let k = CString::new(key).map_err(|_| Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("key has NUL".into()),
+        })?;
         let mut out: *mut c_char = ptr::null_mut();
         // SAFETY: out is an out-param the shim writes; we free it via slic3r_string_free.
         let status = unsafe { sys::slic3r_config_get(self.raw, k.as_ptr(), &mut out) };
@@ -398,7 +445,9 @@ impl Config {
             return Ok(String::new());
         }
         let s = unsafe { CStr::from_ptr(out).to_string_lossy().into_owned() };
-        unsafe { sys::slic3r_string_free(out); }
+        unsafe {
+            sys::slic3r_string_free(out);
+        }
         Ok(s)
     }
 
@@ -431,15 +480,20 @@ impl Model {
         // SAFETY: shim handles allocation.
         let raw = unsafe { sys::slic3r_model_new() };
         if raw.is_null() {
-            return Err(Error { kind: ErrorKind::Internal, message: Some("slic3r_model_new returned null".into()) });
+            return Err(Error {
+                kind: ErrorKind::Internal,
+                message: Some("slic3r_model_new returned null".into()),
+            });
         }
         Ok(Self { raw })
     }
 
     /// Load a model file. Format detected from extension.
     pub fn load<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
-        let p = CString::new(path.as_ref().to_string_lossy().as_bytes())
-            .map_err(|_| Error { kind: ErrorKind::InvalidArg, message: Some("path has NUL".into()) })?;
+        let p = CString::new(path.as_ref().to_string_lossy().as_bytes()).map_err(|_| Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("path has NUL".into()),
+        })?;
         let mut err: *mut c_char = ptr::null_mut();
         // SAFETY: p lives through the call; err is an out-param we own on non-null return.
         let status = unsafe { sys::slic3r_model_load(self.raw, p.as_ptr(), &mut err) };
@@ -454,8 +508,10 @@ impl Model {
     /// For STL/OBJ/STEP files (which carry no embedded config) this is
     /// equivalent to [`Model::load`] and leaves `config` untouched.
     pub fn load_with_config<P: AsRef<Path>>(&mut self, path: P, config: &mut Config) -> Result<()> {
-        let p = CString::new(path.as_ref().to_string_lossy().as_bytes())
-            .map_err(|_| Error { kind: ErrorKind::InvalidArg, message: Some("path has NUL".into()) })?;
+        let p = CString::new(path.as_ref().to_string_lossy().as_bytes()).map_err(|_| Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("path has NUL".into()),
+        })?;
         let mut err: *mut c_char = ptr::null_mut();
         // SAFETY: handles are valid; p lives through the call; err is an out-param we own on non-null return.
         let status = unsafe {
@@ -547,12 +603,7 @@ static SLICE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// exclusive-access guarantee Rust requires, even though libslic3r
 /// fans `set_status` calls across many TBB worker threads inside a
 /// single slice.
-pub fn slice<P, F>(
-    model: &Model,
-    config: &Config,
-    out_gcode_path: P,
-    mut progress: F,
-) -> Result<()>
+pub fn slice<P, F>(model: &Model, config: &Config, out_gcode_path: P, mut progress: F) -> Result<()>
 where
     P: AsRef<Path>,
     F: FnMut(i32, &str),
@@ -560,8 +611,11 @@ where
     let _guard = SLICE_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let p = CString::new(out_gcode_path.as_ref().to_string_lossy().as_bytes())
-        .map_err(|_| Error { kind: ErrorKind::InvalidArg, message: Some("path has NUL".into()) })?;
+    let p =
+        CString::new(out_gcode_path.as_ref().to_string_lossy().as_bytes()).map_err(|_| Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("path has NUL".into()),
+        })?;
     let mut err: *mut c_char = ptr::null_mut();
     // Pin the closure as a trait object on the stack and hand its
     // address to C as opaque user_data. The double-reference
@@ -628,7 +682,11 @@ type LogClosure = Box<dyn FnMut(LogLevel, &str) + Send>;
 
 static LOG_CALLBACK: Mutex<Option<LogClosure>> = Mutex::new(None);
 
-extern "C" fn log_trampoline(severity: i32, message: *const c_char, _user_data: *mut std::ffi::c_void) {
+extern "C" fn log_trampoline(
+    severity: i32,
+    message: *const c_char,
+    _user_data: *mut std::ffi::c_void,
+) {
     let msg_str = if message.is_null() {
         ""
     } else {

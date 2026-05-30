@@ -140,7 +140,10 @@ mod tests {
     fn first_launch_returns_empty() {
         let dir = tempdir().expect("tempdir");
         let loaded = load_from_disk(dir.path()).expect("load empty");
-        assert!(loaded.is_empty(), "fresh launch must start with no instances");
+        assert!(
+            loaded.is_empty(),
+            "fresh launch must start with no instances"
+        );
     }
 
     #[test]

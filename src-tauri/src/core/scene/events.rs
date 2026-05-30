@@ -34,9 +34,7 @@ pub enum SceneEvent {
     /// live on `Project.meshes` (not per-plate) so this event
     /// carries no `plate_id` — the same mesh can be referenced by
     /// objects on multiple plates.
-    MeshLoaded {
-        mesh: MeshHeader,
-    },
+    MeshLoaded { mesh: MeshHeader },
 
     // ---- Per-plate scene-graph deltas -------------------------------
     ObjectAdded {
@@ -97,20 +95,14 @@ pub enum SceneEvent {
     /// A new plate was added. The frontend mirror
     /// reads `plate_id` to track it; subsequent events on this
     /// plate carry the same id.
-    PlateAdded {
-        plate_id: PlateId,
-    },
+    PlateAdded { plate_id: PlateId },
     /// A plate was removed. Pairs with
     /// `ActivePlateChanged` when the removed plate was the active
     /// one (the rebalanced active plate's id ships separately).
-    PlateRemoved {
-        plate_id: PlateId,
-    },
+    PlateRemoved { plate_id: PlateId },
     /// The active plate changed. Emitted on explicit
     /// switches and on remove-of-active rebalancing.
-    ActivePlateChanged {
-        plate_id: PlateId,
-    },
+    ActivePlateChanged { plate_id: PlateId },
     /// One or more cascade overrides on a specific object changed
     ///. The frontend re-runs cascade resolution to refresh
     /// the panel — the event carries no value payload because the
@@ -123,35 +115,25 @@ pub enum SceneEvent {
     ///. Same shape as `ObjectOverridesChanged` minus the
     /// object id — the cascade re-resolves with the updated plate
     /// override map.
-    ProjectOverridesChanged {
-        plate_id: PlateId,
-    },
+    ProjectOverridesChanged { plate_id: PlateId },
     /// A plate's metadata changed — cycle count, composition order,
     /// or name. The frontend re-reads the
     /// plate's metadata via the project snapshot to refresh the tab
     /// badge / inputs.
-    PlateMetadataChanged {
-        plate_id: PlateId,
-    },
+    PlateMetadataChanged { plate_id: PlateId },
     /// A plate's material → slot routing changed. The
     /// frontend re-reads `plate.material_to_slot` via the snapshot
     /// to refresh the slot binding panel.
-    MaterialSlotChanged {
-        plate_id: PlateId,
-    },
+    MaterialSlotChanged { plate_id: PlateId },
     /// A project was written to disk. `path` is the
     /// container the writer just produced. UI updates the window
     /// title + recent-files list.
-    ProjectSaved {
-        path: String,
-    },
+    ProjectSaved { path: String },
     /// A project was loaded from disk — the in-memory
     /// `Project` state has been replaced wholesale. The frontend
     /// drops every cached plate / mesh / object and re-fetches via
     /// `scene_snapshot`.
-    ProjectLoaded {
-        path: String,
-    },
+    ProjectLoaded { path: String },
 }
 
 impl SceneEvent {
@@ -231,7 +213,11 @@ impl std::fmt::Display for SceneOpError {
             Self::UnknownPlate(id) => write!(f, "no plate with id {}", id.0),
             Self::LastPlate => write!(f, "cannot remove the last plate"),
             Self::SamePlate(id) => {
-                write!(f, "from_plate == to_plate ({}); pick a different target", id.0)
+                write!(
+                    f,
+                    "from_plate == to_plate ({}); pick a different target",
+                    id.0
+                )
             }
             Self::InvalidPlateMetadata { plate_id, message } => {
                 write!(f, "plate {}: {}", plate_id.0, message)

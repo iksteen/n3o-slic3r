@@ -45,10 +45,7 @@ pub struct ParseError {
 pub enum ParseErrorKind {
     /// A recognized command had a malformed numeric parameter.
     /// E.g. `G1 Xabc`.
-    InvalidNumber {
-        param: char,
-        value: String,
-    },
+    InvalidNumber { param: char, value: String },
     /// An I/O error reading from the underlying stream.
     Io(String),
 }
@@ -275,7 +272,9 @@ fn try_parse_tool_change(
 ) -> Option<ToolChange> {
     let trimmed = line.trim_end();
     // Accept `T<n>` and `T <n>` (whitespace tolerant).
-    let after_t = trimmed.strip_prefix('T').or_else(|| trimmed.strip_prefix('t'))?;
+    let after_t = trimmed
+        .strip_prefix('T')
+        .or_else(|| trimmed.strip_prefix('t'))?;
     let after_t = after_t.trim_start();
     // Number runs to end of line or to the first whitespace / ';'.
     let end = after_t

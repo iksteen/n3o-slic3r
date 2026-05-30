@@ -57,8 +57,8 @@ use crate::core::cascade_adapter::{adapt, Manifest};
 use crate::core::printer::lookup_instance;
 use crate::core::profile_library::compose_cascade;
 use crate::core::project::SlicingContext;
-use std::collections::BTreeMap;
 use slic3r_ffi::{slice, Model};
+use std::collections::BTreeMap;
 
 /// Errors `start_slice_job` returns synchronously (before the
 /// worker thread spawns). Post-spawn errors flow out via the
@@ -262,12 +262,7 @@ pub fn run_slice_job_blocking(
 
 /// Sequential per-plate worker. Holds the `JobHandle` for cancel +
 /// status updates. Emits every lifecycle event through `sink`.
-fn run_worker(
-    job_id: JobId,
-    job: ResolvedJob,
-    sink: Arc<EventSink>,
-    handle: Arc<JobHandle>,
-) {
+fn run_worker(job_id: JobId, job: ResolvedJob, sink: Arc<EventSink>, handle: Arc<JobHandle>) {
     let mut last_plate_in_progress: Option<u32> = None;
 
     for &plate_id in &job.plate_ids {
@@ -437,7 +432,13 @@ fn run_worker(
     sink(SliceEvent::JobFinished { job_id });
 }
 
-fn fail(handle: &Arc<JobHandle>, sink: &Arc<EventSink>, job_id: JobId, plate_id: u32, error: SliceError) {
+fn fail(
+    handle: &Arc<JobHandle>,
+    sink: &Arc<EventSink>,
+    job_id: JobId,
+    plate_id: u32,
+    error: SliceError,
+) {
     handle.set_status(JobStatus::Failed {
         plate_id,
         error: error.to_string(),

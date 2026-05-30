@@ -26,8 +26,8 @@ use crate::core::scene::events::{
 };
 use crate::core::scene::primitives::{self, PrimitiveKind, PrimitiveParams};
 use crate::core::scene::state::{
-    mesh_bb_corners, z_extent, Mesh, MeshId, MeshProvenance, NewMesh,
-    NewSceneObject, ObjectId, SceneObject,
+    mesh_bb_corners, z_extent, Mesh, MeshId, MeshProvenance, NewMesh, NewSceneObject, ObjectId,
+    SceneObject,
 };
 use crate::core::scene::transform::Transform;
 
@@ -144,15 +144,16 @@ impl Project {
             return;
         }
         let idx = self.active_plate;
-        if self.plates[idx].material_to_slot.contains_key(&model_material) {
+        if self.plates[idx]
+            .material_to_slot
+            .contains_key(&model_material)
+        {
             return;
         }
-        let Some(instance_id) = self.plates[idx].printer_instance_id.clone()
-        else {
+        let Some(instance_id) = self.plates[idx].printer_instance_id.clone() else {
             return;
         };
-        let Some(instance) = crate::core::printer::lookup_instance(&instance_id)
-        else {
+        let Some(instance) = crate::core::printer::lookup_instance(&instance_id) else {
             return;
         };
         // Flat (extruder, slot) walk in extruder-major order. If the
@@ -197,7 +198,9 @@ impl Project {
             .map(|offset| flat[(start + offset) % flat.len()])
             .find(|s| !taken.contains(s))
             .unwrap_or(flat[start]);
-        self.plates[idx].material_to_slot.insert(model_material, pick);
+        self.plates[idx]
+            .material_to_slot
+            .insert(model_material, pick);
     }
 
     // ---- Plate list mutations -------------------------------------
@@ -207,10 +210,7 @@ impl Project {
     /// picker. Returns the new plate's id paired with the
     /// `PlateAdded` event the renderer subscribes to. Active plate
     /// is unchanged (the caller switches if desired).
-    pub fn add_plate(
-        &mut self,
-        instance_id: Option<String>,
-    ) -> (PlateId, Vec<SceneEvent>) {
+    pub fn add_plate(&mut self, instance_id: Option<String>) -> (PlateId, Vec<SceneEvent>) {
         let id = self.next_plate_id();
         let position = (self.plates.len() + 1) as u32;
 
@@ -272,16 +272,11 @@ impl Project {
     /// plates form a dense `[1..N]` sequence + adjusts
     /// `active_plate` when the removed plate was the active one or
     /// sat before it (emits `ActivePlateChanged` in those cases).
-    pub fn remove_plate(
-        &mut self,
-        id: PlateId,
-    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+    pub fn remove_plate(&mut self, id: PlateId) -> Result<Vec<SceneEvent>, SceneOpError> {
         if self.plates.len() <= 1 {
             return Err(SceneOpError::LastPlate);
         }
-        let idx = self
-            .plate_index(id)
-            .ok_or(SceneOpError::UnknownPlate(id))?;
+        let idx = self.plate_index(id).ok_or(SceneOpError::UnknownPlate(id))?;
         self.plates.remove(idx);
         let mut events = vec![SceneEvent::PlateRemoved { plate_id: id }];
 
@@ -324,13 +319,8 @@ impl Project {
 
     /// Switch the active plate. No-op (no event) when already on
     /// `id`. Errors when the id is unknown.
-    pub fn set_active_plate(
-        &mut self,
-        id: PlateId,
-    ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        let idx = self
-            .plate_index(id)
-            .ok_or(SceneOpError::UnknownPlate(id))?;
+    pub fn set_active_plate(&mut self, id: PlateId) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let idx = self.plate_index(id).ok_or(SceneOpError::UnknownPlate(id))?;
         if self.active_plate == idx {
             return Ok(Vec::new());
         }
@@ -364,9 +354,7 @@ impl Project {
         // separately); range-check would error before the picker can
         // round-trip the user's choice.
         if let Some(instance_id) = self.plates[plate_idx].printer_instance_id.clone() {
-            if let Some(instance) =
-                crate::core::printer::lookup_instance(&instance_id)
-            {
+            if let Some(instance) = crate::core::printer::lookup_instance(&instance_id) {
                 let e_count = instance.extruders.len();
                 if (slot.extruder as usize) >= e_count {
                     return Err(SceneOpError::InvalidPlateMetadata {
@@ -389,7 +377,9 @@ impl Project {
                 }
             }
         }
-        let prev = self.plates[plate_idx].material_to_slot.insert(model_material, slot);
+        let prev = self.plates[plate_idx]
+            .material_to_slot
+            .insert(model_material, slot);
         if prev == Some(slot) {
             return Ok(Vec::new());
         }
@@ -438,9 +428,7 @@ impl Project {
         if order < 1 || order > n {
             return Err(SceneOpError::InvalidPlateMetadata {
                 plate_id,
-                message: format!(
-                    "composition_order must be in 1..={n}, got {order}",
-                ),
+                message: format!("composition_order must be in 1..={n}, got {order}",),
             });
         }
         let idx = self
@@ -506,9 +494,7 @@ impl Project {
         if trimmed.len() > PLATE_NAME_MAX {
             return Err(SceneOpError::InvalidPlateMetadata {
                 plate_id,
-                message: format!(
-                    "plate name must be at most {PLATE_NAME_MAX} bytes",
-                ),
+                message: format!("plate name must be at most {PLATE_NAME_MAX} bytes",),
             });
         }
         let idx = self
@@ -529,10 +515,7 @@ impl Project {
     /// printer/build-plate *identity*, not the resolved profile;
     /// see [`Self::set_plate_printer`] for the binding update
     /// surface.
-    pub fn set_active_printer(
-        &mut self,
-        printer: Option<&PrinterProfile>,
-    ) -> Vec<SceneEvent> {
+    pub fn set_active_printer(&mut self, printer: Option<&PrinterProfile>) -> Vec<SceneEvent> {
         let active_id = self.active_plate().id;
         // Indexed mutation can't fail for the active plate.
         self.set_plate_printer(active_id, printer)
@@ -587,7 +570,13 @@ impl Project {
         plate_id: PlateId,
         instance_id: String,
         profile: &PrinterProfile,
-    ) -> Result<(crate::core::scene::events::PrinterChangeReport, Vec<SceneEvent>), SceneOpError> {
+    ) -> Result<
+        (
+            crate::core::scene::events::PrinterChangeReport,
+            Vec<SceneEvent>,
+        ),
+        SceneOpError,
+    > {
         use crate::core::scene::events::PrinterChangeReport;
 
         let idx = self
@@ -687,10 +676,7 @@ impl Project {
     /// Register a mesh and place one default `SceneObject` at
     /// origin on the active plate. Returns (mesh_id, object_id,
     /// events).
-    pub fn load_mesh(
-        &mut self,
-        new_mesh: NewMesh,
-    ) -> (MeshId, ObjectId, Vec<SceneEvent>) {
+    pub fn load_mesh(&mut self, new_mesh: NewMesh) -> (MeshId, ObjectId, Vec<SceneEvent>) {
         let obj_name = match &new_mesh.provenance {
             MeshProvenance::File(p) => p
                 .rsplit_once('/')
@@ -748,14 +734,10 @@ impl Project {
         let lift_z = -mesh_bb.min[2] as f32;
         let (shift_x, shift_y) = match &self.active_plate().scene.bed {
             Some(bed) => {
-                let bed_cx =
-                    ((bed.extents.min[0] + bed.extents.max[0]) * 0.5) as f32;
-                let bed_cy =
-                    ((bed.extents.min[1] + bed.extents.max[1]) * 0.5) as f32;
-                let mesh_cx =
-                    ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32;
-                let mesh_cy =
-                    ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32;
+                let bed_cx = ((bed.extents.min[0] + bed.extents.max[0]) * 0.5) as f32;
+                let bed_cy = ((bed.extents.min[1] + bed.extents.max[1]) * 0.5) as f32;
+                let mesh_cx = ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32;
+                let mesh_cy = ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32;
                 (bed_cx - mesh_cx, bed_cy - mesh_cy)
             }
             None => (0.0, 0.0),
@@ -1051,10 +1033,7 @@ impl Project {
     /// ticket; library + Phase 4 UI can introduce
     /// "lay flat on selected face" later when the user can pick a
     /// face from the viewport.
-    pub fn lay_flat_object(
-        &mut self,
-        id: ObjectId,
-    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+    pub fn lay_flat_object(&mut self, id: ObjectId) -> Result<Vec<SceneEvent>, SceneOpError> {
         let active = self.active_plate;
         let mesh_bb = {
             let obj = self.plates[active]
@@ -1085,18 +1064,14 @@ impl Project {
         // sound for affine matrices without shear; our transforms
         // are built from translate/rotate/scale composition only,
         // so this holds.
-        let (current_scale, _current_rot, current_trans) =
-            current.to_scale_rotation_translation();
+        let (current_scale, _current_rot, current_trans) = current.to_scale_rotation_translation();
         let current_world_center = obj.transform.apply_point(local_center);
 
         let (best_rotation, best_min_z) = cube_rotations()
             .into_iter()
             .map(|rot| {
-                let candidate = glam::Mat4::from_scale_rotation_translation(
-                    current_scale,
-                    rot,
-                    current_trans,
-                );
+                let candidate =
+                    glam::Mat4::from_scale_rotation_translation(current_scale, rot, current_trans);
                 let (min_z, max_z) = z_extent(&local_corners, &candidate);
                 (rot, min_z, max_z)
             })
@@ -1187,8 +1162,7 @@ impl Project {
                 }
             }
             if selection_changed {
-                let mut sorted: Vec<ObjectId> =
-                    plate.selection.iter().copied().collect();
+                let mut sorted: Vec<ObjectId> = plate.selection.iter().copied().collect();
                 sorted.sort();
                 events.push(SceneEvent::SelectionChanged {
                     plate_id,
@@ -1490,8 +1464,7 @@ impl Project {
                 match reason {
                     None => (object, None),
                     Some(why) => {
-                        let recentered =
-                            recenter_on_bed(&object, &mesh_bb, target_bed);
+                        let recentered = recenter_on_bed(&object, &mesh_bb, target_bed);
                         (recentered, Some(why))
                     }
                 }
@@ -1551,7 +1524,9 @@ impl Project {
         let mut moved_set = BTreeSet::new();
         moved_set.insert(moved_material);
         if self.prune_orphan_material_bindings(from_idx, &moved_set) {
-            events.push(SceneEvent::MaterialSlotChanged { plate_id: from_plate });
+            events.push(SceneEvent::MaterialSlotChanged {
+                plate_id: from_plate,
+            });
         }
         Ok((report, events))
     }
@@ -1703,11 +1678,7 @@ fn object_repositioning_reason(
 /// Drop `obj` onto the target plate's XY center at bed Z. Preserves
 /// the rotation + scale of the original transform; only the
 /// translation part changes.
-fn recenter_on_bed(
-    obj: &SceneObject,
-    mesh_bb: &BoundingBox,
-    target_bed: &BedMesh,
-) -> SceneObject {
+fn recenter_on_bed(obj: &SceneObject, mesh_bb: &BoundingBox, target_bed: &BedMesh) -> SceneObject {
     let current = obj.transform.to_mat4();
     let (scale, rotation, _trans) = current.to_scale_rotation_translation();
     let local_center = Vec3::new(
@@ -1715,8 +1686,7 @@ fn recenter_on_bed(
         ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32,
         ((mesh_bb.min[2] + mesh_bb.max[2]) * 0.5) as f32,
     );
-    let no_translation =
-        glam::Mat4::from_scale_rotation_translation(scale, rotation, Vec3::ZERO);
+    let no_translation = glam::Mat4::from_scale_rotation_translation(scale, rotation, Vec3::ZERO);
     let post_rs_center = no_translation.transform_point3(local_center);
     let corners = mesh_bb_corners(mesh_bb);
     let mut min_z_after_rs = f32::INFINITY;
@@ -1995,12 +1965,7 @@ mod tests {
         let mut p = Project::default();
         let (_mesh, obj) = add_cube(&mut p);
         let _ = p
-            .rotate_object(
-                obj,
-                Vec3::Z,
-                std::f32::consts::FRAC_PI_2,
-                Some(Vec3::ZERO),
-            )
+            .rotate_object(obj, Vec3::Z, std::f32::consts::FRAC_PI_2, Some(Vec3::ZERO))
             .unwrap();
         let o = p.active_plate().scene.objects.get(&obj).unwrap();
         let corner = o.transform.apply_point(Vec3::X);
@@ -2238,11 +2203,7 @@ mod tests {
         // no layers.
         let mut p = Project::default();
         let mesh = NewMesh {
-            vertices: vec![
-                -5.0, -5.0, -3.0,
-                 5.0, -5.0, -3.0,
-                 0.0,  5.0,  3.0,
-            ],
+            vertices: vec![-5.0, -5.0, -3.0, 5.0, -5.0, -3.0, 0.0, 5.0, 3.0],
             normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             indices: vec![0, 1, 2],
             bounding_box: BoundingBox {
@@ -2295,9 +2256,7 @@ mod tests {
         // clear it before the move.
         p.plates[0].scene.bed = None;
         let (_, obj) = add_cube(&mut p);
-        let events = p
-            .translate_object(obj, Vec3::new(500.0, 0.0, 0.0))
-            .unwrap();
+        let events = p.translate_object(obj, Vec3::new(500.0, 0.0, 0.0)).unwrap();
         assert!(events
             .iter()
             .all(|e| !matches!(e, SceneEvent::ObjectOutOfBounds { .. })));
@@ -2373,8 +2332,12 @@ mod tests {
         // binding inherits from active plate) populates the new
         // plate's bed in the same mutation, so the renderer sees
         // both events.
-        assert!(matches!(events.first(), Some(SceneEvent::PlateAdded { plate_id }) if *plate_id == new_id));
-        assert!(events.iter().any(|e| matches!(e, SceneEvent::BedChanged { plate_id, .. } if *plate_id == new_id)));
+        assert!(
+            matches!(events.first(), Some(SceneEvent::PlateAdded { plate_id }) if *plate_id == new_id)
+        );
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, SceneEvent::BedChanged { plate_id, .. } if *plate_id == new_id)));
     }
 
     #[test]
@@ -2601,11 +2564,13 @@ mod tests {
         p.object_override_set(active_id, obj, "infill_density".into(), "25%".into())
             .unwrap();
 
-        p.object_override_clear(active_id, obj, "layer_height").unwrap();
+        p.object_override_clear(active_id, obj, "layer_height")
+            .unwrap();
         let map = p.plates[0].scene.object_overrides.get(&obj).unwrap();
         assert_eq!(map.len(), 1);
 
-        p.object_override_clear(active_id, obj, "infill_density").unwrap();
+        p.object_override_clear(active_id, obj, "infill_density")
+            .unwrap();
         assert!(p.plates[0].scene.object_overrides.get(&obj).is_none());
     }
 
@@ -2614,7 +2579,9 @@ mod tests {
         let mut p = Project::default();
         let (_, obj) = add_cube(&mut p);
         let active_id = p.active_plate().id;
-        let events = p.object_override_clear(active_id, obj, "never_set").unwrap();
+        let events = p
+            .object_override_clear(active_id, obj, "never_set")
+            .unwrap();
         assert!(events.is_empty());
     }
 
@@ -2665,13 +2632,8 @@ mod tests {
             SceneOpError::UnknownPlate(PlateId(99)),
         );
         assert_eq!(
-            p.object_override_set(
-                PlateId(1),
-                ObjectId(9999),
-                "k".into(),
-                "v".into(),
-            )
-            .unwrap_err(),
+            p.object_override_set(PlateId(1), ObjectId(9999), "k".into(), "v".into(),)
+                .unwrap_err(),
             SceneOpError::UnknownObject(ObjectId(9999)),
         );
     }
@@ -2686,10 +2648,15 @@ mod tests {
             .unwrap();
         assert!(matches!(
             events.as_slice(),
-            [SceneEvent::ProjectOverridesChanged { plate_id: PlateId(1) }],
+            [SceneEvent::ProjectOverridesChanged {
+                plate_id: PlateId(1)
+            }],
         ));
         assert_eq!(
-            p.plates[0].project_overrides.get("layer_height").map(|s| s.as_str()),
+            p.plates[0]
+                .project_overrides
+                .get("layer_height")
+                .map(|s| s.as_str()),
             Some("0.12"),
         );
     }
@@ -2820,7 +2787,8 @@ mod tests {
         let (id_b, _) = p.add_plate(None);
         p.set_active_printer(Some(&a1_mini_for_test()));
         let (_, obj) = add_cube(&mut p);
-        p.translate_object(obj, Vec3::new(160.0, 160.0, 0.0)).unwrap();
+        p.translate_object(obj, Vec3::new(160.0, 160.0, 0.0))
+            .unwrap();
         p.set_active_plate(id_b).unwrap();
         p.set_active_printer(Some(&small_printer()));
 
@@ -2844,7 +2812,8 @@ mod tests {
         p.plates[0].scene.bed = None;
         let (id_b, _) = p.add_plate(None);
         p.plates[1].scene.bed = None;
-        p.set_plate_printer(id_b, Some(&a1_mini_for_test())).unwrap();
+        p.set_plate_printer(id_b, Some(&a1_mini_for_test()))
+            .unwrap();
         assert!(p.plates[0].scene.bed.is_none(), "plate 0 bed untouched");
         assert!(p.plates[1].scene.bed.is_some(), "plate 1 bed set");
         assert_eq!(p.active_plate, 0);
@@ -2854,7 +2823,8 @@ mod tests {
     fn set_plate_printer_with_none_clears_bed() {
         let mut p = Project::default();
         let (id_b, _) = p.add_plate(None);
-        p.set_plate_printer(id_b, Some(&a1_mini_for_test())).unwrap();
+        p.set_plate_printer(id_b, Some(&a1_mini_for_test()))
+            .unwrap();
         p.set_plate_printer(id_b, None).unwrap();
         assert!(p.plates[1].scene.bed.is_none());
     }
@@ -2905,8 +2875,19 @@ mod tests {
         assert!(report.clamped.is_empty());
         // Events emitted: BedChanged + PlateMetadataChanged.
         assert_eq!(events.len(), 2);
-        assert!(matches!(&events[0], SceneEvent::BedChanged { plate_id: PlateId(1), .. }));
-        assert!(matches!(&events[1], SceneEvent::PlateMetadataChanged { plate_id: PlateId(1) }));
+        assert!(matches!(
+            &events[0],
+            SceneEvent::BedChanged {
+                plate_id: PlateId(1),
+                ..
+            }
+        ));
+        assert!(matches!(
+            &events[1],
+            SceneEvent::PlateMetadataChanged {
+                plate_id: PlateId(1)
+            }
+        ));
     }
 
     #[test]
@@ -2940,7 +2921,9 @@ mod tests {
         assert_eq!(p.plates[0].name, "Bench");
         assert!(matches!(
             events.as_slice(),
-            [SceneEvent::PlateMetadataChanged { plate_id: PlateId(1) }],
+            [SceneEvent::PlateMetadataChanged {
+                plate_id: PlateId(1)
+            }],
         ));
     }
 
@@ -2967,7 +2950,10 @@ mod tests {
         let err = p.set_plate_name(PlateId(1), "   ".into()).unwrap_err();
         assert!(matches!(
             err,
-            SceneOpError::InvalidPlateMetadata { plate_id: PlateId(1), .. },
+            SceneOpError::InvalidPlateMetadata {
+                plate_id: PlateId(1),
+                ..
+            },
         ));
     }
 
@@ -2978,7 +2964,10 @@ mod tests {
         let err = p.set_plate_name(PlateId(1), too_long).unwrap_err();
         assert!(matches!(
             err,
-            SceneOpError::InvalidPlateMetadata { plate_id: PlateId(1), .. },
+            SceneOpError::InvalidPlateMetadata {
+                plate_id: PlateId(1),
+                ..
+            },
         ));
     }
 
@@ -3021,17 +3010,15 @@ mod tests {
         let (id_b, _) = p.add_plate(None); // composition_order=2
         let (id_c, _) = p.add_plate(None); // composition_order=3
         let (id_d, _) = p.add_plate(None); // composition_order=4
-        // Initial: [A=1, B=2, C=3, D=4].
-        // Move A (composition_order=1) → 3.
-        // Expected: A=3, B=1, C=2, D=4.
+                                           // Initial: [A=1, B=2, C=3, D=4].
+                                           // Move A (composition_order=1) → 3.
+                                           // Expected: A=3, B=1, C=2, D=4.
         let events = p.set_plate_composition_order(PlateId(1), 3).unwrap();
         let orders = plate_orders(&p);
-        assert_eq!(orders, vec![
-            (PlateId(1), 3),
-            (id_b, 1),
-            (id_c, 2),
-            (id_d, 4),
-        ]);
+        assert_eq!(
+            orders,
+            vec![(PlateId(1), 3), (id_b, 1), (id_c, 2), (id_d, 4),]
+        );
         // 3 plates affected: the moved one + 2 shifted siblings.
         assert_eq!(events.len(), 3);
     }
@@ -3047,12 +3034,10 @@ mod tests {
         // Expected: A=1, B=3, C=4, D=2.
         let events = p.set_plate_composition_order(id_d, 2).unwrap();
         let orders = plate_orders(&p);
-        assert_eq!(orders, vec![
-            (PlateId(1), 1),
-            (id_b, 3),
-            (id_c, 4),
-            (id_d, 2),
-        ]);
+        assert_eq!(
+            orders,
+            vec![(PlateId(1), 1), (id_b, 3), (id_c, 4), (id_d, 2),]
+        );
         assert_eq!(events.len(), 3);
     }
 
@@ -3090,7 +3075,10 @@ mod tests {
         let err = p.set_plate_composition_order(PlateId(1), 0).unwrap_err();
         assert!(matches!(
             err,
-            SceneOpError::InvalidPlateMetadata { plate_id: PlateId(1), .. },
+            SceneOpError::InvalidPlateMetadata {
+                plate_id: PlateId(1),
+                ..
+            },
         ));
     }
 
@@ -3102,7 +3090,10 @@ mod tests {
         let err = p.set_plate_composition_order(PlateId(1), 3).unwrap_err();
         assert!(matches!(
             err,
-            SceneOpError::InvalidPlateMetadata { plate_id: PlateId(1), .. },
+            SceneOpError::InvalidPlateMetadata {
+                plate_id: PlateId(1),
+                ..
+            },
         ));
     }
 
@@ -3163,15 +3154,24 @@ mod tests {
         add_cube_with_material(&mut p, 5);
         assert_eq!(
             p.plates[0].material_to_slot.get(&1),
-            Some(&SlotRef { extruder: 0, slot: 0 }),
+            Some(&SlotRef {
+                extruder: 0,
+                slot: 0
+            }),
         );
         assert_eq!(
             p.plates[0].material_to_slot.get(&2),
-            Some(&SlotRef { extruder: 0, slot: 1 }),
+            Some(&SlotRef {
+                extruder: 0,
+                slot: 1
+            }),
         );
         assert_eq!(
             p.plates[0].material_to_slot.get(&5),
-            Some(&SlotRef { extruder: 0, slot: 2 }),
+            Some(&SlotRef {
+                extruder: 0,
+                slot: 2
+            }),
             "preferred slot (AMS:1, modular) is taken by M1; walk forward to first free → AMS:3",
         );
     }
@@ -3191,7 +3191,10 @@ mod tests {
         add_cube_with_material(&mut p, 5);
         assert_eq!(
             p.plates[0].material_to_slot.get(&5),
-            Some(&SlotRef { extruder: 0, slot: 0 }),
+            Some(&SlotRef {
+                extruder: 0,
+                slot: 0
+            }),
             "all 4 AMS slots taken → wrap to preferred (AMS:1 = slot 0)",
         );
     }
@@ -3213,9 +3216,13 @@ mod tests {
         p.plates[0].printer_instance_id = Some("snappy".into());
         let cube = add_cube_with_material(&mut p, 1);
         // User manually pins M1 → T2 (instead of the auto-bind's T1).
-        p.plates[0]
-            .material_to_slot
-            .insert(1, SlotRef { extruder: 1, slot: 0 });
+        p.plates[0].material_to_slot.insert(
+            1,
+            SlotRef {
+                extruder: 1,
+                slot: 0,
+            },
+        );
         let events = p.delete_objects(&[cube]);
         assert!(!p.plates[0].material_to_slot.contains_key(&1));
         assert!(
@@ -3259,18 +3266,28 @@ mod tests {
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
         p.plates[0].printer_instance_id = Some("snappy".into());
         // User pins M1 → T2 before adding any objects.
-        p.plates[0]
-            .material_to_slot
-            .insert(1, SlotRef { extruder: 1, slot: 0 });
+        p.plates[0].material_to_slot.insert(
+            1,
+            SlotRef {
+                extruder: 1,
+                slot: 0,
+            },
+        );
         add_cube_with_material(&mut p, 2);
         assert_eq!(
             p.plates[0].material_to_slot.get(&1),
-            Some(&SlotRef { extruder: 1, slot: 0 }),
+            Some(&SlotRef {
+                extruder: 1,
+                slot: 0
+            }),
             "user pin survives",
         );
         assert_eq!(
             p.plates[0].material_to_slot.get(&2),
-            Some(&SlotRef { extruder: 2, slot: 0 }),
+            Some(&SlotRef {
+                extruder: 2,
+                slot: 0
+            }),
             "M2's preferred T2 is taken by user pin; walks forward to T3",
         );
     }
@@ -3282,7 +3299,10 @@ mod tests {
         // Auto-bind on Bambi puts material 1 on AMS:1 (slot 0 in
         // the AMS-first layout); setting the same value should be
         // a silent no-op.
-        let target = SlotRef { extruder: 0, slot: 0 };
+        let target = SlotRef {
+            extruder: 0,
+            slot: 0,
+        };
         let events = p.set_material_slot(PlateId(1), 1, target).unwrap();
         assert!(events.is_empty());
     }
@@ -3295,7 +3315,10 @@ mod tests {
             .set_material_slot(
                 PlateId(1),
                 1,
-                SlotRef { extruder: 5, slot: 0 },
+                SlotRef {
+                    extruder: 5,
+                    slot: 0,
+                },
             )
             .unwrap_err();
         assert!(matches!(err, SceneOpError::InvalidPlateMetadata { .. }));
@@ -3324,7 +3347,10 @@ mod tests {
         assert_eq!(parsed.plates[0].material_to_slot.len(), 1);
         assert_eq!(
             parsed.plates[0].material_to_slot.get(&1),
-            Some(&SlotRef { extruder: 0, slot: 0 }),
+            Some(&SlotRef {
+                extruder: 0,
+                slot: 0
+            }),
         );
     }
 }

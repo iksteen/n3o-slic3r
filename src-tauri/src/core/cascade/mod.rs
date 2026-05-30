@@ -33,8 +33,8 @@ pub use commands::{
 };
 pub use loader::{load_cascade, CascadeLoadError};
 pub use overrides::{
-    load_override_file, parse_override_str, resolve_with_overrides, FlatOverrides,
-    OverrideTier, OverrideTiers, OverrideTraceEntry, ResolvedOverrides, ResolvedWithTrace,
+    load_override_file, parse_override_str, resolve_with_overrides, FlatOverrides, OverrideTier,
+    OverrideTiers, OverrideTraceEntry, ResolvedOverrides, ResolvedWithTrace,
 };
 pub use resolver::{
     format_when, resolve, Context, MapContext, MatchingRule, Resolved, ResolvedValue,
@@ -155,7 +155,9 @@ impl DefaultValue {
     ///   - other vectors → simple comma split.
     pub fn from_serialized(ty: OptType, serialized: &str) -> Self {
         if !ty.is_vector() {
-            return Self::Scalar { value: serialized.to_owned() };
+            return Self::Scalar {
+                value: serialized.to_owned(),
+            };
         }
         let values = if matches!(ty, OptType::Strings) {
             unescape_strings_cstyle(serialized)
@@ -303,7 +305,9 @@ fn summary_from_def(d: slic3r_ffi::OptionDef) -> OptionSummary {
 fn matches_filter(d: &slic3r_ffi::OptionDef, needle: &str) -> bool {
     needle.is_empty()
         || d.key.to_lowercase().contains(needle)
-        || d.label.as_deref().is_some_and(|s| s.to_lowercase().contains(needle))
+        || d.label
+            .as_deref()
+            .is_some_and(|s| s.to_lowercase().contains(needle))
 }
 
 /// Settings-panel-visible options: Process bucket only. Printer
@@ -461,11 +465,18 @@ mod tests {
             .iter()
             .find(|o| o.key == "layer_height")
             .expect("layer_height present");
-        assert_eq!(lh.mode, OptMode::Simple, "layer_height ships in Simple mode");
+        assert_eq!(
+            lh.mode,
+            OptMode::Simple,
+            "layer_height ships in Simple mode"
+        );
         // layer_height lives in PrintObjectConfig (per
         // external/OrcaSlicer/src/libslic3r/PrintConfig.hpp:936).
         assert!(lh.scope.object, "layer_height is an object-scope option");
-        assert!(lh.tooltip.is_some(), "libslic3r ships a tooltip for layer_height");
+        assert!(
+            lh.tooltip.is_some(),
+            "libslic3r ships a tooltip for layer_height"
+        );
         assert!(
             lh.capability.is_none(),
             "layer_height has no printer-capability gating",
@@ -518,7 +529,12 @@ mod tests {
     #[test]
     fn default_value_for_scalar_keeps_serialized_string() {
         let dv = DefaultValue::from_serialized(OptType::Float, "0.2");
-        assert_eq!(dv, DefaultValue::Scalar { value: "0.2".into() });
+        assert_eq!(
+            dv,
+            DefaultValue::Scalar {
+                value: "0.2".into()
+            }
+        );
     }
 
     #[test]
@@ -553,7 +569,10 @@ mod tests {
         };
         assert_eq!(values.len(), 4);
         assert_eq!(values[0], "0,0", "unquoted first entry");
-        assert_eq!(values[1], "\n0.2,0.4444", "quoted entry round-trips with literal newline");
+        assert_eq!(
+            values[1], "\n0.2,0.4444",
+            "quoted entry round-trips with literal newline"
+        );
         assert_eq!(values[2], "\n0.4,0.6145");
         assert_eq!(values[3], "\n0.6,0.7059");
     }
@@ -565,7 +584,9 @@ mod tests {
         let dv = DefaultValue::from_serialized(OptType::Strings, "PLA");
         assert_eq!(
             dv,
-            DefaultValue::Vector { values: vec!["PLA".into()] },
+            DefaultValue::Vector {
+                values: vec!["PLA".into()]
+            },
         );
     }
 
@@ -621,7 +642,11 @@ mod tests {
         let DefaultValue::Vector { values } = dv else {
             panic!("coStrings must surface as Vector, got {dv:?}");
         };
-        assert_eq!(values.len(), 10, "10-entry default per upstream PrintConfig.cpp");
+        assert_eq!(
+            values.len(),
+            10,
+            "10-entry default per upstream PrintConfig.cpp"
+        );
         assert_eq!(values[0], "0,0", "first entry is the (0,0) anchor pair");
         assert!(opt.multiline, "regression field is a multiline textarea");
     }
