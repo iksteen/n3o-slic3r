@@ -21,6 +21,7 @@ mod error;
 mod hooks;
 mod host;
 mod manifest;
+pub mod resolve;
 mod runtime;
 mod sandbox;
 

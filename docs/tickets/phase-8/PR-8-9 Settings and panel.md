@@ -107,8 +107,34 @@ a whole-job send (document the boundary).
      typed settings ride the *same* tiers — extract one `plugin.*`
      resolver returning a typed map (with `.enabled` as one consumer)
      rather than copying the walk.
+
+### Settings-cascade model (decided 2026-05-31)
+
+Activation is **tri-state per level** — `global` is binary (`on`/`off`);
+`project` and `plate` are `inherit` / `on` / `off`. Levels map to:
+`global` = `config.toml`, `project` = the cascade *user* tier
+(`Project.user_overrides`), `plate` = the cascade *project* tier
+(`Plate.project_overrides`). The object tier is **not** a plugin level
+(dropped). In the flat override representation, `inherit` = the
+`plugin.<name>.enabled` key is **absent** at that tier.
+
+- **Effective activation** (does it run): the first explicit
+  (non-`inherit`) value walking **plate → project → global**, default
+  `on`. (The dispatch gate already computes this.)
+- **Settings promotion (enforced backend-side, not trusting the UI):** a
+  level's `plugin.<name>.<key>` values overlay the resolved settings
+  **only where that level's activation is explicitly `on`** — `inherit`
+  and `off` levels never promote settings, *even when the plugin is
+  effectively running via inheritance*. Base = the manifest defaults;
+  overlay order `global → project → plate` (finest on-level wins). So to
+  attach a per-plate setting value, the plate's activation must be set
+  `on` (not left `inherit`). The UI gates which controls it offers by
+  scope/activation; the backend independently enforces the same rule.
+
 4. Frontend: Plugins panel + settings category + per-scope controls.
-   `plugin_set_global_enabled` is the panel toggle's backend.
+   `plugin_set_global_enabled` is the panel toggle's backend. The UI
+   gates settings entry by per-level activation; the backend enforces it
+   regardless (see the settings-cascade model above).
 
 **Acceptance criteria.**
 
