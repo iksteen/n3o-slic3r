@@ -24,7 +24,7 @@ mod manifest;
 mod runtime;
 mod sandbox;
 
-pub use bindings::{GcodeCell, GcodeHandle};
+pub use bindings::{FilamentHandle, FilamentLoadout, GcodeCell, GcodeHandle, SlotInfo};
 pub use discovery::{discover, DiscoveredPlugin, MANIFEST_FILE};
 pub use error::PluginError;
 pub use hooks::{

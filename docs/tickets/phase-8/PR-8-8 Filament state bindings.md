@@ -1,64 +1,109 @@
-# PR-8-8 — read-only filament-state Lua bindings
+# PR-8-8 — read-only filament-loadout Lua bindings
 
-Status: ❌ open.
+Status: ✅ done (software).
 
-**Scope.** Give plugins a read-only view of the active printer's live
-filament loadout — per-slot identity (type, color, brand/SKU where
-reported), loaded flag, and mismatch state — so plugins can be
-material-aware (e.g. "only append the swap macro if all slots loaded",
-"warn if a PETG slot is mounted for a PLA job"). Read-only: plugins
-never write filament state.
+## Scope decision (2026-05-30) — slice-time mapping, not live state
 
-Owns **FR-PL-7** (live filament state, read-only).
+The original ticket scoped this as a *live* filament view: per-slot
+`loaded` flag and `mismatch` state sourced from the driver report + the
+Phase 7c mismatch detector. Reframed at implementation time: **expose
+the slice-time material→slot mapping** — what each physical slot is
+*bound* to, as resolved from the `PrinterInstance` — and drop the live
+dimension. Two reasons:
 
-**Acceptance criteria.**
+1. **The mismatch detector (PR-7c-4) isn't built.** There's no
+   `core/filament/mismatch.rs`; 7c landed only the driver→slot *sync*
+   (7c-2) and the Materials UI (7c-3). A `mismatch` field would have
+   nothing to compute from.
+2. **The live driver loadout isn't reachable at the slice hooks.** The
+   pre/post-slice dispatch carries `SlicingContext` (vendor profile +
+   resolved filament profiles), not the live `PrinterStatus` (AMS
+   trays / U1 toolheads). Surfacing `loaded` there is separate
+   plumbing.
 
-- A `filament` table injected into the hook context (available to
-  pre-slice, post-slice, pre-send), sourced from the active plate's
-  printer binding + the live driver status:
-  - `filament.slots()` → array of `{ index, type, color, brand,
-    loaded, mismatch }` — one entry per physical slot. Sources:
-    - identity/type/color/brand from the driver's per-slot report
-      (`DriverExtra::Bambu` AMS slots / `DriverExtra::U1` toolheads)
-      and the project's filament binding (`core/filament` +
-      Phase 7c's binding model), with manual-override identity
-      respected.
-    - `mismatch` from Phase 7c's mismatch detector (material-family /
-      temperature-band), `nil`/false when no binding to compare.
-  - `filament.slot(i)` → one slot or `nil`.
-  - `filament.printer()` → `{ model, driver_kind, connected }`.
-  - All values are snapshots taken at hook-dispatch time (no live
-    cells in Lua); a long-running hook sees a consistent view.
+The bound loadout, by contrast, **is** in scope: `prepare_job` already
+resolves the `PrinterInstance`, so its `extruders[].slots[]` bindings
+snapshot cleanly with no new plumbing. That's the material→slot mapping
+plugins actually need to be material-aware at slice time.
 
-- Strictly read-only: the table and its entries have no setters;
-  attempting to assign raises a Lua error (lock the metatable /
-  use immutable userdata).
+Owns the MVP slice of **FR-PL-7**. The live `loaded`/`mismatch`
+surface moves to a follow-up gated on PR-7c-4 + a driver-status thread
+into the dispatch (and the pre-send context).
 
-- Graceful when there's no live state: an unbound plate or a
-  disconnected printer yields `loaded = false`, identity fields `nil`,
-  `printer().connected = false` — never an error. Plugins must be able
-  to run offline (slice without a printer connected).
+## What shipped
 
-- The binding is assembled host-side and passed into the dispatch
-  context; it does not reach back into the driver registry from Lua.
+- A read-only `filament` binding, handed to **pre-slice** and
+  **post-slice** hooks as the **third positional Lua arg**
+  (`on_post_slice(gcode, plate, filament)` /
+  `on_pre_slice(settings, ctx, filament)`). Backward-compatible — the
+  existing plugins that take two args ignore it.
+  - `filament:slots()` → array (1-based) of read-only slot tables:
+    `{ index, extruder, slot, feed, identity, type, color, vendor,
+    bound }`. `index` is the 1-based flat filament ordinal (material
+    `index` emits `T<index-1>`); `extruder`/`slot` are 1-based coords;
+    `feed` is `"direct"`/`"ams"`; unbound slots have `bound=false` and
+    `nil` identity fields. `type`/`vendor`/`color` resolve from the
+    bundled filament catalog (color prefers the per-slot binding color).
+  - `filament:slot(i)` → the 1-based i-th slot, or `nil`.
+  - `filament:count()` → physical slot count.
+  - `filament:printer()` → `{ model, toolhead_count }`.
+- **One-way read into host state:** the `FilamentLoadout` lives
+  Rust-side behind an `Arc` and is never handed to Lua, so a plugin
+  cannot write filament state back into the slice (the FR-PL-7
+  guarantee). The handle is immutable userdata (assignment raises). The
+  per-slot/printer tables are fresh per-call snapshots whose `=`
+  assignment path raises via `__newindex` (`__metatable = false` hides
+  the read-through table). Not bulletproof against `rawset` — which by
+  design bypasses `__newindex` — but a `rawset` only shadows a key on
+  the plugin's throwaway copy and never reaches host state; the guard
+  catches honest mistakes, the sandbox owns hostile plugins.
+- **Offline-safe:** when the instance can't be resolved the loadout is
+  empty — `slots()` returns `{}`, `count()` is 0, no error. (Today the
+  instance always resolves, since `resolve_cascade` already proved it;
+  the empty path is the defensive fallback.)
+- Assembled host-side (`FilamentLoadout::from_instance`) and snapshotted
+  into `ResolvedJob.filament` at job prep — it does **not** reach back
+  into the instance registry from Lua. Snapshot-at-dispatch: a
+  long-running hook sees a consistent view.
 
-- Tests (with a stubbed filament/driver state, no real printer):
-  - `slots()` reflects a stubbed AMS loadout (types/colors/loaded).
-  - `mismatch` surfaces a stubbed family mismatch.
-  - Disconnected printer → `connected=false`, slots `loaded=false`,
-    no error.
-  - Write attempt from Lua raises an error.
+## Implementation
 
-**Effort.** ~1.5 days.
+- `core/plugin/bindings/filament.rs` — `FilamentLoadout` / `SlotInfo`
+  data + the `FilamentHandle` userdata (read-only proxy helper).
+- `core/plugin/hooks.rs` — `filament` field on `PreSliceHook` /
+  `PostSliceHook`, passed as the third Lua arg.
+- `core/slice/orchestrator.rs` — builds the snapshot in `prepare_job`,
+  stores it on `ResolvedJob`, threads it into the two dispatch helpers.
+- `examples/plugins/filament-summary/` — a read-only example that
+  prepends a per-slot loadout header (template for material-aware
+  plugins).
 
-**Dependencies.** PR-8-3 (host/dispatch context), **Phase 7c**
-(filament-state model + mismatch detector), `core/driver` status,
-`core/filament`. This is the one binding gated on Phase 7c.
+## Tests (no real printer)
 
-**Out of scope.**
+- `slots()` reflects a stubbed loadout (type/color/vendor/feed, bound vs
+  unbound); `slot(i)` range + `0`/out-of-range → `nil`; empty loadout →
+  no slots, no error.
+- Assigning a slot field **or** a handle field raises, and clean-by-copy
+  discards the whole edit (G-code untouched).
+- `from_instance` over a bundled fixture instance: slot count + 1-based
+  ordinals.
+- `filament-summary` example loads and prepends its header end-to-end.
+
+## Not done / follow-ups
+
+- **Live `loaded` + `mismatch`** — needs PR-7c-4 (mismatch detector)
+  and a live `PrinterStatus` thread into the slice dispatch. Tracked as
+  a post-7c-4 extension of this binding.
+- **pre-send** doesn't get `filament`. Its dispatch site
+  (`core/driver/commands.rs`) has only `plate_id` + `driver_kind`, no
+  instance context; threading the loadout there is separate work.
+
+**Dependencies (met).** PR-8-3 (host/dispatch context), PR-8-5
+(post-slice wired), `core/printer` instance topology, `core/filament`
+catalog.
+
+## Out of scope (unchanged)
 
 - Writing/binding filament from a plugin (read-only by FR-PL-7).
-- Live/streaming updates into a running hook — snapshot at dispatch is
-  the contract.
-- Exposing raw driver protocol details (AMS humidity, etc.) — only the
-  identity/loaded/mismatch surface plugins need.
+- Live/streaming updates into a running hook — snapshot is the contract.
+- Raw driver protocol details (AMS humidity, etc.).

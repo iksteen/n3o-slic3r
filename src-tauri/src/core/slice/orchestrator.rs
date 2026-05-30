@@ -56,7 +56,7 @@ use crate::core::cascade::{self, types::Cascade, Resolved, ResolvedValue, Source
 use crate::core::cascade_adapter::{adapt, Manifest};
 use crate::core::gcode::{parse_str, to_string};
 use crate::core::plugin::{
-    HookKind, PlateMeta, PluginHost, PostSliceHook, PreSliceContext, PreSliceHook,
+    FilamentLoadout, HookKind, PlateMeta, PluginHost, PostSliceHook, PreSliceContext, PreSliceHook,
 };
 use crate::core::printer::lookup_instance;
 use crate::core::profile_library::compose_cascade;
@@ -204,6 +204,20 @@ fn prepare_job(
             .collect(),
         active_slot: input.context.active_slot,
     };
+    // Snapshot the bound filament loadout from the instance for the
+    // plugin hooks. `resolve_cascade` already proved the instance
+    // resolves; re-looking-up here is cheap (bundled-library read) and
+    // keeps the snapshot logic out of the cascade path. Empty on the
+    // (now-unreachable) miss so plugins still run with no slots.
+    let filament = lookup_instance(&input.printer_instance_id)
+        .map(|inst| {
+            FilamentLoadout::from_instance(
+                &inst,
+                input.context.printer.model.clone(),
+                input.context.printer.toolheads.len(),
+            )
+        })
+        .unwrap_or_default();
     let output_dir = PathBuf::from(&input.output_dir);
     // Materialize the output directory now so the worker can write
     // its first file without dancing around `mkdir -p`. If the path
@@ -221,6 +235,7 @@ fn prepare_job(
         plate_ids: input.plate_ids,
         cascade,
         context,
+        filament,
     };
     Ok((job_id, resolved, handle))
 }
@@ -301,6 +316,7 @@ fn apply_post_slice(
     output_path: &Path,
     plate_id: u32,
     ctx: &SlicingContext,
+    filament: &FilamentLoadout,
 ) {
     let Some(host) = host else {
         return;
@@ -340,6 +356,7 @@ fn apply_post_slice(
             // objects today; surface it as unknown rather than wrong.
             object_count: None,
         },
+        filament: filament.clone(),
     };
 
     // Dispatch runs untrusted plugin Lua; hold the host lock only for
@@ -381,7 +398,12 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// Run the pre-slice plugin hook over the resolved cascade, applying
 /// any plugin edits back into `resolved` before the adapter + safety
 /// gate run. No-op when no host is wired or no plugin declares the hook.
-fn apply_pre_slice(host: &Option<PluginHostRef>, resolved: &mut Resolved, ctx: &SlicingContext) {
+fn apply_pre_slice(
+    host: &Option<PluginHostRef>,
+    resolved: &mut Resolved,
+    ctx: &SlicingContext,
+    filament: &FilamentLoadout,
+) {
     let Some(host) = host else {
         return;
     };
@@ -399,6 +421,7 @@ fn apply_pre_slice(host: &Option<PluginHostRef>, resolved: &mut Resolved, ctx: &
             plate: ctx.plate.identity.clone(),
             toolhead_count: ctx.printer.toolheads.len(),
         },
+        filament: filament.clone(),
     };
     // Dispatch (untrusted Lua) is the panic-prone step; it runs before
     // `resolved` is touched, so a panic leaves the cascade unchanged.
@@ -436,7 +459,8 @@ fn apply_pre_slice_result(resolved: &mut Resolved, edited: BTreeMap<String, Stri
 /// Lock the plugin host, recovering the guard if a plugin panic
 /// poisoned it (the buffer's edits are per-call, so recovery is safe).
 fn lock_host(host: &PluginHostRef) -> std::sync::MutexGuard<'_, PluginHost> {
-    host.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    host.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Sequential per-plate worker. Holds the `JobHandle` for cancel +
@@ -477,10 +501,13 @@ fn run_worker(
         // by catch_unwind for the same reason as post-slice — a panic
         // must not silently kill the worker thread.
         let pre = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            apply_pre_slice(&host, &mut resolved_cascade, &job.context);
+            apply_pre_slice(&host, &mut resolved_cascade, &job.context, &job.filament);
         }));
         if pre.is_err() {
-            tracing::error!(plate_id, "pre-slice plugin hook panicked; using resolved settings");
+            tracing::error!(
+                plate_id,
+                "pre-slice plugin hook panicked; using resolved settings"
+            );
         }
 
         // Safety gate (cascade_safety.rs): refuses slice when the
@@ -591,7 +618,7 @@ fn run_worker(
                 // plate keeps libslic3r's unmodified G-code and the
                 // slice completes normally.
                 let post = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    apply_post_slice(&host, &output_path, plate_id, &job.context);
+                    apply_post_slice(&host, &output_path, plate_id, &job.context, &job.filament);
                 }));
                 if post.is_err() {
                     tracing::error!(

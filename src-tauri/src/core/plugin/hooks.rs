@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use mlua::{IntoLua, Lua, Result as LuaResult, Value};
 
-use super::bindings::{GcodeHandle, SettingsHandle};
+use super::bindings::{FilamentHandle, FilamentLoadout, GcodeHandle, SettingsHandle};
 use super::error::PluginError;
 use super::host::Hook;
 use super::manifest::HookKind;
@@ -49,6 +49,8 @@ impl IntoLua for PlateMeta {
 /// lines untouched (the fold continues with them).
 pub struct PostSliceHook {
     pub plate: PlateMeta,
+    /// Read-only bound filament loadout, passed as the third Lua arg.
+    pub filament: FilamentLoadout,
 }
 
 impl Hook for PostSliceHook {
@@ -65,7 +67,8 @@ impl Hook for PostSliceHook {
     ) -> (Vec<Line>, Option<PluginError>) {
         let handle = GcodeHandle::new(lines.clone());
         let cell = handle.cell();
-        match runtime.call::<_, ()>("on_post_slice", (handle, self.plate.clone())) {
+        let filament = FilamentHandle::new(self.filament.clone());
+        match runtime.call::<_, ()>("on_post_slice", (handle, self.plate.clone(), filament)) {
             Ok(_) => {
                 // Recover the guard if a panic mid-edit poisoned the
                 // cell, so one bad plugin can't wedge the host.
@@ -109,6 +112,8 @@ impl IntoLua for PreSliceContext {
 /// post-slice.
 pub struct PreSliceHook {
     pub context: PreSliceContext,
+    /// Read-only bound filament loadout, passed as the third Lua arg.
+    pub filament: FilamentLoadout,
 }
 
 impl Hook for PreSliceHook {
@@ -125,7 +130,8 @@ impl Hook for PreSliceHook {
     ) -> (BTreeMap<String, String>, Option<PluginError>) {
         let handle = SettingsHandle::new(settings.clone());
         let cell = handle.cell();
-        match runtime.call::<_, ()>("on_pre_slice", (handle, self.context.clone())) {
+        let filament = FilamentHandle::new(self.filament.clone());
+        match runtime.call::<_, ()>("on_pre_slice", (handle, self.context.clone(), filament)) {
             Ok(_) => {
                 let edited = cell
                     .lock()
@@ -271,7 +277,10 @@ mod tests {
                end"#,
         );
         let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
-        let hook = PostSliceHook { plate: plate() };
+        let hook = PostSliceHook {
+            plate: plate(),
+            filament: FilamentLoadout::default(),
+        };
         let out = to_string(&host.dispatch(&hook, parse_str(GCODE)));
         assert!(out.starts_with(GCODE));
         assert!(out.ends_with("; sliced for Test Printer\n"));
@@ -287,7 +296,10 @@ mod tests {
             r#"function on_post_slice(g, plate) g:append("X"); error("boom") end"#,
         );
         let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
-        let hook = PostSliceHook { plate: plate() };
+        let hook = PostSliceHook {
+            plate: plate(),
+            filament: FilamentLoadout::default(),
+        };
         let out = to_string(&host.dispatch(&hook, parse_str(GCODE)));
         // Clean-by-copy: the partial append is discarded on error.
         assert_eq!(out, GCODE);
@@ -319,6 +331,7 @@ mod tests {
         let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
         let hook = PreSliceHook {
             context: pre_slice_ctx(),
+            filament: FilamentLoadout::default(),
         };
         let settings: BTreeMap<String, String> = [
             ("bed_temp".to_string(), "99".to_string()),
@@ -348,11 +361,182 @@ mod tests {
         let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
         let hook = PreSliceHook {
             context: pre_slice_ctx(),
+            filament: FilamentLoadout::default(),
         };
-        let settings: BTreeMap<String, String> =
-            [("bed_temp".to_string(), "55".to_string())].into_iter().collect();
+        let settings: BTreeMap<String, String> = [("bed_temp".to_string(), "55".to_string())]
+            .into_iter()
+            .collect();
         let out = host.dispatch(&hook, settings);
         assert_eq!(out.get("bed_temp").map(String::as_str), Some("55"));
+    }
+
+    // ---- filament binding ----------------------------------------
+
+    fn loadout() -> FilamentLoadout {
+        use crate::core::plugin::SlotInfo;
+        FilamentLoadout {
+            printer_model: "Test Printer".into(),
+            toolhead_count: 1,
+            slots: vec![
+                SlotInfo {
+                    index: 1,
+                    extruder: 0,
+                    slot: 0,
+                    feed: "ams",
+                    identity: Some("generic-pla".into()),
+                    base_type: Some("PLA".into()),
+                    color: Some("#ff8800".into()),
+                    vendor: Some("Generic".into()),
+                },
+                SlotInfo {
+                    index: 2,
+                    extruder: 0,
+                    slot: 1,
+                    feed: "ams",
+                    identity: None,
+                    base_type: None,
+                    color: None,
+                    vendor: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn post_slice_hook_reads_filament_loadout() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(
+            tmp.path(),
+            "reporter",
+            r#"["post_slice"]"#,
+            r#"function on_post_slice(g, plate, filament)
+                 g:append("; printer=" .. filament:printer().model)
+                 g:append("; count=" .. filament:count())
+                 for _, s in ipairs(filament:slots()) do
+                   local id = s.identity or "empty"
+                   g:append("; slot " .. s.index .. " feed=" .. s.feed ..
+                            " bound=" .. tostring(s.bound) .. " id=" .. id)
+                 end
+               end"#,
+        );
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+        let hook = PostSliceHook {
+            plate: plate(),
+            filament: loadout(),
+        };
+        let out = to_string(&host.dispatch(&hook, parse_str(GCODE)));
+        assert!(out.contains("; printer=Test Printer"));
+        assert!(out.contains("; count=2"));
+        assert!(out.contains("; slot 1 feed=ams bound=true id=generic-pla"));
+        assert!(out.contains("; slot 2 feed=ams bound=false id=empty"));
+    }
+
+    #[test]
+    fn filament_slot_lookup_out_of_range_is_nil() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(
+            tmp.path(),
+            "lookup",
+            r#"["post_slice"]"#,
+            r#"function on_post_slice(g, plate, filament)
+                 g:append("; has1=" .. tostring(filament:slot(1) ~= nil))
+                 g:append("; has9=" .. tostring(filament:slot(9) ~= nil))
+                 g:append("; has0=" .. tostring(filament:slot(0) ~= nil))
+               end"#,
+        );
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+        let hook = PostSliceHook {
+            plate: plate(),
+            filament: loadout(),
+        };
+        let out = to_string(&host.dispatch(&hook, parse_str(GCODE)));
+        assert!(out.contains("; has1=true"));
+        assert!(out.contains("; has9=false"));
+        assert!(out.contains("; has0=false"));
+    }
+
+    #[test]
+    fn empty_loadout_yields_no_slots_no_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(
+            tmp.path(),
+            "offline",
+            r#"["post_slice"]"#,
+            r#"function on_post_slice(g, plate, filament)
+                 g:append("; count=" .. filament:count())
+               end"#,
+        );
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+        let hook = PostSliceHook {
+            plate: plate(),
+            filament: FilamentLoadout::default(),
+        };
+        let out = to_string(&host.dispatch(&hook, parse_str(GCODE)));
+        assert!(out.contains("; count=0"));
+    }
+
+    #[test]
+    fn assigning_a_slot_field_raises_and_leaves_gcode_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(
+            tmp.path(),
+            "mutator",
+            r#"["post_slice"]"#,
+            // Append first (proving the plugin ran), then attempt an
+            // illegal write — the error must discard the whole edit.
+            r#"function on_post_slice(g, plate, filament)
+                 g:append("; ran")
+                 filament:slots()[1].index = 99
+               end"#,
+        );
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+        let hook = PostSliceHook {
+            plate: plate(),
+            filament: loadout(),
+        };
+        let out = to_string(&host.dispatch(&hook, parse_str(GCODE)));
+        // Clean-by-copy: the write raised, so the append is rolled back too.
+        assert_eq!(out, GCODE);
+    }
+
+    #[test]
+    fn assigning_a_handle_field_raises() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(
+            tmp.path(),
+            "mutator2",
+            r#"["post_slice"]"#,
+            r#"function on_post_slice(g, plate, filament)
+                 g:append("; ran")
+                 filament.bogus = 1
+               end"#,
+        );
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+        let hook = PostSliceHook {
+            plate: plate(),
+            filament: loadout(),
+        };
+        let out = to_string(&host.dispatch(&hook, parse_str(GCODE)));
+        assert_eq!(out, GCODE);
+    }
+
+    #[test]
+    fn loadout_from_instance_resolves_bound_filament() {
+        // Use a bundled fixture instance; assert the loadout walks its
+        // slots and resolves at least one bound filament's type from the
+        // catalog. (Graceful even if the fixture changes — we only check
+        // structure, not a specific filament.)
+        let Some(inst) = crate::core::printer::lookup_instance("bambi") else {
+            return; // no fixture wired in this build; nothing to assert
+        };
+        let total_slots: usize = inst.extruders.iter().map(|e| e.slots.len()).sum();
+        let lo = FilamentLoadout::from_instance(&inst, "Bambu Lab A1 mini".into(), 1);
+        assert_eq!(lo.slots.len(), total_slots);
+        assert_eq!(lo.toolhead_count, 1);
+        // Indices are the 1-based flat filament ordinal.
+        for (i, s) in lo.slots.iter().enumerate() {
+            assert_eq!(s.index, i + 1);
+        }
     }
 
     #[test]

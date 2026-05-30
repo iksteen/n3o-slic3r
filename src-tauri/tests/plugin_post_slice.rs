@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, Once};
 use n3o_slic3r_lib::core::cascade::commands::ContextJson;
 use n3o_slic3r_lib::core::filament::FilamentProfile;
 use n3o_slic3r_lib::core::gcode::{parse_str, to_string};
-use n3o_slic3r_lib::core::plugin::{PlateMeta, PluginHost, PostSliceHook};
+use n3o_slic3r_lib::core::plugin::{FilamentLoadout, PlateMeta, PluginHost, PostSliceHook};
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
 use n3o_slic3r_lib::core::scene::build_plate::BuildPlate;
 use n3o_slic3r_lib::core::slice::{
@@ -224,7 +224,9 @@ fn pre_slice_plugin_rewrites_bed_temp_in_real_gcode() {
     )
     .unwrap();
 
-    let host = Arc::new(Mutex::new(PluginHost::load(&[plugins.path().to_path_buf()])));
+    let host = Arc::new(Mutex::new(PluginHost::load(&[plugins
+        .path()
+        .to_path_buf()])));
     let (input, registry, _out) = slice_input(vec![1]);
     let (sink, events) = collecting_sink();
     run_slice_job_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
@@ -270,6 +272,7 @@ fn platecycler_inserts_eject_macro_inside_executable_block_idempotently() {
     let mut host = host_for_example("platecycler");
     let hook = PostSliceHook {
         plate: a1_mini_plate(),
+        filament: FilamentLoadout::default(),
     };
     // Mirror Bambu structure: runnable block ends at EXECUTABLE_BLOCK_END,
     // then a trailing config/footer the firmware ignores.
@@ -294,6 +297,52 @@ fn platecycler_inserts_eject_macro_inside_executable_block_idempotently() {
     assert_eq!(out2, out1, "re-running must not double-insert");
 }
 
+/// The filament-summary example reads the `filament` binding and
+/// prepends a per-slot header. Guards the example against bit-rot and
+/// exercises the read-only binding end-to-end through a real host.
+#[test]
+fn filament_summary_example_prepends_loadout_header() {
+    use n3o_slic3r_lib::core::plugin::SlotInfo;
+    let mut host = host_for_example("filament-summary");
+    let filament = FilamentLoadout {
+        printer_model: "Bambu Lab A1 mini".into(),
+        toolhead_count: 1,
+        slots: vec![
+            SlotInfo {
+                index: 1,
+                extruder: 0,
+                slot: 0,
+                feed: "ams",
+                identity: Some("generic-pla".into()),
+                base_type: Some("PLA".into()),
+                color: Some("#ff8800".into()),
+                vendor: Some("Generic".into()),
+            },
+            SlotInfo {
+                index: 2,
+                extruder: 0,
+                slot: 1,
+                feed: "ams",
+                identity: None,
+                base_type: None,
+                color: None,
+                vendor: None,
+            },
+        ],
+    };
+    let hook = PostSliceHook {
+        plate: a1_mini_plate(),
+        filament,
+    };
+    let gcode = "G1 X0 Y0 F1200\n";
+    let out = to_string(&host.dispatch(&hook, parse_str(gcode)));
+    assert!(out.starts_with("; n3o filament loadout for Bambu Lab A1 mini"));
+    assert!(out.contains("; slot 1 (ams): generic-pla [PLA #ff8800 Generic]"));
+    assert!(out.contains("; slot 2 (ams): <empty>"));
+    // The original toolpath survives below the header.
+    assert!(out.contains("G1 X0 Y0 F1200"));
+}
+
 /// The plugin's printer self-guard: it does nothing for a non-A1-mini
 /// plate (printer_compatibility isn't host-enforced yet).
 #[test]
@@ -304,6 +353,7 @@ fn platecycler_skips_non_a1_mini() {
             printer_model: "Snapmaker U1".into(),
             ..a1_mini_plate()
         },
+        filament: FilamentLoadout::default(),
     };
     let gcode = "G1 X0 Y0 F1200\n";
     let out = to_string(&host.dispatch(&hook, parse_str(gcode)));
@@ -356,7 +406,9 @@ fn erroring_plugin_does_not_break_a_multi_plate_job() {
     )
     .unwrap();
 
-    let host = Arc::new(Mutex::new(PluginHost::load(&[plugins.path().to_path_buf()])));
+    let host = Arc::new(Mutex::new(PluginHost::load(&[plugins
+        .path()
+        .to_path_buf()])));
     let (input, registry, _out) = slice_input(vec![1, 2]);
     let (sink, events) = collecting_sink();
     run_slice_job_blocking_with_plugins(input, &registry, sink, host)

@@ -203,6 +203,11 @@ pub struct ResolvedJob {
     pub plate_ids: Vec<u32>,
     pub cascade: crate::core::cascade::Cascade,
     pub context: crate::core::project::SlicingContext,
+    /// Bound filament loadout (slice-time material→slot mapping),
+    /// snapshotted from the PrinterInstance at job prep and handed to
+    /// the pre/post-slice plugin hooks. Empty when the instance can't
+    /// be resolved (plugins then see no slots — offline-safe).
+    pub filament: crate::core::plugin::FilamentLoadout,
 }
 
 #[cfg(test)]

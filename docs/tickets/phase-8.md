@@ -9,12 +9,14 @@ PRD §6.9 (FR-PL-1..9). Stated goal:
 > Working Lua plugin host with hot reload.
 
 Phase 8 has **no printer dependency for most of its surface** and the
-plan notes it can run in parallel with Phase 7. In practice it lands
-after 7c: the read-only filament API (PR-8-8) binds Phase 7c's
-filament-state model, and the flagship platecycler plugin's hardware
-smoke needs Phase 7a's A1 mini send path. The hook infrastructure,
-G-code bindings, and example plugins have no such dependency and can
-start immediately.
+plan notes it can run in parallel with Phase 7. The flagship platecycler
+plugin's hardware smoke needs Phase 7a's A1 mini send path. The
+read-only filament API (PR-8-8) was originally scoped to Phase 7c's live
+filament-state model, but shipped **reduced** to the slice-time bound
+loadout (the `PrinterInstance` material→slot mapping), which has no 7c
+dependency; the live `loaded`/`mismatch` surface is a post-7c-4
+follow-up. The hook infrastructure, G-code bindings, and example
+plugins likewise can start immediately.
 
 Individual tickets live one-per-file in `phase-8/`. This file is the
 index plus phase-level status and the two kickoff scope decisions.
@@ -82,7 +84,10 @@ closes at 8-5, the rest are largely independent:
 - **8-6** (pre-slice + pre-send) extends dispatch — needs 8-5's host.
 - **8-7** (platecycler) needs 8-5 (post-slice) + **Phase 7a** for the
   real-hardware smoke.
-- **8-8** (filament bindings) needs **Phase 7c**'s filament-state model.
+- **8-8** (filament bindings) — **reduced** to the slice-time
+  material→slot mapping (the bound `PrinterInstance` loadout), which
+  removed the Phase 7c dependency. The live `loaded`/`mismatch` surface
+  is a post-7c-4 follow-up. See the ticket's scope decision.
 - **8-9** (settings UI + Plugins panel) needs 8-2's manifest settings
   declarations; frontend.
 - **8-10** (hot reload + authoring guide + exit smoke) last.
@@ -98,7 +103,7 @@ closes at 8-5, the rest are largely independent:
 | post-slice hook wired into the slice pipeline + beep/pause example plugins | ✅ done | [PR-8-5](phase-8/PR-8-5%20Post-slice%20hook.md) |
 | pre-slice + pre-send hooks wired + bed-temp-by-range example | ✅ done | [PR-8-6](phase-8/PR-8-6%20Pre-slice%20and%20pre-send.md) |
 | **platecycler plugin** (post-slice macro append) + A1 mini hardware smoke | ✅ done (sw) | [PR-8-7](phase-8/PR-8-7%20platecycler%20plugin.md) |
-| Read-only filament-state Lua bindings (per-slot identity/loaded/mismatch) | ❌ open | [PR-8-8](phase-8/PR-8-8%20Filament%20state%20bindings.md) |
+| Read-only filament-loadout Lua bindings (slice-time material→slot mapping) | ✅ done (sw) | [PR-8-8](phase-8/PR-8-8%20Filament%20state%20bindings.md) |
 | Plugin-declared settings in the cascade UI + Plugins panel (frontend) | ❌ open | [PR-8-9](phase-8/PR-8-9%20Settings%20and%20panel.md) |
 | Hot reload (folder watcher) + plugin authoring guide + exit-criteria smoke | ❌ open | [PR-8-10](phase-8/PR-8-10%20Hot%20reload%20and%20guide.md) |
 

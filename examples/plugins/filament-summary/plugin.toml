@@ -1,0 +1,5 @@
+name = "filament-summary"
+version = "0.1.0"
+entry = "main.lua"
+hooks = ["post_slice"]
+description = "Prepend a comment header listing the bound filament loadout."
