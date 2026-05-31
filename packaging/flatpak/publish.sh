@@ -38,6 +38,7 @@ echo ":: signed build + export into ${pubrepo} (key ${key})"
 flatpak-builder \
   --user \
   --force-clean \
+  --state-dir="${here}/.flatpak-builder" \
   --gpg-sign="${key}" \
   --repo="${pubrepo}" \
   "${builddir}" \

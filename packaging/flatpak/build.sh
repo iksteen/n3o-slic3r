@@ -42,9 +42,13 @@ esac
 # --user installs the runtime/sdk from the user flathub remote;
 # --force-clean wipes the previous build tree; sources are cached under
 # .flatpak-builder/ between runs.
+# --state-dir keeps flatpak-builder's (large) download/build cache under
+# packaging/flatpak/ regardless of the invoking CWD — otherwise it lands
+# in the CWD (e.g. a 29 GB .flatpak-builder/ at the repo root).
 flatpak-builder \
   --user \
   --force-clean \
+  --state-dir="${here}/.flatpak-builder" \
   --repo="${repodir}" \
   "${extra[@]}" \
   "${builddir}" \

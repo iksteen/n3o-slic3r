@@ -25,6 +25,11 @@ __pycache__
 /packaging/arch/pkg/
 /packaging/arch/*.pkg.tar.zst
 
+# flatpak-builder writes its cache to the CWD by default; the scripts
+# pin it under packaging/flatpak/ via --state-dir, but guard the root in
+# case flatpak-builder is ever run here directly.
+/.flatpak-builder/
+
 # local environment overrides loaded by `npm run tauri dev` via dotenv-cli
 .env
 .env.local
