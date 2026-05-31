@@ -172,6 +172,7 @@ fn slice_fourcolor(
         plate_ids: vec![1],
         printer_instance_id: instance_id.into(),
         material_layout: vec![],
+        quality_profile: None,
     };
 
     run_slice_job_blocking(input, &registry, sink)

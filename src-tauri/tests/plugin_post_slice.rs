@@ -111,6 +111,7 @@ fn slice_input(plate_ids: Vec<u32>) -> (SliceJobInput, JobRegistry, tempfile::Te
         plate_ids,
         printer_instance_id: "bambi".into(),
         material_layout: vec![],
+        quality_profile: None,
     };
     (input, JobRegistry::new(), out)
 }
