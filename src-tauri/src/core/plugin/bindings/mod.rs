@@ -26,9 +26,11 @@ pub(crate) fn read_only(lua: &Lua, data: Table, what: &'static str) -> LuaResult
     let msg = format!("{what} is read-only");
     mt.set(
         "__newindex",
-        lua.create_function(move |_, (_, _, _): (Table, Value, Value)| -> LuaResult<()> {
-            Err(mlua::Error::RuntimeError(msg.clone()))
-        })?,
+        lua.create_function(
+            move |_, (_, _, _): (Table, Value, Value)| -> LuaResult<()> {
+                Err(mlua::Error::RuntimeError(msg.clone()))
+            },
+        )?,
     )?;
     mt.set("__metatable", false)?;
     proxy.set_metatable(Some(mt))?;

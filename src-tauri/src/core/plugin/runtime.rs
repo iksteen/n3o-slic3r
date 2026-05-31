@@ -200,7 +200,11 @@ mod tests {
         )
         .unwrap();
         let all_absent: Option<bool> = rt.call("probe", ()).unwrap();
-        assert_eq!(all_absent, Some(true), "a denied global leaked into the sandbox");
+        assert_eq!(
+            all_absent,
+            Some(true),
+            "a denied global leaked into the sandbox"
+        );
     }
 
     #[test]
@@ -223,9 +227,11 @@ mod tests {
 
     #[test]
     fn io_open_is_denied() {
-        let rt =
-            PluginRuntime::load(r#"function go() return io.open("/etc/passwd", "r") end"#, "io")
-                .unwrap();
+        let rt = PluginRuntime::load(
+            r#"function go() return io.open("/etc/passwd", "r") end"#,
+            "io",
+        )
+        .unwrap();
         let r: Result<Option<bool>, _> = rt.call("go", ());
         assert!(r.is_err(), "io.open should be unreachable");
     }

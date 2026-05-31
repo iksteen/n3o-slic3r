@@ -20,10 +20,10 @@ use std::sync::{Arc, Mutex};
 
 use mlua::{Lua, MetaMethod, Result as LuaResult, Table, UserData, UserDataMethods, Value};
 
-use crate::core::gcode::{parse_str, Line};
 use crate::core::gcode::model::{
     Comment, CommentStyle, LayerSource, MoveCommand, Other, SemanticComment,
 };
+use crate::core::gcode::{parse_str, Line};
 
 /// Shared, mutable line buffer behind the userdata.
 pub type GcodeCell = Arc<Mutex<Vec<Line>>>;
@@ -52,13 +52,16 @@ impl GcodeHandle {
 /// one plugin call at a time, so recovering is safe — and it keeps a
 /// stray panic from wedging every later access.
 fn lock_lines(cell: &GcodeCell) -> std::sync::MutexGuard<'_, Vec<Line>> {
-    cell.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    cell.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl UserData for GcodeHandle {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         // #g and g:len()
-        methods.add_meta_method(MetaMethod::Len, |_, this, ()| Ok(lock_lines(&this.lines).len()));
+        methods.add_meta_method(MetaMethod::Len, |_, this, ()| {
+            Ok(lock_lines(&this.lines).len())
+        });
         methods.add_method("len", |_, this, ()| Ok(lock_lines(&this.lines).len()));
 
         // g:line(i) — 1-based; nil when out of range (reads are lenient).
@@ -454,7 +457,8 @@ G1 X10 Y10 E1.0
 
     #[test]
     fn appends_a_comment_and_round_trips() {
-        let out = run(r#"function go(g) g:append({ kind = "comment", text = "n3o was here" }) end"#);
+        let out =
+            run(r#"function go(g) g:append({ kind = "comment", text = "n3o was here" }) end"#);
         assert!(out.starts_with(SAMPLE));
         assert!(out.ends_with("; n3o was here\n"));
     }
@@ -511,8 +515,8 @@ G1 X10 Y10 E1.0
     fn append_does_not_merge_with_an_unterminated_last_line() {
         // A file whose final line has no trailing newline.
         let src = "G1 X0 Y0 F1200\nM84";
-        let rt = PluginRuntime::load(r#"function go(g) g:append("M300 S440 P200") end"#, "t")
-            .unwrap();
+        let rt =
+            PluginRuntime::load(r#"function go(g) g:append("M300 S440 P200") end"#, "t").unwrap();
         let handle = GcodeHandle::new(parse_str(src));
         let cell = handle.cell();
         let _: Option<()> = rt.call("go", handle).unwrap();

@@ -503,7 +503,9 @@ fn phase_8_exit_smoke() {
     );
 
     // (2) Enabled globally → runs at post-slice.
-    host.lock().unwrap().set_global_enabled("beep-at-layer", true);
+    host.lock()
+        .unwrap()
+        .set_global_enabled("beep-at-layer", true);
     assert!(
         slice_once(host.clone(), false).contains(BEEP),
         "enabled → beep injected"
@@ -531,7 +533,11 @@ fn plugin_reload_recovers_a_broken_plugin() {
     )
     .unwrap();
     // A syntax error → the plugin loads in the errored state.
-    std::fs::write(dir.join("main.lua"), "function on_post_slice(g, plate) return").unwrap();
+    std::fs::write(
+        dir.join("main.lua"),
+        "function on_post_slice(g, plate) return",
+    )
+    .unwrap();
     let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
     {
         let list = host.list();

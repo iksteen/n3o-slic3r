@@ -2667,9 +2667,14 @@ mod tests {
         let events = p
             .user_override_set("plugin.platecycler.enabled".into(), "true".into())
             .unwrap();
-        assert!(matches!(events.as_slice(), [SceneEvent::UserOverridesChanged]));
+        assert!(matches!(
+            events.as_slice(),
+            [SceneEvent::UserOverridesChanged]
+        ));
         assert_eq!(
-            p.user_overrides.get("plugin.platecycler.enabled").map(|s| s.as_str()),
+            p.user_overrides
+                .get("plugin.platecycler.enabled")
+                .map(|s| s.as_str()),
             Some("true"),
         );
         // Unchanged value → silent no-op.
@@ -2679,7 +2684,10 @@ mod tests {
             .is_empty());
         // Clear removes it and emits.
         let cleared = p.user_override_clear("plugin.platecycler.enabled").unwrap();
-        assert!(matches!(cleared.as_slice(), [SceneEvent::UserOverridesChanged]));
+        assert!(matches!(
+            cleared.as_slice(),
+            [SceneEvent::UserOverridesChanged]
+        ));
         assert!(p.user_overrides.is_empty());
     }
 

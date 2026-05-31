@@ -223,7 +223,14 @@ mod tests {
             .collect();
         let project = lvl(Some(true), &[("swap", "B")]);
         let plate = lvl(Some(true), &[("swap", "C")]);
-        let r = resolve(false, Some(true), &global_settings, &project, &plate, &defaults());
+        let r = resolve(
+            false,
+            Some(true),
+            &global_settings,
+            &project,
+            &plate,
+            &defaults(),
+        );
         assert!(r.enabled);
         assert_eq!(r.settings.get("swap").map(String::as_str), Some("C"));
     }
@@ -237,7 +244,14 @@ mod tests {
             .collect();
         let project = lvl(Some(true), &[("swap", "B")]);
         let plate = lvl(None, &[]);
-        let r = resolve(false, Some(false), &global_settings, &project, &plate, &defaults());
+        let r = resolve(
+            false,
+            Some(false),
+            &global_settings,
+            &project,
+            &plate,
+            &defaults(),
+        );
         assert!(r.enabled, "project on overrides global off");
         assert_eq!(r.settings.get("swap").map(String::as_str), Some("B"));
     }
@@ -246,7 +260,14 @@ mod tests {
     fn plate_off_deactivates_even_if_lower_levels_on() {
         let project = lvl(Some(true), &[("swap", "B")]);
         let plate = lvl(Some(false), &[]);
-        let r = resolve(false, Some(true), &BTreeMap::new(), &project, &plate, &defaults());
+        let r = resolve(
+            false,
+            Some(true),
+            &BTreeMap::new(),
+            &project,
+            &plate,
+            &defaults(),
+        );
         assert!(!r.enabled, "plate off wins");
     }
 

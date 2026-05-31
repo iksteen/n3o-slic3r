@@ -371,12 +371,22 @@ impl PluginHost {
                 name: p.manifest.name.clone(),
                 version: p.manifest.version.clone(),
                 description: p.manifest.description.clone(),
-                hooks: p.manifest.hooks.iter().map(|h| h.as_str().to_string()).collect(),
+                hooks: p
+                    .manifest
+                    .hooks
+                    .iter()
+                    .map(|h| h.as_str().to_string())
+                    .collect(),
                 printers: match &p.manifest.printer_compatibility {
                     PrinterCompat::Any => None,
                     PrinterCompat::Models(m) => Some(m.clone()),
                 },
-                scopes: p.manifest.scopes.iter().map(|s| s.as_str().to_string()).collect(),
+                scopes: p
+                    .manifest
+                    .scopes
+                    .iter()
+                    .map(|s| s.as_str().to_string())
+                    .collect(),
                 enabled: p.enabled,
                 globally_enabled: self
                     .global_enabled
@@ -524,11 +534,7 @@ mod tests {
         fn kind(&self) -> HookKind {
             HookKind::PostSlice
         }
-        fn invoke(
-            &self,
-            runtime: &PluginRuntime,
-            value: String,
-        ) -> (String, Option<PluginError>) {
+        fn invoke(&self, runtime: &PluginRuntime, value: String) -> (String, Option<PluginError>) {
             match runtime.call::<_, String>("on_post_slice", value.clone()) {
                 Ok(Some(next)) => (next, None),
                 Ok(None) => (value, None),
@@ -826,7 +832,10 @@ mod tests {
                 .collect(),
             ..Default::default()
         };
-        assert_eq!(host.dispatch_gated(&StubHook, "x".into(), &inherit), "x:DEF");
+        assert_eq!(
+            host.dispatch_gated(&StubHook, "x".into(), &inherit),
+            "x:DEF"
+        );
     }
 
     #[test]

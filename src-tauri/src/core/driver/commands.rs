@@ -465,7 +465,9 @@ pub async fn driver_send_plate(
 /// is then simply skipped (the gate treats `None` as "any").
 fn plate_printer_model(project: &Mutex<Project>, plate_id: u32) -> Option<String> {
     let inst_id = {
-        let p = project.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let p = project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         p.plate(PlateId(plate_id))?.printer_instance_id.clone()?
     };
     let inst = crate::core::printer::lookup_instance(&inst_id)?;
@@ -480,7 +482,10 @@ fn apply_pre_send(
     kind: DriverKind,
     printer_model: Option<String>,
 ) -> SendPayload {
-    let lock = || host.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let lock = || {
+        host.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
     // Per-plate/project plugin activation doesn't apply to a whole-job
     // send, so the gate carries no per-level overrides — only the printer
     // model (for compatibility). The host still applies the global tier.
@@ -610,9 +615,8 @@ mod tests {
             r#"function on_pre_send(p, t) return "CLOBBERED" end"#,
         )
         .unwrap();
-        let host: PluginHostState = Arc::new(Mutex::new(PluginHost::load(&[tmp
-            .path()
-            .to_path_buf()])));
+        let host: PluginHostState =
+            Arc::new(Mutex::new(PluginHost::load(&[tmp.path().to_path_buf()])));
 
         let mk = || SendPayload::Gcode {
             bytes: b"G1 X0".to_vec(),
@@ -620,7 +624,13 @@ mod tests {
         };
         // Wrong printer model → the U1-only plugin is skipped (gate
         // enforces printer_compatibility), payload unchanged.
-        match apply_pre_send(&host, mk(), 1, DriverKind::U1, Some("Bambu Lab A1 mini".into())) {
+        match apply_pre_send(
+            &host,
+            mk(),
+            1,
+            DriverKind::U1,
+            Some("Bambu Lab A1 mini".into()),
+        ) {
             SendPayload::Gcode { bytes, .. } => {
                 assert_eq!(bytes, b"G1 X0".to_vec(), "incompatible plugin skipped")
             }

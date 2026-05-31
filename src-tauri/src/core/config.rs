@@ -181,7 +181,11 @@ mod tests {
         let path = tmp.path().join("config.toml");
 
         let mut cfg = AppConfig::default();
-        let kv = cfg.plugins.settings.entry("beep-at-layer".into()).or_default();
+        let kv = cfg
+            .plugins
+            .settings
+            .entry("beep-at-layer".into())
+            .or_default();
         kv.insert("layer".into(), toml::Value::Integer(10));
         kv.insert("tag".into(), toml::Value::String("hi".into()));
         save_to(&cfg, &path).unwrap();

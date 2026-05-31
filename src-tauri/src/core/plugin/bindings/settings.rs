@@ -50,29 +50,32 @@ impl UserData for SettingsHandle {
         });
         // settings.key = value : a string or integer sets it; nil is a
         // no-op (no removal); a float or other type is rejected.
-        methods.add_meta_method(MetaMethod::NewIndex, |_, this, (key, value): (String, Value)| {
-            match value {
-                Value::Nil => {}
-                Value::String(s) => {
-                    lock(&this.map).insert(key, s.to_str()?.to_owned());
-                }
-                Value::Integer(i) => {
-                    lock(&this.map).insert(key, i.to_string());
-                }
-                Value::Number(_) => {
-                    return Err(mlua::Error::RuntimeError(format!(
-                        "setting `{key}`: use tostring() for fractional values so the \
+        methods.add_meta_method(
+            MetaMethod::NewIndex,
+            |_, this, (key, value): (String, Value)| {
+                match value {
+                    Value::Nil => {}
+                    Value::String(s) => {
+                        lock(&this.map).insert(key, s.to_str()?.to_owned());
+                    }
+                    Value::Integer(i) => {
+                        lock(&this.map).insert(key, i.to_string());
+                    }
+                    Value::Number(_) => {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "setting `{key}`: use tostring() for fractional values so the \
                          plugin controls the formatting"
-                    )))
+                        )))
+                    }
+                    other => {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "setting `{key}` must be a string, got {}",
+                            other.type_name()
+                        )))
+                    }
                 }
-                other => {
-                    return Err(mlua::Error::RuntimeError(format!(
-                        "setting `{key}` must be a string, got {}",
-                        other.type_name()
-                    )))
-                }
-            }
-            Ok(())
-        });
+                Ok(())
+            },
+        );
     }
 }

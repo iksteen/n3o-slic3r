@@ -376,7 +376,11 @@ fn validate_setting(key: &str, raw: RawSettingDecl) -> Result<SettingDecl, Manif
         "number" => SettingKind::Number,
         "bool" => SettingKind::Bool,
         "enum" => SettingKind::Enum,
-        other => return Err(bad(format!("unknown type `{other}` (string|number|bool|enum)"))),
+        other => {
+            return Err(bad(format!(
+                "unknown type `{other}` (string|number|bool|enum)"
+            )))
+        }
     };
     let values = raw.values.unwrap_or_default();
     let default = match (kind, &raw.default) {
@@ -386,7 +390,9 @@ fn validate_setting(key: &str, raw: RawSettingDecl) -> Result<SettingDecl, Manif
         (SettingKind::Bool, toml::Value::Boolean(b)) => SettingValue::Bool(*b),
         (SettingKind::Enum, toml::Value::String(s)) => {
             if values.is_empty() {
-                return Err(bad("enum setting needs a non-empty `values` list".to_string()));
+                return Err(bad(
+                    "enum setting needs a non-empty `values` list".to_string()
+                ));
             }
             if !values.iter().any(|v| v == s) {
                 return Err(bad(format!("default `{s}` is not one of `values`")));

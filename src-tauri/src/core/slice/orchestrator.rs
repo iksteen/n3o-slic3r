@@ -547,7 +547,13 @@ fn run_worker(
         // by catch_unwind for the same reason as post-slice — a panic
         // must not silently kill the worker thread.
         let pre = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            apply_pre_slice(&host, &mut resolved_cascade, &job.context, &job.filament, &gate);
+            apply_pre_slice(
+                &host,
+                &mut resolved_cascade,
+                &job.context,
+                &job.filament,
+                &gate,
+            );
         }));
         if pre.is_err() {
             tracing::error!(
