@@ -10,11 +10,11 @@ report dialog. Wired into `project_load`'s `ForeignProject` branch +
 a `ProjectImported` event. Tested against the real `case-bambu-studio.3mf`.
 
 > **Remaining:**
-> 1. **Minimize overrides** — `import()` uses an *empty* baseline, so
->    every Process/Filament key becomes an override (correct but buries
->    the cascade). Swap in the cascade-resolved baseline
->    (`compose_cascade` + `cascade::resolve` for the bound instance) so
->    redundant keys drop — `compute_overrides` already takes it.
+> 1. ✅ **Minimize overrides** (2026-05-31) — `import()` resolves our
+>    cascade baseline for the bound printer/bed/filament and deltas
+>    against it; redundant keys drop. On `case-bambu-studio.3mf` the
+>    applied count falls 299 → 189 (110 redundant). The cascade panel now
+>    shows genuine deviations, not the whole resolved config.
 > 2. **Verify-via-gcode** — open `case-bambu-studio.3mf`, slice, confirm
 >    the imported support tweaks (tree-on-plate-only, top-Z-distance,
 >    first-layer-gap) survive into the output.
