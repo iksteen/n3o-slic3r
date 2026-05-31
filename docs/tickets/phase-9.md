@@ -46,11 +46,17 @@ index plus phase-level status, sequencing, and scope decisions.
    a Phase 1 follow-up instead, it can move — but it stays a gate on
    PR-9-8 either way.
 
-2. **OrcaSlicer profile importer (PR-9-6) is the phase's cut
-   candidate.** Per §11 it saves ~4 days if cut. The app ships
-   first-class profiles for both MVP printers, so the importer is an
-   adoption convenience, not a workflow dependency. Built if schedule
-   allows; first against the chopping block if it doesn't.
+2. **PR-9-6 is OrcaSlicer `.3mf` *project* import, not the preset
+   importer (rescoped 2026-05-31).** The project lead's call: importing
+   *presets/profiles through the UI* should not have been an MVP item —
+   it moves to post-MVP. The MVP import item is opening an OrcaSlicer
+   `.3mf` **project** and reconstructing an n3o project from it
+   (geometry + the project's settings) — a bounded extension of the
+   existing 3MF reader (`bbs_meta.rs` already reads `model_settings`;
+   the new work is `project_settings.config` → cascade overrides +
+   printer/filament binding). Still a cut candidate if the schedule
+   slips, but a wanted one. Diverges from `Execution_Plan.md` §11 (which
+   named a *profile* importer) — see [Doc updates owed](#doc-updates-owed).
 
 3. **WSL2 validation is folded in, not its own ticket.** §11 lists it
    best-effort. It rides along in the flatpak ticket (PR-9-2) as a
@@ -70,7 +76,8 @@ start immediately — they're independent. The rest:
 - **9-3** (distribution) needs a flatpak artifact → after **9-2**.
 - **9-4** (onboarding flow) — frontend over existing backend; independent.
 - **9-5** (.3mf format finalize) — small; independent.
-- **9-6** (profile importer) — standalone tool; independent (cut candidate).
+- **9-6** (OrcaSlicer `.3mf` project import) — extends the 3MF reader;
+  independent (cut candidate). Preset import is post-MVP.
 - **9-7** (docs: getting-started + troubleshooting + release notes)
   needs the **9-2** install path and the **9-4** onboarding flow to
   document.
@@ -87,7 +94,7 @@ start immediately — they're independent. The rest:
 | Distribution: self-hosted `.flatpakref` + repo | ✅ done | [PR-9-3](phase-9/PR-9-3%20Distribution%20channel.md) |
 | First-run onboarding (pick printers, prompt for access info) | ✅ existing UI (inline-connection deferred) | [PR-9-4](phase-9/PR-9-4%20First-run%20onboarding.md) |
 | Project file format `.3mf` finalized (FR-MP-4) | 🟡 menu wired + documented (format review owed pre-MVP) | [PR-9-5](phase-9/PR-9-5%20Project%20file%20format.md) |
-| OrcaSlicer profile importer (one-time migration; cut candidate) | ⬜ open | [PR-9-6](phase-9/PR-9-6%20Orca%20profile%20importer.md) |
+| OrcaSlicer `.3mf` project import — geometry + settings (cut candidate) | ⬜ open | [PR-9-6](phase-9/PR-9-6%20Orca%20project%20import.md) |
 | Documentation: getting-started, troubleshooting, release notes | ⬜ open | [PR-9-7](phase-9/PR-9-7%20Documentation%20and%20release%20notes.md) |
 | Independence audit (clean Linux box, no other slicer) — exit gate | ⬜ open | [PR-9-8](phase-9/PR-9-8%20Independence%20audit.md) |
 
@@ -111,6 +118,11 @@ Per PRD §11.3 (living documents):
   criterion reframed from "platecycler plugin (compose hook) ships with
   the MVP" to the **post-slice macro append** shipped in Phase 8
   (phase-8.md scope decision 2); the compose hook is noted post-MVP.
-- **`Execution_Plan.md` §11** — update once the distribution decision
-  (PR-9-3) and any cut (PR-9-6) are final, so the plan reflects what
-  actually shipped.
+- **`Execution_Plan.md` §11 + §16** — §11 names an "OrcaSlicer profile
+  importer (one-time migration tool)". Reframe the MVP deliverable to
+  **OrcaSlicer `.3mf` project import (geometry + settings)** and move the
+  user-facing **profile/preset importer** to the §16 post-MVP list
+  (rescope 2026-05-31; see scope decision 2). ✅ done 2026-05-31.
+- **`Execution_Plan.md` §11** — also update once the distribution
+  decision (PR-9-3) and any cut (PR-9-6) are final, so the plan reflects
+  what actually shipped.

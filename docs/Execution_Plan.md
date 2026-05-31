@@ -538,7 +538,7 @@ Goal: Linux flatpak build, basic onboarding, release-readiness. Windows and macO
 
 - Project file format: .3mf extension finalized (per FR-MP-4).
 
-- OrcaSlicer profile importer (one-time migration tool, not a runtime dependency): read .json profile bundles, map to cascade layers. Optional for users; the app ships with first-class profiles for both MVP printers.
+- OrcaSlicer `.3mf` **project** import (one-time, not a runtime dependency): open a Bambu Studio / OrcaSlicer project and reconstruct an n3o project — geometry + plate layout + the project's settings. Optional for users; extends the existing 3MF reader. *(Rescoped 2026-05-31: the MVP import item is project import, not the user-facing **profile/preset** importer — the latter moved to §16 post-MVP. See `docs/tickets/phase-9.md` scope decision 2.)*
 
 - Documentation: getting started (Linux flatpak install path), plugin authoring guide, troubleshooting. Does not reference any other slicer as a required tool.
 
@@ -663,5 +663,7 @@ Out of scope for this plan, but worth listing so MVP decisions don't paint into 
 - Print farm / fleet management UI.
 
 - Community profile sharing format.
+
+- **OrcaSlicer profile/preset importer** — a user-facing one-time tool to import OrcaSlicer `.json` machine/process/filament presets into a user-profile-library overlay as cascade fragments (reusing the `scripts/import_*.py` field knowledge + the FFI bucket classification). Descoped from the MVP (2026-05-31): the MVP import item is OrcaSlicer `.3mf` *project* import (§11), not preset import through the UI.
 
 - Advanced G-code preview features: time-based scrubbing, head trajectory animation, simulated print time visualization.
