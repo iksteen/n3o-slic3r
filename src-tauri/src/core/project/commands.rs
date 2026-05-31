@@ -102,11 +102,13 @@ pub fn project_clear_material_slot(
 /// Map a winning rule's source path to the cascade *layer* the settings
 /// panel ladder renders it under. The fragment paths `compose_cascade`
 /// stamps are deterministic per step, so this is an exact classification
-/// (not a heuristic): the process fragment → the `"user"` row (labeled
-/// "Profile" — the selected quality/process profile), printer/bed/filament
-/// fragments → their rows, synthesized machine-topology rules → printer.
-/// Returns the frontend `CascadeLayer` id, or `None` for `<plate-overrides>`
-/// (the panel draws override tiers itself) / anything unrecognized.
+/// (not a heuristic): process fragment → the `"user"` row (labeled
+/// "Profile" — the selected quality/process profile), nozzle fragment +
+/// extruder-vector assembly → `"nozzle"`, bed → `"build_plate"`, filament →
+/// `"filament"`, and `machine.toml` + synthesized machine-topology rules →
+/// `"printer"`. Returns the frontend `CascadeLayer` id, or `None` for
+/// `<plate-overrides>` (the panel draws override tiers itself) / anything
+/// unrecognized.
 fn layer_for_source(path: &std::path::Path) -> Option<&'static str> {
     let s = path.to_string_lossy();
     if s.contains("/processes/") {
@@ -118,10 +120,10 @@ fn layer_for_source(path: &std::path::Path) -> Option<&'static str> {
         || s.contains("<filament-colour-synthesis>")
     {
         Some("filament")
+    } else if s.contains("/nozzles/") || s.contains("<extruder-vector-assembly>") {
+        Some("nozzle")
     } else if s.contains("machine.toml")
-        || s.contains("/nozzles/")
         || s.contains("<flush-defaults>")
-        || s.contains("<extruder-vector-assembly>")
         || s.contains("<filament-topology>")
     {
         Some("printer")
@@ -446,10 +448,13 @@ mod tests {
             p("bbl/printer/bambu-lab-a1-mini/machine.toml"),
             Some("printer")
         );
+        assert_eq!(p("<filament-topology>"), Some("printer"));
         assert_eq!(
             p("bbl/printer/bambu-lab-a1-mini/nozzles/0.4.toml"),
-            Some("printer")
+            Some("nozzle"),
+            "nozzle fragment → its own Nozzle row, split out of Printer",
         );
+        assert_eq!(p("<extruder-vector-assembly>"), Some("nozzle"));
         assert_eq!(p("<plate-overrides>"), None);
     }
 
@@ -489,5 +494,25 @@ mod tests {
         let ow = resolved.entries.get("outer_wall_speed").expect("present");
         assert_eq!(ow.value, "60", "the plate's own process wins");
         assert_eq!(ow.source_layer.as_deref(), Some("user"));
+    }
+
+    #[test]
+    fn plate_resolve_attributes_nozzle_keys_to_the_nozzle_layer() {
+        // The nozzle fragment (via the extruder-vector assembly) is its own
+        // ladder row, not folded into Printer. Check both a machine-bucket
+        // key (`nozzle_diameter`, hidden in the panel) and a user-visible
+        // one (`retraction_length`, shown under Retraction) so the row is
+        // demonstrably reachable from the UI.
+        let _ = slic3r_ffi::init(None, 3);
+        let project = Project::default();
+        let plate_id = project.plates[0].id;
+        let resolved = resolve_plate_cascade(&project, plate_id).expect("resolve");
+        for key in ["nozzle_diameter", "retraction_length"] {
+            let e = resolved
+                .entries
+                .get(key)
+                .unwrap_or_else(|| panic!("{key} resolved"));
+            assert_eq!(e.source_layer.as_deref(), Some("nozzle"), "{key} → Nozzle");
+        }
     }
 }

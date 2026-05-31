@@ -28,6 +28,7 @@
 export type CascadeLayer =
   | "default"
   | "printer"
+  | "nozzle"
   | "build_plate"
   | "filament"
   | "user"
@@ -41,6 +42,7 @@ export type CascadeLayer =
 export const LAYER_HUE: Record<CascadeLayer, number> = {
   default: 220,
   printer: 18,
+  nozzle: 55,
   build_plate: 95,
   filament: 175,
   user: 235,

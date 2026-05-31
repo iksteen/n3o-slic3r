@@ -520,12 +520,13 @@ function buildLadderLayers(
   map.set("default", defaultScalarFor(schema));
   map.set("printer", null);
   map.set("build_plate", null);
+  map.set("nozzle", null);
   map.set("filament", null);
   map.set("user", null);
   // Place the cascade-resolved value under the cascade layer it won
   // from. `source_layer` is a CascadeLayer id from the backend
-  // (process → "user"/Profile, bed → "build_plate", filament →
-  // "filament", machine/nozzle/topology → "printer"); fall back to
+  // (process → "user"/Profile, nozzle → "nozzle", bed → "build_plate",
+  // filament → "filament", machine/topology → "printer"); fall back to
   // "printer" so a value is never silently dropped.
   const entry = resolved[schema.key];
   if (entry != null) {

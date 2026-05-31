@@ -39,6 +39,7 @@ const LAYER_ORDER: ReadonlyArray<{ id: CascadeLayer; label: string }> = [
   { id: "default", label: "Defaults" },
   { id: "printer", label: "Printer" },
   { id: "build_plate", label: "Build plate" },
+  { id: "nozzle", label: "Nozzle" },
   { id: "filament", label: "Filament" },
   { id: "user", label: "Profile" },
   { id: "project", label: "Project" },

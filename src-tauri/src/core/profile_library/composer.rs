@@ -9,8 +9,8 @@
 //! cascade resolver's source-order tie-break):
 //!
 //!   1. Printer fragment      (machine globals only; no per-extruder)
-//!   2. Per-extruder nozzle fragments, scalar-to-vector assembled
-//!   3. Bed fragment          (bed identity + curr_bed_type)
+//!   2. Bed fragment          (bed identity + curr_bed_type)
+//!   3. Per-extruder nozzle fragments, scalar-to-vector assembled
 //!   4. Filament fragment     (single-slot MVP)
 //!   5. Process fragment
 //!   6. Plate process overrides
@@ -246,7 +246,23 @@ pub fn compose_cascade(
     let plate_type = instance.bed.identity.clone();
     rules.extend(printer.rules);
 
-    // 2. Per-extruder nozzle fragments → vector assembly.
+    // 2. Bed fragment — looked up by `(printer_slug, bed_identity)`
+    //    where the identity matches libslic3r's `curr_bed_type` enum
+    //    value verbatim. Composed *before* the per-extruder nozzle layer
+    //    so nozzle (the more specific hardware) wins the source-order
+    //    tie-break. They share no keys today (bed sets only
+    //    `curr_bed_type`), so this is a no-op for resolution; the order is
+    //    what the cascade ladder's precedence display reflects.
+    let bed = load_bed_fragment(&instance.printer_fragment_slug, &instance.bed.identity)
+        .ok_or_else(|| {
+            ComposeError::UnknownBedFragment(format!(
+                "{}/{}",
+                instance.printer_fragment_slug, instance.bed.identity,
+            ))
+        })?;
+    rules.extend(bed.rules);
+
+    // 3. Per-extruder nozzle fragments → vector assembly.
     //    Load one nozzle fragment per extruder using its
     //    `installed_nozzle.diameter` as the SKU. Then merge their
     //    scalar values into per-key vectors and synthesize one cascade
@@ -263,7 +279,7 @@ pub fn compose_cascade(
         });
     }
 
-    // 2b. Filament-map topology.
+    // 3b. Filament-map topology.
     //
     //    libslic3r's `GCodeProcessor::update_slice_warnings` indexes
     //    `m_filament_maps` by filament index — if the map is shorter
@@ -289,18 +305,6 @@ pub fn compose_cascade(
             },
         });
     }
-
-    // 3. Bed fragment — looked up by `(printer_slug, bed_identity)`
-    //    where the identity matches libslic3r's `curr_bed_type` enum
-    //    value verbatim.
-    let bed = load_bed_fragment(&instance.printer_fragment_slug, &instance.bed.identity)
-        .ok_or_else(|| {
-            ComposeError::UnknownBedFragment(format!(
-                "{}/{}",
-                instance.printer_fragment_slug, instance.bed.identity,
-            ))
-        })?;
-    rules.extend(bed.rules);
 
     // 4. Per-slot filament fragments → vector assembly.
     //    Walk slots in extruder-major flat order (matching the
