@@ -1,6 +1,8 @@
 # PR-8-7 — platecycler plugin (post-slice macro append)
 
-Status: ✅ done (software; hardware smoke pending).
+Status: ✅ done. Hardware smoke confirmed 2026-05-31 — the platecycler
+auto-ejects the finished plate on the project lead's A1 mini +
+PlateCycler (see `docs/phase-8-platecycler-smoke.md`).
 
 **Implementation notes.**
 - `examples/plugins/platecycler/` — a post-slice plugin (not auto-loaded

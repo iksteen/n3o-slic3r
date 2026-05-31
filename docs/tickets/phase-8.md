@@ -112,22 +112,23 @@ closes at 8-5, the rest are largely independent:
 | Typed G-code Lua bindings (lines/layers/commands, insert/replace/remove/append) | ✅ done | [PR-8-4](phase-8/PR-8-4%20Gcode%20bindings.md) |
 | post-slice hook wired into the slice pipeline + beep/pause example plugins | ✅ done | [PR-8-5](phase-8/PR-8-5%20Post-slice%20hook.md) |
 | pre-slice + pre-send hooks wired + bed-temp-by-range example | ✅ done | [PR-8-6](phase-8/PR-8-6%20Pre-slice%20and%20pre-send.md) |
-| **platecycler plugin** (post-slice macro append) + A1 mini hardware smoke | ✅ done (sw) | [PR-8-7](phase-8/PR-8-7%20platecycler%20plugin.md) |
-| Read-only filament-loadout Lua bindings (slice-time material→slot mapping) | ✅ done (sw) | [PR-8-8](phase-8/PR-8-8%20Filament%20state%20bindings.md) |
-| Plugin-declared settings in the cascade UI + Plugins panel (frontend) | ✅ done (sw) | [PR-8-9](phase-8/PR-8-9%20Settings%20and%20panel.md) |
-| Plugin authoring guide + exit-criteria smoke (hot reload deferred post-MVP) | ❌ open | [PR-8-10](phase-8/PR-8-10%20Hot%20reload%20and%20guide.md) |
+| **platecycler plugin** (post-slice macro append) + A1 mini hardware smoke | ✅ done | [PR-8-7](phase-8/PR-8-7%20platecycler%20plugin.md) |
+| Read-only filament-loadout Lua bindings (slice-time material→slot mapping) | ✅ done | [PR-8-8](phase-8/PR-8-8%20Filament%20state%20bindings.md) |
+| Plugin-declared settings in the cascade UI + Plugins panel (frontend) | ✅ done | [PR-8-9](phase-8/PR-8-9%20Settings%20and%20panel.md) |
+| Plugin authoring guide + exit-criteria smoke (hot reload deferred post-MVP) | ✅ done | [PR-8-10](phase-8/PR-8-10%20Hot%20reload%20and%20guide.md) |
 
-> **2026-05-31:** PR-8-9 shipped as a much larger feature than the
+> **Phase 8 complete (2026-05-31).** PR-8-9 shipped much larger than its
 > original ticket — a three-tier (global → project → plate) activation +
 > settings cascade with tri-state per-level enablement, opt-in
 > (off-by-default) plugins, `printer_compatibility` enforcement, global
 > state in `config.toml`, and the three UI surfaces (brand-menu Global,
-> project-menu Project, settings-panel Plate tab). Software-complete +
-> reviewed; the one unverified piece is a live visual/interaction pass in
-> the running app. Remaining for the phase: **PR-8-10** (authoring guide
-> + exit smoke; **hot reload deferred to post-MVP**, scope decision 3)
-> and the **platecycler hardware smoke** (PR-8-7's exit-criteria proof,
-> pending the real run).
+> project-menu Project, settings-panel Plate tab). The project lead
+> confirmed the **UI** spot-check and the **platecycler hardware smoke**
+> (auto-eject on the A1 mini + PlateCycler). PR-8-10 closed the phase
+> with the **authoring guide** (`docs/plugin-authoring.md`) and the
+> **exit smoke** (`docs/phase-8-smoke.md` + automated chain in
+> `plugin_post_slice.rs`). **Hot reload (FR-PL-8) is deferred to
+> post-MVP** (scope decision 3) — the manual `plugin_reload` ships.
 
 ## Review pass (after PR-8-5)
 
@@ -187,20 +188,25 @@ safe even if it forgets a per-object `__metatable` lock. `rawget` /
 was already immune (`rawset` errors on userdata); this hardens the
 table-based bindings.
 
-## Exit criteria (Execution_Plan §10, adjusted)
+## Exit criteria (Execution_Plan §10, adjusted) — all met
 
-- A non-Rust developer can take an example plugin, edit it, drop it in
+The software chain is automated as the **exit smoke**
+(`docs/phase-8-smoke.md`; `phase_8_exit_smoke` +
+`plugin_reload_recovers_a_broken_plugin` in `plugin_post_slice.rs`).
+
+- ✅ A non-Rust developer can take an example plugin, edit it, drop it in
   the plugins folder, and enable it from the Plugins panel — active on
-  the next launch or via a manual reload (PR-8-10). *(The automatic
-  "under 60 seconds" loop returns with post-MVP hot reload — scope
-  decision 3.)*
-- A plugin error is caught and surfaced (Plugins panel) without
-  crashing the host (PR-8-3 error isolation).
-- The platecycler plugin appends its swap macro to a real A1 mini
+  the next launch or via a manual reload (PR-8-10;
+  `docs/plugin-authoring.md`). *(The automatic "under 60 seconds" loop
+  returns with post-MVP hot reload — scope decision 3.)*
+- ✅ A plugin error is caught and surfaced (Plugins panel) without
+  crashing the host (PR-8-3 error isolation;
+  `plugin_reload_recovers_a_broken_plugin`).
+- ✅ The platecycler plugin appends its swap macro to a real A1 mini
   print's G-code such that the PlateCycler auto-ejects the finished
-  plate on the project lead's hardware (PR-8-7). *This is the reduced
-  proof point that replaces the original "compose hook produces a
-  `.platecycler.3mf`" criterion.*
+  plate on the project lead's hardware (PR-8-7, confirmed 2026-05-31).
+  *This is the reduced proof point that replaces the original "compose
+  hook produces a `.platecycler.3mf`" criterion.*
 
 ## Doc updates owed
 

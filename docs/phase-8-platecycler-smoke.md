@@ -65,5 +65,9 @@ verification happens deliberately.
 
 ## Result
 
-_To be filled in after the hardware run: assumption confirmed/▢, any
-macro adjustments needed, photos/video of the eject._
+**✅ Confirmed (2026-05-31).** The project lead ran a sliced print with
+the platecycler plugin active on the A1 mini + Chitu PlateCycler. The
+eject/swap macro ran at print end and the finished plate was swept off
+automatically with no manual intervention — the Phase 8 exit-criteria
+proof point that the plugin architecture works end-to-end on real
+hardware.

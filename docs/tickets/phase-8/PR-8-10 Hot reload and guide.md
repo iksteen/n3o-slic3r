@@ -1,6 +1,10 @@
 # PR-8-10 — plugin authoring guide + exit-criteria smoke
 
-Status: ❌ open.
+Status: ✅ done (2026-05-31). Shipped `docs/plugin-authoring.md` (the
+guide), `docs/phase-8-smoke.md` (the exit-criteria checklist), and the
+automated chain `phase_8_exit_smoke` + `plugin_reload_recovers_a_broken_plugin`
+in `src-tauri/tests/plugin_post_slice.rs`. Hot reload deferred post-MVP
+(see below).
 
 > **Hot reload descoped (2026-05-31).** The automatic file-watcher hot
 > reload that this ticket originally owned (FR-PL-8) is **deferred to

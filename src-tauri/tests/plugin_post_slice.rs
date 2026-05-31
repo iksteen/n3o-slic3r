@@ -455,3 +455,89 @@ fn erroring_plugin_does_not_break_a_multi_plate_job() {
         "an erroring plugin must not stop later plates"
     );
 }
+
+/// Phase 8 exit-criteria smoke (software chain): an example plugin is
+/// discovered + loaded **off by default**, runs at post-slice once
+/// enabled, and is suppressible per plate. See docs/phase-8-smoke.md.
+#[test]
+fn phase_8_exit_smoke() {
+    ensure_ffi_init();
+    const BEEP: &str = "M300 S440 P200";
+
+    // (1) Discover + load the beep example into a fresh root.
+    let src = workspace_root().join("examples/plugins/beep-at-layer");
+    let tmp = tempfile::tempdir().unwrap();
+    let dst = tmp.path().join("beep-at-layer");
+    std::fs::create_dir_all(&dst).unwrap();
+    for f in ["plugin.toml", "main.lua"] {
+        std::fs::copy(src.join(f), dst.join(f)).unwrap();
+    }
+    let host = Arc::new(Mutex::new(PluginHost::load(&[tmp.path().to_path_buf()])));
+
+    let slice_once = |host: Arc<Mutex<PluginHost>>, plate_off: bool| -> String {
+        let (mut input, registry, _out) = slice_input(vec![1]);
+        if plate_off {
+            input.context.project_overrides.push(OverrideFileSpec {
+                label: "<smoke>".into(),
+                content: "\"plugin.beep-at-layer.enabled\" = false".into(),
+            });
+        }
+        let (sink, events) = collecting_sink();
+        run_slice_job_blocking_with_plugins(input, &registry, sink, host).expect("slice");
+        output_gcode(&events)
+    };
+
+    // Off by default (opt-in) → no beep.
+    assert!(
+        !slice_once(host.clone(), false).contains(BEEP),
+        "off by default → no beep"
+    );
+
+    // (2) Enabled globally → runs at post-slice.
+    host.lock().unwrap().set_global_enabled("beep-at-layer", true);
+    assert!(
+        slice_once(host.clone(), false).contains(BEEP),
+        "enabled → beep injected"
+    );
+
+    // (3) A per-plate off override suppresses it even with global on.
+    assert!(
+        !slice_once(host.clone(), true).contains(BEEP),
+        "plate-level off override suppresses it"
+    );
+}
+
+/// A broken plugin loads disabled with its error surfaced, and the
+/// manual `plugin_reload` recovers it once the on-disk file is fixed.
+/// (Exit criterion 4 — no FFI needed.)
+#[test]
+fn plugin_reload_recovers_a_broken_plugin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("fixme");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("plugin.toml"),
+        "name=\"fixme\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\n\
+         hooks=[\"post_slice\"]\nenabled_by_default=true\n",
+    )
+    .unwrap();
+    // A syntax error → the plugin loads in the errored state.
+    std::fs::write(dir.join("main.lua"), "function on_post_slice(g, plate) return").unwrap();
+    let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+    {
+        let list = host.list();
+        assert!(!list[0].enabled, "broken plugin loads disabled");
+        assert!(list[0].last_error.is_some(), "with its error surfaced");
+    }
+
+    // Fix the file on disk, reload → recovers.
+    std::fs::write(
+        dir.join("main.lua"),
+        r#"function on_post_slice(g, plate) g:append("; fixed") end"#,
+    )
+    .unwrap();
+    host.reload("fixme").expect("reload a fixed plugin");
+    let list = host.list();
+    assert!(list[0].enabled, "reload of the fixed plugin recovers it");
+    assert!(list[0].last_error.is_none(), "and clears the stale error");
+}

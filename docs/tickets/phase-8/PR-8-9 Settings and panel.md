@@ -1,6 +1,9 @@
 # PR-8-9 — plugin-declared settings in the cascade + Plugins panel
 
-Status: ❌ open.
+Status: ✅ done (2026-05-31). Backend + the three UI surfaces shipped and
+reviewed; the project lead confirmed the live UI spot-check. Shipped far
+larger than this original ticket — see the enablement + settings-cascade
+model below.
 
 **Scope.** The frontend phase: plugin-declared settings (from the
 manifest) become real, cascade-participating settings under a Plugins
