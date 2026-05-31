@@ -1,0 +1,5 @@
+# flatpak-builder outputs and the resolved-from-template manifest.
+.gen/
+.build/
+.repo/
+.flatpak-builder/

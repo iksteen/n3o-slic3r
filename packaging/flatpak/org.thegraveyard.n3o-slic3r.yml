@@ -1,0 +1,146 @@
+# Flatpak manifest for n3o-slic3r (PR-9-2).
+#
+# This is a TEMPLATE: `@REPO@` is substituted with the absolute repo
+# root by `build.sh`, which writes the resolved manifest to `.gen/` and
+# runs flatpak-builder on it. Local builds source straight from the
+# working tree's committed git state (no homedir is baked into the file
+# in source control). The Flathub-shape manifest (upstream git URLs,
+# offline/vendored deps) is a post-MVP follow-up — see the ticket.
+#
+# Runtime: GNOME 50 (freedesktop 25.08 base) — it ships the webkitgtk
+# Tauri needs on Linux, which the bare org.freedesktop.Platform does
+# not. Build toolchain comes from the rust-stable + node22 SDK
+# extensions.
+app-id: org.thegraveyard.n3o-slic3r
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.node22
+  # libclang, for the slic3r-ffi crate's bindgen step (the GNOME SDK
+  # ships no LLVM). Build-time only.
+  - org.freedesktop.Sdk.Extension.llvm21
+command: n3o-slic3r
+
+finish-args:
+  # Display + input. Wayland with an X11 fallback.
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # GPU acceleration for the Three.js 3D viewport.
+  - --device=dri
+  # webkit2gtk's DMABUF renderer trips over NVIDIA / some Wayland
+  # compositors with "Wayland protocol error 71" + WebKit render
+  # failures (the webview never loads). Disabling it falls back to a
+  # reliable path at a small perf cost — the standard Tauri-on-flatpak
+  # fix. Revisit if/when the runtime's webkit handles DMABUF cleanly.
+  - --env=WEBKIT_DISABLE_DMABUF_RENDERER=1
+  # The ONLY network use is talking to user-configured printers on the
+  # LAN. No telemetry/analytics endpoint is ever contacted (PRD §11.5).
+  - --share=network
+  # Open/save projects (.3mf) and import models.
+  - --filesystem=home
+  # Point the app's resource loader straight at the bundled tree, so it
+  # doesn't depend on Tauri's resource_dir() guesswork for a
+  # manually-installed (non-tauri-bundler) layout. Absolute path → used
+  # verbatim by core::resources_root.
+  - --env=N3O_SLIC3R_RESOURCES_ROOT=/app/share/n3o-slic3r/resources
+
+# The OrcaSlicer deps prefix is staged at /app/orca-deps for the app
+# module to link against; it's build-only, so drop it from the shipped
+# app.
+cleanup:
+  - /orca-deps
+
+# Build-options are pushed down per-module (not set here) so that
+# iterating on the app module's env doesn't invalidate the cached,
+# expensive orca-deps module.
+modules:
+  # libGLU — OrcaSlicer's GLEW dep needs GL/glu.h, which the GNOME SDK
+  # doesn't ship (it has Mesa GL but not GLU). Build it into /app first
+  # (the SDK searches /app/include + /app/lib by default), which also
+  # supplies libGLU.so.1 at runtime since the runtime lacks it too.
+  - name: glu
+    buildsystem: meson
+    config-opts:
+      - -Ddefault_library=shared
+    sources:
+      - type: archive
+        url: https://archive.mesa3d.org/glu/glu-9.0.3.tar.xz
+        sha256: bd43fe12f374b1192eb15fe20e45ff456b9bc26ab57f0eee919f96ca0f8a330f
+    cleanup:
+      - '*.a'
+      - '/include'
+      - '/lib/pkgconfig'
+
+  # OrcaSlicer's dependency tree (Boost/CGAL/OCCT/TBB/OpenVDB/wxWidgets/…),
+  # built from source via its own build_linux.sh and staged at
+  # /app/orca-deps for the app module's FFI cmake build to link against.
+  # Its own module so the ~40-min build is cached independently of app
+  # iteration — its only input is the pinned OrcaSlicer tarball.
+  - name: orca-deps
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network   # build_linux.sh downloads each dep's source
+      env:
+        # OCCT needs -fpermissive on modern GCC (see scripts/build.sh).
+        CXXFLAGS: -fpermissive
+    build-commands:
+      # build_linux.sh refuses to run without a scripts/linux.d/<distro>
+      # script that verifies system deps via the host package manager.
+      # Inside the SDK there's none (and no pacman/apt), but the SDK
+      # provides the libs — stub the only gate it checks (gtk3-dev).
+      - |
+        set -eu
+        distro="$(awk -F= '/^ID=/ {print $2}' /etc/os-release | tr -d '"')"
+        printf '#!/bin/bash\nexport FOUND_GTK3_DEV=1\n' > "scripts/linux.d/${distro}"
+        ./build_linux.sh -d -r
+        mkdir -p /app/orca-deps
+        cp -a deps/build/OrcaSlicer_dep/usr/local/. /app/orca-deps/
+    sources:
+      - type: archive
+        path: @REPO@/packaging/flatpak/.gen/orca-src.tar
+        strip-components: 1
+
+  - name: n3o-slic3r
+    buildsystem: simple
+    build-options:
+      # rust-stable + node22 + llvm21 (clang) live under /usr/lib/sdk/<ext>/bin.
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node22/bin:/usr/lib/sdk/llvm21/bin
+      build-args:
+        - --share=network   # cargo fetches crates
+      env:
+        # Keep cargo's cache inside the build dir (writable, ephemeral).
+        CARGO_HOME: /run/build/n3o-slic3r/.cargo
+        CXXFLAGS: -fpermissive
+        # slic3r-ffi's bindgen needs libclang from the llvm21 extension.
+        LIBCLANG_PATH: /usr/lib/sdk/llvm21/lib
+        # Build the FFI in Release (smaller .so, no debug symbols) for the
+        # shipped artifact; build.rs defaults to RelWithDebInfo for dev.
+        N3O_SLIC3R_FFI_CMAKE_CONFIG: Release
+    build-commands:
+      - bash packaging/flatpak/build-in-sandbox.sh
+    sources:
+      # Main repo: committed state of the local working tree. Submodules
+      # disabled — OrcaSlicer source comes from the tarball below.
+      - type: git
+        url: file://@REPO@
+        branch: main
+        disable-submodules: true
+      # OrcaSlicer source (for src/libslic3r) as a clean tarball of the
+      # pinned commit. Archive rather than git so flatpak-builder doesn't
+      # run its full-history `git lfs fetch --all`, which trips on LFS
+      # objects in OrcaSlicer's old history absent from our local mirror
+      # (the pinned tree uses no LFS). build.sh regenerates this.
+      - type: archive
+        path: @REPO@/packaging/flatpak/.gen/orca-src.tar
+        strip-components: 1
+        dest: external/OrcaSlicer
+      # Overlay the working-tree flatpak scripts last, so iterating on
+      # build-in-sandbox.sh doesn't require a commit per attempt. (The
+      # release build folds these into the git source.)
+      - type: dir
+        path: @REPO@/packaging/flatpak
+        dest: packaging/flatpak

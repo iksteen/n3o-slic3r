@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=n3o-slic3r
+GenericName=3D Print Slicer
+Comment=Multi-printer-first desktop slicer
+Exec=n3o-slic3r
+Icon=org.thegraveyard.n3o-slic3r
+Terminal=false
+Categories=Graphics;3DGraphics;Engineering;
+Keywords=3D;printing;slicer;gcode;
+StartupNotify=true
+StartupWMClass=n3o-slic3r

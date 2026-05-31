@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.thegraveyard.n3o-slic3r</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <name>n3o-slic3r</name>
+  <summary>Multi-printer-first desktop slicer</summary>
+  <description>
+    <p>
+      n3o-slic3r is a desktop slicer that drives OrcaSlicer's libslic3r
+      engine, built for running several different printers from one
+      project. It targets a transparent settings cascade, a slice-and-send
+      workflow, and a Lua plugin system for G-code post-processing — with
+      no other slicer required at runtime.
+    </p>
+  </description>
+  <launchable type="desktop-id">org.thegraveyard.n3o-slic3r.desktop</launchable>
+  <categories>
+    <category>Graphics</category>
+    <category>Engineering</category>
+  </categories>
+  <url type="homepage">https://github.com/iksteen/n3o-slic3r</url>
+  <developer id="org.thegraveyard">
+    <name>Ingmar Steen</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-05-31">
+      <description>
+        <p>MVP candidate.</p>
+      </description>
+    </release>
+  </releases>
+</component>
