@@ -35,6 +35,8 @@ export interface SettingSummary {
 export interface PluginSummary {
   name: string;
   version: string;
+  /** One-line description from the manifest, or `null`. */
+  description: string | null;
   /** Compose / post-process hooks the plugin registers. */
   hooks: string[];
   /** Printer models the plugin is scoped to, or `null` for "any". */

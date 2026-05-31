@@ -85,6 +85,8 @@ pub struct SettingSummary {
 pub struct PluginSummary {
     pub name: String,
     pub version: String,
+    /// One-line description from the manifest, for the Plugins UI.
+    pub description: Option<String>,
     pub hooks: Vec<String>,
     /// `None` means "any printer"; `Some(list)` restricts to models.
     pub printers: Option<Vec<String>>,
@@ -368,6 +370,7 @@ impl PluginHost {
             .map(|p| PluginSummary {
                 name: p.manifest.name.clone(),
                 version: p.manifest.version.clone(),
+                description: p.manifest.description.clone(),
                 hooks: p.manifest.hooks.iter().map(|h| h.as_str().to_string()).collect(),
                 printers: match &p.manifest.printer_compatibility {
                     PrinterCompat::Any => None,

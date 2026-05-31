@@ -247,9 +247,12 @@ function LevelBadges({
 
 // ── Secondary text (no `summary` in the backend) ──────────────────
 
-/** Best-effort one-liner from the lean PluginSummary: hooks first,
- *  then printer scoping. */
+/** Row subtitle: the manifest description when present, else a
+ *  best-effort one-liner from hooks + printer scoping. */
 function pluginSubtitle(plugin: PluginSummary): string {
+  if (plugin.description && plugin.description.trim().length > 0) {
+    return plugin.description;
+  }
   const parts: string[] = [];
   if (plugin.hooks.length > 0) {
     parts.push(`hooks: ${plugin.hooks.join(", ")}`);
