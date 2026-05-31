@@ -104,8 +104,19 @@ closes at 8-5, the rest are largely independent:
 | pre-slice + pre-send hooks wired + bed-temp-by-range example | ✅ done | [PR-8-6](phase-8/PR-8-6%20Pre-slice%20and%20pre-send.md) |
 | **platecycler plugin** (post-slice macro append) + A1 mini hardware smoke | ✅ done (sw) | [PR-8-7](phase-8/PR-8-7%20platecycler%20plugin.md) |
 | Read-only filament-loadout Lua bindings (slice-time material→slot mapping) | ✅ done (sw) | [PR-8-8](phase-8/PR-8-8%20Filament%20state%20bindings.md) |
-| Plugin-declared settings in the cascade UI + Plugins panel (frontend) | ❌ open | [PR-8-9](phase-8/PR-8-9%20Settings%20and%20panel.md) |
+| Plugin-declared settings in the cascade UI + Plugins panel (frontend) | ✅ done (sw) | [PR-8-9](phase-8/PR-8-9%20Settings%20and%20panel.md) |
 | Hot reload (folder watcher) + plugin authoring guide + exit-criteria smoke | ❌ open | [PR-8-10](phase-8/PR-8-10%20Hot%20reload%20and%20guide.md) |
+
+> **2026-05-31:** PR-8-9 shipped as a much larger feature than the
+> original ticket — a three-tier (global → project → plate) activation +
+> settings cascade with tri-state per-level enablement, opt-in
+> (off-by-default) plugins, `printer_compatibility` enforcement, global
+> state in `config.toml`, and the three UI surfaces (brand-menu Global,
+> project-menu Project, settings-panel Plate tab). Software-complete +
+> reviewed; the one unverified piece is a live visual/interaction pass in
+> the running app. Remaining for the phase: **PR-8-10** (hot reload +
+> authoring guide + exit smoke) and the **platecycler hardware smoke**
+> (PR-8-7's exit-criteria proof, pending the real run).
 
 ## Review pass (after PR-8-5)
 
