@@ -27,9 +27,15 @@
 //!   identity where we recognize them, otherwise reported as unmapped.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use serde_json::Value;
 use slic3r_ffi::{bucket_of, OptBucket};
+
+use crate::core::printer::{list_instances, lookup, PrinterInstance};
+use crate::core::project::model::Project;
+use crate::core::scene::state::{MeshId, NewSceneObject};
+use crate::core::threemf::{load_3mf, ProjectObject};
 
 /// The parsed `project_settings.config`: every key as-authored, plus
 /// typed access to the identity keys the importer binds against.
@@ -284,6 +290,179 @@ pub fn compute_overrides(
     out
 }
 
+// ---- orchestration --------------------------------------------------
+
+/// Summary of an import, surfaced to the user so lossy mapping is never
+/// silent.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ImportReport {
+    pub objects: usize,
+    pub plates: usize,
+    /// The bound printer instance id (none only if the user has no
+    /// instances at all).
+    pub printer_instance: Option<String>,
+    /// The model the project asked for.
+    pub printer_model: Option<String>,
+    /// No instance matched the model → bound an existing one as a
+    /// fallback. Machine settings are dropped regardless, so this is
+    /// safe; the user can rebind.
+    pub printer_fallback: bool,
+    pub filaments_matched: usize,
+    pub filaments_unmatched: usize,
+    /// Process/Filament settings carried as overrides.
+    pub settings_applied: usize,
+    /// Settings that matched our baseline and were dropped as redundant.
+    pub settings_redundant: usize,
+    /// Printer/machine settings dropped (owned by the bound printer).
+    pub settings_machine_dropped: usize,
+    /// Keys with no home in our model.
+    pub settings_unmapped: usize,
+}
+
+/// Find an *existing* user `PrinterInstance` whose printer model matches
+/// `model`; else the first instance, flagged as a fallback. **Never
+/// creates an instance.** `None` only when the user has no instances.
+fn bind_instance(model: Option<&str>) -> Option<(PrinterInstance, bool)> {
+    let instances = list_instances();
+    if let Some(model) = model {
+        if let Some(i) = instances.iter().find(|i| {
+            lookup(&i.vendor_profile_ref)
+                .map(|p| p.model == model)
+                .unwrap_or(false)
+        }) {
+            return Some((i.clone(), false));
+        }
+    }
+    instances.into_iter().next().map(|i| (i, true))
+}
+
+fn register_obj(project: &mut Project, mesh_ids: &[MeshId], obj: &ProjectObject) {
+    project.register_object(NewSceneObject {
+        mesh: mesh_ids[obj.mesh_idx],
+        transform: obj.transform,
+        name: obj.name.clone(),
+        visible: true,
+        extruder_id: obj.extruder_id,
+        parent: None,
+        group_id: obj.group_id,
+    });
+}
+
+/// Import an OrcaSlicer / Bambu Studio `.3mf` **project** into a fresh
+/// n3o `Project`. Geometry + per-object/plate structure come from the
+/// existing 3MF reader (which applies `model_settings.config`); the
+/// project's `project_settings.config` settings are carried as overrides
+/// (Process/Filament only — machine keys dropped). The plate(s) bind to
+/// an existing matching `PrinterInstance` (fallback flagged, never
+/// created).
+///
+/// Returns the built project + a report. Note: settings currently use an
+/// **empty baseline**, so every Process/Filament key is kept (correct,
+/// but non-minimal). Supplying the cascade-resolved baseline to drop
+/// redundant keys is the follow-up — `compute_overrides` already takes
+/// the baseline.
+pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
+    let loaded = load_3mf(path).map_err(|e| e.to_string())?;
+    let crate::core::threemf::Project3mf {
+        meshes,
+        objects,
+        plate_assignments,
+        embedded_settings,
+        file_metadata,
+        ..
+    } = loaded;
+
+    let raw = embedded_settings
+        .ok_or_else(|| "no project_settings.config — not a foreign project".to_string())?;
+    let settings = OrcaProjectSettings::parse(raw.as_bytes())?;
+    let part = partition(&settings);
+
+    // Bind an existing instance by model (fallback flagged; never create).
+    let model = settings.printer_model();
+    let bind = bind_instance(model.as_deref());
+    let instance_id = bind.as_ref().map(|(i, _)| i.id.clone());
+
+    // Fresh project (one default plate). Bind plate 1 before registering
+    // objects so register_object's material→slot auto-bind sees the
+    // instance.
+    let mut project = Project::new();
+    project.file_metadata = file_metadata;
+    if let Some(id) = &instance_id {
+        project.plates[0].printer_instance_id = Some(id.clone());
+    }
+
+    // Plates: foreign plate ids in order; create the ones past plate 1.
+    let mut plate_map = std::collections::HashMap::new();
+    plate_map.insert(1u32, project.plates[0].id);
+    let mut foreign_plate_ids: Vec<u32> = plate_assignments.keys().copied().collect();
+    foreign_plate_ids.sort_unstable();
+    for fid in &foreign_plate_ids {
+        if *fid != 1 {
+            let (pid, _) = project.add_plate(instance_id.clone());
+            plate_map.insert(*fid, pid);
+        }
+    }
+
+    // Meshes are scene-wide; register them once and keep the id order.
+    let mesh_ids: Vec<MeshId> = meshes
+        .into_iter()
+        .map(|m| project.register_mesh(m))
+        .collect();
+
+    // Objects → their plate (set_active_plate steers register_object).
+    let mut object_count = 0usize;
+    if foreign_plate_ids.is_empty() {
+        for obj in &objects {
+            register_obj(&mut project, &mesh_ids, obj);
+            object_count += 1;
+        }
+    } else {
+        for fid in &foreign_plate_ids {
+            project
+                .set_active_plate(plate_map[fid])
+                .map_err(|e| format!("set active plate: {e:?}"))?;
+            for &idx in &plate_assignments[fid] {
+                register_obj(&mut project, &mesh_ids, &objects[idx]);
+                object_count += 1;
+            }
+        }
+        let first = project.plates[0].id;
+        let _ = project.set_active_plate(first);
+    }
+
+    // Settings → project-tier overrides. Empty baseline for now (keep all
+    // Process/Filament; machine already excluded by `partition`).
+    let outcome = compute_overrides(&settings, &part, &BTreeMap::new());
+    for (k, v) in &outcome.overrides {
+        project.user_overrides.insert(k.clone(), v.clone());
+    }
+
+    // Filament match counts (report only — no instance mutation).
+    let (mut matched, mut unmatched) = (0usize, 0usize);
+    for id in settings.filament_settings_ids() {
+        if infer_filament(&id).identity.is_some() {
+            matched += 1;
+        } else {
+            unmatched += 1;
+        }
+    }
+
+    let report = ImportReport {
+        objects: object_count,
+        plates: project.plates.len(),
+        printer_instance: instance_id,
+        printer_model: model,
+        printer_fallback: bind.map(|(_, fb)| fb).unwrap_or(false),
+        filaments_matched: matched,
+        filaments_unmatched: unmatched,
+        settings_applied: outcome.overrides.len(),
+        settings_redundant: outcome.redundant.len(),
+        settings_machine_dropped: part.machine.len(),
+        settings_unmapped: part.unmapped.len(),
+    };
+    Ok((project, report))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,5 +593,44 @@ mod tests {
         // Every Process+Filament key is accounted for.
         let seen = out.overrides.len() + out.redundant.len() + out.unreadable.len();
         assert_eq!(seen, p.process.len() + p.filament.len());
+    }
+
+    #[test]
+    fn imports_a_real_bambu_studio_project_end_to_end() {
+        // The project lead's real A1 mini Bambu Studio project.
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/3mf/case-bambu-studio.3mf");
+        let (project, report) = import(&path).expect("import case-bambu-studio.3mf");
+
+        // Geometry landed: objects on plates, count agrees with the report.
+        assert!(
+            report.objects >= 1,
+            "expected objects, got {}",
+            report.objects
+        );
+        let placed: usize = project.plates.iter().map(|pl| pl.scene.objects.len()).sum();
+        assert_eq!(
+            placed, report.objects,
+            "report.objects must match placed objects"
+        );
+
+        // Bound to an existing A1 mini instance (the bundled `bambi`
+        // fixture) by exact model match — not a fallback, never created.
+        assert_eq!(report.printer_model.as_deref(), Some("Bambu Lab A1 mini"));
+        assert!(
+            report.printer_instance.is_some(),
+            "should bind an existing instance"
+        );
+        assert!(!report.printer_fallback, "A1 mini matches `bambi` exactly");
+
+        // Settings carried as project overrides; machine settings dropped.
+        assert!(report.settings_applied > 0, "expected imported settings");
+        assert!(
+            report.settings_machine_dropped > 0,
+            "expected dropped machine settings"
+        );
+        assert_eq!(report.settings_applied, project.user_overrides.len());
+        assert!(!project.user_overrides.contains_key("machine_start_gcode"));
+        assert!(!project.user_overrides.contains_key("nozzle_diameter"));
     }
 }
