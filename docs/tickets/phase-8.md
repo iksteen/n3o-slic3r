@@ -148,7 +148,7 @@ one deferred:
 - **UX:** re-enabling a plugin clears its stale `last_error`; non-UTF-8
   output gets a clear "plugins skipped" warning.
 - **Cleanup:** shared `core::paths::data_dir()` (autosave + plugins) and
-  a `resource_root()` helper in `lib.rs`; the G-code bindings use new
+  a `resources_root()` helper in `lib.rs`; the G-code bindings use new
   `Comment::new`/`Other::new`/`Line::set_line_ending` instead of reaching
   into model internals.
 - **Deferred (#10):** `apply_post_slice` does a full read→parse→

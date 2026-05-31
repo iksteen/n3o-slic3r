@@ -28,7 +28,7 @@ verification happens deliberately.
 
 1. platecycler **ships bundled** (`resources/plugins/platecycler/`, installed via
    `tauri.conf.json` resources; loaded in dev through
-   `N3O_PLUGIN_ROOT=./resources/plugins`), so no install step is needed. Like all
+   `N3O_SLIC3R_RESOURCES_ROOT=./resources`), so no install step is needed. Like all
    plugins it's **off by default** — enable it from the Plugins panel
    (the brand menu's "Global plugins…", or per-plate via the settings
    panel's Plugins tab).

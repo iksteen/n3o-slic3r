@@ -8,14 +8,14 @@ At startup the app loads plugins from two roots, bundled first then the
 user's `~/.local/share/n3o-slic3r/plugins/`, so a user plugin overrides
 a bundled one of the same name.
 
-In dev runs the app reads this directory via `N3O_PLUGIN_ROOT` (mirrors
-`N3O_PROFILE_ROOT` for profiles); a packaged build reads the copy in its
-resource dir.
+In dev runs the app finds this directory as the `plugins/` child of the
+resources root (`N3O_SLIC3R_RESOURCES_ROOT=./resources`, shared with
+`profiles/`); a packaged build reads the copy in its resource dir.
 
 **platecycler** ships here — the flagship plugin, bundled + installed
 with the app (mapped in `tauri.conf.json` `bundle.resources`; loaded in
-dev via `N3O_PLUGIN_ROOT=./resources/plugins`). Like all plugins it's **off by
-default** (opt-in) — enable it from the Plugins panel.
+dev via `N3O_SLIC3R_RESOURCES_ROOT=./resources`). Like all plugins it's
+**off by default** (opt-in) — enable it from the Plugins panel.
 
 The other examples (beep-at-layer, pause-at-layer, rewrite-bed-temp,
 filament-summary) stay under `examples/plugins/` as reference material;

@@ -17,8 +17,8 @@ Status: ✅ done.
 - mlua's `send` feature is enabled so `Lua: Send` and the host can live
   in `State<Arc<Mutex<PluginHost>>>`; all registered closures are Send.
 - Roots are wired in `lib.rs`: bundled `resources/plugins/` (a
-  `resources/profiles/` sibling; `N3O_PLUGIN_ROOT` dev override mirrors
-  `N3O_PROFILE_ROOT`) +
+  `resources/profiles/` sibling under the shared resources root, dev
+  override `N3O_SLIC3R_RESOURCES_ROOT=./resources`) +
   `~/.local/share/n3o-slic3r/plugins`.
 
 **Scope.** The multi-plugin host: take the discovered plugins, load

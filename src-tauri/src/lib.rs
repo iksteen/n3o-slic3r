@@ -12,27 +12,24 @@ use std::sync::{Arc, Mutex};
 
 use slic3r_ffi::init;
 
-/// Resolve a bundled-resource root: `<resource_dir>/<subdir>` for a
-/// packaged build, overridable via `$env_key`.
+/// Resolve the bundled-resources root — the directory the shipped
+/// trees (`profiles/`, `plugins/`, …) live directly under. For a
+/// packaged build this is Tauri's `resource_dir`; dev runs override it
+/// via `$N3O_SLIC3R_RESOURCES_ROOT`.
 ///
 /// The override exists because `tauri-build`'s copy of `bundle.resources`
 /// into `target/<profile>/` runs only on tracked-file changes and never
 /// prunes, so a source-tree restructure can leave stale files shadowing
-/// the right ones. Dev runs pass an env override (e.g.
-/// `N3O_PROFILE_ROOT=./resources/profiles` via the npm `tauri` script) and
-/// read straight from source; production never sets it and gets the
-/// bundled `resource_dir` path.
+/// the right ones. Dev runs pass `N3O_SLIC3R_RESOURCES_ROOT=./resources`
+/// (via the npm `tauri` script) and read straight from source; production
+/// never sets it and gets the bundled `resource_dir` path.
 ///
 /// A relative override resolves against the workspace root baked in at
 /// compile time (one dir above `src-tauri`), not the runtime CWD —
-/// Tauri's dev mode may set CWD to `src-tauri/`, so a naive
-/// `./resources/profiles` against process CWD would land in the wrong place.
-fn resource_root<R: tauri::Runtime, M: tauri::Manager<R>>(
-    mgr: &M,
-    env_key: &str,
-    subdir: &str,
-) -> std::path::PathBuf {
-    if let Some(path_os) = std::env::var_os(env_key) {
+/// Tauri's dev mode may set CWD to `src-tauri/`, so a naive `./resources`
+/// against process CWD would land in the wrong place.
+fn resources_root<R: tauri::Runtime, M: tauri::Manager<R>>(mgr: &M) -> std::path::PathBuf {
+    if let Some(path_os) = std::env::var_os("N3O_SLIC3R_RESOURCES_ROOT") {
         let path = std::path::PathBuf::from(&path_os);
         let resolved = if path.is_absolute() {
             path
@@ -42,13 +39,10 @@ fn resource_root<R: tauri::Runtime, M: tauri::Manager<R>>(
                 .expect("workspace root above src-tauri")
                 .join(path)
         };
-        tracing::info!(env = env_key, path = %resolved.display(), "using resource-root override");
+        tracing::info!(path = %resolved.display(), "using resources-root override");
         resolved
     } else {
-        mgr.path()
-            .resource_dir()
-            .expect("resource_dir")
-            .join(subdir)
+        mgr.path().resource_dir().expect("resource_dir")
     }
 }
 
@@ -75,9 +69,11 @@ pub fn run() {
             init(None, 3).expect("libslic3r init failed");
             tracing::info!("libslic3r initialized");
 
-            // Load the bundled profile tree from the Tauri resource dir
-            // (configured via tauri.conf.json::bundle.resources), with
-            // an explicit `N3O_PROFILE_ROOT` env override for dev runs.
+            // Resolve the bundled-resources root once: the shipped trees
+            // (`profiles/`, `plugins/`) live directly under it. For a
+            // packaged build this is the Tauri resource dir (configured
+            // via tauri.conf.json::bundle.resources); dev runs override
+            // it with `N3O_SLIC3R_RESOURCES_ROOT=./resources`.
             //
             // Why the override exists: `tauri-build`'s copy of
             // `bundle.resources` into `target/<profile>/` runs only on
@@ -85,20 +81,22 @@ pub fn run() {
             // restructure can leave stale fragments shadowing the right
             // ones (see profile_library's same-slug collision warning
             // for the failure mode). Dev passes
-            // `N3O_PROFILE_ROOT=./resources/profiles` through the npm `tauri`
-            // script (`cross-env` in package.json) and reads straight from
-            // source; production never sets it and gets the bundled
-            // `resource_dir` path. The override is explicit so an unset
-            // env in prod doesn't silently fall back to a baked-in source
-            // path that won't exist on the user's machine.
+            // `N3O_SLIC3R_RESOURCES_ROOT=./resources` through the npm
+            // `tauri` script (`cross-env` in package.json) and reads
+            // straight from source; production never sets it and gets the
+            // bundled `resource_dir` path. The override is explicit so an
+            // unset env in prod doesn't silently fall back to a baked-in
+            // source path that won't exist on the user's machine.
             //
             // Relative override paths resolve against the workspace root
             // baked in at compile time (one dir above `src-tauri`), not
             // the binary's runtime CWD — Tauri's dev mode may set CWD to
-            // `src-tauri/`, so a naive `./resources/profiles` resolved
-            // against process CWD would land at the wrong place.
-            let profiles_root = resource_root(app, "N3O_PROFILE_ROOT", "profiles");
-            core::profile_library::init_from(profiles_root);
+            // `src-tauri/`, so a naive `./resources` resolved against
+            // process CWD would land at the wrong place.
+            let resources = resources_root(app);
+
+            // Load the bundled profile tree.
+            core::profile_library::init_from(resources.join("profiles"));
             tracing::info!("profile library loaded");
 
             // User-owned printer instance library. First launch
@@ -145,15 +143,13 @@ pub fn run() {
 
             // Plugin host. Two roots, bundled first then user, so a
             // user plugin overrides a bundled one of the same name:
-            //   - bundled: a `plugins/` dir alongside the bundled
-            //     `profiles/` (resource dir in a packaged build;
-            //     `N3O_PLUGIN_ROOT` dev override).
+            //   - bundled: the `plugins/` dir under the resources root
+            //     (alongside `profiles/`).
             //   - user: `~/.local/share/n3o-slic3r/plugins`.
             // Loading runs each plugin's Lua top level in its sandbox;
             // a load failure keeps the plugin in the host as errored.
-            let bundled_plugins = resource_root(app, "N3O_PLUGIN_ROOT", "plugins");
             let mut plugin_host = core::plugin::PluginHost::load(&[
-                bundled_plugins,
+                resources.join("plugins"),
                 core::plugin::user_plugins_dir(),
             ]);
             // Seed the global tier (enable/disable + setting values) from

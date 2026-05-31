@@ -181,11 +181,11 @@ fn library() -> &'static ProfileLibrary {
         // it doesn't, this fallback will pick up a stale build-time
         // path that doesn't exist post-install and `load` will panic
         // with a clear "missing root" message.
-        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let resources_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("workspace root above manifest dir")
-            .to_path_buf();
-        let root = workspace_root.join("resources").join("profiles");
+            .join("resources");
+        let root = resources_root.join("profiles");
         ProfileLibrary::load(&root)
             .unwrap_or_else(|e| panic!("profile library load (workspace fallback) failed: {e}"))
     })

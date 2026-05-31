@@ -36,8 +36,9 @@ $XDG_DATA_HOME/n3o-slic3r/plugins/my-plugin/      (or ~/.local/share/...)
 (The flagship **platecycler** ships installed in the bundled
 `resources/plugins/` dir; the other example plugins live in
 `examples/plugins/` —
-copy one to the user folder to try it. Point `N3O_PLUGIN_ROOT` at a
-folder of plugins for a dev run.)
+copy one to the user folder to try it, or point
+`N3O_SLIC3R_RESOURCES_ROOT` at a resources dir whose `plugins/` holds it
+for a dev run.)
 
 **Plugins are off by default.** Dropping one in makes it *available*, not
 *active* — enable it from the Plugins UI (see §4). Loading happens at
