@@ -76,6 +76,29 @@ impl OrcaProjectSettings {
         }
     }
 
+    /// Canonical string form for comparison + override storage: a scalar
+    /// string, or a comma-joined list. A vector whose libslic3r type
+    /// actually joins with `;` will compare unequal to our `,`-joined
+    /// baseline and be kept as an override — safe (the foreign value
+    /// still wins), occasionally non-minimal; refine via the FFI option
+    /// type later.
+    pub fn canonical(&self, key: &str) -> Option<String> {
+        Some(match self.settings.get(key)? {
+            Value::String(s) => s.clone(),
+            Value::Array(a) => a
+                .iter()
+                .map(|x| match x {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(","),
+            Value::Number(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Null | Value::Object(_) => return None,
+        })
+    }
+
     // --- identity keys the importer binds against (not slice settings) ---
 
     /// The printer this project targets, e.g. "Bambu Lab A1 mini". The
@@ -214,6 +237,53 @@ pub fn infer_filament(filament_settings_id: &str) -> FilamentMatch {
     }
 }
 
+// ---- delta vs our resolved baseline ---------------------------------
+
+/// The settings to carry from a foreign project.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct OverrideOutcome {
+    /// Keys whose foreign value differs from our resolved baseline —
+    /// kept as overrides (canonical string form).
+    pub overrides: BTreeMap<String, String>,
+    /// Keys whose foreign value already matches our baseline — redundant,
+    /// so dropped (reported as a count, not noise).
+    pub redundant: Vec<String>,
+    /// Process/Filament keys we couldn't read a value for (skipped).
+    pub unreadable: Vec<String>,
+}
+
+/// Compute the overrides to import: for each **Process** + **Filament**
+/// key (machine keys are already excluded by [`partition`]), keep it
+/// only when the foreign value differs from `baseline` — our cascade
+/// resolved (libslic3r key → value) for the bound printer / filament /
+/// process. Keys that match the baseline are redundant and dropped, so
+/// the imported project's override set stays minimal and the cascade
+/// readable.
+///
+/// When in doubt the key is kept (an absent baseline entry counts as a
+/// difference): a redundant override is harmless, a *missing* one would
+/// silently lose the project's setting.
+pub fn compute_overrides(
+    foreign: &OrcaProjectSettings,
+    partition: &KeyPartition,
+    baseline: &BTreeMap<String, String>,
+) -> OverrideOutcome {
+    let mut out = OverrideOutcome::default();
+    for key in partition.process.iter().chain(partition.filament.iter()) {
+        let Some(value) = foreign.canonical(key) else {
+            out.unreadable.push(key.clone());
+            continue;
+        };
+        match baseline.get(key) {
+            Some(base) if *base == value => out.redundant.push(key.clone()),
+            _ => {
+                out.overrides.insert(key.clone(), value);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,5 +374,45 @@ mod tests {
         // An unknown filament stays unbound (slot keeps the default).
         let u = infer_filament("Nonexistent Filament @XYZ");
         assert!(u.identity.is_none());
+    }
+
+    #[test]
+    fn canonical_scalar_and_list_forms() {
+        let s = fourcolor_project_settings();
+        // layer_height is a scalar string — no comma.
+        let lh = s.canonical("layer_height").expect("layer_height present");
+        assert!(!lh.contains(','), "scalar should not be comma-joined: {lh}");
+        // filament_settings_id is a 4-element list → comma-joined (3 commas).
+        let f = s.canonical("filament_settings_id").expect("present");
+        assert_eq!(
+            f.matches(',').count(),
+            3,
+            "four elements → three commas: {f}"
+        );
+    }
+
+    #[test]
+    fn compute_overrides_keeps_differences_drops_redundant_and_machine() {
+        let s = fourcolor_project_settings();
+        let p = partition(&s);
+
+        // Baseline pins one process key to the foreign value (→ redundant);
+        // every other proc/fil key is absent (→ counts as a difference).
+        let pinned = p.process.first().expect("a process key").clone();
+        let mut baseline = BTreeMap::new();
+        baseline.insert(pinned.clone(), s.canonical(&pinned).unwrap());
+
+        let out = compute_overrides(&s, &p, &baseline);
+
+        // The pinned key matched the baseline → redundant, not overridden.
+        assert!(out.redundant.contains(&pinned));
+        assert!(!out.overrides.contains_key(&pinned));
+        // The rest differ → overrides.
+        assert!(!out.overrides.is_empty());
+        // A machine key is never an override (partition dropped it).
+        assert!(!out.overrides.contains_key("machine_start_gcode"));
+        // Every Process+Filament key is accounted for.
+        let seen = out.overrides.len() + out.redundant.len() + out.unreadable.len();
+        assert_eq!(seen, p.process.len() + p.filament.len());
     }
 }
