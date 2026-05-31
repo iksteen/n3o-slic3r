@@ -138,6 +138,14 @@ pub enum SceneEvent {
     /// drops every cached plate / mesh / object and re-fetches via
     /// `scene_snapshot`.
     ProjectLoaded { path: String },
+    /// A foreign (OrcaSlicer / Bambu Studio) project was imported via
+    /// Open project. Emitted right after `ProjectLoaded` (so the scene
+    /// re-syncs first); the report lets the UI tell the user what mapped
+    /// and what was dropped.
+    ProjectImported {
+        path: String,
+        report: crate::core::orca_import::ImportReport,
+    },
 }
 
 impl SceneEvent {
@@ -165,6 +173,7 @@ impl SceneEvent {
             Self::MaterialSlotChanged { .. } => "scene:material_slot_changed",
             Self::ProjectSaved { .. } => "project:saved",
             Self::ProjectLoaded { .. } => "project:loaded",
+            Self::ProjectImported { .. } => "project:imported",
         }
     }
 }

@@ -156,13 +156,32 @@ pub fn project_load(
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<Project, String> {
-    let loaded = format::read_project(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
+    let path_ref = std::path::Path::new(&path);
+    // Open project transparently imports a foreign OrcaSlicer / Bambu
+    // Studio project (no n3o_project.json) instead of erroring.
+    let (loaded, import_report) = match format::read_project(path_ref) {
+        Ok(p) => (p, None),
+        Err(format::ProjectIoError::ForeignProject { .. }) => {
+            let (project, report) =
+                crate::core::orca_import::import(path_ref).map_err(|e| format!("import: {e}"))?;
+            (project, Some(report))
+        }
+        Err(e) => return Err(e.to_string()),
+    };
     let returned = loaded.clone();
     {
         let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
         *p = loaded;
     }
-    emit_all(&window, &[SceneEvent::ProjectLoaded { path: path.clone() }]);
+    // ProjectLoaded first (scene re-syncs), then the import report.
+    let mut events = vec![SceneEvent::ProjectLoaded { path: path.clone() }];
+    if let Some(report) = import_report {
+        events.push(SceneEvent::ProjectImported {
+            path: path.clone(),
+            report,
+        });
+    }
+    emit_all(&window, &events);
     Ok(returned)
 }
 
@@ -180,7 +199,12 @@ pub fn project_new(window: Window, state: State<Arc<Mutex<Project>>>) -> Result<
         let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
         *p = Project::default();
     }
-    emit_all(&window, &[SceneEvent::ProjectLoaded { path: String::new() }]);
+    emit_all(
+        &window,
+        &[SceneEvent::ProjectLoaded {
+            path: String::new(),
+        }],
+    );
     Ok(())
 }
 

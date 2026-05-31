@@ -18,6 +18,7 @@ import {
   save as saveDialog,
   message as messageDialog,
 } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import { SettingsPanelHost } from "./settings/SettingsPanelHost";
 import { PreviewWorkspace } from "./preview/PreviewWorkspace";
 import { useSlicePreviewBridge } from "./preview/useSlicePreviewBridge";
@@ -46,6 +47,22 @@ import {
   type CascadeSources,
 } from "./plugins/pluginCascade";
 import "./App.css";
+
+/** Summary emitted by the backend after importing a foreign
+ * (OrcaSlicer / Bambu Studio) project via Open project. */
+interface ImportReport {
+  objects: number;
+  plates: number;
+  printer_instance: string | null;
+  printer_model: string | null;
+  printer_fallback: boolean;
+  filaments_matched: number;
+  filaments_unmatched: number;
+  settings_applied: number;
+  settings_redundant: number;
+  settings_machine_dropped: number;
+  settings_unmapped: number;
+}
 
 function App() {
   const [mode, setMode] = useState<"scene" | "preview" | "devices">("scene");
@@ -274,6 +291,34 @@ function App() {
       console.error("[printer] create failed", err);
     }
   };
+
+  // A foreign project imported via Open project → show what mapped and
+  // what was dropped, so lossy mapping is never silent.
+  useEffect(() => {
+    const un = listen<{ data: { report: ImportReport } }>(
+      "project:imported",
+      (e) => {
+        const r = e.payload.data.report;
+        const lines = [
+          `${r.objects} object(s) across ${r.plates} plate(s).`,
+          `Printer: ${r.printer_model ?? "?"} → ${r.printer_instance ?? "(none)"}${
+            r.printer_fallback ? " — no exact match; bound a fallback, rebind if needed" : ""
+          }`,
+          `Filaments: ${r.filaments_matched} matched, ${r.filaments_unmatched} not found.`,
+          `Settings: ${r.settings_applied} applied${
+            r.settings_redundant ? `, ${r.settings_redundant} already at default` : ""
+          }.`,
+          `Not imported: ${r.settings_machine_dropped} machine settings (owned by your printer), ${r.settings_unmapped} unrecognized.`,
+        ];
+        void messageDialog(lines.join("\n"), {
+          title: "Imported from OrcaSlicer / Bambu Studio",
+        });
+      },
+    );
+    return () => {
+      void un.then((f) => f());
+    };
+  }, []);
 
   // ----- Project file menu (Open / Save / Save as) -----
   // The backend's source_path is the project's on-disk origin; null
