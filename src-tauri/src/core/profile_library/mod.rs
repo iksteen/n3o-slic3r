@@ -1,6 +1,6 @@
 //! Hierarchical vendor profile library, loaded from disk at startup.
 //!
-//! On-disk layout (root = `profiles/vendor/`):
+//! On-disk layout (root = `profiles/`):
 //!
 //! ```text
 //! <root>/<vendor>/
@@ -165,7 +165,7 @@ pub struct ProfileLibrary {
 static LIBRARY: OnceLock<ProfileLibrary> = OnceLock::new();
 
 /// Explicit init. The Tauri runtime calls this from `setup()` with
-/// the bundled-resources `profiles/vendor` path. Subsequent calls
+/// the bundled-resources `profiles` path. Subsequent calls
 /// are no-ops (`OnceLock` only initializes the first time).
 pub fn init_from(root: PathBuf) {
     let _ = LIBRARY.get_or_init(|| {
@@ -176,7 +176,7 @@ pub fn init_from(root: PathBuf) {
 fn library() -> &'static ProfileLibrary {
     LIBRARY.get_or_init(|| {
         // Test/dev fallback: walk up from the manifest dir to find
-        // `profiles/vendor` in the workspace. A packaged binary
+        // `profiles` in the workspace. A packaged binary
         // *must* explicitly call `init_from` before any lookup; if
         // it doesn't, this fallback will pick up a stale build-time
         // path that doesn't exist post-install and `load` will panic
@@ -185,7 +185,7 @@ fn library() -> &'static ProfileLibrary {
             .parent()
             .expect("workspace root above manifest dir")
             .to_path_buf();
-        let root = workspace_root.join("profiles/vendor");
+        let root = workspace_root.join("profiles");
         ProfileLibrary::load(&root)
             .unwrap_or_else(|e| panic!("profile library load (workspace fallback) failed: {e}"))
     })
@@ -388,7 +388,7 @@ impl ProfileLibrary {
 ///
 /// **Why:** Tauri copies `bundle.resources` into the target dir on
 /// build and doesn't prune directories that have since vanished from
-/// source. A stale `target/<profile>/profiles/vendor/<old-vendor>/`
+/// source. A stale `target/<profile>/profiles/<old-vendor>/`
 /// leftover whose name sorts later than a current vendor's will
 /// silently overwrite the right fragment — same-slug collisions are
 /// load-bearing for slice correctness (plate-temp keys vanished into
@@ -410,7 +410,7 @@ fn insert_fragment<K>(
             new_source = %new_source,
             "profile_library: {kind} fragment slug collision — later file silently \
              overwrites the earlier one. Check for stale leftovers in the resource dir \
-             (`target/<profile>/profiles/vendor/`) or remove the duplicate from source.",
+             (`target/<profile>/profiles/`) or remove the duplicate from source.",
         );
     }
 }

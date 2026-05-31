@@ -8,7 +8,7 @@
 //! `bbs_production_cascade.rs`.
 //!
 //! The fixture lives next to this test (test-only); production code
-//! reads vendor profiles from `profiles/vendor/` via the
+//! reads vendor profiles from `profiles/` via the
 //! `core::profile_library` disk loader.
 //!
 //! NB: The demo cascade hits identities/strings only; surface_kind

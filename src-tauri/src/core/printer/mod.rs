@@ -332,7 +332,7 @@ pub fn filament_catalog_list() -> Vec<FilamentProfile> {
 }
 
 /// Tauri command: bundled vendor filament fragments
-/// (`profiles/vendor/<vendor>/filament/<slug>.toml`). Each entry
+/// (`profiles/<vendor>/filament/<slug>.toml`). Each entry
 /// carries the slug (the wire `filament_identity` the slot panel
 /// stores) plus a display label parsed out of the fragment's
 /// `filament_settings_id` field, plus the base material type for

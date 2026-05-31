@@ -14,7 +14,7 @@ Captured during Phase 7a real-print smoke: the A1 mini's compiled-in
 `wipe_tower_y = 220` default put the tower 40 mm past the back wall
 of the 180 × 180 bed; the print started, the Y axis ran into its
 stop, and the steppers ground audibly. Band-aid fix in
-`profiles/vendor/bbl/printer/bambu-lab-a1-mini/machine.toml` pins
+`profiles/bbl/printer/bambu-lab-a1-mini/machine.toml` pins
 `wipe_tower_x = 5`, `wipe_tower_y = 130`. The fix is per-printer and
 silent — exactly the kind of correctness-by-magic-number this ticket
 exists to replace.

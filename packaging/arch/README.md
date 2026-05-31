@@ -33,7 +33,7 @@ The resulting package installs:
 
 - `/usr/bin/n3o-slic3r` — the Tauri-bundled desktop binary
 - `/usr/lib/libslic3r_ffi.so{,.0}` — the FFI shim libslic3r is wrapped through
-- `/usr/lib/<bundle-id>/resources/profiles/vendor/` — bundled vendor profiles
+- `/usr/lib/<bundle-id>/resources/profiles/` — bundled vendor profiles
 - `/usr/share/applications/n3o-slic3r.desktop` — Tauri-generated desktop entry
 - `/usr/share/icons/hicolor/.../n3o-slic3r.png` — Tauri-bundled icons
 - `/usr/share/licenses/n3o-slic3r/LICENSE` — AGPL-3.0-or-later

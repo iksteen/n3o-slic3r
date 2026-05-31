@@ -32,7 +32,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../profiles/vendor": "profiles/vendor",
+      "../profiles": "profiles",
       "../plugins": "plugins",
       "../assets/calibration": "calibration"
     }

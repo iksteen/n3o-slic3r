@@ -1,7 +1,7 @@
 //! Bundled filament profile registry.
 //!
 //! Thin facade over [`crate::core::profile_library::list_filament_fragments`].
-//! Each vendor filament fragment under `profiles/vendor/<v>/filament/`
+//! Each vendor filament fragment under `profiles/<v>/filament/`
 //! carries the `filament_settings_id` and `filament_type` fields the
 //! cascade context needs to construct a [`FilamentProfile`]; we derive
 //! the picker-facing struct from those instead of keeping a parallel

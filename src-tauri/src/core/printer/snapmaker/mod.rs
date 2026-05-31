@@ -3,7 +3,7 @@
 //! This module owns the *cascade-side* knowledge of the U1 printer
 //! profile: bed identities, toolhead topology, the printer fragment
 //! slug `snapmaker-u1`. Per-toolhead nozzle config (FR-SU-6) is
-//! authored under `profiles/vendor/snapmaker/printer/snapmaker-u1/`.
+//! authored under `profiles/snapmaker/printer/snapmaker-u1/`.
 //!
 //! **Driver-side comms live elsewhere**: `core/driver/snapmaker/`
 //! holds the actual Moonraker HTTP+WS client (PR-7b). FR-SU-1

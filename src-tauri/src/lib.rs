@@ -19,14 +19,14 @@ use slic3r_ffi::init;
 /// into `target/<profile>/` runs only on tracked-file changes and never
 /// prunes, so a source-tree restructure can leave stale files shadowing
 /// the right ones. Dev runs pass an env override (e.g.
-/// `N3O_PROFILE_ROOT=./profiles/vendor` via the npm `tauri` script) and
+/// `N3O_PROFILE_ROOT=./profiles` via the npm `tauri` script) and
 /// read straight from source; production never sets it and gets the
 /// bundled `resource_dir` path.
 ///
 /// A relative override resolves against the workspace root baked in at
 /// compile time (one dir above `src-tauri`), not the runtime CWD —
 /// Tauri's dev mode may set CWD to `src-tauri/`, so a naive
-/// `./profiles/vendor` against process CWD would land in the wrong place.
+/// `./profiles` against process CWD would land in the wrong place.
 fn resource_root<R: tauri::Runtime, M: tauri::Manager<R>>(
     mgr: &M,
     env_key: &str,
@@ -85,7 +85,7 @@ pub fn run() {
             // restructure can leave stale fragments shadowing the right
             // ones (see profile_library's same-slug collision warning
             // for the failure mode). Dev passes
-            // `N3O_PROFILE_ROOT=./profiles/vendor` through the npm `tauri`
+            // `N3O_PROFILE_ROOT=./profiles` through the npm `tauri`
             // script (`cross-env` in package.json) and reads straight from
             // source; production never sets it and gets the bundled
             // `resource_dir` path. The override is explicit so an unset
@@ -95,9 +95,9 @@ pub fn run() {
             // Relative override paths resolve against the workspace root
             // baked in at compile time (one dir above `src-tauri`), not
             // the binary's runtime CWD — Tauri's dev mode may set CWD to
-            // `src-tauri/`, so a naive `./profiles/vendor` resolved
+            // `src-tauri/`, so a naive `./profiles` resolved
             // against process CWD would land at the wrong place.
-            let profiles_root = resource_root(app, "N3O_PROFILE_ROOT", "profiles/vendor");
+            let profiles_root = resource_root(app, "N3O_PROFILE_ROOT", "profiles");
             core::profile_library::init_from(profiles_root);
             tracing::info!("profile library loaded");
 

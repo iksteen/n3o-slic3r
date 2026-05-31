@@ -54,7 +54,7 @@ pub struct PrinterProfile {
 
     /// Build-plate identities this printer can target. Derived from
     /// the bed fragments bundled at
-    /// `profiles/vendor/<vendor>/printer/<slug>/beds/<id>.toml` — the
+    /// `profiles/<vendor>/printer/<slug>/beds/<id>.toml` — the
     /// registry populates this in `bundled_catalog`/`lookup` from
     /// `bundled_beds_for_printer(slug)`. `#[serde(default)]` so
     /// printer TOMLs don't need to repeat the list.

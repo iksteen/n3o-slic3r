@@ -884,7 +884,7 @@ mod tests {
     fn slot_filament_context_populates_predicates_from_lookup() {
         use crate::core::cascade::resolver::Context;
         // A bundled filament with known shape — generic-pla is shipped
-        // by the converter under profiles/vendor/generic/filament/.
+        // by the converter under profiles/generic/filament/.
         let ctx = slot_filament_context("generic-pla", "Snapmaker U1", "Textured PEI Plate");
         assert_eq!(ctx.predicate_value("filament.type"), Some("PLA"));
         // filament.name carries the FilamentProfile.identity string,
