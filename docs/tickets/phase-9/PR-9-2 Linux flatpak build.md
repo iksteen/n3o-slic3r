@@ -1,6 +1,34 @@
 # PR-9-2 — Linux flatpak build
 
-Status: ⬜ open. The phase's **long pole**.
+Status: 🟡 builds + runs on Arch (2026-05-31); multi-distro + GPU-visual
+confirmation pending. The phase's **long pole** — core deliverable done.
+
+> **Outcome.** `packaging/flatpak/` builds a flatpak that compiles
+> everything in-sandbox against the runtime, bundles `libslic3r_ffi.so` +
+> the resources tree, and launches with the embedded production frontend.
+> Validated on Arch: builds, installs (`flatpak install`), and runs — the
+> backend fully initializes (libslic3r, the env-pointed resource root,
+> profile + instance libraries, plugin host) and the **project lead
+> visually confirmed the n3o UI loads** (the embedded production
+> frontend, not a stray dev server).
+>
+> Divergences from this ticket's original wording, recorded per PRD §11.3:
+> - **Runtime is GNOME 50 (freedesktop 25.08), not the bare Freedesktop
+>   SDK.** Only the GNOME runtime ships the webkitgtk Tauri needs on
+>   Linux. Toolchain via rust-stable + node22 + **llvm21** SDK
+>   extensions (llvm21 supplies libclang for slic3r-ffi's bindgen).
+> - **Two extra modules**: `glu` (the SDK/runtime omit libGLU, which
+>   GLEW needs) and `orca-deps` (the dep tree, cached independently).
+> - **`WEBKIT_DISABLE_DMABUF_RENDERER=1`** in finish-args — the webkit
+>   DMABUF renderer trips over NVIDIA/Wayland (protocol error 71).
+> - Must build via **`tauri build`**, not bare `cargo build`, or the
+>   webview loads `devUrl` (localhost:1420) instead of the embedded UI.
+>
+> **Still open:** clean install+run on **Ubuntu and Fedora** (needs
+> those environments — folds into the PR-9-8 audit); a visual check that
+> the 3D viewport renders with the DMABUF renderer off; the WSL2
+> best-effort note; and the Flathub-shape offline-vendored manifest
+> (post-MVP).
 
 **Scope.** Produce a flatpak that bundles the Tauri app, its
 `libslic3r_ffi.so`, the webview/runtime deps, and the `resources/`

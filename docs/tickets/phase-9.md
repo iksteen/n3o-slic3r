@@ -83,7 +83,7 @@ start immediately — they're independent. The rest:
 | Deliverable | Status | Ticket |
 |-------------|--------|--------|
 | Slice-path / cascade-resolver correctness gate (release blocker) | ✅ done | [PR-9-1](phase-9/PR-9-1%20Slice-path%20correctness%20gate.md) |
-| Linux flatpak build (manifest, runtime, bundled libslic3r + webview, GPU) | ⬜ open | [PR-9-2](phase-9/PR-9-2%20Linux%20flatpak%20build.md) |
+| Linux flatpak build (manifest, runtime, bundled libslic3r + webview, GPU) | 🟡 builds + runs on Arch | [PR-9-2](phase-9/PR-9-2%20Linux%20flatpak%20build.md) |
 | Distribution: self-hosted `.flatpakref` + repo | ⬜ open | [PR-9-3](phase-9/PR-9-3%20Distribution%20channel.md) |
 | First-run onboarding (pick printers, prompt for access info) | ⬜ open | [PR-9-4](phase-9/PR-9-4%20First-run%20onboarding.md) |
 | Project file format `.3mf` finalized (FR-MP-4) | ⬜ open | [PR-9-5](phase-9/PR-9-5%20Project%20file%20format.md) |
