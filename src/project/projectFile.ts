@@ -7,6 +7,11 @@
 // command.
 import { invoke } from "@tauri-apps/api/core";
 
+/** Replace the current project with a fresh, empty one ("Untitled"). */
+export function projectNew(): Promise<void> {
+  return invoke("project_new");
+}
+
 /** Save the project to `path`, leaving its source path unchanged. */
 export function projectSave(path: string): Promise<void> {
   return invoke("project_save", { path });

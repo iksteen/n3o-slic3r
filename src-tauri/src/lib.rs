@@ -227,6 +227,7 @@ pub fn run() {
             core::project::commands::project_save,
             core::project::commands::project_save_as,
             core::project::commands::project_load,
+            core::project::commands::project_new,
             core::project::commands::project_autosave_enable,
             core::project::commands::project_autosave_disable,
             core::project::commands::project_autosave_list,

@@ -166,6 +166,24 @@ pub fn project_load(
     Ok(returned)
 }
 
+/// Reset the in-memory project to a fresh, empty default, **replacing**
+/// the current one wholesale. Emits `project:loaded` (with an empty
+/// path — there's no file yet) so the frontend mirror throws out its
+/// cached scene and re-syncs via `scene_snapshot`, the same path as
+/// loading a file. The new project has `source_path = None`, so the UI
+/// shows it as "Untitled". The previous project's autosave file is
+/// keyed by its own uuid and survives, so this stays recoverable.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn project_new(window: Window, state: State<Arc<Mutex<Project>>>) -> Result<(), String> {
+    {
+        let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
+        *p = Project::default();
+    }
+    emit_all(&window, &[SceneEvent::ProjectLoaded { path: String::new() }]);
+    Ok(())
+}
+
 // ---- Autosave --------------------------------------------
 
 /// Start the autosave worker if not already running. Idempotent.

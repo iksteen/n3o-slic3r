@@ -12,7 +12,7 @@ import {
   useAutosaveRecoveryGate,
 } from "./project/AutosaveRecoveryDialog";
 import { autosaveEnable } from "./project/autosaveCommands";
-import { projectLoad, projectSave, projectSaveAs } from "./project/projectFile";
+import { projectNew, projectLoad, projectSave, projectSaveAs } from "./project/projectFile";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { SettingsPanelHost } from "./settings/SettingsPanelHost";
 import { PreviewWorkspace } from "./preview/PreviewWorkspace";
@@ -281,6 +281,14 @@ function App() {
     : "Untitled.3mf";
   const projectFilters = [{ name: "n3o project", extensions: ["3mf"] }];
 
+  const handleNewProject = async (): Promise<void> => {
+    try {
+      await projectNew(); // → project:loaded → session + scene resync
+    } catch (err) {
+      console.error("[project] new failed", err);
+    }
+  };
+
   const handleOpenProject = async (): Promise<void> => {
     try {
       const picked = await openDialog({ multiple: false, filters: projectFilters });
@@ -335,6 +343,7 @@ function App() {
         {session.snapshot && (
           <ProjectMenu
             projectName={projectName}
+            onNewProject={() => void handleNewProject()}
             onOpenProject={() => void handleOpenProject()}
             onSaveProject={() => void handleSaveProject()}
             onSaveProjectAs={() => void handleSaveProjectAs()}

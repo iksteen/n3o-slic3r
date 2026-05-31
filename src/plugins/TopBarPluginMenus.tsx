@@ -88,6 +88,7 @@ export interface ProjectMenuProps {
   /** The current project's filename (e.g. "thing.3mf"), or
    * "Untitled.3mf" when the project has never been saved. */
   projectName?: string | null;
+  onNewProject: () => void;
   onOpenProject: () => void;
   onSaveProject: () => void;
   onSaveProjectAs: () => void;
@@ -97,6 +98,7 @@ export interface ProjectMenuProps {
 
 export function ProjectMenu({
   projectName,
+  onNewProject,
   onOpenProject,
   onSaveProject,
   onSaveProjectAs,
@@ -118,6 +120,9 @@ export function ProjectMenu({
       {open && (
         <div className="tb-menu" role="menu">
           <div className="tb-menu-section">Project</div>
+          <button type="button" className="tb-menu-item" role="menuitem" onClick={act(onNewProject)}>
+            <span>New project</span>
+          </button>
           <button type="button" className="tb-menu-item" role="menuitem" onClick={act(onOpenProject)}>
             <span>Open project…</span>
           </button>
