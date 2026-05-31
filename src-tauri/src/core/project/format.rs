@@ -72,6 +72,11 @@ pub enum ProjectIoError {
     /// written by us (or by a future / older format version that
     /// removed the entry).
     NotAProjectFile { path: PathBuf },
+    /// No `n3o_project.json`, but the file carries OrcaSlicer / Bambu
+    /// Studio project metadata (`project_settings.config`). It's a
+    /// foreign project — openable only via the (in-progress) importer,
+    /// not as an n3o project. Distinguished so the UI can say so.
+    ForeignProject { path: PathBuf },
     /// The geometry side of the file disagrees with the project
     /// skeleton: the 3MF has a different number of meshes than
     /// the JSON's mesh map. Symptomatic of a corrupted file or a
@@ -100,6 +105,15 @@ impl std::fmt::Display for ProjectIoError {
                 f,
                 "{}: no {METADATA_FILENAME} — not an n3o-slic3r project",
                 path.display(),
+            ),
+            Self::ForeignProject { path } => write!(
+                f,
+                "{} is an OrcaSlicer / Bambu Studio project, not an n3o \
+                 project — n3o can't open it as a project yet. (Importing \
+                 OrcaSlicer projects is in progress.)",
+                path.file_name()
+                    .map(|n| n.to_string_lossy())
+                    .unwrap_or_default(),
             ),
             Self::GeometryMismatch {
                 path,
@@ -252,9 +266,24 @@ pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoEr
 /// subsequent "save" calls overwrite the loaded file; `save_as`
 /// is the surface for "save to a different path."
 pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
-    // 1. JSON skeleton.
-    let raw = read_3mf_extra_entry(input, METADATA_FILENAME)?
-        .ok_or_else(|| ProjectIoError::NotAProjectFile { path: input.into() })?;
+    // 1. JSON skeleton. If it's absent, distinguish a foreign
+    //    OrcaSlicer/Bambu project (has project_settings.config) from a
+    //    file that isn't a slicer project at all, so the UI can point
+    //    the user at the importer rather than a generic "not a project".
+    let raw = match read_3mf_extra_entry(input, METADATA_FILENAME)? {
+        Some(raw) => raw,
+        None => {
+            let is_foreign = read_3mf_extra_entry(input, "Metadata/project_settings.config")
+                .ok()
+                .flatten()
+                .is_some();
+            return Err(if is_foreign {
+                ProjectIoError::ForeignProject { path: input.into() }
+            } else {
+                ProjectIoError::NotAProjectFile { path: input.into() }
+            });
+        }
+    };
     let file: ProjectFile = serde_json::from_slice(&raw).map_err(|e| ProjectIoError::Json {
         path: input.into(),
         message: format!("parse: {e}"),
@@ -507,6 +536,24 @@ mod tests {
         let err = read_project(&path).unwrap_err();
         assert!(matches!(err, ProjectIoError::NotAProjectFile { .. }));
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn read_project_flags_a_foreign_orca_project() {
+        // An OrcaSlicer/BBS project (project_settings.config, no
+        // n3o_project.json) is distinguished from "not a project" so the
+        // UI can point at the importer. fourcolor.3mf is such a file.
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("examples/spike3/fourcolor.3mf");
+        let err = read_project(&fixture).unwrap_err();
+        assert!(
+            matches!(err, ProjectIoError::ForeignProject { .. }),
+            "expected ForeignProject, got {err:?}",
+        );
+        // And the message names OrcaSlicer (the whole point).
+        assert!(err.to_string().contains("OrcaSlicer"));
     }
 
     #[test]

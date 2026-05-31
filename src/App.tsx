@@ -13,7 +13,11 @@ import {
 } from "./project/AutosaveRecoveryDialog";
 import { autosaveEnable } from "./project/autosaveCommands";
 import { projectNew, projectLoad, projectSave, projectSaveAs } from "./project/projectFile";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import {
+  open as openDialog,
+  save as saveDialog,
+  message as messageDialog,
+} from "@tauri-apps/plugin-dialog";
 import { SettingsPanelHost } from "./settings/SettingsPanelHost";
 import { PreviewWorkspace } from "./preview/PreviewWorkspace";
 import { useSlicePreviewBridge } from "./preview/useSlicePreviewBridge";
@@ -281,11 +285,19 @@ function App() {
     : "Untitled.3mf";
   const projectFilters = [{ name: "n3o project", extensions: ["3mf"] }];
 
+  // Surface a project file-op failure to the user (a native dialog), not
+  // just the console — opening e.g. an OrcaSlicer .3mf via "Open project"
+  // otherwise looks like nothing happened.
+  const reportProjectError = (action: string, err: unknown): void => {
+    console.error(`[project] ${action} failed`, err);
+    void messageDialog(String(err), { title: `${action} failed`, kind: "error" });
+  };
+
   const handleNewProject = async (): Promise<void> => {
     try {
       await projectNew(); // → project:loaded → session + scene resync
     } catch (err) {
-      console.error("[project] new failed", err);
+      reportProjectError("New project", err);
     }
   };
 
@@ -295,7 +307,7 @@ function App() {
       if (typeof picked !== "string") return; // cancelled
       await projectLoad(picked); // → project:loaded → session refetch
     } catch (err) {
-      console.error("[project] open failed", err);
+      reportProjectError("Open project", err);
     }
   };
 
@@ -309,7 +321,7 @@ function App() {
       if (typeof picked !== "string") return; // cancelled
       await projectSaveAs(picked); // adopts the new source_path
     } catch (err) {
-      console.error("[project] save-as failed", err);
+      reportProjectError("Save project as", err);
     }
   };
 
@@ -322,7 +334,7 @@ function App() {
     try {
       await projectSave(sourcePath);
     } catch (err) {
-      console.error("[project] save failed", err);
+      reportProjectError("Save project", err);
     }
   };
 
