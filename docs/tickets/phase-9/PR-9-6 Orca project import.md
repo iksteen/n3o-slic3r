@@ -1,6 +1,6 @@
 # PR-9-6 — import OrcaSlicer `.3mf` projects (geometry + settings)
 
-Status: 🟡 working end-to-end (2026-05-31); two refinements left. Open
+Status: ✅ done (2026-06-01). Open
 project imports a foreign Bambu/Orca `.3mf`: `core::orca_import` parses
 `project_settings.config`, partitions keys by FFI bucket (machine
 dropped), builds the n3o project (geometry via `load_3mf`, binds an
@@ -22,9 +22,20 @@ a `ProjectImported` event. Tested against the real `case-bambu-studio.3mf`.
 >    migrates to `rectilinear`) is dropped to `settings_incompatible` and
 >    reported, not injected as an invalid override (4 on
 >    `case-bambu-studio.3mf`).
-> 2. **Verify-via-gcode** — open `case-bambu-studio.3mf`, slice, confirm
->    the imported support tweaks (tree-on-plate-only, top-Z-distance,
->    first-layer-gap) survive into the output.
+>
+>    **Process-preset adoption (2026-06-01, `91caea3`)** — the import now
+>    maps the project's `print_settings_id` ("0.20mm Strength @BBL A1M") to
+>    a bundled process slug and sets it as the plate's `quality_profile`
+>    (per-plate process binding). The baseline then resolves against the
+>    project's *own* process, so its preset values (e.g.
+>    `outer_wall_speed = 60`) resolve natively instead of landing as
+>    overrides — the real fix for the earlier lossy-vs-noisy bind. Falls
+>    back to the instance's default process when we ship no match.
+> 2. ✅ **Verify-via-gcode** (2026-06-01) — imported `case-bambu-studio.3mf`
+>    (0.20mm Strength) slices its outer walls at 60 mm/s (`G1 F3600`), the
+>    Strength preset value, not 200 — confirming the adopted process reaches
+>    libslic3r's motion, not just the config echo. (`support_top_z_distance`
+>    etc. likewise survive as overrides.)
 >
 > **Deferred follow-up (revisit later — project lead, 2026-05-31):**
 > import from `different_settings_to_system` (the project's own list of
