@@ -13,6 +13,7 @@ pub mod driver;
 pub mod filament;
 pub mod gcode;
 pub mod logging;
+pub mod orca_import;
 pub mod paths;
 pub mod plugin;
 pub mod preview;
