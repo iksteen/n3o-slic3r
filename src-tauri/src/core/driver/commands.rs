@@ -589,7 +589,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("plugin.toml"),
-            "name=\"p\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nhooks=[\"pre_send\"]\n",
+            "name=\"p\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\nhooks=[\"pre_send\"]\n\
+             enabled_by_default=true\n",
         )
         .unwrap();
         std::fs::write(dir.join("main.lua"), lua).unwrap();
@@ -607,7 +608,8 @@ mod tests {
         std::fs::write(
             dir.join("plugin.toml"),
             "name=\"u1-only\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\n\
-             hooks=[\"pre_send\"]\nprinter_compatibility=[\"Snapmaker U1\"]\n",
+             hooks=[\"pre_send\"]\nprinter_compatibility=[\"Snapmaker U1\"]\n\
+             enabled_by_default=true\n",
         )
         .unwrap();
         std::fs::write(
