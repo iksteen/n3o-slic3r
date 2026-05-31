@@ -15,6 +15,13 @@ a `ProjectImported` event. Tested against the real `case-bambu-studio.3mf`.
 >    against it; redundant keys drop. On `case-bambu-studio.3mf` the
 >    applied count falls 299 → 189 (110 redundant). The cascade panel now
 >    shows genuine deviations, not the whole resolved config.
+>
+>    Enum-value validation: a foreign enum value our engine's
+>    `OptionDef.enum_values` doesn't list (a fork-divergence; e.g. Bambu's
+>    `ironing_pattern = "zig-zag"`, which OrcaSlicer's own `handle_legacy`
+>    migrates to `rectilinear`) is dropped to `settings_incompatible` and
+>    reported, not injected as an invalid override (4 on
+>    `case-bambu-studio.3mf`).
 > 2. **Verify-via-gcode** — open `case-bambu-studio.3mf`, slice, confirm
 >    the imported support tweaks (tree-on-plate-only, top-Z-distance,
 >    first-layer-gap) survive into the output.

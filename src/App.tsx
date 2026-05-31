@@ -61,6 +61,7 @@ interface ImportReport {
   filaments_unmatched: number;
   settings_applied: number;
   settings_redundant: number;
+  settings_incompatible: number;
   settings_machine_dropped: number;
   settings_unmapped: number;
 }
@@ -308,6 +309,8 @@ function App() {
           `Filaments: ${r.filaments_matched} matched, ${r.filaments_unmatched} not found.`,
           `Settings: ${r.settings_applied} applied${
             r.settings_redundant ? `, ${r.settings_redundant} already at default` : ""
+          }${
+            r.settings_incompatible ? `, ${r.settings_incompatible} with values this engine doesn't recognize (reset to default)` : ""
           }.`,
           `Not imported: ${r.settings_machine_dropped} printer/machine settings (your printer's own), ${r.settings_unmapped} settings this engine doesn't support (Bambu Studio extras).`,
         ];

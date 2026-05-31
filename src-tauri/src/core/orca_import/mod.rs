@@ -262,6 +262,13 @@ pub struct OverrideOutcome {
     pub redundant: Vec<String>,
     /// Process/Filament keys we couldn't read a value for (skipped).
     pub unreadable: Vec<String>,
+    /// Enum keys whose foreign value isn't in our engine's value set —
+    /// a fork-divergence (e.g. Bambu's `ironing_pattern = "zig-zag"`,
+    /// which OrcaSlicer's own `handle_legacy` migrates to `rectilinear`;
+    /// our set is `rectilinear`/`concentric`). Importing the raw value
+    /// would inject an option libslic3r rejects, so it's dropped and
+    /// reported (the cascade resolves these keys from our default).
+    pub incompatible: Vec<String>,
 }
 
 /// Compute the overrides to import: for each **Process** + **Filament**
@@ -275,10 +282,17 @@ pub struct OverrideOutcome {
 /// When in doubt the key is kept (an absent baseline entry counts as a
 /// difference): a redundant override is harmless, a *missing* one would
 /// silently lose the project's setting.
+///
+/// `enum_sets` maps an enum key to its valid value set (our engine's
+/// `OptionDef.enum_values`). A foreign value outside that set — a
+/// fork-divergence our libslic3r would reject — is dropped to
+/// `incompatible` rather than imported; non-enum keys aren't in the map
+/// and skip the check.
 pub fn compute_overrides(
     foreign: &OrcaProjectSettings,
     partition: &KeyPartition,
     baseline: &BTreeMap<String, String>,
+    enum_sets: &BTreeMap<String, Vec<String>>,
 ) -> OverrideOutcome {
     let mut out = OverrideOutcome::default();
     for key in partition.process.iter().chain(partition.filament.iter()) {
@@ -288,12 +302,25 @@ pub fn compute_overrides(
         };
         match baseline.get(key) {
             Some(base) if values_equal(base, &value) => out.redundant.push(key.clone()),
+            _ if !enum_value_known(&value, enum_sets.get(key)) => {
+                out.incompatible.push(key.clone())
+            }
             _ => {
                 out.overrides.insert(key.clone(), value);
             }
         }
     }
     out
+}
+
+/// Whether every element of a (possibly per-extruder, comma-joined) enum
+/// value is in our engine's value set. `valid = None` means the key isn't
+/// an enum we track — nothing to validate, so it passes.
+fn enum_value_known(value: &str, valid: Option<&Vec<String>>) -> bool {
+    match valid {
+        Some(set) => value.split(',').all(|el| set.iter().any(|v| v == el)),
+        None => true,
+    }
 }
 
 /// Collapse a comma-joined vector whose elements are all equal to its
@@ -354,6 +381,9 @@ pub struct ImportReport {
     pub settings_applied: usize,
     /// Settings that matched our baseline and were dropped as redundant.
     pub settings_redundant: usize,
+    /// Enum settings whose foreign value our engine doesn't recognize
+    /// (fork-divergence), dropped rather than imported as invalid.
+    pub settings_incompatible: usize,
     /// Printer/machine settings dropped (owned by the bound printer).
     pub settings_machine_dropped: usize,
     /// Keys with no home in our model.
@@ -541,7 +571,15 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
         Some((instance, _)) => resolve_baseline(instance, &settings),
         None => BTreeMap::new(),
     };
-    let outcome = compute_overrides(&settings, &part, &baseline);
+    // Valid value set per enum option, from our engine's schema — used to
+    // drop foreign enum values our libslic3r would reject (fork-divergence;
+    // e.g. Bambu's `ironing_pattern = "zig-zag"`).
+    let enum_sets: BTreeMap<String, Vec<String>> = slic3r_ffi::option_defs()
+        .into_iter()
+        .filter(|d| !d.enum_values.is_empty())
+        .map(|d| (d.key, d.enum_values))
+        .collect();
+    let outcome = compute_overrides(&settings, &part, &baseline, &enum_sets);
     for plate in project.plates.iter_mut() {
         for (k, v) in &outcome.overrides {
             plate.project_overrides.insert(k.clone(), v.clone());
@@ -569,6 +607,7 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
         filaments_unmatched: unmatched,
         settings_applied: outcome.overrides.len(),
         settings_redundant: outcome.redundant.len(),
+        settings_incompatible: outcome.incompatible.len(),
         settings_machine_dropped: part.machine.len(),
         settings_unmapped: part.unmapped.len(),
     };
@@ -693,7 +732,9 @@ mod tests {
         let mut baseline = BTreeMap::new();
         baseline.insert(pinned.clone(), s.canonical(&pinned).unwrap());
 
-        let out = compute_overrides(&s, &p, &baseline);
+        // No enum validation in this unit (FFI not initialized here); an
+        // empty set leaves every value valid.
+        let out = compute_overrides(&s, &p, &baseline, &BTreeMap::new());
 
         // The pinned key matched the baseline → redundant, not overridden.
         assert!(out.redundant.contains(&pinned));
@@ -703,7 +744,10 @@ mod tests {
         // A machine key is never an override (partition dropped it).
         assert!(!out.overrides.contains_key("machine_start_gcode"));
         // Every Process+Filament key is accounted for.
-        let seen = out.overrides.len() + out.redundant.len() + out.unreadable.len();
+        let seen = out.overrides.len()
+            + out.redundant.len()
+            + out.unreadable.len()
+            + out.incompatible.len();
         assert_eq!(seen, p.process.len() + p.filament.len());
     }
 
@@ -778,6 +822,19 @@ mod tests {
             plate_ov.get("support_top_z_distance").map(String::as_str),
             Some("0.3"),
             "the genuine support tweak should import",
+        );
+
+        // Fork-divergent enum value is dropped, not injected: the project's
+        // `ironing_pattern = "zig-zag"` (a Bambu value OrcaSlicer's
+        // handle_legacy migrates) isn't in our set (rectilinear/concentric),
+        // so it's reported incompatible and never reaches the overrides.
+        assert!(
+            !plate_ov.contains_key("ironing_pattern"),
+            "invalid enum value must not be imported as an override",
+        );
+        assert!(
+            report.settings_incompatible > 0,
+            "expected zig-zag ironing_pattern reported incompatible",
         );
     }
 }
