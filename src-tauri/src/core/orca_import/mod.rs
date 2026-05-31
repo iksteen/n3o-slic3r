@@ -148,6 +148,72 @@ pub fn partition(settings: &OrcaProjectSettings) -> KeyPartition {
     p
 }
 
+// ---- printer / filament inference -----------------------------------
+
+/// Strip OrcaSlicer's per-printer `@<suffix>` variant tag from a preset
+/// name ("Bambu PLA Basic @BBL A1M" → "Bambu PLA Basic"). Our bundled
+/// fragments are consolidated under the un-suffixed base name, so we
+/// compare on the base.
+fn base_preset_name(name: &str) -> &str {
+    name.split(" @").next().unwrap_or(name).trim()
+}
+
+/// The bundled printer an imported project binds to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrinterMatch {
+    /// Catalog identity bound to (always set when the catalog is
+    /// non-empty — a fallback still picks one).
+    pub identity: String,
+    /// True when `printer_model` matched no bundled printer and we fell
+    /// back. Flagged in the report; machine settings are dropped
+    /// regardless, so a fallback bind is safe.
+    pub fallback: bool,
+}
+
+/// Map a BBS/Orca `printer_model` to a bundled printer: exact match on
+/// the model name, else the first catalog entry flagged as a fallback.
+/// `None` only when no printers are bundled.
+pub fn infer_printer(printer_model: Option<&str>) -> Option<PrinterMatch> {
+    let catalog = crate::core::profile_library::printer_catalog();
+    if let Some(model) = printer_model {
+        if let Some(e) = catalog.iter().find(|e| e.profile.model == model) {
+            return Some(PrinterMatch {
+                identity: e.identity.clone(),
+                fallback: false,
+            });
+        }
+    }
+    catalog.first().map(|e| PrinterMatch {
+        identity: e.identity.clone(),
+        fallback: true,
+    })
+}
+
+/// The bundled filament a project slot maps to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilamentMatch {
+    /// The preset name as authored (suffix and all), for the report.
+    pub requested: String,
+    /// Bundled fragment identity (the `SlotBinding.filament_identity`
+    /// wire form) if matched by base name; `None` if unmatched — the
+    /// slot keeps the instance default and the report flags it.
+    pub identity: Option<String>,
+}
+
+/// Map a BBS/Orca `filament_settings_id` ("Bambu PLA Basic @BBL A1M") to
+/// a bundled fragment by base name (suffix stripped).
+pub fn infer_filament(filament_settings_id: &str) -> FilamentMatch {
+    let want = base_preset_name(filament_settings_id);
+    let identity = crate::core::profile_library::list_filament_fragments()
+        .iter()
+        .find(|f| base_preset_name(&f.display_name) == want)
+        .map(|f| f.identity.clone());
+    FilamentMatch {
+        requested: filament_settings_id.to_owned(),
+        identity,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,5 +276,33 @@ mod tests {
             .filter(|k| !IDENTITY_KEYS.contains(&k.as_str()))
             .count();
         assert_eq!(total, non_identity);
+    }
+
+    #[test]
+    fn infers_a_bundled_printer_and_falls_back_for_unknown() {
+        // The fixture targets the A1 mini, which we ship → exact bind.
+        let m = infer_printer(Some("Bambu Lab A1 mini")).expect("catalog non-empty");
+        assert!(!m.fallback, "A1 mini should match exactly");
+        let entry = crate::core::profile_library::printer_catalog_lookup(&m.identity)
+            .expect("bound identity is in the catalog");
+        assert_eq!(entry.profile.model, "Bambu Lab A1 mini");
+
+        // An unknown model falls back (still binds something, flagged).
+        let f = infer_printer(Some("Frobozz MagiPrint 9000")).expect("catalog non-empty");
+        assert!(f.fallback, "unknown model must fall back");
+    }
+
+    #[test]
+    fn infers_filament_by_base_name_stripping_the_variant_suffix() {
+        // The project's "@BBL A1M" variant maps to our consolidated
+        // "Bambu PLA Basic" fragment by base name.
+        let m = infer_filament("Bambu PLA Basic @BBL A1M");
+        assert!(
+            m.identity.is_some(),
+            "expected a bundled match for Bambu PLA Basic, got {m:?}",
+        );
+        // An unknown filament stays unbound (slot keeps the default).
+        let u = infer_filament("Nonexistent Filament @XYZ");
+        assert!(u.identity.is_none());
     }
 }
