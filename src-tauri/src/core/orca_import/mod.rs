@@ -293,6 +293,7 @@ pub fn compute_overrides(
     partition: &KeyPartition,
     baseline: &BTreeMap<String, String>,
     enum_sets: &BTreeMap<String, Vec<String>>,
+    nonneg: &std::collections::HashSet<String>,
 ) -> OverrideOutcome {
     let mut out = OverrideOutcome::default();
     for key in partition.process.iter().chain(partition.filament.iter()) {
@@ -302,7 +303,15 @@ pub fn compute_overrides(
         };
         match baseline.get(key) {
             Some(base) if values_equal(base, &value) => out.redundant.push(key.clone()),
+            // Fork-divergent values our engine would reject: an enum value
+            // outside its set, or a negative number for an option whose
+            // range starts at >= 0 (e.g. Bambu's `tree_support_wall_count =
+            // -1` / `raft_first_layer_expansion = -1` "auto" sentinels, where
+            // Orca's min is 0). Dropped + reported, not injected.
             _ if !enum_value_known(&value, enum_sets.get(key)) => {
+                out.incompatible.push(key.clone())
+            }
+            _ if negative_for_nonneg_option(&value, nonneg.contains(key)) => {
                 out.incompatible.push(key.clone())
             }
             _ => {
@@ -321,6 +330,23 @@ fn enum_value_known(value: &str, valid: Option<&Vec<String>>) -> bool {
         Some(set) => value.split(',').all(|el| set.iter().any(|v| v == el)),
         None => true,
     }
+}
+
+/// Whether a (possibly per-extruder, comma-joined) value is a negative
+/// number for an option whose declared range starts at >= 0. `nonneg` is
+/// true only for numeric options whose `min >= 0`; for those, a negative
+/// element is a fork-divergent sentinel our engine can't represent (Bambu's
+/// `-1` "auto" for `tree_support_wall_count` / `raft_first_layer_expansion`).
+///
+/// Deliberately narrow: it does NOT enforce a *positive* lower bound or the
+/// upper bound. Those are GUI hints in PrintConfig.cpp, and valid sentinels
+/// sit outside them — e.g. `wall_filament = 0` (the "inherit the object's
+/// filament" value, below its GUI `min = 1`) must NOT be dropped.
+fn negative_for_nonneg_option(value: &str, nonneg: bool) -> bool {
+    nonneg
+        && value
+            .split(',')
+            .any(|el| matches!(el.trim().parse::<f64>(), Ok(v) if v < -1e-9))
 }
 
 /// Collapse a comma-joined vector whose elements are all equal to its
@@ -600,15 +626,32 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
         Some((instance, _)) => resolve_baseline(instance, &settings, process_slug.as_deref()),
         None => BTreeMap::new(),
     };
-    // Valid value set per enum option, from our engine's schema — used to
-    // drop foreign enum values our libslic3r would reject (fork-divergence;
-    // e.g. Bambu's `ironing_pattern = "zig-zag"`).
-    let enum_sets: BTreeMap<String, Vec<String>> = slic3r_ffi::option_defs()
-        .into_iter()
+    // Per-option validity from our engine's schema, used to drop foreign
+    // values our libslic3r would reject (fork-divergence): the enum value
+    // set (e.g. Bambu's `ironing_pattern = "zig-zag"`) and the set of numeric
+    // options that disallow negatives (`min >= 0`), to catch Bambu's `-1`
+    // "auto" sentinels (`tree_support_wall_count`, `raft_first_layer_expansion`).
+    // Built in one pass over `option_defs`.
+    let defs = slic3r_ffi::option_defs();
+    let enum_sets: BTreeMap<String, Vec<String>> = defs
+        .iter()
         .filter(|d| !d.enum_values.is_empty())
-        .map(|d| (d.key, d.enum_values))
+        .map(|d| (d.key.clone(), d.enum_values.clone()))
         .collect();
-    let outcome = compute_overrides(&settings, &part, &baseline, &enum_sets);
+    let nonneg: std::collections::HashSet<String> = defs
+        .iter()
+        .filter(|d| {
+            matches!(
+                d.ty,
+                slic3r_ffi::OptType::Int
+                    | slic3r_ffi::OptType::Ints
+                    | slic3r_ffi::OptType::Float
+                    | slic3r_ffi::OptType::Floats
+            ) && d.min >= 0.0
+        })
+        .map(|d| d.key.clone())
+        .collect();
+    let outcome = compute_overrides(&settings, &part, &baseline, &enum_sets, &nonneg);
     for plate in project.plates.iter_mut() {
         plate.quality_profile = process_slug.clone();
         for (k, v) in &outcome.overrides {
@@ -762,9 +805,15 @@ mod tests {
         let mut baseline = BTreeMap::new();
         baseline.insert(pinned.clone(), s.canonical(&pinned).unwrap());
 
-        // No enum validation in this unit (FFI not initialized here); an
-        // empty set leaves every value valid.
-        let out = compute_overrides(&s, &p, &baseline, &BTreeMap::new());
+        // No enum/negative validation in this unit (FFI not initialized
+        // here); empty sets leave every value valid.
+        let out = compute_overrides(
+            &s,
+            &p,
+            &baseline,
+            &BTreeMap::new(),
+            &std::collections::HashSet::new(),
+        );
 
         // The pinned key matched the baseline → redundant, not overridden.
         assert!(out.redundant.contains(&pinned));
@@ -881,6 +930,24 @@ mod tests {
         assert!(
             report.settings_incompatible > 0,
             "expected zig-zag ironing_pattern reported incompatible",
+        );
+
+        // Out-of-range numeric value is dropped too: case.3mf carries
+        // `tree_support_wall_count = -1` (Bambu's "auto" sentinel), but our
+        // engine's range is [0,2], so it's reported incompatible, not
+        // imported as the invalid -1.
+        assert!(
+            !plate_ov.contains_key("tree_support_wall_count"),
+            "negative value for a non-negative option must not be imported",
+        );
+        // ...but a valid sentinel BELOW a positive GUI min is NOT dropped:
+        // `wall_filament = 0` ("inherit the object's filament", GUI min=1) is
+        // a real value libslic3r accepts, so it's kept as an override rather
+        // than swept up as out-of-range.
+        assert_eq!(
+            plate_ov.get("wall_filament").map(String::as_str),
+            Some("0"),
+            "wall_filament=0 (valid inherit sentinel) must be kept, not dropped",
         );
     }
 }
