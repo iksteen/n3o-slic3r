@@ -19,7 +19,7 @@ Usage:
   import_process_profile.py \\
       --root external/OrcaSlicer/resources/profiles \\
       --leaf "BBL/process/0.20mm Standard @BBL A1M.json" \\
-      --out profiles/bbl/printer/bambu-lab-a1-mini/processes/0.20mm-standard-bbl-a1m.toml
+      --out resources/profiles/bbl/printer/bambu-lab-a1-mini/processes/0.20mm-standard-bbl-a1m.toml
 """
 
 from __future__ import annotations

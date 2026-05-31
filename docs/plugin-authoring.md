@@ -34,7 +34,8 @@ $XDG_DATA_HOME/n3o-slic3r/plugins/my-plugin/      (or ~/.local/share/...)
 ```
 
 (The flagship **platecycler** ships installed in the bundled
-`plugins/` dir; the other example plugins live in `examples/plugins/` —
+`resources/plugins/` dir; the other example plugins live in
+`examples/plugins/` —
 copy one to the user folder to try it. Point `N3O_PLUGIN_ROOT` at a
 folder of plugins for a dev run.)
 
@@ -275,7 +276,7 @@ through the typed APIs.
 
 ## 9. Walkthroughs (the examples)
 
-`platecycler` ships installed in `plugins/`; the rest live in
+`platecycler` ships installed in `resources/plugins/`; the rest live in
 `examples/plugins/`.
 
 **`beep-at-layer`** (post-slice, `layer` number setting): iterate layers,

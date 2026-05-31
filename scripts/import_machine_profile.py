@@ -43,7 +43,7 @@ Usage:
       --vendor BBL \\
       --model "Bambu Lab A1 mini" \\
       --slug bambu-lab-a1-mini \\
-      --toml-out profiles/bbl/printer
+      --toml-out resources/profiles/bbl/printer
 """
 
 from __future__ import annotations

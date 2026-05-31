@@ -5,7 +5,7 @@ auto-ejects the finished plate on the project lead's A1 mini +
 PlateCycler (see `docs/phase-8-platecycler-smoke.md`).
 
 **Implementation notes.**
-- `plugins/platecycler/` — a post-slice plugin that **ships bundled +
+- `resources/plugins/platecycler/` — a post-slice plugin that **ships bundled +
   installed** (the flagship), but is **off by default** (opt-in via the
   Plugins panel), so it doesn't eject on every print until enabled.
   `printer_compatibility = ["Bambu Lab A1 mini"]` is now **enforced at
@@ -47,7 +47,7 @@ deferred).
 
 **Acceptance criteria.**
 
-- A bundled plugin `plugins/platecycler/` (`plugin.toml` +
+- A bundled plugin `resources/plugins/platecycler/` (`plugin.toml` +
   `main.lua`):
   - `hooks = ["post_slice"]`, `printer_compatibility = ["Bambu Lab A1
     mini"]` (the lead's PlateCycler rig; widen later as validated).

@@ -32,8 +32,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../profiles": "profiles",
-      "../plugins": "plugins",
+      "../resources/profiles": "profiles",
+      "../resources/plugins": "plugins",
       "../assets/calibration": "calibration"
     }
   }

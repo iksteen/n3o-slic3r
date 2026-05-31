@@ -16,8 +16,9 @@ Status: ✅ done.
   `dispatch` (PR-8-5) will trigger the panel refresh.
 - mlua's `send` feature is enabled so `Lua: Send` and the host can live
   in `State<Arc<Mutex<PluginHost>>>`; all registered closures are Send.
-- Roots are wired in `lib.rs`: bundled `plugins/` (a `profiles/`
-  sibling; `N3O_PLUGIN_ROOT` dev override mirrors `N3O_PROFILE_ROOT`) +
+- Roots are wired in `lib.rs`: bundled `resources/plugins/` (a
+  `resources/profiles/` sibling; `N3O_PLUGIN_ROOT` dev override mirrors
+  `N3O_PROFILE_ROOT`) +
   `~/.local/share/n3o-slic3r/plugins`.
 
 **Scope.** The multi-plugin host: take the discovered plugins, load

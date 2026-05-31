@@ -1,6 +1,6 @@
 //! Hierarchical vendor profile library, loaded from disk at startup.
 //!
-//! On-disk layout (root = `profiles/`):
+//! On-disk layout (root = `resources/profiles/`):
 //!
 //! ```text
 //! <root>/<vendor>/
@@ -176,7 +176,7 @@ pub fn init_from(root: PathBuf) {
 fn library() -> &'static ProfileLibrary {
     LIBRARY.get_or_init(|| {
         // Test/dev fallback: walk up from the manifest dir to find
-        // `profiles` in the workspace. A packaged binary
+        // `resources/profiles` in the workspace. A packaged binary
         // *must* explicitly call `init_from` before any lookup; if
         // it doesn't, this fallback will pick up a stale build-time
         // path that doesn't exist post-install and `load` will panic
@@ -185,7 +185,7 @@ fn library() -> &'static ProfileLibrary {
             .parent()
             .expect("workspace root above manifest dir")
             .to_path_buf();
-        let root = workspace_root.join("profiles");
+        let root = workspace_root.join("resources").join("profiles");
         ProfileLibrary::load(&root)
             .unwrap_or_else(|e| panic!("profile library load (workspace fallback) failed: {e}"))
     })

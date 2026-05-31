@@ -8,7 +8,7 @@
 
 ## Assumption tested
 
-The `platecycler` example plugin (`plugins/platecycler/`), run
+The `platecycler` example plugin (`resources/plugins/platecycler/`), run
 at post-slice, appends the `DEFAULT_SWAP_GCODE` eject/swap macro to the
 tail of a real A1 mini slice such that, when the print finishes on the
 project lead's A1 mini + Chitu PlateCycler, the macro runs and the plate
@@ -17,7 +17,7 @@ is swept off automatically.
 ## Pre-flight (do this first)
 
 ⚠️ **Verify the macro before sending to hardware.** Diff
-`plugins/platecycler/main.lua`'s `SWAP_GCODE` against your
+`resources/plugins/platecycler/main.lua`'s `SWAP_GCODE` against your
 current `platecycler.py` `DEFAULT_SWAP_GCODE`
 (github.com/iksteen/platecycler). The macro drives the toolhead through
 a fixed ejection path; a wrong coordinate can crash the toolhead into
@@ -26,9 +26,9 @@ verification happens deliberately.
 
 ## Method
 
-1. platecycler **ships bundled** (`plugins/platecycler/`, installed via
+1. platecycler **ships bundled** (`resources/plugins/platecycler/`, installed via
    `tauri.conf.json` resources; loaded in dev through
-   `N3O_PLUGIN_ROOT=./plugins`), so no install step is needed. Like all
+   `N3O_PLUGIN_ROOT=./resources/plugins`), so no install step is needed. Like all
    plugins it's **off by default** — enable it from the Plugins panel
    (the brand menu's "Global plugins…", or per-plate via the settings
    panel's Plugins tab).

@@ -252,10 +252,11 @@ fn pre_slice_plugin_rewrites_bed_temp_in_real_gcode() {
 /// Load a single bundled example plugin in isolation (copied into a
 /// fresh temp root, so sibling examples don't also load).
 fn host_for_example(name: &str) -> PluginHost {
-    // The flagship platecycler ships in the bundled `plugins/` dir; the
-    // other examples live under `examples/plugins/`. Resolve either.
+    // The flagship platecycler ships in the bundled `resources/plugins/`
+    // dir; the other examples live under `examples/plugins/`. Resolve
+    // either.
     let root = workspace_root();
-    let bundled = root.join("plugins").join(name);
+    let bundled = root.join("resources/plugins").join(name);
     let src = if bundled.is_dir() {
         bundled
     } else {

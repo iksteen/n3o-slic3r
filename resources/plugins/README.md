@@ -1,7 +1,7 @@
 # Bundled plugins
 
 First-party Lua plugins that ship with n3o-slic3r, a sibling of the
-bundled `profiles/` tree. Each plugin is a subdirectory with a
+bundled `resources/profiles/` tree. Each plugin is a subdirectory with a
 `plugin.toml` manifest and its Lua entry file.
 
 At startup the app loads plugins from two roots, bundled first then the
@@ -14,7 +14,7 @@ resource dir.
 
 **platecycler** ships here — the flagship plugin, bundled + installed
 with the app (mapped in `tauri.conf.json` `bundle.resources`; loaded in
-dev via `N3O_PLUGIN_ROOT=./plugins`). Like all plugins it's **off by
+dev via `N3O_PLUGIN_ROOT=./resources/plugins`). Like all plugins it's **off by
 default** (opt-in) — enable it from the Plugins panel.
 
 The other examples (beep-at-layer, pause-at-layer, rewrite-bed-temp,
