@@ -488,17 +488,24 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
         let _ = project.set_active_plate(first);
     }
 
-    // Settings → project-tier overrides, minimized against our cascade
-    // baseline for the bound printer: keys that already match our default
-    // drop out, leaving the project's genuine deltas (machine already
-    // excluded by `partition`).
+    // Settings → per-plate **project_overrides**, minimized against our
+    // cascade baseline for the bound printer: keys that already match our
+    // default drop out, leaving the project's genuine deltas (machine
+    // already excluded by `partition`). These are the *project's* settings
+    // (they came from its file), so they belong on the plate's
+    // project tier — not Project.user_overrides (the user's everywhere
+    // tier) — which is also where the settings panel already shows them.
+    // (project_settings.config is the project's single active config; we
+    // don't yet read per-plate plate_N.json, so every plate gets it.)
     let baseline = match bind.as_ref() {
         Some((instance, _)) => resolve_baseline(instance, &settings),
         None => BTreeMap::new(),
     };
     let outcome = compute_overrides(&settings, &part, &baseline);
-    for (k, v) in &outcome.overrides {
-        project.user_overrides.insert(k.clone(), v.clone());
+    for plate in project.plates.iter_mut() {
+        for (k, v) in &outcome.overrides {
+            plate.project_overrides.insert(k.clone(), v.clone());
+        }
     }
 
     // Filament match counts (report only — no instance mutation).
@@ -694,9 +701,13 @@ mod tests {
             report.settings_machine_dropped > 0,
             "expected dropped machine settings"
         );
-        assert_eq!(report.settings_applied, project.user_overrides.len());
-        assert!(!project.user_overrides.contains_key("machine_start_gcode"));
-        assert!(!project.user_overrides.contains_key("nozzle_diameter"));
+        // Settings land on the plate's project tier (where they came
+        // from + where the panel shows them), not the user-everywhere tier.
+        assert!(project.user_overrides.is_empty());
+        let plate_ov = &project.plates[0].project_overrides;
+        assert_eq!(report.settings_applied, plate_ov.len());
+        assert!(!plate_ov.contains_key("machine_start_gcode"));
+        assert!(!plate_ov.contains_key("nozzle_diameter"));
 
         // The cascade baseline fired: many keys already match our A1 mini
         // default and drop out as redundant. Guards against a silent
