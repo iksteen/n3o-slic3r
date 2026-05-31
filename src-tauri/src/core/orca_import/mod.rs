@@ -158,6 +158,8 @@ const IDENTITY_KEYS: &[&str] = &[
     "from",
     "name",
     "setting_id",
+    // Consumed for bed selection (curr_bed_type()), not a slice override.
+    "curr_bed_type",
 ];
 
 /// Classify every key in `settings` by libslic3r bucket.
@@ -301,6 +303,8 @@ pub struct ImportReport {
     /// The bound printer instance id (none only if the user has no
     /// instances at all).
     pub printer_instance: Option<String>,
+    /// The bound instance's display name, for the report.
+    pub printer_instance_name: Option<String>,
     /// The model the project asked for.
     pub printer_model: Option<String>,
     /// No instance matched the model → bound an existing one as a
@@ -381,6 +385,7 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
     let model = settings.printer_model();
     let bind = bind_instance(model.as_deref());
     let instance_id = bind.as_ref().map(|(i, _)| i.id.clone());
+    let instance_name = bind.as_ref().map(|(i, _)| i.display_name.clone());
 
     // Fresh project (one default plate). Bind plate 1 before registering
     // objects so register_object's material→slot auto-bind sees the
@@ -451,6 +456,7 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
         objects: object_count,
         plates: project.plates.len(),
         printer_instance: instance_id,
+        printer_instance_name: instance_name,
         printer_model: model,
         printer_fallback: bind.map(|(_, fb)| fb).unwrap_or(false),
         filaments_matched: matched,
