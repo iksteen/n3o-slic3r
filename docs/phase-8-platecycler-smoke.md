@@ -8,7 +8,7 @@
 
 ## Assumption tested
 
-The `platecycler` example plugin (`examples/plugins/platecycler/`), run
+The `platecycler` example plugin (`plugins/platecycler/`), run
 at post-slice, appends the `DEFAULT_SWAP_GCODE` eject/swap macro to the
 tail of a real A1 mini slice such that, when the print finishes on the
 project lead's A1 mini + Chitu PlateCycler, the macro runs and the plate
@@ -17,7 +17,7 @@ is swept off automatically.
 ## Pre-flight (do this first)
 
 ⚠️ **Verify the macro before sending to hardware.** Diff
-`examples/plugins/platecycler/main.lua`'s `SWAP_GCODE` against your
+`plugins/platecycler/main.lua`'s `SWAP_GCODE` against your
 current `platecycler.py` `DEFAULT_SWAP_GCODE`
 (github.com/iksteen/platecycler). The macro drives the toolhead through
 a fixed ejection path; a wrong coordinate can crash the toolhead into
@@ -26,16 +26,12 @@ verification happens deliberately.
 
 ## Method
 
-1. Copy the plugin into your user plugins dir so the app loads it:
-   ```
-   cp -r examples/plugins/platecycler ~/.local/share/n3o-slic3r/plugins/
-   ```
-   (Or point `N3O_PLUGIN_ROOT` at `examples/plugins` for a dev run.)
-   Plugins are **off by default** (opt-in) — enable platecycler in the
-   Plugins panel (the brand menu's "Global plugins…", or per-plate via
-   the settings panel's Plugins tab). It only ships an
-   `enabled_by_default = true` if the manifest declares it, which the
-   example does not.
+1. platecycler **ships bundled** (`plugins/platecycler/`, installed via
+   `tauri.conf.json` resources; loaded in dev through
+   `N3O_PLUGIN_ROOT=./plugins`), so no install step is needed. Like all
+   plugins it's **off by default** — enable it from the Plugins panel
+   (the brand menu's "Global plugins…", or per-plate via the settings
+   panel's Plugins tab).
 
 2. Load a small model, bind the plate to the **Bambu Lab A1 mini**, and
    slice. The plugin's printer self-guard only fires for that model.

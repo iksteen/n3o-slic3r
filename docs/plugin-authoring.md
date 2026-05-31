@@ -33,9 +33,10 @@ Drop that directory into your user plugins folder:
 $XDG_DATA_HOME/n3o-slic3r/plugins/my-plugin/      (or ~/.local/share/...)
 ```
 
-(Bundled example plugins live in `examples/plugins/` in the repo; copy
-one to the user folder, or point `N3O_PLUGIN_ROOT` at a folder of
-plugins for a dev run.)
+(The flagship **platecycler** ships installed in the bundled
+`plugins/` dir; the other example plugins live in `examples/plugins/` —
+copy one to the user folder to try it. Point `N3O_PLUGIN_ROOT` at a
+folder of plugins for a dev run.)
 
 **Plugins are off by default.** Dropping one in makes it *available*, not
 *active* — enable it from the Plugins UI (see §4). Loading happens at
@@ -272,9 +273,10 @@ through the typed APIs.
 
 ---
 
-## 9. Walkthroughs (the bundled examples)
+## 9. Walkthroughs (the examples)
 
-All live in `examples/plugins/`.
+`platecycler` ships installed in `plugins/`; the rest live in
+`examples/plugins/`.
 
 **`beep-at-layer`** (post-slice, `layer` number setting): iterate layers,
 insert an `M300` beep at the boundary of the chosen layer.

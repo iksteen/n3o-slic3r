@@ -33,6 +33,7 @@
     ],
     "resources": {
       "../profiles/vendor": "profiles/vendor",
+      "../plugins": "plugins",
       "../assets/calibration": "calibration"
     }
   }

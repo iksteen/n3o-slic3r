@@ -5,11 +5,12 @@ auto-ejects the finished plate on the project lead's A1 mini +
 PlateCycler (see `docs/phase-8-platecycler-smoke.md`).
 
 **Implementation notes.**
-- `examples/plugins/platecycler/` — a post-slice plugin (not auto-loaded
-  bundled, so it doesn't eject on every print; opt-in by copying to the
-  user plugins dir). `printer_compatibility = ["Bambu Lab A1 mini"]`
-  plus a Lua self-guard on `plate.printer_model`, since the host doesn't
-  enforce `printer_compatibility` in dispatch yet.
+- `plugins/platecycler/` — a post-slice plugin that **ships bundled +
+  installed** (the flagship), but is **off by default** (opt-in via the
+  Plugins panel), so it doesn't eject on every print until enabled.
+  `printer_compatibility = ["Bambu Lab A1 mini"]` is now **enforced at
+  dispatch** (PR-8-9); the Lua self-guard on `plate.printer_model`
+  remains as belt-and-suspenders.
 - The `DEFAULT_SWAP_GCODE` macro is transcribed from the platecycler
   tool (`platecycler.py`); the plugin + smoke doc warn to verify it
   against the source before running on hardware.
@@ -46,7 +47,7 @@ deferred).
 
 **Acceptance criteria.**
 
-- A bundled plugin `examples/plugins/platecycler/` (`plugin.toml` +
+- A bundled plugin `plugins/platecycler/` (`plugin.toml` +
   `main.lua`):
   - `hooks = ["post_slice"]`, `printer_compatibility = ["Bambu Lab A1
     mini"]` (the lead's PlateCycler rig; widen later as validated).

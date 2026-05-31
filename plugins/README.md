@@ -12,5 +12,11 @@ In dev runs the app reads this directory via `N3O_PLUGIN_ROOT` (mirrors
 `N3O_PROFILE_ROOT` for profiles); a packaged build reads the copy in its
 resource dir.
 
-The example plugins (beep-at-layer, pause-at-layer, rewrite-bed-temp,
-platecycler) land here in later Phase 8 tickets.
+**platecycler** ships here — the flagship plugin, bundled + installed
+with the app (mapped in `tauri.conf.json` `bundle.resources`; loaded in
+dev via `N3O_PLUGIN_ROOT=./plugins`). Like all plugins it's **off by
+default** (opt-in) — enable it from the Plugins panel.
+
+The other examples (beep-at-layer, pause-at-layer, rewrite-bed-temp,
+filament-summary) stay under `examples/plugins/` as reference material;
+copy one into your user plugins dir to try it.
