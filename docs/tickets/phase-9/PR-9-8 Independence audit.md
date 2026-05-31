@@ -30,9 +30,9 @@ success criterion #7, run for real, not asserted.
   - beep-at-layer plugin write→drop→enable (#4) — Phase 8;
   - 50 MB G-code preview (slider, color modes, hover, stats) (#5) —
     Phase 6;
-  - platecycler sequential plates (#6) — **reframed** to the post-slice
-    macro-append proof (phase-8.md decision 2; close PRD §3.3's stale
-    "compose hook" wording here, doc-update owed);
+  - platecycler auto-eject at print end (#6) — the post-slice
+    macro-append proof (phase-8.md decision 2; PRD §3.3 already
+    reframed off the "compose hook" wording, 2026-05-31);
   - clean-box independence (#7) — this audit itself.
 - **Findings filed**, not waved through: anything the audit surfaces
   becomes a tracked bug/follow-up. A failed criterion blocks the MVP

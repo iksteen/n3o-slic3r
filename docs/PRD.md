@@ -92,7 +92,7 @@ The MVP is considered successful when:
 
 - A user can preview a 50MB production G-code in-app: layer slider, color modes, hover inspection, and per-job stats all functional without any external tool.
 
-- A user with an A1 mini + PlateCycler add-on can compose a multi-plate project, slice it, send it to the printer, and have the PlateCycler complete all plates sequentially. The platecycler plugin (compose hook) ships with the MVP and is the proof point for the plugin architecture.
+- A user with an A1 mini + PlateCycler add-on can slice a plate, send it to the printer, and have the PlateCycler auto-eject the finished plate at print end so the next print can run. The platecycler plugin ships with the MVP as a **post-slice macro append** (not the originally-scoped compose hook, which is deferred post-MVP — see Phase 8 scope decision 2) and is the proof point for the plugin architecture.
 
 - An external auditor on a clean Linux machine (flatpak installed, no other slicer software present) completes the full workflow — install app, configure both printers, slice, preview G-code, send to printer, monitor.
 

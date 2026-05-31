@@ -107,12 +107,10 @@ start immediately — they're independent. The rest:
 
 Per PRD §11.3 (living documents):
 
-- **PRD §3.3** — the platecycler success criterion (line ~95) still
-  reads "platecycler plugin (compose hook) ships with the MVP". Reframe
-  to the **post-slice macro append** shipped in Phase 8 (phase-8.md
-  scope decision 2); the compose hook is post-MVP. (Carried over from
-  Phase 8's doc-updates-owed; close it here as part of PR-9-8's
-  success-criteria pass.)
+- **PRD §3.3** — ✅ done (2026-05-31). The platecycler success
+  criterion reframed from "platecycler plugin (compose hook) ships with
+  the MVP" to the **post-slice macro append** shipped in Phase 8
+  (phase-8.md scope decision 2); the compose hook is noted post-MVP.
 - **`Execution_Plan.md` §11** — update once the distribution decision
   (PR-9-3) and any cut (PR-9-6) are final, so the plan reflects what
   actually shipped.
