@@ -28,12 +28,16 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde_json::Value;
 use slic3r_ffi::{bucket_of, OptBucket};
 
+use crate::core::filament::FilamentProfile;
 use crate::core::printer::{list_instances, lookup, PrinterInstance};
+use crate::core::project::context::SlicingContext;
 use crate::core::project::model::Project;
+use crate::core::scene::build_plate::{self, BuildPlate};
 use crate::core::scene::state::{MeshId, NewSceneObject};
 use crate::core::threemf::{load_3mf, ProjectObject};
 
@@ -340,6 +344,55 @@ fn bind_instance(model: Option<&str>) -> Option<(PrinterInstance, bool)> {
     instances.into_iter().next().map(|i| (i, true))
 }
 
+/// Our cascade resolved (libslic3r key → value) for the bound instance +
+/// the project's bed + filament — the baseline to delta the project's
+/// settings against, so only genuinely-different keys become overrides.
+/// Best-effort: any failure yields an empty map, which keeps every
+/// Process/Filament key (correct, just non-minimal).
+fn resolve_baseline(
+    instance: &PrinterInstance,
+    settings: &OrcaProjectSettings,
+) -> BTreeMap<String, String> {
+    let Some(printer) = lookup(&instance.vendor_profile_ref) else {
+        return BTreeMap::new();
+    };
+    let Ok(cascade) =
+        crate::core::profile_library::compose_cascade(instance, &[], &BTreeMap::new())
+    else {
+        return BTreeMap::new();
+    };
+    // The project's bed (its `when.plate.type` is the libslic3r bed
+    // identity verbatim); fall back to the instance's bed.
+    let bed = settings
+        .curr_bed_type()
+        .unwrap_or_else(|| instance.bed.identity.clone());
+    let plate = build_plate::lookup(&bed).unwrap_or(BuildPlate {
+        identity: bed.clone(),
+        libslic3r_curr_bed_type: bed,
+    });
+    // Filament context drives `when.filament.type`; mirror the project's
+    // per-slot material families.
+    let types = settings.list("filament_type").unwrap_or_default();
+    let mk = |base_type: String| {
+        Arc::new(FilamentProfile {
+            identity: "imported".into(),
+            base_type,
+            vendor: None,
+            color: None,
+        })
+    };
+    let filaments: Vec<Arc<FilamentProfile>> = if types.is_empty() {
+        vec![mk("PLA".into())]
+    } else {
+        types.into_iter().map(mk).collect()
+    };
+    let ctx = SlicingContext::new(Arc::new(printer), Arc::new(plate), filaments);
+    crate::core::cascade::resolve(&cascade, &ctx)
+        .into_iter()
+        .map(|(k, v)| (k, v.value))
+        .collect()
+}
+
 fn register_obj(project: &mut Project, mesh_ids: &[MeshId], obj: &ProjectObject) {
     project.register_object(NewSceneObject {
         mesh: mesh_ids[obj.mesh_idx],
@@ -435,9 +488,15 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
         let _ = project.set_active_plate(first);
     }
 
-    // Settings → project-tier overrides. Empty baseline for now (keep all
-    // Process/Filament; machine already excluded by `partition`).
-    let outcome = compute_overrides(&settings, &part, &BTreeMap::new());
+    // Settings → project-tier overrides, minimized against our cascade
+    // baseline for the bound printer: keys that already match our default
+    // drop out, leaving the project's genuine deltas (machine already
+    // excluded by `partition`).
+    let baseline = match bind.as_ref() {
+        Some((instance, _)) => resolve_baseline(instance, &settings),
+        None => BTreeMap::new(),
+    };
+    let outcome = compute_overrides(&settings, &part, &baseline);
     for (k, v) in &outcome.overrides {
         project.user_overrides.insert(k.clone(), v.clone());
     }
@@ -638,5 +697,14 @@ mod tests {
         assert_eq!(report.settings_applied, project.user_overrides.len());
         assert!(!project.user_overrides.contains_key("machine_start_gcode"));
         assert!(!project.user_overrides.contains_key("nozzle_diameter"));
+
+        // The cascade baseline fired: many keys already match our A1 mini
+        // default and drop out as redundant. Guards against a silent
+        // empty-baseline fallback (which would keep every key).
+        assert!(
+            report.settings_redundant > 0,
+            "baseline should drop redundant keys; got redundant={}",
+            report.settings_redundant,
+        );
     }
 }
