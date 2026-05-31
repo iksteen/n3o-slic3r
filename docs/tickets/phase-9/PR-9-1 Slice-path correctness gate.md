@@ -1,7 +1,26 @@
 # PR-9-1 — slice-path / cascade-resolver correctness gate
 
-Status: ⬜ open. **Release blocker** — gates the independence audit
-(PR-9-8) and PRD §3.3 success criterion #1.
+Status: ✅ done (2026-05-31). **Confirmed clean** — the live slice path
+routes through the resolver + adapter; no fix needed. Verified via
+G-code, not just the trace. **Release blocker** cleared for the
+independence audit (PR-9-8) / PRD §3.3 #1.
+
+> **Result.** `core/slice/orchestrator.rs::resolve_cascade` composes a
+> fresh cascade from the bound `PrinterInstance`; `cascade::resolve` +
+> `cascade_adapter::adapt` produce the `DynamicPrintConfig`; the
+> `.3mf`/STL is loaded for **geometry only** (`model.load`). Proven at
+> the G-code boundary by
+> `tests/slice_orchestrator.rs::resolved_bed_temp_reaches_the_engine_for_both_printers`:
+> slicing a raw STL (no embedded config to leak), the engine body's
+> `M140`/`M190` carry the cascade-resolved `textured_plate_temp`,
+> `curr_bed_type` is the context's plate type, and the two MVP printers
+> resolve to different temps from their own fragments (A1 mini + bambu-pla
+> → 65; U1 + generic-pla → 60). The old "`hot_plate_temp=60` not `55`"
+> concern was the wrong key (active plate is Textured PEI →
+> `textured_plate_temp`) and pre-dated the compose-context fix (310f7b6);
+> the U1 + snapmaker-pla `55` rule fires at compose time, guarded by
+> `composer::tests::u1_filament_fragment_printer_rule_fires_at_compose_time`.
+> CLAUDE.md's OPEN bullet updated to CONFIRMED.
 
 **Scope.** Confirm — and fix if needed — that the live *slice* path
 applies our resolved cascade, not the input `.3mf`'s embedded config

@@ -118,7 +118,10 @@ reason from contrary priors.
   `crates/slic3r-ffi/`. FFI extensions are first-party work, not
   external dependencies.
 - **`platecycler` is owned in-house.** The MVP ships it as a Lua
-  plugin using the compose hook (FR-PL-5).
+  plugin using the **post-slice** hook — a macro append that
+  auto-ejects the finished plate at print end (Phase 8 scope decision
+  2). The originally-scoped compose hook (FR-PL-5) is deferred
+  post-MVP.
 - **The cascade resolver *is* built** (corrected 2026-05-30; this
   bullet previously said it wasn't). The rule-cascade resolver lives
   in `src-tauri/src/core/cascade/` (`resolver`, `loader`, `overrides`,
@@ -127,15 +130,22 @@ reason from contrary priors.
   `bed_temp` → per-plate-type dimensional expansion + `curr_bed_type`
   set). `tests/reference_profiles.rs` exercises it end-to-end. Design
   of record is still `docs/profiles.md`.
-  - **OPEN / unverified:** whether the live *slice* path
-    (`core/slice/input.rs` → `orchestrator.rs`) actually routes
-    through the resolver+adapter, or still slices from the input
-    `.3mf`'s embedded config + the shim's pre-`apply` normalization.
-    A 2026-05-30 U1 slice (`plate-1.gcode.3mf`) emitted baseline
-    `hot_plate_temp=60` (not the `Snapmaker U1` rule's `55`), which
-    suggests the slice did **not** apply our consolidated filament
-    fragments — trace `slice/input.rs` before assuming the resolver
-    feeds the slicer. Update this bullet once confirmed.
+  - **CONFIRMED (2026-05-31, PR-9-1):** the live *slice* path **does**
+    route through the resolver + adapter, not the input's embedded
+    config. `core/slice/orchestrator.rs::resolve_cascade` composes a
+    fresh cascade from the bound `PrinterInstance`, `cascade::resolve`
+    + `cascade_adapter::adapt` build the `DynamicPrintConfig`, and the
+    `.3mf`/STL is loaded for **geometry only**. Verified via G-code
+    (`tests/slice_orchestrator.rs::resolved_bed_temp_reaches_the_engine_for_both_printers`):
+    slicing a raw STL (no embedded config to leak), the engine's body
+    `M140`/`M190` carry the cascade-resolved `textured_plate_temp`,
+    `curr_bed_type` is the context's plate type, and the two MVP
+    printers resolve to different temps from their own fragments.
+    The old "`hot_plate_temp=60` not `55`" observation was the *wrong
+    key* (the active plate is Textured PEI → `textured_plate_temp`) and
+    pre-dated the compose-context fix (310f7b6); the U1 snapmaker-pla
+    `55` rule now fires at compose time, guarded by
+    `composer::tests::u1_filament_fragment_printer_rule_fires_at_compose_time`.
 
 ## Project shape and build
 

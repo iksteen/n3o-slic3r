@@ -226,6 +226,126 @@ fn bambi_slice_emits_started_progress_finished_with_summary() {
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
+/// Slice a plate and return the emitted G-code text.
+fn slice_to_gcode(label: &str, input: SliceJobInput) -> String {
+    let registry = JobRegistry::new();
+    let (sink, events) = collecting_sink();
+    run_slice_job_blocking(input, &registry, sink)
+        .unwrap_or_else(|e| panic!("[{label}] start: {e:?}"));
+    let path = events
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|e| match e {
+            SliceEvent::PlateFinished { output_path, .. } => Some(output_path.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("[{label}] no PlateFinished event"));
+    let gcode =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("[{label}] read {path}: {e}"));
+    let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+    gcode
+}
+
+/// First element of a comma-joined config-trailer scalar, e.g.
+/// `; textured_plate_temp = 65,65,65` → `"65"`.
+fn config_value<'a>(gcode: &'a str, key: &str) -> &'a str {
+    let needle = format!("; {key} = ");
+    gcode
+        .lines()
+        .find_map(|l| l.strip_prefix(&needle))
+        .unwrap_or_else(|| panic!("config trailer missing `{key}`"))
+        .split(',')
+        .next()
+        .unwrap()
+        .trim()
+}
+
+/// PR-9-1 (Phase 9) — slice-path correctness gate, at the G-code
+/// boundary. Proves the *resolved cascade* is what libslic3r slices
+/// from, not the engine's defaults or any embedded config (the input
+/// is a raw STL — there is no embedded config to leak).
+///
+/// For each MVP printer, with the active plate `Textured PEI Plate`:
+///   - `curr_bed_type` in the trailer is the context's plate type
+///     (cascade context → adapter), and
+///   - the engine's actual bed-heat commands (`M140`/`M190`) in the
+///     body carry the cascade-resolved `textured_plate_temp` — i.e. the
+///     resolved value reached the engine and was baked into output, and
+///   - that temperature is a real heated value (> 40 °C), guarding the
+///     U1 cold-bed class of bug (`textured_plate_temp = 0` leaking when a
+///     per-printer rule fails to fire).
+///
+/// The two printers resolve to *different* bed temps from their own
+/// fragments (A1 mini + bambu-pla → 65; U1 + generic-pla → 60), which a
+/// shared engine default could not produce. The U1 + snapmaker-pla rule
+/// that lowers this to 55 is guarded at the compose layer by
+/// `composer::tests::u1_filament_fragment_printer_rule_fires_at_compose_time`;
+/// the bundled `snappy` fixture binds generic-pla, so 60 is correct here.
+#[test]
+fn resolved_bed_temp_reaches_the_engine_for_both_printers() {
+    ensure_ffi_init();
+    let stl = test_stl().display().to_string();
+    let td = |name: &str| {
+        std::env::temp_dir()
+            .join(format!("n3o-9-1-{name}-{}", std::process::id()))
+            .display()
+            .to_string()
+    };
+
+    let mut resolved = vec![];
+    for (label, mk) in [
+        (
+            "bambi",
+            bambi_input as fn(String, String, Vec<u32>) -> SliceJobInput,
+        ),
+        (
+            "snappy",
+            snappy_input as fn(String, String, Vec<u32>) -> SliceJobInput,
+        ),
+    ] {
+        let gcode = slice_to_gcode(label, mk(stl.clone(), td(label), vec![1]));
+
+        // Context plate type reached the config (cascade → adapter).
+        assert_eq!(
+            config_value(&gcode, "curr_bed_type"),
+            "Textured PEI Plate",
+            "[{label}] curr_bed_type should be the context's plate type",
+        );
+
+        // The active plate's resolved bed temp is a real heated value,
+        // not 0 (the cold-bed bug) and not unset.
+        let bed = config_value(&gcode, "textured_plate_temp");
+        let bed_c: u32 = bed
+            .parse()
+            .unwrap_or_else(|_| panic!("[{label}] bed temp `{bed}`"));
+        assert!(
+            bed_c > 40,
+            "[{label}] resolved textured_plate_temp {bed_c} looks like a cold-bed leak"
+        );
+
+        // The engine baked that resolved value into the body's bed-heat
+        // commands — proof the cascade value reached libslic3r, not just
+        // the trailer echo.
+        assert!(
+            gcode.contains(&format!("M140 S{bed}")),
+            "[{label}] expected `M140 S{bed}` (resolved bed temp) in the G-code body",
+        );
+        assert!(
+            gcode.contains(&format!("M190 S{bed}")),
+            "[{label}] expected `M190 S{bed}` (resolved bed temp) in the G-code body",
+        );
+        resolved.push((label, bed_c));
+    }
+
+    // The two printers resolve to different temps from their own
+    // fragments — a shared engine default could not.
+    assert_ne!(
+        resolved[0].1, resolved[1].1,
+        "per-printer cascade differentiation: {resolved:?} should differ",
+    );
+}
+
 #[test]
 fn snappy_slice_emits_started_progress_finished_with_summary() {
     // Sibling of the Bambi slice smoke. Exercises the 4-extruder
