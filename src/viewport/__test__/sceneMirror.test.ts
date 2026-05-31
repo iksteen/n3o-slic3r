@@ -64,6 +64,7 @@ function plateSnap(id: number, objects: SceneObject[] = []): PlateSnapshot {
     printer_instance_id: null,
     material_to_slot: {},
     project_overrides: {},
+    quality_profile: null,
     objects,
     selection: [],
     build_plate: null,

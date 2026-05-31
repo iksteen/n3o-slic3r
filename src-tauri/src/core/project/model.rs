@@ -169,6 +169,17 @@ pub struct Plate {
     #[serde(default)]
     pub material_to_slot: std::collections::BTreeMap<u8, crate::core::printer::SlotRef>,
 
+    /// The process/quality profile this plate slices against, as a
+    /// bundled process-fragment slug (e.g. `"0.20mm-strength"`). `None`
+    /// inherits the bound `PrinterInstance.quality_profile` — the
+    /// instance's profile is the seed/default; selecting one per plate
+    /// (or importing a project authored with a different preset) records
+    /// it here so this plate resolves + slices against that process
+    /// without touching the shared instance. The composer's effective
+    /// process is `plate.quality_profile.unwrap_or(instance.quality_profile)`.
+    #[serde(default)]
+    pub quality_profile: Option<String>,
+
     pub metadata: PlateMetadata,
 
     /// The plate's scene contents. Real type lives in
@@ -269,6 +280,7 @@ impl Plate {
             project_overrides: HashMap::new(),
             printer_instance_id: None,
             material_to_slot: std::collections::BTreeMap::new(),
+            quality_profile: None,
             metadata: PlateMetadata::at_position(position),
             scene: PlateSceneState::default(),
         }

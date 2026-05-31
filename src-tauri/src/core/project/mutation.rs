@@ -507,6 +507,52 @@ impl Project {
         Ok(vec![SceneEvent::PlateMetadataChanged { plate_id }])
     }
 
+    /// Set (or clear, with `None`) this plate's process/quality profile.
+    /// `Some(slug)` is validated to be a bundled process fragment for the
+    /// plate's bound printer; an unknown slug rejects with
+    /// `InvalidPlateMetadata`. `None` clears the override so the plate
+    /// inherits the bound instance's profile again. No-op (no event) when
+    /// unchanged. Emits `PlateMetadataChanged` — the same channel the
+    /// frontend already re-fetches plate metadata on.
+    pub fn set_plate_quality_profile(
+        &mut self,
+        plate_id: PlateId,
+        quality_profile: Option<String>,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let idx = self
+            .plate_index(plate_id)
+            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        // Validate a non-None slug against the plate's bound printer's
+        // bundled processes. An unbound plate can't validate, so it
+        // accepts the value (the slice path rejects an unbound plate
+        // separately).
+        if let Some(slug) = &quality_profile {
+            if let Some(instance_id) = self.plates[idx].printer_instance_id.clone() {
+                if let Some(instance) = crate::core::printer::lookup_instance(&instance_id) {
+                    let known = crate::core::profile_library::bundled_process_slugs_for_printer(
+                        &instance.printer_fragment_slug,
+                    )
+                    .iter()
+                    .any(|s| *s == slug);
+                    if !known {
+                        return Err(SceneOpError::InvalidPlateMetadata {
+                            plate_id,
+                            message: format!(
+                                "`{slug}` is not a bundled process for `{}`",
+                                instance.printer_fragment_slug,
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+        if self.plates[idx].quality_profile == quality_profile {
+            return Ok(Vec::new());
+        }
+        self.plates[idx].quality_profile = quality_profile;
+        Ok(vec![SceneEvent::PlateMetadataChanged { plate_id }])
+    }
+
     // ---- Per-plate printer assignment -----------------------------
 
     /// Install the active plate's bed by passing through a resolved
@@ -611,6 +657,24 @@ impl Project {
         // (always emitted below), so no separate MaterialSlotChanged
         // event is needed.
         self.plates[idx].material_to_slot.clear();
+        // The process/quality profile is printer-bound (process fragments
+        // are keyed by `(printer, slug)`). A slug the *new* printer doesn't
+        // ship is now invalid — left in place it would hard-fail
+        // `compose_cascade` at slice + panel-resolve time. Clear it so the
+        // plate inherits the new instance's default; a slug the new printer
+        // also ships (rebind to the same model) is preserved.
+        if let Some(slug) = self.plates[idx].quality_profile.clone() {
+            let still_valid = new_instance.as_ref().map_or(false, |i| {
+                crate::core::profile_library::bundled_process_slugs_for_printer(
+                    &i.printer_fragment_slug,
+                )
+                .iter()
+                .any(|s| *s == slug)
+            });
+            if !still_valid {
+                self.plates[idx].quality_profile = None;
+            }
+        }
         let referenced: std::collections::BTreeSet<u8> = self.plates[idx]
             .scene
             .objects
@@ -2941,6 +3005,33 @@ mod tests {
                 plate_id: PlateId(1)
             }
         ));
+    }
+
+    #[test]
+    fn rebind_plate_printer_clears_quality_profile_the_new_printer_lacks() {
+        // The picker writes a per-plate process slug; rebinding to a
+        // printer that doesn't ship it must clear it (else compose hard-
+        // fails at slice/resolve), while a slug the new printer also
+        // ships is preserved. `profile` is only used for the bed viz, so
+        // a1_mini_for_test() suffices for both legs.
+        let profile = a1_mini_for_test();
+        let mut p = Project::default();
+        p.plates[0].printer_instance_id = Some("bambi".into());
+        p.plates[0].quality_profile = Some("0.20mm-strength".into());
+
+        // Same-model rebind: the A1 mini ships `0.20mm-strength` → kept.
+        p.rebind_plate_printer(PlateId(1), "bambi".into(), &profile)
+            .unwrap();
+        assert_eq!(
+            p.plates[0].quality_profile.as_deref(),
+            Some("0.20mm-strength"),
+        );
+
+        // Cross-printer rebind to the U1 (its process slugs omit the
+        // "mm", so `0.20mm-strength` isn't one of them) → cleared.
+        p.rebind_plate_printer(PlateId(1), "snappy".into(), &profile)
+            .unwrap();
+        assert_eq!(p.plates[0].quality_profile, None);
     }
 
     #[test]

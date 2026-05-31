@@ -49,8 +49,6 @@ import {
 } from "./types";
 import {
   usePrinterOptions,
-  useCascadeResolve,
-  type ContextJson,
   type PrinterProfileJson,
   type ResolvedMap,
 } from "./resolve";
@@ -84,11 +82,11 @@ export interface SettingsPanelProps {
   /** Active printer profile. `null` = no printer selected; the panel
    *  renders an empty state and does no resolves. */
   printer: PrinterProfileJson | null;
-  /** Loaded cascade handle. `null` = no cascade loaded. */
-  cascadeHandle: number | null;
-  /** Cascade resolve context (printer + plate + filaments). Built
-   *  by the panel's host (App.tsx) from current scene state. */
-  context: ContextJson | null;
+  /** The active plate's cascade resolution (from `plate_cascade_resolve`),
+   *  keyed by setting. Owned + fetched by the host (it has the plate
+   *  state to key on); the panel reads values + their `source_layer` to
+   *  fill the cascade rows. Empty `{}` when there's no resolved plate. */
+  resolved: ResolvedMap;
   /** Currently selected scene object — drives the Object tab.
    *  `null` disables the Object tab. */
   selectedObject: SelectedObjectStub | null;
@@ -135,8 +133,7 @@ type ContextLayer = "project" | "object";
 export function SettingsPanel(props: SettingsPanelProps) {
   const {
     printer,
-    cascadeHandle,
-    context,
+    resolved,
     selectedObject,
     objectOverrides,
     onSetObjectOverride,
@@ -177,10 +174,6 @@ export function SettingsPanel(props: SettingsPanelProps) {
   }, [contextLayer, selectedObject]);
 
   const { options, loading: optsLoading } = usePrinterOptions(printer);
-  const { resolved, error: resolveError } = useCascadeResolve(
-    cascadeHandle,
-    context,
-  );
 
   // Diff baselines (PR-4-10):
   //   - "from-default": cascade resolved with no overrides. We
@@ -401,12 +394,6 @@ export function SettingsPanel(props: SettingsPanelProps) {
         </div>
       ) : (
         <>
-      {resolveError && (
-        <div className="sp-error" role="alert">
-          cascade resolve failed: {resolveError}
-        </div>
-      )}
-
       {printer == null ? (
         <div className="sp-empty">No printer selected.</div>
       ) : optsLoading ? (
@@ -464,7 +451,12 @@ export function SettingsPanel(props: SettingsPanelProps) {
           settingKey={hoveredSchema.key}
           settingLabel={hoveredSchema.label ?? hoveredSchema.key}
           layers={buildLadderLayers(hoveredSchema, resolved, projectOverrides, objectOverrides)}
-          winningLayer={winningLayerFor(hoveredSchema.key, projectOverrides, objectOverrides)}
+          winningLayer={ladderWinningLayer(
+            hoveredSchema.key,
+            resolved,
+            projectOverrides,
+            objectOverrides,
+          )}
           anchor={ladder.anchor}
           open={ladder.open}
           onMouseEnter={() => ladder.openLadder(ladder.anchor!)}
@@ -492,13 +484,30 @@ export function SettingsPanel(props: SettingsPanelProps) {
   );
 }
 
+/** The ladder's winner ✓: an override tier when one wins, else the
+ *  cascade layer the resolved value was attributed to (so the ✓ lands on
+ *  e.g. "Profile" when the process fragment is the winner). Distinct from
+ *  `winningLayerFor`, which stays "cascade" for the row-tint logic that
+ *  must not treat a fragment win as user-authored. */
+function ladderWinningLayer(
+  key: string,
+  resolved: ResolvedMap,
+  projectOverrides: Record<string, string>,
+  objectOverrides: Record<string, string>,
+): CascadeLayer {
+  const base = winningLayerFor(key, projectOverrides, objectOverrides);
+  if (base !== "cascade") return base;
+  return (resolved[key]?.source_layer as CascadeLayer | undefined) ?? "cascade";
+}
+
 /** Build the per-layer value snapshot the CascadeLadder reads.
- *  MVP scope: populate the layers we directly know about (default,
- *  project, object) and the winning value's source attribution
- *  from `cascade_resolve`. Cascade-tier layers (printer / filament
- *  / build_plate / user) are populated from the cascade trace
- *  when PR-5 ships profile-source tagging; until then they render
- *  as em-dash for unknown. */
+ *  `default` is the engine schema default. The cascade-resolved value
+ *  (`plate_cascade_resolve`) is placed under the layer it won from —
+ *  its `source_layer` — so e.g. a process-fragment value shows under
+ *  "Profile" (the `user` row) and a bed-fragment value under "Build
+ *  plate". The override tiers (`project` / `object`) come straight from
+ *  the panel's own override maps. Cascade rows with no contribution
+ *  render as em-dash. */
 function buildLadderLayers(
   schema: OptionSummary,
   resolved: ResolvedMap,
@@ -506,25 +515,22 @@ function buildLadderLayers(
   objectOverrides: Record<string, string>,
 ): Map<CascadeLayer, string | null> {
   const map = new Map<CascadeLayer, string | null>();
+  // `default` is the engine schema default — the genuine bottom of the
+  // ladder, distinct from what our fragments resolve to.
   map.set("default", defaultScalarFor(schema));
-  // Cascade-side layers — until profile tagging, the cascade-tier
-  // winner shows under `default` and the rest are em-dashes. The
-  // resolve map's value is the effective post-cascade-and-overrides
-  // value; we can attribute it to the cascade umbrella when no
-  // override is active.
-  const resolvedValue = resolved[schema.key]?.value ?? null;
   map.set("printer", null);
   map.set("build_plate", null);
   map.set("filament", null);
   map.set("user", null);
-  if (
-    resolvedValue !== null &&
-    !(schema.key in projectOverrides) &&
-    !(schema.key in objectOverrides)
-  ) {
-    // Cascade-only winner — surface the value under `printer` as a
-    // proxy for the cascade tier until profile tagging lands.
-    map.set("printer", resolvedValue);
+  // Place the cascade-resolved value under the cascade layer it won
+  // from. `source_layer` is a CascadeLayer id from the backend
+  // (process → "user"/Profile, bed → "build_plate", filament →
+  // "filament", machine/nozzle/topology → "printer"); fall back to
+  // "printer" so a value is never silently dropped.
+  const entry = resolved[schema.key];
+  if (entry != null) {
+    const layer = (entry.source_layer ?? "printer") as CascadeLayer;
+    if (map.has(layer)) map.set(layer, entry.value);
   }
   map.set("project", projectOverrides[schema.key] ?? null);
   map.set("object", objectOverrides[schema.key] ?? null);

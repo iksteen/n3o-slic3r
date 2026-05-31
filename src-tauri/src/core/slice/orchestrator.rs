@@ -63,7 +63,7 @@ use crate::core::plugin::{
     PreSliceHook,
 };
 use crate::core::printer::lookup_instance;
-use crate::core::profile_library::compose_cascade;
+use crate::core::profile_library::{compose_cascade, with_quality_profile};
 use crate::core::project::SlicingContext;
 use slic3r_ffi::{slice, Model};
 use std::collections::BTreeMap;
@@ -150,7 +150,11 @@ fn resolve_cascade(input: &SliceJobInput) -> Result<Cascade, SliceStartError> {
             }
         }
     }
-    compose_cascade(&instance, &input.material_layout, &plate_overrides)
+    // The plate's process/quality profile overrides the instance's
+    // (per-plate binding); `with_quality_profile` swaps it in only when
+    // set, so the composer picks the plate's process fragment.
+    let effective = with_quality_profile(&instance, input.quality_profile.as_deref());
+    compose_cascade(&effective, &input.material_layout, &plate_overrides)
         .map_err(|e| SliceStartError::PrinterInstanceCompose(e.to_string()))
 }
 

@@ -116,6 +116,10 @@ export interface PlateSnapshot {
    *  populates this on object register. */
   material_to_slot: Record<number, { extruder: number; slot: number }>;
   project_overrides: Record<string, string>;
+  /** The plate's process/quality profile override (a bundled
+   *  process-fragment slug), or `null` to inherit the bound instance's
+   *  `quality_profile`. Drives the per-plate Quality picker. */
+  quality_profile: string | null;
 
   // Per-plate scene contents
   objects: SceneObject[];

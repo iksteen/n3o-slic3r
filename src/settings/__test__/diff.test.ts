@@ -5,7 +5,7 @@ import { computeDiff, passesDiff } from "../diff";
 import type { ResolvedMap } from "../resolve";
 
 function entry(value: string): ResolvedMap[string] {
-  return { value, winning_specificity: 0, cascade_fallback: null };
+  return { value, source_layer: null, cascade_fallback: null };
 }
 
 describe("computeDiff", () => {

@@ -303,6 +303,7 @@ pub fn build_slice_input(
         plate_ids: vec![plate_id.0],
         printer_instance_id,
         material_layout,
+        quality_profile: plate.quality_profile.clone(),
     };
 
     Ok((input, temp_path))

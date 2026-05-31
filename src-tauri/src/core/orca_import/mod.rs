@@ -407,20 +407,43 @@ fn bind_instance(model: Option<&str>) -> Option<(PrinterInstance, bool)> {
     instances.into_iter().next().map(|i| (i, true))
 }
 
+/// Map a foreign project's `print_settings_id` (e.g.
+/// `"0.20mm Strength @BBL A1M"`) to one of the printer's bundled process
+/// slugs (`"0.20mm-strength"`), when we ship a matching fragment. The
+/// importer adopts this as the plate's `quality_profile`, so the plate
+/// resolves + slices against the project's actual process rather than the
+/// instance default — and its preset values aren't mistaken for overrides.
+/// `None` when the project names no process or we ship no match.
+fn mapped_process(printer_fragment_slug: &str, settings: &OrcaProjectSettings) -> Option<String> {
+    let id = settings.print_settings_id()?;
+    // "<layer> <variant> @<machine>" → "<layer>-<variant>".
+    let base = id.split(" @").next().unwrap_or(&id).trim();
+    let slug = base.to_lowercase().replace(' ', "-");
+    crate::core::profile_library::bundled_process_slugs_for_printer(printer_fragment_slug)
+        .iter()
+        .any(|s| *s == slug)
+        .then_some(slug)
+}
+
 /// Our cascade resolved (libslic3r key → value) for the bound instance +
-/// the project's bed + filament — the baseline to delta the project's
-/// settings against, so only genuinely-different keys become overrides.
+/// the project's bed + filament + `quality_profile` — the baseline to
+/// delta the project's settings against, so only genuinely-different keys
+/// become overrides. `quality_profile` is the plate's adopted process (see
+/// [`mapped_process`]); composing against it is what makes a project's
+/// preset values resolve natively instead of as a pile of false overrides.
 /// Best-effort: any failure yields an empty map, which keeps every
 /// Process/Filament key (correct, just non-minimal).
 fn resolve_baseline(
     instance: &PrinterInstance,
     settings: &OrcaProjectSettings,
+    quality_profile: Option<&str>,
 ) -> BTreeMap<String, String> {
     let Some(printer) = lookup(&instance.vendor_profile_ref) else {
         return BTreeMap::new();
     };
+    let effective = crate::core::profile_library::with_quality_profile(instance, quality_profile);
     let Ok(cascade) =
-        crate::core::profile_library::compose_cascade(instance, &[], &BTreeMap::new())
+        crate::core::profile_library::compose_cascade(&effective, &[], &BTreeMap::new())
     else {
         return BTreeMap::new();
     };
@@ -509,6 +532,12 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
     let bind = bind_instance(model.as_deref());
     let instance_id = bind.as_ref().map(|(i, _)| i.id.clone());
     let instance_name = bind.as_ref().map(|(i, _)| i.display_name.clone());
+    // The project's process preset, mapped to a bundled slug the bound
+    // printer ships. Adopted as each plate's `quality_profile` so the
+    // plate resolves + slices against the project's actual process.
+    let process_slug = bind
+        .as_ref()
+        .and_then(|(i, _)| mapped_process(&i.printer_fragment_slug, &settings));
 
     // Fresh project (one default plate). Bind plate 1 before registering
     // objects so register_object's material→slot auto-bind sees the
@@ -568,7 +597,7 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
     // (project_settings.config is the project's single active config; we
     // don't yet read per-plate plate_N.json, so every plate gets it.)
     let baseline = match bind.as_ref() {
-        Some((instance, _)) => resolve_baseline(instance, &settings),
+        Some((instance, _)) => resolve_baseline(instance, &settings, process_slug.as_deref()),
         None => BTreeMap::new(),
     };
     // Valid value set per enum option, from our engine's schema — used to
@@ -581,6 +610,7 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
         .collect();
     let outcome = compute_overrides(&settings, &part, &baseline, &enum_sets);
     for plate in project.plates.iter_mut() {
+        plate.quality_profile = process_slug.clone();
         for (k, v) in &outcome.overrides {
             plate.project_overrides.insert(k.clone(), v.clone());
         }
@@ -822,6 +852,22 @@ mod tests {
             plate_ov.get("support_top_z_distance").map(String::as_str),
             Some("0.3"),
             "the genuine support tweak should import",
+        );
+
+        // The plate adopts the project's process preset: case.3mf used
+        // "0.20mm Strength @BBL A1M", which we ship as `0.20mm-strength`. So
+        // the plate's quality_profile is that slug, the baseline resolves
+        // against it, and `outer_wall_speed = 60` (the Strength preset value,
+        // vs. 200 under 0.20mm-standard) matches → NOT a false override. The
+        // plate now both shows and slices 60.
+        assert_eq!(
+            project.plates[0].quality_profile.as_deref(),
+            Some("0.20mm-strength"),
+            "the imported plate should adopt the project's process preset",
+        );
+        assert!(
+            !plate_ov.contains_key("outer_wall_speed"),
+            "a value that matches the adopted process preset must not be an override",
         );
 
         // Fork-divergent enum value is dropped, not injected: the project's

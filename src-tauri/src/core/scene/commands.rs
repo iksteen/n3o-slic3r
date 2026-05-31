@@ -89,6 +89,10 @@ pub struct PlateSnapshot {
     /// populates it on object register.
     pub material_to_slot: std::collections::BTreeMap<u8, crate::core::printer::SlotRef>,
     pub project_overrides: std::collections::HashMap<String, String>,
+    /// The plate's process/quality profile override (a bundled
+    /// process-fragment slug), or `None` to inherit the bound instance's
+    /// `quality_profile`. Drives the per-plate Quality picker.
+    pub quality_profile: Option<String>,
 
     // ---- Per-plate scene contents -----------------------------
     pub objects: Vec<SceneObject>,
@@ -145,6 +149,7 @@ fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
         printer_instance_id: plate.printer_instance_id.clone(),
         material_to_slot: plate.material_to_slot.clone(),
         project_overrides: plate.project_overrides.clone(),
+        quality_profile: plate.quality_profile.clone(),
         objects: plate.scene.objects.values().cloned().collect(),
         selection,
         build_plate: plate.scene.plate.clone(),

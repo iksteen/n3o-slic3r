@@ -40,6 +40,7 @@ function plateSnap(opts: {
     printer_instance_id: null,
     material_to_slot: {},
     project_overrides: {},
+    quality_profile: null,
     objects: Array.from({ length: opts.objects ?? 0 }, (_, i) => obj(i + 1)),
     selection: [],
     build_plate: null,

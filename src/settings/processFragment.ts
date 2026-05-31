@@ -7,6 +7,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { PrinterInstance } from "../printer/printerInstance";
+import type { PlateId } from "../viewport/types";
 
 export interface ProcessAvailability {
   printer: string;
@@ -67,4 +68,19 @@ export async function setInstanceQualityProfile(
     "printer_instance_set_quality_profile",
     { id, qualityProfile },
   );
+}
+
+/** Set a plate's process/quality profile (a bundled process slug),
+ *  overriding the bound instance's default for that plate only. Emits
+ *  `PlateMetadataChanged`, which the session listens on to refetch the
+ *  snapshot, so the picker + cascade ladder re-resolve. Pass `null` to
+ *  clear the override and inherit the instance's profile again. */
+export async function setPlateQualityProfile(
+  plateId: PlateId,
+  qualityProfile: string | null,
+): Promise<void> {
+  return invoke("project_set_plate_quality_profile", {
+    plateId,
+    qualityProfile,
+  });
 }

@@ -46,7 +46,7 @@ use crate::core::cascade::types::Cascade;
 use crate::core::printer::profile::PrinterProfile;
 
 pub mod composer;
-pub use composer::{compose_cascade, ComposeError};
+pub use composer::{compose_cascade, with_quality_profile, ComposeError};
 
 /// Errors emitted by [`ProfileLibrary::load`]. The Tauri setup hook
 /// panics on failure — a packaged binary without a parseable profile

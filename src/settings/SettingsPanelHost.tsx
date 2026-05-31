@@ -19,7 +19,7 @@ import {
 } from "./SettingsPanel";
 import { usePlugins } from "../plugins/usePlugins";
 import { platePluginWriters } from "../plugins/pluginWriters";
-import { buildContextJson } from "./buildContextJson";
+import { usePlateCascadeResolve } from "./resolve";
 import { makeObjectOverrideCallbacks } from "./overrideCommands";
 import { makeProjectOverrideCallbacks } from "./projectOverrideCommands";
 import { PrinterPicker } from "../printer/PrinterPicker";
@@ -38,7 +38,7 @@ import { QualityPicker } from "./QualityPicker";
 import { chunkExtruders, nozzlesInline } from "./nozzleLayout";
 import {
   listProcessFragments,
-  setInstanceQualityProfile,
+  setPlateQualityProfile,
   type ProcessFragmentSummary,
 } from "./processFragment";
 import type { PlateSnapshot } from "../viewport/types";
@@ -95,12 +95,6 @@ export interface SettingsPanelHostProps {
   /** Open the per-printer settings modal for the given instance.
    *  Wired from the cog button next to each row in PrinterPicker. */
   onEditPrinter: (instanceId: string) => void;
-  /** Active-slot index plumbed into `buildContextJson` for the
-   * cascade resolve. The settings panel itself no longer surfaces a
-   * slot picker (PR-S-2 filtered to Process bucket — no per-
-   * extruder rows here), so this defaults to 0 and stays there
-   * until per-extruder editing surfaces ship in their own panels. */
-  activeSlot?: number;
 }
 
 export function SettingsPanelHost({
@@ -109,7 +103,6 @@ export function SettingsPanelHost({
   connections,
   onAddPrinter,
   onEditPrinter,
-  activeSlot = 0,
 }: SettingsPanelHostProps) {
   const plate = useMemo(() => activePlate(session), [session]);
   const selected = useMemo(() => selectedObject(plate), [plate]);
@@ -155,22 +148,14 @@ export function SettingsPanelHost({
     return session.printer;
   }, [plate?.printer_identity, catalog.entries, session.printer]);
 
-  const context = useMemo(() => {
-    if (!activeProfile) return null;
-    return buildContextJson({
-      printer: activeProfile,
-      projectOverrides,
-      userOverrides,
-      objectOverrides,
-      activeSlot,
-    });
-  }, [
-    activeProfile,
-    projectOverrides,
-    userOverrides,
-    objectOverrides,
-    activeSlot,
-  ]);
+  // The active plate's cascade resolution (fragments composed against
+  // its effective process, each value tagged with the layer it won from).
+  // Re-resolves when the plate switches, its process changes, or it's
+  // rebound — those are the backend inputs.
+  const { resolved } = usePlateCascadeResolve(
+    plate?.plate_id ?? null,
+    `${plate?.quality_profile ?? ""}|${plate?.printer_instance_id ?? ""}`,
+  );
 
   const objectCbs = useMemo(
     () => makeObjectOverrideCallbacks(plate?.plate_id ?? null, selected?.id ?? null),
@@ -352,18 +337,22 @@ export function SettingsPanelHost({
             {row.map((i) => renderNozzlePicker(i, true))}
           </div>
         ))}
-        {instance && instanceId && (
+        {instance && instanceId && plate && (
           <div className="sp-quality">
             <span className="config-row-label sp-quality-label">Quality</span>
             <div className="sp-quality-wrap">
               <QualityPicker
-                value={instance.quality_profile}
+                // The plate's own process when set, else the bound
+                // instance's default (the seed for new plates).
+                value={plate.quality_profile ?? instance.quality_profile}
                 options={processOptions}
                 onChange={(next) => {
-                  void setInstanceQualityProfile(instanceId, next).catch(
+                  // Per-plate: record the choice on the plate, leaving
+                  // the shared instance default untouched.
+                  void setPlateQualityProfile(plate.plate_id, next).catch(
                     (err) => {
                       console.error(
-                        "[settings] setInstanceQualityProfile failed",
+                        "[settings] setPlateQualityProfile failed",
                         err,
                       );
                     },
@@ -391,8 +380,7 @@ export function SettingsPanelHost({
       </div>
       <SettingsPanel
         printer={activeProfile}
-        cascadeHandle={session.cascadeHandle}
-        context={context}
+        resolved={resolved}
         selectedObject={selected}
         objectOverrides={objectOverrides}
         onSetObjectOverride={objectCbs.onSetObjectOverride}

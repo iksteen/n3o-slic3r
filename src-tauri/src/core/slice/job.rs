@@ -69,6 +69,12 @@ pub struct SliceJobInput {
     /// SliceJobInput shapes).
     #[serde(default)]
     pub material_layout: Vec<Option<crate::core::printer::SlotRef>>,
+    /// The plate's process/quality profile override (a bundled
+    /// process-fragment slug), or `None` to inherit the bound
+    /// instance's `quality_profile`. The orchestrator composes the
+    /// cascade against this effective process.
+    #[serde(default)]
+    pub quality_profile: Option<String>,
 }
 
 /// Snapshot of a job's lifecycle. Returned by `slice_status` so the

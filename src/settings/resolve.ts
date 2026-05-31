@@ -80,10 +80,15 @@ export type FilamentProfileJson = {
 
 export type OverrideFileSpec = { label: string; content: string };
 
-/** Per-key cascade resolution from `cascade_resolve`. */
+/** Per-key cascade resolution from `plate_cascade_resolve`. The value
+ *  is the cascade-resolved value (fragments only — override tiers are
+ *  drawn from the panel's own override maps), `source_layer` is the
+ *  cascade `CascadeLayer` id it won from (drives the ladder row it lands
+ *  in), and `cascade_fallback` is unused by this path (always null —
+ *  there's no override folded in to revert from). */
 export type ResolvedEntry = {
   value: string;
-  winning_specificity: number;
+  source_layer: string | null;
   cascade_fallback: string | null;
 };
 
@@ -134,20 +139,27 @@ export function usePrinterOptions(
   return { options, loading };
 }
 
-/** Run `cascade_resolve` against the current handle + context. */
-export function useCascadeResolve(
-  handle: number | null,
-  context: ContextJson | null,
+/** Wire shape of one `plate_cascade_resolve` entry (no
+ *  `cascade_fallback` — this path folds in no overrides). */
+type PlateResolvedEntryWire = { value: string; source_layer: string | null };
+
+/** Resolve a plate's cascade for the settings panel via the backend
+ *  `plate_cascade_resolve` command: the bound instance's fragments,
+ *  composed against the plate's effective process, each value tagged
+ *  with the layer it won from. Refetches when `plateId` or `dep`
+ *  changes — pass a `dep` derived from the plate's process + binding
+ *  (e.g. `quality_profile|printer_instance_id`) so a process switch or
+ *  rebind re-resolves. Returns `{}` for a null plate. */
+export function usePlateCascadeResolve(
+  plateId: number | null,
+  dep: string,
 ): { resolved: ResolvedMap; loading: boolean; error: string | null } {
   const [resolved, setResolved] = useState<ResolvedMap>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Same JSON-key trick as usePrinterOptions — the context object
-  // is rebuilt per render in the parent.
-  const key = useMemo(() => JSON.stringify({ handle, context }), [handle, context]);
 
   useEffect(() => {
-    if (handle == null || context == null) {
+    if (plateId == null) {
       setResolved({});
       setLoading(false);
       setError(null);
@@ -156,12 +168,22 @@ export function useCascadeResolve(
     let cancelled = false;
     setLoading(true);
     setError(null);
-    invoke<{ entries: ResolvedMap }>("cascade_resolve", { handle, context })
+    invoke<{ entries: Record<string, PlateResolvedEntryWire> }>(
+      "plate_cascade_resolve",
+      { plateId },
+    )
       .then((res) => {
-        if (!cancelled) {
-          setResolved(res.entries);
-          setLoading(false);
+        if (cancelled) return;
+        const out: ResolvedMap = {};
+        for (const [k, v] of Object.entries(res.entries)) {
+          out[k] = {
+            value: v.value,
+            source_layer: v.source_layer,
+            cascade_fallback: null,
+          };
         }
+        setResolved(out);
+        setLoading(false);
       })
       .catch((err) => {
         if (!cancelled) {
@@ -172,8 +194,9 @@ export function useCascadeResolve(
     return () => {
       cancelled = true;
     };
+    // `dep` captures the plate state the backend resolve depends on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [plateId, dep]);
 
   return { resolved, loading, error };
 }

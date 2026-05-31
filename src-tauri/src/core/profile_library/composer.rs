@@ -147,6 +147,27 @@ impl std::fmt::Display for ComposeError {
 
 impl std::error::Error for ComposeError {}
 
+/// View an instance as if its process were `qp` — the per-plate
+/// quality-profile override. Returns the instance unchanged
+/// (`Borrowed`) when `qp` is `None` or already equal; otherwise a
+/// `Owned` clone with `quality_profile` swapped. The composer reads
+/// `instance.quality_profile` to pick the process fragment, so callers
+/// (slice, panel resolve, import baseline) pass the plate's effective
+/// profile through this rather than the composer growing a parameter.
+pub fn with_quality_profile<'a>(
+    instance: &'a PrinterInstance,
+    qp: Option<&str>,
+) -> std::borrow::Cow<'a, PrinterInstance> {
+    match qp {
+        Some(qp) if qp != instance.quality_profile => {
+            let mut owned = instance.clone();
+            owned.quality_profile = qp.to_owned();
+            std::borrow::Cow::Owned(owned)
+        }
+        _ => std::borrow::Cow::Borrowed(instance),
+    }
+}
+
 /// Compose the slice-time cascade for `instance`.
 ///
 /// `material_layout` is the per-material filament view: one entry

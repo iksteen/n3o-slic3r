@@ -222,6 +222,8 @@ pub fn run() {
             core::printer::printer_instance_update,
             core::printer::printer_instance_sync_from_driver,
             core::project::commands::project_set_plate_composition_order,
+            core::project::commands::project_set_plate_quality_profile,
+            core::project::commands::plate_cascade_resolve,
             core::project::commands::project_set_material_slot,
             core::project::commands::project_clear_material_slot,
             core::project::commands::project_save,
