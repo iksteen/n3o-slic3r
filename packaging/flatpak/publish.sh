@@ -61,7 +61,7 @@ Branch=master
 Url=${N3O_FLATPAK_REPO_URL}
 GPGKey=$(base64 -w0 "${gen}/${appid}.gpg")
 IsRuntime=false
-RuntimeRepo=https://flathub.org/repo/flathub.flatpakref
+RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo
 Title=n3o-slic3r
 REF
 
