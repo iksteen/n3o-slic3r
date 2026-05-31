@@ -77,8 +77,9 @@ Owns the **FR-PL-3** dispatch infrastructure and the
     enabled, last_error.
   - `plugin_set_enabled(name, enabled) -> Result<(), String>`.
   - `plugin_reload(name) -> Result<(), String>` — re-load one
-    plugin's Lua from disk (manual; the watcher in PR-8-10 calls the
-    same path).
+    plugin's Lua from disk. The MVP reload path (also the errored-plugin
+    recovery affordance); a post-MVP hot-reload watcher would call this
+    same path automatically.
   - `plugin:changed` event when the host's plugin set / states change,
     so the panel (PR-8-9) refreshes.
   - `PluginHost` stored as `tauri::State<Arc<Mutex<PluginHost>>>`
@@ -106,7 +107,8 @@ manifest).
   payload → PR-8-4, PR-8-6, PR-8-8.
 - Wiring dispatch into the actual slice / send pipeline → PR-8-5
   (post-slice), PR-8-6 (pre-slice + pre-send).
-- Hot reload on file change → PR-8-10 (this ticket ships only the
-  manual `plugin_reload`).
+- Automatic hot reload on file change → **deferred to post-MVP**
+  (FR-PL-8). This ticket's manual `plugin_reload` is the MVP reload
+  path (and the errored-plugin recovery affordance) and stays.
 - The Plugins panel UI → PR-8-9 (this ticket ships the commands it
   consumes).

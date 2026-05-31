@@ -6,7 +6,8 @@ deferred compose hook) is the **extensibility phase** — the PRD's
 pipeline without touching Rust." Source: `docs/Execution_Plan.md` §10,
 PRD §6.9 (FR-PL-1..9). Stated goal:
 
-> Working Lua plugin host with hot reload.
+> Working Lua plugin host. *(Automatic hot reload deferred to post-MVP
+> — see scope decision 3.)*
 
 Phase 8 has **no printer dependency for most of its surface** and the
 plan notes it can run in parallel with Phase 7. The flagship platecycler
@@ -50,10 +51,18 @@ Two decisions taken at phase kickoff that **diverge from
    composition, no Python/Pillow runtime dependency, no `.gcode.3mf`
    re-wrapping.
 
+3. **Hot reload (FR-PL-8) deferred to post-MVP (2026-05-31).** The
+   automatic `notify`-based folder watcher that reloads plugins on file
+   change is cut from the MVP. Plugins load on launch; the **manual**
+   `plugin_reload` command (also the errored-plugin recovery path)
+   stays, and the Plugins panel exposes it. PR-8-10 keeps the authoring
+   guide + exit smoke; the watcher moves to the §16 post-MVP list. The
+   "edit → active in under 60 seconds" loop returns with it.
+
 Net effect on the phase: the compose-hook ticket and the 3MF
 compose-API work are dropped (~3–4 days saved); the platecycler
 ticket shrinks from "port the Python pipeline" to "append a
-configurable macro block."
+configurable macro block"; PR-8-10 loses the hot-reload watcher.
 
 ## Hooks in scope
 
@@ -72,8 +81,7 @@ loaded into the sandboxed host, runs at **post-slice** and modifies
 real libslic3r-emitted G-code through the **typed** model — verified
 by re-slicing and grepping the output (green unit tests alone don't
 prove libslic3r accepted the change). Everything after 8-5 deepens: more
-hooks, the flagship plugin, the filament API, the settings UI, hot
-reload.
+hooks, the flagship plugin, the filament API, and the settings UI.
 
 ## Sequencing
 
@@ -90,7 +98,9 @@ closes at 8-5, the rest are largely independent:
   is a post-7c-4 follow-up. See the ticket's scope decision.
 - **8-9** (settings UI + Plugins panel) needs 8-2's manifest settings
   declarations; frontend.
-- **8-10** (hot reload + authoring guide + exit smoke) last.
+- **8-10** (authoring guide + exit smoke) last. **Hot reload is
+  deferred** to post-MVP (scope decision 3); only the manual
+  `plugin_reload` ships.
 
 ## Status by deliverable
 
@@ -105,7 +115,7 @@ closes at 8-5, the rest are largely independent:
 | **platecycler plugin** (post-slice macro append) + A1 mini hardware smoke | ✅ done (sw) | [PR-8-7](phase-8/PR-8-7%20platecycler%20plugin.md) |
 | Read-only filament-loadout Lua bindings (slice-time material→slot mapping) | ✅ done (sw) | [PR-8-8](phase-8/PR-8-8%20Filament%20state%20bindings.md) |
 | Plugin-declared settings in the cascade UI + Plugins panel (frontend) | ✅ done (sw) | [PR-8-9](phase-8/PR-8-9%20Settings%20and%20panel.md) |
-| Hot reload (folder watcher) + plugin authoring guide + exit-criteria smoke | ❌ open | [PR-8-10](phase-8/PR-8-10%20Hot%20reload%20and%20guide.md) |
+| Plugin authoring guide + exit-criteria smoke (hot reload deferred post-MVP) | ❌ open | [PR-8-10](phase-8/PR-8-10%20Hot%20reload%20and%20guide.md) |
 
 > **2026-05-31:** PR-8-9 shipped as a much larger feature than the
 > original ticket — a three-tier (global → project → plate) activation +
@@ -114,9 +124,10 @@ closes at 8-5, the rest are largely independent:
 > state in `config.toml`, and the three UI surfaces (brand-menu Global,
 > project-menu Project, settings-panel Plate tab). Software-complete +
 > reviewed; the one unverified piece is a live visual/interaction pass in
-> the running app. Remaining for the phase: **PR-8-10** (hot reload +
-> authoring guide + exit smoke) and the **platecycler hardware smoke**
-> (PR-8-7's exit-criteria proof, pending the real run).
+> the running app. Remaining for the phase: **PR-8-10** (authoring guide
+> + exit smoke; **hot reload deferred to post-MVP**, scope decision 3)
+> and the **platecycler hardware smoke** (PR-8-7's exit-criteria proof,
+> pending the real run).
 
 ## Review pass (after PR-8-5)
 
@@ -178,8 +189,11 @@ table-based bindings.
 
 ## Exit criteria (Execution_Plan §10, adjusted)
 
-- A non-Rust developer can take an example plugin, edit it, and have it
-  active in under 60 seconds (hot reload, PR-8-10).
+- A non-Rust developer can take an example plugin, edit it, drop it in
+  the plugins folder, and enable it from the Plugins panel — active on
+  the next launch or via a manual reload (PR-8-10). *(The automatic
+  "under 60 seconds" loop returns with post-MVP hot reload — scope
+  decision 3.)*
 - A plugin error is caught and surfaced (Plugins panel) without
   crashing the host (PR-8-3 error isolation).
 - The platecycler plugin appends its swap macro to a real A1 mini
@@ -199,3 +213,9 @@ kickoff decisions above and get a deferral note when PR-8-1 lands:
   multi-plate platecycler port to "What follows the MVP" (§16).
 - **`docs/Execution_Plan.md` §16** — add compose hook + multi-plate
   platecycler to the post-MVP list.
+
+**Done 2026-05-31 (hot-reload deferral, scope decision 3):** PRD
+FR-PL-8 marked deferred (+ MVP goals / §3.3 success criterion
+reframed); `Execution_Plan.md` §10 goal/deliverable/exit-criteria
+updated and FR-PL-8 added to §16; the phase-8 status table + exit
+criteria + PR-8-10/PR-8-9/PR-8-3/PR-8-2 cross-refs updated.

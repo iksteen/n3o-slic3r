@@ -86,7 +86,8 @@ Owns **FR-PL-2** (plugin manifest).
 **Out of scope.**
 
 - Loading the Lua into a `PluginRuntime` and running anything → PR-8-3.
-- Hot reload / folder watching → PR-8-10.
+- Hot reload / folder watching → **deferred to post-MVP** (FR-PL-8;
+  the MVP loads on launch + manual reload).
 - The settings actually appearing in the cascade UI → PR-8-9.
 - Resolving the real on-disk plugins root via Tauri paths is a thin
   command-layer wrapper; the core discovery fn is path-injectable for

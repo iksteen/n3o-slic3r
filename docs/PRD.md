@@ -34,7 +34,7 @@ OrcaSlicer and PrusaSlicer both implement a layered profile system (vendor → p
 
 ## 2.3 G-code post-processing is a second-class citizen
 
-Existing slicers permit external scripts as a final post-processing step, but offer no structured G-code model, no per-printer scoping, no hot-reload, and no UI integration for plugin-defined settings. Users who want to insert pauses, modify temperatures by layer, or add machine-specific commands write fragile string-manipulation scripts.
+Existing slicers permit external scripts as a final post-processing step, but offer no structured G-code model, no per-printer scoping, and no UI integration for plugin-defined settings. Users who want to insert pauses, modify temperatures by layer, or add machine-specific commands write fragile string-manipulation scripts.
 
 # 3. Goals and non-goals
 
@@ -46,7 +46,7 @@ Existing slicers permit external scripts as a final post-processing step, but of
 
 - **Slice and send.** Load model → assign to plate(s) → slice → send to Bambu A1 mini or Snapmaker U1 over LAN, with basic status feedback.
 
-- **Plugin system.** Lua-based G-code post-processing with structured G-code model, pipeline hooks, per-printer scoping, and hot-reload.
+- **Plugin system.** Lua-based G-code post-processing with structured G-code model, pipeline hooks, and per-printer scoping. (Automatic hot-reload of plugin files is deferred to post-MVP — plugins load on launch and can be reloaded manually.)
 
 - **Cross-platform.** Linux flatpak for the MVP. Windows and macOS support are post-MVP. WSL2 compatibility is a tested nice-to-have if the flatpak runs cleanly; not a requirement.
 
@@ -88,7 +88,7 @@ The MVP is considered successful when:
 
 - Time-to-first-slice for a new user with a known printer is under 5 minutes from app launch.
 
-- A plugin that inserts a beep at layer change can be written, dropped into the plugins folder, and active in the UI within 60 seconds.
+- A plugin that inserts a beep at layer change can be written, dropped into the plugins folder, and enabled from the Plugins UI (active on the next launch, or via a manual reload). The "active within 60 seconds" automatic-reload loop is a post-MVP refinement.
 
 - A user can preview a 50MB production G-code in-app: layer slider, color modes, hover inspection, and per-job stats all functional without any external tool.
 
@@ -388,7 +388,7 @@ Model materials are abstract extruder indices (1..N) assigned to objects, paint 
 
 - **FR-PL-7.** Plugins can read live filament state for the active printer (per-slot identity, loaded flag) via a read-only API, enabling printer- and material-aware plugin behavior.
 
-- **FR-PL-8.** Hot reload: changes to plugin files in the plugins folder are detected and applied without restart.
+- **FR-PL-8.** *(Deferred to post-MVP.)* Hot reload: changes to plugin files in the plugins folder are detected and applied without restart via a folder watcher. For the MVP, plugins load on launch and can be reloaded manually (`plugin_reload`); the automatic file watcher is post-MVP.
 
 - **FR-PL-9.** Plugin errors are caught, logged, and surfaced in a Plugins panel without crashing the host.
 

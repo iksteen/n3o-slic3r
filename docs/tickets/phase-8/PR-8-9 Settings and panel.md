@@ -199,6 +199,8 @@ panel + settings rendering).
   the folder by hand for MVP.
 - Per-plugin log streaming beyond `last_error` (a one-line error is
   enough for MVP; a full log pane is post-MVP).
-- Hot reload refreshing the panel live → PR-8-10 (this ticket consumes
-  the `plugin:changed` event; the watcher that fires it on file change
-  is PR-8-10).
+- Automatic file-watch hot reload → **deferred to post-MVP** (FR-PL-8;
+  `phase-8.md` scope decision 3). The panel refreshes on the
+  `plugin:changed` event, which manual reloads / activation commands
+  already emit; the `notify` watcher that would emit it on file change
+  is the deferred piece.

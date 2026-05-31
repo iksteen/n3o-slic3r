@@ -476,7 +476,7 @@ Filament sync ties the printer comms (7a, 7b) to the cascade (Phase 1) and the m
 
 # 10. Phase 8 — Plugin system (effort: ~4 person-weeks)
 
-Runs in parallel with Phase 7 since it has no printer dependency, and reuses the G-code parser from Phase 3. Goal: working Lua plugin host with hot reload.
+Runs in parallel with Phase 7 since it has no printer dependency, and reuses the G-code parser from Phase 3. Goal: a working Lua plugin host. (Automatic hot reload was descoped from the MVP — see §16; plugins load on launch and reload manually.)
 
 ### Deliverables
 
@@ -494,7 +494,7 @@ Runs in parallel with Phase 7 since it has no printer dependency, and reuses the
 
 - Plugin-declared settings integrated into the cascade UI under a Plugins category. Plate-level metadata (cycle counts, composition order) editable in the plate tab UI.
 
-- Hot reload via file watcher on the plugins folder.
+- ~~Hot reload via file watcher on the plugins folder.~~ **Deferred to post-MVP** (see §16). The MVP loads plugins on launch; the manual `plugin_reload` command (error recovery + a "reload" affordance) stays, but the automatic `notify`-based folder watcher is cut.
 
 - Plugins panel in UI: enabled state, errors, per-printer scoping.
 
@@ -506,11 +506,11 @@ Runs in parallel with Phase 7 since it has no printer dependency, and reuses the
 
 ### Exit criteria
 
-- A non-Rust developer can write a plugin from the example as a starting point and have it active in under 60 seconds.
+- A non-Rust developer can write a plugin from the example as a starting point, drop it in the plugins folder, and enable it from the Plugins panel (active on the next launch, or via a manual reload). The automatic "active in under 60 seconds" loop returns with post-MVP hot reload.
 
 - Plugin errors are caught and surfaced without crashing the host.
 
-- platecycler plugin produces a .platecycler.3mf from a multi-plate A1 mini project that prints successfully on the project lead's A1 mini + PlateCycler hardware. This is the proof that the compose hook + plugin architecture works end-to-end.
+- platecycler plugin appends its eject/swap macro to a real A1 mini print's G-code such that the PlateCycler auto-ejects the finished plate at print end on the project lead's A1 mini + PlateCycler hardware. This is the reduced proof point (the original compose-hook `.platecycler.3mf` criterion went with the deferred compose hook) that the plugin architecture works end-to-end.
 
 ### Cut candidates
 
@@ -575,7 +575,7 @@ Goal: Linux flatpak build, basic onboarding, release-readiness. Windows and macO
 | 5 — Multi-printer project | 3 pw | Phase 1, Phase 2 | Plates bound to printers, plate metadata, binding model | Low (this is the product) |
 | 6 — G-code preview | 3 pw | Phase 3 | Full in-app preview, .gcode and .gcode.3mf, independence achieved | Low (hard requirement) |
 | 7 — Printer + filament sync | 6 pw | Phase 3 (3MF), Phase 5 | A1 mini and U1 send-monitor-sync | Medium |
-| 8 — Plugin system | 4 pw | Phase 3, Phase 7 (filament-state) | Lua plugins with hot reload, platecycler ships | Medium |
+| 8 — Plugin system | 4 pw | Phase 3, Phase 7 (filament-state) | Lua plugins (hot reload deferred), platecycler ships | Medium |
 | 9 — Polish + Linux flatpak | 2 pw | Phase 8 | Linux flatpak; WSL2 best-effort | Medium |
 
 *Total: ~37.5 person-weeks of focused work. Some phases can be interleaved with their predecessors (Phase 4 ↔ Phase 5, Phase 6 ↔ Phase 7) by context-switching within the same developer**'**s brain on the same day; this does not reduce total effort but may reduce calendar time. Other phases hard-block: Phase 7c filament sync requires Phase 7a and 7b done; Phase 8**'**s platecycler validation requires Phase 7a done. Do not plan calendar from effort; plan effort from effort.*
@@ -653,6 +653,8 @@ Out of scope for this plan, but worth listing so MVP decisions don't paint into 
 - **Compose hook (FR-PL-5)** — the project-level plugin hook receiving all sliced plates + metadata and returning a transformed bundle (3MF metadata read/write, plate composition order, plate-count transform). Deferred from the MVP (2026-05-30) once the MVP platecycler was simplified to a post-slice macro append, leaving compose with no MVP consumer.
 
 - **Multi-plate batch platecycler** — the original concatenate-N-plates-into-one-job behavior (cycle counts, swap macro between plates, 3MF aggregate rewriting), which the compose hook enables. The MVP ships only the single-plate post-slice macro append.
+
+- **Plugin hot reload (FR-PL-8)** — a `notify`-based folder watcher on the plugins root that detects manifest/`.lua` create/modify/remove and reloads the affected plugin without a restart (debounced, atomic with respect to an in-flight slice), restoring the "edit → active in under 60 seconds" author loop. Descoped from the MVP (2026-05-31); the MVP loads plugins on launch and keeps the manual `plugin_reload` command (also the error-recovery path) — the watcher just calls that same reload automatically.
 
 - WASM plugin runtime alongside Lua.
 
