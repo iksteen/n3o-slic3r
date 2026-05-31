@@ -18,6 +18,20 @@ a `ProjectImported` event. Tested against the real `case-bambu-studio.3mf`.
 > 2. **Verify-via-gcode** — open `case-bambu-studio.3mf`, slice, confirm
 >    the imported support tweaks (tree-on-plate-only, top-Z-distance,
 >    first-layer-gap) survive into the output.
+>
+> **Deferred follow-up (revisit later — project lead, 2026-05-31):**
+> import from `different_settings_to_system` (the project's own list of
+> keys changed from its system preset) instead of the computed delta.
+> For `case.3mf` that field lists exactly the **5** support keys the user
+> changed (`enable_support`, `support_style`, `support_on_build_plate_only`,
+> `support_top_z_distance`, `support_object_first_layer_gap`) — vs. our
+> **189** computed deltas, ~184 of which are accent gap (Bambu's A1-mini
+> defaults vs. ours), not user intent. Intent-based import would: take
+> those keys (still bucket-filtered, machine dropped), pull values from
+> `project_settings.config`, let everything else resolve from our
+> cascade, and fall back to the delta path when the field is absent. Far
+> cleaner cascade + honest report; deferred to keep moving with what we
+> have.
 
 **Rescoped 2026-05-31** (project lead): the MVP import
 item is **OrcaSlicer/BBS `.3mf` *project* import — geometry + the
