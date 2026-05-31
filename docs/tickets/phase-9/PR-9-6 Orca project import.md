@@ -1,6 +1,25 @@
 # PR-9-6 — import OrcaSlicer `.3mf` projects (geometry + settings)
 
-Status: ⬜ open. **Rescoped 2026-05-31** (project lead): the MVP import
+Status: 🟡 working end-to-end (2026-05-31); two refinements left. Open
+project imports a foreign Bambu/Orca `.3mf`: `core::orca_import` parses
+`project_settings.config`, partitions keys by FFI bucket (machine
+dropped), builds the n3o project (geometry via `load_3mf`, binds an
+existing matching `PrinterInstance` — fallback flagged, never created),
+carries Process/Filament settings as overrides, and surfaces an import
+report dialog. Wired into `project_load`'s `ForeignProject` branch +
+a `ProjectImported` event. Tested against the real `case-bambu-studio.3mf`.
+
+> **Remaining:**
+> 1. **Minimize overrides** — `import()` uses an *empty* baseline, so
+>    every Process/Filament key becomes an override (correct but buries
+>    the cascade). Swap in the cascade-resolved baseline
+>    (`compose_cascade` + `cascade::resolve` for the bound instance) so
+>    redundant keys drop — `compute_overrides` already takes it.
+> 2. **Verify-via-gcode** — open `case-bambu-studio.3mf`, slice, confirm
+>    the imported support tweaks (tree-on-plate-only, top-Z-distance,
+>    first-layer-gap) survive into the output.
+
+**Rescoped 2026-05-31** (project lead): the MVP import
 item is **OrcaSlicer/BBS `.3mf` *project* import — geometry + the
 project's settings** — not the user-facing preset importer. Preset /
 profile import through the UI moves to **post-MVP** (the original
