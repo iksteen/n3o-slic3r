@@ -287,13 +287,46 @@ pub fn compute_overrides(
             continue;
         };
         match baseline.get(key) {
-            Some(base) if *base == value => out.redundant.push(key.clone()),
+            Some(base) if values_equal(base, &value) => out.redundant.push(key.clone()),
             _ => {
                 out.overrides.insert(key.clone(), value);
             }
         }
     }
     out
+}
+
+/// Collapse a comma-joined vector whose elements are all equal to its
+/// single value ("35,35,35" → "35"). A uniform per-filament setting then
+/// compares equal regardless of how many slots each side resolved — the
+/// project's filament count vs. our instance's — so it isn't a false
+/// delta. Non-uniform vectors and scalars are returned unchanged.
+fn collapse_uniform(v: &str) -> &str {
+    match v.split_once(',') {
+        Some((first, rest)) if rest.split(',').all(|p| p == first) => first,
+        _ => v,
+    }
+}
+
+/// Whether two libslic3r values mean the same thing, tolerating the
+/// representation gaps between Bambu's serialization and ours:
+/// per-filament slot count (uniform-vector collapse) and numeric
+/// formatting ("1" vs "1.0", "0.30" vs "0.3"). Compares element-wise so
+/// non-uniform numeric vectors normalize too.
+fn values_equal(a: &str, b: &str) -> bool {
+    let (a, b) = (collapse_uniform(a), collapse_uniform(b));
+    if a == b {
+        return true;
+    }
+    let (pa, pb): (Vec<&str>, Vec<&str>) = (a.split(',').collect(), b.split(',').collect());
+    pa.len() == pb.len()
+        && pa.iter().zip(&pb).all(|(x, y)| {
+            x == y
+                || matches!(
+                    (x.parse::<f64>(), y.parse::<f64>()),
+                    (Ok(nx), Ok(ny)) if (nx - ny).abs() < 1e-9
+                )
+        })
 }
 
 // ---- orchestration --------------------------------------------------
@@ -387,10 +420,17 @@ fn resolve_baseline(
         types.into_iter().map(mk).collect()
     };
     let ctx = SlicingContext::new(Arc::new(printer), Arc::new(plate), filaments);
-    crate::core::cascade::resolve(&cascade, &ctx)
+    // Seed with libslic3r's per-option defaults so keys our fragments
+    // never set (whose value is just the engine default at slice time)
+    // don't read as deltas — then overlay our cascade-resolved values.
+    let mut baseline: BTreeMap<String, String> = slic3r_ffi::option_defs()
         .into_iter()
-        .map(|(k, v)| (k, v.value))
-        .collect()
+        .filter_map(|d| d.default_serialized.map(|v| (d.key, v)))
+        .collect();
+    for (k, v) in crate::core::cascade::resolve(&cascade, &ctx) {
+        baseline.insert(k, v.value);
+    }
+    baseline
 }
 
 fn register_obj(project: &mut Project, mesh_ids: &[MeshId], obj: &ProjectObject) {
@@ -669,6 +709,10 @@ mod tests {
 
     #[test]
     fn imports_a_real_bambu_studio_project_end_to_end() {
+        // FFI up so resolve_baseline can seed libslic3r defaults (the
+        // production path); without it the baseline lacks defaults and
+        // default-valued keys read as false deltas.
+        let _ = slic3r_ffi::init(None, 3);
         // The project lead's real A1 mini Bambu Studio project.
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/3mf/case-bambu-studio.3mf");
@@ -716,6 +760,24 @@ mod tests {
             report.settings_redundant > 0,
             "baseline should drop redundant keys; got redundant={}",
             report.settings_redundant,
+        );
+
+        // No false deltas: a key whose value equals our default is NOT an
+        // override. interlocking_depth (project "2" == libslic3r default)
+        // and cool_plate_temp (uniform per-filament, slot-count aside) both
+        // drop; the genuine user change (support_top_z_distance) stays.
+        assert!(
+            !plate_ov.contains_key("interlocking_depth"),
+            "default-valued key must not be a false override",
+        );
+        assert!(
+            !plate_ov.contains_key("cool_plate_temp"),
+            "uniform per-filament value must not be a false override",
+        );
+        assert_eq!(
+            plate_ov.get("support_top_z_distance").map(String::as_str),
+            Some("0.3"),
+            "the genuine support tweak should import",
         );
     }
 }
