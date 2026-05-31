@@ -29,8 +29,12 @@ it and landing those values in the n3o project model.
 
 **Acceptance criteria.**
 
-- **Open an OrcaSlicer `.3mf` project** (file picker / menu item, framed
-  as import — "Import OrcaSlicer project…") and produce an n3o project:
+- **Hooked into "Open project" — no separate menu item** (project lead,
+  2026-05-31). Opening a Bambu Studio / OrcaSlicer `.3mf` via the
+  existing File → Open project transparently *imports* it: `project_load`
+  loads a native n3o project as before, and routes a foreign BBS/Orca
+  project (the `ForeignProject` case) through the importer instead of
+  erroring. Produce an n3o project:
   - geometry + per-object placement across **plates** (reusing the
     existing geometry + `model_settings.config` paths);
   - each plate's **printer + filament binding** inferred from the
