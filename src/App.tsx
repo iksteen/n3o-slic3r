@@ -64,6 +64,7 @@ interface ImportReport {
   settings_incompatible: number;
   settings_machine_dropped: number;
   settings_unmapped: number;
+  settings_from_change_list: boolean;
 }
 
 function App() {
@@ -308,6 +309,10 @@ function App() {
           }`,
           `Filaments: ${r.filaments_matched} matched, ${r.filaments_unmatched} not found.`,
           `Settings: ${r.settings_applied} applied${
+            r.settings_from_change_list
+              ? " (only the changes the project made to its preset)"
+              : ""
+          }${
             r.settings_redundant ? `, ${r.settings_redundant} already at default` : ""
           }${
             r.settings_incompatible ? `, ${r.settings_incompatible} with values this engine doesn't recognize (reset to default)` : ""

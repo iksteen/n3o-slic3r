@@ -37,19 +37,22 @@ a `ProjectImported` event. Tested against the real `case-bambu-studio.3mf`.
 >    libslic3r's motion, not just the config echo. (`support_top_z_distance`
 >    etc. likewise survive as overrides.)
 >
-> **Deferred follow-up (revisit later — project lead, 2026-05-31):**
-> import from `different_settings_to_system` (the project's own list of
-> keys changed from its system preset) instead of the computed delta.
-> For `case.3mf` that field lists exactly the **5** support keys the user
-> changed (`enable_support`, `support_style`, `support_on_build_plate_only`,
-> `support_top_z_distance`, `support_object_first_layer_gap`) — vs. our
-> **189** computed deltas, ~184 of which are accent gap (Bambu's A1-mini
-> defaults vs. ours), not user intent. Intent-based import would: take
-> those keys (still bucket-filtered, machine dropped), pull values from
-> `project_settings.config`, let everything else resolve from our
-> cascade, and fall back to the delta path when the field is absent. Far
-> cleaner cascade + honest report; deferred to keep moving with what we
-> have.
+> ✅ **Intent-based import (2026-06-01)** — import from
+> `different_settings_to_system` (the project's own list of keys changed
+> from its system preset) instead of the full computed delta.
+> `OrcaProjectSettings::changed_from_system` flattens that BBS field (a
+> list whose slots are `;`-joined keys) into a key set; `compute_overrides`
+> takes an `only_keys` filter and imports just those (still bucket-filtered,
+> machine dropped, enum/range-validated), letting everything else resolve
+> from the adopted process. For `case.3mf` that's the **5** support keys
+> (`enable_support`, `support_style`, `support_on_build_plate_only`,
+> `support_top_z_distance`, `support_object_first_layer_gap`) — vs. the
+> ~31 the full delta produced. Reported via `settings_from_change_list`.
+> The field being **absent** (or `null`) falls back to the full delta;
+> **present-but-empty** imports nothing (the project changed nothing).
+> Guarded by enum/negative-sentinel validation done first (so the full-delta
+> fallback path stays safe even for the invalid Bambu defaults a project
+> never changed).
 
 **Rescoped 2026-05-31** (project lead): the MVP import
 item is **OrcaSlicer/BBS `.3mf` *project* import — geometry + the

@@ -131,6 +131,33 @@ impl OrcaProjectSettings {
     pub fn filament_settings_ids(&self) -> Vec<String> {
         self.list("filament_settings_id").unwrap_or_default()
     }
+
+    /// The keys the project marks as changed from its system preset
+    /// (`different_settings_to_system`). BBS stores this as a list whose
+    /// slots are `;`-joined key strings, one per config category (process,
+    /// then per-filament, …); we flatten the union across all slots.
+    ///
+    /// Returns:
+    /// - `None` when the key is **absent** (or `null`): we can't tell what
+    ///   the user changed, so the caller imports the full delta-vs-baseline.
+    /// - `Some(set)` when **present** — even an empty set (every slot blank):
+    ///   the project declares it changed *nothing*, so the caller imports no
+    ///   overrides (just geometry + the adopted process).
+    pub fn changed_from_system(&self) -> Option<std::collections::HashSet<String>> {
+        let split = |s: &str| -> Vec<String> {
+            s.split(';')
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .map(str::to_owned)
+                .collect()
+        };
+        match self.settings.get("different_settings_to_system")? {
+            Value::Array(a) => Some(a.iter().filter_map(Value::as_str).flat_map(split).collect()),
+            Value::String(s) => Some(split(s).into_iter().collect()),
+            // null / unexpected shape → treat as absent (full import).
+            _ => None,
+        }
+    }
 }
 
 /// Where each settings key lands when importing.
@@ -288,15 +315,26 @@ pub struct OverrideOutcome {
 /// fork-divergence our libslic3r would reject — is dropped to
 /// `incompatible` rather than imported; non-enum keys aren't in the map
 /// and skip the check.
+///
+/// `only_keys`, when `Some`, restricts the import to exactly the project's
+/// declared change list (`different_settings_to_system`) — every other
+/// Process/Filament key resolves from the adopted process instead of
+/// landing as an override. `None` imports the full delta (no change list).
 pub fn compute_overrides(
     foreign: &OrcaProjectSettings,
     partition: &KeyPartition,
     baseline: &BTreeMap<String, String>,
     enum_sets: &BTreeMap<String, Vec<String>>,
     nonneg: &std::collections::HashSet<String>,
+    only_keys: Option<&std::collections::HashSet<String>>,
 ) -> OverrideOutcome {
     let mut out = OverrideOutcome::default();
     for key in partition.process.iter().chain(partition.filament.iter()) {
+        // Intent-based import: skip anything the project didn't mark as
+        // changed from its system preset.
+        if only_keys.is_some_and(|only| !only.contains(key)) {
+            continue;
+        }
         let Some(value) = foreign.canonical(key) else {
             out.unreadable.push(key.clone());
             continue;
@@ -414,6 +452,10 @@ pub struct ImportReport {
     pub settings_machine_dropped: usize,
     /// Keys with no home in our model.
     pub settings_unmapped: usize,
+    /// `true` when the project declared a `different_settings_to_system`
+    /// change list and we imported only those keys (everything else resolves
+    /// from the adopted process); `false` for the full delta-vs-baseline.
+    pub settings_from_change_list: bool,
 }
 
 /// Find an *existing* user `PrinterInstance` whose printer model matches
@@ -651,7 +693,18 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
         })
         .map(|d| d.key.clone())
         .collect();
-    let outcome = compute_overrides(&settings, &part, &baseline, &enum_sets, &nonneg);
+    // Intent-based import: when the project declares which keys it changed
+    // from its system preset, import only those (everything else resolves
+    // from the adopted process). Absent/null → full delta.
+    let changed = settings.changed_from_system();
+    let outcome = compute_overrides(
+        &settings,
+        &part,
+        &baseline,
+        &enum_sets,
+        &nonneg,
+        changed.as_ref(),
+    );
     for plate in project.plates.iter_mut() {
         plate.quality_profile = process_slug.clone();
         for (k, v) in &outcome.overrides {
@@ -683,6 +736,7 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
         settings_incompatible: outcome.incompatible.len(),
         settings_machine_dropped: part.machine.len(),
         settings_unmapped: part.unmapped.len(),
+        settings_from_change_list: changed.is_some(),
     };
     Ok((project, report))
 }
@@ -806,13 +860,15 @@ mod tests {
         baseline.insert(pinned.clone(), s.canonical(&pinned).unwrap());
 
         // No enum/negative validation in this unit (FFI not initialized
-        // here); empty sets leave every value valid.
+        // here); empty sets leave every value valid. `None` = full delta
+        // (no change list).
         let out = compute_overrides(
             &s,
             &p,
             &baseline,
             &BTreeMap::new(),
             &std::collections::HashSet::new(),
+            None,
         );
 
         // The pinned key matched the baseline → redundant, not overridden.
@@ -876,78 +932,154 @@ mod tests {
         assert!(!plate_ov.contains_key("machine_start_gcode"));
         assert!(!plate_ov.contains_key("nozzle_diameter"));
 
-        // The cascade baseline fired: many keys already match our A1 mini
-        // default and drop out as redundant. Guards against a silent
-        // empty-baseline fallback (which would keep every key).
+        // Intent-based import: case.3mf declares `different_settings_to_system`
+        // (the support keys the user changed from the Strength preset), so we
+        // import ONLY those — everything else resolves from the adopted
+        // process. (The full delta-vs-baseline path is covered by the unit
+        // tests below; it's not exercised here since the change list exists.)
         assert!(
-            report.settings_redundant > 0,
-            "baseline should drop redundant keys; got redundant={}",
-            report.settings_redundant,
+            report.settings_from_change_list,
+            "case.3mf has a change list → intent-based import",
         );
-
-        // No false deltas: a key whose value equals our default is NOT an
-        // override. interlocking_depth (project "2" == libslic3r default)
-        // and cool_plate_temp (uniform per-filament, slot-count aside) both
-        // drop; the genuine user change (support_top_z_distance) stays.
-        assert!(
-            !plate_ov.contains_key("interlocking_depth"),
-            "default-valued key must not be a false override",
-        );
-        assert!(
-            !plate_ov.contains_key("cool_plate_temp"),
-            "uniform per-filament value must not be a false override",
-        );
+        // The genuine support tweak the user made imports...
         assert_eq!(
             plate_ov.get("support_top_z_distance").map(String::as_str),
             Some("0.3"),
-            "the genuine support tweak should import",
+            "a key in the change list should import",
+        );
+        // ...and nothing outside the change list lands as an override: not the
+        // process defaults (outer_wall_speed, interlocking_depth,
+        // cool_plate_temp), not the invalid Bambu-default sentinels the user
+        // never touched (ironing_pattern=zig-zag, tree_support_wall_count=-1),
+        // not the filament selectors. All resolve from the adopted process.
+        for absent in [
+            "outer_wall_speed",
+            "interlocking_depth",
+            "cool_plate_temp",
+            "ironing_pattern",
+            "tree_support_wall_count",
+            "wall_filament",
+        ] {
+            assert!(
+                !plate_ov.contains_key(absent),
+                "{absent} is not in the change list — must not import",
+            );
+        }
+        // The override set is exactly the changed keys (≤ the 5 declared,
+        // less any already matching our Strength baseline) — minimal.
+        assert!(
+            plate_ov.len() <= 5,
+            "intent-based import should be minimal; got {}",
+            plate_ov.len(),
         );
 
-        // The plate adopts the project's process preset: case.3mf used
-        // "0.20mm Strength @BBL A1M", which we ship as `0.20mm-strength`. So
-        // the plate's quality_profile is that slug, the baseline resolves
-        // against it, and `outer_wall_speed = 60` (the Strength preset value,
-        // vs. 200 under 0.20mm-standard) matches → NOT a false override. The
-        // plate now both shows and slices 60.
+        // The plate adopts the project's process preset regardless of the
+        // change list (from print_settings_id) — "0.20mm Strength" → our
+        // `0.20mm-strength` slug, so it both shows and slices the preset.
         assert_eq!(
             project.plates[0].quality_profile.as_deref(),
             Some("0.20mm-strength"),
             "the imported plate should adopt the project's process preset",
         );
-        assert!(
-            !plate_ov.contains_key("outer_wall_speed"),
-            "a value that matches the adopted process preset must not be an override",
-        );
+    }
 
-        // Fork-divergent enum value is dropped, not injected: the project's
-        // `ironing_pattern = "zig-zag"` (a Bambu value OrcaSlicer's
-        // handle_legacy migrates) isn't in our set (rectilinear/concentric),
-        // so it's reported incompatible and never reaches the overrides.
-        assert!(
-            !plate_ov.contains_key("ironing_pattern"),
-            "invalid enum value must not be imported as an override",
-        );
-        assert!(
-            report.settings_incompatible > 0,
-            "expected zig-zag ironing_pattern reported incompatible",
-        );
-
-        // Out-of-range numeric value is dropped too: case.3mf carries
-        // `tree_support_wall_count = -1` (Bambu's "auto" sentinel), but our
-        // engine's range is [0,2], so it's reported incompatible, not
-        // imported as the invalid -1.
-        assert!(
-            !plate_ov.contains_key("tree_support_wall_count"),
-            "negative value for a non-negative option must not be imported",
-        );
-        // ...but a valid sentinel BELOW a positive GUI min is NOT dropped:
-        // `wall_filament = 0` ("inherit the object's filament", GUI min=1) is
-        // a real value libslic3r accepts, so it's kept as an override rather
-        // than swept up as out-of-range.
+    #[test]
+    fn changed_from_system_distinguishes_absent_present_empty_null() {
+        use serde_json::json;
+        let with = |v: serde_json::Value| OrcaProjectSettings {
+            settings: [("different_settings_to_system".to_string(), v)]
+                .into_iter()
+                .collect(),
+        };
+        // Absent → None (full import).
+        assert!(OrcaProjectSettings {
+            settings: BTreeMap::new()
+        }
+        .changed_from_system()
+        .is_none());
+        // Present, BBS-structured (keys in slot 0, other slots blank) →
+        // flattened union.
+        let set = with(json!(["a;b;c", "", "", ""]))
+            .changed_from_system()
+            .expect("present");
+        assert_eq!(set, ["a", "b", "c"].iter().map(|s| s.to_string()).collect());
+        // Present but empty (every slot blank) → Some(empty): import nothing.
         assert_eq!(
-            plate_ov.get("wall_filament").map(String::as_str),
-            Some("0"),
-            "wall_filament=0 (valid inherit sentinel) must be kept, not dropped",
+            with(json!(["", "", ""]))
+                .changed_from_system()
+                .expect("present")
+                .len(),
+            0
+        );
+        // null → None (treated as absent — our call).
+        assert!(with(json!(null)).changed_from_system().is_none());
+    }
+
+    #[test]
+    fn compute_overrides_validates_invalid_values_and_honors_the_change_list() {
+        use serde_json::json;
+        use std::collections::HashSet;
+        let s = OrcaProjectSettings {
+            settings: [
+                ("ironing_pattern", json!("zig-zag")),    // enum not in our set
+                ("tree_support_wall_count", json!("-1")), // negative, min>=0
+                ("wall_filament", json!("0")),            // valid 0 sentinel
+                ("outer_wall_speed", json!("99")),        // ordinary delta
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+        };
+        let part = KeyPartition {
+            process: [
+                "ironing_pattern",
+                "tree_support_wall_count",
+                "wall_filament",
+                "outer_wall_speed",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            ..Default::default()
+        };
+        let baseline = BTreeMap::new(); // empty → everything differs
+        let enum_sets: BTreeMap<String, Vec<String>> = [(
+            "ironing_pattern".to_string(),
+            vec!["rectilinear".to_string(), "concentric".to_string()],
+        )]
+        .into_iter()
+        .collect();
+        let nonneg: HashSet<String> = ["tree_support_wall_count".to_string()]
+            .into_iter()
+            .collect();
+
+        // Full delta (no change list): invalid values drop to incompatible,
+        // valid ones import (incl. the wall_filament=0 sentinel).
+        let full = compute_overrides(&s, &part, &baseline, &enum_sets, &nonneg, None);
+        assert!(full.incompatible.contains(&"ironing_pattern".to_string()));
+        assert!(full
+            .incompatible
+            .contains(&"tree_support_wall_count".to_string()));
+        assert_eq!(
+            full.overrides.get("wall_filament").map(String::as_str),
+            Some("0")
+        );
+        assert_eq!(
+            full.overrides.get("outer_wall_speed").map(String::as_str),
+            Some("99")
+        );
+
+        // Change list = {outer_wall_speed}: only that key is considered; the
+        // others are skipped entirely (not even validated).
+        let only: HashSet<String> = ["outer_wall_speed".to_string()].into_iter().collect();
+        let intent = compute_overrides(&s, &part, &baseline, &enum_sets, &nonneg, Some(&only));
+        assert_eq!(
+            intent.overrides.keys().cloned().collect::<Vec<_>>(),
+            vec!["outer_wall_speed".to_string()]
+        );
+        assert!(
+            intent.incompatible.is_empty(),
+            "keys outside the change list aren't validated"
         );
     }
 }
