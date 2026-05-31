@@ -1,7 +1,14 @@
 # PR-9-3 — distribution: self-hosted `.flatpakref` + repo
 
-Status: 🟢 publish tooling done + validated (2026-05-31); awaiting the
-host URL + deploy (operational, the maintainer's step).
+Status: ✅ done (2026-05-31). Published to the maintainer's host and a
+signed `flatpak install --from <url>/…flatpakref` install + launch
+succeeded on this machine. (The clean-*box* install is PR-9-8's run.)
+
+> **Note:** the first generated `.flatpakref` had `RuntimeRepo` pointing
+> at `…/flathub.flatpakref` (404) instead of the repo-definition
+> `…/flathub.flatpakrepo`, which failed the install with "Can't load
+> dependent file … status 404". Fixed in `publish.sh` to
+> `https://dl.flathub.org/repo/flathub.flatpakrepo`.
 
 > **Outcome.** `packaging/flatpak/publish.sh` is the signed release path
 > (vs. `build.sh`, the unsigned dev path): it does a GPG-signed

@@ -1,6 +1,35 @@
 # PR-9-4 — first-run onboarding
 
-Status: ⬜ open. Frontend over existing backend.
+Status: ✅ satisfied by existing UI (2026-05-31), reduced scope per the
+project lead. The onboarding need is already met; inline connection
+setup and sequenced multi-printer onboarding are deferred (non-blocking).
+
+> **What already covers this** (audited 2026-05-31):
+> - **First-launch empty state** — `src/printer/PrintersEmptyState.tsx`,
+>   gated by `App.tsx`'s `noPrinters` (empty instance library): a
+>   "Set up your first printer" hero + CTA into the add-printer modal,
+>   instead of a bare canvas.
+> - **Add-printer modal** — `src/printer/AddPrinterModal.tsx`: searchable
+>   bundled catalog (incl. **A1 mini** + **U1**, A1 mini default), name +
+>   AMS config, creates a real `PrinterInstance` via
+>   `printer_instance_create`; the new instance binds to the active plate.
+> - **Connection setup exists** — not in the add-printer modal (by
+>   design) but in `PrinterSettingsModal`'s Connection tab (IP + access
+>   code for Bambu / IP + Moonraker port for U1, with validation + a
+>   "Test connection" button), persisted to `PrinterInstance.connection`.
+>   So "prompt for access info" is a *separate post-create step*, not a
+>   gap in capability — and connection matters only for **sending**, not
+>   slicing, so time-to-first-slice (the §11 / PRD §3.3 gate) is met by
+>   the add-printer flow alone.
+>
+> **Deferred (non-blocking, post-MVP polish):**
+> - Collecting connection/access info **inline** in the add-printer flow
+>   rather than via the settings modal afterwards.
+> - A **sequenced** "add A1 mini, then U1" first-run (today you add one,
+>   then click "Add printer" again — fine for MVP).
+>
+> Project lead's call: "there's already an add printer dialog … it
+> doesn't do the printer connection setup but that's okay for now."
 
 **Scope.** A guided first-launch flow: the user picks their printer(s)
 from a list that includes the **A1 mini** and **U1**, and is prompted
