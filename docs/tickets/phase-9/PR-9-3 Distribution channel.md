@@ -1,6 +1,30 @@
 # PR-9-3 — distribution: self-hosted `.flatpakref` + repo
 
-Status: ⬜ open.
+Status: 🟢 publish tooling done + validated (2026-05-31); awaiting the
+host URL + deploy (operational, the maintainer's step).
+
+> **Outcome.** `packaging/flatpak/publish.sh` is the signed release path
+> (vs. `build.sh`, the unsigned dev path): it does a GPG-signed
+> `flatpak-builder` export into `.publish-repo/`, signs the repo summary
+> + static deltas, exports the public key, and generates the
+> `.flatpakref` (URL + embedded key). Validated end-to-end with a
+> placeholder URL: the repo summary is signed (`summary.sig` present),
+> and the ref's embedded `GPGKey` decodes to the project key fingerprint.
+>
+> - **Hosting:** maintainer's own HTTPS server/domain (per the PR-9-3
+>   decision). `N3O_FLATPAK_REPO_URL` is a required env param; the script
+>   prints the rsync/scp upload steps. The actual deploy + a clean-machine
+>   install-from-the-real-URL are the remaining operational steps (folds
+>   into the PR-9-8 audit's clean-box run).
+> - **Signing:** a **dedicated** project key
+>   (`B3D305B4…0335DC53`, UID "n3o-slic3r release signing key"), separate
+>   from any personal key. Public key tracked at
+>   `packaging/flatpak/n3o-slic3r-signing-key.asc`. Passphraseless for
+>   scriptable signing (rotation/protection notes in `PUBLISHING.md`).
+> - **Docs:** `packaging/flatpak/PUBLISHING.md` (key, hosting, per-release
+>   publish, install command, AGPL source pointer).
+> - The install path is signed (no `--no-gpg-verify`); the ref's
+>   `RuntimeRepo` pulls the GNOME 50 runtime from Flathub automatically.
 
 **Scope.** Stand up the MVP distribution channel: a self-hosted flatpak
 repo + a `.flatpakref` users can install from. Per `Execution_Plan.md`

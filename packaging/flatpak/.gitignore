@@ -1,5 +1,7 @@
-# flatpak-builder outputs and the resolved-from-template manifest.
+# flatpak-builder outputs, the resolved-from-template manifest, and the
+# signed release repo + generated ref/key (all build outputs).
 .gen/
 .build/
 .repo/
+.publish-repo/
 .flatpak-builder/
