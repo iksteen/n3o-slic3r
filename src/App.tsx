@@ -12,6 +12,8 @@ import {
   useAutosaveRecoveryGate,
 } from "./project/AutosaveRecoveryDialog";
 import { autosaveEnable } from "./project/autosaveCommands";
+import { projectLoad, projectSave, projectSaveAs } from "./project/projectFile";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { SettingsPanelHost } from "./settings/SettingsPanelHost";
 import { PreviewWorkspace } from "./preview/PreviewWorkspace";
 import { useSlicePreviewBridge } from "./preview/useSlicePreviewBridge";
@@ -269,6 +271,53 @@ function App() {
     }
   };
 
+  // ----- Project file menu (Open / Save / Save as) -----
+  // The backend's source_path is the project's on-disk origin; null
+  // until first save. The menu label shows its basename, or
+  // "Untitled.3mf" for an unsaved project.
+  const sourcePath = session.snapshot?.source_path ?? null;
+  const projectName = sourcePath
+    ? sourcePath.split(/[\\/]/).pop() || "Untitled.3mf"
+    : "Untitled.3mf";
+  const projectFilters = [{ name: "n3o project", extensions: ["3mf"] }];
+
+  const handleOpenProject = async (): Promise<void> => {
+    try {
+      const picked = await openDialog({ multiple: false, filters: projectFilters });
+      if (typeof picked !== "string") return; // cancelled
+      await projectLoad(picked); // → project:loaded → session refetch
+    } catch (err) {
+      console.error("[project] open failed", err);
+    }
+  };
+
+  const handleSaveProjectAs = async (): Promise<void> => {
+    try {
+      const picked = await saveDialog({
+        title: "Save project as",
+        defaultPath: projectName,
+        filters: projectFilters,
+      });
+      if (typeof picked !== "string") return; // cancelled
+      await projectSaveAs(picked); // adopts the new source_path
+    } catch (err) {
+      console.error("[project] save-as failed", err);
+    }
+  };
+
+  const handleSaveProject = async (): Promise<void> => {
+    // No source path yet (Untitled) → behave like Save As.
+    if (!sourcePath) {
+      await handleSaveProjectAs();
+      return;
+    }
+    try {
+      await projectSave(sourcePath);
+    } catch (err) {
+      console.error("[project] save failed", err);
+    }
+  };
+
   // No printers + bootstrap completed → onboarding takes over.
   const noPrinters =
     !printers.loading && printers.instances.length === 0;
@@ -285,6 +334,10 @@ function App() {
         />
         {session.snapshot && (
           <ProjectMenu
+            projectName={projectName}
+            onOpenProject={() => void handleOpenProject()}
+            onSaveProject={() => void handleSaveProject()}
+            onSaveProjectAs={() => void handleSaveProjectAs()}
             onOpenProjectPlugins={() => setShowProjectPlugins(true)}
             projectPluginCount={projectPluginCount}
           />

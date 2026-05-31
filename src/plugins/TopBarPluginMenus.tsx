@@ -85,34 +85,53 @@ export function BrandMenu({
 }
 
 export interface ProjectMenuProps {
+  /** The current project's filename (e.g. "thing.3mf"), or
+   * "Untitled.3mf" when the project has never been saved. */
   projectName?: string | null;
+  onOpenProject: () => void;
+  onSaveProject: () => void;
+  onSaveProjectAs: () => void;
   onOpenProjectPlugins: () => void;
   projectPluginCount?: number;
 }
 
 export function ProjectMenu({
   projectName,
+  onOpenProject,
+  onSaveProject,
+  onSaveProjectAs,
   onOpenProjectPlugins,
   projectPluginCount = 0,
 }: ProjectMenuProps): React.JSX.Element {
   const { open, setOpen, ref } = useDropdown();
+  // Run an action and close the menu.
+  const act = (fn: () => void) => () => {
+    setOpen(false);
+    fn();
+  };
   return (
     <div className="tb-file-menu-wrap" ref={ref}>
       <button type="button" className="tb-btn" onClick={() => setOpen(!open)}>
-        <span>{projectName ?? "Project"}</span>
+        <span>{projectName ?? "Untitled.3mf"}</span>
         <Chevron />
       </button>
       {open && (
         <div className="tb-menu" role="menu">
           <div className="tb-menu-section">Project</div>
+          <button type="button" className="tb-menu-item" role="menuitem" onClick={act(onOpenProject)}>
+            <span>Open project…</span>
+          </button>
+          <button type="button" className="tb-menu-item" role="menuitem" onClick={act(onSaveProject)}>
+            <span>Save project</span>
+          </button>
+          <button type="button" className="tb-menu-item" role="menuitem" onClick={act(onSaveProjectAs)}>
+            <span>Save project as…</span>
+          </button>
           <button
             type="button"
             className="tb-menu-item"
             role="menuitem"
-            onClick={() => {
-              setOpen(false);
-              onOpenProjectPlugins();
-            }}
+            onClick={act(onOpenProjectPlugins)}
           >
             <span>Plugins…</span>
             {projectPluginCount > 0 && <span className="tb-menu-count">{projectPluginCount}</span>}

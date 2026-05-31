@@ -86,7 +86,7 @@ start immediately — they're independent. The rest:
 | Linux flatpak build (manifest, runtime, bundled libslic3r + webview, GPU) | 🟡 builds + runs on Arch | [PR-9-2](phase-9/PR-9-2%20Linux%20flatpak%20build.md) |
 | Distribution: self-hosted `.flatpakref` + repo | ✅ done | [PR-9-3](phase-9/PR-9-3%20Distribution%20channel.md) |
 | First-run onboarding (pick printers, prompt for access info) | ✅ existing UI (inline-connection deferred) | [PR-9-4](phase-9/PR-9-4%20First-run%20onboarding.md) |
-| Project file format `.3mf` finalized (FR-MP-4) | ⬜ open | [PR-9-5](phase-9/PR-9-5%20Project%20file%20format.md) |
+| Project file format `.3mf` finalized (FR-MP-4) | 🟡 menu wired + documented (format review owed pre-MVP) | [PR-9-5](phase-9/PR-9-5%20Project%20file%20format.md) |
 | OrcaSlicer profile importer (one-time migration; cut candidate) | ⬜ open | [PR-9-6](phase-9/PR-9-6%20Orca%20profile%20importer.md) |
 | Documentation: getting-started, troubleshooting, release notes | ⬜ open | [PR-9-7](phase-9/PR-9-7%20Documentation%20and%20release%20notes.md) |
 | Independence audit (clean Linux box, no other slicer) — exit gate | ⬜ open | [PR-9-8](phase-9/PR-9-8%20Independence%20audit.md) |

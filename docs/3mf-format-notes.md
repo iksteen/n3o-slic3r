@@ -173,3 +173,68 @@ models).
   Phase 6 work.
 - Per-plate detail (`Metadata/plate_N.json`, `top_N.png`, …) — these
   describe the *sliced* state, not the source project.
+
+## The n3o-slic3r project container (`Metadata/n3o_project.json`)
+
+> ⚠️ **PROVISIONAL — to be reviewed before MVP sign-off.** The custom
+> project entry below is the format of record *today* (FR-MP-4), and is
+> versioned (`format_version` + a reader-side mismatch reject), but the
+> project lead wants a deliberate review of the custom format before the
+> MVP is stamped complete — so treat the schema as not-yet-frozen. A
+> schema change before 1.0 should bump `FORMAT_VERSION` and add a
+> migration/compat decision (see below). Source of record:
+> `src-tauri/src/core/project/format.rs`.
+
+A saved project is a **standard 3MF zip with one extra entry**:
+`Metadata/n3o_project.json`. Foreign slicers (Bambu Studio, OrcaSlicer,
+PrusaSlicer) read the geometry + standard 3MF `<metadata>` and ignore
+the unrecognized entry.
+
+- **Geometry** (mesh buffers, object placements, plate assignments)
+  lives in the standard 3MF structure — foreign-slicer interop + a
+  container we already read/write.
+- **Project state** lives in `Metadata/n3o_project.json` as a
+  `ProjectFile`:
+
+  ```jsonc
+  {
+    "format_version": "1",            // FORMAT_VERSION; reader rejects a mismatch
+    "project": { /* the serialized Project */ },
+    "plate_printer_identities": {     // side-field, PlateId → vendor identity
+      "1": "bambu-lab-a1-mini"        // denormalized from the bound instance
+    }
+  }
+  ```
+
+  The `project` skeleton carries the plate list (per-plate name,
+  `project_overrides`, `printer_instance_id`, `material_to_slot`,
+  plate metadata, and scene objects), project-tier `user_overrides`,
+  `file_metadata` (3MF Title/Designer/License), the project `uuid`, and
+  `Mesh` entries with **empty** buffers (`#[serde(skip)]` — the heavy
+  vertex/normal/index data stays in the 3MF geometry, keeping the JSON
+  small).
+
+**Geometry ↔ skeleton reunite by position.** The writer emits meshes
+sorted by `MeshId` ascending; the reader walks the skeleton's meshes in
+the same order and zips them with the 3MF geometry. A count mismatch is
+a hard `GeometryMismatch` error.
+
+**No credentials in the project.** A plate references its printer only by
+`printer_instance_id` (a string like `"bambi"`) plus the denormalized
+`plate_printer_identities` vendor name — **never** connection info.
+Access codes / hosts live in the per-printer user-library instance TOML
+(`<config>/n3o-slic3r/printers/`), outside the `.3mf`. So a project file
+is shareable and rebinds cleanly on another install (the vendor identity
+lets the UI offer "rebind to a Bambu A1 mini" rather than just
+"unbound").
+
+**Versioning / compatibility.** `FORMAT_VERSION = "1"`. The reader
+rejects any other version with `SchemaMismatch` — i.e. the MVP makes
+**no forward-compat promise**: a newer-format file won't silently open
+in an older build. There is no upgrade/migration path yet (none is
+needed — "1" is the baseline). If the pre-MVP format review changes the
+schema, bump the version and decide then whether to add migration.
+
+**Round-trip coverage.** `src-tauri/tests/phase5_smoke.rs` (a 3-plate
+fixture: bindings, all override tiers, file metadata, geometry) plus the
+`round_trip_*` unit tests in `format.rs`.

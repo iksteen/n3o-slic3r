@@ -43,6 +43,9 @@ export const SESSION_EVENT_NAMES = [
   "scene:user_overrides_changed",
   "scene:bed_changed",
   "project:loaded",
+  // Save-as changes the project's source_path; refetch so the File
+  // menu's filename label updates. (Plain saves re-emit it harmlessly.)
+  "project:saved",
 ] as const;
 
 export interface ProjectSession {
