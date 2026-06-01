@@ -17,10 +17,16 @@
 //!   driver report, converting BBL's `RRGGBBAA` (no `#`) to our
 //!   `#RRGGBB` CSS form.
 //!
-//! Slots the driver doesn't report (Bambu external spool, U1
-//! toolheads without a mounted filament) stay untouched — the
-//! user's manual edits stand. See
-//! `memory/project_filament_id_sources.md` for the policy.
+//! The sync mirrors the report destructively (see
+//! `memory/feedback_sync_is_destructive_by_design.md`): a slot the report
+//! **enumerates as empty** — an AMS tray with no spool, an unmounted U1
+//! toolhead — is **cleared** (`filament_identity` + `color` → `None`), not
+//! left at its prior binding. The Bambu external spool is the exception:
+//! it's a single optional field, not an enumerated slot, and `None` is
+//! ambiguous (no external feed / a manually-filled Direct slot, since
+//! vt_tray has no RFID), so it's written only when a spool is reported.
+//! Manual entry remains a first-class write path
+//! (`memory/project_filament_id_sources.md`) — sync just overwrites it.
 
 use crate::core::driver::status::{AmsFilament, DriverExtra, U1Extra, U1Filament};
 use crate::core::printer::instance::{PrinterInstance, SlotBinding};
@@ -33,12 +39,13 @@ use crate::core::profile_library::FilamentFragmentSummary;
 pub struct SlotUpdate {
     pub extruder_idx: usize,
     pub slot_idx: usize,
-    /// The new identity. `Some(slug)` writes; `None` clears the
-    /// binding outright (we currently never emit this — every
-    /// resolver branch falls back to a generic identity instead).
+    /// The new identity. `Some(slug)` writes a binding; `None` together
+    /// with `color: None` clears the slot — emitted when the driver
+    /// reports the physical slot as empty, so a removed spool is synced
+    /// out (the sync is destructive by design — it mirrors the report).
     pub filament_identity: Option<String>,
-    /// CSS-style hex color (`#RRGGBB`).
-    pub color: String,
+    /// CSS-style hex color (`#RRGGBB`), or `None` for a cleared slot.
+    pub color: Option<String>,
 }
 
 /// Reconcile an instance to a driver status report in one atomic
@@ -75,7 +82,7 @@ pub fn apply_from_driver(
             if let Some(ext) = inst.extruders.get_mut(u.extruder_idx) {
                 if let Some(slot) = ext.slots.get_mut(u.slot_idx) {
                     slot.filament_identity = u.filament_identity.clone();
-                    slot.color = Some(u.color.clone());
+                    slot.color = u.color.clone();
                 }
             }
         }
@@ -83,10 +90,11 @@ pub fn apply_from_driver(
     })
 }
 
-/// Resolve a driver-report into per-slot updates for `instance`.
-/// Slots the driver didn't report (or couldn't report — Bambu's
-/// external spool isn't on the AMS bus) are absent from the output;
-/// the caller leaves them alone.
+/// Resolve a driver-report into per-slot updates for `instance`. A slot
+/// the report enumerates produces an update — a loaded one writes the
+/// resolved identity + color, an empty one clears them. Slots the report
+/// doesn't enumerate (the external spool when absent) are omitted; the
+/// caller leaves those alone.
 pub fn resolve_updates(
     instance: &PrinterInstance,
     extra: &DriverExtra,
@@ -141,32 +149,43 @@ fn resolve_bambu(
                 if !slot_at_index_is_ams_feed(ext, slot_idx) {
                     continue;
                 }
-                let Some(identity) = &tray.identity else {
-                    continue;
-                };
-                out.push(SlotUpdate {
-                    extruder_idx,
-                    slot_idx,
-                    filament_identity: resolve_bambu_identity(identity, library),
-                    color: hex8_to_css(&identity.color),
+                // An empty tray clears the slot (destructive sync); a
+                // loaded one writes the reported identity + color.
+                out.push(match &tray.identity {
+                    Some(identity) => SlotUpdate {
+                        extruder_idx,
+                        slot_idx,
+                        filament_identity: resolve_bambu_identity(identity, library),
+                        color: Some(hex8_to_css(&identity.color)),
+                    },
+                    None => SlotUpdate {
+                        extruder_idx,
+                        slot_idx,
+                        filament_identity: None,
+                        color: None,
+                    },
                 });
             }
         }
     }
+    // External spool → first Direct slot on the same extruder. On the A1
+    // mini that's slot 4 (after the 4 AMS feeds); future layouts
+    // (Direct-only without AMS, or a non-trailing Direct) work the same —
+    // find the first Direct and write into it.
+    //
+    // Unlike the AMS trays (each enumerated with an explicit empty state),
+    // the external spool is a single optional field — `None` is ambiguous
+    // (no external feed / nothing reported / a Direct slot the user filled
+    // manually, since vt_tray has no RFID). So we only write when a spool
+    // is reported and leave the slot alone otherwise, rather than clearing
+    // a possibly-manual binding.
     if let Some(vt) = &extra.external_spool {
-        // External spool → first Direct slot on the same extruder.
-        // On the A1 mini that's slot 4 (after the 4 AMS feeds);
-        // future layouts (Direct-only without AMS, or a non-
-        // trailing Direct) work the same — find the first Direct
-        // and write into it. If the printer reports an external
-        // spool but the user's instance has no Direct slot we
-        // simply skip it.
         if let Some(slot_idx) = first_direct_slot(ext) {
             out.push(SlotUpdate {
                 extruder_idx,
                 slot_idx,
                 filament_identity: resolve_bambu_identity(vt, library),
-                color: hex8_to_css(&vt.color),
+                color: Some(hex8_to_css(&vt.color)),
             });
         }
     }
@@ -180,7 +199,6 @@ fn resolve_u1(
 ) -> Vec<SlotUpdate> {
     let mut out = Vec::new();
     for (ext_idx, slot) in extra.toolhead_filaments.iter().enumerate() {
-        let Some(filament) = slot else { continue };
         // U1 has one slot per toolhead; the slot binding sits at
         // (extruder=ext_idx, slot=0). Skip toolheads the instance
         // doesn't declare.
@@ -190,13 +208,21 @@ fn resolve_u1(
         let Some(current) = extruder.slots.first() else {
             continue;
         };
-        let filament_identity = resolve_u1_identity(current, filament, library);
-        let color = hex8_to_css(&filament.color);
-        out.push(SlotUpdate {
-            extruder_idx: ext_idx,
-            slot_idx: 0,
-            filament_identity,
-            color,
+        // A mounted filament writes the resolved identity + color; an
+        // empty toolhead clears the slot (destructive sync).
+        out.push(match slot {
+            Some(filament) => SlotUpdate {
+                extruder_idx: ext_idx,
+                slot_idx: 0,
+                filament_identity: resolve_u1_identity(current, filament, library),
+                color: Some(hex8_to_css(&filament.color)),
+            },
+            None => SlotUpdate {
+                extruder_idx: ext_idx,
+                slot_idx: 0,
+                filament_identity: None,
+                color: None,
+            },
         });
     }
     out
@@ -520,7 +546,7 @@ mod tests {
             updates[0].filament_identity.as_deref(),
             Some("bambu-pla-basic-bbl-a1m")
         );
-        assert_eq!(updates[0].color, "#ff0000");
+        assert_eq!(updates[0].color.as_deref(), Some("#ff0000"));
     }
 
     #[test]
@@ -540,7 +566,7 @@ mod tests {
             updates[0].filament_identity.as_deref(),
             Some("generic-petg")
         );
-        assert_eq!(updates[0].color, "#aabbcc");
+        assert_eq!(updates[0].color.as_deref(), Some("#aabbcc"));
     }
 
     #[test]
@@ -565,7 +591,9 @@ mod tests {
     }
 
     #[test]
-    fn bambu_empty_trays_produce_no_updates() {
+    fn bambu_empty_trays_clear_their_slots() {
+        // Destructive sync: a tray the printer reports as empty clears
+        // the slot's binding + color, rather than leaving a stale spool.
         let inst = bambi();
         let ams = ams_with_trays(vec![empty_tray(0), empty_tray(1)]);
         let updates = resolve_updates(
@@ -576,7 +604,16 @@ mod tests {
             }),
             &lib(),
         );
-        assert!(updates.is_empty());
+        assert_eq!(
+            updates.len(),
+            2,
+            "both empty trays produce a clearing update"
+        );
+        for (i, u) in updates.iter().enumerate() {
+            assert_eq!(u.slot_idx, i);
+            assert_eq!(u.filament_identity, None);
+            assert_eq!(u.color, None);
+        }
     }
 
     #[test]
@@ -630,7 +667,7 @@ mod tests {
             updates[0].filament_identity.as_deref(),
             Some("generic-petg")
         );
-        assert_eq!(updates[0].color, "#112233");
+        assert_eq!(updates[0].color.as_deref(), Some("#112233"));
     }
 
     #[test]
@@ -693,7 +730,7 @@ mod tests {
             updates[0].filament_identity.as_deref(),
             Some("bambu-pla-basic-bbl-a1m")
         );
-        assert_eq!(updates[0].color, "#224466");
+        assert_eq!(updates[0].color.as_deref(), Some("#224466"));
     }
 
     #[test]
@@ -755,7 +792,7 @@ mod tests {
         assert_eq!(updates.len(), 1);
         assert!(updates[0].filament_identity.is_none());
         // Color always updates regardless of identity resolution.
-        assert_eq!(updates[0].color, "#112233");
+        assert_eq!(updates[0].color.as_deref(), Some("#112233"));
     }
 
     #[test]
@@ -777,9 +814,20 @@ mod tests {
             ..Default::default()
         };
         let updates = resolve_updates(&inst, &DriverExtra::U1(extra), &lib());
-        assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0].extruder_idx, 1);
-        assert_eq!(updates[1].extruder_idx, 3);
+        // Every reported toolhead syncs: mounted ones write, the two
+        // unmounted ones clear (destructive sync). Toolhead index maps
+        // directly to extruder index.
+        assert_eq!(updates.len(), 4);
+        assert_eq!(
+            updates.iter().map(|u| u.extruder_idx).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
+        assert_eq!(updates[0].filament_identity, None);
+        assert_eq!(updates[0].color, None);
+        assert!(updates[1].filament_identity.is_some());
+        assert_eq!(updates[1].color.as_deref(), Some("#010203"));
+        assert_eq!(updates[2].filament_identity, None);
+        assert_eq!(updates[3].color.as_deref(), Some("#040506"));
     }
 
     #[test]
