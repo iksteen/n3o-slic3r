@@ -20,14 +20,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDriverStatus } from "./useDriverStatus";
 import { driverCommand } from "./invokes";
 import type { ConnectionSummary } from "./useDriverConnections";
-import type { PrinterStatus } from "./types";
-import {
-  flattenSlots,
-  type PrinterInstance,
-} from "../printer/printerInstance";
+import type { AmsFilament, AmsTray, PrinterStatus } from "./types";
+import { cssColorFromHex } from "./colorUtils";
+import type { PrinterInstance } from "../printer/printerInstance";
 import { usePrinterCatalog } from "../printer/usePrinterCatalog";
-import type { FilamentSummary } from "../material/filamentSummary";
-import { useFilamentCatalog } from "../material/useFilamentCatalog";
 import { formatDuration } from "../ui/formatDuration";
 
 // ───────── Status derivation ─────────
@@ -407,29 +403,71 @@ interface LoadoutSlot {
   active: boolean;
 }
 
-/** Flat-slot key (`extruder:slot`) of the currently-engaged slot, or
- *  null. Mirrors BambuAmsStrip (`ams.active_slot` ↔ AMS tray index)
- *  and U1ToolheadStrip (`mounted_toolhead` ↔ extruder). */
-function engagedSlotKey(
-  instance: PrinterInstance,
-  status: PrinterStatus | null,
-  slots: ReturnType<typeof flattenSlots>,
-): string | null {
-  if (status == null) return null;
+/** Filament-name from an AMS/external spool's raw report: `"<type> <brand>"`
+ *  (e.g. "PLA Basic"), or just the type, or null when untagged. */
+function amsFilamentName(id: AmsFilament): string | null {
+  const parts = [id.tray_type, id.sub_brand].filter((p): p is string => !!p);
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
+function amsLoadoutRow(
+  tray: AmsTray,
+  unitId: number,
+  multiUnit: boolean,
+  activeSlot: number | null,
+): LoadoutSlot {
+  const id = tray.identity;
+  return {
+    key: `ams:${unitId}:${tray.id}`,
+    label: multiUnit
+      ? `${String.fromCharCode(65 + unitId)}:${tray.id + 1}`
+      : `${tray.id + 1}`,
+    color: id ? cssColorFromHex(id.color) : null,
+    name: id ? amsFilamentName(id) : null,
+    material: id ? id.tray_type : null,
+    active: activeSlot != null && activeSlot === tray.id,
+  };
+}
+
+/** Project the live driver report into loadout rows — what's *physically*
+ *  loaded per the printer's MQTT. Intentionally decoupled from the plate /
+ *  slot bindings (those are the slicing assignment, a separate concern the
+ *  device panel never reflects). `[]` when offline / nothing reported yet,
+ *  so a connection doesn't depend on the user having Synced slots. */
+export function loadoutFromReport(status: PrinterStatus | null): LoadoutSlot[] {
+  if (status == null) return [];
   const extra = status.extra;
   if (extra.kind === "U1") {
-    const mounted = extra.data.mounted_toolhead;
-    if (mounted == null || instance.extruders[mounted] == null) return null;
-    return `${mounted}:0`;
+    return extra.data.toolhead_filaments.map((fil, i) => ({
+      key: `th:${i}`,
+      label: `T${i + 1}`,
+      color: fil ? cssColorFromHex(fil.color) : null,
+      name: fil ? fil.material_type : null,
+      material: fil ? fil.material_type : null,
+      active: extra.data.mounted_toolhead === i,
+    }));
   }
-  const active = extra.data.ams?.active_slot ?? null;
-  if (active == null) return null;
-  // active_slot indexes the AMS trays in order; map it to the
-  // matching AMS-feed flat slot. (External-spool sentinels fall past
-  // the AMS slots → no highlight, matching the strip.)
-  const amsSlots = slots.filter((s) => s.feed === "ams");
-  const target = amsSlots[active];
-  return target ? `${target.ref.extruder}:${target.ref.slot}` : null;
+  const rows: LoadoutSlot[] = [];
+  const { ams, external_spool } = extra.data;
+  if (ams) {
+    const multiUnit = ams.units.length > 1;
+    for (const unit of ams.units) {
+      for (const tray of unit.trays) {
+        rows.push(amsLoadoutRow(tray, unit.id, multiUnit, ams.active_slot));
+      }
+    }
+  }
+  if (external_spool) {
+    rows.push({
+      key: "ext",
+      label: "Ext",
+      color: cssColorFromHex(external_spool.color),
+      name: amsFilamentName(external_spool),
+      material: external_spool.tray_type,
+      active: false,
+    });
+  }
+  return rows;
 }
 
 function LoadoutPanel({
@@ -450,15 +488,13 @@ function LoadoutPanel({
     );
   }
   const loaded = slots.filter((s) => s.name != null);
-  if (loaded.length === 0) {
+  if (slots.length === 0) {
     return (
       <div className="device-loadout">
         <div className="device-loadout-header">
           <span>Filament loadout</span>
         </div>
-        <div className="device-loadout-empty dim">
-          No synced loadout — use Sync on the printer to pull it in.
-        </div>
+        <div className="device-loadout-empty dim">No filament reported.</div>
       </div>
     );
   }
@@ -568,7 +604,6 @@ interface MonitorProps {
   instance: PrinterInstance | null;
   summary: ConnectionSummary | null;
   modelLabel: string;
-  filaments: Map<string, FilamentSummary>;
   onEditPrinter: (id: string) => void;
 }
 
@@ -576,7 +611,6 @@ function DeviceMonitor({
   instance,
   summary,
   modelLabel,
-  filaments,
   onEditPrinter,
 }: MonitorProps): React.JSX.Element {
   const driverId = summary?.driverId ?? null;
@@ -595,13 +629,6 @@ function DeviceMonitor({
     setActionError(null);
     setActionPending(false);
   }, [driverId]);
-  // Flatten the instance's slot bindings once per instance change —
-  // both the engaged-slot lookup and the loadout list read it, and it
-  // must not be recomputed on every status tick.
-  const slots = useMemo(
-    () => (instance ? flattenSlots(instance) : []),
-    [instance],
-  );
 
   if (instance == null) {
     return (
@@ -644,29 +671,16 @@ function DeviceMonitor({
     }
   };
 
-  // Loadout from the instance's synced slot bindings, with the live
-  // engaged-slot highlight when the printer is online.
-  const activeKey = offline ? null : engagedSlotKey(instance, status, slots);
-  const loadoutSlots: LoadoutSlot[] = slots.map((s) => {
-    const fil = s.filament_identity ? filaments.get(s.filament_identity) : undefined;
-    const key = `${s.ref.extruder}:${s.ref.slot}`;
-    return {
-      key,
-      label: s.label,
-      color: s.color,
-      name: s.filament_identity ? (fil?.display_name ?? s.filament_identity) : null,
-      material: fil?.base_type ?? null,
-      active: key === activeKey,
-    };
-  });
+  // Loadout = what's *physically* loaded per the live MQTT report — the
+  // AMS trays / toolheads the printer reports, NOT the instance's synced
+  // slot bindings (that's the slicing assignment, a deliberately separate
+  // concern). So filament shows on connect, no Sync required.
+  const loadoutSlots: LoadoutSlot[] = loadoutFromReport(offline ? null : status);
 
-  // Per-nozzle filament swatch. Multi-toolhead printers map nozzle i →
-  // extruder i's slot 1:1; a single-nozzle (AMS) printer's one nozzle
-  // is fed by whichever slot is engaged, so it shows the active spool.
-  const swatchFor = (color: string | null, identity: string | null): NozzleSwatch => {
-    const fs = identity ? filaments.get(identity) : undefined;
-    return { color, label: fs?.display_name ?? identity ?? "" };
-  };
+  // Per-nozzle filament swatch, also from the live report. Multi-toolhead
+  // printers map nozzle i → toolhead i's reported filament; a single-nozzle
+  // (AMS) printer's one nozzle is fed by whichever slot is engaged, so it
+  // shows the active spool.
   const activeSlot = loadoutSlots.find((s) => s.active) ?? null;
   // Single-nozzle (AMS) printers feed one nozzle from whichever slot is
   // engaged. While printing that's `activeSlot`; while idle the driver
@@ -688,9 +702,10 @@ function DeviceMonitor({
   };
   const nozzleSwatches: NozzleSwatch[] =
     instance.extruders.length > 1
-      ? instance.extruders.map((ext) =>
-          swatchFor(ext.slots[0]?.color ?? null, ext.slots[0]?.filament_identity ?? null),
-        )
+      ? instance.extruders.map((_ext, i) => {
+          const s = loadoutSlots[i];
+          return { color: s?.color ?? null, label: s?.name ?? "" };
+        })
       : [singleNozzleSwatch()];
 
   return (
@@ -818,7 +833,6 @@ export function DevicesView({
   onEditPrinter,
 }: DevicesViewProps): React.JSX.Element {
   const modelLabel = useModelLabels();
-  const { byIdentity: filaments } = useFilamentCatalog();
   const [selectedId, setSelectedIdState] = useState<string | null>(
     () => lastSelectedId,
   );
@@ -846,7 +860,6 @@ export function DevicesView({
         instance={selected}
         summary={selected ? (connections[selected.id] ?? null) : null}
         modelLabel={selected ? modelLabel(selected) : ""}
-        filaments={filaments}
         onEditPrinter={onEditPrinter}
       />
     </div>
