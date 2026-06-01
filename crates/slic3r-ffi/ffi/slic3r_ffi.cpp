@@ -769,7 +769,19 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         const std::string printer_model = cfg.opt_string("printer_model");
         print.is_BBL_printer() = (printer_model.compare(0, 9, "Bambu Lab") == 0);
 
-        StringObjectException err = print.validate();
+        // Print::validate() reports non-fatal validation *warnings* through
+        // its `warning` out-param (a StringObjectException*), and ~20 of those
+        // sites deref it unconditionally — e.g. Print.cpp:1890, which fires
+        // when the filaments' shrinkage compensations don't all match (common
+        // on a multi-material BBL plate). The param defaults to nullptr, so the
+        // headless entry — unlike the GUI, which always passes a real pointer
+        // to surface warnings to the user — null-derefs and hard-crashes the
+        // process before process() even runs. Pass a sink to catch (and, since
+        // we have no UI for them, discard) the warnings, exactly as the GUI
+        // does. The *returned* StringObjectException is the fatal error; the
+        // sink is the advisory warning. See docs/libslic3r-workarounds.md.
+        StringObjectException validation_warning;
+        StringObjectException err = print.validate(&validation_warning);
         if (!err.string.empty()) {
             set_err(out_err, err.string);
             return SLIC3R_ERR_VALIDATE;

@@ -369,6 +369,38 @@ per this doc's model.
 
 ---
 
+## 8. `Print::validate()` null-derefs its `warning` out-param
+
+**Symptom.** A multi-material slice hard-crashes (SIGSEGV, no Rust panic,
+the whole app exits) *before* `process()` runs. Reproduces deterministically
+on some plates and not others — looks printer-specific (e.g. BBL crashes, a
+Snapmaker U1 plate doesn't) but is actually driven by the *filaments* on the
+plate, not the printer.
+
+**Root cause.** Not UB, not heap-dependent — a plain null-pointer deref.
+`Print::validate(StringObjectException *warning = nullptr, …)` reports
+*non-fatal validation warnings* by writing through `warning`, and ~20 of
+those sites deref it **unconditionally** (Print.cpp:979–1891). The headless
+entry called `print.validate()` with no args, so `warning` was `nullptr`;
+whenever a plate trips one of those warning conditions, `warning->string = …`
+writes through null and crashes. The condition that surfaced it was
+`!has_same_shrinkage_compensations()` (Print.cpp:1890) — fires when the
+filaments on a multi-material plate have mismatched shrinkage-compensation
+values, which is why it tracked the filament set rather than the printer.
+
+The GUI never hits this: it always passes a real `StringObjectException*`
+to `validate()` to surface warnings to the user, so the writes have a valid
+target. This is the same class as §3/§6 — *invocation* setup the GUI does
+that the headless path skipped, not an engine defect we provoke.
+
+**Fix.** `slic3r_ffi.cpp` — pass a local `StringObjectException` sink to
+`validate()` (`print.validate(&validation_warning)`) and discard it (we have
+no warning UI). The *returned* `StringObjectException` remains the fatal
+error we gate on; the sink just absorbs the advisory writes. One sink covers
+all ~20 sites — none can deref null. Mirrors the GUI exactly.
+
+---
+
 ## When bumping the OrcaSlicer submodule
 
 Re-verify each workaround:
