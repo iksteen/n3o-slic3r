@@ -568,6 +568,24 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
             cfg.option<ConfigOptionEnumsGeneric>("nozzle_volume_type", true)
                 ->values.resize(extruder_count, nvtStandard);
 
+        // BBL printers are forced onto the Type1 (old, rectangular) wipe
+        // tower (Print::wipe_tower_type() returns Type1 whenever
+        // is_BBL_printer()). That tower has no stabilization cone — that's a
+        // Type2/rib-tower feature — yet Print::first_layer_wipe_tower_corners()
+        // unconditionally sizes one as `tan(cone_angle/2) *
+        // m_wipe_tower_data.height`, and only the Type2 path ever assigns
+        // `height`. So with the engine-default cone_angle=30 and an unset
+        // (garbage) `height`, the skirt convex hull picks up an infinite
+        // corner and ClipperLib throws "Coordinate outside allowed range" in
+        // _make_skirt — heap-dependent, so it strikes intermittently. Pin the
+        // cone angle to 0 for BBL printers (cone radius collapses to 0
+        // regardless of the unset height); a cone is meaningless on a Type1
+        // tower anyway. Non-BBL printers (e.g. the Snapmaker U1) use the Type2
+        // tower, which sets `height` and wants a real cone, so leave their
+        // value alone. See docs/libslic3r-workarounds.md §7.
+        if (cfg.opt_string("printer_model").compare(0, 9, "Bambu Lab") == 0)
+            cfg.option<ConfigOptionFloat>("wipe_tower_cone_angle", true)->value = 0.;
+
         // Per-region / per-object filament selectors carry "0 = use the
         // object/printer default" in 3MF configs. OrcaSlicer's GUI resolves
         // these via PartPlate state pre-apply, substituting the part's

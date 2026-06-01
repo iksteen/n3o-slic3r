@@ -316,10 +316,56 @@ print.set_plate_origin(Vec3d(0.0, 0.0, 0.0));
 ```
 
 Same class of bug as workaround 3 (`is_BBL_printer()`): an uninitialized
-`Print` member the GUI would otherwise set. Note this does **not** cover
-every uninitialized-state path — `_make_skirt`'s polygon offset hits the
-same class of overflow from a different unset value, surfaced once this
-fix shifts the heap; a systematic headless-init audit is the durable fix.
+`Print` member the GUI would otherwise set. A second, distinct
+uninitialized-read on the skirt path (`WipeTowerData::height`) is
+workaround 7 below.
+
+---
+
+## 7. `WipeTowerData::height` is read uninitialized on the BBL (Type1) tower path
+
+**Symptom.** A BBL (Bambu) multi-material slice with a prime tower
+*intermittently* fails with ClipperLib "Coordinate outside allowed range"
+during `Print::_make_skirt` (Print.cpp). Heap-layout dependent: the same
+input slices fine on most builds and throws on others — any unrelated
+change to the shim can flip it.
+
+**Root cause.** A latent upstream UB bug — **not** a config divergence. A
+real OrcaSlicer A1 inherits the exact same values we do
+(`fdm_process_common.json`: `skirt_height=1`, `skirt_loops=0`; engine
+default `wipe_tower_cone_angle=30`). The chain:
+
+- `Print::has_skirt()` returns `skirt_height > 0` — *not* `skirt_loops` —
+  so with the default `skirt_height=1`, `_make_skirt` runs even with zero
+  skirt loops.
+- `_make_skirt` builds a convex hull over
+  `first_layer_wipe_tower_corners()`, whose stabilization-cone math is
+  **not** gated by wall type: it computes
+  `R = tan(cone_angle/2) * m_wipe_tower_data.height` for *every* tower.
+- BBL printers are forced onto the Type1 (old, rectangular) wipe tower
+  (`Print::wipe_tower_type()` returns Type1 when `is_BBL_printer()`), and
+  **only the Type2/rib branch ever assigns `m_wipe_tower_data.height`**
+  (`Print.cpp:3449`). The Type1 path leaves it as an uninitialized
+  `float height;`.
+- `cone_angle=30` × garbage `height` → an infinite cone radius → an
+  `INT64_MIN` corner → the range check throws.
+
+It "works for millions" only because reading uninitialized memory usually
+lands on a small/benign value (a small cone, no overflow). Genuine UB
+masked by lucky memory; OrcaSlicer's A1 runs this exact path.
+
+**Fix.** `slic3r_ffi.cpp` — in the pre-`apply` config normalization, pin
+`wipe_tower_cone_angle = 0` when the printer is BBL (a Type1 tower has no
+stabilization cone anyway). `R = tan(0) * height = 0` regardless of the
+unset `height`, so the corner is deterministic — strictly better than
+upstream's reliance on benign garbage. Non-BBL printers (e.g. the
+Snapmaker U1, Type2/rib) do set `height` and want a real cone, so their
+value is left untouched.
+
+An equivalent root fix is a one-line `= 0` initializer on
+`WipeTowerData::height` in the submodule (and arguably gating the cone on
+the rib wall type) — both upstreamable — but we keep workarounds shim-side
+per this doc's model.
 
 ---
 
