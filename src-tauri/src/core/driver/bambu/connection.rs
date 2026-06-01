@@ -395,6 +395,14 @@ impl Driver for BambuDriver {
         // ("higher priority"). Publish + await ack on the status
         // stream.
         let topic = format!("device/{device_id}/request");
+        tracing::debug!(
+            target: "mqtt",
+            serial = %device_id,
+            dir = "tx",
+            topic = %topic,
+            payload = %String::from_utf8_lossy(&body),
+            "command",
+        );
         client
             .publish(&topic, QoS::AtLeastOnce, false, body)
             .await
@@ -574,6 +582,14 @@ async fn event_loop(
                         };
                         match serde_json::to_vec(&req) {
                             Ok(body) => {
+                                tracing::debug!(
+                                    target: "mqtt",
+                                    serial = %device_id,
+                                    dir = "tx",
+                                    topic = %request_topic,
+                                    payload = %String::from_utf8_lossy(&body),
+                                    "pushall",
+                                );
                                 if let Err(e) = client
                                     .publish(&request_topic, QoS::AtMostOnce, false, body)
                                     .await
@@ -589,6 +605,20 @@ async fn event_loop(
                         });
                     }
                     Ok(Event::Incoming(Packet::Publish(p))) if p.topic == report_topic => {
+                        // Full inbound report on the dedicated `mqtt` target
+                        // (enable with `RUST_LOG=mqtt=debug`) so the raw
+                        // `ams` / `vt_tray` JSON is inspectable when a spool
+                        // looks wrong. Logged here, before the bounded
+                        // channel can drop it.
+                        tracing::debug!(
+                            target: "mqtt",
+                            serial = %device_id,
+                            dir = "rx",
+                            topic = %p.topic,
+                            len = p.payload.len(),
+                            payload = %String::from_utf8_lossy(&p.payload),
+                            "report",
+                        );
                         // Forward to the parser. If the channel
                         // is full, drop the oldest by closing the
                         // current send and reopening — for now,

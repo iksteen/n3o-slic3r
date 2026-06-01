@@ -6,6 +6,11 @@
 //! setting `LOG_FORMAT=json` switches to JSON Lines for ingestion by
 //! external log pipelines.
 //!
+//! The driver layer logs the full printer conversation on a dedicated
+//! `mqtt` target — enable with `RUST_LOG=mqtt=debug` (capture to a file
+//! with `… 2> mqtt.log`) to inspect raw inbound reports (`ams` / `vt_tray`)
+//! and outbound commands when a printer's state looks wrong.
+//!
 //! Safe to call once at app startup. Calling twice is a no-op (the
 //! second call's subscriber install is silently ignored — tracing's
 //! global subscriber is set-once).
