@@ -148,9 +148,15 @@ export function ViewportCanvas({
       scene,
       mirror,
     });
+    // A gizmo drag ends with a pointerup the browser also turns into a
+    // `click` on the canvas. Swallow exactly that click so releasing a
+    // handle doesn't fall through to click-to-select (which would
+    // deselect, or grab whatever sits behind the released handle).
+    let swallowGizmoClick = false;
     gizmo.controls.addEventListener("dragging-changed", (ev) => {
       const dragging = (ev as { value: boolean }).value;
       controls.enabled = !dragging;
+      if (!dragging) swallowGizmoClick = true;
     });
     gizmoRef.current = gizmo;
 
@@ -247,6 +253,10 @@ export function ViewportCanvas({
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     const onClick = (ev: MouseEvent) => {
+      if (swallowGizmoClick) {
+        swallowGizmoClick = false;
+        return;
+      }
       if (ev.target !== renderer.domElement) return;
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
@@ -284,6 +294,13 @@ export function ViewportCanvas({
       }
     };
     renderer.domElement.addEventListener("click", onClick);
+    // Reset the swallow flag at the start of any fresh interaction, so a
+    // gizmo drag released off-canvas (no resulting click) can't suppress
+    // the user's next real click.
+    const onPointerDown = () => {
+      swallowGizmoClick = false;
+    };
+    renderer.domElement.addEventListener("pointerdown", onPointerDown, true);
 
     // ---- Keyboard shortcuts ------------------------------------------
     const onKeyDown = (ev: KeyboardEvent) => {
@@ -306,6 +323,7 @@ export function ViewportCanvas({
     return () => {
       cancelAnimationFrame(raf);
       renderer.domElement.removeEventListener("click", onClick);
+      renderer.domElement.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("keydown", onKeyDown);
       resizeObserver.disconnect();
       detachToastsListener();

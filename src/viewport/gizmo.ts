@@ -1,16 +1,17 @@
-// Transform gizmo (PR-2-10).
+// Transform gizmo.
 //
 // Wraps three's `TransformControls`. On drag-finish the *final*
 // matrix round-trips through `scene_object_set_transform` so Rust
 // stays authoritative — the renderer never persists transform state
 // it computed locally.
 //
-// Multi-select drag is deferred: when more than one object is
-// selected the gizmo attaches only to the first selected object, and
-// dragging affects that one. The pure-translate multi-object case
-// would be easy to add (apply the same delta vector per object) but
-// rotate / scale need careful pivot handling that's better suited to
-// Phase 4 UI work. Single-object covers the dominant flow.
+// Single selection attaches the gizmo directly to the mesh. Multi
+// selection attaches it to a temporary pivot placed at the selection's
+// bounding-box centre; the selected meshes are re-parented under the
+// pivot for the duration of the drag, so translate / rotate / scale
+// apply to all of them in unison around the shared centre (Three.js
+// hierarchy does the maths). On drag-finish each mesh is re-parented
+// back and its final matrix committed — one command per object.
 //
 // Snap defaults match common slicer UX: 1 mm translate snap, 15°
 // rotate snap, no scale snap. Hold Shift during drag to disable
@@ -58,51 +59,113 @@ export function createGizmo(deps: GizmoDeps): GizmoApi {
 
   let mode: GizmoMode = "Translate";
   let selected: ObjectId[] = [];
-  /** Matrix captured at drag start; used to compute the *final*
-   * matrix that gets committed via Tauri. */
+  // Single-object drag: the mesh's matrix captured at drag start.
   let dragStartMatrix: THREE.Matrix4 | null = null;
+  // Multi-object drag: a reusable pivot the selected meshes re-parent
+  // under for the drag, plus those meshes (with original parents + ids)
+  // so they can be re-parented back and committed on drag-finish.
+  let pivot: THREE.Object3D | null = null;
+  let pivotChildren: {
+    mesh: THREE.Mesh;
+    parent: THREE.Object3D;
+    id: ObjectId;
+  }[] = [];
 
   controls.addEventListener("dragging-changed", (ev) => {
     const dragging = (ev as { value: boolean }).value;
-    if (dragging) {
-      const attached = controls.object;
-      if (attached) {
-        dragStartMatrix = attached.matrix.clone();
-      }
-    } else if (dragStartMatrix) {
-      commitDrag();
-      dragStartMatrix = null;
-    }
+    if (dragging) onDragStart();
+    else onDragEnd();
   });
 
-  function commitDrag() {
-    if (selected.length === 0) return;
+  function selectedMeshes(): { mesh: THREE.Mesh; id: ObjectId }[] {
+    const out: { mesh: THREE.Mesh; id: ObjectId }[] = [];
+    for (const id of selected) {
+      const mesh = deps.mirror.findActiveMesh(id);
+      if (mesh) out.push({ mesh, id });
+    }
+    return out;
+  }
+
+  function onDragStart() {
     const attached = controls.object;
     if (!attached) return;
-    // The gizmo only attaches to the first selected mesh; the
-    // committed matrix is the final state of *that* mesh. For
-    // multi-select we still issue commands only for the first
-    // mesh (see module-level comment).
-    const finalMatrix = attached.matrix.clone();
-    void invokeFn("scene_object_set_transform", {
-      id: selected[0],
-      transform: matrixToArray(finalMatrix),
-    });
+    if (pivot && attached === pivot) {
+      // Re-parent the selected meshes under the pivot (preserving world
+      // transform) so the gizmo moves/rotates/scales them as one.
+      pivotChildren = [];
+      for (const { mesh, id } of selectedMeshes()) {
+        const parent = mesh.parent;
+        if (!parent) continue;
+        pivotChildren.push({ mesh, parent, id });
+        pivot.attach(mesh);
+      }
+    } else {
+      dragStartMatrix = attached.matrix.clone();
+    }
+  }
+
+  function onDragEnd() {
+    if (pivot && controls.object === pivot && pivotChildren.length > 0) {
+      // Re-parent each mesh back (preserving world transform) and commit
+      // its final matrix — one command per object; Rust re-applies via
+      // the snapshot.
+      for (const { mesh, parent, id } of pivotChildren) {
+        parent.attach(mesh);
+        mesh.updateMatrix();
+        void invokeFn("scene_object_set_transform", {
+          id,
+          transform: matrixToArray(mesh.matrix),
+        });
+      }
+      pivotChildren = [];
+      // Re-centre the pivot (back to identity) on the moved meshes so the
+      // next drag starts from a clean, axis-aligned frame instead of
+      // inheriting this drag's rotation/scale.
+      refresh();
+    } else if (dragStartMatrix) {
+      const attached = controls.object;
+      if (attached && selected.length > 0) {
+        void invokeFn("scene_object_set_transform", {
+          id: selected[0],
+          transform: matrixToArray(attached.matrix.clone()),
+        });
+      }
+      dragStartMatrix = null;
+    }
+  }
+
+  function detachPivot() {
+    if (pivot?.parent) pivot.parent.remove(pivot);
   }
 
   function refresh() {
-    if (selected.length === 0) {
+    const meshes = selectedMeshes();
+    if (meshes.length === 0) {
       controls.detach();
+      detachPivot();
       helper.visible = false;
       return;
     }
-    const target = pickAttachTarget(deps.mirror, selected);
-    if (!target) {
-      controls.detach();
-      helper.visible = false;
-      return;
+    if (meshes.length === 1) {
+      detachPivot();
+      controls.attach(meshes[0].mesh);
+    } else {
+      // Pivot at the selection's bounding-box centre, in the meshes'
+      // parent (the active plate's object group).
+      const group = meshes[0].mesh.parent ?? deps.scene;
+      if (!pivot) {
+        pivot = new THREE.Object3D();
+        pivot.name = "n3o:gizmo-pivot";
+      }
+      if (pivot.parent !== group) group.add(pivot);
+      const box = new THREE.Box3();
+      for (const { mesh } of meshes) box.expandByObject(mesh);
+      pivot.position.copy(box.getCenter(new THREE.Vector3()));
+      pivot.quaternion.identity();
+      pivot.scale.set(1, 1, 1);
+      pivot.updateMatrixWorld(true);
+      controls.attach(pivot);
     }
-    controls.attach(target);
     helper.visible = true;
     controls.setMode(modeForThree(mode));
   }
@@ -119,6 +182,7 @@ export function createGizmo(deps: GizmoDeps): GizmoApi {
     },
     dispose() {
       controls.detach();
+      detachPivot();
       // three.js 0.169's `TransformControls.dispose()` is buggy:
       // it calls `this.traverse(...)` but TransformControls no longer
       // extends Object3D in 0.169+ (it extends Controls/EventDispatcher),
