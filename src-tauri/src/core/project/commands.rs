@@ -280,6 +280,11 @@ pub struct TowerGeometry {
     pub width: f64,
     pub brim: f64,
     pub rotation: f64,
+    /// Distinct material count this resolved against. The viewport pairs a
+    /// sliced tower mesh with the count it was sliced at and treats the
+    /// mesh as stale once this diverges (the only thing that reshapes the
+    /// tower; moving it does not).
+    pub material_count: usize,
 }
 
 /// The active plate's priming-tower geometry for the viewport overlay,
@@ -357,6 +362,7 @@ pub fn tower_geometry_for_plate(
         width: num("prime_tower_width").unwrap_or(0.0),
         brim: num("prime_tower_brim_width").unwrap_or(0.0),
         rotation: num("wipe_tower_rotation_angle").unwrap_or(0.0),
+        material_count: distinct_materials.len(),
     }))
 }
 

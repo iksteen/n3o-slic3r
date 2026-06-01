@@ -49,7 +49,7 @@ fn main() {
     match slice(&model, &config, &out_path, |percent, stage| {
         println!("  [{percent:>3}%] {stage}");
     }) {
-        Ok(()) => println!("ok"),
+        Ok(_) => println!("ok"),
         Err(e) => {
             eprintln!("slice failed: {e}");
             std::process::exit(1);

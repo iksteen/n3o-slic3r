@@ -602,7 +602,23 @@ static SLICE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// exclusive-access guarantee Rust requires, even though libslic3r
 /// fans `set_status` calls across many TBB worker threads inside a
 /// single slice.
-pub fn slice<P, F>(model: &Model, config: &Config, out_gcode_path: P, mut progress: F) -> Result<()>
+/// The prime/wipe tower's exact mesh as libslic3r built it during the
+/// slice (a box for AMS purge towers, the rib/cone solid for
+/// toolchangers), in tower-local millimetres. `vertices` is 3 floats per
+/// vertex; `indices` is 3 vertex indices per triangle. [`slice`] returns
+/// `None` when the plate is single-material (no tower).
+#[derive(Debug, Clone)]
+pub struct TowerMesh {
+    pub vertices: Vec<f32>,
+    pub indices: Vec<u32>,
+}
+
+pub fn slice<P, F>(
+    model: &Model,
+    config: &Config,
+    out_gcode_path: P,
+    mut progress: F,
+) -> Result<Option<TowerMesh>>
 where
     P: AsRef<Path>,
     F: FnMut(i32, &str),
@@ -622,11 +638,18 @@ where
     // addressable through a thin `*mut c_void`.
     let mut cb_ref: &mut dyn FnMut(i32, &str) = &mut progress;
     let user_data = &mut cb_ref as *mut &mut dyn FnMut(i32, &str) as *mut std::ffi::c_void;
+    let mut tower_verts: *mut f32 = ptr::null_mut();
+    let mut tower_vcount: usize = 0;
+    let mut tower_idx: *mut u32 = ptr::null_mut();
+    let mut tower_icount: usize = 0;
     // SAFETY:
     // - handles are valid; p + user_data live through the call.
     // - err is an out-param we own on non-null return.
     // - the trampoline only dereferences user_data during the call;
     //   `cb_ref` outlives it (stack frame lives until slice returns).
+    // - the tower out-params are an all-or-nothing group the shim fills
+    //   on success; `take_tower_mesh` copies them out and frees them with
+    //   the matching deallocator.
     let status = unsafe {
         sys::slic3r_slice(
             model.raw,
@@ -634,10 +657,42 @@ where
             p.as_ptr(),
             Some(progress_trampoline),
             user_data,
+            &mut tower_verts,
+            &mut tower_vcount,
+            &mut tower_idx,
+            &mut tower_icount,
             &mut err,
         )
     };
-    unsafe { check_with_err(status, err) }
+    let tower = unsafe { take_tower_mesh(tower_verts, tower_vcount, tower_idx, tower_icount) };
+    unsafe { check_with_err(status, err)? };
+    Ok(tower)
+}
+
+/// Copy the shim's tower buffers into owned `Vec`s and free the C
+/// allocations. `None` when either buffer is null/empty (the
+/// single-material no-tower case). Always frees, so it's safe to call on
+/// the slice error path too.
+///
+/// # Safety
+/// `verts`/`idx` must be the exact pointers the shim wrote (or null) with
+/// `vcount`/`icount` their element counts; they are freed here and must
+/// not be used afterward.
+unsafe fn take_tower_mesh(
+    verts: *mut f32,
+    vcount: usize,
+    idx: *mut u32,
+    icount: usize,
+) -> Option<TowerMesh> {
+    if verts.is_null() || idx.is_null() || vcount == 0 || icount == 0 {
+        // Defensive: free whichever half (if any) is non-null.
+        sys::slic3r_tower_mesh_free(verts, idx);
+        return None;
+    }
+    let vertices = std::slice::from_raw_parts(verts, vcount * 3).to_vec();
+    let indices = std::slice::from_raw_parts(idx, icount * 3).to_vec();
+    sys::slic3r_tower_mesh_free(verts, idx);
+    Some(TowerMesh { vertices, indices })
 }
 
 // ---- Log sink ----

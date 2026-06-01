@@ -86,6 +86,19 @@ export interface TowerGeometry {
   width: number;
   brim: number;
   rotation: number;
+  /** Distinct material count this resolved against. A sliced tower mesh is
+   *  stale once this diverges from the count it was sliced at (the only
+   *  thing that reshapes the tower; moving it does not). */
+  material_count: number;
+}
+
+/** The prime/wipe tower's exact mesh from a slice — `vertices` is 3 floats
+ *  per vertex, `indices` 3 vertex indices per triangle, in tower-local
+ *  millimetres (placed at the plate's wipe_tower_x/y). Mirrors the backend
+ *  slice-event `tower_mesh` payload. */
+export interface TowerMesh {
+  vertices: number[];
+  indices: number[];
 }
 
 export type BoundsAxis = "X" | "Y" | "Z";

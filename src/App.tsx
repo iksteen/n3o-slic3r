@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ViewportCanvas } from "./viewport/ViewportCanvas";
+import { setupTowerMeshCache } from "./viewport/towerMeshCache";
 import type { GizmoMode } from "./viewport/types";
 import { SlicePanel } from "./slice/SlicePanel";
 import { SlicingWindow } from "./slice/SlicingWindow";
@@ -182,6 +183,18 @@ function App() {
       setMode((current) => (current === "devices" ? current : "preview"));
     });
   }, [bridge, activePlateId]);
+
+  // App-lifetime listener feeding the priming-tower mesh cache. Lives here
+  // (App is always mounted) rather than in ViewportCanvas, which unmounts
+  // on the auto-switch to preview that fires the instant a slice finishes —
+  // a viewport-local listener would miss the slice's tower mesh.
+  useEffect(() => {
+    let un: (() => void) | null = null;
+    void setupTowerMeshCache().then((u) => {
+      un = u;
+    });
+    return () => un?.();
+  }, []);
 
   const goPrepare = (): void => {
     setMode("scene");

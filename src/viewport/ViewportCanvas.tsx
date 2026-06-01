@@ -25,7 +25,8 @@ import { attachEventBridge, tauriMeshBufferProvider } from "./eventBridge";
 import { createGizmo, type GizmoApi } from "./gizmo";
 import { SceneMirror } from "./sceneMirror";
 import { createTowerOverlay } from "./towerOverlay";
-import type { GizmoMode, ObjectId, TowerGeometry } from "./types";
+import { getCachedTowerMesh, onTowerMeshCacheChange } from "./towerMeshCache";
+import type { BedMesh, GizmoMode, ObjectId, TowerGeometry } from "./types";
 
 interface ToastMessage {
   id: number;
@@ -164,22 +165,50 @@ export function ViewportCanvas({
 
     // ---- Priming-tower overlay ----------------------------------------
     //
-    // A translucent box on the bed at the resolved tower footprint,
-    // draggable in the bed plane. Position/size come from the backend
-    // `plate_tower_geometry` (cascade-resolved + the plate's project
-    // overrides), refreshed whenever the active plate, its bed, or any
-    // override changes. `towerGeom`/`towerBedZ` are the live state the
-    // drag handlers read + mutate.
+    // Draggable on the bed; position/footprint come from the backend
+    // `plate_tower_geometry` (cascade-resolved + project overrides),
+    // refreshed whenever the active plate, its bed, or any override
+    // changes. Two representations: the predicted box (pre-slice / while
+    // dragging) and the exact mesh from the last slice. The real mesh is
+    // kept across drags (just re-placed) and only goes stale when the
+    // plate's material count diverges from the count it was sliced at.
     const tower = createTowerOverlay();
     scene.add(tower.group);
-    tower.setVisible(false);
+    tower.hide();
     let towerGeom: TowerGeometry | null = null;
     let towerBedZ = 0;
+    const fmtCoord = (v: number): string => (Math.round(v * 10) / 10).toString();
+    // Valid range for the tower corner so its footprint stays on the bed.
+    // The sliced mesh carries the true (asymmetric width × depth + brim)
+    // extent; the predicted box falls back to a square width × width + brim.
+    // Extents are relative to the corner (x, y), so the corner range is
+    // [bed.min - extentMin, bed.max - extentMax] per axis.
+    const clampTowerCorner = (
+      x: number,
+      y: number,
+      geom: TowerGeometry,
+      fp: { minX: number; minY: number; maxX: number; maxY: number } | null,
+      bed: BedMesh,
+    ): { x: number; y: number } => {
+      const b = geom.brim;
+      const minLX = fp ? fp.minX : -b;
+      const maxLX = fp ? fp.maxX : geom.width + b;
+      const minLY = fp ? fp.minY : -b;
+      const maxLY = fp ? fp.maxY : geom.width + b;
+      const loX = bed.extents.min[0] - minLX;
+      const hiX = bed.extents.max[0] - maxLX;
+      const loY = bed.extents.min[1] - minLY;
+      const hiY = bed.extents.max[1] - maxLY;
+      return {
+        x: Math.min(Math.max(x, loX), Math.max(loX, hiX)),
+        y: Math.min(Math.max(y, loY), Math.max(loY, hiY)),
+      };
+    };
     const refreshTower = async (): Promise<void> => {
       const plateId = mirror.activePlateIdOrNull();
       if (plateId == null) {
         towerGeom = null;
-        tower.setVisible(false);
+        tower.hide();
         return;
       }
       try {
@@ -187,19 +216,50 @@ export function ViewportCanvas({
           plateId,
         });
         if (!geom) {
+          // No tower (single-material / unbound).
           towerGeom = null;
-          tower.setVisible(false);
+          tower.hide();
           return;
         }
         const bed = mirror.activePlate()?.bed ?? null;
         towerBedZ = bed ? bed.extents.min[2] : 0;
         towerGeom = geom;
-        tower.update(geom, towerBedZ);
-        tower.setVisible(true);
+        // The exact sliced mesh (module-cached, survives remounts) is shown
+        // while its material count still matches — a drag only moves the
+        // tower, so the mesh stays valid and is just re-placed; a
+        // material-count change reshapes it, so fall back to the box.
+        const cached = getCachedTowerMesh(plateId);
+        if (cached && cached.materialCount === geom.material_count) {
+          tower.showMesh(cached.mesh, geom, towerBedZ);
+        } else {
+          tower.showBox(geom, towerBedZ);
+        }
+        // Re-clamp on-bed for the *current* footprint and persist the
+        // correction: when a material-count change drops the small sliced
+        // mesh back to the square predicted box, the inherited corner can
+        // leave the footprint poking off the edge — keep view + override +
+        // slice in agreement.
+        if (bed) {
+          const c = clampTowerCorner(geom.x, geom.y, geom, tower.meshFootprint(), bed);
+          if (c.x !== geom.x || c.y !== geom.y) {
+            towerGeom = { ...geom, x: c.x, y: c.y };
+            tower.place(towerGeom, towerBedZ);
+            void invoke("scene_project_override_set", {
+              plateId,
+              key: "wipe_tower_x",
+              value: fmtCoord(c.x),
+            });
+            void invoke("scene_project_override_set", {
+              plateId,
+              key: "wipe_tower_y",
+              value: fmtCoord(c.y),
+            });
+          }
+        }
       } catch {
         // Transiently-unbound plate etc. — hide rather than toast-spam.
         towerGeom = null;
-        tower.setVisible(false);
+        tower.hide();
       }
     };
 
@@ -303,6 +363,16 @@ export function ViewportCanvas({
         .catch(() => {});
     }
 
+    // The exact tower mesh from a finished slice lands in the module-level
+    // cache, fed by App's app-lifetime `slice:plate_finished` listener (so
+    // it survives this component's unmount/remount — the app auto-switches
+    // to preview the instant a slice finishes). Re-render when the cache
+    // changes for the active plate; on a fresh mount, refreshTower below
+    // already reads the cache.
+    const detachTowerCache = onTowerMeshCacheChange((plateId) => {
+      if (plateId === mirror.activePlateIdOrNull()) void refreshTower();
+    });
+
     // ---- Resize handling ---------------------------------------------
     const onResize = () => {
       const w = container.clientWidth;
@@ -396,7 +466,9 @@ export function ViewportCanvas({
       pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
-      const towerHits = raycaster.intersectObject(tower.box, false);
+      const target = tower.dragTarget();
+      if (!target) return;
+      const towerHits = raycaster.intersectObject(target, false);
       if (towerHits.length === 0) return;
       const objHits = raycaster.intersectObjects(
         mirror.objectGroup.children,
@@ -424,18 +496,13 @@ export function ViewportCanvas({
       let ny = p.y - towerDrag.offsetY;
       const bed = mirror.activePlate()?.bed;
       if (bed) {
-        // Keep the whole footprint + brim on the bed.
-        const m = towerGeom.brim;
-        const minX = bed.extents.min[0] + m;
-        const minY = bed.extents.min[1] + m;
-        const maxX = bed.extents.max[0] - towerGeom.width - m;
-        const maxY = bed.extents.max[1] - towerGeom.width - m;
-        nx = Math.min(Math.max(nx, minX), Math.max(minX, maxX));
-        ny = Math.min(Math.max(ny, minY), Math.max(minY, maxY));
+        const c = clampTowerCorner(nx, ny, towerGeom, tower.meshFootprint(), bed);
+        nx = c.x;
+        ny = c.y;
       }
       if (nx !== towerGeom.x || ny !== towerGeom.y) towerDrag.moved = true;
       towerGeom = { ...towerGeom, x: nx, y: ny };
-      tower.update(towerGeom, towerBedZ);
+      tower.place(towerGeom, towerBedZ);
     };
     const onPointerUp = () => {
       if (!towerDrag) return;
@@ -446,16 +513,15 @@ export function ViewportCanvas({
       const plateId = mirror.activePlateIdOrNull();
       // A click without a drag shouldn't pin the tower with an override.
       if (moved && plateId != null && towerGeom) {
-        const fmt = (v: number) => (Math.round(v * 10) / 10).toString();
         void invoke("scene_project_override_set", {
           plateId,
           key: "wipe_tower_x",
-          value: fmt(towerGeom.x),
+          value: fmtCoord(towerGeom.x),
         });
         void invoke("scene_project_override_set", {
           plateId,
           key: "wipe_tower_y",
-          value: fmt(towerGeom.y),
+          value: fmtCoord(towerGeom.y),
         });
         // The override-changed event triggers refreshTower → the
         // authoritative (resolved + clamped) box settles in.
@@ -491,6 +557,7 @@ export function ViewportCanvas({
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("keydown", onKeyDown);
       for (const un of towerUnlisten) un();
+      detachTowerCache();
       resizeObserver.disconnect();
       detachToastsListener();
       if (detachBridge) void detachBridge();

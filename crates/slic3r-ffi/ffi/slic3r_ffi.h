@@ -13,6 +13,7 @@
 #define SLIC3R_FFI_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -254,6 +255,15 @@ typedef void (*slic3r_progress_fn_t)(int percent, const char* stage, void* user_
  * out_err may be NULL. If non-NULL and the call fails, *out_err receives a
  * heap-allocated message; caller frees with slic3r_string_free.
  *
+ * out_tower_* (all four nullable; all-or-nothing): on a successful slice
+ * that generates a prime/wipe tower, receive the tower's exact mesh — the
+ * rib/cone solid for toolchangers, a box for AMS purge towers — in
+ * tower-local millimetres. *out_tower_vertices holds 3 floats per vertex,
+ * *out_tower_indices holds 3 vertex indices per triangle; both are
+ * heap-allocated and freed together with slic3r_tower_mesh_free. All are
+ * set to NULL / 0 when the plate is single-material (no tower) or when the
+ * caller passes NULL for the group.
+ *
  * SLIC3R_ERR_VALIDATE: cross-option / object validation failed.
  * SLIC3R_ERR_SLICE:    exception thrown during process() or export_gcode(). */
 slic3r_status slic3r_slice(slic3r_model_t* model,
@@ -261,7 +271,15 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
                             const char* out_gcode_path,
                             slic3r_progress_fn_t progress_cb,
                             void* progress_user_data,
+                            float** out_tower_vertices,
+                            size_t* out_tower_vertex_count,
+                            uint32_t** out_tower_indices,
+                            size_t* out_tower_index_count,
                             char** out_err);
+
+/* Free the buffers returned in slic3r_slice's out_tower_* params. Safe to
+ * call with NULL pointers (no-op). */
+void slic3r_tower_mesh_free(float* vertices, uint32_t* indices);
 
 /* Log sink callback.
  *

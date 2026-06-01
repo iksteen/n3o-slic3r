@@ -70,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     eprintln!("\nslicing...");
     match slice(&model, &config, &out_path, |_, _| {}) {
-        Ok(()) => {
+        Ok(_) => {
             let bytes = std::fs::metadata(&out_path)?.len();
             eprintln!("ok — wrote {} ({} bytes)", out_path.display(), bytes);
             Ok(())

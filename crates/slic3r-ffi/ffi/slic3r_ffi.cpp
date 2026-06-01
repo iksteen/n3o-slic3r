@@ -8,6 +8,7 @@
 #include <libslic3r/Model.hpp>
 #include <libslic3r/Print.hpp>
 #include <libslic3r/PrintBase.hpp>
+#include <libslic3r/TriangleMesh.hpp>
 #include <libslic3r/Utils.hpp>
 #include <libslic3r/GCode/GCodeProcessor.hpp>
 #include <libslic3r/Format/bbs_3mf.hpp>
@@ -530,9 +531,23 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
                             const char* out_path,
                             slic3r_progress_fn_t progress_cb,
                             void* progress_user_data,
+                            float** out_tower_vertices,
+                            size_t* out_tower_vertex_count,
+                            uint32_t** out_tower_indices,
+                            size_t* out_tower_index_count,
                             char** out_err) {
     if (!model || !config || !out_path) return SLIC3R_ERR_INVALID_ARG;
     if (out_err) *out_err = nullptr;
+    // Tower-mesh out-params are an all-or-nothing group; clear them up front
+    // so an early return (or a single-material plate) leaves no tower.
+    const bool want_tower = out_tower_vertices && out_tower_vertex_count &&
+                            out_tower_indices && out_tower_index_count;
+    if (want_tower) {
+        *out_tower_vertices = nullptr;
+        *out_tower_vertex_count = 0;
+        *out_tower_indices = nullptr;
+        *out_tower_index_count = 0;
+    }
     try {
         // Several config fields must be normalized to the printer's geometry
         // before slicing — chiefly that filament_map has one entry per
@@ -762,6 +777,66 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
 
         print.process();
 
+        // Capture the prime/wipe tower's exact mesh, built by process() via
+        // WipeTowerData::construct_mesh: a box for AMS purge towers, the
+        // rib/cone solid for toolchangers. In tower-local millimetres; the
+        // caller places it at wipe_tower_x/y. Absent (optional unset) on a
+        // single-material plate, which has no tower.
+        if (want_tower) {
+            const auto& wtd = print.wipe_tower_data();
+            if (wtd.wipe_tower_mesh_data) {
+                // The printed tower is the body + its first-layer brim, both
+                // in the same tower-local frame. Concatenate them into one
+                // mesh (brim vertices appended after the body's, brim indices
+                // shifted past them) so the overlay shows the full footprint
+                // the user sees on the plate. Either may be empty.
+                const indexed_triangle_set& body =
+                    wtd.wipe_tower_mesh_data->real_wipe_tower_mesh.its;
+                const indexed_triangle_set& brim =
+                    wtd.wipe_tower_mesh_data->real_brim_mesh.its;
+                const size_t body_v = body.vertices.size();
+                const size_t vcount = body_v + brim.vertices.size();
+                const size_t icount = body.indices.size() + brim.indices.size();
+                if (vcount > 0 && icount > 0) {
+                    float* verts = static_cast<float*>(
+                        std::malloc(vcount * 3 * sizeof(float)));
+                    uint32_t* idx = static_cast<uint32_t*>(
+                        std::malloc(icount * 3 * sizeof(uint32_t)));
+                    if (verts && idx) {
+                        size_t v = 0;
+                        for (size_t i = 0; i < body_v; ++i, ++v) {
+                            verts[v * 3 + 0] = body.vertices[i].x();
+                            verts[v * 3 + 1] = body.vertices[i].y();
+                            verts[v * 3 + 2] = body.vertices[i].z();
+                        }
+                        for (size_t i = 0; i < brim.vertices.size(); ++i, ++v) {
+                            verts[v * 3 + 0] = brim.vertices[i].x();
+                            verts[v * 3 + 1] = brim.vertices[i].y();
+                            verts[v * 3 + 2] = brim.vertices[i].z();
+                        }
+                        size_t t = 0;
+                        for (size_t i = 0; i < body.indices.size(); ++i, ++t) {
+                            idx[t * 3 + 0] = static_cast<uint32_t>(body.indices[i][0]);
+                            idx[t * 3 + 1] = static_cast<uint32_t>(body.indices[i][1]);
+                            idx[t * 3 + 2] = static_cast<uint32_t>(body.indices[i][2]);
+                        }
+                        for (size_t i = 0; i < brim.indices.size(); ++i, ++t) {
+                            idx[t * 3 + 0] = static_cast<uint32_t>(brim.indices[i][0] + body_v);
+                            idx[t * 3 + 1] = static_cast<uint32_t>(brim.indices[i][1] + body_v);
+                            idx[t * 3 + 2] = static_cast<uint32_t>(brim.indices[i][2] + body_v);
+                        }
+                        *out_tower_vertices = verts;
+                        *out_tower_vertex_count = vcount;
+                        *out_tower_indices = idx;
+                        *out_tower_index_count = icount;
+                    } else {
+                        std::free(verts);
+                        std::free(idx);
+                    }
+                }
+            }
+        }
+
         // GCodeProcessorResult holds time/filament analysis. We must pass a
         // valid pointer (export_gcode populates it); we just drop it on return
         // since v0 doesn't surface preview data yet.
@@ -778,6 +853,11 @@ void slic3r_set_log_sink(slic3r_log_fn_t cb, void* user_data) {
     std::lock_guard<std::mutex> lk(g_log_mutex);
     g_log_cb = cb;
     g_log_user_data = user_data;
+}
+
+void slic3r_tower_mesh_free(float* vertices, uint32_t* indices) {
+    std::free(vertices);
+    std::free(indices);
 }
 
 } // extern "C"

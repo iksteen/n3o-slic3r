@@ -14,6 +14,17 @@ use super::errors::SliceError;
 use super::job::JobId;
 use super::summary::PlateSummary;
 
+/// The prime/wipe tower's exact mesh from the slice (the rib/cone solid
+/// for toolchangers, a box for AMS purge towers), in tower-local
+/// millimetres: `vertices` is 3 floats per vertex, `indices` 3 vertex
+/// indices per triangle. The viewport renders it at the plate's
+/// `wipe_tower_x/y`. `None` for a single-material plate (no tower).
+#[derive(Debug, Clone, Serialize)]
+pub struct TowerMesh {
+    pub vertices: Vec<f32>,
+    pub indices: Vec<u32>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum SliceEvent {
@@ -37,6 +48,11 @@ pub enum SliceEvent {
         plate_id: u32,
         output_path: String,
         summary: PlateSummary,
+        /// The prime/wipe tower mesh libslic3r built for this plate, or
+        /// `None` when single-material (no tower). The viewport shows the
+        /// exact shape; it survives drags (placed at the live
+        /// `wipe_tower_x/y`) and goes stale only on a material-count change.
+        tower_mesh: Option<TowerMesh>,
     },
     JobFinished {
         job_id: JobId,

@@ -661,7 +661,7 @@ fn run_worker(
         let slice_result = slice(&model, &adapt_result.config, &output_path, progress_cb);
 
         match slice_result {
-            Ok(()) => {
+            Ok(tower_mesh) => {
                 // Post-slice plugin hook: let plugins read/modify the
                 // plate's G-code before the summary + preview see it.
                 // No-op (and near-zero cost) when no host is wired or
@@ -706,6 +706,10 @@ fn run_worker(
                     plate_id,
                     output_path: output_path.display().to_string(),
                     summary,
+                    tower_mesh: tower_mesh.map(|m| super::events::TowerMesh {
+                        vertices: m.vertices,
+                        indices: m.indices,
+                    }),
                 });
             }
             Err(e) => {
