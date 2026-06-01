@@ -612,6 +612,12 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
     // instance.
     let mut project = Project::new();
     project.file_metadata = file_metadata;
+    // Adopt the imported file as the project's source so the title bar shows
+    // its name (not "Untitled"). MVP: a plain Save writes n3o's format back
+    // to this path — a forceful in-place migration of the foreign file,
+    // which is acceptable for now (the Save-As-vs-convert UX is a later
+    // decision).
+    project.source_path = Some(path.to_path_buf());
     if let Some(id) = &instance_id {
         project.plates[0].printer_instance_id = Some(id.clone());
     }
@@ -908,6 +914,10 @@ mod tests {
             placed, report.objects,
             "report.objects must match placed objects"
         );
+
+        // The imported file becomes the project's source_path, so the title
+        // bar shows its name instead of "Untitled".
+        assert_eq!(project.source_path.as_deref(), Some(path.as_path()));
 
         // Bound to an existing A1 mini instance (the bundled `bambi`
         // fixture) by exact model match — not a fallback, never created.
