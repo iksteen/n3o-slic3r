@@ -555,10 +555,14 @@ pub fn scene_auto_arrange(
 #[tracing::instrument(skip(state, window))]
 pub fn scene_object_add_from_primitive(
     kind: super::primitives::PrimitiveKind,
-    params: super::primitives::PrimitiveParams,
+    // Optional — omitted by the object-library quick-add, which wants the
+    // kind's sensible defaults. A future parameter dialog supplies them.
+    params: Option<super::primitives::PrimitiveParams>,
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(MeshId, ObjectId), String> {
+    let params =
+        params.unwrap_or_else(|| super::primitives::PrimitiveParams::defaults_for(kind));
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let (mesh_id, obj_id, events) = s.add_from_primitive(kind, params);
     drop(s);

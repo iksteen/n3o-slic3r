@@ -139,13 +139,16 @@
   .objects-panel-head {
     display: flex;
     align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     height: 38px;
-    padding: 0 12px;
+    padding: 0 8px 0 12px;
     border-bottom: 1px solid var(--hairline);
     flex-shrink: 0;
   }
   .objects-panel-head h3 {
     margin: 0;
+    min-width: 0;
     font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
@@ -154,6 +157,82 @@
     text-overflow: ellipsis;
   }
   .objects-panel-printer { color: var(--text); }
+
+  .objects-add { position: relative; flex-shrink: 0; }
+  .objects-add-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .objects-add-btn:hover { background: var(--surface); color: var(--text); }
+  .objects-add-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 19;
+  }
+  .objects-add-menu {
+    position: absolute;
+    top: 28px;
+    right: 0;
+    z-index: 20;
+    min-width: 160px;
+    padding: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+  .objects-add-section {
+    padding: 4px 8px 2px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+  }
+  .objects-add-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 5px 8px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .objects-add-item:hover { background: var(--surface-2); }
+  .objects-add-sep {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--hairline);
+  }
+
+  .objects-remove {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border: 0;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--text-dim);
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity 100ms;
+  }
+  .objects-item:hover .objects-remove,
+  .objects-item.selected .objects-remove { opacity: 1; }
+  .objects-remove:hover { background: var(--surface-3); color: var(--text); }
 
   .objects-list {
     flex: 1;

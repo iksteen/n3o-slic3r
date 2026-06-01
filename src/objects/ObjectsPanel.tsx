@@ -8,7 +8,7 @@
 // the same routing the Materials section of `SlotBindingPanel` uses, so
 // the colours agree across both surfaces.
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { PlateSnapshot, SceneObject, ObjectId } from "../viewport/types";
 import {
@@ -16,6 +16,12 @@ import {
   type FlatSlotOption,
   type PrinterInstance,
 } from "../printer/printerInstance";
+import {
+  addPrimitive,
+  deleteObject,
+  loadModelFromDialog,
+  PRIMITIVE_KINDS,
+} from "./objectCommands";
 
 export interface ObjectsPanelProps {
   plate: PlateSnapshot | null;
@@ -41,10 +47,25 @@ export function ObjectsPanel({
   plateSize,
   readOnly = false,
 }: ObjectsPanelProps) {
+  const [showLibrary, setShowLibrary] = useState(false);
+
   const slots = useMemo<FlatSlotOption[]>(
     () => (instance ? flattenSlots(instance) : []),
     [instance],
   );
+
+  const onAddPrimitive = (kind: (typeof PRIMITIVE_KINDS)[number]): void => {
+    setShowLibrary(false);
+    void addPrimitive(kind).catch((err) =>
+      console.error("[objects] addPrimitive failed", err),
+    );
+  };
+  const onAddModel = (): void => {
+    setShowLibrary(false);
+    void loadModelFromDialog().catch((err) =>
+      console.error("[objects] loadModelFromDialog failed", err),
+    );
+  };
 
   const objects = plate?.objects ?? [];
   const selection = useMemo(
@@ -79,11 +100,51 @@ export function ObjectsPanel({
         <h3 title={printerName}>
           Plate · <span className="objects-panel-printer">{printerName}</span>
         </h3>
+        {!readOnly && (
+          <div className="objects-add">
+            <button
+              className="objects-add-btn"
+              title="Add object"
+              aria-label="Add object"
+              onClick={() => setShowLibrary((s) => !s)}
+            >
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden>
+                <path d="M7 2v10M2 7h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </button>
+            {showLibrary && (
+              <>
+                <div className="objects-add-backdrop" onClick={() => setShowLibrary(false)} />
+                <div className="objects-add-menu" role="menu">
+                  <div className="objects-add-section">Primitives</div>
+                  {PRIMITIVE_KINDS.map((k) => (
+                    <button
+                      key={k}
+                      className="objects-add-item"
+                      role="menuitem"
+                      onClick={() => onAddPrimitive(k)}
+                    >
+                      {k}
+                    </button>
+                  ))}
+                  <div className="objects-add-sep" />
+                  <button className="objects-add-item" role="menuitem" onClick={onAddModel}>
+                    Add model…
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="objects-list">
         {objects.length === 0 ? (
-          <div className="objects-empty">No objects on this plate.</div>
+          <div className="objects-empty">
+            {readOnly
+              ? "No objects on this plate."
+              : "No objects yet — click + to add one."}
+          </div>
         ) : (
           objects.map((obj) => {
             const material = materialOf(obj);
@@ -138,6 +199,23 @@ export function ObjectsPanel({
                   >
                     {overrides}
                   </span>
+                )}
+                {!readOnly && (
+                  <button
+                    className="objects-remove"
+                    title="Remove"
+                    aria-label={`Remove ${obj.name}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void deleteObject(obj.id).catch((err) =>
+                        console.error("[objects] deleteObject failed", err),
+                      );
+                    }}
+                  >
+                    <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden>
+                      <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    </svg>
+                  </button>
                 )}
               </div>
             );

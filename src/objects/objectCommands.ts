@@ -1,0 +1,64 @@
+// Object-mutation commands for the Objects panel (OP-2): add a
+// primitive, load a mesh from a file, remove an object. Thin invoke
+// wrappers — the backend owns the scene; the panel re-renders off the
+// snapshot it refetches on the emitted scene events.
+
+import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import type { ObjectId, MeshId } from "../viewport/types";
+
+/** The five library primitives — must match Rust `PrimitiveKind`. */
+export type PrimitiveKind = "Cube" | "Cylinder" | "Sphere" | "Cone" | "Torus";
+
+export const PRIMITIVE_KINDS: readonly PrimitiveKind[] = [
+  "Cube",
+  "Cylinder",
+  "Sphere",
+  "Cone",
+  "Torus",
+];
+
+/** Select an object (replacing the current selection). */
+async function selectObject(id: ObjectId): Promise<void> {
+  await invoke("scene_select", { ids: [id], mode: "Replace" });
+}
+
+/** Add a primitive at its backend-default size, then select it. */
+export async function addPrimitive(kind: PrimitiveKind): Promise<ObjectId> {
+  // params omitted → the backend fills in `defaults_for(kind)`.
+  const [, objId] = await invoke<[MeshId, ObjectId]>(
+    "scene_object_add_from_primitive",
+    { kind },
+  );
+  await selectObject(objId);
+  return objId;
+}
+
+/** Pick a model file via the native dialog and load its geometry onto
+ *  the active plate. Mirrors the viewport's load button: `.stl`/`.obj`
+ *  load a single mesh; `.3mf` loads only the geometry (objects +
+ *  transforms + per-part extruder hints) via `scene_load_3mf` — NOT the
+ *  project settings (that's the separate "open project" import).
+ *  Cancelling is a no-op. */
+export async function loadModelFromDialog(): Promise<void> {
+  const path = await openDialog({
+    multiple: false,
+    filters: [{ name: "Model", extensions: ["stl", "obj", "3mf"] }],
+  });
+  if (typeof path !== "string") return; // cancelled
+  if (path.toLowerCase().endsWith(".3mf")) {
+    // Geometry-only import — multiple objects, no single one to select.
+    await invoke("scene_load_3mf", { path });
+    return;
+  }
+  const [, objId] = await invoke<[MeshId, ObjectId]>(
+    "scene_load_mesh_from_path",
+    { path },
+  );
+  await selectObject(objId);
+}
+
+/** Remove one object from the active plate. */
+export async function deleteObject(id: ObjectId): Promise<void> {
+  await invoke("scene_object_delete", { ids: [id] });
+}
