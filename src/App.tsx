@@ -20,6 +20,7 @@ import {
 } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { SettingsPanelHost } from "./settings/SettingsPanelHost";
+import { ObjectsPanel } from "./objects/ObjectsPanel";
 import { PreviewWorkspace } from "./preview/PreviewWorkspace";
 import { useSlicePreviewBridge } from "./preview/useSlicePreviewBridge";
 import { SendControls } from "./driver/SendControls";
@@ -470,6 +471,24 @@ function App() {
         />
       ) : (
         <div className={`workspace ${showPreview ? "preview-mode" : ""}`}>
+          <ObjectsPanel
+            plate={activePlate ?? null}
+            instance={activeInstance}
+            printerName={
+              activeInstance?.display_name ?? printerIdentity ?? "No printer"
+            }
+            plateSize={
+              activePlate?.bed
+                ? [
+                    activePlate.bed.extents.max[0] -
+                      activePlate.bed.extents.min[0],
+                    activePlate.bed.extents.max[1] -
+                      activePlate.bed.extents.min[1],
+                  ]
+                : null
+            }
+            readOnly={showPreview}
+          />
           <main style={{ position: "relative", minWidth: 0 }}>
             {showPreview ? (
               <>
