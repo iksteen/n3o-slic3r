@@ -1,5 +1,5 @@
-// Per-object material picker (OP-3) — a floating popover anchored under
-// a row's material badge. Two views:
+// Per-object material picker — a floating popover anchored under a row's
+// material badge. Two views:
 //   Assign — pick an existing project material; each row shows its slot
 //            routing + the slot's filament colour/name.
 //   Create — mint a new material routed to a chosen slot.
@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { SlotRef, FlatSlotOption } from "../printer/printerInstance";
 import type { FilamentSummary } from "../material/filamentSummary";
+import { slotForMaterial, slotColor, swatchStyle } from "../material/materials";
 
 export interface MaterialPickerProps {
   objectName: string;
@@ -49,15 +50,20 @@ export function MaterialPicker({
 }: MaterialPickerProps) {
   const [creating, setCreating] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  // Latest onClose via a ref so the document listeners attach once on
+  // mount rather than re-subscribing on every render (onClose is an
+  // inline arrow from the parent).
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     const onDoc = (e: MouseEvent): void => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        onClose();
+        onCloseRef.current();
       }
     };
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
@@ -65,34 +71,16 @@ export function MaterialPicker({
       document.removeEventListener("mousedown", onDoc);
       document.removeEventListener("keydown", onKey);
     };
-  }, [onClose]);
+  }, []);
 
-  const slotFor = (m: number): FlatSlotOption | null => {
-    const ref = materialToSlot[m];
-    if (!ref) return null;
-    return (
-      slots.find(
-        (s) => s.ref.extruder === ref.extruder && s.ref.slot === ref.slot,
-      ) ?? null
-    );
-  };
+  const slotFor = (m: number): FlatSlotOption | null =>
+    slotForMaterial(m, materialToSlot, slots);
   const filamentLabel = (slot: FlatSlotOption | null): string => {
     if (!slot?.filament_identity) return "unassigned";
     return (
       filamentByIdentity.get(slot.filament_identity)?.display_name ??
       slot.filament_identity
     );
-  };
-  // A slot shows its colour only when a filament is actually loaded
-  // (`filament_identity`). A leftover/cached spool colour with no
-  // identity — e.g. the Bambu external feed (no RFID) after unload —
-  // reads as empty (hollow dashed orb), not a solid swatch.
-  const swatch = (slot: FlatSlotOption | null): CSSProperties => {
-    const color = slot?.filament_identity ? slot.color : null;
-    return {
-      background: color ?? "transparent",
-      border: color ? "none" : "1px dashed var(--text-muted)",
-    };
   };
 
   // Fixed position, clamped to the viewport; below the badge, flipped
@@ -130,7 +118,7 @@ export function MaterialPicker({
                 }}
               >
                 <span className="material-picker-name">
-                  <span className="material-picker-swatch" style={swatch(slot)} />
+                  <span className="material-picker-swatch" style={swatchStyle(slotColor(slot))} />
                   <span className="material-picker-mid">M{m}</span>
                   <span className="material-picker-arrow">→</span>
                   <span className="material-picker-slot">{slot?.label || "—"}</span>
@@ -173,7 +161,7 @@ export function MaterialPicker({
               }}
             >
               <span className="material-picker-name">
-                <span className="material-picker-swatch" style={swatch(slot)} />
+                <span className="material-picker-swatch" style={swatchStyle(slotColor(slot))} />
                 {slot.label}
               </span>
               <span className="material-picker-detail">{filamentLabel(slot)}</span>

@@ -28,8 +28,14 @@ import {
   ungroupObjects,
   PRIMITIVE_KINDS,
 } from "./objectCommands";
-import { referencedMaterials } from "../material/SlotBindingPanel";
 import { useFilamentCatalog } from "../material/useFilamentCatalog";
+import {
+  materialOf,
+  referencedMaterials,
+  slotColor,
+  slotForMaterial,
+  swatchStyle,
+} from "../material/materials";
 import { MaterialPicker } from "./MaterialPicker";
 
 export interface ObjectsPanelProps {
@@ -41,12 +47,6 @@ export interface ObjectsPanelProps {
   /** Preview mode: selection still works for cross-reference, but the
    *  panel presents read-only (no add/remove/group/material edits). */
   readOnly?: boolean;
-}
-
-/** An object's material index — its `extruder_id`, defaulting to 1
- *  (unassigned inherits material 1), matching `referencedMaterials`. */
-function materialOf(obj: SceneObject): number {
-  return obj.extruder_id ?? 1;
 }
 
 /** Lowest 1-based material index not yet referenced on the plate, so a
@@ -112,16 +112,8 @@ export function ObjectsPanel({
     [groupMembers],
   );
 
-  // Material index → routed slot's spool colour, only when a filament is
-  // actually loaded (a cached colour with no identity reads as empty).
-  const colorForMaterial = (material: number): string | null => {
-    const pick = plate?.material_to_slot?.[material];
-    if (!pick) return null;
-    const slot = slots.find(
-      (s) => s.ref.extruder === pick.extruder && s.ref.slot === pick.slot,
-    );
-    return slot?.filament_identity ? slot.color : null;
-  };
+  const colorForMaterial = (material: number): string | null =>
+    slotColor(slotForMaterial(material, materialToSlot, slots));
   const overrideCount = (id: ObjectId): number =>
     Object.keys(plate?.object_overrides?.[String(id)] ?? {}).length;
 
@@ -201,13 +193,7 @@ export function ObjectsPanel({
       >
         <div className="objects-item-main">
           <div className="objects-item-name">
-            <span
-              className="objects-color-tag"
-              style={{
-                background: color ?? "transparent",
-                border: color ? "none" : "1px dashed var(--text-muted)",
-              }}
-            />
+            <span className="objects-color-tag" style={swatchStyle(color)} />
             <span className="objects-name-text">{obj.name}</span>
           </div>
           <div className="objects-item-meta">
@@ -305,16 +291,21 @@ export function ObjectsPanel({
               onClick={(e) => e.stopPropagation()}
               onBlur={(e) => {
                 const v = e.target.value.trim();
-                if (v) void renameGroup(g, v).catch(() => {});
+                if (v && v !== name) void renameGroup(g, v).catch(() => {});
                 setEditingGroup(null);
               }}
               onKeyDown={(e) => {
+                // Don't let Enter/Escape bubble to row/group handlers.
+                e.stopPropagation();
                 if (e.key === "Enter") {
-                  const v = (e.target as HTMLInputElement).value.trim();
-                  if (v) void renameGroup(g, v).catch(() => {});
+                  e.preventDefault();
+                  const v = e.currentTarget.value.trim();
+                  if (v && v !== name) void renameGroup(g, v).catch(() => {});
+                  setEditingGroup(null);
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
                   setEditingGroup(null);
                 }
-                if (e.key === "Escape") setEditingGroup(null);
               }}
             />
           ) : (
@@ -335,8 +326,8 @@ export function ObjectsPanel({
           )}
           <span className="objects-group-count">{members.length}</span>
           <span className="objects-group-swatches">
-            {swatches.slice(0, 4).map((c, i) => (
-              <span key={i} className="objects-group-swatch" style={{ background: c }} />
+            {swatches.slice(0, 4).map((c) => (
+              <span key={c} className="objects-group-swatch" style={{ background: c }} />
             ))}
           </span>
           {!readOnly && (

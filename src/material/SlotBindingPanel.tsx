@@ -27,6 +27,7 @@ import {
 } from "../printer/printerInstance";
 import type { DriverId } from "../driver/types";
 import { MaterialChip } from "./MaterialChip";
+import { referencedMaterials, slotForMaterial } from "./materials";
 import { SlotChipStrip } from "./SlotChipStrip";
 import { useFilamentCatalog } from "./useFilamentCatalog";
 
@@ -39,17 +40,6 @@ export interface SlotBindingPanelProps {
    *  usable connection; the Sync button rejects with the
    *  error-triangle state in that case. */
   driverId: DriverId | null;
-}
-
-/** The 1-based model material indices referenced by objects on the
- *  plate. Sorted ascending. Exported for tests. */
-export function referencedMaterials(plate: PlateSnapshot | null): number[] {
-  if (!plate) return [];
-  const seen = new Set<number>();
-  for (const obj of plate.objects) {
-    seen.add(obj.extruder_id ?? 1);
-  }
-  return Array.from(seen).sort((a, b) => a - b);
 }
 
 async function setMaterialSlot(
@@ -165,17 +155,9 @@ export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelP
     });
   };
 
-  // Find the FlatSlotOption that matches the plate's current
-  // material→slot pick (if any).
-  const slotForMaterial = (material: number): FlatSlotOption | null => {
-    const pick = plate.material_to_slot?.[material];
-    if (!pick) return null;
-    return (
-      slots.find(
-        (s) => s.ref.extruder === pick.extruder && s.ref.slot === pick.slot,
-      ) ?? null
-    );
-  };
+  // FlatSlotOption matching the plate's current material→slot pick.
+  const slotFor = (material: number): FlatSlotOption | null =>
+    slotForMaterial(material, plate.material_to_slot ?? {}, slots);
 
   const onPickMaterialSlot = (material: number, slot: SlotRef): void => {
     void setMaterialSlot(plateId, material, slot).catch((err) =>
@@ -219,7 +201,7 @@ export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelP
               <MaterialChip
                 key={`mat-${mat}`}
                 material={mat}
-                current={slotForMaterial(mat)}
+                current={slotFor(mat)}
                 slots={slots}
                 totalExtruders={instance.extruders.length}
                 extruderSlots={instance.extruders.map((e) => e.slots)}

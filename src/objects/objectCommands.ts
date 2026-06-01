@@ -1,5 +1,5 @@
-// Object-mutation commands for the Objects panel (OP-2): add a
-// primitive, load a mesh from a file, remove an object. Thin invoke
+// Object-mutation commands for the Objects panel: add a primitive, load
+// a mesh from a file, remove/group/recolour an object. Thin invoke
 // wrappers — the backend owns the scene; the panel re-renders off the
 // snapshot it refetches on the emitted scene events.
 
