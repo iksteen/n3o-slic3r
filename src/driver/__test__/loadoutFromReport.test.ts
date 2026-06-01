@@ -70,10 +70,10 @@ describe("loadoutFromReport", () => {
     expect(rows[1]).toMatchObject({ label: "2", color: null, name: null, material: null });
     // active_slot 2 → tray id 2 highlighted; name falls back to type when no brand.
     expect(rows[2]).toMatchObject({ label: "3", name: "PETG", material: "PETG", active: true });
-    expect(rows[4]).toMatchObject({ label: "Ext", color: "#0000FF", material: "TPU", active: false });
+    expect(rows[4]).toMatchObject({ label: "Ext", color: "#0000FF", material: "TPU", active: true });
   });
 
-  it("omits the external spool row when none is reported", () => {
+  it("keeps the external row visible but empty when nothing is loaded", () => {
     const rows = loadoutFromReport(
       status({
         kind: "Bambu",
@@ -87,7 +87,8 @@ describe("loadoutFromReport", () => {
         },
       }),
     );
-    expect(rows.map((r) => r.label)).toEqual(["1"]);
+    expect(rows.map((r) => r.label)).toEqual(["1", "Ext"]);
+    expect(rows[1]).toMatchObject({ label: "Ext", color: null, name: null, material: null, active: false });
   });
 
   it("projects U1 toolhead filaments, with the mounted toolhead active", () => {

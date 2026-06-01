@@ -227,90 +227,90 @@ pub struct RawAmsTray {
 }
 
 impl RawAmsTray {
-    /// True iff this tray carries any real spool information
-    /// (non-empty material, non-transparent color, non-empty
-    /// sub_brand, or at least one real multi-color entry).
-    ///
-    /// Used as the gate in [`RawAmsUnit::merge_in`] to ignore the
-    /// placeholder tray fields BBL emits during print startup
-    /// (`tray_color = "00000000"`, empty material strings) so they
-    /// don't wipe the real spool data the initial `pushall` carried.
-    /// Mirrors the predicate `tray_identity` uses to decide whether
-    /// to emit `Some(AmsFilament)` — kept separate so the merge
-    /// gate doesn't have to allocate.
-    pub fn has_spool_data(&self) -> bool {
-        let has_text =
+    /// Field-level merge for a tray patch — used for both AMS trays
+    /// and the external `vt_tray`. BBL sends incremental pushes that
+    /// carry only the changed field — e.g. `{"tray_color":"AC95D5FF"}`
+    /// when a spool is recolored on the printer — so a wholesale
+    /// replace would drop the `tray_type` / `id` / brand the last full
+    /// push established. Adopt each field individually instead, taking
+    /// it only when the patch carries a meaningful value (non-empty,
+    /// and non-transparent for color). That makes a placeholder push
+    /// (BBL's startup-time `tray_color = "00000000"` + empty strings) a
+    /// natural no-op — which is what used to require the explicit
+    /// `has_spool_data` replace gate.
+    pub fn merge_in(&mut self, patch: RawAmsTray) {
+        let text =
             |opt: &Option<String>| opt.as_deref().map(str::trim).is_some_and(|s| !s.is_empty());
-        let has_color = self
+        if patch.id.is_some() {
+            self.id = patch.id;
+        }
+        if text(&patch.material) {
+            self.material = patch.material;
+        }
+        if patch
             .color
             .as_deref()
             .map(str::trim)
-            .is_some_and(|s| !s.is_empty() && !is_transparent_black(s));
-        let has_multi_color = self
+            .is_some_and(|c| !c.is_empty() && !is_transparent_black(c))
+        {
+            self.color = patch.color;
+        }
+        if text(&patch.sub_brand) {
+            self.sub_brand = patch.sub_brand;
+        }
+        if patch
             .cols
             .iter()
-            .any(|c| !c.trim().is_empty() && !is_transparent_black(c.trim()));
-        has_text(&self.material) || has_color || has_text(&self.sub_brand) || has_multi_color
+            .any(|c| !c.trim().is_empty() && !is_transparent_black(c.trim()))
+        {
+            self.cols = patch.cols;
+        }
+        if text(&patch.tray_info_idx) {
+            self.tray_info_idx = patch.tray_info_idx;
+        }
     }
 }
 
 impl RawAmsUnit {
-    /// True iff any tray in this unit has real spool data. Gate
-    /// for the unit-level branch of [`RawAmsState::merge_in`].
-    pub fn has_spool_data(&self) -> bool {
-        self.tray.iter().any(RawAmsTray::has_spool_data)
-    }
-
-    /// Conditional per-tray merge — adopts a patched tray verbatim
-    /// when it carries real spool data, otherwise keeps the cached
-    /// tray at that position so a placeholder-only patch can't
-    /// clobber a real spool. `id` last-write-wins on `is_some`.
+    /// Per-tray field-merge. Each cached tray is patched field-wise by
+    /// the tray at its position (see [`RawAmsTray::merge_in`]), so a
+    /// placeholder push leaves real spool data intact without a gate;
+    /// trays beyond the cached length are appended to reserve the
+    /// position. `id` last-write-wins on `is_some`.
     pub fn merge_in(&mut self, patch: RawAmsUnit) {
         if patch.id.is_some() {
             self.id = patch.id;
         }
         for (i, patch_tray) in patch.tray.into_iter().enumerate() {
-            if !patch_tray.has_spool_data() {
-                continue;
-            }
-            if let Some(self_tray) = self.tray.get_mut(i) {
-                *self_tray = patch_tray;
-            } else {
-                self.tray.push(patch_tray);
+            match self.tray.get_mut(i) {
+                Some(self_tray) => self_tray.merge_in(patch_tray),
+                None => self.tray.push(patch_tray),
             }
         }
     }
 }
 
 impl RawAmsState {
-    /// True iff at least one unit carries at least one tray with
-    /// real spool data.
-    pub fn has_spool_data(&self) -> bool {
-        self.ams.iter().any(RawAmsUnit::has_spool_data)
-    }
-
-    /// Conditional merge — `tray_now` last-write-wins; the unit
-    /// list is only consulted when the patch has *some* real spool
-    /// data, and even then individual trays are gated by
-    /// [`RawAmsUnit::merge_in`]. This means a placeholder push
-    /// (BBL's startup-time empty-tray report) updates the active
-    /// slot indicator but leaves the cached spool identities intact.
+    /// Merge a patch — `tray_now` last-write-wins, then each unit is
+    /// field-merged at its position (units beyond the cached length
+    /// are appended). Placeholder pushes (BBL's startup-time empty-tray
+    /// reports) advance the active slot but leave the cached spool
+    /// identities intact, because the per-field merge skips empty
+    /// values — no separate placeholder gate needed.
     ///
-    /// Ported from `iksteen/machin3d-overlay` commit `dcf6b26350`
-    /// ("Hopefully not lose AMS data during print startup") with
-    /// the per-tray gate adapted to our `RawAmsTray` field set.
+    /// The original wholesale-replace-plus-gate approach came from
+    /// `iksteen/machin3d-overlay` commit `dcf6b26350` ("Hopefully not
+    /// lose AMS data during print startup"); field-merge preserves the
+    /// same guarantee structurally and also survives partial single-
+    /// field pushes (e.g. an in-place recolor) that the gate could not.
     pub fn merge_in(&mut self, patch: RawAmsState) {
         if patch.tray_now.is_some() {
             self.tray_now = patch.tray_now;
         }
-        if !patch.has_spool_data() {
-            return;
-        }
         for (i, patch_unit) in patch.ams.into_iter().enumerate() {
-            if let Some(self_unit) = self.ams.get_mut(i) {
-                self_unit.merge_in(patch_unit);
-            } else {
-                self.ams.push(patch_unit);
+            match self.ams.get_mut(i) {
+                Some(self_unit) => self_unit.merge_in(patch_unit),
+                None => self.ams.push(patch_unit),
             }
         }
     }
@@ -342,6 +342,11 @@ impl RawAmsState {
         AmsState { units, active_slot }
     }
 }
+
+/// `ams.tray_now` value meaning the external spool (`vt_tray`) is the
+/// engaged filament path. AMS trays are `0..N`; `254` is the external
+/// spool; `255` is "nothing engaged".
+const EXTERNAL_SPOOL_TRAY_ID: i64 = 254;
 
 fn tray_identity(t: &RawAmsTray) -> Option<crate::core::driver::status::AmsFilament> {
     use crate::core::driver::status::AmsFilament;
@@ -438,13 +443,15 @@ impl BambuReport {
                 Some(cached) => cached.merge_in(patch_ams),
             }
         }
-        // vt_tray: same placeholder-aware gate. BBL emits empty
-        // patches during print startup; without the gate they'd
-        // wipe the cached external-spool identity.
+        // vt_tray: field-level merge. BBL sends partial external-spool
+        // pushes carrying a single changed field (recolor on the
+        // printer → `{tray_color}` only), so merging per-field rather
+        // than replacing wholesale keeps the cached tray_type/id intact.
+        // Placeholder fields are skipped inside `merge_in`.
         if let Some(patch_vt) = patch.vt_tray {
-            if patch_vt.has_spool_data() {
-                self.vt_tray = Some(patch_vt);
-            }
+            self.vt_tray
+                .get_or_insert_with(RawAmsTray::default)
+                .merge_in(patch_vt);
         }
     }
 }
@@ -537,6 +544,22 @@ pub fn merge_into(snapshot: &mut PrinterStatus, msg: BambuReport) {
         if let Some(f) = msg.fan_speed {
             extra.fan_speed = Some(f as f32);
         }
+        // External spool: `vt_tray` carries the slot's *remembered*
+        // filament identity, which the printer keeps reporting even
+        // after the spool is unloaded — so its presence does NOT mean
+        // "loaded". The engaged signal is the active-tray pointer:
+        // `tray_now == 254` is the external-spool tray id (AMS trays
+        // are 0..N, 255 is "nothing engaged"). Gate the loadout on
+        // that so an unloaded external reads empty, not stale. The
+        // identity itself stays cached across load/unload (the printer
+        // keeps reporting it), so no refresh request is needed — the
+        // pointer alone decides whether to surface it.
+        // Read before the AMS block consumes `msg.ams`.
+        let external_engaged =
+            msg.ams.as_ref().and_then(|a| a.tray_now) == Some(EXTERNAL_SPOOL_TRAY_ID);
+        extra.external_spool = external_engaged
+            .then(|| msg.vt_tray.as_ref().and_then(tray_identity))
+            .flatten();
         // AMS: lower the (already placeholder-gated) raw AMS into the
         // typed shape. The caller is expected to feed a report whose
         // AMS was accumulated through `BambuReport::merge` (the live
@@ -546,14 +569,6 @@ pub fn merge_into(snapshot: &mut PrinterStatus, msg: BambuReport) {
         // `raw` is the full cached state, not a raw per-message delta.
         if let Some(raw) = msg.ams {
             extra.ams = Some(raw.to_typed());
-        }
-        // External spool (PR-7c-2): lower the raw vt_tray into
-        // the typed shape. The wire form mirrors a normal AMS
-        // tray, so we reuse `tray_identity` and drop the result
-        // into `external_spool`. `None`-shaped patches (no spool
-        // info) are filtered upstream by the spool-data gate.
-        if let Some(raw_vt) = msg.vt_tray {
-            extra.external_spool = tray_identity(&raw_vt);
         }
     }
 }
@@ -902,6 +917,73 @@ mod tests {
         }
     }
 
+    #[test]
+    fn external_spool_surfaces_only_when_engaged() {
+        // vt_tray carries a full identity (the printer keeps reporting
+        // the slot's remembered filament even when unloaded). With the
+        // external NOT engaged (tray_now = 255), the loadout must read
+        // empty, not show the stale identity.
+        let unengaged: BambuReport = serde_json::from_value(json!({
+            "ams": { "tray_now": 255, "ams": [] },
+            "vt_tray": { "id": 254, "tray_type": "PLA", "tray_color": "101410FF" },
+        }))
+        .unwrap();
+        let mut snap = PrinterStatus::disconnected_for(DriverExtra::Bambu(BambuExtra::default()));
+        merge_into(&mut snap, unengaged);
+        match &snap.extra {
+            DriverExtra::Bambu(extra) => assert!(
+                extra.external_spool.is_none(),
+                "unengaged external must not surface its remembered identity"
+            ),
+            _ => panic!("expected Bambu extra"),
+        }
+
+        // Same identity, now engaged (tray_now = 254) → it surfaces.
+        let engaged: BambuReport = serde_json::from_value(json!({
+            "ams": { "tray_now": 254, "ams": [] },
+            "vt_tray": { "id": 254, "tray_type": "PLA", "tray_color": "101410FF" },
+        }))
+        .unwrap();
+        let mut snap = PrinterStatus::disconnected_for(DriverExtra::Bambu(BambuExtra::default()));
+        merge_into(&mut snap, engaged);
+        match &snap.extra {
+            DriverExtra::Bambu(extra) => {
+                let ext = extra.external_spool.as_ref().expect("engaged external surfaces");
+                assert_eq!(ext.color, "101410FF");
+            }
+            _ => panic!("expected Bambu extra"),
+        }
+    }
+
+    #[test]
+    fn partial_vt_tray_push_patches_one_field_keeps_the_rest() {
+        // Full external-spool identity from a pushall, then a partial
+        // incremental push that only recolors it (what the printer
+        // sends when you change the spool's color in its UI). The new
+        // color must apply while tray_type / sku survive.
+        let mut acc = BambuReport::default();
+        acc.merge(
+            serde_json::from_value::<BambuReport>(json!({
+                "vt_tray": {
+                    "id": 254, "tray_type": "PLA",
+                    "tray_color": "101410FF", "tray_info_idx": "GFL99",
+                },
+            }))
+            .unwrap(),
+        );
+        acc.merge(
+            serde_json::from_value::<BambuReport>(json!({
+                "vt_tray": { "tray_color": "AC95D5FF" },
+            }))
+            .unwrap(),
+        );
+        let vt = acc.vt_tray.expect("vt_tray retained");
+        assert_eq!(vt.color.as_deref(), Some("AC95D5FF"), "recolor applied");
+        assert_eq!(vt.material.as_deref(), Some("PLA"), "tray_type survives");
+        assert_eq!(vt.tray_info_idx.as_deref(), Some("GFL99"), "sku survives");
+        assert_eq!(vt.id, Some(254), "id survives");
+    }
+
     // ---- spool-aware AMS merge (the print-startup data-loss fix) ----
 
     /// Helper: build a `RawAmsTray` quickly. `material=None` + empty
@@ -931,49 +1013,46 @@ mod tests {
     }
 
     #[test]
-    fn has_spool_data_detects_real_vs_placeholder_trays() {
-        assert!(real_tray(0, "PLA", "FF8800FF").has_spool_data());
-        assert!(!placeholder_tray(0).has_spool_data());
-        // Color alone is enough.
-        assert!(RawAmsTray {
-            id: None,
-            material: None,
+    fn tray_merge_in_adopts_meaningful_fields_and_skips_placeholders() {
+        // A placeholder patch (empty material, transparent color, blank
+        // brand, sentinel cols) must not touch a cached real tray.
+        let mut cached = real_tray(0, "PLA", "FF8800FF");
+        cached.merge_in(placeholder_tray(0));
+        assert_eq!(cached.material.as_deref(), Some("PLA"));
+        assert_eq!(cached.color.as_deref(), Some("FF8800FF"));
+
+        // Each meaningful field is adopted on its own (color / brand /
+        // multi-color cols), building up from an empty tray.
+        let mut t = RawAmsTray::default();
+        t.merge_in(RawAmsTray {
             color: Some("FF0000FF".into()),
-            sub_brand: None,
-            cols: vec![],
-            tray_info_idx: None
-        }
-        .has_spool_data());
-        // Multi-color cols alone is enough.
-        assert!(RawAmsTray {
-            id: None,
-            material: None,
-            color: None,
-            sub_brand: None,
-            cols: vec!["FF0000FF".into()],
-            tray_info_idx: None
-        }
-        .has_spool_data());
-        // sub_brand alone is enough.
-        assert!(RawAmsTray {
-            id: None,
-            material: None,
-            color: None,
+            ..Default::default()
+        });
+        assert_eq!(t.color.as_deref(), Some("FF0000FF"));
+        t.merge_in(RawAmsTray {
             sub_brand: Some("Bambu PLA Basic".into()),
-            cols: vec![],
-            tray_info_idx: None
-        }
-        .has_spool_data());
-        // All blanks / sentinels → empty.
-        assert!(!RawAmsTray {
+            ..Default::default()
+        });
+        assert_eq!(t.sub_brand.as_deref(), Some("Bambu PLA Basic"));
+        t.merge_in(RawAmsTray {
+            cols: vec!["00FF00FF".into()],
+            ..Default::default()
+        });
+        assert_eq!(t.cols, vec!["00FF00FF".to_string()]);
+
+        // Blanks / sentinels are skipped — they don't clobber the
+        // values established above.
+        t.merge_in(RawAmsTray {
             id: Some(0),
             material: Some("".into()),
             color: Some("000000".into()),
             sub_brand: Some("  ".into()),
             cols: vec!["00000000".into()],
-            tray_info_idx: None
-        }
-        .has_spool_data());
+            tray_info_idx: None,
+        });
+        assert_eq!(t.color.as_deref(), Some("FF0000FF"), "transparent color skipped");
+        assert_eq!(t.sub_brand.as_deref(), Some("Bambu PLA Basic"), "blank brand skipped");
+        assert_eq!(t.cols, vec!["00FF00FF".to_string()], "sentinel cols skipped");
     }
 
     #[test]

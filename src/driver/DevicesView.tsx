@@ -457,16 +457,19 @@ export function loadoutFromReport(status: PrinterStatus | null): LoadoutSlot[] {
       }
     }
   }
-  if (external_spool) {
-    rows.push({
-      key: "ext",
-      label: "Ext",
-      color: cssColorFromHex(external_spool.color),
-      name: amsFilamentName(external_spool),
-      material: external_spool.tray_type,
-      active: false,
-    });
-  }
+  // The external spool slot always exists on the A1 mini, so its row
+  // stays visible even when nothing is loaded — mirroring how the AMS
+  // slots stay visible when empty. The backend populates
+  // external_spool only when the external is the engaged tray
+  // (tray_now == 254), so its presence == loaded == active.
+  rows.push({
+    key: "ext",
+    label: "Ext",
+    color: external_spool ? cssColorFromHex(external_spool.color) : null,
+    name: external_spool ? amsFilamentName(external_spool) : null,
+    material: external_spool ? external_spool.tray_type : null,
+    active: external_spool != null,
+  });
   return rows;
 }
 
