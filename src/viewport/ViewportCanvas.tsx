@@ -274,7 +274,12 @@ export function ViewportCanvas({
       if (id !== null) {
         void invoke("scene_select", {
           ids: [id],
-          mode: additive ? "Add" : "Replace",
+          // Modifier-click toggles (so clicking a selected object again
+          // deselects it) — matching the objects panel.
+          mode: additive ? "Toggle" : "Replace",
+          // Canvas clicks select the whole group; the object list selects
+          // individual parts.
+          expandGroups: true,
         });
       }
     };

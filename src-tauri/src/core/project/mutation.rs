@@ -886,33 +886,68 @@ impl Project {
     /// Apply a selection change on the active plate. Returns one
     /// `SelectionChanged` event (sorted for deterministic output)
     /// or empty if the selection didn't actually change.
+    /// Expand `ids` to include every object sharing a group with any of
+    /// them. Ungrouped ids pass through unchanged; the result is deduped.
+    fn expand_to_groups(
+        plate: &crate::core::scene::state::PlateSceneState,
+        ids: &[ObjectId],
+    ) -> Vec<ObjectId> {
+        let groups: HashSet<u32> = ids
+            .iter()
+            .filter_map(|id| plate.objects.get(id).and_then(|o| o.group_id))
+            .collect();
+        if groups.is_empty() {
+            return ids.to_vec();
+        }
+        let mut out: HashSet<ObjectId> = ids.iter().copied().collect();
+        for o in plate.objects.values() {
+            if o.group_id.is_some_and(|g| groups.contains(&g)) {
+                out.insert(o.id);
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    /// Expand `ids` to whole-group membership on the active plate. The
+    /// canvas uses this so clicking one part selects the whole group;
+    /// the object list passes ids straight to `select` to keep parts
+    /// individually selectable.
+    pub fn group_expanded_ids(&self, ids: &[ObjectId]) -> Vec<ObjectId> {
+        Self::expand_to_groups(&self.plates[self.active_plate].scene, ids)
+    }
+
     pub fn select(&mut self, ids: &[ObjectId], mode: SelectMode) -> Vec<SceneEvent> {
         let active = self.active_plate;
         let plate_id = self.plates[active].id;
         let plate = &mut self.plates[active].scene;
         let before: HashSet<ObjectId> = plate.selection.iter().copied().collect();
+        // `ids` is taken as-is — the object list selects individuals.
+        // The canvas's select-the-whole-group behaviour is opt-in via
+        // `group_expanded_ids` at the command layer.
+        let present: Vec<ObjectId> = ids
+            .iter()
+            .copied()
+            .filter(|id| plate.objects.contains_key(id))
+            .collect();
         match mode {
             SelectMode::Replace => {
-                plate.selection = ids
-                    .iter()
-                    .copied()
-                    .filter(|id| plate.objects.contains_key(id))
-                    .collect();
+                plate.selection = present.into_iter().collect();
             }
             SelectMode::Add => {
-                for id in ids {
-                    if plate.objects.contains_key(id) {
-                        plate.selection.insert(*id);
-                    }
+                for id in present {
+                    plate.selection.insert(id);
                 }
             }
             SelectMode::Toggle => {
-                for id in ids {
-                    if !plate.objects.contains_key(id) {
-                        continue;
-                    }
-                    if !plate.selection.insert(*id) {
-                        plate.selection.remove(id);
+                // Toggle the (possibly group-expanded) set as a unit:
+                // remove it if already fully selected, else add it all.
+                let all_selected =
+                    !present.is_empty() && present.iter().all(|id| plate.selection.contains(id));
+                for id in present {
+                    if all_selected {
+                        plate.selection.remove(&id);
+                    } else {
+                        plate.selection.insert(id);
                     }
                 }
             }
@@ -2086,6 +2121,37 @@ mod tests {
         assert!(!plate.scene.group_names.contains_key(&g1));
         let gbc = plate.scene.objects[&b].group_id.expect("b grouped");
         assert_eq!(plate.scene.objects[&c].group_id, Some(gbc));
+    }
+
+    #[test]
+    fn group_expansion_is_opt_in_select_stays_individual() {
+        let mut p = Project::default();
+        let (_, a) = add_cube(&mut p);
+        let (_, b) = add_cube(&mut p);
+        let (_, c) = add_cube(&mut p);
+        p.group_objects(&[a, b], "G".into()).unwrap();
+
+        // The canvas's expansion helper pulls in the whole group...
+        let mut exp = p.group_expanded_ids(&[a]);
+        exp.sort();
+        let mut want = vec![a, b];
+        want.sort();
+        assert_eq!(exp, want, "grouped object expands to its group");
+        assert_eq!(p.group_expanded_ids(&[c]), vec![c], "ungrouped passes through");
+
+        // ...but `select` itself (the object-list path) stays individual.
+        p.select(&[a], SelectMode::Replace);
+        let sel = &p.active_plate().scene.selection;
+        assert_eq!(sel.len(), 1, "select does not auto-expand");
+        assert!(sel.contains(&a));
+
+        // Toggle a multi-id set as a unit (the canvas group-toggle path):
+        // a is selected, b is not → not all selected → add both.
+        p.select(&[a, b], SelectMode::Toggle);
+        assert!(p.active_plate().scene.selection.contains(&b));
+        // Both selected now → toggle removes both.
+        p.select(&[a, b], SelectMode::Toggle);
+        assert!(p.active_plate().scene.selection.is_empty());
     }
 
     fn a1_mini_for_test() -> PrinterProfile {

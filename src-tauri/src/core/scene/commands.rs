@@ -600,10 +600,19 @@ pub fn scene_mesh_buffers(
 pub fn scene_select(
     ids: Vec<ObjectId>,
     mode: SelectMode,
+    // When set, expand the ids to whole groups before selecting (the
+    // canvas's click-selects-the-group behaviour). The object list omits
+    // it so parts stay individually selectable.
+    expand_groups: Option<bool>,
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let ids = if expand_groups.unwrap_or(false) {
+        s.group_expanded_ids(&ids)
+    } else {
+        ids
+    };
     let events = s.select(&ids, mode);
     drop(s);
     emit_all(&window, &events);
