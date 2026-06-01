@@ -1052,6 +1052,35 @@ function SlicerWorkspace({
     patchPlate(activePlateId, p => ({ materialMap: { ...(p.materialMap || {}), [materialId]: slotId } }));
   }, [activePlateId, patchPlate]);
 
+  // Assign an existing project material (M1, M2…) to a single object.
+  const setObjectMaterial = useCallback((objId, materialId) => {
+    setObjects(prev => prev.map(o => o.id === objId ? { ...o, materialId } : o));
+  }, [setObjects]);
+
+  // Mint a brand-new project material, route it to `slotId` (or, if omitted,
+  // the slot the object's current material already uses, falling back to the
+  // first slot), and assign it to the object — all in one plate patch so the
+  // materialMap and the object update commit together.
+  const createMaterialForObject = useCallback((objId, slotId) => {
+    patchPlate(activePlateId, p => {
+      const mm = p.materialMap || {};
+      const nums = Object.keys(mm)
+        .map(k => /^M(\d+)$/.exec(k))
+        .filter(Boolean)
+        .map(m => parseInt(m[1], 10));
+      const nextN = (nums.length ? Math.max(...nums) : 0) + 1;
+      const newId = `M${nextN}`;
+      const obj = p.objects.find(o => o.id === objId);
+      const target = slotId
+        || (obj && mm[obj.materialId])
+        || Object.keys(p.slotMap || {})[0];
+      return {
+        materialMap: { ...mm, [newId]: target },
+        objects: p.objects.map(o => o.id === objId ? { ...o, materialId: newId } : o),
+      };
+    });
+  }, [activePlateId, patchPlate]);
+
   // Picker handler — receives a fully-described filament from the catalog,
   // registers it in the project library (deduping by id), and binds it to
   // the slot the picker was opened from.
@@ -1195,6 +1224,9 @@ function SlicerWorkspace({
           filaments={filaments}
           slotMap={slotMap}
           materialMap={materialMap}
+          slotIds={slotIds}
+          setObjectMaterial={setObjectMaterial}
+          createMaterialForObject={createMaterialForObject}
           printerName={activePlate.name}
           countObjectOverrides={countObjectOverrides}
           plateSize={plateSize}

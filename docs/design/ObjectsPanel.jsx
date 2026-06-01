@@ -1,7 +1,11 @@
 // ObjectsPanel.jsx — left panel: object library + plate object list.
 
-const { useState: useStateOP, useRef: useRefOP } = React;
-const { resolveObjectFilament: resolveOP } = window.SLICER_DATA;
+const { useState: useStateOP, useRef: useRefOP, useEffect: useEffectOP } = React;
+const {
+  resolveObjectFilament: resolveOP,
+  slotShortLabel: slotShortOP,
+  slotLongLabel: slotLongOP,
+} = window.SLICER_DATA;
 
 const OBJECT_LIBRARY = [
   { section: "Primitives", items: [
@@ -22,12 +26,135 @@ const OBJECT_LIBRARY = [
   ]},
 ];
 
+// Natural-sort material ids so M2 precedes M10.
+function sortMaterialIds(ids) {
+  return [...ids].sort((a, b) => {
+    const na = parseInt((a.match(/\d+/) || [0])[0], 10);
+    const nb = parseInt((b.match(/\d+/) || [0])[0], 10);
+    return na - nb || a.localeCompare(b);
+  });
+}
+
+// Floating picker anchored (fixed-position, so it escapes the object list's
+// scroll clip) under an object's material badge. Two views:
+//   1. "Assign" — pick any existing project material (M1, M2…); each row shows
+//      where that material is routed and the filament colour/label.
+//   2. "Create" — mint a new material and route it to any loaded slot.
+function MaterialPicker({
+  obj, materialMap, slotMap, filaments, slotIds,
+  anchorRect, onAssign, onCreate, onClose,
+}) {
+  const [creating, setCreating] = useStateOP(false);
+  const menuRef = useRefOP(null);
+
+  useEffectOP(() => {
+    const onDoc = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) onClose();
+    };
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
+  const materials = sortMaterialIds(Object.keys(materialMap || {}));
+
+  // Clamp the menu within the viewport. Width is fixed by CSS (220px).
+  const MENU_W = 224;
+  const style = { position: "fixed" };
+  if (anchorRect) {
+    const left = Math.min(anchorRect.left, window.innerWidth - MENU_W - 8);
+    style.left = Math.max(8, left);
+    // Prefer below the badge; flip above if it would overflow the viewport.
+    const estH = creating ? 40 + slotIds.length * 34 : 64 + materials.length * 34;
+    style.top = (anchorRect.bottom + estH > window.innerHeight - 8)
+      ? Math.max(8, anchorRect.top - estH - 4)
+      : anchorRect.bottom + 4;
+  }
+
+  const swatchOf = (slotId) => {
+    const fid = slotId ? (slotMap || {})[slotId] : null;
+    return fid ? filaments.find(x => x.id === fid) : null;
+  };
+
+  return (
+    <div
+      ref={menuRef}
+      className="printer-picker-menu material-picker-menu"
+      style={style}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {!creating ? (
+        <React.Fragment>
+          <div className="ptpm-title">Material · {obj.name}</div>
+          {materials.map(mid => {
+            const slotId = (materialMap || {})[mid];
+            const f = swatchOf(slotId);
+            const active = obj.materialId === mid;
+            return (
+              <button
+                key={mid}
+                className={`ptpm-item ptpm-row mp-item ${active ? "active" : ""}`}
+                onClick={() => { onAssign(mid); onClose(); }}
+              >
+                <span className="ptpm-name">
+                  <span className="ptpm-swatch" style={{ background: f?.color || "transparent", border: f ? "none" : "1px dashed currentColor" }}/>
+                  <span className="mp-mid">{mid}</span>
+                  <span className="mp-arrow">→</span>
+                  <span className="mp-slot">{slotId ? slotShortOP(slotId, slotIds) : "—"}</span>
+                </span>
+                <span className="ptpm-detail">{f ? f.label : "unmapped"}</span>
+              </button>
+            );
+          })}
+          <div className="ptpm-sep"/>
+          <button className="ptpm-item ptpm-add" onClick={() => setCreating(true)}>
+            <span className="ptpm-name">+ New material</span>
+            <span className="ptpm-detail">from slot…</span>
+          </button>
+        </React.Fragment>
+      ) : (
+        <React.Fragment>
+          <button className="ptpm-title mp-back" onClick={() => setCreating(false)}>
+            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+              <path d="M6.5 1.5l-3.5 3.5 3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            New material — route to slot
+          </button>
+          {slotIds.map(sid => {
+            const f = swatchOf(sid);
+            return (
+              <button
+                key={sid}
+                className="ptpm-item ptpm-row mp-item"
+                onClick={() => { onCreate(sid); onClose(); }}
+              >
+                <span className="ptpm-name">
+                  <span className="ptpm-swatch" style={{ background: f?.color || "transparent", border: f ? "none" : "1px dashed currentColor" }}/>
+                  {slotLongOP(sid)}
+                </span>
+                <span className="ptpm-detail">{f ? f.label : "empty"}</span>
+              </button>
+            );
+          })}
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
 function ObjectsPanel({
   objects, setObjects,
   selectedId, setSelectedId,
   filaments,
   slotMap,
   materialMap,
+  slotIds = [],
+  setObjectMaterial,
+  createMaterialForObject,
   printerName,
   countObjectOverrides,
   plateSize,
@@ -45,6 +172,8 @@ function ObjectsPanel({
   const [collapsed, setCollapsed] = useStateOP(() => new Set());
   // Group whose name is currently being edited inline.
   const [editingGroup, setEditingGroup] = useStateOP(null);
+  // Which object's material picker is open: { objId, rect } or null.
+  const [materialPicker, setMaterialPicker] = useStateOP(null);
   const draggingRef = useRefOP(null);
 
   const handleDragStart = (e, item) => {
@@ -190,7 +319,24 @@ function ObjectsPanel({
             {obj.name}
           </div>
           <div className="object-meta">
-            <span className="object-material-badge" title={`Material ${materialId} → ${filLabel}`}>{materialId || "M?"}</span>
+            {readOnly ? (
+              <span className="object-material-badge" title={`Material ${materialId} → ${filLabel}`}>{materialId || "M?"}</span>
+            ) : (
+              <button
+                className={`object-material-badge object-material-badge-btn ${materialPicker && materialPicker.objId === obj.id ? "open" : ""}`}
+                title={`Material ${materialId || "—"} → ${filLabel}\nClick to assign or create a material`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setMaterialPicker(prev => prev && prev.objId === obj.id ? null : { objId: obj.id, rect });
+                }}
+              >
+                {materialId || "M?"}
+                <svg className="mp-badge-chev" width="7" height="7" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                  <path d="M2 3.5L5 6.5l3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+            )}
             <span>{Math.round(obj.x)}, {Math.round(obj.y)} mm</span>
             <span className="dim">· {filLabel}</span>
           </div>
@@ -391,6 +537,24 @@ function ObjectsPanel({
           <span className="v">{objects.length}</span>
         </div>
       </div>
+
+      {materialPicker && !readOnly && (() => {
+        const obj = objects.find(o => o.id === materialPicker.objId);
+        if (!obj) return null;
+        return (
+          <MaterialPicker
+            obj={obj}
+            materialMap={materialMap}
+            slotMap={slotMap}
+            filaments={filaments}
+            slotIds={slotIds}
+            anchorRect={materialPicker.rect}
+            onAssign={(mid) => setObjectMaterial && setObjectMaterial(obj.id, mid)}
+            onCreate={(sid) => createMaterialForObject && createMaterialForObject(obj.id, sid)}
+            onClose={() => setMaterialPicker(null)}
+          />
+        );
+      })()}
     </aside>
   );
 }

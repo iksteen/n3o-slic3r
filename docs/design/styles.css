@@ -1500,6 +1500,76 @@ input, select, textarea { font-family: inherit; }
   background: hsl(var(--accent-hue, 175) 30% 22%);
   color: hsl(var(--accent-hue, 175) 50% 80%);
 }
+
+/* Interactive variant of the badge — opens the material picker. */
+.object-material-badge-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: none;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.object-material-badge-btn .mp-badge-chev { opacity: 0.55; margin-top: 0.5px; }
+.object-material-badge-btn:hover,
+.object-material-badge-btn.open {
+  background: hsl(var(--accent-hue, 175) 45% 84%);
+  color: hsl(var(--accent-hue, 175) 45% 24%);
+}
+[data-theme="dark"] .object-material-badge-btn:hover,
+[data-theme="dark"] .object-material-badge-btn.open {
+  background: hsl(var(--accent-hue, 175) 35% 32%);
+  color: hsl(var(--accent-hue, 175) 55% 88%);
+}
+
+/* Material picker dropdown (object list). Reuses .printer-picker-menu chrome
+   but is fixed-positioned so it escapes the scrolling object list. */
+.material-picker-menu {
+  width: 224px;
+  max-height: min(380px, 70vh);
+  overflow-y: auto;
+  z-index: 200;
+}
+.material-picker-menu .ptpm-row.mp-item .ptpm-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.material-picker-menu .mp-mid {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 11.5px;
+}
+.material-picker-menu .mp-arrow { color: var(--text-dim); font-size: 11px; }
+.material-picker-menu .mp-slot {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.material-picker-menu .ptpm-row.mp-item.active .mp-arrow,
+.material-picker-menu .ptpm-row.mp-item.active .mp-slot { color: var(--accent-text); }
+
+/* Separator between the materials list and the "new material" action. */
+.ptpm-sep {
+  height: 1px;
+  background: var(--hairline);
+  margin: 4px 6px;
+}
+
+/* "‹ New material — route to slot" header doubles as a back button. */
+.ptpm-title.mp-back {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-dim);
+}
+.ptpm-title.mp-back:hover { color: var(--text); }
 /* ───────── Quality profile selector ─────────
    Coarse print-quality preset dropdown sitting between the materials config
    band and the granular settings editor. Scales to many (incl. user-defined)
