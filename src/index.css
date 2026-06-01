@@ -328,6 +328,93 @@
   .objects-stat .k { color: var(--text-dim); }
   .objects-stat .v { color: var(--text-muted); font-family: var(--font-mono); }
 
+  /* Per-object material badge button + picker (OP-3) */
+  .objects-material-badge-btn {
+    border: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .objects-material-badge-btn:hover,
+  .objects-material-badge-btn.open {
+    background: var(--surface-3);
+    color: var(--text);
+  }
+
+  .material-picker {
+    z-index: 50;
+    width: 224px;
+    padding: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  }
+  .material-picker-title {
+    display: block;
+    width: 100%;
+    padding: 4px 8px 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+    text-align: left;
+    background: transparent;
+    border: 0;
+  }
+  .material-picker-back { cursor: pointer; color: var(--text-muted); }
+  .material-picker-back:hover { color: var(--text); }
+  .material-picker-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text);
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .material-picker-row:hover { background: var(--surface-2); }
+  .material-picker-row.active { background: var(--accent-soft); }
+  .material-picker-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .material-picker-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-sizing: border-box;
+  }
+  .material-picker-mid { font-family: var(--font-mono); font-size: 11px; }
+  .material-picker-arrow { color: var(--text-dim); }
+  .material-picker-slot {
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .material-picker-detail {
+    flex-shrink: 0;
+    font-size: 10.5px;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+  .material-picker-new { color: var(--text-muted); }
+  .material-picker-sep { height: 1px; margin: 4px 0; background: var(--hairline); }
+  .material-picker-empty {
+    padding: 10px 8px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
   /* ─────────── Top Bar ─────────── */
   .topbar {
     display: flex;

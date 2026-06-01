@@ -18,10 +18,15 @@ import {
 } from "../printer/printerInstance";
 import {
   addPrimitive,
+  createMaterialForObject,
   deleteObject,
   loadModelFromDialog,
+  setObjectMaterial,
   PRIMITIVE_KINDS,
 } from "./objectCommands";
+import { referencedMaterials } from "../material/SlotBindingPanel";
+import { useFilamentCatalog } from "../material/useFilamentCatalog";
+import { MaterialPicker } from "./MaterialPicker";
 
 export interface ObjectsPanelProps {
   plate: PlateSnapshot | null;
@@ -40,6 +45,16 @@ function materialOf(obj: SceneObject): number {
   return obj.extruder_id ?? 1;
 }
 
+/** Lowest 1-based material index not yet referenced on the plate, so a
+ *  new material reuses a freed gap (e.g. M2 after M2 was removed) rather
+ *  than always climbing past the highest. */
+function firstAvailableMaterial(used: number[]): number {
+  const set = new Set(used);
+  let m = 1;
+  while (set.has(m)) m++;
+  return m;
+}
+
 export function ObjectsPanel({
   plate,
   instance,
@@ -48,11 +63,19 @@ export function ObjectsPanel({
   readOnly = false,
 }: ObjectsPanelProps) {
   const [showLibrary, setShowLibrary] = useState(false);
+  const [materialPicker, setMaterialPicker] = useState<{
+    objId: ObjectId;
+    rect: DOMRect;
+  } | null>(null);
+  const { byIdentity: filamentByIdentity } = useFilamentCatalog();
 
   const slots = useMemo<FlatSlotOption[]>(
     () => (instance ? flattenSlots(instance) : []),
     [instance],
   );
+  const materials = useMemo(() => referencedMaterials(plate), [plate]);
+  const nextMaterial = firstAvailableMaterial(materials);
+  const materialToSlot = plate?.material_to_slot ?? {};
 
   const onAddPrimitive = (kind: (typeof PRIMITIVE_KINDS)[number]): void => {
     setShowLibrary(false);
@@ -81,7 +104,10 @@ export function ObjectsPanel({
     const slot = slots.find(
       (s) => s.ref.extruder === pick.extruder && s.ref.slot === pick.slot,
     );
-    return slot?.color ?? null;
+    // Only show a colour when a filament is actually loaded — a cached
+    // spool colour with no identity (e.g. the unloaded external feed)
+    // reads as empty, not solid.
+    return slot?.filament_identity ? slot.color : null;
   };
 
   const overrideCount = (id: ObjectId): number =>
@@ -175,18 +201,38 @@ export function ObjectsPanel({
                       className="objects-color-tag"
                       style={{
                         background: color ?? "transparent",
-                        border: color ? "none" : "1px dashed currentColor",
+                        border: color
+                          ? "none"
+                          : "1px dashed var(--text-muted)",
                       }}
                     />
                     <span className="objects-name-text">{obj.name}</span>
                   </div>
                   <div className="objects-item-meta">
-                    <span
-                      className="objects-material-badge"
-                      title={`Material ${material}`}
-                    >
-                      M{material}
-                    </span>
+                    {readOnly ? (
+                      <span
+                        className="objects-material-badge"
+                        title={`Material ${material}`}
+                      >
+                        M{material}
+                      </span>
+                    ) : (
+                      <button
+                        className={`objects-material-badge objects-material-badge-btn ${
+                          materialPicker?.objId === obj.id ? "open" : ""
+                        }`}
+                        title={`Material ${material} — click to change`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setMaterialPicker((p) =>
+                            p && p.objId === obj.id ? null : { objId: obj.id, rect },
+                          );
+                        }}
+                      >
+                        M{material}
+                      </button>
+                    )}
                     <span className="dim">
                       {x}, {y} mm
                     </span>
@@ -237,6 +283,43 @@ export function ObjectsPanel({
           <span className="v">{objects.length}</span>
         </div>
       </div>
+
+      {!readOnly &&
+        materialPicker &&
+        plate &&
+        (() => {
+          const obj = objects.find((o) => o.id === materialPicker.objId);
+          if (!obj) return null;
+          return (
+            <MaterialPicker
+              objectName={obj.name}
+              currentMaterial={obj.extruder_id ?? 1}
+              materials={materials}
+              nextMaterial={nextMaterial}
+              slots={slots}
+              materialToSlot={materialToSlot}
+              filamentByIdentity={filamentByIdentity}
+              allowCreate={objects.length > 1}
+              anchorRect={materialPicker.rect}
+              onAssign={(m) => {
+                void setObjectMaterial(obj.id, m).catch((err) =>
+                  console.error("[objects] setObjectMaterial failed", err),
+                );
+              }}
+              onCreate={(m, slot) => {
+                void createMaterialForObject(
+                  plate.plate_id,
+                  obj.id,
+                  m,
+                  slot,
+                ).catch((err) =>
+                  console.error("[objects] createMaterialForObject failed", err),
+                );
+              }}
+              onClose={() => setMaterialPicker(null)}
+            />
+          );
+        })()}
     </aside>
   );
 }

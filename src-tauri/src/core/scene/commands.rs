@@ -743,6 +743,24 @@ pub fn scene_object_lay_flat(
     Ok(())
 }
 
+/// Set an object's material — its 1-based `extruder_id` — on the active
+/// plate. Auto-binds the material to a slot if it had none, so the
+/// material → slot table stays complete.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_set_object_material(
+    id: ObjectId,
+    material: u8,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s.set_object_material(id, material).map_err(op_err_to_string)?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_object_duplicate(

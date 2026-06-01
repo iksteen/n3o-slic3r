@@ -968,6 +968,37 @@ impl Project {
         Ok(events)
     }
 
+    /// Set an object's material — its 1-based `extruder_id` — on the
+    /// active plate, ensuring that material has a slot binding (the same
+    /// auto-binding the add path applies). Emits `ObjectUpdated` for the
+    /// object and `MaterialSlotChanged` since the plate's material set
+    /// may have gained a new entry.
+    pub fn set_object_material(
+        &mut self,
+        id: ObjectId,
+        material: u8,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        let active = self.active_plate;
+        let plate_id = self.plates[active].id;
+        let obj = self.plates[active]
+            .scene
+            .objects
+            .get_mut(&id)
+            .ok_or(SceneOpError::UnknownObject(id))?;
+        obj.extruder_id = Some(material);
+        let clone = obj.clone();
+        // Borrow of `obj` ends above; auto-bind the (possibly new)
+        // material to a slot, mirroring the object-add path.
+        self.ensure_default_material_slot_on_active(material);
+        Ok(vec![
+            SceneEvent::ObjectUpdated {
+                plate_id,
+                object: clone,
+            },
+            SceneEvent::MaterialSlotChanged { plate_id },
+        ])
+    }
+
     /// Rotate an object around `axis` by `radians`. Pivot defaults
     /// to the object's current world-space center; `pivot_override`
     /// rotates around an explicit world-space point instead.

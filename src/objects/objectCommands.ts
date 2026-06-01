@@ -5,7 +5,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { ObjectId, MeshId } from "../viewport/types";
+import type { ObjectId, MeshId, PlateId } from "../viewport/types";
+import type { SlotRef } from "../printer/printerInstance";
 
 /** The five library primitives — must match Rust `PrimitiveKind`. */
 export type PrimitiveKind = "Cube" | "Cylinder" | "Sphere" | "Cone" | "Torus";
@@ -61,4 +62,29 @@ export async function loadModelFromDialog(): Promise<void> {
 /** Remove one object from the active plate. */
 export async function deleteObject(id: ObjectId): Promise<void> {
   await invoke("scene_object_delete", { ids: [id] });
+}
+
+/** Assign an existing material (1-based) to an object. The backend
+ *  auto-binds the material to a slot if it had none. */
+export async function setObjectMaterial(
+  id: ObjectId,
+  material: number,
+): Promise<void> {
+  await invoke("scene_set_object_material", { id, material });
+}
+
+/** Mint a new material, route it to `slot`, then assign it to the
+ *  object — reusing the existing material→slot routing. */
+export async function createMaterialForObject(
+  plateId: PlateId,
+  id: ObjectId,
+  material: number,
+  slot: SlotRef,
+): Promise<void> {
+  await invoke("project_set_material_slot", {
+    plateId,
+    modelMaterial: material,
+    slot,
+  });
+  await invoke("scene_set_object_material", { id, material });
 }
