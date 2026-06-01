@@ -26,8 +26,21 @@ Read these before reasoning about scope, design, or behavior:
   working practices (§11).
 - **`docs/Execution_Plan.md`** — 10-phase plan, ~37.5 person-weeks.
   Phase ordering and dependencies are real; calendar dates are not.
-  Phase 0 (foundation) is done; Phase 0.5 spike 4 (coEnums) is done;
-  the other phases are open.
+  **Status (2026-06-01):** Phases 0–8 are done — the full vertical
+  slice ships (cascade resolver + adapter, viewport, end-to-end slice +
+  G-code parser + 3MF I/O, settings UI, multi-printer project model,
+  G-code preview, both printer drivers + filament sync, Lua plugin
+  system with platecycler hardware-validated). **Phase 9 (polish,
+  Linux flatpak, release prep) is in progress** — done: flatpak build +
+  self-hosted signed-repo distribution (validated on Arch, Ubuntu, and
+  Fedora, including under WSL2/WSLg), first-run onboarding, OrcaSlicer
+  `.3mf` project import, Linux CI. Remaining (see
+  `docs/tickets/phase-9.md`, PR-9-* tickets): user docs (getting-started
+  / troubleshooting / release notes — PR-9-7), the
+  `.3mf`/`n3o_project.json` format-finalization review (PR-9-5, still
+  provisional), and the **independence-audit exit gate** (PR-9-8, the
+  one open PRD §3.3 success criterion). Post-MVP deferrals (plugin
+  compose hook, hot reload, Orca preset importer) live in plan §16.
 - **`docs/profiles.md`** — Rule-cascade design of record. Two-phase
   resolution (authored cascade + `!important`-style override tiers),
   TOML schema, translation adapter to libslic3r's `DynamicPrintConfig`,
