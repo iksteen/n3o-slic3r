@@ -342,7 +342,10 @@
   .plate-tab.active::after {
     content: "";
     position: absolute;
-    left: 0; right: 0; bottom: -1px;
+    /* Sit flush with the tab's bottom edge, not -1px below it: the tab
+     * fills the scroll strip, so an accent hanging 1px lower counts as
+     * vertical scrollable overflow and let the strip scroll in Y. */
+    left: 0; right: 0; bottom: 0;
     height: 2px;
     background: var(--accent);
   }

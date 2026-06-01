@@ -54,6 +54,29 @@ export function PlateTabs({
     }
   }, [editingId]);
 
+  // The plate strip scrolls horizontally when it overflows, but its
+  // scrollbar is hidden by design and a mouse wheel is vertical — so
+  // translate vertical wheel delta into horizontal scroll, letting a
+  // plain mouse reach overflowed tabs. The Devices tab is a sibling
+  // outside this scroll region, so it stays pinned regardless. Attached
+  // natively because React's onWheel is passive (no preventDefault).
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (el.scrollWidth <= el.clientWidth) return; // nothing overflowing
+      // Trackpads send horizontal deltaX already; only remap a
+      // vertical wheel, and only when it dominates, so two-axis
+      // trackpad gestures still feel natural.
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      el.scrollLeft += e.deltaY;
+      e.preventDefault();
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [loading]);
+
   const commitRename = (plateId: PlateId): void => {
     const trimmed = editValue.trim();
     if (trimmed.length > 0) {
@@ -111,7 +134,7 @@ export function PlateTabs({
           />
         </svg>
       </button>
-      <div className="plate-tabs-scroll">
+      <div className="plate-tabs-scroll" ref={scrollRef}>
         {plates.map((plate) => {
           const isActive = !devicesActive && plate.id === activePlateId;
           const isEditing = editingId === plate.id;
