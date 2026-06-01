@@ -259,6 +259,14 @@ pub struct PlateSceneState {
     /// objects without authored overrides.
     #[serde(default)]
     pub object_overrides: HashMap<ObjectId, HashMap<String, String>>,
+    /// User-facing names for groups (`group_id` → display name). A group
+    /// is a set of objects sharing a `SceneObject::group_id` — the same
+    /// mechanism the 3MF loader uses for multi-volume objects, now also
+    /// driven by user grouping. The grouping itself persists as the
+    /// objects' `group_id`; this map carries the label. Empty for
+    /// groups without an explicit name (the UI shows a default).
+    #[serde(default)]
+    pub group_names: HashMap<u32, String>,
 }
 
 /// 8 corners of a mesh's axis-aligned bounding box, as world-space

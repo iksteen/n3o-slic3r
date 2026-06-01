@@ -30,6 +30,7 @@ function plateSnap(opts: {
     name: `obj-${id}`,
     visible: true,
     extruder_id: null,
+    group_id: null,
     parent: null,
   });
   return {
@@ -47,6 +48,7 @@ function plateSnap(opts: {
     exclusion_zones: [],
     bed: null,
     object_overrides: {},
+    group_names: {},
   };
 }
 

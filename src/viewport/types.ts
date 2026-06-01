@@ -51,6 +51,9 @@ export interface SceneObject {
   name: string;
   visible: boolean;
   extruder_id: number | null;
+  /** Group membership — objects sharing a `group_id` are volumes of one
+   *  logical object (3MF multi-volume or user grouping). `null` = solo. */
+  group_id: number | null;
   parent: ObjectId | null;
 }
 
@@ -131,6 +134,8 @@ export interface PlateSnapshot {
   exclusion_zones: ExclusionZone[];
   bed: BedMesh | null;
   object_overrides: Record<string, Record<string, string>>;
+  /** Display names for object groups (`group_id` → name). */
+  group_names: Record<number, string>;
 }
 
 /** Snapshot returned by the `scene_snapshot` Tauri command (PR-5-2

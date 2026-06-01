@@ -88,3 +88,25 @@ export async function createMaterialForObject(
   });
   await invoke("scene_set_object_material", { id, material });
 }
+
+/** Group objects into one logical (multi-volume) object on the active
+ *  plate. No-op for fewer than two ids (enforced backend-side). */
+export async function groupObjects(
+  ids: ObjectId[],
+  name: string,
+): Promise<void> {
+  await invoke("scene_group_objects", { ids, name });
+}
+
+/** Ungroup a group (clear its members' group_id). */
+export async function ungroupObjects(groupId: number): Promise<void> {
+  await invoke("scene_ungroup_objects", { groupId });
+}
+
+/** Rename a group. */
+export async function renameGroup(
+  groupId: number,
+  name: string,
+): Promise<void> {
+  await invoke("scene_rename_group", { groupId, name });
+}

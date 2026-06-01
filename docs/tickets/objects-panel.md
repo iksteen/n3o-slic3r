@@ -20,7 +20,7 @@ commands (per-object material set; the user-grouping model).
 | [OP-1](objects-panel/OP-1%20Layout%20and%20object%20list.md) | 3-column layout + read-only object list, selection sync, plate stats | ✅ done 2026-06-01 |
 | [OP-2](objects-panel/OP-2%20Add%20and%20remove%20objects.md) | Object library (primitives + model load), add/remove | ✅ done 2026-06-01 |
 | [OP-3](objects-panel/OP-3%20Per-object%20material.md) | Per-object material badge + picker, set-object-material command | ✅ done 2026-06-01 |
-| [OP-4](objects-panel/OP-4%20Grouping.md) | Multi-select + group/ungroup/rename, user-group model + persistence | 📋 planned |
+| [OP-4](objects-panel/OP-4%20Grouping.md) | Multi-select + group/ungroup/rename (unified with multi-volume) | ✅ done 2026-06-01 |
 
 ## Scope decisions
 

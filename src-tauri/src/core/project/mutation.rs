@@ -999,6 +999,138 @@ impl Project {
         ])
     }
 
+    // ---- Object grouping (active plate) ---------------------------
+    //
+    // A "group" is a set of objects sharing a `group_id` — the same
+    // mechanism the 3MF loader uses for multi-volume objects, now also
+    // driven by user grouping. The writer/slice path already emits a
+    // shared `group_id` as one ModelObject with multiple volumes, so
+    // grouping == assembling into one logical print object. Only the
+    // display name (`scene.group_names`) is new state.
+
+    /// Lowest unused `group_id` across all plates (project-scoped).
+    fn next_group_id(&self) -> u32 {
+        self.plates
+            .iter()
+            .flat_map(|p| p.scene.objects.values())
+            .filter_map(|o| o.group_id)
+            .max()
+            .map_or(1, |m| m + 1)
+    }
+
+    /// Group `ids` on the active plate under one new, project-unique
+    /// `group_id` named `name`. Objects already in other groups move
+    /// into this one; any group thereby left with a single member is
+    /// dissolved. No-op for fewer than two ids.
+    pub fn group_objects(
+        &mut self,
+        ids: &[ObjectId],
+        name: String,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        if ids.len() < 2 {
+            return Ok(Vec::new());
+        }
+        let group_id = self.next_group_id();
+        let active = self.active_plate;
+        let plate_id = self.plates[active].id;
+        let mut events = Vec::new();
+        for &id in ids {
+            let obj = self.plates[active]
+                .scene
+                .objects
+                .get_mut(&id)
+                .ok_or(SceneOpError::UnknownObject(id))?;
+            obj.group_id = Some(group_id);
+            events.push(SceneEvent::ObjectUpdated {
+                plate_id,
+                object: obj.clone(),
+            });
+        }
+        self.plates[active].scene.group_names.insert(group_id, name);
+        events.extend(self.dissolve_orphan_groups_on_active());
+        events.push(SceneEvent::PlateMetadataChanged { plate_id });
+        Ok(events)
+    }
+
+    /// Ungroup: clear `group_id` from every member of `group_id` on the
+    /// active plate and drop its name.
+    pub fn ungroup_objects(&mut self, group_id: u32) -> Vec<SceneEvent> {
+        let active = self.active_plate;
+        let plate_id = self.plates[active].id;
+        let member_ids: Vec<ObjectId> = self.plates[active]
+            .scene
+            .objects
+            .values()
+            .filter(|o| o.group_id == Some(group_id))
+            .map(|o| o.id)
+            .collect();
+        let mut events = Vec::new();
+        for id in member_ids {
+            if let Some(obj) = self.plates[active].scene.objects.get_mut(&id) {
+                obj.group_id = None;
+                events.push(SceneEvent::ObjectUpdated {
+                    plate_id,
+                    object: obj.clone(),
+                });
+            }
+        }
+        self.plates[active].scene.group_names.remove(&group_id);
+        events.push(SceneEvent::PlateMetadataChanged { plate_id });
+        events
+    }
+
+    /// Rename a group on the active plate.
+    pub fn rename_group(&mut self, group_id: u32, name: String) -> Vec<SceneEvent> {
+        let active = self.active_plate;
+        let plate_id = self.plates[active].id;
+        self.plates[active].scene.group_names.insert(group_id, name);
+        vec![SceneEvent::PlateMetadataChanged { plate_id }]
+    }
+
+    /// Dissolve any group on the active plate left with fewer than two
+    /// members — a group of one isn't a group. Clears those objects'
+    /// `group_id` and drops the names. Returns the per-object events.
+    fn dissolve_orphan_groups_on_active(&mut self) -> Vec<SceneEvent> {
+        use std::collections::{HashMap, HashSet};
+        let active = self.active_plate;
+        let plate_id = self.plates[active].id;
+        let mut counts: HashMap<u32, usize> = HashMap::new();
+        for o in self.plates[active].scene.objects.values() {
+            if let Some(g) = o.group_id {
+                *counts.entry(g).or_insert(0) += 1;
+            }
+        }
+        let orphans: HashSet<u32> = counts
+            .into_iter()
+            .filter(|&(_, c)| c < 2)
+            .map(|(g, _)| g)
+            .collect();
+        if orphans.is_empty() {
+            return Vec::new();
+        }
+        let ids: Vec<ObjectId> = self.plates[active]
+            .scene
+            .objects
+            .values()
+            .filter(|o| o.group_id.is_some_and(|g| orphans.contains(&g)))
+            .map(|o| o.id)
+            .collect();
+        let mut events = Vec::new();
+        for id in ids {
+            if let Some(obj) = self.plates[active].scene.objects.get_mut(&id) {
+                obj.group_id = None;
+                events.push(SceneEvent::ObjectUpdated {
+                    plate_id,
+                    object: obj.clone(),
+                });
+            }
+        }
+        for g in orphans {
+            self.plates[active].scene.group_names.remove(&g);
+        }
+        events
+    }
+
     /// Rotate an object around `axis` by `radians`. Pivot defaults
     /// to the object's current world-space center; `pivot_override`
     /// rotates around an explicit world-space point instead.
@@ -1905,6 +2037,55 @@ mod tests {
         let mesh_id = p.register_mesh(unit_cube_mesh());
         let obj_id = p.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
         (mesh_id, obj_id)
+    }
+
+    #[test]
+    fn group_objects_shares_id_and_name_then_ungroups() {
+        let mut p = Project::default();
+        let (_, a) = add_cube(&mut p);
+        let (_, b) = add_cube(&mut p);
+
+        let events = p.group_objects(&[a, b], "Bracket".into()).unwrap();
+        assert!(!events.is_empty());
+        let plate = p.active_plate();
+        let ga = plate.scene.objects[&a].group_id.expect("a grouped");
+        assert_eq!(plate.scene.objects[&b].group_id, Some(ga), "shared group id");
+        assert_eq!(
+            plate.scene.group_names.get(&ga).map(String::as_str),
+            Some("Bracket"),
+        );
+
+        p.ungroup_objects(ga);
+        let plate = p.active_plate();
+        assert_eq!(plate.scene.objects[&a].group_id, None);
+        assert_eq!(plate.scene.objects[&b].group_id, None);
+        assert!(plate.scene.group_names.is_empty(), "name dropped on ungroup");
+    }
+
+    #[test]
+    fn grouping_fewer_than_two_objects_is_a_noop() {
+        let mut p = Project::default();
+        let (_, a) = add_cube(&mut p);
+        assert!(p.group_objects(&[a], "G".into()).unwrap().is_empty());
+        assert_eq!(p.active_plate().scene.objects[&a].group_id, None);
+    }
+
+    #[test]
+    fn regrouping_dissolves_a_group_left_with_one_member() {
+        let mut p = Project::default();
+        let (_, a) = add_cube(&mut p);
+        let (_, b) = add_cube(&mut p);
+        let (_, c) = add_cube(&mut p);
+        p.group_objects(&[a, b], "G1".into()).unwrap();
+        let g1 = p.active_plate().scene.objects[&a].group_id.unwrap();
+        // Move b into a new group with c — G1 is left with only a, so it
+        // dissolves (a group of one isn't a group).
+        p.group_objects(&[b, c], "G2".into()).unwrap();
+        let plate = p.active_plate();
+        assert_eq!(plate.scene.objects[&a].group_id, None, "a's group dissolved");
+        assert!(!plate.scene.group_names.contains_key(&g1));
+        let gbc = plate.scene.objects[&b].group_id.expect("b grouped");
+        assert_eq!(plate.scene.objects[&c].group_id, Some(gbc));
     }
 
     fn a1_mini_for_test() -> PrinterProfile {

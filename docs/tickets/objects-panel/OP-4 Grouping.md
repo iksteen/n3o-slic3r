@@ -1,29 +1,45 @@
-# OP-4 — grouping
+# OP-4 — grouping (unified with multi-volume)
 
-Status: 📋 planned
+Status: ✅ done 2026-06-01
 
-**Scope.** Manual object grouping in the panel: multi-select →
-group/ungroup, rename, collapsible group blocks.
+**Design decision (2026-06-01): user groups ARE multi-volume objects.**
+`SceneObject.group_id` already means "these objects are volumes of one
+logical print object" — the writer emits a shared `group_id` as a single
+`ModelObject` with multiple `ModelVolume`s, and the slice path treats it
+as one object. That is exactly "assemble selected objects into one
+multi-part object". So user grouping **reuses `group_id`** rather than
+adding a parallel field: 3MF multi-volume objects and user-created groups
+are the same thing and render identically in the panel.
 
-**Design note — user groups vs multi-volume `group_id`.** The existing
-`SceneObject.group_id` is reserved for 3MF multi-volume objects (volumes
-of one logical object), **not** user grouping. User groups likely need a
-distinct field (e.g. `user_group_id`) plus a per-plate `group → name`
-map, so the two concepts don't collide. Settle this in the ticket before
-coding.
+The only genuinely new state is a **group name** (the model has
+per-object names but no per-group name).
+
+**What exists:** `SceneObject.group_id`; the writer/slice path that
+treats a shared `group_id` as one ModelObject; project save/load that
+round-trips objects (incl. `group_id`) through `n3o_project.json`.
 
 **Net-new / changes:**
-- Backend: per-plate user-group model — group id allocation, a
-  `group_id → name` map, and commands `scene_group_objects` /
-  `scene_ungroup_objects` / `scene_rename_group`. Persist in the `.3mf`
-  (the `n3o_project.json` side). Orphan-group dissolve (a group of one
-  isn't a group) on delete/ungroup.
-- Snapshot: surface the user-group id + name per object.
-- Panel: multi-select (⌘/Ctrl/Shift-click), the group action bar, group
-  blocks (caret/collapse, member count, swatch stack, rename, ungroup);
-  the group header selects all members.
+- Per-plate `group_names` map (`group_id → name`), serialized in
+  `n3o_project.json` (default empty) and surfaced in `PlateSnapshot`.
+  (The grouping itself already persists as multi-volume geometry; this
+  just carries the user label.)
+- Mutations + commands:
+  - `scene_group_objects(ids, name)` — allocate a new project-scoped
+    `group_id`, set it on the selected objects, store the name.
+  - `scene_ungroup_objects(group_id)` — clear `group_id` from members,
+    drop the name.
+  - `scene_rename_group(group_id, name)`.
+- Snapshot: surface `group_id` per object (the TS `SceneObject` type is
+  currently missing it) + the per-plate `group_names`.
+- Panel: multi-select (⌘/Ctrl/Shift-click) + a group action bar; objects
+  sharing a `group_id` render as a collapsible block (caret, member
+  count, swatch stack, rename, ungroup); the group header selects all
+  members. A group left with one member dissolves.
 
 **Acceptance criteria:**
-- Multi-select two-plus objects → Group makes a named group; it
+- Multi-select two-plus objects → Group makes a named group that
   collapses, renames, and ungroups; it survives save/reload.
-- Grouping never clobbers 3MF multi-volume objects.
+- A 3MF multi-volume object loads as a group in the panel (same render
+  path).
+- A grouped set slices as one object — the existing `group_id`
+  behaviour, unchanged.

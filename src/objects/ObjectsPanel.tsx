@@ -1,14 +1,15 @@
-// Objects panel (OP-1) — the left workspace column: the active plate's
-// object list with two-way selection sync to the 3D viewport.
+// Objects panel — the left workspace column: the active plate's object
+// list, with selection, add/remove, per-object material, and grouping.
 //
-// Scope: read-only display here. Add/remove (OP-2), per-object material
-// editing (OP-3), and grouping (OP-4) layer on later. An object's
-// "material" is its `extruder_id`, resolved to a spool colour through
-// the plate's `material_to_slot` table + the bound instance's slots —
-// the same routing the Materials section of `SlotBindingPanel` uses, so
-// the colours agree across both surfaces.
+// An object's "material" is its `extruder_id`, resolved to a spool colour
+// through the plate's `material_to_slot` table + the bound instance's
+// slots — the same routing the Materials section of `SlotBindingPanel`
+// uses, so the colours agree across both surfaces. A "group" is a set of
+// objects sharing a `group_id` (3MF multi-volume *and* user grouping are
+// the same thing); the panel renders groups with ≥2 members as
+// collapsible blocks.
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { PlateSnapshot, SceneObject, ObjectId } from "../viewport/types";
 import {
@@ -20,8 +21,11 @@ import {
   addPrimitive,
   createMaterialForObject,
   deleteObject,
+  groupObjects,
   loadModelFromDialog,
+  renameGroup,
   setObjectMaterial,
+  ungroupObjects,
   PRIMITIVE_KINDS,
 } from "./objectCommands";
 import { referencedMaterials } from "../material/SlotBindingPanel";
@@ -35,7 +39,7 @@ export interface ObjectsPanelProps {
   /** Build-plate [x, y] mm for the footer; null when unbound. */
   plateSize: [number, number] | null;
   /** Preview mode: selection still works for cross-reference, but the
-   *  panel presents read-only (which it already is in OP-1). */
+   *  panel presents read-only (no add/remove/group/material edits). */
   readOnly?: boolean;
 }
 
@@ -67,6 +71,8 @@ export function ObjectsPanel({
     objId: ObjectId;
     rect: DOMRect;
   } | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
+  const [editingGroup, setEditingGroup] = useState<number | null>(null);
   const { byIdentity: filamentByIdentity } = useFilamentCatalog();
 
   const slots = useMemo<FlatSlotOption[]>(
@@ -76,6 +82,65 @@ export function ObjectsPanel({
   const materials = useMemo(() => referencedMaterials(plate), [plate]);
   const nextMaterial = firstAvailableMaterial(materials);
   const materialToSlot = plate?.material_to_slot ?? {};
+  const groupNames = plate?.group_names ?? {};
+
+  const objects = plate?.objects ?? [];
+  const selection = useMemo(
+    () => new Set(plate?.selection ?? []),
+    [plate?.selection],
+  );
+
+  // Members per group_id; only groups with ≥2 members render as a block.
+  const groupMembers = useMemo(() => {
+    const m = new Map<number, SceneObject[]>();
+    for (const o of objects) {
+      if (o.group_id != null) {
+        const arr = m.get(o.group_id) ?? [];
+        arr.push(o);
+        m.set(o.group_id, arr);
+      }
+    }
+    return m;
+  }, [objects]);
+  const realGroups = useMemo(
+    () =>
+      new Set(
+        [...groupMembers.entries()]
+          .filter(([, mem]) => mem.length >= 2)
+          .map(([g]) => g),
+      ),
+    [groupMembers],
+  );
+
+  // Material index → routed slot's spool colour, only when a filament is
+  // actually loaded (a cached colour with no identity reads as empty).
+  const colorForMaterial = (material: number): string | null => {
+    const pick = plate?.material_to_slot?.[material];
+    if (!pick) return null;
+    const slot = slots.find(
+      (s) => s.ref.extruder === pick.extruder && s.ref.slot === pick.slot,
+    );
+    return slot?.filament_identity ? slot.color : null;
+  };
+  const overrideCount = (id: ObjectId): number =>
+    Object.keys(plate?.object_overrides?.[String(id)] ?? {}).length;
+
+  const sceneSelect = (ids: ObjectId[], mode = "Replace"): void => {
+    void invoke("scene_select", { ids, mode }).catch((err) =>
+      console.error("[objects] scene_select failed", err),
+    );
+  };
+  const clearSelection = (): void => {
+    void invoke("scene_deselect").catch(() => {});
+  };
+  // The scene selection is the single source of truth — ⌘/Ctrl/Shift
+  // toggles membership, a plain click replaces. The action bar + Group
+  // act on it, so a single-selected object is already in the set when
+  // you ctrl-click a second (no separate grouping state to fall out of
+  // sync).
+  const handleRowClick = (id: ObjectId, additive: boolean): void => {
+    sceneSelect([id], !readOnly && additive ? "Toggle" : "Replace");
+  };
 
   const onAddPrimitive = (kind: (typeof PRIMITIVE_KINDS)[number]): void => {
     setShowLibrary(false);
@@ -89,36 +154,233 @@ export function ObjectsPanel({
       console.error("[objects] loadModelFromDialog failed", err),
     );
   };
+  const onGroup = (): void => {
+    if (selection.size < 2) return;
+    const name = `Group ${Object.keys(groupNames).length + 1}`;
+    void (async () => {
+      try {
+        await groupObjects([...selection], name);
+        await invoke("scene_deselect");
+      } catch (err) {
+        console.error("[objects] group failed", err);
+      }
+    })();
+  };
+  const toggleCollapse = (g: number): void => {
+    setCollapsed((prev) => {
+      const n = new Set(prev);
+      if (n.has(g)) n.delete(g);
+      else n.add(g);
+      return n;
+    });
+  };
 
-  const objects = plate?.objects ?? [];
-  const selection = useMemo(
-    () => new Set(plate?.selection ?? []),
-    [plate?.selection],
-  );
-
-  // Material index → routed slot's spool colour (CSS hex), via the
-  // plate's material_to_slot table + the bound instance's slots.
-  const colorForMaterial = (material: number): string | null => {
-    const pick = plate?.material_to_slot?.[material];
-    if (!pick) return null;
-    const slot = slots.find(
-      (s) => s.ref.extruder === pick.extruder && s.ref.slot === pick.slot,
+  const renderRow = (obj: SceneObject, inGroup = false): ReactNode => {
+    const material = materialOf(obj);
+    const color = colorForMaterial(material);
+    const x = Math.round(obj.transform[12] ?? 0);
+    const y = Math.round(obj.transform[13] ?? 0);
+    const overrides = overrideCount(obj.id);
+    return (
+      <div
+        key={obj.id}
+        role="button"
+        tabIndex={0}
+        className={`objects-item ${selection.has(obj.id) ? "selected" : ""} ${
+          inGroup ? "in-group" : ""
+        }`}
+        onClick={(e) =>
+          handleRowClick(obj.id, e.metaKey || e.ctrlKey || e.shiftKey)
+        }
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleRowClick(obj.id, e.metaKey || e.ctrlKey || e.shiftKey);
+          }
+        }}
+      >
+        <div className="objects-item-main">
+          <div className="objects-item-name">
+            <span
+              className="objects-color-tag"
+              style={{
+                background: color ?? "transparent",
+                border: color ? "none" : "1px dashed var(--text-muted)",
+              }}
+            />
+            <span className="objects-name-text">{obj.name}</span>
+          </div>
+          <div className="objects-item-meta">
+            {readOnly ? (
+              <span
+                className="objects-material-badge"
+                title={`Material ${material}`}
+              >
+                M{material}
+              </span>
+            ) : (
+              <button
+                className={`objects-material-badge objects-material-badge-btn ${
+                  materialPicker?.objId === obj.id ? "open" : ""
+                }`}
+                title={`Material ${material} — click to change`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setMaterialPicker((p) =>
+                    p && p.objId === obj.id ? null : { objId: obj.id, rect },
+                  );
+                }}
+              >
+                M{material}
+              </button>
+            )}
+            <span className="dim">
+              {x}, {y} mm
+            </span>
+          </div>
+        </div>
+        {overrides > 0 && (
+          <span
+            className="objects-overrides"
+            title={`${overrides} per-object override${overrides === 1 ? "" : "s"}`}
+          >
+            {overrides}
+          </span>
+        )}
+        {!readOnly && (
+          <button
+            className="objects-remove"
+            title="Remove"
+            aria-label={`Remove ${obj.name}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              void deleteObject(obj.id).catch((err) =>
+                console.error("[objects] deleteObject failed", err),
+              );
+            }}
+          >
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden>
+              <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
+      </div>
     );
-    // Only show a colour when a filament is actually loaded — a cached
-    // spool colour with no identity (e.g. the unloaded external feed)
-    // reads as empty, not solid.
-    return slot?.filament_identity ? slot.color : null;
   };
 
-  const overrideCount = (id: ObjectId): number =>
-    Object.keys(plate?.object_overrides?.[String(id)] ?? {}).length;
-
-  const onSelect = (id: ObjectId, additive: boolean): void => {
-    void invoke("scene_select", {
-      ids: [id],
-      mode: additive ? "Add" : "Replace",
-    }).catch((err) => console.error("[objects] scene_select failed", err));
+  const renderGroup = (g: number, members: SceneObject[]): ReactNode => {
+    const name = groupNames[g] ?? `Group ${g}`;
+    const isCollapsed = collapsed.has(g);
+    const swatches: string[] = [];
+    for (const m of members) {
+      const c = colorForMaterial(materialOf(m));
+      if (c && !swatches.includes(c)) swatches.push(c);
+    }
+    return (
+      <div key={`g${g}`} className="objects-group">
+        <div
+          className="objects-group-head"
+          onClick={() => sceneSelect(members.map((m) => m.id))}
+          title="Select the whole group"
+        >
+          <button
+            className={`objects-group-caret ${isCollapsed ? "collapsed" : ""}`}
+            title={isCollapsed ? "Expand group" : "Collapse group"}
+            aria-label="Toggle group"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleCollapse(g);
+            }}
+          >
+            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden>
+              <path d="M3 1.5l4 3.5-4 3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          {editingGroup === g && !readOnly ? (
+            <input
+              className="objects-group-name-input"
+              defaultValue={name}
+              autoFocus
+              onClick={(e) => e.stopPropagation()}
+              onBlur={(e) => {
+                const v = e.target.value.trim();
+                if (v) void renameGroup(g, v).catch(() => {});
+                setEditingGroup(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const v = (e.target as HTMLInputElement).value.trim();
+                  if (v) void renameGroup(g, v).catch(() => {});
+                  setEditingGroup(null);
+                }
+                if (e.key === "Escape") setEditingGroup(null);
+              }}
+            />
+          ) : (
+            <span
+              className="objects-group-name"
+              title={readOnly ? name : "Click to rename"}
+              onClick={
+                readOnly
+                  ? undefined
+                  : (e) => {
+                      e.stopPropagation();
+                      setEditingGroup(g);
+                    }
+              }
+            >
+              {name}
+            </span>
+          )}
+          <span className="objects-group-count">{members.length}</span>
+          <span className="objects-group-swatches">
+            {swatches.slice(0, 4).map((c, i) => (
+              <span key={i} className="objects-group-swatch" style={{ background: c }} />
+            ))}
+          </span>
+          {!readOnly && (
+            <button
+              className="objects-group-ungroup"
+              title="Ungroup"
+              aria-label="Ungroup"
+              onClick={(e) => {
+                e.stopPropagation();
+                void ungroupObjects(g).catch((err) =>
+                  console.error("[objects] ungroupObjects failed", err),
+                );
+              }}
+            >
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden>
+                <rect x="1.5" y="1.5" width="4" height="4" rx="0.8" stroke="currentColor" strokeWidth="1.1" />
+                <rect x="6.5" y="6.5" width="4" height="4" rx="0.8" stroke="currentColor" strokeWidth="1.1" />
+                <path d="M10.5 1.5l-9 9" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
+        </div>
+        {!isCollapsed && (
+          <div className="objects-group-members">
+            {members.map((m) => renderRow(m, true))}
+          </div>
+        )}
+      </div>
+    );
   };
+
+  // Walk objects in order; emit a group block the first time one of its
+  // (≥2-member) members is seen, otherwise a single row.
+  const renderList: ReactNode[] = [];
+  const seenGroups = new Set<number>();
+  for (const obj of objects) {
+    if (obj.group_id != null && realGroups.has(obj.group_id)) {
+      if (seenGroups.has(obj.group_id)) continue;
+      seenGroups.add(obj.group_id);
+      renderList.push(renderGroup(obj.group_id, groupMembers.get(obj.group_id)!));
+    } else {
+      renderList.push(renderRow(obj));
+    }
+  }
 
   return (
     <aside className={`objects-panel ${readOnly ? "readonly" : ""}`}>
@@ -164,6 +426,24 @@ export function ObjectsPanel({
         )}
       </div>
 
+      {!readOnly && selection.size >= 2 && (
+        <div className="objects-selbar">
+          <span className="objects-selbar-count">{selection.size} selected</span>
+          <div className="objects-selbar-actions">
+            <button
+              className="objects-selbar-btn primary"
+              title="Group selected into one object"
+              onClick={onGroup}
+            >
+              Group
+            </button>
+            <button className="objects-selbar-btn" onClick={clearSelection}>
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="objects-list">
         {objects.length === 0 ? (
           <div className="objects-empty">
@@ -172,100 +452,7 @@ export function ObjectsPanel({
               : "No objects yet — click + to add one."}
           </div>
         ) : (
-          objects.map((obj) => {
-            const material = materialOf(obj);
-            const color = colorForMaterial(material);
-            const selected = selection.has(obj.id);
-            const overrides = overrideCount(obj.id);
-            const x = Math.round(obj.transform[12] ?? 0);
-            const y = Math.round(obj.transform[13] ?? 0);
-            return (
-              <div
-                key={obj.id}
-                role="button"
-                tabIndex={0}
-                className={`objects-item ${selected ? "selected" : ""}`}
-                onClick={(e) =>
-                  onSelect(obj.id, e.metaKey || e.ctrlKey || e.shiftKey)
-                }
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onSelect(obj.id, e.metaKey || e.ctrlKey || e.shiftKey);
-                  }
-                }}
-              >
-                <div className="objects-item-main">
-                  <div className="objects-item-name">
-                    <span
-                      className="objects-color-tag"
-                      style={{
-                        background: color ?? "transparent",
-                        border: color
-                          ? "none"
-                          : "1px dashed var(--text-muted)",
-                      }}
-                    />
-                    <span className="objects-name-text">{obj.name}</span>
-                  </div>
-                  <div className="objects-item-meta">
-                    {readOnly ? (
-                      <span
-                        className="objects-material-badge"
-                        title={`Material ${material}`}
-                      >
-                        M{material}
-                      </span>
-                    ) : (
-                      <button
-                        className={`objects-material-badge objects-material-badge-btn ${
-                          materialPicker?.objId === obj.id ? "open" : ""
-                        }`}
-                        title={`Material ${material} — click to change`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setMaterialPicker((p) =>
-                            p && p.objId === obj.id ? null : { objId: obj.id, rect },
-                          );
-                        }}
-                      >
-                        M{material}
-                      </button>
-                    )}
-                    <span className="dim">
-                      {x}, {y} mm
-                    </span>
-                  </div>
-                </div>
-                {overrides > 0 && (
-                  <span
-                    className="objects-overrides"
-                    title={`${overrides} per-object override${overrides === 1 ? "" : "s"}`}
-                  >
-                    {overrides}
-                  </span>
-                )}
-                {!readOnly && (
-                  <button
-                    className="objects-remove"
-                    title="Remove"
-                    aria-label={`Remove ${obj.name}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void deleteObject(obj.id).catch((err) =>
-                        console.error("[objects] deleteObject failed", err),
-                      );
-                    }}
-                  >
-                    <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden>
-                      <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                    </svg>
-                  </button>
-                )}
-              </div>
-            );
-          })
+          renderList
         )}
       </div>
 

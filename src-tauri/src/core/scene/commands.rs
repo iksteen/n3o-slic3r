@@ -105,6 +105,9 @@ pub struct PlateSnapshot {
     pub bed: Option<BedMesh>,
     pub object_overrides:
         std::collections::HashMap<ObjectId, std::collections::HashMap<String, String>>,
+    /// Display names for object groups (`group_id` → name). A group is a
+    /// set of objects sharing a `SceneObject::group_id`.
+    pub group_names: std::collections::HashMap<u32, String>,
 }
 
 /// Snapshot of the scene state. Frontend calls this on startup /
@@ -156,6 +159,7 @@ fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
         exclusion_zones: plate.scene.exclusion_zones.clone(),
         bed: plate.scene.bed.clone(),
         object_overrides: plate.scene.object_overrides.clone(),
+        group_names: plate.scene.group_names.clone(),
     }
 }
 
@@ -756,6 +760,55 @@ pub fn scene_set_object_material(
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s.set_object_material(id, material).map_err(op_err_to_string)?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
+/// Group objects on the active plate into one logical (multi-volume)
+/// object named `name` — the same `group_id` mechanism as 3MF
+/// multi-volume objects.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_group_objects(
+    ids: Vec<ObjectId>,
+    name: String,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s.group_objects(&ids, name).map_err(op_err_to_string)?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
+/// Ungroup a group on the active plate (clear its members' `group_id`).
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_ungroup_objects(
+    group_id: u32,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s.ungroup_objects(group_id);
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
+/// Rename a group on the active plate.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_rename_group(
+    group_id: u32,
+    name: String,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s.rename_group(group_id, name);
     drop(s);
     emit_all(&window, &events);
     Ok(())
