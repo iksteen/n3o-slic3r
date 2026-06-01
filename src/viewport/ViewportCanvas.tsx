@@ -190,6 +190,10 @@ export function ViewportCanvas({
       fp: { minX: number; minY: number; maxX: number; maxY: number } | null,
       bed: BedMesh,
     ): { x: number; y: number } => {
+      // Footprint extents are axis-aligned (the mesh bbox / the square box),
+      // so this clamp assumes the tower is not rotated. Both MVP printers
+      // default wipe_tower_rotation_angle to 0; a nonzero rotation would need
+      // the rotated AABB here. (Re-add when a rotation UI lands.)
       const b = geom.brim;
       const minLX = fp ? fp.minX : -b;
       const maxLX = fp ? fp.maxX : geom.width + b;
@@ -221,6 +225,12 @@ export function ViewportCanvas({
           tower.hide();
           return;
         }
+        // The active plate may have changed while the query was in flight
+        // (refreshTower fires on ActivePlateChanged + override/object/material
+        // events, which interleave). Bail rather than clamp `geom` against the
+        // *new* plate's bed or persist an override to a stale plate — the
+        // switch fired its own refresh.
+        if (plateId !== mirror.activePlateIdOrNull()) return;
         const bed = mirror.activePlate()?.bed ?? null;
         towerBedZ = bed ? bed.extents.min[2] : 0;
         towerGeom = geom;
@@ -242,18 +252,31 @@ export function ViewportCanvas({
         if (bed) {
           const c = clampTowerCorner(geom.x, geom.y, geom, tower.meshFootprint(), bed);
           if (c.x !== geom.x || c.y !== geom.y) {
+            // Always show the clamped (on-bed) position.
             towerGeom = { ...geom, x: c.x, y: c.y };
             tower.place(towerGeom, towerBedZ);
-            void invoke("scene_project_override_set", {
-              plateId,
-              key: "wipe_tower_x",
-              value: fmtCoord(c.x),
-            });
-            void invoke("scene_project_override_set", {
-              plateId,
-              key: "wipe_tower_y",
-              value: fmtCoord(c.y),
-            });
+            // Persist only when the *rounded* corner actually moves. The clamp
+            // boundary is a float (e.g. 255.97); fmtCoord rounds it to 0.1
+            // ("256"), which the backend re-resolves to 256.0 — off-bed again —
+            // so comparing raw clamp vs raw geom would re-enter via the
+            // override-changed event forever (255.97→"256"→256.0→255.97→…).
+            // Comparing rounded values reaches a fixed point.
+            const rx = fmtCoord(c.x);
+            const ry = fmtCoord(c.y);
+            if (rx !== fmtCoord(geom.x)) {
+              void invoke("scene_project_override_set", {
+                plateId,
+                key: "wipe_tower_x",
+                value: rx,
+              });
+            }
+            if (ry !== fmtCoord(geom.y)) {
+              void invoke("scene_project_override_set", {
+                plateId,
+                key: "wipe_tower_y",
+                value: ry,
+              });
+            }
           }
         }
       } catch {

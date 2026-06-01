@@ -189,11 +189,20 @@ function App() {
   // on the auto-switch to preview that fires the instant a slice finishes —
   // a viewport-local listener would miss the slice's tower mesh.
   useEffect(() => {
-    let un: (() => void) | null = null;
-    void setupTowerMeshCache().then((u) => {
-      un = u;
+    // listen() returns a Promise<UnlistenFn>; the cleanup may run before it
+    // resolves (StrictMode mounts→unmounts→remounts the effect synchronously),
+    // so capture the promise and unlisten once it settles — a `cancelled` flag
+    // tears down even if the cleanup fired first. Storing into a local `un`
+    // and calling it in cleanup would no-op (still null) and leak the listener.
+    let cancelled = false;
+    const pending = setupTowerMeshCache().then((un) => {
+      if (cancelled) un();
+      return un;
     });
-    return () => un?.();
+    return () => {
+      cancelled = true;
+      void pending.then((un) => un());
+    };
   }, []);
 
   const goPrepare = (): void => {

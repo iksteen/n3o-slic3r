@@ -25,6 +25,13 @@ interface CachedTowerMesh {
 
 const cache = new Map<number, CachedTowerMesh>();
 const subscribers = new Set<(plateId: number) => void>();
+// Per-plate sequence: each plate_finished event bumps it. The async
+// material-count query below only writes the cache if its event is still the
+// latest for that plate — so two slices of the same plate finishing close
+// together can't apply out of resolution order (last-to-resolve-wins would
+// otherwise cache the older slice's mesh).
+const latestSeq = new Map<number, number>();
+let seqCounter = 0;
 
 /** The last-sliced tower mesh for `plateId`, or null if none cached. */
 export function getCachedTowerMesh(plateId: number): CachedTowerMesh | null {
@@ -56,6 +63,8 @@ export async function setupTowerMeshCache(): Promise<UnlistenFn> {
     "slice:plate_finished",
     (e) => {
       const { plate_id, tower_mesh } = e.payload.data;
+      const seq = ++seqCounter;
+      latestSeq.set(plate_id, seq);
       if (!tower_mesh) {
         cache.delete(plate_id);
         notify(plate_id);
@@ -67,11 +76,19 @@ export async function setupTowerMeshCache(): Promise<UnlistenFn> {
         plateId: plate_id,
       })
         .then((g) => {
+          if (latestSeq.get(plate_id) !== seq) return; // superseded
           if (g) cache.set(plate_id, { mesh: tower_mesh, materialCount: g.material_count });
           else cache.delete(plate_id);
           notify(plate_id);
         })
-        .catch(() => {});
+        .catch(() => {
+          // Query failed (plate removed mid-flight, backend error): drop any
+          // stale mesh and re-render, rather than leaving the prior slice's
+          // tower on screen with no notify.
+          if (latestSeq.get(plate_id) !== seq) return;
+          cache.delete(plate_id);
+          notify(plate_id);
+        });
     },
   );
 }
