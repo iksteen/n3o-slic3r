@@ -262,6 +262,18 @@ export class SceneMirror {
     }
 
     this.setActivePlate(snapshot.active_plate_id);
+
+    // applySnapshot otherwise rebuilds silently (it doesn't run through
+    // handleEvent, so listeners never hear about it). Consumers that
+    // derive state from the freshly-loaded active plate — bed framing,
+    // the priming-tower overlay — have no incremental event to react to
+    // on project load / reconnect, so signal the rebuild explicitly.
+    const activeId = snapshot.active_plate_id;
+    if (activeId !== null && this.plates.has(activeId)) {
+      for (const l of this.listeners) {
+        l({ kind: "ActivePlateChanged", data: { plate_id: activeId } });
+      }
+    }
   }
 
   /** Apply one event from the Rust side. Events are serialized

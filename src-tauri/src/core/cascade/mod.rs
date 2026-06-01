@@ -337,6 +337,19 @@ pub fn slicer_options(filter: Option<String>) -> Vec<OptionSummary> {
     out
 }
 
+/// The engine's compiled-in default for `key`, serialized exactly as
+/// libslic3r emits it (e.g. `wipe_tower_x` → `"15"`). Exact-key match
+/// over the raw FFI option table — unlike [`slicer_options`] it applies
+/// no panel-visibility or capability filter, so capability-gated keys
+/// (the `wipe_tower_*` family) still return their default. `None` when
+/// libslic3r has no compile-time default for the key.
+pub fn engine_default_serialized(key: &str) -> Option<String> {
+    option_defs()
+        .into_iter()
+        .find(|d| d.key == key)
+        .and_then(|d| d.default_serialized)
+}
+
 /// Stable-sort options by their position in Orca's hand-curated
 /// Tab.cpp UI layout (scraped at build time via
 /// `scripts/scrape_option_display_order.py`). Keys absent from the
@@ -453,6 +466,22 @@ mod tests {
             exclusion_zones: vec![],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn engine_default_serialized_returns_capability_gated_key_default() {
+        ensure_ffi();
+        // wipe_tower_x is capability-gated (RequiresPurgeTower) so it can be
+        // filtered out of `slicer_options`; the exact-match accessor must
+        // still surface its compiled default. The priming-tower overlay
+        // leans on this for printers (the U1) that pin no position.
+        let d = engine_default_serialized("wipe_tower_x")
+            .expect("libslic3r ships a wipe_tower_x default");
+        assert!(
+            d.trim().parse::<f64>().is_ok(),
+            "default parses as a number, got {d:?}"
+        );
+        assert_eq!(engine_default_serialized("not_a_real_key_xyz"), None);
     }
 
     #[test]

@@ -12,6 +12,7 @@
 // reflector; the canonical state is on the Rust side.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -23,7 +24,8 @@ import {
 import { attachEventBridge, tauriMeshBufferProvider } from "./eventBridge";
 import { createGizmo, type GizmoApi } from "./gizmo";
 import { SceneMirror } from "./sceneMirror";
-import type { GizmoMode, ObjectId } from "./types";
+import { createTowerOverlay } from "./towerOverlay";
+import type { GizmoMode, ObjectId, TowerGeometry } from "./types";
 
 interface ToastMessage {
   id: number;
@@ -160,6 +162,47 @@ export function ViewportCanvas({
     });
     gizmoRef.current = gizmo;
 
+    // ---- Priming-tower overlay ----------------------------------------
+    //
+    // A translucent box on the bed at the resolved tower footprint,
+    // draggable in the bed plane. Position/size come from the backend
+    // `plate_tower_geometry` (cascade-resolved + the plate's project
+    // overrides), refreshed whenever the active plate, its bed, or any
+    // override changes. `towerGeom`/`towerBedZ` are the live state the
+    // drag handlers read + mutate.
+    const tower = createTowerOverlay();
+    scene.add(tower.group);
+    tower.setVisible(false);
+    let towerGeom: TowerGeometry | null = null;
+    let towerBedZ = 0;
+    const refreshTower = async (): Promise<void> => {
+      const plateId = mirror.activePlateIdOrNull();
+      if (plateId == null) {
+        towerGeom = null;
+        tower.setVisible(false);
+        return;
+      }
+      try {
+        const geom = await invoke<TowerGeometry | null>("plate_tower_geometry", {
+          plateId,
+        });
+        if (!geom) {
+          towerGeom = null;
+          tower.setVisible(false);
+          return;
+        }
+        const bed = mirror.activePlate()?.bed ?? null;
+        towerBedZ = bed ? bed.extents.min[2] : 0;
+        towerGeom = geom;
+        tower.update(geom, towerBedZ);
+        tower.setVisible(true);
+      } catch {
+        // Transiently-unbound plate etc. — hide rather than toast-spam.
+        towerGeom = null;
+        tower.setVisible(false);
+      }
+    };
+
     // ---- Event bridge -------------------------------------------------
     //
     // PR-5-2 phase C: events route to the active plate via SceneMirror.
@@ -203,6 +246,7 @@ export function ViewportCanvas({
           if (evt.data.bed) {
             initialFrameForBed(camera, controls, evt.data.bed);
           }
+          void refreshTower();
           break;
         case "ActivePlateChanged": {
           // The active plate just changed — re-sync the viewport's
@@ -218,6 +262,7 @@ export function ViewportCanvas({
               initialFrameForBed(camera, controls, plate.bed);
             }
           }
+          void refreshTower();
           break;
         }
       }
@@ -231,10 +276,32 @@ export function ViewportCanvas({
         // unbound plate (empty library) has no bed — the onboarding
         // empty-state covers that case, no default printer is forced.
         detachBridge = un;
+        void refreshTower();
       })
       .catch((err) => {
         pushToast("error", `viewport init failed: ${err}`);
       });
+
+    // Refresh the tower on everything that can change whether it shows or
+    // where it sits: override edits (a drag commit or the settings panel),
+    // a quality-profile swap (prime_tower_width), and changes to the plate's
+    // material count (add/remove an object, reassign a material) — the tower
+    // only exists for a multi-material plate.
+    const towerUnlisten: UnlistenFn[] = [];
+    for (const name of [
+      "scene:project_overrides_changed",
+      "scene:user_overrides_changed",
+      "scene:plate_metadata_changed",
+      "scene:object_added",
+      "scene:object_removed",
+      "scene:material_slot_changed",
+    ]) {
+      void listen(name, () => {
+        void refreshTower();
+      })
+        .then((un) => towerUnlisten.push(un))
+        .catch(() => {});
+    }
 
     // ---- Resize handling ---------------------------------------------
     const onResize = () => {
@@ -294,13 +361,109 @@ export function ViewportCanvas({
       }
     };
     renderer.domElement.addEventListener("click", onClick);
-    // Reset the swallow flag at the start of any fresh interaction, so a
-    // gizmo drag released off-canvas (no resulting click) can't suppress
-    // the user's next real click.
-    const onPointerDown = () => {
+
+    // ---- Priming-tower drag (bed-plane translate) ---------------------
+    //
+    // Grabbing the tower box drags it across the bed; releasing commits
+    // wipe_tower_x/y as project overrides (which the slice honours, so the
+    // box and the print move together). The capture-phase pointerdown also
+    // resets the click-swallow guard — so a gizmo drag released off-canvas
+    // can't suppress the next real click — and, when a tower drag starts,
+    // stops the event reaching OrbitControls.
+    let towerDrag: { offsetX: number; offsetY: number; moved: boolean } | null =
+      null;
+    const bedPlane = new THREE.Plane();
+    const hitPoint = new THREE.Vector3();
+    const pointerToBed = (ev: PointerEvent): THREE.Vector3 | null => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      bedPlane.set(new THREE.Vector3(0, 0, 1), -towerBedZ);
+      return raycaster.ray.intersectPlane(bedPlane, hitPoint)
+        ? hitPoint.clone()
+        : null;
+    };
+    const onPointerDown = (ev: PointerEvent) => {
       swallowGizmoClick = false;
+      // Only start a tower drag when the tower is shown, nothing else is
+      // mid-drag (a gizmo drag disables orbit), and the box is the
+      // frontmost thing under the pointer.
+      if (towerDrag || !towerGeom || !tower.group.visible || !controls.enabled) {
+        return;
+      }
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const towerHits = raycaster.intersectObject(tower.box, false);
+      if (towerHits.length === 0) return;
+      const objHits = raycaster.intersectObjects(
+        mirror.objectGroup.children,
+        true,
+      );
+      if (objHits.length > 0 && objHits[0].distance < towerHits[0].distance) {
+        return; // an object is in front — let the click select it instead
+      }
+      const p = pointerToBed(ev);
+      if (!p) return;
+      towerDrag = {
+        offsetX: p.x - towerGeom.x,
+        offsetY: p.y - towerGeom.y,
+        moved: false,
+      };
+      controls.enabled = false;
+      ev.stopPropagation();
+      ev.preventDefault();
+    };
+    const onPointerMove = (ev: PointerEvent) => {
+      if (!towerDrag || !towerGeom) return;
+      const p = pointerToBed(ev);
+      if (!p) return;
+      let nx = p.x - towerDrag.offsetX;
+      let ny = p.y - towerDrag.offsetY;
+      const bed = mirror.activePlate()?.bed;
+      if (bed) {
+        // Keep the whole footprint + brim on the bed.
+        const m = towerGeom.brim;
+        const minX = bed.extents.min[0] + m;
+        const minY = bed.extents.min[1] + m;
+        const maxX = bed.extents.max[0] - towerGeom.width - m;
+        const maxY = bed.extents.max[1] - towerGeom.width - m;
+        nx = Math.min(Math.max(nx, minX), Math.max(minX, maxX));
+        ny = Math.min(Math.max(ny, minY), Math.max(minY, maxY));
+      }
+      if (nx !== towerGeom.x || ny !== towerGeom.y) towerDrag.moved = true;
+      towerGeom = { ...towerGeom, x: nx, y: ny };
+      tower.update(towerGeom, towerBedZ);
+    };
+    const onPointerUp = () => {
+      if (!towerDrag) return;
+      const moved = towerDrag.moved;
+      towerDrag = null;
+      controls.enabled = true;
+      swallowGizmoClick = true; // the release also fires a click; never select
+      const plateId = mirror.activePlateIdOrNull();
+      // A click without a drag shouldn't pin the tower with an override.
+      if (moved && plateId != null && towerGeom) {
+        const fmt = (v: number) => (Math.round(v * 10) / 10).toString();
+        void invoke("scene_project_override_set", {
+          plateId,
+          key: "wipe_tower_x",
+          value: fmt(towerGeom.x),
+        });
+        void invoke("scene_project_override_set", {
+          plateId,
+          key: "wipe_tower_y",
+          value: fmt(towerGeom.y),
+        });
+        // The override-changed event triggers refreshTower → the
+        // authoritative (resolved + clamped) box settles in.
+      }
     };
     renderer.domElement.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
 
     // ---- Keyboard shortcuts ------------------------------------------
     const onKeyDown = (ev: KeyboardEvent) => {
@@ -324,12 +487,16 @@ export function ViewportCanvas({
       cancelAnimationFrame(raf);
       renderer.domElement.removeEventListener("click", onClick);
       renderer.domElement.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("keydown", onKeyDown);
+      for (const un of towerUnlisten) un();
       resizeObserver.disconnect();
       detachToastsListener();
       if (detachBridge) void detachBridge();
       gizmoRef.current = null;
       gizmo.dispose();
+      tower.dispose();
       controls.dispose();
       mirror.clear();
       renderer.dispose();

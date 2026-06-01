@@ -76,6 +76,18 @@ export interface BedMesh {
   exclusion_zones: ExclusionZone[];
 }
 
+/** Resolved priming-tower placement + footprint (bed millimetres = world
+ *  space). Mirrors the backend `plate_tower_geometry` payload. `x`/`y` are
+ *  the tower's lower-left corner, `width` the square footprint, `brim` the
+ *  surrounding skirt, `rotation` degrees about the tower. */
+export interface TowerGeometry {
+  x: number;
+  y: number;
+  width: number;
+  brim: number;
+  rotation: number;
+}
+
 export type BoundsAxis = "X" | "Y" | "Z";
 
 export type OutOfBoundsReason =

@@ -169,13 +169,45 @@ pub fn plate_cascade_resolve(
 /// a Tauri `State`.
 pub fn resolve_plate_cascade(p: &Project, plate_id: PlateId) -> Result<PlateResolvedJson, String> {
     use std::collections::{BTreeMap, HashMap};
+    // Fragment-only resolution (no override tiers) — the panel draws
+    // project/object rows from its own maps.
+    let Some(resolved) = resolve_plate(p, plate_id, &BTreeMap::new())? else {
+        return Ok(PlateResolvedJson {
+            entries: HashMap::new(),
+        });
+    };
+    let entries = resolved
+        .into_iter()
+        .map(|(k, v)| {
+            (
+                k,
+                PlateResolvedEntry {
+                    source_layer: layer_for_source(&v.winning_rule.path).map(str::to_owned),
+                    value: v.value,
+                },
+            )
+        })
+        .collect();
+    Ok(PlateResolvedJson { entries })
+}
+
+/// Compose + resolve a plate's cascade, folding `overrides` in as the
+/// top-precedence layer exactly as the slice path folds
+/// `Plate.project_overrides` (`slice::orchestrator::resolve_cascade`).
+/// Pass an empty map for the fragment-only resolution the settings
+/// ladder wants, or the plate's project overrides when the resolved
+/// value has to match what actually slices (e.g. the priming-tower
+/// position). Returns `None` for an unbound plate (no printer instance).
+fn resolve_plate(
+    p: &Project,
+    plate_id: PlateId,
+    overrides: &std::collections::BTreeMap<String, String>,
+) -> Result<Option<crate::core::cascade::Resolved>, String> {
     let plate = p
         .plate(plate_id)
         .ok_or_else(|| format!("unknown plate id {plate_id:?}"))?;
     let Some(instance_id) = plate.printer_instance_id.as_deref() else {
-        return Ok(PlateResolvedJson {
-            entries: HashMap::new(),
-        });
+        return Ok(None);
     };
     let instance = crate::core::printer::lookup_instance(instance_id)
         .ok_or_else(|| format!("unknown printer instance `{instance_id}`"))?;
@@ -225,27 +257,107 @@ pub fn resolve_plate_cascade(p: &Project, plate_id: PlateId) -> Result<PlateReso
         &instance,
         plate.quality_profile.as_deref(),
     );
-    let cascade = crate::core::profile_library::compose_cascade(&effective, &[], &BTreeMap::new())
+    let cascade = crate::core::profile_library::compose_cascade(&effective, &[], overrides)
         .map_err(|e| format!("compose: {e}"))?;
     let ctx = crate::core::project::SlicingContext::new(
         std::sync::Arc::new(printer),
         std::sync::Arc::new(bed),
         filaments,
     );
-    let resolved = crate::core::cascade::resolve(&cascade, &ctx);
-    let entries = resolved
-        .into_iter()
-        .map(|(k, v)| {
-            (
-                k,
-                PlateResolvedEntry {
-                    source_layer: layer_for_source(&v.winning_rule.path).map(str::to_owned),
-                    value: v.value,
-                },
-            )
-        })
+    Ok(Some(crate::core::cascade::resolve(&cascade, &ctx)))
+}
+
+/// Resolved priming-tower placement + footprint for one plate, in bed
+/// millimetres (world space — the bed's corner is the world origin).
+/// `x`/`y` are the tower's lower-left corner (`wipe_tower_x/y`); `width`
+/// is the square footprint (`prime_tower_width`); `brim` the skirt that
+/// rings it; `rotation` is degrees about the tower (0 for both MVP
+/// printers — carried for fidelity).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TowerGeometry {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub brim: f64,
+    pub rotation: f64,
+}
+
+/// The active plate's priming-tower geometry for the viewport overlay,
+/// or `None` when the plate is unbound or has no tower
+/// (`enable_prime_tower` off). Visibility keys on `enable_prime_tower`,
+/// not the purge-tower capability: both MVP printers run a tower (the
+/// A1 mini purges through it, the U1 uses it for toolhead re-entry), and
+/// only the purge-*volume* options are toolchanger-gated. The plate's
+/// project overrides are folded in, so the box tracks exactly where the
+/// tower slices — including a position the user has dragged it to.
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub fn plate_tower_geometry(
+    plate_id: PlateId,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<Option<TowerGeometry>, String> {
+    let p = state.lock().map_err(|e| format!("project lock: {e}"))?;
+    tower_geometry_for_plate(&p, plate_id)
+}
+
+/// Core of [`plate_tower_geometry`], split out for testing without a
+/// Tauri `State`.
+pub fn tower_geometry_for_plate(
+    p: &Project,
+    plate_id: PlateId,
+) -> Result<Option<TowerGeometry>, String> {
+    let Some(plate) = p.plate(plate_id) else {
+        return Ok(None);
+    };
+    // A wipe/prime tower is only generated for a multi-material print —
+    // ≥2 distinct filament indices among the plate's objects. With a single
+    // material there are no tool changes, so libslic3r emits no tower
+    // regardless of `enable_prime_tower`; the overlay must match. (Same
+    // "referenced materials" notion the pre-slice gate uses:
+    // `extruder_id.unwrap_or(1)`.)
+    let distinct_materials: std::collections::HashSet<u8> = plate
+        .scene
+        .objects
+        .values()
+        .map(|o| o.extruder_id.unwrap_or(1))
         .collect();
-    Ok(PlateResolvedJson { entries })
+    if distinct_materials.len() < 2 {
+        return Ok(None);
+    }
+    // Fold the plate's project-tier overrides into the compose exactly as
+    // the slice path does, so a dragged position resolves here too.
+    let overrides: std::collections::BTreeMap<String, String> =
+        plate.project_overrides.clone().into_iter().collect();
+    let Some(resolved) = resolve_plate(p, plate_id, &overrides)? else {
+        return Ok(None);
+    };
+
+    let enabled = resolved
+        .get("enable_prime_tower")
+        .map(|v| matches!(v.value.trim(), "1" | "true" | "True"))
+        .unwrap_or(false);
+    if !enabled {
+        return Ok(None);
+    }
+
+    // Cascade-resolved value if a fragment/override sets it, else the
+    // engine's compiled default (the U1 pins no position, so its tower
+    // sits at libslic3r's default until dragged).
+    let num = |key: &str| -> Option<f64> {
+        resolved
+            .get(key)
+            .map(|v| v.value.clone())
+            .or_else(|| crate::core::cascade::engine_default_serialized(key))
+            .and_then(|s| s.trim().parse::<f64>().ok())
+    };
+
+    Ok(Some(TowerGeometry {
+        x: num("wipe_tower_x").unwrap_or(0.0),
+        y: num("wipe_tower_y").unwrap_or(0.0),
+        width: num("prime_tower_width").unwrap_or(0.0),
+        brim: num("prime_tower_brim_width").unwrap_or(0.0),
+        rotation: num("wipe_tower_rotation_angle").unwrap_or(0.0),
+    }))
 }
 
 /// Set (or clear, with `None`) a plate's process/quality profile —
@@ -494,6 +606,87 @@ mod tests {
         let ow = resolved.entries.get("outer_wall_speed").expect("present");
         assert_eq!(ow.value, "60", "the plate's own process wins");
         assert_eq!(ow.source_layer.as_deref(), Some("user"));
+    }
+
+    /// Add a cube on the active plate assigned to `material` (its 1-based
+    /// filament index). Two distinct materials make the plate multi-material
+    /// — the condition a wipe/prime tower is generated for.
+    fn add_cube(p: &mut Project, material: u8) {
+        use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
+        use crate::core::scene::transform::Transform;
+        let mesh = p.register_mesh(NewMesh {
+            vertices: vec![0.0; 24],
+            normals: vec![0.0; 24],
+            indices: vec![0, 1, 2],
+            bounding_box: crate::core::printer::profile::BoundingBox {
+                min: [0.0, 0.0, 0.0],
+                max: [1.0, 1.0, 1.0],
+            },
+            provenance: MeshProvenance::Primitive("cube".into()),
+        });
+        p.register_object(NewSceneObject {
+            mesh,
+            transform: Transform::IDENTITY,
+            name: format!("cube-m{material}"),
+            visible: true,
+            extruder_id: Some(material),
+            parent: None,
+            group_id: None,
+        });
+    }
+
+    #[test]
+    fn tower_geometry_for_a1_mini_reads_pinned_position_and_footprint() {
+        let _ = slic3r_ffi::init(None, 3);
+        let mut project = Project::default();
+        let plate_id = project.plates[0].id;
+        // Multi-material plate → the tower is generated.
+        add_cube(&mut project, 1);
+        add_cube(&mut project, 2);
+        let t = tower_geometry_for_plate(&project, plate_id)
+            .expect("ok")
+            .expect("the A1 mini runs a prime tower for a multi-material plate");
+        // Position pinned in machine.toml; footprint in the process fragment.
+        assert_eq!(t.x, 5.0, "wipe_tower_x");
+        assert_eq!(t.y, 130.0, "wipe_tower_y");
+        assert_eq!(t.width, 35.0, "prime_tower_width");
+        assert_eq!(t.brim, 3.0, "prime_tower_brim_width");
+    }
+
+    #[test]
+    fn tower_geometry_is_none_for_a_single_material_plate() {
+        let _ = slic3r_ffi::init(None, 3);
+        let mut project = Project::default();
+        let plate_id = project.plates[0].id;
+        // One material (or none) → no tool changes → no tower, even though
+        // enable_prime_tower is set.
+        add_cube(&mut project, 1);
+        assert!(
+            tower_geometry_for_plate(&project, plate_id)
+                .expect("ok")
+                .is_none(),
+            "single-material plate must not show a tower",
+        );
+    }
+
+    #[test]
+    fn tower_geometry_tracks_a_project_override_position() {
+        let _ = slic3r_ffi::init(None, 3);
+        let mut project = Project::default();
+        let plate_id = project.plates[0].id;
+        add_cube(&mut project, 1);
+        add_cube(&mut project, 2);
+        // Dragging the tower writes a project-tier wipe_tower_x override;
+        // the geometry the viewport reads must fold it in (so the box
+        // tracks where the tower will actually slice).
+        project
+            .project_override_set(plate_id, "wipe_tower_x".into(), "42".into())
+            .expect("set override");
+        let t = tower_geometry_for_plate(&project, plate_id)
+            .expect("ok")
+            .expect("tower");
+        assert_eq!(t.x, 42.0, "overridden position resolves here");
+        assert_eq!(t.y, 130.0, "the untouched axis stays pinned");
     }
 
     #[test]
