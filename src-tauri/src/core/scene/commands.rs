@@ -175,25 +175,6 @@ pub fn scene_set_active_printer(
     Ok(())
 }
 
-/// Install the bundled Bambu A1 mini profile as the active printer.
-/// Pulled from the printer catalog (`core::printer::registry`) so
-/// the profile — including its bed-derived `supported_build_plates`
-/// — comes from a single source of truth.
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn scene_load_default_printer(
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<PrinterProfile, String> {
-    let printer = crate::core::printer::registry::lookup("bambu-lab-a1-mini")
-        .ok_or_else(|| "bundled `bambu-lab-a1-mini` profile missing from catalog".to_owned())?;
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.set_active_printer(Some(&printer));
-    drop(s);
-    emit_all(&window, &events);
-    Ok(printer)
-}
-
 /// Append a new plate. Active plate is unchanged. `printerIdentity`
 /// is optional — new plates may be created unbound and assigned a
 /// printer later via [`scene_rebind_plate_printer`]. When supplied,
@@ -967,4 +948,5 @@ mod tests {
         assert_eq!(json["plate_id"], 1);
         assert_eq!(json["name"], "Plate 1");
     }
+
 }

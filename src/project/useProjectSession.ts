@@ -1,28 +1,28 @@
 // `useProjectSession` — App.tsx's top-level project state hook
 // (PR-5-9).
 //
-// Owns two pieces of "current session" state the SettingsPanel
-// host needs:
-//   - `printer` — the canonical `PrinterProfileJson` returned by
-//     `scene_load_default_printer()` on mount. The bundled A1 mini
-//     fixture for now; Phase 9 swaps for a registry.
+// Owns the "current session" snapshot the SettingsPanel host needs:
 //   - `snapshot` — the current `SceneSnapshot` (refetched on every
 //     scene/project event).
 //
-// `cascadeHandle` is no longer plumbed here — the slice path
-// composes the cascade fresh per job from the bound printer
-// instance (PR-S-5c), and the SettingsPanel's resolved-value display
-// is wired separately downstream.
+// The active printer profile is NOT held here. The host derives it
+// from the active plate's `printer_identity` against the printer
+// catalog; an unbound plate (empty library) simply has no printer and
+// the panel renders its "No printer selected" state while the
+// onboarding empty-state guides the user to add one.
 //
-// The hook performs the bootstrap dance once on mount, then
-// listens for the full firehose of project / scene events so the
-// snapshot stays fresh.
+// `cascadeHandle` is no longer plumbed here — the slice path composes
+// the cascade fresh per job from the bound printer instance, and the
+// SettingsPanel's resolved-value display is wired separately
+// downstream.
+//
+// The hook fetches the initial snapshot once on mount, then listens
+// for the full firehose of project / scene events so it stays fresh.
 
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { SceneSnapshot } from "../viewport/types";
-import type { PrinterProfileJson } from "../settings/resolve";
 
 /** Events worth refetching the snapshot on. Broader than the tab
  * strip's set — the panel reads selection + overrides + bindings,
@@ -55,11 +55,9 @@ export interface ProjectSession {
    * resolved values to render" the same way they did with the
    * legacy missing-handle case. */
   cascadeHandle: number | null;
-  printer: PrinterProfileJson | null;
   snapshot: SceneSnapshot | null;
-  /** True until the bootstrap call returns + the first snapshot
-   * lands. App-level chrome can render a tiny loading state if it
-   * wants. */
+  /** True until the first snapshot lands. App-level chrome can render
+   * a tiny loading state if it wants. */
   loading: boolean;
   /** Bootstrap error message — non-null indicates the session
    * couldn't initialize. Surfaces in App.tsx as a banner; the
@@ -68,7 +66,6 @@ export interface ProjectSession {
 }
 
 export function useProjectSession(): ProjectSession {
-  const [printer, setPrinter] = useState<PrinterProfileJson | null>(null);
   const [snapshot, setSnapshot] = useState<SceneSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -102,12 +99,12 @@ export function useProjectSession(): ProjectSession {
       }
 
       try {
-        const prof = await invoke<PrinterProfileJson>(
-          "scene_load_default_printer",
-        );
+        // The backend's Project::default() has already bound the first
+        // library instance (or left the plate unbound for the empty-
+        // library onboarding); just pull the initial snapshot.
+        const snap = await invoke<SceneSnapshot>("scene_snapshot");
         if (!mounted) return;
-        setPrinter(prof);
-        await refetchSnapshot();
+        setSnapshot(snap);
       } catch (err) {
         if (!mounted) return;
         setError(String(err));
@@ -123,5 +120,5 @@ export function useProjectSession(): ProjectSession {
     };
   }, [refetchSnapshot]);
 
-  return { cascadeHandle: null, printer, snapshot, loading, error };
+  return { cascadeHandle: null, snapshot, loading, error };
 }

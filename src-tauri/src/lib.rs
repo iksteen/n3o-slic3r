@@ -185,7 +185,6 @@ pub fn run() {
             core::scene::commands::scene_object_mirror,
             core::scene::commands::scene_object_lay_flat,
             core::scene::commands::scene_set_active_printer,
-            core::scene::commands::scene_load_default_printer,
             core::scene::commands::scene_add_plate,
             core::scene::commands::scene_remove_plate,
             core::scene::commands::scene_set_active_plate,

@@ -71,7 +71,6 @@ function snap(plates: PlateSnapshot[], activeId: number): SceneSnapshot {
 function session(overrides: Partial<ProjectSession> = {}): ProjectSession {
   return {
     cascadeHandle: null,
-    printer: null,
     snapshot: null,
     loading: false,
     error: null,

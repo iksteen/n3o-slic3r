@@ -134,10 +134,10 @@ export function SettingsPanelHost({
   }, [plate, pluginList.plugins, userOverrides, projectOverrides]);
 
   // Pick the printer profile for cascade resolution from the active
-  // plate's bound instance (the snapshot's derived
-  // `printer_identity`). Falls back to the bootstrap printer when
-  // the plate hasn't been bound yet — that's the App.tsx default-
-  // printer load that runs before the user touches anything.
+  // plate's bound instance (the snapshot's derived `printer_identity`)
+  // against the catalog. `null` when the plate is unbound (empty
+  // library) or the catalog hasn't loaded — the panel renders its "No
+  // printer selected" state for that.
   const activeProfile = useMemo(() => {
     if (plate?.printer_identity) {
       const entry = catalog.entries.find(
@@ -145,8 +145,8 @@ export function SettingsPanelHost({
       );
       if (entry) return entry.profile;
     }
-    return session.printer;
-  }, [plate?.printer_identity, catalog.entries, session.printer]);
+    return null;
+  }, [plate?.printer_identity, catalog.entries]);
 
   // The active plate's cascade resolution (fragments composed against
   // its effective process, each value tagged with the layer it won from).

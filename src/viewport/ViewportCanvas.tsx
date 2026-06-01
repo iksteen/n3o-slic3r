@@ -220,18 +220,12 @@ export function ViewportCanvas({
 
     let detachBridge: (() => Promise<void>) | null = null;
     attachEventBridge(mirror)
-      .then(async (un) => {
+      .then((un) => {
+        // The bed comes from the snapshot the bridge applies on attach
+        // (Project::default() binds the first library instance). An
+        // unbound plate (empty library) has no bed — the onboarding
+        // empty-state covers that case, no default printer is forced.
         detachBridge = un;
-        // Phase 2 bootstrap: pull the bundled A1 mini profile so the
-        // viewport has a bed to render before Phase 5 wires real
-        // printer selection. No-op if a printer is already active.
-        if (!mirror.bed) {
-          try {
-            await invoke("scene_load_default_printer");
-          } catch (e) {
-            pushToast("warn", `default printer load failed: ${e}`);
-          }
-        }
       })
       .catch((err) => {
         pushToast("error", `viewport init failed: ${err}`);
