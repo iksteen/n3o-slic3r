@@ -281,6 +281,48 @@ the standard `d.default_value->serialize()` for everything else.
 
 ---
 
+## 6. `Print::m_origin` (plate origin) is uninitialized
+
+**Symptom.** A multi-material slice (≥2 filaments, so the clearance check
+has a non-trivial exclusion polygon to test) fails *validation* — before
+any slicing — with ClipperLib's "Coordinate outside allowed range",
+thrown from `Print::validate()` → `layered_print_cleareance_valid`
+(`Print.cpp:959`). It's **heap/binary-dependent**: an unrelated change to
+the shim can flip a previously-passing fixture (e.g. `fourcolor.3mf`)
+into failure, because the bad value is uninitialized memory.
+
+**Root cause.** `Print::m_origin` (the per-plate origin) is declared at
+`Print.hpp:1173` *without an initializer*:
+
+```cpp
+Vec3d   m_origin;
+```
+
+Eigen's default constructor leaves it uninitialized, so it holds garbage
+(observed: denormal doubles like `{2e-320, 6.9e-310, …}`). The clearance
+check reads it via `get_plate_origin()` and translates the bed-exclusion
+polygon by `scale_(m_origin.x()), scale_(m_origin.y())`
+(`Print.cpp:937`). When the garbage is large, the translated polygon's
+coordinates exceed ClipperLib's `hiRange` (`0x3FFFFFFFFFFFFFFF`) and the
+range check throws. The origin is normally set by the GUI's PartPlate
+(`set_plate_origin`); a headless slice never touches it.
+
+**Fix.** `slic3r_ffi.cpp` — after `print.apply(model, config)`, pin the
+origin to zero (the plate sits at the bed origin in our single-plate
+headless model):
+
+```cpp
+print.set_plate_origin(Vec3d(0.0, 0.0, 0.0));
+```
+
+Same class of bug as workaround 3 (`is_BBL_printer()`): an uninitialized
+`Print` member the GUI would otherwise set. Note this does **not** cover
+every uninitialized-state path — `_make_skirt`'s polygon offset hits the
+same class of overflow from a different unset value, surfaced once this
+fix shifts the heap; a systematic headless-init audit is the durable fix.
+
+---
+
 ## When bumping the OrcaSlicer submodule
 
 Re-verify each workaround:

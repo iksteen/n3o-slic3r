@@ -684,6 +684,17 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         Print print;
         print.apply(model->model, cfg);
 
+        // Print::m_origin (the plate origin) is declared without an
+        // initializer (Print.hpp) and is normally set by the GUI's
+        // PartPlate; a headless slice never touches it, so it holds
+        // uninitialized garbage. Print::validate()'s clearance check
+        // translates the bed-exclusion polygon by scale_(plate_origin) —
+        // when the garbage is large the polygon overflows ClipperLib's
+        // coordinate range and validate() throws "Coordinate outside
+        // allowed range". The failure is heap/binary-dependent (any
+        // unrelated code change can flip it), so pin the origin to zero.
+        print.set_plate_origin(Vec3d(0.0, 0.0, 0.0));
+
         // Install the caller-supplied progress callback on this
         // Print instance. The lambda captures progress_cb +
         // progress_user_data by value so the callback travels with
