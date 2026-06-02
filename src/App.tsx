@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { ViewportCanvas } from "./viewport/ViewportCanvas";
 import { setupTowerMeshCache } from "./viewport/towerMeshCache";
+import { ErrorConsole } from "./logging/ErrorConsole";
+import { setupLogSinks } from "./logging/logStore";
 import type { GizmoMode } from "./viewport/types";
 import { SlicePanel } from "./slice/SlicePanel";
 import { SlicingWindow } from "./slice/SlicingWindow";
@@ -196,6 +198,20 @@ function App() {
     // and calling it in cleanup would no-op (still null) and leak the listener.
     let cancelled = false;
     const pending = setupTowerMeshCache().then((un) => {
+      if (cancelled) un();
+      return un;
+    });
+    return () => {
+      cancelled = true;
+      void pending.then((un) => un());
+    };
+  }, []);
+
+  // App-lifetime routing of slice failures + libslic3r validation warnings
+  // into the error-console log store (same cancel-safe pattern as above).
+  useEffect(() => {
+    let cancelled = false;
+    const pending = setupLogSinks().then((un) => {
       if (cancelled) un();
       return un;
     });
@@ -419,6 +435,38 @@ function App() {
   const noPrinters =
     !printers.loading && printers.instances.length === 0;
 
+  // Object list — shown in both layouts (read-only in preview, kept mounted so
+  // switching modes doesn't shift the layout).
+  const objectsPanel = (
+    <ObjectsPanel
+      plate={activePlate ?? null}
+      instance={activeInstance}
+      printerName={activeInstance?.display_name ?? printerIdentity ?? "No printer"}
+      plateSize={
+        activePlate?.bed
+          ? [
+              activePlate.bed.extents.max[0] - activePlate.bed.extents.min[0],
+              activePlate.bed.extents.max[1] - activePlate.bed.extents.min[1],
+            ]
+          : null
+      }
+      readOnly={showPreview}
+    />
+  );
+
+  // Overlays that live inside the canvas frame in both layouts: the floating
+  // slice-progress window and the error console. They anchor to the canvas
+  // stage, never to the surrounding panels or the slider.
+  const canvasOverlays = (
+    <>
+      <SlicingWindow
+        state={slice.state}
+        objectCount={sliceObjectCount ?? slicingPlate?.objects.length ?? 0}
+      />
+      <ErrorConsole />
+    </>
+  );
+
   return (
     <div className="app">
       {!recovery.resolved && (
@@ -492,54 +540,29 @@ function App() {
           onEditPrinter={(id) => setEditingPrinterId(id)}
         />
       ) : (
-        <div className={`workspace ${showPreview ? "preview-mode" : ""}`}>
-          <ObjectsPanel
-            plate={activePlate ?? null}
-            instance={activeInstance}
-            printerName={
-              activeInstance?.display_name ?? printerIdentity ?? "No printer"
-            }
-            plateSize={
-              activePlate?.bed
-                ? [
-                    activePlate.bed.extents.max[0] -
-                      activePlate.bed.extents.min[0],
-                    activePlate.bed.extents.max[1] -
-                      activePlate.bed.extents.min[1],
-                  ]
-                : null
-            }
-            readOnly={showPreview}
-          />
-          <main style={{ position: "relative", minWidth: 0 }}>
-            {showPreview ? (
-              <>
-                <PreviewWorkspace
-                  preview={bridge.activePreview}
-                  bedExtents={bedExtents}
-                />
-                <div className="absolute top-2 left-2 flex pointer-events-none">
-                  {modeToggle}
-                </div>
-              </>
-            ) : (
+        showPreview ? (
+          // ── Preview layout: objects (disabled) · canvas+slider · details ──
+          <div className="layout-preview">
+            {objectsPanel}
+            <PreviewWorkspace
+              preview={bridge.activePreview}
+              bedExtents={bedExtents}
+              toolbar={modeToggle}
+              overlays={canvasOverlays}
+            />
+          </div>
+        ) : (
+          // ── Prepare layout: objects · canvas · settings ──
+          <div className="layout-prepare">
+            {objectsPanel}
+            <div className="canvas-stage">
               <ViewportCanvas
                 leading={modeToggle}
                 gizmoMode={gizmoMode}
                 onGizmoMode={setGizmoMode}
               />
-            )}
-            {/* Floating slice-progress window — positioned against this
-                `relative` <main>, lower-left, over whichever canvas is
-                active. Renders only while a slice is in flight. */}
-            <SlicingWindow
-              state={slice.state}
-              objectCount={
-                sliceObjectCount ?? slicingPlate?.objects.length ?? 0
-              }
-            />
-          </main>
-          {!showPreview && (
+              {canvasOverlays}
+            </div>
             <SettingsPanelHost
               session={session}
               instances={printers.instances}
@@ -547,8 +570,8 @@ function App() {
               onAddPrinter={() => setShowAddPrinter(true)}
               onEditPrinter={(id) => setEditingPrinterId(id)}
             />
-          )}
-        </div>
+          </div>
+        )
       )}
 
       {showAddPrinter && (

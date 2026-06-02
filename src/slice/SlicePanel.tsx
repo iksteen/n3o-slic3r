@@ -21,7 +21,6 @@
 
 import { useState } from "react";
 
-import { sliceErrorMessage } from "./reducer";
 import type { PlateSnapshot, SceneSnapshot } from "../viewport/types";
 import type { JobId, SliceState } from "./types";
 
@@ -117,11 +116,6 @@ export function SlicePanel({
         >
           {state.status === "cancelling" ? "Cancelling…" : "Cancel"}
         </button>
-      )}
-      {state.status === "failed" && state.error && (
-        <span className="text-xs text-rose-400" role="alert">
-          {sliceErrorMessage(state.error)}
-        </span>
       )}
       {startError && (
         <span className="text-xs text-rose-400" role="alert">

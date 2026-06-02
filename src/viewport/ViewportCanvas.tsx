@@ -26,6 +26,7 @@ import { createGizmo, type GizmoApi } from "./gizmo";
 import { SceneMirror } from "./sceneMirror";
 import { createTowerOverlay } from "./towerOverlay";
 import { getCachedTowerMesh, onTowerMeshCacheChange } from "./towerMeshCache";
+import { pushLog } from "../logging/logStore";
 import type { BedMesh, GizmoMode, ObjectId, TowerGeometry } from "./types";
 
 interface ToastMessage {
@@ -601,6 +602,9 @@ export function ViewportCanvas({
       setTimeout(() => {
         setToasts((prev) => prev.filter((t) => t.id !== id));
       }, 4000);
+      // Toasts are transient and lost on viewport unmount; also persist them
+      // in the app-wide error console so the user can review them later.
+      pushLog(level, text);
     }
   }, []);
 

@@ -78,6 +78,16 @@ export const SLICE_EVENT_NAMES = [
   "slice:cancelled",
 ] as const;
 
+/** Non-fatal libslic3r validation warning, emitted on `slice:plate_warning`
+ *  just before the plate finishes. Mirrors Rust `SliceEvent::PlateWarning`,
+ *  but kept out of the `SliceEvent` union / `SLICE_EVENT_NAMES` above on
+ *  purpose: it's a console/notification concern, not slice-reducer state, so
+ *  it isn't routed through `useSliceJob` → `reducer`. */
+export type PlateWarningEvent = {
+  kind: "PlateWarning";
+  data: { job_id: JobId; plate_id: number; message: string };
+};
+
 export type SliceStatus =
   | "idle"
   | "starting"

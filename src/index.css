@@ -112,18 +112,27 @@
     grid-template-rows: 48px 38px 1fr 24px;
     height: 100vh;
   }
-  .workspace {
+  /* Two purpose-built workspace layouts, both: objects (left) · canvas
+     (center) · panel (right). Prepare's right column is the wide settings
+     panel; preview's is the narrower details panel + a slider footer under
+     the canvas. */
+  .layout-prepare,
+  .layout-preview {
     display: grid;
-    /* objects panel (left) · viewport (center) · settings (right). */
-    grid-template-columns: 240px 1fr 640px;
     min-height: 0;
     overflow: hidden;
   }
+  .layout-prepare {
+    grid-template-columns: 240px 1fr 640px;
+  }
+  .layout-preview {
+    grid-template-columns: 240px 1fr 320px;
+  }
   @media (max-width: 1400px) {
-    .workspace { grid-template-columns: 240px 1fr 560px; }
+    .layout-prepare { grid-template-columns: 240px 1fr 560px; }
   }
   @media (max-width: 1100px) {
-    .workspace { grid-template-columns: 220px 1fr 480px; }
+    .layout-prepare { grid-template-columns: 220px 1fr 480px; }
   }
 
   /* ─────────── Objects panel (left column) ─────────── */
@@ -2315,29 +2324,40 @@
  * stacked on the right.
  */
 @layer components {
-  .workspace.preview-mode {
-    grid-template-columns: 240px 1fr;
-  }
-
-  .preview-workspace {
-    display: grid;
-    grid-template-columns: 1fr 320px;
-    grid-template-rows: 1fr;
-    height: 100%;
-    min-height: 0;
+  /* Canvas frame — the 3D view's own positioning context. The toolbar, the
+     error console, and the slicing-progress window overlay THIS; the layer
+     slider and side panels live outside it, so overlays never collide with
+     them. Used directly as the center column in prepare, and as the top row
+     of .canvas-column in preview. */
+  .canvas-stage {
     position: relative;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
   }
-  .preview-canvas-region {
+  /* Preview center column: canvas frame on top, layer-slider footer below. */
+  .canvas-column {
     display: grid;
     grid-template-rows: 1fr auto;
-    min-height: 0;
     min-width: 0;
-    grid-column: 1;
-    grid-row: 1;
+    min-height: 0;
   }
-  /* Preview render controls (color mode + travel/retraction
-     visibility), relocated from a canvas header into the stats
-     sidebar. Stacked vertically to fit the 320px column. */
+  /* Canvas toolbar — top-left overlay holding the Prepare/Preview toggle. (The
+     prepare gizmo selector rides inside ViewportCanvas's own toolbar.) */
+  .canvas-toolbar {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 12;
+    display: flex;
+  }
+  .preview-canvas-host {
+    position: absolute;
+    inset: 0;
+    background: #0f1115;
+  }
+  /* Preview render controls (color mode + travel/retraction visibility),
+     stacked in the details sidebar. */
   .preview-controls {
     display: flex;
     flex-direction: column;
@@ -2346,19 +2366,13 @@
     padding-bottom: 12px;
     border-bottom: 1px solid var(--border);
   }
-  .preview-canvas-host {
-    position: relative;
-    min-height: 0;
-    background: #0f1115;
-  }
-  .preview-slider-region {
+  .layer-slider-footer {
     padding: 8px 14px;
     background: var(--surface-2);
     border-top: 1px solid var(--border);
   }
-  .preview-stats-column {
-    grid-column: 2;
-    grid-row: 1;
+  .preview-details {
+    min-height: 0;
     border-left: 1px solid var(--border);
     background: var(--surface);
     padding: 12px;
@@ -4463,3 +4477,111 @@
 .sp-plugins-scroll .plg-intro { margin: 12px 12px 4px; }
 .sp-plugins-scroll .plg-group { padding: 0 12px; }
 .sp-plugins-scroll .plg-unavailable { padding: 6px 14px 16px; }
+
+/* ───────── Error console (toggle + pane) ───────── */
+.console-toggle {
+  position: absolute;
+  bottom: 12px; right: 12px;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 10px 0 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-sm);
+  cursor: default;
+  z-index: 11;
+}
+.console-toggle:hover { background: var(--surface-2); color: var(--text); }
+.console-toggle svg { width: 13px; height: 13px; flex-shrink: 0; }
+.console-toggle-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 16px; height: 14px; padding: 0 4px;
+  margin-left: 2px;
+  border-radius: 7px;
+  font-size: 9.5px; font-weight: 600;
+  color: #fff;
+  line-height: 1;
+}
+.console-toggle-badge.error { background: var(--danger); }
+.console-toggle-badge.warn  { background: var(--warn); color: #2a1f00; }
+
+.console-pane {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 33vh;
+  display: flex; flex-direction: column;
+  background: var(--surface);
+  border-top: 1px solid var(--border-strong);
+  box-shadow: 0 -8px 24px rgba(15,17,21,0.08);
+  z-index: 10;
+}
+.console-pane-head {
+  display: flex; align-items: center; gap: 10px;
+  height: 28px; padding: 0 8px 0 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.console-pane-title {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.console-pane-count { color: var(--text-dim); }
+.console-pane-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 20px; padding: 0 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: default;
+}
+.console-pane-btn:hover {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+.console-pane-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0 6px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  background: var(--surface);
+}
+.console-empty {
+  padding: 12px;
+  color: var(--text-dim);
+  text-align: center;
+}
+.console-line {
+  display: grid;
+  grid-template-columns: 70px 54px 1fr;
+  gap: 10px;
+  padding: 2px 12px;
+  color: var(--text);
+}
+.console-line:hover { background: var(--surface-2); }
+.console-line-time { color: var(--text-dim); }
+.console-line-level {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  align-self: center;
+}
+.console-line-msg { white-space: pre-wrap; word-break: break-word; }
+.console-line-info  .console-line-level { color: var(--text-dim); }
+.console-line-warn  .console-line-level { color: var(--warn); }
+.console-line-warn  .console-line-msg   { color: var(--warn); }
+.console-line-error .console-line-level { color: var(--danger); }
+.console-line-error .console-line-msg   { color: var(--danger); }

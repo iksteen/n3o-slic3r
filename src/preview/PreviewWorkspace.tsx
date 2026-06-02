@@ -12,7 +12,7 @@
 // App is responsible for the plate-switch + slice-finished
 // auto-load (see useSlicePreviewBridge).
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { ColorModePicker, useColorModePicker } from "./ColorModePicker";
 import { DropZone, type DroppedPreview } from "./DropZone";
@@ -34,9 +34,20 @@ import type {
 export interface PreviewWorkspaceProps {
   preview: PreviewLoadResponse | null;
   bedExtents: BoundingBox | null;
+  /** Canvas toolbar content (the Prepare/Preview toggle), rendered top-left
+   *  inside the canvas frame. */
+  toolbar: ReactNode;
+  /** Canvas overlays shared with prepare (slicing-progress window + error
+   *  console), rendered inside the canvas frame so they anchor to the view. */
+  overlays: ReactNode;
 }
 
-export function PreviewWorkspace({ preview, bedExtents }: PreviewWorkspaceProps) {
+export function PreviewWorkspace({
+  preview,
+  bedExtents,
+  toolbar,
+  overlays,
+}: PreviewWorkspaceProps) {
   const { state: colorState, onChange: setColorState } = useColorModePicker();
   const { value: visState, onChange: setVisState } = useVisibilityToggles();
 
@@ -116,8 +127,10 @@ export function PreviewWorkspace({ preview, bedExtents }: PreviewWorkspaceProps)
 
   return (
     <>
-      <div className="preview-workspace">
-        <div className="preview-canvas-region">
+      {/* Center column: the canvas frame on top, the layer-slider footer
+          below it (outside the frame, so overlays never overlap it). */}
+      <div className="canvas-column">
+        <div className="canvas-stage">
           <div className="preview-canvas-host">
             <GcodePreview
               preview={activePreview}
@@ -150,16 +163,29 @@ export function PreviewWorkspace({ preview, bedExtents }: PreviewWorkspaceProps)
               </div>
             )}
           </div>
-          <div className="preview-slider-region">
-            <LayerSlider
-              layerCount={activePreview?.layer_count ?? 0}
-              value={layerWindow}
-              onChange={setLayerWindow}
-            />
-          </div>
+          <div className="canvas-toolbar">{toolbar}</div>
+          {overlays}
+          <HoverTooltip
+            detail={hoverDetail}
+            mouseX={hoverPos.x}
+            mouseY={hoverPos.y}
+            viewportWidth={window.innerWidth}
+            viewportHeight={window.innerHeight}
+          />
         </div>
+        <div className="layer-slider-footer">
+          <LayerSlider
+            layerCount={activePreview?.layer_count ?? 0}
+            value={layerWindow}
+            onChange={setLayerWindow}
+          />
+        </div>
+      </div>
+      {/* Right column: preview details (controls + stats). Always present so
+          the column reserves its width; content appears once a preview loads. */}
+      <aside className="preview-details">
         {activePreview && (
-          <aside className="preview-stats-column">
+          <>
             <div className="preview-controls">
               <ColorModePicker
                 mode={colorState.mode}
@@ -178,16 +204,9 @@ export function PreviewWorkspace({ preview, bedExtents }: PreviewWorkspaceProps)
               layerCount={activePreview.layer_count}
               rangeMode={layerWindow.mode === "range"}
             />
-          </aside>
+          </>
         )}
-      </div>
-      <HoverTooltip
-        detail={hoverDetail}
-        mouseX={hoverPos.x}
-        mouseY={hoverPos.y}
-        viewportWidth={window.innerWidth}
-        viewportHeight={window.innerHeight}
-      />
+      </aside>
     </>
   );
 }
