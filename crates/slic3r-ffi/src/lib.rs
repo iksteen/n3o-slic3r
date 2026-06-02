@@ -613,12 +613,34 @@ pub struct TowerMesh {
     pub indices: Vec<u32>,
 }
 
-pub fn slice<P, F>(
+/// Severity of an advisory slice [diagnostic](SliceOutcome). Fatal errors
+/// abort the slice and come back as the `Err` of `SliceOutcome::result`
+/// instead of as a diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    Warning,
+}
+
+/// The outcome of a slice attempt: the advisory `diagnostics` libslic3r
+/// reported (zero or more `(severity, message)` pairs — e.g. a mismatched-
+/// filament-shrinkage warning), paired with the slice `result` (the tower
+/// mesh on success, or the error). Diagnostics are computed before
+/// `process()` runs, so they're reported whether the slice then **succeeds
+/// or fails** — letting the UI surface a warning even on a failed slice.
+#[must_use]
+pub struct SliceOutcome {
+    pub diagnostics: Vec<(Severity, String)>,
+    pub result: Result<Option<TowerMesh>>,
+}
+
+/// Slice, returning the advisory diagnostics alongside the result — see
+/// [`SliceOutcome`].
+pub fn slice_outcome<P, F>(
     model: &Model,
     config: &Config,
     out_gcode_path: P,
     mut progress: F,
-) -> Result<Option<TowerMesh>>
+) -> SliceOutcome
 where
     P: AsRef<Path>,
     F: FnMut(i32, &str),
@@ -626,11 +648,18 @@ where
     let _guard = SLICE_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let p =
-        CString::new(out_gcode_path.as_ref().to_string_lossy().as_bytes()).map_err(|_| Error {
-            kind: ErrorKind::InvalidArg,
-            message: Some("path has NUL".into()),
-        })?;
+    let p = match CString::new(out_gcode_path.as_ref().to_string_lossy().as_bytes()) {
+        Ok(p) => p,
+        Err(_) => {
+            return SliceOutcome {
+                diagnostics: Vec::new(),
+                result: Err(Error {
+                    kind: ErrorKind::InvalidArg,
+                    message: Some("path has NUL".into()),
+                }),
+            };
+        }
+    };
     let mut err: *mut c_char = ptr::null_mut();
     // Pin the closure as a trait object on the stack and hand its
     // address to C as opaque user_data. The double-reference
@@ -642,6 +671,7 @@ where
     let mut tower_vcount: usize = 0;
     let mut tower_idx: *mut u32 = ptr::null_mut();
     let mut tower_icount: usize = 0;
+    let mut warning: *mut c_char = ptr::null_mut();
     // SAFETY:
     // - handles are valid; p + user_data live through the call.
     // - err is an out-param we own on non-null return.
@@ -662,11 +692,53 @@ where
             &mut tower_idx,
             &mut tower_icount,
             &mut err,
+            &mut warning,
         )
     };
     let tower = unsafe { take_tower_mesh(tower_verts, tower_vcount, tower_idx, tower_icount) };
-    unsafe { check_with_err(status, err)? };
-    Ok(tower)
+    // Always reclaim the warning string (freed here) even on the error path,
+    // and keep it whether the slice succeeded or failed.
+    let warning = unsafe { take_c_string(warning) };
+    let result = unsafe { check_with_err(status, err) }.map(|()| tower);
+    let diagnostics = warning
+        .into_iter()
+        .map(|message| (Severity::Warning, message))
+        .collect();
+    SliceOutcome {
+        diagnostics,
+        result,
+    }
+}
+
+/// Slice and return just the tower mesh (or the error), discarding any
+/// advisory diagnostics. Convenience for callers that don't surface them
+/// (tests, examples); the orchestrator uses [`slice_outcome`] instead.
+pub fn slice<P, F>(
+    model: &Model,
+    config: &Config,
+    out_gcode_path: P,
+    progress: F,
+) -> Result<Option<TowerMesh>>
+where
+    P: AsRef<Path>,
+    F: FnMut(i32, &str),
+{
+    slice_outcome(model, config, out_gcode_path, progress).result
+}
+
+/// Copy a heap-allocated C string out-param into an owned `String` and free
+/// it with `slic3r_string_free`. `None` for a null pointer.
+///
+/// # Safety
+/// `ptr` must be null or a string the shim allocated via `set_err`; it is
+/// freed here and must not be used afterward.
+unsafe fn take_c_string(ptr: *mut c_char) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let s = CStr::from_ptr(ptr).to_string_lossy().into_owned();
+    sys::slic3r_string_free(ptr);
+    Some(s)
 }
 
 /// Copy the shim's tower buffers into owned `Vec`s and free the C

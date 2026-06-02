@@ -54,6 +54,15 @@ pub enum SliceEvent {
         /// `wipe_tower_x/y`) and goes stale only on a material-count change.
         tower_mesh: Option<TowerMesh>,
     },
+    /// A non-fatal validation warning libslic3r reported for a plate that
+    /// still sliced successfully (e.g. mismatched filament shrinkage). The
+    /// frontend surfaces it in the error console; it does not change slice
+    /// state. Emitted just before the plate's `PlateFinished`.
+    PlateWarning {
+        job_id: JobId,
+        plate_id: u32,
+        message: String,
+    },
     JobFinished {
         job_id: JobId,
     },
@@ -79,6 +88,7 @@ impl SliceEvent {
             Self::PlateStarted { .. } => "slice:plate_started",
             Self::PlateProgress { .. } => "slice:plate_progress",
             Self::PlateFinished { .. } => "slice:plate_finished",
+            Self::PlateWarning { .. } => "slice:plate_warning",
             Self::JobFinished { .. } => "slice:job_finished",
             Self::JobFailed { .. } => "slice:job_failed",
             Self::Cancelled { .. } => "slice:cancelled",

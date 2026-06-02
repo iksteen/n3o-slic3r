@@ -8,6 +8,7 @@
 #include <libslic3r/Model.hpp>
 #include <libslic3r/Print.hpp>
 #include <libslic3r/PrintBase.hpp>
+#include <libslic3r/Exception.hpp>
 #include <libslic3r/TriangleMesh.hpp>
 #include <libslic3r/Utils.hpp>
 #include <libslic3r/GCode/GCodeProcessor.hpp>
@@ -535,9 +536,11 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
                             size_t* out_tower_vertex_count,
                             uint32_t** out_tower_indices,
                             size_t* out_tower_index_count,
-                            char** out_err) {
+                            char** out_err,
+                            char** out_warning) {
     if (!model || !config || !out_path) return SLIC3R_ERR_INVALID_ARG;
     if (out_err) *out_err = nullptr;
+    if (out_warning) *out_warning = nullptr;
     // Tower-mesh out-params are an all-or-nothing group; clear them up front
     // so an early return (or a single-material plate) leaves no tower.
     const bool want_tower = out_tower_vertices && out_tower_vertex_count &&
@@ -786,6 +789,10 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
             set_err(out_err, err.string);
             return SLIC3R_ERR_VALIDATE;
         }
+        // Surface the non-fatal validation warning (if any) to the caller so
+        // it can show it in the UI — the same advisory the GUI displays.
+        if (out_warning && !validation_warning.string.empty())
+            set_err(out_warning, validation_warning.string);
 
         print.process();
 
@@ -855,6 +862,20 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         GCodeProcessorResult gcode_result;
         print.export_gcode(out_path, &gcode_result, nullptr);
         return SLIC3R_OK;
+    } catch (const SlicingErrors& e) {
+        // libslic3r aggregates per-object slicing failures into SlicingErrors,
+        // whose what() is the bare "Errors" — the real, actionable diagnoses
+        // live in errors_ (each a SlicingError with the true message). Join
+        // them so the caller sees the actual reason(s) instead of "Errors".
+        // (Singular SlicingError carries its message in what(), so the generic
+        // handler below already surfaces those.)
+        std::string joined;
+        for (const SlicingError& se : e.errors_) {
+            if (!joined.empty()) joined += "\n";
+            joined += se.what();
+        }
+        set_err(out_err, joined.empty() ? e.what() : joined);
+        return SLIC3R_ERR_SLICE;
     } catch (const std::exception& e) {
         set_err(out_err, e.what());
         return SLIC3R_ERR_SLICE;

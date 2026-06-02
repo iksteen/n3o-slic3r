@@ -255,6 +255,12 @@ typedef void (*slic3r_progress_fn_t)(int percent, const char* stage, void* user_
  * out_err may be NULL. If non-NULL and the call fails, *out_err receives a
  * heap-allocated message; caller frees with slic3r_string_free.
  *
+ * out_warning may be NULL. On a *successful* slice that produced a non-fatal
+ * validation warning (the advisory libslic3r's validate() reports through its
+ * warning out-param — e.g. mismatched filament shrinkage), *out_warning
+ * receives a heap-allocated message; caller frees with slic3r_string_free.
+ * Set to NULL when there was no warning or the caller passes NULL.
+ *
  * out_tower_* (all four nullable; all-or-nothing): on a successful slice
  * that generates a prime/wipe tower, receive the tower's exact mesh — the
  * rib/cone solid for toolchangers, a box for AMS purge towers — in
@@ -275,7 +281,8 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
                             size_t* out_tower_vertex_count,
                             uint32_t** out_tower_indices,
                             size_t* out_tower_index_count,
-                            char** out_err);
+                            char** out_err,
+                            char** out_warning);
 
 /* Free the buffers returned in slic3r_slice's out_tower_* params. Safe to
  * call with NULL pointers (no-op). */
