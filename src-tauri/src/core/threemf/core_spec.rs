@@ -50,6 +50,12 @@ pub enum ObjectBody {
     Mesh {
         vertices: Vec<f32>,
         indices: Vec<u32>,
+        /// BBS per-triangle `paint_color` (MMU color-painting) strings,
+        /// one per triangle in `indices`-triple order. Empty when no
+        /// triangle is painted; otherwise dense (length = triangle count,
+        /// `""` for unpainted faces). Carried verbatim — libslic3r owns
+        /// the encoding; we only round-trip it.
+        paint_colors: Vec<String>,
     },
     /// Tree of <component> references. Each component points to
     /// some `objectid` — possibly in a sibling .model file via the
@@ -162,8 +168,12 @@ fn parse_object(
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => match local_name(e.name()) {
                 b"mesh" => {
-                    let (vertices, indices) = parse_mesh(reader, source)?;
-                    body = Some(ObjectBody::Mesh { vertices, indices });
+                    let (vertices, indices, paint_colors) = parse_mesh(reader, source)?;
+                    body = Some(ObjectBody::Mesh {
+                        vertices,
+                        indices,
+                        paint_colors,
+                    });
                 }
                 b"components" => {
                     let components = parse_components(reader, source)?;
@@ -202,9 +212,15 @@ fn parse_object(
 fn parse_mesh(
     reader: &mut Reader<&[u8]>,
     source: &std::path::Path,
-) -> Result<(Vec<f32>, Vec<u32>), LoadError> {
+) -> Result<(Vec<f32>, Vec<u32>, Vec<String>), LoadError> {
     let mut vertices: Vec<f32> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
+    // One entry per triangle, in document order. BBS only writes
+    // `paint_color` on painted triangles, so most are empty; we keep a
+    // dense vector (aligned to triangle index) and drop it to empty if
+    // nothing was painted.
+    let mut paint_colors: Vec<String> = Vec::new();
+    let mut any_paint = false;
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
@@ -233,6 +249,14 @@ fn parse_mesh(
                     indices.push(v1);
                     indices.push(v2);
                     indices.push(v3);
+                    // BBS MMU color-painting (also `slic3r:mmu_segmentation`
+                    // in some exports). Opaque per-triangle string we hand
+                    // straight back to libslic3r on write.
+                    let paint = attr_string(e, b"paint_color")
+                        .or_else(|| attr_string(e, b"slic3r:mmu_segmentation"))
+                        .unwrap_or_default();
+                    any_paint |= !paint.is_empty();
+                    paint_colors.push(paint);
                 }
                 _ => {}
             },
@@ -253,7 +277,10 @@ fn parse_mesh(
         }
         buf.clear();
     }
-    Ok((vertices, indices))
+    if !any_paint {
+        paint_colors.clear();
+    }
+    Ok((vertices, indices, paint_colors))
 }
 
 fn parse_components(
@@ -418,7 +445,9 @@ mod tests {
         );
         let obj = doc.objects.get(&1).expect("object 1");
         match &obj.body {
-            ObjectBody::Mesh { vertices, indices } => {
+            ObjectBody::Mesh {
+                vertices, indices, ..
+            } => {
                 assert_eq!(vertices, &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
                 assert_eq!(indices, &[0, 1, 2]);
             }

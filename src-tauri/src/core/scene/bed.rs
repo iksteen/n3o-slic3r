@@ -212,6 +212,7 @@ mod tests {
             vertices: vec![],
             normals: vec![],
             indices: vec![],
+            paint_colors: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [1.0, 1.0, 1.0],

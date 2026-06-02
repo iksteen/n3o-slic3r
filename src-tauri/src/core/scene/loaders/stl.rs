@@ -53,6 +53,7 @@ pub fn load(path: &Path) -> Result<NewMesh, LoadError> {
         vertices,
         normals,
         indices,
+        paint_colors: None,
         bounding_box,
         provenance: MeshProvenance::File(path.display().to_string()),
     })

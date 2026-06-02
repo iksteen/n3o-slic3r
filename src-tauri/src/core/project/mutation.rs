@@ -72,6 +72,7 @@ impl Project {
                 vertices: new_mesh.vertices,
                 normals: new_mesh.normals,
                 indices: new_mesh.indices,
+                paint_colors: new_mesh.paint_colors,
                 bounding_box: new_mesh.bounding_box,
                 provenance: new_mesh.provenance,
             },
@@ -109,6 +110,17 @@ impl Project {
         );
         self.ensure_default_material_slot_on_active(extruder_id.unwrap_or(1));
         id
+    }
+
+    /// Bind `model_material` to a default slot on the active plate (public
+    /// entry to the auto-binder; no-op if already bound or the plate is
+    /// unbound). The Orca importer uses this to materialize a project's
+    /// **painted** filaments — ones applied to faces via `paint_color`
+    /// rather than a per-object `extruder`, so no object carries
+    /// `extruder = N` — as bound plate materials, so `material_count`
+    /// counts them and the cascade fans + routes them at slice time.
+    pub fn ensure_material_bound_on_active(&mut self, model_material: u8) {
+        self.ensure_default_material_slot_on_active(model_material);
     }
 
     /// Carry a foreign file's per-object setting overrides onto
@@ -2059,6 +2071,7 @@ mod tests {
                 0, 2, 4, 2, 6, 4, // left
                 1, 5, 3, 3, 5, 7, // right
             ],
+            paint_colors: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [1.0, 1.0, 1.0],
@@ -2628,6 +2641,7 @@ mod tests {
             vertices: vec![-5.0, -5.0, -3.0, 5.0, -5.0, -3.0, 0.0, 5.0, 3.0],
             normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             indices: vec![0, 1, 2],
+            paint_colors: None,
             bounding_box: BoundingBox {
                 min: [-5.0, -5.0, -3.0],
                 max: [5.0, 5.0, 3.0],
@@ -2654,6 +2668,7 @@ mod tests {
             vertices: vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 5.0],
             normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             indices: vec![0, 1, 2],
+            paint_colors: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [10.0, 10.0, 5.0],
@@ -3559,6 +3574,7 @@ mod tests {
             vertices: vec![0.0; 24],
             normals: vec![0.0; 24],
             indices: vec![0, 1, 2],
+            paint_colors: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [1.0, 1.0, 1.0],

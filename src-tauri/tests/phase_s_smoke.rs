@@ -734,6 +734,80 @@ fn imported_object_override_reaches_the_engine_end_to_end() {
     let _ = std::fs::remove_file(&ovr_3mf);
 }
 
+/// MMU color-painting import → multi-material slice (Phase 1, AMS).
+///
+/// spinning-top.3mf is a single-extruder model whose 2nd filament is applied
+/// by per-face `paint_color`, not a per-object `extruder`. Import it (binds to
+/// bambi / A1 mini, AMS) and confirm the slice is genuine 2-material — the
+/// painted faces reached filament 2. Exercises the whole chain: paint
+/// round-trip into the slice 3MF + the painted-filament accounting + the
+/// `filament_colour` semicolon-join (a comma join crashed libslic3r's MMU
+/// segmentation).
+///
+/// INTERIM FIXTURE: a top-level *untracked* local file, so the test skips when
+/// absent (e.g. CI) rather than failing. Replace with a committed, licensed
+/// painted fixture once the paint work (incl. the U1 toolchanger path) lands.
+#[test]
+fn imported_painted_model_slices_as_multi_material() {
+    use n3o_slic3r_lib::core::orca_import::import;
+    use n3o_slic3r_lib::core::slice::input::build_slice_input;
+
+    ensure_ffi_init();
+    let fixture = workspace_root().join("spinning-top.3mf");
+    if !fixture.exists() {
+        eprintln!(
+            "skipping imported_painted_model_slices_as_multi_material: {} absent (interim local fixture)",
+            fixture.display()
+        );
+        return;
+    }
+
+    let (project, _report) = import(&fixture).expect("import painted project");
+    let pid = project.plates[0].id;
+    let temp_dir = std::env::temp_dir().join(format!("n3o-paint-mm-{}", std::process::id()));
+    let (input, temp_3mf) = build_slice_input(&project, pid, temp_dir.display().to_string())
+        .expect("build_slice_input");
+
+    let registry = JobRegistry::new();
+    let (sink, events) = collecting_sink();
+    run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
+    let events = events.lock().unwrap();
+    if let Some(SliceEvent::JobFailed { error, .. }) = events
+        .iter()
+        .find(|e| matches!(e, SliceEvent::JobFailed { .. }))
+    {
+        panic!("painted slice failed: {error:?}");
+    }
+    let (path, summary) = events
+        .iter()
+        .find_map(|e| match e {
+            SliceEvent::PlateFinished {
+                output_path,
+                summary,
+                ..
+            } => Some((PathBuf::from(output_path), summary.clone())),
+            _ => None,
+        })
+        .expect("PlateFinished");
+
+    // ≥2 filaments actually consumed → the painted 2nd material reached the
+    // engine (a 1-material slice would report a single extruder slot).
+    assert!(
+        summary.filament_used_grams.len() >= 2,
+        "painted model must slice multi-material (>=2 filaments), got {:?}",
+        summary.filament_used_grams,
+    );
+    // And an AMS swap macro between the two colors.
+    let gcode = std::fs::read_to_string(&path).expect("read gcode");
+    assert!(
+        gcode.matches("M620").count() >= 1,
+        "expected >=1 AMS swap (M620) between the painted colors",
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::remove_file(&temp_3mf);
+}
+
 /// Leg 3 (deferred): copy-vs-vendor binding.
 ///
 /// Once the in-app filament/process copy mechanic lands (tracked

@@ -71,6 +71,14 @@ pub struct Mesh {
     /// Triangle vertex indices (3 per triangle). Not serialized.
     #[serde(skip, default)]
     pub indices: Vec<u32>,
+    /// BBS per-triangle `paint_color` (MMU color-painting) strings, one
+    /// per triangle in `indices`-triple order. `None` when the mesh has no
+    /// painting; otherwise dense (`""` for unpainted faces). Opaque —
+    /// libslic3r owns the encoding; we round-trip it through the slice
+    /// `.3mf` so painted models slice multi-material. Not serialized (it
+    /// travels with the mesh geometry in the 3MF, like the buffers above).
+    #[serde(skip, default)]
+    pub paint_colors: Option<Vec<String>>,
     pub bounding_box: BoundingBox,
     /// File path or in-app catalog handle the mesh came from.
     pub provenance: MeshProvenance,
@@ -172,6 +180,9 @@ pub struct NewMesh {
     pub vertices: Vec<f32>,
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
+    /// Per-triangle `paint_color` strings (see [`Mesh::paint_colors`]).
+    /// `None` for procedurally-generated / unpainted meshes.
+    pub paint_colors: Option<Vec<String>>,
     pub bounding_box: BoundingBox,
     pub provenance: MeshProvenance,
 }

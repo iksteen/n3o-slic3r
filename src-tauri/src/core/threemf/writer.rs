@@ -377,11 +377,28 @@ fn write_object_with_mesh(out: &mut String, object_id: u32, mesh: &NewMesh) {
         ));
     }
     out.push_str("    </vertices>\n    <triangles>\n");
-    for tri in mesh.indices.chunks_exact(3) {
-        out.push_str(&format!(
-            "     <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>\n",
-            tri[0], tri[1], tri[2]
-        ));
+    for (i, tri) in mesh.indices.chunks_exact(3).enumerate() {
+        // Re-emit the opaque BBS `paint_color` (MMU color-painting) string
+        // for painted faces so libslic3r segments them to their filaments on
+        // load. Indexed by triangle position — preserved 1:1 from read.
+        let paint = mesh
+            .paint_colors
+            .as_ref()
+            .and_then(|p| p.get(i))
+            .filter(|s| !s.is_empty());
+        match paint {
+            Some(p) => out.push_str(&format!(
+                "     <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\" paint_color=\"{}\"/>\n",
+                tri[0],
+                tri[1],
+                tri[2],
+                xml_escape_attr(p),
+            )),
+            None => out.push_str(&format!(
+                "     <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>\n",
+                tri[0], tri[1], tri[2]
+            )),
+        }
     }
     out.push_str("    </triangles>\n   </mesh>\n  </object>\n");
 }
@@ -617,6 +634,7 @@ mod tests {
             vertices: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
             normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             indices: vec![0, 1, 2],
+            paint_colors: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [1.0, 1.0, 0.0],
@@ -634,6 +652,49 @@ mod tests {
                 .unwrap()
                 .as_nanos(),
         ))
+    }
+
+    #[test]
+    fn paint_color_round_trips_through_write_and_read() {
+        // Two triangles, one painted with an opaque BBS state string, one
+        // not. The writer must re-emit `paint_color` per triangle and the
+        // reader recover it 1:1 by triangle index — the MMU-painting
+        // round-trip libslic3r relies on to segment painted faces.
+        let mesh = NewMesh {
+            vertices: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
+            normals: vec![0.0; 12],
+            indices: vec![0, 1, 2, 1, 3, 2],
+            paint_colors: Some(vec!["4".to_string(), String::new()]),
+            bounding_box: BoundingBox {
+                min: [0.0, 0.0, 0.0],
+                max: [1.0, 1.0, 0.0],
+            },
+            provenance: MeshProvenance::Primitive("painted".into()),
+        };
+        let project = project_from_objects(
+            vec![mesh],
+            vec![ProjectObject {
+                mesh_idx: 0,
+                transform: Transform::IDENTITY,
+                name: "tri".into(),
+                extruder_id: Some(1),
+                plate_id: 1,
+                group_id: None,
+                overrides: std::collections::BTreeMap::new(),
+            }],
+            std::collections::BTreeMap::new(),
+        );
+        let path = tempfile_3mf();
+        write_3mf(&project, &path).expect("write");
+        let reloaded = super::super::load_3mf(&path).expect("re-read");
+        let pc = reloaded.meshes[0]
+            .paint_colors
+            .as_ref()
+            .expect("paint survived round-trip");
+        assert_eq!(pc.len(), 2, "one entry per triangle");
+        assert_eq!(pc[0], "4", "painted face's state preserved");
+        assert_eq!(pc[1], "", "unpainted face stays unpainted");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

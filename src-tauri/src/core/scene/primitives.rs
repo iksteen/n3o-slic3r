@@ -194,6 +194,7 @@ fn cube(w: f32, d: f32, h: f32) -> NewMesh {
         vertices,
         normals,
         indices,
+        paint_colors: None,
         bounding_box,
         provenance: MeshProvenance::Primitive("cube".into()),
     }
@@ -277,6 +278,7 @@ fn cylinder(radius: f32, height: f32, segments: u32) -> NewMesh {
         vertices,
         normals,
         indices,
+        paint_colors: None,
         bounding_box,
         provenance: MeshProvenance::Primitive("cylinder".into()),
     }
@@ -328,6 +330,7 @@ fn sphere(radius: f32, segments: u32) -> NewMesh {
         vertices,
         normals,
         indices,
+        paint_colors: None,
         bounding_box,
         provenance: MeshProvenance::Primitive("sphere".into()),
     }
@@ -393,6 +396,7 @@ fn cone(radius: f32, height: f32, segments: u32) -> NewMesh {
         vertices,
         normals,
         indices,
+        paint_colors: None,
         bounding_box,
         provenance: MeshProvenance::Primitive("cone".into()),
     }
@@ -448,6 +452,7 @@ fn torus(major_radius: f32, minor_radius: f32, tube_segments: u32, ring_segments
         vertices,
         normals,
         indices,
+        paint_colors: None,
         bounding_box,
         provenance: MeshProvenance::Primitive("torus".into()),
     }

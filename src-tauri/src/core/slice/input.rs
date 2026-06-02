@@ -408,6 +408,9 @@ fn build_plate_geometry(
                 vertices: m.vertices.clone(),
                 normals: m.normals.clone(),
                 indices: m.indices.clone(),
+                // Carry MMU paint into the slice .3mf so libslic3r segments
+                // the painted faces to their filaments.
+                paint_colors: m.paint_colors.clone(),
                 bounding_box: m.bounding_box,
                 provenance: m.provenance.clone(),
             }
@@ -536,6 +539,7 @@ mod tests {
             vertices: vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0],
             normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             indices: vec![0, 1, 2],
+            paint_colors: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [10.0, 10.0, 0.0],

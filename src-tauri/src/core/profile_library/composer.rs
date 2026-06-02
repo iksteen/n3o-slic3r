@@ -685,7 +685,7 @@ fn assemble_filament_topology(filaments: &[FilamentEntry<'_>]) -> BTreeMap<Strin
 /// tests) or the key isn't in libslic3r's option universe, fall back
 /// to comma-join — matches the pre-existing behavior so tests stay
 /// deterministic.
-fn join_for_key(key: &str, values: &[String]) -> String {
+pub fn join_for_key(key: &str, values: &[String]) -> String {
     let ty = schema_by_key(key).map(|s| s.ty);
     if matches!(ty, Some(OptType::Strings)) {
         values

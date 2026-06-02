@@ -301,7 +301,11 @@ fn expand(
     })?;
 
     match &obj.body {
-        core_spec::ObjectBody::Mesh { vertices, indices } => {
+        core_spec::ObjectBody::Mesh {
+            vertices,
+            indices,
+            paint_colors,
+        } => {
             let key = (part_key.to_owned(), objectid);
             let mesh_idx = match mesh_idx_by_source.get(&key) {
                 Some(&idx) => idx,
@@ -328,6 +332,7 @@ fn expand(
                         vertices: vertices.clone(),
                         normals,
                         indices: indices.clone(),
+                        paint_colors: (!paint_colors.is_empty()).then(|| paint_colors.clone()),
                         bounding_box,
                         provenance,
                     });

@@ -185,6 +185,7 @@ pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoEr
                 vertices: m.vertices.clone(),
                 normals: m.normals.clone(),
                 indices: m.indices.clone(),
+                paint_colors: None,
                 bounding_box: m.bounding_box,
                 provenance: m.provenance.clone(),
             }
@@ -395,6 +396,7 @@ mod tests {
             vertices: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
             normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             indices: vec![0, 1, 2],
+            paint_colors: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [1.0, 1.0, 0.0],

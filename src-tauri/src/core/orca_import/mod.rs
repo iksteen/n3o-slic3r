@@ -87,22 +87,27 @@ impl OrcaProjectSettings {
     }
 
     /// Canonical string form for comparison + override storage: a scalar
-    /// string, or a comma-joined list. A vector whose libslic3r type
-    /// actually joins with `;` will compare unequal to our `,`-joined
-    /// baseline and be kept as an override — safe (the foreign value
-    /// still wins), occasionally non-minimal; refine via the FFI option
-    /// type later.
+    /// string, or a list joined with the libslic3r separator for the key's
+    /// option type — `;` for string vectors (`filament_colour`,
+    /// `filament_type`, …), `,` otherwise — via the same
+    /// [`join_for_key`](crate::core::profile_library::composer::join_for_key)
+    /// the composer uses. Getting this right is load-bearing: a comma-joined
+    /// `filament_colour` parses as a *single* color in libslic3r, which then
+    /// underflows the MMU color-painting segmentation (it sizes per-color
+    /// arrays from `filament_colour.size()`) and crashes the slice.
     pub fn canonical(&self, key: &str) -> Option<String> {
         Some(match self.settings.get(key)? {
             Value::String(s) => s.clone(),
-            Value::Array(a) => a
-                .iter()
-                .map(|x| match x {
-                    Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                })
-                .collect::<Vec<_>>()
-                .join(","),
+            Value::Array(a) => {
+                let parts: Vec<String> = a
+                    .iter()
+                    .map(|x| match x {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    })
+                    .collect();
+                crate::core::profile_library::composer::join_for_key(key, &parts)
+            }
             Value::Number(n) => n.to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Null | Value::Object(_) => return None,
@@ -670,6 +675,41 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
         let _ = project.set_active_plate(first);
     }
 
+    // Painted (MMU color) filaments. A model whose 2nd+ filament is applied
+    // by face `paint_color` rather than a per-object `extruder` carries no
+    // object with `extruder = N`, so `material_count` would miss it and the
+    // slice would fan a single filament — libslic3r then has nothing to
+    // segment the painted faces to. Bind the project's declared filaments as
+    // plate materials on any plate that has a painted object, so the cascade
+    // fans them and AMS / toolhead routing covers them. (Per-plate precision
+    // — exactly which filament indices a plate's paint references — arrives
+    // with the paint decoder; for now adopt the project's filament count,
+    // which is what the source slicer shows.)
+    let filament_count = settings.filament_settings_ids().len().min(u8::MAX as usize) as u8;
+    if filament_count > 1 {
+        let painted_plates: Vec<_> = project
+            .plates
+            .iter()
+            .filter(|pl| {
+                pl.scene.objects.values().any(|o| {
+                    project
+                        .meshes
+                        .get(&o.mesh)
+                        .is_some_and(|m| m.paint_colors.is_some())
+                })
+            })
+            .map(|pl| pl.id)
+            .collect();
+        for pid in painted_plates {
+            let _ = project.set_active_plate(pid);
+            for material in 1..=filament_count {
+                project.ensure_material_bound_on_active(material);
+            }
+        }
+        let first = project.plates[0].id;
+        let _ = project.set_active_plate(first);
+    }
+
     // Settings → per-plate **project_overrides**, minimized against our
     // cascade baseline for the bound printer: keys that already match our
     // default drop out, leaving the project's genuine deltas (machine
@@ -850,16 +890,33 @@ mod tests {
 
     #[test]
     fn canonical_scalar_and_list_forms() {
+        // Schema (for the per-OptType separator) needs the FFI option table.
+        let _ = slic3r_ffi::init(None, 3);
         let s = fourcolor_project_settings();
-        // layer_height is a scalar string — no comma.
+        // layer_height is a scalar string — no separator.
         let lh = s.canonical("layer_height").expect("layer_height present");
-        assert!(!lh.contains(','), "scalar should not be comma-joined: {lh}");
-        // filament_settings_id is a 4-element list → comma-joined (3 commas).
+        assert!(
+            !lh.contains(',') && !lh.contains(';'),
+            "scalar should not be joined: {lh}"
+        );
+        // filament_settings_id is a 4-element *string* vector → libslic3r
+        // joins those with `;`, not `,`.
         let f = s.canonical("filament_settings_id").expect("present");
         assert_eq!(
-            f.matches(',').count(),
+            f.matches(';').count(),
             3,
-            "four elements → three commas: {f}"
+            "four string-vector elements → three semicolons: {f}"
+        );
+        // Regression guard for the MMU-painting crash: filament_colour is a
+        // string vector, so a comma join would make libslic3r read it as a
+        // single color and segfault in color-painting segmentation. It must
+        // be `;`-joined.
+        let c = s
+            .canonical("filament_colour")
+            .expect("filament_colour present");
+        assert!(
+            c.contains(';') && !c.contains(','),
+            "filament_colour must be semicolon-joined: {c}"
         );
     }
 

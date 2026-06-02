@@ -64,6 +64,7 @@ fn triangle_mesh() -> NewMesh {
         vertices: vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0],
         normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
         indices: vec![0, 1, 2],
+        paint_colors: None,
         bounding_box: BoundingBox {
             min: [0.0, 0.0, 0.0],
             max: [10.0, 10.0, 0.0],
