@@ -24,7 +24,7 @@
 //! `SegmentSet`. The hover-inspection raycast depends
 //! on this.
 
-use crate::core::gcode::{FeatureType, Line, SemanticComment};
+use crate::core::gcode::{ArcCenter, FeatureType, Line, MoveCommand, SemanticComment};
 
 use super::ir::{BoundingBox, LayerRange, PreviewGeometry, RetractionMarker, Segment};
 
@@ -97,7 +97,6 @@ pub fn build_preview(lines: &[Line]) -> PreviewGeometry {
         let line_idx = idx as u32;
         match line {
             Line::Move(mv) => {
-                let prev = (state.x, state.y, state.z);
                 let target_x = mv.target.x.unwrap_or(state.x);
                 let target_y = mv.target.y.unwrap_or(state.y);
                 let target_z = mv.target.z.unwrap_or(state.z);
@@ -108,31 +107,26 @@ pub fn build_preview(lines: &[Line]) -> PreviewGeometry {
                 }
 
                 let delta_e = target_e - state.e;
-                let xy_moved =
-                    (target_x - state.x).abs() > 1e-6 || (target_y - state.y).abs() > 1e-6;
-                let z_moved = (target_z - state.z).abs() > 1e-6;
-
-                let start = [prev.0, prev.1, prev.2];
+                let start = [state.x, state.y, state.z];
                 let end = [target_x, target_y, target_z];
 
-                // Classification:
-                //   delta_e > 0  + (xy_moved || z_moved) → extrusion
-                //   delta_e > 0  + no xy/z motion         → in-place extrude (rare, skip)
-                //   delta_e < 0  + no xy_moved            → retraction (no segment)
-                //   delta_e < 0  + xy_moved               → travel + retraction marker at start
-                //   delta_e == 0 + xy/z motion            → travel
-                //   delta_e == 0 + no motion              → nothing
-                if delta_e > 1e-6 && (xy_moved || z_moved) {
-                    // Extrusion segment.
-                    let length = euclidean(start, end);
-                    let speed_mm_s = state.feedrate / 60.0;
-                    let flow_mm3_s = if length > 1e-6 && speed_mm_s > 1e-6 {
-                        let duration = length / speed_mm_s;
-                        let vol_mm3 = delta_e * FILAMENT_CROSS_SECTION_MM2;
-                        vol_mm3 / duration
-                    } else {
-                        0.0
-                    };
+                // Tessellate a G2/G3 arc into a polyline; a straight move is
+                // just `[start, end]` (one edge → identical to the previous
+                // single-segment behaviour). `path_len` is the swept length;
+                // `delta_e` is distributed across the edges by length.
+                let points = arc_polyline(start, end, mv.command, mv.arc_center);
+                let path_len: f32 = points.windows(2).map(|w| euclidean(w[0], w[1])).sum();
+                let moved = path_len > 1e-6;
+                let speed_mm_s = state.feedrate / 60.0;
+
+                // Classification (on the move as a whole):
+                //   delta_e > 0  + motion → extrusion (per-edge)
+                //   delta_e > 0  + none   → in-place extrude (rare, skip)
+                //   delta_e < 0  + none   → retraction (no segment)
+                //   delta_e < 0  + motion → travel + retraction marker at start
+                //   delta_e == 0 + motion → travel
+                //   delta_e == 0 + none   → nothing
+                if delta_e > 1e-6 && moved {
                     open_or_continue_layer(
                         &mut current_layer_range,
                         &mut geom.layer_ranges,
@@ -140,31 +134,39 @@ pub fn build_preview(lines: &[Line]) -> PreviewGeometry {
                         state.layer_z,
                         geom.extrusions.len() as u32,
                     );
-                    geom.extrusions.push(Segment {
-                        start,
-                        end,
-                        layer: state.layer_index,
-                        feature: state.feature.clone(),
-                        speed: speed_mm_s,
-                        flow: flow_mm3_s,
-                        tool: state.tool,
-                        source_line: line_idx,
-                    });
-                    geom.bounding_box.extend(start);
-                    geom.bounding_box.extend(end);
-                } else if delta_e < -1e-6 && !xy_moved {
+                    for w in points.windows(2) {
+                        let (a, b) = (w[0], w[1]);
+                        let length = euclidean(a, b);
+                        let de = delta_e * (length / path_len);
+                        let flow_mm3_s = if length > 1e-6 && speed_mm_s > 1e-6 {
+                            let duration = length / speed_mm_s;
+                            de * FILAMENT_CROSS_SECTION_MM2 / duration
+                        } else {
+                            0.0
+                        };
+                        geom.extrusions.push(Segment {
+                            start: a,
+                            end: b,
+                            layer: state.layer_index,
+                            feature: state.feature.clone(),
+                            speed: speed_mm_s,
+                            flow: flow_mm3_s,
+                            tool: state.tool,
+                            source_line: line_idx,
+                        });
+                        geom.bounding_box.extend(a);
+                        geom.bounding_box.extend(b);
+                    }
+                } else if delta_e < -1e-6 && !moved {
                     // Pure retraction.
                     geom.retractions.push(RetractionMarker {
                         position: start,
                         layer_index: state.layer_index,
                         amount_mm: -delta_e,
                     });
-                } else if xy_moved || z_moved {
-                    // Travel (covers both delta_e == 0 with motion
-                    // AND delta_e < 0 with motion). For the
-                    // retraction-with-motion case, also push a
-                    // retraction marker at the start.
-                    let speed_mm_s = state.feedrate / 60.0;
+                } else if moved {
+                    // Travel (delta_e == 0, or delta_e < 0 with motion → also
+                    // a retraction marker at the start).
                     if delta_e < -1e-6 {
                         geom.retractions.push(RetractionMarker {
                             position: start,
@@ -172,19 +174,20 @@ pub fn build_preview(lines: &[Line]) -> PreviewGeometry {
                             amount_mm: -delta_e,
                         });
                     }
-                    geom.travels.push(Segment {
-                        start,
-                        end,
-                        layer: state.layer_index,
-                        feature: FeatureType::Travel,
-                        speed: speed_mm_s,
-                        flow: 0.0,
-                        tool: state.tool,
-                        source_line: line_idx,
-                    });
+                    for w in points.windows(2) {
+                        geom.travels.push(Segment {
+                            start: w[0],
+                            end: w[1],
+                            layer: state.layer_index,
+                            feature: FeatureType::Travel,
+                            speed: speed_mm_s,
+                            flow: 0.0,
+                            tool: state.tool,
+                            source_line: line_idx,
+                        });
+                    }
                 }
-                // Else: no XY/Z motion + no E change → genuine
-                // no-op, ignore.
+                // Else: no motion + no E change → genuine no-op, ignore.
 
                 state.x = target_x;
                 state.y = target_y;
@@ -289,6 +292,65 @@ fn euclidean(a: [f32; 3], b: [f32; 3]) -> f32 {
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
+/// Tessellate a `G2`/`G3` arc into a polyline (both endpoints inclusive) so
+/// the renderer draws the curve instead of a straight chord between its
+/// endpoints — a large arc rendered as a chord is a beam slashing across the
+/// model (the spinner-wall artifact). `~1` segment per mm of arc, clamped.
+///
+/// Returns `[start, end]` (the previous straight-chord behaviour) for a
+/// non-arc move, or an arc missing its `I`/`J` centre or with a degenerate
+/// radius. The arc centre is `start + (I, J)`; `G2` sweeps clockwise
+/// (decreasing angle), `G3` counter-clockwise; equal start/end angles are a
+/// full turn. Z interpolates linearly for the rare helical arc.
+fn arc_polyline(
+    start: [f32; 3],
+    end: [f32; 3],
+    command: MoveCommand,
+    arc: ArcCenter,
+) -> Vec<[f32; 3]> {
+    let cw = command == MoveCommand::ArcCw;
+    let ccw = command == MoveCommand::ArcCcw;
+    if !cw && !ccw {
+        return vec![start, end];
+    }
+    let (Some(i), Some(j)) = (arc.i, arc.j) else {
+        return vec![start, end];
+    };
+    let (cx, cy) = (start[0] + i, start[1] + j);
+    let r = ((start[0] - cx).powi(2) + (start[1] - cy).powi(2)).sqrt();
+    if r < 1e-6 {
+        return vec![start, end];
+    }
+    use std::f32::consts::PI;
+    let a0 = (start[1] - cy).atan2(start[0] - cx);
+    let mut a1 = (end[1] - cy).atan2(end[0] - cx);
+    if cw {
+        while a1 >= a0 {
+            a1 -= 2.0 * PI;
+        }
+    } else {
+        while a1 <= a0 {
+            a1 += 2.0 * PI;
+        }
+    }
+    let arc_len = r * (a1 - a0).abs();
+    let n = (arc_len.ceil() as usize).clamp(2, 256);
+    let mut pts = Vec::with_capacity(n + 1);
+    for k in 0..=n {
+        let t = k as f32 / n as f32;
+        let a = a0 + (a1 - a0) * t;
+        pts.push([
+            cx + r * a.cos(),
+            cy + r * a.sin(),
+            start[2] + (end[2] - start[2]) * t,
+        ]);
+    }
+    // Pin exact endpoints so the joins with neighbouring moves stay tight.
+    pts[0] = start;
+    *pts.last_mut().expect("n >= 2") = end;
+    pts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,6 +408,45 @@ mod tests {
             "E=0 from E=0.5 with no XY → retract"
         );
         assert!((g.retractions[0].amount_mm - 0.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn arc_move_is_tessellated_into_a_curve_not_a_chord() {
+        // CCW quarter arc from (10,0) to (0,10) about the origin, radius 10.
+        // Rendered as a chord it would be one straight 14mm segment slashing
+        // across the bulge — the spinner-wall artifact.
+        let src = "G1 X10 Y0 Z0.2 F1800\n\
+                   G3 X0 Y10 I-10 J0 E5 F1200\n";
+        let g = build(src);
+        assert!(
+            g.extrusions.len() > 1,
+            "arc must tessellate into multiple segments, got {}",
+            g.extrusions.len(),
+        );
+        // Every vertex lies on the radius-10 circle — the path follows the
+        // curve, not the chord (whose interior points sit at radius < 8).
+        let p = &g.extrusions.positions;
+        for chunk in p.chunks(3) {
+            let r = (chunk[0] * chunk[0] + chunk[1] * chunk[1]).sqrt();
+            assert!((r - 10.0).abs() < 0.05, "vertex off the arc: r={r}");
+        }
+        // Endpoints exact.
+        assert_eq!(&p[..3], &[10.0, 0.0, 0.2][..]);
+        assert_eq!(&p[p.len() - 3..], &[0.0, 10.0, 0.2][..]);
+    }
+
+    #[test]
+    fn straight_move_still_produces_one_segment() {
+        // Regression: a linear move must remain a single segment (the arc
+        // path collapses to [start, end] for non-arcs).
+        let src = "G1 X0 Y0 Z0.2 F1800\n\
+                   G1 X10 Y0 E0.5 F1200\n";
+        let g = build(src);
+        assert_eq!(g.extrusions.len(), 1);
+        assert_eq!(
+            &g.extrusions.positions[..6],
+            &[0.0, 0.0, 0.2, 10.0, 0.0, 0.2][..]
+        );
     }
 
     #[test]
