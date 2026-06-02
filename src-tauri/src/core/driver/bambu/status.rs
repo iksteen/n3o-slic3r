@@ -948,7 +948,10 @@ mod tests {
         merge_into(&mut snap, engaged);
         match &snap.extra {
             DriverExtra::Bambu(extra) => {
-                let ext = extra.external_spool.as_ref().expect("engaged external surfaces");
+                let ext = extra
+                    .external_spool
+                    .as_ref()
+                    .expect("engaged external surfaces");
                 assert_eq!(ext.color, "101410FF");
             }
             _ => panic!("expected Bambu extra"),
@@ -1050,9 +1053,21 @@ mod tests {
             cols: vec!["00000000".into()],
             tray_info_idx: None,
         });
-        assert_eq!(t.color.as_deref(), Some("FF0000FF"), "transparent color skipped");
-        assert_eq!(t.sub_brand.as_deref(), Some("Bambu PLA Basic"), "blank brand skipped");
-        assert_eq!(t.cols, vec!["00FF00FF".to_string()], "sentinel cols skipped");
+        assert_eq!(
+            t.color.as_deref(),
+            Some("FF0000FF"),
+            "transparent color skipped"
+        );
+        assert_eq!(
+            t.sub_brand.as_deref(),
+            Some("Bambu PLA Basic"),
+            "blank brand skipped"
+        );
+        assert_eq!(
+            t.cols,
+            vec!["00FF00FF".to_string()],
+            "sentinel cols skipped"
+        );
     }
 
     #[test]
