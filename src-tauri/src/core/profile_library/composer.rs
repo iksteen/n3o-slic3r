@@ -5,15 +5,17 @@
 //! per-bed bed.toml + filament + process), plus the plate-level
 //! process overrides.
 //!
-//! Composition order (lowest precedence first; later layers win in the
-//! cascade resolver's source-order tie-break):
+//! Composition order. Authored layers 1–5 are lowest-precedence first and
+//! win among themselves by the resolver's source-order tie-break; layer 6
+//! is the `!important` override tier, which wins over any authored rule
+//! regardless of specificity:
 //!
 //!   1. Printer fragment      (machine globals only; no per-extruder)
 //!   2. Bed fragment          (bed identity + curr_bed_type)
 //!   3. Per-extruder nozzle fragments, scalar-to-vector assembled
 //!   4. Filament fragment     (single-slot MVP)
 //!   5. Process fragment
-//!   6. Plate process overrides
+//!   6. Plate process overrides (override tier — `Rule::important`)
 //!
 //! The per-extruder vector assembly step zips each nozzle fragment's
 //! scalars into vectors keyed at the extruder dimension. For an A1
@@ -180,8 +182,9 @@ pub fn with_quality_profile<'a>(
 /// filament per `PrinterInstance` slot" view used by non-slice
 /// callers (cascade trace UI, schema preview).
 ///
-/// `plate_overrides` becomes the highest-precedence layer (the
-/// resolver's source-order tie-break makes later sources win).
+/// `plate_overrides` becomes the highest-precedence layer: appended as an
+/// `important` (override-tier) rule, so the resolver ranks it above every
+/// authored rule regardless of specificity.
 pub fn compose_cascade(
     instance: &PrinterInstance,
     material_layout: &[Option<SlotRef>],
@@ -222,6 +225,7 @@ pub fn compose_cascade(
                 path: PathBuf::from("<flush-defaults>"),
                 line: 1,
             },
+            important: false,
         });
     }
 
@@ -276,6 +280,7 @@ pub fn compose_cascade(
                 path: PathBuf::from("<extruder-vector-assembly>"),
                 line: 1,
             },
+            important: false,
         });
     }
 
@@ -303,6 +308,7 @@ pub fn compose_cascade(
                 path: PathBuf::from("<filament-topology>"),
                 line: 1,
             },
+            important: false,
         });
     }
 
@@ -325,6 +331,7 @@ pub fn compose_cascade(
                 path: PathBuf::from("<filament-vector-assembly>"),
                 line: 1,
             },
+            important: false,
         });
     }
 
@@ -354,6 +361,7 @@ pub fn compose_cascade(
                 path: PathBuf::from("<filament-colour-synthesis>"),
                 line: 1,
             },
+            important: false,
         });
     }
 
@@ -368,7 +376,10 @@ pub fn compose_cascade(
         })?;
     rules.extend(process.rules);
 
-    // 6. Plate overrides — virtual source so trace UI can name them.
+    // 6. Plate overrides — the `!important` override tier: they win over
+    //    every authored rule regardless of specificity (a profile option set
+    //    under a `when` predicate must still lose to an explicit override).
+    //    Virtual source so the trace UI can name them.
     if !plate_overrides.is_empty() {
         rules.push(Rule {
             when: Predicate::default(),
@@ -377,6 +388,7 @@ pub fn compose_cascade(
                 path: PathBuf::from("<plate-overrides>"),
                 line: 1,
             },
+            important: true,
         });
     }
 

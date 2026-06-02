@@ -5,10 +5,16 @@
 //! described in `docs/profiles.md` — predicate evaluation, specificity
 //! ranking, source-order tie-breaks, within-cascade tie-break warnings.
 //!
-//! The *override* tier (`!important`-style user + project overrides)
-//! lives in `overrides.rs` and consumes this resolver's output. Trace
-//! tooling builds the structured "why is X = 55?" report from the
-//! matching-rules list this resolver retains.
+//! `resolve()` also honors an in-cascade override tier: a rule flagged
+//! [`Rule::important`](super::types::Rule::important) wins over every
+//! authored rule regardless of specificity. `compose_cascade` uses it for
+//! plate/object overrides, which must beat a profile option even when that
+//! option is set under a `when` predicate.
+//!
+//! Separately, the file-based `!important` user + project override tier
+//! (loaded from override `.toml`s) lives in `overrides.rs` and consumes
+//! this resolver's output. Trace tooling builds the structured "why is
+//! X = 55?" report from the matching-rules list this resolver retains.
 
 use super::types::{Cascade, Condition, ConditionValue, Rule, SourceLocation};
 use std::collections::BTreeMap;
@@ -117,11 +123,14 @@ pub type Resolved = BTreeMap<String, ResolvedValue>;
 /// Resolve the cascade against `ctx`. Returns the flat per-key
 /// `Resolved` map.
 ///
-/// Application order: lowest specificity first; within the same
-/// specificity, source order (later wins). When two rules at the same
-/// specificity *and* from different cascade files both set the same
-/// key, emits a `tracing::warn!` — the later rule still wins, but the
-/// author probably didn't intend the dependency on load order.
+/// Application order: non-`important` rules first, then `important`
+/// (override-tier) rules — so an override beats authored rules of **any**
+/// specificity. Within each tier: lowest specificity first; within the
+/// same specificity, source order (later wins). When two *non-override*
+/// rules at the same specificity *and* from different cascade files both
+/// set the same key, emits a `tracing::warn!` — the later rule still wins,
+/// but the author probably didn't intend the dependency on load order. An
+/// override overwriting an authored rule is intentional, so it never warns.
 pub fn resolve(cascade: &Cascade, ctx: &dyn Context) -> Resolved {
     // Step 1: identify the rules that match, with their source index.
     let mut matching: Vec<(usize, &Rule)> = cascade
@@ -131,9 +140,10 @@ pub fn resolve(cascade: &Cascade, ctx: &dyn Context) -> Resolved {
         .filter(|(_, r)| rule_matches(r, ctx))
         .collect();
 
-    // Sort by (specificity, source-index) — both ascending — so later
-    // same-specificity rules overwrite earlier ones at apply time.
-    matching.sort_by_key(|(idx, r)| (r.specificity(), *idx));
+    // Sort by (important, specificity, source-index) — all ascending — so
+    // override-tier rules apply last (winning over any specificity), and
+    // within a tier later same-specificity rules overwrite earlier ones.
+    matching.sort_by_key(|(idx, r)| (r.important, r.specificity(), *idx));
 
     let mut resolved: Resolved = BTreeMap::new();
     for (_, rule) in &matching {
@@ -147,8 +157,12 @@ pub fn resolve(cascade: &Cascade, ctx: &dyn Context) -> Resolved {
             };
             match resolved.get_mut(key) {
                 Some(prior) => {
-                    // Tie-break warning: same specificity, different file.
-                    if prior.winning_specificity == rule.specificity()
+                    // Tie-break warning: same specificity, different file —
+                    // but only among authored rules. An override (`important`)
+                    // overwriting an authored value is the whole point of the
+                    // override tier, so it's never a "tie" to warn about.
+                    if !rule.important
+                        && prior.winning_specificity == rule.specificity()
                         && prior.winning_rule.path != rule.source.path
                     {
                         tracing::warn!(
@@ -361,6 +375,57 @@ set.bed_temp = 55
         );
         assert!(log.contains("fileA.toml"));
         assert!(log.contains("fileB.toml"));
+    }
+
+    #[test]
+    fn important_override_beats_higher_specificity_and_does_not_warn() {
+        use tracing::subscriber::with_default;
+
+        // Authored cascade: a specificity-2 rule sets bed_temp = 55. Without
+        // the override tier this would win over an unconditional override.
+        let authored = parse(
+            "\
+[[rule]]
+when.filament.type = \"PLA\"
+when.plate.type = \"PEI\"
+set.bed_temp = 55
+",
+        );
+        // Override tier: an unconditional (specificity 0) `important` rule —
+        // the shape `compose_cascade` appends for plate/object overrides.
+        let override_rule = Rule {
+            when: crate::core::cascade::types::Predicate::default(),
+            set: BTreeMap::from([("bed_temp".to_string(), "99".to_string())]),
+            source: SourceLocation {
+                path: "<plate-overrides>".into(),
+                line: 1,
+            },
+            important: true,
+        };
+        let cascade = Cascade {
+            rules: authored.rules.into_iter().chain([override_rule]).collect(),
+        };
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let writer = TestWriter {
+            buf: captured.clone(),
+        };
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_max_level(tracing::Level::WARN)
+            .finish();
+        let resolved = with_default(subscriber, || resolve(&cascade, &pla_pei_ctx()));
+
+        let v = resolved.get("bed_temp").expect("bed_temp resolved");
+        assert_eq!(
+            v.value, "99",
+            "the override wins over the specificity-2 rule"
+        );
+        let log = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+        assert!(
+            !log.contains("cascade tie"),
+            "an override overwriting an authored rule must not warn: {log}"
+        );
     }
 
     /// Test-only `Write` impl that fans every line into a shared

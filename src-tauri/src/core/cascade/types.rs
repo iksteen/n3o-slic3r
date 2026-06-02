@@ -28,6 +28,14 @@ pub struct Rule {
     pub when: Predicate,
     pub set: BTreeMap<String, String>,
     pub source: SourceLocation,
+    /// `!important`-style override tier. An important rule wins over **any**
+    /// authored-cascade rule regardless of specificity — the resolver ranks
+    /// it above every non-important rule (then by specificity + source order
+    /// among important rules). This is how plate / object overrides beat
+    /// profile options that set the same key under a `when` predicate; a
+    /// plain authored rule (the default) leaves it `false`.
+    #[serde(default)]
+    pub important: bool,
 }
 
 impl Rule {

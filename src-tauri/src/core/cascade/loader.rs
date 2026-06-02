@@ -147,6 +147,7 @@ pub fn parse_cascade_str(src: &str, path: &Path) -> Result<Vec<Rule>, CascadeLoa
                 path: path.into(),
                 line: 1,
             },
+            important: false,
         };
         rules.insert(0, default_rule);
     }
@@ -262,6 +263,7 @@ fn walk_section(
         when: Predicate { conditions },
         set,
         source,
+        important: false,
     });
     Ok(())
 }
@@ -312,6 +314,7 @@ fn parse_explicit_rule(
         when: Predicate { conditions },
         set,
         source,
+        important: false,
     })
 }
 
