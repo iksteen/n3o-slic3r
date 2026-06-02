@@ -10,6 +10,7 @@
 #include <libslic3r/PrintBase.hpp>
 #include <libslic3r/Exception.hpp>
 #include <libslic3r/TriangleMesh.hpp>
+#include <libslic3r/TriangleSelector.hpp>
 #include <libslic3r/Utils.hpp>
 #include <libslic3r/GCode/GCodeProcessor.hpp>
 #include <libslic3r/Format/bbs_3mf.hpp>
@@ -23,6 +24,7 @@
 #include <boost/make_shared.hpp>
 #include <boost/shared_ptr.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -313,6 +315,60 @@ struct slic3r_model_t {
     Model model;
 };
 
+namespace {
+
+// Walk one triangle's MMU paint bitstream (mirrors TriangleSelector::serialize):
+// copy the split-tree structure verbatim and remap each leaf's filament state
+// through `perm` (state s -> perm[s], identity when s is out of range). `c`
+// advances past exactly one triangle's bits. Operates on the already-decoded
+// in-memory bitstream — no hex packing involved (that's only 3MF I/O).
+void remap_paint_walk(const std::vector<bool>& in, size_t& c,
+                      std::vector<bool>& out, const std::vector<int>& perm,
+                      std::vector<bool>& used_states) {
+    bool s0 = in[c], s1 = in[c + 1];
+    c += 2;
+    out.push_back(s0);
+    out.push_back(s1);
+    int split_sides = (s0 ? 1 : 0) | (s1 ? 2 : 0);
+    if (split_sides != 0) {
+        // special_side (2 bits) — structural, copied verbatim.
+        out.push_back(in[c]);
+        out.push_back(in[c + 1]);
+        c += 2;
+        for (int i = 0; i <= split_sides; ++i) // split_sides + 1 children
+            remap_paint_walk(in, c, out, perm, used_states);
+    } else {
+        // Leaf: state is 2 bits, or "11" prefix + 4 bits for states >= 3.
+        bool p0 = in[c], p1 = in[c + 1];
+        c += 2;
+        int n;
+        if (p0 && p1) {
+            n = 0;
+            for (int i = 0; i < 4; ++i)
+                if (in[c + i]) n |= (1 << i);
+            c += 4;
+            n += 3;
+        } else {
+            n = (p0 ? 1 : 0) | (p1 ? 2 : 0);
+        }
+        int nn = (n >= 0 && n < static_cast<int>(perm.size())) ? perm[n] : n;
+        if (nn >= 0 && nn < static_cast<int>(used_states.size()))
+            used_states[nn] = true;
+        if (nn >= 3) {
+            out.push_back(true);
+            out.push_back(true);
+            int m = nn - 3;
+            for (int i = 0; i < 4; ++i)
+                out.push_back((m & (1 << i)) != 0);
+        } else {
+            out.push_back((nn & 1) != 0);
+            out.push_back((nn & 2) != 0);
+        }
+    }
+}
+
+} // namespace
+
 extern "C" {
 
 const char* slic3r_version(void) {
@@ -523,6 +579,40 @@ slic3r_status slic3r_model_load_with_config(slic3r_model_t* m,
                                              char** out_err) {
     if (!c) return SLIC3R_ERR_INVALID_ARG;
     return do_load(m, &c->cfg, path, out_err);
+}
+
+// ---- MMU paint remap ----
+
+slic3r_status slic3r_model_remap_paint_filaments(slic3r_model_t* m,
+                                                 const int32_t* perm,
+                                                 size_t perm_len) {
+    if (m == nullptr || (perm == nullptr && perm_len != 0))
+        return SLIC3R_ERR_INVALID_ARG;
+    try {
+        std::vector<int> p(perm, perm + perm_len);
+        for (ModelObject* obj : m->model.objects) {
+            for (ModelVolume* vol : obj->volumes) {
+                if (vol->mmu_segmentation_facets.empty())
+                    continue;
+                const TriangleSelector::TriangleSplittingData& in =
+                    vol->mmu_segmentation_facets.get_data();
+                TriangleSelector::TriangleSplittingData out;
+                std::fill(out.used_states.begin(), out.used_states.end(), false);
+                out.bitstream.reserve(in.bitstream.size());
+                out.triangles_to_split.reserve(in.triangles_to_split.size());
+                for (const auto& mapping : in.triangles_to_split) {
+                    out.triangles_to_split.emplace_back(
+                        mapping.triangle_idx, static_cast<int>(out.bitstream.size()));
+                    size_t c = static_cast<size_t>(mapping.bitstream_start_idx);
+                    remap_paint_walk(in.bitstream, c, out.bitstream, p, out.used_states);
+                }
+                vol->mmu_segmentation_facets.set_data(std::move(out));
+            }
+        }
+        return SLIC3R_OK;
+    } catch (const std::exception&) {
+        return SLIC3R_ERR_INTERNAL;
+    }
 }
 
 // ---- Slicing ----

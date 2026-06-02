@@ -254,6 +254,7 @@ fn prepare_job(
         filament,
         plugin_project,
         plugin_plate,
+        paint_filament_remap: input.paint_filament_remap,
     };
     Ok((job_id, resolved, handle))
 }
@@ -616,6 +617,19 @@ fn run_worker(
             let err = classify_libslic3r_error(&format!("{e}"));
             fail(&handle, &sink, job_id, plate_id, err);
             return;
+        }
+        // Toolchanger MMU paint routing: remap each painted filament
+        // state to the libslic3r filament index its base material binds
+        // to, so painted faces follow their material onto the right
+        // toolhead (AMS printers pass `None` — identity is implicit).
+        if let Some(perm) = &job.paint_filament_remap {
+            if let Err(e) = model.remap_paint_filaments(perm) {
+                let err = SliceError::Unknown {
+                    raw_message: format!("paint filament remap failed: {e}"),
+                };
+                fail(&handle, &sink, job_id, plate_id, err);
+                return;
+            }
         }
 
         // Build the progress closure. Passed into slice() per-call

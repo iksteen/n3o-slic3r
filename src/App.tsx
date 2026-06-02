@@ -67,6 +67,7 @@ interface ImportReport {
   settings_redundant: number;
   settings_incompatible: number;
   settings_machine_dropped: number;
+  settings_filament_dropped: number;
   settings_unmapped: number;
   settings_from_change_list: boolean;
 }
@@ -356,7 +357,7 @@ function App() {
           }${
             r.settings_incompatible ? `, ${r.settings_incompatible} with values this engine doesn't recognize (reset to default)` : ""
           }.`,
-          `Not imported: ${r.settings_machine_dropped} printer/machine settings (your printer's own), ${r.settings_unmapped} settings this engine doesn't support (Bambu Studio extras).`,
+          `Not imported: ${r.settings_machine_dropped} printer/machine settings (your printer's own), ${r.settings_filament_dropped} filament settings (taken from the slot each material binds to), ${r.settings_unmapped} settings this engine doesn't support (Bambu Studio extras).`,
         ];
         void messageDialog(lines.join("\n"), {
           title: "Imported from OrcaSlicer / Bambu Studio",

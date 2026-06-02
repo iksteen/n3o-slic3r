@@ -283,6 +283,32 @@ pub fn build_slice_input(
         message: format!("{e}"),
     })?;
 
+    // ── MMU paint remap (toolchangers only) ───────────────────
+    // build_plate_geometry rewrites each object's `extruder_id` to its flat-
+    // slot index on toolchangers. The face paint encodes the *original* model
+    // material indices, so it needs the same remap or painted faces route to
+    // the wrong toolhead. AMS printers remap identity, and an unpainted plate
+    // needs nothing → `None` for both (and the orchestrator skips the call).
+    let plate_has_paint = plate.scene.objects.values().any(|o| {
+        project
+            .meshes
+            .get(&o.mesh)
+            .is_some_and(|m| m.paint_colors.is_some())
+    });
+    let paint_filament_remap = if is_toolchanger && plate_has_paint {
+        // perm[state]: state 0 (the object's own extruder) maps to itself;
+        // each painted material 1..=N maps to its flat-slot filament index,
+        // matching the per-object `extruder_id` remap.
+        let mut perm: Vec<i32> = (0..=material_count as i32).collect();
+        for m in 1..=material_count as u8 {
+            perm[m as usize] =
+                material_to_filament_idx(m, &instance, &plate.material_to_slot) as i32;
+        }
+        Some(perm)
+    } else {
+        None
+    };
+
     // ── Assemble the SliceJobInput ────────────────────────────
     let input = SliceJobInput {
         model_path: temp_path.to_string_lossy().into_owned(),
@@ -304,6 +330,7 @@ pub fn build_slice_input(
         printer_instance_id,
         material_layout,
         quality_profile: plate.quality_profile.clone(),
+        paint_filament_remap,
     };
 
     Ok((input, temp_path))

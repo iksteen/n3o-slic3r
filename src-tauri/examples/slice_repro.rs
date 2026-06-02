@@ -119,6 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         printer_instance_id: instance_id.clone(),
         material_layout: vec![],
         quality_profile: None,
+        paint_filament_remap: None,
     };
 
     let bucket: Arc<Mutex<Vec<SliceEvent>>> = Arc::new(Mutex::new(Vec::new()));

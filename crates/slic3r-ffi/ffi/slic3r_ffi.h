@@ -216,6 +216,19 @@ slic3r_status slic3r_model_load_with_config(slic3r_model_t* model,
                                              const char* path,
                                              char** out_err);
 
+/* Remap MMU color-painting (paint_color) filament states in place.
+ *
+ * For every painted ModelVolume, each per-face filament state `s` is
+ * replaced with `perm[s]` (states >= perm_len, and any unpainted face, are
+ * left unchanged). Used to reconcile painted filament indices with n3o's
+ * per-object extruder remap on toolchanger printers, where the object's base
+ * extruder is rewritten to a flat-slot index and the paint must follow.
+ * State 0 (the object's own extruder) should map to itself. No-op on a model
+ * with no painting. */
+slic3r_status slic3r_model_remap_paint_filaments(slic3r_model_t* model,
+                                                 const int32_t* perm,
+                                                 size_t perm_len);
+
 /* ---- Slicing ---- */
 
 /* Slice progress callback.

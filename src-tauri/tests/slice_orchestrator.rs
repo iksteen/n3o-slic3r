@@ -105,6 +105,7 @@ fn bambi_input(model_path: String, output_dir: String, plate_ids: Vec<u32>) -> S
         printer_instance_id: "bambi".into(),
         material_layout: vec![],
         quality_profile: None,
+        paint_filament_remap: None,
     }
 }
 
@@ -148,6 +149,7 @@ fn snappy_input(model_path: String, output_dir: String, plate_ids: Vec<u32>) -> 
         printer_instance_id: "snappy".into(),
         material_layout: vec![],
         quality_profile: None,
+        paint_filament_remap: None,
     }
 }
 

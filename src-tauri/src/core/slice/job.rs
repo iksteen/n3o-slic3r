@@ -75,6 +75,15 @@ pub struct SliceJobInput {
     /// cascade against this effective process.
     #[serde(default)]
     pub quality_profile: Option<String>,
+    /// MMU color-paint filament remap for toolchanger printers, or `None`
+    /// when no remap is needed (AMS printers, or a plate with no painting).
+    /// `perm[state]` is the libslic3r filament index the painted state should
+    /// route to — the same `material → flat-slot` remap the per-object
+    /// `extruder_id` gets, so painted faces follow the base material onto the
+    /// right toolhead. The orchestrator applies it via
+    /// `Model::remap_paint_filaments` after loading the temp `.3mf`.
+    #[serde(default)]
+    pub paint_filament_remap: Option<Vec<i32>>,
 }
 
 /// Snapshot of a job's lifecycle. Returned by `slice_status` so the
@@ -222,6 +231,10 @@ pub struct ResolvedJob {
     /// global tier.
     pub plugin_project: std::collections::BTreeMap<String, String>,
     pub plugin_plate: std::collections::BTreeMap<String, String>,
+    /// MMU paint filament remap (toolchanger only); see
+    /// [`SliceJobInput::paint_filament_remap`]. Applied to the loaded model
+    /// before slicing.
+    pub paint_filament_remap: Option<Vec<i32>>,
 }
 
 #[cfg(test)]

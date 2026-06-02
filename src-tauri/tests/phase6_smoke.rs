@@ -138,6 +138,7 @@ fn slice_cube_to_gcode() -> (PathBuf, Vec<u8>) {
         printer_instance_id: "bambi".into(),
         material_layout: vec![],
         quality_profile: None,
+        paint_filament_remap: None,
     };
 
     run_slice_job_blocking(input, &registry, sink).expect("slice start");

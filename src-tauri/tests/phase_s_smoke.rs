@@ -173,6 +173,7 @@ fn slice_fourcolor(
         printer_instance_id: instance_id.into(),
         material_layout: vec![],
         quality_profile: None,
+        paint_filament_remap: None,
     };
 
     run_slice_job_blocking(input, &registry, sink)
@@ -741,8 +742,9 @@ fn imported_object_override_reaches_the_engine_end_to_end() {
 /// bambi / A1 mini, AMS) and confirm the slice is genuine 2-material — the
 /// painted faces reached filament 2. Exercises the whole chain: paint
 /// round-trip into the slice 3MF + the painted-filament accounting + the
-/// `filament_colour` semicolon-join (a comma join crashed libslic3r's MMU
-/// segmentation).
+/// composer fanning `filament_colour` to the bound slot count (so MMU's
+/// per-colour vector matches `filament_diameter`; a length mismatch crashes
+/// libslic3r's segmentation).
 ///
 /// INTERIM FIXTURE: a top-level *untracked* local file, so the test skips when
 /// absent (e.g. CI) rather than failing. Replace with a committed, licensed
@@ -802,6 +804,119 @@ fn imported_painted_model_slices_as_multi_material() {
     assert!(
         gcode.matches("M620").count() >= 1,
         "expected >=1 AMS swap (M620) between the painted colors",
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::remove_file(&temp_3mf);
+}
+
+/// MMU color-painting on a toolchanger → painted faces route to the bound
+/// toolhead (Phase 2, U1).
+///
+/// Same painted fixture, rebound to snappy (Snapmaker U1, 4-toolhead
+/// toolchanger). The base material binds to toolhead 1 and the painted
+/// material to toolhead 3 — a *non-sequential* binding, so the paint state's
+/// libslic3r filament index (2) must be remapped to the bound toolhead's flat
+/// slot index (3). The orchestrator applies that remap to the loaded model via
+/// `Model::remap_paint_filaments`; without it the painted faces would print on
+/// toolhead 2 (filament index 2), not 3.
+///
+/// Verified at the G-code: the only tool-change commands are `T0` (base →
+/// toolhead 1) and `T2` (painted → toolhead 3, 0-based). No `T1`/`T3` in the
+/// print moves. This also covers the toolchanger MMU config invariant — the
+/// composer fans `filament_colour` to the 4 slots so it matches the slot-fanned
+/// `filament_diameter` (a shorter colour vector segfaults the segmentation).
+///
+/// INTERIM FIXTURE: shares spinning-top.3mf with the AMS test; skips when
+/// absent. Replace with a committed, licensed painted fixture once the paint
+/// work lands.
+#[test]
+fn imported_painted_model_routes_to_bound_toolhead_on_u1() {
+    use n3o_slic3r_lib::core::orca_import::import;
+    use n3o_slic3r_lib::core::printer::{lookup, SlotRef};
+    use n3o_slic3r_lib::core::slice::input::build_slice_input;
+
+    ensure_ffi_init();
+    let fixture = workspace_root().join("spinning-top.3mf");
+    if !fixture.exists() {
+        eprintln!(
+            "skipping imported_painted_model_routes_to_bound_toolhead_on_u1: {} absent (interim local fixture)",
+            fixture.display()
+        );
+        return;
+    }
+
+    let (mut project, _report) = import(&fixture).expect("import painted project");
+    // Rebind to the U1 toolchanger; its bundled process differs, so clear the
+    // imported A1-mini process and let the instance default resolve.
+    project.plates[0].set_printer(Some("snappy".into()), lookup("snapmaker-u1").as_ref());
+    project.plates[0].quality_profile = None;
+    // Non-sequential: base material 1 → toolhead 1, painted material 2 →
+    // toolhead 3. The remap must follow the binding, not assume identity.
+    project.plates[0].material_to_slot.insert(
+        1,
+        SlotRef {
+            extruder: 0,
+            slot: 0,
+        },
+    );
+    project.plates[0].material_to_slot.insert(
+        2,
+        SlotRef {
+            extruder: 2,
+            slot: 0,
+        },
+    );
+
+    let pid = project.plates[0].id;
+    let temp_dir = std::env::temp_dir().join(format!("n3o-paint-u1-{}", std::process::id()));
+    let (input, temp_3mf) = build_slice_input(&project, pid, temp_dir.display().to_string())
+        .expect("build_slice_input");
+    // build_slice_input computes the toolchanger paint remap; for this binding
+    // the painted state 2 must route to flat slot index 3.
+    assert_eq!(
+        input.paint_filament_remap.as_deref(),
+        Some([0, 1, 3].as_slice()),
+        "painted state 2 should remap to the bound toolhead's flat slot index 3",
+    );
+
+    let registry = JobRegistry::new();
+    let (sink, events) = collecting_sink();
+    run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
+    let events = events.lock().unwrap();
+    if let Some(SliceEvent::JobFailed { error, .. }) = events
+        .iter()
+        .find(|e| matches!(e, SliceEvent::JobFailed { .. }))
+    {
+        panic!("U1 painted slice failed: {error:?}");
+    }
+    let path = events
+        .iter()
+        .find_map(|e| match e {
+            SliceEvent::PlateFinished { output_path, .. } => Some(PathBuf::from(output_path)),
+            _ => None,
+        })
+        .expect("PlateFinished");
+
+    // The print moves use exactly two toolheads: T0 (base → toolhead 1) and
+    // T2 (painted → toolhead 3, 0-based). A bare `T<n>` on its own line is a
+    // tool change; collect the distinct set.
+    let gcode = std::fs::read_to_string(&path).expect("read gcode");
+    let mut tools: Vec<u32> = gcode
+        .lines()
+        .filter_map(|l| {
+            let t = l.trim();
+            t.strip_prefix('T')
+                .filter(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+                .and_then(|rest| rest.parse::<u32>().ok())
+        })
+        .collect();
+    tools.sort_unstable();
+    tools.dedup();
+    assert_eq!(
+        tools,
+        vec![0, 2],
+        "painted faces must route to the bound toolheads T0 (base) + T2 (painted), got {tools:?}",
     );
 
     let _ = std::fs::remove_dir_all(&temp_dir);

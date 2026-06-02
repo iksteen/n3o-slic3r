@@ -170,7 +170,9 @@ impl OrcaProjectSettings {
 pub struct KeyPartition {
     /// Process-bucket keys → candidate project overrides (delta path).
     pub process: Vec<String>,
-    /// Filament-bucket keys → candidate filament overrides (delta path).
+    /// Filament-bucket keys — **dropped** (owned by the bound slot; a
+    /// material's filament identity comes from the slot it binds to, not the
+    /// foreign project). Tracked for the import report's accounting.
     pub filament: Vec<String>,
     /// Printer/machine keys — **dropped** (owned by the bound printer).
     pub machine: Vec<String>,
@@ -292,7 +294,7 @@ pub struct OverrideOutcome {
     /// Keys whose foreign value already matches our baseline — redundant,
     /// so dropped (reported as a count, not noise).
     pub redundant: Vec<String>,
-    /// Process/Filament keys we couldn't read a value for (skipped).
+    /// Process keys we couldn't read a value for (skipped).
     pub unreadable: Vec<String>,
     /// Enum keys whose foreign value isn't in our engine's value set —
     /// a fork-divergence (e.g. Bambu's `ironing_pattern = "zig-zag"`,
@@ -303,13 +305,26 @@ pub struct OverrideOutcome {
     pub incompatible: Vec<String>,
 }
 
-/// Compute the overrides to import: for each **Process** + **Filament**
-/// key (machine keys are already excluded by [`partition`]), keep it
-/// only when the foreign value differs from `baseline` — our cascade
-/// resolved (libslic3r key → value) for the bound printer / filament /
-/// process. Keys that match the baseline are redundant and dropped, so
-/// the imported project's override set stays minimal and the cascade
+/// Compute the overrides to import: for each **Process** key (machine
+/// *and* filament keys are excluded — see below), keep it only when the
+/// foreign value differs from `baseline` — our cascade resolved
+/// (libslic3r key → value) for the bound printer / filament / process.
+/// Keys that match the baseline are redundant and dropped, so the
+/// imported project's override set stays minimal and the cascade
 /// readable.
+///
+/// **Filament-bucket keys are not adopted.** In n3o a material's filament
+/// identity — colour, type, temperatures, retraction, and the per-slot
+/// `filament_*` vectors libslic3r fans — comes from the *slot* the
+/// material binds to, not from the foreign project. Importing a foreign
+/// project's filament settings would override the slot-owned values with
+/// settings describing a different machine's filaments. It's the same
+/// ownership rule that drops machine keys (owned by the bound
+/// `PrinterInstance`), applied one bucket over (owned by the bound slot).
+/// It also structurally removes a crash class: a foreign filament *vector*
+/// (e.g. `filament_colour`) imported at the source project's length would
+/// clash with the target's slot-fanned length and segfault libslic3r's MMU
+/// painting (`filament_colour.size()` < `filament_diameter.size()`).
 ///
 /// When in doubt the key is kept (an absent baseline entry counts as a
 /// difference): a redundant override is harmless, a *missing* one would
@@ -323,8 +338,8 @@ pub struct OverrideOutcome {
 ///
 /// `only_keys`, when `Some`, restricts the import to exactly the project's
 /// declared change list (`different_settings_to_system`) — every other
-/// Process/Filament key resolves from the adopted process instead of
-/// landing as an override. `None` imports the full delta (no change list).
+/// Process key resolves from the adopted process instead of landing as an
+/// override. `None` imports the full delta (no change list).
 pub fn compute_overrides(
     foreign: &OrcaProjectSettings,
     partition: &KeyPartition,
@@ -334,7 +349,7 @@ pub fn compute_overrides(
     only_keys: Option<&std::collections::HashSet<String>>,
 ) -> OverrideOutcome {
     let mut out = OverrideOutcome::default();
-    for key in partition.process.iter().chain(partition.filament.iter()) {
+    for key in partition.process.iter() {
         // Intent-based import: skip anything the project didn't mark as
         // changed from its system preset.
         if only_keys.is_some_and(|only| !only.contains(key)) {
@@ -455,6 +470,10 @@ pub struct ImportReport {
     pub settings_incompatible: usize,
     /// Printer/machine settings dropped (owned by the bound printer).
     pub settings_machine_dropped: usize,
+    /// Filament settings dropped (owned by the bound slot — colour, type,
+    /// temperatures, retraction all come from the slot a material binds to,
+    /// not the foreign project).
+    pub settings_filament_dropped: usize,
     /// Keys with no home in our model.
     pub settings_unmapped: usize,
     /// `true` when the project declared a `different_settings_to_system`
@@ -577,7 +596,8 @@ fn register_obj(project: &mut Project, mesh_ids: &[MeshId], obj: &ProjectObject)
 /// n3o `Project`. Geometry + per-object/plate structure come from the
 /// existing 3MF reader (which applies `model_settings.config`); the
 /// project's `project_settings.config` settings are carried as overrides
-/// (Process/Filament only — machine keys dropped). The plate(s) bind to
+/// (Process only — machine keys owned by the bound printer and filament
+/// keys owned by the bound slot are dropped). The plate(s) bind to
 /// an existing matching `PrinterInstance` (fallback flagged, never
 /// created).
 ///
@@ -790,6 +810,7 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
         settings_redundant: outcome.redundant.len(),
         settings_incompatible: outcome.incompatible.len(),
         settings_machine_dropped: part.machine.len(),
+        settings_filament_dropped: part.filament.len(),
         settings_unmapped: part.unmapped.len(),
         settings_from_change_list: changed.is_some(),
     };
@@ -950,12 +971,21 @@ mod tests {
         assert!(!out.overrides.is_empty());
         // A machine key is never an override (partition dropped it).
         assert!(!out.overrides.contains_key("machine_start_gcode"));
-        // Every Process+Filament key is accounted for.
+        // A filament key is never an override either — filament identity is
+        // owned by the bound slot, so the whole bucket is dropped.
+        for fk in &p.filament {
+            assert!(
+                !out.overrides.contains_key(fk),
+                "filament key {fk} should not be imported as an override",
+            );
+        }
+        // Every Process key is accounted for (filament keys are dropped
+        // wholesale, so they don't appear in any outcome bucket).
         let seen = out.overrides.len()
             + out.redundant.len()
             + out.unreadable.len()
             + out.incompatible.len();
-        assert_eq!(seen, p.process.len() + p.filament.len());
+        assert_eq!(seen, p.process.len());
     }
 
     #[test]

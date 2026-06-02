@@ -519,6 +519,20 @@ impl Model {
         };
         unsafe { check_with_err(status, err) }
     }
+
+    /// Remap MMU color-painting (`paint_color`) filament states in place.
+    ///
+    /// Each painted face's filament state `s` is replaced with `perm[s]`
+    /// (states `>= perm.len()`, and unpainted faces, are left unchanged).
+    /// Index 0 is the object's own extruder and should map to itself. Used to
+    /// make painted filament indices follow n3o's per-object extruder remap on
+    /// toolchanger printers, where the base extruder is rewritten to a
+    /// flat-slot index and the paint must follow. No-op on an unpainted model.
+    pub fn remap_paint_filaments(&mut self, perm: &[i32]) -> Result<()> {
+        let status =
+            unsafe { sys::slic3r_model_remap_paint_filaments(self.raw, perm.as_ptr(), perm.len()) };
+        check(status)
+    }
 }
 
 impl Drop for Model {
