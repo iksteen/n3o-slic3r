@@ -388,18 +388,30 @@ fn apply_bbs_metadata(settings: &bbs_meta::ModelSettings, objects: &mut [Project
     // separate objects but no per-part metadata). We walk parts
     // linearly across all outer objects and zip with `objects` in
     // document order — this matches BBS's own assumption.
-    let mut all_parts: Vec<&bbs_meta::PartSettings> = Vec::new();
+    let mut all_parts: Vec<(&bbs_meta::ObjectSettings, &bbs_meta::PartSettings)> = Vec::new();
     for outer in &settings.objects {
         for part in &outer.parts {
-            all_parts.push(part);
+            all_parts.push((outer, part));
         }
     }
 
-    for (obj, part) in objects.iter_mut().zip(all_parts.iter()) {
+    for (obj, (outer, part)) in objects.iter_mut().zip(all_parts.iter()) {
         if let Some(name) = &part.name {
             obj.name = name.clone();
         }
         obj.extruder_id = part.extruder;
+        // Per-object setting overrides: the outer object's config
+        // (`ModelObject::config`, shared by all its parts) merged with this
+        // part's own (`ModelVolume::config`), the part winning on conflict.
+        // Kept as raw libslic3r keys — the scene-load layer scope-gates them
+        // into `scene.object_overrides`. The writer emits solo overrides at
+        // the object level and group-member overrides at the part level, so
+        // this merge round-trips our own output.
+        if !outer.config.is_empty() || !part.config.is_empty() {
+            let mut merged = outer.config.clone();
+            merged.extend(part.config.iter().map(|(k, v)| (k.clone(), v.clone())));
+            obj.overrides = merged;
+        }
     }
 
     // Plate assignments + group identity in a single walk.

@@ -910,6 +910,9 @@ pub fn scene_load_3mf(
             parent: None,
             group_id: obj.group_id,
         });
+        // Carry any per-object setting overrides from the source 3MF
+        // (model_settings.config) into the scene, scope-gated.
+        s.apply_imported_object_overrides(object_id, &obj.overrides);
         let obj_clone = s
             .active_plate()
             .scene

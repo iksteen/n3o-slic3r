@@ -555,7 +555,7 @@ fn resolve_baseline(
 }
 
 fn register_obj(project: &mut Project, mesh_ids: &[MeshId], obj: &ProjectObject) {
-    project.register_object(NewSceneObject {
+    let id = project.register_object(NewSceneObject {
         mesh: mesh_ids[obj.mesh_idx],
         transform: obj.transform,
         name: obj.name.clone(),
@@ -564,6 +564,8 @@ fn register_obj(project: &mut Project, mesh_ids: &[MeshId], obj: &ProjectObject)
         parent: None,
         group_id: obj.group_id,
     });
+    // Per-object overrides from the imported project's model_settings.config.
+    project.apply_imported_object_overrides(id, &obj.overrides);
 }
 
 /// Import an OrcaSlicer / Bambu Studio `.3mf` **project** into a fresh

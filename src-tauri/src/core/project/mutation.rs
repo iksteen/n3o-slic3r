@@ -111,6 +111,42 @@ impl Project {
         id
     }
 
+    /// Carry a foreign file's per-object setting overrides onto
+    /// `object_id` on the active plate, keeping only object/region-scoped
+    /// libslic3r keys — libslic3r ignores anything else per object (see
+    /// [`crate::core::schema::is_object_overridable`]), so storing it would
+    /// be an inert no-op. The 3MF / Orca-project loaders call this right
+    /// after [`Project::register_object`] with the object's
+    /// `ModelObject`/`ModelVolume::config` deltas. Replaces any existing
+    /// overrides for the object; a no-op if nothing survives the gate.
+    pub fn apply_imported_object_overrides(
+        &mut self,
+        object_id: ObjectId,
+        raw: &std::collections::BTreeMap<String, String>,
+    ) {
+        let mut gated = std::collections::HashMap::new();
+        for (key, value) in raw {
+            if crate::core::schema::is_object_overridable(key) {
+                gated.insert(key.clone(), value.clone());
+            } else {
+                tracing::warn!(
+                    object = object_id.0,
+                    key = %key,
+                    "dropping imported per-object override: not an object/region-scoped \
+                     libslic3r option",
+                );
+            }
+        }
+        if gated.is_empty() {
+            return;
+        }
+        let active = self.active_plate;
+        self.plates[active]
+            .scene
+            .object_overrides
+            .insert(object_id, gated);
+    }
+
     /// Plant a default `material → slot` mapping on the active plate
     /// when the material has no entry yet. Helper for
     /// [`Project::register_object`]; idempotent on re-call.
@@ -2049,6 +2085,46 @@ mod tests {
         let mesh_id = p.register_mesh(unit_cube_mesh());
         let obj_id = p.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
         (mesh_id, obj_id)
+    }
+
+    #[test]
+    fn apply_imported_object_overrides_scope_gates_then_stores() {
+        let _ = slic3r_ffi::init(None, 3);
+        let mut p = Project::default();
+        let (_mesh, obj) = add_cube(&mut p);
+
+        p.apply_imported_object_overrides(
+            obj,
+            &std::collections::BTreeMap::from([
+                ("layer_height".to_string(), "0.3".to_string()), // object scope → kept
+                ("skirt_loops".to_string(), "2".to_string()),    // print scope → dropped
+                ("n3o_not_a_real_key".to_string(), "x".to_string()), // unknown → dropped
+            ]),
+        );
+        let stored = p
+            .active_plate()
+            .scene
+            .object_overrides
+            .get(&obj)
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            stored.len(),
+            1,
+            "only the object-scoped key survives: {stored:?}"
+        );
+        assert_eq!(stored.get("layer_height").map(String::as_str), Some("0.3"));
+
+        // Input with no object/region keys leaves no override entry at all.
+        let (_m2, obj2) = add_cube(&mut p);
+        p.apply_imported_object_overrides(
+            obj2,
+            &std::collections::BTreeMap::from([("skirt_loops".to_string(), "2".to_string())]),
+        );
+        assert!(
+            !p.active_plate().scene.object_overrides.contains_key(&obj2),
+            "no object/region keys → no override entry",
+        );
     }
 
     #[test]

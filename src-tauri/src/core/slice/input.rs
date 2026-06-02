@@ -363,16 +363,15 @@ fn object_overrides_for_slice(
     };
     let mut out = BTreeMap::new();
     for (key, value) in raw {
-        match crate::core::schema::schema_by_key(key) {
-            Some(schema) if schema.scope.is_object() || schema.scope.is_region() => {
-                out.insert(key.clone(), value.clone());
-            }
-            _ => tracing::warn!(
+        if crate::core::schema::is_object_overridable(key) {
+            out.insert(key.clone(), value.clone());
+        } else {
+            tracing::warn!(
                 object = id.0,
                 key = %key,
                 "dropping per-object override: not an object/region-scoped libslic3r option \
                  (libslic3r only honors per-object config at PrintObject/PrintRegion scope)"
-            ),
+            );
         }
     }
     out

@@ -192,6 +192,17 @@ pub fn schema_by_key(key: &str) -> Option<&'static OptionSchema> {
     cache().by_key.get(key).map(|&i| &cache().options[i])
 }
 
+/// Whether `key` can be set as a per-object override — i.e. libslic3r
+/// honors it at object or region scope (`PrintObjectConfig` /
+/// `PrintRegionConfig`). The single source of truth shared by the
+/// slice-time gate (`object_overrides_for_slice`) and the Orca-import
+/// reader; mirrors the frontend's `isObjectOverridable`. Unknown keys and
+/// print/global-scope keys return `false` — libslic3r would ignore them
+/// per object, so storing them as object overrides is an inert no-op.
+pub fn is_object_overridable(key: &str) -> bool {
+    schema_by_key(key).is_some_and(|s| s.scope.is_object() || s.scope.is_region())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -22,6 +22,8 @@
 //! different key set. Out of scope for MVP per the ticket — we
 //! detect the flavor and error early in [`super::mod`] when present.
 
+use std::collections::BTreeMap;
+
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 
@@ -41,6 +43,12 @@ pub struct ObjectSettings {
     pub id: u32,
     pub name: Option<String>,
     pub default_extruder: Option<u8>,
+    /// Object-level libslic3r config metadata (every `<metadata>` key
+    /// that isn't a recognized identity key like `name`/`extruder`).
+    /// These are `ModelObject::config` deltas — per-object setting
+    /// overrides. Applies to all of the object's parts. Kept raw; the
+    /// scene-load layer scope-gates them into `scene.object_overrides`.
+    pub config: BTreeMap<String, String>,
     /// Per-part settings, in document order. Part `id` matches the
     /// 1-based index of the corresponding `<component>` inside the
     /// referenced object — but we keep the id explicit since BBS
@@ -54,6 +62,10 @@ pub struct PartSettings {
     pub id: u32,
     pub name: Option<String>,
     pub extruder: Option<u8>,
+    /// Per-part (`ModelVolume::config`) libslic3r config metadata — the
+    /// per-volume setting overrides for a multi-volume object. Same
+    /// raw-keep-and-gate-later treatment as [`ObjectSettings::config`].
+    pub config: BTreeMap<String, String>,
     /// `source_object_id` lets us map a part back to its source
     /// mesh — useful when one 3MF aggregates parts originally
     /// imported from separate files. Phase 2 doesn't consume this
@@ -125,6 +137,7 @@ fn parse_object(
         id,
         name: None,
         default_extruder: None,
+        config: BTreeMap::new(),
         parts: Vec::new(),
     };
     let mut buf = Vec::new();
@@ -178,7 +191,10 @@ fn apply_object_metadata(e: &BytesStart, obj: &mut ObjectSettings) {
     match key.as_str() {
         "name" => obj.name = Some(value),
         "extruder" => obj.default_extruder = value.parse().ok(),
-        _ => {}
+        // Any other key is a libslic3r `ModelObject::config` override.
+        _ => {
+            obj.config.insert(key, value);
+        }
     }
 }
 
@@ -195,6 +211,7 @@ fn parse_part(
         id,
         name: None,
         extruder: None,
+        config: BTreeMap::new(),
         source_object_id: None,
     };
     let mut buf = Vec::new();
@@ -238,7 +255,10 @@ fn apply_part_metadata(e: &BytesStart, part: &mut PartSettings) {
         "name" => part.name = Some(value),
         "extruder" => part.extruder = value.parse().ok(),
         "source_object_id" => part.source_object_id = value.parse().ok(),
-        _ => {}
+        // Any other key is a libslic3r `ModelVolume::config` override.
+        _ => {
+            part.config.insert(key, value);
+        }
     }
 }
 
@@ -410,6 +430,44 @@ mod tests {
   </plate>
 </config>
 "#;
+
+    #[test]
+    fn collects_object_and_part_level_config_overrides() {
+        // Object-level config (ModelObject::config) and part-level config
+        // (ModelVolume::config) land in their respective `config` maps,
+        // separate from identity keys (name/extruder/source_object_id).
+        let src = r#"<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <object id="3">
+    <metadata key="name" value="thing"/>
+    <metadata key="extruder" value="1"/>
+    <metadata key="layer_height" value="0.3"/>
+    <part id="1">
+      <metadata key="name" value="vol"/>
+      <metadata key="extruder" value="2"/>
+      <metadata key="wall_loops" value="5"/>
+    </part>
+  </object>
+</config>
+"#;
+        let settings = parse_model_settings(src.as_bytes(), Path::new("ms.config")).expect("parse");
+        let obj = &settings.objects[0];
+        assert_eq!(obj.name.as_deref(), Some("thing"));
+        assert_eq!(obj.default_extruder, Some(1));
+        assert_eq!(
+            obj.config.get("layer_height").map(String::as_str),
+            Some("0.3"),
+            "object-level config key collected",
+        );
+        assert!(!obj.config.contains_key("name") && !obj.config.contains_key("extruder"));
+        let part = &obj.parts[0];
+        assert_eq!(
+            part.config.get("wall_loops").map(String::as_str),
+            Some("5"),
+            "part-level config key collected",
+        );
+        assert!(!part.config.contains_key("source_object_id"));
+    }
 
     #[test]
     fn parses_object_and_parts() {

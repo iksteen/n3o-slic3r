@@ -601,6 +601,139 @@ fn object_layer_height_override_changes_sliced_layer_count() {
     );
 }
 
+/// Full import→slice round-trip. A 3MF that *carries* a per-object
+/// `layer_height` override in its `model_settings.config` (exactly how a
+/// foreign Orca export stores it) is loaded the way the app's
+/// `scene_load_3mf` does — `load_3mf` + `register_object` +
+/// `apply_imported_object_overrides` — then sliced. Asserts (a) the import
+/// populated `scene.object_overrides`, and (b) the imported override drops
+/// the sliced layer count vs. the same geometry imported without it.
+/// Covers the read seam the other tests exercise only piecewise:
+/// bbs_meta → apply_bbs_metadata → apply_imported_object_overrides →
+/// build_plate_geometry → libslic3r → G-code.
+#[test]
+fn imported_object_override_reaches_the_engine_end_to_end() {
+    use n3o_slic3r_lib::core::project::{PlateId, Project};
+    use n3o_slic3r_lib::core::scene::state::NewSceneObject;
+    use n3o_slic3r_lib::core::slice::input::build_slice_input;
+    use n3o_slic3r_lib::core::threemf::{load_3mf, write_3mf};
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    ensure_ffi_init();
+    let cube_path = workspace_root().join("assets/calibration/OrcaCube_v2.3mf");
+    let tmp = std::env::temp_dir();
+    let pid = std::process::id();
+
+    // Author two "foreign" 3MFs from the same geometry: one plain, one with
+    // a per-object layer_height override baked into model_settings.config
+    // (our writer emits it there — the same shape Orca reads/writes).
+    let base_3mf = tmp.join(format!("n3o-imp-base-{pid}.3mf"));
+    let ovr_3mf = tmp.join(format!("n3o-imp-ovr-{pid}.3mf"));
+    {
+        let plain = load_3mf(&cube_path).expect("load OrcaCube");
+        write_3mf(&plain, &base_3mf).expect("write base");
+        let mut withovr = load_3mf(&cube_path).expect("load OrcaCube");
+        for o in &mut withovr.objects {
+            o.overrides = BTreeMap::from([("layer_height".to_string(), "0.25".to_string())]);
+        }
+        write_3mf(&withovr, &ovr_3mf).expect("write ovr");
+    }
+
+    // Import a 3MF into a fresh bambi project exactly as scene_load_3mf does.
+    let import = |path: &Path| -> Project {
+        let p3mf = load_3mf(path).expect("load");
+        let mut project = Project::default();
+        project.plates[0].set_printer(Some("bambi".into()), None);
+        let mesh_ids: Vec<_> = p3mf
+            .meshes
+            .into_iter()
+            .map(|m| project.register_mesh(m))
+            .collect();
+        for obj in &p3mf.objects {
+            let id = project.register_object(NewSceneObject {
+                mesh: mesh_ids[obj.mesh_idx],
+                transform: obj.transform,
+                name: obj.name.clone(),
+                visible: true,
+                extruder_id: obj.extruder_id,
+                parent: None,
+                group_id: obj.group_id,
+            });
+            project.apply_imported_object_overrides(id, &obj.overrides);
+        }
+        project
+    };
+
+    let slice_layers = |project: &Project, tag: &str| -> u32 {
+        let out = tmp.join(format!("n3o-imp-slice-{tag}-{pid}"));
+        let (input, temp_3mf) = build_slice_input(project, PlateId(1), out.display().to_string())
+            .expect("build_slice_input");
+        let registry = JobRegistry::new();
+        let (sink, events) = collecting_sink();
+        run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
+        let events = events.lock().unwrap();
+        if let Some(SliceEvent::JobFailed { error, .. }) = events
+            .iter()
+            .find(|e| matches!(e, SliceEvent::JobFailed { .. }))
+        {
+            panic!("[{tag}] slice failed: {error:?}");
+        }
+        let layers = events
+            .iter()
+            .find_map(|e| match e {
+                SliceEvent::PlateFinished { summary, .. } => Some(summary.layer_count),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("[{tag}] no PlateFinished"));
+        let _ = std::fs::remove_dir_all(&out);
+        let _ = std::fs::remove_file(&temp_3mf);
+        layers
+    };
+
+    let base = import(&base_3mf);
+    let ovr = import(&ovr_3mf);
+
+    // (a) The import actually populated object_overrides on the override 3MF
+    //     and left the plain one clean.
+    let ovr_count: usize = ovr
+        .plate(PlateId(1))
+        .unwrap()
+        .scene
+        .object_overrides
+        .values()
+        .filter(|m| m.get("layer_height").map(String::as_str) == Some("0.25"))
+        .count();
+    assert!(
+        ovr_count >= 1,
+        "import must populate scene.object_overrides with the file's layer_height override",
+    );
+    assert!(
+        base.plate(PlateId(1))
+            .unwrap()
+            .scene
+            .object_overrides
+            .is_empty(),
+        "plain import must carry no object overrides",
+    );
+
+    // (b) The imported override reaches the engine: fewer layers.
+    let base_layers = slice_layers(&base, "base");
+    let ovr_layers = slice_layers(&ovr, "ovr");
+    assert!(
+        base_layers > 0 && ovr_layers > 0,
+        "both slices report a layer count (base={base_layers}, ovr={ovr_layers})",
+    );
+    assert!(
+        ovr_layers < base_layers,
+        "imported per-object layer_height override didn't reach the engine: base={base_layers}, \
+         override={ovr_layers}",
+    );
+
+    let _ = std::fs::remove_file(&base_3mf);
+    let _ = std::fs::remove_file(&ovr_3mf);
+}
+
 /// Leg 3 (deferred): copy-vs-vendor binding.
 ///
 /// Once the in-app filament/process copy mechanic lands (tracked

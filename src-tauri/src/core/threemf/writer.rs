@@ -662,6 +662,40 @@ mod tests {
     }
 
     #[test]
+    fn per_object_overrides_round_trip_through_write_and_read() {
+        // The inverse of `per_object_overrides_emit_as_object_metadata`:
+        // overrides the writer emits as object metadata must come back on
+        // load (bbs_meta collects them, apply_bbs_metadata merges them onto
+        // the ProjectObject). Closes the Orca-import read gap end to end.
+        let overrides = std::collections::BTreeMap::from([
+            ("layer_height".to_string(), "0.3".to_string()),
+            ("wall_loops".to_string(), "5".to_string()),
+        ]);
+        let project = project_from_objects(
+            vec![one_triangle_mesh()],
+            vec![ProjectObject {
+                mesh_idx: 0,
+                transform: Transform::translation(glam::Vec3::ZERO),
+                name: "tri".into(),
+                extruder_id: Some(1),
+                plate_id: 1,
+                group_id: None,
+                overrides: overrides.clone(),
+            }],
+            std::collections::BTreeMap::new(),
+        );
+        let path = tempfile_3mf();
+        write_3mf(&project, &path).expect("write");
+        let reloaded = super::super::load_3mf(&path).expect("re-read");
+        assert_eq!(reloaded.objects.len(), 1);
+        assert_eq!(
+            reloaded.objects[0].overrides, overrides,
+            "per-object overrides must survive write → read",
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn round_trips_a_single_triangle_project() {
         let project = project_from_objects(
             vec![one_triangle_mesh()],
