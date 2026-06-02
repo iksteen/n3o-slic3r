@@ -12,8 +12,9 @@ verifying upstream has fixed the root cause.** If a future OrcaSlicer
 bump silently changes the behavior they rely on, slicing breaks in
 non-obvious ways.
 
-All five live in `crates/slic3r-ffi/ffi/slic3r_ffi.cpp`. Line numbers
-below are stable as of writing.
+All of these but §9 live in `crates/slic3r-ffi/ffi/slic3r_ffi.cpp`; §9 is
+a Rust-side adapter guard on what we *send* the engine rather than a patch
+to the engine's behavior. Line numbers below are stable as of writing.
 
 ---
 
@@ -401,6 +402,53 @@ all ~20 sites — none can deref null. Mirrors the GUI exactly.
 
 ---
 
+## 9. Short per-filament vectors crash MMU segmentation (guarded Rust-side)
+
+**Symptom.** A multi-material slice whose `filament_colour` (or any other
+per-filament vector) carries *fewer* elements than the printer has filaments
+segfaults inside multi-material segmentation — `apply_mm_segmentation`
+(`PrintObjectSlice.cpp:874`) → `get_extents`, reached from
+`multi_material_segmentation_by_painting` (`MultiMaterialSegmentation.cpp:2198`).
+Surfaced first when a P1S project (2 filaments) was rebound onto the U1
+(4 toolheads) and its imported `filament_colour` override stayed length-2
+while the rest of the filament vectors fanned to 4.
+
+**Root cause.** `apply_mm_segmentation` sets `num_extruders =
+filament_diameter.size()` and indexes `segmentation[layer][extruder_id]`,
+but the painting sizes the inner vector to `num_facets_states - 1 =
+filament_colour.size()`. When `filament_colour.size() < filament_diameter.size()`
+the per-extruder index runs past the end → OOB read → segfault. libslic3r
+assumes every per-filament vector is exactly `num_extruders` long (the GUI
+guarantees this by construction); a short one is undefined behavior. Unlike
+the broadcast-on-`get_at` clamp libslic3r applies elsewhere, the segmentation
+path indexes raw, so the lengths must match exactly.
+
+**Fix (Rust-side, not the shim).** Unlike workarounds 1–8, this guard lives
+in our adapter, not the FFI shim — it polices what we *send* libslic3r rather
+than patching libslic3r itself.
+`src-tauri/src/core/cascade_adapter/adapter.rs::check_filament_vector_lengths`
+rejects the slice — with the offending keys + the expected count — when any
+filament-bucket vector is shorter than `filament_diameter`. Filament-bucket
+vector keys are identified from the schema's `bucket` + `is_vector` signals,
+not a curated list. The normal cascade fans every filament vector to the slot
+count, so this only fires on an already-inconsistent config (a stray override,
+a composer gap): it *surfaces* the error rather than padding the vector to
+length, which would feed libslic3r guessed per-filament print parameters (a
+wrong hotend temperature is dangerous, not merely cosmetic). Longer-than-
+`num_extruders` vectors are harmless (libslic3r ignores the surplus) and pass
+through. Element counting is cstyle-aware
+(`profile_library::split_for_key`, the inverse of `join_for_key`) so the
+`;`-comments embedded in `filament_start_gcode` / `_end_gcode` string vectors
+aren't miscounted into a spurious failure.
+
+This complements workaround 4 (the shim-side `filament_map` /
+`nozzle_volume_type` sizing): §4 sizes vectors *up* inside the shim before
+`apply` for the dimensions the GUI would have sized; §9 *rejects* a
+genuinely-inconsistent short filament vector before it ever reaches the
+engine, instead of guessing the missing values.
+
+---
+
 ## When bumping the OrcaSlicer submodule
 
 Re-verify each workaround:
@@ -432,6 +480,14 @@ Re-verify each workaround:
    The fix upstream would be to pass `enum_keys_map` through
    `set_default_value`. Check `ConfigOptionEnumsGeneric::set_default_value`
    if it exists, or the def's `set_default_value` overload.
+
+6. Does MMU segmentation still index per-filament vectors raw against
+   `filament_diameter.size()` (§9)? Check `apply_mm_segmentation`
+   (`PrintObjectSlice.cpp`) and `multi_material_segmentation_by_painting`
+   (`MultiMaterialSegmentation.cpp`). If upstream added a clamp/broadcast on
+   the short-vector path, our adapter guard becomes belt-and-suspenders but
+   stays correct (a short filament vector is still a config inconsistency
+   worth surfacing).
 
 If a workaround becomes unnecessary, **leave the code in place with an
 updated comment** ("upstream fixed in commit XYZ, kept for older

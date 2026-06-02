@@ -698,6 +698,75 @@ pub fn join_for_key(key: &str, values: &[String]) -> String {
     }
 }
 
+/// Inverse of [`join_for_key`]: split a serialized vector value back into
+/// its elements. For string vectors this is cstyle-aware — a `;` inside a
+/// quoted element (e.g. the `;`-comments in `filament_start_gcode`) is NOT
+/// a separator — so naive `split(';')` would miscount. Non-string vectors
+/// split on `,`. An empty value yields an empty vec.
+///
+/// `split_for_key(k, &join_for_key(k, parts))` round-trips `parts` (modulo
+/// libslic3r's escaping normalization).
+pub fn split_for_key(key: &str, value: &str) -> Vec<String> {
+    let ty = schema_by_key(key).map(|s| s.ty);
+    if matches!(ty, Some(OptType::Strings)) {
+        unescape_strings_cstyle(value)
+    } else if value.is_empty() {
+        Vec::new()
+    } else {
+        value.split(',').map(str::to_string).collect()
+    }
+}
+
+/// Rust port of libslic3r's `unescape_strings_cstyle` (Config.cpp). Splits
+/// a `;`-delimited list into elements, honoring `"…"` quoting and the
+/// `\"`/`\\`/`\r`/`\n` escapes [`escape_string_cstyle`] emits, so a `;`
+/// inside a quoted value stays part of that value. The exact inverse of
+/// the escape path.
+fn unescape_strings_cstyle(s: &str) -> Vec<String> {
+    if s.is_empty() {
+        return Vec::new();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let n = chars.len();
+    let mut out = Vec::new();
+    let mut i = 0;
+    loop {
+        let mut current = String::new();
+        if i < n && chars[i] == '"' {
+            // Quoted element: consume until the unescaped closing quote.
+            i += 1;
+            while i < n && chars[i] != '"' {
+                if chars[i] == '\\' && i + 1 < n {
+                    i += 1;
+                    match chars[i] {
+                        'n' => current.push('\n'),
+                        'r' => current.push('\r'),
+                        c => current.push(c),
+                    }
+                } else {
+                    current.push(chars[i]);
+                }
+                i += 1;
+            }
+            if i < n {
+                i += 1; // skip closing quote
+            }
+        } else {
+            // Bare element: up to the next `;`.
+            while i < n && chars[i] != ';' {
+                current.push(chars[i]);
+                i += 1;
+            }
+        }
+        out.push(current);
+        if i >= n {
+            break;
+        }
+        i += 1; // skip the `;` separator
+    }
+    out
+}
+
 /// Rust port of libslic3r's `escape_string_cstyle` (Config.cpp:49). A
 /// value is quoted iff it contains a character that would otherwise
 /// confuse the `;`-delimited parser: space, tab, backslash, quote, CR,
@@ -759,6 +828,53 @@ mod tests {
         assert_eq!(escape_string_cstyle("a\\b"), "\"a\\\\b\"");
         assert_eq!(escape_string_cstyle("a\nb"), "\"a\\nb\"");
         assert_eq!(escape_string_cstyle("a\rb"), "\"a\\rb\"");
+    }
+
+    #[test]
+    fn unescape_strings_cstyle_inverts_the_escape() {
+        // Bare values, quoted-with-space, embedded `;`, and the escape
+        // digraphs all round-trip back to the original element list. Built
+        // via escape_string_cstyle directly so the test needs no schema.
+        let cases: Vec<Vec<String>> = vec![
+            vec!["PLA".into(), "PETG".into()],
+            vec!["#FFFFFF".into(), "#DE4343".into()],
+            vec!["Generic PLA".into(), "eSUN".into()],
+            // The filament_start_gcode shape: a `;`-comment inside one element.
+            vec!["; outer\nM104 S200".into(), "; inner\nM104 S210".into()],
+            vec!["a\"b".into(), "c\\d".into()],
+        ];
+        for parts in cases {
+            let joined = parts
+                .iter()
+                .map(|v| escape_string_cstyle(v))
+                .collect::<Vec<_>>()
+                .join(";");
+            assert_eq!(
+                unescape_strings_cstyle(&joined),
+                parts,
+                "round-trip failed for {parts:?} (joined: {joined:?})",
+            );
+        }
+    }
+
+    #[test]
+    fn split_for_key_counts_quoted_gcode_as_one_element() {
+        let _ = slic3r_ffi::init(None, 3); // split_for_key consults the schema
+                                           // A single gcode element with `;`-comments must count as ONE element,
+                                           // not split on the embedded `;` — the bug that corrupted
+                                           // filament_start_gcode during length normalization.
+        let one = join_for_key(
+            "filament_start_gcode",
+            &["; start\nM104 S200 ; set temp".into()],
+        );
+        assert_eq!(split_for_key("filament_start_gcode", &one).len(), 1);
+        // Numeric vectors split on `,`.
+        assert_eq!(
+            split_for_key("filament_diameter", "1.75,1.75,1.75"),
+            vec!["1.75", "1.75", "1.75"],
+        );
+        // Empty value → no elements.
+        assert!(split_for_key("filament_diameter", "").is_empty());
     }
 
     #[test]

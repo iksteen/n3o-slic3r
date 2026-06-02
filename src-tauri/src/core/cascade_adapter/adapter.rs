@@ -25,9 +25,10 @@
 use super::manifest::Manifest;
 use crate::core::cascade::resolver::{Context, Resolved};
 use crate::core::cascade::ResolvedOverrides;
+use crate::core::profile_library::split_for_key;
 use crate::core::schema::{schema_by_key, BED_TEMP_KEYS};
 use serde::Serialize;
-use slic3r_ffi::{Config, ErrorKind};
+use slic3r_ffi::{Config, ErrorKind, OptBucket};
 
 /// Outcome of `adapt`. The Config itself is `Send`-but-not-trivially-
 /// serializable; the manifest of dropped/remapped/skipped entries
@@ -76,12 +77,41 @@ pub enum AdaptEvent {
 #[derive(Debug)]
 pub enum AdaptError {
     ConfigAlloc(slic3r_ffi::Error),
+    /// One or more per-filament vectors carry FEWER elements than the
+    /// printer has filaments (`filament_diameter.size()` =
+    /// `num_extruders`). libslic3r's MMU segmentation would index past the
+    /// end and segfault. This is a config inconsistency — a stray override
+    /// or a composer gap — surfaced rather than papered over with guessed
+    /// values: the normal cascade fans every filament vector to the slot
+    /// count, so this never fires for a well-formed config.
+    FilamentVectorTooShort {
+        /// `filament_diameter.size()` — the expected element count.
+        expected: usize,
+        /// `(key, found_len)` for each short vector, sorted by key.
+        offenders: Vec<(String, usize)>,
+    },
 }
 
 impl std::fmt::Display for AdaptError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ConfigAlloc(e) => write!(f, "slic3r_ffi::Config alloc failed: {e}"),
+            Self::FilamentVectorTooShort {
+                expected,
+                offenders,
+            } => {
+                let list = offenders
+                    .iter()
+                    .map(|(k, n)| format!("{k} has {n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "filament setting(s) shorter than the printer's {expected} filament(s): \
+                     {list}. This is an inconsistent filament configuration — most likely an \
+                     override that doesn't match the printer's slot count.",
+                )
+            }
         }
     }
 }
@@ -94,6 +124,14 @@ pub fn adapt(
     ctx: &dyn Context,
     manifest: &Manifest,
 ) -> Result<AdaptResult, AdaptError> {
+    // Invariant guard: every per-filament vector must carry exactly
+    // `filament_diameter.size()` (= num_extruders) elements, or libslic3r's
+    // MMU segmentation indexes out of bounds and segfaults. The normal
+    // cascade fans them all to the slot count, so a short one means a real
+    // inconsistency upstream — fail loudly with the offenders rather than
+    // mask it with padded/guessed values.
+    check_filament_vector_lengths(resolved)?;
+
     let mut config = Config::new().map_err(AdaptError::ConfigAlloc)?;
     let mut events: Vec<AdaptEvent> = Vec::new();
 
@@ -172,6 +210,60 @@ pub fn adapt_with_overrides(
         })
         .collect();
     adapt(&cascade_view, ctx, manifest)
+}
+
+/// libslic3r's effective extruder count for the filament dimension is
+/// `filament_diameter.size()` — that's literally what
+/// `apply_mm_segmentation` reads as `num_extruders` and what every other
+/// per-filament vector is indexed against. Anchoring to it (rather than a
+/// composer-side slot count the adapter can't see) keeps the invariant in
+/// libslic3r's own terms. `None` when `filament_diameter` is absent
+/// (non-FFF, or nothing to anchor to → no normalization).
+fn filament_vector_len(resolved: &Resolved) -> Option<usize> {
+    let v = &resolved.get("filament_diameter")?.value;
+    if v.is_empty() {
+        return None;
+    }
+    Some(v.split(',').count())
+}
+
+/// Reject the resolved config if any per-filament vector is SHORTER than
+/// `filament_diameter` (libslic3r's `num_extruders`). A short vector makes
+/// MMU segmentation read past its end — the segfault this guards against.
+///
+/// Filament-bucket vector keys are identified from the schema's bucket +
+/// is_vector signals (not a curated list). Element counts use the composer's
+/// cstyle-aware [`split_for_key`] so a `;` inside a quoted string element
+/// (e.g. the `;`-comments in `filament_start_gcode`) isn't miscounted.
+///
+/// Longer-than-`num_extruders` vectors are NOT an error: libslic3r ignores
+/// the surplus filament indices (no OOB), so they pass through untouched.
+/// `filament_diameter` absent → non-FFF, nothing to anchor to, no check.
+fn check_filament_vector_lengths(resolved: &Resolved) -> Result<(), AdaptError> {
+    let Some(expected) = filament_vector_len(resolved) else {
+        return Ok(());
+    };
+    let mut offenders: Vec<(String, usize)> = Vec::new();
+    for (key, rv) in resolved {
+        let Some(schema) = schema_by_key(key) else {
+            continue;
+        };
+        if matches!(schema.bucket, Some(OptBucket::Filament)) && schema.is_vector {
+            let len = split_for_key(key, &rv.value).len();
+            if len < expected {
+                offenders.push((key.clone(), len));
+            }
+        }
+    }
+    if offenders.is_empty() {
+        Ok(())
+    } else {
+        offenders.sort();
+        Err(AdaptError::FilamentVectorTooShort {
+            expected,
+            offenders,
+        })
+    }
 }
 
 /// Push one key into the Config, applying typo-remap + drop-list +
@@ -404,5 +496,82 @@ mod tests {
             })
             .collect();
         assert_eq!(unknown, vec!["totally_made_up_key"]);
+    }
+
+    #[test]
+    fn short_filament_vector_fails_the_adapt_rather_than_padding() {
+        ensure_ffi();
+        // filament_diameter fans to 4 (a 4-slot toolchanger); something
+        // clobbered filament_colour down to 2. That's a real inconsistency
+        // that would segfault libslic3r's MMU segmentation — surface it, don't
+        // mask it with guessed values.
+        let resolved = resolved_from([
+            ("filament_diameter", "1.75,1.75,1.75,1.75"),
+            ("filament_colour", "#FFFFFF;#DE4343"),
+        ]);
+        let manifest = Manifest::build();
+        let err = match adapt(&resolved, &ctx_pei(), &manifest) {
+            Err(e) => e,
+            Ok(_) => panic!("a short filament vector must fail the adapt"),
+        };
+        match &err {
+            AdaptError::FilamentVectorTooShort {
+                expected,
+                offenders,
+            } => {
+                assert_eq!(*expected, 4);
+                assert_eq!(*offenders, vec![("filament_colour".to_string(), 2)]);
+            }
+            other => panic!("expected FilamentVectorTooShort, got {other:?}"),
+        }
+        // The message names the offender + the expected count.
+        let msg = err.to_string();
+        assert!(msg.contains("filament_colour has 2"), "got {msg:?}");
+        assert!(msg.contains('4'), "got {msg:?}");
+    }
+
+    #[test]
+    fn longer_than_num_extruders_filament_vector_passes_through() {
+        ensure_ffi();
+        // A surplus filament index is harmless — libslic3r ignores it (no
+        // OOB), so a longer-than-num_extruders vector is NOT an error.
+        let resolved = resolved_from([
+            ("filament_diameter", "1.75,1.75"),
+            ("filament_colour", "#AAAAAA;#BBBBBB;#CCCCCC;#DDDDDD"),
+        ]);
+        let manifest = Manifest::build();
+        let result = adapt(&resolved, &ctx_pei(), &manifest).expect("longer is allowed");
+        assert_eq!(
+            result.config.get("filament_colour").unwrap_or_default(),
+            "#AAAAAA;#BBBBBB;#CCCCCC;#DDDDDD",
+        );
+    }
+
+    #[test]
+    fn matching_length_filament_vectors_adapt_cleanly() {
+        ensure_ffi();
+        let resolved = resolved_from([
+            ("filament_diameter", "1.75,1.75"),
+            ("filament_colour", "#FFFFFF;#DE4343"),
+        ]);
+        let manifest = Manifest::build();
+        let result = adapt(&resolved, &ctx_pei(), &manifest).expect("matching lengths adapt");
+        assert_eq!(
+            result.config.get("filament_colour").unwrap_or_default(),
+            "#FFFFFF;#DE4343",
+        );
+    }
+
+    #[test]
+    fn gcode_string_vector_with_embedded_semicolons_is_not_miscounted() {
+        ensure_ffi();
+        // filament_start_gcode is a `;`-joined string vector whose values
+        // embed `;` (gcode comments). Counting must be cstyle-aware or this
+        // single-element value reads as "short" and spuriously fails.
+        let gcode = split_for_key(
+            "filament_start_gcode",
+            "\"; one\\nM104 S200 ; t\"", // one quoted element with inner `;`
+        );
+        assert_eq!(gcode.len(), 1, "embedded `;` must not split the element");
     }
 }
