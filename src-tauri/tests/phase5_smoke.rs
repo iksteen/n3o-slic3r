@@ -153,7 +153,7 @@ fn phase5_smoke_3plate_save_reload_roundtrip() {
     let identities: Vec<&str> = reloaded
         .plates
         .iter()
-        .map(|pl| pl.printer_instance_id.as_deref().unwrap_or("<unbound>"))
+        .map(|pl| pl.printer_instance_id().unwrap_or("<unbound>"))
         .collect();
     assert_eq!(
         identities,
@@ -169,7 +169,7 @@ fn phase5_smoke_3plate_save_reload_roundtrip() {
     let plates_inst: Vec<&str> = reloaded
         .plates
         .iter()
-        .map(|pl| pl.printer_instance_id.as_deref().unwrap_or("<unbound>"))
+        .map(|pl| pl.printer_instance_id().unwrap_or("<unbound>"))
         .collect();
     assert_eq!(
         plates_inst,

@@ -151,8 +151,12 @@ pub struct Plate {
     /// alongside. .3mf save persists a denormalized copy as a
     /// cross-machine portability hedge (see
     /// `ProjectFile.plate_printer_identities`).
+    ///
+    /// **Private on purpose**: the binding and the derived `scene.bed` must
+    /// stay in sync, so the only way to set it is [`Plate::set_printer`],
+    /// which updates both together. Read via [`Plate::printer_instance_id`].
     #[serde(default)]
-    pub printer_instance_id: Option<String>,
+    printer_instance_id: Option<String>,
 
     /// Per-plate routing from a model material index (the per-volume
     /// `extruder` metadata libslic3r consumes) to a specific feed slot
@@ -226,10 +230,7 @@ fn bind_first_available_printer_in_place(plate: &mut Plate) {
     let Some(profile) = crate::core::printer::lookup(&first.vendor_profile_ref) else {
         return;
     };
-    let bed = crate::core::scene::bed::bed_for_printer(&profile);
-    plate.scene.exclusion_zones = bed.exclusion_zones.clone();
-    plate.scene.bed = Some(bed);
-    plate.printer_instance_id = Some(first.id);
+    plate.set_printer(Some(first.id), Some(&profile));
 }
 
 impl Project {
@@ -287,11 +288,38 @@ impl Plate {
     }
 
     /// Construct a plate already bound to the named PrinterInstance.
+    /// The bed is left unset; bind through [`Self::set_printer`] (or let
+    /// `add_plate` populate it) to derive the bed from the printer.
     pub fn with_instance(id: PlateId, instance_id: String, position: u32) -> Self {
         Self {
             printer_instance_id: Some(instance_id),
             ..Self::new(id, position)
         }
+    }
+
+    /// The bound `PrinterInstance` id, or `None` when unbound.
+    pub fn printer_instance_id(&self) -> Option<&str> {
+        self.printer_instance_id.as_deref()
+    }
+
+    /// The **one** way to (re)bind a plate's printer. Sets the instance id
+    /// *and* recomputes the derived bed visualization + exclusion zones
+    /// together, so the two can never desync — erasing the class of bug
+    /// where code set the binding but left a stale bed. The caller resolves
+    /// the bound instance's [`PrinterProfile`] from the registry (keeping the
+    /// lookup out of this pure model layer); `None` unbinds + clears the bed.
+    pub fn set_printer(
+        &mut self,
+        instance_id: Option<String>,
+        profile: Option<&crate::core::printer::profile::PrinterProfile>,
+    ) {
+        self.printer_instance_id = instance_id;
+        let bed = profile.map(crate::core::scene::bed::bed_for_printer);
+        self.scene.exclusion_zones = bed
+            .as_ref()
+            .map(|b| b.exclusion_zones.clone())
+            .unwrap_or_default();
+        self.scene.bed = bed;
     }
 
     /// Default name for a plate at the given 1-based position
@@ -379,7 +407,7 @@ mod tests {
         // Project::default auto-binds the bootstrap plate to the
         // bundled-default printer instance.
         assert!(
-            p.plates[0].printer_instance_id.is_some(),
+            p.plates[0].printer_instance_id().is_some(),
             "auto-bound to bundled default",
         );
         assert_eq!(p.active_plate, 0);
@@ -393,13 +421,13 @@ mod tests {
         let p = Plate::with_instance(PlateId(2), BAMBI.into(), 2);
         assert_eq!(p.id, PlateId(2));
         assert_eq!(p.name, "Plate 2");
-        assert_eq!(p.printer_instance_id.as_deref(), Some(BAMBI));
+        assert_eq!(p.printer_instance_id(), Some(BAMBI));
     }
 
     #[test]
     fn project_serde_round_trips() {
         let mut p = Project::default();
-        p.plates[0].printer_instance_id = Some(BAMBI.into());
+        p.plates[0].set_printer(Some(BAMBI.into()), None);
         p.plates[0]
             .project_overrides
             .insert("layer_height".into(), "0.12".into());
@@ -412,7 +440,7 @@ mod tests {
 
         assert_eq!(parsed.uuid, p.uuid);
         assert_eq!(parsed.plates.len(), 1);
-        assert_eq!(parsed.plates[0].printer_instance_id.as_deref(), Some(BAMBI));
+        assert_eq!(parsed.plates[0].printer_instance_id(), Some(BAMBI));
         assert_eq!(
             parsed.plates[0]
                 .project_overrides

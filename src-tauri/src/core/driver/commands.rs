@@ -468,7 +468,9 @@ fn plate_printer_model(project: &Mutex<Project>, plate_id: u32) -> Option<String
         let p = project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        p.plate(PlateId(plate_id))?.printer_instance_id.clone()?
+        p.plate(PlateId(plate_id))?
+            .printer_instance_id()?
+            .to_owned()
     };
     let inst = crate::core::printer::lookup_instance(&inst_id)?;
     let profile = crate::core::printer::lookup(&inst.vendor_profile_ref)?;

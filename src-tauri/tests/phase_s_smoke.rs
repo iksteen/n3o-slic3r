@@ -327,7 +327,7 @@ fn snappy_binding_routes_single_material_to_bound_toolhead() {
     // 3mf, register every mesh + object on the active plate.
     let project_3mf = load_3mf(&cube_path).expect("load OrcaCube");
     let mut project = Project::default();
-    project.plates[0].printer_instance_id = Some("snappy".into());
+    project.plates[0].set_printer(Some("snappy".into()), None);
     let mesh_ids: Vec<_> = project_3mf
         .meshes
         .into_iter()
@@ -433,7 +433,7 @@ fn cube_halves_slices_as_one_multivolume_object_no_floating_warning() {
     let project_3mf = load_3mf(&fixture).expect("load cube-halves fixture");
 
     let mut project = Project::default();
-    project.plates[0].printer_instance_id = Some("bambi".into());
+    project.plates[0].set_printer(Some("bambi".into()), None);
     let mesh_ids: Vec<_> = project_3mf
         .meshes
         .into_iter()

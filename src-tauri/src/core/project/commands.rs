@@ -206,7 +206,7 @@ fn resolve_plate(
     let plate = p
         .plate(plate_id)
         .ok_or_else(|| format!("unknown plate id {plate_id:?}"))?;
-    let Some(instance_id) = plate.printer_instance_id.as_deref() else {
+    let Some(instance_id) = plate.printer_instance_id() else {
         return Ok(None);
     };
     let instance = crate::core::printer::lookup_instance(instance_id)
@@ -585,7 +585,7 @@ mod tests {
         let project = Project::default();
         let plate_id = project.plates[0].id;
         // Sanity: the test env actually bound an instance.
-        assert!(project.plates[0].printer_instance_id.is_some());
+        assert!(project.plates[0].printer_instance_id().is_some());
 
         let resolved = resolve_plate_cascade(&project, plate_id).expect("resolve");
         let ow = resolved

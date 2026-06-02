@@ -140,8 +140,7 @@ fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
     let mut selection: Vec<ObjectId> = plate.scene.selection.iter().copied().collect();
     selection.sort();
     let printer_identity = plate
-        .printer_instance_id
-        .as_deref()
+        .printer_instance_id()
         .and_then(crate::core::printer::lookup_instance)
         .map(|inst| inst.vendor_profile_ref);
     PlateSnapshot {
@@ -149,7 +148,7 @@ fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
         name: plate.name.clone(),
         metadata: plate.metadata.clone(),
         printer_identity,
-        printer_instance_id: plate.printer_instance_id.clone(),
+        printer_instance_id: plate.printer_instance_id().map(str::to_owned),
         material_to_slot: plate.material_to_slot.clone(),
         project_overrides: plate.project_overrides.clone(),
         quality_profile: plate.quality_profile.clone(),
@@ -285,26 +284,6 @@ pub fn scene_object_override_clear(
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
         .object_override_clear(plate_id, object_id, &key)
-        .map_err(|e| e.to_string())?;
-    drop(s);
-    emit_all(&window, &events);
-    Ok(())
-}
-
-/// Install a printer on the specified plate. Pass `None` to clear
-/// that plate's bed. The cascade re-resolution triggers naturally
-/// from the BedChanged event flow.
-#[tauri::command]
-#[tracing::instrument(skip(state, window, printer))]
-pub fn scene_set_plate_printer(
-    plate_id: PlateId,
-    printer: Option<PrinterProfile>,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s
-        .set_plate_printer(plate_id, printer.as_ref())
         .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
@@ -565,8 +544,7 @@ pub fn scene_object_add_from_primitive(
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(MeshId, ObjectId), String> {
-    let params =
-        params.unwrap_or_else(|| super::primitives::PrimitiveParams::defaults_for(kind));
+    let params = params.unwrap_or_else(|| super::primitives::PrimitiveParams::defaults_for(kind));
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let (mesh_id, obj_id, events) = s.add_from_primitive(kind, params);
     drop(s);
@@ -768,7 +746,9 @@ pub fn scene_set_object_material(
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.set_object_material(id, material).map_err(op_err_to_string)?;
+    let events = s
+        .set_object_material(id, material)
+        .map_err(op_err_to_string)?;
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -985,7 +965,7 @@ mod tests {
     #[test]
     fn plate_snapshot_carries_metadata_and_scene() {
         let mut p = Project::default();
-        p.plates[0].printer_instance_id = Some("bambi".into());
+        p.plates[0].set_printer(Some("bambi".into()), None);
         p.plates[0].name = "My Plate".into();
         let mesh_id = p.register_mesh(unit_cube_mesh());
         let obj_id = p.register_object(NewSceneObject {
@@ -1032,5 +1012,4 @@ mod tests {
         assert_eq!(json["plate_id"], 1);
         assert_eq!(json["name"], "Plate 1");
     }
-
 }

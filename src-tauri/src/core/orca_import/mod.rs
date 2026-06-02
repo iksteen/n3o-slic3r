@@ -619,7 +619,14 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
     // decision).
     project.source_path = Some(path.to_path_buf());
     if let Some(id) = &instance_id {
-        project.plates[0].printer_instance_id = Some(id.clone());
+        // `Project::new()` seeded plate 0's bed from the *default* instance;
+        // `set_printer` rebinds it to the matched (possibly non-default)
+        // printer AND recomputes the bed together, so the viewport renders the
+        // bound printer's build-plate geometry.
+        let profile = bind
+            .as_ref()
+            .and_then(|(i, _)| lookup(&i.vendor_profile_ref));
+        project.plates[0].set_printer(Some(id.clone()), profile.as_ref());
     }
 
     // Plates: foreign plate ids in order; create the ones past plate 1.
@@ -898,6 +905,10 @@ mod tests {
         // production path); without it the baseline lacks defaults and
         // default-valued keys read as false deltas.
         let _ = slic3r_ffi::init(None, 3);
+        // Isolate the global instance registry: this reads it via import()'s
+        // printer match, so it must serialize with registry-mutating tests
+        // (e.g. the non-default-bed test) and start from the bundled set.
+        let _g = crate::core::printer::instance_registry::RegistryGuard::acquire();
         // The project lead's real A1 mini Bambu Studio project.
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/3mf/case-bambu-studio.3mf");
@@ -1090,6 +1101,49 @@ mod tests {
         assert!(
             intent.incompatible.is_empty(),
             "keys outside the change list aren't validated"
+        );
+    }
+
+    #[test]
+    fn import_recomputes_plate_bed_for_a_non_default_matched_printer() {
+        use crate::core::printer::instance_registry::RegistryGuard;
+        use crate::core::printer::{create_instance, delete_instance};
+        use crate::core::scene::bed::bed_for_printer;
+
+        // Bundled order is [bambi (A1, default), snappy (U1)]. Make a
+        // *non-default* printer the match target: drop the default A1, then
+        // recreate it so it lands after the U1. Plate 0 is then seeded with the
+        // U1's bed (the default), while the A1 project below matches the A1.
+        let _g = RegistryGuard::acquire();
+        delete_instance("bambi").expect("drop default A1");
+        let a1 = create_instance("bambu-lab-a1-mini", "A1 (non-default)".into(), 1)
+            .expect("recreate A1 as a non-default instance");
+
+        // fourcolor.3mf is a Bambu Lab A1 mini project (see the identity test).
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("examples/spike3/fourcolor.3mf");
+        let (project, _report) = import(&path).expect("import A1 project");
+
+        // Plate 0 binds the matched A1...
+        assert_eq!(
+            project.plates[0].printer_instance_id(),
+            Some(a1.id.as_str()),
+        );
+        // ...and its bed geometry follows the A1, not the default U1. (Before
+        // the fix it stayed at Project::new()'s default-instance bed seed.)
+        let a1_profile = lookup(&a1.vendor_profile_ref).expect("A1 profile");
+        let expected = bed_for_printer(&a1_profile);
+        let plate_bed = project.plates[0]
+            .scene
+            .bed
+            .as_ref()
+            .expect("plate 0 bed populated");
+        assert_eq!(
+            (plate_bed.extents.min, plate_bed.extents.max),
+            (expected.extents.min, expected.extents.max),
+            "plate 0 bed must follow the bound A1, not the default U1",
         );
     }
 }

@@ -127,8 +127,8 @@ pub fn build_slice_input(
     // instance's `vendor_profile_ref` — the per-plate binding has
     // no separate identity of its own.
     let printer_instance_id = plate
-        .printer_instance_id
-        .clone()
+        .printer_instance_id()
+        .map(str::to_owned)
         .ok_or(SliceInputError::UnboundPrinter { plate_id })?;
     let instance = lookup_instance(&printer_instance_id)
         .ok_or(SliceInputError::UnboundPrinter { plate_id })?;
@@ -508,7 +508,7 @@ mod tests {
         // Project::default() auto-binds the bootstrap plate to the
         // bundled default printer (Bambi) — pin it explicitly so the
         // tests don't drift if the bundled-default identity changes.
-        p.plates[0].printer_instance_id = Some("bambi".into());
+        p.plates[0].set_printer(Some("bambi".into()), None);
         let mesh_id = p.register_mesh(triangle_mesh());
         p.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
         p
@@ -554,14 +554,14 @@ mod tests {
         let mut project = Project::default();
 
         // Plate 1: A1 mini with one cube.
-        project.plates[0].printer_instance_id = Some("bambi".into());
+        project.plates[0].set_printer(Some("bambi".into()), None);
         let mesh_a = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_a, "cube-a"));
 
         // Plate 2: Snapmaker U1 with one cube. Activate so
         // register_object lands on it.
         let (id2, _) = project.add_plate(None);
-        project.plates[1].printer_instance_id = Some("snappy".into());
+        project.plates[1].set_printer(Some("snappy".into()), None);
         project.set_active_plate(id2).expect("activate plate 2");
         let mesh_b = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_b, "cube-b"));
@@ -599,7 +599,7 @@ mod tests {
         // the bound slot's filament identity + extruder routing.
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
-        project.plates[0].printer_instance_id = Some("bambi".into());
+        project.plates[0].set_printer(Some("bambi".into()), None);
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject {
             mesh: mesh_id,
@@ -636,7 +636,7 @@ mod tests {
         use crate::core::printer::SlotRef;
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
-        project.plates[0].printer_instance_id = Some("snappy".into());
+        project.plates[0].set_printer(Some("snappy".into()), None);
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject {
             mesh: mesh_id,
@@ -716,7 +716,7 @@ mod tests {
         // the bug we hit on the cube-halves external-spool fixture.
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
-        project.plates[0].printer_instance_id = Some("bambi".into());
+        project.plates[0].set_printer(Some("bambi".into()), None);
         let mesh_id = project.register_mesh(triangle_mesh());
         // Two objects sharing group_id=42 with distinct extruder
         // hints — same shape the cube-halves loader produces.
@@ -782,7 +782,7 @@ mod tests {
         let mut project = Project::default();
         // Project::default now auto-binds; clear it so this test
         // pins the genuinely-unbound error path.
-        project.plates[0].printer_instance_id = None;
+        project.plates[0].set_printer(None, None);
         project.plates[0].scene.bed = None;
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
@@ -800,7 +800,7 @@ mod tests {
     fn empty_scene_errors() {
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
-        project.plates[0].printer_instance_id = Some("bambi".into());
+        project.plates[0].set_printer(Some("bambi".into()), None);
         // No register_object call → no objects on the plate.
         let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
             .expect_err("empty scene");
@@ -821,7 +821,7 @@ mod tests {
         // around the validator via `mutate_instance` directly.
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
-        project.plates[0].printer_instance_id = Some("bambi".into());
+        project.plates[0].set_printer(Some("bambi".into()), None);
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
 
@@ -846,7 +846,7 @@ mod tests {
         // bundled `generic-pla` fragment.
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
-        project.plates[0].printer_instance_id = Some("snappy".into());
+        project.plates[0].set_printer(Some("snappy".into()), None);
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
 
@@ -863,7 +863,7 @@ mod tests {
     fn temp_3mf_omits_unused_meshes_from_other_plates() {
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
-        project.plates[0].printer_instance_id = Some("bambi".into());
+        project.plates[0].set_printer(Some("bambi".into()), None);
 
         // Mesh on plate 1.
         let mesh_a = project.register_mesh(triangle_mesh());
@@ -871,7 +871,7 @@ mod tests {
 
         // Plate 2 with its own mesh.
         let (id2, _) = project.add_plate(None);
-        project.plates[1].printer_instance_id = Some("bambi".into());
+        project.plates[1].set_printer(Some("bambi".into()), None);
         project.set_active_plate(id2).unwrap();
         let mesh_b = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_b, "b"));

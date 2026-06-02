@@ -234,7 +234,7 @@ pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoEr
         .plates
         .iter()
         .filter_map(|plate| {
-            let instance_id = plate.printer_instance_id.as_deref()?;
+            let instance_id = plate.printer_instance_id()?;
             let instance = crate::core::printer::lookup_instance(instance_id)?;
             Some((plate.id.0, instance.vendor_profile_ref))
         })
@@ -420,7 +420,7 @@ mod tests {
         p.file_metadata
             .insert("Title".into(), "Fixture Project".into());
         // Plate 0: printer + bindings + project override.
-        p.plates[0].printer_instance_id = Some(A1_MINI_INSTANCE.into());
+        p.plates[0].set_printer(Some(A1_MINI_INSTANCE.into()), None);
         p.plates[0]
             .project_overrides
             .insert("layer_height".into(), "0.12".into());
@@ -444,7 +444,7 @@ mod tests {
         );
         assert_eq!(parsed.plates.len(), 2);
         assert_eq!(
-            parsed.plates[0].printer_instance_id.as_deref(),
+            parsed.plates[0].printer_instance_id(),
             Some(A1_MINI_INSTANCE),
         );
         assert_eq!(
@@ -594,7 +594,7 @@ mod tests {
         // metadata, material bindings. Verifies the full save/load
         // shape end-to-end.
         let mut p = Project::default();
-        p.plates[0].printer_instance_id = Some(A1_MINI_INSTANCE.into());
+        p.plates[0].set_printer(Some(A1_MINI_INSTANCE.into()), None);
         let (_b, _) = p.add_plate(Some(U1_INSTANCE.into()));
         let (_c, _) = p.add_plate(Some(U1_INSTANCE.into()));
 
@@ -605,7 +605,7 @@ mod tests {
         let instances: Vec<&str> = parsed
             .plates
             .iter()
-            .map(|pl| pl.printer_instance_id.as_deref().unwrap_or("<unbound>"))
+            .map(|pl| pl.printer_instance_id().unwrap_or("<unbound>"))
             .collect();
         assert_eq!(instances, vec![A1_MINI_INSTANCE, U1_INSTANCE, U1_INSTANCE],);
         std::fs::remove_file(&path).ok();

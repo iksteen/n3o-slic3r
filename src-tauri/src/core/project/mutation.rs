@@ -150,7 +150,7 @@ impl Project {
         {
             return;
         }
-        let Some(instance_id) = self.plates[idx].printer_instance_id.clone() else {
+        let Some(instance_id) = self.plates[idx].printer_instance_id().map(str::to_owned) else {
             return;
         };
         let Some(instance) = crate::core::printer::lookup_instance(&instance_id) else {
@@ -225,25 +225,16 @@ impl Project {
         let instance_id = instance_id.or_else(|| {
             self.plates
                 .get(self.active_plate)
-                .and_then(|p| p.printer_instance_id.clone())
+                .and_then(|p| p.printer_instance_id().map(str::to_owned))
         });
 
-        let mut plate = match instance_id.clone() {
-            Some(iid) => Plate::with_instance(id, iid, position),
-            None => Plate::new(id, position),
-        };
-        // Populate the bed visualization so the viewport renders
-        // immediately on plate switch — set_plate_printer would
-        // otherwise be the only path setting plate.scene.bed, but
-        // it's only called by the explicit picker flow.
-        if let Some(iid) = &instance_id {
-            if let Some(profile) = crate::core::printer::lookup_instance(iid)
-                .and_then(|inst| crate::core::printer::lookup(&inst.vendor_profile_ref))
-            {
-                let bed = crate::core::scene::bed::bed_for_printer(&profile);
-                plate.scene.exclusion_zones = bed.exclusion_zones.clone();
-                plate.scene.bed = Some(bed);
-            }
+        let mut plate = Plate::new(id, position);
+        // Bind + derive the bed together (one path: set_printer) so the new
+        // plate renders immediately on plate switch.
+        if let Some(iid) = instance_id {
+            let profile = crate::core::printer::lookup_instance(&iid)
+                .and_then(|inst| crate::core::printer::lookup(&inst.vendor_profile_ref));
+            plate.set_printer(Some(iid), profile.as_ref());
         }
         self.plates.push(plate);
 
@@ -353,7 +344,10 @@ impl Project {
         // plate still accepts the mapping (the slice path rejects
         // separately); range-check would error before the picker can
         // round-trip the user's choice.
-        if let Some(instance_id) = self.plates[plate_idx].printer_instance_id.clone() {
+        if let Some(instance_id) = self.plates[plate_idx]
+            .printer_instance_id()
+            .map(str::to_owned)
+        {
             if let Some(instance) = crate::core::printer::lookup_instance(&instance_id) {
                 let e_count = instance.extruders.len();
                 if (slot.extruder as usize) >= e_count {
@@ -527,7 +521,7 @@ impl Project {
         // accepts the value (the slice path rejects an unbound plate
         // separately).
         if let Some(slug) = &quality_profile {
-            if let Some(instance_id) = self.plates[idx].printer_instance_id.clone() {
+            if let Some(instance_id) = self.plates[idx].printer_instance_id().map(str::to_owned) {
                 if let Some(instance) = crate::core::printer::lookup_instance(&instance_id) {
                     let known = crate::core::profile_library::bundled_process_slugs_for_printer(
                         &instance.printer_fragment_slug,
@@ -557,45 +551,23 @@ impl Project {
 
     /// Install the active plate's bed by passing through a resolved
     /// `PrinterProfile`. `None` clears the bed. The plate's
-    /// `printer` binding is unchanged here — bindings carry
-    /// printer/build-plate *identity*, not the resolved profile;
-    /// see [`Self::set_plate_printer`] for the binding update
-    /// surface.
+    /// `printer_instance_id` binding is unchanged here — this is the
+    /// bed-viz-only path used by `scene_set_active_printer` and the
+    /// arrange helpers. The picker flow that also updates the binding
+    /// is [`Self::rebind_plate_printer`].
     pub fn set_active_printer(&mut self, printer: Option<&PrinterProfile>) -> Vec<SceneEvent> {
-        let active_id = self.active_plate().id;
-        // Indexed mutation can't fail for the active plate.
-        self.set_plate_printer(active_id, printer)
-            .expect("active plate id is always valid")
-    }
-
-    /// Install a printer profile on the specified plate.
-    /// Recomputes the bed visualization, caches it on the plate,
-    /// and emits a `BedChanged` event the renderer subscribes to.
-    /// Pass `None` to clear the plate's bed.
-    ///
-    /// This is the bed-viz-only path — it does NOT touch the plate's
-    /// `printer` binding. Use [`Self::rebind_plate_printer`] for the
-    /// picker flow that also updates the binding + emits the
-    /// metadata-changed signal the tab strip subscribes to.
-    pub fn set_plate_printer(
-        &mut self,
-        plate_id: PlateId,
-        printer: Option<&PrinterProfile>,
-    ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        let idx = self
-            .plate_index(plate_id)
-            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
+        let plate_id = self.active_plate().id;
         let new_bed = printer.map(bed::bed_for_printer);
-        let plate = &mut self.plates[idx];
+        let plate = &mut self.plates[self.active_plate];
         plate.scene.exclusion_zones = new_bed
             .as_ref()
             .map(|b| b.exclusion_zones.clone())
             .unwrap_or_default();
         plate.scene.bed = new_bed.clone();
-        Ok(vec![SceneEvent::BedChanged {
+        vec![SceneEvent::BedChanged {
             plate_id,
             bed: new_bed,
-        }])
+        }]
     }
 
     /// Rebind a plate to a different `PrinterInstance` (backs the
@@ -630,8 +602,7 @@ impl Project {
             .ok_or(SceneOpError::UnknownPlate(plate_id))?;
 
         let previous_printer = self.plates[idx]
-            .printer_instance_id
-            .as_deref()
+            .printer_instance_id()
             .and_then(crate::core::printer::lookup_instance)
             .map(|inst| inst.vendor_profile_ref);
         // Resolve identity + bed off the new instance for the
@@ -648,7 +619,8 @@ impl Project {
             .as_ref()
             .map(|i| i.bed.identity.clone())
             .unwrap_or_default();
-        self.plates[idx].printer_instance_id = Some(instance_id);
+        // Bind + derive the bed together (the one binding path).
+        self.plates[idx].set_printer(Some(instance_id), Some(profile));
         // Slot refs are physical (extruder, slot) coordinates — they
         // don't survive a topology change. Wipe + re-auto-bind any
         // referenced material against the new printer so existing
@@ -688,12 +660,15 @@ impl Project {
         }
         self.active_plate = prev_active;
 
-        // Reuse the bed-viz path for the bed/exclusion-zone update.
-        // Can't fail (we already validated the plate id above).
-        let mut events = self
-            .set_plate_printer(plate_id, Some(profile))
-            .expect("plate id was validated above");
-        events.push(SceneEvent::PlateMetadataChanged { plate_id });
+        // `set_printer` above already updated the bed/exclusion zones; emit the
+        // canonical BedChanged + the metadata change the tab strip listens for.
+        let events = vec![
+            SceneEvent::BedChanged {
+                plate_id,
+                bed: self.plates[idx].scene.bed.clone(),
+            },
+            SceneEvent::PlateMetadataChanged { plate_id },
+        ];
 
         let report = PrinterChangeReport {
             plate_id,
@@ -724,14 +699,16 @@ impl Project {
         let idx = self
             .plate_index(plate_id)
             .ok_or(SceneOpError::UnknownPlate(plate_id))?;
-        self.plates[idx].printer_instance_id = None;
+        // Unbind + clear the bed/exclusion zones together.
+        self.plates[idx].set_printer(None, None);
         self.plates[idx].material_to_slot.clear();
-        // Reuse the bed-viz path with no profile — clears the bed
-        // and exclusion zones on the plate.
-        let mut events = self
-            .set_plate_printer(plate_id, None)
-            .expect("plate id was validated above");
-        events.push(SceneEvent::PlateMetadataChanged { plate_id });
+        let events = vec![
+            SceneEvent::BedChanged {
+                plate_id,
+                bed: None,
+            },
+            SceneEvent::PlateMetadataChanged { plate_id },
+        ];
         Ok(events)
     }
 
@@ -2084,7 +2061,11 @@ mod tests {
         assert!(!events.is_empty());
         let plate = p.active_plate();
         let ga = plate.scene.objects[&a].group_id.expect("a grouped");
-        assert_eq!(plate.scene.objects[&b].group_id, Some(ga), "shared group id");
+        assert_eq!(
+            plate.scene.objects[&b].group_id,
+            Some(ga),
+            "shared group id"
+        );
         assert_eq!(
             plate.scene.group_names.get(&ga).map(String::as_str),
             Some("Bracket"),
@@ -2094,7 +2075,10 @@ mod tests {
         let plate = p.active_plate();
         assert_eq!(plate.scene.objects[&a].group_id, None);
         assert_eq!(plate.scene.objects[&b].group_id, None);
-        assert!(plate.scene.group_names.is_empty(), "name dropped on ungroup");
+        assert!(
+            plate.scene.group_names.is_empty(),
+            "name dropped on ungroup"
+        );
     }
 
     #[test]
@@ -2117,7 +2101,10 @@ mod tests {
         // dissolves (a group of one isn't a group).
         p.group_objects(&[b, c], "G2".into()).unwrap();
         let plate = p.active_plate();
-        assert_eq!(plate.scene.objects[&a].group_id, None, "a's group dissolved");
+        assert_eq!(
+            plate.scene.objects[&a].group_id, None,
+            "a's group dissolved"
+        );
         assert!(!plate.scene.group_names.contains_key(&g1));
         let gbc = plate.scene.objects[&b].group_id.expect("b grouped");
         assert_eq!(plate.scene.objects[&c].group_id, Some(gbc));
@@ -2137,7 +2124,11 @@ mod tests {
         let mut want = vec![a, b];
         want.sort();
         assert_eq!(exp, want, "grouped object expands to its group");
-        assert_eq!(p.group_expanded_ids(&[c]), vec![c], "ungrouped passes through");
+        assert_eq!(
+            p.group_expanded_ids(&[c]),
+            vec![c],
+            "ungrouped passes through"
+        );
 
         // ...but `select` itself (the object-list path) stays individual.
         p.select(&[a], SelectMode::Replace);
@@ -2708,11 +2699,11 @@ mod tests {
         let mut p = Project::default();
         // Override the bootstrap plate's instance so we can tell the
         // inheritance apart from the bundled-default fallback.
-        p.plates[0].printer_instance_id = Some("snappy".into());
+        p.plates[0].set_printer(Some("snappy".into()), None);
         let (new_id, _) = p.add_plate(None);
         let new_plate = p.plate(new_id).unwrap();
         assert_eq!(
-            new_plate.printer_instance_id.as_deref(),
+            new_plate.printer_instance_id(),
             Some("snappy"),
             "inherits from active plate",
         );
@@ -2721,12 +2712,12 @@ mod tests {
     #[test]
     fn add_plate_unbound_when_active_is_unbound() {
         let mut p = Project::default();
-        p.plates[0].printer_instance_id = None;
+        p.plates[0].set_printer(None, None);
         p.plates[0].scene.bed = None;
         let (new_id, _) = p.add_plate(None);
         let new_plate = p.plate(new_id).unwrap();
         assert!(
-            new_plate.printer_instance_id.is_none(),
+            new_plate.printer_instance_id().is_none(),
             "no inheritance source + no caller-supplied id → unbound",
         );
     }
@@ -2737,7 +2728,7 @@ mod tests {
         let (new_id, _) = p.add_plate(Some("snappy".into()));
         let new_plate = p.plate(new_id).unwrap();
         assert_eq!(
-            new_plate.printer_instance_id.as_deref(),
+            new_plate.printer_instance_id(),
             Some("snappy"),
             "explicit instance id wins over inheritance",
         );
@@ -2747,7 +2738,7 @@ mod tests {
     fn project_default_bootstraps_with_bundled_printer() {
         let p = Project::default();
         assert!(
-            p.plates[0].printer_instance_id.is_some(),
+            p.plates[0].printer_instance_id().is_some(),
             "default project's first plate is auto-bound",
         );
         assert!(
@@ -3199,41 +3190,6 @@ mod tests {
     // ---- Per-plate printer --------------------------------------
 
     #[test]
-    fn set_plate_printer_targets_specific_plate() {
-        let mut p = Project::default();
-        // Project::default + add_plate both auto-populate the bed;
-        // clear both so the assertion below pins set_plate_printer's
-        // targeting (only the named plate's bed flips).
-        p.plates[0].scene.bed = None;
-        let (id_b, _) = p.add_plate(None);
-        p.plates[1].scene.bed = None;
-        p.set_plate_printer(id_b, Some(&a1_mini_for_test()))
-            .unwrap();
-        assert!(p.plates[0].scene.bed.is_none(), "plate 0 bed untouched");
-        assert!(p.plates[1].scene.bed.is_some(), "plate 1 bed set");
-        assert_eq!(p.active_plate, 0);
-    }
-
-    #[test]
-    fn set_plate_printer_with_none_clears_bed() {
-        let mut p = Project::default();
-        let (id_b, _) = p.add_plate(None);
-        p.set_plate_printer(id_b, Some(&a1_mini_for_test()))
-            .unwrap();
-        p.set_plate_printer(id_b, None).unwrap();
-        assert!(p.plates[1].scene.bed.is_none());
-    }
-
-    #[test]
-    fn set_plate_printer_unknown_errors() {
-        let mut p = Project::default();
-        let err = p
-            .set_plate_printer(PlateId(99), Some(&a1_mini_for_test()))
-            .unwrap_err();
-        assert_eq!(err, SceneOpError::UnknownPlate(PlateId(99)));
-    }
-
-    #[test]
     fn set_active_printer_delegates_to_active_plate() {
         let mut p = Project::default();
         p.set_active_printer(Some(&a1_mini_for_test()));
@@ -3250,14 +3206,14 @@ mod tests {
         // rebinding-from-unbound case explicitly (previous_printer
         // = None). The rebind-from-bound case is covered by
         // `rebind_plate_printer_records_previous_printer`.
-        p.plates[0].printer_instance_id = None;
+        p.plates[0].set_printer(None, None);
         p.plates[0].scene.bed = None;
         let profile = a1_mini_for_test();
         let (report, events) = p
             .rebind_plate_printer(PlateId(1), "bambi".into(), &profile)
             .unwrap();
         // printer_instance_id assigned to the chosen instance.
-        assert_eq!(p.plates[0].printer_instance_id.as_deref(), Some("bambi"));
+        assert_eq!(p.plates[0].printer_instance_id(), Some("bambi"));
         // Report shape — previous was None for a fresh project.
         assert_eq!(report.plate_id, PlateId(1));
         assert_eq!(report.previous_printer, None);
@@ -3294,7 +3250,7 @@ mod tests {
         // a1_mini_for_test() suffices for both legs.
         let profile = a1_mini_for_test();
         let mut p = Project::default();
-        p.plates[0].printer_instance_id = Some("bambi".into());
+        p.plates[0].set_printer(Some("bambi".into()), None);
         p.plates[0].quality_profile = Some("0.20mm-strength".into());
 
         // Same-model rebind: the A1 mini ships `0.20mm-strength` → kept.
@@ -3315,7 +3271,7 @@ mod tests {
     #[test]
     fn rebind_plate_printer_records_previous_identity() {
         let mut p = Project::default();
-        p.plates[0].printer_instance_id = Some("snappy".into());
+        p.plates[0].set_printer(Some("snappy".into()), None);
         let profile = a1_mini_for_test();
         let (report, _) = p
             .rebind_plate_printer(PlateId(1), "bambi".into(), &profile)
@@ -3635,7 +3591,7 @@ mod tests {
         // for a material nothing references).
         let mut p = Project::default();
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
-        p.plates[0].printer_instance_id = Some("snappy".into());
+        p.plates[0].set_printer(Some("snappy".into()), None);
         let cube = add_cube_with_material(&mut p, 1);
         // User manually pins M1 → T2 (instead of the auto-bind's T1).
         p.plates[0].material_to_slot.insert(
@@ -3661,7 +3617,7 @@ mod tests {
         // use → binding survives, no MaterialSlotChanged event.
         let mut p = Project::default();
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
-        p.plates[0].printer_instance_id = Some("snappy".into());
+        p.plates[0].set_printer(Some("snappy".into()), None);
         let cube_a = add_cube_with_material(&mut p, 1);
         let _cube_b = add_cube_with_material(&mut p, 1);
         let before = p.plates[0].material_to_slot.get(&1).copied();
@@ -3686,7 +3642,7 @@ mod tests {
         // onto T2; with it, M2 advances to the next free slot (T3).
         let mut p = Project::default();
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
-        p.plates[0].printer_instance_id = Some("snappy".into());
+        p.plates[0].set_printer(Some("snappy".into()), None);
         // User pins M1 → T2 before adding any objects.
         p.plates[0].material_to_slot.insert(
             1,

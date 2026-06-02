@@ -116,7 +116,7 @@ pub fn ams_bindings_for_plate(
     plate: &crate::core::project::model::Plate,
 ) -> Vec<crate::core::threemf::AmsBinding> {
     use crate::core::printer::FeedKind;
-    let Some(instance_id) = plate.printer_instance_id.as_deref() else {
+    let Some(instance_id) = plate.printer_instance_id() else {
         return Vec::new();
     };
     let Some(instance) = lookup_instance(instance_id) else {
@@ -231,7 +231,7 @@ pub fn ams_mapping_for_plate(
     plate: &crate::core::project::model::Plate,
 ) -> (bool, Vec<i8>, Vec<AmsMappingV2>) {
     use crate::core::printer::FeedKind;
-    let Some(instance_id) = plate.printer_instance_id.as_deref() else {
+    let Some(instance_id) = plate.printer_instance_id() else {
         return (false, Vec::new(), Vec::new());
     };
     let Some(instance) = lookup_instance(instance_id) else {
@@ -291,7 +291,7 @@ pub fn ams_mapping_for_plate(
 fn validate_plate(plate: &crate::core::project::model::Plate) -> Vec<SliceBlocker> {
     let mut issues = Vec::new();
 
-    let Some(instance_id) = plate.printer_instance_id.as_deref() else {
+    let Some(instance_id) = plate.printer_instance_id() else {
         issues.push(SliceBlocker::UnboundPrinter);
         return issues;
     };
@@ -398,7 +398,7 @@ mod tests {
     fn unbound_printer_blocks() {
         let _registry = RegistryGuard::acquire();
         let mut p = Project::default();
-        p.plates[0].printer_instance_id = None;
+        p.plates[0].set_printer(None, None);
         add_cube(&mut p, 1);
         let err = validate_pre_slice(&p, &[1]).unwrap_err();
         assert!(err
@@ -735,7 +735,7 @@ mod tests {
         // for hygiene).
         let _registry = RegistryGuard::acquire();
         let mut p = Project::default();
-        p.plates[0].printer_instance_id = Some("snappy".into());
+        p.plates[0].set_printer(Some("snappy".into()), None);
         for mat in 1u8..=4 {
             add_cube(&mut p, mat);
         }
