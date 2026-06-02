@@ -236,11 +236,16 @@ export function ViewportCanvas({
         towerBedZ = bed ? bed.extents.min[2] : 0;
         towerGeom = geom;
         // The exact sliced mesh (module-cached, survives remounts) is shown
-        // while its material count still matches — a drag only moves the
-        // tower, so the mesh stays valid and is just re-placed; a
-        // material-count change reshapes it, so fall back to the box.
+        // while it still matches the plate — a drag only moves the tower, so
+        // the mesh stays valid and is just re-placed. A material-count change
+        // reshapes it, and a printer rebind reshapes it without re-slicing
+        // (no fresh mesh arrives), so either divergence falls back to the box.
         const cached = getCachedTowerMesh(plateId);
-        if (cached && cached.materialCount === geom.material_count) {
+        if (
+          cached &&
+          cached.materialCount === geom.material_count &&
+          cached.printerInstanceId === geom.printer_instance_id
+        ) {
           tower.showMesh(cached.mesh, geom, towerBedZ);
         } else {
           tower.showBox(geom, towerBedZ);

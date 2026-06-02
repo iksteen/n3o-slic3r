@@ -21,6 +21,10 @@ interface CachedTowerMesh {
    *  mesh once the plate's live count diverges (the tower reshapes; moving
    *  it does not). */
   materialCount: number;
+  /** Printer instance the slice ran with — the viewport also drops the mesh
+   *  once the plate is rebound to a different printer (which reshapes the
+   *  tower without re-slicing, so no fresh `plate_finished` arrives). */
+  printerInstanceId: string | null;
 }
 
 const cache = new Map<number, CachedTowerMesh>();
@@ -77,7 +81,12 @@ export async function setupTowerMeshCache(): Promise<UnlistenFn> {
       })
         .then((g) => {
           if (latestSeq.get(plate_id) !== seq) return; // superseded
-          if (g) cache.set(plate_id, { mesh: tower_mesh, materialCount: g.material_count });
+          if (g)
+            cache.set(plate_id, {
+              mesh: tower_mesh,
+              materialCount: g.material_count,
+              printerInstanceId: g.printer_instance_id,
+            });
           else cache.delete(plate_id);
           notify(plate_id);
         })

@@ -285,6 +285,11 @@ pub struct TowerGeometry {
     /// mesh as stale once this diverges (the only thing that reshapes the
     /// tower; moving it does not).
     pub material_count: usize,
+    /// The plate's bound printer instance. The viewport also keys the cached
+    /// tower mesh on this: a rebind to a different printer reshapes the tower
+    /// (and doesn't re-slice), so the mesh must go stale even when the
+    /// material count is unchanged. `None` only if the plate is unbound.
+    pub printer_instance_id: Option<String>,
 }
 
 /// The active plate's priming-tower geometry for the viewport overlay,
@@ -363,6 +368,7 @@ pub fn tower_geometry_for_plate(
         brim: num("prime_tower_brim_width").unwrap_or(0.0),
         rotation: num("wipe_tower_rotation_angle").unwrap_or(0.0),
         material_count: distinct_materials.len(),
+        printer_instance_id: plate.printer_instance_id().map(str::to_owned),
     }))
 }
 
@@ -649,6 +655,7 @@ mod tests {
         // Multi-material plate → the tower is generated.
         add_cube(&mut project, 1);
         add_cube(&mut project, 2);
+        let bound = project.plates[0].printer_instance_id().map(str::to_owned);
         let t = tower_geometry_for_plate(&project, plate_id)
             .expect("ok")
             .expect("the A1 mini runs a prime tower for a multi-material plate");
@@ -657,6 +664,14 @@ mod tests {
         assert_eq!(t.y, 130.0, "wipe_tower_y");
         assert_eq!(t.width, 35.0, "prime_tower_width");
         assert_eq!(t.brim, 3.0, "prime_tower_brim_width");
+        // Carries the bound printer instance so the viewport can drop a cached
+        // tower mesh on a rebind to a different printer (which reshapes the
+        // tower without re-slicing).
+        assert!(bound.is_some(), "default plate is auto-bound");
+        assert_eq!(
+            t.printer_instance_id, bound,
+            "carries the bound instance id"
+        );
     }
 
     #[test]

@@ -90,6 +90,10 @@ export interface TowerGeometry {
    *  stale once this diverges from the count it was sliced at (the only
    *  thing that reshapes the tower; moving it does not). */
   material_count: number;
+  /** The plate's bound printer instance. A sliced tower mesh is also stale
+   *  once this diverges: a rebind to a different printer reshapes the tower
+   *  without re-slicing. `null` only if the plate is unbound. */
+  printer_instance_id: string | null;
 }
 
 /** The prime/wipe tower's exact mesh from a slice — `vertices` is 3 floats
