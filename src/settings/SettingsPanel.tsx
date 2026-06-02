@@ -44,6 +44,7 @@ import {
   defaultMultilineText,
   defaultScalarFor,
   isMultilineTextField,
+  isObjectOverridable,
   isVectorKind,
   optionTypeKind,
 } from "./types";
@@ -590,16 +591,16 @@ function SettingRow({
   const effectiveValue =
     tierValue ?? resolved[schema.key]?.value ?? fallbackDefault ?? null;
 
-  // Project-scope settings are read-only on the Object tab per
-  // FR-3D-3 (the value belongs to a higher tier than per-object can
-  // edit). PR-4-9 surfaces the "project-scope setting" badge; PR-4-4
-  // just enforces disabled-input.
+  // On the Object tab only object/region-scoped settings are editable —
+  // they're the only ones libslic3r honors per object, mirroring the
+  // slice-time gate (`object_overrides_for_slice`). Anything else (a
+  // project/print-scope setting, or a dangling no-scope option like
+  // `ironing_expansion`) is disabled, so the user can't author an
+  // override the slicer would silently drop. PR-4-9 surfaces the
+  // "project-scope setting" badge; this just enforces disabled-input.
   const disabled =
     notApplicable ||
-    (contextLayer === "object" &&
-      schema.scope.project &&
-      !schema.scope.object &&
-      !schema.scope.region);
+    (contextLayer === "object" && !isObjectOverridable(schema.scope));
 
   const setValue = (next: string) => {
     if (contextLayer === "object") onSetObjectOverride(schema.key, next);

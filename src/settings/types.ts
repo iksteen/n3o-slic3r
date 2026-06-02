@@ -23,6 +23,18 @@ export type OptScopeFlags = {
   region: boolean;
 };
 
+/** Whether a setting can be edited as a per-object override on the Object
+ *  tab. Mirrors the slice-time gate (`object_overrides_for_slice`): only
+ *  object- or region-scoped (PrintObjectConfig / PrintRegionConfig) keys
+ *  actually reach libslic3r per object. Everything else — project/print-
+ *  scope settings *and* dangling options with no scope bit at all (e.g.
+ *  `ironing_expansion`, defined but not in any config class) — must be
+ *  disabled on the Object tab, or the user sets an override the slicer
+ *  silently drops. */
+export function isObjectOverridable(scope: OptScopeFlags): boolean {
+  return scope.object || scope.region;
+}
+
 /** Printer capability predicate that gates option visibility
  *  (FR-UI-7). Tagged enum — `kind` is the variant name from
  *  `core::schema::capability::CapabilityPredicate`. `None` on the
