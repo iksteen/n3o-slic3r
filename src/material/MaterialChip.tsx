@@ -139,7 +139,9 @@ export function MaterialChip({
           }
         />
         <span className="fil-label">{currentFilLabel}</span>
-        <span className="fil-count">×{useCount}</span>
+        {/* A painted material has no object directly assigned to it
+            (it's applied per-face), so `×0` would be noise — omit it. */}
+        {useCount > 0 && <span className="fil-count">×{useCount}</span>}
         <ChevronChip />
       </button>
       {open && (

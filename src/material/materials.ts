@@ -23,6 +23,24 @@ export function referencedMaterials(plate: PlateSnapshot | null): number[] {
   return Array.from(seen).sort((a, b) => a - b);
 }
 
+/** Every material the plate actually uses: those referenced by objects
+ *  PLUS those bound in `material_to_slot` without a corresponding object.
+ *  A filament applied only via MMU face-painting is the latter case — the
+ *  importer binds it as a plate material, but no object carries its
+ *  `extruder_id` (the base object stays material 1; only some faces are the
+ *  painted material). Mirrors the backend `Plate::material_count`, which
+ *  also unions object extruders with `material_to_slot` keys. */
+export function boundMaterials(plate: PlateSnapshot | null): number[] {
+  if (!plate) return [];
+  const seen = new Set<number>();
+  for (const obj of plate.objects) seen.add(materialOf(obj));
+  for (const key of Object.keys(plate.material_to_slot ?? {})) {
+    const m = Number(key);
+    if (Number.isInteger(m) && m > 0) seen.add(m);
+  }
+  return Array.from(seen).sort((a, b) => a - b);
+}
+
 /** The slot a material is routed to (via `material_to_slot`), resolved
  *  against the bound instance's flattened slots. */
 export function slotForMaterial(

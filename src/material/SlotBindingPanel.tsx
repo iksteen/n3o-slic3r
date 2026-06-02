@@ -27,7 +27,7 @@ import {
 } from "../printer/printerInstance";
 import type { DriverId } from "../driver/types";
 import { MaterialChip } from "./MaterialChip";
-import { referencedMaterials, slotForMaterial } from "./materials";
+import { boundMaterials, slotForMaterial } from "./materials";
 import { SlotChipStrip } from "./SlotChipStrip";
 import { useFilamentCatalog } from "./useFilamentCatalog";
 
@@ -100,7 +100,7 @@ export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelP
     [instance],
   );
 
-  const materials = useMemo(() => referencedMaterials(plate), [plate]);
+  const materials = useMemo(() => boundMaterials(plate), [plate]);
 
   /** Object count per material (×N badge on each chip). */
   const useCountByMaterial = useMemo(() => {
