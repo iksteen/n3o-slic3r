@@ -21,7 +21,11 @@ import {
   makeControls,
   makePerspectiveCamera,
 } from "./cameraControls";
-import { attachEventBridge, tauriMeshBufferProvider } from "./eventBridge";
+import {
+  attachEventBridge,
+  tauriMeshBufferProvider,
+  tauriMeshPaintProvider,
+} from "./eventBridge";
 import { createGizmo, type GizmoApi } from "./gizmo";
 import { SceneMirror } from "./sceneMirror";
 import { createTowerOverlay } from "./towerOverlay";
@@ -138,7 +142,10 @@ export function ViewportCanvas({
     const controls: OrbitControls = makeControls(camera, renderer.domElement);
 
     // Mirror + groups.
-    const mirror = new SceneMirror(tauriMeshBufferProvider());
+    const mirror = new SceneMirror(
+      tauriMeshBufferProvider(),
+      tauriMeshPaintProvider(),
+    );
     mirrorRef.current = mirror;
     scene.add(mirror.objectGroup);
     scene.add(mirror.bedGroup);

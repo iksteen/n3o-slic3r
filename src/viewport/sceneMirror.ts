@@ -36,6 +36,7 @@ import type {
   SceneSnapshot,
 } from "./types";
 import type { PrinterInstance, SlotRef } from "../printer/printerInstance";
+import { buildFaceColors } from "./paintColors";
 
 /** Resolver for binary mesh buffers — at runtime this calls Tauri's
  * `scene_mesh_buffers(meshId)` command and decodes the LE-packed
@@ -44,6 +45,12 @@ import type { PrinterInstance, SlotRef } from "../printer/printerInstance";
 export type MeshBufferProvider = (
   header: MeshHeader,
 ) => Promise<{ vertices: Float32Array; normals: Float32Array; indices: Uint32Array }>;
+
+/** Resolver for a mesh's per-triangle MMU paint states — one byte per
+ * triangle (`0` = unpainted, `N` = filament `N`). An empty array means the
+ * mesh has no painting. At runtime this calls `scene_mesh_paint`; tests pass
+ * a fake (or omit it, defaulting to "no paint"). */
+export type MeshPaintProvider = (header: MeshHeader) => Promise<Uint8Array>;
 
 /** Outline material for selected objects. Phase 4 swaps this for a
  * proper post-process outline; for MVP we tint the base material. */
@@ -64,6 +71,11 @@ interface ObjectRecord {
    * no-op `ObjectUpdated` events (e.g., a rotate that lands the same
    * matrix). Not used by the renderer's display, just for diagnostics. */
   data: SceneObject;
+  /** True when this object's mesh carries MMU paint, so it renders with a
+   * de-indexed geometry + per-face vertex colours instead of a single
+   * `material.color`. `baseColor` is then white (vertex colours show through)
+   * and recolouring rebuilds the `color` attribute rather than the material. */
+  painted: boolean;
 }
 
 /** Parse a CSS hex string (`"#ff8800"` or `"ff8800"`) into a Three.js
@@ -79,6 +91,10 @@ function parseHexColor(hex: string | null | undefined): number | null {
 interface MeshRecord {
   geometry: THREE.BufferGeometry;
   header: MeshHeader;
+  /** Per-triangle MMU paint states (`0` = unpainted, `N` = filament `N`),
+   * or `null` for an unpainted mesh. Drives the per-face paint render for
+   * objects using this mesh. */
+  paintStates: Uint8Array | null;
 }
 
 /** One plate's mirror state. Owns its own object + bed groups; the
@@ -171,6 +187,7 @@ export class SceneMirror {
   private plateOrderList: PlateId[] = [];
   private activePlateId: PlateId | null = null;
   private bufferProvider: MeshBufferProvider;
+  private paintProvider: MeshPaintProvider;
   private listeners: Array<(e: SceneEvent) => void> = [];
   /** Serialization queue for `applyEvent`. Tauri's event listener
    * fires synchronously per event but `applyEvent("MeshLoaded")`
@@ -179,8 +196,14 @@ export class SceneMirror {
    * "unknown mesh" floor, and never appear in the viewport. */
   private queue: Promise<void> = Promise.resolve();
 
-  constructor(bufferProvider: MeshBufferProvider) {
+  constructor(
+    bufferProvider: MeshBufferProvider,
+    paintProvider?: MeshPaintProvider,
+  ) {
     this.bufferProvider = bufferProvider;
+    // Default: no paint (empty states). Keeps the ~30 test construction
+    // sites that only care about geometry working unchanged.
+    this.paintProvider = paintProvider ?? (async () => new Uint8Array(0));
     this.objectGroup.name = "n3o:scene-objects";
     this.bedGroup.name = "n3o:bed";
   }
@@ -390,7 +413,16 @@ export class SceneMirror {
     );
     geometry.setIndex(new THREE.BufferAttribute(buffers.indices, 1));
     geometry.computeBoundingSphere();
-    this.meshes.set(header.id, { geometry, header });
+
+    // MMU paint states (one byte per triangle). Empty = unpainted. Only
+    // accept it when it lines up with the triangle count, so a stale/mismatched
+    // payload degrades to "unpainted" rather than mis-colouring faces.
+    const paint = await this.paintProvider(header);
+    const triangleCount = buffers.indices.length / 3;
+    const paintStates =
+      paint.length === triangleCount && triangleCount > 0 ? paint : null;
+
+    this.meshes.set(header.id, { geometry, header, paintStates });
   }
 
   // ---- Per-plate scene-graph mutation ---------------------------
@@ -429,13 +461,34 @@ export class SceneMirror {
         obj.transform.slice(12, 15),
       );
     }
-    const baseColor = this.colorForObject(plate, obj);
-    const material = new THREE.MeshStandardMaterial({
-      color: baseColor,
-      metalness: 0.0,
-      roughness: 0.8,
-    });
-    const mesh = new THREE.Mesh(meshRec.geometry, material);
+    // A painted mesh renders per-face: its own de-indexed geometry carries a
+    // `color` attribute, the material multiplies vertex colours by a WHITE
+    // base (so paint shows as-is), and selection tinting still works by
+    // multiplying that base toward blue. An unpainted mesh keeps the shared
+    // geometry + a single resolved `material.color`.
+    const painted = meshRec.paintStates !== null;
+    let geometry = meshRec.geometry;
+    let baseColor: number;
+    let material: THREE.MeshStandardMaterial;
+    if (painted) {
+      geometry = meshRec.geometry.toNonIndexed();
+      baseColor = 0xffffff;
+      material = new THREE.MeshStandardMaterial({
+        color: baseColor,
+        vertexColors: true,
+        metalness: 0.0,
+        roughness: 0.8,
+      });
+      this.applyPaintColors(plate, obj, geometry, meshRec.paintStates!);
+    } else {
+      baseColor = this.colorForObject(plate, obj);
+      material = new THREE.MeshStandardMaterial({
+        color: baseColor,
+        metalness: 0.0,
+        roughness: 0.8,
+      });
+    }
+    const mesh = new THREE.Mesh(geometry, material);
     mesh.name = `obj:${obj.id}`;
     mesh.userData.objectId = obj.id;
     mesh.userData.plateId = plate.plateId;
@@ -447,7 +500,7 @@ export class SceneMirror {
     // next-frame recompute reproduces the same matrix.
     applyTransform(mesh, obj);
     plate.objectGroup.add(mesh);
-    plate.objects.set(obj.id, { mesh, material, baseColor, data: obj });
+    plate.objects.set(obj.id, { mesh, material, baseColor, data: obj, painted });
     if (plate.selection.has(obj.id)) {
       this.tintForSelection(plate, obj.id, true);
     }
@@ -472,9 +525,23 @@ export class SceneMirror {
     // chain (material → slot → color) may resolve to a different
     // hex. Recompute + repaint (preserving the selection tint).
     if (rec.data.extruder_id !== obj.extruder_id) {
-      rec.baseColor = this.colorForObject(plate, obj);
-      if (!plate.selection.has(obj.id)) {
-        rec.material.color.setHex(rec.baseColor);
+      if (rec.painted) {
+        // The base extruder colours only the unpainted (state-0) faces;
+        // rebuild the per-face colours against the new assignment.
+        const meshRec = this.meshes.get(obj.mesh);
+        if (meshRec?.paintStates) {
+          this.applyPaintColors(
+            plate,
+            obj,
+            rec.mesh.geometry as THREE.BufferGeometry,
+            meshRec.paintStates,
+          );
+        }
+      } else {
+        rec.baseColor = this.colorForObject(plate, obj);
+        if (!plate.selection.has(obj.id)) {
+          rec.material.color.setHex(rec.baseColor);
+        }
       }
     }
     rec.data = obj;
@@ -485,7 +552,12 @@ export class SceneMirror {
     if (!rec) return;
     plate.objectGroup.remove(rec.mesh);
     rec.material.dispose();
-    // Geometry is shared via the mesh registry — don't dispose here.
+    // A painted object owns its de-indexed geometry (per-object `color`
+    // attribute), so dispose it. An unpainted object shares the registry
+    // geometry — leave that alone.
+    if (rec.painted) {
+      (rec.mesh.geometry as THREE.BufferGeometry).dispose();
+    }
     plate.objects.delete(id);
     plate.selection.delete(id);
   }
@@ -539,7 +611,13 @@ export class SceneMirror {
    * back to `DEFAULT_COLOR` if any link in the chain is missing.
    * Pure — no side effects, no mutation. */
   private colorForObject(plate: PlateMirror, obj: SceneObject): number {
-    const material = obj.extruder_id ?? 1;
+    return this.colorForMaterial(plate, obj.extruder_id ?? 1);
+  }
+
+  /** Resolve a 1-based material index to its spool colour via the plate's
+   * `materialToSlot → slot.color` chain, falling back to `DEFAULT_COLOR` if
+   * any link is missing. Pure. */
+  private colorForMaterial(plate: PlateMirror, material: number): number {
     const slot = plate.materialToSlot[material];
     if (!slot) return DEFAULT_COLOR;
     if (!plate.printerInstanceId) return DEFAULT_COLOR;
@@ -552,12 +630,59 @@ export class SceneMirror {
     return parseHexColor(slotBinding.color) ?? DEFAULT_COLOR;
   }
 
+  /** Colour for one painted face state: `0` (NONE) uses the object's own base
+   * material; `N` is filament `N`. Both route through `colorForMaterial`. */
+  private colorForState(
+    plate: PlateMirror,
+    obj: SceneObject,
+    state: number,
+  ): number {
+    const material = state === 0 ? obj.extruder_id ?? 1 : state;
+    return this.colorForMaterial(plate, material);
+  }
+
+  /** (Re)build the per-face `color` attribute on a painted object's geometry
+   * from its current per-triangle states + the plate's bindings. */
+  private applyPaintColors(
+    plate: PlateMirror,
+    obj: SceneObject,
+    geometry: THREE.BufferGeometry,
+    states: Uint8Array,
+  ): void {
+    const colors = buildFaceColors(states, (s) =>
+      this.colorForState(plate, obj, s),
+    );
+    const existing = geometry.getAttribute("color") as
+      | THREE.BufferAttribute
+      | undefined;
+    if (existing && existing.array.length === colors.length) {
+      (existing.array as Float32Array).set(colors);
+      existing.needsUpdate = true;
+    } else {
+      geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    }
+  }
+
   /** Re-resolve every object's baseColor on this plate + repaint
    * (preserving any selection tint). Called when anything upstream
    * of the resolver changes (instance updated, material→slot map
    * updated). */
   private recolorPlate(plate: PlateMirror): void {
     for (const [id, rec] of plate.objects) {
+      if (rec.painted) {
+        // baseColor stays white (selection tint untouched); rebuild the
+        // per-face colours against the updated bindings.
+        const meshRec = this.meshes.get(rec.data.mesh);
+        if (meshRec?.paintStates) {
+          this.applyPaintColors(
+            plate,
+            rec.data,
+            rec.mesh.geometry as THREE.BufferGeometry,
+            meshRec.paintStates,
+          );
+        }
+        continue;
+      }
       const next = this.colorForObject(plate, rec.data);
       if (next === rec.baseColor) continue;
       rec.baseColor = next;

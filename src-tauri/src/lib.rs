@@ -172,6 +172,7 @@ pub fn run() {
             core::cascade::commands::cascade_context_dimensions,
             core::scene::commands::scene_snapshot,
             core::scene::commands::scene_mesh_buffers,
+            core::scene::commands::scene_mesh_paint,
             core::scene::commands::scene_select,
             core::scene::commands::scene_deselect,
             core::scene::commands::scene_load_mesh_from_path,

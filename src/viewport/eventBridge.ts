@@ -9,7 +9,11 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { SceneMirror, MeshBufferProvider } from "./sceneMirror";
+import type {
+  SceneMirror,
+  MeshBufferProvider,
+  MeshPaintProvider,
+} from "./sceneMirror";
 import type {
   MeshHeader,
   SceneEvent,
@@ -64,6 +68,18 @@ export function tauriMeshBufferProvider(): MeshBufferProvider {
       meshId: header.id,
     })) as ArrayBuffer;
     return decodeMeshBuffer(buf, header);
+  };
+}
+
+/** Build the paint-states provider that calls `scene_mesh_paint`. Returns
+ *  one byte per triangle (`0` = unpainted, `N` = filament `N`); an empty
+ *  array means the mesh has no MMU painting. */
+export function tauriMeshPaintProvider(): MeshPaintProvider {
+  return async (header: MeshHeader) => {
+    const buf = (await invoke("scene_mesh_paint", {
+      meshId: header.id,
+    })) as ArrayBuffer;
+    return new Uint8Array(buf);
   };
 }
 

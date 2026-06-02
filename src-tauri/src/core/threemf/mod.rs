@@ -47,9 +47,11 @@
 mod bbs_meta;
 mod container;
 mod core_spec;
+pub mod paint;
 mod sliced;
 mod writer;
 
+pub use paint::decode_dominant_states;
 pub use sliced::{
     fixture_input, md5_hex, read_sliced_3mf, write_sliced_3mf, AmsBinding, SlicedPlate,
     SlicedPlateMetadata, SlicedPlateRead, SlicedProjectInput, SlicedRead,

@@ -923,6 +923,49 @@ fn imported_painted_model_routes_to_bound_toolhead_on_u1() {
     let _ = std::fs::remove_file(&temp_3mf);
 }
 
+/// Per-triangle paint decode against real data (viewport display).
+///
+/// Imports spinning-top and decodes every painted mesh's per-triangle
+/// `paint_color` to a dominant filament state. Validates the codec port on
+/// real data — including the dozen recursively-split triangles whose long
+/// hex strings the synthetic unit tests can't cover: every decoded state
+/// must be a real filament (0 = base, or 1/2, the project's two filaments),
+/// and BOTH painted filaments must appear. A codec desync (wrong reversal,
+/// bit order, or split recursion) would surface as out-of-range states.
+#[test]
+fn decoded_paint_states_are_real_filaments_on_real_data() {
+    use n3o_slic3r_lib::core::orca_import::import;
+    use n3o_slic3r_lib::core::threemf::decode_dominant_states;
+
+    let fixture = workspace_root().join("spinning-top.3mf");
+    if !fixture.exists() {
+        eprintln!(
+            "skipping decoded_paint_states_are_real_filaments_on_real_data: {} absent",
+            fixture.display()
+        );
+        return;
+    }
+    let (project, _report) = import(&fixture).expect("import painted project");
+    let mut saw_painted_mesh = false;
+    for mesh in project.meshes.values() {
+        let Some(paint) = &mesh.paint_colors else {
+            continue;
+        };
+        let Some(states) = decode_dominant_states(paint) else {
+            continue;
+        };
+        saw_painted_mesh = true;
+        assert_eq!(states.len(), paint.len(), "one state per triangle");
+        assert!(
+            states.iter().all(|&s| s <= 2),
+            "every dominant state is a real filament (0/1/2); a higher value means a codec desync",
+        );
+        assert!(states.contains(&1), "filament 1 painted faces present");
+        assert!(states.contains(&2), "filament 2 painted faces present");
+    }
+    assert!(saw_painted_mesh, "expected at least one painted mesh");
+}
+
 /// Leg 3 (deferred): copy-vs-vendor binding.
 ///
 /// Once the in-app filament/process copy mechanic lands (tracked

@@ -581,6 +581,33 @@ pub fn scene_mesh_buffers(
     Ok(Response::new(mesh.pack_buffers()))
 }
 
+/// Return per-triangle MMU paint state for one mesh — one byte per triangle
+/// (in `indices`-triple order): `0` = unpainted (render with the object's
+/// base material), `N` = filament `N`. The renderer maps each to a colour via
+/// the plate's material→slot binding and paints faces individually.
+///
+/// An EMPTY response means the mesh has no painting (the common case), so the
+/// renderer skips the per-face path. Kept separate from `scene_mesh_buffers`
+/// so unpainted meshes pay nothing and the hot buffer path stays unchanged.
+#[tauri::command]
+#[tracing::instrument(skip(state))]
+pub fn scene_mesh_paint(
+    mesh_id: MeshId,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<Response, String> {
+    let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let mesh = s
+        .meshes
+        .get(&mesh_id)
+        .ok_or_else(|| format!("unknown mesh id {mesh_id:?}"))?;
+    let states = mesh
+        .paint_colors
+        .as_ref()
+        .and_then(|p| crate::core::threemf::decode_dominant_states(p))
+        .unwrap_or_default();
+    Ok(Response::new(states))
+}
+
 /// Replace / add / toggle the selection.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
