@@ -310,12 +310,20 @@ fn matches_filter(d: &slic3r_ffi::OptionDef, needle: &str) -> bool {
             .is_some_and(|s| s.to_lowercase().contains(needle))
 }
 
-/// Settings-panel-visible options: Process bucket only. Printer +
-/// filament editing lives on other surfaces; metadata keys
-/// (`compatible_printers`, `inherits`, …) and SLA-only keys have no
-/// bucket and are also excluded.
+/// Settings-panel-visible options: Process bucket *and* actually settable
+/// in an FFF print config. Printer + filament editing lives on other
+/// surfaces; metadata keys (`compatible_printers`, `inherits`, …) and
+/// SLA-only keys have no Process bucket and are excluded by that test.
+///
+/// The `is_fff` guard additionally drops *dangling* options — ones the
+/// `ConfigDef` defines (so they carry a label + Process bucket) but that
+/// aren't a member of any FFF config class (`PrintConfig` /
+/// `PrintObjectConfig` / `PrintRegionConfig`), so their FFI scope bitmask
+/// is empty. `ironing_expansion` is the lone current case: nothing reads
+/// it, so surfacing it only lets the user author an override that's inert
+/// at slice time. Keyed on the FFI scope signal, not a curated denylist.
 fn is_panel_visible(d: &slic3r_ffi::OptionDef) -> bool {
-    d.bucket == Some(slic3r_ffi::OptBucket::Process)
+    d.bucket == Some(slic3r_ffi::OptBucket::Process) && d.scope.is_fff()
 }
 
 /// Filtered option introspection. The filter matches against the
@@ -427,6 +435,36 @@ mod tests {
         FFI.call_once(|| {
             ffi_init(None, 3).expect("libslic3r init");
         });
+    }
+
+    /// Every option the settings panel surfaces must be FFF-settable
+    /// (print / object / region scope). A Process-bucket option with no
+    /// FFF scope is dangling — defined in the `ConfigDef` but in no config
+    /// class, so nothing reads it and any override is inert. `is_panel_
+    /// visible` filters these out; this guards that it keeps doing so (and
+    /// that a real option like `layer_height` still shows).
+    #[test]
+    fn panel_surfaces_only_fff_settable_options() {
+        ensure_ffi();
+        let dangling: Vec<String> = option_defs()
+            .into_iter()
+            .filter(is_panel_visible)
+            .filter(|d| !d.scope.is_fff())
+            .map(|d| d.key)
+            .collect();
+        assert!(
+            dangling.is_empty(),
+            "panel surfaced non-FFF-settable (dangling) options whose overrides are inert: {dangling:?}",
+        );
+        let keys: Vec<String> = slicer_options(None).into_iter().map(|s| s.key).collect();
+        assert!(
+            keys.iter().any(|k| k == "layer_height"),
+            "a real FFF option must still be present",
+        );
+        assert!(
+            !keys.iter().any(|k| k == "ironing_expansion"),
+            "the dangling `ironing_expansion` must no longer appear",
+        );
     }
 
     fn a1_mini() -> PrinterProfile {
