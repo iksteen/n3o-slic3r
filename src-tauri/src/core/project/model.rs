@@ -281,6 +281,30 @@ impl Project {
                 .is_some_and(|m| m.paint_colors.is_some())
         })
     }
+
+    /// Every material the plate uses: each object's `extruder_id` assignment
+    /// PLUS the filament states referenced by MMU paint on its meshes.
+    ///
+    /// The paint-derived half is the authoritative source for a face-painted
+    /// material — no object's `extruder_id` names it, so any logic that derives
+    /// "materials in use" from objects alone (rebind, orphan-binding cleanup)
+    /// must consult this or the painted material silently disappears.
+    pub fn materials_on_plate(&self, plate: &Plate) -> std::collections::BTreeSet<u8> {
+        let mut out: std::collections::BTreeSet<u8> = plate
+            .scene
+            .objects
+            .values()
+            .map(|o| o.extruder_id.unwrap_or(1))
+            .collect();
+        for obj in plate.scene.objects.values() {
+            if let Some(mesh) = self.meshes.get(&obj.mesh) {
+                if let Some(paint) = &mesh.paint_colors {
+                    out.extend(crate::core::threemf::referenced_states(paint));
+                }
+            }
+        }
+        out
+    }
 }
 
 impl Plate {

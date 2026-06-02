@@ -687,12 +687,10 @@ impl Project {
                 self.plates[idx].quality_profile = None;
             }
         }
-        let referenced: std::collections::BTreeSet<u8> = self.plates[idx]
-            .scene
-            .objects
-            .values()
-            .map(|o| o.extruder_id.unwrap_or(1))
-            .collect();
+        // Re-bind every material the plate uses — including face-painted ones,
+        // which no object's `extruder_id` names. Deriving from objects alone
+        // here would drop a painted material's binding on every printer switch.
+        let referenced = self.materials_on_plate(&self.plates[idx]);
         let prev_active = self.active_plate;
         self.active_plate = idx;
         for mat in referenced {
@@ -1469,7 +1467,9 @@ impl Project {
     /// earlier session; loading M1+M2 routed M2 onto the same slot).
     ///
     /// Object material is `extruder_id.unwrap_or(1)`, matching the
-    /// default applied at register-time.
+    /// default applied at register-time; plus any material referenced by MMU
+    /// paint on the plate's meshes, so a face-painted material (named by no
+    /// object's `extruder_id`) isn't pruned out from under the user.
     fn prune_orphan_material_bindings(
         &mut self,
         plate_idx: usize,
@@ -1478,12 +1478,7 @@ impl Project {
         if candidates.is_empty() {
             return false;
         }
-        let still_in_use: BTreeSet<u8> = self.plates[plate_idx]
-            .scene
-            .objects
-            .values()
-            .map(|o| o.extruder_id.unwrap_or(1))
-            .collect();
+        let still_in_use: BTreeSet<u8> = self.materials_on_plate(&self.plates[plate_idx]);
         let mut changed = false;
         for material in candidates {
             if !still_in_use.contains(material)
@@ -3349,6 +3344,34 @@ mod tests {
         p.rebind_plate_printer(PlateId(1), "snappy".into(), &profile)
             .unwrap();
         assert_eq!(p.plates[0].quality_profile, None);
+    }
+
+    #[test]
+    fn rebind_preserves_a_face_painted_material_binding() {
+        let mut p = Project::default();
+        p.plates[0].set_printer(Some("bambi".into()), None);
+        // A painted object: base material 1, faces painted filament 2 ("8" →
+        // EnforcerBlockerType state 2). No object carries extruder_id 2.
+        let mut mesh = unit_cube_mesh();
+        mesh.paint_colors = Some(vec!["8".to_string(); 12]); // 12 triangles
+        let mesh_id = p.register_mesh(mesh);
+        let _ = p.register_object(NewSceneObject::at_origin(mesh_id, "painted"));
+        // The importer binds the painted material as a plate material.
+        p.ensure_material_bound_on_active(2);
+        assert!(
+            p.plates[0].material_to_slot.contains_key(&2),
+            "painted material 2 bound before the switch",
+        );
+
+        // Switch printers. The rebind clears + re-binds; before the fix it
+        // re-bound only object materials ({1}) and dropped the painted 2.
+        let profile = a1_mini_for_test();
+        p.rebind_plate_printer(PlateId(1), "snappy".into(), &profile)
+            .unwrap();
+        assert!(
+            p.plates[0].material_to_slot.contains_key(&2),
+            "painted material 2 must survive a printer switch",
+        );
     }
 
     #[test]

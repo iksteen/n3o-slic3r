@@ -38,6 +38,30 @@ pub fn decode_dominant_states(paint_colors: &[String]) -> Option<Vec<u8>> {
     any_painted.then_some(states)
 }
 
+/// Every filament state (`>= 1`) referenced anywhere in `paint_colors` —
+/// across all triangles and all sub-triangle leaves, not just the dominant
+/// one. State `0` (NONE = the object's base material) is excluded: that's the
+/// object's own extruder, counted elsewhere.
+///
+/// This is the authoritative "which filaments does this paint use" set. A
+/// face-painted material is named only here (no object carries its
+/// `extruder_id`), so binding/rebind logic must consult it or the material
+/// silently disappears when an object-only "referenced materials" set is used.
+pub fn referenced_states(paint_colors: &[String]) -> std::collections::BTreeSet<u8> {
+    let mut counts = [0u32; 256];
+    for s in paint_colors {
+        if !s.is_empty() {
+            let bits = hex_to_bitstream(s);
+            let mut pos = 0usize;
+            collect_leaf_states(&bits, &mut pos, &mut counts);
+        }
+    }
+    (1usize..256)
+        .filter(|&st| counts[st] > 0)
+        .map(|st| st as u8)
+        .collect()
+}
+
 /// The dominant `EnforcerBlockerType` of one triangle's paint string — `0`
 /// for an empty/unpainted/unparseable triangle.
 fn dominant_state(paint_color: &str) -> u8 {
@@ -167,6 +191,14 @@ mod tests {
         }
         // 1-1 tie resolves to the higher filament.
         assert_eq!(dominant_state("481"), 2);
+    }
+
+    #[test]
+    fn referenced_states_collects_all_painted_filaments() {
+        // "8" → state 2, "4" → state 1, "" → none. State 0 is excluded.
+        let set = referenced_states(&["8".into(), "4".into(), "".into()]);
+        assert_eq!(set.into_iter().collect::<Vec<_>>(), vec![1, 2]);
+        assert!(referenced_states(&["".into(), "".into()]).is_empty());
     }
 
     #[test]
