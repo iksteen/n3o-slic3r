@@ -46,6 +46,7 @@ export type ConnectionState =
  * The `Failed` variant's `reason` is a bare string. */
 export type JobState =
   | { state: "Idle" }
+  | { state: "Preparing" }
   | { state: "Printing" }
   | { state: "Paused" }
   | { state: "Finished" }

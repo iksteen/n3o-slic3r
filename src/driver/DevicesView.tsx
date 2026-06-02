@@ -28,7 +28,7 @@ import { formatDuration } from "../ui/formatDuration";
 
 // ───────── Status derivation ─────────
 
-type DeviceStatus = "idle" | "printing" | "paused" | "error" | "offline";
+type DeviceStatus = "idle" | "preparing" | "printing" | "paused" | "error" | "offline";
 
 interface DerivedStatus {
   status: DeviceStatus;
@@ -86,6 +86,8 @@ function deriveStatus(
   const progress = job?.percent ?? null;
   if (job == null) return { status: "idle", detail: null, progress: null };
   switch (job.state.state) {
+    case "Preparing":
+      return { status: "preparing", detail: "Preparing…", progress: null };
     case "Printing":
       return { status: "printing", detail: null, progress };
     case "Paused":
@@ -101,6 +103,8 @@ function deriveStatus(
 
 function statusMeta(status: DeviceStatus): { label: string; cls: string } {
   switch (status) {
+    case "preparing":
+      return { label: "Preparing", cls: "preparing" };
     case "printing":
       return { label: "Printing", cls: "printing" };
     case "paused":

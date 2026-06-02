@@ -586,8 +586,8 @@ fn default_job() -> JobProgress {
 
 fn map_state(s: &str) -> JobState {
     match s {
-        "IDLE" | "FINISH" if s == "FINISH" => JobState::Finished,
         "IDLE" => JobState::Idle,
+        "PREPARE" => JobState::Preparing,
         "RUNNING" => JobState::Printing,
         "PAUSE" => JobState::Paused,
         "FINISH" => JobState::Finished,
@@ -1267,6 +1267,7 @@ mod tests {
     #[test]
     fn state_mapping_covers_known_strings() {
         assert!(matches!(map_state("IDLE"), JobState::Idle));
+        assert!(matches!(map_state("PREPARE"), JobState::Preparing));
         assert!(matches!(map_state("RUNNING"), JobState::Printing));
         assert!(matches!(map_state("PAUSE"), JobState::Paused));
         assert!(matches!(map_state("FINISH"), JobState::Finished));

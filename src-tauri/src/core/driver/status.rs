@@ -73,6 +73,10 @@ pub struct JobProgress {
 #[serde(tag = "state", content = "reason")]
 pub enum JobState {
     Idle,
+    /// Heating / calibrating / homing before the print starts — an active
+    /// pre-print phase (Bambu reports it as gcode_state "PREPARE"). Not Idle
+    /// (the printer is busy) and not yet Printing (no layers laid down).
+    Preparing,
     Printing,
     Paused,
     Finished,
