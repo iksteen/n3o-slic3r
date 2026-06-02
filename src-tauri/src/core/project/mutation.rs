@@ -124,19 +124,11 @@ impl Project {
         object_id: ObjectId,
         raw: &std::collections::BTreeMap<String, String>,
     ) {
-        let mut gated = std::collections::HashMap::new();
-        for (key, value) in raw {
-            if crate::core::schema::is_object_overridable(key) {
-                gated.insert(key.clone(), value.clone());
-            } else {
-                tracing::warn!(
-                    object = object_id.0,
-                    key = %key,
-                    "dropping imported per-object override: not an object/region-scoped \
-                     libslic3r option",
-                );
-            }
-        }
+        // Same gate the slice path uses, so import and slice agree on which
+        // keys survive. Its 3-way logging distinguishes a real mis-scoped
+        // option (warn) from foreign-3MF bookkeeping metadata like `matrix`
+        // / `source_*` (debug) — expected noise on a genuine Orca import.
+        let gated = crate::core::schema::gate_object_overrides(raw, object_id.0);
         if gated.is_empty() {
             return;
         }
@@ -144,7 +136,7 @@ impl Project {
         self.plates[active]
             .scene
             .object_overrides
-            .insert(object_id, gated);
+            .insert(object_id, gated.into_iter().collect());
     }
 
     /// Plant a default `material → slot` mapping on the active plate

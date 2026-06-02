@@ -349,8 +349,8 @@ fn expand(
                 // shared group_id when multiple leaves share one
                 // outer model_settings object (= BBS multi-volume).
                 group_id: None,
-                // The 3MF reader doesn't yet parse per-object <config>
-                // back (foreign-import gap); empty until it does.
+                // Filled by `apply_bbs_metadata` below from each object's
+                // model_settings.config <metadata>; empty here until then.
                 overrides: Default::default(),
             });
         }
@@ -381,54 +381,29 @@ fn expand(
 }
 
 fn apply_bbs_metadata(settings: &bbs_meta::ModelSettings, objects: &mut [ProjectObject]) {
-    // BBS writes a single outer <object> per build-item root, with
-    // <part> children in the same order as our flattened
-    // ProjectObjects under that root. Phase 2 ingests at most one
-    // outer object (the fourcolor benchy fixture; OrcaCube has
-    // separate objects but no per-part metadata). We walk parts
-    // linearly across all outer objects and zip with `objects` in
-    // document order — this matches BBS's own assumption.
-    let mut all_parts: Vec<(&bbs_meta::ObjectSettings, &bbs_meta::PartSettings)> = Vec::new();
-    for outer in &settings.objects {
-        for part in &outer.parts {
-            all_parts.push((outer, part));
-        }
-    }
-
-    for (obj, (outer, part)) in objects.iter_mut().zip(all_parts.iter()) {
-        if let Some(name) = &part.name {
-            obj.name = name.clone();
-        }
-        obj.extruder_id = part.extruder;
-        // Per-object setting overrides: the outer object's config
-        // (`ModelObject::config`, shared by all its parts) merged with this
-        // part's own (`ModelVolume::config`), the part winning on conflict.
-        // Kept as raw libslic3r keys — the scene-load layer scope-gates them
-        // into `scene.object_overrides`. The writer emits solo overrides at
-        // the object level and group-member overrides at the part level, so
-        // this merge round-trips our own output.
-        if !outer.config.is_empty() || !part.config.is_empty() {
-            let mut merged = outer.config.clone();
-            merged.extend(part.config.iter().map(|(k, v)| (k.clone(), v.clone())));
-            obj.overrides = merged;
-        }
-    }
-
-    // Plate assignments + group identity in a single walk.
+    // One walk over the outer objects in document order. Each outer
+    // `<object>` owns `parts.len().max(1)` consecutive flattened
+    // ProjectObjects — `max(1)` because a *part-less* `<object>` (the
+    // single-volume foreign shape, e.g. OrcaCube) still owns one. For each
+    // owned ProjectObject we apply its identity (name/extruder) + per-object
+    // config overrides + plate id + group id in the same pass, so the
+    // metadata and the plate/group assignment can never desync (an earlier
+    // version flattened only `<part>` entries for metadata, which silently
+    // dropped a part-less object's object-level config and misaligned every
+    // later object's metadata once any object lacked parts).
     //
-    // Plate assignments: for each plate, every object_id in
-    // `object_ids` references an outer object. The flatten result
-    // has all parts of a given outer object adjacent, in document
-    // order — we pin plate ids by walking `objects` in order and
-    // consuming one outer object's worth of parts at a time.
+    // Identity + config precedence: a part supplies its own name/extruder
+    // and `ModelVolume::config`; a part-less object falls back to the outer
+    // object's name/extruder and `ModelObject::config`. Override merge is
+    // outer (shared by all parts) ∪ part, part winning — round-tripping our
+    // own writer (solo overrides on `<object>`, group-member on `<part>`).
     //
-    // Group identity: outer objects with >1 part are BBS multi-
-    // volume groups (e.g. a single cube split into upper + lower
-    // color regions); their leaf ProjectObjects share a fresh
-    // group_id so the writer + slice path can collapse them back
-    // into one ModelObject with N ModelVolumes (without grouping,
-    // libslic3r treats each volume as a freestanding object and
-    // flags non-bed-touching ones as "floating regions").
+    // Group identity: outer objects with >1 part are BBS multi-volume groups
+    // (e.g. a cube split into upper + lower color regions); their leaf
+    // ProjectObjects share a fresh group_id so the writer + slice path
+    // collapse them back into one ModelObject with N ModelVolumes (otherwise
+    // libslic3r treats each volume as freestanding and flags non-bed-touching
+    // ones as "floating regions").
     let has_plate_info = !settings.plates.is_empty();
     let mut cursor = 0usize;
     let mut next_group_id: u32 = 1;
@@ -452,13 +427,38 @@ fn apply_bbs_metadata(settings: &bbs_meta::ModelSettings, objects: &mut [Project
             None
         };
         for offset in 0..part_count {
-            if cursor + offset >= objects.len() {
+            let idx = cursor + offset;
+            if idx >= objects.len() {
                 break;
             }
-            if has_plate_info {
-                objects[cursor + offset].plate_id = plate;
+            let obj = &mut objects[idx];
+            // `None` for a part-less object → fall back to the outer object.
+            let part = outer.parts.get(offset);
+
+            let name = match part {
+                Some(p) => p.name.as_ref(),
+                None => outer.name.as_ref(),
+            };
+            if let Some(name) = name {
+                obj.name = name.clone();
             }
-            objects[cursor + offset].group_id = group_id;
+            obj.extruder_id = match part {
+                Some(p) => p.extruder,
+                None => outer.default_extruder,
+            };
+
+            let mut merged = outer.config.clone();
+            if let Some(p) = part {
+                merged.extend(p.config.iter().map(|(k, v)| (k.clone(), v.clone())));
+            }
+            if !merged.is_empty() {
+                obj.overrides = merged;
+            }
+
+            if has_plate_info {
+                obj.plate_id = plate;
+            }
+            obj.group_id = group_id;
         }
         cursor += part_count;
     }
@@ -478,6 +478,79 @@ mod tests {
         p.pop();
         p.push("examples/spike3/fourcolor.3mf");
         p
+    }
+
+    fn proj_obj(mesh_idx: usize) -> ProjectObject {
+        ProjectObject {
+            mesh_idx,
+            transform: Transform::IDENTITY,
+            name: format!("placeholder_{mesh_idx}"),
+            extruder_id: None,
+            plate_id: 1,
+            group_id: None,
+            overrides: Default::default(),
+        }
+    }
+
+    #[test]
+    fn apply_bbs_metadata_keeps_partless_object_config_and_stays_aligned() {
+        use bbs_meta::{ModelSettings, ObjectSettings, PartSettings};
+        use std::collections::BTreeMap;
+
+        // Object A is part-less but carries object-level config + name +
+        // extruder — the single-volume foreign shape (e.g. OrcaCube, which
+        // writes <object> with no <part>). Object B has one part with its own
+        // config/name/extruder. The flatten yields two ProjectObjects in
+        // document order. Before the unified walk, A (no part) contributed
+        // nothing to the parts list, so its override was dropped AND B's part
+        // metadata misaligned onto A.
+        let settings = ModelSettings {
+            objects: vec![
+                ObjectSettings {
+                    id: 1,
+                    name: Some("A".into()),
+                    default_extruder: Some(3),
+                    config: BTreeMap::from([("layer_height".to_string(), "0.3".to_string())]),
+                    parts: vec![],
+                },
+                ObjectSettings {
+                    id: 2,
+                    name: None,
+                    default_extruder: None,
+                    config: BTreeMap::new(),
+                    parts: vec![PartSettings {
+                        id: 1,
+                        name: Some("Bpart".into()),
+                        extruder: Some(2),
+                        config: BTreeMap::from([("wall_loops".to_string(), "5".to_string())]),
+                        source_object_id: None,
+                    }],
+                },
+            ],
+            plates: vec![],
+        };
+        let mut objects = vec![proj_obj(0), proj_obj(1)];
+        apply_bbs_metadata(&settings, &mut objects);
+
+        // A keeps its own object-level identity + override — not dropped.
+        assert_eq!(objects[0].name, "A");
+        assert_eq!(objects[0].extruder_id, Some(3));
+        assert_eq!(
+            objects[0].overrides.get("layer_height").map(String::as_str),
+            Some("0.3"),
+            "part-less object's object-level override must survive import",
+        );
+        // B's part metadata lands on objects[1], NOT misaligned onto A.
+        assert_eq!(objects[1].name, "Bpart");
+        assert_eq!(objects[1].extruder_id, Some(2));
+        assert_eq!(
+            objects[1].overrides.get("wall_loops").map(String::as_str),
+            Some("5"),
+        );
+        assert!(
+            !objects[0].overrides.contains_key("wall_loops"),
+            "B's override must not bleed onto A",
+        );
     }
 
     #[test]

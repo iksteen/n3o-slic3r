@@ -203,6 +203,44 @@ pub fn is_object_overridable(key: &str) -> bool {
     schema_by_key(key).is_some_and(|s| s.scope.is_object() || s.scope.is_region())
 }
 
+/// Filter a per-object override map down to the keys libslic3r honors per
+/// object (object/region scope), returned as a `BTreeMap` for deterministic
+/// downstream ordering. The single gate shared by the slice-time builder and
+/// the Orca-import reader so they keep exactly the same keys. Dropped keys
+/// are logged by category against `object_label` (the object id):
+///   - a real libslic3r option at the wrong scope → `warn` (the user likely
+///     meant it; it just isn't per-object-settable),
+///   - a key that isn't a libslic3r option at all → `debug` (expected:
+///     foreign-3MF bookkeeping metadata like `matrix` / `source_*` / `module`
+///     that the reader collects alongside real config).
+pub fn gate_object_overrides<'a, I>(
+    raw: I,
+    object_label: u64,
+) -> std::collections::BTreeMap<String, String>
+where
+    I: IntoIterator<Item = (&'a String, &'a String)>,
+{
+    let mut out = std::collections::BTreeMap::new();
+    for (key, value) in raw {
+        if is_object_overridable(key) {
+            out.insert(key.clone(), value.clone());
+        } else if schema_by_key(key).is_some() {
+            tracing::warn!(
+                object = object_label,
+                key = %key,
+                "dropping per-object override: not an object/region-scoped libslic3r option",
+            );
+        } else {
+            tracing::debug!(
+                object = object_label,
+                key = %key,
+                "ignoring non-option per-object metadata (foreign-3MF bookkeeping)",
+            );
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

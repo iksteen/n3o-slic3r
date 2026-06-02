@@ -261,6 +261,15 @@ pub fn scene_object_override_set(
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
+    // Backend backstop for the frontend's Object-tab gate: only object/
+    // region-scoped settings are honored per object — the slice path drops
+    // the rest. Reject at the IPC boundary so an inert override can never be
+    // persisted into the project, rather than leaning on the UI alone.
+    if !crate::core::schema::is_object_overridable(&key) {
+        return Err(format!(
+            "`{key}` is not an object-scoped setting; it can't be set as a per-object override",
+        ));
+    }
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
         .object_override_set(plate_id, object_id, key, value)

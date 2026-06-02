@@ -347,34 +347,18 @@ fn material_to_filament_idx(
 }
 
 /// The per-object overrides libslic3r can actually honor for `id`: the
-/// stored override map filtered to keys whose libslic3r scope is object-
-/// or region-level (`PrintObjectConfig` / `PrintRegionConfig`). A
-/// print/global-scope key set on an object would be ignored by the
-/// engine, and an unknown key isn't a libslic3r option at all — both are
-/// dropped here (with a warning naming them) rather than written into the
-/// 3MF where they'd silently no-op. Returned as a `BTreeMap` so the
+/// stored override map filtered (via the shared [`schema::gate_object_overrides`]
+/// gate) to object/region-scope keys, so only settings the engine applies
+/// per object reach the temp `.3mf`. Returned as a `BTreeMap` so the
 /// writer's metadata order is deterministic.
 fn object_overrides_for_slice(
     object_overrides: &HashMap<crate::core::scene::state::ObjectId, HashMap<String, String>>,
     id: crate::core::scene::state::ObjectId,
 ) -> BTreeMap<String, String> {
-    let Some(raw) = object_overrides.get(&id) else {
-        return BTreeMap::new();
-    };
-    let mut out = BTreeMap::new();
-    for (key, value) in raw {
-        if crate::core::schema::is_object_overridable(key) {
-            out.insert(key.clone(), value.clone());
-        } else {
-            tracing::warn!(
-                object = id.0,
-                key = %key,
-                "dropping per-object override: not an object/region-scoped libslic3r option \
-                 (libslic3r only honors per-object config at PrintObject/PrintRegion scope)"
-            );
-        }
+    match object_overrides.get(&id) {
+        Some(raw) => crate::core::schema::gate_object_overrides(raw, id.0),
+        None => BTreeMap::new(),
     }
-    out
 }
 
 /// Filter `project.meshes` + the named plate's objects into a
