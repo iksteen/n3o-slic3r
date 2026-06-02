@@ -289,12 +289,7 @@ pub fn build_slice_input(
     // material indices, so it needs the same remap or painted faces route to
     // the wrong toolhead. AMS printers remap identity, and an unpainted plate
     // needs nothing → `None` for both (and the orchestrator skips the call).
-    let plate_has_paint = plate.scene.objects.values().any(|o| {
-        project
-            .meshes
-            .get(&o.mesh)
-            .is_some_and(|m| m.paint_colors.is_some())
-    });
+    let plate_has_paint = project.plate_has_painted_object(plate);
     let paint_filament_remap = if is_toolchanger && plate_has_paint {
         // perm[state]: state 0 (the object's own extruder) maps to itself;
         // each painted material 1..=N maps to its flat-slot filament index,

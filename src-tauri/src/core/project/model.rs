@@ -269,6 +269,18 @@ impl Project {
     pub(crate) fn plate_index(&self, id: PlateId) -> Option<usize> {
         self.plates.iter().position(|p| p.id == id)
     }
+
+    /// Whether any object on `plate` references a mesh that carries MMU
+    /// color-painting. Meshes are scene-wide (owned by `Project`, not the
+    /// plate), so this query lives here. Drives the toolchanger paint-remap
+    /// at slice time and the painted-plate material binding on import.
+    pub fn plate_has_painted_object(&self, plate: &Plate) -> bool {
+        plate.scene.objects.values().any(|o| {
+            self.meshes
+                .get(&o.mesh)
+                .is_some_and(|m| m.paint_colors.is_some())
+        })
+    }
 }
 
 impl Plate {

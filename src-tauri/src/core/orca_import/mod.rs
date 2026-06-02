@@ -710,14 +710,7 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
         let painted_plates: Vec<_> = project
             .plates
             .iter()
-            .filter(|pl| {
-                pl.scene.objects.values().any(|o| {
-                    project
-                        .meshes
-                        .get(&o.mesh)
-                        .is_some_and(|m| m.paint_colors.is_some())
-                })
-            })
+            .filter(|pl| project.plate_has_painted_object(pl))
             .map(|pl| pl.id)
             .collect();
         for pid in painted_plates {
