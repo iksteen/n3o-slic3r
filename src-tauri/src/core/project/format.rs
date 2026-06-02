@@ -185,7 +185,11 @@ pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoEr
                 vertices: m.vertices.clone(),
                 normals: m.normals.clone(),
                 indices: m.indices.clone(),
-                paint_colors: None,
+                // MMU paint is #[serde(skip)] — it travels with the geometry
+                // in the 3MF, so it MUST be carried here or a save/reopen
+                // silently drops all painting and the model degrades to
+                // single-material.
+                paint_colors: m.paint_colors.clone(),
                 bounding_box: m.bounding_box,
                 provenance: m.provenance.clone(),
             }
@@ -325,6 +329,10 @@ pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
             mesh.vertices = new_mesh.vertices;
             mesh.normals = new_mesh.normals;
             mesh.indices = new_mesh.indices;
+            // MMU paint lives only in the geometry 3MF (it's #[serde(skip)],
+            // absent from the JSON skeleton), so it must be copied back here
+            // or a save/reopen drops all painting.
+            mesh.paint_colors = new_mesh.paint_colors;
             // bbox + provenance already round-trip via the JSON;
             // the 3MF reader's copies match within float precision.
         }
@@ -484,6 +492,31 @@ mod tests {
         );
         let obj = parsed.plates[0].scene.objects.values().next().unwrap();
         assert_eq!(obj.mesh, mesh_id, "mesh reference preserved");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn round_trip_preserves_mmu_paint() {
+        // MMU paint is #[serde(skip)] — it travels with the geometry in the
+        // 3MF, not the JSON. A painted triangle carries a non-empty paint
+        // string (the opaque BBS TriangleSelector encoding); the save path
+        // must carry it through or a save/reopen silently drops all painting.
+        let mut p = Project::default();
+        let mut mesh = triangle();
+        mesh.paint_colors = Some(vec!["4".to_string()]);
+        let mesh_id = p.register_mesh(mesh);
+        let _obj = p.register_object(NewSceneObject::at_origin(mesh_id, "painted"));
+
+        let path = tempfile_3mf();
+        write_project(&p, &path).expect("write");
+        let parsed = read_project(&path).expect("read");
+
+        let m = parsed.meshes.get(&mesh_id).expect("mesh preserved by id");
+        assert_eq!(
+            m.paint_colors,
+            Some(vec!["4".to_string()]),
+            "MMU paint must survive a save/reopen round-trip",
+        );
         std::fs::remove_file(&path).ok();
     }
 
