@@ -5,6 +5,9 @@ description = "n3o-slic3r: a modern desktop slicer UI driving libslic3r via orca
 authors = ["Ingmar Steen <iksteen@gmail.com>"]
 edition = "2021"
 license = "AGPL-3.0-or-later"
+# With the n3o-send CLI added as a second bin, `cargo run` is ambiguous;
+# pin the bare `cargo run` to the slicer app.
+default-run = "n3o-slic3r"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
