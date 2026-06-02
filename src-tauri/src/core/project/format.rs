@@ -216,6 +216,9 @@ pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoEr
                 extruder_id: obj.extruder_id,
                 plate_id: plate.id.0,
                 group_id: obj.group_id,
+                // Object overrides round-trip via n3o_project.json, not the
+                // geometry 3MF's model_settings — empty on this save path.
+                overrides: Default::default(),
             });
         }
     }
@@ -357,6 +360,7 @@ pub fn plate_to_project_objects(
                 extruder_id: obj.extruder_id,
                 plate_id: plate.id.0,
                 group_id: obj.group_id,
+                overrides: Default::default(),
             })
         })
         .collect()

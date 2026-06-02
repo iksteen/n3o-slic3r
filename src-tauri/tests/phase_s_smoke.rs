@@ -502,6 +502,105 @@ fn cube_halves_slices_as_one_multivolume_object_no_floating_warning() {
     let _ = std::fs::remove_file(temp_3mf);
 }
 
+/// Per-object setting overrides reach the engine. Slices OrcaCube on
+/// bambi twice — once unmodified, once with an object-scoped
+/// `layer_height` override — and asserts the override drops the sliced
+/// layer count. Proves the whole chain end-to-end: the scope gate keeps
+/// the key, the writer emits it as object metadata in the temp `.3mf`,
+/// and libslic3r folds it into `ModelObject::config` on load (the same
+/// channel per-object `extruder` rides). `layer_count` comes from the
+/// gcode footer the summary parser reads, so this is a G-code assertion.
+#[test]
+fn object_layer_height_override_changes_sliced_layer_count() {
+    use n3o_slic3r_lib::core::project::{PlateId, Project};
+    use n3o_slic3r_lib::core::scene::state::NewSceneObject;
+    use n3o_slic3r_lib::core::slice::input::build_slice_input;
+    use n3o_slic3r_lib::core::threemf::load_3mf;
+
+    ensure_ffi_init();
+    let cube_path = workspace_root().join("assets/calibration/OrcaCube_v2.3mf");
+
+    // Build a fresh bambi project from OrcaCube; return it + the object ids.
+    let build = || {
+        let project_3mf = load_3mf(&cube_path).expect("load OrcaCube");
+        let mut project = Project::default();
+        project.plates[0].set_printer(Some("bambi".into()), None);
+        let mesh_ids: Vec<_> = project_3mf
+            .meshes
+            .into_iter()
+            .map(|m| project.register_mesh(m))
+            .collect();
+        let obj_ids: Vec<_> = project_3mf
+            .objects
+            .into_iter()
+            .map(|obj| {
+                project.register_object(NewSceneObject {
+                    mesh: mesh_ids[obj.mesh_idx],
+                    transform: obj.transform,
+                    name: obj.name,
+                    visible: true,
+                    extruder_id: obj.extruder_id,
+                    parent: None,
+                    group_id: obj.group_id,
+                })
+            })
+            .collect();
+        (project, obj_ids)
+    };
+
+    let slice_layer_count = |project: &Project, tag: &str| -> u32 {
+        let temp_dir =
+            std::env::temp_dir().join(format!("n3o-objovr-{tag}-{}", std::process::id()));
+        let (input, temp_3mf) =
+            build_slice_input(project, PlateId(1), temp_dir.display().to_string())
+                .expect("build_slice_input");
+        let registry = JobRegistry::new();
+        let (sink, events) = collecting_sink();
+        run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
+        let events = events.lock().unwrap();
+        if let Some(SliceEvent::JobFailed { error, .. }) = events
+            .iter()
+            .find(|e| matches!(e, SliceEvent::JobFailed { .. }))
+        {
+            panic!("[{tag}] slice failed: {error:?}");
+        }
+        let layers = events
+            .iter()
+            .find_map(|e| match e {
+                SliceEvent::PlateFinished { summary, .. } => Some(summary.layer_count),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("[{tag}] no PlateFinished"));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::remove_file(&temp_3mf);
+        layers
+    };
+
+    // Baseline: the profile default layer height (0.2mm).
+    let (base_project, _) = build();
+    let base_layers = slice_layer_count(&base_project, "base");
+
+    // Override each object's layer_height to a taller value (still within
+    // the 0.4mm nozzle's range) → meaningfully fewer layers.
+    let (mut ovr_project, obj_ids) = build();
+    for id in &obj_ids {
+        ovr_project
+            .object_override_set(PlateId(1), *id, "layer_height".into(), "0.25".into())
+            .expect("set object override");
+    }
+    let ovr_layers = slice_layer_count(&ovr_project, "override");
+
+    assert!(
+        base_layers > 0 && ovr_layers > 0,
+        "both slices must report a layer count (base={base_layers}, override={ovr_layers})",
+    );
+    assert!(
+        ovr_layers < base_layers,
+        "per-object layer_height override didn't reach the engine: a taller layer height must \
+         yield fewer layers, but base={base_layers} and override={ovr_layers}",
+    );
+}
+
 /// Leg 3 (deferred): copy-vs-vendor binding.
 ///
 /// Once the in-app filament/process copy mechanic lands (tracked

@@ -346,6 +346,38 @@ fn material_to_filament_idx(
     }
 }
 
+/// The per-object overrides libslic3r can actually honor for `id`: the
+/// stored override map filtered to keys whose libslic3r scope is object-
+/// or region-level (`PrintObjectConfig` / `PrintRegionConfig`). A
+/// print/global-scope key set on an object would be ignored by the
+/// engine, and an unknown key isn't a libslic3r option at all — both are
+/// dropped here (with a warning naming them) rather than written into the
+/// 3MF where they'd silently no-op. Returned as a `BTreeMap` so the
+/// writer's metadata order is deterministic.
+fn object_overrides_for_slice(
+    object_overrides: &HashMap<crate::core::scene::state::ObjectId, HashMap<String, String>>,
+    id: crate::core::scene::state::ObjectId,
+) -> BTreeMap<String, String> {
+    let Some(raw) = object_overrides.get(&id) else {
+        return BTreeMap::new();
+    };
+    let mut out = BTreeMap::new();
+    for (key, value) in raw {
+        match crate::core::schema::schema_by_key(key) {
+            Some(schema) if schema.scope.is_object() || schema.scope.is_region() => {
+                out.insert(key.clone(), value.clone());
+            }
+            _ => tracing::warn!(
+                object = id.0,
+                key = %key,
+                "dropping per-object override: not an object/region-scoped libslic3r option \
+                 (libslic3r only honors per-object config at PrintObject/PrintRegion scope)"
+            ),
+        }
+    }
+    out
+}
+
 /// Filter `project.meshes` + the named plate's objects into a
 /// geometry-only `Project3mf` ready for `write_3mf`. Returns `None`
 /// if the plate id is unknown (caller checks this upstream).
@@ -419,6 +451,12 @@ fn build_plate_geometry(
                 transform: obj.transform,
                 name: obj.name.clone(),
                 extruder_id: Some(remapped),
+                // Per-object setting overrides → libslic3r ModelObject/
+                // ModelVolume config via the temp .3mf (the writer emits
+                // them as object/part metadata). Scope-gated below so a
+                // print/global key set per object isn't silently dropped
+                // by libslic3r.
+                overrides: object_overrides_for_slice(&plate.scene.object_overrides, obj.id),
                 // Plate id collapses to 1 in the temp file — libslic3r
                 // only sees one plate per slice job; the multi-plate
                 // shape is project-level, not slice-input-level.
@@ -487,8 +525,28 @@ mod tests {
     use super::*;
     use crate::core::printer::instance_registry::RegistryGuard;
     use crate::core::printer::profile::BoundingBox;
-    use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
+    use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject, ObjectId};
     use crate::core::scene::transform::Transform;
+
+    #[test]
+    fn object_overrides_for_slice_keeps_object_scope_drops_print_and_unknown() {
+        // Schema scope comes from the FFI option table.
+        let _ = slic3r_ffi::init(None, 3);
+        let id = ObjectId(7);
+        let mut inner = HashMap::new();
+        inner.insert("layer_height".to_string(), "0.3".to_string()); // PrintObjectConfig → object: kept
+        inner.insert("skirt_loops".to_string(), "2".to_string()); // PrintConfig → print scope: dropped
+        inner.insert("n3o_not_a_real_option".to_string(), "x".to_string()); // not a libslic3r key: dropped
+        let map = HashMap::from([(id, inner)]);
+
+        assert_eq!(
+            object_overrides_for_slice(&map, id),
+            BTreeMap::from([("layer_height".to_string(), "0.3".to_string())]),
+            "only the object/region-scoped key survives the gate",
+        );
+        // An object with no stored overrides yields an empty map.
+        assert!(object_overrides_for_slice(&map, ObjectId(999)).is_empty());
+    }
 
     fn triangle_mesh() -> NewMesh {
         NewMesh {

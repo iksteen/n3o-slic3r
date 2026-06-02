@@ -119,6 +119,14 @@ pub struct ProjectObject {
     /// metadata) so libslic3r reads it as one ModelObject with N
     /// ModelVolumes, not N freestanding objects. Scoped per-document.
     pub group_id: Option<u32>,
+    /// Per-object libslic3r config overrides (key → serialized value).
+    /// The writer emits these as `<metadata>` in the object's (or, for a
+    /// group member, the part's) `model_settings.config` stanza, where
+    /// libslic3r folds them into `ModelObject`/`ModelVolume::config` on
+    /// load — the same channel per-object `extruder` rides. Empty for
+    /// every path except the slice-input builder, which fills it from the
+    /// plate's `object_overrides` (scope-gated to object/region keys).
+    pub overrides: BTreeMap<String, String>,
 }
 
 pub fn load_3mf(path: &Path) -> Result<Project3mf, LoadError> {
@@ -341,6 +349,9 @@ fn expand(
                 // shared group_id when multiple leaves share one
                 // outer model_settings object (= BBS multi-volume).
                 group_id: None,
+                // The 3MF reader doesn't yet parse per-object <config>
+                // back (foreign-import gap); empty until it does.
+                overrides: Default::default(),
             });
         }
         core_spec::ObjectBody::Components(comps) => {

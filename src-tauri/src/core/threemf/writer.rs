@@ -30,6 +30,7 @@
 //! identically. The reader handles both shapes; the writer picks
 //! the simpler one.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -408,6 +409,21 @@ fn transform_to_3mf_string(t: &crate::core::scene::transform::Transform) -> Stri
     format!("{a} {b} {c} {d} {e} {f} {g} {h} {i} {tx} {ty} {tz}")
 }
 
+/// Emit per-object config overrides as `<metadata key=.. value=../>` lines
+/// at `indent`. On load libslic3r folds object-level metadata into
+/// `ModelObject::config` and part-level into `ModelVolume::config` (same
+/// channel as the `extruder` hint), so a solo object's overrides go on its
+/// `<object>` and a group member's on its `<part>`.
+fn push_override_metadata(out: &mut String, indent: &str, overrides: &BTreeMap<String, String>) {
+    for (key, value) in overrides {
+        out.push_str(&format!(
+            "{indent}<metadata key=\"{}\" value=\"{}\"/>\n",
+            xml_escape_attr(key),
+            xml_escape_attr(value),
+        ));
+    }
+}
+
 fn model_settings_xml(project: &Project3mf) -> String {
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<config>\n");
@@ -434,6 +450,8 @@ fn model_settings_xml(project: &Project3mf) -> String {
                         "    <metadata key=\"extruder\" value=\"{extruder}\"/>\n"
                     ));
                 }
+                // Per-object overrides at the <object> (ModelObject::config) level.
+                push_override_metadata(&mut out, "    ", &obj.overrides);
                 // Emit a single <part> too so the BBS-flavor reader
                 // (which keys per-volume extruder off <part>) picks
                 // up the hint even on simple single-volume objects.
@@ -478,6 +496,8 @@ fn model_settings_xml(project: &Project3mf) -> String {
                             "      <metadata key=\"extruder\" value=\"{extruder}\"/>\n"
                         ));
                     }
+                    // Group member overrides at the <part> (ModelVolume::config) level.
+                    push_override_metadata(&mut out, "      ", &obj.overrides);
                     out.push_str("    </part>\n");
                 }
                 out.push_str("  </object>\n");
@@ -617,6 +637,31 @@ mod tests {
     }
 
     #[test]
+    fn per_object_overrides_emit_as_object_metadata() {
+        let project = project_from_objects(
+            vec![one_triangle_mesh()],
+            vec![ProjectObject {
+                mesh_idx: 0,
+                transform: Transform::translation(glam::Vec3::ZERO),
+                name: "tri".into(),
+                extruder_id: Some(1),
+                plate_id: 1,
+                group_id: None,
+                overrides: std::collections::BTreeMap::from([(
+                    "layer_height".to_string(),
+                    "0.3".to_string(),
+                )]),
+            }],
+            std::collections::BTreeMap::new(),
+        );
+        let xml = model_settings_xml(&project);
+        assert!(
+            xml.contains("<metadata key=\"layer_height\" value=\"0.3\"/>"),
+            "per-object override must appear as object-level metadata:\n{xml}",
+        );
+    }
+
+    #[test]
     fn round_trips_a_single_triangle_project() {
         let project = project_from_objects(
             vec![one_triangle_mesh()],
@@ -627,6 +672,7 @@ mod tests {
                 extruder_id: Some(2),
                 plate_id: 1,
                 group_id: None,
+                overrides: Default::default(),
             }],
             std::collections::BTreeMap::new(),
         );
@@ -672,6 +718,7 @@ mod tests {
                     extruder_id: Some(1),
                     plate_id: 1,
                     group_id: None,
+                    overrides: Default::default(),
                 },
                 ProjectObject {
                     mesh_idx: 0,
@@ -680,6 +727,7 @@ mod tests {
                     extruder_id: Some(2),
                     plate_id: 1,
                     group_id: None,
+                    overrides: Default::default(),
                 },
             ],
             std::collections::BTreeMap::new(),
@@ -717,6 +765,7 @@ mod tests {
                     extruder_id: Some(1),
                     plate_id: 1,
                     group_id: Some(7),
+                    overrides: Default::default(),
                 },
                 ProjectObject {
                     mesh_idx: 1,
@@ -725,6 +774,7 @@ mod tests {
                     extruder_id: Some(2),
                     plate_id: 1,
                     group_id: Some(7),
+                    overrides: Default::default(),
                 },
             ],
             std::collections::BTreeMap::new(),
@@ -811,6 +861,7 @@ mod tests {
                 extruder_id: None,
                 plate_id: 1,
                 group_id: None,
+                overrides: Default::default(),
             }],
             meta,
         );
