@@ -665,7 +665,9 @@ export function ViewportCanvas({
         </span>
         Drag · LMB rotate · RMB pan · scroll zoom
       </div>
-      <div className="absolute bottom-2 right-2 flex flex-col gap-1 pointer-events-none">
+      {/* Pinned above the console toggle (bottom:12px, ~26px tall) so the
+          lowest toast clears it rather than rendering behind it. */}
+      <div className="absolute bottom-12 right-3 flex flex-col gap-1 pointer-events-none">
         {toasts.map((t) => (
           <div
             key={t.id}

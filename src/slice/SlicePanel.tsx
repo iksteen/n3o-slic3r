@@ -23,6 +23,7 @@ import { useState } from "react";
 
 import type { PlateSnapshot, SceneSnapshot } from "../viewport/types";
 import type { JobId, SliceState } from "./types";
+import { pushLog } from "../logging/logStore";
 
 /** Why the Slice button can't run right now, or `null` if it can. */
 function whyDisabled(
@@ -59,7 +60,6 @@ export function SlicePanel({
   cancel,
 }: SlicePanelProps) {
   const [busy, setBusy] = useState(false);
-  const [startError, setStartError] = useState<string | null>(null);
 
   const inFlight =
     state.status === "running" ||
@@ -71,12 +71,13 @@ export function SlicePanel({
 
   async function doSlice() {
     if (disabledReason != null) return;
-    setStartError(null);
     setBusy(true);
     try {
       await start();
     } catch (err) {
-      setStartError(String(err));
+      // Route to the error console (which pops open) like an async slice
+      // failure does — not inline into the topbar.
+      pushLog("error", `Slice failed to start: ${String(err)}`);
     } finally {
       setBusy(false);
     }
@@ -116,11 +117,6 @@ export function SlicePanel({
         >
           {state.status === "cancelling" ? "Cancelling…" : "Cancel"}
         </button>
-      )}
-      {startError && (
-        <span className="text-xs text-rose-400" role="alert">
-          {startError}
-        </span>
       )}
     </div>
   );

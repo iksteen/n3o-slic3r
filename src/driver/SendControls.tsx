@@ -11,6 +11,7 @@
 import { useEffect, useState } from "react";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { driverExportPlate, driverSendPlate } from "./invokes";
+import { pushLog } from "../logging/logStore";
 import { useDriverStatus } from "./useDriverStatus";
 import { isJobIdle, sendDisabledReason } from "./sendGate";
 import type { ConnectionSummary } from "./useDriverConnections";
@@ -53,7 +54,6 @@ export function SendControls({
   lastSliceOutputPath,
 }: SendControlsProps): React.JSX.Element | null {
   const driverId = connection?.driverId ?? null;
-  const [actionError, setActionError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
   // Mirror the module-scoped latch into state (lazy-init from it so a
   // remount after a Devices round-trip restores it). The latch is
@@ -108,14 +108,13 @@ export function SendControls({
   const handleSend = async (): Promise<void> => {
     if (driverId == null || plateId == null) return;
     setActionPending(true);
-    setActionError(null);
     try {
       await driverSendPlate(driverId, plateId, lastSliceOutputPath);
       // Accepted — latch Send off (for this driver) until the job state
       // changes from what it is now or the link drops.
       setAwaiting({ driverId, sinceJob: jobToken(status) });
     } catch (e) {
-      setActionError(`Send failed: ${String(e)}`);
+      pushLog("error", `Send failed: ${String(e)}`);
     } finally {
       setActionPending(false);
     }
@@ -124,7 +123,6 @@ export function SendControls({
   const handleExport = async (): Promise<void> => {
     if (plateId == null) return;
     setActionPending(true);
-    setActionError(null);
     try {
       const path = await saveDialog({
         title: "Export .gcode.3mf",
@@ -137,7 +135,7 @@ export function SendControls({
       }
       await driverExportPlate(plateId, lastSliceOutputPath, path);
     } catch (e) {
-      setActionError(`Export failed: ${String(e)}`);
+      pushLog("error", `Export failed: ${String(e)}`);
     } finally {
       setActionPending(false);
     }
@@ -179,15 +177,6 @@ export function SendControls({
       >
         Export
       </button>
-      {actionError && (
-        <span
-          className="text-xs text-danger truncate max-w-xs"
-          role="alert"
-          title={actionError}
-        >
-          {actionError}
-        </span>
-      )}
     </div>
   );
 }
