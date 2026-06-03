@@ -1,38 +1,24 @@
 // `usePlateTabs` — the tab strip's data hook.
 //
-// Fetches `scene_snapshot` for the initial state, then listens to
-// the four plate-affecting Tauri events and re-fetches the
-// snapshot to refresh the strip's view-model. We're not piggybacking
-// on `SceneMirror` because:
-//   - The mirror is owned by `ViewportCanvas`; the tab strip
-//     mounts at the App level a layer above it.
-//   - The strip needs per-plate object counts + printer label —
-//     fields the snapshot carries directly. Snapshot fetches are
-//     cheap (headers + metadata only, no mesh buffers) so simple
-//     re-fetch on event is correct and easy to reason about.
+// State-layer spike: the strip reads the shared `scene_snapshot` query (the
+// same one `useProjectSession` reads) instead of running its own invoke +
+// listen loop. The two now share ONE fetch and ONE invalidation set — a
+// `scene:object_added` triggers a single shared refetch, not one per hook.
 //
-// The events watched cover every state change the strip cares
-// about:
-//   - `scene:plate_added` / `scene:plate_removed` — strip layout
-//   - `scene:active_plate_changed` — highlight
-//   - `scene:plate_metadata_changed` — name (PR-5-3 rename) /
-//     cycle count (PR-5-5) / composition order (PR-5-5)
-//   - `scene:object_added` / `scene:object_removed` — per-tab
-//     object count
-//   - `scene:bed_changed` — printer label changes when a plate's
-//     printer binding updates (the strip shows the printer
-//     identity from `plate.printer`)
-//   - `project:loaded` — wholesale state replacement
+// The strip only needs a projection (id / name / printerLabel / objectCount +
+// the active id), so it reads through `useQuerySelector`: the shared query
+// invalidates on its full superset, but the strip re-renders only when its
+// projected slice actually changes. So events the projection ignores (e.g.
+// `scene:selection_changed`, an object transform that leaves the count alone)
+// cost at most one shared fetch and zero strip re-renders — strictly better
+// than the old per-hook subscription, never worse.
 //
-// The strip view-model is intentionally a minimal projection of
-// `SceneSnapshot`; we don't expose the raw snapshot to the tab
-// component because that would couple it to fields it has no
-// business reading.
+// `PLATE_TAB_EVENT_NAMES` documents the events whose effect the projection
+// reflects; they're a subset of the shared query's invalidation set.
 
-import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { PlateId, SceneSnapshot } from "../viewport/types";
+import { useQuerySelector, type QueryState } from "../state/queryCache";
+import { sceneSnapshotQuery } from "../state/sceneSnapshot";
 
 /** What one tab needs to render. Names match the design's
  * `plate.{id,name,printer,objects}` access pattern (the design
@@ -85,48 +71,38 @@ export function projectSnapshot(snap: SceneSnapshot): PlateTabsState {
   };
 }
 
-export function usePlateTabs(): PlateTabsState {
-  const [state, setState] = useState<PlateTabsState>({
-    plates: [],
-    activePlateId: null,
-    loading: true,
-  });
+/** Select the strip's view-model from the shared query's state. Before the
+ *  first snapshot lands there are no tabs — render the empty skeleton. */
+function selectTabs(s: QueryState<SceneSnapshot>): PlateTabsState {
+  if (s.data == null) {
+    return { plates: [], activePlateId: null, loading: s.loading };
+  }
+  return projectSnapshot(s.data);
+}
 
-  const refetch = useCallback(async () => {
-    try {
-      const snap = await invoke<SceneSnapshot>("scene_snapshot");
-      setState(projectSnapshot(snap));
-    } catch (err) {
-      console.error("[plates] scene_snapshot failed", err);
+/** Structural equality over the projected view-model — lets `useQuerySelector`
+ *  skip a re-render when a shared-query refetch leaves the strip's slice
+ *  unchanged (e.g. a selection change, or an object transform that doesn't
+ *  alter the per-tab object count). */
+function tabsEqual(a: PlateTabsState, b: PlateTabsState): boolean {
+  if (a.loading !== b.loading) return false;
+  if (a.activePlateId !== b.activePlateId) return false;
+  if (a.plates.length !== b.plates.length) return false;
+  for (let i = 0; i < a.plates.length; i++) {
+    const x = a.plates[i];
+    const y = b.plates[i];
+    if (
+      x.id !== y.id ||
+      x.name !== y.name ||
+      x.printerLabel !== y.printerLabel ||
+      x.objectCount !== y.objectCount
+    ) {
+      return false;
     }
-  }, []);
+  }
+  return true;
+}
 
-  useEffect(() => {
-    let mounted = true;
-    const unlisteners: UnlistenFn[] = [];
-
-    void (async () => {
-      // Subscribe before the initial fetch so an event that races
-      // the snapshot can't be lost (worst case: it triggers a
-      // redundant re-fetch).
-      for (const name of PLATE_TAB_EVENT_NAMES) {
-        const un = await listen(name, () => {
-          void refetch();
-        });
-        if (!mounted) {
-          un();
-          continue;
-        }
-        unlisteners.push(un);
-      }
-      await refetch();
-    })();
-
-    return () => {
-      mounted = false;
-      for (const un of unlisteners) un();
-    };
-  }, [refetch]);
-
-  return state;
+export function usePlateTabs(): PlateTabsState {
+  return useQuerySelector(sceneSnapshotQuery, selectTabs, tabsEqual);
 }

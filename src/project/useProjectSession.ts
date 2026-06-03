@@ -1,136 +1,61 @@
-// `useProjectSession` — App.tsx's top-level project state hook
-// (PR-5-9).
+// `useProjectSession` — App.tsx's top-level project state hook (PR-5-9).
 //
-// Owns the "current session" snapshot the SettingsPanel host needs:
-//   - `snapshot` — the current `SceneSnapshot` (refetched on every
-//     scene/project event).
+// Owns the "current session" the SettingsPanel host needs: the current
+// `SceneSnapshot` plus the unsaved-edits `dirty` flag.
 //
-// The active printer profile is NOT held here. The host derives it
-// from the active plate's `printer_identity` against the printer
-// catalog; an unbound plate (empty library) simply has no printer and
-// the panel renders its "No printer selected" state while the
-// onboarding empty-state guides the user to add one.
+// State-layer spike: the snapshot now comes from the shared `scene_snapshot`
+// query (src/state) instead of this hook's own invoke + listen loop. Any other
+// consumer of that query (e.g. usePlateTabs, once converted) shares the same
+// fetch and the same invalidation set — one `scene:object_added` triggers one
+// refetch, not one per hook. The `dirty` flag stays here (it's session-derived
+// client state, not a backend value) but rides the same shared event router,
+// so it adds classification, not another batch of Tauri subscriptions.
 //
-// `cascadeHandle` is no longer plumbed here — the slice path composes
-// the cascade fresh per job from the bound printer instance, and the
-// SettingsPanel's resolved-value display is wired separately
-// downstream.
-//
-// The hook fetches the initial snapshot once on mount, then listens
-// for the full firehose of project / scene events so it stays fresh.
+// The active printer profile is NOT held here. The host derives it from the
+// active plate's `printer_identity` against the printer catalog.
 
-import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useEffect, useState } from "react";
 import type { SceneSnapshot } from "../viewport/types";
+import { useQuery } from "../state/queryCache";
+import { onEvents } from "../state/eventRouter";
+import { sceneSnapshotQuery, SCENE_SNAPSHOT_EVENTS } from "../state/sceneSnapshot";
 import { isEditEvent, isSavedEvent } from "./editEvents";
 
-/** Events worth refetching the snapshot on. Broader than the tab
- * strip's set — the panel reads selection + overrides + bindings,
- * any of which can shift on a per-plate event. Kept exported so
- * tests can pin the set. */
-export const SESSION_EVENT_NAMES = [
-  "scene:plate_added",
-  "scene:plate_removed",
-  "scene:active_plate_changed",
-  "scene:plate_metadata_changed",
-  "scene:material_slot_changed",
-  "scene:object_added",
-  "scene:object_removed",
-  "scene:object_updated",
-  "scene:selection_changed",
-  "scene:object_overrides_changed",
-  "scene:project_overrides_changed",
-  "scene:user_overrides_changed",
-  "scene:bed_changed",
-  "project:loaded",
-  // Save-as changes the project's source_path; refetch so the File
-  // menu's filename label updates. (Plain saves re-emit it harmlessly.)
-  "project:saved",
-  // Importing a foreign project replaces the whole session — refetch +
-  // reset the dirty flag to its clean baseline.
-  "project:imported",
-] as const;
+/** Back-compat re-export: the event set the session refetches on now lives
+ *  with the `scene_snapshot` query. Kept under the old name so existing
+ *  importers (and the host's floor-pinning test) don't churn. */
+export const SESSION_EVENT_NAMES = SCENE_SNAPSHOT_EVENTS;
 
 export interface ProjectSession {
-  /** Always `null` post-PR-S-5c. Kept on the interface so the
-   * SettingsPanel host can pass it through without conditionalizing
-   * its prop shape; downstream consumers treat `null` as "no
-   * resolved values to render" the same way they did with the
-   * legacy missing-handle case. */
+  /** Always `null` post-PR-S-5c. Kept on the interface so the SettingsPanel
+   * host can pass it through without conditionalizing its prop shape. */
   cascadeHandle: number | null;
   snapshot: SceneSnapshot | null;
   /** True when the project has unsaved edits — set by any content edit,
    * cleared on save / load / import. Drives the title-bar unsaved marker. */
   dirty: boolean;
-  /** True until the first snapshot lands. App-level chrome can render
-   * a tiny loading state if it wants. */
+  /** True until the first snapshot lands. */
   loading: boolean;
-  /** Bootstrap error message — non-null indicates the session
-   * couldn't initialize. Surfaces in App.tsx as a banner; the
-   * panel won't render in this state. */
+  /** Bootstrap error message — non-null indicates the session couldn't
+   * initialize. Surfaces in App.tsx as a banner. */
   error: string | null;
 }
 
 export function useProjectSession(): ProjectSession {
-  const [snapshot, setSnapshot] = useState<SceneSnapshot | null>(null);
+  const { data: snapshot, loading, error } = useQuery(sceneSnapshotQuery);
   const [dirty, setDirty] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  const refetchSnapshot = useCallback(async () => {
-    try {
-      const snap = await invoke<SceneSnapshot>("scene_snapshot");
-      setSnapshot(snap);
-    } catch (err) {
-      console.error("[session] scene_snapshot failed", err);
-    }
-  }, []);
-
+  // Dirty tracking rides the shared router: a content edit dirties the
+  // project; save/load/import returns it to a clean baseline. (Selection +
+  // navigation aren't edits — see editEvents.) Same event names as the query,
+  // so this reuses the router's per-name Tauri subscriptions.
   useEffect(() => {
-    let mounted = true;
-    const unlisteners: UnlistenFn[] = [];
-
-    void (async () => {
-      // Subscribe first so an event mid-bootstrap doesn't get
-      // dropped on the floor (the worst case is one redundant
-      // refetch).
-      for (const name of SESSION_EVENT_NAMES) {
-        const un = await listen(name, () => {
-          void refetchSnapshot();
-          // A content edit dirties the project; save/load/import returns it
-          // to a clean baseline. (Selection + navigation aren't edits.)
-          if (isSavedEvent(name)) setDirty(false);
-          else if (isEditEvent(name)) setDirty(true);
-        });
-        if (!mounted) {
-          un();
-          continue;
-        }
-        unlisteners.push(un);
-      }
-
-      try {
-        // The backend's Project::default() has already bound the first
-        // library instance (or left the plate unbound for the empty-
-        // library onboarding); just pull the initial snapshot.
-        const snap = await invoke<SceneSnapshot>("scene_snapshot");
-        if (!mounted) return;
-        setSnapshot(snap);
-      } catch (err) {
-        if (!mounted) return;
-        setError(String(err));
-        console.error("[session] bootstrap failed", err);
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    })();
-
-    return () => {
-      mounted = false;
-      for (const un of unlisteners) un();
-    };
-  }, [refetchSnapshot]);
+    return onEvents(SCENE_SNAPSHOT_EVENTS, (event) => {
+      const name = event.event;
+      if (isSavedEvent(name)) setDirty(false);
+      else if (isEditEvent(name)) setDirty(true);
+    });
+  }, []);
 
   return { cascadeHandle: null, snapshot, dirty, loading, error };
 }
