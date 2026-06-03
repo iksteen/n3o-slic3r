@@ -1035,11 +1035,21 @@ impl Project {
             .objects
             .get_mut(&id)
             .ok_or(SceneOpError::UnknownObject(id))?;
+        let old_material = obj.extruder_id.unwrap_or(1);
         obj.extruder_id = Some(material);
         let clone = obj.clone();
         // Borrow of `obj` ends above; auto-bind the (possibly new)
         // material to a slot, mirroring the object-add path.
         self.ensure_default_material_slot_on_active(material);
+        // Reassigning away from a material can orphan its slot binding — drop
+        // it if nothing else (object or MMU paint) on the plate still uses it,
+        // the symmetric cleanup `delete_objects` does. Without this the old
+        // material lingers in `material_to_slot`, so the Materials panel keeps
+        // listing it (it unions object extruders with binding keys).
+        if old_material != material {
+            let orphan_candidates: BTreeSet<u8> = std::iter::once(old_material).collect();
+            self.prune_orphan_material_bindings(active, &orphan_candidates);
+        }
         Ok(vec![
             SceneEvent::ObjectUpdated {
                 plate_id,
@@ -3736,6 +3746,57 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, SceneEvent::MaterialSlotChanged { .. })),
             "no MaterialSlotChanged when the material still has a user",
+        );
+    }
+
+    #[test]
+    fn reassigning_an_objects_material_drops_the_old_orphaned_binding() {
+        // The user's reproduction: assign a material via the Objects-panel
+        // picker, then reassign that object to a different material. The old
+        // material now has no user, so its slot binding must be pruned —
+        // otherwise the Materials panel (which unions object extruders with
+        // material_to_slot keys) keeps listing the abandoned material.
+        let mut p = Project::default();
+        let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
+        p.plates[0].set_printer(Some("snappy".into()), None);
+        let cube = add_cube_with_material(&mut p, 2);
+        assert!(
+            p.plates[0].material_to_slot.contains_key(&2),
+            "auto-bind populated M2",
+        );
+        let events = p.set_object_material(cube, 3).expect("object exists");
+        assert!(
+            !p.plates[0].material_to_slot.contains_key(&2),
+            "M2 has no user after reassignment → its binding must be pruned",
+        );
+        assert!(
+            p.plates[0].material_to_slot.contains_key(&3),
+            "the new material M3 is auto-bound",
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SceneEvent::MaterialSlotChanged { .. })),
+            "reassignment emits MaterialSlotChanged so the panel refreshes",
+        );
+    }
+
+    #[test]
+    fn reassigning_keeps_old_binding_when_another_object_still_uses_it() {
+        // Two cubes on M2; reassign one to M3. M2 is still used by the other
+        // cube → its binding survives.
+        let mut p = Project::default();
+        let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
+        p.plates[0].set_printer(Some("snappy".into()), None);
+        let cube_a = add_cube_with_material(&mut p, 2);
+        let _cube_b = add_cube_with_material(&mut p, 2);
+        let before = p.plates[0].material_to_slot.get(&2).copied();
+        assert!(before.is_some(), "auto-bind populated M2");
+        p.set_object_material(cube_a, 3).expect("object exists");
+        assert_eq!(
+            p.plates[0].material_to_slot.get(&2).copied(),
+            before,
+            "M2 still has a user → binding survives",
         );
     }
 
