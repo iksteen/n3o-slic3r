@@ -2,9 +2,11 @@
 //
 // Each surface mounts <PluginManager> with writers bound to the right
 // backend tier:
-//   - global  → plugin_set_global_enabled / plugin_set_global_setting
-//   - project → Project.user_overrides (scene_user_override_*)
-//   - plate   → Plate.project_overrides (scene_project_override_*)
+//   - global           → plugin_set_global_enabled / _setting
+//   - printer-instance → PrinterInstance.config_overrides
+//                        (printer_instance_set_plugin_override)
+//   - project          → Project.user_overrides (scene_user_override_*)
+//   - plate            → Plate.project_overrides (scene_project_override_*)
 //
 // Activation "inherit" (undefined) clears the override at the
 // project/plate tiers; the global root is binary so inherit can't occur
@@ -28,6 +30,27 @@ export function globalPluginWriters(): PluginWriters {
     clearSettings: () => {
       // The global tier IS the baseline — clearing to "inherit" has no
       // meaning; the manager hides the reset button at the root.
+    },
+    reload: (plugin) => cmd.reloadPlugin(plugin.name),
+  };
+}
+
+export function instancePluginWriters(instanceId: string): PluginWriters {
+  return {
+    setActivation: (plugin, value) => {
+      const key = enabledKey(plugin.name);
+      if (value === undefined) cmd.clearInstanceOverride(instanceId, key);
+      else cmd.setInstanceOverride(instanceId, key, value === "on" ? "true" : "false");
+    },
+    setSetting: (plugin, setting, value) =>
+      cmd.setInstanceOverride(
+        instanceId,
+        settingKey(plugin.name, setting.key),
+        serializeSettingValue(value),
+      ),
+    clearSettings: (plugin) => {
+      for (const s of plugin.settings)
+        cmd.clearInstanceOverride(instanceId, settingKey(plugin.name, s.key));
     },
     reload: (plugin) => cmd.reloadPlugin(plugin.name),
   };

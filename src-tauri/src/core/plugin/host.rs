@@ -125,10 +125,15 @@ pub struct DispatchGate {
     /// Active printer model, for `printer_compatibility` enforcement.
     /// `None` skips the printer check (a context with no bound model).
     pub printer_model: Option<String>,
+    /// Flat `plugin.*` override entries for the **printer-instance** level
+    /// — the bound `PrinterInstance.config_overrides`, filtered to
+    /// `plugin.*`. A per-printer default sitting just above global; the
+    /// project and plate tiers override it. Empty = no instance overrides.
+    pub printer_instance: BTreeMap<String, String>,
     /// Flat `plugin.*` override entries for the **project** level
     /// (cascade *user* tier). The host resolves each plugin's per-level
-    /// activation + settings from these and `plate` (see
-    /// [`super::resolve`]). Empty = no project-level overrides.
+    /// activation + settings from these, `printer_instance`, and `plate`
+    /// (see [`super::resolve`]). Empty = no project-level overrides.
     pub project: BTreeMap<String, String>,
     /// Flat `plugin.*` override entries for the **plate** level (cascade
     /// *project* tier).
@@ -292,6 +297,7 @@ impl PluginHost {
     /// activation-gated settings overlay over the manifest defaults.
     fn resolve_plugin(&self, p: &LoadedPlugin, gate: &DispatchGate) -> ResolvedPlugin {
         let name = &p.manifest.name;
+        let printer_instance = resolve::level_for(name, &gate.printer_instance);
         let project = resolve::level_for(name, &gate.project);
         let plate = resolve::level_for(name, &gate.plate);
         let global_on = self.global_enabled.get(name).copied();
@@ -301,6 +307,7 @@ impl PluginHost {
             p.manifest.enabled_by_default,
             global_on,
             global_settings,
+            &printer_instance,
             &project,
             &plate,
             &p.manifest.setting_defaults(),
@@ -786,6 +793,43 @@ mod tests {
         // Re-enabling globally runs it again under the permissive gate.
         host.set_global_enabled("p", true);
         assert_eq!(host.dispatch(&StubHook, "x".into()), "x-p");
+    }
+
+    #[test]
+    fn printer_instance_tier_gates_plugin_and_yields_to_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plugin(
+            tmp.path(),
+            "p",
+            r#"["post_slice"]"#,
+            r#"function on_post_slice(s) return s .. "-p" end"#,
+        );
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+
+        // Disabled at the printer-instance tier → skipped (it beats the
+        // default-on, since the instance is finer than global).
+        let off = DispatchGate {
+            printer_instance: [("plugin.p.enabled".to_string(), "false".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(host.dispatch_gated(&StubHook, "x".into(), &off), "x");
+
+        // Project tier re-enables it — project overrides printer-instance.
+        let project_on = DispatchGate {
+            printer_instance: [("plugin.p.enabled".to_string(), "false".to_string())]
+                .into_iter()
+                .collect(),
+            project: [("plugin.p.enabled".to_string(), "true".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(
+            host.dispatch_gated(&StubHook, "x".into(), &project_on),
+            "x-p"
+        );
     }
 
     #[test]

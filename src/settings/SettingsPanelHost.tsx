@@ -19,6 +19,7 @@ import {
 } from "./SettingsPanel";
 import { usePlugins } from "../plugins/usePlugins";
 import { platePluginWriters } from "../plugins/pluginWriters";
+import { pluginSupportsPrinter } from "../plugins/pluginCascade";
 import { usePlateCascadeResolve } from "./resolve";
 import { makeObjectOverrideCallbacks } from "./overrideCommands";
 import { makeProjectOverrideCallbacks } from "./projectOverrideCommands";
@@ -120,18 +121,6 @@ export function SettingsPanelHost({
   // wide user overrides, the plugin "plate" level is this plate's
   // project_overrides.
   const pluginList = usePlugins();
-  const pluginSurface = useMemo<PluginPlateSurface | null>(() => {
-    if (!plate) return null;
-    return {
-      plugins: pluginList.plugins,
-      sources: {
-        projectOverrides: userOverrides,
-        plateOverrides: projectOverrides,
-      },
-      writers: platePluginWriters(plate.plate_id),
-      plateName: plate.name,
-    };
-  }, [plate, pluginList.plugins, userOverrides, projectOverrides]);
 
   // Pick the printer profile for cascade resolution from the active
   // plate's bound instance (the snapshot's derived `printer_identity`)
@@ -147,6 +136,39 @@ export function SettingsPanelHost({
     }
     return null;
   }, [plate?.printer_identity, catalog.entries]);
+
+  // Plate-level plugin surface for the panel's Plugins tab. Reads the plugin
+  // "project" level off the project-wide user overrides and "plate" off this
+  // plate's project_overrides; the plate inherits its bound instance's
+  // per-printer defaults (instanceOverrides). The list is filtered to plugins
+  // compatible with the bound printer — a U1 plate doesn't show platecycler.
+  const pluginSurface = useMemo<PluginPlateSurface | null>(() => {
+    if (!plate) return null;
+    const boundInstance =
+      plate.printer_instance_id != null
+        ? instances.find((i) => i.id === plate.printer_instance_id)
+        : undefined;
+    const model = activeProfile?.model ?? null;
+    return {
+      plugins: pluginList.plugins.filter((p) =>
+        pluginSupportsPrinter(p, model),
+      ),
+      sources: {
+        instanceOverrides: boundInstance?.config_overrides,
+        projectOverrides: userOverrides,
+        plateOverrides: projectOverrides,
+      },
+      writers: platePluginWriters(plate.plate_id),
+      plateName: plate.name,
+    };
+  }, [
+    plate,
+    instances,
+    activeProfile,
+    pluginList.plugins,
+    userOverrides,
+    projectOverrides,
+  ]);
 
   // The active plate's cascade resolution (fragments composed against
   // its effective process, each value tagged with the layer it won from).

@@ -280,6 +280,29 @@ pub fn set_slot_filament(
     })
 }
 
+/// Set (or clear, with `None`) a `plugin.<name>.<key>` entry in the
+/// instance's `config_overrides` — the printer-instance tier of the plugin
+/// activation/settings cascade (a per-printer default the project/plate
+/// tiers override). The caller is responsible for restricting `key` to the
+/// `plugin.*` namespace (the command layer does).
+pub fn set_plugin_override(
+    id: &str,
+    key: String,
+    value: Option<String>,
+) -> Result<PrinterInstance, InstanceMutError> {
+    mutate_instance(id, move |inst| {
+        match value {
+            Some(v) => {
+                inst.config_overrides.insert(key, v);
+            }
+            None => {
+                inst.config_overrides.remove(&key);
+            }
+        }
+        Ok(())
+    })
+}
+
 /// Set (or clear, with `None`) a slot's user-assigned spool color.
 /// Hex string like `"#ff8800"`; the backend does not validate the
 /// shape — the picker only ever writes well-formed values.
@@ -1208,6 +1231,33 @@ mod tests {
         let _registry = RegistryGuard::acquire();
         let err = set_slot_filament("ghost", 0, 0, Some("PLA".into())).unwrap_err();
         assert!(matches!(err, InstanceMutError::UnknownInstance { .. }));
+    }
+
+    #[test]
+    fn set_plugin_override_sets_and_clears_in_config_overrides() {
+        let _registry = RegistryGuard::acquire();
+        let updated = set_plugin_override(
+            "bambi",
+            "plugin.platecycler.enabled".into(),
+            Some("false".into()),
+        )
+        .expect("bambi exists");
+        assert_eq!(
+            updated.config_overrides.get("plugin.platecycler.enabled"),
+            Some(&"false".to_string()),
+        );
+        // Persisted into the registry, not just the returned clone.
+        let again = lookup_instance("bambi").expect("bambi present");
+        assert_eq!(
+            again.config_overrides.get("plugin.platecycler.enabled"),
+            Some(&"false".to_string()),
+        );
+        // Clear removes the key entirely (back to inherit).
+        let cleared =
+            set_plugin_override("bambi", "plugin.platecycler.enabled".into(), None).unwrap();
+        assert!(!cleared
+            .config_overrides
+            .contains_key("plugin.platecycler.enabled"));
     }
 
     #[test]

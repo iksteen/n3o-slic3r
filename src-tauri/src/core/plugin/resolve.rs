@@ -2,22 +2,25 @@
 //! across the cascade levels, enforcing the activation-gated settings
 //! rule (PR-8-9 "Settings-cascade model").
 //!
-//! Levels: `global` (binary on/off), then `project`, then `plate` (each
-//! tri-state inherit/on/off — `inherit` = the `plugin.<name>.enabled`
-//! key absent at that tier). This is the single `plugin.*` resolver the
-//! review asked for: activation is just one of its outputs, so the
-//! tier-walk isn't duplicated for settings.
+//! Levels: `global` (binary on/off), then `printer-instance`, then
+//! `project`, then `plate` (the last three tri-state inherit/on/off —
+//! `inherit` = the `plugin.<name>.enabled` key absent at that tier). The
+//! printer-instance tier is a per-printer default: instances live in the
+//! user library (shared across projects), so it sits just above global,
+//! and a project or plate still overrides it. This is the single
+//! `plugin.*` resolver the review asked for: activation is just one of its
+//! outputs, so the tier-walk isn't duplicated for settings.
 //!
 //! The two rules:
 //! - **Effective activation** (does it run): the first explicit
-//!   (non-inherit) value walking **plate → project → global**, default
-//!   on.
+//!   (non-inherit) value walking **plate → project → printer-instance →
+//!   global**, default on.
 //! - **Settings promotion:** base = manifest defaults; a level's
 //!   settings overlay **only where that level's activation is explicitly
-//!   `on`**, in `global → project → plate` order. `inherit` / `off`
-//!   levels never promote settings — even when the plugin is effectively
-//!   running via inheritance. Enforced here, independent of any UI
-//!   gating.
+//!   `on`**, in `global → printer-instance → project → plate` order.
+//!   `inherit` / `off` levels never promote settings — even when the
+//!   plugin is effectively running via inheritance. Enforced here,
+//!   independent of any UI gating.
 
 use std::collections::BTreeMap;
 
@@ -84,15 +87,18 @@ pub fn resolve(
     default_on: bool,
     global_on: Option<bool>,
     global_settings: &BTreeMap<String, String>,
+    printer_instance: &PluginLevel,
     project: &PluginLevel,
     plate: &PluginLevel,
     defaults: &BTreeMap<String, String>,
 ) -> ResolvedPlugin {
     // Effective activation: first explicit value, finest level first,
-    // else the manifest default.
+    // else the manifest default. Printer-instance sits between project and
+    // global (a per-printer default the project/plate can override).
     let enabled = plate
         .activation
         .or(project.activation)
+        .or(printer_instance.activation)
         .or(global_on)
         .unwrap_or(default_on);
 
@@ -102,6 +108,9 @@ pub fn resolve(
     let mut settings = defaults.clone();
     if global_on.unwrap_or(default_on) {
         overlay(&mut settings, global_settings);
+    }
+    if printer_instance.activation == Some(true) {
+        overlay(&mut settings, &printer_instance.settings);
     }
     if project.activation == Some(true) {
         overlay(&mut settings, &project.settings);
@@ -188,7 +197,15 @@ mod tests {
         let plate = lvl(None, &[("swap", "C")]);
         // Manifest defaults on (enabled_by_default = true) and nothing
         // is set, so it runs at the global value.
-        let r = resolve(true, None, &global_settings, &project, &plate, &defaults());
+        let r = resolve(
+            true,
+            None,
+            &global_settings,
+            &lvl(None, &[]),
+            &project,
+            &plate,
+            &defaults(),
+        );
         assert!(r.enabled, "effective on via inheritance");
         assert_eq!(r.settings.get("swap").map(String::as_str), Some("A"));
     }
@@ -204,6 +221,7 @@ mod tests {
             false,
             None,
             &global_settings,
+            &lvl(None, &[]),
             &lvl(None, &[]),
             &lvl(None, &[]),
             &defaults(),
@@ -227,6 +245,7 @@ mod tests {
             false,
             Some(true),
             &global_settings,
+            &lvl(None, &[]),
             &project,
             &plate,
             &defaults(),
@@ -248,6 +267,7 @@ mod tests {
             false,
             Some(false),
             &global_settings,
+            &lvl(None, &[]),
             &project,
             &plate,
             &defaults(),
@@ -264,6 +284,7 @@ mod tests {
             false,
             Some(true),
             &BTreeMap::new(),
+            &lvl(None, &[]),
             &project,
             &plate,
             &defaults(),
@@ -278,6 +299,76 @@ mod tests {
             true,
             None,
             &BTreeMap::new(),
+            &lvl(None, &[]),
+            &lvl(None, &[]),
+            &lvl(None, &[]),
+            &defaults(),
+        );
+        assert_eq!(r.settings.get("swap").map(String::as_str), Some("DEFAULT"));
+    }
+
+    #[test]
+    fn printer_instance_overrides_global_but_yields_to_project_and_plate() {
+        let g = BTreeMap::new();
+        // Instance ON beats global default-off.
+        let r = resolve(
+            false,
+            None,
+            &g,
+            &lvl(Some(true), &[]),
+            &lvl(None, &[]),
+            &lvl(None, &[]),
+            &defaults(),
+        );
+        assert!(r.enabled, "printer-instance on overrides the off default");
+
+        // Project OFF overrides instance ON (project is finer).
+        let r = resolve(
+            false,
+            None,
+            &g,
+            &lvl(Some(true), &[]),
+            &lvl(Some(false), &[]),
+            &lvl(None, &[]),
+            &defaults(),
+        );
+        assert!(!r.enabled, "project off overrides printer-instance on");
+
+        // Plate ON overrides instance OFF (plate is finest).
+        let r = resolve(
+            true,
+            None,
+            &g,
+            &lvl(Some(false), &[]),
+            &lvl(None, &[]),
+            &lvl(Some(true), &[]),
+            &defaults(),
+        );
+        assert!(r.enabled, "plate on overrides printer-instance off");
+    }
+
+    #[test]
+    fn printer_instance_settings_promote_only_when_on() {
+        let g = BTreeMap::new();
+        // Instance on → its settings overlay above the manifest default.
+        let r = resolve(
+            false,
+            None,
+            &g,
+            &lvl(Some(true), &[("swap", "INSTANCE")]),
+            &lvl(None, &[]),
+            &lvl(None, &[]),
+            &defaults(),
+        );
+        assert_eq!(r.settings.get("swap").map(String::as_str), Some("INSTANCE"));
+
+        // Instance inherit (runs via global default-on) → its settings do
+        // NOT promote, mirroring the inherit rule for the other tiers.
+        let r = resolve(
+            true,
+            None,
+            &g,
+            &lvl(None, &[("swap", "INSTANCE")]),
             &lvl(None, &[]),
             &lvl(None, &[]),
             &defaults(),

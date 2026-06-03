@@ -5,12 +5,18 @@
 // snake_case params, fire-and-forget with `.catch(console.error)`
 // for the mutation calls.
 //
-// THE THREE LEVELS, THREE SOURCES
-//   global  → backend plugin store    (plugin_set_global_*)
-//   project → Project.user_overrides  (scene_user_override_*)
-//   plate   → Plate.project_overrides (scene_project_override_*)
+// THE FOUR LEVELS, FOUR SOURCES (coarse → fine)
+//   global           → backend plugin store           (plugin_set_global_*)
+//   printer-instance → PrinterInstance.config_overrides
+//                      (printer_instance_set_plugin_override)
+//   project          → Project.user_overrides          (scene_user_override_*)
+//   plate            → Plate.project_overrides          (scene_project_override_*)
 //
-// Project + plate enablement / settings are encoded as override
+// The printer-instance tier is a per-printer default that sits just above
+// global (instances are shared across projects), so project + plate still
+// override it.
+//
+// Instance + project + plate enablement / settings are encoded as override
 // keys: `plugin.<name>.enabled` ("true"|"false") and
 // `plugin.<name>.<settingKey>` (the setting's string form). Clearing
 // a key means "inherit from the level above".
@@ -100,6 +106,30 @@ export function setUserOverride(key: string, value: string): void {
 /** Drop one project-tier override key (→ inherit from global). */
 export function clearUserOverride(key: string): void {
   void invoke("scene_user_override_clear", { key }).catch(console.error);
+}
+
+// ── Printer-instance level (PrinterInstance.config_overrides) ──────
+
+/** Upsert one printer-instance-tier override key on an instance. */
+export function setInstanceOverride(
+  instanceId: string,
+  key: string,
+  value: string,
+): void {
+  void invoke("printer_instance_set_plugin_override", {
+    id: instanceId,
+    key,
+    value,
+  }).catch(console.error);
+}
+
+/** Drop one printer-instance-tier override key (→ inherit from global). */
+export function clearInstanceOverride(instanceId: string, key: string): void {
+  void invoke("printer_instance_set_plugin_override", {
+    id: instanceId,
+    key,
+    value: null,
+  }).catch(console.error);
 }
 
 // ── Plate level (Plate.project_overrides) ─────────────────────────

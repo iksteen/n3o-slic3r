@@ -57,11 +57,16 @@ pub enum PrinterCompat {
 /// declared scopes and a cascade override at an undeclared scope is
 /// ignored at resolve. Ordered low → high so a `scopes` list renders
 /// and resolves deterministically; this is *not* the override
-/// precedence (that's plate > project > global at resolve time).
+/// precedence (that's plate > project > printer-instance > global at
+/// resolve time).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PluginScope {
     /// App-wide default (the Plugins-panel toggle), across all projects.
     Global,
+    /// Per-printer default (rides `PrinterInstance.config_overrides`).
+    /// Instances are shared across projects, so this is a coarse default
+    /// the project/plate tiers override — just above global.
+    PrinterInstance,
     /// Per-project override (rides `Project.user_overrides`).
     Project,
     /// Per-plate override (rides `Plate.project_overrides`).
@@ -72,16 +77,19 @@ impl PluginScope {
     fn from_str(s: &str) -> Option<Self> {
         match s {
             "global" => Some(Self::Global),
+            "printer-instance" => Some(Self::PrinterInstance),
             "project" => Some(Self::Project),
             "plate" => Some(Self::Plate),
             _ => None,
         }
     }
 
-    /// The manifest/string name (`"global"`, `"project"`, `"plate"`).
+    /// The manifest/string name (`"global"`, `"printer-instance"`,
+    /// `"project"`, `"plate"`).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Global => "global",
+            Self::PrinterInstance => "printer-instance",
             Self::Project => "project",
             Self::Plate => "plate",
         }
@@ -90,7 +98,12 @@ impl PluginScope {
     /// All scopes in canonical order — the default when a manifest omits
     /// (or empties) `scopes`.
     pub fn all() -> Vec<Self> {
-        vec![Self::Global, Self::Project, Self::Plate]
+        vec![
+            Self::Global,
+            Self::PrinterInstance,
+            Self::Project,
+            Self::Plate,
+        ]
     }
 }
 

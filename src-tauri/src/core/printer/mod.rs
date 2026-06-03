@@ -28,7 +28,8 @@ pub use instance_registry::{
     create_instance, delete_instance, list_instances, lookup_instance, mutate_instance,
     set_extruder_nozzle_diameter, set_instance_ams_units, set_instance_bed,
     set_instance_connection, set_instance_display_name, set_instance_quality_profile,
-    set_slot_color, set_slot_filament, update_instance, InstanceMutError, InstancePatch,
+    set_plugin_override, set_slot_color, set_slot_filament, update_instance, InstanceMutError,
+    InstancePatch,
 };
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
 pub use registry::{bundled_catalog, default_printer_identity, lookup, CatalogEntry};
@@ -69,6 +70,28 @@ pub fn printer_instance_set_slot_filament(
 ) -> Result<PrinterInstance, String> {
     let updated = set_slot_filament(&id, extruder_idx, slot_idx, filament_identity)
         .map_err(|e| e.to_string())?;
+    use tauri::Emitter;
+    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
+        tracing::warn!(error = %e, "printer:instance_changed emit failed");
+    }
+    Ok(updated)
+}
+
+/// Tauri command: set (or clear, with `value = None`) a `plugin.<name>.*`
+/// entry on the instance — the printer-instance tier of the plugin cascade.
+/// Only `plugin.*` keys are accepted. Emits `printer:instance_changed`.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn printer_instance_set_plugin_override(
+    id: String,
+    key: String,
+    value: Option<String>,
+    window: tauri::Window,
+) -> Result<PrinterInstance, String> {
+    if !key.starts_with("plugin.") {
+        return Err(format!("`{key}` is not a plugin override key"));
+    }
+    let updated = set_plugin_override(&id, key, value).map_err(|e| e.to_string())?;
     use tauri::Emitter;
     if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
         tracing::warn!(error = %e, "printer:instance_changed emit failed");

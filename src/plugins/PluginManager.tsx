@@ -443,9 +443,11 @@ export function PluginManager({
   const introTail =
     level === "global"
       ? "the baseline for every project. Projects and plates inherit these unless they override."
-      : level === "project"
-        ? "inherits from Global. Anything set here overrides Global for this project and cascades to its plates."
-        : "inherits from Project. Anything set here applies to just this plate and overrides everything above.";
+      : level === "printer-instance"
+        ? "inherits from Global. Set here to default a plugin on or off for every project that uses this printer; projects and plates can still override it."
+        : level === "project"
+          ? "inherits from the printer default. Anything set here overrides it for this project and cascades to its plates."
+          : "inherits from Project. Anything set here applies to just this plate and overrides everything above.";
 
   return (
     <div className="plg-manager">

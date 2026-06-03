@@ -237,11 +237,21 @@ fn prepare_job(
     let handle = JobHandle::new();
     registry.insert(job_id, handle.clone());
 
-    // Per-level plugin overrides for the dispatch gate. The plugin
-    // levels are global / project / plate (the manifest `scopes`
-    // vocabulary): project = cascade *user* tier
+    // Per-level plugin overrides for the dispatch gate. The plugin levels
+    // are global / printer-instance / project / plate: printer-instance =
+    // the bound instance's `config_overrides` (a per-printer default in the
+    // user library), project = cascade *user* tier
     // (`Project.user_overrides`), plate = cascade *project* tier
     // (`Plate.project_overrides`). The object tier is not a plugin level.
+    let plugin_instance = lookup_instance(&input.printer_instance_id)
+        .map(|inst| {
+            inst.config_overrides
+                .iter()
+                .filter(|(k, _)| k.starts_with("plugin."))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
     let plugin_project = plugin_overrides_for_tier(&input.context.user_overrides);
     let plugin_plate = plugin_overrides_for_tier(&input.context.project_overrides);
 
@@ -252,6 +262,7 @@ fn prepare_job(
         cascade,
         context,
         filament,
+        plugin_instance,
         plugin_project,
         plugin_plate,
         paint_filament_remap: input.paint_filament_remap,
@@ -521,6 +532,7 @@ fn run_worker(
     // (printer-compatible + activated, on top of host health).
     let gate = DispatchGate {
         printer_model: Some(job.context.printer.model.clone()),
+        printer_instance: job.plugin_instance.clone(),
         project: job.plugin_project.clone(),
         plate: job.plugin_plate.clone(),
     };

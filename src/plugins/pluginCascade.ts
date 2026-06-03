@@ -7,10 +7,12 @@
 // changes back to the right backend surface.
 //
 // THE CASCADE
-//   global → project → plate, lower overrides higher. Each level's
-//   raw activation is tri-state: "on" / "off" / undefined (inherit).
-//   `global` is the root: it's binary (its undefined collapses to the
-//   backend's resolved `globally_enabled`, never "inherit").
+//   global → printer-instance → project → plate, lower overrides higher.
+//   Each level's raw activation is tri-state: "on" / "off" / undefined
+//   (inherit). `global` is the root: it's binary (its undefined collapses
+//   to the backend's resolved `globally_enabled`, never "inherit"). The
+//   printer-instance tier is a per-printer default (instances are shared
+//   across projects) sitting just above global.
 //
 //   Settings overlay ONLY at levels that are explicitly on, coarse →
 //   fine, over the manifest defaults. A level set to inherit/off
@@ -19,10 +21,11 @@
 
 import type { PluginSummary, SettingSummary } from "./pluginCommands";
 
-export type PluginLevel = "global" | "project" | "plate";
+export type PluginLevel = "global" | "printer-instance" | "project" | "plate";
 
 export const PLUGIN_LEVEL_ORDER: readonly PluginLevel[] = [
   "global",
+  "printer-instance",
   "project",
   "plate",
 ];
@@ -36,6 +39,12 @@ export interface PluginLevelMeta {
 
 export const PLUGIN_LEVEL_META: Record<PluginLevel, PluginLevelMeta> = {
   global: { label: "Global", short: "G", blurb: "Every project on this machine", hue: 215 },
+  "printer-instance": {
+    label: "Printer",
+    short: "PR",
+    blurb: "Every project using this printer",
+    hue: 175,
+  },
   project: { label: "Project", short: "P", blurb: "This .3mf file", hue: 285 },
   plate: { label: "Plate", short: "PL", blurb: "Just the active plate", hue: 340 },
 };
@@ -50,6 +59,9 @@ export type RawActivation = "on" | "off" | undefined;
  *  `Plate.project_overrides`). The plate maps are absent on
  *  global / project surfaces. */
 export interface CascadeSources {
+  /** Bound `PrinterInstance.config_overrides` (the `plugin.*` subset),
+   *  or `undefined` when no instance is in scope. */
+  instanceOverrides?: Record<string, string>;
   /** `SceneSnapshot.user_overrides`. */
   projectOverrides: Record<string, string>;
   /** Active plate's `project_overrides`, or `undefined` when no plate
@@ -74,6 +86,20 @@ export function settingKey(name: string, key: string): string {
 /** The cascade levels a plugin participates in, in cascade order. */
 export function pluginLevels(plugin: PluginSummary): PluginLevel[] {
   return PLUGIN_LEVEL_ORDER.filter((l) => plugin.scopes.includes(l));
+}
+
+/** Whether `plugin` is compatible with printer `model` (its `printers`
+ *  allow-list; `null` = any printer). An unknown model (`null`) keeps the
+ *  plugin visible. Used to hide printer-specific plugins from the
+ *  instance/plate surfaces of an incompatible printer — the same
+ *  compatibility the dispatch gate enforces at slice time. */
+export function pluginSupportsPrinter(
+  plugin: PluginSummary,
+  model: string | null,
+): boolean {
+  if (plugin.printers === null) return true;
+  if (model === null) return true;
+  return plugin.printers.includes(model);
 }
 
 /** Is `level` the plugin's root (the highest level it's available
@@ -102,6 +128,9 @@ export function readActivation(
     return plugin.globally_enabled ? "on" : "off";
   }
   const key = enabledKey(plugin.name);
+  if (level === "printer-instance") {
+    return parseEnabledRaw(sources.instanceOverrides?.[key]);
+  }
   if (level === "project") {
     return parseEnabledRaw(sources.projectOverrides[key]);
   }
@@ -120,6 +149,9 @@ export function readSettingRaw(
     return plugin.global_settings[setting.key];
   }
   const key = settingKey(plugin.name, setting.key);
+  if (level === "printer-instance") {
+    return sources.instanceOverrides?.[key];
+  }
   if (level === "project") {
     return sources.projectOverrides[key];
   }

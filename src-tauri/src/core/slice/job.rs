@@ -229,6 +229,10 @@ pub struct ResolvedJob {
     /// extracted at prep. Fed to the per-plate `DispatchGate`; the host
     /// resolves each plugin's activation + settings from them plus the
     /// global tier.
+    /// Flat `plugin.*` entries for the **printer-instance** tier — the
+    /// bound instance's `config_overrides` (a per-printer default the
+    /// project/plate tiers override). Snapshotted at job prep.
+    pub plugin_instance: std::collections::BTreeMap<String, String>,
     pub plugin_project: std::collections::BTreeMap<String, String>,
     pub plugin_plate: std::collections::BTreeMap<String, String>,
     /// MMU paint filament remap (toolchanger only); see

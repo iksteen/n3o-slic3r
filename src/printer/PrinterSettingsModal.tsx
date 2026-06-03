@@ -38,6 +38,10 @@ import { usePrinterCatalog } from "./usePrinterCatalog";
 import { configForConnection } from "../driver/useDriverConnections";
 import { driverTestConnection } from "../driver/invokes";
 import type { PlateSnapshot } from "../viewport/types";
+import { usePlugins } from "../plugins/usePlugins";
+import { PluginManager } from "../plugins/PluginManager";
+import { instancePluginWriters } from "../plugins/pluginWriters";
+import { pluginSupportsPrinter } from "../plugins/pluginCascade";
 
 /** Bambu printers need a LAN access code; U1 needs a Moonraker port.
  *  Default Moonraker port matches the existing PrinterCredentialsDialog. */
@@ -198,7 +202,9 @@ export function PrinterSettingsModal({
   const driverKind = driverKindFromProfile(profile);
 
   const [draft, setDraft] = useState<Draft>(() => initialDraft(instance));
-  const [active, setActive] = useState<"general" | "connection">("general");
+  const [active, setActive] = useState<"general" | "connection" | "plugins">(
+    "general",
+  );
   /** Which modal-blocking confirmation overlay is showing, if any.
    *  One union instead of three mutually-exclusive booleans —
    *  delete / discard / amsShrink never co-occur, so a single state
@@ -372,11 +378,26 @@ export function PrinterSettingsModal({
     }
   };
 
-  const sections: { id: "general" | "connection"; label: string; icon: string }[] = [
-    { id: "general", label: "General", icon: "⚙" },
+  const sections: {
+    id: "general" | "connection" | "plugins";
+    label: string;
+    icon: string;
+    dirty: boolean;
+  }[] = [
+    { id: "general", label: "General", icon: "⚙", dirty: sectionDirty.general },
     ...(driverKind != null
-      ? [{ id: "connection" as const, label: "Connection", icon: "⇄" }]
+      ? [
+          {
+            id: "connection" as const,
+            label: "Connection",
+            icon: "⇄",
+            dirty: sectionDirty.connection,
+          },
+        ]
       : []),
+    // Plugins persist live (each toggle hits the backend immediately), so
+    // they're outside the draft/Save flow — never "dirty".
+    { id: "plugins" as const, label: "Plugins", icon: "🧩", dirty: false },
   ];
 
   return (
@@ -416,12 +437,12 @@ export function PrinterSettingsModal({
               <button
                 key={s.id}
                 type="button"
-                className={`psm-nav-item${active === s.id ? " active" : ""}${sectionDirty[s.id] ? " dirty" : ""}`}
+                className={`psm-nav-item${active === s.id ? " active" : ""}${s.dirty ? " dirty" : ""}`}
                 onClick={() => setActive(s.id)}
               >
                 <span className="psm-nav-icon">{s.icon}</span>
                 <span>{s.label}</span>
-                {sectionDirty[s.id] && (
+                {s.dirty && (
                   <span
                     className="psm-nav-dot"
                     title="Unsaved changes"
@@ -465,6 +486,12 @@ export function PrinterSettingsModal({
                   }));
                 }}
                 onEdit={() => setForgetConnection(false)}
+              />
+            )}
+            {active === "plugins" && (
+              <PluginsSection
+                instance={instance}
+                printerModel={profile?.model ?? null}
               />
             )}
           </section>
@@ -710,6 +737,50 @@ function ConfirmOverlay({
         {children}
         <div className="psm-discard-actions">{actions}</div>
       </div>
+    </div>
+  );
+}
+
+/** Printer-instance plugin tier — the per-printer default that sits just
+ *  above Global in the plugin cascade. Mounts the shared <PluginManager> at
+ *  the "printer-instance" level, reading/writing the instance's
+ *  `config_overrides`. Toggles persist live (each fires a backend command);
+ *  the `printer:instance_changed` event refreshes the `instance` prop so the
+ *  rows reflect the new state. Project/plate aren't in scope here. */
+function PluginsSection({
+  instance,
+  printerModel,
+}: {
+  instance: PrinterInstance;
+  /** This printer's model, for compatibility filtering. */
+  printerModel: string | null;
+}): React.JSX.Element {
+  const { plugins } = usePlugins();
+  // Only plugins compatible with this printer — a U1's list omits an
+  // A1-mini-only plugin like platecycler.
+  const compatible = useMemo(
+    () => plugins.filter((p) => pluginSupportsPrinter(p, printerModel)),
+    [plugins, printerModel],
+  );
+  const sources = useMemo(
+    () => ({
+      instanceOverrides: instance.config_overrides,
+      projectOverrides: {},
+    }),
+    [instance.config_overrides],
+  );
+  const writers = useMemo(
+    () => instancePluginWriters(instance.id),
+    [instance.id],
+  );
+  return (
+    <div className="psm-section">
+      <PluginManager
+        level="printer-instance"
+        plugins={compatible}
+        sources={sources}
+        writers={writers}
+      />
     </div>
   );
 }
