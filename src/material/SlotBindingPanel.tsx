@@ -12,19 +12,17 @@
 //      by an object on this plate with a slot picker. Writes via
 //      `project_set_material_slot`.
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { PlateId, PlateSnapshot } from "../viewport/types";
 import {
   flattenSlots,
-  getPrinterInstance,
   setSlotColor,
   setSlotFilament,
   type FlatSlotOption,
-  type PrinterInstance,
   type SlotRef,
 } from "../printer/printerInstance";
+import { usePrinterInstance } from "../printer/usePrinterInstance";
 import type { DriverId } from "../driver/types";
 import { MaterialChip } from "./MaterialChip";
 import { boundMaterials, slotForMaterial } from "./materials";
@@ -63,37 +61,13 @@ async function clearMaterialSlot(
 
 export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelProps) {
   const instanceId = plate?.printer_instance_id ?? null;
-  const [instance, setInstance] = useState<PrinterInstance | null>(null);
+  // Live instance state via the shared per-instance query — refetches on
+  // `printer:instance_changed` for this id (e.g. another panel writes a slot
+  // binding) and shares the fetch with the settings host, which reads the
+  // same id.
+  const instance = usePrinterInstance(instanceId);
   const { list: filaments, byIdentity: filamentByIdentity } =
     useFilamentCatalog();
-
-  // Pull the live instance state. Refetches whenever the bound id
-  // changes, or when the backend emits `printer:instance_changed`
-  // (e.g. another panel writes a slot binding).
-  useEffect(() => {
-    if (!instanceId) {
-      setInstance(null);
-      return;
-    }
-    let cancelled = false;
-    void getPrinterInstance(instanceId).then((inst) => {
-      if (!cancelled) setInstance(inst);
-    });
-    let unlisten: UnlistenFn | null = null;
-    void listen<string>("printer:instance_changed", (event) => {
-      if (event.payload !== instanceId) return;
-      void getPrinterInstance(instanceId).then((inst) => {
-        if (!cancelled) setInstance(inst);
-      });
-    }).then((u) => {
-      if (cancelled) u();
-      else unlisten = u;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [instanceId]);
 
   const slots = useMemo<FlatSlotOption[]>(
     () => (instance ? flattenSlots(instance) : []),

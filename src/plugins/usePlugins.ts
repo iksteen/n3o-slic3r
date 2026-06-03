@@ -1,63 +1,37 @@
-// `usePlugins` — fetches the plugin list on mount + on `plugin:changed`.
+// `usePlugins` — the plugin list, refetched on `plugin:changed`.
 //
-// Mirrors `useProjectSession`'s listen/unlisten dance: subscribe
-// first so a mid-bootstrap event isn't dropped, then do the initial
-// fetch. The backend emits `plugin:changed` after any
-// enable/setting/reload mutation; we just re-pull the whole list.
+// State-layer spike: reads the shared `plugins` query instead of running its
+// own invoke + listen. This hook has three independent callers (App, the
+// printer settings modal, the settings-panel host) — sharing the query
+// collapses what was three fetches + three `plugin:changed` listeners into one.
 
-import { useCallback, useEffect, useState } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useCallback, useEffect } from "react";
 import { listPlugins, type PluginSummary } from "./pluginCommands";
+import { defineQuery, invalidateQuery, useQuery } from "../state/queryCache";
 
 /** Event the backend fires after any plugin store mutation. */
 export const PLUGIN_CHANGED_EVENT = "plugin:changed";
 
+/** Stable empty reference for the pre-first-fetch window. */
+const NO_PLUGINS: PluginSummary[] = [];
+
+export const pluginsQuery = defineQuery<PluginSummary[]>({
+  key: "plugins",
+  fetch: () => listPlugins(),
+  invalidateOn: [PLUGIN_CHANGED_EVENT],
+});
+
 export interface UsePluginsResult {
   plugins: PluginSummary[];
-  /** Imperative re-fetch (e.g. after a reload the caller wants to
-   *  reflect immediately). */
+  /** Imperative re-fetch (e.g. after a reload the caller wants to reflect
+   *  immediately). Shared across all consumers via the query cache. */
   reload: () => void;
 }
 
 export function usePlugins(): UsePluginsResult {
-  const [plugins, setPlugins] = useState<PluginSummary[]>([]);
-
-  const refetch = useCallback(async () => {
-    try {
-      const list = await listPlugins();
-      setPlugins(list);
-    } catch (err) {
-      console.error("[plugins] plugin_list failed", err);
-    }
-  }, []);
-
-  const reload = useCallback(() => {
-    void refetch();
-  }, [refetch]);
-
-  useEffect(() => {
-    let mounted = true;
-    let unlisten: UnlistenFn | null = null;
-
-    void (async () => {
-      const un = await listen(PLUGIN_CHANGED_EVENT, () => {
-        void refetch();
-      });
-      if (!mounted) {
-        un();
-        return;
-      }
-      unlisten = un;
-      await refetch();
-    })();
-
-    return () => {
-      mounted = false;
-      if (unlisten) unlisten();
-    };
-  }, [refetch]);
-
-  return { plugins, reload };
+  const { data } = useQuery(pluginsQuery);
+  const reload = useCallback(() => invalidateQuery(pluginsQuery.key), []);
+  return { plugins: data ?? NO_PLUGINS, reload };
 }
 
 /** Close-on-Escape helper. Stops propagation so a nested modal

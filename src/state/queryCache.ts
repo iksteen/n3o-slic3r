@@ -20,6 +20,7 @@
 //     before converting projection-only hooks like usePlateTabs.
 
 import { useCallback, useRef, useSyncExternalStore } from "react";
+import type { Event as TauriEvent } from "@tauri-apps/api/event";
 import { onEvents } from "./eventRouter";
 
 export interface QueryState<T> {
@@ -38,6 +39,12 @@ export interface QueryDef<T> {
   key: string;
   fetch: () => Promise<T>;
   invalidateOn: readonly string[];
+  /** Optional payload filter for parameterized ("family") queries: when set,
+   *  an `invalidateOn` event only triggers a refetch if this returns true.
+   *  E.g. a per-instance query refetches on `printer:instance_changed` only
+   *  when `event.payload === id`, so one printer's change doesn't refetch
+   *  every other printer's cached entry. */
+  shouldInvalidate?: (event: TauriEvent<unknown>) => boolean;
 }
 
 interface QueryEntry<T> {
@@ -71,7 +78,11 @@ function getEntry<T>(def: QueryDef<T>): QueryEntry<T> {
   registry.set(def.key, entry as QueryEntry<unknown>);
   // One shared invalidation subscription for the lifetime of the entry, and
   // the initial fetch. Both happen exactly once per key.
-  onEvents(def.invalidateOn, () => invalidateQuery(def.key));
+  onEvents(def.invalidateOn, (event) => {
+    if (!def.shouldInvalidate || def.shouldInvalidate(event)) {
+      invalidateQuery(def.key);
+    }
+  });
   void runFetch(entry);
   return entry;
 }
@@ -124,18 +135,30 @@ export function invalidateQuery(key: string): void {
   if (entry) void runFetch(entry);
 }
 
+/** Stable "no query" state for a disabled (`null` def) `useQuery` — lets a
+ *  parameterized consumer call the hook unconditionally when its argument
+ *  isn't available yet (e.g. no instance bound). */
+const DISABLED: QueryState<never> = { data: null, loading: false, error: null };
+
 /** React hook: subscribe to a query's state. The first caller for a key
- *  triggers its fetch + invalidation wiring; all callers share one entry. */
-export function useQuery<T>(def: QueryDef<T>): QueryState<T> {
-  const entry = getEntry(def);
-  return useSyncExternalStore(
-    (cb) => {
+ *  triggers its fetch + invalidation wiring; all callers share one entry.
+ *  Pass `null`/`undefined` to disable (returns a constant empty state without
+ *  touching the cache) — for parameterized queries whose argument may be
+ *  absent. */
+export function useQuery<T>(def: QueryDef<T> | null | undefined): QueryState<T> {
+  const entry = def ? getEntry(def) : null;
+  const subscribe = useCallback(
+    (cb: () => void) => {
+      if (!entry) return () => {};
       entry.subscribers.add(cb);
       return () => {
         entry.subscribers.delete(cb);
       };
     },
-    () => entry.state,
+    [entry],
+  );
+  return useSyncExternalStore(subscribe, () =>
+    entry ? entry.state : (DISABLED as QueryState<T>),
   );
 }
 

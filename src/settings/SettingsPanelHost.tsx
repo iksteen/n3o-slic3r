@@ -10,7 +10,6 @@
 // projects a slice of the snapshot. No business logic of its own.
 
 import { useEffect, useMemo, useState } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { ProjectSession } from "../project/useProjectSession";
 import {
   SettingsPanel,
@@ -27,11 +26,11 @@ import { PrinterPicker } from "../printer/PrinterPicker";
 import type { ConnectionSummary } from "../driver/useDriverConnections";
 import { usePrinterCatalog } from "../printer/usePrinterCatalog";
 import {
-  getPrinterInstance,
   setExtruderNozzleDiameter,
   setInstanceBed,
   type PrinterInstance,
 } from "../printer/printerInstance";
+import { usePrinterInstance } from "../printer/usePrinterInstance";
 import { SlotBindingPanel } from "../material/SlotBindingPanel";
 import { BuildPlateSelector } from "./BuildPlateSelector";
 import { NozzlePicker } from "./NozzlePicker";
@@ -194,34 +193,11 @@ export function SettingsPanelHost({
   // write through `printerInstanceSetBed` /
   // `printerInstanceSetExtruderNozzleDiameter`, the slicer composer
   // reads off `instance.bed.identity` /
-  // `instance.extruders[i].installed_nozzle`. Same fetch +
-  // `instance_changed` refresh pattern SlotBindingPanel uses.
+  // `instance.extruders[i].installed_nozzle`. The shared per-instance
+  // query handles the fetch + `instance_changed` refresh (and shares
+  // it with SlotBindingPanel, which reads the same id).
   const instanceId = plate?.printer_instance_id ?? null;
-  const [instance, setInstance] = useState<PrinterInstance | null>(null);
-  useEffect(() => {
-    if (!instanceId) {
-      setInstance(null);
-      return;
-    }
-    let cancelled = false;
-    void getPrinterInstance(instanceId).then((inst) => {
-      if (!cancelled) setInstance(inst);
-    });
-    let unlisten: UnlistenFn | null = null;
-    void listen<string>("printer:instance_changed", (event) => {
-      if (event.payload !== instanceId) return;
-      void getPrinterInstance(instanceId).then((inst) => {
-        if (!cancelled) setInstance(inst);
-      });
-    }).then((u) => {
-      if (cancelled) u();
-      else unlisten = u;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [instanceId]);
+  const instance = usePrinterInstance(instanceId);
   const instanceBed = instance?.bed.identity ?? null;
 
   // Quality picker — process fragments available for the active
