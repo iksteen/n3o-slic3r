@@ -1,18 +1,18 @@
-// Shared loader for the bundled filament catalog. The slot-binding
-// panel and the Devices monitor both need to map a slot's
-// `filament_identity` to a display name / base type; this centralizes
-// the one-shot fetch + identity index so it isn't reimplemented (and
-// allowed to drift) per surface.
+// Shared loader for the bundled filament catalog. The slot-binding panel and
+// the Devices monitor both need to map a slot's `filament_identity` to a
+// display name / base type; this centralizes the one-shot fetch + identity
+// index so it isn't reimplemented (and allowed to drift) per surface.
 //
-// The catalog is static for a session, so the fetched list is cached at
-// module scope (mirrors `usePrinterCatalog`): every consumer shares one
-// `filament_profile_list` round-trip, and a remount (entering the
-// Devices view, reopening the settings panel) reads the cached value
-// synchronously instead of re-fetching from empty.
+// State-layer: the catalog is a query with no invalidation event (static for
+// the session — `invalidateOn: []`). The query cache holds the one fetched
+// list, so every consumer shares one `filament_profile_list` round-trip and a
+// remount reads the cached value immediately. When user-library editing lands,
+// give this query a `filament:changed`-style invalidation event.
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { FilamentSummary } from "./filamentSummary";
+import { defineQuery, useQuery } from "../state/queryCache";
 
 export interface FilamentCatalog {
   /** Raw bundled filament fragments. */
@@ -21,30 +21,20 @@ export interface FilamentCatalog {
   byIdentity: Map<string, FilamentSummary>;
 }
 
-// Module-level cache, shared across every hook instance and surviving
-// component unmount/remount. `null` until the first fetch resolves.
-let catalogCache: FilamentSummary[] | null = null;
+/** Stable empty reference for the pre-first-fetch window. */
+const NO_FILAMENTS: FilamentSummary[] = [];
 
-/** Load the bundled filament catalog once per session and index it by
- *  identity. The catalog is small + stable, so there's no refetch
- *  trigger until user-library editing lands. */
+export const filamentCatalogQuery = defineQuery<FilamentSummary[]>({
+  key: "filament_catalog",
+  fetch: () => invoke<FilamentSummary[]>("filament_profile_list"),
+  invalidateOn: [],
+});
+
+/** The bundled filament catalog, indexed by identity. Shared across every
+ *  consumer via the query cache. */
 export function useFilamentCatalog(): FilamentCatalog {
-  const [list, setList] = useState<FilamentSummary[]>(catalogCache ?? []);
-  useEffect(() => {
-    if (catalogCache != null) return;
-    let cancelled = false;
-    void invoke<FilamentSummary[]>("filament_profile_list")
-      .then((l) => {
-        if (catalogCache == null) catalogCache = l;
-        if (!cancelled) setList(l);
-      })
-      .catch((err) =>
-        console.error("[filament] filament_profile_list failed", err),
-      );
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { data } = useQuery(filamentCatalogQuery);
+  const list = data ?? NO_FILAMENTS;
   const byIdentity = useMemo(() => {
     const map = new Map<string, FilamentSummary>();
     for (const f of list) map.set(f.identity, f);

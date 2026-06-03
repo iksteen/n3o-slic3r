@@ -14,7 +14,8 @@
 // completion rates.
 
 import { useEffect, useState } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { onEvents } from "../state/eventRouter";
 import type { SliceEvent } from "./types";
 import { listenPlateEdits } from "../project/editEvents";
 
@@ -29,26 +30,11 @@ export function useLastSliceOutput(): UseLastSliceOutputResult {
   const [paths, setPaths] = useState<Record<number, string>>({});
 
   useEffect(() => {
-    let mounted = true;
-    let unlisten: UnlistenFn | null = null;
-
-    void (async () => {
-      const un = await listen<SliceEvent>("slice:plate_finished", (e) => {
-        if (e.payload.kind !== "PlateFinished") return;
-        const { plate_id, output_path } = e.payload.data;
-        setPaths((prev) => ({ ...prev, [plate_id]: output_path }));
-      });
-      if (mounted) {
-        unlisten = un;
-      } else {
-        un();
-      }
-    })();
-
-    return () => {
-      mounted = false;
-      if (unlisten) unlisten();
-    };
+    return onEvents<SliceEvent>(["slice:plate_finished"], (e) => {
+      if (e.payload.kind !== "PlateFinished") return;
+      const { plate_id, output_path } = e.payload.data;
+      setPaths((prev) => ({ ...prev, [plate_id]: output_path }));
+    });
   }, []);
 
   // Editing a plate invalidates its last slice: drop the path so Send/Export

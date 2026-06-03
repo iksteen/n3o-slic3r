@@ -7,7 +7,8 @@
 // gcode and fire `onPreviewReady` so App can switch to preview.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { onEvents } from "../state/eventRouter";
 
 import { previewDrop, previewLoad } from "./invokes";
 import type { PreviewLoadResponse } from "./types";
@@ -47,38 +48,35 @@ export function useSlicePreviewBridge(
   const readyCallbackRef = useRef<((plateId: number) => void) | null>(null);
 
   useEffect(() => {
-    let unlisten: UnlistenFn | null = null;
-    void (async () => {
-      unlisten = await listen<PlateFinishedPayload>(
-        "slice:plate_finished",
-        (e) => {
-          const data = e.payload?.data;
-          if (!data?.plate_id || !data?.output_path) return;
-          const plateId = data.plate_id;
-          const path = data.output_path;
-          // Load the gcode through the preview pipeline. Drop
-          // the previous cached preview for the same plate so
-          // we don't leak the 250MB-per-load memory.
-          const prior = cacheRef.current.get(plateId);
-          if (prior) {
-            void previewDrop(prior.handle).catch(() => undefined);
-          }
-          void previewLoad(path)
-            .then((res) => {
-              cacheRef.current.set(plateId, res);
-              setTick((t) => t + 1);
-              if (readyCallbackRef.current) {
-                readyCallbackRef.current(plateId);
-              }
-            })
-            .catch((err) =>
-              console.error("[preview] auto-load after slice failed", err),
-            );
-        },
-      );
-    })();
+    const off = onEvents<PlateFinishedPayload>(
+      ["slice:plate_finished"],
+      (e) => {
+        const data = e.payload?.data;
+        if (!data?.plate_id || !data?.output_path) return;
+        const plateId = data.plate_id;
+        const path = data.output_path;
+        // Load the gcode through the preview pipeline. Drop the previous
+        // cached preview for the same plate so we don't leak the
+        // 250MB-per-load memory.
+        const prior = cacheRef.current.get(plateId);
+        if (prior) {
+          void previewDrop(prior.handle).catch(() => undefined);
+        }
+        void previewLoad(path)
+          .then((res) => {
+            cacheRef.current.set(plateId, res);
+            setTick((t) => t + 1);
+            if (readyCallbackRef.current) {
+              readyCallbackRef.current(plateId);
+            }
+          })
+          .catch((err) =>
+            console.error("[preview] auto-load after slice failed", err),
+          );
+      },
+    );
     return () => {
-      if (unlisten) unlisten();
+      off();
       // Drop all cached previews on unmount.
       for (const r of cacheRef.current.values()) {
         void previewDrop(r.handle).catch(() => undefined);

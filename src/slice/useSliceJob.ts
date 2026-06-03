@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { onEvents } from "../state/eventRouter";
 
 import { initialState, reduce } from "./reducer";
 import { SLICE_EVENT_NAMES, type JobId, type SliceEvent } from "./types";
@@ -24,25 +24,17 @@ export function useSliceJob() {
   jobIdRef.current = state.job_id;
 
   useEffect(() => {
-    const unlisteners: UnlistenFn[] = [];
-    let mounted = true;
+    // Subscribe via the router (synchronous registration — no subscribe-race
+    // to guard).
+    const off = onEvents<SliceEvent>(SLICE_EVENT_NAMES, (e) => {
+      dispatch({ type: "event", event: e.payload });
+    });
 
+    // Reconnect path: if a prior renderer session was running a job
+    // when the window reloaded, resync from the cached status. The
+    // events that already fired are gone but the backend snapshot
+    // gets us back to a reasonable starting point.
     void (async () => {
-      for (const name of SLICE_EVENT_NAMES) {
-        const un = await listen<SliceEvent>(name, (e) => {
-          dispatch({ type: "event", event: e.payload });
-        });
-        if (!mounted) {
-          un();
-          continue;
-        }
-        unlisteners.push(un);
-      }
-
-      // Reconnect path: if a prior renderer session was running a job
-      // when the window reloaded, resync from the cached status. The
-      // events that already fired are gone but the backend snapshot
-      // gets us back to a reasonable starting point.
       const saved = readStoredJobId();
       if (saved != null) {
         try {
@@ -84,10 +76,7 @@ export function useSliceJob() {
       }
     })();
 
-    return () => {
-      mounted = false;
-      for (const un of unlisteners) un();
-    };
+    return off;
   }, []);
 
   const start = useCallback(async (): Promise<JobId> => {

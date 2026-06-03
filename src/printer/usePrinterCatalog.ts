@@ -1,27 +1,20 @@
-// `usePrinterCatalog` — fetches + caches the bundled printer
-// catalog (PR-5-4). The catalog is static data; refetching after
-// the first mount serves no purpose, so this is a one-shot fetch
-// that returns the cached list to every subsequent caller.
+// `usePrinterCatalog` — the bundled printer catalog (PR-5-4).
+//
+// State-layer: a query with no invalidation event — the catalog is static
+// bundled data, so it fetches once and the query cache returns the cached list
+// to every later caller (replacing this hook's hand-rolled module promise).
 
-import { useEffect, useState } from "react";
-import {
-  printerCatalog,
-  type PrinterCatalogEntry,
-} from "./printerCommands";
+import { printerCatalog, type PrinterCatalogEntry } from "./printerCommands";
+import { defineQuery, useQuery } from "../state/queryCache";
 
-let cachedPromise: Promise<PrinterCatalogEntry[]> | null = null;
+/** Stable empty reference for the pre-first-fetch window. */
+const NO_ENTRIES: PrinterCatalogEntry[] = [];
 
-function loadCatalog(): Promise<PrinterCatalogEntry[]> {
-  if (cachedPromise === null) {
-    cachedPromise = printerCatalog().catch((err) => {
-      // Reset on failure so a transient hiccup doesn't poison
-      // subsequent mounts.
-      cachedPromise = null;
-      throw err;
-    });
-  }
-  return cachedPromise;
-}
+export const printerCatalogQuery = defineQuery<PrinterCatalogEntry[]>({
+  key: "printer_catalog",
+  fetch: () => printerCatalog(),
+  invalidateOn: [],
+});
 
 export interface CatalogState {
   entries: PrinterCatalogEntry[];
@@ -30,30 +23,6 @@ export interface CatalogState {
 }
 
 export function usePrinterCatalog(): CatalogState {
-  const [entries, setEntries] = useState<PrinterCatalogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let mounted = true;
-    setLoading(true);
-    loadCatalog()
-      .then((list) => {
-        if (mounted) {
-          setEntries(list);
-          setLoading(false);
-        }
-      })
-      .catch((err) => {
-        if (mounted) {
-          setError(String(err));
-          setLoading(false);
-        }
-      });
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  return { entries, loading, error };
+  const { data, loading, error } = useQuery(printerCatalogQuery);
+  return { entries: data ?? NO_ENTRIES, loading, error };
 }

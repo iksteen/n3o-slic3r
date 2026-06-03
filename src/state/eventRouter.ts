@@ -19,43 +19,61 @@
 
 import { listen, type Event as TauriEvent } from "@tauri-apps/api/event";
 
-/** A router handler. Receives the raw Tauri event (name + payload) so a
- *  handler that needs `data.plate_id` can read it. */
-export type EventHandler = (event: TauriEvent<unknown>) => void;
+/** A router handler. Receives the raw Tauri event (name + payload). `T` is the
+ *  payload type when a name-group is homogeneous (e.g. all `SliceEvent`);
+ *  defaults to `unknown`. */
+export type EventHandler<T = unknown> = (event: TauriEvent<T>) => void;
 
 const handlers = new Map<string, Set<EventHandler>>();
-/** Names we've already opened a (single) Tauri `listen` for. */
-const listening = new Set<string>();
+/** Per-name `listen()` promise — one shared subscription per name, created on
+ *  first interest. Awaited by `onEventsReady` so order-sensitive consumers
+ *  (the scene-mirror bridge: subscribe before the initial snapshot) don't miss
+ *  an event in the listen-resolution window. */
+const listenPromises = new Map<string, Promise<void>>();
 
-function ensureListening(name: string): void {
-  if (listening.has(name)) return;
-  listening.add(name);
-  // Fire-and-forget: the subscription lives for the app's lifetime. An event
-  // arriving in the tiny window before this promise resolves is lost — the
-  // same race the per-hook subscribe-before-fetch pattern already tolerates,
-  // and queries do an initial fetch regardless.
-  void listen(name, (event) => {
+function ensureListening(name: string): Promise<void> {
+  const existing = listenPromises.get(name);
+  if (existing) return existing;
+  // The subscription lives for the app's lifetime (event names are a small
+  // fixed vocabulary; the streams are app-global), so we discard the
+  // UnlistenFn and never tear the Tauri listener down — only per-handler
+  // registration is ref-counted.
+  const p = listen(name, (event) => {
     const set = handlers.get(name);
     if (!set) return;
     // Snapshot before iterating: a handler may unsubscribe mid-dispatch.
     for (const h of [...set]) h(event);
-  });
+  }).then(() => {});
+  listenPromises.set(name, p);
+  return p;
 }
 
 /** Register `handler` for every name in `names`. Returns an unsubscribe that
  *  detaches it from all of them. Multiple calls for the same name share one
  *  underlying Tauri subscription. */
-export function onEvents(
+export function onEvents<T = unknown>(
   names: readonly string[],
-  handler: EventHandler,
+  handler: EventHandler<T>,
 ): () => void {
   for (const name of names) {
     let set = handlers.get(name);
     if (!set) handlers.set(name, (set = new Set()));
-    set.add(handler);
-    ensureListening(name);
+    set.add(handler as EventHandler);
+    void ensureListening(name);
   }
   return () => {
-    for (const name of names) handlers.get(name)?.delete(handler);
+    for (const name of names) handlers.get(name)?.delete(handler as EventHandler);
   };
+}
+
+/** Like `onEvents`, but resolves only once every name's underlying Tauri
+ *  `listen` is established — so a consumer that must not miss events between
+ *  subscribing and an initial fetch can `await` this before fetching. */
+export async function onEventsReady<T = unknown>(
+  names: readonly string[],
+  handler: EventHandler<T>,
+): Promise<() => void> {
+  const off = onEvents(names, handler);
+  await Promise.all(names.map((name) => ensureListening(name)));
+  return off;
 }

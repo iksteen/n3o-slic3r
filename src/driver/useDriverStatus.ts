@@ -12,7 +12,7 @@
 // `useDriverConnections`.
 
 import { useCallback, useSyncExternalStore } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { onEvents } from "../state/eventRouter";
 import { driverStatus } from "./invokes";
 import type { DriverId, PrinterStatus, StatusUpdateEvent } from "./types";
 
@@ -38,8 +38,7 @@ const subscribers = new Set<() => void>();
 const seeded = new Set<DriverId>();
 const EMPTY: UseDriverStatusResult = { status: null, error: null };
 
-let unlisten: UnlistenFn | null = null;
-let starting = false;
+let statusOff: (() => void) | null = null;
 
 function notify(): void {
   for (const cb of subscribers) cb();
@@ -51,17 +50,15 @@ function setEntry(id: DriverId, patch: Partial<Entry>): void {
   notify();
 }
 
-// One shared listener for the app's lifetime. The channel name is
-// constant (drivers come and go, the event isn't), so once started it's
-// never torn down — there's nothing per-consumer to clean up.
+// One shared subscription for the app's lifetime, via the router. The channel
+// name is constant (drivers come and go, the event isn't), so once started it's
+// never torn down — there's nothing per-consumer to clean up. The router
+// shares this `driver:status_update` subscription with useDriverConnections'
+// reconciler, which reads the same stream.
 function ensureListening(): void {
-  if (unlisten != null || starting) return;
-  starting = true;
-  void listen<StatusUpdateEvent>("driver:status_update", (e) => {
+  if (statusOff != null) return;
+  statusOff = onEvents<StatusUpdateEvent>(["driver:status_update"], (e) => {
     setEntry(e.payload.driver_id, { status: e.payload.status, error: null });
-  }).then((un) => {
-    unlisten = un;
-    starting = false;
   });
 }
 
@@ -120,9 +117,10 @@ export function useDriverStatus(
 // import.meta.hot). Mirrors the dispose hook in `useDriverConnections`.
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    void unlisten?.();
-    unlisten = null;
-    starting = false;
+    // Detach only this module's handler — the router's shared
+    // `driver:status_update` subscription stays up for other consumers.
+    statusOff?.();
+    statusOff = null;
     entries.clear();
     subscribers.clear();
     seeded.clear();

@@ -12,7 +12,7 @@
 // reflector; the canonical state is on the Rust side.
 
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { onEvents } from "../state/eventRouter";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -383,21 +383,19 @@ export function ViewportCanvas({
     // a quality-profile swap (prime_tower_width), and changes to the plate's
     // material count (add/remove an object, reassign a material) — the tower
     // only exists for a multi-material plate.
-    const towerUnlisten: UnlistenFn[] = [];
-    for (const name of [
-      "scene:project_overrides_changed",
-      "scene:user_overrides_changed",
-      "scene:plate_metadata_changed",
-      "scene:object_added",
-      "scene:object_removed",
-      "scene:material_slot_changed",
-    ]) {
-      void listen(name, () => {
+    const detachTowerListeners = onEvents(
+      [
+        "scene:project_overrides_changed",
+        "scene:user_overrides_changed",
+        "scene:plate_metadata_changed",
+        "scene:object_added",
+        "scene:object_removed",
+        "scene:material_slot_changed",
+      ],
+      () => {
         void refreshTower();
-      })
-        .then((un) => towerUnlisten.push(un))
-        .catch(() => {});
-    }
+      },
+    );
 
     // The exact tower mesh from a finished slice lands in the module-level
     // cache, fed by App's app-lifetime `slice:plate_finished` listener (so
@@ -592,7 +590,7 @@ export function ViewportCanvas({
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("keydown", onKeyDown);
-      for (const un of towerUnlisten) un();
+      detachTowerListeners();
       detachTowerCache();
       resizeObserver.disconnect();
       detachToastsListener();

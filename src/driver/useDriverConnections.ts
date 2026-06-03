@@ -16,7 +16,7 @@
 // hooks when the map mutates so consumers re-render.
 
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { onEvents } from "../state/eventRouter";
 import {
   driverConnect,
   driverDisconnect,
@@ -140,43 +140,33 @@ function bumpAndNotify(): void {
   for (const fn of SUBSCRIBERS) fn();
 }
 
-/** One-shot install of the global `driver:status_update` listener.
- *  Lazy because the Tauri event bus isn't available during SSR
- *  / unit tests; the listener stays installed for the app's
- *  lifetime since drivers outlive the React tree. */
-let GLOBAL_STATUS_LISTENER: Promise<UnlistenFn | null> | null = null;
+/** One-shot install of the global `driver:status_update` handler via the
+ *  router (which shares the one Tauri subscription with useDriverStatus). Lazy
+ *  because the event bus isn't available during unit tests; the handler stays
+ *  installed for the app's lifetime since drivers outlive the React tree. */
+let globalStatusOff: (() => void) | null = null;
 function ensureGlobalStatusListener(): void {
-  if (GLOBAL_STATUS_LISTENER != null) return;
-  GLOBAL_STATUS_LISTENER = (async () => {
-    try {
-      return await listen<StatusUpdateEvent>(
-        "driver:status_update",
-        (e) => {
-          // O(1) reverse-lookup. Populated at register-success
-          // time so first-event-after-spawn routes correctly even
-          // before the entry transitions to `live`.
-          const identity = DRIVER_TO_IDENTITY.get(e.payload.driver_id);
-          if (identity == null) return;
-          const entry = ENTRIES.get(identity);
-          if (entry == null || entry.kind !== "live") return;
-          // In-place mutation of the runtime field is OK: the
-          // entry object identity is not part of the snapshot
-          // cache key — the version bump below invalidates it.
-          ENTRIES.set(identity, {
-            ...entry,
-            runtime: e.payload.status.connection,
-          });
-          bumpAndNotify();
-        },
-      );
-    } catch (e) {
-      console.warn(
-        "[driver-auto] failed to install global status listener",
-        e,
-      );
-      return null;
-    }
-  })();
+  if (globalStatusOff != null) return;
+  globalStatusOff = onEvents<StatusUpdateEvent>(
+    ["driver:status_update"],
+    (e) => {
+      // O(1) reverse-lookup. Populated at register-success time so
+      // first-event-after-spawn routes correctly even before the entry
+      // transitions to `live`.
+      const identity = DRIVER_TO_IDENTITY.get(e.payload.driver_id);
+      if (identity == null) return;
+      const entry = ENTRIES.get(identity);
+      if (entry == null || entry.kind !== "live") return;
+      // In-place mutation of the runtime field is OK: the entry object
+      // identity is not part of the snapshot cache key — the version bump
+      // below invalidates it.
+      ENTRIES.set(identity, {
+        ...entry,
+        runtime: e.payload.status.connection,
+      });
+      bumpAndNotify();
+    },
+  );
 }
 
 // Vite HMR teardown: when this module re-evaluates in dev, the
@@ -187,8 +177,10 @@ function ensureGlobalStatusListener(): void {
 // import.meta.hot).
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
-    void GLOBAL_STATUS_LISTENER?.then((unlisten) => unlisten?.());
-    GLOBAL_STATUS_LISTENER = null;
+    // Detach only THIS module's handler — the router's shared
+    // `driver:status_update` subscription stays up for useDriverStatus.
+    globalStatusOff?.();
+    globalStatusOff = null;
     ENTRIES.clear();
     DRIVER_TO_IDENTITY.clear();
     PENDING.clear();

@@ -8,7 +8,8 @@
 // code (Tauri event listeners) pushes through the plain `pushLog` function.
 
 import { useSyncExternalStore } from "react";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { onEvents } from "../state/eventRouter";
 import type { PlateWarningEvent, SliceEvent } from "../slice/types";
 import { sliceErrorMessage } from "../slice/reducer";
 
@@ -108,16 +109,16 @@ export function useLogs(): LogEntry[] {
  *  libslic3r's non-fatal validation warnings as warnings. Returns an
  *  unlisten fn that tears down both listeners. */
 export async function setupLogSinks(): Promise<UnlistenFn> {
-  const unfail = await listen<SliceEvent>("slice:job_failed", (e) => {
+  const offFail = onEvents<SliceEvent>(["slice:job_failed"], (e) => {
     if (e.payload.kind === "JobFailed") {
       pushLog("error", `Slice failed: ${sliceErrorMessage(e.payload.data.error)}`);
     }
   });
-  const unwarn = await listen<PlateWarningEvent>("slice:plate_warning", (e) => {
+  const offWarn = onEvents<PlateWarningEvent>(["slice:plate_warning"], (e) => {
     pushLog("warn", e.payload.data.message);
   });
   return () => {
-    unfail();
-    unwarn();
+    offFail();
+    offWarn();
   };
 }

@@ -12,7 +12,8 @@
 // viewport mount state. The viewport then just reads the cache on mount.
 
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { onEvents } from "../state/eventRouter";
 import type { TowerGeometry, TowerMesh } from "./types";
 
 interface CachedTowerMesh {
@@ -57,14 +58,14 @@ function notify(plateId: number): void {
   for (const cb of subscribers) cb(plateId);
 }
 
-/** Wire the app-lifetime `slice:plate_finished` → cache listener. Call once
- *  from an always-mounted component (App); await + invoke the returned
- *  unlisten on teardown. */
+/** Wire the app-lifetime `slice:plate_finished` → cache handler via the router.
+ *  Call once from an always-mounted component (App); await + invoke the
+ *  returned unsubscribe on teardown. */
 export async function setupTowerMeshCache(): Promise<UnlistenFn> {
   // SliceEvent serializes tagged (`#[serde(tag="kind", content="data")]`),
   // so the payload is `{ kind, data: {...} }` — the fields are under `.data`.
-  return listen<{ data: { plate_id: number; tower_mesh: TowerMesh | null } }>(
-    "slice:plate_finished",
+  return onEvents<{ data: { plate_id: number; tower_mesh: TowerMesh | null } }>(
+    ["slice:plate_finished"],
     (e) => {
       const { plate_id, tower_mesh } = e.payload.data;
       const seq = ++seqCounter;

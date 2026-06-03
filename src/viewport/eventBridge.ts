@@ -8,7 +8,7 @@
 // rebuilds its mirror at any time without losing state.
 
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { onEventsReady } from "../state/eventRouter";
 import type {
   SceneMirror,
   MeshBufferProvider,
@@ -118,49 +118,49 @@ export function decodeMeshBuffer(
 export async function attachEventBridge(
   mirror: SceneMirror,
 ): Promise<() => Promise<void>> {
-  const unlisteners: UnlistenFn[] = [];
-  for (const name of EVENT_NAMES) {
-    const un = await listen<SceneEvent>(name, (e) => {
-      // Tauri delivers the payload as the event's `payload` field.
-      // The backend already shapes it as `{ kind, data }`.
-      if (import.meta.env.DEV) {
-        console.debug("[n3o] event in", name, e.payload);
-      }
-      void mirror.applyEvent(e.payload);
-      if (e.payload.kind === "ProjectLoaded") {
-        // The whole project changed — refetch the snapshot rather
-        // than try to incrementally update from prior state.
-        void refreshSnapshot(mirror);
-      }
-      // Anything that may have silently mutated the plate's
-      // material→slot routing on the backend: refetch + recolor.
-      // Auto-bind runs as a side effect of register_object
-      // (ObjectAdded) and rebind_plate_printer wipes + re-binds
-      // (PlateMetadataChanged) — neither emits MaterialSlotChanged,
-      // so the explicit-edit handler isn't enough on its own.
-      if (
-        e.payload.kind === "MaterialSlotChanged" ||
-        e.payload.kind === "ObjectAdded" ||
-        e.payload.kind === "PlateMetadataChanged"
-      ) {
-        void refreshPlateMaterialToSlot(mirror, e.payload.data.plate_id);
-      }
-    });
-    unlisteners.push(un);
-  }
+  // Subscribe via the router, awaiting readiness so no scene delta can slip
+  // through between subscribing and the initial snapshot below.
+  const offScene = await onEventsReady<SceneEvent>(EVENT_NAMES, (e) => {
+    // Tauri delivers the payload as the event's `payload` field.
+    // The backend already shapes it as `{ kind, data }`.
+    if (import.meta.env.DEV) {
+      console.debug("[n3o] event in", e.event, e.payload);
+    }
+    void mirror.applyEvent(e.payload);
+    if (e.payload.kind === "ProjectLoaded") {
+      // The whole project changed — refetch the snapshot rather
+      // than try to incrementally update from prior state.
+      void refreshSnapshot(mirror);
+    }
+    // Anything that may have silently mutated the plate's
+    // material→slot routing on the backend: refetch + recolor.
+    // Auto-bind runs as a side effect of register_object
+    // (ObjectAdded) and rebind_plate_printer wipes + re-binds
+    // (PlateMetadataChanged) — neither emits MaterialSlotChanged,
+    // so the explicit-edit handler isn't enough on its own.
+    if (
+      e.payload.kind === "MaterialSlotChanged" ||
+      e.payload.kind === "ObjectAdded" ||
+      e.payload.kind === "PlateMetadataChanged"
+    ) {
+      void refreshPlateMaterialToSlot(mirror, e.payload.data.plate_id);
+    }
+  });
 
   // Live printer-instance updates: payload is the mutated instance
   // id; fetch its post-mutation state + push so the mirror can
   // recolor any plate bound to it. Kept off the SceneEvent channel
   // since the printer-instance registry is its own concern (the
   // setter lives in `core::printer`, not `core::scene`).
-  const instanceUn = await listen<string>("printer:instance_changed", (e) => {
-    if (import.meta.env.DEV) {
-      console.debug("[n3o] printer:instance_changed", e.payload);
-    }
-    void pushPrinterInstance(mirror, e.payload);
-  });
-  unlisteners.push(instanceUn);
+  const offInstance = await onEventsReady<string>(
+    ["printer:instance_changed"],
+    (e) => {
+      if (import.meta.env.DEV) {
+        console.debug("[n3o] printer:instance_changed", e.payload);
+      }
+      void pushPrinterInstance(mirror, e.payload);
+    },
+  );
 
   // Prime the cache before the first snapshot so initial render
   // paints with the right spool colors instead of flashing the
@@ -171,7 +171,8 @@ export async function attachEventBridge(
   await refreshSnapshot(mirror);
 
   return async () => {
-    for (const un of unlisteners) un();
+    offScene();
+    offInstance();
   };
 }
 

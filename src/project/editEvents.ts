@@ -10,7 +10,8 @@
 // navigation (`scene:active_plate_changed`), structural add/remove of empty
 // plates, and the warning events (out-of-bounds, non-uniform-scale, …).
 
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { onEvents } from "../state/eventRouter";
 
 /** Plate-scoped content edits — each carries `data.plate_id` and invalidates
  *  just that plate. */
@@ -56,22 +57,21 @@ interface EditPayload {
   data?: { plate_id?: number };
 }
 
-/** Subscribe to content edits. `onPlate(plateId)` fires for a plate-scoped
- *  edit; `onAll()` for a project-wide one. Returns a single unlisten that
- *  tears down every subscription. */
+/** Subscribe to content edits via the shared event router. `onPlate(plateId)`
+ *  fires for a plate-scoped edit; `onAll()` for a project-wide one. Returns a
+ *  single unsubscribe. Async-returning for caller compatibility (the router
+ *  registration itself is synchronous). */
 export async function listenPlateEdits(
   onPlate: (plateId: number) => void,
   onAll: () => void,
 ): Promise<UnlistenFn> {
-  const uns: UnlistenFn[] = [];
-  for (const name of PLATE_EDIT_EVENTS) {
-    uns.push(
-      await listen<EditPayload>(name, (e) => {
-        const plateId = e.payload?.data?.plate_id;
-        if (plateId != null) onPlate(plateId);
-      }),
-    );
-  }
-  uns.push(await listen(PROJECT_WIDE_EDIT_EVENT, () => onAll()));
-  return () => uns.forEach((u) => u());
+  const offPlate = onEvents<EditPayload>(PLATE_EDIT_EVENTS, (e) => {
+    const plateId = e.payload?.data?.plate_id;
+    if (plateId != null) onPlate(plateId);
+  });
+  const offAll = onEvents([PROJECT_WIDE_EDIT_EVENT], () => onAll());
+  return () => {
+    offPlate();
+    offAll();
+  };
 }

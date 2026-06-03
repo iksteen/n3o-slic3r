@@ -21,7 +21,7 @@ import {
   save as saveDialog,
   message as messageDialog,
 } from "@tauri-apps/plugin-dialog";
-import { listen } from "@tauri-apps/api/event";
+import { onEvents } from "./state/eventRouter";
 import { SettingsPanelHost } from "./settings/SettingsPanelHost";
 import { ObjectsPanel } from "./objects/ObjectsPanel";
 import { PreviewWorkspace } from "./preview/PreviewWorkspace";
@@ -338,8 +338,8 @@ function App() {
   // A foreign project imported via Open project → show what mapped and
   // what was dropped, so lossy mapping is never silent.
   useEffect(() => {
-    const un = listen<{ data: { report: ImportReport } }>(
-      "project:imported",
+    return onEvents<{ data: { report: ImportReport } }>(
+      ["project:imported"],
       (e) => {
         const r = e.payload.data.report;
         const lines = [
@@ -364,9 +364,6 @@ function App() {
         });
       },
     );
-    return () => {
-      void un.then((f) => f());
-    };
   }, []);
 
   // ----- Project file menu (Open / Save / Save as) -----
