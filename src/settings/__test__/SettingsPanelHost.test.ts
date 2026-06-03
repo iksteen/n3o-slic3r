@@ -74,6 +74,7 @@ function session(overrides: Partial<ProjectSession> = {}): ProjectSession {
   return {
     cascadeHandle: null,
     snapshot: null,
+    dirty: false,
     loading: false,
     error: null,
     ...overrides,

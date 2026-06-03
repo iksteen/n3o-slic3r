@@ -11,6 +11,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { previewDrop, previewLoad } from "./invokes";
 import type { PreviewLoadResponse } from "./types";
+import { listenPlateEdits } from "../project/editEvents";
 
 interface PlateFinishedPayload {
   data?: {
@@ -83,6 +84,35 @@ export function useSlicePreviewBridge(
         void previewDrop(r.handle).catch(() => undefined);
       }
       cacheRef.current.clear();
+    };
+  }, []);
+
+  // Editing a plate makes its preview stale — blank it (drop the cached
+  // handle so the workspace falls back to its "slice to preview" state and a
+  // stale render can't be shown or sent). A project-wide edit (user
+  // overrides) blanks every plate's preview.
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    const dropPlate = (plateId: number) => {
+      const prior = cacheRef.current.get(plateId);
+      if (prior) {
+        void previewDrop(prior.handle).catch(() => undefined);
+        cacheRef.current.delete(plateId);
+        setTick((t) => t + 1);
+      }
+    };
+    void (async () => {
+      unlisten = await listenPlateEdits(dropPlate, () => {
+        if (cacheRef.current.size === 0) return;
+        for (const r of cacheRef.current.values()) {
+          void previewDrop(r.handle).catch(() => undefined);
+        }
+        cacheRef.current.clear();
+        setTick((t) => t + 1);
+      });
+    })();
+    return () => {
+      if (unlisten) unlisten();
     };
   }, []);
 

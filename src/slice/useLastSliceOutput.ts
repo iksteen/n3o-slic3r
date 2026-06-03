@@ -16,6 +16,7 @@
 import { useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { SliceEvent } from "./types";
+import { listenPlateEdits } from "../project/editEvents";
 
 export interface UseLastSliceOutputResult {
   /** Path of the most recent slice's `.gcode` output for the
@@ -46,6 +47,29 @@ export function useLastSliceOutput(): UseLastSliceOutputResult {
 
     return () => {
       mounted = false;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  // Editing a plate invalidates its last slice: drop the path so Send/Export
+  // can't push a gcode that no longer matches the plate (sendGate reports
+  // "Slice the plate first" once the path is gone). A project-wide edit
+  // (user overrides) invalidates every plate's slice.
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    void (async () => {
+      unlisten = await listenPlateEdits(
+        (plateId) =>
+          setPaths((prev) => {
+            if (!(plateId in prev)) return prev;
+            const next = { ...prev };
+            delete next[plateId];
+            return next;
+          }),
+        () => setPaths((prev) => (Object.keys(prev).length ? {} : prev)),
+      );
+    })();
+    return () => {
       if (unlisten) unlisten();
     };
   }, []);

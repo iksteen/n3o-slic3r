@@ -685,6 +685,14 @@
     padding: 1px 7px;
   }
 
+  /* Unsaved-changes marker next to the project name. */
+  .tb-dirty-dot {
+    color: var(--accent-text);
+    font-size: 14px;
+    line-height: 1;
+    margin-right: 1px;
+  }
+
   /* ─────────── Status bar ─────────── */
   .statusbar {
     display: flex;

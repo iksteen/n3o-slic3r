@@ -481,6 +481,7 @@ function App() {
         {session.snapshot && (
           <ProjectMenu
             projectName={projectName}
+            dirty={session.dirty}
             onNewProject={() => void handleNewProject()}
             onOpenProject={() => void handleOpenProject()}
             onSaveProject={() => void handleSaveProject()}

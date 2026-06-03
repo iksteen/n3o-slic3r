@@ -88,6 +88,8 @@ export interface ProjectMenuProps {
   /** The current project's filename (e.g. "thing.3mf"), or
    * "Untitled.3mf" when the project has never been saved. */
   projectName?: string | null;
+  /** True when the project has unsaved edits — shows a `•` marker. */
+  dirty?: boolean;
   onNewProject: () => void;
   onOpenProject: () => void;
   onSaveProject: () => void;
@@ -98,6 +100,7 @@ export interface ProjectMenuProps {
 
 export function ProjectMenu({
   projectName,
+  dirty = false,
   onNewProject,
   onOpenProject,
   onSaveProject,
@@ -114,6 +117,15 @@ export function ProjectMenu({
   return (
     <div className="tb-file-menu-wrap" ref={ref}>
       <button type="button" className="tb-btn" onClick={() => setOpen(!open)}>
+        {dirty && (
+          <span
+            className="tb-dirty-dot"
+            title="Unsaved changes"
+            aria-label="Unsaved changes"
+          >
+            •
+          </span>
+        )}
         <span>{projectName ?? "Untitled.3mf"}</span>
         <Chevron />
       </button>

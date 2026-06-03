@@ -23,6 +23,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { SceneSnapshot } from "../viewport/types";
+import { isEditEvent, isSavedEvent } from "./editEvents";
 
 /** Events worth refetching the snapshot on. Broader than the tab
  * strip's set — the panel reads selection + overrides + bindings,
@@ -46,6 +47,9 @@ export const SESSION_EVENT_NAMES = [
   // Save-as changes the project's source_path; refetch so the File
   // menu's filename label updates. (Plain saves re-emit it harmlessly.)
   "project:saved",
+  // Importing a foreign project replaces the whole session — refetch +
+  // reset the dirty flag to its clean baseline.
+  "project:imported",
 ] as const;
 
 export interface ProjectSession {
@@ -56,6 +60,9 @@ export interface ProjectSession {
    * legacy missing-handle case. */
   cascadeHandle: number | null;
   snapshot: SceneSnapshot | null;
+  /** True when the project has unsaved edits — set by any content edit,
+   * cleared on save / load / import. Drives the title-bar unsaved marker. */
+  dirty: boolean;
   /** True until the first snapshot lands. App-level chrome can render
    * a tiny loading state if it wants. */
   loading: boolean;
@@ -67,6 +74,7 @@ export interface ProjectSession {
 
 export function useProjectSession(): ProjectSession {
   const [snapshot, setSnapshot] = useState<SceneSnapshot | null>(null);
+  const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -90,6 +98,10 @@ export function useProjectSession(): ProjectSession {
       for (const name of SESSION_EVENT_NAMES) {
         const un = await listen(name, () => {
           void refetchSnapshot();
+          // A content edit dirties the project; save/load/import returns it
+          // to a clean baseline. (Selection + navigation aren't edits.)
+          if (isSavedEvent(name)) setDirty(false);
+          else if (isEditEvent(name)) setDirty(true);
         });
         if (!mounted) {
           un();
@@ -120,5 +132,5 @@ export function useProjectSession(): ProjectSession {
     };
   }, [refetchSnapshot]);
 
-  return { cascadeHandle: null, snapshot, loading, error };
+  return { cascadeHandle: null, snapshot, dirty, loading, error };
 }
