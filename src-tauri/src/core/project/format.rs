@@ -313,28 +313,41 @@ pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
     }
     let mut project = file.project;
 
-    // 2. Geometry. Read the 3MF and zip its NewMesh entries back
-    //    into project.meshes by sorted-MeshId order (matches the
-    //    writer's order).
+    // 2. Geometry. The geometry 3MF carries one mesh resource PER OBJECT —
+    //    the writer keeps shared geometry as distinct resources so per-object
+    //    metadata (extruder hint, name) stays separate (see threemf::writer),
+    //    and `write_project` emits them in ascending mesh_idx (== sorted
+    //    MeshId) order. So reconstruct the same per-object MeshId sequence and
+    //    zip positionally: a mesh shared by N objects (e.g. a duplicated
+    //    object) appears N times and each fill writes the same buffer
+    //    (harmless). Using the per-object sequence — not the distinct mesh
+    //    set — is what lets a duplicated-object project round-trip instead of
+    //    failing the count check.
     //
-    //    Skip when the JSON project has no meshes: load_3mf rejects
-    //    empty containers with LoadError::Empty, which is the
-    //    wrong signal for a legitimately-empty project. A
-    //    brand-new project the user saves before adding any
-    //    geometry round-trips cleanly via this path.
-    let mut mesh_id_order: Vec<MeshId> = project.meshes.keys().copied().collect();
-    mesh_id_order.sort();
-    if !mesh_id_order.is_empty() {
+    //    Skip when there are no objects: load_3mf rejects empty containers
+    //    with LoadError::Empty, the wrong signal for a legitimately-empty
+    //    project. A brand-new project saved before adding geometry round-trips
+    //    cleanly via this path.
+    let mut object_mesh_order: Vec<MeshId> = project
+        .plates
+        .iter()
+        .flat_map(|plate| plate.scene.objects.values().map(|o| o.mesh))
+        .collect();
+    object_mesh_order.sort();
+    if !object_mesh_order.is_empty() {
         let geometry = load_3mf(input)?;
-        if mesh_id_order.len() != geometry.meshes.len() {
+        if object_mesh_order.len() != geometry.meshes.len() {
             return Err(ProjectIoError::GeometryMismatch {
                 path: input.into(),
-                json_mesh_count: mesh_id_order.len(),
+                json_mesh_count: object_mesh_order.len(),
                 threemf_mesh_count: geometry.meshes.len(),
             });
         }
-        for (id, new_mesh) in mesh_id_order.iter().zip(geometry.meshes) {
-            let mesh = project.meshes.get_mut(id).expect("walked id set");
+        for (id, new_mesh) in object_mesh_order.iter().zip(geometry.meshes) {
+            let mesh = project
+                .meshes
+                .get_mut(id)
+                .expect("object references a known mesh");
             mesh.vertices = new_mesh.vertices;
             mesh.normals = new_mesh.normals;
             mesh.indices = new_mesh.indices;
@@ -460,6 +473,62 @@ mod tests {
                 mesh_id.0,
             );
         }
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn round_trip_handles_shared_mesh_duplicated_object() {
+        // Regression: two objects sharing one mesh (the duplicate_object
+        // shape) used to fail read_project with GeometryMismatch — the writer
+        // emits one mesh resource per object, but the reader checked the
+        // *distinct* mesh count. The reader now reconstructs the per-object
+        // MeshId sequence, so a shared mesh round-trips.
+        let mut p = Project::default();
+        let mesh_id = p.register_mesh(marked_triangle(77.0));
+        p.register_object(NewSceneObject::at_origin(mesh_id, "orig"));
+        p.register_object(NewSceneObject::at_origin(mesh_id, "copy"));
+
+        let path = tempfile_3mf();
+        write_project(&p, &path).expect("write");
+        let parsed = read_project(&path).expect("shared-mesh project round-trips");
+
+        assert_eq!(parsed.meshes.len(), 1, "still one distinct mesh");
+        assert_eq!(parsed.plates[0].scene.objects.len(), 2, "both objects survive");
+        assert_eq!(
+            parsed.meshes.get(&mesh_id).expect("shared mesh preserved").vertices[0],
+            77.0,
+            "shared geometry buffer round-trips",
+        );
+        for obj in parsed.plates[0].scene.objects.values() {
+            assert_eq!(obj.mesh, mesh_id, "both objects still reference the one mesh");
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn round_trip_mixed_shared_and_distinct_meshes() {
+        // Mesh A shared by 2 objects, B by 1, C by 3 — six objects, three
+        // distinct meshes with multiplicity. Exercises the per-object ordering
+        // + zip: each marker must land on its own MeshId.
+        let mut p = Project::default();
+        let a = p.register_mesh(marked_triangle(1.0));
+        let b = p.register_mesh(marked_triangle(2.0));
+        let c = p.register_mesh(marked_triangle(3.0));
+        for (m, n) in [(a, 2u32), (b, 1), (c, 3)] {
+            for _ in 0..n {
+                p.register_object(NewSceneObject::at_origin(m, "o"));
+            }
+        }
+
+        let path = tempfile_3mf();
+        write_project(&p, &path).expect("write");
+        let parsed = read_project(&path).expect("read");
+
+        assert_eq!(parsed.meshes.len(), 3);
+        assert_eq!(parsed.plates[0].scene.objects.len(), 6);
+        assert_eq!(parsed.meshes.get(&a).unwrap().vertices[0], 1.0);
+        assert_eq!(parsed.meshes.get(&b).unwrap().vertices[0], 2.0);
+        assert_eq!(parsed.meshes.get(&c).unwrap().vertices[0], 3.0);
         std::fs::remove_file(&path).ok();
     }
 
