@@ -228,6 +228,15 @@ pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoEr
         }
     }
 
+    // Emit geometry in ascending-mesh-idx (== sorted-MeshId) order.
+    // `read_project` re-associates the loaded buffers to MeshIds by zipping the
+    // sorted MeshId list against the 3MF's document order, so that document
+    // order MUST be sorted — but the loop above walks `objects.values()`
+    // (HashMap, randomized per process). Without this sort a multi-mesh project
+    // lands each mesh's geometry on the wrong MeshId on a reopen whenever the
+    // HashMap order differs from sorted order, scrambling the layout.
+    geometry_objects.sort_by_key(|o| o.mesh_idx);
+
     let project_3mf = project_from_objects(
         geometry_meshes,
         geometry_objects,
@@ -411,6 +420,47 @@ mod tests {
             },
             provenance: MeshProvenance::Primitive("triangle".into()),
         }
+    }
+
+    /// A triangle whose first vertex x encodes `marker`, so a test can
+    /// detect geometry landing on the wrong MeshId after a round-trip.
+    fn marked_triangle(marker: f32) -> NewMesh {
+        let mut t = triangle();
+        t.vertices[0] = marker;
+        t
+    }
+
+    #[test]
+    fn round_trip_keeps_each_meshs_geometry_on_its_own_id() {
+        // Regression: `write_project` emitted geometry in `objects.values()`
+        // (HashMap, randomized per process) order while `read_project` re-zips
+        // the loaded buffers onto sorted MeshIds. A multi-mesh project
+        // therefore scrambled geometry onto the wrong MeshId whenever the two
+        // orders differed — intermittently, since the HashMap reseeds per
+        // process ("sometimes the layout is messed up after a recovery save").
+        let mut p = Project::default();
+        let mut expected: Vec<(MeshId, f32)> = Vec::new();
+        for i in 0..6u32 {
+            let marker = (i as f32 + 1.0) * 10.0;
+            let mesh_id = p.register_mesh(marked_triangle(marker));
+            p.register_object(NewSceneObject::at_origin(mesh_id, &format!("obj{i}")));
+            expected.push((mesh_id, marker));
+        }
+
+        let path = tempfile_3mf();
+        write_project(&p, &path).expect("write");
+        let parsed = read_project(&path).expect("read");
+
+        assert_eq!(parsed.meshes.len(), 6);
+        for (mesh_id, marker) in expected {
+            let m = parsed.meshes.get(&mesh_id).expect("mesh preserved by id");
+            assert_eq!(
+                m.vertices[0], marker,
+                "mesh {} received another mesh's geometry — scrambled order",
+                mesh_id.0,
+            );
+        }
+        std::fs::remove_file(&path).ok();
     }
 
     const A1_MINI_INSTANCE: &str = "bambi";
