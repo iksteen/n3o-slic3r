@@ -9,9 +9,11 @@
 //!   incoming status snapshot via [`super::status::decode`], and
 //!   publishes the result through a `watch::Sender<PrinterStatus>`.
 //! - Reconnect is the driver's concern (not the session's): on any
-//!   session failure / clean close, the worker waits with exponential
-//!   backoff (2 s → 30 s cap) and tries again. Backoff resets on
-//!   every successful connect.
+//!   session failure / clean close, the worker waits with the shared
+//!   exponential backoff (capped at 60s, reset on success) and tries
+//!   again. Each connect attempt is bounded by `CONNECT_TIMEOUT` so an
+//!   unreachable host fails fast into backoff instead of hanging. See
+//!   [`crate::core::driver::backoff`].
 //! - `send` + `command` reuse the same HTTP host/port; they don't
 //!   need the session at all.
 //!
@@ -26,17 +28,11 @@ use tokio::task::JoinHandle;
 use tracing::warn;
 
 use super::{http, moonraker::MoonrakerSession, probe, status as status_decode};
+use crate::core::driver::backoff::{reconnect_backoff_secs, CONNECT_TIMEOUT};
 use crate::core::driver::status::{ConnectionState, DriverExtra, PrinterStatus, U1Extra};
 use crate::core::driver::traits::{
     Driver, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle, SendPayload,
 };
-
-/// Initial reconnect delay. The worker doubles up to [`RECONNECT_MAX`]
-/// on repeated failures.
-const RECONNECT_INITIAL: Duration = Duration::from_secs(2);
-
-/// Cap on the reconnect backoff. Matches the overlay's pacing.
-const RECONNECT_MAX: Duration = Duration::from_secs(30);
 
 /// Per-driver connection config. Pulled out of
 /// [`crate::core::driver::traits::DriverConfig::U1`] at registry-
@@ -186,15 +182,26 @@ async fn run_worker(
     status_tx: watch::Sender<PrinterStatus>,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
-    let mut backoff = RECONNECT_INITIAL;
+    let mut attempt = 0u32;
     loop {
         status_tx.send_modify(|s| {
             s.connection = ConnectionState::Connecting;
             s.last_updated = std::time::SystemTime::now();
         });
 
+        // Bound the connect (WS handshake + initial subscribe) so an
+        // unreachable host fails fast into backoff instead of stalling
+        // on the OS TCP timeout.
         let session = tokio::select! {
-            r = MoonrakerSession::connect(&host, port) => r,
+            r = tokio::time::timeout(CONNECT_TIMEOUT, MoonrakerSession::connect(&host, port)) => {
+                match r {
+                    Ok(inner) => inner,
+                    Err(_) => Err(DriverError::Network(format!(
+                        "connect timed out after {}s",
+                        CONNECT_TIMEOUT.as_secs()
+                    ))),
+                }
+            }
             _ = &mut shutdown_rx => return,
         };
 
@@ -206,7 +213,7 @@ async fn run_worker(
                 // Reset backoff on every successful connect — a
                 // healthy printer that disconnects briefly should
                 // come back fast on the next round.
-                backoff = RECONNECT_INITIAL;
+                attempt = 0;
                 // Publish the initial subscribe response so the UI
                 // doesn't sit on a stale "Connecting…" snapshot.
                 let initial = status_decode::decode(&session.status(), ConnectionState::Connected);
@@ -246,21 +253,22 @@ async fn run_worker(
 
         // Publish the upcoming reconnect window so the UI can show
         // a countdown rather than a generic "disconnected".
+        let delay = reconnect_backoff_secs(attempt);
+        attempt = attempt.saturating_add(1);
         status_tx.send_modify(|s| {
             s.connection = ConnectionState::Reconnecting {
-                in_seconds: backoff.as_secs() as u32,
+                in_seconds: delay as u32,
                 reason,
             };
             s.last_updated = std::time::SystemTime::now();
         });
 
-        let sleep = tokio::time::sleep(backoff);
+        let sleep = tokio::time::sleep(Duration::from_secs(delay));
         tokio::pin!(sleep);
         tokio::select! {
             _ = &mut sleep => {}
             _ = &mut shutdown_rx => return,
         }
-        backoff = (backoff + backoff / 2).min(RECONNECT_MAX);
     }
 }
 

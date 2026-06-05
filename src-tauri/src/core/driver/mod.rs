@@ -20,6 +20,7 @@
 //!   drivers become plugins, the trait shape stays the same; only
 //!   the implementation surface (in-process vs IPC) changes.
 
+pub mod backoff;
 pub mod bambu;
 pub mod commands;
 pub mod registry;

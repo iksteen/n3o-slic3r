@@ -15,8 +15,10 @@
 //! On disconnect: signal the task via a oneshot channel; it
 //! tears down the rumqttc client + exits.
 //!
-//! Reconnect: exponential backoff (1, 2, 4, 8, 16 sec, cap 60s).
-//! During backoff the status connection state is
+//! Reconnect + connect-timeout policy is shared across drivers in
+//! [`crate::core::driver::backoff`]: exponential backoff capped at 60s
+//! (reset on success), and each network connect bounded by
+//! `CONNECT_TIMEOUT`. During backoff the status is
 //! `Reconnecting { in_seconds }` so the UI can show progress.
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,13 +35,12 @@ use uuid::Uuid;
 use crate::core::driver::status::{
     BambuExtra, ConnectionState, DriverExtra, JobState, PrinterStatus,
 };
+use crate::core::driver::backoff::{reconnect_backoff_secs, CONNECT_TIMEOUT};
 use crate::core::driver::traits::{
     Driver, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle, SendPayload,
 };
 
 const KEEPALIVE: Duration = Duration::from_secs(60);
-const RECONNECT_BACKOFFS: &[u32] = &[1, 2, 4, 8, 16];
-const RECONNECT_CAP_SECS: u32 = 60;
 
 /// Connection-level configuration. The device serial is not
 /// supplied here — `connect()` always probes it from the peer cert CN.
@@ -160,7 +161,13 @@ impl Driver for BambuDriver {
         let connector = super::tls::connector().map_err(DriverError::Other)?;
         options.set_transport(Transport::tls_with_config(connector.into()));
 
-        let (client, eventloop) = AsyncClient::new(options, 32);
+        let (client, mut eventloop) = AsyncClient::new(options, 32);
+        // Bound each network connect attempt so an unreachable host
+        // fails fast into backoff instead of stalling on the OS TCP
+        // timeout (shared CONNECT_TIMEOUT).
+        let mut net = eventloop.network_options();
+        net.set_connection_timeout(CONNECT_TIMEOUT.as_secs());
+        eventloop.set_network_options(net);
         self.client = Some(client.clone());
 
         // Two channels: rumqttc loop pushes raw payloads into
@@ -552,7 +559,7 @@ async fn event_loop(
 ) {
     let report_topic = format!("device/{device_id}/report");
     let request_topic = format!("device/{device_id}/request");
-    let mut backoff_idx = 0usize;
+    let mut attempt = 0u32;
 
     loop {
         tokio::select! {
@@ -564,7 +571,7 @@ async fn event_loop(
             event = eventloop.poll() => {
                 match event {
                     Ok(Event::Incoming(Packet::ConnAck(_))) => {
-                        backoff_idx = 0;
+                        attempt = 0;
                         // Subscribe + pushall.
                         if let Err(e) = client
                             .subscribe(&report_topic, QoS::AtMostOnce)
@@ -628,16 +635,16 @@ async fn event_loop(
                         }
                     }
                     Ok(Event::Incoming(Packet::Disconnect)) => {
-                        let delay = backoff_seconds(backoff_idx);
-                        backoff_idx = (backoff_idx + 1).min(RECONNECT_BACKOFFS.len());
+                        let delay = reconnect_backoff_secs(attempt);
+                        attempt = attempt.saturating_add(1);
                         status_tx.send_modify(|s| {
                             s.connection = ConnectionState::Reconnecting {
-                                in_seconds: delay,
+                                in_seconds: delay as u32,
                                 reason: "the printer closed the connection".to_string(),
                             };
                             s.last_updated = std::time::SystemTime::now();
                         });
-                        tokio::time::sleep(Duration::from_secs(delay as u64)).await;
+                        tokio::time::sleep(Duration::from_secs(delay)).await;
                     }
                     Err(e) => {
                         // Network error — rumqttc surfaces these
@@ -645,17 +652,17 @@ async fn event_loop(
                         // transient + backoff. `e` carries the real
                         // cause (e.g. a refused CONNECT on a bad access
                         // code), so thread it into the status.
-                        let delay = backoff_seconds(backoff_idx);
-                        backoff_idx = (backoff_idx + 1).min(RECONNECT_BACKOFFS.len());
+                        let delay = reconnect_backoff_secs(attempt);
+                        attempt = attempt.saturating_add(1);
                         tracing::warn!(error = %e, backoff_secs = delay, "bambu poll error");
                         status_tx.send_modify(|s| {
                             s.connection = ConnectionState::Reconnecting {
-                                in_seconds: delay,
+                                in_seconds: delay as u32,
                                 reason: e.to_string(),
                             };
                             s.last_updated = std::time::SystemTime::now();
                         });
-                        tokio::time::sleep(Duration::from_secs(delay as u64)).await;
+                        tokio::time::sleep(Duration::from_secs(delay)).await;
                     }
                     _ => {
                         // PingResp / SubAck / etc — uninteresting.
@@ -666,30 +673,9 @@ async fn event_loop(
     }
 }
 
-/// Backoff sequence: `[1, 2, 4, 8, 16]`-then-cap-at-60. Public
-/// for unit testing.
-pub fn backoff_seconds(attempt: usize) -> u32 {
-    RECONNECT_BACKOFFS
-        .get(attempt)
-        .copied()
-        .unwrap_or(RECONNECT_CAP_SECS)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn backoff_follows_expected_sequence() {
-        assert_eq!(backoff_seconds(0), 1);
-        assert_eq!(backoff_seconds(1), 2);
-        assert_eq!(backoff_seconds(2), 4);
-        assert_eq!(backoff_seconds(3), 8);
-        assert_eq!(backoff_seconds(4), 16);
-        // Beyond the array, cap at 60.
-        assert_eq!(backoff_seconds(5), 60);
-        assert_eq!(backoff_seconds(99), 60);
-    }
 
     #[test]
     fn driver_constructs_in_disconnected_state() {
