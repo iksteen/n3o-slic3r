@@ -95,7 +95,7 @@ start immediately — they're independent. The rest:
 | First-run onboarding (pick printers, prompt for access info) | ✅ existing UI (inline-connection deferred) | [PR-9-4](phase-9/PR-9-4%20First-run%20onboarding.md) |
 | Project file format `.3mf` finalized (FR-MP-4) | 🟡 menu wired + documented (format review owed pre-MVP) | [PR-9-5](phase-9/PR-9-5%20Project%20file%20format.md) |
 | OrcaSlicer `.3mf` project import — geometry + settings (cut candidate) | ✅ done 2026-06-01 | [PR-9-6](phase-9/PR-9-6%20Orca%20project%20import.md) |
-| Documentation: getting-started, troubleshooting, release notes | ⬜ open | [PR-9-7](phase-9/PR-9-7%20Documentation%20and%20release%20notes.md) |
+| Documentation: getting-started, troubleshooting, release notes | ✅ done 2026-06-05 (`docs/getting-started.md`, `docs/troubleshooting.md`, `docs/release-notes.md`; plugin-authoring guide linked) | [PR-9-7](phase-9/PR-9-7%20Documentation%20and%20release%20notes.md) |
 | Independence audit (clean Linux box, no other slicer) — exit gate | ⬜ open | [PR-9-8](phase-9/PR-9-8%20Independence%20audit.md) |
 
 ## Exit criteria (Execution_Plan §11)

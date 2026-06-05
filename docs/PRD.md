@@ -54,7 +54,7 @@ Existing slicers permit external scripts as a final post-processing step, but of
 
 - **In-app G-code preview.** Layer slider, multiple color modes, hover inspection, and travel toggle, performant on real production G-code files.
 
-- **Filament sync and assignment.** Live read of loaded filaments from each connected printer; per-printer mapping of model materials to physical slots; mismatch detection before slice; bindings persist per-printer so a multi-printer project resolves correctly for each target.
+- **Filament sync and assignment.** Live read of loaded filaments from each connected printer; per-printer mapping of model materials to physical slots; slot-loaded/available validation before slice (the slot's filament is authoritative — a model carries no intended filament, so there is no model-vs-printer mismatch to detect); bindings persist per-printer so a multi-printer project resolves correctly for each target.
 
 ## 3.2 Explicit non-goals for MVP
 
@@ -228,7 +228,7 @@ Presentation vs mechanism. The UI presents the cascade as values-by-source-file 
 
 - **FR-UI-9.** Editing context tabs: the settings panel has a Project tab (active by default) and an Object tab (active when an object is selected in the viewport; disabled otherwise). Writes from the settings panel land in the active tab's override tier (project or per-object). The active tab is visually distinguished and shows which object is being edited when Object is active.
 
-- **FR-UI-10.** Object library / scaffolding panel on the left side of the viewport. Sections include Primitives (cube, cylinder, sphere, cone, torus — quick test geometry), Calibration (calibration cube, temperature tower, generic flow test), and Imported (user-loaded STL/3MF files for the current session). Clicking an item adds it to the active plate.
+- **FR-UI-10.** Object library / scaffolding panel on the left side of the viewport. Sections include Primitives (cube, cylinder, sphere, cone, torus — quick test geometry) and Imported (user-loaded STL/3MF files for the current session). Clicking an item adds it to the active plate. *(A Calibration section — temperature/flow/retraction fixtures — was descoped from the MVP (2026-06-05): the fixtures aren't vendored and several upstream ones ship as Draco `.drc` our loaders don't read; calibration **wizards** were already a non-goal, §3.2. Re-add as a post-MVP item if/when fixtures are sourced.)*
 
 ## 6.4 3D viewport
 
@@ -326,7 +326,7 @@ The U1 is a CoreXY toolchanger with 4 magnetically-docked toolheads on steel-bal
 
 ## 6.8 Filament sync and assignment
 
-Filament sync makes the slicer aware of what is physically loaded in each printer, lets the user map model materials to physical slots per-printer, and surfaces mismatches before a print starts. This is the integration that current slicers — including unmodified OrcaSlicer — handle poorly for U1 and other multi-printer setups.
+Filament sync makes the slicer aware of what is physically loaded in each printer and lets the user map model materials to physical slots per-printer; the slot's loaded filament is what each material prints as. **A model never carries an intended filament.** That model-baked-filament assumption — where the project remembers "this object wants PETG" and the slicer then nags when the printer's loadout disagrees — is precisely the misfeature current slicers (including unmodified OrcaSlicer) impose, and one n3o deliberately eliminates. n3o inverts it: the user controls what is in each slot, a binding routes each abstract material index to a slot, and the only thing validated before slice is that every bound slot is actually loaded and available (FR-MP-8). There is therefore no "model wants X, printer has Y" mismatch to surface — the slot is the source of truth, shown inline so the user can change the loadout or the binding deliberately. This slot-as-truth model is the integration that current slicers handle poorly for U1 and other multi-printer setups.
 
 ### Conceptual model
 
@@ -348,9 +348,9 @@ Model materials are abstract extruder indices (1..N) assigned to objects, paint 
 
 - **FR-FS-7.** Bindings are stored per-(plate, printer): a plate assigned to A1 mini has its own model→slot mapping; reassigning the plate to U1 surfaces the U1's mapping (or prompts for one).
 
-- **FR-FS-8.** Mismatch detection runs at every cascade resolution and before slice: model wants PETG in slot 2 but slot 2 reports PLA → warning surfaced inline in the binding UI and as a slice-time blocker (configurable: warn or block).
+- **FR-FS-8.** Binding validation runs at every cascade resolution and before slice. Because a model material carries no intended filament — it is an abstract index the user binds to a slot, and the slot's loaded filament is authoritative — there is **no "model vs. loaded" mismatch to detect**. What is validated is that every bound slot is loaded (carries a filament identity) and available (not removed/disabled): an unloaded or unavailable bound slot surfaces inline in the binding UI and blocks slice with a load/rebind prompt (FR-MP-8, AD-4). The binding UI always shows the slot's current loaded filament inline at each material index, so the user sees exactly what each material will print as and changes the loadout or the binding deliberately.
 
-- **FR-FS-9.** Mismatch types detected: material family mismatch (PLA vs PETG vs ABS), temperature-range mismatch outside ±10°C, color mismatch surfaced as informational (not blocking).
+- **FR-FS-9.** No model-vs-slot mismatch class exists (see FR-FS-8): a model does not declare a wanted material family, temperature, or color, so there is nothing to compare a slot against — surfacing such "mismatches" is the existing-slicer misfeature n3o removes, not a feature it ships. A filament-vs-*hardware* compatibility check — the bound filament's required temperature exceeding the slot's hotend maximum — is a distinct, correctly-framed validation (filament against the printer's own capability, not against model intent); it is out of MVP scope and named here only so it is not confused with the rejected model-intent mismatch.
 
 - **FR-FS-10.** Auto-binding heuristic: when assigning a plate to a printer for the first time, attempt to bind model materials to physical slots automatically based on filament family match. User confirms or adjusts.
 
@@ -439,7 +439,7 @@ Model materials are abstract extruder indices (1..N) assigned to objects, paint 
 
 - **core/threemf.** 3MF reader and writer utility. Used by parts of the system that need it: project save/load (our own .3mf format extends standard 3MF), project import from other slicers (Bambu Studio, OrcaSlicer, Snapmaker Orca all save .3mf), preview drag-drop of sliced files (.gcode.3mf), and the A1 mini driver (which wraps slice output as .gcode.3mf for Bambu's required send format). The U1 driver does not depend on this module — it sends raw G-code. Future drivers depend on this module only if their printer requires 3MF input.
 
-- **core/filament.** Filament profile library, printer-state-to-profile resolution, mismatch detection, sync-on-send metadata emission.
+- **core/filament.** Filament profile library, printer-state-to-profile resolution, slot-load/availability validation, sync-on-send metadata emission.
 
 - **core/plugin.** Lua host, manifest loader, hook dispatch (pre-slice / post-slice / pre-send / compose), sandboxing. Read-only views into project, gcode, and filament state for plugins.
 

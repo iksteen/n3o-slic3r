@@ -170,7 +170,7 @@ Goal: functional 3D scene with model load, transform operations, and bed visuali
 
 - Object operations: move, rotate, scale, mirror, lay flat, duplicate, delete. Each is a Tauri command operating on the Rust scene state. The renderer reflects the resulting state diff; it does not compute transforms itself.
 
-- Object library / scaffolding panel (FR-UI-10): left side of viewport, sections for Primitives (cube/cylinder/sphere/cone/torus), Calibration (calibration cube, temperature tower, generic flow test), and Imported (user-loaded files this session). Clicking an item adds it to the active plate.
+- Object library / scaffolding panel (FR-UI-10): left side of viewport, sections for Primitives (cube/cylinder/sphere/cone/torus) and Imported (user-loaded files this session). Clicking an item adds it to the active plate. (The Calibration section was descoped from the MVP — 2026-06-05; no vendored fixtures. See PRD FR-UI-10.)
 
 - Auto-arrange (single plate, no rotation for MVP).
 
@@ -442,7 +442,7 @@ Filament sync ties the printer comms (7a, 7b) to the cascade (Phase 1) and the m
 
 - Auto-binding heuristic: on first plate-to-printer assignment, attempt to bind model materials to physical slots by filament family match. User confirms or adjusts.
 
-- Mismatch detection at cascade resolution and at slice-time: material family mismatch (PLA/PETG/ABS), temperature range outside ±10°C of profile, color mismatch (informational). Configurable warn-vs-block on slice.
+- Binding validation at cascade resolution and at slice-time: every bound slot is loaded (carries a filament identity) and available; an unloaded/unavailable bound slot blocks slice with a load/rebind prompt (FR-MP-8 / AD-4). No model-vs-slot filament mismatch is computed — a model material is an abstract index, not a declared filament, so there is nothing to compare against (see PRD FR-FS-8; "model wants X, printer has Y" detection is the existing-slicer misfeature n3o removes).
 
 - Sync-on-send: emit the binding into 3MF/G-code metadata in the format each printer expects.
 
@@ -458,7 +458,7 @@ Filament sync ties the printer comms (7a, 7b) to the cascade (Phase 1) and the m
 
 - Status of both printers can be monitored simultaneously.
 
-- Filament sync works: changing what's loaded in a printer is reflected in the app within one poll cycle; mismatches are caught before slice.
+- Filament sync works: changing what's loaded in a printer is reflected in the app within one poll cycle; unloaded or unavailable bound slots are caught before slice.
 
 - A multi-color project sliced for either printer assigns model materials to the correct physical slots and prints with the expected colors.
 
@@ -470,7 +470,7 @@ Filament sync ties the printer comms (7a, 7b) to the cascade (Phase 1) and the m
 
 - Auto-binding heuristic (manual binding only on first assignment) — saves 2 days. Hurts UX but binding still works.
 
-- Mismatch detection beyond material family (skip ±10°C check) — saves 1 day.
+- (Removed) The former "filament mismatch detection" cut candidate is gone: there is no model-vs-slot mismatch feature to trim — a model carries no intended filament (PRD FR-FS-8/9). Slot-loaded/available validation (FR-MP-8) stays; it is not a cut candidate.
 
 - Manual filament-identity override (use printer-reported only) — saves 2 days. Hurts third-party-spool users.
 
@@ -486,7 +486,7 @@ Runs in parallel with Phase 7 since it has no printer dependency, and reuses the
 
 - Lua bindings to the typed G-code model from Phase 3 (no re-implementation): gcode.lines(), gcode.layers(), gcode.commands(), insert/replace/remove operations, printer + plate metadata access.
 
-- Lua bindings to live filament state from Phase 7c (read-only): per-slot identity, loaded flag, mismatch state. Enables material-aware plugins.
+- Lua bindings to live filament state from Phase 7c (read-only): per-slot identity, loaded flag, availability. Enables material-aware plugins.
 
 - Hook dispatch at pre-slice, post-slice, and pre-send. *(The compose hook — FR-PL-5 — is **deferred to post-MVP**; see §16 and `docs/tickets/phase-8.md`.)*
 
