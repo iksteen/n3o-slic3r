@@ -1,24 +1,13 @@
-//! Object library — catalog the UI's scaffolding panel reads from
-//!.
+//! Object library — catalog the UI's scaffolding panel reads from.
 //!
-//! Three sections:
+//! Two sections:
 //! - **Primitives** — procedurally generated meshes (see
 //!   [`super::primitives`]).
-//! - **Calibration** — file-based fixtures shipped under
-//!   `external/OrcaSlicer/resources/`. We resolve paths relative to
-//!   the cargo workspace root at build time; the runtime expects
-//!   them to be vendored in the same layout. Some fixtures
-//!   currently ship as Draco-compressed `.drc` files which our
-//!   loaders don't understand — those surface as
-//!   [`CalibrationAvailability::UnsupportedFormat`] so the UI can
-//!   tell users *why* the entry is greyed out (vs. silently
-//!   missing).
 //! - **Imported** — meshes registered in the live scene; the UI
 //!   uses this to re-instance an already-loaded model without
 //!   re-reading the source file.
 
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
 
 use super::primitives::{PrimitiveKind, PrimitiveParams};
 use super::state::MeshId;
@@ -72,151 +61,6 @@ pub fn list_primitives() -> Vec<PrimitiveDescriptor> {
     ]
 }
 
-/// One calibration fixture's descriptor. The UI greys out entries
-/// whose `availability` isn't `Available` and surfaces the reason
-/// in a tooltip.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CalibrationDescriptor {
-    /// Stable id for the UI (also used as the key in the library
-    /// sidebar's preferences).
-    pub id: String,
-    pub display_name: String,
-    /// Short human-readable summary of what the calibration tests.
-    pub description: String,
-    pub availability: CalibrationAvailability,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "data")]
-pub enum CalibrationAvailability {
-    /// File exists and our loader supports the format.
-    Available { path: PathBuf },
-    /// File ships in the vendored Orca resources but uses a format
-    /// our loader doesn't understand yet (typically Draco-compressed
-    /// `.drc`). Tracked as a follow-up.
-    UnsupportedFormat { path: PathBuf, format: String },
-    /// Expected fixture path is missing — the user's checkout might
-    /// not have the OrcaSlicer submodule populated, or we
-    /// mis-specified the path.
-    MissingFromResources { expected_at: PathBuf },
-}
-
-/// Build the calibration catalog for the given printer model. The
-/// material-flow entry is printer-specific (Bambu's flow test
-/// differs from Snapmaker's); other entries are shared.
-///
-/// `calibration_root` is the path to our vendored calibration
-/// asset directory (`assets/calibration/` at the workspace root,
-/// shipped as `calibration/` in the Tauri bundle). Tests pass the
-/// workspace-relative path; production passes the runtime-resolved
-/// bundle path.
-///
-/// We vendor the fixtures locally rather than reading them from the
-/// OrcaSlicer submodule because upstream churn drops files we rely
-/// on (e.g. nightly-builds 2026-05-28 removed `OrcaCube_v2.3mf` in
-/// favor of `.drc`-only); decoupling the calibration set from
-/// submodule state means a libslic3r bump can't silently break our
-/// calibration list.
-pub fn list_calibration(
-    printer_model: &str,
-    calibration_root: &Path,
-) -> Vec<CalibrationDescriptor> {
-    vec![
-        check_calibration(
-            "dimension-cube",
-            "Dimension Cube (Orca Cube v2)",
-            "XYZ accuracy and dimensional check at known size.",
-            calibration_root.join("OrcaCube_v2.3mf"),
-        ),
-        check_calibration(
-            "temperature-tower",
-            "Temperature Tower",
-            "Per-layer-band temperature sweep to find your filament's window.",
-            calibration_root.join("temperature_tower.drc"),
-        ),
-        check_calibration(
-            "stringing-tower",
-            "Stringing / Retraction Tower",
-            "Retraction tuning — minimize strings between towers.",
-            calibration_root.join("retraction_tower.drc"),
-        ),
-        material_flow_for(printer_model, calibration_root),
-    ]
-}
-
-/// Resolve the right material-flow fixture per printer. Bambu A1
-/// (and the rest of the BBS line) consume Orca's bundled
-/// `Orca-LinearFlow.3mf`; Snapmaker U1 needs a per-machine fixture
-/// we haven't sourced yet (the U1 ships with its own flow tower
-/// that differs structurally from Orca's pattern). When that lands
-/// the descriptor here updates.
-fn material_flow_for(printer_model: &str, calibration_root: &Path) -> CalibrationDescriptor {
-    let lower = printer_model.to_ascii_lowercase();
-    if lower.contains("bambu")
-        || lower.contains("a1")
-        || lower.contains("x1")
-        || lower.contains("p1")
-    {
-        check_calibration(
-            "material-flow",
-            "Material Flow (Orca-LinearFlow)",
-            "Linear advance / flow rate tuning for Bambu printers.",
-            calibration_root.join("Orca-LinearFlow.3mf"),
-        )
-    } else if lower.contains("snapmaker") || lower.contains("u1") {
-        // No vendored Snapmaker flow fixture yet; surface a
-        // placeholder so the UI can still list the slot.
-        CalibrationDescriptor {
-            id: "material-flow".into(),
-            display_name: "Material Flow (Snapmaker)".into(),
-            description: "Per-toolhead flow calibration for Snapmaker U1.".into(),
-            availability: CalibrationAvailability::MissingFromResources {
-                expected_at: calibration_root.join("snapmaker_u1_flow.3mf"),
-            },
-        }
-    } else {
-        check_calibration(
-            "material-flow",
-            "Material Flow (generic)",
-            "Generic flow calibration via Orca's Linear Flow pattern.",
-            calibration_root.join("Orca-LinearFlow.3mf"),
-        )
-    }
-}
-
-fn check_calibration(
-    id: &str,
-    display_name: &str,
-    description: &str,
-    path: PathBuf,
-) -> CalibrationDescriptor {
-    let availability = if !path.exists() {
-        CalibrationAvailability::MissingFromResources { expected_at: path }
-    } else {
-        let ext = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_owned());
-        match ext.as_deref() {
-            Some("3mf") | Some("stl") | Some("obj") => CalibrationAvailability::Available { path },
-            Some(e) => CalibrationAvailability::UnsupportedFormat {
-                path,
-                format: e.to_owned(),
-            },
-            None => CalibrationAvailability::UnsupportedFormat {
-                path,
-                format: "unknown".into(),
-            },
-        }
-    };
-    CalibrationDescriptor {
-        id: id.into(),
-        display_name: display_name.into(),
-        description: description.into(),
-        availability,
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportedDescriptor {
     pub mesh_id: MeshId,
@@ -265,60 +109,5 @@ mod tests {
         assert!(kinds.contains(&PrimitiveKind::Sphere));
         assert!(kinds.contains(&PrimitiveKind::Cone));
         assert!(kinds.contains(&PrimitiveKind::Torus));
-    }
-
-    fn workspace_calibration_root() -> PathBuf {
-        let crate_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-        let mut p = PathBuf::from(crate_dir);
-        p.pop();
-        p.push("assets/calibration");
-        p
-    }
-
-    #[test]
-    fn calibration_for_a1_mini_returns_four_entries() {
-        let root = workspace_calibration_root();
-        if !root.exists() {
-            eprintln!("skipping: vendored calibration assets missing at {root:?}");
-            return;
-        }
-        let cals = list_calibration("Bambu Lab A1 mini", &root);
-        assert_eq!(cals.len(), 4);
-        // Dimension cube + material flow ship as .3mf → loadable.
-        let dim = cals.iter().find(|c| c.id == "dimension-cube").unwrap();
-        assert!(matches!(
-            dim.availability,
-            CalibrationAvailability::Available { .. }
-        ));
-        let flow = cals.iter().find(|c| c.id == "material-flow").unwrap();
-        assert!(matches!(
-            flow.availability,
-            CalibrationAvailability::Available { .. }
-        ));
-        // Temperature + stringing towers are still .drc → unsupported.
-        let temp = cals.iter().find(|c| c.id == "temperature-tower").unwrap();
-        assert!(matches!(
-            temp.availability,
-            CalibrationAvailability::UnsupportedFormat { ref format, .. } if format == "drc"
-        ));
-        let string = cals.iter().find(|c| c.id == "stringing-tower").unwrap();
-        assert!(matches!(
-            string.availability,
-            CalibrationAvailability::UnsupportedFormat { ref format, .. } if format == "drc"
-        ));
-    }
-
-    #[test]
-    fn calibration_for_snapmaker_u1_marks_flow_as_missing() {
-        let root = workspace_calibration_root();
-        if !root.exists() {
-            return;
-        }
-        let cals = list_calibration("Snapmaker U1", &root);
-        let flow = cals.iter().find(|c| c.id == "material-flow").unwrap();
-        assert!(matches!(
-            flow.availability,
-            CalibrationAvailability::MissingFromResources { .. }
-        ));
     }
 }

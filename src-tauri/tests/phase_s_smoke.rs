@@ -60,6 +60,12 @@ fn fourcolor_3mf() -> PathBuf {
     workspace_root().join("examples/spike3/fourcolor.3mf")
 }
 
+/// OrcaCube v2 — a real multi-volume `.3mf` (cube + plug) used here as a
+/// geometry fixture. Lives under the crate's test fixtures.
+fn orca_cube_3mf() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/3mf/orca-cube-v2.3mf")
+}
+
 fn canonical_plate() -> BuildPlate {
     BuildPlate {
         identity: "Textured PEI".into(),
@@ -322,7 +328,7 @@ fn snappy_binding_routes_single_material_to_bound_toolhead() {
 
     ensure_ffi_init();
 
-    let cube_path = workspace_root().join("assets/calibration/OrcaCube_v2.3mf");
+    let cube_path = orca_cube_3mf();
 
     // Build a Project the way the UI's scene_load_3mf does: load the
     // 3mf, register every mesh + object on the active plate.
@@ -519,7 +525,7 @@ fn object_layer_height_override_changes_sliced_layer_count() {
     use n3o_slic3r_lib::core::threemf::load_3mf;
 
     ensure_ffi_init();
-    let cube_path = workspace_root().join("assets/calibration/OrcaCube_v2.3mf");
+    let cube_path = orca_cube_3mf();
 
     // Build a fresh bambi project from OrcaCube; return it + the object ids.
     let build = || {
@@ -622,7 +628,7 @@ fn imported_object_override_reaches_the_engine_end_to_end() {
     use std::path::Path;
 
     ensure_ffi_init();
-    let cube_path = workspace_root().join("assets/calibration/OrcaCube_v2.3mf");
+    let cube_path = orca_cube_3mf();
     let tmp = std::env::temp_dir();
     let pid = std::process::id();
 

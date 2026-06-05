@@ -33,8 +33,7 @@
     ],
     "resources": {
       "../resources/profiles": "profiles",
-      "../resources/plugins": "plugins",
-      "../assets/calibration": "calibration"
+      "../resources/plugins": "plugins"
     }
   }
 }
