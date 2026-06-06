@@ -329,6 +329,88 @@ const ALL_SETTINGS = CATEGORIES.flatMap(c =>
   c.settings.map(s => ({ ...s, _catId: c.id, _catName: c.name }))
 );
 
+// ───────────── Complexity tiers (Simple / Advanced / Expert) ─────────────
+// Each setting belongs to a tier. Modes are cumulative: Simple shows only
+// simple settings; Advanced shows simple + advanced; Expert shows everything.
+// We tag a curated handful as "simple" (the everyday controls), a curated set
+// plus two whole categories as "expert" (deep/technical), and let everything
+// else fall through to "advanced".
+const SETTING_MODES = [
+  { id: "simple",   label: "Simple",   rank: 0, desc: "Everyday essentials — the controls most prints need" },
+  { id: "advanced", label: "Advanced", rank: 1, desc: "Common tuning controls for dialing in quality" },
+  { id: "expert",   label: "Expert",   rank: 2, desc: "Every setting exposed — no guardrails" },
+];
+const LEVEL_RANK = { simple: 0, advanced: 1, expert: 2 };
+const MODE_RANK = Object.fromEntries(SETTING_MODES.map(m => [m.id, m.rank]));
+
+const SIMPLE_SETTING_IDS = new Set([
+  "layer_height", "initial_layer_h",
+  "wall_count",
+  "top_layers", "bottom_layers",
+  "infill_density", "infill_pattern",
+  "print_temp", "bed_temp", "flow",
+  "print_speed",
+  "fan_enable", "fan_speed",
+  "support_enable", "support_type", "support_density",
+  "adhesion_type", "brim_width",
+  "spiralize_outer",
+]);
+
+// Whole categories that are expert-only by nature.
+const EXPERT_CATEGORY_IDS = new Set(["meshfix", "experimental"]);
+
+const EXPERT_SETTING_IDS = new Set([
+  // quality
+  "init_line_width", "z_seam_x", "z_seam_y", "xy_offset", "xy_offset_hole",
+  "z_offset", "slicing_tolerance", "min_feat_size", "min_thick_wall", "res_avoid_cross",
+  // walls
+  "min_wall_flow", "filter_out_tiny", "compensate_wall", "alt_extra_wall",
+  "ext_wall_acc", "ext_wall_jerk", "ironing_inset",
+  // top/bottom
+  "skin_overlap", "skin_removal", "expand_skins", "top_init_line",
+  "extra_skin_walls", "skin_edge_support", "interface_skin", "top_dir_rot",
+  // infill
+  "infill_acc", "infill_wipe_dist", "infill_z_step", "min_infill_area",
+  "connect_infill", "connect_polys", "skin_to_infill", "gradual_infill",
+  "gradual_step_h", "infill_support", "lightning_density", "infill_line_dist",
+  // material
+  "chamber_temp", "retract_count_max", "density", "standby_temp", "purge_volume",
+  // speed
+  "max_accel", "max_jerk", "classic_jerk", "first_layer_acc", "ext_speed_mult", "z_hop_speed",
+  // travel
+  "travel_avoid_dist", "coast_at_end", "coast_volume", "retract_extra_at_layer",
+  "zhop_during_travel", "ramming_volume", "z_hop_type",
+  // cooling
+  "fan_lift_at_min_t", "aux_fan_speed", "chamber_fan", "min_speed_cool",
+  // support
+  "support_xy_dist", "support_z_dist", "tree_branch_dia", "tree_angle",
+  "support_floor", "support_brim",
+  // adhesion
+  "skirt_min_length", "raft_smoothing", "draft_shield", "draft_shield_h", "prime_tower_size",
+  // multi-extruder
+  "toolchange_temp", "toolchange_retract", "toolchange_zhop", "wipe_tower_rot",
+  "ooze_shield", "interface_only_first", "prime_volume",
+  // special modes
+  "smooth_spiralized", "relative_extrusion", "fuzzy_thickness", "fuzzy_density",
+]);
+
+function computeSettingLevel(catId, id) {
+  if (SIMPLE_SETTING_IDS.has(id)) return "simple";
+  if (EXPERT_CATEGORY_IDS.has(catId) || EXPERT_SETTING_IDS.has(id)) return "expert";
+  return "advanced";
+}
+
+// Tag every setting object in place with its tier so both CATEGORIES (used by
+// the panel) and ALL_SETTINGS (the flattened copy) carry `level`.
+CATEGORIES.forEach(c => c.settings.forEach(st => { st.level = computeSettingLevel(c.id, st.id); }));
+ALL_SETTINGS.forEach(st => { st.level = computeSettingLevel(st._catId, st.id); });
+
+// Is `setting` visible in `mode`? Cumulative: a mode shows its tier and all
+// lower tiers.
+function settingVisibleInMode(setting, mode) {
+  return (LEVEL_RANK[setting.level] ?? 1) <= (MODE_RANK[mode] ?? 2);
+}
+
 // stat: number of settings overridden at object level (used as a quick badge)
 function countOverridesAtLayer(layerId) {
   return ALL_SETTINGS.filter(s =>
@@ -415,6 +497,7 @@ function resolveObjectFilament(obj, materialMap, slotMap, filaments) {
 window.SLICER_DATA = {
   CASCADE_LAYERS, LAYER_BY_ID, LAYER_INDEX,
   CATEGORIES, ALL_SETTINGS,
+  SETTING_MODES, LEVEL_RANK, MODE_RANK, settingVisibleInMode, computeSettingLevel,
   resolveValue, getOverriddenLayers, countOverridesAtLayer,
   computeSlotIds, slotShortLabel, slotLongLabel,
   resolveObjectFilament,

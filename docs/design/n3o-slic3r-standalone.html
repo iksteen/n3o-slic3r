@@ -1783,6 +1783,131 @@ input, select, textarea { font-family: inherit; }
   padding: 10px 12px 8px;
   display: grid; gap: 8px;
 }
+.search-row {
+  display: flex; align-items: stretch; gap: 8px;
+}
+.search-row .search-input { flex: 1; min-width: 0; }
+
+/* Filter-by-modified toggle, sits to the right of the search field. */
+.filter-toggle {
+  flex-shrink: 0;
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 32px; padding: 0 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color 100ms, background 100ms, color 100ms, box-shadow 100ms;
+}
+.filter-toggle:hover:not(:disabled) {
+  color: var(--text);
+  border-color: color-mix(in oklch, var(--accent) 35%, var(--border));
+}
+.filter-toggle:disabled { opacity: 0.4; cursor: default; }
+.filter-toggle.active {
+  background: color-mix(in oklch, var(--accent) 16%, var(--surface));
+  border-color: color-mix(in oklch, var(--accent) 55%, var(--border));
+  color: var(--accent-text);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 12%, transparent);
+}
+.filter-toggle-count {
+  font-family: var(--font-mono);
+  font-size: 10.5px; font-weight: 600;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.filter-toggle.active .filter-toggle-count {
+  background: color-mix(in oklch, var(--accent) 22%, var(--surface));
+  border-color: transparent;
+  color: var(--accent-text);
+}
+
+/* Simple / Advanced / Expert mode switch — sits under the search field. */
+.mode-seg {
+  display: flex; gap: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 2px;
+}
+.mode-seg-btn {
+  flex: 1;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 25px;
+  border: 0; background: transparent;
+  border-radius: 5px;
+  font-size: 11.5px; font-weight: 500;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 110ms, color 110ms, box-shadow 110ms;
+}
+.mode-seg-btn:hover { color: var(--text); }
+.mode-seg-btn.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.14);
+}
+.mode-seg-count {
+  font-family: var(--font-mono);
+  font-size: 9.5px; font-weight: 600;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  opacity: 0.75;
+}
+.mode-seg-btn.active .mode-seg-count {
+  background: color-mix(in oklch, var(--accent) 18%, var(--surface));
+  color: var(--accent-text);
+  opacity: 1;
+}
+
+.empty-link {
+  background: none; border: 0; padding: 0;
+  color: var(--accent-text);
+  font: inherit; cursor: pointer;
+  text-decoration: underline;
+}
+.empty-link:hover { opacity: 0.8; }
+
+/* Tier tag on a setting row that's above the current mode but shown because
+   it's been modified. */
+.tier-tag {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 8.5px; font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+}
+.tier-tag.tier-advanced {
+  color: hsl(45 75% 38%);
+  background: hsl(45 75% 38% / 0.12);
+  border-color: hsl(45 75% 38% / 0.3);
+}
+.tier-tag.tier-expert {
+  color: hsl(8 70% 50%);
+  background: hsl(8 70% 50% / 0.12);
+  border-color: hsl(8 70% 50% / 0.3);
+}
+[data-theme="dark"] .tier-tag.tier-advanced {
+  color: hsl(45 80% 65%);
+  background: hsl(45 70% 55% / 0.16);
+  border-color: hsl(45 70% 55% / 0.32);
+}
+[data-theme="dark"] .tier-tag.tier-expert {
+  color: hsl(8 85% 68%);
+  background: hsl(8 75% 58% / 0.16);
+  border-color: hsl(8 75% 58% / 0.32);
+}
 .search-input {
   display: flex; align-items: center; gap: 8px;
   padding: 0 10px;
@@ -5937,6 +6062,88 @@ const ALL_SETTINGS = CATEGORIES.flatMap(c =>
   c.settings.map(s => ({ ...s, _catId: c.id, _catName: c.name }))
 );
 
+// ───────────── Complexity tiers (Simple / Advanced / Expert) ─────────────
+// Each setting belongs to a tier. Modes are cumulative: Simple shows only
+// simple settings; Advanced shows simple + advanced; Expert shows everything.
+// We tag a curated handful as "simple" (the everyday controls), a curated set
+// plus two whole categories as "expert" (deep/technical), and let everything
+// else fall through to "advanced".
+const SETTING_MODES = [
+  { id: "simple",   label: "Simple",   rank: 0, desc: "Everyday essentials — the controls most prints need" },
+  { id: "advanced", label: "Advanced", rank: 1, desc: "Common tuning controls for dialing in quality" },
+  { id: "expert",   label: "Expert",   rank: 2, desc: "Every setting exposed — no guardrails" },
+];
+const LEVEL_RANK = { simple: 0, advanced: 1, expert: 2 };
+const MODE_RANK = Object.fromEntries(SETTING_MODES.map(m => [m.id, m.rank]));
+
+const SIMPLE_SETTING_IDS = new Set([
+  "layer_height", "initial_layer_h",
+  "wall_count",
+  "top_layers", "bottom_layers",
+  "infill_density", "infill_pattern",
+  "print_temp", "bed_temp", "flow",
+  "print_speed",
+  "fan_enable", "fan_speed",
+  "support_enable", "support_type", "support_density",
+  "adhesion_type", "brim_width",
+  "spiralize_outer",
+]);
+
+// Whole categories that are expert-only by nature.
+const EXPERT_CATEGORY_IDS = new Set(["meshfix", "experimental"]);
+
+const EXPERT_SETTING_IDS = new Set([
+  // quality
+  "init_line_width", "z_seam_x", "z_seam_y", "xy_offset", "xy_offset_hole",
+  "z_offset", "slicing_tolerance", "min_feat_size", "min_thick_wall", "res_avoid_cross",
+  // walls
+  "min_wall_flow", "filter_out_tiny", "compensate_wall", "alt_extra_wall",
+  "ext_wall_acc", "ext_wall_jerk", "ironing_inset",
+  // top/bottom
+  "skin_overlap", "skin_removal", "expand_skins", "top_init_line",
+  "extra_skin_walls", "skin_edge_support", "interface_skin", "top_dir_rot",
+  // infill
+  "infill_acc", "infill_wipe_dist", "infill_z_step", "min_infill_area",
+  "connect_infill", "connect_polys", "skin_to_infill", "gradual_infill",
+  "gradual_step_h", "infill_support", "lightning_density", "infill_line_dist",
+  // material
+  "chamber_temp", "retract_count_max", "density", "standby_temp", "purge_volume",
+  // speed
+  "max_accel", "max_jerk", "classic_jerk", "first_layer_acc", "ext_speed_mult", "z_hop_speed",
+  // travel
+  "travel_avoid_dist", "coast_at_end", "coast_volume", "retract_extra_at_layer",
+  "zhop_during_travel", "ramming_volume", "z_hop_type",
+  // cooling
+  "fan_lift_at_min_t", "aux_fan_speed", "chamber_fan", "min_speed_cool",
+  // support
+  "support_xy_dist", "support_z_dist", "tree_branch_dia", "tree_angle",
+  "support_floor", "support_brim",
+  // adhesion
+  "skirt_min_length", "raft_smoothing", "draft_shield", "draft_shield_h", "prime_tower_size",
+  // multi-extruder
+  "toolchange_temp", "toolchange_retract", "toolchange_zhop", "wipe_tower_rot",
+  "ooze_shield", "interface_only_first", "prime_volume",
+  // special modes
+  "smooth_spiralized", "relative_extrusion", "fuzzy_thickness", "fuzzy_density",
+]);
+
+function computeSettingLevel(catId, id) {
+  if (SIMPLE_SETTING_IDS.has(id)) return "simple";
+  if (EXPERT_CATEGORY_IDS.has(catId) || EXPERT_SETTING_IDS.has(id)) return "expert";
+  return "advanced";
+}
+
+// Tag every setting object in place with its tier so both CATEGORIES (used by
+// the panel) and ALL_SETTINGS (the flattened copy) carry `level`.
+CATEGORIES.forEach(c => c.settings.forEach(st => { st.level = computeSettingLevel(c.id, st.id); }));
+ALL_SETTINGS.forEach(st => { st.level = computeSettingLevel(st._catId, st.id); });
+
+// Is `setting` visible in `mode`? Cumulative: a mode shows its tier and all
+// lower tiers.
+function settingVisibleInMode(setting, mode) {
+  return (LEVEL_RANK[setting.level] ?? 1) <= (MODE_RANK[mode] ?? 2);
+}
+
 // stat: number of settings overridden at object level (used as a quick badge)
 function countOverridesAtLayer(layerId) {
   return ALL_SETTINGS.filter(s =>
@@ -6023,6 +6230,7 @@ function resolveObjectFilament(obj, materialMap, slotMap, filaments) {
 window.SLICER_DATA = {
   CASCADE_LAYERS, LAYER_BY_ID, LAYER_INDEX,
   CATEGORIES, ALL_SETTINGS,
+  SETTING_MODES, LEVEL_RANK, MODE_RANK, settingVisibleInMode, computeSettingLevel,
   resolveValue, getOverriddenLayers, countOverridesAtLayer,
   computeSlotIds, slotShortLabel, slotLongLabel,
   resolveObjectFilament,
@@ -7857,6 +8065,7 @@ const {
   CATEGORIES, ALL_SETTINGS,
   resolveValue, getOverriddenLayers,
   computeSlotIds, slotShortLabel, slotLongLabel,
+  SETTING_MODES, settingVisibleInMode,
 } = window.SLICER_DATA;
 
 // Connection-indicator tooltip copy, keyed by status.
@@ -7987,6 +8196,7 @@ function formatVal(v, unit) {
 function SettingRow({
   readOnly = false,
   setting,
+  outOfMode = false,      // tier is above the active mode — shown only because modified
   contextLayer,
   selectedObject,         // present when contextLayer === "object"
   objects,                // ALL objects on the plate, so we can show which override this setting
@@ -8141,6 +8351,12 @@ function SettingRow({
     >
       <div className="set-meta">
         <span className="set-name" title={setting.name}>{setting.name}</span>
+        {outOfMode && (
+          <span
+            className={`tier-tag tier-${setting.level}`}
+            title={`This is ${setting.level === "expert" ? "an Expert" : "an Advanced"} setting, shown because it's been changed`}
+          >{setting.level === "expert" ? "EXP" : "ADV"}</span>
+        )}
         {accountabilityMode === "breadcrumb" && (
           <span className="set-breadcrumb">
             {definedLayers.map((l, i) => (
@@ -8401,6 +8617,14 @@ function SettingsPanel({
   activePlateId, activePlateName,
 }) {
   const [query, setQuery] = useSPS("");
+  const [showModifiedOnly, setShowModifiedOnly] = useSPS(false);
+  const [settingMode, setSettingMode] = useSPS(() => {
+    try { return localStorage.getItem("n3o.settingMode") || "advanced"; }
+    catch (e) { return "advanced"; }
+  });
+  useSPE(() => {
+    try { localStorage.setItem("n3o.settingMode", settingMode); } catch (e) {}
+  }, [settingMode]);
   const [pluginTabActive, setPluginTabActive] = useSPS(false);
   const PluginManagerComp = window.PluginManager;
   const [activeCat, setActiveCat] = useSPS(CATEGORIES[0].id);
@@ -8466,8 +8690,41 @@ function SettingsPanel({
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
+  // Is this setting "modified" at the current editing layer? On the Project
+  // tab: has a project-level value (base profile + user edits, minus cleared
+  // sentinels). On the Object tab: the selected object overrides it. This is
+  // the same notion the category-rail accent counts use, so the filter total
+  // lines up with those badges.
+  const isSettingModified = useSPC((s) => {
+    if (contextLayer === "object") {
+      if (!selectedObject) return false;
+      const ov = (selectedObject.overrides || {})[s.id];
+      return ov !== undefined && ov !== null;
+    }
+    const user = (userOverrides[s.id] || {}).project;
+    if (user === null) return false;
+    if (user !== undefined) return true;
+    return s.cascade.project !== undefined && s.cascade.project !== null;
+  }, [contextLayer, selectedObject, userOverrides]);
+
   const filteredCategories = useSPM(() => {
-    if (!query.trim()) return CATEGORIES.map(c => ({ ...c, _settings: c.settings, _matchedAll: true }));
+    const passFilters = (arr) => {
+      // A setting shows if it's in the current mode's tier OR it's been
+      // modified — changed settings are never hidden by the mode, so you can
+      // always see (and revert) what differs even in Simple mode.
+      let out = arr.filter(s => settingVisibleInMode(s, settingMode) || isSettingModified(s));
+      if (showModifiedOnly) out = out.filter(isSettingModified);
+      return out;
+    };
+    // The list shows literally everything only in Expert mode with no query
+    // and no modified filter — the only case the header omits the "/total".
+    const showingAll = !query.trim() && !showModifiedOnly && settingMode === "expert";
+
+    if (!query.trim()) {
+      return CATEGORIES
+        .map(c => ({ ...c, _settings: passFilters(c.settings), _matchedAll: showingAll }))
+        .filter(c => c._settings.length > 0);
+    }
 
     const q = query.trim();
     return CATEGORIES.map(cat => {
@@ -8494,9 +8751,9 @@ function SettingsPanel({
           .sort((a, b) => b.score - a.score)
           .map(x => x.s);
       }
-      return { ...cat, _settings: matched, _matchedAll: false };
+      return { ...cat, _settings: passFilters(matched), _matchedAll: false };
     }).filter(c => c._settings.length > 0);
-  }, [query, searchMode, activeCat]);
+  }, [query, searchMode, activeCat, showModifiedOnly, settingMode, isSettingModified]);
 
   // observe scroll position to update activeCat
   useSPE(() => {
@@ -8558,24 +8815,34 @@ function SettingsPanel({
   const counts = useSPM(() => {
     const out = {};
     CATEGORIES.forEach(c => {
+      const visible = c.settings.filter(s => settingVisibleInMode(s, settingMode) || isSettingModified(s));
       out[c.id] = {
-        total: c.settings.length,
-        overrides: c.settings.filter(s => {
-          if (contextLayer === "object") {
-            if (!selectedObject) return false;
-            const ov = (selectedObject.overrides || {})[s.id];
-            return ov !== undefined && ov !== null;
-          }
-          // project tab
-          const user = (userOverrides[s.id] || {}).project;
-          if (user === null) return false;
-          if (user !== undefined) return true;
-          return s.cascade.project !== undefined && s.cascade.project !== null;
-        }).length,
+        total: visible.length,
+        overrides: visible.filter(isSettingModified).length,
       };
     });
     return out;
-  }, [userOverrides, contextLayer, selectedObject]);
+  }, [isSettingModified, settingMode]);
+
+  // How many settings each mode reveals (cumulative) — shown on the segments.
+  const modeCounts = useSPM(() => {
+    const out = {};
+    SETTING_MODES.forEach(m => {
+      out[m.id] = ALL_SETTINGS.filter(s => settingVisibleInMode(s, m.id)).length;
+    });
+    return out;
+  }, []);
+
+  const modifiedTotal = useSPM(
+    () => Object.values(counts).reduce((n, c) => n + c.overrides, 0),
+    [counts]
+  );
+
+  // If the user filters to modified-only and then clears every override (so
+  // nothing is left to show), drop the filter so the list isn't stuck empty.
+  useSPE(() => {
+    if (showModifiedOnly && modifiedTotal === 0) setShowModifiedOnly(false);
+  }, [showModifiedOnly, modifiedTotal]);
 
   const totalMatches = filteredCategories.reduce((n, c) => n + c._settings.length, 0);
 
@@ -8836,30 +9103,67 @@ function SettingsPanel({
       </div>
 
       <div className="search-wrap" style={pluginTabActive ? { display: "none" } : undefined}>
-        <div className="search-input">
-          <svg className="ico" viewBox="0 0 14 14" fill="none">
-            <circle cx="6" cy="6" r="4.2" stroke="currentColor" strokeWidth="1.4"/>
-            <path d="M9.2 9.2L12 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-          </svg>
-          <input
-            ref={inputRef}
-            type="text"
-            placeholder={
-              searchMode === "instant" ? "Search 800+ settings…" :
-              searchMode === "scoped"  ? `Search within ${LAYER_BY_ID && CATEGORIES.find(c=>c.id===activeCat)?.name}…` :
-              "Fuzzy search any setting…"
+        <div className="search-row">
+          <div className="search-input">
+            <svg className="ico" viewBox="0 0 14 14" fill="none">
+              <circle cx="6" cy="6" r="4.2" stroke="currentColor" strokeWidth="1.4"/>
+              <path d="M9.2 9.2L12 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+            </svg>
+            <input
+              ref={inputRef}
+              type="text"
+              placeholder={
+                searchMode === "instant" ? "Search 800+ settings…" :
+                searchMode === "scoped"  ? `Search within ${LAYER_BY_ID && CATEGORIES.find(c=>c.id===activeCat)?.name}…` :
+                "Fuzzy search any setting…"
+              }
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            {query && (
+              <button className="icon-btn" onClick={() => setQuery("")}>×</button>
+            )}
+            {!query && <span className="kbd">⌘F</span>}
+          </div>
+          <button
+            className={`filter-toggle ${showModifiedOnly ? "active" : ""}`}
+            onClick={() => setShowModifiedOnly(v => !v)}
+            disabled={modifiedTotal === 0 && !showModifiedOnly}
+            aria-pressed={showModifiedOnly}
+            title={
+              modifiedTotal === 0
+                ? `No modified settings on the ${contextLayer === "object" ? "Object" : "Project"} layer yet`
+                : showModifiedOnly
+                  ? "Showing only modified settings — click to show all"
+                  : `Show only modified settings (${modifiedTotal})`
             }
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          {query && (
-            <button className="icon-btn" onClick={() => setQuery("")}>×</button>
-          )}
-          {!query && <span className="kbd">⌘F</span>}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M1.5 2.5h11l-4.2 5v3.6l-2.6 1.2V7.5L1.5 2.5z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+            </svg>
+            {modifiedTotal > 0 && <span className="filter-toggle-count">{modifiedTotal}</span>}
+          </button>
         </div>
-        {query && (
+        <div className="mode-seg" role="tablist" aria-label="Setting complexity">
+          {SETTING_MODES.map(m => (
+            <button
+              key={m.id}
+              role="tab"
+              aria-selected={settingMode === m.id}
+              className={`mode-seg-btn ${settingMode === m.id ? "active" : ""}`}
+              onClick={() => setSettingMode(m.id)}
+              title={m.desc}
+            >
+              <span className="mode-seg-label">{m.label}</span>
+              <span className="mode-seg-count">{modeCounts[m.id]}</span>
+            </button>
+          ))}
+        </div>
+        {(query || showModifiedOnly) && (
           <div className="dim" style={{ fontSize: 11, fontFamily: "var(--font-mono)" }}>
-            {totalMatches} {totalMatches === 1 ? "match" : "matches"} across {filteredCategories.length} {filteredCategories.length === 1 ? "category" : "categories"}
+            {showModifiedOnly && !query && `${totalMatches} modified ${totalMatches === 1 ? "setting" : "settings"} across ${filteredCategories.length} ${filteredCategories.length === 1 ? "category" : "categories"}`}
+            {query && !showModifiedOnly && `${totalMatches} ${totalMatches === 1 ? "match" : "matches"} across ${filteredCategories.length} ${filteredCategories.length === 1 ? "category" : "categories"}`}
+            {query && showModifiedOnly && `${totalMatches} modified ${totalMatches === 1 ? "match" : "matches"} · filtered`}
           </div>
         )}
       </div>
@@ -8881,7 +9185,7 @@ function SettingsPanel({
       <div className="settings-body">
         <div className="cat-rail">
           {CATEGORIES.map(cat => {
-            const hasMatches = !query.trim() || filteredCategories.find(c => c.id === cat.id);
+            const hasMatches = filteredCategories.some(c => c.id === cat.id);
             return (
               <button
                 key={cat.id}
@@ -8905,8 +9209,21 @@ function SettingsPanel({
         <div className="settings-scroll" ref={scrollRef}>
           {filteredCategories.length === 0 && (
             <div className="empty-state">
-              No settings match <span className="kbd-inline">{query}</span>
-              <div style={{ marginTop: 8, fontSize: 11 }}>Try fuzzy mode or broaden your terms.</div>
+              {query
+                ? <>No {showModifiedOnly ? "modified " : ""}settings match <span className="kbd-inline">{query}</span></>
+                : <>No modified settings on this layer</>}
+              <div style={{ marginTop: 8, fontSize: 11 }}>
+                {query ? "Try fuzzy mode or broaden your terms." : "Edit a setting to see it here."}
+                {settingMode !== "expert" && (
+                  <div style={{ marginTop: 6 }}>
+                    Some settings are hidden by <b>{SETTING_MODES.find(m => m.id === settingMode)?.label}</b> mode —{" "}
+                    <button
+                      className="empty-link"
+                      onClick={() => setSettingMode("expert")}
+                    >switch to Expert</button>.
+                  </div>
+                )}
+              </div>
             </div>
           )}
           {filteredCategories.map(cat => (
@@ -8926,6 +9243,7 @@ function SettingsPanel({
                   key={setting.id}
                   readOnly={readOnly}
                   setting={setting}
+                  outOfMode={!settingVisibleInMode(setting, settingMode)}
                   contextLayer={contextLayer}
                   selectedObject={contextLayer === "object" ? selectedObject : null}
                   objects={objects}

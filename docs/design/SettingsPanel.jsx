@@ -8,6 +8,7 @@ const {
   CATEGORIES, ALL_SETTINGS,
   resolveValue, getOverriddenLayers,
   computeSlotIds, slotShortLabel, slotLongLabel,
+  SETTING_MODES, settingVisibleInMode,
 } = window.SLICER_DATA;
 
 // Connection-indicator tooltip copy, keyed by status.
@@ -138,6 +139,7 @@ function formatVal(v, unit) {
 function SettingRow({
   readOnly = false,
   setting,
+  outOfMode = false,      // tier is above the active mode — shown only because modified
   contextLayer,
   selectedObject,         // present when contextLayer === "object"
   objects,                // ALL objects on the plate, so we can show which override this setting
@@ -292,6 +294,12 @@ function SettingRow({
     >
       <div className="set-meta">
         <span className="set-name" title={setting.name}>{setting.name}</span>
+        {outOfMode && (
+          <span
+            className={`tier-tag tier-${setting.level}`}
+            title={`This is ${setting.level === "expert" ? "an Expert" : "an Advanced"} setting, shown because it's been changed`}
+          >{setting.level === "expert" ? "EXP" : "ADV"}</span>
+        )}
         {accountabilityMode === "breadcrumb" && (
           <span className="set-breadcrumb">
             {definedLayers.map((l, i) => (
@@ -552,6 +560,14 @@ function SettingsPanel({
   activePlateId, activePlateName,
 }) {
   const [query, setQuery] = useSPS("");
+  const [showModifiedOnly, setShowModifiedOnly] = useSPS(false);
+  const [settingMode, setSettingMode] = useSPS(() => {
+    try { return localStorage.getItem("n3o.settingMode") || "advanced"; }
+    catch (e) { return "advanced"; }
+  });
+  useSPE(() => {
+    try { localStorage.setItem("n3o.settingMode", settingMode); } catch (e) {}
+  }, [settingMode]);
   const [pluginTabActive, setPluginTabActive] = useSPS(false);
   const PluginManagerComp = window.PluginManager;
   const [activeCat, setActiveCat] = useSPS(CATEGORIES[0].id);
@@ -617,8 +633,41 @@ function SettingsPanel({
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
+  // Is this setting "modified" at the current editing layer? On the Project
+  // tab: has a project-level value (base profile + user edits, minus cleared
+  // sentinels). On the Object tab: the selected object overrides it. This is
+  // the same notion the category-rail accent counts use, so the filter total
+  // lines up with those badges.
+  const isSettingModified = useSPC((s) => {
+    if (contextLayer === "object") {
+      if (!selectedObject) return false;
+      const ov = (selectedObject.overrides || {})[s.id];
+      return ov !== undefined && ov !== null;
+    }
+    const user = (userOverrides[s.id] || {}).project;
+    if (user === null) return false;
+    if (user !== undefined) return true;
+    return s.cascade.project !== undefined && s.cascade.project !== null;
+  }, [contextLayer, selectedObject, userOverrides]);
+
   const filteredCategories = useSPM(() => {
-    if (!query.trim()) return CATEGORIES.map(c => ({ ...c, _settings: c.settings, _matchedAll: true }));
+    const passFilters = (arr) => {
+      // A setting shows if it's in the current mode's tier OR it's been
+      // modified — changed settings are never hidden by the mode, so you can
+      // always see (and revert) what differs even in Simple mode.
+      let out = arr.filter(s => settingVisibleInMode(s, settingMode) || isSettingModified(s));
+      if (showModifiedOnly) out = out.filter(isSettingModified);
+      return out;
+    };
+    // The list shows literally everything only in Expert mode with no query
+    // and no modified filter — the only case the header omits the "/total".
+    const showingAll = !query.trim() && !showModifiedOnly && settingMode === "expert";
+
+    if (!query.trim()) {
+      return CATEGORIES
+        .map(c => ({ ...c, _settings: passFilters(c.settings), _matchedAll: showingAll }))
+        .filter(c => c._settings.length > 0);
+    }
 
     const q = query.trim();
     return CATEGORIES.map(cat => {
@@ -645,9 +694,9 @@ function SettingsPanel({
           .sort((a, b) => b.score - a.score)
           .map(x => x.s);
       }
-      return { ...cat, _settings: matched, _matchedAll: false };
+      return { ...cat, _settings: passFilters(matched), _matchedAll: false };
     }).filter(c => c._settings.length > 0);
-  }, [query, searchMode, activeCat]);
+  }, [query, searchMode, activeCat, showModifiedOnly, settingMode, isSettingModified]);
 
   // observe scroll position to update activeCat
   useSPE(() => {
@@ -709,24 +758,34 @@ function SettingsPanel({
   const counts = useSPM(() => {
     const out = {};
     CATEGORIES.forEach(c => {
+      const visible = c.settings.filter(s => settingVisibleInMode(s, settingMode) || isSettingModified(s));
       out[c.id] = {
-        total: c.settings.length,
-        overrides: c.settings.filter(s => {
-          if (contextLayer === "object") {
-            if (!selectedObject) return false;
-            const ov = (selectedObject.overrides || {})[s.id];
-            return ov !== undefined && ov !== null;
-          }
-          // project tab
-          const user = (userOverrides[s.id] || {}).project;
-          if (user === null) return false;
-          if (user !== undefined) return true;
-          return s.cascade.project !== undefined && s.cascade.project !== null;
-        }).length,
+        total: visible.length,
+        overrides: visible.filter(isSettingModified).length,
       };
     });
     return out;
-  }, [userOverrides, contextLayer, selectedObject]);
+  }, [isSettingModified, settingMode]);
+
+  // How many settings each mode reveals (cumulative) — shown on the segments.
+  const modeCounts = useSPM(() => {
+    const out = {};
+    SETTING_MODES.forEach(m => {
+      out[m.id] = ALL_SETTINGS.filter(s => settingVisibleInMode(s, m.id)).length;
+    });
+    return out;
+  }, []);
+
+  const modifiedTotal = useSPM(
+    () => Object.values(counts).reduce((n, c) => n + c.overrides, 0),
+    [counts]
+  );
+
+  // If the user filters to modified-only and then clears every override (so
+  // nothing is left to show), drop the filter so the list isn't stuck empty.
+  useSPE(() => {
+    if (showModifiedOnly && modifiedTotal === 0) setShowModifiedOnly(false);
+  }, [showModifiedOnly, modifiedTotal]);
 
   const totalMatches = filteredCategories.reduce((n, c) => n + c._settings.length, 0);
 
@@ -987,30 +1046,67 @@ function SettingsPanel({
       </div>
 
       <div className="search-wrap" style={pluginTabActive ? { display: "none" } : undefined}>
-        <div className="search-input">
-          <svg className="ico" viewBox="0 0 14 14" fill="none">
-            <circle cx="6" cy="6" r="4.2" stroke="currentColor" strokeWidth="1.4"/>
-            <path d="M9.2 9.2L12 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
-          </svg>
-          <input
-            ref={inputRef}
-            type="text"
-            placeholder={
-              searchMode === "instant" ? "Search 800+ settings…" :
-              searchMode === "scoped"  ? `Search within ${LAYER_BY_ID && CATEGORIES.find(c=>c.id===activeCat)?.name}…` :
-              "Fuzzy search any setting…"
+        <div className="search-row">
+          <div className="search-input">
+            <svg className="ico" viewBox="0 0 14 14" fill="none">
+              <circle cx="6" cy="6" r="4.2" stroke="currentColor" strokeWidth="1.4"/>
+              <path d="M9.2 9.2L12 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+            </svg>
+            <input
+              ref={inputRef}
+              type="text"
+              placeholder={
+                searchMode === "instant" ? "Search 800+ settings…" :
+                searchMode === "scoped"  ? `Search within ${LAYER_BY_ID && CATEGORIES.find(c=>c.id===activeCat)?.name}…` :
+                "Fuzzy search any setting…"
+              }
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            {query && (
+              <button className="icon-btn" onClick={() => setQuery("")}>×</button>
+            )}
+            {!query && <span className="kbd">⌘F</span>}
+          </div>
+          <button
+            className={`filter-toggle ${showModifiedOnly ? "active" : ""}`}
+            onClick={() => setShowModifiedOnly(v => !v)}
+            disabled={modifiedTotal === 0 && !showModifiedOnly}
+            aria-pressed={showModifiedOnly}
+            title={
+              modifiedTotal === 0
+                ? `No modified settings on the ${contextLayer === "object" ? "Object" : "Project"} layer yet`
+                : showModifiedOnly
+                  ? "Showing only modified settings — click to show all"
+                  : `Show only modified settings (${modifiedTotal})`
             }
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          {query && (
-            <button className="icon-btn" onClick={() => setQuery("")}>×</button>
-          )}
-          {!query && <span className="kbd">⌘F</span>}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M1.5 2.5h11l-4.2 5v3.6l-2.6 1.2V7.5L1.5 2.5z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"/>
+            </svg>
+            {modifiedTotal > 0 && <span className="filter-toggle-count">{modifiedTotal}</span>}
+          </button>
         </div>
-        {query && (
+        <div className="mode-seg" role="tablist" aria-label="Setting complexity">
+          {SETTING_MODES.map(m => (
+            <button
+              key={m.id}
+              role="tab"
+              aria-selected={settingMode === m.id}
+              className={`mode-seg-btn ${settingMode === m.id ? "active" : ""}`}
+              onClick={() => setSettingMode(m.id)}
+              title={m.desc}
+            >
+              <span className="mode-seg-label">{m.label}</span>
+              <span className="mode-seg-count">{modeCounts[m.id]}</span>
+            </button>
+          ))}
+        </div>
+        {(query || showModifiedOnly) && (
           <div className="dim" style={{ fontSize: 11, fontFamily: "var(--font-mono)" }}>
-            {totalMatches} {totalMatches === 1 ? "match" : "matches"} across {filteredCategories.length} {filteredCategories.length === 1 ? "category" : "categories"}
+            {showModifiedOnly && !query && `${totalMatches} modified ${totalMatches === 1 ? "setting" : "settings"} across ${filteredCategories.length} ${filteredCategories.length === 1 ? "category" : "categories"}`}
+            {query && !showModifiedOnly && `${totalMatches} ${totalMatches === 1 ? "match" : "matches"} across ${filteredCategories.length} ${filteredCategories.length === 1 ? "category" : "categories"}`}
+            {query && showModifiedOnly && `${totalMatches} modified ${totalMatches === 1 ? "match" : "matches"} · filtered`}
           </div>
         )}
       </div>
@@ -1032,7 +1128,7 @@ function SettingsPanel({
       <div className="settings-body">
         <div className="cat-rail">
           {CATEGORIES.map(cat => {
-            const hasMatches = !query.trim() || filteredCategories.find(c => c.id === cat.id);
+            const hasMatches = filteredCategories.some(c => c.id === cat.id);
             return (
               <button
                 key={cat.id}
@@ -1056,8 +1152,21 @@ function SettingsPanel({
         <div className="settings-scroll" ref={scrollRef}>
           {filteredCategories.length === 0 && (
             <div className="empty-state">
-              No settings match <span className="kbd-inline">{query}</span>
-              <div style={{ marginTop: 8, fontSize: 11 }}>Try fuzzy mode or broaden your terms.</div>
+              {query
+                ? <>No {showModifiedOnly ? "modified " : ""}settings match <span className="kbd-inline">{query}</span></>
+                : <>No modified settings on this layer</>}
+              <div style={{ marginTop: 8, fontSize: 11 }}>
+                {query ? "Try fuzzy mode or broaden your terms." : "Edit a setting to see it here."}
+                {settingMode !== "expert" && (
+                  <div style={{ marginTop: 6 }}>
+                    Some settings are hidden by <b>{SETTING_MODES.find(m => m.id === settingMode)?.label}</b> mode —{" "}
+                    <button
+                      className="empty-link"
+                      onClick={() => setSettingMode("expert")}
+                    >switch to Expert</button>.
+                  </div>
+                )}
+              </div>
             </div>
           )}
           {filteredCategories.map(cat => (
@@ -1077,6 +1186,7 @@ function SettingsPanel({
                   key={setting.id}
                   readOnly={readOnly}
                   setting={setting}
+                  outOfMode={!settingVisibleInMode(setting, settingMode)}
                   contextLayer={contextLayer}
                   selectedObject={contextLayer === "object" ? selectedObject : null}
                   objects={objects}
