@@ -5,13 +5,16 @@
 # path; this is the signed release path.)
 #
 # Config (env):
-#   N3O_FLATPAK_REPO_URL   REQUIRED. Public HTTPS base URL the repo is
-#                          served from, e.g. https://dl.example.org/n3o
-#   N3O_FLATPAK_GPG_KEY    Signing key fingerprint. Defaults to the
-#                          dedicated project key created for PR-9-3.
+#   N3O_FLATPAK_REPO_URL    REQUIRED. Public HTTPS base URL the repo is
+#                           served from, e.g. https://n3o.thegraveyard.org/repo
+#   N3O_FLATPAK_GPG_KEY     Signing key fingerprint. Defaults to the
+#                           dedicated project key created for PR-9-3.
+#   N3O_FLATPAK_PUBLISH_DEST  Optional rsync/ssh destination, e.g.
+#                           user@host:/srv/www/n3o.thegraveyard.org/repo. When set, the script
+#                           uploads the repo + ref there automatically;
+#                           when unset, it just prints the manual steps.
 #
-# After it runs, upload the repo + ref to your server (see the printed
-# instructions and packaging/flatpak/PUBLISHING.md).
+# See packaging/flatpak/PUBLISHING.md for the hosting setup.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -66,19 +69,37 @@ RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo
 Title=n3o-slic3r
 REF
 
-cat <<DONE
+echo
+echo "Done."
+echo "  signed repo:  ${pubrepo}"
+echo "  flatpakref:   ${gen}/${appid}.flatpakref"
 
-Done.
-  signed repo:  ${pubrepo}
-  flatpakref:   ${gen}/${appid}.flatpakref
+if [[ -n "${N3O_FLATPAK_PUBLISH_DEST:-}" ]]; then
+  dest="${N3O_FLATPAK_PUBLISH_DEST%/}"
+  echo
+  echo ":: uploading to ${dest}/ (N3O_FLATPAK_PUBLISH_DEST set)"
+  # Repo contents first — `--delete` prunes stale ostree objects (and the
+  # ref, re-added next) so the served tree matches the freshly-pruned repo.
+  rsync -a --delete "${pubrepo}/" "${dest}/"
+  # Then the ref alongside it, so it resolves at
+  # $N3O_FLATPAK_REPO_URL/${appid}.flatpakref.
+  rsync -a "${gen}/${appid}.flatpakref" "${dest}/"
+  echo ":: uploaded."
+  echo
+  echo "Install on a clean machine (signed; no --no-gpg-verify needed):"
+  echo "  flatpak install --from ${N3O_FLATPAK_REPO_URL}/${appid}.flatpakref"
+else
+  cat <<DONE
 
-Publish (one-time + per-release):
+Set N3O_FLATPAK_PUBLISH_DEST=<rsync/ssh dest> (e.g. user@host:/srv/www/n3o.thegraveyard.org/repo)
+to upload automatically, or publish by hand:
   1. Upload the repo so it's served at \$N3O_FLATPAK_REPO_URL:
-       rsync -a --delete "${pubrepo}/" your-server:/srv/www/n3o/
+       rsync -a --delete "${pubrepo}/" your-server:/srv/www/n3o.thegraveyard.org/repo/
   2. Upload the ref alongside it:
-       scp "${gen}/${appid}.flatpakref" your-server:/srv/www/n3o/
+       scp "${gen}/${appid}.flatpakref" your-server:/srv/www/n3o.thegraveyard.org/repo/
        (so it resolves at \$N3O_FLATPAK_REPO_URL/${appid}.flatpakref)
 
 Install on a clean machine (signed; no --no-gpg-verify needed):
   flatpak install --from ${N3O_FLATPAK_REPO_URL}/${appid}.flatpakref
 DONE
+fi

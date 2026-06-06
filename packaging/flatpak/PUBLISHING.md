@@ -24,9 +24,11 @@ key from the updated `.flatpakref`.
 
 ## One-time hosting setup
 
-Pick an HTTPS location to serve a static directory, e.g.
-`https://dl.example.org/n3o-slic3r/`. The ostree repo is just static
-files — any web server (nginx, Caddy, object storage + CDN) works. No
+The repo is served from **`https://n3o.thegraveyard.org/repo/`**. The
+marketing site (`docs/site/`) lives at the domain root and the ostree
+repo sits under `/repo/`, so a publish's `--delete` only ever prunes the
+repo and never touches the site. The ostree repo is just static files —
+any web server (nginx, Caddy, object storage + CDN) works. No
 server-side software is needed.
 
 ## Per-release publish
@@ -34,7 +36,7 @@ server-side software is needed.
 From the repo root, with the public URL set:
 
 ```bash
-N3O_FLATPAK_REPO_URL="https://dl.example.org/n3o-slic3r" \
+N3O_FLATPAK_REPO_URL="https://n3o.thegraveyard.org/repo" \
   packaging/flatpak/publish.sh
 ```
 
@@ -50,18 +52,29 @@ path):
 4. writes `packaging/flatpak/.gen/org.thegraveyard.n3o-slic3r.flatpakref`
    with the repo URL and the embedded public key.
 
-Then upload both to your host so they resolve under `$N3O_FLATPAK_REPO_URL`:
+Then upload both to your host so they resolve under `$N3O_FLATPAK_REPO_URL`.
+Set **`N3O_FLATPAK_PUBLISH_DEST`** to an rsync/ssh destination and `publish.sh`
+does the upload for you (repo with `--delete`, then the ref alongside it):
 
 ```bash
-rsync -a --delete packaging/flatpak/.publish-repo/  your-server:/srv/www/n3o-slic3r/
+N3O_FLATPAK_REPO_URL="https://n3o.thegraveyard.org/repo" \
+N3O_FLATPAK_PUBLISH_DEST="your-server:/srv/www/n3o.thegraveyard.org/repo" \
+  packaging/flatpak/publish.sh
+```
+
+Or upload by hand (what the script prints when `N3O_FLATPAK_PUBLISH_DEST` is
+unset):
+
+```bash
+rsync -a --delete packaging/flatpak/.publish-repo/  your-server:/srv/www/n3o.thegraveyard.org/repo/
 scp packaging/flatpak/.gen/org.thegraveyard.n3o-slic3r.flatpakref \
-    your-server:/srv/www/n3o-slic3r/
+    your-server:/srv/www/n3o.thegraveyard.org/repo/
 ```
 
 ## Install (end user, clean machine)
 
 ```bash
-flatpak install --from https://dl.example.org/n3o-slic3r/org.thegraveyard.n3o-slic3r.flatpakref
+flatpak install --from https://n3o.thegraveyard.org/repo/org.thegraveyard.n3o-slic3r.flatpakref
 ```
 
 The ref carries the signing key, so the install verifies the signature

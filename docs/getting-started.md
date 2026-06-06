@@ -45,7 +45,7 @@ GPG key automatically):
 
 ```sh
 flatpak install --from \
-  https://thegraveyard.org/n3o-slic3r/org.thegraveyard.n3o-slic3r.flatpakref
+  https://n3o.thegraveyard.org/repo/org.thegraveyard.n3o-slic3r.flatpakref
 ```
 
 Then launch it:

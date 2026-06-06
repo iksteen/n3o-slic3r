@@ -50,7 +50,7 @@ See the [getting-started guide](getting-started.md). In short:
 
 ```sh
 flatpak install --from \
-  https://thegraveyard.org/n3o-slic3r/org.thegraveyard.n3o-slic3r.flatpakref
+  https://n3o.thegraveyard.org/repo/org.thegraveyard.n3o-slic3r.flatpakref
 flatpak run org.thegraveyard.n3o-slic3r
 ```
 
