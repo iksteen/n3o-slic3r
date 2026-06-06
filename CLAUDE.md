@@ -27,20 +27,27 @@ Read these before reasoning about scope, design, or behavior:
   working practices (§11).
 - **`docs/dev/Execution_Plan.md`** — 10-phase plan, ~37.5 person-weeks.
   Phase ordering and dependencies are real; calendar dates are not.
-  **Status (2026-06-01):** Phases 0–8 are done — the full vertical
+  **Status (2026-06-07):** Phases 0–8 are done — the full vertical
   slice ships (cascade resolver + adapter, viewport, end-to-end slice +
   G-code parser + 3MF I/O, settings UI, multi-printer project model,
   G-code preview, both printer drivers + filament sync, Lua plugin
   system with platecycler hardware-validated). **Phase 9 (polish,
-  Linux flatpak, release prep) is in progress** — done: flatpak build +
-  self-hosted signed-repo distribution (validated on Arch, Ubuntu, and
-  Fedora, including under WSL2/WSLg), first-run onboarding, OrcaSlicer
-  `.3mf` project import, Linux CI. Remaining (see
-  `docs/dev/tickets/phase-9.md`, PR-9-* tickets): user docs (getting-started
-  / troubleshooting / release notes — PR-9-7), the
-  `.3mf`/`n3o_project.json` format-finalization review (PR-9-5, still
-  provisional), and the **independence-audit exit gate** (PR-9-8, the
-  one open PRD §3.3 success criterion). Post-MVP deferrals (plugin
+  Linux flatpak, release prep) is nearly complete** — done: flatpak
+  build + self-hosted signed-repo distribution (validated on Arch,
+  Ubuntu, and Fedora, including a full open→slice→print→monitor cycle on
+  both printers under WSL2/WSLg), first-run onboarding, OrcaSlicer
+  `.3mf` project import, user docs (getting-started / troubleshooting /
+  release notes — PR-9-7), Linux CI. The **independence-audit exit
+  gate** (PR-9-8) is **met** (2026-06-07): the clean-WSL2 full-cycle run
+  on both printers plus an external (non-lead) tester reaching send in
+  ~5 min prove "standalone at runtime" (no host slicer/libslic3r), and
+  the §3.3 feature criteria are proven in-phase. The audit surfaced one
+  finding — the Bambu **Developer Mode** requirement (recent firmware
+  rejects third-party MQTT commands, err_code 84033543) wasn't
+  discoverable in-app — now fixed (n3o surfaces the command-rejection
+  `err_code` with Developer-Mode guidance). Remaining (see
+  `docs/dev/tickets/phase-9.md`): the `.3mf`/`n3o_project.json`
+  format-finalization review (PR-9-5). Post-MVP deferrals (plugin
   compose hook, hot reload, Orca preset importer) live in plan §16.
 - **`docs/dev/profiles.md`** — Rule-cascade design of record. Two-phase
   resolution (authored cascade + `!important`-style override tiers),

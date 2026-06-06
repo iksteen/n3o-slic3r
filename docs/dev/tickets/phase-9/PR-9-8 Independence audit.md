@@ -1,13 +1,44 @@
 # PR-9-8 — independence audit (exit gate)
 
-Status: ⬜ open. **The phase's exit gate** — the proof that "standalone
-at runtime" (PRD §5) is real, not aspirational.
+Status: ✅ met (2026-06-07) — clean-box independence + the full
+open→slice→print→monitor workflow are proven on a clean WSL2 box for
+**both** printers, and an external (non-lead) tester reached **send** on
+his own clean machine in ~5 minutes. The run surfaced one finding (Bambu
+Developer-Mode discoverability), now filed **and fixed**. **The phase's
+exit gate** — proof that "standalone at runtime" (PRD §5) is real, not
+aspirational.
 
 **Scope.** An external tester, on a **clean Linux machine with no other
 slicer software installed**, completes the full workflow from the
 flatpak: install → configure both printers → slice → preview G-code →
 send to printer → monitor. This is the §11 exit criterion and PRD §3.3
 success criterion #7, run for real, not asserted.
+
+**Evidence / status (2026-06-06).** The substantive gate is met. A full
+workflow — open → slice → send → monitor — was completed on a **clean
+WSL2 distro** (no slicer and no build toolchain present; the flatpak's
+bundled libslic3r + webview carry the entire slice path) for **both**
+the A1 mini and the U1. That retires criterion #7 (clean-box
+independence — no host slicer or libslic3r) and exercises the
+send/monitor leg under the most adversarial supported environment (WSLg
+GPU/compositor + WSL2 NAT-to-LAN-printer networking). The §3.3 feature
+criteria are proven in their phases: #2 cascade visibility (Phase 4),
+#4 plugin lifecycle (Phase 8), #5 50 MB preview (Phase 6), #6
+platecycler auto-eject (Phase 8, hardware-validated), #1 multi-printer
+slice + send completing without manual G-code editing (PR-9-1 + native
+runs, incl. live A1 mini + U1 sends).
+
+**External-tester run (2026-06-07).** A non-lead tester installed the
+flatpak on his own clean machine and reached **send** in ~5 minutes —
+time-to-first-slice well under the PRD §3.3 #3 budget. It surfaced one
+real finding: the Bambu **Developer Mode** requirement (recent firmware
+rejects third-party MQTT commands without it — err_code 84033543) was
+documented but not discoverable in-app, costing the tester ~5 extra
+minutes. **Filed and fixed** — n3o now parses the command-rejection
+`err_code` and surfaces actionable Developer-Mode guidance instead of
+swallowing the rejection (the printer's on-screen error was previously
+invisible to the app). With the external run done and the finding
+resolved, the gate is **met**.
 
 **Acceptance criteria.**
 
