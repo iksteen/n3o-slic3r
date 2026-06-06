@@ -194,7 +194,7 @@ n3o-slic3r would send to a location you choose.
 
 ## 9. Multiple printers and plates (optional)
 
-A project can hold up to 4 **plates**, and **each plate has its own
+A project can hold **multiple plates**, and **each plate has its own
 printer**. Add plates from the plate tab strip and assign a printer per
 plate — slice Plate 1 for the A1 mini and Plates 2–3 for the U1 in the
 same project. Material→slot bindings are stored **per (plate, printer)**,

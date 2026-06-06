@@ -8,7 +8,7 @@ switches the active plate (which switches the entire workspace
 per PR-5-2's event scoping). `+` adds, `×` removes (with
 single-plate guard), double-click on the name renames inline.
 
-Owns FR-MP-1 (1-4 plates), the user-visible side of FR-MP-2
+Owns FR-MP-1 (one or more plates, no upper limit), the user-visible side of FR-MP-2
 (switchable assignment — the binding change itself ships with
 PR-5-4).
 

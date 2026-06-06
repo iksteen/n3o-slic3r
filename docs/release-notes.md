@@ -18,7 +18,7 @@ Both can be configured and used in the same project.
 
 ### What's in it
 
-- **Multi-printer, multi-plate projects.** Up to 4 plates, each bound to
+- **Multi-printer, multi-plate projects.** Multiple plates, each bound to
   its own printer; per-(plate, printer) material→slot bindings.
 - **Transparent settings cascade.** Every setting shows where its value
   came from — hover any row for the layer ladder (printer → build plate →

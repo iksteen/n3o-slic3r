@@ -296,8 +296,8 @@ impl Project {
 
     /// Drop a plate by id. Errors when:
     ///   - The plate id isn't in the list.
-    ///   - It's the only plate (FR-MP-1: 1-4 plates; a project
-    ///     must always have at least one).
+    ///   - It's the only plate (FR-MP-1: a project must always have
+    ///     at least one plate; there is no upper limit).
     ///
     /// On success, repacks `composition_order` so the remaining
     /// plates form a dense `[1..N]` sequence + adjusts

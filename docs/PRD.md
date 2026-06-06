@@ -66,8 +66,6 @@ Existing slicers permit external scripts as a final post-processing step, but of
 
 - Calibration wizards (flow, pressure advance, etc.)
 
-- Multi-plate projects beyond 4 plates
-
 - Mobile companion app
 
 - AI features of any kind
@@ -190,7 +188,7 @@ Presentation vs mechanism. The UI presents the cascade as values-by-source-file 
 
 ## 6.2 Multi-printer project model
 
-- **FR-MP-1.** A project may contain 1–4 plates.
+- **FR-MP-1.** A project may contain one or more plates (no upper limit).
 
 - **FR-MP-2.** Each plate has exactly one assigned printer. Assignment is changeable per plate.
 
@@ -547,7 +545,7 @@ Decision: tool offsets are read-only in the MVP. The UI displays offsets reporte
 
 ### AD-6: Plate-count guidance (soft UX, not constraint)
 
-Decision: plate count is not constrained per-printer. A1 mini and U1 can both have 1–4 plates. The UX may offer soft hints post-MVP (e.g. 'U1 typically prints multi-material on a single plate; consider consolidating') but the MVP does not gate behavior.
+Decision: plate count is not constrained per-printer or globally. A1 mini and U1 can both have any number of plates. The UX may offer soft hints post-MVP (e.g. 'U1 typically prints multi-material on a single plate; consider consolidating') but the MVP does not gate behavior.
 
 - **Resolves:** lets PlateCycler workflows shine for A1 mini owners while not artificially limiting U1 users who want multi-plate for batch jobs.
 
