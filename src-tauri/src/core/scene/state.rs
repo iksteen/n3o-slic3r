@@ -255,18 +255,32 @@ pub struct ExclusionZone {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlateSceneState {
     pub objects: HashMap<ObjectId, SceneObject>,
+    /// Live selection — transient UI state, deliberately **not
+    /// persisted**. A reopened project starts with nothing selected.
+    #[serde(skip)]
     pub selection: HashSet<ObjectId>,
+    /// Vestigial active-build-plate handle — never assigned (the active
+    /// build plate is a property of the bound `PrinterInstance`, not the
+    /// project), so **not persisted**.
+    #[serde(skip)]
     pub plate: Option<ActivePlate>,
+    /// Derived from the bound printer profile alongside `bed`. **Not
+    /// persisted** — re-derived on load with `bed` (see below).
+    #[serde(skip)]
     pub exclusion_zones: Vec<ExclusionZone>,
-    /// Active bed visualization + bounds. `None` when no
-    /// printer is selected yet for this plate — loading meshes
-    /// still works, just without the out-of-bounds check or grid.
-    #[serde(default)]
+    /// Active bed visualization + bounds. `None` when no printer is
+    /// selected yet for this plate — loading meshes still works, just
+    /// without the out-of-bounds check or grid. **Not persisted**: it's a
+    /// pure function of the bound printer profile, so `format::read_project`
+    /// re-derives it (and `exclusion_zones`) via `Plate::set_printer` on
+    /// load rather than storing a snapshot that could drift from the profile.
+    #[serde(skip)]
     pub bed: Option<super::bed::BedMesh>,
-    /// Per-object cascade overrides. Outer key: object;
-    /// inner map: setting key → serialized libslic3r value. The
-    /// resolver consumes this as the highest-priority tier when
-    /// the panel resolves with the Object tab active. Empty for
+    /// Per-object cascade overrides. Outer key: object; inner map:
+    /// **logical** cascade key → serialized value. The resolver consumes
+    /// this as the highest-priority tier when the panel resolves with the
+    /// Object tab active. Keys are logical, not libslic3r — the adapter
+    /// translates to libslic3r vocabulary only at slice time. Empty for
     /// objects without authored overrides.
     #[serde(default)]
     pub object_overrides: HashMap<ObjectId, HashMap<String, String>>,

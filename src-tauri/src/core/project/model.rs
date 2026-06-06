@@ -87,8 +87,11 @@ pub struct Project {
     /// Filesystem path the project came from / saves to. `None`
     /// for in-memory projects that haven't been saved yet —
     /// autosave still runs for those, using a `uuid`-derived
-    /// recovery path rather than `source_path`.
-    #[serde(default)]
+    /// recovery path rather than `source_path`. **Not persisted**:
+    /// `format::read_project` re-stamps it with the actual file path
+    /// on load, so serializing it only carried dead data (and leaked
+    /// the author's absolute path into a shareable file).
+    #[serde(skip)]
     pub source_path: Option<PathBuf>,
 
     /// Scene-wide mesh storage. Per-plate object references

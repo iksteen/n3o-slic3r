@@ -18,6 +18,16 @@
 //!   overrides, file metadata) lives in `Metadata/n3o_project.json`.
 //!   Just a `serde_json::to_string(&Project)` — the heavy mesh
 //!   buffers are `#[serde(skip)]`, so the JSON stays small.
+//! - **Derived / transient state is *not* stored.** The bed mesh +
+//!   exclusion zones (a pure function of the bound printer profile),
+//!   the live selection, and `source_path` are all `#[serde(skip)]`:
+//!   `read_project` re-derives the bed via [`Plate::set_printer`] and
+//!   re-stamps the path; selection defaults empty. Cascade overrides
+//!   are stored as **logical** keys — the adapter owns the libslic3r
+//!   translation — so the file isn't coupled to libslic3r option names.
+//! - **Writer provenance.** `app_name` / `app_version` stamp the build
+//!   that wrote the file (optional fields, for diagnostics + any future
+//!   migration).
 //!
 //! On load the two layers reunite: the JSON gives the project
 //! skeleton (including [`Mesh`] entries with empty buffers); the
@@ -143,17 +153,26 @@ impl From<LoadError> for ProjectIoError {
 /// runtime type stays small while the on-disk form can grow
 /// portability/diagnostic hints.
 ///
-/// `plate_printer_identities` is the only such side-field today —
-/// vendor printer identities indexed by `PlateId`, populated at
-/// save time from each plate's bound `PrinterInstance.vendor_profile_ref`.
-/// In-memory state only carries `printer_instance_id`; the
-/// denormalization survives "saved on machine A, opened on machine B
-/// where that instance isn't registered" so the loader can hand
-/// the user a meaningful "rebind to a Bambu A1 mini" prompt instead
-/// of just "unbound."
+/// `app_name` / `app_version` stamp the writing build for diagnostics.
+/// `plate_printer_identities` is the portability side-field — vendor
+/// printer identities indexed by `PlateId`, populated at save time from
+/// each plate's bound `PrinterInstance.vendor_profile_ref`. In-memory
+/// state only carries `printer_instance_id`; the denormalization
+/// survives "saved on machine A, opened on machine B where that instance
+/// isn't registered" so the loader can hand the user a meaningful
+/// "rebind to a Bambu A1 mini" prompt instead of just "unbound."
+///
+/// All side-fields are `#[serde(default)]` so they can be added or
+/// dropped without a [`FORMAT_VERSION`] bump.
 #[derive(Debug, Serialize, Deserialize)]
 struct ProjectFile {
     format_version: String,
+    /// Name of the build that wrote the file (`CARGO_PKG_NAME`).
+    #[serde(default)]
+    app_name: String,
+    /// Version of the build that wrote the file (`CARGO_PKG_VERSION`).
+    #[serde(default)]
+    app_version: String,
     project: Project,
     #[serde(default)]
     plate_printer_identities: BTreeMap<u32, String>,
@@ -260,6 +279,8 @@ pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoEr
     // Build the JSON-side payload + the extras map.
     let project_json = serde_json::to_string_pretty(&ProjectFile {
         format_version: FORMAT_VERSION.into(),
+        app_name: env!("CARGO_PKG_NAME").into(),
+        app_version: env!("CARGO_PKG_VERSION").into(),
         project: project.clone(),
         plate_printer_identities,
     })
@@ -360,7 +381,29 @@ pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
         }
     }
 
-    // 3. Stamp source_path so the next "save" knows where to go.
+    // 3. Re-derive scene state we no longer persist. `bed` +
+    //    `exclusion_zones` are a pure function of the bound printer
+    //    profile (skipped in the JSON to keep it small + drift-free), so
+    //    rebuild them per plate through the one binding path,
+    //    `set_printer`. An instance/profile that no longer resolves
+    //    (project opened where it isn't registered) leaves the plate
+    //    bound-but-bedless — the same state as an unresolved binding,
+    //    which the rebind prompt (plate_printer_identities) handles.
+    //    `selection` + the vestigial `plate` field default to empty/None.
+    for plate in &mut project.plates {
+        let Some(instance_id) = plate.printer_instance_id().map(str::to_owned) else {
+            continue;
+        };
+        let Some(instance) = crate::core::printer::lookup_instance(&instance_id) else {
+            continue;
+        };
+        let Some(profile) = crate::core::printer::lookup(&instance.vendor_profile_ref) else {
+            continue;
+        };
+        plate.set_printer(Some(instance_id), Some(&profile));
+    }
+
+    // 4. Stamp source_path so the next "save" knows where to go.
     project.source_path = Some(input.into());
 
     Ok(project)
@@ -543,6 +586,34 @@ mod tests {
         let parsed = read_project(&path).expect("read");
         assert_eq!(parsed.plates.len(), 1);
         assert_eq!(parsed.source_path, Some(path.clone()));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn derived_and_transient_state_is_not_serialized_and_build_is_stamped() {
+        // Format-finalization decisions (PR-9-5): derived state (bed +
+        // exclusion zones), transient UI state (selection), and the
+        // re-stamped-on-load source_path must NOT appear in the JSON; the
+        // writing build's name + version must.
+        let p = Project::default();
+        let path = tempfile_3mf();
+        write_project(&p, &path).expect("write");
+        let raw = read_3mf_extra_entry(&path, METADATA_FILENAME)
+            .expect("read entry")
+            .expect("n3o_project.json present");
+        let json = String::from_utf8(raw).expect("utf8");
+
+        for absent in ["\"bed\"", "\"exclusion_zones\"", "\"selection\"", "\"source_path\""] {
+            assert!(
+                !json.contains(absent),
+                "{absent} is derived/transient and must not be persisted",
+            );
+        }
+        assert!(json.contains("\"app_name\""), "writer name must be stamped");
+        assert!(
+            json.contains(env!("CARGO_PKG_VERSION")),
+            "writer version must be stamped",
+        );
         std::fs::remove_file(&path).ok();
     }
 
