@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "tauri": "cross-env N3O_SLIC3R_RESOURCES_ROOT=./resources dotenv -- tauri",
-    "flatpak-publish": "dotenv ./packaging/flatpak/publish.sh"
+    "flatpak-publish": "dotenv ./packaging/flatpak/publish.sh",
+    "arch-publish": "dotenv ./packaging/arch/publish.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

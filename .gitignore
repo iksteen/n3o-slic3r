@@ -24,6 +24,7 @@ __pycache__
 /packaging/arch/src/
 /packaging/arch/pkg/
 /packaging/arch/*.pkg.tar.zst
+/packaging/arch/*.pkg.tar.zst.sig
 
 # flatpak-builder writes its cache to the CWD by default; the scripts
 # pin it under packaging/flatpak/ via --state-dir, but guard the root in
