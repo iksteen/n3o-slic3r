@@ -32,7 +32,8 @@ Read these before reasoning about scope, design, or behavior:
   G-code parser + 3MF I/O, settings UI, multi-printer project model,
   G-code preview, both printer drivers + filament sync, Lua plugin
   system with platecycler hardware-validated). **Phase 9 (polish,
-  Linux flatpak, release prep) is nearly complete** — done: flatpak
+  Linux flatpak, release prep) is complete — the MVP candidate is
+  reached.** Done: flatpak
   build + self-hosted signed-repo distribution (validated on Arch,
   Ubuntu, and Fedora, including a full open→slice→print→monitor cycle on
   both printers under WSL2/WSLg), first-run onboarding, OrcaSlicer
@@ -45,9 +46,11 @@ Read these before reasoning about scope, design, or behavior:
   finding — the Bambu **Developer Mode** requirement (recent firmware
   rejects third-party MQTT commands, err_code 84033543) wasn't
   discoverable in-app — now fixed (n3o surfaces the command-rejection
-  `err_code` with Developer-Mode guidance). Remaining (see
-  `docs/dev/tickets/phase-9.md`): the `.3mf`/`n3o_project.json`
-  format-finalization review (PR-9-5). Post-MVP deferrals (plugin
+  `err_code` with Developer-Mode guidance). The
+  `.3mf`/`n3o_project.json` format is **finalized for MVP** (PR-9-5,
+  2026-06-07): the field-by-field review landed — derived/transient
+  state dropped, logical-key overrides, writer stamp, UUID group
+  identity. With that, **all of Phase 9 is done.** Post-MVP deferrals (plugin
   compose hook, hot reload, Orca preset importer) live in plan §16.
 - **`docs/dev/profiles.md`** — Rule-cascade design of record. Two-phase
   resolution (authored cascade + `!important`-style override tiers),

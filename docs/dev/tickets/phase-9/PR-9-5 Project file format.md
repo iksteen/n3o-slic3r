@@ -1,8 +1,23 @@
 # PR-9-5 — project file format `.3mf` finalized
 
-Status: 🟡 done bar a pre-MVP format review (2026-05-31). The File menu
-is wired and the format is documented; the custom format itself gets a
-deliberate review before MVP sign-off (project lead's call).
+Status: ✅ done — **format finalized for MVP** (2026-06-07, project
+lead's call). The deliberate pre-MVP format review happened: the on-disk
+`Metadata/n3o_project.json` was audited field-by-field and the agreed
+changes landed —
+- derived/transient state no longer persisted (bed + exclusion zones
+  re-derived on load via `set_printer`; live selection + the
+  write-then-ignore `source_path` dropped);
+- cascade overrides confirmed stored as **logical** keys, not libslic3r
+  vocabulary (the adapter owns that translation);
+- writer provenance stamped (`app_name` / `app_version` — optional, no
+  `FORMAT_VERSION` bump since nothing has shipped);
+- object groups given a stable **UUID identity** (`GroupId`) replacing
+  the reused-integer `group_id`, and the dead `SceneObject.parent`
+  removed.
+
+Round-trip tests cover the populated cases (groups + names, painted
+meshes, overrides, multi-plate bindings). The File menu was already
+wired and documented.
 
 > **Outcome.** The audit found the backend was further along than this
 > ticket assumed — `project_save`/`project_save_as`/`project_load`, the
