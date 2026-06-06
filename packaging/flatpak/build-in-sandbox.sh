@@ -48,13 +48,12 @@ ln -sf libslic3r_ffi.so.0 /app/lib/libslic3r_ffi.so
 # at runtime; /app/lib is on the runtime's default loader path, so the
 # soname `libslic3r_ffi.so.0` resolves there.
 
-# Bundled resources (profiles + plugins + calibration assets). The app
-# reads these from $N3O_SLIC3R_RESOURCES_ROOT (set in finish-args).
+# Bundled resources (profiles + plugins). The app reads these from
+# $N3O_SLIC3R_RESOURCES_ROOT (set in finish-args).
 res=/app/share/n3o-slic3r/resources
 mkdir -p "${res}"
 cp -r resources/profiles "${res}/profiles"
 cp -r resources/plugins "${res}/plugins"
-cp -r assets/calibration "${res}/calibration"
 
 # Desktop integration: launcher, icon, and AppStream metadata (the last
 # is required for the bundle to be considered a valid app).
