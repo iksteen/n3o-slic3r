@@ -475,7 +475,7 @@ fn build_plate_geometry(
                 // emitting each volume as a freestanding object —
                 // otherwise libslic3r flags non-bed-touching volumes
                 // as "floating regions" needing supports.
-                group_id: obj.group_id,
+                group: obj.group,
             }
         })
         .collect();
@@ -674,8 +674,7 @@ mod tests {
             name: "cube-m3".into(),
             visible: true,
             extruder_id: Some(3),
-            parent: None,
-            group_id: None,
+            group: None,
         });
 
         let (input, temp_path) =
@@ -711,8 +710,7 @@ mod tests {
             name: "cube-m1".into(),
             visible: true,
             extruder_id: Some(1),
-            parent: None,
-            group_id: None,
+            group: None,
         });
         // Override the auto-bind with an explicit "M1 → T1" binding.
         project.plates[0].material_to_slot.insert(
@@ -785,16 +783,16 @@ mod tests {
         let mut project = Project::default();
         project.plates[0].set_printer(Some("bambi".into()), None);
         let mesh_id = project.register_mesh(triangle_mesh());
-        // Two objects sharing group_id=42 with distinct extruder
-        // hints — same shape the cube-halves loader produces.
+        // Two objects sharing one group with distinct extruder hints —
+        // same shape the cube-halves loader produces.
+        let g = crate::core::scene::state::GroupId::fresh();
         project.register_object(NewSceneObject {
             mesh: mesh_id,
             transform: Transform::IDENTITY,
             name: "lower".into(),
             visible: true,
             extruder_id: Some(1),
-            parent: None,
-            group_id: Some(42),
+            group: Some(g),
         });
         project.register_object(NewSceneObject {
             mesh: mesh_id,
@@ -802,8 +800,7 @@ mod tests {
             name: "upper".into(),
             visible: true,
             extruder_id: Some(2),
-            parent: None,
-            group_id: Some(42),
+            group: Some(g),
         });
 
         let (_input, temp_path) =

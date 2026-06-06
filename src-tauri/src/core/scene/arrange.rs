@@ -257,8 +257,7 @@ mod tests {
                     name: String::new(),
                     visible: true,
                     extruder_id: None,
-                    parent: None,
-                    group_id: None,
+                    group: None,
                 };
                 let mesh = state.meshes.get(&obj_clone.mesh).unwrap();
                 let fp = xy_footprint(&obj_clone, &mesh.bounding_box);
@@ -398,8 +397,7 @@ mod tests {
                 name: String::new(),
                 visible: true,
                 extruder_id: None,
-                parent: None,
-                group_id: None,
+                group: None,
             };
             let mesh = s.meshes.get(&obj_clone.mesh).unwrap();
             let fp = xy_footprint(&obj_clone, &mesh.bounding_box);

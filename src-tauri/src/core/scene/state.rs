@@ -20,6 +20,7 @@ use crate::core::printer::profile::BoundingBox;
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use uuid::Uuid;
 
 /// Opaque mesh identifier. Monotonic across the registry's lifetime;
 /// never reused even after a mesh is freed. Surfaced to the frontend
@@ -33,6 +34,29 @@ pub struct MeshId(pub u64);
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ObjectId(pub u64);
+
+/// Stable, collision-free group identity (a UUID). Unlike a reused
+/// integer high-water mark, it never collides on import/merge and
+/// round-trips without renumbering, so it's a sound durable key for the
+/// per-plate group state in [`PlateSceneState::groups`].
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct GroupId(pub Uuid);
+
+impl GroupId {
+    /// Allocate a fresh, globally-unique group id.
+    pub fn fresh() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+/// Per-group state. Members reference the group via
+/// [`SceneObject::group`]; this carries the display name (and is the
+/// natural home for future per-group state — print order, color, …).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Group {
+    pub name: String,
+}
 
 /// Loaded mesh data + provenance.
 ///
@@ -155,21 +179,16 @@ pub struct SceneObject {
     /// extruder metadata.
     #[serde(default)]
     pub extruder_id: Option<u8>,
-    /// Parent object — `None` for top-level objects. Hierarchical
-    /// grouping (Phase 5 multi-plate) builds on this.
+    /// Group membership. Objects sharing the same `Some(GroupId)` are
+    /// volumes of one logical object (e.g. a cube with upper + lower
+    /// halves painted different colors). `None` = solo object. Populated
+    /// by the 3mf loader from BBS-style `<components>` + per-`<part>`
+    /// model_settings entries and by user grouping; the writer and slice
+    /// path emit a group as one ModelObject with multiple ModelVolumes so
+    /// libslic3r doesn't treat each volume as a separate floating object.
+    /// The group's name lives in [`PlateSceneState::groups`].
     #[serde(default)]
-    pub parent: Option<ObjectId>,
-    /// Multi-volume group identity. Objects sharing the same
-    /// `Some(id)` are volumes of one logical object (e.g. a cube
-    /// with upper + lower halves painted different colors). `None` =
-    /// solo object. Populated by the 3mf loader from BBS-style
-    /// `<components>` + per-`<part>` model_settings entries; the
-    /// writer and slice path emit groups as one ModelObject with
-    /// multiple ModelVolumes so libslic3r doesn't treat each volume
-    /// as a separate floating object. The id is scoped per-Project
-    /// and not stable across loads.
-    #[serde(default)]
-    pub group_id: Option<u32>,
+    pub group: Option<GroupId>,
 }
 
 /// Caller-builds-this shape for inserting a fresh mesh. No `id`
@@ -196,10 +215,9 @@ pub struct NewSceneObject {
     pub name: String,
     pub visible: bool,
     pub extruder_id: Option<u8>,
-    pub parent: Option<ObjectId>,
-    /// See [`SceneObject::group_id`]. Loaders populate; most
-    /// procedural / user-add call sites pass `None`.
-    pub group_id: Option<u32>,
+    /// See [`SceneObject::group`]. Loaders populate; most procedural /
+    /// user-add call sites pass `None`.
+    pub group: Option<GroupId>,
 }
 
 impl NewSceneObject {
@@ -212,8 +230,7 @@ impl NewSceneObject {
             name: name.into(),
             visible: true,
             extruder_id: None,
-            parent: None,
-            group_id: None,
+            group: None,
         }
     }
 }
@@ -284,14 +301,13 @@ pub struct PlateSceneState {
     /// objects without authored overrides.
     #[serde(default)]
     pub object_overrides: HashMap<ObjectId, HashMap<String, String>>,
-    /// User-facing names for groups (`group_id` → display name). A group
-    /// is a set of objects sharing a `SceneObject::group_id` — the same
-    /// mechanism the 3MF loader uses for multi-volume objects, now also
-    /// driven by user grouping. The grouping itself persists as the
-    /// objects' `group_id`; this map carries the label. Empty for
-    /// groups without an explicit name (the UI shows a default).
+    /// Per-group state keyed by [`GroupId`] — the display name today.
+    /// A group is a set of objects sharing a `SceneObject::group`; the
+    /// membership persists on the objects, this map carries the name
+    /// (and room for future per-group state). Empty for groups without
+    /// an explicit name (the UI shows a default).
     #[serde(default)]
-    pub group_names: HashMap<u32, String>,
+    pub groups: HashMap<GroupId, Group>,
 }
 
 /// 8 corners of a mesh's axis-aligned bounding box, as world-space

@@ -5,7 +5,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { ObjectId, MeshId, PlateId } from "../viewport/types";
+import type { ObjectId, MeshId, PlateId, GroupId } from "../viewport/types";
 import type { SlotRef } from "../printer/printerInstance";
 
 /** The five library primitives — must match Rust `PrimitiveKind`. */
@@ -98,15 +98,15 @@ export async function groupObjects(
   await invoke("scene_group_objects", { ids, name });
 }
 
-/** Ungroup a group (clear its members' group_id). */
-export async function ungroupObjects(groupId: number): Promise<void> {
-  await invoke("scene_ungroup_objects", { groupId });
+/** Ungroup a group (clear its members' group). */
+export async function ungroupObjects(group: GroupId): Promise<void> {
+  await invoke("scene_ungroup_objects", { group });
 }
 
 /** Rename a group. */
 export async function renameGroup(
-  groupId: number,
+  group: GroupId,
   name: string,
 ): Promise<void> {
-  await invoke("scene_rename_group", { groupId, name });
+  await invoke("scene_rename_group", { group, name });
 }

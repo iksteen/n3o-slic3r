@@ -5,13 +5,18 @@
 // through the plate's `material_to_slot` table + the bound instance's
 // slots — the same routing the Materials section of `SlotBindingPanel`
 // uses, so the colours agree across both surfaces. A "group" is a set of
-// objects sharing a `group_id` (3MF multi-volume *and* user grouping are
+// objects sharing a `group` (3MF multi-volume *and* user grouping are
 // the same thing); the panel renders groups with ≥2 members as
 // collapsible blocks.
 
 import { useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { PlateSnapshot, SceneObject, ObjectId } from "../viewport/types";
+import type {
+  PlateSnapshot,
+  SceneObject,
+  ObjectId,
+  GroupId,
+} from "../viewport/types";
 import {
   flattenSlots,
   type FlatSlotOption,
@@ -71,8 +76,8 @@ export function ObjectsPanel({
     objId: ObjectId;
     rect: DOMRect;
   } | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
-  const [editingGroup, setEditingGroup] = useState<number | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<GroupId>>(() => new Set());
+  const [editingGroup, setEditingGroup] = useState<GroupId | null>(null);
   const { byIdentity: filamentByIdentity } = useFilamentCatalog();
 
   const slots = useMemo<FlatSlotOption[]>(
@@ -82,7 +87,7 @@ export function ObjectsPanel({
   const materials = useMemo(() => referencedMaterials(plate), [plate]);
   const nextMaterial = firstAvailableMaterial(materials);
   const materialToSlot = plate?.material_to_slot ?? {};
-  const groupNames = plate?.group_names ?? {};
+  const groups = plate?.groups ?? {};
 
   const objects = plate?.objects ?? [];
   const selection = useMemo(
@@ -90,15 +95,26 @@ export function ObjectsPanel({
     [plate?.selection],
   );
 
-  // Members per group_id; only groups with ≥2 members render as a block.
+  // Members per group; only groups with ≥2 members render as a block.
   const groupMembers = useMemo(() => {
-    const m = new Map<number, SceneObject[]>();
+    const m = new Map<GroupId, SceneObject[]>();
     for (const o of objects) {
-      if (o.group_id != null) {
-        const arr = m.get(o.group_id) ?? [];
+      if (o.group != null) {
+        const arr = m.get(o.group) ?? [];
         arr.push(o);
-        m.set(o.group_id, arr);
+        m.set(o.group, arr);
       }
+    }
+    return m;
+  }, [objects]);
+
+  // 1-based ordinal per group in appearance order — a friendly fallback
+  // label for groups without a name (e.g. multi-volume objects from a 3MF
+  // import), since the GroupId itself is an opaque UUID.
+  const groupOrdinal = useMemo(() => {
+    const m = new Map<GroupId, number>();
+    for (const o of objects) {
+      if (o.group != null && !m.has(o.group)) m.set(o.group, m.size + 1);
     }
     return m;
   }, [objects]);
@@ -148,7 +164,7 @@ export function ObjectsPanel({
   };
   const onGroup = (): void => {
     if (selection.size < 2) return;
-    const name = `Group ${Object.keys(groupNames).length + 1}`;
+    const name = `Group ${Object.keys(groups).length + 1}`;
     void (async () => {
       try {
         await groupObjects([...selection], name);
@@ -158,7 +174,7 @@ export function ObjectsPanel({
       }
     })();
   };
-  const toggleCollapse = (g: number): void => {
+  const toggleCollapse = (g: GroupId): void => {
     setCollapsed((prev) => {
       const n = new Set(prev);
       if (n.has(g)) n.delete(g);
@@ -255,8 +271,8 @@ export function ObjectsPanel({
     );
   };
 
-  const renderGroup = (g: number, members: SceneObject[]): ReactNode => {
-    const name = groupNames[g] ?? `Group ${g}`;
+  const renderGroup = (g: GroupId, members: SceneObject[]): ReactNode => {
+    const name = groups[g]?.name ?? `Group ${groupOrdinal.get(g) ?? "?"}`;
     const isCollapsed = collapsed.has(g);
     const swatches: string[] = [];
     for (const m of members) {
@@ -362,12 +378,12 @@ export function ObjectsPanel({
   // Walk objects in order; emit a group block the first time one of its
   // (≥2-member) members is seen, otherwise a single row.
   const renderList: ReactNode[] = [];
-  const seenGroups = new Set<number>();
+  const seenGroups = new Set<GroupId>();
   for (const obj of objects) {
-    if (obj.group_id != null && realGroups.has(obj.group_id)) {
-      if (seenGroups.has(obj.group_id)) continue;
-      seenGroups.add(obj.group_id);
-      renderList.push(renderGroup(obj.group_id, groupMembers.get(obj.group_id)!));
+    if (obj.group != null && realGroups.has(obj.group)) {
+      if (seenGroups.has(obj.group)) continue;
+      seenGroups.add(obj.group);
+      renderList.push(renderGroup(obj.group, groupMembers.get(obj.group)!));
     } else {
       renderList.push(renderRow(obj));
     }

@@ -28,8 +28,7 @@ function obj(id: number, name: string): SceneObject {
     name,
     visible: true,
     extruder_id: null,
-    group_id: null,
-    parent: null,
+    group: null,
   };
 }
 
@@ -54,7 +53,7 @@ function plate(opts: {
     exclusion_zones: [],
     bed: null,
     object_overrides: opts.object_overrides ?? {},
-    group_names: {},
+    groups: {},
   };
 }
 

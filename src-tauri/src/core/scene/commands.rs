@@ -8,7 +8,9 @@
 
 use super::bed::BedMesh;
 use super::events::{MirrorAxis, MoveReport, SceneEvent, SceneOpError, SelectMode};
-use super::state::{ActivePlate, ExclusionZone, MeshHeader, MeshId, ObjectId, SceneObject};
+use super::state::{
+    ActivePlate, ExclusionZone, Group, GroupId, MeshHeader, MeshId, ObjectId, SceneObject,
+};
 use super::transform::Transform;
 use crate::core::printer::profile::PrinterProfile;
 use crate::core::project::{PlateId, Project};
@@ -105,9 +107,9 @@ pub struct PlateSnapshot {
     pub bed: Option<BedMesh>,
     pub object_overrides:
         std::collections::HashMap<ObjectId, std::collections::HashMap<String, String>>,
-    /// Display names for object groups (`group_id` → name). A group is a
-    /// set of objects sharing a `SceneObject::group_id`.
-    pub group_names: std::collections::HashMap<u32, String>,
+    /// Per-group state keyed by [`GroupId`] (the display name today). A
+    /// group is a set of objects sharing a `SceneObject::group`.
+    pub groups: std::collections::HashMap<GroupId, Group>,
 }
 
 /// Snapshot of the scene state. Frontend calls this on startup /
@@ -158,7 +160,7 @@ fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
         exclusion_zones: plate.scene.exclusion_zones.clone(),
         bed: plate.scene.bed.clone(),
         object_overrides: plate.scene.object_overrides.clone(),
-        group_names: plate.scene.group_names.clone(),
+        groups: plate.scene.groups.clone(),
     }
 }
 
@@ -799,7 +801,7 @@ pub fn scene_set_object_material(
 }
 
 /// Group objects on the active plate into one logical (multi-volume)
-/// object named `name` — the same `group_id` mechanism as 3MF
+/// object named `name` — the same `group` mechanism as 3MF
 /// multi-volume objects.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
@@ -816,16 +818,16 @@ pub fn scene_group_objects(
     Ok(())
 }
 
-/// Ungroup a group on the active plate (clear its members' `group_id`).
+/// Ungroup a group on the active plate (clear its members' `group`).
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_ungroup_objects(
-    group_id: u32,
+    group: GroupId,
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.ungroup_objects(group_id);
+    let events = s.ungroup_objects(group);
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -835,13 +837,13 @@ pub fn scene_ungroup_objects(
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_rename_group(
-    group_id: u32,
+    group: GroupId,
     name: String,
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.rename_group(group_id, name);
+    let events = s.rename_group(group, name);
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -951,8 +953,10 @@ pub fn scene_load_3mf(
             name: obj.name.clone(),
             visible: true,
             extruder_id: obj.extruder_id,
-            parent: None,
-            group_id: obj.group_id,
+            // GroupIds are globally unique, so merging a multi-part import
+            // into an existing project can't collide with its groups — no
+            // remap needed.
+            group: obj.group,
         });
         // Carry any per-object setting overrides from the source 3MF
         // (model_settings.config) into the scene, scope-gated.
@@ -1022,8 +1026,7 @@ mod tests {
             name: "cube".into(),
             visible: true,
             extruder_id: Some(2),
-            parent: None,
-            group_id: None,
+            group: None,
         });
 
         let snap = plate_snapshot(&p.plates[0]);

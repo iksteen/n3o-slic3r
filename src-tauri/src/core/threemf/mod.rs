@@ -72,7 +72,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use crate::core::scene::loaders::{compute_bounding_box, compute_vertex_normals, LoadError};
-use crate::core::scene::state::{MeshProvenance, NewMesh};
+use crate::core::scene::state::{GroupId, MeshProvenance, NewMesh};
 use crate::core::scene::transform::Transform;
 
 #[derive(Debug)]
@@ -115,12 +115,13 @@ pub struct ProjectObject {
     /// Plater id this part belongs to (1-based, matches BBS).
     pub plate_id: u32,
     /// Multi-volume group identity. ProjectObjects sharing the same
-    /// `Some(id)` are volumes of one logical ModelObject. `None` =
+    /// `Some(GroupId)` are volumes of one logical ModelObject. `None` =
     /// solo. The writer collapses each group into a single
     /// `<object>` with `<components>` (and per-volume `<part>`
     /// metadata) so libslic3r reads it as one ModelObject with N
-    /// ModelVolumes, not N freestanding objects. Scoped per-document.
-    pub group_id: Option<u32>,
+    /// ModelVolumes, not N freestanding objects. The writer maps each
+    /// `GroupId` to an integer 3MF resource id at emit time.
+    pub group: Option<GroupId>,
     /// Per-object libslic3r config overrides (key → serialized value).
     /// The writer emits these as `<metadata>` in the object's (or, for a
     /// group member, the part's) `model_settings.config` stanza, where
@@ -353,9 +354,9 @@ fn expand(
                 extruder_id: None,
                 plate_id: 1,
                 // Default to solo; apply_bbs_metadata assigns a
-                // shared group_id when multiple leaves share one
+                // shared group when multiple leaves share one
                 // outer model_settings object (= BBS multi-volume).
-                group_id: None,
+                group: None,
                 // Filled by `apply_bbs_metadata` below from each object's
                 // model_settings.config <metadata>; empty here until then.
                 overrides: Default::default(),
@@ -407,13 +408,12 @@ fn apply_bbs_metadata(settings: &bbs_meta::ModelSettings, objects: &mut [Project
     //
     // Group identity: outer objects with >1 part are BBS multi-volume groups
     // (e.g. a cube split into upper + lower color regions); their leaf
-    // ProjectObjects share a fresh group_id so the writer + slice path
+    // ProjectObjects share a fresh group so the writer + slice path
     // collapse them back into one ModelObject with N ModelVolumes (otherwise
     // libslic3r treats each volume as freestanding and flags non-bed-touching
     // ones as "floating regions").
     let has_plate_info = !settings.plates.is_empty();
     let mut cursor = 0usize;
-    let mut next_group_id: u32 = 1;
     for outer in &settings.objects {
         let part_count = outer.parts.len().max(1);
         let plate = if has_plate_info {
@@ -426,10 +426,8 @@ fn apply_bbs_metadata(settings: &bbs_meta::ModelSettings, objects: &mut [Project
         } else {
             1
         };
-        let group_id = if outer.parts.len() > 1 {
-            let id = next_group_id;
-            next_group_id += 1;
-            Some(id)
+        let group = if outer.parts.len() > 1 {
+            Some(GroupId::fresh())
         } else {
             None
         };
@@ -465,7 +463,7 @@ fn apply_bbs_metadata(settings: &bbs_meta::ModelSettings, objects: &mut [Project
             if has_plate_info {
                 obj.plate_id = plate;
             }
-            obj.group_id = group_id;
+            obj.group = group;
         }
         cursor += part_count;
     }
@@ -494,7 +492,7 @@ mod tests {
             name: format!("placeholder_{mesh_idx}"),
             extruder_id: None,
             plate_id: 1,
-            group_id: None,
+            group: None,
             overrides: Default::default(),
         }
     }
@@ -673,14 +671,14 @@ mod tests {
         let plates: std::collections::HashSet<u32> =
             project.objects.iter().map(|o| o.plate_id).collect();
         assert_eq!(plates, std::collections::HashSet::from([1]));
-        // And both volumes share a group_id — they're parts of one
+        // And both volumes share a group — they're parts of one
         // logical ModelObject. Without grouping, the writer would
         // emit them as freestanding objects and libslic3r would
         // flag the upper half as a "floating region" needing
         // supports.
-        let group_a = project.objects[0].group_id;
-        let group_b = project.objects[1].group_id;
-        assert!(group_a.is_some(), "lower half should have a group_id");
+        let group_a = project.objects[0].group;
+        let group_b = project.objects[1].group;
+        assert!(group_a.is_some(), "lower half should have a group");
         assert_eq!(group_a, group_b, "both volumes belong to the same group");
     }
 
@@ -688,16 +686,16 @@ mod tests {
     fn two_cubes_2mat_leaves_solos_ungrouped() {
         // Sanity guard for the loader: when each outer model_settings
         // <object> has exactly one <part>, the leaves are solo —
-        // group_id stays None and the writer emits them as
+        // group stays None and the writer emits them as
         // freestanding objects (today's flat shape).
         let project = load_3mf(&two_cubes_fixture()).expect("load 2-cube fixture");
         assert_eq!(project.objects.len(), 2);
         for obj in &project.objects {
             assert!(
-                obj.group_id.is_none(),
-                "{} should be solo, got group_id={:?}",
+                obj.group.is_none(),
+                "{} should be solo, got group={:?}",
                 obj.name,
-                obj.group_id,
+                obj.group,
             );
         }
     }

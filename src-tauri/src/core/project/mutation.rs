@@ -26,8 +26,8 @@ use crate::core::scene::events::{
 };
 use crate::core::scene::primitives::{self, PrimitiveKind, PrimitiveParams};
 use crate::core::scene::state::{
-    mesh_bb_corners, z_extent, Mesh, MeshId, MeshProvenance, NewMesh, NewSceneObject, ObjectId,
-    SceneObject,
+    mesh_bb_corners, z_extent, Group, GroupId, Mesh, MeshId, MeshProvenance, NewMesh,
+    NewSceneObject, ObjectId, SceneObject,
 };
 use crate::core::scene::transform::Transform;
 
@@ -104,8 +104,7 @@ impl Project {
                 name: new_obj.name,
                 visible: new_obj.visible,
                 extruder_id,
-                parent: new_obj.parent,
-                group_id: new_obj.group_id,
+                group: new_obj.group,
             },
         );
         self.ensure_default_material_slot_on_active(extruder_id.unwrap_or(1));
@@ -777,8 +776,7 @@ impl Project {
             name: obj_name,
             visible: true,
             extruder_id: None,
-            parent: None,
-            group_id: None,
+            group: None,
         });
 
         let plate_id = self.active_plate().id;
@@ -877,8 +875,7 @@ impl Project {
             name: name.to_string(),
             visible: true,
             extruder_id: None,
-            parent: None,
-            group_id: None,
+            group: None,
         });
         let plate_id = self.active_plate().id;
         let obj_clone = self
@@ -907,16 +904,16 @@ impl Project {
         plate: &crate::core::scene::state::PlateSceneState,
         ids: &[ObjectId],
     ) -> Vec<ObjectId> {
-        let groups: HashSet<u32> = ids
+        let groups: HashSet<GroupId> = ids
             .iter()
-            .filter_map(|id| plate.objects.get(id).and_then(|o| o.group_id))
+            .filter_map(|id| plate.objects.get(id).and_then(|o| o.group))
             .collect();
         if groups.is_empty() {
             return ids.to_vec();
         }
         let mut out: HashSet<ObjectId> = ids.iter().copied().collect();
         for o in plate.objects.values() {
-            if o.group_id.is_some_and(|g| groups.contains(&g)) {
+            if o.group.is_some_and(|g| groups.contains(&g)) {
                 out.insert(o.id);
             }
         }
@@ -1061,25 +1058,15 @@ impl Project {
 
     // ---- Object grouping (active plate) ---------------------------
     //
-    // A "group" is a set of objects sharing a `group_id` — the same
+    // A "group" is a set of objects sharing a `group` — the same
     // mechanism the 3MF loader uses for multi-volume objects, now also
     // driven by user grouping. The writer/slice path already emits a
-    // shared `group_id` as one ModelObject with multiple volumes, so
+    // shared `group` as one ModelObject with multiple volumes, so
     // grouping == assembling into one logical print object. Only the
-    // display name (`scene.group_names`) is new state.
+    // display name (`scene.groups`) is new state.
 
-    /// Lowest unused `group_id` across all plates (project-scoped).
-    fn next_group_id(&self) -> u32 {
-        self.plates
-            .iter()
-            .flat_map(|p| p.scene.objects.values())
-            .filter_map(|o| o.group_id)
-            .max()
-            .map_or(1, |m| m + 1)
-    }
-
-    /// Group `ids` on the active plate under one new, project-unique
-    /// `group_id` named `name`. Objects already in other groups move
+    /// Group `ids` on the active plate under one new, globally-unique
+    /// [`GroupId`] named `name`. Objects already in other groups move
     /// into this one; any group thereby left with a single member is
     /// dissolved. No-op for fewer than two ids.
     pub fn group_objects(
@@ -1090,7 +1077,7 @@ impl Project {
         if ids.len() < 2 {
             return Ok(Vec::new());
         }
-        let group_id = self.next_group_id();
+        let group = GroupId::fresh();
         let active = self.active_plate;
         let plate_id = self.plates[active].id;
         let mut events = Vec::new();
@@ -1100,67 +1087,73 @@ impl Project {
                 .objects
                 .get_mut(&id)
                 .ok_or(SceneOpError::UnknownObject(id))?;
-            obj.group_id = Some(group_id);
+            obj.group = Some(group);
             events.push(SceneEvent::ObjectUpdated {
                 plate_id,
                 object: obj.clone(),
             });
         }
-        self.plates[active].scene.group_names.insert(group_id, name);
+        self.plates[active]
+            .scene
+            .groups
+            .insert(group, Group { name });
         events.extend(self.dissolve_orphan_groups_on_active());
         events.push(SceneEvent::PlateMetadataChanged { plate_id });
         Ok(events)
     }
 
-    /// Ungroup: clear `group_id` from every member of `group_id` on the
-    /// active plate and drop its name.
-    pub fn ungroup_objects(&mut self, group_id: u32) -> Vec<SceneEvent> {
+    /// Ungroup: clear `group` from every member of `group` on the active
+    /// plate and drop its name.
+    pub fn ungroup_objects(&mut self, group: GroupId) -> Vec<SceneEvent> {
         let active = self.active_plate;
         let plate_id = self.plates[active].id;
         let member_ids: Vec<ObjectId> = self.plates[active]
             .scene
             .objects
             .values()
-            .filter(|o| o.group_id == Some(group_id))
+            .filter(|o| o.group == Some(group))
             .map(|o| o.id)
             .collect();
         let mut events = Vec::new();
         for id in member_ids {
             if let Some(obj) = self.plates[active].scene.objects.get_mut(&id) {
-                obj.group_id = None;
+                obj.group = None;
                 events.push(SceneEvent::ObjectUpdated {
                     plate_id,
                     object: obj.clone(),
                 });
             }
         }
-        self.plates[active].scene.group_names.remove(&group_id);
+        self.plates[active].scene.groups.remove(&group);
         events.push(SceneEvent::PlateMetadataChanged { plate_id });
         events
     }
 
     /// Rename a group on the active plate.
-    pub fn rename_group(&mut self, group_id: u32, name: String) -> Vec<SceneEvent> {
+    pub fn rename_group(&mut self, group: GroupId, name: String) -> Vec<SceneEvent> {
         let active = self.active_plate;
         let plate_id = self.plates[active].id;
-        self.plates[active].scene.group_names.insert(group_id, name);
+        self.plates[active]
+            .scene
+            .groups
+            .insert(group, Group { name });
         vec![SceneEvent::PlateMetadataChanged { plate_id }]
     }
 
     /// Dissolve any group on the active plate left with fewer than two
     /// members — a group of one isn't a group. Clears those objects'
-    /// `group_id` and drops the names. Returns the per-object events.
+    /// `group` and drops the names. Returns the per-object events.
     fn dissolve_orphan_groups_on_active(&mut self) -> Vec<SceneEvent> {
         use std::collections::{HashMap, HashSet};
         let active = self.active_plate;
         let plate_id = self.plates[active].id;
-        let mut counts: HashMap<u32, usize> = HashMap::new();
+        let mut counts: HashMap<GroupId, usize> = HashMap::new();
         for o in self.plates[active].scene.objects.values() {
-            if let Some(g) = o.group_id {
+            if let Some(g) = o.group {
                 *counts.entry(g).or_insert(0) += 1;
             }
         }
-        let orphans: HashSet<u32> = counts
+        let orphans: HashSet<GroupId> = counts
             .into_iter()
             .filter(|&(_, c)| c < 2)
             .map(|(g, _)| g)
@@ -1172,13 +1165,13 @@ impl Project {
             .scene
             .objects
             .values()
-            .filter(|o| o.group_id.is_some_and(|g| orphans.contains(&g)))
+            .filter(|o| o.group.is_some_and(|g| orphans.contains(&g)))
             .map(|o| o.id)
             .collect();
         let mut events = Vec::new();
         for id in ids {
             if let Some(obj) = self.plates[active].scene.objects.get_mut(&id) {
-                obj.group_id = None;
+                obj.group = None;
                 events.push(SceneEvent::ObjectUpdated {
                     plate_id,
                     object: obj.clone(),
@@ -1186,7 +1179,7 @@ impl Project {
             }
         }
         for g in orphans {
-            self.plates[active].scene.group_names.remove(&g);
+            self.plates[active].scene.groups.remove(&g);
         }
         events
     }
@@ -1524,11 +1517,10 @@ impl Project {
             name: format!("{} (copy)", original.name),
             visible: original.visible,
             extruder_id: original.extruder_id,
-            parent: original.parent,
             // Duplicate breaks group membership — copying one volume
             // of a multi-volume object yields a solo object, not a
             // 3rd member of the source's group.
-            group_id: None,
+            group: None,
         });
         let plate_id = self.active_plate().id;
         let cloned_obj = self
@@ -2146,23 +2138,23 @@ mod tests {
         let events = p.group_objects(&[a, b], "Bracket".into()).unwrap();
         assert!(!events.is_empty());
         let plate = p.active_plate();
-        let ga = plate.scene.objects[&a].group_id.expect("a grouped");
+        let ga = plate.scene.objects[&a].group.expect("a grouped");
         assert_eq!(
-            plate.scene.objects[&b].group_id,
+            plate.scene.objects[&b].group,
             Some(ga),
             "shared group id"
         );
         assert_eq!(
-            plate.scene.group_names.get(&ga).map(String::as_str),
+            plate.scene.groups.get(&ga).map(|g| g.name.as_str()),
             Some("Bracket"),
         );
 
         p.ungroup_objects(ga);
         let plate = p.active_plate();
-        assert_eq!(plate.scene.objects[&a].group_id, None);
-        assert_eq!(plate.scene.objects[&b].group_id, None);
+        assert_eq!(plate.scene.objects[&a].group, None);
+        assert_eq!(plate.scene.objects[&b].group, None);
         assert!(
-            plate.scene.group_names.is_empty(),
+            plate.scene.groups.is_empty(),
             "name dropped on ungroup"
         );
     }
@@ -2172,7 +2164,7 @@ mod tests {
         let mut p = Project::default();
         let (_, a) = add_cube(&mut p);
         assert!(p.group_objects(&[a], "G".into()).unwrap().is_empty());
-        assert_eq!(p.active_plate().scene.objects[&a].group_id, None);
+        assert_eq!(p.active_plate().scene.objects[&a].group, None);
     }
 
     #[test]
@@ -2182,18 +2174,18 @@ mod tests {
         let (_, b) = add_cube(&mut p);
         let (_, c) = add_cube(&mut p);
         p.group_objects(&[a, b], "G1".into()).unwrap();
-        let g1 = p.active_plate().scene.objects[&a].group_id.unwrap();
+        let g1 = p.active_plate().scene.objects[&a].group.unwrap();
         // Move b into a new group with c — G1 is left with only a, so it
         // dissolves (a group of one isn't a group).
         p.group_objects(&[b, c], "G2".into()).unwrap();
         let plate = p.active_plate();
         assert_eq!(
-            plate.scene.objects[&a].group_id, None,
+            plate.scene.objects[&a].group, None,
             "a's group dissolved"
         );
-        assert!(!plate.scene.group_names.contains_key(&g1));
-        let gbc = plate.scene.objects[&b].group_id.expect("b grouped");
-        assert_eq!(plate.scene.objects[&c].group_id, Some(gbc));
+        assert!(!plate.scene.groups.contains_key(&g1));
+        let gbc = plate.scene.objects[&b].group.expect("b grouped");
+        assert_eq!(plate.scene.objects[&c].group, Some(gbc));
     }
 
     #[test]
@@ -2473,8 +2465,7 @@ mod tests {
             name: "test-cube".into(),
             visible: true,
             extruder_id: Some(2),
-            parent: None,
-            group_id: None,
+            group: None,
         });
 
         let json = serde_json::to_string(&p).unwrap();
@@ -3624,8 +3615,7 @@ mod tests {
             name: format!("cube-m{mat}"),
             visible: true,
             extruder_id: Some(mat),
-            parent: None,
-            group_id: None,
+            group: None,
         })
     }
 

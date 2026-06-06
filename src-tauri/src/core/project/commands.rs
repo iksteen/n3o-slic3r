@@ -645,8 +645,7 @@ mod tests {
             name: format!("cube-m{material}"),
             visible: true,
             extruder_id: Some(material),
-            parent: None,
-            group_id: None,
+            group: None,
         });
     }
 

@@ -585,8 +585,7 @@ fn register_obj(project: &mut Project, mesh_ids: &[MeshId], obj: &ProjectObject)
         name: obj.name.clone(),
         visible: true,
         extruder_id: obj.extruder_id,
-        parent: None,
-        group_id: obj.group_id,
+        group: obj.group,
     });
     // Per-object overrides from the imported project's model_settings.config.
     project.apply_imported_object_overrides(id, &obj.overrides);

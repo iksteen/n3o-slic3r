@@ -239,7 +239,7 @@ pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoEr
                 name: obj.name.clone(),
                 extruder_id: obj.extruder_id,
                 plate_id: plate.id.0,
-                group_id: obj.group_id,
+                group: obj.group,
                 // Object overrides round-trip via n3o_project.json, not the
                 // geometry 3MF's model_settings — empty on this save path.
                 overrides: Default::default(),
@@ -433,7 +433,7 @@ pub fn plate_to_project_objects(
                 name: obj.name.clone(),
                 extruder_id: obj.extruder_id,
                 plate_id: plate.id.0,
-                group_id: obj.group_id,
+                group: obj.group,
                 overrides: Default::default(),
             })
         })
@@ -751,6 +751,45 @@ mod tests {
         write_project(&p, &path).expect("write");
         let parsed = read_project(&path).expect("read");
         assert_eq!(parsed.uuid, p.uuid);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn round_trip_preserves_object_groups_and_names() {
+        // A named, multi-member group must survive save/reopen: both members
+        // keep the same GroupId and the group's name round-trips. Guards the
+        // GroupId(Uuid) on-disk shape (PR-9-5 item 6) — the `group` field and
+        // the `groups` map (a HashMap keyed by a UUID newtype) serialize and
+        // reload intact.
+        let mut p = Project::default();
+        let mesh_id = p.register_mesh(triangle());
+        let a = p.register_object(NewSceneObject::at_origin(mesh_id, "lower"));
+        let b = p.register_object(NewSceneObject::at_origin(mesh_id, "upper"));
+        p.group_objects(&[a, b], "Bracket".into()).expect("group");
+        let gid = p.active_plate().scene.objects[&a]
+            .group
+            .expect("a is grouped");
+
+        let path = tempfile_3mf();
+        write_project(&p, &path).expect("write");
+        let parsed = read_project(&path).expect("read");
+
+        let plate = &parsed.plates[0];
+        assert_eq!(
+            plate.scene.objects[&a].group,
+            Some(gid),
+            "member a keeps its group id across a round-trip",
+        );
+        assert_eq!(
+            plate.scene.objects[&b].group,
+            Some(gid),
+            "member b still shares the same group id",
+        );
+        assert_eq!(
+            plate.scene.groups.get(&gid).map(|g| g.name.as_str()),
+            Some("Bracket"),
+            "group name round-trips via the groups map",
+        );
         std::fs::remove_file(&path).ok();
     }
 

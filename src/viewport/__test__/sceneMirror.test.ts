@@ -49,8 +49,7 @@ function sceneObjectAt(id: number, mesh: number, tx: number): SceneObject {
     name: `obj-${id}`,
     visible: true,
     extruder_id: null,
-    group_id: null,
-    parent: null,
+    group: null,
   };
 }
 
@@ -72,7 +71,7 @@ function plateSnap(id: number, objects: SceneObject[] = []): PlateSnapshot {
     exclusion_zones: [],
     bed: null,
     object_overrides: {},
-    group_names: {},
+    groups: {},
   };
 }
 

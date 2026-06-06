@@ -347,8 +347,7 @@ fn snappy_binding_routes_single_material_to_bound_toolhead() {
             name: obj.name,
             visible: true,
             extruder_id: obj.extruder_id,
-            parent: None,
-            group_id: obj.group_id,
+            group: obj.group,
         });
     }
 
@@ -453,8 +452,7 @@ fn cube_halves_slices_as_one_multivolume_object_no_floating_warning() {
             name: obj.name,
             visible: true,
             extruder_id: obj.extruder_id,
-            parent: None,
-            group_id: obj.group_id,
+            group: obj.group,
         });
     }
 
@@ -547,8 +545,7 @@ fn object_layer_height_override_changes_sliced_layer_count() {
                     name: obj.name,
                     visible: true,
                     extruder_id: obj.extruder_id,
-                    parent: None,
-                    group_id: obj.group_id,
+                    group: obj.group,
                 })
             })
             .collect();
@@ -664,8 +661,7 @@ fn imported_object_override_reaches_the_engine_end_to_end() {
                 name: obj.name.clone(),
                 visible: true,
                 extruder_id: obj.extruder_id,
-                parent: None,
-                group_id: obj.group_id,
+                group: obj.group,
             });
             project.apply_imported_object_overrides(id, &obj.overrides);
         }

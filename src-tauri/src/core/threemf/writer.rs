@@ -41,7 +41,7 @@ use zip::ZipWriter;
 
 use super::{Project3mf, ProjectObject};
 use crate::core::scene::loaders::LoadError;
-use crate::core::scene::state::NewMesh;
+use crate::core::scene::state::{GroupId, NewMesh};
 
 const N3O_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -182,7 +182,7 @@ enum BuildUnit {
 }
 
 /// Pre-computed grouping pass used by [`model_xml`] and
-/// [`model_settings_xml`]. Buckets `project.objects` by `group_id`:
+/// [`model_settings_xml`]. Buckets `project.objects` by `group`:
 /// `None` and single-member groups become [`BuildUnit::Solo`]; groups
 /// with ≥2 members become [`BuildUnit::Group`] with a resource id
 /// allocated above all leaf ids (so 3MF's "components reference
@@ -194,15 +194,15 @@ struct Layout {
 impl Layout {
     fn from_project(project: &Project3mf) -> Self {
         // Walk the object list once, recording the first occurrence
-        // of each group_id and the leaf indices that belong to it.
-        // Solos and unique group_ids are emitted in their original
+        // of each group and the leaf indices that belong to it.
+        // Solos and unique groups are emitted in their original
         // position; multi-member groups attach to the position of
         // their first member to keep build-item order deterministic.
-        let mut group_order: Vec<Option<u32>> = Vec::new();
-        let mut group_members: std::collections::BTreeMap<u32, Vec<usize>> =
+        let mut group_order: Vec<Option<GroupId>> = Vec::new();
+        let mut group_members: std::collections::BTreeMap<GroupId, Vec<usize>> =
             std::collections::BTreeMap::new();
         for (idx, obj) in project.objects.iter().enumerate() {
-            match obj.group_id {
+            match obj.group {
                 None => group_order.push(None),
                 Some(gid) => {
                     let entry = group_members.entry(gid).or_default();
@@ -233,7 +233,7 @@ impl Layout {
                         // A "group" of one is just a solo — emit as
                         // flat, no wrapper. Keeps the output minimal
                         // for projects that authored a unique
-                        // group_id but only one member ended up in it.
+                        // group but only one member ended up in it.
                         build_units.push(BuildUnit::Solo {
                             object_idx: members[0],
                         });
@@ -679,7 +679,7 @@ mod tests {
                 name: "tri".into(),
                 extruder_id: Some(1),
                 plate_id: 1,
-                group_id: None,
+                group: None,
                 overrides: std::collections::BTreeMap::new(),
             }],
             std::collections::BTreeMap::new(),
@@ -707,7 +707,7 @@ mod tests {
                 name: "tri".into(),
                 extruder_id: Some(1),
                 plate_id: 1,
-                group_id: None,
+                group: None,
                 overrides: std::collections::BTreeMap::from([(
                     "layer_height".to_string(),
                     "0.3".to_string(),
@@ -740,7 +740,7 @@ mod tests {
                 name: "tri".into(),
                 extruder_id: Some(1),
                 plate_id: 1,
-                group_id: None,
+                group: None,
                 overrides: overrides.clone(),
             }],
             std::collections::BTreeMap::new(),
@@ -766,7 +766,7 @@ mod tests {
                 name: "tri".into(),
                 extruder_id: Some(2),
                 plate_id: 1,
-                group_id: None,
+                group: None,
                 overrides: Default::default(),
             }],
             std::collections::BTreeMap::new(),
@@ -812,7 +812,7 @@ mod tests {
                     name: "a".into(),
                     extruder_id: Some(1),
                     plate_id: 1,
-                    group_id: None,
+                    group: None,
                     overrides: Default::default(),
                 },
                 ProjectObject {
@@ -821,7 +821,7 @@ mod tests {
                     name: "b".into(),
                     extruder_id: Some(2),
                     plate_id: 1,
-                    group_id: None,
+                    group: None,
                     overrides: Default::default(),
                 },
             ],
@@ -844,12 +844,13 @@ mod tests {
 
     #[test]
     fn round_trips_a_multi_volume_group() {
-        // A ProjectObject pair sharing a group_id should round-trip
+        // A ProjectObject pair sharing a group should round-trip
         // as one ModelObject with two ModelVolumes (BBS-style
         // <components> + <part> children) — the libslic3r "floating
         // regions" check fires per-ModelObject, so a stacked
         // multi-volume object MUST come through as one object or the
         // upper volume reads as freestanding-above-the-bed.
+        let g = GroupId::fresh();
         let project = project_from_objects(
             vec![one_triangle_mesh(), one_triangle_mesh()],
             vec![
@@ -859,7 +860,7 @@ mod tests {
                     name: "lower".into(),
                     extruder_id: Some(1),
                     plate_id: 1,
-                    group_id: Some(7),
+                    group: Some(g),
                     overrides: Default::default(),
                 },
                 ProjectObject {
@@ -868,7 +869,7 @@ mod tests {
                     name: "upper".into(),
                     extruder_id: Some(2),
                     plate_id: 1,
-                    group_id: Some(7),
+                    group: Some(g),
                     overrides: Default::default(),
                 },
             ],
@@ -881,16 +882,16 @@ mod tests {
         // Reload still flattens components back to two ProjectObjects
         // (the loader's API surfaces leaves), but the BBS metadata
         // says one outer object with two parts — so both volumes
-        // share a group_id and the extruder hints come through in
+        // share a group and the extruder hints come through in
         // document order. plate_assignments lists one outer object
         // for plate 1, not two.
         assert_eq!(reloaded.objects.len(), 2);
         assert_eq!(reloaded.objects[0].extruder_id, Some(1));
         assert_eq!(reloaded.objects[1].extruder_id, Some(2));
         assert!(
-            reloaded.objects[0].group_id.is_some()
-                && reloaded.objects[0].group_id == reloaded.objects[1].group_id,
-            "both volumes should share a group_id on reload"
+            reloaded.objects[0].group.is_some()
+                && reloaded.objects[0].group == reloaded.objects[1].group,
+            "both volumes should share a group on reload"
         );
 
         // Inspect the written XML directly — the loader flattens
@@ -955,7 +956,7 @@ mod tests {
                 name: "tri".into(),
                 extruder_id: None,
                 plate_id: 1,
-                group_id: None,
+                group: None,
                 overrides: Default::default(),
             }],
             meta,

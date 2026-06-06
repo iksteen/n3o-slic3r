@@ -20,6 +20,14 @@ export type ObjectId = number;
  * never reused even when a plate is removed. */
 export type PlateId = number;
 
+/** Stable group identity — a UUID string (Rust `GroupId(Uuid)`). */
+export type GroupId = string;
+
+/** Per-group state (the display name today). */
+export interface Group {
+  name: string;
+}
+
 /** Column-major [f32; 16] matrix matching glam + THREE.Matrix4.
  *  The Rust `Transform` is `#[serde(transparent)]` over `[f32; 16]`,
  *  so the wire shape is a bare 16-element number array — *not* an
@@ -51,10 +59,10 @@ export interface SceneObject {
   name: string;
   visible: boolean;
   extruder_id: number | null;
-  /** Group membership — objects sharing a `group_id` are volumes of one
-   *  logical object (3MF multi-volume or user grouping). `null` = solo. */
-  group_id: number | null;
-  parent: ObjectId | null;
+  /** Group membership — objects sharing a `group` are volumes of one
+   *  logical object (3MF multi-volume or user grouping). `null` = solo.
+   *  The group's name lives in `PlateSnapshot.groups`. */
+  group: GroupId | null;
 }
 
 
@@ -163,8 +171,8 @@ export interface PlateSnapshot {
   exclusion_zones: ExclusionZone[];
   bed: BedMesh | null;
   object_overrides: Record<string, Record<string, string>>;
-  /** Display names for object groups (`group_id` → name). */
-  group_names: Record<number, string>;
+  /** Per-group state keyed by group id (the display name today). */
+  groups: Record<GroupId, Group>;
 }
 
 /** Snapshot returned by the `scene_snapshot` Tauri command (PR-5-2

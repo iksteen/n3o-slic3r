@@ -226,8 +226,7 @@ mod tests {
             name: "cube".into(),
             visible: true,
             extruder_id: None,
-            parent: None,
-            group_id: None,
+            group: None,
         };
         (obj, mesh)
     }
