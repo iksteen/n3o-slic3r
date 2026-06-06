@@ -634,7 +634,16 @@ If the schedule slips, cuts come from this list in order. The intent is to prese
 
 Out of scope for this plan, but worth listing so MVP decisions don't paint into corners:
 
-- Native Windows build: FFI symbol exports, MSI installer, code signing. The data model and architecture do not preclude this.
+> **Use-discovered 1.0 backlog.** Features surfaced from real use (send
+> progress bar, lay-object-flat, multi-plate auto-arrange, move-objects-
+> to-plate, UI polish) and the Windows **cross-compile** feasibility
+> analysis are tracked in [`road-to-1.0.md`](tickets/road-to-1.0.md).
+
+- Windows build (native *or* cross-compiled): the crux is OrcaSlicer's
+  C++ dep tree (OCCT/OpenVDB), not Tauri — Tauri cross-compiles via
+  `cargo-xwin`. FFI `.dll` + symbol exports, NSIS/MSI installer, code
+  signing. See [`road-to-1.0.md`](tickets/road-to-1.0.md). The data model
+  and architecture do not preclude this.
 
 - Native macOS build: CMake adjustments, notarized .dmg, code signing.
 
