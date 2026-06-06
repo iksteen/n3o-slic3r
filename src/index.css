@@ -1742,18 +1742,125 @@
     color: oklch(0.40 0.18 25);
     font-size: 11.5px;
   }
-  .sp-overrides-badge {
-    background: var(--accent-soft);
-    color: var(--accent-text);
-    border: 1px solid color-mix(in oklch, var(--accent) 25%, transparent);
-    border-radius: 10px;
-    padding: 1px 8px;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    margin-left: 8px;
-  }
 
   /* ─────────── Search + mode strip ─────────── */
+  .search-row {
+    display: flex; align-items: stretch; gap: 8px;
+  }
+  .search-row .search-input { flex: 1; min-width: 0; }
+  .filter-toggle {
+    flex-shrink: 0;
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 32px; padding: 0 9px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: border-color 100ms, background 100ms, color 100ms, box-shadow 100ms;
+  }
+  .filter-toggle:hover:not(:disabled) {
+    color: var(--text);
+    border-color: color-mix(in oklch, var(--accent) 35%, var(--border));
+  }
+  .filter-toggle:disabled { opacity: 0.4; cursor: default; }
+  .filter-toggle.active {
+    background: color-mix(in oklch, var(--accent) 16%, var(--surface));
+    border-color: color-mix(in oklch, var(--accent) 55%, var(--border));
+    color: var(--accent-text);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 12%, transparent);
+  }
+  .filter-toggle-count {
+    font-family: var(--font-mono);
+    font-size: 10.5px; font-weight: 600;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .filter-toggle.active .filter-toggle-count {
+    background: color-mix(in oklch, var(--accent) 22%, var(--surface));
+    border-color: transparent;
+    color: var(--accent-text);
+  }
+  .mode-seg {
+    display: flex; gap: 2px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 2px;
+  }
+  .mode-seg-btn {
+    flex: 1;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 25px;
+    border: 0; background: transparent;
+    border-radius: 5px;
+    font-size: 11.5px; font-weight: 500;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: background 110ms, color 110ms, box-shadow 110ms;
+  }
+  .mode-seg-btn:hover { color: var(--text); }
+  .mode-seg-btn.active {
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.14);
+  }
+  .mode-seg-count {
+    font-family: var(--font-mono);
+    font-size: 9.5px; font-weight: 600;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-dim);
+    opacity: 0.75;
+  }
+  .mode-seg-btn.active .mode-seg-count {
+    background: color-mix(in oklch, var(--accent) 18%, var(--surface));
+    color: var(--accent-text);
+    opacity: 1;
+  }
+  .empty-link {
+    background: none; border: 0; padding: 0;
+    color: var(--accent-text);
+    font: inherit; cursor: pointer;
+    text-decoration: underline;
+  }
+  .empty-link:hover { opacity: 0.8; }
+  .tier-tag {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 8.5px; font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 3px;
+    border: 1px solid transparent;
+  }
+  .tier-tag.tier-advanced {
+    color: hsl(45 75% 38%);
+    background: hsl(45 75% 38% / 0.12);
+    border-color: hsl(45 75% 38% / 0.3);
+  }
+  .tier-tag.tier-expert {
+    color: hsl(8 70% 50%);
+    background: hsl(8 70% 50% / 0.12);
+    border-color: hsl(8 70% 50% / 0.3);
+  }
+  [data-theme="dark"] .tier-tag.tier-advanced {
+    color: hsl(45 80% 65%);
+    background: hsl(45 70% 55% / 0.16);
+    border-color: hsl(45 70% 55% / 0.32);
+  }
+  [data-theme="dark"] .tier-tag.tier-expert {
+    color: hsl(8 85% 68%);
+    background: hsl(8 75% 58% / 0.16);
+    border-color: hsl(8 75% 58% / 0.32);
+  }
   .search-wrap {
     padding: 10px 12px 8px;
     display: grid;

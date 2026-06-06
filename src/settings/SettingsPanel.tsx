@@ -19,7 +19,7 @@
 // into the row CSS; PR-4-4 ships the row markup ready to carry
 // those modifier classes once PR-4-7 lands.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BoolInput,
   ColorInput,
@@ -56,13 +56,7 @@ import {
 import { winningLayerFor, type CascadeLayer } from "./layers";
 import { CascadeLadder, useLadderHover } from "./ladder/CascadeLadder";
 import { ANNOTATIONS } from "./annotations/data";
-import {
-  computeDiff,
-  passesDiff,
-  readStoredDiffMode,
-  writeStoredDiffMode,
-  type DiffMode,
-} from "./diff";
+import { useStoredModeFilter } from "./nav/ModeFilter";
 import { PluginManager, type PluginWriters } from "../plugins/PluginManager";
 import {
   countActiveAtLevel,
@@ -131,6 +125,18 @@ export type SelectedObjectStub = {
 
 type ContextLayer = "project" | "object";
 
+/** Complexity-mode segments. Tiers come from libslic3r's per-option mode
+ *  metadata (via `passesMode`) — not a curated list. */
+const MODE_SEGMENTS: ReadonlyArray<{
+  id: "simple" | "advanced" | "expert";
+  label: string;
+  desc: string;
+}> = [
+  { id: "simple", label: "Simple", desc: "Everyday essentials — the controls most prints need" },
+  { id: "advanced", label: "Advanced", desc: "Common tuning controls for dialing in quality" },
+  { id: "expert", label: "Expert", desc: "Every setting exposed — no guardrails" },
+];
+
 export function SettingsPanel(props: SettingsPanelProps) {
   const {
     printer,
@@ -154,12 +160,11 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [pluginTabActive, setPluginTabActive] = useState(false);
   const onPluginTab = pluginTabActive && pluginSurface != null;
 
-  // Mode filter UI is parked pending a redesign; pin to "advanced"
-  // — "expert" pulls in G-code / machine-limits noise most users
-  // never touch. `setMode` is kept available for when the new UI
-  // lands.
-  const [mode, setMode] = useState<ModeFilter>("advanced");
-  void setMode;
+  // Setting-complexity mode (Simple / Advanced / Expert), persisted.
+  const [mode, setMode] = useStoredModeFilter();
+  // "Show only modified settings" — the diff toggle. Modified = overridden
+  // at the active editing layer (project or object).
+  const [showModifiedOnly, setShowModifiedOnly] = useState(false);
   const [search, setSearch] = useState("");
   const [contextLayer, setContextLayer] = useState<ContextLayer>("project");
   const [activeCat, setActiveCat] = useState<string | null>(null);
@@ -176,58 +181,58 @@ export function SettingsPanel(props: SettingsPanelProps) {
 
   const { options, loading: optsLoading } = usePrinterOptions(printer);
 
-  // Diff baselines (PR-4-10):
-  //   - "from-default": cascade resolved with no overrides. We
-  //     approximate by tracking the resolved map sans overrides
-  //     for the same printer + plate + filaments. Since the panel
-  //     receives `context` with overrides already merged, we
-  //     compute a printer-only baseline by stripping overrides
-  //     and re-resolving once per printer change. (Phase 5's
-  //     project model adds dedicated baseline tracking.)
-  //   - "from-save": snapshot of `resolved` at panel mount or at
-  //     project-save time. In-memory only for Phase 4; Phase 5's
-  //     project save populates from the .3mf load.
-  // Diff tabs (All / Diff: default / Diff: save) are parked pending
-  // a redesign; pin to "all" so every row shows. `setDiffMode` is
-  // kept available for when the new UI lands.
-  const [diffMode, setDiffMode] = useState<DiffMode>("all");
-  void setDiffMode;
-  void readStoredDiffMode;
-  void writeStoredDiffMode;
-  const savedBaselineRef = useRef<ResolvedMap | null>(null);
-  useEffect(() => {
-    if (savedBaselineRef.current === null && Object.keys(resolved).length > 0) {
-      savedBaselineRef.current = { ...resolved };
-    }
-  }, [resolved]);
-  // For "from-default" we approximate with the cascade resolve
-  // minus project + object overrides — those are the tiers we
-  // know about at the frontend. Phase 5's project model adds a
-  // separate printer-only resolve.
-  const defaultBaseline = useMemo<ResolvedMap>(() => {
-    const out: ResolvedMap = {};
-    for (const [k, v] of Object.entries(resolved)) {
-      if (k in projectOverrides || k in objectOverrides) {
-        out[k] = { ...v, value: v.cascade_fallback ?? v.value };
-      } else {
-        out[k] = v;
+  // Is this option modified at the active editing layer? Project tab: a
+  // project override exists. Object tab: the selected object overrides it.
+  // This is the notion the "show modified" filter + tier-tags use.
+  const isModified = useCallback(
+    (key: string) =>
+      contextLayer === "object"
+        ? key in objectOverrides
+        : key in projectOverrides,
+    [contextLayer, objectOverrides, projectOverrides],
+  );
+
+  // Apply printer-aware visibility + mode + search to the option list. The
+  // core rule: a setting shows if it's in the current mode's tier OR it's
+  // been modified — changed settings are never hidden by the mode, so you can
+  // always see (and revert) what differs even in Simple, across every
+  // category. `showModifiedOnly` then narrows to just the modified ones.
+  const visibleOptions = useMemo(() => {
+    return options.filter((o) => {
+      const modified = isModified(o.key);
+      if (showModifiedOnly && !modified) return false;
+      return filterRow(o, mode, search, modified);
+    });
+  }, [options, mode, search, showModifiedOnly, isModified]);
+
+  // Per-mode cumulative counts on the segmented control (printer-applicable
+  // options at or below each tier).
+  const modeCounts = useMemo(() => {
+    const out: Record<"simple" | "advanced" | "expert", number> = {
+      simple: 0,
+      advanced: 0,
+      expert: 0,
+    };
+    for (const o of options) {
+      if (o.hidden) continue;
+      for (const m of ["simple", "advanced", "expert"] as const) {
+        if (passesMode(o, m)) out[m] += 1;
       }
     }
     return out;
-  }, [resolved, projectOverrides, objectOverrides]);
-  const diffSet = useMemo(() => {
-    if (diffMode === "all") return new Set<string>();
-    if (diffMode === "from-default") return computeDiff(resolved, defaultBaseline);
-    return computeDiff(resolved, savedBaselineRef.current ?? resolved);
-  }, [diffMode, resolved, defaultBaseline]);
+  }, [options]);
 
-  // Apply visibility + mode + search + diff to the option list.
-  // Pure; memoize to keep the render path bounded.
-  const visibleOptions = useMemo(() => {
-    return options.filter(
-      (o) => filterRow(o, mode, search) && passesDiff(o.key, diffMode, diffSet),
-    );
-  }, [options, mode, search, diffMode, diffSet]);
+  // Total modified settings at the active layer — drives the toggle's count
+  // and disabled state.
+  const modifiedTotal = useMemo(
+    () => options.reduce((n, o) => (isModified(o.key) ? n + 1 : n), 0),
+    [options, isModified],
+  );
+  // If the user filters to modified-only and then clears every override, drop
+  // the filter so the list isn't stuck empty.
+  useEffect(() => {
+    if (showModifiedOnly && modifiedTotal === 0) setShowModifiedOnly(false);
+  }, [showModifiedOnly, modifiedTotal]);
 
   const groups = useMemo(() => categorize(visibleOptions), [visibleOptions]);
 
@@ -244,13 +249,6 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const counts = useMemo(
     () => categoryCounts(groups, overriddenKeys),
     [groups, overriddenKeys],
-  );
-
-  const totalOverrides = overriddenKeys.size;
-  const totalCategoriesWithOverrides = useMemo(
-    () =>
-      [...counts.values()].filter((c) => c.overrides > 0).length,
-    [counts],
   );
 
   // Cascade ladder hover state (PR-4-8). One ladder portal per
@@ -348,37 +346,66 @@ export function SettingsPanel(props: SettingsPanelProps) {
             </>
           )}
         </div>
-        {/* Mode filter (Simple / Advanced / Expert / Develop) and the
-            diff tabs are intentionally not rendered yet; the user is
-            redesigning that surface. The underlying state + filter
-            machinery is still in place (mode is pinned to "expert" so
-            all stable settings show; diffMode stays at "all").
-            The per-extruder slot strip + sync-edit toggle retired
-            with PR-S-2's Process-only filter — there are no per-
-            extruder options surfaced here for a slot picker to act
-            on. Filament/printer-bucket editing surfaces live
-            elsewhere. */}
         <div
           className="search-wrap"
           style={onPluginTab ? { display: "none" } : undefined}
         >
-          <div className="search-input">
-            <input
-              type="search"
-              placeholder="Search 800+ settings…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            {totalOverrides > 0 && (
-              <span
-                className="sp-overrides-badge"
-                title={`${totalOverrides} settings overridden across ${totalCategoriesWithOverrides} categor${
-                  totalCategoriesWithOverrides === 1 ? "y" : "ies"
-                }`}
+          <div className="search-row">
+            <div className="search-input">
+              <input
+                type="search"
+                placeholder="Search settings…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            {/* Show-only-modified toggle (the diff filter). */}
+            <button
+              type="button"
+              className={`filter-toggle${showModifiedOnly ? " active" : ""}`}
+              onClick={() => setShowModifiedOnly((v) => !v)}
+              disabled={modifiedTotal === 0 && !showModifiedOnly}
+              aria-pressed={showModifiedOnly}
+              title={
+                modifiedTotal === 0
+                  ? `No modified settings on the ${
+                      contextLayer === "object" ? "Object" : "Project"
+                    } layer yet`
+                  : showModifiedOnly
+                    ? "Showing only modified settings — click to show all"
+                    : `Show only modified settings (${modifiedTotal})`
+              }
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <path
+                  d="M1.5 2.5h11l-4.2 5v3.6l-2.6 1.2V7.5L1.5 2.5z"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              {modifiedTotal > 0 && (
+                <span className="filter-toggle-count">{modifiedTotal}</span>
+              )}
+            </button>
+          </div>
+          {/* Setting-complexity mode (Simple / Advanced / Expert). A changed
+              setting still shows regardless of the mode (see visibleOptions). */}
+          <div className="mode-seg" role="tablist" aria-label="Setting complexity">
+            {MODE_SEGMENTS.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                role="tab"
+                aria-selected={mode === m.id}
+                className={`mode-seg-btn${mode === m.id ? " active" : ""}`}
+                onClick={() => setMode(m.id)}
+                title={m.desc}
               >
-                {totalOverrides} overridden
-              </span>
-            )}
+                <span className="mode-seg-label">{m.label}</span>
+                <span className="mode-seg-count">{modeCounts[m.id]}</span>
+              </button>
+            ))}
           </div>
         </div>
       </header>
@@ -401,7 +428,22 @@ export function SettingsPanel(props: SettingsPanelProps) {
         <div className="sp-empty">Loading options…</div>
       ) : groups.length === 0 ? (
         <div className="sp-empty">
-          No matching settings — try broadening the search or mode.
+          {showModifiedOnly
+            ? "No modified settings on this layer — edit a setting to see it here."
+            : "No matching settings — try broadening the search."}
+          {mode !== "expert" && !showModifiedOnly && (
+            <div style={{ marginTop: 6 }}>
+              Some settings are hidden by <b>{mode}</b> mode —{" "}
+              <button
+                type="button"
+                className="empty-link"
+                onClick={() => setMode("expert")}
+              >
+                switch to Expert
+              </button>
+              .
+            </div>
+          )}
         </div>
       ) : (
         <div className="settings-body">
@@ -434,6 +476,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     onSetObjectOverride={onSetObjectOverride}
                     onClearObjectOverride={onClearObjectOverride}
                     notApplicable={opt.hidden}
+                    outOfMode={!passesMode(opt, mode)}
                     allObjects={allObjects}
                     onRowEnter={(el) => {
                       setHoveredKey(opt.key);
@@ -552,6 +595,9 @@ interface SettingRowProps {
   /** True when this option is capability-hidden but surfaced via
    *  search; renders the "not applicable" badge inline (PR-4-5). */
   notApplicable?: boolean;
+  /** True when this option's tier is above the active mode — it's shown only
+   *  because it's been modified. Renders an ADV/EXP tier-tag. */
+  outOfMode?: boolean;
   /** Cascade ladder hover hooks (PR-4-8). The panel owns the
    *  open/close lifecycle centrally; SettingRow just forwards the
    *  row's DOM node + leave. The label hover hooks retired with
@@ -574,6 +620,7 @@ function SettingRow({
   onSetObjectOverride,
   onClearObjectOverride,
   notApplicable = false,
+  outOfMode = false,
   onRowEnter,
   onRowLeave,
   allObjects,
@@ -607,14 +654,36 @@ function SettingRow({
     else onSetProjectOverride(schema.key, next);
   };
 
-  const leadingBadge = notApplicable ? (
-    <span
-      className="set-badge set-badge-na"
-      title="Not applicable to the active printer"
-    >
-      not applicable
-    </span>
+  // ADV/EXP tier-tag: this setting is above the active mode but shown because
+  // it's been modified. `expert`/`develop` → EXP; everything else → ADV.
+  const tierTag = outOfMode ? (
+    (() => {
+      const expert = schema.mode === "expert" || schema.mode === "develop";
+      return (
+        <span
+          className={`tier-tag tier-${expert ? "expert" : "advanced"}`}
+          title={`${expert ? "An Expert" : "An Advanced"} setting, shown because it's been changed`}
+        >
+          {expert ? "EXP" : "ADV"}
+        </span>
+      );
+    })()
   ) : null;
+
+  const leadingBadge =
+    notApplicable || tierTag ? (
+      <>
+        {notApplicable && (
+          <span
+            className="set-badge set-badge-na"
+            title="Not applicable to the active printer"
+          >
+            not applicable
+          </span>
+        )}
+        {tierTag}
+      </>
+    ) : null;
 
   // Objects-overriding badge (PR-4-9, FR-CAS-7b): on the Project
   // tab, surface the objects that override this setting via small
@@ -814,11 +883,14 @@ function renderScalarInput(
   }
 }
 
-/** Pure filter function used by the panel and exposed for vitest. */
+/** Pure filter function used by the panel and exposed for vitest.
+ *  `modified` (overridden at the active layer) bypasses the mode tier so a
+ *  changed setting is never hidden by Simple/Advanced. */
 export function filterRow(
   opt: PrinterAwareOptionSummary,
   mode: ModeFilter,
   search: string,
+  modified = false,
 ): boolean {
   if (opt.hidden) {
     // Match the mockup behavior: when search is active, hidden
@@ -827,7 +899,7 @@ export function filterRow(
     // the no-search default view.
     if (search.trim() === "") return false;
   }
-  if (!passesMode(opt, mode)) return false;
+  if (!passesMode(opt, mode) && !modified) return false;
   if (search.trim() === "") return true;
   const needle = search.toLowerCase();
   return (
