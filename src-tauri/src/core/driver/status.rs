@@ -119,6 +119,9 @@ pub struct BambuExtra {
     /// diagnostics. Free-form string — PR-7a-3 maps known codes.
     pub current_stage: Option<String>,
     pub print_error_code: Option<i32>,
+    /// Last non-zero Bambu `err_code` from a rejected command (84033543
+    /// = Developer Mode required); `None` once a command succeeds.
+    pub command_error_code: Option<i32>,
     pub fan_speed: Option<f32>,
     /// Populated by PR-7a-4. `None` until that ticket lands or
     /// when the printer reports no AMS.

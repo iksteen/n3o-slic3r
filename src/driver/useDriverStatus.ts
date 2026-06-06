@@ -13,8 +13,16 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 import { onEvents } from "../state/eventRouter";
+import { pushLog } from "../logging/logStore";
 import { driverStatus } from "./invokes";
 import type { DriverId, PrinterStatus, StatusUpdateEvent } from "./types";
+
+/** Bambu `err_code` from a rejected command, or null. */
+function rejectionCode(status: PrinterStatus | null): number | null {
+  return status?.extra.kind === "Bambu"
+    ? status.extra.data.command_error_code
+    : null;
+}
 
 export interface UseDriverStatusResult {
   /** `null` until either the initial fetch resolves or the first
@@ -46,7 +54,21 @@ function notify(): void {
 
 function setEntry(id: DriverId, patch: Partial<Entry>): void {
   const prev = entries.get(id) ?? { status: null, error: null };
-  entries.set(id, { ...prev, ...patch });
+  const next = { ...prev, ...patch };
+  entries.set(id, next);
+  // Log a freshly-arrived command rejection once (84033543 = Developer
+  // Mode off). Fired from this app-lifetime store so it reaches the user
+  // in any view; an error log auto-opens the console.
+  const code = rejectionCode(next.status);
+  if (code != null && code !== rejectionCode(prev.status)) {
+    const hex = `0x${(code >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
+    pushLog(
+      "error",
+      code === 84033543
+        ? `Print rejected (err ${hex}): this printer needs Developer Mode for third-party software. On the printer, enable LAN Only Mode → “LAN Only” + “Developer Mode”, then reconnect.`
+        : `Printer rejected a command (err ${hex}).`,
+    );
+  }
   notify();
 }
 

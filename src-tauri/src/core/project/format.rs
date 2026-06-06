@@ -536,14 +536,25 @@ mod tests {
         let parsed = read_project(&path).expect("shared-mesh project round-trips");
 
         assert_eq!(parsed.meshes.len(), 1, "still one distinct mesh");
-        assert_eq!(parsed.plates[0].scene.objects.len(), 2, "both objects survive");
         assert_eq!(
-            parsed.meshes.get(&mesh_id).expect("shared mesh preserved").vertices[0],
+            parsed.plates[0].scene.objects.len(),
+            2,
+            "both objects survive"
+        );
+        assert_eq!(
+            parsed
+                .meshes
+                .get(&mesh_id)
+                .expect("shared mesh preserved")
+                .vertices[0],
             77.0,
             "shared geometry buffer round-trips",
         );
         for obj in parsed.plates[0].scene.objects.values() {
-            assert_eq!(obj.mesh, mesh_id, "both objects still reference the one mesh");
+            assert_eq!(
+                obj.mesh, mesh_id,
+                "both objects still reference the one mesh"
+            );
         }
         std::fs::remove_file(&path).ok();
     }
@@ -603,7 +614,12 @@ mod tests {
             .expect("n3o_project.json present");
         let json = String::from_utf8(raw).expect("utf8");
 
-        for absent in ["\"bed\"", "\"exclusion_zones\"", "\"selection\"", "\"source_path\""] {
+        for absent in [
+            "\"bed\"",
+            "\"exclusion_zones\"",
+            "\"selection\"",
+            "\"source_path\"",
+        ] {
             assert!(
                 !json.contains(absent),
                 "{absent} is derived/transient and must not be persisted",

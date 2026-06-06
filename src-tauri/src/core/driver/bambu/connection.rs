@@ -32,10 +32,10 @@ use tokio::sync::{mpsc, oneshot, watch, Mutex};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+use crate::core::driver::backoff::{reconnect_backoff_secs, CONNECT_TIMEOUT};
 use crate::core::driver::status::{
     BambuExtra, ConnectionState, DriverExtra, JobState, PrinterStatus,
 };
-use crate::core::driver::backoff::{reconnect_backoff_secs, CONNECT_TIMEOUT};
 use crate::core::driver::traits::{
     Driver, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle, SendPayload,
 };

@@ -103,6 +103,9 @@ export interface BambuExtra {
   mounted_plate: string | null;
   current_stage: string | null;
   print_error_code: number | null;
+  /** Last non-zero Bambu err_code from a rejected command (84033543 =
+   *  Developer Mode required); null when none. */
+  command_error_code: number | null;
   fan_speed: number | null;
   ams: AmsState | null;
   /** External (PTFE-tube) spool — Bambu pushes this via

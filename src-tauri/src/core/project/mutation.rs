@@ -2139,11 +2139,7 @@ mod tests {
         assert!(!events.is_empty());
         let plate = p.active_plate();
         let ga = plate.scene.objects[&a].group.expect("a grouped");
-        assert_eq!(
-            plate.scene.objects[&b].group,
-            Some(ga),
-            "shared group id"
-        );
+        assert_eq!(plate.scene.objects[&b].group, Some(ga), "shared group id");
         assert_eq!(
             plate.scene.groups.get(&ga).map(|g| g.name.as_str()),
             Some("Bracket"),
@@ -2153,10 +2149,7 @@ mod tests {
         let plate = p.active_plate();
         assert_eq!(plate.scene.objects[&a].group, None);
         assert_eq!(plate.scene.objects[&b].group, None);
-        assert!(
-            plate.scene.groups.is_empty(),
-            "name dropped on ungroup"
-        );
+        assert!(plate.scene.groups.is_empty(), "name dropped on ungroup");
     }
 
     #[test]
@@ -2179,10 +2172,7 @@ mod tests {
         // dissolves (a group of one isn't a group).
         p.group_objects(&[b, c], "G2".into()).unwrap();
         let plate = p.active_plate();
-        assert_eq!(
-            plate.scene.objects[&a].group, None,
-            "a's group dissolved"
-        );
+        assert_eq!(plate.scene.objects[&a].group, None, "a's group dissolved");
         assert!(!plate.scene.groups.contains_key(&g1));
         let gbc = plate.scene.objects[&b].group.expect("b grouped");
         assert_eq!(plate.scene.objects[&c].group, Some(gbc));

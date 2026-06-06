@@ -139,6 +139,10 @@ pub struct BambuReport {
     pub current_stage: Option<i64>,
     #[serde(default, rename = "print_error", deserialize_with = "de::optional_i64")]
     pub print_error: Option<i64>,
+    /// Non-zero on a command echo = the printer rejected our command;
+    /// 84033543 = Developer Mode off. Absent / 0 on normal reports.
+    #[serde(default, rename = "err_code", deserialize_with = "de::optional_i64")]
+    pub err_code: Option<i64>,
     #[serde(
         default,
         rename = "cooling_fan_speed",
@@ -434,6 +438,7 @@ impl BambuReport {
             bed_type,
             current_stage,
             print_error,
+            err_code,
             fan_speed,
         );
         // AMS: spool-aware per-tray merge.
@@ -540,6 +545,11 @@ pub fn merge_into(snapshot: &mut PrinterStatus, msg: BambuReport) {
         }
         if let Some(e) = msg.print_error {
             extra.print_error_code = Some(e as i32);
+        }
+        // Non-zero err_code = the printer rejected our command; sticky
+        // until a later 0 (success) clears it. The frontend surfaces it.
+        if let Some(e) = msg.err_code {
+            extra.command_error_code = if e == 0 { None } else { Some(e as i32) };
         }
         if let Some(f) = msg.fan_speed {
             extra.fan_speed = Some(f as f32);
@@ -764,6 +774,36 @@ mod tests {
             }
             _ => panic!("expected Bambu extra"),
         }
+    }
+
+    #[test]
+    fn merge_surfaces_command_err_code_and_clears_on_zero() {
+        // 84033543 (Developer Mode off) surfaces as command_error_code;
+        // a later 0 clears it. Goes through the worker path (acc.merge →
+        // merge_into) so a field missing from `lww!` (the real bug) is
+        // caught.
+        let mut snap = PrinterStatus::disconnected_for(DriverExtra::Bambu(BambuExtra::default()));
+        let mut acc = BambuReport::default();
+
+        acc.merge(BambuReport {
+            err_code: Some(84033543),
+            ..Default::default()
+        });
+        merge_into(&mut snap, acc.clone());
+        let DriverExtra::Bambu(e) = &snap.extra else {
+            panic!("bambu")
+        };
+        assert_eq!(e.command_error_code, Some(84033543));
+
+        acc.merge(BambuReport {
+            err_code: Some(0),
+            ..Default::default()
+        });
+        merge_into(&mut snap, acc.clone());
+        let DriverExtra::Bambu(e) = &snap.extra else {
+            panic!("bambu")
+        };
+        assert_eq!(e.command_error_code, None);
     }
 
     #[test]

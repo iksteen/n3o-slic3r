@@ -40,7 +40,7 @@ describe("loadoutFromReport", () => {
           mounted_plate: null,
           current_stage: null,
           print_error_code: null,
-          fan_speed: null,
+          command_error_code: null,          fan_speed: null,
           ams: {
             active_slot: 2,
             units: [
@@ -81,7 +81,7 @@ describe("loadoutFromReport", () => {
           mounted_plate: null,
           current_stage: null,
           print_error_code: null,
-          fan_speed: null,
+          command_error_code: null,          fan_speed: null,
           ams: { active_slot: null, units: [{ id: 0, trays: [{ id: 0, identity: amsFil("PLA", "FF0000FF") }] }] },
           external_spool: null,
         },
