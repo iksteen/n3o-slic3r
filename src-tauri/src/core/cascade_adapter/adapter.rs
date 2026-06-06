@@ -16,7 +16,7 @@
 //!    from the active context's plate. This is the simplified
 //!    expansion from PR-0.5-1; the production "resolve per
 //!    hypothetical plate context" form is a forward task documented
-//!    in `docs/profiles.md` and known limitations.
+//!    in `docs/dev/profiles.md` and known limitations.
 //!
 //! Unknown-but-not-dropped keys (typos the manifest doesn't know
 //! about) surface as `AdaptDropEntry::UnknownKey` so the caller can
@@ -151,7 +151,7 @@ pub fn adapt(
     if let Some(value) = bed_temp_value {
         // Broadcast to all 12 BED_TEMP_KEYS — same value across plate
         // types. The production "resolve per hypothetical plate"
-        // form is a follow-up (see docs/profiles.md "Translating to
+        // form is a follow-up (see docs/dev/profiles.md "Translating to
         // libslic3r → Dimensional expansion"); the broadcast is
         // libslic3r-correct because the active `curr_bed_type`
         // selects which key the engine actually reads.
@@ -313,7 +313,7 @@ fn push_key(
 /// Translate our context's `plate.type` predicate value to libslic3r's
 /// `curr_bed_type` enum value. Mapping mirrors the
 /// `BuildPlate::libslic3r_curr_bed_type` design point from
-/// `docs/profiles.md`. Unknown plate types pass through verbatim —
+/// `docs/dev/profiles.md`. Unknown plate types pass through verbatim —
 /// libslic3r will reject at slice time, which the trace tooling
 /// surfaces.
 fn libslic3r_curr_bed_type(plate_type: &str) -> String {

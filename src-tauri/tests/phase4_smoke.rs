@@ -5,7 +5,7 @@
 //! fails loudly. The frontend halves (form-component contracts,
 //! categorize / mode-filter / diff / slot helpers, annotations
 //! coverage) are exercised in the vitest suite — see
-//! `docs/phase-4-smoke.md` for the full procedure.
+//! `docs/dev/phase-4-smoke.md` for the full procedure.
 
 use std::sync::Once;
 

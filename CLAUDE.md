@@ -1,10 +1,11 @@
 # Claude Code context for n3o-slic3r
 
 This file captures the durable context any Claude Code session in this
-repo should pick up immediately. Source-of-truth documents live in
-`docs/`; this file points at them and records facts that have already
-been corrected once during prior sessions and should not need
-re-correcting.
+repo should pick up immediately. Source-of-truth development documents
+live in `docs/dev/` (user-facing docs — getting-started, troubleshooting,
+release-notes — stay at the top of `docs/`); this file points at them and
+records facts that have already been corrected once during prior sessions
+and should not need re-correcting.
 
 ## What this project is
 
@@ -20,11 +21,11 @@ manipulation.
 
 Read these before reasoning about scope, design, or behavior:
 
-- **`docs/PRD.md`** — Product requirements. Goals, non-goals, success
+- **`docs/dev/PRD.md`** — Product requirements. Goals, non-goals, success
   criteria, feature requirements (FR-CAS-*, FR-MP-*, FR-UI-*, …),
   printer capability matrix, architecture decisions (AD-1..AD-7),
   working practices (§11).
-- **`docs/Execution_Plan.md`** — 10-phase plan, ~37.5 person-weeks.
+- **`docs/dev/Execution_Plan.md`** — 10-phase plan, ~37.5 person-weeks.
   Phase ordering and dependencies are real; calendar dates are not.
   **Status (2026-06-01):** Phases 0–8 are done — the full vertical
   slice ships (cascade resolver + adapter, viewport, end-to-end slice +
@@ -35,21 +36,21 @@ Read these before reasoning about scope, design, or behavior:
   self-hosted signed-repo distribution (validated on Arch, Ubuntu, and
   Fedora, including under WSL2/WSLg), first-run onboarding, OrcaSlicer
   `.3mf` project import, Linux CI. Remaining (see
-  `docs/tickets/phase-9.md`, PR-9-* tickets): user docs (getting-started
+  `docs/dev/tickets/phase-9.md`, PR-9-* tickets): user docs (getting-started
   / troubleshooting / release notes — PR-9-7), the
   `.3mf`/`n3o_project.json` format-finalization review (PR-9-5, still
   provisional), and the **independence-audit exit gate** (PR-9-8, the
   one open PRD §3.3 success criterion). Post-MVP deferrals (plugin
   compose hook, hot reload, Orca preset importer) live in plan §16.
-- **`docs/profiles.md`** — Rule-cascade design of record. Two-phase
+- **`docs/dev/profiles.md`** — Rule-cascade design of record. Two-phase
   resolution (authored cascade + `!important`-style override tiers),
   TOML schema, translation adapter to libslic3r's `DynamicPrintConfig`,
   option scope mechanism. The PRD's §6.1 codifies the requirements;
   this doc owns the design.
-- **`docs/design.md`** — Mockup review. What in `docs/design/` is
+- **`docs/dev/design.md`** — Mockup review. What in `docs/dev/design/` is
   reusable as-is, what to port, what to replace. Known design gaps
   (plate-printer assignment UI, filament sync, G-code preview).
-- **`docs/libslic3r-workarounds.md`** — The set of pre-`apply` and
+- **`docs/dev/libslic3r-workarounds.md`** — The set of pre-`apply` and
   post-`apply` workarounds the shim applies to compensate for
   libslic3r's headless-mode quirks. Required reading before bumping
   the OrcaSlicer submodule.
@@ -87,7 +88,7 @@ later costs more than it had to.
     renderer commits on orbit-end and reads back on load.
 
 - **Configs are pure data.** No embedded code, no expressions, no
-  template strings. The rule cascade (PRD §6.1, docs/profiles.md)
+  template strings. The rule cascade (PRD §6.1, docs/dev/profiles.md)
   handles conditional values declaratively. Lua exists for G-code
   post-processing plugins, not for configs.
 
@@ -96,7 +97,7 @@ later costs more than it had to.
   libslic3r's flat `DynamicPrintConfig` and dispatch quirks
   (`curr_bed_type`, `wipe_tower`, dimensional key explosions) live
   contained. New libslic3r-specific quirks land in
-  `docs/libslic3r-workarounds.md` and the shim, not in higher layers.
+  `docs/dev/libslic3r-workarounds.md` and the shim, not in higher layers.
 
 - **Standalone at runtime.** The app must complete every workflow
   with no other slicer installed. UX principle from PRD §5.
@@ -142,7 +143,7 @@ reason from contrary priors.
   `src-tauri/src/core/cascade_adapter/` (`adapter` does the
   `bed_temp` → per-plate-type dimensional expansion + `curr_bed_type`
   set). `tests/reference_profiles.rs` exercises it end-to-end. Design
-  of record is still `docs/profiles.md`.
+  of record is still `docs/dev/profiles.md`.
   - **CONFIRMED (2026-05-31, PR-9-1):** the live *slice* path **does**
     route through the resolver + adapter, not the input's embedded
     config. `core/slice/orchestrator.rs::resolve_cascade` composes a
@@ -174,7 +175,7 @@ n3o-slic3r/
 ├── src-tauri/                  # Tauri backend (depends on slic3r-ffi via path)
 ├── src/                        # React renderer
 ├── external/OrcaSlicer/        # submodule, pinned
-└── docs/                       # all the above docs
+└── docs/                       # user-facing docs; dev docs under docs/dev/
 ```
 
 Build flow (Linux; macOS / Windows post-MVP):

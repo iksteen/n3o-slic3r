@@ -13,7 +13,7 @@
 # Default rule — specificity 0. The merged machine + process +
 # non-filament-rule filament keys, with plate-dim keys excluded.
 # Emitted as top-level keys (the recommended form for the
-# unconditional default — see docs/profiles.md). Must appear
+# unconditional default — see docs/dev/profiles.md). Must appear
 # before any [[rule]] header.
 activate_air_filtration = "0"
 adaptive_layer_height = "0"

@@ -7,7 +7,7 @@
 //
 // Visual styling lives in `src/index.css` under the `.plate-tabs`,
 // `.plate-tab`, `.plate-tab-*` selectors — ported from
-// `docs/design/PlateTabs.jsx`. This file is presentation-free; it
+// `docs/dev/design/PlateTabs.jsx`. This file is presentation-free; it
 // just stamps the right class hooks + wires events.
 //
 // The strip is a view on top of `usePlateTabs`; mutation goes

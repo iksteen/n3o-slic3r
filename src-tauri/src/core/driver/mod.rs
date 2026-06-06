@@ -5,7 +5,7 @@
 //! same lifecycle, the same status surface, and the same
 //! command surface. The [`Driver`] trait pins that contract.
 //!
-//! Design rationale (also called out in `docs/tickets/phase-7.md`):
+//! Design rationale (also called out in `docs/dev/tickets/phase-7.md`):
 //!
 //! - **One Tauri command set, dispatched by `DriverId`.** Frontend
 //!   never calls `bambu_send_print` / `u1_send_print` directly —

@@ -9,7 +9,7 @@
 //! `gcode_parser_perf.rs` and runs as part of the same
 //! `cargo test --workspace` step; we don't duplicate it here.
 //!
-//! Procedure (human-driven half) lives in `docs/phase-3-smoke.md`.
+//! Procedure (human-driven half) lives in `docs/dev/phase-3-smoke.md`.
 
 use std::io::Read;
 use std::path::PathBuf;

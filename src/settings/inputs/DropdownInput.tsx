@@ -1,6 +1,6 @@
 // Native <select> for libslic3r `Enum` options (PR-4-2).
 //
-// Matches the mockup's `.val-select` pattern (docs/design/
+// Matches the mockup's `.val-select` pattern (docs/dev/design/
 // SettingsPanel.jsx:229-234). Commits on change.
 //
 // `OptionSummary` (PR-4-1) doesn't surface the enum value list yet

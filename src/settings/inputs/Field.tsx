@@ -85,7 +85,7 @@ export function Field({
     : "";
   const style: CSSProperties = {
     // The `--row-hue` CSS var feeds the source-rule hover treatment
-    // (matches docs/design/styles.css:972-1029). Production CSS will
+    // (matches docs/dev/design/styles.css:972-1029). Production CSS will
     // bind it in `:hover` once the design styles are formally
     // integrated; the Field already publishes the value so the
     // styling lift is a one-file change.

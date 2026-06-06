@@ -9,7 +9,7 @@
 //!
 //! Procedure (human-driven half, includes the slice + send-to-
 //! printer walkthrough this Rust test omits) lives in
-//! `docs/phase-5-smoke.md`.
+//! `docs/dev/phase-5-smoke.md`.
 //!
 //! What this test covers:
 //!   1. Build the 3-plate exit fixture programmatically (plate

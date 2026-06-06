@@ -4,7 +4,7 @@
 //! libslic3r schema, accepts a context object, and returns resolved
 //! settings with trace metadata (winning rule's file:line and
 //! specificity, list of also-matching losers, override-tier source).
-//! Two-phase resolution per `docs/profiles.md`: authored cascade with
+//! Two-phase resolution per `docs/dev/profiles.md`: authored cascade with
 //! specificity-and-source-order, then `!important`-style user / project /
 //! object override tiers.
 //!

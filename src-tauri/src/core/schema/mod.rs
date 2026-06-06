@@ -17,7 +17,7 @@
 //! called before `load_schema()` — the Tauri app's `run()` does this in
 //! its setup step, so any command-handler use is safe.
 //!
-//! See PRD §6.1 (FR-CAS-1..13) and `docs/profiles.md` for the design.
+//! See PRD §6.1 (FR-CAS-1..13) and `docs/dev/profiles.md` for the design.
 
 pub mod capability;
 
@@ -67,7 +67,7 @@ pub struct OptionSchema {
 /// logical key (e.g. `bed_temp`) but libslic3r consumes a *family* of
 /// keys (one per dimension value). The adapter resolves the cascade
 /// against each dimension value and writes the corresponding libslic3r
-/// key. See `docs/profiles.md` "Translating to libslic3r → Dimensional
+/// key. See `docs/dev/profiles.md` "Translating to libslic3r → Dimensional
 /// expansion" for the worked bed-temp example.
 ///
 /// Variants are added as the adapter surfaces them. Start small

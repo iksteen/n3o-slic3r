@@ -128,7 +128,7 @@ pub fn validate_cascade(
         // of scope for our FFF-only Phase 1 cascade. Object/region/print
         // scopes are all valid targets for any rule today (every rule
         // applies at the (filament, plate, object) intersection per
-        // docs/profiles.md), so the meaningful early check is just the
+        // docs/dev/profiles.md), so the meaningful early check is just the
         // FFF-vs-SLA gate. Richer object/print scope distinctions can
         // land later as the override tiers gain more constraints.
         for key in rule.set.keys() {

@@ -471,7 +471,7 @@ fn assemble_nozzle_vectors(
 /// length stays uniform across keys.
 ///
 /// Each fragment is resolved against a slot-scoped context (per
-/// `docs/settings-model.md` §5 "Per-slot vector-key assembly")
+/// `docs/dev/settings-model.md` §5 "Per-slot vector-key assembly")
 /// before vector-assembly: conditional `[[rule]]` blocks inside
 /// fragments — e.g. `when.filament.type = "PETG" set.fan_speed = 30`
 /// — match against THIS slot's bound filament, so the vector entry

@@ -3,7 +3,7 @@
 // Maps a setting's resolved trace into the cascade layer that won,
 // then into the visual treatment (background tint + hue) the row
 // applies. The seven-layer vocabulary mirrors
-// `docs/design/data.jsx`'s `CASCADE_LAYERS`:
+// `docs/dev/design/data.jsx`'s `CASCADE_LAYERS`:
 //
 //   default     hue 220   neutral grey
 //   printer     hue 18    warm orange (cascade tier — Phase 5 labels these)
@@ -36,7 +36,7 @@ export type CascadeLayer =
   | "object"
   | "cascade";
 
-/** HSL hue per layer — matches docs/design/data.jsx. The `cascade`
+/** HSL hue per layer — matches docs/dev/design/data.jsx. The `cascade`
  *  umbrella uses neutral grey since we don't know which sub-layer
  *  won. */
 export const LAYER_HUE: Record<CascadeLayer, number> = {

@@ -557,7 +557,7 @@ fn n3o_settings_xml() -> String {
     // Placeholder for Phase 5 cascade overrides + plate-printer
     // bindings + project-wide metadata. The reader doesn't
     // consume this yet; Phase 5 will. Schema documented in
-    // `docs/3mf-format-notes.md` so the round-trip stays stable
+    // `docs/dev/3mf-format-notes.md` so the round-trip stays stable
     // across writer revisions.
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\

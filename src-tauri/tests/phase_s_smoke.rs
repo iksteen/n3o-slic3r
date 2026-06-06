@@ -6,7 +6,7 @@
 //! `flush_volumes_matrix` sizing, this fails loudly before a real
 //! slice ever runs.
 //!
-//! Three legs from docs/settings-model.md §11.4:
+//! Three legs from docs/dev/settings-model.md §11.4:
 //!
 //!   1. **Multi-filament A1 + AMS Lite** — slice a 4-color model on
 //!      bambi (1 extruder × 5 AMS slots), verify ≥2 filaments tracked
@@ -21,7 +21,7 @@
 //!      land first.
 //!
 //! Procedure for the human-driven half lives in
-//! `docs/phase-s-smoke.md`.
+//! `docs/dev/phase-s-smoke.md`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};

@@ -1,5 +1,5 @@
 // Curated color palette shared by every product in the filament
-// picker modal. Mirrors `STANDARD_PALETTE` from `docs/design/
+// picker modal. Mirrors `STANDARD_PALETTE` from `docs/dev/design/
 // filament-catalog.jsx` (PR-7c-3a).
 //
 // Vendor profiles (OrcaSlicer/BBS) don't model per-color SKUs — color

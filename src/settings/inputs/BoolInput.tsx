@@ -1,6 +1,6 @@
 // On/off toggle for libslic3r `bool` options (PR-4-2).
 //
-// Matches the mockup's `.val-toggle` pattern (docs/design/
+// Matches the mockup's `.val-toggle` pattern (docs/dev/design/
 // SettingsPanel.jsx:222-227). Commits on click.
 
 import { parseBool, formatBool } from "./helpers";

@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Cascade file shape. Top-level keys are the unconditional default
-/// rule (see docs/profiles.md "three equivalent forms"); the `[[rule]]`
+/// rule (see docs/dev/profiles.md "three equivalent forms"); the `[[rule]]`
 /// array holds conditional rules.
 #[derive(Debug)]
 struct Cascade {
@@ -122,7 +122,7 @@ fn rule_matches(rule: &Rule, ctx: &Context) -> bool {
 
 /// Two-pass over the cascade: lowest specificity first, ties broken by
 /// source order (later rule wins). This implements the authored-cascade
-/// half of the two-phase resolution in docs/profiles.md; the spike
+/// half of the two-phase resolution in docs/dev/profiles.md; the spike
 /// doesn't model the `!important` override tiers.
 ///
 /// Top-level keys count as a single specificity-0 rule at source
@@ -155,7 +155,7 @@ fn resolve(cascade: &Cascade, ctx: &Context) -> Context {
 /// a single logical `bed_temp` resolved against the active plate type;
 /// the adapter writes the resolved value into every plate-temp key so
 /// libslic3r's `curr_bed_type` selector picks the right one at slice
-/// time. (See docs/profiles.md "Translating to libslic3r" → bed temp
+/// time. (See docs/dev/profiles.md "Translating to libslic3r" → bed temp
 /// dimensional expansion.)
 const PLATE_TEMP_KEYS: &[&str] = &[
     "hot_plate_temp",

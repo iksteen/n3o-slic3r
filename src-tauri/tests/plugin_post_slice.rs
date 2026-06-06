@@ -469,7 +469,7 @@ fn erroring_plugin_does_not_break_a_multi_plate_job() {
 
 /// Phase 8 exit-criteria smoke (software chain): an example plugin is
 /// discovered + loaded **off by default**, runs at post-slice once
-/// enabled, and is suppressible per plate. See docs/phase-8-smoke.md.
+/// enabled, and is suppressible per plate. See docs/dev/phase-8-smoke.md.
 #[test]
 fn phase_8_exit_smoke() {
     ensure_ffi_init();

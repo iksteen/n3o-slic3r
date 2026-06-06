@@ -1,7 +1,7 @@
 // Vertical category rail (PR-4-3) — FR-UI-1.
 //
 // Mirrors the mockup's `.cat-rail` + `.cat-rail-item` layout
-// (docs/design/SettingsPanel.jsx:633-654). Each item shows icon +
+// (docs/dev/design/SettingsPanel.jsx:633-654). Each item shows icon +
 // name + a count badge in `overrides/total` form (PR-4-7 fills
 // the override count; PR-4-3 ships the badge slot displaying just
 // `total`). Active item is highlighted; clicking a category jumps

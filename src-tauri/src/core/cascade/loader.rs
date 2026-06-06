@@ -1,7 +1,7 @@
 //! TOML cascade file loader + parser.
 //!
 //! Parses cascade files into the typed IR from `types.rs`. Supports the
-//! three equivalent authoring forms documented in `docs/profiles.md`
+//! three equivalent authoring forms documented in `docs/dev/profiles.md`
 //! "Syntax — three equivalent forms":
 //!
 //! 1. **Top-level keys** (the unconditional default rule):

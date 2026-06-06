@@ -185,7 +185,7 @@ A few traps that aren't obvious from the toolchain alone.
   (temp dir defaulting to filesystem root, missing `LoadStrategy::
   LoadModel`, uninitialized `is_BBL_printer`, filament_map
   normalization, coEnums serialization). Read
-  `docs/libslic3r-workarounds.md` before bumping the OrcaSlicer
+  `docs/dev/libslic3r-workarounds.md` before bumping the OrcaSlicer
   submodule — removing one of these without confirming upstream
   fixed the root cause silently reintroduces hard-to-debug failures.
 

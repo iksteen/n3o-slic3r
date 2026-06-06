@@ -3,7 +3,7 @@
 // workspace until the user adds their first printer (which the CTA
 // opens `AddPrinterModal` for).
 //
-// Ported from `docs/design/PrintersEmptyState.jsx` — same layout,
+// Ported from `docs/dev/design/PrintersEmptyState.jsx` — same layout,
 // React 19 + TypeScript shape, brand chips derived from the
 // catalog entries.
 

@@ -1,6 +1,6 @@
 // One row in the materials sub-section — represents a logical model
 // material (M1, M2…) and lets the user route it to a physical slot on
-// the bound printer. Ported from `docs/design/SettingsPanel.jsx`'s
+// the bound printer. Ported from `docs/dev/design/SettingsPanel.jsx`'s
 // MaterialChip.
 //
 // The chip carries the full chain at a glance:

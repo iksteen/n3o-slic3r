@@ -42,7 +42,7 @@ interface ToastMessage {
 let nextToastId = 1;
 
 // Transform-gizmo mode icons, ported from the design mockup
-// (docs/design/app.jsx vp-toolbar): move arrows, a rotate arc, and a
+// (docs/dev/design/app.jsx vp-toolbar): move arrows, a rotate arc, and a
 // scale corner-handle pair.
 const GIZMO_ICONS: Record<GizmoMode, ReactNode> = {
   Translate: (

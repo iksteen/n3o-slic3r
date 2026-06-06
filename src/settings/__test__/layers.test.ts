@@ -41,7 +41,7 @@ describe("isAuthoredTier", () => {
   });
 });
 
-describe("LAYER_HUE palette matches docs/design/data.jsx", () => {
+describe("LAYER_HUE palette matches docs/dev/design/data.jsx", () => {
   it("default hue = 220 (neutral blue-grey)", () => {
     expect(LAYER_HUE.default).toBe(220);
   });

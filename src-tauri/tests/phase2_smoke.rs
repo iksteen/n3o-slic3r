@@ -1,7 +1,7 @@
 //! Phase 2 Rust-side smoke (PR-2-12).
 //!
 //! Drives the loader → scene → arrange path end-to-end without the
-//! UI. Mirrors the steps in `docs/phase-2-smoke.md` that don't
+//! UI. Mirrors the steps in `docs/dev/phase-2-smoke.md` that don't
 //! require a human-driven GUI:
 //!
 //! - Active printer set, bed visualization derived.
@@ -153,7 +153,7 @@ fn step_4_stormtrooper_loads_under_budget_when_present() {
     if !fixture.exists() {
         eprintln!(
             "skipping: stormtrooper helmet fixture not staged at {fixture:?}\n\
-             see docs/phase-2-smoke.md for staging instructions."
+             see docs/dev/phase-2-smoke.md for staging instructions."
         );
         return;
     }

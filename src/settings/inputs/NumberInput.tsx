@@ -1,7 +1,7 @@
 // Numeric input for libslic3r `Float` / `Int` options (PR-4-2).
 //
 // Matches the mockup's `.val-wrap` + `.val-input` + `.val-unit`
-// pattern (docs/design/SettingsPanel.jsx:236-249). Commits on blur
+// pattern (docs/dev/design/SettingsPanel.jsx:236-249). Commits on blur
 // and on Enter, NOT per keystroke (typing should not constantly
 // fire cascade re-resolves).
 

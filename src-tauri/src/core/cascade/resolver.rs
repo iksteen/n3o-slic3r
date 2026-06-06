@@ -2,7 +2,7 @@
 //!
 //! Replaces the throwaway resolver in `src-tauri/examples/spike1.rs`.
 //! Implements the *authored-cascade* tier of the two-phase resolution
-//! described in `docs/profiles.md` — predicate evaluation, specificity
+//! described in `docs/dev/profiles.md` — predicate evaluation, specificity
 //! ranking, source-order tie-breaks, within-cascade tie-break warnings.
 //!
 //! `resolve()` also honors an in-cascade override tier: a rule flagged

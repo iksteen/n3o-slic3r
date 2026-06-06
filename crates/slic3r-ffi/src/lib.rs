@@ -268,7 +268,7 @@ impl OptScope {
 /// Process. The partitioning comes from `Preset::printer_options()` /
 /// `filament_options()` / `print_options()`; extruder-keyed printer options
 /// (per-extruder vectors) fall under `Printer` because that's where their
-/// vendor preset stores them. See `docs/orcaslicer-settings-classification.md`
+/// vendor preset stores them. See `docs/dev/orcaslicer-settings-classification.md`
 /// for the upstream rationale.
 ///
 /// Some metadata keys (`compatible_printers`, `inherits`, …) appear in all

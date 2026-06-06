@@ -8,7 +8,7 @@
 //   - On confirm, fires `onAdd({ printerIdentity, displayName, amsUnits })`
 //     and the caller invokes `printer_instance_create` + rebind.
 //
-// Ported from `docs/design/AddPrinterModal.jsx`. Keyboard: Enter
+// Ported from `docs/dev/design/AddPrinterModal.jsx`. Keyboard: Enter
 // confirms when valid, Esc cancels.
 
 import { useEffect, useMemo, useRef, useState } from "react";

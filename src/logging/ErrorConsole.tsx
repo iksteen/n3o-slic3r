@@ -1,4 +1,4 @@
-// Floating error console — lifted from docs/design/app.jsx (ConsolePane +
+// Floating error console — lifted from docs/dev/design/app.jsx (ConsolePane +
 // the bottom-right toggle). Rendered inside the canvas frame so its overlays
 // anchor to the 3D view. Open/closed + auto-open-on-error live in the log
 // store, so it survives being re-mounted in the prepare vs preview frame.

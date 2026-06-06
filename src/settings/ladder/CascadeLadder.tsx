@@ -3,7 +3,7 @@
 // Renders every cascade layer for the hovered setting in a portal
 // at body level so the SettingsPanel's overflow scroll doesn't
 // clip the popover. Pattern lifted from
-// docs/design/SettingsPanel.jsx:39-107 (CascadeLadder function):
+// docs/dev/design/SettingsPanel.jsx:39-107 (CascadeLadder function):
 //
 // - Auto-position left of the row, fall back right if not enough
 //   space.
@@ -33,7 +33,7 @@ export type LadderLayer = {
 };
 
 /** The seven layers in priority order (low → high), matching
- *  docs/design/data.jsx. The `object` layer is elided from the main
+ *  docs/dev/design/data.jsx. The `object` layer is elided from the main
  *  list and rendered in its own per-object section below. */
 const LAYER_ORDER: ReadonlyArray<{ id: CascadeLayer; label: string }> = [
   { id: "default", label: "Defaults" },

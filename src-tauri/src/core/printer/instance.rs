@@ -15,7 +15,7 @@
 //! storage root fall back to the bambi + snappy fixtures from
 //! `instance_library`.
 //!
-//! See `docs/design/settings-model.md` §4 (Storage model — User library)
+//! See `docs/dev/settings-model.md` §4 (Storage model — User library)
 //! for the durable-form intent.
 
 use serde::{Deserialize, Serialize};

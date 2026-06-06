@@ -1,5 +1,5 @@
 // Non-blocking slice-progress window, ported from the design's
-// `SlicingWindow` (docs/design/app.jsx + `.slicing-window` in
+// `SlicingWindow` (docs/dev/design/app.jsx + `.slicing-window` in
 // styles.css). Floats over the viewport's lower-left while a slice is
 // in flight.
 //

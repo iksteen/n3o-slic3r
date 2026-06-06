@@ -2,7 +2,7 @@
 
 The MVP distribution channel is a **self-hosted, GPG-signed flatpak
 ostree repo** served over HTTPS, installed via a `.flatpakref`. (Flathub
-submission is post-MVP — see `docs/tickets/phase-9.md`.)
+submission is post-MVP — see `docs/dev/tickets/phase-9.md`.)
 
 ## Signing key
 

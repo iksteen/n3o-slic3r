@@ -1,4 +1,4 @@
-// DevicesView — fleet monitor (ported from docs/design/DevicesView.jsx).
+// DevicesView — fleet monitor (ported from docs/dev/design/DevicesView.jsx).
 //
 // A top-level mode (alongside Prepare / Preview) that replaces the
 // topbar PrinterPanel's monitoring role: a printer rail on the left

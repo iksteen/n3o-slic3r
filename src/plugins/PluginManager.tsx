@@ -1,6 +1,6 @@
 // PluginManager — the level-scoped plugin list.
 //
-// Ported from `docs/design/PluginManager.jsx`, adapted to the real,
+// Ported from `docs/dev/design/PluginManager.jsx`, adapted to the real,
 // leaner `PluginSummary` (no category / glyph / author / summary;
 // settings are string/number/bool/enum only — no secret / events
 // kinds). Visual structure (rows, tri-state level control, config

@@ -1,6 +1,6 @@
 // Three-pane filament picker modal — brand rail → product list →
 // color grid (with a Custom swatch that opens the native color
-// picker). Port of `docs/design/FilamentPickerModal.jsx`.
+// picker). Port of `docs/dev/design/FilamentPickerModal.jsx`.
 //
 // Brand and product come from the bundled vendor filament fragments
 // (`filament_profile_list`). Color comes from a curated in-app

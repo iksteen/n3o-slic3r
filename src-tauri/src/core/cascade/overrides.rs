@@ -1,7 +1,7 @@
 //! Override-tier resolution.
 //!
 //! Implements the *absolute-override* half of the two-phase resolution
-//! described in `docs/profiles.md` — user profile and project file
+//! described in `docs/dev/profiles.md` — user profile and project file
 //! applied as `!important`-style tiers on top of the authored cascade
 //! from `resolver.rs`. Project tier ranks higher than user; later
 //! source within the same tier wins on ties.
