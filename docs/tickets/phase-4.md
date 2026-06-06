@@ -29,7 +29,7 @@ index plus phase-level status and notes.
 | Source-layer rule + authored-tier tint + override count badges | ✅ done | [PR-4-7](phase-4/PR-4-7%20Source-layer%20rule.md) |
 | Hover cascade ladder (portal-rendered) | ✅ done | [PR-4-8](phase-4/PR-4-8%20Cascade%20ladder.md) |
 | Per-object overrides + objects-overriding badge + reset | ✅ done (frontend) | [PR-4-9](phase-4/PR-4-9%20Per-object%20overrides.md) |
-| Diff view (vs printer default, vs last save) | ✅ done | [PR-4-10](phase-4/PR-4-10%20Diff%20view.md) |
+| Show-modified filter (settings overridden at the active layer) | ✅ done | [PR-4-10](phase-4/PR-4-10%20Diff%20view.md) |
 | Tooltips + inline validation | ✅ tooltip shipped; validation deferred | [PR-4-11](phase-4/PR-4-11%20Tooltips%20and%20validation.md) |
 | Support toggle per object + first ~30 "why this matters" annotations | ✅ done | [PR-4-12](phase-4/PR-4-12%20Support%20toggle%20and%20annotations.md) |
 | Phase 4 exit-criteria smoke | ✅ done | [PR-4-13](phase-4/PR-4-13%20Exit-criteria%20smoke.md) |
@@ -159,7 +159,7 @@ PR-4-1 (backend introspection — mode, scope, capability flags)
                  ├── PR-4-7 (source-layer breadcrumb)
                  │    └── PR-4-8 (cascade ladder — extends breadcrumb)
                  ├── PR-4-9 (per-object overrides + badge + reset)
-                 ├── PR-4-10 (diff view)
+                 ├── PR-4-10 (show-modified filter)
                  ├── PR-4-11 (tooltips + validation)
                  └── PR-4-12 (support toggle + annotations)
 
@@ -189,8 +189,8 @@ PR-4-5 through PR-4-12 can land in any order once the scaffold is up.
 
 If pressed for time:
 
-- **Diff view (PR-4-10)** → saves ~2 days. Smoke still demonstrates
-  override visibility via the breadcrumb + ladder.
+- **Show-modified filter (PR-4-10)** → saves ~1 day. Override visibility
+  still works via the override-count badges + the cascade ladder.
 - **"Why this matters" annotations beyond the first 30** (PR-4-12
   sub-deliverable) → saves ~3 days. First 30 ship; remainder lands
   iteratively in Phase 9.

@@ -81,9 +81,9 @@ ladder in PR-4-8 is the louder half).
   otherwise (matches `docs/design/SettingsPanel.jsx:645-650`).
 
 - **Panel-header total badge:** sum of per-category counts,
-  next to the search bar. Click opens the diff view (PR-4-10);
-  hover shows a tooltip "{N} settings overridden across {M}
-  categories". The mockup's `.statusbar` (app.jsx:373-383)
+  next to the search bar; hover shows a tooltip "{N} settings
+  overridden across {M} categories". The adjacent show-modified
+  toggle (PR-4-10) filters the panel to just these. The mockup's `.statusbar` (app.jsx:373-383)
   prototypes the same info; lift the count text idea, not the
   bottom-bar placement.
 

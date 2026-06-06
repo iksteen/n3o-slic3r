@@ -270,7 +270,7 @@ Goal: the cascade-aware settings UI that is this project's primary differentiato
 
 - Override count indicator at category and panel level.
 
-- Diff view: changes vs printer default, changes vs last save.
+- Show-modified filter: a toggle narrowing the panel to settings overridden at the active editing layer (project/object). (The originally-scoped multi-baseline diff — vs printer default / vs last save — was dropped 2026-06-06; see PRD FR-CAS-10.)
 
 - Tooltips combining libslic3r tooltip + 'why this matters' annotations (initially seeded with ~30 hand-written annotations for highest-impact options).
 
@@ -292,7 +292,7 @@ Goal: the cascade-aware settings UI that is this project's primary differentiato
 
 ### Cut candidates
 
-- Diff vs another plate — saves 2 days.
+- Show-modified filter (FR-CAS-10) — saves ~1 day. Override visibility remains via the override-count badges + the cascade ladder. (Was "diff vs another plate / vs last save"; the multi-baseline diff was replaced by the show-modified toggle, 2026-06-06.)
 
 - 'Why this matters' annotations beyond the first 30 — saves 3 days.
 
@@ -610,7 +610,7 @@ If the schedule slips, cuts come from this list in order. The intent is to prese
 | 5 | Flathub submission (self-hosted only) (Phase 9) | 2 days + wait | Slower public discovery; reasonable for early release. |
 | 6 | Preview: layer time + flow color modes (Phase 6) | 2 days | Preview keeps feature-type + speed coloring. |
 | 7 | Preview: per-layer stats panel (Phase 6) | 2 days | Full-job stats panel retained. |
-| 8 | Diff vs another plate (Phase 4) | 2 days | Diff still works against printer default. |
+| 8 | Show-modified filter (Phase 4) | 1 day | Override visibility remains via the override-count badges + the cascade ladder. |
 | 9 | WSL2 validation (Phase 9) | 1–2 days | Already best-effort; cut without ceremony. |
 | 10 | Preview: layer-range view (Phase 6) | 1 day | Up-to-N view retained. |
 | 11 | Auto-arrange (Phase 2) | 4 days | Manual placement only. |

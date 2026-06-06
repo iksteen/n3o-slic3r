@@ -172,7 +172,7 @@ Presentation vs mechanism. The UI presents the cascade as values-by-source-file 
 
 - **FR-CAS-9.** Settings panel header shows count of overrides relative to printer + filament + plate defaults (i.e. how many settings the user/project changed beyond what the structured profiles imply).
 
-- **FR-CAS-10.** A diff view lists every setting that differs from a chosen baseline (defaults only, defaults + filament, last save, another project plate).
+- **FR-CAS-10.** Show-modified filter: a toggle on the settings panel that narrows the list to only the settings overridden at the active editing layer (project or object), so the user can review and revert their changes at a glance. A modified setting stays visible regardless of the Simple/Advanced/Expert mode (with an ADV/EXP tier-tag when it's above the active mode), so a change is never hidden. (The originally-scoped multi-baseline diff — *vs last save*, *defaults + filament*, and *vs another project plate* — was dropped 2026-06-06 in favor of this single "what have I changed" view.)
 
 - **FR-CAS-11.** Cascade resolution time for a full settings panel render is under 100ms on mid-range hardware for a 4-slot printer with full context. (Higher than the original 50ms target because per-slot resolution multiplies the work.)
 

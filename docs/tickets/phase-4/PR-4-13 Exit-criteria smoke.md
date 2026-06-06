@@ -88,8 +88,7 @@ out-of-band activity scheduled separately.
 land.
 
 **Out of scope.** The 5-user UX study itself (an activity, not a
-deliverable). Phase 5's project-save round-trip (the diff-from-
-save mode in PR-4-10 falls back to in-memory snapshot in Phase 4).
+deliverable). Phase 5's project-save round-trip.
 
 **The smoke is the project's gate for cascade visibility.** If a
 future change accidentally hides the breadcrumb on a row, or

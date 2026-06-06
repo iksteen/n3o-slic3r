@@ -92,7 +92,7 @@ components), PR-4-3 (category nav + mode filter).
 **Out of scope.** Source-layer breadcrumb (PR-4-7). Cascade ladder
 (PR-4-8). Per-object override storage (PR-4-9 — scaffold renders
 the tabs; the actual override-tier write path is PR-4-9's
-responsibility). Diff view (PR-4-10). Tooltips + validation
+responsibility). Show-modified filter (PR-4-10). Tooltips + validation
 (PR-4-11).
 
 **Cut candidate.** None — this is the critical path. If perf is a
