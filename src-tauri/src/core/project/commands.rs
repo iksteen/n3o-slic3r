@@ -491,7 +491,9 @@ pub fn project_load(
 pub fn project_new(window: Window, state: State<Arc<Mutex<Project>>>) -> Result<(), String> {
     {
         let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-        *p = Project::default();
+        // Bind the user's last-selected printer to the new project's plate.
+        let preferred = crate::core::config::load().defaults.printer_instance;
+        *p = Project::with_preferred_printer(preferred.as_deref());
     }
     emit_all(
         &window,

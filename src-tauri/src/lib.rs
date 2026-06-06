@@ -129,15 +129,18 @@ pub fn run() {
             tracing::info!("printer instance library initialized");
 
             // Project state is constructed AFTER the storage roots
-            // are wired so its `Project::default()` (which eagerly
-            // touches the registry to look up the default printer)
-            // sees the real on-disk library, not a registry pinned
-            // to whatever happened to be in the OnceLock first.
-            // Same reasoning for cascade — once both roots are
-            // live, the rest of the app's state managers see a
-            // fully initialized backend.
-            let project: Arc<Mutex<core::project::Project>> =
-                Arc::new(Mutex::new(core::project::Project::default()));
+            // are wired so the bootstrap plate's printer lookup sees
+            // the real on-disk library, not a registry pinned to
+            // whatever happened to be in the OnceLock first. Same
+            // reasoning for cascade — once both roots are live, the
+            // rest of the app's state managers see a fully
+            // initialized backend. The bootstrap plate binds the
+            // user's last-selected printer (config `[defaults]`),
+            // falling back to the first registered instance.
+            let preferred = core::config::load().defaults.printer_instance;
+            let project: Arc<Mutex<core::project::Project>> = Arc::new(Mutex::new(
+                core::project::Project::with_preferred_printer(preferred.as_deref()),
+            ));
             app.manage(project);
             app.manage(core::project::autosave::AutosaveHandle::new());
 

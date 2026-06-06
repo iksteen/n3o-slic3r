@@ -25,6 +25,18 @@ use crate::core::paths::config_dir;
 pub struct AppConfig {
     #[serde(default)]
     pub plugins: PluginsConfig,
+    #[serde(default)]
+    pub defaults: DefaultsConfig,
+}
+
+/// The `[defaults]` section — workspace defaults remembered across sessions.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DefaultsConfig {
+    /// The printer instance the user most recently bound to a plate. Used as
+    /// the default printer for new plates and new projects. `None` until the
+    /// user has bound a printer at least once.
+    #[serde(default)]
+    pub printer_instance: Option<String>,
 }
 
 /// The `[plugins]` section.
@@ -102,6 +114,14 @@ pub fn save(cfg: &AppConfig) -> io::Result<()> {
 pub fn set_plugin_enabled(name: &str, enabled: bool) -> io::Result<()> {
     let mut cfg = load();
     cfg.plugins.enabled.insert(name.to_string(), enabled);
+    save(&cfg)
+}
+
+/// Remember `id` as the user's last-selected printer instance — the default
+/// for new plates and new projects. Load-modify-save so other config survives.
+pub fn set_default_printer_instance(id: &str) -> io::Result<()> {
+    let mut cfg = load();
+    cfg.defaults.printer_instance = Some(id.to_string());
     save(&cfg)
 }
 
@@ -196,6 +216,20 @@ mod tests {
         let flat = loaded.plugins.settings_as_strings();
         assert_eq!(flat["beep-at-layer"]["layer"], "10");
         assert_eq!(flat["beep-at-layer"]["tag"], "hi");
+    }
+
+    #[test]
+    fn round_trips_default_printer_instance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+
+        let mut cfg = AppConfig::default();
+        assert_eq!(cfg.defaults.printer_instance, None, "none by default");
+        cfg.defaults.printer_instance = Some("snappy".into());
+        save_to(&cfg, &path).unwrap();
+
+        let loaded = load_from(&path);
+        assert_eq!(loaded.defaults.printer_instance.as_deref(), Some("snappy"));
     }
 
     #[test]

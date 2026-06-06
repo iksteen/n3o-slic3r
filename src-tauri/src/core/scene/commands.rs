@@ -191,6 +191,18 @@ pub fn scene_add_plate(
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<PlateId, String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    // Precedence: caller's choice → the active plate's printer (add_plate
+    // inherits it) → the user's last-selected printer → unbound. We only
+    // inject the last-selected when the active plate is unbound (otherwise
+    // add_plate's own inheritance handles it).
+    let printer_identity = printer_identity.or_else(|| {
+        if s.active_plate().printer_instance_id().is_some() {
+            return None;
+        }
+        let pref = crate::core::config::load().defaults.printer_instance?;
+        // Only use it if it's still a registered instance.
+        crate::core::printer::lookup_instance(&pref).map(|_| pref)
+    });
     let (id, events) = s.add_plate(printer_identity);
     drop(s);
     emit_all(&window, &events);
@@ -331,9 +343,14 @@ pub fn scene_rebind_plate_printer(
     })?;
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let (report, events) = s
-        .rebind_plate_printer(plate_id, instance_id, &profile)
+        .rebind_plate_printer(plate_id, instance_id.clone(), &profile)
         .map_err(|e| e.to_string())?;
     drop(s);
+    // Remember the user's selection as the default for new plates + projects.
+    // Best-effort — a config write failure must not fail the rebind.
+    if let Err(e) = crate::core::config::set_default_printer_instance(&instance_id) {
+        tracing::warn!(error = %e, "failed to persist default printer instance");
+    }
     emit_all(&window, &events);
     Ok(report)
 }
