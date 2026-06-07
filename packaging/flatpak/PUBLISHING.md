@@ -4,6 +4,26 @@ The MVP distribution channel is a **self-hosted, GPG-signed flatpak
 ostree repo** served over HTTPS, installed via a `.flatpakref`. (Flathub
 submission is post-MVP — see `docs/dev/tickets/phase-9.md`.)
 
+## Prerequisites
+
+The app builds in-sandbox and pulls its toolchain from three SDK
+extensions at the `org.gnome.Sdk//50` freedesktop base (**25.08**). Install
+them before `build.sh` / `publish.sh` (both preflight-check and will name
+any that are missing):
+
+```sh
+flatpak install flathub \
+  org.freedesktop.Sdk.Extension.node22//25.08 \
+  org.freedesktop.Sdk.Extension.rust-stable//25.08 \
+  org.freedesktop.Sdk.Extension.llvm21//25.08
+```
+
+flatpak-builder does not auto-install these and does not hard-fail when
+they're absent — a missing one would otherwise surface only as a cryptic
+`command not found` mid-build (`npm`, then `cargo`, then `clang`). Bump the
+`25.08` branch if the manifest's GNOME `runtime-version` changes; it tracks
+the SDK's freedesktop base.
+
 ## Signing key
 
 Releases are signed with a **dedicated project key** (separate from any

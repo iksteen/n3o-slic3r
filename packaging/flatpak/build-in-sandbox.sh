@@ -9,6 +9,30 @@
 # against the runtime.
 set -euo pipefail
 
+# Preflight: the build toolchain (npm/node, cargo, clang) comes from the
+# node22 / rust-stable / llvm21 SDK extensions the manifest wires onto PATH
+# (append-path). flatpak-builder does NOT hard-fail when a declared
+# sdk-extension isn't installed on the host, so a missing one otherwise
+# surfaces only as a cryptic "command not found" mid-build. Name it instead.
+fdbranch="25.08" # freedesktop base of the manifest's org.gnome.Sdk//50
+missing=()
+command -v npm   >/dev/null 2>&1 || missing+=("node22//${fdbranch} (npm)")
+command -v cargo >/dev/null 2>&1 || missing+=("rust-stable//${fdbranch} (cargo)")
+command -v clang >/dev/null 2>&1 || missing+=("llvm21//${fdbranch} (clang)")
+if (( ${#missing[@]} )); then
+  {
+    echo "error: build toolchain not on the sandbox PATH — missing SDK extension(s):"
+    printf '  - org.freedesktop.Sdk.Extension.%s\n' "${missing[@]}"
+    echo
+    echo "Install them on the host (branch = org.gnome.Sdk//50's freedesktop base):"
+    echo "  flatpak install flathub \\"
+    echo "    org.freedesktop.Sdk.Extension.node22//${fdbranch} \\"
+    echo "    org.freedesktop.Sdk.Extension.rust-stable//${fdbranch} \\"
+    echo "    org.freedesktop.Sdk.Extension.llvm21//${fdbranch}"
+  } >&2
+  exit 1
+fi
+
 echo "::: 1/4 restore the OrcaSlicer deps prefix staged by the orca-deps module"
 # The deps tree (Boost/CGAL/OCCT/…) is built by the separate orca-deps
 # module and staged at /app/orca-deps. slic3r-ffi/build.rs looks for the
