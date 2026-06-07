@@ -86,12 +86,29 @@ openexr() {  # validated — provides IlmBase/Half (OpenVDB's half type)
   build "$s/b"
 }
 
-occt() {  # validated (C++ compiles clean; args mirror OrcaSlicer deps/OCCT)
+occt() {  # builds with freetype (see below); args mirror OrcaSlicer deps/OCCT
   local s; s="$SRC/$(fetch https://github.com/Open-Cascade-SAS/OCCT/archive/refs/tags/V7_6_0.zip 'OCCT-*')"
   ( cd "$s" && git apply --ignore-space-change --whitespace=fix \
       "$ORCA/OCCT/0001-OCCT-fix.patch" 2>/dev/null || true )
+  # OCCT must build WITH freetype. We don't ask for it, but DataExchange's
+  # TKRWMesh pulls in TKService, whose Font_FTFont.cxx references
+  # FT_LOAD_TARGET_LIGHT *outside* its `#ifdef HAVE_FREETYPE` guard — so OCCT 7.6
+  # does not compile at all without freetype headers. OrcaSlicer's own deps/OCCT
+  # does the same: leaves USE_FREETYPE on and DEPENDS on the freetype package.
+  # freetype is built into this same cross prefix just above; point OCCT's own
+  # detection straight at it. Setting 3RDPARTY_FREETYPE_DIR + the include dirs
+  # makes OCCT skip its builtin search, so the host's /usr freetype is never
+  # picked up. A static OCCT needs only the headers here; freetype.lib links in
+  # downstream (it's in the prefix). Resolve the include dir from disk (where
+  # ft2build.h actually landed) rather than assuming include/freetype2.
+  local ftinc; ftinc="$(dirname "$(find "$WINCROSS_PREFIX/include" -name ft2build.h -print -quit)")"
+  [[ -n "$ftinc" && -f "$ftinc/ft2build.h" ]] || { echo "error: freetype headers not in $WINCROSS_PREFIX (build freetype before occt)" >&2; return 1; }
   xcmake -S "$s" -B "$s/b" -DCMAKE_CXX_STANDARD=17 -DBUILD_LIBRARY_TYPE=Static \
-    -DUSE_TK=OFF -DUSE_TBB=OFF -DUSE_FREETYPE=OFF -DUSE_FFMPEG=OFF -DUSE_VTK=OFF \
+    -DUSE_TK=OFF -DUSE_TBB=OFF -DUSE_FFMPEG=OFF -DUSE_VTK=OFF \
+    -DUSE_FREETYPE=ON \
+    -D3RDPARTY_FREETYPE_DIR="$WINCROSS_PREFIX" \
+    -D3RDPARTY_FREETYPE_INCLUDE_DIR_ft2build="$ftinc" \
+    -D3RDPARTY_FREETYPE_INCLUDE_DIR_freetype2="$ftinc" \
     -DBUILD_DOC_Overview=OFF -DBUILD_MODULE_ApplicationFramework=OFF \
     -DBUILD_MODULE_Draw=OFF -DBUILD_MODULE_FoundationClasses=OFF \
     -DBUILD_MODULE_ModelingAlgorithms=OFF -DBUILD_MODULE_ModelingData=OFF \
@@ -311,10 +328,11 @@ patch_orca() {
 }
 
 # ── Build in dependency order ────────────────────────────────────────────
-# Geometry / math
-zlib; tbb; openexr; occt; boost; openvdb; blosc; gmp_mpfr; cereal; eigen; qhull; nlopt; cgal
+# Geometry / math.  freetype before occt: OCCT 7.6's TKService (pulled in by
+# TKRWMesh) won't compile without freetype headers — see occt() above.
+zlib; tbb; openexr; freetype; occt; boost; openvdb; blosc; gmp_mpfr; cereal; eigen; qhull; nlopt; cgal
 # Image / font / misc (libslic3r)
-png; freetype; glfw; expat; libnoise; jpeg; draco; opencv
+png; glfw; expat; libnoise; jpeg; draco; opencv
 openssl_curl
 syscase
 patch_orca

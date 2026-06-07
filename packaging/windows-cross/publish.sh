@@ -30,8 +30,9 @@
 #                          When set, uploads the installer + signature + public
 #                          key; when unset, prints the manual steps.
 #
-# Prereqs: cargo-xwin, the x86_64-pc-windows-msvc rust target, node deps, and
-# the cross-deps prefix from build-deps.sh. See build-app.sh.
+# Prereqs: cargo-xwin, the x86_64-pc-windows-msvc rust target, and node deps.
+# The cross-deps prefix is built on demand (build-deps.sh) when absent, then
+# reused; see WINCROSS_PREFIX above and build-app.sh.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,6 +46,18 @@ url="${url%/}"
 keyfile="${repo}/packaging/flatpak/n3o-slic3r-signing-key.asc"
 keyname="$(basename "${keyfile}")"
 target="x86_64-pc-windows-msvc"
+
+# Self-contained like the arch (makepkg -s) and flatpak (orca-deps module)
+# publish paths: ensure the cross-deps prefix exists before build-app.sh, which
+# otherwise hard-errors on a missing prefix. build-deps.sh is the slow one-time
+# step (the whole libslic3r dep tree); reuse the prefix when it's already there.
+prefix="${WINCROSS_PREFIX:-${here}/.build/prefix}"
+if [[ -d "${prefix}/lib" ]]; then
+  echo ":: reusing cross-deps prefix at ${prefix} (rm it or run build-deps.sh to rebuild)"
+else
+  echo ":: cross-deps prefix missing — building it (one-time, slow)"
+  "${here}/build-deps.sh"
+fi
 
 echo ":: cross-building the Windows app + NSIS installer"
 "${here}/build-app.sh"
