@@ -72,21 +72,29 @@ link via its import lib, drop the rpath, ship the DLL next to the `.exe`
 (Windows resolves DLLs from the exe dir). With clang-cl that's a *cross*
 path, not native-only.
 
-**Decisions for the lead:**
-- Deps strategy: cross-build the whole tree via clang-cl/xwin, or source
-  **prebuilt** Windows deps (vendor binaries / a cached artifact) and
-  only cross our own code against them? This choice dominates the effort.
-- Prior experience cross-compiling an OCCT/OpenVDB-heavy tree? Worth more
-  than guessing where it breaks.
+**Decision (2026-06-07):** full cross — clang-cl/xwin, no Windows host, no
+wine, no prebuilt deps. Backed by a feasibility spike.
 
-**First spike (retires the real risk fast):** get `crates/slic3r-ffi`
-building under `cargo-xwin` — the part we own, which forces the deps
-question immediately. Milestone after: an unsigned `.exe` + NSIS from CI;
-signing + polish later.
+**Spike result (2026-06-07).** Scaffold + findings committed at
+`packaging/windows-cross/` (see its README). OCCT 7.6.0 (the scariest dep),
+TBB, zlib, and OpenEXR/IlmBase all cross-compile **clean** under clang-cl + LLD
+against the cargo-xwin MSVC CRT/SDK — heavy templated C++ is not a wall.
+OrcaSlicer's own `deps-windows.cmake` is VS-generator/msbuild-native and does
+*not* cross, so the scaffold drives each dep through **Ninja + clang-cl**,
+reusing OrcaSlicer's version pins + patches. Two gaps the cargo-xwin toolchain
+lacked for a CMake deps superbuild were found + fixed: the `.rc` preprocess
+needed the SDK includes, and `find_package` needed find-root-path hygiene (else
+host `/usr` headers/libs leak into a windows-msvc build).
 
-**Fallback** if cross stalls on the deps: a native Windows CI runner
-(`windows-latest` + MSVC), lifting OrcaSlicer's `build_release_vs2022.bat`
-/ `deps-windows.cmake` recipe.
+**Remaining (reproducible via `packaging/windows-cross/build-deps.sh`):**
+Boost (`b2` clang-win cross — the one fiddly dep) → unblocks OpenVDB's own
+compile; the remaining OrcaSlicer deps (CGAL / Cereal / Eigen / NLopt / Qhull /
+…); then libslic3r + the FFI shim's `build.rs` Windows branch (`.dll` + import
+lib, drop rpath) + the Tauri MSI/NSIS bundle.
+
+**Fallback** if the deps cross stalls: a native Windows CI runner
+(`windows-latest` + MSVC), lifting OrcaSlicer's `build_release_vs2022.bat` /
+`deps-windows.cmake`. The spike says we shouldn't need it.
 
 ## Other pending (not 1.0 features, just TODOs)
 
