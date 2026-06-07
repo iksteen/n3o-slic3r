@@ -129,9 +129,21 @@ under MSVC (C leaves an all-non-negative enum's signedness to the compiler), so
 the wrapper casts `as u32` at those two boundaries (lossless — small positive
 bitflags). Linux build + the 26 FFI tests stay green.
 
-**Remaining:** `src-tauri` via cargo-xwin — a larger, different beast (Tauri's
-own crates + the WebView2 loader + bundling the Vite frontend) + the Tauri NSIS
-installer. The C++ engine and the FFI seam — the hard part — are done.
+**Update — the full app + NSIS installer cross-build (2026-06-07).** `src-tauri`
+cross-compiled with no Tauri/WebView2/resource-compiler snags (Tauri 2's cross
+story is mature): `n3o-slic3r.exe` (19M, GUI subsystem, imports `slic3r_ffi.dll`)
+via `cargo xwin`, and the **NSIS installer** (`n3o-slic3r_<ver>_x64-setup.exe`)
+via `tauri build --runner cargo-xwin --bundles nsis` — makensis runs on Linux.
+The only wiring needed: the src-tauri rpath guard, and a
+`tauri.windows.conf.json` adding `slic3r_ffi.dll` as a root bundle resource so it
+ships beside the exe (the loader resolves DLLs from the exe dir; the slic3r-ffi
+build script also copies it there for `cargo`-built binaries). Installer signing
+is skipped on a Linux host (`bundle.windows.signCommand` for a custom signer).
+
+**Windows cross-build: complete from Linux** — deps → engine → FFI DLL → app →
+installer, no Windows host, no wine. Post-MVP polish left: wire it into CI, add a
+`build-app.sh` driver (mirroring the flatpak/arch publish scripts), and an
+authenticode signer. None are unknowns.
 
 **Fallback** if the deps cross stalls: a native Windows CI runner
 (`windows-latest` + MSVC), lifting OrcaSlicer's `build_release_vs2022.bat` /

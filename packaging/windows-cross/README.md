@@ -9,13 +9,17 @@ fetched by **[cargo-xwin](https://github.com/rust-cross/cargo-xwin)** (which
 wraps [`xwin`](https://github.com/Jake-Shadle/xwin)). This is the same ABI a
 native MSVC build produces.
 
-## Status (2026-06-07) — `slic3r_ffi.dll` cross-built
+## Status (2026-06-07) — Windows installer cross-builds from Linux
 
-**The whole native side cross-compiles *and links*** to windows-msvc, on Linux
-under clang-cl + LLD with no Windows host and no wine: the engine
-(`libslic3r.lib`, 255/255 objects) **and** the FFI shim
-(`slic3r_ffi.dll` + `slic3r_ffi.lib`, a PE32+ x86-64 DLL exporting the `slic3r_*`
-C API). Both the full dependency tree and our own C++ build.
+**The whole app cross-builds to a distributable, on Linux, no Windows host and no
+wine.** End to end: the dependency tree (clang-cl + LLD) → the engine
+(`libslic3r.lib`, 255/255 objects) → the FFI shim (`slic3r_ffi.dll` +
+`slic3r_ffi.lib`, exporting the `slic3r_*` C API) → the FFI Rust crate and the
+**full Tauri app** (`n3o-slic3r.exe`, 19M, `IMAGE_SUBSYSTEM_WINDOWS_GUI`, links
+the FFI) via `cargo xwin` → the **NSIS installer**
+(`n3o-slic3r_<ver>_x64-setup.exe`) with `slic3r_ffi.dll` bundled beside the exe.
+Tauri 2's cross story is mature — no tauri-winres / WebView2 / resource-compiler
+snags. See "Use" below for the three build steps.
 
 The dependency tree (each a full Ninja build → `.lib`):
 
@@ -140,11 +144,27 @@ here):
 ## Use
 
 ```sh
-# one-time: cache the MSVC CRT/SDK (any cargo-xwin build, or `xwin splat`)
+# one-time: cache the MSVC CRT/SDK (cargo-xwin fetches it on first build)
 cargo install cargo-xwin
-# build the cross deps
-packaging/windows-cross/build-deps.sh        # -> .build/prefix (gitignored)
+# 1) build the cross deps  (-> .build/prefix, gitignored)
+packaging/windows-cross/build-deps.sh
+export WINCROSS_PREFIX=<.build/prefix from above>
+
+# 2) the FFI crate / app  — build.rs drives the cross cmake for slic3r_ffi.dll
+cargo xwin build --release --target x86_64-pc-windows-msvc -p n3o-slic3r
+
+# 3) the installer  — tauri cross-bundles NSIS on Linux (cargo-xwin as runner).
+#    ~/.cargo/bin must be on PATH so tauri can exec the cargo-xwin binary.
+PATH="$HOME/.cargo/bin:$PATH" \
+  npx tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis
+#  -> target/x86_64-pc-windows-msvc/release/bundle/nsis/n3o-slic3r_<ver>_x64-setup.exe
 ```
 
-Env: `XWIN_DIR` (CRT/SDK splat dir), `WINCROSS_PREFIX` (install prefix),
+Env: `XWIN_DIR` (CRT/SDK splat dir), `WINCROSS_PREFIX` (cross-deps prefix),
 `BUILD_DIR`, `JOBS`. See the script header.
+
+`slic3r_ffi.dll` ships **beside** the exe: the slic3r-ffi build script copies it
+next to the binary (Windows resolves DLLs from the exe dir), and
+`src-tauri/tauri.windows.conf.json` adds it as a root bundle resource so the NSIS
+installer includes it. Installer signing is skipped on a Linux host (set
+`bundle.windows.signCommand` for a custom signer).
