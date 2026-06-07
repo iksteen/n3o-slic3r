@@ -69,9 +69,24 @@ build() { ninja -C "$1" -j "$JOBS" install; }   # <build-dir>
 
 # ── deps (dependency order) ──────────────────────────────────────────────
 
-zlib() {  # validated
+zlib() {  # validated — static only
   local s; s="$SRC/$(fetch https://github.com/madler/zlib/archive/refs/tags/v1.3.1.zip 'zlib-*')"
-  xcmake -S "$s" -B "$s/b"; build "$s/b"
+  # zlib 1.3.1 hardcodes both a SHARED (zlib.dll + zlib.lib import lib) and a
+  # STATIC (zlibstatic.lib) target and installs both in one install() call — it
+  # has no build-static-only switch. We want zlib linked statically everywhere
+  # (the shim must ship no zlib.dll), so build just the static target and install
+  # it by hand (same as png() below). The prefix then carries only
+  # zlibstatic.lib; find_package(ZLIB) resolves to it automatically everywhere
+  # (FindZLIB's default name search includes `zlibstatic`), and no shared lib is
+  # ever produced for a consumer to pick up. zconf.h is generated into the build
+  # dir at configure time.
+  xcmake -S "$s" -B "$s/b"
+  ninja -C "$s/b" -j "$JOBS" zlibstatic
+  # zlib is the first dep, so the prefix's lib/ + include/ don't exist yet (no
+  # earlier `ninja install` has created them); the manual install must mkdir.
+  mkdir -p "$WINCROSS_PREFIX/lib" "$WINCROSS_PREFIX/include"
+  cp "$s/b/zlibstatic.lib" "$WINCROSS_PREFIX/lib/zlibstatic.lib"
+  cp "$s/zlib.h" "$s/b/zconf.h" "$WINCROSS_PREFIX/include/"
 }
 
 tbb() {   # validated
