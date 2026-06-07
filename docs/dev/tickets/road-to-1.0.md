@@ -108,11 +108,21 @@ expression to a `Matrix` param — fixed by one line
 (`patches/0001-AABBTreeLines-…`, applied to the submodule at build time). So the
 engine is conformant-clean bar one line: **no compiler wall, no porting effort.**
 
-**Remaining:** the FFI shim → `slic3r_ffi.dll` (this forces the **real**
-OpenSSL/CURL MSVC cross-builds — libslic3r only needed their headers, but the
-DLL *links* them — plus the `build.rs` Windows branch: `.dll` + import lib, drop
-rpath), then `src-tauri` via cargo-xwin + the Tauri NSIS bundle. All our own
-integration; no third-party-C++ unknowns left.
+**Update — `slic3r_ffi.dll` cross-built (2026-06-07).** The FFI shim links too:
+a PE32+ x86-64 DLL + import lib exporting the `slic3r_*` C API. The shim needed
+three small things (in the FFI crate's `CMakeLists.txt`, Windows-guarded):
+`_USE_MATH_DEFINES`/`NOMINMAX` (its headers use `M_PI`), and
+`WINDOWS_EXPORT_ALL_SYMBOLS` (the C API carries no `__declspec`, matching the
+Linux `.so`). The DLL *link* surfaced the expected real-symbol needs, all narrow:
+**real MD5** (libslic3r's only OpenSSL use — compile OpenSSL's own
+`crypto/md5/*.c`, no full-OpenSSL cross), two more clang-cl source patches
+(`Psapi.lib` case, an explicit `construct` instantiation), and a couple of Win32
+system-lib case symlinks. **The entire native C++ side — engine + shim — now
+cross-builds and links.**
+
+**Remaining:** `src-tauri` via cargo-xwin (links `slic3r_ffi` through the import
+lib; needs the `build.rs` Windows branch — drop the rpath, resolve the DLL) +
+the Tauri NSIS bundle. Pure Rust/packaging integration; no C++ unknowns left.
 
 **Fallback** if the deps cross stalls: a native Windows CI runner
 (`windows-latest` + MSVC), lifting OrcaSlicer's `build_release_vs2022.bat` /

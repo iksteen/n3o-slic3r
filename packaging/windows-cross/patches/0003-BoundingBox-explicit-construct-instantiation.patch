@@ -1,0 +1,27 @@
+Explicitly instantiate BoundingBoxBase::construct for the clang-cl cross-link.
+
+get_extents<false/true>(const Points&) in Point.cpp are explicitly instantiated
+and call the inline private BoundingBoxBase<Point, Points>::construct(). MSVC
+emits construct() as part of that instantiation; clang-cl does not, so it is
+undefined when the FFI shim DLL links libslic3r. Add the explicit instantiation
+so the symbol is emitted. No behavioural change; correct on every compiler.
+
+Applied to the OrcaSlicer submodule at cross-build time; tree left pinned.
+
+diff --git a/src/libslic3r/BoundingBox.cpp b/src/libslic3r/BoundingBox.cpp
+index a2a510b64c..0d5a614fcf 100644
+--- a/src/libslic3r/BoundingBox.cpp
++++ b/src/libslic3r/BoundingBox.cpp
+@@ -12,6 +12,12 @@ template BoundingBoxBase<Vec2d>::BoundingBoxBase(const std::vector<Vec2d> &point
+ 
+ template BoundingBox3Base<Vec3d>::BoundingBox3Base(const std::vector<Vec3d> &points);
+ 
++// clang-cl (unlike MSVC) does not emit the inline private construct() pulled in
++// by get_extents<>(const Points&)'s explicit instantiation in Point.cpp, leaving
++// it undefined at link. Instantiate it explicitly here so the cross-link resolves.
++template void BoundingBoxBase<Point, Points>::construct<false, BoundingBox, Points::const_iterator>(BoundingBox&, Points::const_iterator, Points::const_iterator);
++template void BoundingBoxBase<Point, Points>::construct<true, BoundingBox, Points::const_iterator>(BoundingBox&, Points::const_iterator, Points::const_iterator);
++
+ void BoundingBox::polygon(Polygon* polygon) const
+ {
+     polygon->points = { 

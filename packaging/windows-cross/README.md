@@ -9,12 +9,13 @@ fetched by **[cargo-xwin](https://github.com/rust-cross/cargo-xwin)** (which
 wraps [`xwin`](https://github.com/Jake-Shadle/xwin)). This is the same ABI a
 native MSVC build produces.
 
-## Status (2026-06-07) — `libslic3r.lib` cross-built
+## Status (2026-06-07) — `slic3r_ffi.dll` cross-built
 
-**The OrcaSlicer slicing engine itself cross-compiles** to a windows-msvc COFF
-static archive — `libslic3r.lib`, 255/255 objects, `Machine:
-IMAGE_FILE_MACHINE_AMD64`. Both the full dependency tree and the engine source
-build under clang-cl + LLD with no Windows host and no wine.
+**The whole native side cross-compiles *and links*** to windows-msvc, on Linux
+under clang-cl + LLD with no Windows host and no wine: the engine
+(`libslic3r.lib`, 255/255 objects) **and** the FFI shim
+(`slic3r_ffi.dll` + `slic3r_ffi.lib`, a PE32+ x86-64 DLL exporting the `slic3r_*`
+C API). Both the full dependency tree and our own C++ build.
 
 The dependency tree (each a full Ninja build → `.lib`):
 
@@ -41,15 +42,27 @@ links them directly; `build-deps.sh` just copies them in.
 CURL it doesn't use at all. Real OpenSSL/CURL MSVC cross-builds are needed for
 the FFI-shim **DLL link** — that's the next step, not done here.
 
-**One source patch** — `patches/0001-AABBTreeLines-eigen-cast-conformance.patch`.
-The single source-level clang-cl-vs-cl.exe difference across the whole engine
-(17 instantiations of one call site): MSVC's permissive mode binds a lazy Eigen
-`.cast<>()` expression to a `Matrix` parameter; clang-cl (conformant) won't.
-One-line fix, applied to the submodule at build time, tree left pinned.
+**Three source patches** (`patches/`, applied to the pinned submodule at build
+time) — the entire clang-cl-vs-cl.exe source delta across engine + shim:
+- `0001-AABBTreeLines-…` — a lazy Eigen `.cast<>()` bound to a `Matrix`
+  parameter (MSVC-permissive, clang-cl-conformant); materialise to the exact
+  `Vec` type. 17 instantiations of one call site.
+- `0002-psapi-lib-lowercase-…` — `Psapi.lib` → `psapi.lib`; lld-link resolves
+  case-sensitively against the lowercased SDK splat.
+- `0003-BoundingBox-explicit-construct-…` — clang-cl doesn't emit an inline
+  private member template that MSVC does from a friend's explicit instantiation;
+  instantiate it explicitly.
 
-**Remaining:** the FFI shim → `slic3r_ffi.dll` (real OpenSSL/CURL + the
-`build.rs` Windows branch) + `src-tauri` via cargo-xwin + the Tauri NSIS bundle.
-No compiler walls and no dep walls remain — what's left is our own integration.
+Plus, in the FFI crate's own `CMakeLists.txt` (Windows-guarded): `_USE_MATH_DEFINES`
++ `NOMINMAX` (the shim's headers use `M_PI`), and `WINDOWS_EXPORT_ALL_SYMBOLS`
+(the `slic3r_*` C API has no `__declspec`, mirroring the Linux `.so`'s
+export-all-public-symbols default). And **real MD5**: libslic3r's only OpenSSL
+use, so `build-deps.sh` compiles OpenSSL's own `crypto/md5/*.c` into `libcrypto`
+rather than cross-building all of OpenSSL.
+
+**Remaining:** `src-tauri` via cargo-xwin (links `slic3r_ffi` through the import
+lib — needs the `build.rs` Windows branch: drop the rpath, find the DLL/import
+lib) + the Tauri NSIS bundle. The hard part — the C++ engine + shim — is done.
 
 Boost note: skip `b2` entirely — Boost 1.84 ships a CMake build that reuses this
 same toolchain. It only *installs* headers for the compiled libs you select, so
@@ -117,10 +130,12 @@ here):
   Prepended to `CMAKE_MODULE_PATH` (survives a dep's `list(APPEND …)`, e.g.
   OrcaSlicer's top-level CMake); `build-deps.sh` also copies it into a dep's own
   `cmake/` dir when the dep *replaces* the module path (c-blosc).
-- `patches/0001-AABBTreeLines-eigen-cast-conformance.patch` — the one source
-  conformance fix, applied to the submodule at build time.
-- `build-deps.sh` — builds the deps in dependency order, stubs OpenSSL/CURL,
-  and applies the patch (`patch_orca`).
+- `patches/000{1,2,3}-*.patch` — the clang-cl source deltas (Eigen cast, psapi
+  case, explicit `construct` instantiation), applied to the submodule at build
+  time by `patch_orca`.
+- `build-deps.sh` — builds the deps in dependency order, builds real OpenSSL MD5
+  + stubs libssl/CURL, adds Win32 system-lib case symlinks (`syscase`), and
+  applies the patches (`patch_orca`).
 
 ## Use
 

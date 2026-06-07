@@ -1,0 +1,23 @@
+Use lowercase psapi.lib so the cross-link resolves on a case-sensitive host.
+
+libslic3r links the Win32 system lib as `Psapi.lib`. lld-link on Linux resolves
+library names case-sensitively against the xwin Windows-SDK splat, which ships
+`psapi.lib` / `PSAPI.lib` but not the mixed-case `Psapi.lib`, so the link fails
+with "could not open 'Psapi.lib'". Lowercase resolves on both the cross host and
+native Windows (case-insensitive there), so it's safe everywhere.
+
+Applied to the OrcaSlicer submodule at cross-build time; tree left pinned.
+
+diff --git a/src/libslic3r/CMakeLists.txt b/src/libslic3r/CMakeLists.txt
+index 9b67d7ab50..f1ab53b981 100644
+--- a/src/libslic3r/CMakeLists.txt
++++ b/src/libslic3r/CMakeLists.txt
+@@ -625,7 +625,7 @@ if (TARGET OpenVDB::openvdb)
+ endif()
+
+ if(WIN32)
+-    target_link_libraries(libslic3r PRIVATE Psapi.lib bcrypt.lib)
++    target_link_libraries(libslic3r PRIVATE psapi.lib bcrypt.lib)
+ endif()
+
+ if(SLIC3R_PROFILE)

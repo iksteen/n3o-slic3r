@@ -249,7 +249,10 @@ opencv() {  # validated — OrcaSlicer's `world` build; libslic3r links opencv_w
             # cv::Mat/kmeans/cvtColor (ObjColorUtils); imgcodecs+highgui satisfy the
             # world module's wiring. quirc/ade off (not built → dangling exports).
   local s; s="$SRC/$(fetch https://github.com/opencv/opencv/archive/refs/tags/4.6.0.tar.gz 'opencv-*')"
+  # BUILD_WITH_STATIC_CRT=OFF: OpenCV defaults to the /MT static CRT; everything
+  # else here uses /MD, and lld-link's /failifmismatch rejects mixing them.
   xcmake -S "$s" -B "$s/b" -DBUILD_LIST="core,imgcodecs,imgproc,highgui,world" -DBUILD_opencv_world=ON \
+    -DBUILD_WITH_STATIC_CRT=OFF \
     -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_opencv_apps=OFF -DBUILD_JAVA=OFF \
     -DBUILD_JPEG=ON -DBUILD_PNG=ON -DBUILD_ZLIB=OFF -DBUILD_OPENEXR=OFF \
     -DWITH_IPP=OFF -DWITH_ITT=OFF -DWITH_CUDA=OFF -DWITH_OPENCL=OFF -DWITH_EIGEN=OFF -DWITH_FFMPEG=OFF \
@@ -258,32 +261,53 @@ opencv() {  # validated — OrcaSlicer's `world` build; libslic3r links opencv_w
   build "$s/b"
 }
 
-# OpenSSL + CURL — INTERIM (libslic3r *compile* only). libslic3r #include's just
-# <openssl/md5.h> and, as a *static* archive, links neither; CURL it doesn't use
-# at all. So real OpenSSL headers (generated via Configure) + CURL headers + empty
-# stub import libs are enough to satisfy find_package and compile libslic3r.
-# The FFI-shim DLL *link* needs real OpenSSL/CURL MSVC cross-builds — replace there.
-openssl_curl_stub() {
+# OpenSSL + CURL. libslic3r's only OpenSSL use is MD5 (<openssl/md5.h>), so we
+# compile OpenSSL's *own* crypto/md5/*.c (+ the OPENSSL_cleanse it calls) into a
+# real libcrypto.lib — byte-identical MD5, no full-OpenSSL MSVC cross needed. The
+# FFI shim DLL links libcrypto (MD5); libssl + CURL are never referenced by
+# libslic3r, so those stay headers + empty stub libs (satisfy find_package +
+# the libcurl INTERFACE target).
+openssl_curl() {
   local o; o="$SRC/$(fetch https://github.com/openssl/openssl/archive/OpenSSL_1_1_1w.tar.gz 'openssl-OpenSSL_1_1_1w')"
   ( cd "$o" && ./Configure mingw64 no-asm no-shared --prefix=/tmp/none >/dev/null 2>&1 \
-       && make include/openssl/opensslconf.h >/dev/null 2>&1 )
+       && make include/openssl/opensslconf.h >/dev/null 2>&1 )   # generates opensslconf.h
   mkdir -p "$WINCROSS_PREFIX/include/openssl"; cp "$o"/include/openssl/*.h "$WINCROSS_PREFIX/include/openssl/"
+  local b="$BUILD_DIR/openssl-obj"; mkdir -p "$b"
+  for f in crypto/md5/md5_dgst crypto/md5/md5_one crypto/mem_clr; do
+    clang-cl --target=x86_64-pc-windows-msvc -Wno-unused-command-line-argument \
+      /imsvc"$XWIN_DIR"/crt/include /imsvc"$XWIN_DIR"/sdk/include/ucrt \
+      /imsvc"$XWIN_DIR"/sdk/include/um /imsvc"$XWIN_DIR"/sdk/include/shared \
+      -DOPENSSL_NO_ASM -DWIN32 /O2 -I"$o/include" -I"$o" -I"$o/crypto" /c "$o/$f.c" /Fo"$b/$(basename "$f").obj"
+  done
+  llvm-lib /out:"$WINCROSS_PREFIX/lib/libcrypto.lib" "$b"/md5_dgst.obj "$b"/md5_one.obj "$b"/mem_clr.obj
+  cp "$WINCROSS_PREFIX/lib/libcrypto.lib" "$WINCROSS_PREFIX/lib/crypto.lib"   # name FindOpenSSL looks for
   local c; c="$SRC/$(fetch https://github.com/curl/curl/archive/refs/tags/curl-7_75_0.zip 'curl-curl-7_75_0')"
   mkdir -p "$WINCROSS_PREFIX/include/curl"; cp "$c"/include/curl/*.h "$WINCROSS_PREFIX/include/curl/"
   : > "$BUILD_DIR/empty.c"; clang-cl --target=x86_64-pc-windows-msvc /c /Fo"$BUILD_DIR/empty.obj" "$BUILD_DIR/empty.c"
-  for l in libcrypto libssl crypto ssl libcurl; do llvm-lib /out:"$WINCROSS_PREFIX/lib/$l.lib" "$BUILD_DIR/empty.obj"; done
+  for l in libssl ssl libcurl; do llvm-lib /out:"$WINCROSS_PREFIX/lib/$l.lib" "$BUILD_DIR/empty.obj"; done
+}
+
+# Some deps reference Win32 system libs via #pragma comment(lib, "Name.lib") in
+# mixed/upper case (e.g. boost.asio -> WSOCK32.LIB). lld-link resolves library
+# names case-sensitively against the lowercased xwin SDK splat, so add the case
+# variants those pragmas ask for. (Touches the shared xwin cache dir.)
+syscase() {
+  local um="$XWIN_DIR/sdk/lib/um/x86_64"
+  ln -sf wsock32.lib "$um/WSOCK32.LIB"
 }
 
 # Apply the clang-cl source-conformance patch to the OrcaSlicer submodule. The
 # submodule tree stays pinned — this is in-place build prep; revert with
 # `git -C external/OrcaSlicer checkout -- src/libslic3r/AABBTreeLines.hpp`.
 patch_orca() {
-  local p="$here/patches/0001-AABBTreeLines-eigen-cast-conformance.patch"
-  if git -C "$ORCA/.." apply --check "$p" 2>/dev/null; then
-    git -C "$ORCA/.." apply "$p"; echo ":: applied $(basename "$p")"
-  else
-    echo ":: $(basename "$p") already applied (or no longer needed)"
-  fi
+  local p
+  for p in "$here"/patches/*.patch; do
+    if git -C "$ORCA/.." apply --check "$p" 2>/dev/null; then
+      git -C "$ORCA/.." apply "$p"; echo ":: applied $(basename "$p")"
+    else
+      echo ":: $(basename "$p") already applied (or no longer needed)"
+    fi
+  done
 }
 
 # ── Build in dependency order ────────────────────────────────────────────
@@ -291,10 +315,12 @@ patch_orca() {
 zlib; tbb; openexr; occt; boost; openvdb; blosc; gmp_mpfr; cereal; eigen; qhull; nlopt; cgal
 # Image / font / misc (libslic3r)
 png; freetype; glfw; expat; libnoise; jpeg; draco; opencv
-openssl_curl_stub
+openssl_curl
+syscase
 patch_orca
-# With these + the source patch, libslic3r cross-compiles to a windows-msvc
-# COFF archive (validated: 255/255 objects -> libslic3r.lib). Next: the FFI
-# shim DLL (needs real OpenSSL/CURL) + src-tauri (cargo-xwin) + the NSIS bundle.
+# With these + the source patches, the engine and the FFI shim cross-build:
+# libslic3r.lib (255/255 objects) and slic3r_ffi.dll + slic3r_ffi.lib (the C API
+# exported, COFF x86-64). Next: src-tauri via cargo-xwin (links slic3r_ffi via
+# the import lib; needs the build.rs Windows branch) + the Tauri NSIS bundle.
 
 echo ":: done. cross deps in $WINCROSS_PREFIX"

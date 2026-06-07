@@ -76,6 +76,18 @@ set_target_properties(slic3r_ffi PROPERTIES
     VERSION      0.1.0
 )
 
+# On Windows (MSVC/clang-cl) the shim needs the same baseline defines libslic3r
+# compiles with — its public headers (calib.hpp, …) use M_PI (needs
+# _USE_MATH_DEFINES; MSVC's <cmath> doesn't expose it like glibc) and would trip
+# the min/max macros from <windows.h> (NOMINMAX). No effect on the Linux build.
+if (WIN32)
+    target_compile_definitions(slic3r_ffi PRIVATE _USE_MATH_DEFINES NOMINMAX)
+    # The slic3r_ffi.h C API carries no __declspec(dllexport) — on Linux the .so
+    # exports all public symbols by default. Mirror that on Windows so the
+    # slic3r_* entry points land in the DLL's export table (and import lib).
+    set_target_properties(slic3r_ffi PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
+
 target_include_directories(slic3r_ffi
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/ffi>
