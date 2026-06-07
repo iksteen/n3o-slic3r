@@ -168,3 +168,23 @@ next to the binary (Windows resolves DLLs from the exe dir), and
 `src-tauri/tauri.windows.conf.json` adds it as a root bundle resource so the NSIS
 installer includes it. Installer signing is skipped on a Linux host (set
 `bundle.windows.signCommand` for a custom signer).
+
+## Publishing
+
+`publish.sh` is the signed release path (parallel to `packaging/arch/publish.sh`
+and `packaging/flatpak/publish.sh`): it cross-builds the installer via
+`build-app.sh`, GPG-signs it with the project release key, and uploads the
+`-setup.exe` + its detached `.sig` + the public key.
+
+```sh
+N3O_WIN_PUBLISH_DEST="user@host:/srv/www/n3o.thegraveyard.org/windows" \
+  packaging/windows-cross/publish.sh
+```
+
+With `N3O_WIN_PUBLISH_DEST` unset it builds + signs and prints the manual upload
++ verify steps. Override the key with `N3O_WIN_GPG_KEY` and the served base URL
+with `N3O_WIN_URL` (default `https://n3o.thegraveyard.org/windows`). This is GPG
+signing for cross-channel verification (`gpg --verify`), **not** Windows
+Authenticode — SmartScreen still prompts unless a `signCommand` cert is wired.
+End users import the key once, then `gpg --verify <installer>.sig <installer>`
+before running it.

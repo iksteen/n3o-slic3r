@@ -10,7 +10,8 @@
     "test": "vitest run",
     "tauri": "cross-env N3O_SLIC3R_RESOURCES_ROOT=./resources dotenv -- tauri",
     "flatpak-publish": "dotenv ./packaging/flatpak/publish.sh",
-    "arch-publish": "dotenv ./packaging/arch/publish.sh"
+    "arch-publish": "dotenv ./packaging/arch/publish.sh",
+    "windows-publish": "dotenv ./packaging/windows-cross/publish.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
