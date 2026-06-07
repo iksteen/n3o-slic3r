@@ -1,0 +1,30 @@
+Make the Eigen .cast<>() argument conformant for clang-cl.
+
+closest_point_to_origin passes `origin.cast<Scalar>()` — a lazy Eigen
+expression (CwiseUnaryOp) — to line_alg::distance_to_squared, whose parameter
+is a concrete Vec (Eigen::Matrix<…, DontAlign>). MSVC's default permissive mode
+binds the expression to the parameter; clang-cl (standards-conformant, used for
+the Linux->windows-msvc cross-build) rejects template argument deduction —
+first "could not match Eigen::Matrix against Eigen::CwiseUnaryOp", then, after a
+bare .eval(), "could not match 2 against 0" (the DontAlign options flag). The
+fix materialises the cast into the exact Vec type the parameter expects. This is
+a latent conformance bug; the change is correct and a no-op cost on every
+compiler (it only forces evaluation that already happened implicitly).
+
+Applied to the OrcaSlicer submodule at cross-build time (the submodule tree is
+left pinned/unmodified). Drop once fixed upstream.
+
+diff --git a/src/libslic3r/AABBTreeLines.hpp b/src/libslic3r/AABBTreeLines.hpp
+index 97ad1bdf44..b13fe03401 100644
+--- a/src/libslic3r/AABBTreeLines.hpp
++++ b/src/libslic3r/AABBTreeLines.hpp
+@@ -32,7 +32,8 @@ namespace AABBTreeLines {
+             {
+                 Vec<LineType::Dim, typename LineType::Scalar> nearest_point;
+                 const LineType& line = lines[primitive_index];
+-                squared_distance = line_alg::distance_to_squared(line, origin.template cast<typename LineType::Scalar>(), &nearest_point);
++                const Vec<LineType::Dim, typename LineType::Scalar> origin_cast = origin.template cast<typename LineType::Scalar>();
++                squared_distance = line_alg::distance_to_squared(line, origin_cast, &nearest_point);
+                 return nearest_point.template cast<ScalarType>();
+             }
+         };

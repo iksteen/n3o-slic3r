@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Wrapper around llvm-rc that sets the input codepage to Windows-1252.
+#
+# llvm-rc rejects an 8-bit codepoint in a non-Unicode VERSIONINFO string
+# ("Non-ASCII 8-bit codepoint (169) can't occur in a non-Unicode string") —
+# hit on the © in OCCT's and FreeType's version resources. MSVC's rc.exe
+# assumes the system codepage; llvm-rc must be told. cp1252 ⊇ ASCII, so
+# pure-ASCII .rc files are unaffected.
+#
+# Wired as CMAKE_RC_COMPILER in toolchain.cmake. CMAKE_RC_COMPILER is used only
+# for the resource-compile step (the .rc preprocess runs clang-cl separately),
+# so the codepage flag lands only where it's needed.
+exec llvm-rc /C 1252 "$@"

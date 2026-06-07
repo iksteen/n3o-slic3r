@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Compiler-launcher wrapper: insert -Wno-error immediately before `-c`.
+#
+# Several bundled deps (clipper2, …) compile with /WX or -Werror. They are
+# -Werror-clean under cl.exe — the engine's native Windows compiler — but
+# clang-cl enables extra clang warnings (global-constructors, extra-semi,
+# missing-noreturn, …) that cl.exe lacks, so -Werror turns them fatal. Keeping
+# warnings as warnings makes clang-cl behave like the cl.exe build it mirrors.
+#
+# Why insert before `-c` (not append): override.cmake rewrites the compile to
+# `… -c -- <source>`, so anything appended lands in the positional-input zone
+# and is taken as a filename. The target's /WX sits in the flags before `-c`, so
+# placing -Wno-error just before `-c` lands it after /WX (last-wins) yet before
+# the source. Wired as CMAKE_<LANG>_COMPILER_LAUNCHER; applies only to compiles.
+out=()
+for a in "$@"; do
+  [ "$a" = "-c" ] && out+=(-Wno-error)
+  out+=("$a")
+done
+exec "${out[@]}"

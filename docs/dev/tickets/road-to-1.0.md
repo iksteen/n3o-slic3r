@@ -76,21 +76,43 @@ path, not native-only.
 wine, no prebuilt deps. Backed by a feasibility spike.
 
 **Spike result (2026-06-07).** Scaffold + findings committed at
-`packaging/windows-cross/` (see its README). OCCT 7.6.0 (the scariest dep),
-TBB, zlib, and OpenEXR/IlmBase all cross-compile **clean** under clang-cl + LLD
-against the cargo-xwin MSVC CRT/SDK — heavy templated C++ is not a wall.
-OrcaSlicer's own `deps-windows.cmake` is VS-generator/msbuild-native and does
-*not* cross, so the scaffold drives each dep through **Ninja + clang-cl**,
-reusing OrcaSlicer's version pins + patches. Two gaps the cargo-xwin toolchain
-lacked for a CMake deps superbuild were found + fixed: the `.rc` preprocess
-needed the SDK includes, and `find_package` needed find-root-path hygiene (else
-host `/usr` headers/libs leak into a windows-msvc build).
+`packaging/windows-cross/` (see its README). **The entire libslic3r dependency
+tree cross-compiles clean** under clang-cl + LLD against the cargo-xwin MSVC
+CRT/SDK: OCCT 7.6.0 (the scariest dep), TBB, zlib, OpenEXR/IlmBase, Boost 1.84
+(via Boost's own CMake build, not `b2`), OpenVDB (`libopenvdb.lib`), Blosc
+(`libblosc.lib`), NLopt, Qhull, and the header-only Cereal / Eigen / CGAL. The
+two that can't cross — **GMP / MPFR** (configure + assembly, no CMake) — reuse
+OrcaSlicer's *vendored* prebuilt MSVC import libs+DLLs (already MSVC-ABI, so
+clang-cl links them directly). OrcaSlicer's own `deps-windows.cmake` is
+VS-generator/msbuild-native and does *not* cross, so the scaffold drives each
+dep through **Ninja + clang-cl**, reusing OrcaSlicer's version pins + patches.
+Four toolchain gaps were found + fixed (all in the scaffold's README): the `.rc`
+preprocess needed the SDK includes; `find_package` needed find-root-path hygiene
+(else host `/usr` leaks in); xwin's release-only CRT needed `CMP0091 NEW` +
+forced release runtime (else a Debug try-compile wants the absent
+`msvcrtd.lib`); and clang-19's promoted legacy-C errors needed downgrading for
+old C (boost.container's dlmalloc). Plus one per-dep quirk (c-blosc's CPack
+`InstallRequiredSystemLibraries` queries the Windows registry) shadowed with a
+no-op module.
 
-**Remaining (reproducible via `packaging/windows-cross/build-deps.sh`):**
-Boost (`b2` clang-win cross — the one fiddly dep) → unblocks OpenVDB's own
-compile; the remaining OrcaSlicer deps (CGAL / Cereal / Eigen / NLopt / Qhull /
-…); then libslic3r + the FFI shim's `build.rs` Windows branch (`.dll` + import
-lib, drop rpath) + the Tauri MSI/NSIS bundle.
+**Update — `libslic3r.lib` cross-built (2026-06-07).** Past the deps, **the
+engine itself now cross-compiles**: `libslic3r.lib`, 255/255 objects,
+`IMAGE_FILE_MACHINE_AMD64`. Two more general toolchain pieces were needed (a
+cp1252 `llvm-rc` wrapper for `©` in OCCT/FreeType version resources, and a
+`clang-cl-nowerror` launcher so bundled deps' `/WX` doesn't turn clang's wider
+warning set fatal), plus the libslic3r deps (libpng, FreeType, GLFW, expat,
+libnoise, libjpeg-turbo, draco, OpenCV `world`). The **only** source-level
+clang-cl-vs-cl.exe difference in the whole engine was a single call site (17
+instantiations) where MSVC's permissive mode bound a lazy Eigen `.cast<>()`
+expression to a `Matrix` param — fixed by one line
+(`patches/0001-AABBTreeLines-…`, applied to the submodule at build time). So the
+engine is conformant-clean bar one line: **no compiler wall, no porting effort.**
+
+**Remaining:** the FFI shim → `slic3r_ffi.dll` (this forces the **real**
+OpenSSL/CURL MSVC cross-builds — libslic3r only needed their headers, but the
+DLL *links* them — plus the `build.rs` Windows branch: `.dll` + import lib, drop
+rpath), then `src-tauri` via cargo-xwin + the Tauri NSIS bundle. All our own
+integration; no third-party-C++ unknowns left.
 
 **Fallback** if the deps cross stalls: a native Windows CI runner
 (`windows-latest` + MSVC), lifting OrcaSlicer's `build_release_vs2022.bat` /
