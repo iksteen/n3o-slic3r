@@ -104,7 +104,12 @@ export function PrinterPicker({
       : CONN_LABELS[activeStatus];
 
   return (
-    <div className="config-chip-wrap" ref={wrapRef}>
+    <div
+      className={`config-chip-wrap config-chip-wrap-printer${
+        onEditPrinter && activeInstance ? " is-split" : ""
+      }`}
+      ref={wrapRef}
+    >
       <button
         type="button"
         className="config-chip config-chip-printer"
@@ -135,6 +140,32 @@ export function PrinterPicker({
           )}
         </span>
       </button>
+      {/* Split-button gear: opens the active printer's machine settings
+          directly, so per-printer machine config is one click from the chip
+          rather than buried in the picker menu. Self-hides when no printer is
+          bound (nothing to configure). */}
+      {onEditPrinter && activeInstance && (
+        <button
+          type="button"
+          className="chip-gear"
+          onClick={(e) => {
+            e.stopPropagation();
+            onEditPrinter(activeInstance.id);
+          }}
+          title={`Machine settings — ${chipLabel}\nG-code, limits, connection`}
+          aria-label={`Machine settings for ${chipLabel}`}
+        >
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="8" cy="8" r="2.3" stroke="currentColor" strokeWidth="1.3" />
+            <path
+              d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M3.3 12.7l1.4-1.4M11.3 4.7l1.4-1.4"
+              stroke="currentColor"
+              strokeWidth="1.3"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+      )}
       {open && (
         <div className="printer-picker-menu" role="menu">
           <div className="ptpm-title">Printer</div>

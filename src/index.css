@@ -1043,6 +1043,48 @@
     border-color: var(--border-strong);
   }
   .config-chip:disabled { opacity: 0.55; }
+
+  /* Machine-settings discoverability — the printer chip + an always-visible
+     gear, joined as a split button: the chip opens the picker, the gear opens
+     the active printer's machine settings. The printer wrap gets a touch more
+     of the row to absorb the fixed-width gear. */
+  .config-chip-wrap-printer { gap: 4px; flex: 1.45 1 0; }
+  .config-chip-wrap-printer > .config-chip-printer { width: auto; flex: 1 1 0; }
+  .config-chip-wrap-printer.is-split { gap: 0; }
+  .config-chip-wrap-printer.is-split > .config-chip-printer {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .config-chip-wrap-printer.is-split > .chip-gear {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    border-left-color: transparent;
+  }
+  /* The chip's right border is the single seam; keep the gear's left edge
+     transparent even on hover so the divider never doubles. */
+  .config-chip-wrap-printer.is-split > .chip-gear:hover { border-left-color: transparent; }
+  .chip-gear {
+    flex: 0 0 auto;
+    align-self: stretch;
+    width: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text-dim);
+    cursor: default;
+    transition: background 110ms, border-color 110ms, color 110ms;
+  }
+  .chip-gear:hover {
+    background: var(--accent-soft);
+    border-color: color-mix(in oklch, var(--accent) 45%, var(--border));
+    color: var(--accent-text);
+  }
+  .chip-gear svg { transition: transform 240ms ease; }
+  .chip-gear:hover svg { transform: rotate(40deg); }
+
   .config-chip .config-chip-top {
     display: flex;
     align-items: center;
