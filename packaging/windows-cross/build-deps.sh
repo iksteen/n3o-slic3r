@@ -116,21 +116,35 @@ occt() {  # builds with freetype (see below); args mirror OrcaSlicer deps/OCCT
   build "$s/b"
 }
 
-boost() {  # validated — Boost's own CMake build (NOT b2); clang-cl cross-clean
-  local s; s="$SRC/$(fetch https://archives.boost.io/release/1.84.0/source/boost_1_84_0.tar.gz 'boost_1_84_0')"
-  # The modular CMake build only *installs* headers for the selected compiled
-  # libs (+ their deps). It cross-builds clean under clang-cl (the legacy-C
-  # warning downgrades in toolchain.cmake are what unblock boost.container's
-  # dlmalloc). libslic3r's compiled-lib set:
-  # OrcaSlicer's find_package COMPONENT set (CMakeLists.txt). log pulls
-  # log_setup; chrono/atomic/date_time/container come in transitively.
+boost() {  # Boost's own CMake build (NOT b2); clang-cl cross-clean
+  # Use the boostorg superproject release (boost-1.84.0, DASH) — it ships the
+  # top-level CMakeLists.txt + tools/cmake. The classic boost.org release
+  # (boost_1_84_0, underscore) is b2-only with no CMakeLists.txt, so it can't
+  # drive an xcmake build at all. The CMake install also writes
+  # BoostConfig.cmake, which modern CMake (>=3.30 dropped the FindBoost module;
+  # OrcaSlicer sets CMP0167 NEW) requires for config-mode find_package(Boost).
+  local s; s="$SRC/$(fetch https://github.com/boostorg/boost/releases/download/boost-1.84.0/boost-1.84.0.tar.gz 'boost-1.84.0')"
+  # Compiled-lib set = exactly OrcaSlicer's find_package COMPONENTS, so a config
+  # lands for every requested component (config mode is strict about each). The
+  # set cross-builds clean under clang-cl (the legacy-C warning downgrades in
+  # toolchain.cmake unblock boost.container's dlmalloc); deps come in transitively.
+  # Boost.Context (pulled into the closure by log/thread deps) hand-writes its
+  # stack switch in asm and defaults to MASM (.asm → ml64) for the MSVC/PE
+  # target. We have no ml64; select the GAS-syntax sources instead, which
+  # clang-cl's integrated assembler builds (the toolchain sets up the ASM lang).
   xcmake -S "$s" -B "$s/b" -DBUILD_TESTING=OFF -DBOOST_RUNTIME_LINK=shared \
-    -DBOOST_INCLUDE_LIBRARIES="system;filesystem;thread;log;locale;regex;iostreams;program_options;nowide"
+    -DBOOST_CONTEXT_ASSEMBLER=gas -DBOOST_CONTEXT_ASM_SUFFIX=.asm \
+    -DBOOST_INCLUDE_LIBRARIES="system;filesystem;thread;log;log_setup;locale;regex;chrono;atomic;date_time;iostreams;program_options;nowide"
   build "$s/b"
-  # …but OpenVDB and libslic3r also pull header-only boost (any, interprocess,
-  # …) that the selective install omits. Lay down the complete pre-assembled
-  # header tree (what b2's `install` would have done) so every header resolves.
-  cp -rn "$s/boost" "$WINCROSS_PREFIX/include/"
+  # OpenVDB and libslic3r also pull header-only boost (any, interprocess, …) the
+  # selective install omits, and the superproject release has no pre-assembled
+  # boost/ tree. Assemble the full header set from each libs/*/include/boost
+  # (what `b2 headers` would symlink); sorted + cp -n so a real lib's header wins
+  # over any test-fixture copy of the same path.
+  mkdir -p "$WINCROSS_PREFIX/include/boost"
+  find "$s/libs" -type d -path '*/include/boost' | sort | while IFS= read -r d; do
+    cp -rn "$d/." "$WINCROSS_PREFIX/include/boost/"
+  done
 }
 
 openvdb() {  # validated — links libopenvdb.lib; fork carries a clang19 patch
@@ -340,5 +354,10 @@ patch_orca
 # libslic3r.lib (255/255 objects) and slic3r_ffi.dll + slic3r_ffi.lib (the C API
 # exported, COFF x86-64). Next: src-tauri via cargo-xwin (links slic3r_ffi via
 # the import lib; needs the build.rs Windows branch) + the Tauri NSIS bundle.
+
+# Completion stamp: written only after the ENTIRE tree above succeeds (set -e
+# aborts before here on any failure). build-app.sh / publish.sh gate on this so
+# a partial prefix from an interrupted run isn't mistaken for a complete one.
+: > "$WINCROSS_PREFIX/.deps-complete"
 
 echo ":: done. cross deps in $WINCROSS_PREFIX"

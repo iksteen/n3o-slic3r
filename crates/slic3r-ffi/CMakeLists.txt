@@ -106,3 +106,15 @@ target_link_libraries(slic3r_ffi
 if (TARGET libslic3r_cgal)
     target_link_libraries(slic3r_ffi PRIVATE libslic3r_cgal)
 endif()
+
+# libslic3r's Emboss and OCCT's TKService reference FreeType. Upstream only
+# links freetype for the OCCT dependency on non-Windows — src/libslic3r/
+# CMakeLists.txt guards it behind `if(NOT WIN32)`, assuming a stock Windows
+# build's OCCT package carries freetype itself. Our windows-msvc cross build
+# links a *static* OCCT that doesn't propagate it, so the FT_* symbols are
+# unresolved at the shim's DLL link. Pull freetype in here for Windows only
+# (the non-Windows builds already get it transitively from libslic3r).
+if (WIN32)
+    find_package(Freetype REQUIRED)
+    target_link_libraries(slic3r_ffi PRIVATE Freetype::Freetype)
+endif()

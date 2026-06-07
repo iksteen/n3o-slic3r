@@ -48,14 +48,16 @@ keyname="$(basename "${keyfile}")"
 target="x86_64-pc-windows-msvc"
 
 # Self-contained like the arch (makepkg -s) and flatpak (orca-deps module)
-# publish paths: ensure the cross-deps prefix exists before build-app.sh, which
+# publish paths: ensure the cross-deps prefix before build-app.sh, which
 # otherwise hard-errors on a missing prefix. build-deps.sh is the slow one-time
-# step (the whole libslic3r dep tree); reuse the prefix when it's already there.
+# step (the whole libslic3r dep tree); reuse the prefix only when it's *complete*
+# — gate on the .deps-complete stamp build-deps.sh writes at the end, not just on
+# lib/ existing (a partial/interrupted run leaves early deps' libs behind).
 prefix="${WINCROSS_PREFIX:-${here}/.build/prefix}"
-if [[ -d "${prefix}/lib" ]]; then
-  echo ":: reusing cross-deps prefix at ${prefix} (rm it or run build-deps.sh to rebuild)"
+if [[ -f "${prefix}/.deps-complete" ]]; then
+  echo ":: reusing complete cross-deps prefix at ${prefix} (rm it or run build-deps.sh to rebuild)"
 else
-  echo ":: cross-deps prefix missing — building it (one-time, slow)"
+  echo ":: cross-deps prefix missing or incomplete — building it (one-time, slow)"
   "${here}/build-deps.sh"
 fi
 

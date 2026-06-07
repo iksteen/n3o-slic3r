@@ -58,6 +58,15 @@ set(_c_legacy "-Wno-error=incompatible-pointer-types \
 set(CMAKE_C_FLAGS_INIT "${_common} ${_c_legacy}")
 set(CMAKE_CXX_FLAGS_INIT "${_common} /EHsc")
 
+# ASM language, same toolchain + target triple as C/CXX. Needed by deps that
+# hand-write assembly — Boost.Context (pulled into the dep closure) switches
+# stacks in asm. For the MSVC/PE target its CMake would pick MASM (.asm needing
+# ml64, which we don't have cross); build-deps.sh instead selects the GAS-syntax
+# sources (BOOST_CONTEXT_ASSEMBLER=gas), which clang-cl's integrated assembler
+# builds directly. Harmless for deps that enable no ASM.
+set(CMAKE_ASM_COMPILER clang-cl)
+set(CMAKE_ASM_FLAGS_INIT "${_common}")
+
 # Bundled deps (clipper2, …) compile with /WX or -Werror and are clean under
 # cl.exe but not clang-cl's stricter warning set. A launcher that inserts
 # -Wno-error just before `-c` keeps warnings non-fatal — matching the cl.exe

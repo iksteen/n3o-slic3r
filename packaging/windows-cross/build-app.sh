@@ -24,9 +24,13 @@ root="$(cd "$here/../.." && pwd)"
 : "${BUNDLES:=nsis}"
 export WINCROSS_PREFIX XWIN_DIR
 
-[[ -d "$WINCROSS_PREFIX/lib" ]] || {
-  echo "error: WINCROSS_PREFIX=$WINCROSS_PREFIX has no lib/." >&2
-  echo "       Run packaging/windows-cross/build-deps.sh first." >&2
+# Gate on the completion stamp, not just lib/: a partial/interrupted build-deps
+# run leaves early deps' libs in place, which would otherwise sail past here and
+# fail deep in the FFI cmake configure (e.g. find_package(Boost) not found).
+[[ -f "$WINCROSS_PREFIX/.deps-complete" ]] || {
+  echo "error: cross-deps prefix not complete: $WINCROSS_PREFIX" >&2
+  echo "       (.deps-complete stamp missing — an interrupted or partial deps build)." >&2
+  echo "       Run packaging/windows-cross/build-deps.sh to build the full tree first." >&2
   exit 1
 }
 # tauri execs the runner as a bare `cargo-xwin` binary, so its dir must be on
