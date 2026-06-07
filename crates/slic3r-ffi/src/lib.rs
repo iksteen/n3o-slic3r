@@ -166,7 +166,10 @@ impl OptType {
             sys::SLIC3R_OPT_BOOLS => Self::Bools,
             sys::SLIC3R_OPT_ENUM => Self::Enum,
             sys::SLIC3R_OPT_ENUMS => Self::Enums,
-            other => Self::Unknown(other),
+            // The raw enum value is u32 under GCC (Linux) but i32 under MSVC
+            // (windows-msvc), since C leaves an all-non-negative enum's underlying
+            // type to the compiler. Normalize to the wrapper's u32.
+            other => Self::Unknown(other as u32),
         }
     }
 
@@ -214,13 +217,17 @@ impl OptMode {
 pub struct OptScope(pub u32);
 
 impl OptScope {
-    pub const PRINT: Self = Self(sys::SLIC3R_SCOPE_PRINT);
-    pub const OBJECT: Self = Self(sys::SLIC3R_SCOPE_OBJECT);
-    pub const REGION: Self = Self(sys::SLIC3R_SCOPE_REGION);
-    pub const SLA_PRINT: Self = Self(sys::SLIC3R_SCOPE_SLA_PRINT);
-    pub const SLA_OBJECT: Self = Self(sys::SLIC3R_SCOPE_SLA_OBJECT);
-    pub const SLA_MATERIAL: Self = Self(sys::SLIC3R_SCOPE_SLA_MATERIAL);
-    pub const SLA_PRINTER: Self = Self(sys::SLIC3R_SCOPE_SLA_PRINTER);
+    // `as u32`: the SLIC3R_SCOPE_* enum constants are u32 under GCC (Linux) but
+    // i32 under MSVC (windows-msvc) — C leaves an all-non-negative enum's
+    // underlying type to the compiler. The values are small positive bitflags,
+    // so the cast is lossless on both.
+    pub const PRINT: Self = Self(sys::SLIC3R_SCOPE_PRINT as u32);
+    pub const OBJECT: Self = Self(sys::SLIC3R_SCOPE_OBJECT as u32);
+    pub const REGION: Self = Self(sys::SLIC3R_SCOPE_REGION as u32);
+    pub const SLA_PRINT: Self = Self(sys::SLIC3R_SCOPE_SLA_PRINT as u32);
+    pub const SLA_OBJECT: Self = Self(sys::SLIC3R_SCOPE_SLA_OBJECT as u32);
+    pub const SLA_MATERIAL: Self = Self(sys::SLIC3R_SCOPE_SLA_MATERIAL as u32);
+    pub const SLA_PRINTER: Self = Self(sys::SLIC3R_SCOPE_SLA_PRINTER as u32);
 
     /// True if `other`'s bits are all set on `self`.
     pub fn contains(self, other: Self) -> bool {

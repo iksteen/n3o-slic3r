@@ -120,9 +120,18 @@ Linux `.so`). The DLL *link* surfaced the expected real-symbol needs, all narrow
 system-lib case symlinks. **The entire native C++ side — engine + shim — now
 cross-builds and links.**
 
-**Remaining:** `src-tauri` via cargo-xwin (links `slic3r_ffi` through the import
-lib; needs the `build.rs` Windows branch — drop the rpath, resolve the DLL) +
-the Tauri NSIS bundle. Pure Rust/packaging integration; no C++ unknowns left.
+**Update — the FFI Rust crate cross-builds via `cargo xwin` (2026-06-07).** The
+`build.rs` Windows branch drives the cross cmake + applies the patches, and
+`cargo xwin build --target x86_64-pc-windows-msvc` links a real windows `.exe`
+(`introspect.exe`) that imports `slic3r_ffi.dll`. One binding wrinkle: the
+`SLIC3R_SCOPE_*`/`SLIC3R_OPT_*` enum constants are `u32` under GCC but `i32`
+under MSVC (C leaves an all-non-negative enum's signedness to the compiler), so
+the wrapper casts `as u32` at those two boundaries (lossless — small positive
+bitflags). Linux build + the 26 FFI tests stay green.
+
+**Remaining:** `src-tauri` via cargo-xwin — a larger, different beast (Tauri's
+own crates + the WebView2 loader + bundling the Vite frontend) + the Tauri NSIS
+installer. The C++ engine and the FFI seam — the hard part — are done.
 
 **Fallback** if the deps cross stalls: a native Windows CI runner
 (`windows-latest` + MSVC), lifting OrcaSlicer's `build_release_vs2022.bat` /
