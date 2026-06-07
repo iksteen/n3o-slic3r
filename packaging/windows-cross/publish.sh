@@ -24,9 +24,9 @@
 #                          dedicated project key the arch/flatpak channels use.
 #   N3O_WIN_URL            Public HTTPS base URL the installer is served from
 #                          (used only for the printed install commands).
-#                          Default: https://n3o.thegraveyard.org/windows
+#                          Default: https://n3o.thegraveyard.org/pkg
 #   N3O_WIN_PUBLISH_DEST   Optional rsync/ssh destination, e.g.
-#                          user@host:/srv/www/n3o.thegraveyard.org/windows.
+#                          user@host:/srv/www/n3o.thegraveyard.org/pkg.
 #                          When set, uploads the installer + signature + public
 #                          key; when unset, prints the manual steps.
 #
@@ -41,7 +41,7 @@ repo="$(cd "${here}/../.." && pwd)"
 # Same dedicated release key as the arch/flatpak channels. Override to sign
 # with a different key.
 key="${N3O_WIN_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
-url="${N3O_WIN_URL:-https://n3o.thegraveyard.org/windows}"
+url="${N3O_WIN_URL:-https://n3o.thegraveyard.org/pkg}"
 url="${url%/}"
 keyfile="${repo}/packaging/flatpak/n3o-slic3r-signing-key.asc"
 keyname="$(basename "${keyfile}")"
@@ -101,10 +101,10 @@ else
   cat <<DONE
 
 Set N3O_WIN_PUBLISH_DEST=<rsync/ssh dest> (e.g.
-user@host:/srv/www/n3o.thegraveyard.org/windows) to upload automatically,
+user@host:/srv/www/n3o.thegraveyard.org/pkg) to upload automatically,
 or by hand:
-  rsync -a "${setup}" "${sig}" your-server:/srv/www/n3o.thegraveyard.org/windows/
-  rsync -a "${keyfile}" your-server:/srv/www/n3o.thegraveyard.org/windows/
+  rsync -a "${setup}" "${sig}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
+  rsync -a "${keyfile}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
 DONE
 fi
 
