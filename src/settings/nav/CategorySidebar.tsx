@@ -15,6 +15,10 @@ export interface CategorySidebarProps {
   counts: ReadonlyMap<string, CategoryCounts>;
   activeId: string | null;
   onActivate: (id: string) => void;
+  /** Collapsed = icons-only (labels hidden). Drives the toggle chevron and
+   *  the per-item tooltip; the width change is CSS on `.settings-panel`. */
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }
 
 export function CategorySidebar({
@@ -22,9 +26,29 @@ export function CategorySidebar({
   counts,
   activeId,
   onActivate,
+  collapsed,
+  onToggleCollapsed,
 }: CategorySidebarProps) {
   return (
     <nav className="cat-rail" role="tablist" aria-label="Setting categories">
+      <button
+        type="button"
+        className="cat-rail-toggle"
+        onClick={onToggleCollapsed}
+        title={collapsed ? "Expand category list" : "Collapse category list to icons"}
+        aria-label={collapsed ? "Expand category list" : "Collapse category list"}
+        aria-expanded={!collapsed}
+      >
+        <svg width="12" height="14" viewBox="0 0 12 14" fill="none" aria-hidden>
+          <path
+            d={collapsed ? "M5 3l4 4-4 4" : "M9 3L5 7l4 4"}
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
       {groups.map((g) => {
         const c = counts.get(g.id) ?? { total: g.settings.length, overrides: 0 };
         const active = g.id === activeId;
@@ -36,6 +60,7 @@ export function CategorySidebar({
             aria-selected={active}
             className={`cat-rail-item${active ? " active" : ""}`}
             onClick={() => onActivate(g.id)}
+            title={collapsed ? g.name : undefined}
           >
             <span className="cat-rail-icon" aria-hidden>
               {g.icon}

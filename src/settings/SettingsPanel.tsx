@@ -137,6 +137,8 @@ const MODE_SEGMENTS: ReadonlyArray<{
   { id: "expert", label: "Expert", desc: "Every setting exposed — no guardrails" },
 ];
 
+const RAIL_COLLAPSED_KEY = "n3o.settings.railCollapsed";
+
 export function SettingsPanel(props: SettingsPanelProps) {
   const {
     printer,
@@ -168,6 +170,22 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [search, setSearch] = useState("");
   const [contextLayer, setContextLayer] = useState<ContextLayer>("project");
   const [activeCat, setActiveCat] = useState<string | null>(null);
+  // Category rail collapse (icons-only), persisted across reloads like the
+  // mode filter — reclaims horizontal space for the setting rows.
+  const [railCollapsed, setRailCollapsed] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(RAIL_COLLAPSED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(RAIL_COLLAPSED_KEY, railCollapsed ? "1" : "0");
+    } catch {
+      // localStorage may be disabled — ignore.
+    }
+  }, [railCollapsed]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   // Object tab auto-fall-back: when the selected object disappears
@@ -287,7 +305,10 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const objectTabAvailable = selectedObject != null;
 
   return (
-    <section className="settings-panel" data-context-layer={contextLayer}>
+    <section
+      className={`settings-panel${railCollapsed ? " rail-collapsed" : ""}`}
+      data-context-layer={contextLayer}
+    >
       <header className="sp-header">
         <div className="sp-tabs" role="tablist" aria-label="Editing context">
           <button
@@ -452,6 +473,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
             counts={counts}
             activeId={activeCat}
             onActivate={jumpToCategory}
+            collapsed={railCollapsed}
+            onToggleCollapsed={() => setRailCollapsed((v) => !v)}
           />
           <div className="settings-scroll" ref={scrollRef}>
             {groups.map((g) => (

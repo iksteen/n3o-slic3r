@@ -124,6 +124,9 @@
   }
   .layout-prepare {
     grid-template-columns: 240px 1fr 640px;
+    /* Glide the settings column when the category rail collapses (paired with
+       the .settings-body track below so the rows stay a constant width). */
+    transition: grid-template-columns 0.24s cubic-bezier(0.2, 0.9, 0.3, 1);
   }
   .layout-preview {
     grid-template-columns: 240px 1fr 320px;
@@ -133,6 +136,23 @@
   }
   @media (max-width: 1100px) {
     .layout-prepare { grid-template-columns: 220px 1fr 480px; }
+  }
+  /* Collapsing the category rail shrinks the settings column by the rail's
+     saved width (190px -> 46px = 144px) and hands it to the canvas, rather
+     than just widening the rows. `:has()` keeps `rail-collapsed` on the panel
+     as the single source of truth — no lifted state. */
+  .layout-prepare:has(.settings-panel.rail-collapsed) {
+    grid-template-columns: 240px 1fr 496px;
+  }
+  @media (max-width: 1400px) {
+    .layout-prepare:has(.settings-panel.rail-collapsed) {
+      grid-template-columns: 240px 1fr 416px;
+    }
+  }
+  @media (max-width: 1100px) {
+    .layout-prepare:has(.settings-panel.rail-collapsed) {
+      grid-template-columns: 220px 1fr 336px;
+    }
   }
 
   /* ─────────── Objects panel (left column) ─────────── */
@@ -1942,6 +1962,9 @@
      * ("Layers and Perimeters") at the panel's font size without
      * truncation, with the row body taking the rest. */
     grid-template-columns: 190px 1fr;
+    /* Same timing as the .layout-prepare track so the rail and the panel edge
+       glide together on collapse, keeping the row body a constant width. */
+    transition: grid-template-columns 0.24s cubic-bezier(0.2, 0.9, 0.3, 1);
     min-height: 0;
     overflow: hidden;
   }
@@ -2007,6 +2030,36 @@
     text-align: right;
   }
   .cat-rail-count-overrides { color: var(--accent-text); }
+
+  /* Collapsible category rail — a toggle folds the labels to icons-only,
+     narrowing the body's rail column and handing the width to the row list.
+     State + persistence live in SettingsPanel; this is the visual half. */
+  .cat-rail-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 2px 8px 4px;
+    background: transparent;
+    border: 0;
+    color: var(--text-muted);
+    cursor: default;
+  }
+  .cat-rail-toggle:hover { color: var(--text); }
+  .cat-rail-toggle svg { transition: transform 160ms ease; }
+  .settings-panel.rail-collapsed .settings-body { grid-template-columns: 46px 1fr; }
+  .settings-panel.rail-collapsed .cat-rail-name,
+  .settings-panel.rail-collapsed .cat-rail-count { display: none; }
+  .settings-panel.rail-collapsed .cat-rail-item {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .settings-panel.rail-collapsed .cat-rail-toggle {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
 
   .settings-scroll {
     overflow-y: auto;
