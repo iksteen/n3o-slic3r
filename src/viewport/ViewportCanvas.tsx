@@ -415,6 +415,12 @@ export function ViewportCanvas({
       renderer.setSize(w, h, false);
       camera.aspect = aspect;
       camera.updateProjectionMatrix();
+      // Repaint within this callback. setSize() resizes (and clears) the
+      // drawing buffer, and ResizeObserver fires after layout but before paint;
+      // without an in-callback render, that frame paints a blank canvas — which
+      // shows as flicker during a continuous resize (e.g. the settings-panel
+      // collapse animation), where the rAF loop's render ran before the resize.
+      renderer.render(scene, camera);
     };
     onResize();
     const resizeObserver = new ResizeObserver(onResize);
