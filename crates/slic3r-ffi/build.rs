@@ -177,8 +177,15 @@ fn main() {
 
     if windows {
         // Windows resolves DLLs from the executable's directory, not via rpath.
-        // Drop the dll next to this crate's examples/tests so they can run.
-        copy_dll_beside_artifacts(&lib_dir, &out_dir);
+        // Drop the runtime DLLs next to this crate's examples/tests/bins so they
+        // can run: the shim itself, plus the vendored GMP/MPFR (which OrcaSlicer
+        // ships as DLLs, so slic3r_ffi.dll imports libgmp-10.dll at runtime).
+        copy_runtime_dll(&lib_dir.join("slic3r_ffi.dll"), &out_dir);
+        if let Ok(prefix) = env::var("WINCROSS_PREFIX") {
+            let bin = Path::new(&prefix).join("bin");
+            copy_runtime_dll(&bin.join("libgmp-10.dll"), &out_dir);
+            copy_runtime_dll(&bin.join("libmpfr-4.dll"), &out_dir);
+        }
     } else {
         // rpath for this crate's own examples/tests. Won't propagate to
         // downstream binaries — they read DEP_SLIC3R_FFI_LIB_DIR (below).
@@ -240,19 +247,22 @@ fn apply_orca_patches(workspace_root: &Path, wc: &Path) {
     }
 }
 
-// Copy slic3r_ffi.dll next to the test/example/bin output dirs. OUT_DIR is
+// Copy a runtime DLL next to the test/example/bin output dirs. OUT_DIR is
 // target/<triple>/<profile>/build/<pkg-hash>/out — the profile dir (where
 // examples/ and the bins live) is four ancestors up.
-fn copy_dll_beside_artifacts(lib_dir: &Path, out_dir: &Path) {
-    let dll = lib_dir.join("slic3r_ffi.dll");
-    if !dll.exists() {
+fn copy_runtime_dll(src: &Path, out_dir: &Path) {
+    if !src.exists() {
         return;
     }
+    let name = match src.file_name() {
+        Some(n) => n,
+        None => return,
+    };
     if let Some(profile_dir) = out_dir.ancestors().nth(3) {
         for sub in ["", "examples", "deps"] {
             let dest_dir = profile_dir.join(sub);
             if std::fs::create_dir_all(&dest_dir).is_ok() {
-                let _ = std::fs::copy(&dll, dest_dir.join("slic3r_ffi.dll"));
+                let _ = std::fs::copy(src, dest_dir.join(name));
             }
         }
     }

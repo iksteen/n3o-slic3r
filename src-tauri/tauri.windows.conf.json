@@ -2,7 +2,9 @@
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
     "resources": {
-      "../target/x86_64-pc-windows-msvc/release/slic3r_ffi.dll": "slic3r_ffi.dll"
+      "../target/x86_64-pc-windows-msvc/release/slic3r_ffi.dll": "slic3r_ffi.dll",
+      "../target/x86_64-pc-windows-msvc/release/libgmp-10.dll": "libgmp-10.dll",
+      "../target/x86_64-pc-windows-msvc/release/libmpfr-4.dll": "libmpfr-4.dll"
     }
   }
 }
