@@ -54,3 +54,6 @@ __pycache__
 *.sw?
 .claude
 bugs.txt
+
+# Windows cross-compile scratch (sources + builds + prefix)
+packaging/windows-cross/.build/
