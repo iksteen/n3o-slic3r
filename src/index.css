@@ -17,6 +17,13 @@
 
 @import "tailwindcss";
 
+/* Rebind Tailwind v4's `dark:` variant to our explicit attribute so
+ * utility classes like `dark:bg-purple-950/40` follow the user's
+ * Appearance choice (driven by useTheme + main.tsx) instead of the OS
+ * `prefers-color-scheme` default. The CSS-variable token swap below
+ * keys on the same selector, so one mechanism drives both. */
+@custom-variant dark ([data-theme="dark"] &);
+
 /* ─────────── Design tokens (light theme; default) ───────────
  *
  * Tailwind v4 exposes every `--color-*` / `--font-*` / `--radius-*`
@@ -684,6 +691,27 @@
     border-radius: 8px;
     padding: 1px 7px;
   }
+  /* Radio dot for menuitemradio rows (Appearance picker). The dot
+     inherits `currentColor` so it reads as a dim ring on idle rows and
+     picks up the accent on selection. */
+  .tb-menu-radio {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+  .tb-menu-item[aria-checked="true"] .tb-menu-radio {
+    color: var(--accent);
+  }
+  .tb-menu-item[aria-checked="true"] .tb-menu-radio-label {
+    font-weight: 600;
+  }
+  /* Push the label so the row's space-between aligns the dot+label
+     cluster on the left rather than spreading them across the row. */
+  .tb-menu-radio-label {
+    flex: 1;
+  }
 
   /* Unsaved-changes marker next to the project name. */
   .tb-dirty-dot {
@@ -1141,6 +1169,7 @@
     color: oklch(0.40 0.18 25);
     font-size: 11px;
   }
+  [data-theme="dark"] .ptpm-error { color: oklch(0.78 0.15 25); }
   .ptpm-item {
     display: flex;
     align-items: center;
@@ -1498,6 +1527,7 @@
     color: oklch(0.40 0.18 25);
     font-size: 11.5px;
   }
+  [data-theme="dark"] .autosave-recovery-list-error { color: oklch(0.78 0.15 25); }
   .autosave-recovery-list {
     margin: 0;
     padding: 8px 12px 12px;
@@ -1575,11 +1605,13 @@
   .autosave-recovery-btn.danger:hover:not(:disabled) {
     background: var(--danger-soft);
   }
+  [data-theme="dark"] .autosave-recovery-btn.danger { color: oklch(0.78 0.15 25); }
   .autosave-recovery-row-error {
     grid-column: 1 / -1;
     font-size: 11px;
     color: oklch(0.50 0.18 25);
   }
+  [data-theme="dark"] .autosave-recovery-row-error { color: oklch(0.78 0.15 25); }
   .sp-header {
     border-bottom: 1px solid var(--hairline);
     background: var(--surface);
@@ -1742,6 +1774,7 @@
     color: oklch(0.40 0.18 25);
     font-size: 11.5px;
   }
+  [data-theme="dark"] .sp-error { color: oklch(0.78 0.15 25); }
 
   /* ─────────── Search + mode strip ─────────── */
   .search-row {
@@ -2427,8 +2460,14 @@
   --color-accent: oklch(0.72 0.17 235);
   --color-accent-soft: oklch(0.30 0.10 235);
   --color-accent-text: oklch(0.82 0.12 235);
+  /* Semantic hues, brightened for legibility against dark surfaces.
+   * The `*-soft` tones swap to a dimmed chroma at low lightness so
+   * badge/banner fills don't blow out a near-black background. */
+  --color-warn: oklch(0.78 0.15 65);
   --color-warn-soft: oklch(0.30 0.10 60);
+  --color-danger: oklch(0.72 0.18 25);
   --color-danger-soft: oklch(0.30 0.10 25);
+  --color-ok: oklch(0.72 0.14 155);
 }
 
 /* ─────────── Preview (Phase 6) ──────────────────────────────
@@ -4146,6 +4185,9 @@
   .device-card-state.printing { color: oklch(0.42 0.16 145); }
   .device-card-state.error    { color: var(--danger); }
   .device-card-state.paused   { color: oklch(0.46 0.16 60); }
+  [data-theme="dark"] .device-card-state.preparing { color: oklch(0.78 0.13 230); }
+  [data-theme="dark"] .device-card-state.printing  { color: oklch(0.78 0.14 145); }
+  [data-theme="dark"] .device-card-state.paused    { color: oklch(0.80 0.14 60);  }
   .device-card-model {
     font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -4190,6 +4232,8 @@
   .device-monitor-state.printing { color: oklch(0.42 0.16 145); }
   .device-monitor-state.error { color: var(--danger); }
   .device-monitor-state.paused { color: oklch(0.46 0.16 60); }
+  [data-theme="dark"] .device-monitor-state.printing { color: oklch(0.78 0.14 145); }
+  [data-theme="dark"] .device-monitor-state.paused   { color: oklch(0.80 0.14 60);  }
   .device-monitor-controls { display: flex; gap: 6px; flex-shrink: 0; }
   .device-ctl {
     display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;

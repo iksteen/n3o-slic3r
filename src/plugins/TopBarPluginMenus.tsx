@@ -1,11 +1,12 @@
 // Top-bar dropdowns that host the plugin surfaces:
-//   - the n3o-slic3r brand menu → "Global plugins…"
+//   - the n3o-slic3r brand menu → "Global plugins…" + Appearance picker
 //   - the project menu → "Plugins…"
 //
 // Minimal dropdowns (the brand/project menu CSS already lives in
 // index.css). Each toggles on click and closes on outside-click or Esc.
 
 import { useEffect, useRef, useState } from "react";
+import { type ThemeMode, useTheme } from "../theme/useTheme";
 
 function useDropdown(): {
   open: boolean;
@@ -54,6 +55,7 @@ export function BrandMenu({
   globalPluginCount = 0,
 }: BrandMenuProps): React.JSX.Element {
   const { open, setOpen, ref } = useDropdown();
+  const { mode, setMode } = useTheme();
   return (
     <div className="brand-menu-wrap" ref={ref}>
       <button type="button" className="brand" onClick={() => setOpen(!open)}>
@@ -78,9 +80,42 @@ export function BrandMenu({
             <span>Global plugins…</span>
             {globalPluginCount > 0 && <span className="tb-menu-count">{globalPluginCount}</span>}
           </button>
+          <div className="tb-menu-divider" />
+          <div className="tb-menu-section">Appearance</div>
+          <AppearanceItem label="System" value="system" current={mode} onSelect={setMode} />
+          <AppearanceItem label="Light" value="light" current={mode} onSelect={setMode} />
+          <AppearanceItem label="Dark" value="dark" current={mode} onSelect={setMode} />
         </div>
       )}
     </div>
+  );
+}
+
+interface AppearanceItemProps {
+  label: string;
+  value: ThemeMode;
+  current: ThemeMode;
+  onSelect: (mode: ThemeMode) => void;
+}
+
+function AppearanceItem({ label, value, current, onSelect }: AppearanceItemProps): React.JSX.Element {
+  const selected = value === current;
+  return (
+    <button
+      type="button"
+      className="tb-menu-item"
+      role="menuitemradio"
+      aria-checked={selected}
+      onClick={() => onSelect(value)}
+    >
+      <span className="tb-menu-radio" aria-hidden>
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2" />
+          {selected && <circle cx="6" cy="6" r="2.6" fill="currentColor" />}
+        </svg>
+      </span>
+      <span className="tb-menu-radio-label">{label}</span>
+    </button>
   );
 }
 
