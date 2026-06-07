@@ -40,7 +40,7 @@ import { PrinterSettingsModal } from "./printer/PrinterSettingsModal";
 import { createInstance } from "./printer/printerInstance";
 import { rebindPlatePrinter } from "./printer/printerCommands";
 import { usePlugins } from "./plugins/usePlugins";
-import { BrandMenu, ProjectMenu } from "./plugins/TopBarPluginMenus";
+import { BrandMenu, ProjectMenu } from "./plugins/TopBarMenus";
 import { PluginsModal } from "./plugins/PluginsModal";
 import {
   globalPluginWriters,
