@@ -409,11 +409,12 @@ function DeviceMonitor({ device, status, onPause, onResume, onStop, onJumpToPlat
               Stop
             </button>
           )}
-          <button className="device-ctl ghost" title="Printer settings" onClick={() => onEditPrinter(device.id)}>
+          <button className="device-ctl ghost" title="Machine settings — G-code, limits, connection" onClick={() => onEditPrinter(device.id)}>
             <svg width="11" height="11" viewBox="0 0 14 14" fill="none">
               <circle cx="7" cy="7" r="2" stroke="currentColor" strokeWidth="1.3"/>
               <path d="M7 1v2M7 11v2M1 7h2M11 7h2M2.5 2.5l1.5 1.5M10 10l1.5 1.5M2.5 11.5L4 10M10 4l1.5-1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
             </svg>
+            Machine settings
           </button>
         </div>
       </div>

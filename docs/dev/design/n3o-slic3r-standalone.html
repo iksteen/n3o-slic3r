@@ -90,12 +90,20 @@ input, select, textarea { font-family: inherit; }
 }
 .workspace {
   display: grid;
-  grid-template-columns: 280px 1fr 420px;
+  grid-template-columns: 280px 1fr var(--sp-w, 420px);
   min-height: 0;
   overflow: hidden;
 }
 @media (max-width: 1400px) {
-  .workspace { grid-template-columns: 260px 1fr 380px; }
+  .workspace { grid-template-columns: 260px 1fr var(--sp-w, 380px); }
+}
+/* Settings-panel width is driven by a root var so the collapsible category
+   rail can narrow the whole panel. Defaults track the breakpoints. */
+:root { --sp-w: 420px; }
+:root.sp-collapsed { --sp-w: 322px; }
+@media (max-width: 1400px) {
+  :root { --sp-w: 380px; }
+  :root.sp-collapsed { --sp-w: 290px; }
 }
 
 /* ───────── Plate Tabs ───────── */
@@ -1041,6 +1049,7 @@ input, select, textarea { font-family: inherit; }
   display: grid;
   grid-template-rows: auto auto auto auto 1fr;
   min-height: 0;
+  min-width: 0;
 }
 
 /* Read-only mode (shown in Preview). Keep navigation — category rail, tabs,
@@ -1964,7 +1973,7 @@ input, select, textarea { font-family: inherit; }
 /* category jump rail + scrolling list */
 .settings-body {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   min-height: 0;
 }
 .cat-rail {
@@ -2021,6 +2030,50 @@ input, select, textarea { font-family: inherit; }
   color: var(--text-dim);
   text-align: right;
 }
+
+/* ── Collapsible category rail ──────────────────────────────────────────
+   Collapsed, the rail shows only each section's symbol, narrowing the whole
+   settings panel. */
+.cat-rail-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 140px;
+  padding: 2px 12px 4px 8px;
+  margin-bottom: 2px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--text-dim);
+  cursor: default;
+  transition: color 110ms, background 110ms;
+}
+.cat-rail-toggle:hover { color: var(--text); background: var(--surface-2); }
+.cat-rail.collapsed .cat-rail-toggle {
+  width: auto;
+  justify-content: center;
+  padding: 2px 0 4px;
+}
+.cat-rail-icon { position: relative; }
+.cat-rail-ovdot {
+  display: none;
+  position: absolute;
+  top: -2px; right: -2px;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1.5px var(--surface);
+}
+.cat-rail.collapsed .cat-rail-ovdot { display: block; }
+.cat-rail.collapsed .cat-rail-item.active .cat-rail-ovdot { box-shadow: 0 0 0 1.5px var(--accent-soft); }
+.cat-rail.collapsed .cat-rail-item {
+  grid-template-columns: 1fr;
+  width: auto;
+  justify-items: center;
+  padding: 5px 9px;
+}
+.cat-rail.collapsed .cat-rail-name,
+.cat-rail.collapsed .cat-rail-count { display: none; }
 .cat-rail-divider {
   border-bottom: 1px solid var(--hairline);
   margin: 4px 8px;
@@ -4461,12 +4514,12 @@ input, select, textarea { font-family: inherit; }
 
 .preview-workspace {
   display: grid;
-  grid-template-columns: 280px 1fr 420px;
+  grid-template-columns: 280px 1fr var(--sp-w, 420px);
   min-height: 0;
   overflow: hidden;
 }
 @media (max-width: 1400px) {
-  .preview-workspace { grid-template-columns: 260px 1fr 380px; }
+  .preview-workspace { grid-template-columns: 260px 1fr var(--sp-w, 380px); }
 }
 
 /* Read-only Objects panel in Preview: dim affordances, drop the lower
@@ -5709,6 +5762,135 @@ input, select, textarea { font-family: inherit; }
 }
 .modal-btn.primary:hover { background: oklch(from var(--text) calc(l + 0.08) c h); }
 .modal-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ═══════════════════════════════════════════════════════════════
+   Machine-settings discoverability
+   Labeled entry points to the per-printer machine config sheet.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Printer chip + always-visible gear, sharing the chip-wrap track. */
+.config-chip-wrap-printer { gap: 4px; flex: 1.45 1 0; }
+.config-chip-wrap-printer > .config-chip-printer { width: auto; flex: 1 1 0; }
+
+/* Split-button join: the dropdown segment (large, left) and the machine-settings
+   gear (small, right) read as one control — reversed from the usual split
+   button, where the large segment is the action and a caret opens the menu. */
+.config-chip-wrap-printer.is-split { gap: 0; }
+.config-chip-wrap-printer.is-split > .config-chip-printer {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.config-chip-wrap-printer.is-split > .chip-gear {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left-color: transparent;
+}
+/* The chip's right border is the single seam; keep the gear's left edge
+   transparent even on its own hover so the divider never doubles. */
+.config-chip-wrap-printer.is-split > .chip-gear:hover { border-left-color: transparent; }
+.chip-gear {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-dim);
+  cursor: default;
+  transition: background 110ms, border-color 110ms, color 110ms;
+}
+.chip-gear:hover {
+  background: var(--accent-soft);
+  border-color: color-mix(in oklch, var(--accent) 45%, var(--border));
+  color: var(--accent-text);
+}
+.chip-gear svg { transition: transform 240ms ease; }
+.chip-gear:hover svg { transform: rotate(40deg); }
+
+/* Dedicated "Machine / Configure" chip in the config strip. */
+.config-chip-machine { cursor: default; }
+.config-chip-machine:hover {
+  background: var(--accent-soft);
+  border-color: color-mix(in oklch, var(--accent) 45%, var(--border));
+}
+.chip-value-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-sans, inherit);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--accent-text);
+}
+.config-chip-machine:hover .chip-value-action svg { transform: rotate(40deg); }
+.chip-value-action svg { transition: transform 240ms ease; flex-shrink: 0; }
+
+/* Promoted "Machine settings…" action at the top of the printer dropdown. */
+.ptpm-machine-action {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 9px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in oklch, var(--accent) 30%, transparent);
+  color: var(--text);
+  text-align: left;
+  cursor: default;
+  transition: background 110ms, border-color 110ms;
+}
+.ptpm-machine-action:hover {
+  background: color-mix(in oklch, var(--accent) 18%, var(--surface));
+  border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+}
+.ptpm-machine-action-ico {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px; height: 26px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid color-mix(in oklch, var(--accent) 25%, var(--border));
+  color: var(--accent-text);
+}
+.ptpm-machine-action:hover .ptpm-machine-action-ico svg { transform: rotate(40deg); }
+.ptpm-machine-action-ico svg { transition: transform 280ms ease; }
+.ptpm-machine-action-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.ptpm-machine-action-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ptpm-machine-action-sub {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ptpm-machine-action-chev {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+.ptpm-machine-action:hover .ptpm-machine-action-chev { color: var(--accent-text); }
+
+/* Per-printer cog is now a persistent affordance, not hover-gated. */
+.ptpm-cog.ptpm-cog-visible { opacity: 0.5; }
+.ptpm-row:hover .ptpm-cog.ptpm-cog-visible,
+.ptpm-row.active .ptpm-cog.ptpm-cog-visible,
+.ptpm-cog.ptpm-cog-visible:hover { opacity: 1; }
 
 </style>
 <style>
@@ -8593,6 +8775,7 @@ function SettingsPanel({
   resetObjectOverride,
   accountabilityMode,
   searchMode,
+  machineEntry = "gear",
   userOverrides,
   setUserOverrides,
   objects,                 // all objects on the plate
@@ -8628,6 +8811,18 @@ function SettingsPanel({
   const [pluginTabActive, setPluginTabActive] = useSPS(false);
   const PluginManagerComp = window.PluginManager;
   const [activeCat, setActiveCat] = useSPS(CATEGORIES[0].id);
+  const [railCollapsed, setRailCollapsed] = useSPS(() => {
+    try { return localStorage.getItem("n3o.railCollapsed.v2") === "1"; }
+    catch (e) { return false; }
+  });
+  useSPE(() => {
+    try { localStorage.setItem("n3o.railCollapsed.v2", railCollapsed ? "1" : "0"); } catch (e) {}
+  }, [railCollapsed]);
+  // Drive the panel width via a root class so the workspace grid column
+  // (which reads --sp-w) narrows when the rail is collapsed.
+  useSPE(() => {
+    document.documentElement.classList.toggle("sp-collapsed", railCollapsed);
+  }, [railCollapsed]);
   const [printerMenuOpen, setPrinterMenuOpen] = useSPS(false);
   const [qualityProfile, setQualityProfile] = useSPS("standard");
   const [qualityMenuOpen, setQualityMenuOpen] = useSPS(false);
@@ -8673,6 +8868,16 @@ function SettingsPanel({
     return Array(n).fill(nozzle);
   }, [extruders, nozzles, nozzle]);
   const inlineNozzles = nozzleList.length <= 2;
+
+  // The user printer currently assigned to this plate, matched by display
+  // name. Machine-settings entry points act on this printer directly.
+  const activePrinterId = useSPM(() => {
+    const m = (printerPresets || []).find(p => !p.isAddNew && p.name === printer);
+    return m ? m.id : null;
+  }, [printerPresets, printer]);
+  const openMachineSettings = useSPC(() => {
+    if (onEditPrinter && activePrinterId) onEditPrinter(activePrinterId);
+  }, [onEditPrinter, activePrinterId]);
   // If object becomes unavailable while on object tab, fall back to project.
   useSPE(() => {
     if (contextLayer === "object" && !objectAvailable) setContextLayer("project");
@@ -8847,7 +9052,7 @@ function SettingsPanel({
   const totalMatches = filteredCategories.reduce((n, c) => n + c._settings.length, 0);
 
   return (
-    <aside className={`settings-panel ${readOnly ? "readonly" : ""}`}>
+    <aside className={`settings-panel ${readOnly ? "readonly" : ""} ${railCollapsed ? "rail-collapsed" : ""}`}>
       {readOnly && (
         <div className="sp-readonly-banner" title="Settings are locked while viewing the sliced result. Switch to Prepare to edit.">
           <svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -8859,7 +9064,7 @@ function SettingsPanel({
       )}
       <div className="sp-config">
         <div className="sp-config-row">
-          <div className="config-chip-wrap" ref={printerChipRef}>
+          <div className={`config-chip-wrap config-chip-wrap-printer ${machineEntry === "gear" && onEditPrinter && activePrinterId ? "is-split" : ""}`} ref={printerChipRef}>
             <button
               className="config-chip config-chip-printer"
               onClick={() => setPrinterMenuOpen(o => !o)}
@@ -8879,9 +9084,46 @@ function SettingsPanel({
                 />
               </span>
             </button>
+            {machineEntry === "gear" && onEditPrinter && activePrinterId && (
+              <button
+                className="chip-gear"
+                onClick={(e) => { e.stopPropagation(); openMachineSettings(); }}
+                title={`Machine settings \u2014 ${printer}\nG-code, limits, connection`}
+                aria-label={`Machine settings for ${printer}`}
+              >
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <circle cx="8" cy="8" r="2.3" stroke="currentColor" strokeWidth="1.3"/>
+                  <path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M3.3 12.7l1.4-1.4M11.3 4.7l1.4-1.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                </svg>
+              </button>
+            )}
             {printerMenuOpen && printerPresets && (
               <div className="printer-picker-menu" onClick={(e) => e.stopPropagation()}>
-                <div className="ptpm-title">Assign printer to this plate</div>
+                {machineEntry === "menu" && onEditPrinter && activePrinterId && (
+                  <>
+                    <button
+                      className="ptpm-machine-action"
+                      onClick={() => { setPrinterMenuOpen(false); openMachineSettings(); }}
+                      title={`Open machine settings for ${printer}`}
+                    >
+                      <span className="ptpm-machine-action-ico">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <circle cx="8" cy="8" r="2.3" stroke="currentColor" strokeWidth="1.3"/>
+                          <path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M3.3 12.7l1.4-1.4M11.3 4.7l1.4-1.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                        </svg>
+                      </span>
+                      <span className="ptpm-machine-action-text">
+                        <span className="ptpm-machine-action-title">Machine settings…</span>
+                        <span className="ptpm-machine-action-sub">{printer} · G-code, limits, connection</span>
+                      </span>
+                      <svg className="ptpm-machine-action-chev" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                        <path d="M3.5 2l3 3-3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </button>
+                    <div className="ptpm-divider"/>
+                  </>
+                )}
+                <div className="ptpm-title">Switch printer for this plate</div>
                 {printerPresets.filter(p => !p.isAddNew).map(preset => (
                   <div
                     key={preset.id}
@@ -8902,14 +9144,14 @@ function SettingsPanel({
                     </button>
                     {onEditPrinter && (
                       <button
-                        className="ptpm-cog"
+                        className="ptpm-cog ptpm-cog-visible"
                         onClick={(e) => {
                           e.stopPropagation();
                           setPrinterMenuOpen(false);
                           onEditPrinter(preset.id);
                         }}
-                        title={`Settings for ${preset.name}`}
-                        aria-label={`Settings for ${preset.name}`}
+                        title={`Machine settings for ${preset.name}`}
+                        aria-label={`Machine settings for ${preset.name}`}
                       >
                         <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
                           <path d="M7 4.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM7 1v1.5M7 11.5V13M3.5 3.5l1 1M9.5 9.5l1 1M1 7h1.5M11.5 7H13M3.5 10.5l1-1M9.5 4.5l1-1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
@@ -8958,6 +9200,26 @@ function SettingsPanel({
               onClick={() => onSwapNozzle && onSwapNozzle(i)}
             />
           ))}
+          {machineEntry === "chip" && onEditPrinter && activePrinterId && (
+            <button
+              className="config-chip config-chip-machine"
+              onClick={openMachineSettings}
+              style={{ "--chip-hue": LAYER_BY_ID.printer.hue }}
+              title={`Machine settings \u2014 ${printer}\nG-code, machine limits, connection`}
+            >
+              <span className="config-chip-top">
+                <span className="chip-dot"/>
+                <span className="chip-label">Machine</span>
+              </span>
+              <span className="chip-value chip-value-action">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <circle cx="8" cy="8" r="2.3" stroke="currentColor" strokeWidth="1.3"/>
+                  <path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M3.3 12.7l1.4-1.4M11.3 4.7l1.4-1.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                </svg>
+                Configure
+              </span>
+            </button>
+          )}
         </div>
         {!inlineNozzles && (
           <div className="sp-config-row sp-config-nozzles">
@@ -9183,9 +9445,21 @@ function SettingsPanel({
         </div>
       ) : (
       <div className="settings-body">
-        <div className="cat-rail">
+        <div className={`cat-rail ${railCollapsed ? "collapsed" : ""}`}>
+          <button
+            className="cat-rail-toggle"
+            onClick={() => setRailCollapsed(v => !v)}
+            title={railCollapsed ? "Expand category list" : "Collapse category list to icons"}
+            aria-label={railCollapsed ? "Expand category list" : "Collapse category list"}
+            aria-expanded={!railCollapsed}
+          >
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d={railCollapsed ? "M5 3l4 4-4 4" : "M9 3L5 7l4 4"} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
           {CATEGORIES.map(cat => {
             const hasMatches = filteredCategories.some(c => c.id === cat.id);
+            const ov = counts[cat.id].overrides;
             return (
               <button
                 key={cat.id}
@@ -9193,12 +9467,16 @@ function SettingsPanel({
                 onClick={() => jumpToCat(cat.id)}
                 disabled={!hasMatches}
                 style={{ opacity: hasMatches ? 1 : 0.35 }}
+                title={railCollapsed ? `${cat.name}${ov > 0 ? ` \u00b7 ${ov} modified` : ""}` : undefined}
               >
-                <span className="cat-rail-icon">{cat.icon}</span>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cat.name}</span>
+                <span className="cat-rail-icon">
+                  {cat.icon}
+                  {ov > 0 && <span className="cat-rail-ovdot" aria-hidden="true"/>}
+                </span>
+                <span className="cat-rail-name" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cat.name}</span>
                 <span className="cat-rail-count">
-                  {counts[cat.id].overrides > 0
-                    ? <span style={{ color: "var(--accent-text)" }}>{counts[cat.id].overrides}/{counts[cat.id].total}</span>
+                  {ov > 0
+                    ? <span style={{ color: "var(--accent-text)" }}>{ov}/{counts[cat.id].total}</span>
                     : counts[cat.id].total}
                 </span>
               </button>
@@ -12551,11 +12829,12 @@ function DeviceMonitor({ device, status, onPause, onResume, onStop, onJumpToPlat
               Stop
             </button>
           )}
-          <button className="device-ctl ghost" title="Printer settings" onClick={() => onEditPrinter(device.id)}>
+          <button className="device-ctl ghost" title="Machine settings — G-code, limits, connection" onClick={() => onEditPrinter(device.id)}>
             <svg width="11" height="11" viewBox="0 0 14 14" fill="none">
               <circle cx="7" cy="7" r="2" stroke="currentColor" strokeWidth="1.3"/>
               <path d="M7 1v2M7 11v2M1 7h2M11 7h2M2.5 2.5l1.5 1.5M10 10l1.5 1.5M2.5 11.5L4 10M10 4l1.5-1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
             </svg>
+            Machine settings
           </button>
         </div>
       </div>
@@ -12634,7 +12913,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "accent": "cyan",
   "accountability": "rule",
   "search": "instant",
-  "density": "regular"
+  "density": "regular",
+  "machineEntry": "gear"
 }/*EDITMODE-END*/;
 
 // The user's filament *library* — anything they could potentially load. Each
@@ -13956,6 +14236,7 @@ function SlicerWorkspace({
           resetObjectOverride={resetObjectOverride}
           accountabilityMode={t.accountability}
           searchMode={t.search}
+          machineEntry={t.machineEntry}
           userOverrides={userOverrides}
           setUserOverrides={setUserOverrides}
           objects={objects}
@@ -14007,6 +14288,7 @@ function SlicerWorkspace({
               resetObjectOverride={resetObjectOverride}
               accountabilityMode={t.accountability}
               searchMode={t.search}
+              machineEntry={t.machineEntry}
               userOverrides={userOverrides}
               setUserOverrides={setUserOverrides}
               objects={objects}
@@ -14166,6 +14448,14 @@ function SlicerWorkspace({
       )}
 
       <TweaksPanel>
+        <TweakSection label="Machine settings" />
+        <TweakRadio  label="Entry point" value={t.machineEntry}
+                     options={["gear", "chip", "menu"]}
+                     onChange={(v) => setTweak('machineEntry', v)} />
+        <div style={{ fontSize: 10.5, color: "rgba(41,38,27,.55)", lineHeight: 1.45 }}>
+          How to reach a printer's machine config (G-code, limits, connection). <b>gear</b> — always-visible cog on the Printer chip · <b>chip</b> — a dedicated “Machine” chip in the strip · <b>menu</b> — only via the promoted action inside the Printer dropdown.
+        </div>
+
         <TweakSection label="Accountability" />
         <TweakRadio  label="Source viz" value={t.accountability}
                      options={["rule", "breadcrumb", "ladder-only"]}

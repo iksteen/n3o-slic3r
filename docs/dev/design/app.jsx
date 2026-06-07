@@ -18,7 +18,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "accent": "cyan",
   "accountability": "rule",
   "search": "instant",
-  "density": "regular"
+  "density": "regular",
+  "machineEntry": "gear"
 }/*EDITMODE-END*/;
 
 // The user's filament *library* — anything they could potentially load. Each
@@ -1340,6 +1341,7 @@ function SlicerWorkspace({
           resetObjectOverride={resetObjectOverride}
           accountabilityMode={t.accountability}
           searchMode={t.search}
+          machineEntry={t.machineEntry}
           userOverrides={userOverrides}
           setUserOverrides={setUserOverrides}
           objects={objects}
@@ -1391,6 +1393,7 @@ function SlicerWorkspace({
               resetObjectOverride={resetObjectOverride}
               accountabilityMode={t.accountability}
               searchMode={t.search}
+              machineEntry={t.machineEntry}
               userOverrides={userOverrides}
               setUserOverrides={setUserOverrides}
               objects={objects}
@@ -1550,6 +1553,14 @@ function SlicerWorkspace({
       )}
 
       <TweaksPanel>
+        <TweakSection label="Machine settings" />
+        <TweakRadio  label="Entry point" value={t.machineEntry}
+                     options={["gear", "chip", "menu"]}
+                     onChange={(v) => setTweak('machineEntry', v)} />
+        <div style={{ fontSize: 10.5, color: "rgba(41,38,27,.55)", lineHeight: 1.45 }}>
+          How to reach a printer's machine config (G-code, limits, connection). <b>gear</b> — always-visible cog on the Printer chip · <b>chip</b> — a dedicated “Machine” chip in the strip · <b>menu</b> — only via the promoted action inside the Printer dropdown.
+        </div>
+
         <TweakSection label="Accountability" />
         <TweakRadio  label="Source viz" value={t.accountability}
                      options={["rule", "breadcrumb", "ladder-only"]}

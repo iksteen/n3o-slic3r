@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DESIGN = ROOT / "docs" / "design"
+DESIGN = ROOT / "docs" / "dev" / "design"
 SOURCE = DESIGN / "index.html"
 OUTPUT = DESIGN / "n3o-slic3r-standalone.html"
 

@@ -536,6 +536,7 @@ function SettingsPanel({
   resetObjectOverride,
   accountabilityMode,
   searchMode,
+  machineEntry = "gear",
   userOverrides,
   setUserOverrides,
   objects,                 // all objects on the plate
@@ -571,6 +572,18 @@ function SettingsPanel({
   const [pluginTabActive, setPluginTabActive] = useSPS(false);
   const PluginManagerComp = window.PluginManager;
   const [activeCat, setActiveCat] = useSPS(CATEGORIES[0].id);
+  const [railCollapsed, setRailCollapsed] = useSPS(() => {
+    try { return localStorage.getItem("n3o.railCollapsed.v2") === "1"; }
+    catch (e) { return false; }
+  });
+  useSPE(() => {
+    try { localStorage.setItem("n3o.railCollapsed.v2", railCollapsed ? "1" : "0"); } catch (e) {}
+  }, [railCollapsed]);
+  // Drive the panel width via a root class so the workspace grid column
+  // (which reads --sp-w) narrows when the rail is collapsed.
+  useSPE(() => {
+    document.documentElement.classList.toggle("sp-collapsed", railCollapsed);
+  }, [railCollapsed]);
   const [printerMenuOpen, setPrinterMenuOpen] = useSPS(false);
   const [qualityProfile, setQualityProfile] = useSPS("standard");
   const [qualityMenuOpen, setQualityMenuOpen] = useSPS(false);
@@ -616,6 +629,16 @@ function SettingsPanel({
     return Array(n).fill(nozzle);
   }, [extruders, nozzles, nozzle]);
   const inlineNozzles = nozzleList.length <= 2;
+
+  // The user printer currently assigned to this plate, matched by display
+  // name. Machine-settings entry points act on this printer directly.
+  const activePrinterId = useSPM(() => {
+    const m = (printerPresets || []).find(p => !p.isAddNew && p.name === printer);
+    return m ? m.id : null;
+  }, [printerPresets, printer]);
+  const openMachineSettings = useSPC(() => {
+    if (onEditPrinter && activePrinterId) onEditPrinter(activePrinterId);
+  }, [onEditPrinter, activePrinterId]);
   // If object becomes unavailable while on object tab, fall back to project.
   useSPE(() => {
     if (contextLayer === "object" && !objectAvailable) setContextLayer("project");
@@ -790,7 +813,7 @@ function SettingsPanel({
   const totalMatches = filteredCategories.reduce((n, c) => n + c._settings.length, 0);
 
   return (
-    <aside className={`settings-panel ${readOnly ? "readonly" : ""}`}>
+    <aside className={`settings-panel ${readOnly ? "readonly" : ""} ${railCollapsed ? "rail-collapsed" : ""}`}>
       {readOnly && (
         <div className="sp-readonly-banner" title="Settings are locked while viewing the sliced result. Switch to Prepare to edit.">
           <svg width="12" height="12" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -802,7 +825,7 @@ function SettingsPanel({
       )}
       <div className="sp-config">
         <div className="sp-config-row">
-          <div className="config-chip-wrap" ref={printerChipRef}>
+          <div className={`config-chip-wrap config-chip-wrap-printer ${machineEntry === "gear" && onEditPrinter && activePrinterId ? "is-split" : ""}`} ref={printerChipRef}>
             <button
               className="config-chip config-chip-printer"
               onClick={() => setPrinterMenuOpen(o => !o)}
@@ -822,9 +845,46 @@ function SettingsPanel({
                 />
               </span>
             </button>
+            {machineEntry === "gear" && onEditPrinter && activePrinterId && (
+              <button
+                className="chip-gear"
+                onClick={(e) => { e.stopPropagation(); openMachineSettings(); }}
+                title={`Machine settings \u2014 ${printer}\nG-code, limits, connection`}
+                aria-label={`Machine settings for ${printer}`}
+              >
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <circle cx="8" cy="8" r="2.3" stroke="currentColor" strokeWidth="1.3"/>
+                  <path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M3.3 12.7l1.4-1.4M11.3 4.7l1.4-1.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                </svg>
+              </button>
+            )}
             {printerMenuOpen && printerPresets && (
               <div className="printer-picker-menu" onClick={(e) => e.stopPropagation()}>
-                <div className="ptpm-title">Assign printer to this plate</div>
+                {machineEntry === "menu" && onEditPrinter && activePrinterId && (
+                  <>
+                    <button
+                      className="ptpm-machine-action"
+                      onClick={() => { setPrinterMenuOpen(false); openMachineSettings(); }}
+                      title={`Open machine settings for ${printer}`}
+                    >
+                      <span className="ptpm-machine-action-ico">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <circle cx="8" cy="8" r="2.3" stroke="currentColor" strokeWidth="1.3"/>
+                          <path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M3.3 12.7l1.4-1.4M11.3 4.7l1.4-1.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                        </svg>
+                      </span>
+                      <span className="ptpm-machine-action-text">
+                        <span className="ptpm-machine-action-title">Machine settings…</span>
+                        <span className="ptpm-machine-action-sub">{printer} · G-code, limits, connection</span>
+                      </span>
+                      <svg className="ptpm-machine-action-chev" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                        <path d="M3.5 2l3 3-3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </button>
+                    <div className="ptpm-divider"/>
+                  </>
+                )}
+                <div className="ptpm-title">Switch printer for this plate</div>
                 {printerPresets.filter(p => !p.isAddNew).map(preset => (
                   <div
                     key={preset.id}
@@ -845,14 +905,14 @@ function SettingsPanel({
                     </button>
                     {onEditPrinter && (
                       <button
-                        className="ptpm-cog"
+                        className="ptpm-cog ptpm-cog-visible"
                         onClick={(e) => {
                           e.stopPropagation();
                           setPrinterMenuOpen(false);
                           onEditPrinter(preset.id);
                         }}
-                        title={`Settings for ${preset.name}`}
-                        aria-label={`Settings for ${preset.name}`}
+                        title={`Machine settings for ${preset.name}`}
+                        aria-label={`Machine settings for ${preset.name}`}
                       >
                         <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
                           <path d="M7 4.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM7 1v1.5M7 11.5V13M3.5 3.5l1 1M9.5 9.5l1 1M1 7h1.5M11.5 7H13M3.5 10.5l1-1M9.5 4.5l1-1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
@@ -901,6 +961,26 @@ function SettingsPanel({
               onClick={() => onSwapNozzle && onSwapNozzle(i)}
             />
           ))}
+          {machineEntry === "chip" && onEditPrinter && activePrinterId && (
+            <button
+              className="config-chip config-chip-machine"
+              onClick={openMachineSettings}
+              style={{ "--chip-hue": LAYER_BY_ID.printer.hue }}
+              title={`Machine settings \u2014 ${printer}\nG-code, machine limits, connection`}
+            >
+              <span className="config-chip-top">
+                <span className="chip-dot"/>
+                <span className="chip-label">Machine</span>
+              </span>
+              <span className="chip-value chip-value-action">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <circle cx="8" cy="8" r="2.3" stroke="currentColor" strokeWidth="1.3"/>
+                  <path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M3.3 12.7l1.4-1.4M11.3 4.7l1.4-1.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+                </svg>
+                Configure
+              </span>
+            </button>
+          )}
         </div>
         {!inlineNozzles && (
           <div className="sp-config-row sp-config-nozzles">
@@ -1126,9 +1206,21 @@ function SettingsPanel({
         </div>
       ) : (
       <div className="settings-body">
-        <div className="cat-rail">
+        <div className={`cat-rail ${railCollapsed ? "collapsed" : ""}`}>
+          <button
+            className="cat-rail-toggle"
+            onClick={() => setRailCollapsed(v => !v)}
+            title={railCollapsed ? "Expand category list" : "Collapse category list to icons"}
+            aria-label={railCollapsed ? "Expand category list" : "Collapse category list"}
+            aria-expanded={!railCollapsed}
+          >
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d={railCollapsed ? "M5 3l4 4-4 4" : "M9 3L5 7l4 4"} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
           {CATEGORIES.map(cat => {
             const hasMatches = filteredCategories.some(c => c.id === cat.id);
+            const ov = counts[cat.id].overrides;
             return (
               <button
                 key={cat.id}
@@ -1136,12 +1228,16 @@ function SettingsPanel({
                 onClick={() => jumpToCat(cat.id)}
                 disabled={!hasMatches}
                 style={{ opacity: hasMatches ? 1 : 0.35 }}
+                title={railCollapsed ? `${cat.name}${ov > 0 ? ` \u00b7 ${ov} modified` : ""}` : undefined}
               >
-                <span className="cat-rail-icon">{cat.icon}</span>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cat.name}</span>
+                <span className="cat-rail-icon">
+                  {cat.icon}
+                  {ov > 0 && <span className="cat-rail-ovdot" aria-hidden="true"/>}
+                </span>
+                <span className="cat-rail-name" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cat.name}</span>
                 <span className="cat-rail-count">
-                  {counts[cat.id].overrides > 0
-                    ? <span style={{ color: "var(--accent-text)" }}>{counts[cat.id].overrides}/{counts[cat.id].total}</span>
+                  {ov > 0
+                    ? <span style={{ color: "var(--accent-text)" }}>{ov}/{counts[cat.id].total}</span>
                     : counts[cat.id].total}
                 </span>
               </button>
