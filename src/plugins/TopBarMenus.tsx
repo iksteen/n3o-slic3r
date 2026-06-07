@@ -1,4 +1,4 @@
-// Top-bar dropdowns that host the plugin surfaces:
+// Top-bar dropdowns:
 //   - the n3o-slic3r brand menu → "Global plugins…" + Appearance picker
 //   - the project menu → "Plugins…"
 //
