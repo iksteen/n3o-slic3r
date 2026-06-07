@@ -360,7 +360,16 @@ pub fn compute_overrides(
             continue;
         };
         match baseline.get(key) {
-            Some(base) if values_equal(base, &value) => out.redundant.push(key.clone()),
+            // A baseline match is "redundant" (drop it) only on the full-delta
+            // path. When the project declares an explicit change list, the user
+            // deliberately set this key, so keep it as an override even if it
+            // currently equals our baseline — otherwise rebinding to a printer
+            // whose default differs (snappy's max_bridge_length=10 -> bambi's 0)
+            // silently discards the intent. The change list is BBS/Orca's record
+            // of explicitly-changed settings; honoring it is the whole point.
+            Some(base) if only_keys.is_none() && values_equal(base, &value) => {
+                out.redundant.push(key.clone())
+            }
             // Fork-divergent values our engine would reject: an enum value
             // outside its set, or a negative number for an option whose
             // range starts at >= 0 (e.g. Bambu's `tree_support_wall_count =
@@ -1067,8 +1076,10 @@ mod tests {
                 "{absent} is not in the change list — must not import",
             );
         }
-        // The override set is exactly the changed keys (≤ the 5 declared,
-        // less any already matching our Strength baseline) — minimal.
+        // The override set is exactly the declared, engine-compatible change-list
+        // keys — kept even when a value equals our Strength baseline (an
+        // explicitly-changed setting must survive a later printer rebind), and
+        // never more than the 5 declared.
         assert!(
             plate_ov.len() <= 5,
             "intent-based import should be minimal; got {}",
@@ -1183,6 +1194,48 @@ mod tests {
             intent.incompatible.is_empty(),
             "keys outside the change list aren't validated"
         );
+    }
+
+    #[test]
+    fn change_list_keeps_an_explicit_override_even_when_it_equals_the_baseline() {
+        use serde_json::json;
+        use std::collections::HashSet;
+        // The project explicitly set max_bridge_length=10; it happens to equal
+        // our current baseline (the bound printer's default is also 10). On the
+        // full-delta path that's "redundant" and dropped — but when the project
+        // *declares* the key changed, it must be kept, so rebinding to a printer
+        // with a different default (bambi's 0) doesn't silently lose the intent.
+        let s = OrcaProjectSettings {
+            settings: [("max_bridge_length", json!("10"))]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+        };
+        let part = KeyPartition {
+            process: ["max_bridge_length"].iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        let baseline: BTreeMap<String, String> =
+            [("max_bridge_length".to_string(), "10".to_string())]
+                .into_iter()
+                .collect();
+        let enum_sets = BTreeMap::new();
+        let nonneg = HashSet::new();
+
+        // No change list: equal-to-baseline is redundant and dropped.
+        let full = compute_overrides(&s, &part, &baseline, &enum_sets, &nonneg, None);
+        assert!(full.overrides.is_empty());
+        assert!(full.redundant.contains(&"max_bridge_length".to_string()));
+
+        // Declared in the change list: kept despite matching the baseline.
+        let only: HashSet<String> = ["max_bridge_length".to_string()].into_iter().collect();
+        let intent = compute_overrides(&s, &part, &baseline, &enum_sets, &nonneg, Some(&only));
+        assert_eq!(
+            intent.overrides.get("max_bridge_length").map(String::as_str),
+            Some("10"),
+            "an explicitly-changed key must survive even when it equals the baseline",
+        );
+        assert!(intent.redundant.is_empty());
     }
 
     #[test]
