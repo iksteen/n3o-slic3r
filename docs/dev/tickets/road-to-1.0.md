@@ -73,6 +73,27 @@ in the output-writer / send path — not the frozen *project* format (the
   `.gcode.3mf` metadata. Needs a surfaced project-name field threaded
   into the slice-output naming and the 3MF writer.
 
+### 7. Orient / lay-flat without a pre-selection (maybe)
+Reconsider the current requirement to select an object *before* the
+orient / lay-flat tools light up (the MVP gates both on a selection and
+greys the buttons otherwise). A lower-friction model:
+
+- **Auto orient with nothing selected → orient every object/group.** Run
+  the optimizer over each object (or group) on the active plate and seat
+  them all, instead of being a no-op. "Orient the whole plate" is a
+  reasonable default for an empty selection.
+- **Lay on surface with nothing selected → raytrace to whatever was
+  clicked.** Skip the "pick the selected object's face" constraint: the
+  face click already identifies the object via the renderer raycast, so
+  just lay-flat *that* object. Selection becomes optional sugar, not a
+  precondition.
+
+Open question: keep the selection-gated behavior when a selection *does*
+exist (orient only the selected set), and only fall back to all/clicked
+when empty — so the tools stay predictable either way. UX call, hence
+"maybe"; revisit once the plate features (#3/#4) settle the multi-object
+interactions.
+
 **Format note:** none of #3/#4 touch the frozen MVP project format —
 per-plate objects and extra plates already round-trip, so 1.0 plate
 features won't reopen the format. #6 is the *sliced-output* container, a
