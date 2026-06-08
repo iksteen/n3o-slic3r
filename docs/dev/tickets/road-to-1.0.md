@@ -52,12 +52,35 @@ build it first.
 ### 5. UI optimizations
 TBD — to discuss. Placeholder; capture specifics here as they're named.
 
-**Format note:** none of #3/#4 touch the frozen MVP format — per-plate
-objects and extra plates already round-trip, so 1.0 plate features won't
-reopen the format.
+### 6. Sliced-output polish (`.gcode` / `.gcode.3mf`)
+The sliced bundle we write (and send) is currently bare. Two gaps, both
+in the output-writer / send path — not the frozen *project* format (the
+`.gcode.3mf` is the sliced-output container, distinct from
+`n3o_project.json`):
+
+- **Thumbnails.** Embed a plate preview image in the output so printers
+  and file browsers show it (Bambu's screen + Bambu Studio, Klipper /
+  Mainsail / Fluidd, the OS file manager). G-code carries it as a
+  base64 `; thumbnail begin … end` block; the `.gcode.3mf` carries PNGs
+  under `Metadata/`. libslic3r can emit these when the `thumbnails` /
+  `thumbnail_size` config is set during slice — first-pass: wire that
+  config + feed it a render (the viewport already has the scene), then
+  confirm both printers display it.
+- **Proper project names.** Output is named generically today
+  (`plate-1.gcode`, `n3o-<uuid>.3mf`) — derive the basename from the
+  project name (+ plate), e.g. `<project>.gcode` /
+  `<project>_plate-1.gcode.3mf`, and set the matching title in the
+  `.gcode.3mf` metadata. Needs a surfaced project-name field threaded
+  into the slice-output naming and the 3MF writer.
+
+**Format note:** none of #3/#4 touch the frozen MVP project format —
+per-plate objects and extra plates already round-trip, so 1.0 plate
+features won't reopen the format. #6 is the *sliced-output* container, a
+separate artifact from the project file.
 
 **Suggested order:** #4 → #3 (the plate cluster); #1 in parallel
-(driver-only); #2 done; then the UI items.
+(driver-only); #6 (output-writer, self-contained); #2 done; then the UI
+items.
 
 ## Windows build — cross-compile feasibility (2026-06-07)
 
@@ -155,9 +178,9 @@ build script also copies it there for `cargo`-built binaries). Installer signing
 is skipped on a Linux host (`bundle.windows.signCommand` for a custom signer).
 
 **Windows cross-build: complete from Linux** — deps → engine → FFI DLL → app →
-installer, no Windows host, no wine. Post-MVP polish left: wire it into CI, add a
-`build-app.sh` driver (mirroring the flatpak/arch publish scripts), and an
-authenticode signer. None are unknowns.
+installer, no Windows host, no wine. The `build-app.sh` driver (mirroring the
+flatpak/arch publish scripts) has since landed. Post-MVP polish left: wire it
+into CI and add an authenticode signer. Neither is an unknown.
 
 **Fallback** if the deps cross stalls: a native Windows CI runner
 (`windows-latest` + MSVC), lifting OrcaSlicer's `build_release_vs2022.bat` /
