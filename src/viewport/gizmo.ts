@@ -34,6 +34,10 @@ export interface GizmoApi {
    *  programmatic change (e.g. auto-orient), so the multi-selection pivot
    *  re-centers on the moved objects. No-op while a drag is in progress. */
   resync(): void;
+  /** Hide the gizmo handles and disable interaction (e.g. while a
+   *  lay-flat face pick owns the canvas), or restore them. Survives
+   *  `refresh()` — a refresh while suppressed keeps the handles hidden. */
+  setSuppressed(value: boolean): void;
   dispose(): void;
   /** Underlying TransformControls. The viewport adds it as a helper
    *  to the scene + listens to dragging-changed for OrbitControls
@@ -63,6 +67,9 @@ export function createGizmo(deps: GizmoDeps): GizmoApi {
 
   let mode: GizmoMode = "Translate";
   let selected: ObjectId[] = [];
+  // While true the handles are hidden and interaction is off (a face pick
+  // owns the canvas). refresh() honours it so a re-sync doesn't reveal them.
+  let suppressed = false;
   // Single-object drag: the mesh's matrix captured at drag start.
   let dragStartMatrix: THREE.Matrix4 | null = null;
   // Multi-object drag: a reusable pivot the selected meshes re-parent
@@ -170,7 +177,7 @@ export function createGizmo(deps: GizmoDeps): GizmoApi {
       pivot.updateMatrixWorld(true);
       controls.attach(pivot);
     }
-    helper.visible = true;
+    helper.visible = !suppressed;
     controls.setMode(modeForThree(mode));
   }
 
@@ -188,6 +195,11 @@ export function createGizmo(deps: GizmoDeps): GizmoApi {
       // Skip mid-drag: the drag owns the gizmo/pivot and re-attaching would
       // tear down the active manipulation.
       if (controls.dragging) return;
+      refresh();
+    },
+    setSuppressed(value) {
+      suppressed = value;
+      controls.enabled = !value;
       refresh();
     },
     dispose() {

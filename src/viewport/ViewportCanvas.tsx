@@ -109,6 +109,10 @@ export function ViewportCanvas({
   // in App, not round-tripped through backend scene state).
   const gizmoRef = useRef<GizmoApi | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  // Whether the active plate has any selection — gates the selection-only
+  // toolbar tools (auto orient / lay flat on). Kept in sync with the mirror's
+  // SelectionChanged / ActivePlateChanged events below.
+  const [hasSelection, setHasSelection] = useState(false);
 
   // Transient toast + error-console notification.
   const notify = (level: ToastMessage["level"], text: string) => {
@@ -123,10 +127,7 @@ export function ViewportCanvas({
   // center), so a group/assembly keeps its arrangement.
   const runAutoOrient = () => {
     const ids = mirrorRef.current?.selectedIds() ?? [];
-    if (ids.length === 0) {
-      notify("info", "Select an object to auto-orient.");
-      return;
-    }
+    if (ids.length === 0) return; // button is disabled without a selection
     void invoke("scene_object_auto_orient", { ids }).catch((err) =>
       notify("error", `Auto orient failed: ${err}`),
     );
@@ -143,12 +144,14 @@ export function ViewportCanvas({
     if (containerRef.current) {
       containerRef.current.style.cursor = layFlatPick ? "crosshair" : "";
     }
-    // Disable the gizmo while picking so its handles don't intercept the click.
-    if (gizmoRef.current) gizmoRef.current.controls.enabled = !layFlatPick;
+    // Hide the gizmo + disable interaction while picking so its handles
+    // neither draw over the model nor intercept the face click.
+    if (gizmoRef.current) gizmoRef.current.setSuppressed(layFlatPick);
   }, [layFlatPick]);
   const toggleLayFlatPick = () => {
+    // Arming needs a selection (button is disabled without one); cancelling an
+    // active pick is always allowed.
     if (!layFlatPick && (mirrorRef.current?.selectedIds().length ?? 0) === 0) {
-      notify("info", "Select an object first, then pick a face to lay flat.");
       return;
     }
     setLayFlatPick((v) => !v);
@@ -388,6 +391,7 @@ export function ViewportCanvas({
         case "SelectionChanged":
           if (evt.data.plate_id !== activeId) break;
           gizmo.setSelection(evt.data.selected);
+          setHasSelection(evt.data.selected.length > 0);
           break;
         case "BedChanged":
           if (evt.data.plate_id !== activeId) break;
@@ -406,9 +410,12 @@ export function ViewportCanvas({
             gizmo.setSelection(
               Array.from(plate.selection).sort((a, b) => a - b),
             );
+            setHasSelection(plate.selection.size > 0);
             if (plate.bed) {
               initialFrameForBed(camera, controls, plate.bed);
             }
+          } else {
+            setHasSelection(false);
           }
           void refreshTower();
           break;
@@ -740,9 +747,18 @@ export function ViewportCanvas({
           <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
             <button
               type="button"
-              className="px-2 py-1.5 hover:bg-neutral-700/60"
+              disabled={!hasSelection}
+              className={`px-2 py-1.5 ${
+                hasSelection
+                  ? "hover:bg-neutral-700/60"
+                  : "opacity-40 cursor-not-allowed"
+              }`}
               onClick={runAutoOrient}
-              title="Auto orient selection (minimize supports)"
+              title={
+                hasSelection
+                  ? "Auto orient selection (minimize supports)"
+                  : "Auto orient selection — Select an object first"
+              }
               aria-label="Auto orient selection"
             >
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -757,11 +773,20 @@ export function ViewportCanvas({
             </button>
             <button
               type="button"
+              disabled={!hasSelection && !layFlatPick}
               className={`px-2 py-1.5 ${
-                layFlatPick ? "bg-neutral-700" : "hover:bg-neutral-700/60"
+                layFlatPick
+                  ? "bg-neutral-700"
+                  : hasSelection
+                    ? "hover:bg-neutral-700/60"
+                    : "opacity-40 cursor-not-allowed"
               }`}
               onClick={toggleLayFlatPick}
-              title="Lay flat on… — then click a face of the selected object"
+              title={
+                hasSelection || layFlatPick
+                  ? "Lay flat on… — then click a face of the selected object"
+                  : "Lay flat on… — Select an object first"
+              }
               aria-label="Lay flat on a clicked face"
               aria-pressed={layFlatPick}
             >
