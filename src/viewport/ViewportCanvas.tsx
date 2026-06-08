@@ -110,6 +110,27 @@ export function ViewportCanvas({
   const gizmoRef = useRef<GizmoApi | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
+  // Engine "Auto orient" of the current selection. The backend orients the
+  // selection as one rigid unit (combined mesh → one rotation about the shared
+  // center), so a group/assembly keeps its arrangement. Errors surface as a
+  // toast rather than failing silently.
+  const runAutoOrient = () => {
+    const notify = (level: ToastMessage["level"], text: string) => {
+      const id = nextToastId++;
+      setToasts((prev) => [...prev, { id, level, text }]);
+      setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+      pushLog(level, text); // parity with pushToast — keep it in the error console
+    };
+    const ids = mirrorRef.current?.selectedIds() ?? [];
+    if (ids.length === 0) {
+      notify("info", "Select an object to auto-orient.");
+      return;
+    }
+    void invoke("scene_object_auto_orient", { ids }).catch((err) =>
+      notify("error", `Auto orient failed: ${err}`),
+    );
+  };
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -332,6 +353,14 @@ export function ViewportCanvas({
             "warn",
             `auto-arrange could not place ${evt.data.un_placed.length} object(s)`,
           );
+          break;
+        case "ObjectUpdated":
+          if (evt.data.plate_id !== activeId) break;
+          // A selected object's transform changed programmatically (e.g.
+          // auto-orient) — the mirror has already moved the mesh; reposition
+          // the gizmo to follow it (the multi-selection pivot otherwise stays
+          // at the old center).
+          if (mirror.selectedIds().includes(evt.data.object.id)) gizmo.resync();
           break;
         case "SelectionChanged":
           if (evt.data.plate_id !== activeId) break;
@@ -655,6 +684,25 @@ export function ViewportCanvas({
                 {GIZMO_ICONS[mode]}
               </button>
             ))}
+          </div>
+          <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
+            <button
+              type="button"
+              className="px-2 py-1.5 hover:bg-neutral-700/60"
+              onClick={runAutoOrient}
+              title="Auto orient selection (minimize supports)"
+              aria-label="Auto orient selection"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <path
+                  d="M7 1.6v6.6M4.2 5.4 7 8.2l2.8-2.8M2.2 12h9.6"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
           </div>
         </div>
       </div>

@@ -780,6 +780,37 @@ pub fn scene_object_lay_flat(
     Ok(())
 }
 
+/// Engine "Auto orient": run libslic3r's support-minimizing orientation
+/// optimizer on the current selection and apply the result. The selection is
+/// oriented as one rigid unit (combined world mesh → one rotation → rotate all
+/// about the shared center), so a group/assembly keeps its arrangement. The
+/// optimizer can run for a noticeable time, so the combined mesh is read out and
+/// the scene lock released while it runs, then re-acquired to apply the result.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_object_auto_orient(
+    ids: Vec<ObjectId>,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let (vertices, indices) = {
+        let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+        s.objects_world_mesh(&ids).map_err(op_err_to_string)?
+    };
+    let quat = slic3r_ffi::orient_mesh(&vertices, &indices, None)
+        .map_err(|e| format!("auto-orient failed: {e}"))?;
+    let rotation = glam::Quat::from_xyzw(quat[0], quat[1], quat[2], quat[3]);
+    let events = {
+        let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+        s.auto_orient_objects(&ids, rotation).map_err(op_err_to_string)?
+    };
+    emit_all(&window, &events);
+    Ok(())
+}
+
 /// Set an object's material — its 1-based `extruder_id` — on the active
 /// plate. Auto-binds the material to a slot if it had none, so the
 /// material → slot table stays complete.

@@ -328,6 +328,27 @@ void slic3r_tower_mesh_free(float* vertices, uint32_t* indices);
 typedef void (*slic3r_log_fn_t)(int severity, const char* message, void* user_data);
 void slic3r_set_log_sink(slic3r_log_fn_t cb, void* user_data);
 
+/* Auto-orient a triangle mesh for minimal support material (wraps
+ * Slic3r::orientation::orient — the engine behind OrcaSlicer's "Auto orient").
+ *
+ * Input is a raw indexed mesh in whatever coordinate frame the caller wants the
+ * orientation computed in (the returned rotation is in that same frame):
+ * `vertices` is `vertex_count` xyz triples (3 floats each), `indices` is
+ * `triangle_count` vertex-index triples (3 uint32 each). `overhang_angle` is the
+ * support threshold in degrees (e.g. 30..60); pass <= 0 for the engine default.
+ *
+ * On success writes the computed rotation into `out_quat_xyzw` as a unit
+ * quaternion (x, y, z, w) — the rotation that brings the given mesh into the
+ * support-minimizing orientation. Applying it (and settling onto the bed) is the
+ * caller's job; this function only computes the rotation.
+ *
+ * Pure computation: touches no slic3r_model_t/config and does not require
+ * slic3r_init(). May run multithreaded internally (TBB). */
+slic3r_status slic3r_orient_mesh(const float* vertices, size_t vertex_count,
+                                 const uint32_t* indices, size_t triangle_count,
+                                 float overhang_angle, float out_quat_xyzw[4],
+                                 char** out_err);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1313,6 +1313,50 @@ impl Project {
     /// "lay flat on selected face" later when the user can pick a
     /// face from the viewport.
     pub fn lay_flat_object(&mut self, id: ObjectId) -> Result<Vec<SceneEvent>, SceneOpError> {
+        // Quick, engine-free flatten: pick the axis-aligned cube orientation
+        // with the smallest Z extent, then settle it onto the plate. The
+        // FFI-backed auto-orient shares place_with_rotation below.
+        let (mesh_bb, current_scale, current_trans) = {
+            let obj = self.plates[self.active_plate]
+                .scene
+                .objects
+                .get(&id)
+                .ok_or(SceneOpError::UnknownObject(id))?;
+            let bb = self
+                .meshes
+                .get(&obj.mesh)
+                .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
+                .bounding_box;
+            let (scale, _rot, trans) = obj.transform.to_mat4().to_scale_rotation_translation();
+            (bb, scale, trans)
+        };
+        let local_corners = mesh_bb_corners(&mesh_bb);
+        let z_extent_of = |rot: &Quat| {
+            let candidate =
+                glam::Mat4::from_scale_rotation_translation(current_scale, *rot, current_trans);
+            let (min_z, max_z) = z_extent(&local_corners, &candidate);
+            max_z - min_z
+        };
+        let best_rotation = cube_rotations()
+            .into_iter()
+            .min_by(|a, b| {
+                z_extent_of(a)
+                    .partial_cmp(&z_extent_of(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .expect("24 rotations is non-empty");
+        self.place_with_rotation(id, best_rotation)
+    }
+
+    /// Replace an object's orientation with `rotation` (object-local → world),
+    /// preserving scale and XY center, then settle it onto the plate (min Z → 0).
+    /// Shared by [`Self::lay_flat_object`] (best cube rotation) and the FFI-backed
+    /// auto-orient (the engine-computed rotation).
+    pub fn place_with_rotation(
+        &mut self,
+        id: ObjectId,
+        rotation: Quat,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
         let active = self.active_plate;
         let mesh_bb = {
             let obj = self.plates[active]
@@ -1335,44 +1379,20 @@ impl Project {
         let plate_id = self.plates[active].id;
         let obj = self.plates[active].scene.objects.get_mut(&id).unwrap();
         let current = obj.transform.to_mat4();
-
-        // Decompose into scale/rotation/translation so we can
-        // preserve scale + center position while replacing the
-        // rotation with a candidate one. glam's decomposition is
-        // sound for affine matrices without shear; our transforms
-        // are built from translate/rotate/scale composition only,
-        // so this holds.
+        // Decompose so we keep scale + position and only replace the rotation.
+        // glam's decomposition is sound for affine matrices without shear; our
+        // transforms are translate/rotate/scale compositions only, so this holds.
         let (current_scale, _current_rot, current_trans) = current.to_scale_rotation_translation();
         let current_world_center = obj.transform.apply_point(local_center);
 
-        let (best_rotation, best_min_z) = cube_rotations()
-            .into_iter()
-            .map(|rot| {
-                let candidate =
-                    glam::Mat4::from_scale_rotation_translation(current_scale, rot, current_trans);
-                let (min_z, max_z) = z_extent(&local_corners, &candidate);
-                (rot, min_z, max_z)
-            })
-            .min_by(|a, b| {
-                let extent_a = a.2 - a.1;
-                let extent_b = b.2 - b.1;
-                extent_a
-                    .partial_cmp(&extent_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|(rot, min_z, _)| (rot, min_z))
-            .expect("24 rotations is non-empty");
-
-        let chosen = glam::Mat4::from_scale_rotation_translation(
-            current_scale,
-            best_rotation,
-            current_trans,
-        );
+        let chosen =
+            glam::Mat4::from_scale_rotation_translation(current_scale, rotation, current_trans);
+        let (min_z, _max_z) = z_extent(&local_corners, &chosen);
         let post_rot_center = chosen.transform_point3(local_center);
         let delta = glam::Vec3::new(
             current_world_center.x - post_rot_center.x,
             current_world_center.y - post_rot_center.y,
-            -best_min_z,
+            -min_z,
         );
         let final_xform = glam::Mat4::from_translation(delta) * chosen;
         obj.transform = Transform::from_mat4(final_xform);
@@ -1383,6 +1403,125 @@ impl Project {
             object: clone,
         }];
         events.extend(self.out_of_bounds_event(id));
+        Ok(events)
+    }
+
+    /// Build one combined **world-space** mesh from a set of objects — each
+    /// object's local mesh baked through its transform — as flattened vertices
+    /// + triangle indices. Used to run the FFI auto-orient on a whole selection
+    /// (single object, a group, or a multi-select) off the scene lock, so the
+    /// optimizer sees the assembly as it currently sits.
+    pub fn objects_world_mesh(
+        &self,
+        ids: &[ObjectId],
+    ) -> Result<(Vec<f32>, Vec<u32>), SceneOpError> {
+        let active = self.active_plate;
+        let mut vertices: Vec<f32> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+        for &id in ids {
+            let obj = self.plates[active]
+                .scene
+                .objects
+                .get(&id)
+                .ok_or(SceneOpError::UnknownObject(id))?;
+            let mesh = self
+                .meshes
+                .get(&obj.mesh)
+                .ok_or(SceneOpError::UnknownMesh(obj.mesh))?;
+            let base = (vertices.len() / 3) as u32;
+            for v in mesh.vertices.chunks_exact(3) {
+                let w = obj.transform.apply_point(Vec3::new(v[0], v[1], v[2]));
+                vertices.extend_from_slice(&[w.x, w.y, w.z]);
+            }
+            indices.extend(mesh.indices.iter().map(|&i| i + base));
+        }
+        Ok((vertices, indices))
+    }
+
+    /// Apply an auto-orient `rotation` (world frame, from the FFI orient of the
+    /// objects' combined world mesh) to a selection **as one rigid unit**: rotate
+    /// every object about the combined world-AABB center, then settle the whole
+    /// set onto the plate (combined min Z → 0). Rotating about a shared pivot
+    /// keeps groups/assemblies intact (their relative arrangement is preserved).
+    pub fn auto_orient_objects(
+        &mut self,
+        ids: &[ObjectId],
+        rotation: Quat,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let active = self.active_plate;
+        let plate_id = self.plates[active].id;
+
+        // Combined world-space AABB over the selection (min, max).
+        let combined_aabb = |me: &Self| -> Result<(Vec3, Vec3), SceneOpError> {
+            let mut lo = Vec3::splat(f32::INFINITY);
+            let mut hi = Vec3::splat(f32::NEG_INFINITY);
+            for &id in ids {
+                let obj = me.plates[active]
+                    .scene
+                    .objects
+                    .get(&id)
+                    .ok_or(SceneOpError::UnknownObject(id))?;
+                let bb = me
+                    .meshes
+                    .get(&obj.mesh)
+                    .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
+                    .bounding_box;
+                for corner in mesh_bb_corners(&bb) {
+                    let w = obj.transform.apply_point(corner);
+                    lo = lo.min(w);
+                    hi = hi.max(w);
+                }
+            }
+            Ok((lo, hi))
+        };
+
+        let (lo, hi) = combined_aabb(self)?;
+        let pivot = (lo + hi) * 0.5;
+        let rot_about_pivot = Transform::translation(pivot)
+            .compose(Transform::rotation(rotation))
+            .compose(Transform::translation(-pivot));
+        for &id in ids {
+            let obj = self.plates[active].scene.objects.get_mut(&id).unwrap();
+            obj.transform = rot_about_pivot.compose(obj.transform);
+        }
+
+        // Clamp the oriented selection into the build volume (in place — orient
+        // does not recenter). Z sits it on the plate; X/Y pull the footprint back
+        // onto the bed only if it overhangs an edge. The small floor margin keeps
+        // the settled bottom above z=0 so a sub-micron floating-point dip doesn't
+        // trip the strict `min_z < 0` (below-plate) bounds check.
+        const FLOOR_MARGIN: f32 = 1.0e-3;
+        let (lo2, hi2) = combined_aabb(self)?;
+        let mut shift = Vec3::new(0.0, 0.0, FLOOR_MARGIN - lo2.z);
+        if let Some(bed) = self.plates[active].scene.bed.as_ref() {
+            let clamp = |lo: f32, hi: f32, bmin: f32, bmax: f32| -> f32 {
+                if lo < bmin {
+                    bmin - lo
+                } else if hi > bmax {
+                    bmax - hi
+                } else {
+                    0.0
+                }
+            };
+            shift.x = clamp(lo2.x, hi2.x, bed.extents.min[0] as f32, bed.extents.max[0] as f32);
+            shift.y = clamp(lo2.y, hi2.y, bed.extents.min[1] as f32, bed.extents.max[1] as f32);
+        }
+        let settle = Transform::translation(shift);
+        let mut events = Vec::with_capacity(ids.len());
+        for &id in ids {
+            let obj = self.plates[active].scene.objects.get_mut(&id).unwrap();
+            obj.transform = settle.compose(obj.transform);
+            events.push(SceneEvent::ObjectUpdated {
+                plate_id,
+                object: obj.clone(),
+            });
+        }
+        for &id in ids {
+            events.extend(self.out_of_bounds_event(id));
+        }
         Ok(events)
     }
 
@@ -2557,6 +2696,76 @@ mod tests {
         }
         assert!(min_z.abs() < 1e-4, "expected min_z ≈ 0, got {min_z}");
         assert!((max_z - 1.0).abs() < 1e-4, "got max_z={max_z}");
+    }
+
+    #[test]
+    fn auto_orient_identity_preserves_xy_and_settles_on_bed() {
+        let mut p = Project::default();
+        let (_, obj) = add_cube(&mut p);
+        // Place it off-origin and floating above the bed.
+        p.translate_object(obj, Vec3::new(50.0, 30.0, 7.0)).unwrap();
+        let mesh_bb = p.meshes.values().next().unwrap().bounding_box;
+        let center_local = Vec3::new(
+            ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32,
+            ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32,
+            ((mesh_bb.min[2] + mesh_bb.max[2]) * 0.5) as f32,
+        );
+        let before = p
+            .active_plate()
+            .scene
+            .objects
+            .get(&obj)
+            .unwrap()
+            .transform
+            .apply_point(center_local);
+        // Identity rotation (engine "already optimal" / best = z-up): orient in
+        // place — keep the XY center, just settle onto the bed.
+        p.auto_orient_objects(&[obj], Quat::IDENTITY).unwrap();
+
+        let xform = p.active_plate().scene.objects.get(&obj).unwrap().transform;
+        let wc = xform.apply_point(center_local);
+        assert!((wc.x - before.x).abs() < 1e-3, "x moved {} -> {}", before.x, wc.x);
+        assert!((wc.y - before.y).abs() < 1e-3, "y moved {} -> {}", before.y, wc.y);
+        // Settled on the bed: min Z ≈ 0.
+        let mut min_z = f32::INFINITY;
+        for &x in &[mesh_bb.min[0] as f32, mesh_bb.max[0] as f32] {
+            for &y in &[mesh_bb.min[1] as f32, mesh_bb.max[1] as f32] {
+                for &z in &[mesh_bb.min[2] as f32, mesh_bb.max[2] as f32] {
+                    min_z = min_z.min(xform.apply_point(Vec3::new(x, y, z)).z);
+                }
+            }
+        }
+        assert!((0.0..1e-2).contains(&min_z), "min_z={min_z} (expected on the plate, not below)");
+    }
+
+    #[test]
+    fn auto_orient_clamps_overhanging_footprint_onto_bed() {
+        let mut p = Project::default();
+        let (_, obj) = add_cube(&mut p);
+        let bed_max_x = {
+            let bed = p.active_plate().scene.bed.as_ref().unwrap();
+            bed.extents.max[0] as f32
+        };
+        // Push the unit cube partly off the +X edge of the bed.
+        p.translate_object(obj, Vec3::new(bed_max_x - 0.5, 30.0, 0.0))
+            .unwrap();
+        // Even with no reorientation, the clamp must pull the footprint back in.
+        p.auto_orient_objects(&[obj], Quat::IDENTITY).unwrap();
+
+        let xform = p.active_plate().scene.objects.get(&obj).unwrap().transform;
+        let mesh_bb = p.meshes.values().next().unwrap().bounding_box;
+        let mut max_x = f32::NEG_INFINITY;
+        for &x in &[mesh_bb.min[0] as f32, mesh_bb.max[0] as f32] {
+            for &y in &[mesh_bb.min[1] as f32, mesh_bb.max[1] as f32] {
+                for &z in &[mesh_bb.min[2] as f32, mesh_bb.max[2] as f32] {
+                    max_x = max_x.max(xform.apply_point(Vec3::new(x, y, z)).x);
+                }
+            }
+        }
+        assert!(
+            max_x <= bed_max_x + 1e-3,
+            "footprint not clamped onto bed: max_x={max_x} > {bed_max_x}"
+        );
     }
 
     // ---- add_from_primitive dedup --------------------------------

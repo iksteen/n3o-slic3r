@@ -119,6 +119,64 @@ pub fn version() -> String {
     }
 }
 
+/// Auto-orient a triangle mesh for minimal support material — the engine behind
+/// OrcaSlicer's "Auto orient".
+///
+/// `vertices` is flattened xyz (length a non-zero multiple of 3); `indices` is
+/// flattened triangle vertex indices (length a non-zero multiple of 3), all in
+/// object-local coordinates. `overhang_angle` is the support threshold in
+/// degrees; pass `None` for the engine default. Returns the rotation to apply to
+/// the object as a unit quaternion `[x, y, z, w]`.
+///
+/// Pure computation — no init or model handle required. May run for a noticeable
+/// time on large meshes (it runs an optimizer), so call it off any UI lock.
+pub fn orient_mesh(vertices: &[f32], indices: &[u32], overhang_angle: Option<f32>) -> Result<[f32; 4]> {
+    if vertices.is_empty() || vertices.len() % 3 != 0 {
+        return Err(Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("vertices must be a non-empty multiple of 3".into()),
+        });
+    }
+    if indices.is_empty() || indices.len() % 3 != 0 {
+        return Err(Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("indices must be a non-empty multiple of 3".into()),
+        });
+    }
+    // Bounds-check the indices before they reach libslic3r — it indexes the
+    // vertex array unchecked (its_face_normals / facet_area), so an out-of-range
+    // index would be an out-of-bounds read inside the engine.
+    let vertex_count = vertices.len() / 3;
+    if let Some(&max_index) = indices.iter().max() {
+        if max_index as usize >= vertex_count {
+            return Err(Error {
+                kind: ErrorKind::InvalidArg,
+                message: Some(format!(
+                    "triangle index {max_index} out of range for {vertex_count} vertices"
+                )),
+            });
+        }
+    }
+    let mut quat = [0.0f32; 4];
+    let mut err: *mut c_char = ptr::null_mut();
+    // SAFETY: slices are non-empty and length-validated above; the out pointers
+    // (quat, err) are valid for the call.
+    let status = unsafe {
+        sys::slic3r_orient_mesh(
+            vertices.as_ptr(),
+            vertices.len() / 3,
+            indices.as_ptr(),
+            indices.len() / 3,
+            overhang_angle.unwrap_or(0.0),
+            quat.as_mut_ptr(),
+            &mut err,
+        )
+    };
+    // SAFETY: err is either null or a shim-owned message pointer.
+    unsafe { check_with_err(status, err) }?;
+    Ok(quat)
+}
+
 // ---- Option introspection ----
 
 /// Mirrors `slic3r_opt_type`.

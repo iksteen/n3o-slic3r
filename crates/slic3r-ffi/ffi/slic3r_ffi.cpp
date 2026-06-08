@@ -11,6 +11,7 @@
 #include <libslic3r/Exception.hpp>
 #include <libslic3r/TriangleMesh.hpp>
 #include <libslic3r/TriangleSelector.hpp>
+#include <libslic3r/Orient.hpp>
 #include <libslic3r/Utils.hpp>
 #include <libslic3r/GCode/GCodeProcessor.hpp>
 #include <libslic3r/Format/bbs_3mf.hpp>
@@ -981,6 +982,63 @@ void slic3r_set_log_sink(slic3r_log_fn_t cb, void* user_data) {
 void slic3r_tower_mesh_free(float* vertices, uint32_t* indices) {
     std::free(vertices);
     std::free(indices);
+}
+
+slic3r_status slic3r_orient_mesh(const float* vertices, size_t vertex_count,
+                                 const uint32_t* indices, size_t triangle_count,
+                                 float overhang_angle, float out_quat_xyzw[4],
+                                 char** out_err) {
+    if (out_err) *out_err = nullptr;
+    if (!vertices || !indices || !out_quat_xyzw || vertex_count == 0 || triangle_count == 0)
+        return SLIC3R_ERR_INVALID_ARG;
+    try {
+        // Rebuild an indexed_triangle_set from the raw arrays (object-local coords).
+        indexed_triangle_set its;
+        its.vertices.reserve(vertex_count);
+        for (size_t i = 0; i < vertex_count; ++i)
+            its.vertices.emplace_back(vertices[i * 3 + 0], vertices[i * 3 + 1],
+                                      vertices[i * 3 + 2]);
+        its.indices.reserve(triangle_count);
+        for (size_t i = 0; i < triangle_count; ++i)
+            its.indices.emplace_back(static_cast<int32_t>(indices[i * 3 + 0]),
+                                     static_cast<int32_t>(indices[i * 3 + 1]),
+                                     static_cast<int32_t>(indices[i * 3 + 2]));
+
+        Slic3r::orientation::OrientMesh om;
+        om.mesh = TriangleMesh(its);
+        if (overhang_angle > 0.f)
+            om.overhang_angle = overhang_angle;
+
+        Slic3r::orientation::OrientMeshs items;
+        items.push_back(std::move(om));
+        Slic3r::orientation::OrientMeshs excludes;
+        Slic3r::orientation::OrientParams params;
+        if (overhang_angle > 0.f)
+            params.overhang_angle = overhang_angle;
+        // _orient() invokes these unconditionally; the defaults are empty
+        // std::functions, so leaving them throws std::bad_function_call. Supply
+        // no-ops (we have no progress UI and never abort).
+        params.progressind = [](unsigned, std::string) {};
+        params.stopcondition = []() { return false; };
+        Slic3r::orientation::orient(items, excludes, params);
+
+        // orient() fills rotation_matrix (the rotation to apply); convert to a
+        // unit quaternion for the Rust/glam side.
+        const Eigen::Matrix3d& R = items.front().rotation_matrix;
+        Eigen::Quaterniond q(R);
+        q.normalize();
+        out_quat_xyzw[0] = static_cast<float>(q.x());
+        out_quat_xyzw[1] = static_cast<float>(q.y());
+        out_quat_xyzw[2] = static_cast<float>(q.z());
+        out_quat_xyzw[3] = static_cast<float>(q.w());
+        return SLIC3R_OK;
+    } catch (const std::exception& e) {
+        set_err(out_err, e.what());
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
+        set_err(out_err, "unknown error in slic3r_orient_mesh");
+        return SLIC3R_ERR_INTERNAL;
+    }
 }
 
 } // extern "C"

@@ -30,6 +30,10 @@ const ROTATE_SNAP_DEG = 15;
 export interface GizmoApi {
   setMode(mode: GizmoMode): void;
   setSelection(ids: ObjectId[]): void;
+  /** Re-sync the gizmo to the current selection's live transforms after a
+   *  programmatic change (e.g. auto-orient), so the multi-selection pivot
+   *  re-centers on the moved objects. No-op while a drag is in progress. */
+  resync(): void;
   dispose(): void;
   /** Underlying TransformControls. The viewport adds it as a helper
    *  to the scene + listens to dragging-changed for OrbitControls
@@ -178,6 +182,12 @@ export function createGizmo(deps: GizmoDeps): GizmoApi {
     },
     setSelection(ids) {
       selected = [...ids];
+      refresh();
+    },
+    resync() {
+      // Skip mid-drag: the drag owns the gizmo/pivot and re-attaching would
+      // tear down the active manipulation.
+      if (controls.dragging) return;
       refresh();
     },
     dispose() {
