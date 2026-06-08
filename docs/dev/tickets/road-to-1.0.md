@@ -15,12 +15,26 @@ Driver-layer, self-contained. Send already uploads the sliced bundle
 `SendControls`. Add upload-progress callbacks in the driver → a progress
 event → a bar at the send site. No scene impact. Smallest of the set.
 
-### 2. Lay an object flat on the build plate
+### 2. Lay an object flat on the build plate ✅ DONE (2026-06-08)
 Transform op. Tractable version: **"place on face"** — click a face,
 rotate its normal to −Z, drop to bed (we already have `rotate_object` +
 the bed). True *auto*-flatten (most-stable resting face, no input) needs
 face-area / convex-hull analysis + a face-pick UX (renderer raycast → a
 Rust command). Independent of the plate features.
+
+**Shipped (2026-06-08).** Both an **"Auto orient"** canvas tool and a
+**"Lay flat on…"** face-pick tool. Auto-orient routes the selection's
+combined world mesh through libslic3r's own `orientation::orient`
+optimizer (support-minimizing — better than the planned most-stable-face
+heuristic), via a new `slic3r_orient_mesh` FFI entry. Lay-flat-on is the
+face-pick UX: arm the toolbar toggle → renderer raycasts the selected
+object/group, turns the clicked face's world normal to −Z, sends the hit
+point as the pivot to a `scene_object_lay_flat_on` command. Both unify on
+one backend `orient_objects(ids, rotation, pivot)` that seats the true
+lowest vertex at z=0 and clamps the footprint onto the bed; groups orient
+as a rigid unit. Deferred: a *largest-flat-surface* heuristic (clustering
+coplanar neighbors) for round/curved hulls, where a single picked triangle
+reads as noise.
 
 ### 3. Auto-arrange on the plate, spilling to extra plates
 Extends the existing `core/scene/arrange.rs` greedy pack, which already
@@ -43,7 +57,7 @@ objects and extra plates already round-trip, so 1.0 plate features won't
 reopen the format.
 
 **Suggested order:** #4 → #3 (the plate cluster); #1 in parallel
-(driver-only); #2 independent; then the UI items.
+(driver-only); #2 done; then the UI items.
 
 ## Windows build — cross-compile feasibility (2026-06-07)
 
