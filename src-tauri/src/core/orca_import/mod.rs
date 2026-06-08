@@ -1212,7 +1212,10 @@ mod tests {
                 .collect(),
         };
         let part = KeyPartition {
-            process: ["max_bridge_length"].iter().map(|s| s.to_string()).collect(),
+            process: ["max_bridge_length"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             ..Default::default()
         };
         let baseline: BTreeMap<String, String> =
@@ -1231,7 +1234,10 @@ mod tests {
         let only: HashSet<String> = ["max_bridge_length".to_string()].into_iter().collect();
         let intent = compute_overrides(&s, &part, &baseline, &enum_sets, &nonneg, Some(&only));
         assert_eq!(
-            intent.overrides.get("max_bridge_length").map(String::as_str),
+            intent
+                .overrides
+                .get("max_bridge_length")
+                .map(String::as_str),
             Some("10"),
             "an explicitly-changed key must survive even when it equals the baseline",
         );

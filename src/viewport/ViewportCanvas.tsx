@@ -110,17 +110,18 @@ export function ViewportCanvas({
   const gizmoRef = useRef<GizmoApi | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
+  // Transient toast + error-console notification.
+  const notify = (level: ToastMessage["level"], text: string) => {
+    const id = nextToastId++;
+    setToasts((prev) => [...prev, { id, level, text }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+    pushLog(level, text);
+  };
+
   // Engine "Auto orient" of the current selection. The backend orients the
   // selection as one rigid unit (combined mesh → one rotation about the shared
-  // center), so a group/assembly keeps its arrangement. Errors surface as a
-  // toast rather than failing silently.
+  // center), so a group/assembly keeps its arrangement.
   const runAutoOrient = () => {
-    const notify = (level: ToastMessage["level"], text: string) => {
-      const id = nextToastId++;
-      setToasts((prev) => [...prev, { id, level, text }]);
-      setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
-      pushLog(level, text); // parity with pushToast — keep it in the error console
-    };
     const ids = mirrorRef.current?.selectedIds() ?? [];
     if (ids.length === 0) {
       notify("info", "Select an object to auto-orient.");
@@ -129,6 +130,28 @@ export function ViewportCanvas({
     void invoke("scene_object_auto_orient", { ids }).catch((err) =>
       notify("error", `Auto orient failed: ${err}`),
     );
+  };
+
+  // "Lay flat on…" face-pick mode. While active, the next canvas click on the
+  // selected object picks a face whose plane is then laid on the build plate.
+  // The ref is what the canvas click handler reads; the effect syncs it and the
+  // cursor/gizmo side effects. Toggling the button again cancels.
+  const [layFlatPick, setLayFlatPick] = useState(false);
+  const layFlatPickRef = useRef(false);
+  useEffect(() => {
+    layFlatPickRef.current = layFlatPick;
+    if (containerRef.current) {
+      containerRef.current.style.cursor = layFlatPick ? "crosshair" : "";
+    }
+    // Disable the gizmo while picking so its handles don't intercept the click.
+    if (gizmoRef.current) gizmoRef.current.controls.enabled = !layFlatPick;
+  }, [layFlatPick]);
+  const toggleLayFlatPick = () => {
+    if (!layFlatPick && (mirrorRef.current?.selectedIds().length ?? 0) === 0) {
+      notify("info", "Select an object first, then pick a face to lay flat.");
+      return;
+    }
+    setLayFlatPick((v) => !v);
   };
 
   useEffect(() => {
@@ -479,6 +502,35 @@ export function ViewportCanvas({
         mirror.objectGroup.children,
         true,
       );
+      if (layFlatPickRef.current) {
+        // Lay-flat-on-face: pick a face of a *selected* object and lay its plane
+        // on the bed. Take the closest hit (so an occluding object isn't picked
+        // through); ignore hits on non-selected objects or empty space (stay in
+        // pick mode). The whole selection rotates as a rigid unit on the backend.
+        const hit = hits[0];
+        const objId = hit?.object.userData.objectId as ObjectId | undefined;
+        const sel = mirror.selectedIds();
+        if (hit?.face && objId != null && sel.includes(objId)) {
+          const normalMatrix = new THREE.Matrix3().getNormalMatrix(
+            hit.object.matrixWorld,
+          );
+          const worldNormal = hit.face.normal.clone().applyNormalMatrix(normalMatrix);
+          // Rotate so the picked face's outward normal points down (-Z), and
+          // pass the exact ray-hit point as the contact: the backend rotates
+          // about it and drops that point's now-horizontal face onto the plate.
+          const q = new THREE.Quaternion().setFromUnitVectors(
+            worldNormal,
+            new THREE.Vector3(0, 0, -1),
+          );
+          void invoke("scene_object_lay_flat_on", {
+            ids: sel,
+            rotation: [q.x, q.y, q.z, q.w],
+            contact: [hit.point.x, hit.point.y, hit.point.z],
+          }).catch((err) => notify("error", `Lay flat failed: ${err}`));
+          setLayFlatPick(false);
+        }
+        return; // consume the click — never select while picking a face
+      }
       const additive = ev.shiftKey || ev.metaKey || ev.ctrlKey;
       if (hits.length === 0) {
         if (!additive) {
@@ -698,6 +750,33 @@ export function ViewportCanvas({
                   d="M7 1.6v6.6M4.2 5.4 7 8.2l2.8-2.8M2.2 12h9.6"
                   stroke="currentColor"
                   strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className={`px-2 py-1.5 ${
+                layFlatPick ? "bg-neutral-700" : "hover:bg-neutral-700/60"
+              }`}
+              onClick={toggleLayFlatPick}
+              title="Lay flat on… — then click a face of the selected object"
+              aria-label="Lay flat on a clicked face"
+              aria-pressed={layFlatPick}
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                {/* a face (parallelogram) on the bed + a down arrow onto it */}
+                <path
+                  d="M2 9.4 7 6.6l5 2.8-5 2.6z"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M7 1.3v3.4M5.4 3.1 7 4.7l1.6-1.6"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 />

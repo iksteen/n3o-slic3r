@@ -1438,15 +1438,113 @@ impl Project {
         Ok((vertices, indices))
     }
 
-    /// Apply an auto-orient `rotation` (world frame, from the FFI orient of the
-    /// objects' combined world mesh) to a selection **as one rigid unit**: rotate
-    /// every object about the combined world-AABB center, then settle the whole
-    /// set onto the plate (combined min Z → 0). Rotating about a shared pivot
-    /// keeps groups/assemblies intact (their relative arrangement is preserved).
-    pub fn auto_orient_objects(
+    /// Combined world-space AABB of a selection from each object's local
+    /// bounding-box corners — the conservative bbox used for bounds + clamping
+    /// (matches `bed::object_out_of_bounds`).
+    fn combined_bbox_aabb(&self, ids: &[ObjectId]) -> Result<(Vec3, Vec3), SceneOpError> {
+        let active = self.active_plate;
+        let mut lo = Vec3::splat(f32::INFINITY);
+        let mut hi = Vec3::splat(f32::NEG_INFINITY);
+        for &id in ids {
+            let obj = self.plates[active]
+                .scene
+                .objects
+                .get(&id)
+                .ok_or(SceneOpError::UnknownObject(id))?;
+            let bb = self
+                .meshes
+                .get(&obj.mesh)
+                .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
+                .bounding_box;
+            for corner in mesh_bb_corners(&bb) {
+                let w = obj.transform.apply_point(corner);
+                lo = lo.min(w);
+                hi = hi.max(w);
+            }
+        }
+        Ok((lo, hi))
+    }
+
+    /// X/Y shift (z = 0) that pulls a footprint `[lo, hi]` back onto the active
+    /// plate's bed if it overhangs an edge. Zero when in-bounds or no bed bound.
+    fn bed_xy_clamp_shift(&self, lo: Vec3, hi: Vec3) -> Vec3 {
+        let Some(bed) = self.plates[self.active_plate].scene.bed.as_ref() else {
+            return Vec3::ZERO;
+        };
+        let clamp = |l: f32, h: f32, bmin: f32, bmax: f32| -> f32 {
+            if l < bmin {
+                bmin - l
+            } else if h > bmax {
+                bmax - h
+            } else {
+                0.0
+            }
+        };
+        Vec3::new(
+            clamp(
+                lo.x,
+                hi.x,
+                bed.extents.min[0] as f32,
+                bed.extents.max[0] as f32,
+            ),
+            clamp(
+                lo.y,
+                hi.y,
+                bed.extents.min[1] as f32,
+                bed.extents.max[1] as f32,
+            ),
+            0.0,
+        )
+    }
+
+    /// Exact lowest world-space Z of a selection, walking its true mesh
+    /// vertices (not the bbox). Seating a freshly-rotated object on the plate
+    /// needs the real contact point: the bbox over-approximates, so settling
+    /// its min would leave the geometry floating. O(V) per call (~ms even for
+    /// dense meshes) — only the seat step pays it; bounds stay cheap bbox.
+    fn combined_world_min_z(&self, ids: &[ObjectId]) -> Result<f32, SceneOpError> {
+        let active = self.active_plate;
+        let mut min_z = f32::INFINITY;
+        for &id in ids {
+            let obj = self.plates[active]
+                .scene
+                .objects
+                .get(&id)
+                .ok_or(SceneOpError::UnknownObject(id))?;
+            let mesh = self
+                .meshes
+                .get(&obj.mesh)
+                .ok_or(SceneOpError::UnknownMesh(obj.mesh))?;
+            for v in mesh.vertices.chunks_exact(3) {
+                let w = obj.transform.apply_point(Vec3::new(v[0], v[1], v[2]));
+                min_z = min_z.min(w.z);
+            }
+        }
+        Ok(min_z)
+    }
+
+    /// Apply a world-frame `rotation` to a selection **as one rigid unit**,
+    /// then seat it flush on the build plate. Every object rotates about a
+    /// shared `pivot`, keeping groups/assemblies intact:
+    /// - `None` pivots about the selection's combined-AABB center — auto-orient,
+    ///   where the FFI optimizer supplies the rotation and there's no anchor
+    ///   point to preserve.
+    /// - `Some(contact)` pivots about an explicit world point — "lay flat on…",
+    ///   where `contact` is the clicked face's ray hit, so the spot the user
+    ///   clicked stays put rather than swinging away.
+    ///
+    /// After rotating, the selection's **true lowest vertex** is translated to
+    /// z=0 — the geometry sits exactly on the plate, no bounding-box gap, no
+    /// float — and the footprint is pulled back onto the bed in X/Y if a
+    /// reoriented edge overhangs. Because we just seated the object, its min Z
+    /// is authoritative truth, so the conservative below-plate bounds check is
+    /// suppressed for this op's output (it would false-positive on sub-micron FP
+    /// noise); X/Y-out-of-volume and too-tall still report.
+    pub fn orient_objects(
         &mut self,
         ids: &[ObjectId],
         rotation: Quat,
+        pivot: Option<Vec3>,
     ) -> Result<Vec<SceneEvent>, SceneOpError> {
         if ids.is_empty() {
             return Ok(Vec::new());
@@ -1454,61 +1552,32 @@ impl Project {
         let active = self.active_plate;
         let plate_id = self.plates[active].id;
 
-        // Combined world-space AABB over the selection (min, max).
-        let combined_aabb = |me: &Self| -> Result<(Vec3, Vec3), SceneOpError> {
-            let mut lo = Vec3::splat(f32::INFINITY);
-            let mut hi = Vec3::splat(f32::NEG_INFINITY);
-            for &id in ids {
-                let obj = me.plates[active]
-                    .scene
-                    .objects
-                    .get(&id)
-                    .ok_or(SceneOpError::UnknownObject(id))?;
-                let bb = me
-                    .meshes
-                    .get(&obj.mesh)
-                    .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
-                    .bounding_box;
-                for corner in mesh_bb_corners(&bb) {
-                    let w = obj.transform.apply_point(corner);
-                    lo = lo.min(w);
-                    hi = hi.max(w);
-                }
+        let pivot = match pivot {
+            Some(p) => p,
+            None => {
+                let (lo, hi) = self.combined_bbox_aabb(ids)?;
+                (lo + hi) * 0.5
             }
-            Ok((lo, hi))
         };
-
-        let (lo, hi) = combined_aabb(self)?;
-        let pivot = (lo + hi) * 0.5;
         let rot_about_pivot = Transform::translation(pivot)
             .compose(Transform::rotation(rotation))
             .compose(Transform::translation(-pivot));
         for &id in ids {
-            let obj = self.plates[active].scene.objects.get_mut(&id).unwrap();
+            let obj = self.plates[active]
+                .scene
+                .objects
+                .get_mut(&id)
+                .ok_or(SceneOpError::UnknownObject(id))?;
             obj.transform = rot_about_pivot.compose(obj.transform);
         }
 
-        // Clamp the oriented selection into the build volume (in place — orient
-        // does not recenter). Z sits it on the plate; X/Y pull the footprint back
-        // onto the bed only if it overhangs an edge. The small floor margin keeps
-        // the settled bottom above z=0 so a sub-micron floating-point dip doesn't
-        // trip the strict `min_z < 0` (below-plate) bounds check.
-        const FLOOR_MARGIN: f32 = 1.0e-3;
-        let (lo2, hi2) = combined_aabb(self)?;
-        let mut shift = Vec3::new(0.0, 0.0, FLOOR_MARGIN - lo2.z);
-        if let Some(bed) = self.plates[active].scene.bed.as_ref() {
-            let clamp = |lo: f32, hi: f32, bmin: f32, bmax: f32| -> f32 {
-                if lo < bmin {
-                    bmin - lo
-                } else if hi > bmax {
-                    bmax - hi
-                } else {
-                    0.0
-                }
-            };
-            shift.x = clamp(lo2.x, hi2.x, bed.extents.min[0] as f32, bed.extents.max[0] as f32);
-            shift.y = clamp(lo2.y, hi2.y, bed.extents.min[1] as f32, bed.extents.max[1] as f32);
-        }
+        // Seat the rotated selection: translate its true lowest vertex to z=0
+        // (exact contact, no bbox gap) and pull the footprint back onto the bed
+        // in X/Y if a reoriented edge overhangs.
+        let min_z = self.combined_world_min_z(ids)?;
+        let (lo, hi) = self.combined_bbox_aabb(ids)?;
+        let mut shift = self.bed_xy_clamp_shift(lo, hi);
+        shift.z = -min_z;
         let settle = Transform::translation(shift);
         let mut events = Vec::with_capacity(ids.len());
         for &id in ids {
@@ -1520,7 +1589,7 @@ impl Project {
             });
         }
         for &id in ids {
-            events.extend(self.out_of_bounds_event(id));
+            events.extend(self.out_of_bounds_event_seated(id));
         }
         Ok(events)
     }
@@ -2051,6 +2120,32 @@ impl Project {
             })
         }
     }
+
+    /// Like `out_of_bounds_event`, but for an object a placement op just seated
+    /// flush on the plate. That op holds the absolute truth that the object's
+    /// lowest point sits at z=0, so the conservative bbox below-plate check is
+    /// dropped — it would false-positive on sub-micron FP noise in the settled
+    /// min. X/Y-out-of-volume, too-tall, and exclusion-zone reasons still report.
+    fn out_of_bounds_event_seated(&self, object_id: ObjectId) -> Option<SceneEvent> {
+        let plate_id = self.active_plate().id;
+        let plate = &self.active_plate().scene;
+        let bed = plate.bed.as_ref()?;
+        let obj = plate.objects.get(&object_id)?;
+        let mesh = self.meshes.get(&obj.mesh)?;
+        let reasons: Vec<_> = bed::object_out_of_bounds(obj, mesh, bed)
+            .into_iter()
+            .filter(|r| !matches!(r, bed::OutOfBoundsReason::BelowBuildPlate))
+            .collect();
+        if reasons.is_empty() {
+            None
+        } else {
+            Some(SceneEvent::ObjectOutOfBounds {
+                plate_id,
+                object_id,
+                reasons,
+            })
+        }
+    }
 }
 
 // ---- Free helpers --------------------------------------------------
@@ -2225,6 +2320,39 @@ mod tests {
     fn add_cube(p: &mut Project) -> (MeshId, ObjectId) {
         let mesh_id = p.register_mesh(unit_cube_mesh());
         let obj_id = p.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
+        (mesh_id, obj_id)
+    }
+
+    /// Octahedron of "radius" `r` centered on the local origin: vertices at
+    /// (±r,0,0),(0,±r,0),(0,0,±r). Unlike a cube, its bounding-box corners are
+    /// *not* vertices — the box corner (±r,±r,±r) sits at distance r√3 while the
+    /// nearest surface is only r away. That gap is what separates a true-vertex
+    /// settle from a bbox settle, and what makes the conservative (bbox) bounds
+    /// check over-report below-plate once the solid is rotated.
+    fn add_octahedron(p: &mut Project, r: f32) -> (MeshId, ObjectId) {
+        let mesh = NewMesh {
+            vertices: vec![
+                r, 0.0, 0.0, // 0 +x
+                -r, 0.0, 0.0, // 1 -x
+                0.0, r, 0.0, // 2 +y
+                0.0, -r, 0.0, // 3 -y
+                0.0, 0.0, r, // 4 +z (apex)
+                0.0, 0.0, -r, // 5 -z (nadir)
+            ],
+            normals: vec![0.0; 18],
+            indices: vec![
+                4, 0, 2, 4, 2, 1, 4, 1, 3, 4, 3, 0, // top fan
+                5, 2, 0, 5, 1, 2, 5, 3, 1, 5, 0, 3, // bottom fan
+            ],
+            paint_colors: None,
+            bounding_box: BoundingBox {
+                min: [(-r) as f64, (-r) as f64, (-r) as f64],
+                max: [r as f64, r as f64, r as f64],
+            },
+            provenance: MeshProvenance::Primitive("octahedron".into()),
+        };
+        let mesh_id = p.register_mesh(mesh);
+        let obj_id = p.register_object(NewSceneObject::at_origin(mesh_id, "octahedron"));
         (mesh_id, obj_id)
     }
 
@@ -2720,12 +2848,22 @@ mod tests {
             .apply_point(center_local);
         // Identity rotation (engine "already optimal" / best = z-up): orient in
         // place — keep the XY center, just settle onto the bed.
-        p.auto_orient_objects(&[obj], Quat::IDENTITY).unwrap();
+        p.orient_objects(&[obj], Quat::IDENTITY, None).unwrap();
 
         let xform = p.active_plate().scene.objects.get(&obj).unwrap().transform;
         let wc = xform.apply_point(center_local);
-        assert!((wc.x - before.x).abs() < 1e-3, "x moved {} -> {}", before.x, wc.x);
-        assert!((wc.y - before.y).abs() < 1e-3, "y moved {} -> {}", before.y, wc.y);
+        assert!(
+            (wc.x - before.x).abs() < 1e-3,
+            "x moved {} -> {}",
+            before.x,
+            wc.x
+        );
+        assert!(
+            (wc.y - before.y).abs() < 1e-3,
+            "y moved {} -> {}",
+            before.y,
+            wc.y
+        );
         // Settled on the bed: min Z ≈ 0.
         let mut min_z = f32::INFINITY;
         for &x in &[mesh_bb.min[0] as f32, mesh_bb.max[0] as f32] {
@@ -2735,7 +2873,10 @@ mod tests {
                 }
             }
         }
-        assert!((0.0..1e-2).contains(&min_z), "min_z={min_z} (expected on the plate, not below)");
+        assert!(
+            min_z.abs() < 1e-3,
+            "min_z={min_z} (expected resting on the plate)"
+        );
     }
 
     #[test]
@@ -2750,7 +2891,7 @@ mod tests {
         p.translate_object(obj, Vec3::new(bed_max_x - 0.5, 30.0, 0.0))
             .unwrap();
         // Even with no reorientation, the clamp must pull the footprint back in.
-        p.auto_orient_objects(&[obj], Quat::IDENTITY).unwrap();
+        p.orient_objects(&[obj], Quat::IDENTITY, None).unwrap();
 
         let xform = p.active_plate().scene.objects.get(&obj).unwrap().transform;
         let mesh_bb = p.meshes.values().next().unwrap().bounding_box;
@@ -2765,6 +2906,184 @@ mod tests {
         assert!(
             max_x <= bed_max_x + 1e-3,
             "footprint not clamped onto bed: max_x={max_x} > {bed_max_x}"
+        );
+    }
+
+    #[test]
+    fn lay_flat_on_pivots_about_contact_and_settles_lowest_to_z_zero() {
+        let mut p = Project::default();
+        let (_, obj) = add_cube(&mut p);
+        p.translate_object(obj, Vec3::new(40.0, 40.0, 20.0))
+            .unwrap();
+        // A world point on the object's surface (the ray hit) and a lay-flat
+        // rotation. The selection pivots about `contact` — so the clicked spot's
+        // XY stays put when nothing overhangs — then seats so the object's *true
+        // lowest vertex* (not the contact point) rests on the plate.
+        let contact = Vec3::new(40.5, 40.5, 25.0);
+        let old = p.active_plate().scene.objects.get(&obj).unwrap().transform;
+        let local = old.to_mat4().inverse().transform_point3(contact);
+        let rot = Quat::from_axis_angle(Vec3::X, 0.7);
+        p.orient_objects(&[obj], rot, Some(contact)).unwrap();
+
+        let new = p.active_plate().scene.objects.get(&obj).unwrap().transform;
+        // The contact point pivots in place: its XY is preserved (no overhang).
+        let placed = new.apply_point(local);
+        assert!(
+            (placed.x - contact.x).abs() < 1e-3,
+            "contact x moved to {}",
+            placed.x
+        );
+        assert!(
+            (placed.y - contact.y).abs() < 1e-3,
+            "contact y moved to {}",
+            placed.y
+        );
+        // The true lowest vertex of the cube rests exactly on the plate.
+        let mesh_bb = p.meshes.values().next().unwrap().bounding_box;
+        let mut min_z = f32::INFINITY;
+        for &x in &[mesh_bb.min[0] as f32, mesh_bb.max[0] as f32] {
+            for &y in &[mesh_bb.min[1] as f32, mesh_bb.max[1] as f32] {
+                for &z in &[mesh_bb.min[2] as f32, mesh_bb.max[2] as f32] {
+                    min_z = min_z.min(new.apply_point(Vec3::new(x, y, z)).z);
+                }
+            }
+        }
+        assert!(
+            min_z.abs() < 1e-3,
+            "lowest vertex should rest at z=0, got {min_z}"
+        );
+    }
+
+    #[test]
+    fn lay_flat_on_clamps_overhanging_footprint_back_onto_bed() {
+        let mut p = Project::default();
+        let (_, obj) = add_cube(&mut p);
+        let bed_max_x = p.active_plate().scene.bed.as_ref().unwrap().extents.max[0] as f32;
+        // Unit cube hanging 0.5 off the +X edge. The post-rotation X/Y clamp must
+        // pull the footprint back on (here identity rotation, so it's purely the
+        // clamp doing the work).
+        p.translate_object(obj, Vec3::new(bed_max_x - 0.5, 30.0, 0.0))
+            .unwrap();
+        p.orient_objects(
+            &[obj],
+            Quat::IDENTITY,
+            Some(Vec3::new(bed_max_x, 30.5, 0.5)),
+        )
+        .unwrap();
+
+        let xform = p.active_plate().scene.objects.get(&obj).unwrap().transform;
+        let mesh_bb = p.meshes.values().next().unwrap().bounding_box;
+        let mut max_x = f32::NEG_INFINITY;
+        for &x in &[mesh_bb.min[0] as f32, mesh_bb.max[0] as f32] {
+            for &y in &[mesh_bb.min[1] as f32, mesh_bb.max[1] as f32] {
+                for &z in &[mesh_bb.min[2] as f32, mesh_bb.max[2] as f32] {
+                    max_x = max_x.max(xform.apply_point(Vec3::new(x, y, z)).x);
+                }
+            }
+        }
+        assert!(
+            max_x <= bed_max_x + 1e-3,
+            "footprint not clamped: max_x={max_x}"
+        );
+    }
+
+    #[test]
+    fn orient_settles_true_lowest_vertex_and_suppresses_false_below_plate() {
+        use crate::core::scene::bed::{object_out_of_bounds, OutOfBoundsReason};
+        let mut p = Project::default();
+        let r = 10.0_f32;
+        let (mesh_id, obj) = add_octahedron(&mut p, r);
+        // Center it well inside the bed and float it, so only Z is in play.
+        let (cx, cy) = {
+            let e = p.active_plate().scene.bed.as_ref().unwrap().extents;
+            (
+                ((e.min[0] + e.max[0]) * 0.5) as f32,
+                ((e.min[1] + e.max[1]) * 0.5) as f32,
+            )
+        };
+        p.translate_object(obj, Vec3::new(cx, cy, 50.0)).unwrap();
+        // A 45° tilt: the bbox corner now dips well below the true geometry, so a
+        // bbox-based settle would leave the solid floating and the bbox bounds
+        // check over-reports below-plate.
+        let rot = Quat::from_axis_angle(Vec3::X, std::f32::consts::FRAC_PI_4);
+        let events = p.orient_objects(&[obj], rot, None).unwrap();
+
+        // The *true* lowest vertex — not a bbox corner — rests on the plate. If
+        // this regressed to a bbox settle it'd float at ≈ +0.71·r.
+        let xform = p.active_plate().scene.objects.get(&obj).unwrap().transform;
+        let mut true_min_z = f32::INFINITY;
+        for v in p.meshes.get(&mesh_id).unwrap().vertices.chunks_exact(3) {
+            true_min_z = true_min_z.min(xform.apply_point(Vec3::new(v[0], v[1], v[2])).z);
+        }
+        assert!(
+            true_min_z.abs() < 1e-3,
+            "true lowest vertex should rest at z=0, got {true_min_z}"
+        );
+
+        // The conservative bbox check *does* flag below-plate here (the rotated
+        // box corner sits at ≈ -0.71·r)…
+        let raw = {
+            let plate = p.active_plate();
+            let oobj = plate.scene.objects.get(&obj).unwrap();
+            let omesh = p.meshes.get(&oobj.mesh).unwrap();
+            object_out_of_bounds(oobj, omesh, plate.scene.bed.as_ref().unwrap())
+        };
+        assert!(
+            raw.iter()
+                .any(|r| matches!(r, OutOfBoundsReason::BelowBuildPlate)),
+            "test premise: bbox check should over-report below-plate, got {raw:?}"
+        );
+        // …but the orient op, which just seated the solid flush, suppresses that
+        // false positive — no below-plate warning reaches the UI.
+        let emitted_below_plate = events.iter().any(|e| {
+            matches!(
+                e,
+                SceneEvent::ObjectOutOfBounds { reasons, .. }
+                    if reasons.iter().any(|r| matches!(r, OutOfBoundsReason::BelowBuildPlate))
+            )
+        });
+        assert!(
+            !emitted_below_plate,
+            "below-plate must be suppressed for a freshly-seated object"
+        );
+    }
+
+    #[test]
+    fn orient_keeps_too_tall_warning_after_seating() {
+        use crate::core::scene::bed::{BoundsAxis, OutOfBoundsReason};
+        let mut p = Project::default();
+        let (_, obj) = add_cube(&mut p);
+        // A column taller than the build volume. Seating drops it to z=0, so it's
+        // not below-plate — but it pierces the Z ceiling, which must still warn:
+        // the seated suppression only drops below-plate, not too-tall.
+        let z_max = p.active_plate().scene.bed.as_ref().unwrap().extents.max[2] as f32;
+        p.scale_object(obj, Vec3::new(1.0, 1.0, z_max * 2.0 + 100.0))
+            .unwrap();
+        let events = p.orient_objects(&[obj], Quat::IDENTITY, None).unwrap();
+
+        let reasons = events
+            .iter()
+            .find_map(|e| match e {
+                SceneEvent::ObjectOutOfBounds {
+                    object_id, reasons, ..
+                } if *object_id == obj => Some(reasons.clone()),
+                _ => None,
+            })
+            .expect("a too-tall object must still emit an out-of-bounds event");
+        assert!(
+            reasons.iter().any(|r| matches!(
+                r,
+                OutOfBoundsReason::OutOfBuildVolume {
+                    axis: BoundsAxis::Z
+                }
+            )),
+            "too-tall (Z) must still report after seating, got {reasons:?}"
+        );
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, OutOfBoundsReason::BelowBuildPlate)),
+            "a seated object is not below-plate, got {reasons:?}"
         );
     }
 
