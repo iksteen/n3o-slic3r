@@ -90,11 +90,15 @@ greys the buttons otherwise). A lower-friction model:
   just lay-flat *that* object. Selection becomes optional sugar, not a
   precondition.
 
-Open question: keep the selection-gated behavior when a selection *does*
-exist (orient only the selected set), and only fall back to pick-to-orient
-/ click-to-lay-flat when empty — so the tools stay predictable either way.
-UX call, hence "maybe"; revisit once the plate features (#3/#4) settle the
-multi-object interactions.
+Settled: the selection-gated path **must stay** as the primary mode — it's
+the only way to target a *subcomponent of a group*. A canvas pick always
+resolves to the whole group (that's what grouping means), so without
+selection-only mode there's no way to orient/lay-flat a single child. The
+pick-when-empty behavior is therefore strictly an *additive* convenience
+for the no-selection case, never a replacement: selection exists → operate
+on the selected set (which may be one child of a group); selection empty →
+fall back to pick-to-orient / click-to-lay-flat. Revisit the rollout once
+the plate features (#3/#4) settle the multi-object interactions.
 
 **Format note:** none of #3/#4 touch the frozen MVP project format —
 per-plate objects and extra plates already round-trip, so 1.0 plate
