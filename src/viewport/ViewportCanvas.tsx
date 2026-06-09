@@ -126,27 +126,31 @@ export function ViewportCanvas({
     pushLog(level, text);
   };
 
-  // Two canvas pick modes — "lay flat on…" (face pick) and "auto orient"
-  // (object pick). At most one is active at a time. While either is armed the
-  // next canvas click is consumed by the pick instead of selecting. The refs
-  // are what the click handler reads; the effect syncs them + the cursor and
-  // gizmo side effects. The buttons gate on object presence — a click
-  // identifies the target, so a prior selection is optional.
+  // Canvas pick modes — "lay flat on…" (face pick), "auto orient" (object
+  // pick), and "align X/Y" (object pick, carrying the target axis). At most one
+  // is active at a time. While any is armed the next canvas click is consumed
+  // by the pick instead of selecting. The refs are what the click handler
+  // reads; the effect syncs them + the cursor and gizmo side effects. The
+  // buttons gate on object presence — a click identifies the target, so a prior
+  // selection is optional.
   const [layFlatPick, setLayFlatPick] = useState(false);
   const [orientPick, setOrientPick] = useState(false);
+  const [alignPick, setAlignPick] = useState<"X" | "Y" | null>(null);
   const layFlatPickRef = useRef(false);
   const orientPickRef = useRef(false);
+  const alignPickRef = useRef<"X" | "Y" | null>(null);
   useEffect(() => {
     layFlatPickRef.current = layFlatPick;
     orientPickRef.current = orientPick;
-    const picking = layFlatPick || orientPick;
+    alignPickRef.current = alignPick;
+    const picking = layFlatPick || orientPick || alignPick !== null;
     if (containerRef.current) {
       containerRef.current.style.cursor = picking ? "crosshair" : "";
     }
     // Hide the gizmo + disable interaction while picking so its handles
     // neither draw over the model nor intercept the pick click.
     if (gizmoRef.current) gizmoRef.current.setSuppressed(picking);
-  }, [layFlatPick, orientPick]);
+  }, [layFlatPick, orientPick, alignPick]);
 
   const plateHasObjects = () =>
     (mirrorRef.current?.activePlate()?.objects.size ?? 0) > 0;
@@ -169,7 +173,8 @@ export function ViewportCanvas({
       return;
     }
     if (!plateHasObjects()) return; // nothing to pick
-    setLayFlatPick(false); // the two pick modes are mutually exclusive
+    setLayFlatPick(false); // the pick modes are mutually exclusive
+    setAlignPick(null);
     setOrientPick(true);
   };
 
@@ -179,18 +184,32 @@ export function ViewportCanvas({
       return;
     }
     if (!plateHasObjects()) return; // nothing to pick
-    setOrientPick(false); // the two pick modes are mutually exclusive
+    setOrientPick(false); // the pick modes are mutually exclusive
+    setAlignPick(null);
     setLayFlatPick(true);
   };
 
   // "Align X / Y": rotate the selection about Z so its dominant line direction
-  // becomes parallel to the chosen axis. Selection-based for now.
+  // becomes parallel to `axis`. With a selection, align it immediately. With no
+  // selection, arm pick-to-align on that axis — the next clicked object's whole
+  // group is aligned. Clicking the same axis while armed cancels; the other
+  // axis re-targets.
   const runAlign = (axis: "X" | "Y") => {
+    if (alignPick === axis) {
+      setAlignPick(null); // toggle off
+      return;
+    }
     const ids = mirrorRef.current?.selectedIds() ?? [];
-    if (ids.length === 0) return; // button disabled without a selection
-    void invoke("scene_object_align_axis", { ids, axis }).catch((err) =>
-      notify("error", `Align ${axis} failed: ${err}`),
-    );
+    if (ids.length > 0) {
+      void invoke("scene_object_align_axis", { ids, axis }).catch((err) =>
+        notify("error", `Align ${axis} failed: ${err}`),
+      );
+      return;
+    }
+    if (!plateHasObjects()) return; // nothing to pick
+    setLayFlatPick(false); // the pick modes are mutually exclusive
+    setOrientPick(false);
+    setAlignPick(axis);
   };
 
   useEffect(() => {
@@ -447,7 +466,12 @@ export function ViewportCanvas({
           // The active plate just changed — re-sync the viewport's
           // selection + camera framing from the new plate's cached
           // state so the workspace matches. (Transform mode is
-          // App-owned and survives the switch.)
+          // App-owned and survives the switch.) Any armed canvas pick
+          // belonged to the old plate, so drop it — otherwise the
+          // crosshair/gizmo-hidden mode lingers onto the new plate.
+          setLayFlatPick(false);
+          setOrientPick(false);
+          setAlignPick(null);
           const plate = mirror.activePlate();
           if (plate) {
             gizmo.setSelection(
@@ -575,6 +599,27 @@ export function ViewportCanvas({
             expandGroups: true,
           }).catch((err) => notify("error", `Auto orient failed: ${err}`));
           setOrientPick(false);
+        }
+        return; // consume the click — never select while picking
+      }
+      if (alignPickRef.current) {
+        // Pick-to-align: click any object (no face needed) and align its whole
+        // group's dominant line direction to the armed axis. Select the group
+        // too, as confirmation. A click on empty space stays in pick mode.
+        const axis = alignPickRef.current;
+        const objId = hits[0]?.object.userData.objectId as ObjectId | undefined;
+        if (objId != null) {
+          void invoke("scene_select", {
+            ids: [objId],
+            mode: "Replace",
+            expandGroups: true,
+          }).catch((err) => notify("error", `Select failed: ${err}`));
+          void invoke("scene_object_align_axis", {
+            ids: [objId],
+            axis,
+            expandGroups: true,
+          }).catch((err) => notify("error", `Align ${axis} failed: ${err}`));
+          setAlignPick(null);
         }
         return; // consume the click — never select while picking
       }
@@ -908,23 +953,29 @@ export function ViewportCanvas({
               // The part-bar runs along the axis: X horizontal (→), Y vertical
               // (↑), matching the standard X-right / Y-away view.
               const horizontal = axis === "X";
+              const armed = alignPick === axis;
               return (
                 <button
                   key={axis}
                   type="button"
-                  disabled={!hasSelection}
+                  disabled={!hasObjects && !armed}
                   className={`px-2 py-1.5 ${
-                    hasSelection
-                      ? "hover:bg-neutral-700/60"
-                      : "opacity-40 cursor-not-allowed"
+                    armed
+                      ? "bg-neutral-700"
+                      : hasObjects
+                        ? "hover:bg-neutral-700/60"
+                        : "opacity-40 cursor-not-allowed"
                   }`}
                   onClick={() => runAlign(axis)}
                   title={
                     hasSelection
                       ? `Align selection's dominant line direction to the ${axis} axis`
-                      : `Align to ${axis} — select an object first`
+                      : hasObjects || armed
+                        ? `Align to ${axis} — click an object to align its group`
+                        : `Align to ${axis} — add an object first`
                   }
                   aria-label={`Align dominant direction to ${axis} axis`}
+                  aria-pressed={armed}
                 >
                   <svg
                     width="14"
