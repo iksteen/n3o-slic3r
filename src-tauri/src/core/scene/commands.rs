@@ -821,6 +821,45 @@ pub fn scene_object_auto_orient(
     Ok(())
 }
 
+/// "Align to axis": rotate the selection about Z so its dominant horizontal
+/// line direction (the length-weighted most common edge direction) becomes
+/// parallel to the X or Y axis. Unlike auto-orient this is a pure yaw — it
+/// doesn't change which face is down, so it composes with a prior orient — and
+/// needs no engine call; the angle is a cheap pure-Rust computation over the
+/// selection's combined world mesh, so it all runs under one lock. A
+/// near-isotropic footprint (no dominant direction) is a no-op.
+///
+/// `expand_groups` mirrors the other tools: the selection-less pick path passes
+/// a single clicked id and expands it to its whole group.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_object_align_axis(
+    mut ids: Vec<ObjectId>,
+    axis: super::align::AlignAxis,
+    expand_groups: Option<bool>,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let events = {
+        let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+        if expand_groups.unwrap_or(false) {
+            ids = s.group_expanded_ids(&ids);
+        }
+        let (vertices, indices) = s.objects_world_mesh(&ids).map_err(op_err_to_string)?;
+        let Some(angle) = super::align::axis_alignment_rotation(&vertices, &indices, axis) else {
+            return Ok(()); // no dominant direction — nothing to align
+        };
+        let rotation = glam::Quat::from_rotation_z(angle);
+        s.orient_objects(&ids, rotation, None)
+            .map_err(op_err_to_string)?
+    };
+    emit_all(&window, &events);
+    Ok(())
+}
+
 /// "Lay flat on…": lay a clicked face of the selection onto the plate.
 /// `rotation` is a world-frame unit quaternion that aligns the clicked face's
 /// outward normal with -Z; `contact` is a world point on that face (the ray

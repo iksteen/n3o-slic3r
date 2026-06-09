@@ -183,6 +183,16 @@ export function ViewportCanvas({
     setLayFlatPick(true);
   };
 
+  // "Align X / Y": rotate the selection about Z so its dominant line direction
+  // becomes parallel to the chosen axis. Selection-based for now.
+  const runAlign = (axis: "X" | "Y") => {
+    const ids = mirrorRef.current?.selectedIds() ?? [];
+    if (ids.length === 0) return; // button disabled without a selection
+    void invoke("scene_object_align_axis", { ids, axis }).catch((err) =>
+      notify("error", `Align ${axis} failed: ${err}`),
+    );
+  };
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -892,6 +902,55 @@ export function ViewportCanvas({
                 />
               </svg>
             </button>
+            {(["Y", "X"] as const).map((axis) => {
+              // Match the bed's origin axis markers: X is red, Y is green.
+              const color = axis === "X" ? "#ff4444" : "#44dd44";
+              // The part-bar runs along the axis: X horizontal (→), Y vertical
+              // (↑), matching the standard X-right / Y-away view.
+              const horizontal = axis === "X";
+              return (
+                <button
+                  key={axis}
+                  type="button"
+                  disabled={!hasSelection}
+                  className={`px-2 py-1.5 ${
+                    hasSelection
+                      ? "hover:bg-neutral-700/60"
+                      : "opacity-40 cursor-not-allowed"
+                  }`}
+                  onClick={() => runAlign(axis)}
+                  title={
+                    hasSelection
+                      ? `Align selection's dominant line direction to the ${axis} axis`
+                      : `Align to ${axis} — select an object first`
+                  }
+                  aria-label={`Align dominant direction to ${axis} axis`}
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 14 14"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    {/* a part (rounded rect) lying along the axis, tinted to
+                        the matching bed axis marker */}
+                    <rect
+                      x={horizontal ? 1.5 : 5.6}
+                      y={horizontal ? 5.6 : 1.5}
+                      width={horizontal ? 11 : 2.8}
+                      height={horizontal ? 2.8 : 11}
+                      rx="1"
+                      stroke={color}
+                      strokeWidth="1.3"
+                    />
+                    <text x="10.5" y="13" fontSize="6" fill={color} stroke="none">
+                      {axis}
+                    </text>
+                  </svg>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>

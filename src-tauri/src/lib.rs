@@ -190,6 +190,7 @@ pub fn run() {
             core::scene::commands::scene_object_lay_flat,
             core::scene::commands::scene_object_auto_orient,
             core::scene::commands::scene_object_lay_flat_on,
+            core::scene::commands::scene_object_align_axis,
             core::scene::commands::scene_set_object_material,
             core::scene::commands::scene_group_objects,
             core::scene::commands::scene_ungroup_objects,

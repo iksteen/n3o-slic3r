@@ -28,6 +28,7 @@
 //! scene. Today the coupling is small enough that the move would be
 //! cosmetic; documented here so future-us doesn't forget.
 
+pub mod align;
 pub mod arrange;
 pub mod bed;
 pub mod build_plate;
