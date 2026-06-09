@@ -819,12 +819,19 @@ pub fn scene_object_auto_orient(
 /// the contact — and its now-horizontal face — sits on the plate. The clicked
 /// triangle defines the contact plane, so the placement is exact (no
 /// bounding-box gap / float).
+///
+/// `expand_groups` supports the selection-less pick path: when the user lays
+/// flat with nothing selected, the click identifies a single object, and we
+/// expand it to its whole group so the group lays flat as one rigid unit. The
+/// selection path leaves it unset so a panel-selected single child (a group
+/// subcomponent) stays individually targetable.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_object_lay_flat_on(
     ids: Vec<ObjectId>,
     rotation: [f32; 4],
     contact: [f32; 3],
+    expand_groups: Option<bool>,
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
@@ -839,6 +846,11 @@ pub fn scene_object_lay_flat_on(
     let contact = glam::Vec3::new(contact[0], contact[1], contact[2]);
     let events = {
         let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+        let ids = if expand_groups.unwrap_or(false) {
+            s.group_expanded_ids(&ids)
+        } else {
+            ids
+        };
         s.orient_objects(&ids, q, Some(contact))
             .map_err(op_err_to_string)?
     };

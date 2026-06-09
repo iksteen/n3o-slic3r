@@ -113,6 +113,10 @@ export function ViewportCanvas({
   // toolbar tools (auto orient / lay flat on). Kept in sync with the mirror's
   // SelectionChanged / ActivePlateChanged events below.
   const [hasSelection, setHasSelection] = useState(false);
+  // Whether the active plate has any objects at all. Lay-flat-on also works
+  // without a selection (the face click identifies the object), so its button
+  // is gated on object presence rather than selection.
+  const [hasObjects, setHasObjects] = useState(false);
 
   // Transient toast + error-console notification.
   const notify = (level: ToastMessage["level"], text: string) => {
@@ -149,9 +153,12 @@ export function ViewportCanvas({
     if (gizmoRef.current) gizmoRef.current.setSuppressed(layFlatPick);
   }, [layFlatPick]);
   const toggleLayFlatPick = () => {
-    // Arming needs a selection (button is disabled without one); cancelling an
-    // active pick is always allowed.
-    if (!layFlatPick && (mirrorRef.current?.selectedIds().length ?? 0) === 0) {
+    // Arming needs something on the plate to pick (the face click identifies
+    // the object — a selection is optional); cancelling is always allowed.
+    if (
+      !layFlatPick &&
+      (mirrorRef.current?.activePlate()?.objects.size ?? 0) === 0
+    ) {
       return;
     }
     setLayFlatPick((v) => !v);
@@ -393,6 +400,13 @@ export function ViewportCanvas({
           gizmo.setSelection(evt.data.selected);
           setHasSelection(evt.data.selected.length > 0);
           break;
+        case "ObjectAdded":
+        case "ObjectRemoved":
+          // Lay-flat-on works without a selection, so its button tracks
+          // object presence. This listener fires after the mirror applied the
+          // event, so the count is current.
+          setHasObjects((mirror.activePlate()?.objects.size ?? 0) > 0);
+          break;
         case "BedChanged":
           if (evt.data.plate_id !== activeId) break;
           if (evt.data.bed) {
@@ -411,11 +425,13 @@ export function ViewportCanvas({
               Array.from(plate.selection).sort((a, b) => a - b),
             );
             setHasSelection(plate.selection.size > 0);
+            setHasObjects(plate.objects.size > 0);
             if (plate.bed) {
               initialFrameForBed(camera, controls, plate.bed);
             }
           } else {
             setHasSelection(false);
+            setHasObjects(false);
           }
           void refreshTower();
           break;
@@ -431,6 +447,11 @@ export function ViewportCanvas({
         // unbound plate (empty library) has no bed — the onboarding
         // empty-state covers that case, no default printer is forced.
         detachBridge = un;
+        // The bridge has applied the initial snapshot — seed the tool gating
+        // from it (events only fire for subsequent changes).
+        const plate = mirror.activePlate();
+        setHasObjects((plate?.objects.size ?? 0) > 0);
+        setHasSelection((plate?.selection.size ?? 0) > 0);
         void refreshTower();
       })
       .catch((err) => {
@@ -510,14 +531,32 @@ export function ViewportCanvas({
         true,
       );
       if (layFlatPickRef.current) {
-        // Lay-flat-on-face: pick a face of a *selected* object and lay its plane
-        // on the bed. Take the closest hit (so an occluding object isn't picked
-        // through); ignore hits on non-selected objects or empty space (stay in
-        // pick mode). The whole selection rotates as a rigid unit on the backend.
+        // Lay-flat-on-face: click a face and lay its plane on the bed. Take the
+        // closest hit (so an occluding object isn't picked through); a click on
+        // empty space stays in pick mode.
         const hit = hits[0];
         const objId = hit?.object.userData.objectId as ObjectId | undefined;
-        const sel = mirror.selectedIds();
-        if (hit?.face && objId != null && sel.includes(objId)) {
+        if (hit?.face && objId != null) {
+          const sel = mirror.selectedIds();
+          // Two modes (the settled #7 contract):
+          //  - selection present → lay the *selected* set flat (which may be a
+          //    single group child — keep it exact, no group expansion). The
+          //    click must land on a selected object; clicks elsewhere are
+          //    ignored so you can't lay-flat something you didn't select.
+          //  - no selection → lay the *clicked* object's whole group flat (the
+          //    backend expands it); a face click is enough to identify it.
+          let ids: ObjectId[];
+          let expandGroups: boolean;
+          if (sel.length > 0) {
+            if (!sel.includes(objId)) {
+              return; // off-selection click — stay in pick mode
+            }
+            ids = sel;
+            expandGroups = false;
+          } else {
+            ids = [objId];
+            expandGroups = true;
+          }
           const normalMatrix = new THREE.Matrix3().getNormalMatrix(
             hit.object.matrixWorld,
           );
@@ -530,9 +569,10 @@ export function ViewportCanvas({
             new THREE.Vector3(0, 0, -1),
           );
           void invoke("scene_object_lay_flat_on", {
-            ids: sel,
+            ids,
             rotation: [q.x, q.y, q.z, q.w],
             contact: [hit.point.x, hit.point.y, hit.point.z],
+            expandGroups,
           }).catch((err) => notify("error", `Lay flat failed: ${err}`));
           setLayFlatPick(false);
         }
@@ -773,19 +813,21 @@ export function ViewportCanvas({
             </button>
             <button
               type="button"
-              disabled={!hasSelection && !layFlatPick}
+              disabled={!hasObjects && !layFlatPick}
               className={`px-2 py-1.5 ${
                 layFlatPick
                   ? "bg-neutral-700"
-                  : hasSelection
+                  : hasObjects
                     ? "hover:bg-neutral-700/60"
                     : "opacity-40 cursor-not-allowed"
               }`}
               onClick={toggleLayFlatPick}
               title={
-                hasSelection || layFlatPick
+                hasSelection
                   ? "Lay flat on… — then click a face of the selected object"
-                  : "Lay flat on… — Select an object first"
+                  : hasObjects || layFlatPick
+                    ? "Lay flat on… — click any object's face to lay it flat"
+                    : "Lay flat on… — add an object first"
               }
               aria-label="Lay flat on a clicked face"
               aria-pressed={layFlatPick}
