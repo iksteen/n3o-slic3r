@@ -1552,6 +1552,16 @@ impl Project {
         let active = self.active_plate;
         let plate_id = self.plates[active].id;
 
+        // Resolve every target up front so the op is transactional: a missing
+        // id (e.g. one deleted during auto-orient's unlocked optimizer run)
+        // aborts here, before any transform is mutated, rather than leaving a
+        // half-rotated, un-settled selection that emitted no events.
+        for &id in ids {
+            if !self.plates[active].scene.objects.contains_key(&id) {
+                return Err(SceneOpError::UnknownObject(id));
+            }
+        }
+
         let pivot = match pivot {
             Some(p) => p,
             None => {
@@ -1577,7 +1587,10 @@ impl Project {
         let min_z = self.combined_world_min_z(ids)?;
         let (lo, hi) = self.combined_bbox_aabb(ids)?;
         let mut shift = self.bed_xy_clamp_shift(lo, hi);
-        shift.z = -min_z;
+        // `min_z` is non-finite only when the whole selection has no vertices
+        // (degenerate/empty meshes) — there's no geometry to seat, so leave Z
+        // untouched rather than translating everything to -∞.
+        shift.z = if min_z.is_finite() { -min_z } else { 0.0 };
         let settle = Transform::translation(shift);
         let mut events = Vec::with_capacity(ids.len());
         for &id in ids {
@@ -3084,6 +3097,58 @@ mod tests {
                 .iter()
                 .any(|r| matches!(r, OutOfBoundsReason::BelowBuildPlate)),
             "a seated object is not below-plate, got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn orient_with_empty_mesh_does_not_collapse_to_negative_infinity() {
+        let mut p = Project::default();
+        // A mesh with no geometry — pathological, but the true-lowest-vertex
+        // settle must not translate it to z = -∞ (a non-finite min_z).
+        let mesh = NewMesh {
+            vertices: vec![],
+            normals: vec![],
+            indices: vec![],
+            paint_colors: None,
+            bounding_box: BoundingBox {
+                min: [0.0, 0.0, 0.0],
+                max: [0.0, 0.0, 0.0],
+            },
+            provenance: MeshProvenance::Primitive("empty".into()),
+        };
+        let mesh_id = p.register_mesh(mesh);
+        let obj = p.register_object(NewSceneObject::at_origin(mesh_id, "empty"));
+        p.translate_object(obj, Vec3::new(10.0, 10.0, 5.0)).unwrap();
+        p.orient_objects(&[obj], Quat::IDENTITY, None).unwrap();
+
+        let xform = p.active_plate().scene.objects.get(&obj).unwrap().transform;
+        assert!(
+            xform.apply_point(Vec3::ZERO).is_finite(),
+            "empty-mesh orient produced a non-finite transform"
+        );
+    }
+
+    #[test]
+    fn orient_aborts_without_mutating_a_sibling_when_an_id_is_missing() {
+        let mut p = Project::default();
+        let (_, a) = add_cube(&mut p);
+        p.translate_object(a, Vec3::new(20.0, 20.0, 9.0)).unwrap();
+        let before = p.active_plate().scene.objects.get(&a).unwrap().transform;
+        // A bogus id alongside a real one (the auto-orient lock-release window
+        // can drop an id mid-flight). The op must abort up front and leave the
+        // surviving object completely untouched — no half-applied rotation.
+        let missing = ObjectId(u64::MAX);
+        let res = p.orient_objects(
+            &[a, missing],
+            Quat::from_axis_angle(Vec3::X, 0.5),
+            Some(Vec3::ZERO),
+        );
+        assert!(matches!(res, Err(SceneOpError::UnknownObject(_))));
+        let after = p.active_plate().scene.objects.get(&a).unwrap().transform;
+        assert_eq!(
+            before.to_mat4(),
+            after.to_mat4(),
+            "the surviving object must be untouched when the op aborts"
         );
     }
 
