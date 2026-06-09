@@ -126,42 +126,61 @@ export function ViewportCanvas({
     pushLog(level, text);
   };
 
-  // Engine "Auto orient" of the current selection. The backend orients the
-  // selection as one rigid unit (combined mesh → one rotation about the shared
-  // center), so a group/assembly keeps its arrangement.
-  const runAutoOrient = () => {
-    const ids = mirrorRef.current?.selectedIds() ?? [];
-    if (ids.length === 0) return; // button is disabled without a selection
-    void invoke("scene_object_auto_orient", { ids }).catch((err) =>
-      notify("error", `Auto orient failed: ${err}`),
-    );
-  };
-
-  // "Lay flat on…" face-pick mode. While active, the next canvas click on the
-  // selected object picks a face whose plane is then laid on the build plate.
-  // The ref is what the canvas click handler reads; the effect syncs it and the
-  // cursor/gizmo side effects. Toggling the button again cancels.
+  // Two canvas pick modes — "lay flat on…" (face pick) and "auto orient"
+  // (object pick). At most one is active at a time. While either is armed the
+  // next canvas click is consumed by the pick instead of selecting. The refs
+  // are what the click handler reads; the effect syncs them + the cursor and
+  // gizmo side effects. The buttons gate on object presence — a click
+  // identifies the target, so a prior selection is optional.
   const [layFlatPick, setLayFlatPick] = useState(false);
+  const [orientPick, setOrientPick] = useState(false);
   const layFlatPickRef = useRef(false);
+  const orientPickRef = useRef(false);
   useEffect(() => {
     layFlatPickRef.current = layFlatPick;
+    orientPickRef.current = orientPick;
+    const picking = layFlatPick || orientPick;
     if (containerRef.current) {
-      containerRef.current.style.cursor = layFlatPick ? "crosshair" : "";
+      containerRef.current.style.cursor = picking ? "crosshair" : "";
     }
     // Hide the gizmo + disable interaction while picking so its handles
-    // neither draw over the model nor intercept the face click.
-    if (gizmoRef.current) gizmoRef.current.setSuppressed(layFlatPick);
-  }, [layFlatPick]);
-  const toggleLayFlatPick = () => {
-    // Arming needs something on the plate to pick (the face click identifies
-    // the object — a selection is optional); cancelling is always allowed.
-    if (
-      !layFlatPick &&
-      (mirrorRef.current?.activePlate()?.objects.size ?? 0) === 0
-    ) {
+    // neither draw over the model nor intercept the pick click.
+    if (gizmoRef.current) gizmoRef.current.setSuppressed(picking);
+  }, [layFlatPick, orientPick]);
+
+  const plateHasObjects = () =>
+    (mirrorRef.current?.activePlate()?.objects.size ?? 0) > 0;
+
+  // Engine "Auto orient": with a selection, orient it immediately (the backend
+  // treats the selection as one rigid unit — combined mesh → one rotation about
+  // the shared center, so a group/assembly keeps its arrangement). With no
+  // selection, arm pick-to-orient — the next clicked object's whole group is
+  // oriented. Clicking the button while armed cancels.
+  const runAutoOrient = () => {
+    if (orientPick) {
+      setOrientPick(false);
       return;
     }
-    setLayFlatPick((v) => !v);
+    const ids = mirrorRef.current?.selectedIds() ?? [];
+    if (ids.length > 0) {
+      void invoke("scene_object_auto_orient", { ids }).catch((err) =>
+        notify("error", `Auto orient failed: ${err}`),
+      );
+      return;
+    }
+    if (!plateHasObjects()) return; // nothing to pick
+    setLayFlatPick(false); // the two pick modes are mutually exclusive
+    setOrientPick(true);
+  };
+
+  const toggleLayFlatPick = () => {
+    if (layFlatPick) {
+      setLayFlatPick(false);
+      return;
+    }
+    if (!plateHasObjects()) return; // nothing to pick
+    setOrientPick(false); // the two pick modes are mutually exclusive
+    setLayFlatPick(true);
   };
 
   useEffect(() => {
@@ -530,6 +549,25 @@ export function ViewportCanvas({
         mirror.objectGroup.children,
         true,
       );
+      if (orientPickRef.current) {
+        // Pick-to-orient: click any object (no face needed) and auto-orient its
+        // whole group. Select the group too, so the gizmo lands on the oriented
+        // result as confirmation. A click on empty space stays in pick mode.
+        const objId = hits[0]?.object.userData.objectId as ObjectId | undefined;
+        if (objId != null) {
+          void invoke("scene_select", {
+            ids: [objId],
+            mode: "Replace",
+            expandGroups: true,
+          }).catch((err) => notify("error", `Select failed: ${err}`));
+          void invoke("scene_object_auto_orient", {
+            ids: [objId],
+            expandGroups: true,
+          }).catch((err) => notify("error", `Auto orient failed: ${err}`));
+          setOrientPick(false);
+        }
+        return; // consume the click — never select while picking
+      }
       if (layFlatPickRef.current) {
         // Lay-flat-on-face: click a face and lay its plane on the bed. Take the
         // closest hit (so an occluding object isn't picked through); a click on
@@ -787,19 +825,24 @@ export function ViewportCanvas({
           <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
             <button
               type="button"
-              disabled={!hasSelection}
+              disabled={!hasObjects && !orientPick}
               className={`px-2 py-1.5 ${
-                hasSelection
-                  ? "hover:bg-neutral-700/60"
-                  : "opacity-40 cursor-not-allowed"
+                orientPick
+                  ? "bg-neutral-700"
+                  : hasObjects
+                    ? "hover:bg-neutral-700/60"
+                    : "opacity-40 cursor-not-allowed"
               }`}
               onClick={runAutoOrient}
               title={
                 hasSelection
                   ? "Auto orient selection (minimize supports)"
-                  : "Auto orient selection — Select an object first"
+                  : hasObjects || orientPick
+                    ? "Auto orient — click an object to orient its group (minimize supports)"
+                    : "Auto orient — add an object first"
               }
               aria-label="Auto orient selection"
+              aria-pressed={orientPick}
             >
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
                 <path

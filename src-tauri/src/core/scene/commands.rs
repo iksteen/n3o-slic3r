@@ -786,10 +786,16 @@ pub fn scene_object_lay_flat(
 /// about the shared center), so a group/assembly keeps its arrangement. The
 /// optimizer can run for a noticeable time, so the combined mesh is read out and
 /// the scene lock released while it runs, then re-acquired to apply the result.
+///
+/// `expand_groups` supports the selection-less pick path: with nothing
+/// selected, the click identifies a single object, and we expand it to its
+/// whole group so the group is oriented as one unit. Expanded once up front so
+/// the read-out mesh and the applied rotation cover the same id set.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_object_auto_orient(
-    ids: Vec<ObjectId>,
+    mut ids: Vec<ObjectId>,
+    expand_groups: Option<bool>,
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
@@ -798,6 +804,9 @@ pub fn scene_object_auto_orient(
     }
     let (vertices, indices) = {
         let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+        if expand_groups.unwrap_or(false) {
+            ids = s.group_expanded_ids(&ids);
+        }
         s.objects_world_mesh(&ids).map_err(op_err_to_string)?
     };
     let quat = slic3r_ffi::orient_mesh(&vertices, &indices, None)
