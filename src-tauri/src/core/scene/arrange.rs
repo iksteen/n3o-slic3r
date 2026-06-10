@@ -535,4 +535,34 @@ mod tests {
             "group should move as one rigid unit: {rel_before:?} -> {rel_after:?}"
         );
     }
+
+    #[test]
+    fn placements_land_on_a_centered_bed() {
+        // Exercise a non-zero bed_min (a bed centered on the origin). The nester
+        // works in a bed-local frame; the returned translation is a delta, so
+        // objects must still land within the centered extents — not offset by
+        // bed_min.
+        let mut s = Project::new();
+        s.set_active_printer(Some(&a1_mini()));
+        add_n_cubes(&mut s, 4, 25.0);
+        let mut bed = s.active_plate().scene.bed.clone().unwrap();
+        bed.extents.min = [-90.0, -90.0, 0.0];
+        bed.extents.max = [90.0, 90.0, 180.0];
+
+        let plan = plan_arrangement(&s, &bed);
+        let placed_ids: Vec<ObjectId> = plan.placed.iter().map(|(id, _)| *id).collect();
+        let _ = apply_arrangement(&mut s, plan);
+        assert!(!placed_ids.is_empty(), "cubes should fit a centered 180mm bed");
+        for id in placed_ids {
+            let o = s.active_plate().scene.objects.get(&id).unwrap();
+            let mesh = s.meshes.get(&o.mesh).unwrap();
+            let fp = xy_footprint(o, &mesh.bounding_box);
+            let (lo_x, lo_y) = (fp.min.x, fp.min.y);
+            let (hi_x, hi_y) = (fp.min.x + fp.size.x, fp.min.y + fp.size.y);
+            assert!(
+                lo_x >= -91.0 && hi_x <= 91.0 && lo_y >= -91.0 && hi_y <= 91.0,
+                "object off the centered bed: x[{lo_x},{hi_x}] y[{lo_y},{hi_y}] (bed ±90)"
+            );
+        }
+    }
 }

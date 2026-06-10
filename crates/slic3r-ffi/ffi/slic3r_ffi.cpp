@@ -1096,8 +1096,16 @@ slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengt
         // No-go regions (e.g. AMS feed zones): axis-aligned rects (minx, miny,
         // maxx, maxy) the nester must keep items clear of.
         for (size_t e = 0; e < exclude_count; ++e) {
-            double x0 = exclude_rects[e * 4 + 0], y0 = exclude_rects[e * 4 + 1];
-            double x1 = exclude_rects[e * 4 + 2], y1 = exclude_rects[e * 4 + 3];
+            // Normalize so the rect is well-formed regardless of corner order;
+            // an inverted (minx > maxx) rect would build a self-intersecting
+            // polygon and confuse libnest2d's collision tests.
+            double x0 = std::min(exclude_rects[e * 4 + 0], exclude_rects[e * 4 + 2]);
+            double y0 = std::min(exclude_rects[e * 4 + 1], exclude_rects[e * 4 + 3]);
+            double x1 = std::max(exclude_rects[e * 4 + 0], exclude_rects[e * 4 + 2]);
+            double y1 = std::max(exclude_rects[e * 4 + 1], exclude_rects[e * 4 + 3]);
+            if (x1 - x0 <= 0.0 || y1 - y0 <= 0.0) {
+                continue; // skip a zero-area exclusion rect
+            }
             Polygon r;
             r.points = {
                 Point(scaled<coord_t>(x0), scaled<coord_t>(y0)),
