@@ -2121,6 +2121,96 @@ impl Project {
         Ok((report, events))
     }
 
+    /// Move a *set* of objects from one plate to another — the shared backend
+    /// for auto-arrange spill (#3 phase 2) and a manual "send to plate" (#4).
+    ///
+    /// The ids are expanded to whole-group membership so a group is never split
+    /// across plates, and each object's transform is **preserved**, so a moved
+    /// group keeps its arrangement (unlike the single-object [`Self::move_object`],
+    /// there's no per-object recentering — that would scatter a group; anything
+    /// off the target bed surfaces through the normal bounds check when that
+    /// plate is viewed). Per-object overrides and each moved group's name travel
+    /// with the objects; the source plate's selection and now-orphaned material
+    /// bindings are pruned.
+    pub fn move_objects_to_plate(
+        &mut self,
+        from_plate: PlateId,
+        to_plate: PlateId,
+        ids: &[ObjectId],
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        if from_plate == to_plate {
+            return Err(SceneOpError::SamePlate(from_plate));
+        }
+        let from_idx = self
+            .plate_index(from_plate)
+            .ok_or(SceneOpError::UnknownPlate(from_plate))?;
+        let to_idx = self
+            .plate_index(to_plate)
+            .ok_or(SceneOpError::UnknownPlate(to_plate))?;
+
+        // Whole groups move together (no split across plates).
+        let ids = Self::expand_to_groups(&self.plates[from_idx].scene, ids);
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        for &id in &ids {
+            if !self.plates[from_idx].scene.objects.contains_key(&id) {
+                return Err(SceneOpError::UnknownObject(id));
+            }
+        }
+
+        let mut events = Vec::with_capacity(ids.len() * 2 + 2);
+        let mut moved_materials: BTreeSet<u8> = BTreeSet::new();
+        let mut moving_groups: HashSet<GroupId> = HashSet::new();
+        let mut any_was_selected = false;
+        for &id in &ids {
+            let obj = self.plates[from_idx].scene.objects.remove(&id).unwrap();
+            if let Some(g) = obj.group {
+                moving_groups.insert(g);
+            }
+            moved_materials.insert(obj.extruder_id.unwrap_or(1));
+            let overrides = self.plates[from_idx].scene.object_overrides.remove(&id);
+            if self.plates[from_idx].scene.selection.remove(&id) {
+                any_was_selected = true;
+            }
+            self.plates[to_idx].scene.objects.insert(id, obj.clone());
+            if let Some(map) = overrides {
+                self.plates[to_idx].scene.object_overrides.insert(id, map);
+            }
+            events.push(SceneEvent::ObjectRemoved {
+                plate_id: from_plate,
+                object_id: id,
+            });
+            events.push(SceneEvent::ObjectAdded {
+                plate_id: to_plate,
+                object: obj,
+            });
+        }
+
+        // Carry each fully-moved group's metadata (its name) to the target.
+        for g in moving_groups {
+            if let Some(group) = self.plates[from_idx].scene.groups.remove(&g) {
+                self.plates[to_idx].scene.groups.insert(g, group);
+            }
+        }
+
+        if any_was_selected {
+            let mut sel: Vec<ObjectId> =
+                self.plates[from_idx].scene.selection.iter().copied().collect();
+            sel.sort();
+            events.push(SceneEvent::SelectionChanged {
+                plate_id: from_plate,
+                selected: sel,
+            });
+        }
+        if self.prune_orphan_material_bindings(from_idx, &moved_materials) {
+            events.push(SceneEvent::MaterialSlotChanged {
+                plate_id: from_plate,
+            });
+        }
+        Ok(events)
+    }
+
     // ---- Bounds / helpers ----------------------------------------
 
     /// Compute the world-space bounding box of all visible objects
@@ -3973,6 +4063,73 @@ mod tests {
         assert!((center.x - 50.0).abs() < 1.0);
         assert!((center.y - 50.0).abs() < 1.0);
         assert!(center.z > 0.0 && center.z < 1.0);
+    }
+
+    #[test]
+    fn move_objects_to_plate_relocates_a_set_preserving_transforms() {
+        let mut p = Project::default();
+        let (id_b, _) = p.add_plate(None);
+        let (_, a) = add_cube(&mut p);
+        let (_, b) = add_cube(&mut p);
+        p.translate_object(a, Vec3::new(20.0, 0.0, 0.0)).unwrap();
+        p.translate_object(b, Vec3::new(60.0, 0.0, 0.0)).unwrap();
+        let (ta, tb) = (
+            p.plates[0].scene.objects.get(&a).unwrap().transform,
+            p.plates[0].scene.objects.get(&b).unwrap().transform,
+        );
+        let events = p.move_objects_to_plate(PlateId(1), id_b, &[a, b]).unwrap();
+        assert!(!p.plates[0].scene.objects.contains_key(&a));
+        assert!(!p.plates[0].scene.objects.contains_key(&b));
+        // Transforms are preserved exactly (a pure relocation, no recentering).
+        assert_eq!(p.plates[1].scene.objects.get(&a).unwrap().transform.to_mat4(), ta.to_mat4());
+        assert_eq!(p.plates[1].scene.objects.get(&b).unwrap().transform.to_mat4(), tb.to_mat4());
+        assert_eq!(
+            events.iter().filter(|e| matches!(e, SceneEvent::ObjectRemoved { .. })).count(),
+            2
+        );
+        assert_eq!(
+            events.iter().filter(|e| matches!(e, SceneEvent::ObjectAdded { .. })).count(),
+            2
+        );
+    }
+
+    #[test]
+    fn move_objects_to_plate_keeps_a_group_rigid_and_carries_its_name() {
+        let mut p = Project::default();
+        let (id_b, _) = p.add_plate(None);
+        let (_, a) = add_cube(&mut p);
+        let (_, b) = add_cube(&mut p);
+        p.translate_object(b, Vec3::new(40.0, 5.0, 0.0)).unwrap();
+        p.group_objects(&[a, b], "duo".into()).unwrap();
+        let g = p.plates[0].scene.objects.get(&a).unwrap().group.unwrap();
+        let origin = |p: &Project, plate: usize, id| {
+            p.plates[plate].scene.objects.get(&id).unwrap().transform.apply_point(Vec3::ZERO)
+        };
+        let rel_before = origin(&p, 0, b) - origin(&p, 0, a);
+
+        // Moving one member moves the whole group (ids expand to the group).
+        p.move_objects_to_plate(PlateId(1), id_b, &[a]).unwrap();
+        assert!(p.plates[1].scene.objects.contains_key(&a));
+        assert!(p.plates[1].scene.objects.contains_key(&b));
+        let rel_after = origin(&p, 1, b) - origin(&p, 1, a);
+        assert!((rel_after - rel_before).length() < 1e-6, "group not rigid through the move");
+        // The group's name travels with it.
+        assert!(!p.plates[0].scene.groups.contains_key(&g));
+        assert_eq!(p.plates[1].scene.groups.get(&g).unwrap().name, "duo");
+    }
+
+    #[test]
+    fn move_objects_to_plate_rejects_same_and_unknown_plate() {
+        let mut p = Project::default();
+        let (_, a) = add_cube(&mut p);
+        assert!(matches!(
+            p.move_objects_to_plate(PlateId(1), PlateId(1), &[a]),
+            Err(SceneOpError::SamePlate(_))
+        ));
+        assert!(matches!(
+            p.move_objects_to_plate(PlateId(1), PlateId(99), &[a]),
+            Err(SceneOpError::UnknownPlate(_))
+        ));
     }
 
     // ---- Per-plate printer --------------------------------------
