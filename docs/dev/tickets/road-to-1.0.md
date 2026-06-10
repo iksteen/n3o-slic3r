@@ -49,20 +49,27 @@ with native exclusion-zone avoidance, single-plate for now: a unit the
 nester spills onto an extra bed (`bed_idx > 0`) is still reported as
 `AutoArrangeOverflow`, exactly like before.
 
-**Phase 2 (the remaining 1.0 work):** act on the spill — catch `bed_idx > 0`
-units, add plate(s) bound to the same printer, and place the spill there
-(the nester already hands us which extra bed each lands on). Built on #4's
-move primitive. Post-1.0 polish: turn on `allow_rotations` for tighter
-packs (the FFI already supports it), and bound the hull cost on dense
-scenes (hull the local mesh once, then transform — convex hull commutes
-with affine maps).
+**Phase 2 (the remaining 1.0 work) — spill onto *new* plates (backend):**
+act on the spill — for each `bed_idx > 0` unit, create an extra plate
+bound to the same printer and move the unit there (the nester already
+hands us which extra bed each lands on). The move itself rides a backend
+`move_objects_to_plate` primitive (per-plate objects + scene-wide mesh
+sharing mean the move copies no mesh buffers); plate-creation + the spill
+mapping are the new work. This is independent of #4 — #4 is the UI for
+moving to *existing* plates, not a prerequisite here. Post-1.0 polish:
+turn on `allow_rotations` for tighter packs (the FFI already supports it),
+and bound the hull cost on dense scenes (hull the local mesh once, then
+transform — convex hull commutes with affine maps).
 
-### 4. Send objects to another / a new plate
-A `move_objects_to_plate(object_ids, target_or_new)` command + UI (drag
-onto a plate tab, or a "send to plate" menu). The scene model was built
-for this: per-plate objects with scene-wide mesh sharing, so a
-move-between-plates op doesn't copy mesh buffers. **#4 underpins #3** —
-build it first.
+### 4. Send objects to an existing plate (UI)
+A UI to move selected objects onto an *existing* plate — drag onto a plate
+tab, or a "send to plate" menu — over the same backend
+`move_objects_to_plate(object_ids, target)` primitive that #3 phase 2
+uses. Distinct from #3 phase 2, which *creates new* plates for the
+auto-arrange spill; the two share the backend move op but neither blocks
+the other. The shared primitive is cheap (per-plate objects with
+scene-wide mesh sharing — no buffer copies); build it once, then #3
+phase 2 (auto/new) and this (manual/existing) proceed independently.
 
 ### 5. UI optimizations
 TBD — to discuss. Placeholder; capture specifics here as they're named.
@@ -120,7 +127,9 @@ per-plate objects and extra plates already round-trip, so 1.0 plate
 features won't reopen the format. #6 is the *sliced-output* container, a
 separate artifact from the project file.
 
-**Suggested order:** #4 → #3 (the plate cluster); #1 in parallel
+**Suggested order:** the backend `move_objects_to_plate` primitive first
+(the plate cluster's shared dependency), then #3 phase 2 (auto → new
+plates) and #4 (manual → existing plates) independently; #1 in parallel
 (driver-only); #6 (output-writer, self-contained); #2 done; then the UI
 items.
 
