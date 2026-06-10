@@ -349,6 +349,32 @@ slic3r_status slic3r_orient_mesh(const float* vertices, size_t vertex_count,
                                  float overhang_angle, float out_quat_xyzw[4],
                                  char** out_err);
 
+/* 2D nesting / auto-arrange (wraps Slic3r::arrangement::arrange — the engine
+ * behind OrcaSlicer's "Arrange", on libnest2d). Packs a set of CONVEX 2D
+ * footprints onto a rectangular bed, computing a translation + rotation for
+ * each plus a logical bed index (0 = this bed, >0 = spilled onto an extra bed,
+ * -1 = unplaced). All distances are in mm; the bed origin is (0, 0).
+ *
+ * Items are passed as flattened contours: `contours` holds xy pairs (2 doubles
+ * each) for every item concatenated, and `contour_lengths` gives the point
+ * count of each item (so item i occupies the next contour_lengths[i] pairs).
+ * Each contour must be a convex polygon with >= 3 points (the caller's
+ * footprint hull). `min_dist` is the minimum gap between items (mm);
+ * `allow_rotations` (0/1) lets the nester try discrete rotations.
+ *
+ * Outputs are caller-allocated, indexed by the same item order:
+ *   out_dx_dy:    2 doubles per item — the translation to apply (mm).
+ *   out_rotation: 1 double per item — the rotation to apply (radians).
+ *   out_bed_idx:  1 int per item — the logical bed it landed on.
+ *
+ * Pure computation: touches no slic3r_model_t/config and does not require
+ * slic3r_init(). May run multithreaded internally (TBB). */
+slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengths,
+                             size_t item_count, double bed_w, double bed_h,
+                             double min_dist, int allow_rotations,
+                             double* out_dx_dy, double* out_rotation,
+                             int* out_bed_idx, char** out_err);
+
 #ifdef __cplusplus
 }
 #endif

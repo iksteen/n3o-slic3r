@@ -177,6 +177,84 @@ pub fn orient_mesh(vertices: &[f32], indices: &[u32], overhang_angle: Option<f32
     Ok(quat)
 }
 
+/// Where the nester placed one item (see [`arrange`]). `translation` (mm) and
+/// `rotation` (radians) are applied to the item's footprint; `bed_idx` is the
+/// logical bed it landed on: `0` = the given bed, `> 0` = spilled onto an extra
+/// bed, `-1` = could not be placed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArrangePlacement {
+    pub translation: [f64; 2],
+    pub rotation: f64,
+    pub bed_idx: i32,
+}
+
+/// 2D auto-arrange — the engine behind OrcaSlicer's "Arrange" (libnest2d).
+///
+/// `contours` is one **convex** footprint per item (>= 3 points, mm); `bed` is
+/// `[width, height]` (mm, origin at 0,0); `min_dist` is the minimum gap between
+/// items (mm); `allow_rotations` lets the nester try discrete rotations.
+/// Returns a placement per item in the same order. Pure computation — no init
+/// or model handle required; may run multithreaded (TBB).
+pub fn arrange(
+    contours: &[Vec<[f64; 2]>],
+    bed: [f64; 2],
+    min_dist: f64,
+    allow_rotations: bool,
+) -> Result<Vec<ArrangePlacement>> {
+    if contours.is_empty() {
+        return Err(Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("no items to arrange".into()),
+        });
+    }
+    let mut flat: Vec<f64> = Vec::new();
+    let mut lengths: Vec<usize> = Vec::with_capacity(contours.len());
+    for c in contours {
+        if c.len() < 3 {
+            return Err(Error {
+                kind: ErrorKind::InvalidArg,
+                message: Some("each item needs at least 3 contour points".into()),
+            });
+        }
+        lengths.push(c.len());
+        for p in c {
+            flat.push(p[0]);
+            flat.push(p[1]);
+        }
+    }
+    let n = contours.len();
+    let mut out_dxdy = vec![0.0f64; n * 2];
+    let mut out_rot = vec![0.0f64; n];
+    let mut out_bed = vec![0i32; n];
+    let mut err: *mut c_char = ptr::null_mut();
+    // SAFETY: all input slices outlive the call; the out buffers are sized n /
+    // 2n and the out_err pointer is valid.
+    let status = unsafe {
+        sys::slic3r_arrange(
+            flat.as_ptr(),
+            lengths.as_ptr(),
+            n,
+            bed[0],
+            bed[1],
+            min_dist,
+            allow_rotations as i32,
+            out_dxdy.as_mut_ptr(),
+            out_rot.as_mut_ptr(),
+            out_bed.as_mut_ptr(),
+            &mut err,
+        )
+    };
+    // SAFETY: err is either null or a shim-owned message pointer.
+    unsafe { check_with_err(status, err) }?;
+    Ok((0..n)
+        .map(|i| ArrangePlacement {
+            translation: [out_dxdy[i * 2], out_dxdy[i * 2 + 1]],
+            rotation: out_rot[i],
+            bed_idx: out_bed[i],
+        })
+        .collect())
+}
+
 // ---- Option introspection ----
 
 /// Mirrors `slic3r_opt_type`.

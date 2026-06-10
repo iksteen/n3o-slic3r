@@ -12,6 +12,7 @@
 #include <libslic3r/TriangleMesh.hpp>
 #include <libslic3r/TriangleSelector.hpp>
 #include <libslic3r/Orient.hpp>
+#include <libslic3r/Arrange.hpp>
 #include <libslic3r/Utils.hpp>
 #include <libslic3r/GCode/GCodeProcessor.hpp>
 #include <libslic3r/Format/bbs_3mf.hpp>
@@ -1037,6 +1038,76 @@ slic3r_status slic3r_orient_mesh(const float* vertices, size_t vertex_count,
         return SLIC3R_ERR_INTERNAL;
     } catch (...) {
         set_err(out_err, "unknown error in slic3r_orient_mesh");
+        return SLIC3R_ERR_INTERNAL;
+    }
+}
+
+slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengths,
+                             size_t item_count, double bed_w, double bed_h,
+                             double min_dist, int allow_rotations,
+                             double* out_dx_dy, double* out_rotation,
+                             int* out_bed_idx, char** out_err) {
+    if (out_err) *out_err = nullptr;
+    if (!contours || !contour_lengths || !out_dx_dy || !out_rotation || !out_bed_idx
+        || item_count == 0 || bed_w <= 0.0 || bed_h <= 0.0)
+        return SLIC3R_ERR_INVALID_ARG;
+    try {
+        // Build the arrange items from the flattened mm contours (libnest2d
+        // wants convex polygons in scaled integer coords).
+        arrangement::ArrangePolygons items;
+        items.reserve(item_count);
+        size_t pair_off = 0; // running offset into `contours`, counted in xy pairs
+        for (size_t i = 0; i < item_count; ++i) {
+            size_t n = contour_lengths[i];
+            if (n < 3) {
+                set_err(out_err, "each arrange item needs at least 3 contour points");
+                return SLIC3R_ERR_INVALID_ARG;
+            }
+            Polygon contour;
+            contour.points.reserve(n);
+            for (size_t k = 0; k < n; ++k) {
+                double x = contours[(pair_off + k) * 2 + 0];
+                double y = contours[(pair_off + k) * 2 + 1];
+                contour.points.emplace_back(scaled<coord_t>(x), scaled<coord_t>(y));
+            }
+            pair_off += n;
+            arrangement::ArrangePolygon ap;
+            ap.poly = ExPolygon(contour);
+            // _arrange() zeroes min_obj_distance and expects items to carry the
+            // spacing as inflation (mirrors update_selected_items_inflation).
+            ap.inflation = scaled<coord_t>(min_dist / 2.0);
+            // The default bed_idx is UNARRANGED (-1) — but the nester's
+            // BIN_ID_UNFIT is also -1, so it would skip every item as
+            // "already unfit". Start them at bed 0 (a real bed) instead.
+            ap.bed_idx = 0;
+            items.push_back(std::move(ap));
+        }
+
+        arrangement::ArrangeParams params;
+        params.min_obj_distance = scaled<coord_t>(min_dist);
+        params.allow_rotations = allow_rotations != 0;
+        // Silence the chatty default progress printer; supply the stop predicate
+        // (its default is an empty std::function, which would throw if invoked).
+        params.progressind = [](unsigned, std::string) {};
+        params.stopcondition = []() { return false; };
+
+        BoundingBox bed(Point(0, 0),
+                        Point(scaled<coord_t>(bed_w), scaled<coord_t>(bed_h)));
+        arrangement::arrange(items, {}, bed, params);
+
+        // Results are written back in place, item order preserved.
+        for (size_t i = 0; i < item_count; ++i) {
+            out_dx_dy[i * 2 + 0] = unscaled<double>(items[i].translation.x());
+            out_dx_dy[i * 2 + 1] = unscaled<double>(items[i].translation.y());
+            out_rotation[i] = items[i].rotation;
+            out_bed_idx[i] = items[i].bed_idx;
+        }
+        return SLIC3R_OK;
+    } catch (const std::exception& e) {
+        set_err(out_err, e.what());
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
+        set_err(out_err, "unknown error in slic3r_arrange");
         return SLIC3R_ERR_INTERNAL;
     }
 }
