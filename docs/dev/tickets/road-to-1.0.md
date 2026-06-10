@@ -49,27 +49,36 @@ with native exclusion-zone avoidance, single-plate for now: a unit the
 nester spills onto an extra bed (`bed_idx > 0`) is still reported as
 `AutoArrangeOverflow`, exactly like before.
 
-**Phase 2 (the remaining 1.0 work) — spill onto *new* plates (backend):**
-act on the spill — for each `bed_idx > 0` unit, create an extra plate
-bound to the same printer and move the unit there (the nester already
-hands us which extra bed each lands on). The move itself rides a backend
-`move_objects_to_plate` primitive (per-plate objects + scene-wide mesh
-sharing mean the move copies no mesh buffers); plate-creation + the spill
-mapping are the new work. This is independent of #4 — #4 is the UI for
-moving to *existing* plates, not a prerequisite here. Post-1.0 polish:
-turn on `allow_rotations` for tighter packs (the FFI already supports it),
-and bound the hull cost on dense scenes (hull the local mesh once, then
-transform — convex hull commutes with affine maps).
+**Phase 2 (the remaining 1.0 work) — spill onto new plates (backend):** act
+on the spill — for each `bed_idx > 0` unit, create an extra plate bound to
+the same printer and move the unit there (the nester already hands us which
+extra bed each lands on). Drives the *create-and-move* backend op (below);
+plate-creation + the spill mapping are the new work.
 
-### 4. Send objects to an existing plate (UI)
-A UI to move selected objects onto an *existing* plate — drag onto a plate
-tab, or a "send to plate" menu — over the same backend
-`move_objects_to_plate(object_ids, target)` primitive that #3 phase 2
-uses. Distinct from #3 phase 2, which *creates new* plates for the
-auto-arrange spill; the two share the backend move op but neither blocks
-the other. The shared primitive is cheap (per-plate objects with
-scene-wide mesh sharing — no buffer copies); build it once, then #3
-phase 2 (auto/new) and this (manual/existing) proceed independently.
+### 4. Send objects to another plate (UI)
+A UI to move selected objects to another plate — drag onto a plate tab, or
+a "send to plate" menu — targeting an *existing* plate or a *new* one. The
+trigger is manual; the work it does is the same backend ops #3 phase 2
+drives automatically.
+
+### Shared backend: move objects between plates
+Both #3 phase 2 (auto → new plate) and #4 (manual → existing or new) ride
+two backend ops, split along the two move *targets*, not along auto-vs-
+manual:
+
+- `move_objects_to_plate(object_ids, target_plate)` — move to an
+  **existing** plate. The common ground, used by both; build this first.
+- *create-and-move* — add a plate bound to the same printer, then move
+  onto it. Phase 2 needs it for spill; a complete #4 also wants it for
+  "send to a new plate." Layers on the first op.
+
+Both are cheap (per-plate objects with scene-wide mesh sharing — no mesh
+buffer copies), and neither feature blocks the other once the shared ops
+exist.
+
+Post-1.0 polish for #3: turn on `allow_rotations` for tighter packs (the
+FFI already supports it), and bound the hull cost on dense scenes (hull the
+local mesh once, then transform — convex hull commutes with affine maps).
 
 ### 5. UI optimizations
 TBD — to discuss. Placeholder; capture specifics here as they're named.
