@@ -17,7 +17,7 @@
 use super::bed::BedMesh;
 use super::state::{GroupId, ObjectId};
 use super::transform::Transform;
-use crate::core::project::Project;
+use crate::core::project::{PlateId, Project};
 use glam::Vec3;
 use std::collections::HashMap;
 
@@ -33,11 +33,25 @@ pub const PLACEMENT_SPACING: f32 = 5.0;
 
 /// Outcome of one auto-arrange pass.
 pub struct ArrangeResult {
-    /// Objects that fit on the plate, with their new transforms.
+    /// Objects that fit on the current plate, with their new transforms.
     pub placed: Vec<(ObjectId, Transform)>,
-    /// Objects we couldn't fit. Listed in original sort order so the
-    /// UI can highlight them top-to-bottom in the outliner.
+    /// Objects the nester spilled onto extra beds — with the transform that
+    /// packs them on that bed and which extra bed (`bed_idx >= 1`) they go to.
+    /// `apply_arrangement` turns each extra bed into a new plate.
+    pub spilled: Vec<SpilledObject>,
+    /// Objects with no usable footprint or that fit no bed at all (degenerate
+    /// or larger than the bed). The UI flags these.
     pub un_placed: Vec<ObjectId>,
+}
+
+/// One object the nester pushed onto an extra bed (see [`ArrangeResult`]).
+pub struct SpilledObject {
+    pub id: ObjectId,
+    /// Transform that packs the object on its extra bed (bed-local position,
+    /// valid on the new plate since it's bound to the same printer).
+    pub transform: Transform,
+    /// Which extra bed (1-based) the nester assigned it.
+    pub bed_idx: i32,
 }
 
 /// Compute a packing without mutating the scene. Pure function so the
@@ -97,9 +111,14 @@ pub fn plan_arrangement(state: &Project, bed: &BedMesh) -> ArrangeResult {
     }
 
     let mut placed = Vec::new();
+    let mut spilled = Vec::new();
     let mut un_placed = Vec::new();
     if contours.is_empty() {
-        return ArrangeResult { placed, un_placed };
+        return ArrangeResult {
+            placed,
+            spilled,
+            un_placed,
+        };
     }
 
     let excludes: Vec<[f64; 4]> = bed
@@ -128,31 +147,51 @@ pub fn plan_arrangement(state: &Project, bed: &BedMesh) -> ArrangeResult {
             for unit in &arranged_units {
                 un_placed.extend(unit.iter().copied());
             }
-            return ArrangeResult { placed, un_placed };
+            return ArrangeResult {
+                placed,
+                spilled,
+                un_placed,
+            };
         }
     };
 
     for (unit, placement) in arranged_units.iter().zip(&placements) {
-        if placement.bed_idx == 0 {
-            // A pure-XY world translation, applied to every member so a group
-            // stays rigid. (Rotation is off, so there's no yaw to compose.)
-            let delta = Transform::translation(Vec3::new(
-                placement.translation[0] as f32,
-                placement.translation[1] as f32,
-                0.0,
-            ));
-            for &id in unit.iter() {
-                if let Some(obj) = plate.objects.get(&id) {
-                    placed.push((id, delta.compose(obj.transform)));
+        // The packed pose: a pure-XY world translation, applied to every member
+        // so a group stays rigid. (Rotation is off, so there's no yaw.)
+        let delta = Transform::translation(Vec3::new(
+            placement.translation[0] as f32,
+            placement.translation[1] as f32,
+            0.0,
+        ));
+        match placement.bed_idx {
+            0 => {
+                for &id in unit.iter() {
+                    if let Some(obj) = plate.objects.get(&id) {
+                        placed.push((id, delta.compose(obj.transform)));
+                    }
                 }
             }
-        } else {
-            // Spilled onto an extra bed (phase 1: report as overflow).
-            un_placed.extend(unit.iter().copied());
+            n if n >= 1 => {
+                for &id in unit.iter() {
+                    if let Some(obj) = plate.objects.get(&id) {
+                        spilled.push(SpilledObject {
+                            id,
+                            transform: delta.compose(obj.transform),
+                            bed_idx: n,
+                        });
+                    }
+                }
+            }
+            // bed_idx < 0: the nester couldn't place it at all.
+            _ => un_placed.extend(unit.iter().copied()),
         }
     }
 
-    ArrangeResult { placed, un_placed }
+    ArrangeResult {
+        placed,
+        spilled,
+        un_placed,
+    }
 }
 
 /// Convex hull of a unit's projected points, as a CCW contour the nester can
@@ -219,29 +258,73 @@ fn convex_hull(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
     hull
 }
 
-/// Apply a [`plan_arrangement`] result to the scene state. Calls
-/// `set_object_transform` per placed object so OOB check
-/// fires naturally — packing keeps objects on the bed but the user
-/// might have an object on a plate with a custom-shape exclusion
-/// zone, and the OOB event surfaces that correctly.
+/// Apply a [`plan_arrangement`] result to the scene state. Objects that fit the
+/// current plate get their packed transform (via `set_object_transform`, so the
+/// OOB check still fires for any exclusion-zone clash). Spilled objects are
+/// positioned the same way, then moved onto fresh plates — one per extra bed,
+/// each bound to the same printer — via `move_objects_to_plate` (phase 2). The
+/// returned `un_placed` is only the genuinely-unplaceable objects.
 pub fn apply_arrangement(
     state: &mut Project,
     plan: ArrangeResult,
 ) -> (Vec<super::events::SceneEvent>, Vec<ObjectId>) {
-    let mut all_events = Vec::new();
+    let mut events = Vec::new();
+    let source = state.active_plate().id;
+
+    // Units that stay on this plate.
     for (id, xform) in plan.placed {
-        match state.set_object_transform(id, xform) {
-            Ok(events) => all_events.extend(events),
-            Err(e) => {
-                tracing::warn!(
-                    object_id = id.0,
-                    error = %e,
-                    "auto-arrange could not apply transform (deleted between plan and apply?)"
-                );
+        apply_transform(state, id, xform, &mut events);
+    }
+
+    // Spill: one new plate per extra bed (same printer), then position + move.
+    if !plan.spilled.is_empty() {
+        let max_bed = plan.spilled.iter().map(|s| s.bed_idx).max().unwrap_or(0);
+        let mut bed_plate: HashMap<i32, PlateId> = HashMap::new();
+        for k in 1..=max_bed {
+            // `None` inherits the active plate's printer binding (+ bed), so the
+            // packed bed-local positions are valid on the new plate.
+            let (pid, evs) = state.add_plate(None);
+            events.extend(evs);
+            bed_plate.insert(k, pid);
+        }
+        // Position every spilled object (the move preserves the transform).
+        for s in &plan.spilled {
+            apply_transform(state, s.id, s.transform, &mut events);
+        }
+        // Move each extra bed's objects onto its plate.
+        for k in 1..=max_bed {
+            let ids: Vec<ObjectId> = plan
+                .spilled
+                .iter()
+                .filter(|s| s.bed_idx == k)
+                .map(|s| s.id)
+                .collect();
+            if let Some(&target) = bed_plate.get(&k) {
+                match state.move_objects_to_plate(source, target, &ids) {
+                    Ok(evs) => events.extend(evs),
+                    Err(e) => tracing::warn!(error = %e, "auto-arrange spill move failed"),
+                }
             }
         }
     }
-    (all_events, plan.un_placed)
+
+    (events, plan.un_placed)
+}
+
+fn apply_transform(
+    state: &mut Project,
+    id: ObjectId,
+    xform: Transform,
+    events: &mut Vec<super::events::SceneEvent>,
+) {
+    match state.set_object_transform(id, xform) {
+        Ok(evs) => events.extend(evs),
+        Err(e) => tracing::warn!(
+            object_id = id.0,
+            error = %e,
+            "auto-arrange could not apply transform (deleted between plan and apply?)"
+        ),
+    }
 }
 
 // Test-only footprint helpers: the live packer uses convex hulls via the FFI,
@@ -378,19 +461,47 @@ mod tests {
     }
 
     #[test]
-    fn one_hundred_cubes_overflow_lists_un_placed() {
+    fn one_hundred_cubes_overflow_spills_rather_than_un_placing() {
         let mut s = Project::new();
         s.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut s, 100, 30.0);
         let bed = s.active_plate().scene.bed.clone().unwrap();
         let plan = plan_arrangement(&s, &bed);
-        assert!(!plan.placed.is_empty(), "some should fit");
-        assert!(!plan.un_placed.is_empty(), "some should overflow");
-        assert_eq!(plan.placed.len() + plan.un_placed.len(), 100);
+        assert!(!plan.placed.is_empty(), "some fit the first plate");
+        assert!(!plan.spilled.is_empty(), "the rest spill to extra beds");
+        // 30mm cubes all fit *some* bed, so nothing is truly un-placeable.
+        assert!(plan.un_placed.is_empty(), "everything fits on some bed");
+        assert_eq!(
+            plan.placed.len() + plan.spilled.len() + plan.un_placed.len(),
+            100
+        );
         assert!(
             !footprints_overlap_after_plan(&plan, &s),
-            "no overlap among placed"
+            "no overlap among first-plate placements"
         );
+    }
+
+    #[test]
+    fn spill_creates_extra_plates_and_relocates_the_objects() {
+        let mut s = Project::new();
+        s.set_active_printer(Some(&a1_mini()));
+        add_n_cubes(&mut s, 100, 30.0);
+        assert_eq!(s.plates.len(), 1);
+        let bed = s.active_plate().scene.bed.clone().unwrap();
+        let plan = plan_arrangement(&s, &bed);
+        assert!(!plan.spilled.is_empty());
+        let (_events, un_placed) = apply_arrangement(&mut s, plan);
+        assert!(un_placed.is_empty());
+        // Spill created at least one extra plate, all bound to the same printer.
+        assert!(s.plates.len() > 1, "spill should add plates");
+        let printer = s.plates[0].printer_instance_id().map(str::to_owned);
+        for p in &s.plates[1..] {
+            assert_eq!(p.printer_instance_id().map(str::to_owned), printer);
+            assert!(!p.scene.objects.is_empty(), "extra plate should hold spill");
+        }
+        // No object is lost or duplicated.
+        let total: usize = s.plates.iter().map(|p| p.scene.objects.len()).sum();
+        assert_eq!(total, 100);
     }
 
     #[test]
