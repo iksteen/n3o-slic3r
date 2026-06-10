@@ -136,21 +136,34 @@ export function ViewportCanvas({
   const [layFlatPick, setLayFlatPick] = useState(false);
   const [orientPick, setOrientPick] = useState(false);
   const [alignPick, setAlignPick] = useState<"X" | "Y" | null>(null);
+  // Face-to-face align is a *two-click* pick: arm it, click the reference face
+  // (its world normal + point are stashed in `ref`), then click the face to
+  // align — the target object matches the reference's heading and slides
+  // coplanar. `null` = not armed; `{ ref: null }` = waiting for the reference.
+  const [faceAlign, setFaceAlign] = useState<{
+    ref: {
+      normal: [number, number, number];
+      point: [number, number, number];
+    } | null;
+  } | null>(null);
   const layFlatPickRef = useRef(false);
   const orientPickRef = useRef(false);
   const alignPickRef = useRef<"X" | "Y" | null>(null);
+  const faceAlignRef = useRef<typeof faceAlign>(null);
   useEffect(() => {
     layFlatPickRef.current = layFlatPick;
     orientPickRef.current = orientPick;
     alignPickRef.current = alignPick;
-    const picking = layFlatPick || orientPick || alignPick !== null;
+    faceAlignRef.current = faceAlign;
+    const picking =
+      layFlatPick || orientPick || alignPick !== null || faceAlign !== null;
     if (containerRef.current) {
       containerRef.current.style.cursor = picking ? "crosshair" : "";
     }
     // Hide the gizmo + disable interaction while picking so its handles
     // neither draw over the model nor intercept the pick click.
     if (gizmoRef.current) gizmoRef.current.setSuppressed(picking);
-  }, [layFlatPick, orientPick, alignPick]);
+  }, [layFlatPick, orientPick, alignPick, faceAlign]);
 
   const plateHasObjects = () =>
     (mirrorRef.current?.activePlate()?.objects.size ?? 0) > 0;
@@ -175,6 +188,7 @@ export function ViewportCanvas({
     if (!plateHasObjects()) return; // nothing to pick
     setLayFlatPick(false); // the pick modes are mutually exclusive
     setAlignPick(null);
+    setFaceAlign(null);
     setOrientPick(true);
   };
 
@@ -186,7 +200,25 @@ export function ViewportCanvas({
     if (!plateHasObjects()) return; // nothing to pick
     setOrientPick(false); // the pick modes are mutually exclusive
     setAlignPick(null);
+    setFaceAlign(null);
     setLayFlatPick(true);
+  };
+
+  // "Face-align": a two-click pick across two objects. Arm it, click a
+  // reference face on object A, then the face to align on object B — B yaws so
+  // its clicked face matches A's face heading, then slides coplanar with it.
+  // Clicking the button while armed cancels.
+  const toggleFaceAlign = () => {
+    if (faceAlign) {
+      setFaceAlign(null); // toggle off
+      return;
+    }
+    if (!plateHasObjects()) return;
+    setLayFlatPick(false); // the pick modes are mutually exclusive
+    setOrientPick(false);
+    setAlignPick(null);
+    setFaceAlign({ ref: null });
+    notify("info", "Face-align: click the reference face, then the face to align.");
   };
 
   // "Align X / Y": rotate the selection about Z so its dominant line direction
@@ -209,6 +241,7 @@ export function ViewportCanvas({
     if (!plateHasObjects()) return; // nothing to pick
     setLayFlatPick(false); // the pick modes are mutually exclusive
     setOrientPick(false);
+    setFaceAlign(null);
     setAlignPick(axis);
   };
 
@@ -472,6 +505,7 @@ export function ViewportCanvas({
           setLayFlatPick(false);
           setOrientPick(false);
           setAlignPick(null);
+          setFaceAlign(null);
           const plate = mirror.activePlate();
           if (plate) {
             gizmo.setSelection(
@@ -620,6 +654,52 @@ export function ViewportCanvas({
             expandGroups: true,
           }).catch((err) => notify("error", `Align ${axis} failed: ${err}`));
           setAlignPick(null);
+        }
+        return; // consume the click — never select while picking
+      }
+      if (faceAlignRef.current) {
+        // Face-to-face align, two clicks: first the reference face (stash its
+        // world normal + point), then the face to align (yaw its object's group
+        // to match the reference's heading, then slide it coplanar).
+        const state = faceAlignRef.current;
+        const hit = hits[0];
+        const objId = hit?.object.userData.objectId as ObjectId | undefined;
+        if (hit?.face && objId != null) {
+          const normalMatrix = new THREE.Matrix3().getNormalMatrix(
+            hit.object.matrixWorld,
+          );
+          const wn = hit.face.normal.clone().applyNormalMatrix(normalMatrix);
+          const point: [number, number, number] = [
+            hit.point.x,
+            hit.point.y,
+            hit.point.z,
+          ];
+          if (state.ref === null) {
+            // First click — remember the reference face's heading + position.
+            // Write the ref synchronously too, not just via the state→effect
+            // sync, so a fast second click can't read a stale null ref and
+            // re-set the reference instead of applying the align.
+            const next = { ref: { normal: [wn.x, wn.y, wn.z] as [number, number, number], point } };
+            faceAlignRef.current = next;
+            setFaceAlign(next);
+            notify("info", "Reference face set — now click the face to align.");
+          } else {
+            // Second click — yaw + slide this object's group, select as feedback.
+            void invoke("scene_select", {
+              ids: [objId],
+              mode: "Replace",
+              expandGroups: true,
+            }).catch((err) => notify("error", `Select failed: ${err}`));
+            void invoke("scene_object_align_face", {
+              ids: [objId],
+              refNormal: state.ref.normal,
+              faceNormal: [wn.x, wn.y, wn.z],
+              refPoint: state.ref.point,
+              facePoint: point,
+              expandGroups: true,
+            }).catch((err) => notify("error", `Align face failed: ${err}`));
+            setFaceAlign(null);
+          }
         }
         return; // consume the click — never select while picking
       }
@@ -1002,6 +1082,53 @@ export function ViewportCanvas({
                 </button>
               );
             })}
+            {(() => {
+              const armed = faceAlign !== null;
+              const haveRef = armed && faceAlign?.ref != null;
+              return (
+                <button
+                  type="button"
+                  disabled={!hasObjects && !armed}
+                  className={`px-2 py-1.5 ${
+                    armed
+                      ? "bg-neutral-700"
+                      : hasObjects
+                        ? "hover:bg-neutral-700/60"
+                        : "opacity-40 cursor-not-allowed"
+                  }`}
+                  onClick={toggleFaceAlign}
+                  title={
+                    armed
+                      ? haveRef
+                        ? "Face-align — click the face to align"
+                        : "Face-align — click the reference face"
+                      : hasObjects
+                        ? "Match a face to a reference face on another object (orientation + coplanar)"
+                        : "Face-align — add objects first"
+                  }
+                  aria-label="Match a face to a reference face on another object"
+                  aria-pressed={armed}
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 14 14"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    {/* two faces (vertical bars) + an arrow bringing the right
+                        one onto the left reference */}
+                    <path
+                      d="M3 2.5v9M11 2.5v9M10 7H5.5M7 5.5 5.5 7 7 8.5"
+                      stroke="currentColor"
+                      strokeWidth="1.3"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              );
+            })()}
           </div>
         </div>
       </div>

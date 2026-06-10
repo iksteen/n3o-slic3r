@@ -190,6 +190,38 @@ fn reduce_mod_pi(a: f32) -> f32 {
     a
 }
 
+/// Yaw (Z rotation, radians) that turns `face_normal`'s in-plane heading to
+/// match `ref_normal`'s in-plane heading — making the target face parallel to
+/// the reference face (both normals pointing the same way), about Z.
+///
+/// Backs the face-to-face align: rotate the target object so its clicked face
+/// faces the same way as a reference face on another object — at the reference's
+/// actual angle, not snapped to a world axis. A face normal has a true
+/// direction, so the turn is unique (normalized to the shortest equivalent).
+///
+/// Returns `None` if either face is ~horizontal (normal ≈ ±Z): no in-plane
+/// heading to match.
+pub fn face_to_face_yaw(ref_normal: [f32; 3], face_normal: [f32; 3]) -> Option<f32> {
+    let (rx, ry) = (ref_normal[0], ref_normal[1]);
+    let (fx, fy) = (face_normal[0], face_normal[1]);
+    if (rx * rx + ry * ry).sqrt() < MIN_EDGE_XY || (fx * fx + fy * fy).sqrt() < MIN_EDGE_XY {
+        return None;
+    }
+    Some(normalize_angle(ry.atan2(rx) - fy.atan2(fx)))
+}
+
+/// Fold an angle into `(-π, π]` — the shortest equivalent turn.
+fn normalize_angle(a: f32) -> f32 {
+    let two_pi = 2.0 * PI;
+    let mut a = a % two_pi;
+    if a > PI {
+        a -= two_pi;
+    } else if a <= -PI {
+        a += two_pi;
+    }
+    a
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,5 +389,51 @@ mod tests {
             indices.extend_from_slice(&[0, rim, 0]);
         }
         assert!(axis_alignment_rotation(&verts, &indices, AlignAxis::X).is_none());
+    }
+
+    /// Apply a Z yaw of `angle` to an XY vector.
+    fn yaw(v: (f32, f32), angle: f32) -> (f32, f32) {
+        let (c, s) = (angle.cos(), angle.sin());
+        (v.0 * c - v.1 * s, v.0 * s + v.1 * c)
+    }
+
+    #[test]
+    fn face_to_face_turns_the_target_to_match_the_reference() {
+        // Reference points +X; a target facing +Y must yaw to +X.
+        let angle = face_to_face_yaw([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]).unwrap();
+        let (nx, ny) = yaw((0.0, 1.0), angle);
+        assert!(
+            (nx - 1.0).abs() < 1e-5 && ny.abs() < 1e-5,
+            "got ({nx}, {ny})"
+        );
+    }
+
+    #[test]
+    fn face_to_face_matches_an_off_angle_reference_exactly() {
+        // The target ends up at the reference's *actual* heading (37°), not
+        // snapped to any world axis.
+        let r = 37_f32.to_radians();
+        let f = 100_f32.to_radians();
+        let angle = face_to_face_yaw([r.cos(), r.sin(), 0.0], [f.cos(), f.sin(), 0.0]).unwrap();
+        let (nx, ny) = yaw((f.cos(), f.sin()), angle);
+        assert!(
+            (nx - r.cos()).abs() < 1e-4 && (ny - r.sin()).abs() < 1e-4,
+            "got ({nx}, {ny}), want ({}, {})",
+            r.cos(),
+            r.sin()
+        );
+    }
+
+    #[test]
+    fn face_to_face_is_a_noop_when_already_matching() {
+        let angle = face_to_face_yaw([1.0, 0.2, 0.0], [1.0, 0.2, 0.0]).unwrap();
+        assert!(angle.abs() < 1e-6, "got {angle}");
+    }
+
+    #[test]
+    fn face_to_face_needs_in_plane_headings() {
+        // A ±Z (horizontal) face on either side has no heading to match.
+        assert!(face_to_face_yaw([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]).is_none());
+        assert!(face_to_face_yaw([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]).is_none());
     }
 }

@@ -860,6 +860,59 @@ pub fn scene_object_align_axis(
     Ok(())
 }
 
+/// "Align face to face": yaw the target object so its clicked face faces the
+/// same way as a reference face on another object (matching the reference's
+/// actual heading, not a world axis), then slide it along the reference face's
+/// normal so the two clicked faces are coplanar. `ref_normal`/`ref_point` are
+/// the first clicked face's world normal + hit point; `face_normal`/`face_point`
+/// are the target's. The yaw depends only on the normals (computed before
+/// locking); the lock expands the group and applies the yaw + coplanar slide via
+/// `align_face_coplanar`, which tracks `face_point` through the in-place
+/// rotation. A ~horizontal face on either side (no in-plane heading) is a no-op.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+#[allow(clippy::too_many_arguments)]
+pub fn scene_object_align_face(
+    mut ids: Vec<ObjectId>,
+    ref_normal: [f32; 3],
+    face_normal: [f32; 3],
+    ref_point: [f32; 3],
+    face_point: [f32; 3],
+    expand_groups: Option<bool>,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let Some(angle) = super::align::face_to_face_yaw(ref_normal, face_normal) else {
+        return Ok(()); // a horizontal face on either side — nothing to match
+    };
+    // Slide along the reference face's in-plane normal; the coplanar target is
+    // the reference point's projection onto it. `face_to_face_yaw` returning
+    // `Some` guarantees the reference has a non-trivial in-plane heading.
+    let n_len = (ref_normal[0] * ref_normal[0] + ref_normal[1] * ref_normal[1]).sqrt();
+    let slide_dir = glam::Vec3::new(ref_normal[0] / n_len, ref_normal[1] / n_len, 0.0);
+    let target_coord = ref_point[0] * slide_dir.x + ref_point[1] * slide_dir.y;
+    let track = glam::Vec3::new(face_point[0], face_point[1], face_point[2]);
+    let events = {
+        let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+        if expand_groups.unwrap_or(false) {
+            ids = s.group_expanded_ids(&ids);
+        }
+        s.align_face_coplanar(
+            &ids,
+            glam::Quat::from_rotation_z(angle),
+            slide_dir,
+            target_coord,
+            track,
+        )
+        .map_err(op_err_to_string)?
+    };
+    emit_all(&window, &events);
+    Ok(())
+}
+
 /// "Lay flat on…": lay a clicked face of the selection onto the plate.
 /// `rotation` is a world-frame unit quaternion that aligns the clicked face's
 /// outward normal with -Z; `contact` is a world point on that face (the ray

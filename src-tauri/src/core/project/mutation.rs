@@ -1607,6 +1607,77 @@ impl Project {
         Ok(events)
     }
 
+    /// Align a face by yaw + coplanar slide. Yaw the selection in place (about
+    /// its AABB center) by `yaw`, then slide it **along `slide_dir`** so the
+    /// tracked world point reaches `target_coord` (its projection onto
+    /// `slide_dir`) — making the clicked face coplanar with a reference face —
+    /// then seat + clamp like `orient_objects`. `track_point` is the clicked
+    /// world point on the selection *before* the yaw; it's followed through the
+    /// rotation so the slide lands it exactly on the reference plane. `slide_dir`
+    /// is a horizontal unit vector (the reference face's in-plane normal), so
+    /// the slide never disturbs the z-seat.
+    pub fn align_face_coplanar(
+        &mut self,
+        ids: &[ObjectId],
+        yaw: Quat,
+        slide_dir: Vec3,
+        target_coord: f32,
+        track_point: Vec3,
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let active = self.active_plate;
+        let plate_id = self.plates[active].id;
+        // Resolve every target up front (transactional, like orient_objects).
+        for &id in ids {
+            if !self.plates[active].scene.objects.contains_key(&id) {
+                return Err(SceneOpError::UnknownObject(id));
+            }
+        }
+
+        // In-place yaw about the selection's AABB center.
+        let (lo, hi) = self.combined_bbox_aabb(ids)?;
+        let pivot = (lo + hi) * 0.5;
+        let rot = Transform::translation(pivot)
+            .compose(Transform::rotation(yaw))
+            .compose(Transform::translation(-pivot));
+        for &id in ids {
+            let obj = self.plates[active].scene.objects.get_mut(&id).unwrap();
+            obj.transform = rot.compose(obj.transform);
+        }
+
+        // Slide along `slide_dir` so the (rotated) tracked point reaches the
+        // reference plane: the clicked faces become coplanar.
+        let track_after = rot.apply_point(track_point);
+        let delta = target_coord - track_after.dot(slide_dir);
+        let slide = Transform::translation(slide_dir * delta);
+        for &id in ids {
+            let obj = self.plates[active].scene.objects.get_mut(&id).unwrap();
+            obj.transform = slide.compose(obj.transform);
+        }
+
+        // Seat on the plate + clamp the footprint (same tail as orient_objects).
+        let min_z = self.combined_world_min_z(ids)?;
+        let (lo2, hi2) = self.combined_bbox_aabb(ids)?;
+        let mut shift = self.bed_xy_clamp_shift(lo2, hi2);
+        shift.z = if min_z.is_finite() { -min_z } else { 0.0 };
+        let settle = Transform::translation(shift);
+        let mut events = Vec::with_capacity(ids.len());
+        for &id in ids {
+            let obj = self.plates[active].scene.objects.get_mut(&id).unwrap();
+            obj.transform = settle.compose(obj.transform);
+            events.push(SceneEvent::ObjectUpdated {
+                plate_id,
+                object: obj.clone(),
+            });
+        }
+        for &id in ids {
+            events.extend(self.out_of_bounds_event_seated(id));
+        }
+        Ok(events)
+    }
+
     /// Replace an object's transform wholesale. Used by
     /// auto-arrange and the gizmo's drag-finalization
     /// step.
@@ -3149,6 +3220,61 @@ mod tests {
             before.to_mat4(),
             after.to_mat4(),
             "the surviving object must be untouched when the op aborts"
+        );
+    }
+
+    #[test]
+    fn align_face_coplanar_slides_tracked_point_onto_the_reference_plane() {
+        let mut p = Project::default();
+        let (_, obj) = add_cube(&mut p);
+        // Identity yaw isolates the spatial slide: the tracked point must end
+        // up at X = 10 (the reference plane), with Y/Z untouched.
+        let track = Vec3::new(0.5, 0.5, 0.5);
+        p.align_face_coplanar(&[obj], Quat::IDENTITY, Vec3::X, 10.0, track)
+            .unwrap();
+        let xform = p.active_plate().scene.objects.get(&obj).unwrap().transform;
+        let moved = xform.apply_point(track);
+        assert!(
+            (moved.x - 10.0).abs() < 1e-3,
+            "tracked X should slide to 10, got {}",
+            moved.x
+        );
+        assert!(
+            (moved.y - 0.5).abs() < 1e-3,
+            "Y should not move, got {}",
+            moved.y
+        );
+        assert!(
+            (moved.z - 0.5).abs() < 1e-3,
+            "Z should not move, got {}",
+            moved.z
+        );
+    }
+
+    #[test]
+    fn align_face_coplanar_tracks_the_point_through_a_non_identity_yaw() {
+        let mut p = Project::default();
+        let (_, obj) = add_cube(&mut p);
+        // A 90° yaw about Z, then slide along X to X=10. The tracked point (the
+        // +X face center) is followed *through* the rotation about the cube's
+        // center, which an identity yaw would skip. After a 90° turn that point
+        // swings to the +Y side, so its Y proves the yaw was tracked while its X
+        // proves the slide landed it on the reference plane.
+        let track = Vec3::new(1.0, 0.5, 0.5);
+        let yaw = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        p.align_face_coplanar(&[obj], yaw, Vec3::X, 10.0, track)
+            .unwrap();
+        let xform = p.active_plate().scene.objects.get(&obj).unwrap().transform;
+        let moved = xform.apply_point(track);
+        assert!(
+            (moved.x - 10.0).abs() < 1e-3,
+            "tracked X should land on 10, got {}",
+            moved.x
+        );
+        assert!(
+            (moved.y - 1.0).abs() < 1e-3,
+            "a 90° yaw should swing the tracked point to Y=1, got {}",
+            moved.y
         );
     }
 
