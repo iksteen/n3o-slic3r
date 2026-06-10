@@ -37,10 +37,25 @@ coplanar neighbors) for round/curved hulls, where a single picked triangle
 reads as noise.
 
 ### 3. Auto-arrange on the plate, spilling to extra plates
-Extends the existing `core/scene/arrange.rs` greedy pack, which already
-*reports* overflow (`AutoArrangeOverflow` with the un-placed objects) but
-doesn't act on it. 1.0: catch the overflow, add plate(s) bound to the
-same printer, and place the spill there — built on #4's move primitive.
+**Phase 1 done (2026-06-10):** `core/scene/arrange.rs` no longer hand-rolls
+a greedy shelf pack — it drives libslic3r's libnest2d nester (the engine
+behind OrcaSlicer's "Arrange") through a new `slic3r_arrange` FFI. Each
+arrange *unit* (a lone object, or a whole group kept rigid) contributes one
+convex hull of its mesh projected to the bed; hulls + bed + the printer's
+exclusion zones go to the nester, which packs them with per-object spacing
+and returns a translation + logical `bed_idx` per unit. We apply the
+translation (XY only, authored rotation preserved). This is real nesting
+with native exclusion-zone avoidance, single-plate for now: a unit the
+nester spills onto an extra bed (`bed_idx > 0`) is still reported as
+`AutoArrangeOverflow`, exactly like before.
+
+**Phase 2 (the remaining 1.0 work):** act on the spill — catch `bed_idx > 0`
+units, add plate(s) bound to the same printer, and place the spill there
+(the nester already hands us which extra bed each lands on). Built on #4's
+move primitive. Post-1.0 polish: turn on `allow_rotations` for tighter
+packs (the FFI already supports it), and bound the hull cost on dense
+scenes (hull the local mesh once, then transform — convex hull commutes
+with affine maps).
 
 ### 4. Send objects to another / a new plate
 A `move_objects_to_plate(object_ids, target_or_new)` command + UI (drag
