@@ -1,28 +1,31 @@
-//! Auto-arrange — single-plate, no-rotation greedy bin-packing
-//!.
+//! Auto-arrange — drives libslic3r's nester (the engine behind
+//! OrcaSlicer's "Arrange", on libnest2d) through the FFI.
 //!
-//! Reads each scene object's XY footprint (axis-aligned bbox of the
-//! mesh after its current transform), sorts by descending footprint
-//! area, and places objects onto the bed using a shelf-style
-//! packer: walk left-to-right filling rows, advance to the next row
-//! when the current one's right edge is reached. Spacing between
-//! adjacent objects is fixed at 5 mm.
+//! Each *unit* (a lone object, or a whole group kept rigid) contributes
+//! one convex footprint = the convex hull of its mesh vertices projected
+//! to the bed plane. Those hulls, the bed rectangle, and the printer's
+//! exclusion zones go to `slic3r_ffi::arrange`, which packs them with
+//! per-object spacing and returns a translation + logical bed index per
+//! unit. We apply the translation (XY only — authored rotation/scale are
+//! preserved; rotation is off for now) to every member of the unit.
 //!
-//! The packer preserves each object's authored rotation/scale —
-//! only XY translation changes. Anything that doesn't fit lands in
-//! the returned `un_placed` list so the UI can flag those objects;
-//! the placed ones still move so the user sees a partial result.
-//!
-//! "Cut candidate" per the Execution Plan §4 — implementer can drop
-//! this entirely if Phase 2 runs long. The user fallback is to
-//! place objects manually via the transform ops.
+//! Phase 1 is single-plate: a unit the nester spills onto an extra bed
+//! (`bed_idx > 0`) is reported as `un_placed` so the UI flags it, exactly
+//! like the old packer's overflow. Spilling onto *real* extra plates is a
+//! follow-up (needs the move-to-plate machinery).
 
 use super::bed::BedMesh;
-use super::state::{ObjectId, SceneObject};
+use super::state::{GroupId, ObjectId};
 use super::transform::Transform;
-use crate::core::printer::profile::BoundingBox;
 use crate::core::project::Project;
 use glam::Vec3;
+use std::collections::HashMap;
+
+// Used only by the test-only bbox helpers below.
+#[cfg(test)]
+use super::state::SceneObject;
+#[cfg(test)]
+use crate::core::printer::profile::BoundingBox;
 
 /// Spacing between adjacent placed objects, in millimeters. Matches
 /// OrcaSlicer's default skirt clearance so prints don't fuse.
@@ -41,99 +44,179 @@ pub struct ArrangeResult {
 /// caller can decide whether to apply the result (e.g., test code
 /// vs. a user-facing "preview" flow).
 pub fn plan_arrangement(state: &Project, bed: &BedMesh) -> ArrangeResult {
-    let mut entries: Vec<Entry> = state
-        .active_plate()
-        .scene
-        .objects
-        .values()
-        .filter(|o| o.visible)
-        .filter_map(|o| {
-            let mesh = state.meshes.get(&o.mesh)?;
-            let footprint = xy_footprint(o, &mesh.bounding_box);
-            Some(Entry {
-                id: o.id,
-                obj: o,
-                footprint,
-            })
-        })
-        .collect();
+    let plate = &state.active_plate().scene;
 
-    // Largest footprint first. Sorting by area (not perimeter) gives
-    // tighter packs for the typical mix of one-big-print-plus-helpers.
-    entries.sort_by(|a, b| {
-        let area_a = a.footprint.size.x * a.footprint.size.y;
-        let area_b = b.footprint.size.x * b.footprint.size.y;
-        area_b
-            .partial_cmp(&area_a)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.id.0.cmp(&b.id.0))
-    });
+    // Group visible objects into arrange units: one per group (kept rigid),
+    // plus each ungrouped object on its own. Sorted by the unit's smallest
+    // object id so the nester sees a deterministic order.
+    let mut groups: HashMap<GroupId, Vec<ObjectId>> = HashMap::new();
+    let mut units: Vec<Vec<ObjectId>> = Vec::new();
+    for o in plate.objects.values().filter(|o| o.visible) {
+        match o.group {
+            Some(g) => groups.entry(g).or_default().push(o.id),
+            None => units.push(vec![o.id]),
+        }
+    }
+    units.extend(groups.into_values());
+    for u in &mut units {
+        u.sort_by_key(|id| id.0);
+    }
+    units.sort_by_key(|u| u[0].0);
 
-    let bed_min = Vec3::new(bed.extents.min[0] as f32, bed.extents.min[1] as f32, 0.0);
-    let bed_max = Vec3::new(bed.extents.max[0] as f32, bed.extents.max[1] as f32, 0.0);
-    let mut cursor_x = bed_min.x;
-    let mut cursor_y = bed_min.y;
-    let mut row_top = bed_min.y;
+    // The nester works in a bed-local frame with origin (0,0); shift footprints
+    // (and exclusion zones) by -bed_min and shift the resulting translation back
+    // implicitly (it's a delta, invariant under the constant shift).
+    let bed_min = (bed.extents.min[0] as f64, bed.extents.min[1] as f64);
+    let bed_size = [
+        (bed.extents.max[0] - bed.extents.min[0]) as f64,
+        (bed.extents.max[1] - bed.extents.min[1]) as f64,
+    ];
+
+    // One convex footprint per unit; units with no usable footprint (empty /
+    // degenerate mesh) are left out of the pack and untouched.
+    let mut contours: Vec<Vec<[f64; 2]>> = Vec::new();
+    let mut arranged_units: Vec<&Vec<ObjectId>> = Vec::new();
+    for unit in &units {
+        let mut pts: Vec<[f64; 2]> = Vec::new();
+        for &id in unit {
+            let Some(obj) = plate.objects.get(&id) else {
+                continue;
+            };
+            let Some(mesh) = state.meshes.get(&obj.mesh) else {
+                continue;
+            };
+            for v in mesh.vertices.chunks_exact(3) {
+                let w = obj.transform.apply_point(Vec3::new(v[0], v[1], v[2]));
+                pts.push([w.x as f64 - bed_min.0, w.y as f64 - bed_min.1]);
+            }
+        }
+        if let Some(contour) = footprint_contour(&pts) {
+            contours.push(contour);
+            arranged_units.push(unit);
+        }
+    }
 
     let mut placed = Vec::new();
     let mut un_placed = Vec::new();
+    if contours.is_empty() {
+        return ArrangeResult { placed, un_placed };
+    }
 
-    for entry in &entries {
-        let w = entry.footprint.size.x;
-        let h = entry.footprint.size.y;
+    let excludes: Vec<[f64; 4]> = bed
+        .exclusion_zones
+        .iter()
+        .map(|z| {
+            [
+                z.bounds.min[0] as f64 - bed_min.0,
+                z.bounds.min[1] as f64 - bed_min.1,
+                z.bounds.max[0] as f64 - bed_min.0,
+                z.bounds.max[1] as f64 - bed_min.1,
+            ]
+        })
+        .collect();
 
-        let mut placed_this = false;
-        // Up to 2 attempts: current row, then a fresh row. Repeats
-        // until both attempts fail (which means the object is taller
-        // than the remaining bed height regardless of row).
-        for _ in 0..2 {
-            // Advance to a new row if this object overflows the current row.
-            if cursor_x + w > bed_max.x {
-                cursor_x = bed_min.x;
-                cursor_y = row_top + PLACEMENT_SPACING;
+    let placements = match slic3r_ffi::arrange(
+        &contours,
+        &excludes,
+        bed_size,
+        PLACEMENT_SPACING as f64,
+        false, // preserve authored rotation for now
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "libslic3r arrange failed; leaving objects in place");
+            for unit in &arranged_units {
+                un_placed.extend(unit.iter().copied());
             }
-            // Check vertical fit.
-            if cursor_y + h > bed_max.y {
-                break;
-            }
-            // Check exclusion-zone clash; if any, advance past the
-            // conflicting zone's far X edge and retry.
-            let candidate_aabb = AAbb {
-                min: Vec3::new(cursor_x, cursor_y, 0.0),
-                max: Vec3::new(cursor_x + w, cursor_y + h, 0.0),
-            };
-            if let Some(blocking) = bed
-                .exclusion_zones
-                .iter()
-                .find(|z| aabb_intersects_xy(&candidate_aabb, &z.bounds))
-            {
-                cursor_x = blocking.bounds.max[0] as f32 + PLACEMENT_SPACING;
-                continue;
-            }
-            // Compute the translation that takes the object's current
-            // world-space footprint origin to `(cursor_x, cursor_y)`.
-            let dx = cursor_x - entry.footprint.min.x;
-            let dy = cursor_y - entry.footprint.min.y;
-            // Preserve Z: this packer only moves in XY. The object's
-            // existing transform stays intact otherwise.
-            let new_xform = Transform::from_mat4(
-                glam::Mat4::from_translation(Vec3::new(dx, dy, 0.0))
-                    * entry.obj.transform.to_mat4(),
-            );
-            placed.push((entry.id, new_xform));
-            // Advance the row cursor + bump row_top if this object
-            // is taller than anything else in the row.
-            cursor_x += w + PLACEMENT_SPACING;
-            row_top = row_top.max(cursor_y + h);
-            placed_this = true;
-            break;
+            return ArrangeResult { placed, un_placed };
         }
-        if !placed_this {
-            un_placed.push(entry.id);
+    };
+
+    for (unit, placement) in arranged_units.iter().zip(&placements) {
+        if placement.bed_idx == 0 {
+            // A pure-XY world translation, applied to every member so a group
+            // stays rigid. (Rotation is off, so there's no yaw to compose.)
+            let delta = Transform::translation(Vec3::new(
+                placement.translation[0] as f32,
+                placement.translation[1] as f32,
+                0.0,
+            ));
+            for &id in unit.iter() {
+                if let Some(obj) = plate.objects.get(&id) {
+                    placed.push((id, delta.compose(obj.transform)));
+                }
+            }
+        } else {
+            // Spilled onto an extra bed (phase 1: report as overflow).
+            un_placed.extend(unit.iter().copied());
         }
     }
 
     ArrangeResult { placed, un_placed }
+}
+
+/// Convex hull of a unit's projected points, as a CCW contour the nester can
+/// pack. Falls back to the points' bounding rectangle if the hull degenerates
+/// (collinear), and returns `None` for an empty or zero-area footprint.
+fn footprint_contour(points: &[[f64; 2]]) -> Option<Vec<[f64; 2]>> {
+    let hull = convex_hull(points);
+    if hull.len() >= 3 {
+        return Some(hull);
+    }
+    // Degenerate hull — use the axis-aligned bounding rectangle if it has area.
+    let mut min = [f64::INFINITY; 2];
+    let mut max = [f64::NEG_INFINITY; 2];
+    for p in points {
+        min[0] = min[0].min(p[0]);
+        min[1] = min[1].min(p[1]);
+        max[0] = max[0].max(p[0]);
+        max[1] = max[1].max(p[1]);
+    }
+    if !(max[0] - min[0] > 1e-6 && max[1] - min[1] > 1e-6) {
+        return None;
+    }
+    Some(vec![
+        [min[0], min[1]],
+        [max[0], min[1]],
+        [max[0], max[1]],
+        [min[0], max[1]],
+    ])
+}
+
+/// 2D convex hull (Andrew's monotone chain), returned CCW without the closing
+/// duplicate. Fewer than 3 unique points yields a degenerate result the caller
+/// handles.
+fn convex_hull(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    let mut pts = points.to_vec();
+    pts.sort_by(|a, b| {
+        a[0]
+            .partial_cmp(&b[0])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a[1].partial_cmp(&b[1]).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    pts.dedup();
+    if pts.len() < 3 {
+        return pts;
+    }
+    let cross = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+        (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    };
+    let mut hull: Vec<[f64; 2]> = Vec::with_capacity(pts.len() + 1);
+    for &p in &pts {
+        while hull.len() >= 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+            hull.pop();
+        }
+        hull.push(p);
+    }
+    let lower = hull.len() + 1;
+    for &p in pts.iter().rev() {
+        while hull.len() >= lower && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+            hull.pop();
+        }
+        hull.push(p);
+    }
+    hull.pop(); // drop the closing point (== first)
+    hull
 }
 
 /// Apply a [`plan_arrangement`] result to the scene state. Calls
@@ -161,17 +244,15 @@ pub fn apply_arrangement(
     (all_events, plan.un_placed)
 }
 
-struct Entry<'a> {
-    id: ObjectId,
-    obj: &'a SceneObject,
-    footprint: XyFootprint,
-}
-
+// Test-only footprint helpers: the live packer uses convex hulls via the FFI,
+// but the tests still verify placements with simple bbox math.
+#[cfg(test)]
 struct XyFootprint {
     min: Vec3,
     size: Vec3,
 }
 
+#[cfg(test)]
 fn xy_footprint(obj: &SceneObject, mesh_bb: &BoundingBox) -> XyFootprint {
     let bb = mesh_bb;
     let mut min = Vec3::new(f32::INFINITY, f32::INFINITY, 0.0);
@@ -193,11 +274,13 @@ fn xy_footprint(obj: &SceneObject, mesh_bb: &BoundingBox) -> XyFootprint {
     }
 }
 
+#[cfg(test)]
 struct AAbb {
     min: Vec3,
     max: Vec3,
 }
 
+#[cfg(test)]
 fn aabb_intersects_xy(a: &AAbb, b: &BoundingBox) -> bool {
     let bmin_x = b.min[0] as f32;
     let bmax_x = b.max[0] as f32;
@@ -410,5 +493,46 @@ mod tests {
                 "placed object intersects exclusion zone"
             );
         }
+    }
+
+    #[test]
+    fn a_grouped_unit_moves_rigidly() {
+        let cube = PrimitiveParams {
+            width: 20.0,
+            depth: 20.0,
+            height: 20.0,
+            radius: 0.0,
+            radial_segments: 0,
+        };
+        let mut s = Project::new();
+        s.set_active_printer(Some(&a1_mini()));
+        let (_, a, _) = s.add_from_primitive(PrimitiveKind::Cube, cube);
+        let (_, b, _) = s.add_from_primitive(PrimitiveKind::Cube, cube);
+        // Offset b so the group has internal structure, and add a loose cube so
+        // the pack actually has to move the group.
+        s.translate_object(b, Vec3::new(40.0, 5.0, 0.0)).unwrap();
+        let (_, _c, _) = s.add_from_primitive(PrimitiveKind::Cube, cube);
+        s.group_objects(&[a, b], "grp".into()).unwrap();
+
+        let origin = |s: &Project, id| {
+            s.active_plate()
+                .scene
+                .objects
+                .get(&id)
+                .unwrap()
+                .transform
+                .apply_point(Vec3::ZERO)
+        };
+        let rel_before = origin(&s, b) - origin(&s, a);
+
+        let bed = s.active_plate().scene.bed.clone().unwrap();
+        let plan = plan_arrangement(&s, &bed);
+        let _ = apply_arrangement(&mut s, plan);
+
+        let rel_after = origin(&s, b) - origin(&s, a);
+        assert!(
+            (rel_after - rel_before).length() < 1e-3,
+            "group should move as one rigid unit: {rel_before:?} -> {rel_after:?}"
+        );
     }
 }

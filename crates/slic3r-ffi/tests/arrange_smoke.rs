@@ -23,7 +23,8 @@ fn arranges_a_few_rectangles_onto_one_bed() {
     let _ = slic3r_ffi::init(None, 3);
     let items = vec![rect(50.0, 50.0), rect(40.0, 60.0), rect(30.0, 30.0)];
     let bed = [180.0, 180.0];
-    let placements = slic3r_ffi::arrange(&items, bed, 2.0, false).expect("arrange should succeed");
+    let placements =
+        slic3r_ffi::arrange(&items, &[], bed, 2.0, false).expect("arrange should succeed");
     assert_eq!(placements.len(), 3);
 
     for p in &placements {
@@ -64,7 +65,7 @@ fn spills_overflow_onto_extra_beds() {
     // need for "auto-arrange, spilling to extra plates".
     let items: Vec<_> = (0..12).map(|_| rect(70.0, 70.0)).collect();
     let placements =
-        slic3r_ffi::arrange(&items, [180.0, 180.0], 2.0, false).expect("arrange should succeed");
+        slic3r_ffi::arrange(&items, &[], [180.0, 180.0], 2.0, false).expect("arrange should succeed");
     assert_eq!(placements.len(), 12);
 
     let max_bed = placements.iter().map(|p| p.bed_idx).max().unwrap();
@@ -79,8 +80,27 @@ fn spills_overflow_onto_extra_beds() {
 }
 
 #[test]
+fn keeps_items_clear_of_an_exclusion_region() {
+    let _ = slic3r_ffi::init(None, 3);
+    // A back-left no-go region (e.g. an AMS feed zone). Items must avoid it.
+    let items = vec![rect(40.0, 40.0), rect(40.0, 40.0)];
+    let excl = [[0.0, 0.0, 60.0, 60.0]];
+    let placements =
+        slic3r_ffi::arrange(&items, &excl, [180.0, 180.0], 2.0, false).expect("arrange ok");
+    for (it, p) in items.iter().zip(&placements) {
+        assert_eq!(p.bed_idx, 0);
+        let (w, h) = (it[1][0], it[2][1]);
+        let (x0, y0) = (p.translation[0], p.translation[1]);
+        let (x1, y1) = (x0 + w, y0 + h);
+        // The placed footprint must not overlap the [0,60]×[0,60] region.
+        let clear = x1 <= 1e-6 || x0 >= 60.0 - 1e-6 || y1 <= 1e-6 || y0 >= 60.0 - 1e-6;
+        assert!(clear, "item at ({x0},{y0})-({x1},{y1}) overlaps the exclusion region");
+    }
+}
+
+#[test]
 fn rejects_a_degenerate_contour() {
     let _ = slic3r_ffi::init(None, 3);
     let items = vec![vec![[0.0, 0.0], [10.0, 0.0]]]; // only 2 points
-    assert!(slic3r_ffi::arrange(&items, [180.0, 180.0], 0.0, false).is_err());
+    assert!(slic3r_ffi::arrange(&items, &[], [180.0, 180.0], 0.0, false).is_err());
 }

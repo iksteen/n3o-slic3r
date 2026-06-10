@@ -190,13 +190,16 @@ pub struct ArrangePlacement {
 
 /// 2D auto-arrange — the engine behind OrcaSlicer's "Arrange" (libnest2d).
 ///
-/// `contours` is one **convex** footprint per item (>= 3 points, mm); `bed` is
-/// `[width, height]` (mm, origin at 0,0); `min_dist` is the minimum gap between
-/// items (mm); `allow_rotations` lets the nester try discrete rotations.
-/// Returns a placement per item in the same order. Pure computation — no init
-/// or model handle required; may run multithreaded (TBB).
+/// `contours` is one **convex** footprint per item (>= 3 points, mm); `excludes`
+/// are axis-aligned no-go regions `[minx, miny, maxx, maxy]` (mm) the nester
+/// keeps clear (e.g. AMS feed zones); `bed` is `[width, height]` (mm, origin at
+/// 0,0); `min_dist` is the minimum gap between items (mm); `allow_rotations`
+/// lets the nester try discrete rotations. Returns a placement per item in the
+/// same order. Pure computation — no init or model handle required; may run
+/// multithreaded (TBB).
 pub fn arrange(
     contours: &[Vec<[f64; 2]>],
+    excludes: &[[f64; 4]],
     bed: [f64; 2],
     min_dist: f64,
     allow_rotations: bool,
@@ -222,6 +225,7 @@ pub fn arrange(
             flat.push(p[1]);
         }
     }
+    let excl_flat: Vec<f64> = excludes.iter().flat_map(|r| r.iter().copied()).collect();
     let n = contours.len();
     let mut out_dxdy = vec![0.0f64; n * 2];
     let mut out_rot = vec![0.0f64; n];
@@ -234,6 +238,12 @@ pub fn arrange(
             flat.as_ptr(),
             lengths.as_ptr(),
             n,
+            if excludes.is_empty() {
+                ptr::null()
+            } else {
+                excl_flat.as_ptr()
+            },
+            excludes.len(),
             bed[0],
             bed[1],
             min_dist,

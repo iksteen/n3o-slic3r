@@ -1043,13 +1043,15 @@ slic3r_status slic3r_orient_mesh(const float* vertices, size_t vertex_count,
 }
 
 slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengths,
-                             size_t item_count, double bed_w, double bed_h,
+                             size_t item_count, const double* exclude_rects,
+                             size_t exclude_count, double bed_w, double bed_h,
                              double min_dist, int allow_rotations,
                              double* out_dx_dy, double* out_rotation,
                              int* out_bed_idx, char** out_err) {
     if (out_err) *out_err = nullptr;
     if (!contours || !contour_lengths || !out_dx_dy || !out_rotation || !out_bed_idx
-        || item_count == 0 || bed_w <= 0.0 || bed_h <= 0.0)
+        || item_count == 0 || bed_w <= 0.0 || bed_h <= 0.0
+        || (exclude_count > 0 && !exclude_rects))
         return SLIC3R_ERR_INVALID_ARG;
     try {
         // Build the arrange items from the flattened mm contours (libnest2d
@@ -1090,6 +1092,25 @@ slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengt
         // (its default is an empty std::function, which would throw if invoked).
         params.progressind = [](unsigned, std::string) {};
         params.stopcondition = []() { return false; };
+
+        // No-go regions (e.g. AMS feed zones): axis-aligned rects (minx, miny,
+        // maxx, maxy) the nester must keep items clear of.
+        for (size_t e = 0; e < exclude_count; ++e) {
+            double x0 = exclude_rects[e * 4 + 0], y0 = exclude_rects[e * 4 + 1];
+            double x1 = exclude_rects[e * 4 + 2], y1 = exclude_rects[e * 4 + 3];
+            Polygon r;
+            r.points = {
+                Point(scaled<coord_t>(x0), scaled<coord_t>(y0)),
+                Point(scaled<coord_t>(x1), scaled<coord_t>(y0)),
+                Point(scaled<coord_t>(x1), scaled<coord_t>(y1)),
+                Point(scaled<coord_t>(x0), scaled<coord_t>(y1)),
+            };
+            arrangement::ArrangePolygon ex;
+            ex.poly = ExPolygon(r);
+            ex.is_virt_object = true;
+            ex.bed_idx = 0;
+            params.excluded_regions.push_back(std::move(ex));
+        }
 
         BoundingBox bed(Point(0, 0),
                         Point(scaled<coord_t>(bed_w), scaled<coord_t>(bed_h)));

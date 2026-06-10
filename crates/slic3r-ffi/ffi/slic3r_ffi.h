@@ -359,7 +359,9 @@ slic3r_status slic3r_orient_mesh(const float* vertices, size_t vertex_count,
  * each) for every item concatenated, and `contour_lengths` gives the point
  * count of each item (so item i occupies the next contour_lengths[i] pairs).
  * Each contour must be a convex polygon with >= 3 points (the caller's
- * footprint hull). `min_dist` is the minimum gap between items (mm);
+ * footprint hull). `exclude_rects` are `exclude_count` axis-aligned no-go
+ * regions (4 doubles each: minx, miny, maxx, maxy) the nester keeps items clear
+ * of — pass NULL/0 for none. `min_dist` is the minimum gap between items (mm);
  * `allow_rotations` (0/1) lets the nester try discrete rotations.
  *
  * Outputs are caller-allocated, indexed by the same item order:
@@ -370,7 +372,8 @@ slic3r_status slic3r_orient_mesh(const float* vertices, size_t vertex_count,
  * Pure computation: touches no slic3r_model_t/config and does not require
  * slic3r_init(). May run multithreaded internally (TBB). */
 slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengths,
-                             size_t item_count, double bed_w, double bed_h,
+                             size_t item_count, const double* exclude_rects,
+                             size_t exclude_count, double bed_w, double bed_h,
                              double min_dist, int allow_rotations,
                              double* out_dx_dy, double* out_rotation,
                              int* out_bed_idx, char** out_err);
