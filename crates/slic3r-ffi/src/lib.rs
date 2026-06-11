@@ -192,14 +192,18 @@ pub struct ArrangePlacement {
 ///
 /// `contours` is one **convex** footprint per item (>= 3 points, mm); `excludes`
 /// are axis-aligned no-go regions `[minx, miny, maxx, maxy]` (mm) the nester
-/// keeps clear (e.g. AMS feed zones); `bed` is `[width, height]` (mm, origin at
-/// 0,0); `min_dist` is the minimum gap between items (mm); `allow_rotations`
-/// lets the nester try discrete rotations. Returns a placement per item in the
+/// keeps clear (e.g. AMS feed zones, the wipe tower); `bed` is `[width, height]`
+/// (mm, origin at 0,0); `min_dist` is the minimum gap between items (mm);
+/// `allow_rotations` lets the nester try discrete rotations. The excludes are
+/// per-plate obstacles present on every bed, so each is reserved on every bed
+/// the pack might spill onto — pass `bed_count` as the worst-case bed bound
+/// (e.g. the item count; clamped to >= 1). Returns a placement per item in the
 /// same order. Pure computation — no init or model handle required; may run
 /// multithreaded (TBB).
 pub fn arrange(
     contours: &[Vec<[f64; 2]>],
     excludes: &[[f64; 4]],
+    bed_count: usize,
     bed: [f64; 2],
     min_dist: f64,
     allow_rotations: bool,
@@ -244,6 +248,7 @@ pub fn arrange(
                 excl_flat.as_ptr()
             },
             excludes.len(),
+            bed_count,
             bed[0],
             bed[1],
             min_dist,

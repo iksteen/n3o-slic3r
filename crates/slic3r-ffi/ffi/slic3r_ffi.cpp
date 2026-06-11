@@ -1044,8 +1044,8 @@ slic3r_status slic3r_orient_mesh(const float* vertices, size_t vertex_count,
 
 slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengths,
                              size_t item_count, const double* exclude_rects,
-                             size_t exclude_count, double bed_w, double bed_h,
-                             double min_dist, int allow_rotations,
+                             size_t exclude_count, size_t bed_count, double bed_w,
+                             double bed_h, double min_dist, int allow_rotations,
                              double* out_dx_dy, double* out_rotation,
                              int* out_bed_idx, char** out_err) {
     if (out_err) *out_err = nullptr;
@@ -1093,8 +1093,19 @@ slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengt
         params.progressind = [](unsigned, std::string) {};
         params.stopcondition = []() { return false; };
 
-        // No-go regions (e.g. AMS feed zones): axis-aligned rects (minx, miny,
-        // maxx, maxy) the nester must keep items clear of.
+        // No-go regions (AMS feed zones, the wipe/prime tower): axis-aligned
+        // rects (minx, miny, maxx, maxy). These go in as **fixed items**, not
+        // ArrangeParams::excluded_regions — the latter is only a soft scoring
+        // penalty the nester overrides on a crowded bed, whereas a fixed item is
+        // preloaded and hard-avoided via the no-fit polygon (matching how
+        // OrcaSlicer pins the wipe tower). `is_virt_object` keeps it immovable
+        // and exempt from the oversize-item cull. The regions are per-plate
+        // hardware/geometry present on every bed, so each is reserved on every
+        // bed the packer might open (0 .. bed_count) — exactly how OrcaSlicer's
+        // prepare_wipe_tower replicates the tower across MAX_NUM_PLATES. Without
+        // this, items spilled onto an extra bed would sit on that bed's tower.
+        size_t beds = bed_count > 0 ? bed_count : 1;
+        arrangement::ArrangePolygons fixed;
         for (size_t e = 0; e < exclude_count; ++e) {
             // Normalize so the rect is well-formed regardless of corner order;
             // an inverted (minx > maxx) rect would build a self-intersecting
@@ -1113,16 +1124,18 @@ slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengt
                 Point(scaled<coord_t>(x1), scaled<coord_t>(y1)),
                 Point(scaled<coord_t>(x0), scaled<coord_t>(y1)),
             };
-            arrangement::ArrangePolygon ex;
-            ex.poly = ExPolygon(r);
-            ex.is_virt_object = true;
-            ex.bed_idx = 0;
-            params.excluded_regions.push_back(std::move(ex));
+            for (size_t b = 0; b < beds; ++b) {
+                arrangement::ArrangePolygon ex;
+                ex.poly = ExPolygon(r);
+                ex.is_virt_object = true;
+                ex.bed_idx = static_cast<int>(b);
+                fixed.push_back(ex);
+            }
         }
 
         BoundingBox bed(Point(0, 0),
                         Point(scaled<coord_t>(bed_w), scaled<coord_t>(bed_h)));
-        arrangement::arrange(items, {}, bed, params);
+        arrangement::arrange(items, fixed, bed, params);
 
         // Results are written back in place, item order preserved.
         for (size_t i = 0; i < item_count; ++i) {

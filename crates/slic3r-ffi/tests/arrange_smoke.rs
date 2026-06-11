@@ -24,7 +24,7 @@ fn arranges_a_few_rectangles_onto_one_bed() {
     let items = vec![rect(50.0, 50.0), rect(40.0, 60.0), rect(30.0, 30.0)];
     let bed = [180.0, 180.0];
     let placements =
-        slic3r_ffi::arrange(&items, &[], bed, 2.0, false).expect("arrange should succeed");
+        slic3r_ffi::arrange(&items, &[], items.len(), bed, 2.0, false).expect("arrange should succeed");
     assert_eq!(placements.len(), 3);
 
     for p in &placements {
@@ -64,8 +64,8 @@ fn spills_overflow_onto_extra_beds() {
     // must spill the rest onto additional beds (bed_idx > 0) — the mechanism we
     // need for "auto-arrange, spilling to extra plates".
     let items: Vec<_> = (0..12).map(|_| rect(70.0, 70.0)).collect();
-    let placements =
-        slic3r_ffi::arrange(&items, &[], [180.0, 180.0], 2.0, false).expect("arrange should succeed");
+    let placements = slic3r_ffi::arrange(&items, &[], items.len(), [180.0, 180.0], 2.0, false)
+        .expect("arrange should succeed");
     assert_eq!(placements.len(), 12);
 
     let max_bed = placements.iter().map(|p| p.bed_idx).max().unwrap();
@@ -85,8 +85,8 @@ fn keeps_items_clear_of_an_exclusion_region() {
     // A back-left no-go region (e.g. an AMS feed zone). Items must avoid it.
     let items = vec![rect(40.0, 40.0), rect(40.0, 40.0)];
     let excl = [[0.0, 0.0, 60.0, 60.0]];
-    let placements =
-        slic3r_ffi::arrange(&items, &excl, [180.0, 180.0], 2.0, false).expect("arrange ok");
+    let placements = slic3r_ffi::arrange(&items, &excl, items.len(), [180.0, 180.0], 2.0, false)
+        .expect("arrange ok");
     for (it, p) in items.iter().zip(&placements) {
         assert_eq!(p.bed_idx, 0);
         let (w, h) = (it[1][0], it[2][1]);
@@ -99,8 +99,45 @@ fn keeps_items_clear_of_an_exclusion_region() {
 }
 
 #[test]
+fn excludes_are_hard_obstacles_on_a_crowded_bed() {
+    let _ = slic3r_ffi::init(None, 3);
+    // The earlier test leaves the bed roomy, so a *soft* scoring penalty would
+    // also keep items clear — it can't tell soft from hard avoidance. Here we
+    // crowd the bed: a 180mm bed fits ~16 of these 42mm tiles, but a 90×90
+    // back-left exclusion steals four tile-slots. With a *soft* penalty the
+    // nester would shove the overflow into the cheap-but-penalised corner;
+    // only a *hard* fixed obstacle forces it to spill to a second bed and
+    // leave the corner untouched. We assert both: nothing overlaps the corner
+    // (on *any* bed — the exclusion is a per-plate obstacle reserved on every
+    // bed, so the spilled surplus must dodge it too), and the surplus spills.
+    let items: Vec<_> = (0..16).map(|_| rect(42.0, 42.0)).collect();
+    let excl = [[0.0, 0.0, 90.0, 90.0]];
+    let placements = slic3r_ffi::arrange(&items, &excl, items.len(), [180.0, 180.0], 2.0, false)
+        .expect("arrange ok");
+    assert_eq!(placements.len(), 16);
+
+    for (it, p) in items.iter().zip(&placements) {
+        let (w, h) = (it[1][0], it[2][1]);
+        let (x0, y0) = (p.translation[0], p.translation[1]);
+        let (x1, y1) = (x0 + w, y0 + h);
+        let clear = x1 <= 1e-6 || x0 >= 90.0 - 1e-6 || y1 <= 1e-6 || y0 >= 90.0 - 1e-6;
+        assert!(
+            clear,
+            "item on bed {} at ({x0},{y0})-({x1},{y1}) overlaps the hard exclusion region",
+            p.bed_idx
+        );
+    }
+
+    let max_bed = placements.iter().map(|p| p.bed_idx).max().unwrap();
+    assert!(
+        max_bed >= 1,
+        "a hard exclusion should crowd the surplus onto a 2nd bed, got max bed_idx={max_bed}"
+    );
+}
+
+#[test]
 fn rejects_a_degenerate_contour() {
     let _ = slic3r_ffi::init(None, 3);
     let items = vec![vec![[0.0, 0.0], [10.0, 0.0]]]; // only 2 points
-    assert!(slic3r_ffi::arrange(&items, &[], [180.0, 180.0], 0.0, false).is_err());
+    assert!(slic3r_ffi::arrange(&items, &[], 1, [180.0, 180.0], 0.0, false).is_err());
 }

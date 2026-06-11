@@ -121,7 +121,7 @@ pub fn plan_arrangement(state: &Project, bed: &BedMesh) -> ArrangeResult {
         };
     }
 
-    let excludes: Vec<[f64; 4]> = bed
+    let mut excludes: Vec<[f64; 4]> = bed
         .exclusion_zones
         .iter()
         .map(|z| {
@@ -134,9 +134,31 @@ pub fn plan_arrangement(state: &Project, bed: &BedMesh) -> ArrangeResult {
         })
         .collect();
 
+    // Reserve the wipe/prime tower's footprint so the pack doesn't sit objects
+    // on it. It exists only for a multi-material plate (the helper returns None
+    // otherwise) and sits at a fixed config position. Every spill plate is the
+    // same printer, so the tower occupies the same spot on each — the FFI
+    // replicates every exclude across all beds the pack opens (see its
+    // `bed_count` arg), so this one rect protects every bed. `(x, y)` is the
+    // lower-left corner; pad by the brim.
+    let plate_id = state.active_plate().id;
+    if let Ok(Some(t)) =
+        crate::core::project::commands::tower_geometry_for_plate(state, plate_id)
+    {
+        excludes.push([
+            t.x - t.brim - bed_min.0,
+            t.y - t.brim - bed_min.1,
+            t.x + t.width + t.brim - bed_min.0,
+            t.y + t.width + t.brim - bed_min.1,
+        ]);
+    }
+
     let placements = match slic3r_ffi::arrange(
         &contours,
         &excludes,
+        // Worst case the pack spills one unit per bed, so reserve the per-plate
+        // obstacles (exclusion zones + tower) on up to that many beds.
+        arranged_units.len(),
         bed_size,
         PLACEMENT_SPACING as f64,
         false, // preserve authored rotation for now
@@ -479,6 +501,67 @@ mod tests {
             !footprints_overlap_after_plan(&plan, &s),
             "no overlap among first-plate placements"
         );
+    }
+
+    #[test]
+    fn arrange_reserves_the_wipe_tower_footprint() {
+        use crate::core::project::commands::tower_geometry_for_plate;
+        let _ = slic3r_ffi::init(None, 3);
+        // Project::default() binds a real library instance (A1 mini) so the
+        // cascade resolves a tower position; two materials make it multi-material
+        // so a tower is actually generated.
+        let mut s = Project::default();
+        // Crowd the bed: with only a handful of cubes the tower footprint is
+        // trivially clear and the test can't tell a hard obstacle from a soft
+        // scoring penalty. Packing the bed near-full means a soft penalty would
+        // be overrun and an object would land on the tower; only hard NFP
+        // avoidance keeps bed-0 placements clear (the surplus spills).
+        add_n_cubes(&mut s, 16, 42.0);
+        let active = s.active_plate;
+        let ids: Vec<ObjectId> = s.plates[active].scene.objects.keys().copied().collect();
+        for id in ids.iter().take(8) {
+            s.plates[active].scene.objects.get_mut(id).unwrap().extruder_id = Some(2);
+        }
+        let plate_id = s.active_plate().id;
+        let Some(tower) = tower_geometry_for_plate(&s, plate_id).ok().flatten() else {
+            return; // no tower resolvable in this env — nothing to assert
+        };
+        let bed = s.active_plate().scene.bed.clone().unwrap();
+
+        let plan = plan_arrangement(&s, &bed);
+        assert!(!plan.placed.is_empty(), "cubes should pack onto the plate");
+        // Crowding this many cubes overflows the bed, so the pack should spill —
+        // letting us prove the tower is reserved on the extra beds too, not just
+        // bed 0 (the tower sits at the same bed-local spot on every plate).
+        assert!(!plan.spilled.is_empty(), "16 cubes + a tower should overflow bed 0");
+        let (tx0, ty0) = (tower.x as f32, tower.y as f32);
+        let (tx1, ty1) = ((tower.x + tower.width) as f32, (tower.y + tower.width) as f32);
+        let assert_clear = |id: &ObjectId, xform: &Transform, bed_label: &str| {
+            let mesh_id = s.plates[active].scene.objects.get(id).unwrap().mesh;
+            let probe = SceneObject {
+                id: *id,
+                mesh: mesh_id,
+                transform: *xform,
+                name: String::new(),
+                visible: true,
+                extruder_id: None,
+                group: None,
+            };
+            let fp = xy_footprint(&probe, &s.meshes.get(&mesh_id).unwrap().bounding_box);
+            let (x0, y0) = (fp.min.x, fp.min.y);
+            let (x1, y1) = (fp.min.x + fp.size.x, fp.min.y + fp.size.y);
+            let clear = x1 <= tx0 + 1e-3 || x0 >= tx1 - 1e-3 || y1 <= ty0 + 1e-3 || y0 >= ty1 - 1e-3;
+            assert!(
+                clear,
+                "{bed_label} object overlaps the wipe tower: obj x[{x0},{x1}] y[{y0},{y1}] tower x[{tx0},{tx1}] y[{ty0},{ty1}]"
+            );
+        };
+        for (id, xform) in &plan.placed {
+            assert_clear(id, xform, "bed-0");
+        }
+        for sp in &plan.spilled {
+            assert_clear(&sp.id, &sp.transform, "spilled");
+        }
     }
 
     #[test]
