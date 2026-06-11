@@ -221,6 +221,20 @@ export function ViewportCanvas({
     notify("info", "Face-align: click the reference face, then the face to align.");
   };
 
+  // "Arrange": auto-pack the whole plate via libslic3r's nester. Anything that
+  // overflows spills onto fresh plates; the overflow toast (if any) fires off
+  // the AutoArrangeOverflow event. Cancels any armed pick first.
+  const runArrange = () => {
+    if (!plateHasObjects()) return;
+    setLayFlatPick(false);
+    setOrientPick(false);
+    setAlignPick(null);
+    setFaceAlign(null);
+    void invoke("scene_auto_arrange").catch((err) =>
+      notify("error", `Arrange failed: ${err}`),
+    );
+  };
+
   // "Align X / Y": rotate the selection about Z so its dominant line direction
   // becomes parallel to `axis`. With a selection, align it immediately. With no
   // selection, arm pick-to-align on that axis — the next clicked object's whole
@@ -958,6 +972,36 @@ export function ViewportCanvas({
             ))}
           </div>
           <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
+            <button
+              type="button"
+              disabled={!hasObjects}
+              className={`px-2 py-1.5 ${
+                hasObjects
+                  ? "hover:bg-neutral-700/60"
+                  : "opacity-40 cursor-not-allowed"
+              }`}
+              onClick={runArrange}
+              title={
+                hasObjects
+                  ? "Arrange — auto-pack the plate (overflow spills to new plates)"
+                  : "Arrange — add objects first"
+              }
+              aria-label="Auto-arrange the plate"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 14 14"
+                fill="none"
+                aria-hidden="true"
+              >
+                {/* a packed grid of parts */}
+                <rect x="1.5" y="1.5" width="4.5" height="4.5" rx="0.6" stroke="currentColor" strokeWidth="1.2" />
+                <rect x="8" y="1.5" width="4.5" height="4.5" rx="0.6" stroke="currentColor" strokeWidth="1.2" />
+                <rect x="1.5" y="8" width="4.5" height="4.5" rx="0.6" stroke="currentColor" strokeWidth="1.2" />
+                <rect x="8" y="8" width="4.5" height="4.5" rx="0.6" stroke="currentColor" strokeWidth="1.2" />
+              </svg>
+            </button>
             <button
               type="button"
               disabled={!hasObjects && !orientPick}
