@@ -11,8 +11,9 @@
     "tauri": "cross-env N3O_SLIC3R_RESOURCES_ROOT=./resources dotenv -- tauri",
     "publish:flatpak": "dotenv ./packaging/flatpak/publish.sh",
     "publish:arch": "dotenv ./packaging/arch/publish.sh",
+    "publish:macos": "dotenv ./packaging/macos/publish.sh",
     "publish:windows": "dotenv ./packaging/windows-cross/publish.sh",
-    "publish:all": "npm run publish:flatpak && npm run publish:arch && npm run publish:windows"
+    "publish:all": "npm run publish:flatpak && npm run publish:arch && npm run publish:macos && npm run publish:windows"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

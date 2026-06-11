@@ -76,6 +76,19 @@ set_target_properties(slic3r_ffi PROPERTIES
     VERSION      0.1.0
 )
 
+if(APPLE)
+    # The bundled Tauri app loads the shim from Contents/Frameworks via @rpath.
+    # Keep the install name stable and unversioned on macOS so the bundle only
+    # needs to ship a single dylib file.
+    set_target_properties(slic3r_ffi PROPERTIES
+        MACOSX_RPATH ON
+        INSTALL_NAME_DIR "@rpath"
+        BUILD_WITH_INSTALL_NAME_DIR ON
+        SOVERSION ""
+        VERSION ""
+    )
+endif()
+
 # On Windows (MSVC/clang-cl) the shim needs the same baseline defines libslic3r
 # compiles with — its public headers (calib.hpp, …) use M_PI (needs
 # _USE_MATH_DEFINES; MSVC's <cmath> doesn't expose it like glibc) and would trip

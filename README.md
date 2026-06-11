@@ -64,8 +64,9 @@ repo unchanged.
 
 ## Build
 
-Tested on Linux (Arch). macOS should work with minor CMake adjustments;
-Windows would need symbol-visibility annotations on the C API.
+Tested and supported on Linux. macOS bring-up is now wired in as an
+experimental path for developers with a local Mac; Windows remains a
+separate cross-build path.
 
 ### 1. System prerequisites
 
@@ -98,11 +99,15 @@ into `external/OrcaSlicer/deps/build/`. Takes ~17 min, idempotent.
 ./scripts/build.sh deps
 ```
 
+On macOS this dispatches to OrcaSlicer's `build_release_macos.sh` for the
+host architecture (`arm64` or `x86_64`), using the per-arch deps prefix under
+`external/OrcaSlicer/deps/build/<arch>/OrcaSlicer_dep/usr/local`.
+
 Everything beyond this point is driven by `cargo build`. The `slic3r-ffi`
-crate's `build.rs` invokes cmake to build `libslic3r_ffi.so` (and
-libslic3r transitively) on first build; cmake's own caching keeps
-incrementals to a few seconds. Output lands at
-`build/slic3r-ffi/RelWithDebInfo/libslic3r_ffi.so`.
+crate's `build.rs` invokes cmake to build the `libslic3r_ffi` shared
+library (and libslic3r transitively) on first build; cmake's own caching
+keeps incrementals to a few seconds. Output lands under
+`build/slic3r-ffi/RelWithDebInfo/` (`.so` on Linux, `.dylib` on macOS).
 
 ### 4. Install JS deps + run the dev server
 
@@ -137,10 +142,16 @@ cargo run -p slic3r-ffi --release --example slice -- <model> /tmp/out.gcode
 npm run tauri build
 ```
 
-The produced binary dynamically links against `libslic3r_ffi.so.0` via rpath
-to the build tree (dev convenience). For distribution, bundle the `.so` next
-to the binary or install it to a system library path; the current `build.rs`
-rpath is not portable.
+On macOS, to emit a DMG explicitly:
+
+```bash
+npm run publish:macos
+```
+
+The produced binary dynamically links against the `libslic3r_ffi` shared
+library via rpath to the build tree (dev convenience). The macOS bundle path
+stages `libslic3r_ffi.dylib` into `Contents/Frameworks`; Linux packaging still
+ships the `.so` separately.
 
 ## Development gotchas
 

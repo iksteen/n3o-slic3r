@@ -25,13 +25,19 @@
 // patched in place (idempotent). Output is slic3r_ffi.dll + its import lib.
 
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let workspace_root = manifest_dir.join("..").join("..").canonicalize().unwrap();
-    let windows = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+    let cmake_arch = cmake_target_arch(&target_os, &target_arch);
+    let macos_deployment_target = macos_deployment_target();
+    let windows = target_os == "windows";
+    let macos = target_os == "macos";
 
     let cmake_build_dir = workspace_root
         .join("build")
@@ -59,8 +65,7 @@ fn main() {
             );
         }
     } else {
-        let deps_prefix =
-            workspace_root.join("external/OrcaSlicer/deps/build/OrcaSlicer_dep/usr/local");
+        let deps_prefix = orca_deps_prefix(&workspace_root, &target_os, &target_arch);
         if !deps_prefix.exists() {
             panic!(
                 "OrcaSlicer's dependency tree is not built yet ({} missing).\n\
@@ -73,6 +78,9 @@ fn main() {
 
     // ---- cmake configure (idempotent) ----
 
+    if macos {
+        invalidate_stale_macos_cmake_cache(&cmake_build_dir, &macos_deployment_target);
+    }
     std::fs::create_dir_all(&cmake_build_dir).expect("create cmake build dir");
 
     let mut configure = Command::new("cmake");
@@ -81,6 +89,10 @@ fn main() {
         .arg(&manifest_dir)
         .arg("-B")
         .arg(&cmake_build_dir)
+        .arg("-Wno-dev")
+        .arg("-DCMAKE_POLICY_VERSION_MINIMUM=3.5")
+        .arg("-DCMAKE_POLICY_DEFAULT_CMP0167=OLD")
+        .arg("-DCMAKE_POLICY_DEFAULT_CMP0175=OLD")
         .env("CMAKE_POLICY_VERSION_MINIMUM", "3.5");
 
     if windows {
@@ -112,6 +124,17 @@ fn main() {
             .env("WINCROSS_PREFIX", &prefix);
     } else {
         configure.arg("-G").arg("Ninja Multi-Config");
+        if macos {
+            configure
+                .arg(format!("-DCMAKE_OSX_ARCHITECTURES={cmake_arch}"))
+                .arg(format!(
+                    "-DCMAKE_OSX_DEPLOYMENT_TARGET={macos_deployment_target}"
+                ))
+                .arg(format!(
+                    "-DCMAKE_PREFIX_PATH={}",
+                    orca_deps_prefix(&workspace_root, &target_os, &target_arch).display()
+                ));
+        }
     }
     run(&mut configure, "cmake configure");
 
@@ -186,6 +209,13 @@ fn main() {
             copy_runtime_dll(&bin.join("libgmp-10.dll"), &out_dir);
             copy_runtime_dll(&bin.join("libmpfr-4.dll"), &out_dir);
         }
+    } else if macos {
+        if let Some(dylib) = find_macos_runtime_dylib(&lib_dir) {
+            copy_runtime_file(&dylib, &out_dir);
+        }
+        // rpath for this crate's own examples/tests plus the final Tauri app.
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks");
     } else {
         // rpath for this crate's own examples/tests. Won't propagate to
         // downstream binaries — they read DEP_SLIC3R_FFI_LIB_DIR (below).
@@ -202,6 +232,77 @@ fn main() {
 // accepts forward slashes everywhere, including on Windows-targeted builds.
 fn toolchain_arg(var: &str, path: &Path) -> String {
     format!("-D{var}={}", path.display())
+}
+
+fn cmake_target_arch(target_os: &str, target_arch: &str) -> String {
+    match (target_os, target_arch) {
+        ("macos", "aarch64") => "arm64".to_string(),
+        _ => target_arch.to_string(),
+    }
+}
+
+fn macos_deployment_target() -> String {
+    match env::var("MACOSX_DEPLOYMENT_TARGET") {
+        Ok(value) if version_at_least(&value, "11.3") => value,
+        _ => "11.3".to_string(),
+    }
+}
+
+fn version_at_least(value: &str, minimum: &str) -> bool {
+    fn parse(version: &str) -> Vec<u32> {
+        version
+            .split('.')
+            .map(|part| part.parse::<u32>().unwrap_or(0))
+            .collect()
+    }
+
+    let lhs = parse(value);
+    let rhs = parse(minimum);
+    let len = lhs.len().max(rhs.len());
+
+    for idx in 0..len {
+        let a = *lhs.get(idx).unwrap_or(&0);
+        let b = *rhs.get(idx).unwrap_or(&0);
+        if a != b {
+            return a > b;
+        }
+    }
+
+    true
+}
+
+fn invalidate_stale_macos_cmake_cache(build_dir: &Path, deployment_target: &str) {
+    let cache_path = build_dir.join("CMakeCache.txt");
+    let cache = match fs::read_to_string(&cache_path) {
+        Ok(cache) => cache,
+        Err(_) => return,
+    };
+    let wanted = format!("CMAKE_OSX_DEPLOYMENT_TARGET:STRING={deployment_target}");
+    if cache.contains(&wanted) {
+        return;
+    }
+
+    let _ = fs::remove_dir_all(build_dir);
+}
+
+fn orca_deps_prefix(workspace_root: &Path, target_os: &str, target_arch: &str) -> PathBuf {
+    if let Ok(prefix) = env::var("N3O_SLIC3R_ORCA_DEPS_PREFIX") {
+        return PathBuf::from(prefix);
+    }
+
+    match target_os {
+        "macos" => {
+            let orca_arch = match target_arch {
+                "aarch64" => "arm64",
+                other => other,
+            };
+            workspace_root
+                .join("external/OrcaSlicer/deps/build")
+                .join(orca_arch)
+                .join("OrcaSlicer_dep/usr/local")
+        }
+        _ => workspace_root.join("external/OrcaSlicer/deps/build/OrcaSlicer_dep/usr/local"),
+    }
 }
 
 // Apply packaging/windows-cross/patches/*.patch to the OrcaSlicer submodule in
@@ -251,6 +352,10 @@ fn apply_orca_patches(workspace_root: &Path, wc: &Path) {
 // target/<triple>/<profile>/build/<pkg-hash>/out — the profile dir (where
 // examples/ and the bins live) is four ancestors up.
 fn copy_runtime_dll(src: &Path, out_dir: &Path) {
+    copy_runtime_file(src, out_dir);
+}
+
+fn copy_runtime_file(src: &Path, out_dir: &Path) {
     if !src.exists() {
         return;
     }
@@ -266,6 +371,30 @@ fn copy_runtime_dll(src: &Path, out_dir: &Path) {
             }
         }
     }
+}
+
+fn find_macos_runtime_dylib(lib_dir: &Path) -> Option<PathBuf> {
+    let direct = lib_dir.join("libslic3r_ffi.dylib");
+    if direct.exists() {
+        return Some(direct);
+    }
+
+    let mut matches: Vec<PathBuf> = fs::read_dir(lib_dir)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| {
+                    name.starts_with("libslic3r_ffi")
+                        && name.ends_with(".dylib")
+                        && !path.is_symlink()
+                })
+                .unwrap_or(false)
+        })
+        .collect();
+    matches.sort();
+    matches.into_iter().next()
 }
 
 fn run(cmd: &mut Command, label: &str) {
