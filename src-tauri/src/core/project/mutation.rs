@@ -179,10 +179,17 @@ impl Project {
     /// path refuses unbound plates anyway, and we don't want to
     /// pin a mapping before the user picks a printer.
     fn ensure_default_material_slot_on_active(&mut self, model_material: u8) {
+        self.ensure_material_slot_on_plate(self.active_plate, model_material);
+    }
+
+    /// Auto-bind `model_material` to a slot on the plate at `idx` (the
+    /// active-plate version above just forwards to here). Used both on the add
+    /// path and when an object arrives on a non-active plate via a cross-plate
+    /// move and needs a slot there.
+    fn ensure_material_slot_on_plate(&mut self, idx: usize, model_material: u8) {
         if model_material < 1 {
             return;
         }
-        let idx = self.active_plate;
         if self.plates[idx]
             .material_to_slot
             .contains_key(&model_material)
@@ -2194,6 +2201,31 @@ impl Project {
             }
         }
 
+        // Carry the moved materials' slot bindings to the target so the objects
+        // keep their material→slot assignment there (same-printer spill keeps it
+        // exact). Don't clobber a binding the target already has; if the source
+        // had none, let the target auto-bind. Done before the source prune below
+        // so the source bindings are still present to copy.
+        let mut target_bindings_changed = false;
+        for &mat in &moved_materials {
+            if self.plates[to_idx].material_to_slot.contains_key(&mat) {
+                continue;
+            }
+            if let Some(&slot) = self.plates[from_idx].material_to_slot.get(&mat) {
+                self.plates[to_idx].material_to_slot.insert(mat, slot);
+                target_bindings_changed = true;
+            } else {
+                let before = self.plates[to_idx].material_to_slot.len();
+                self.ensure_material_slot_on_plate(to_idx, mat);
+                target_bindings_changed |= self.plates[to_idx].material_to_slot.len() != before;
+            }
+        }
+        if target_bindings_changed {
+            events.push(SceneEvent::MaterialSlotChanged {
+                plate_id: to_plate,
+            });
+        }
+
         if any_was_selected {
             let mut sel: Vec<ObjectId> =
                 self.plates[from_idx].scene.selection.iter().copied().collect();
@@ -4116,6 +4148,26 @@ mod tests {
         // The group's name travels with it.
         assert!(!p.plates[0].scene.groups.contains_key(&g));
         assert_eq!(p.plates[1].scene.groups.get(&g).unwrap().name, "duo");
+    }
+
+    #[test]
+    fn move_objects_to_plate_carries_material_slot_bindings() {
+        use crate::core::printer::SlotRef;
+        let mut p = Project::default();
+        let (id_b, _) = p.add_plate(None);
+        let (_, obj) = add_cube(&mut p);
+        // The object uses material 3, pinned to a specific slot on the source.
+        p.plates[0].scene.objects.get_mut(&obj).unwrap().extruder_id = Some(3);
+        let slot = SlotRef { extruder: 1, slot: 2 };
+        p.plates[0].material_to_slot.insert(3, slot);
+
+        let events = p.move_objects_to_plate(PlateId(1), id_b, &[obj]).unwrap();
+        // The binding travels with the object — exact, since same printer.
+        assert_eq!(p.plates[1].material_to_slot.get(&3), Some(&slot));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            SceneEvent::MaterialSlotChanged { plate_id } if *plate_id == id_b
+        )));
     }
 
     #[test]
