@@ -25,6 +25,11 @@ export interface SlotBinding {
   /** Spool color as a CSS hex string ("#ff8800"). `null` means
    *  unassigned — the picker shows a neutral placeholder. */
   color: string | null;
+  /** Last-synced RFID tag id (Bambu `tag_uid`), or `null`/all-zeros
+   *  when the spool wasn't auto-detected via RFID. When set (see
+   *  `isRfidDetected`), the slot is printer-authoritative and the UI
+   *  blocks editing it. */
+  tag_uid: string | null;
 }
 
 export interface NozzleSku {
@@ -290,6 +295,9 @@ export interface FlatSlotOption {
   feed: FeedKind;
   filament_identity: string | null;
   color: string | null;
+  /** RFID tag id of the synced spool, mirrored from `SlotBinding`.
+   *  Drives the read-only gate on RFID-auto-detected slots. */
+  tag_uid: string | null;
 }
 
 /** Display label for an extruder, given its 0-based position and the
@@ -425,6 +433,7 @@ export function flattenSlots(instance: PrinterInstance): FlatSlotOption[] {
         feed: slot.feed,
         filament_identity: slot.filament_identity,
         color: slot.color,
+        tag_uid: slot.tag_uid,
       });
     });
   });

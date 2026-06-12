@@ -21,7 +21,7 @@ function bambi(): PrinterInstance {
       {
         installed_nozzle: { diameter: "0.4", material: "stainless" },
         slots: [
-          { feed: "direct", filament_identity: null, color: null },
+          { feed: "direct", filament_identity: null, color: null, tag_uid: null },
         ],
       },
     ],
@@ -42,7 +42,7 @@ function snappy(): PrinterInstance {
     extruders: [0, 1, 2, 3].map(() => ({
       installed_nozzle: { diameter: "0.4", material: "stainless" },
       slots: [
-        { feed: "direct" as const, filament_identity: null, color: null },
+        { feed: "direct" as const, filament_identity: null, color: null, tag_uid: null },
       ],
     })),
     bed: { identity: "Snapmaker Textured PEI" },
@@ -57,11 +57,11 @@ function ams_a1_mini(): PrinterInstance {
   const ext: PrinterInstance["extruders"][number] = {
     installed_nozzle: { diameter: "0.4", material: "stainless" },
     slots: [
-      { feed: "ams", filament_identity: null, color: null },
-      { feed: "ams", filament_identity: null, color: null },
-      { feed: "ams", filament_identity: null, color: null },
-      { feed: "ams", filament_identity: null, color: null },
-      { feed: "direct", filament_identity: null, color: null },
+      { feed: "ams", filament_identity: null, color: null, tag_uid: null },
+      { feed: "ams", filament_identity: null, color: null, tag_uid: null },
+      { feed: "ams", filament_identity: null, color: null, tag_uid: null },
+      { feed: "ams", filament_identity: null, color: null, tag_uid: null },
+      { feed: "direct", filament_identity: null, color: null, tag_uid: null },
     ],
   };
   return { ...bambi(), extruders: [ext] };
@@ -109,8 +109,9 @@ describe("flattenSlots", () => {
               feed: "ams" as const,
               filament_identity: null,
               color: null,
+              tag_uid: null,
             })),
-            { feed: "direct" as const, filament_identity: null, color: null },
+            { feed: "direct" as const, filament_identity: null, color: null, tag_uid: null },
           ],
         },
       ],
@@ -126,8 +127,8 @@ describe("flattenSlots", () => {
 
 describe("deriveSlotShortLabel", () => {
   // Helpers to keep test data shorter.
-  const ams: SlotBinding = { feed: "ams", filament_identity: null, color: null };
-  const dir: SlotBinding = { feed: "direct", filament_identity: null, color: null };
+  const ams: SlotBinding = { feed: "ams", filament_identity: null, color: null, tag_uid: null };
+  const dir: SlotBinding = { feed: "direct", filament_identity: null, color: null, tag_uid: null };
 
   it("toolchanger: chip shows the extruder identity T1/T2/T3/T4", () => {
     // 4 extruders × 1 Direct slot each — the chip face is the

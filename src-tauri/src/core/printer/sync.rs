@@ -46,6 +46,12 @@ pub struct SlotUpdate {
     pub filament_identity: Option<String>,
     /// CSS-style hex color (`#RRGGBB`), or `None` for a cleared slot.
     pub color: Option<String>,
+    /// RFID tag id (Bambu `tag_uid`) of the reported spool, or `None`
+    /// for a cleared slot, an untagged/third-party spool, or a feed
+    /// with no RFID (vt_tray external spool, U1 toolheads). Persisted
+    /// onto the slot so the UI can mark RFID-auto-detected slots
+    /// read-only — see [`crate::core::driver::status::rfid_detected`].
+    pub tag_uid: Option<String>,
 }
 
 /// Reconcile an instance to a driver status report in one atomic
@@ -83,6 +89,7 @@ pub fn apply_from_driver(
                 if let Some(slot) = ext.slots.get_mut(u.slot_idx) {
                     slot.filament_identity = u.filament_identity.clone();
                     slot.color = u.color.clone();
+                    slot.tag_uid = u.tag_uid.clone();
                 }
             }
         }
@@ -157,12 +164,14 @@ fn resolve_bambu(
                         slot_idx,
                         filament_identity: resolve_bambu_identity(identity, library),
                         color: Some(hex8_to_css(&identity.color)),
+                        tag_uid: identity.tag_uid.clone(),
                     },
                     None => SlotUpdate {
                         extruder_idx,
                         slot_idx,
                         filament_identity: None,
                         color: None,
+                        tag_uid: None,
                     },
                 });
             }
@@ -186,6 +195,9 @@ fn resolve_bambu(
                 slot_idx,
                 filament_identity: resolve_bambu_identity(vt, library),
                 color: Some(hex8_to_css(&vt.color)),
+                // vt_tray (external spool) has no RFID reader — never
+                // RFID-detected, so it stays user-editable.
+                tag_uid: None,
             });
         }
     }
@@ -216,12 +228,15 @@ fn resolve_u1(
                 slot_idx: 0,
                 filament_identity: resolve_u1_identity(current, filament, library),
                 color: Some(hex8_to_css(&filament.color)),
+                // U1 toolheads have no AMS RFID concept.
+                tag_uid: None,
             },
             None => SlotUpdate {
                 extruder_idx: ext_idx,
                 slot_idx: 0,
                 filament_identity: None,
                 color: None,
+                tag_uid: None,
             },
         });
     }
@@ -338,26 +353,31 @@ mod tests {
                         feed: FeedKind::Ams,
                         filament_identity: None,
                         color: None,
+                        tag_uid: None,
                     },
                     SlotBinding {
                         feed: FeedKind::Ams,
                         filament_identity: None,
                         color: None,
+                        tag_uid: None,
                     },
                     SlotBinding {
                         feed: FeedKind::Ams,
                         filament_identity: None,
                         color: None,
+                        tag_uid: None,
                     },
                     SlotBinding {
                         feed: FeedKind::Ams,
                         filament_identity: None,
                         color: None,
+                        tag_uid: None,
                     },
                     SlotBinding {
                         feed: FeedKind::Direct,
                         filament_identity: None,
                         color: None,
+                        tag_uid: None,
                     },
                 ],
             }],
@@ -388,6 +408,7 @@ mod tests {
                         feed: FeedKind::Direct,
                         filament_identity: None,
                         color: None,
+                        tag_uid: None,
                     }],
                 })
                 .collect(),
@@ -482,6 +503,29 @@ mod tests {
                 sub_brand: None,
                 multi_colors: vec![],
                 filament_id: filament_id.map(str::to_owned),
+                tag_uid: None,
+            }),
+        }
+    }
+
+    /// Like [`tray_with`] but with an RFID tag id, for exercising the
+    /// `tag_uid` sync round-trip.
+    fn tray_with_tag(
+        id: u8,
+        filament_id: Option<&str>,
+        material: &str,
+        color: &str,
+        tag_uid: &str,
+    ) -> AmsTray {
+        AmsTray {
+            id,
+            identity: Some(AmsFilament {
+                tray_type: material.into(),
+                color: color.into(),
+                sub_brand: None,
+                multi_colors: vec![],
+                filament_id: filament_id.map(str::to_owned),
+                tag_uid: Some(tag_uid.to_owned()),
             }),
         }
     }
@@ -617,6 +661,35 @@ mod tests {
     }
 
     #[test]
+    fn bambu_tag_uid_round_trips_onto_the_slot_update() {
+        // An RFID-tagged tray carries its tag_uid into the update so the
+        // slot persists it; a manually-set (untagged) tray syncs as
+        // tag_uid = None and stays user-editable. (resolve_updates owns
+        // the report→update mapping; apply_from_driver copies the field
+        // verbatim onto the slot.)
+        use crate::core::driver::status::rfid_detected;
+        let inst = bambi();
+        let ams = ams_with_trays(vec![
+            tray_with_tag(0, Some("GFA00"), "PLA", "ABCDEFFF", "F1E2D3C4B5A60718"),
+            tray_with(1, Some("GFA00"), "PLA", "112233FF"),
+        ]);
+        let updates = resolve_updates(
+            &inst,
+            &DriverExtra::Bambu(BambuExtra {
+                ams: Some(ams),
+                ..Default::default()
+            }),
+            &lib(),
+        );
+        let rfid = &updates[0];
+        assert_eq!(rfid.tag_uid.as_deref(), Some("F1E2D3C4B5A60718"));
+        assert!(rfid_detected(rfid.tag_uid.as_deref()));
+        let manual = &updates[1];
+        assert_eq!(manual.tag_uid, None);
+        assert!(!rfid_detected(manual.tag_uid.as_deref()));
+    }
+
+    #[test]
     fn bambu_ams_path_never_writes_into_the_trailing_direct_slot() {
         // Tray 4 on a 4-tray AMS shouldn't exist, but synthesize one
         // anyway to verify the guard — the AMS branch must never
@@ -642,6 +715,7 @@ mod tests {
             sub_brand: None,
             multi_colors: vec![],
             filament_id: filament_id.map(str::to_owned),
+            tag_uid: None,
         }
     }
 

@@ -170,6 +170,27 @@ pub struct AmsFilament {
     /// lookup. `None` for trays that don't report one (untagged
     /// spool, or older firmware).
     pub filament_id: Option<String>,
+    /// RFID tag id of the loaded spool (Bambu `tag_uid`). Present only
+    /// when the AMS read a tagged genuine Bambu spool; `None` (or an
+    /// all-zeros value, treated equivalently by [`rfid_detected`]) for
+    /// a manually-set / third-party spool. This is the reliable
+    /// "auto-detected via RFID" discriminator — `filament_id` is not,
+    /// since a manual filament pick also stamps it.
+    pub tag_uid: Option<String>,
+}
+
+/// Whether a slot's filament was auto-detected from an RFID tag, given
+/// its `tag_uid`. True only for a present, non-empty tag that isn't the
+/// all-zeros "no tag" sentinel Bambu reports for untagged spools.
+///
+/// Single source of truth for the RFID predicate — the frontend mirrors
+/// this rule (`isRfidDetected`), and Phase 2's write-back gate refuses
+/// any slot for which this returns true (an RFID spool is
+/// printer-authoritative; a write would be stomped on the next read).
+pub fn rfid_detected(tag_uid: Option<&str>) -> bool {
+    tag_uid
+        .map(str::trim)
+        .is_some_and(|t| !t.is_empty() && !t.chars().all(|c| c == '0'))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -215,6 +236,19 @@ mod serde_systemtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rfid_detected_treats_zeros_and_empty_as_no_tag() {
+        // Genuine RFID tag → detected.
+        assert!(rfid_detected(Some("F1E2D3C4B5A60718")));
+        // Bambu's all-zeros "no tag" sentinel (any length) → not detected.
+        assert!(!rfid_detected(Some("0000000000000000")));
+        assert!(!rfid_detected(Some("0")));
+        // Empty / whitespace / absent → not detected.
+        assert!(!rfid_detected(Some("")));
+        assert!(!rfid_detected(Some("   ")));
+        assert!(!rfid_detected(None));
+    }
 
     #[test]
     fn driver_extra_serde_tag_kind() {

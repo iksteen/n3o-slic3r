@@ -220,6 +220,15 @@ pub struct SlotBinding {
     /// writes here, not into the filament profile.
     #[serde(default)]
     pub color: Option<String>,
+
+    /// Last-synced RFID tag id (Bambu `tag_uid`) for the spool in this
+    /// slot. Persisted so the UI can mark an RFID-auto-detected slot
+    /// read-only without a live connection. `None` (or all-zeros, per
+    /// [`crate::core::driver::status::rfid_detected`]) = not
+    /// RFID-detected, so the slot is user-editable. Written by the
+    /// destructive driver sync alongside `filament_identity`/`color`.
+    #[serde(default)]
+    pub tag_uid: Option<String>,
 }
 
 fn default_feed_kind() -> FeedKind {
@@ -278,6 +287,7 @@ mod tests {
                     feed: FeedKind::Direct,
                     filament_identity: None,
                     color: None,
+                    tag_uid: None,
                 }],
             }],
             bed: BedRef {

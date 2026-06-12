@@ -39,11 +39,11 @@ function fixture(overrides: Partial<PrinterInstance> = {}): PrinterInstance {
       {
         installed_nozzle: { diameter: "0.4", material: "stainless" },
         slots: [
-          { feed: "ams", filament_identity: null, color: null },
-          { feed: "ams", filament_identity: null, color: null },
-          { feed: "ams", filament_identity: null, color: null },
-          { feed: "ams", filament_identity: null, color: null },
-          { feed: "direct", filament_identity: null, color: null },
+          { feed: "ams", filament_identity: null, color: null, tag_uid: null },
+          { feed: "ams", filament_identity: null, color: null, tag_uid: null },
+          { feed: "ams", filament_identity: null, color: null, tag_uid: null },
+          { feed: "ams", filament_identity: null, color: null, tag_uid: null },
+          { feed: "direct", filament_identity: null, color: null, tag_uid: null },
         ],
       },
     ],
@@ -66,7 +66,7 @@ describe("initialDraft", () => {
         extruders: [
           {
             installed_nozzle: { diameter: "0.4", material: "stainless" },
-            slots: [{ feed: "direct", filament_identity: null, color: null }],
+            slots: [{ feed: "direct", filament_identity: null, color: null, tag_uid: null }],
           },
         ],
       }),

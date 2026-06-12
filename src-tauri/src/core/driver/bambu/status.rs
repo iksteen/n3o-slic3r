@@ -228,6 +228,14 @@ pub struct RawAmsTray {
         deserialize_with = "de::optional_string"
     )]
     pub tray_info_idx: Option<String>,
+    /// RFID tag id of the loaded spool — present only when the AMS
+    /// read a tagged (genuine Bambu) spool. 16 hex chars;
+    /// `"0000000000000000"` (or empty) means no tag, i.e. a
+    /// manually-set / third-party spool. Unlike `tray_info_idx`
+    /// (set by both an RFID read and a manual filament pick), this is
+    /// the reliable "auto-detected via RFID" discriminator.
+    #[serde(default, rename = "tag_uid", deserialize_with = "de::optional_string")]
+    pub tag_uid: Option<String>,
 }
 
 impl RawAmsTray {
@@ -271,6 +279,9 @@ impl RawAmsTray {
         }
         if text(&patch.tray_info_idx) {
             self.tray_info_idx = patch.tray_info_idx;
+        }
+        if text(&patch.tag_uid) {
+            self.tag_uid = patch.tag_uid;
         }
     }
 }
@@ -383,6 +394,15 @@ fn tray_identity(t: &RawAmsTray) -> Option<crate::core::driver::status::AmsFilam
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
+    // Stored as-is (trimmed, non-empty); the all-zeros "no tag" case is
+    // handled by `rfid_detected`, the single source of truth for the
+    // RFID predicate. tag_uid never makes a tray "occupied" on its own.
+    let tag_uid = t
+        .tag_uid
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
     if material.is_none()
         && color.is_none()
         && sub_brand.is_none()
@@ -397,6 +417,7 @@ fn tray_identity(t: &RawAmsTray) -> Option<crate::core::driver::status::AmsFilam
         sub_brand,
         multi_colors,
         filament_id,
+        tag_uid,
     })
 }
 
@@ -1041,6 +1062,7 @@ mod tests {
             sub_brand: None,
             cols: Vec::new(),
             tray_info_idx: None,
+            tag_uid: None,
         }
     }
 
@@ -1052,6 +1074,7 @@ mod tests {
             sub_brand: None,
             cols: Vec::new(),
             tray_info_idx: None,
+            tag_uid: None,
         }
     }
 
@@ -1092,6 +1115,7 @@ mod tests {
             sub_brand: Some("  ".into()),
             cols: vec!["00000000".into()],
             tray_info_idx: None,
+            tag_uid: None,
         });
         assert_eq!(
             t.color.as_deref(),

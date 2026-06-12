@@ -1349,6 +1349,22 @@
     color: var(--text-dim);
     background: transparent;
   }
+  /* RFID-detected slots are managed by the printer — read-only. No
+   * hover affordance; a small "RFID" tag marks them. */
+  .slot-pill.rfid {
+    cursor: not-allowed;
+  }
+  .slot-pill.rfid:hover {
+    background: var(--surface);
+    border-color: var(--border);
+  }
+  .slot-pill-rfid {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent, var(--text-dim));
+    flex-shrink: 0;
+  }
 
   /* Slots row label doubles as the sync-from-printer button. Same
    * typography as `.config-row-label` but with a hover affordance

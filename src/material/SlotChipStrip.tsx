@@ -28,6 +28,7 @@ import {
   FilamentPickerModal,
   type FilamentPickerPick,
 } from "./FilamentPickerModal";
+import { isRfidDetected } from "./materials";
 import type { FilamentSummary } from "./filamentSummary";
 
 export type { FilamentSummary };
@@ -286,18 +287,24 @@ function SlotChip({
 
   const empty = !option.filament_identity;
   const swatch = option.color ?? UNASSIGNED_SWATCH;
-  const tooltip = empty
-    ? `${option.label} — click to assign filament`
-    : `${option.label} — ${filamentLabel ?? option.filament_identity}\nClick to change`;
+  // RFID-detected slots are printer-authoritative (a write would be
+  // stomped on the next read) — render read-only, no picker.
+  const rfid = isRfidDetected(option.tag_uid);
+  const tooltip = rfid
+    ? `${option.label} — ${filamentLabel ?? option.filament_identity}\nAuto-detected via RFID — managed by the printer`
+    : empty
+      ? `${option.label} — click to assign filament`
+      : `${option.label} — ${filamentLabel ?? option.filament_identity}\nClick to change`;
 
   return (
     <>
       <button
-        className={`slot-pill${empty ? " empty" : ""}`}
+        className={`slot-pill${empty ? " empty" : ""}${rfid ? " rfid" : ""}`}
         onClick={() => setOpen(true)}
+        disabled={rfid}
         title={tooltip}
-        aria-haspopup="dialog"
-        aria-expanded={open}
+        aria-haspopup={rfid ? undefined : "dialog"}
+        aria-expanded={rfid ? undefined : open}
       >
         <span
           className="slot-pill-swatch"
@@ -305,8 +312,32 @@ function SlotChip({
         />
         <span className="slot-pill-label">{shortLabel}</span>
         <span className="slot-pill-material">{materialTag}</span>
+        {rfid && (
+          <span
+            className="slot-pill-rfid"
+            role="img"
+            aria-label="Auto-detected via RFID"
+          >
+            {/* RFID beacon symbol lifted from the bottom-center icon of
+                vecteezy_free-rfid-vector-icon_103817.svg (symbol only,
+                wordmark dropped). viewBox cropped to the glyph. */}
+            <svg
+              width="12"
+              height="12"
+              viewBox="555 513 290 290"
+              fill="currentColor"
+              aria-hidden
+            >
+              <path d="M658.1,592.2c-34.4,37.4-34.4,94.9,0,132.3c5.4-6.2,10.8-12.4,16.3-18.5c-23.9-30.4-23.9-64.8,0-95.3C668.9,604.6,663.5,598.5,658.1,592.2z" />
+              <path d="M633.9,574.6c-5.5-7.2-10.8-14.6-15.9-22.2c-57,56.5-57,155.4,0,211.9c5.1-7.5,10.4-14.9,15.9-22.2C589.8,696.5,589.8,620.2,633.9,574.6z" />
+              <path d="M700.6,641.1c-0.1,0-0.2,0-0.3,0c-0.1,0-0.2,0-0.3,0c-9.5-0.1-17.3,7.9-17.3,17.3c0,9.4,7.8,17.4,17.3,17.3c0.1,0,0.2,0,0.3,0c0.1,0,0.2,0,0.3,0c9.5,0.1,17.3-7.9,17.3-17.3C717.9,648.9,710.1,641,700.6,641.1z" />
+              <path d="M742.4,592.2c-5.4,6.2-10.8,12.4-16.3,18.5c23.9,30.4,23.9,64.8,0,95.3c5.5,6.1,11,12.3,16.3,18.5C776.8,687.1,776.8,629.6,742.4,592.2z" />
+              <path d="M782.5,552.4c-5.1,7.5-10.4,14.9-15.9,22.2c44.1,45.6,44.1,121.9,0,167.5c5.5,7.2,10.8,14.6,15.9,22.2C839.5,707.8,839.5,608.9,782.5,552.4z" />
+            </svg>
+          </span>
+        )}
       </button>
-      {open && (
+      {open && !rfid && (
         <FilamentPickerModal
           slotId={option.label}
           filaments={filaments}

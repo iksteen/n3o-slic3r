@@ -57,6 +57,17 @@ export function slotForMaterial(
   );
 }
 
+/** Whether a slot's spool was auto-detected from an RFID tag, given its
+ *  `tag_uid`. True only for a present, non-empty tag that isn't the
+ *  all-zeros "no tag" sentinel Bambu reports for untagged spools. Mirror
+ *  of the Rust `rfid_detected` predicate (core/driver/status.rs) — an
+ *  RFID slot is printer-authoritative, so the UI blocks editing it. */
+export function isRfidDetected(tag_uid: string | null): boolean {
+  if (tag_uid === null) return false;
+  const t = tag_uid.trim();
+  return t.length > 0 && !/^0+$/.test(t);
+}
+
 /** A slot's display colour — only when a filament is actually loaded.
  *  A cached spool colour with no identity (e.g. the unloaded Bambu
  *  external feed, no RFID) reads as empty, not a solid swatch. */

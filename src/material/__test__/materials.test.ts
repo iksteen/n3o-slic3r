@@ -7,7 +7,11 @@
 // an imported painted model showed "1 material" when it has 2.
 
 import { describe, expect, it } from "vitest";
-import { boundMaterials, referencedMaterials } from "../materials";
+import {
+  boundMaterials,
+  isRfidDetected,
+  referencedMaterials,
+} from "../materials";
 import type { PlateSnapshot, SceneObject } from "../../viewport/types";
 
 function obj(id: number, extruder_id: number | null): SceneObject {
@@ -65,5 +69,22 @@ describe("boundMaterials", () => {
 
   it("returns [] for a null plate", () => {
     expect(boundMaterials(null)).toEqual([]);
+  });
+});
+
+describe("isRfidDetected", () => {
+  it("detects a genuine RFID tag", () => {
+    expect(isRfidDetected("F1E2D3C4B5A60718")).toBe(true);
+  });
+
+  it("treats the all-zeros sentinel as no tag", () => {
+    expect(isRfidDetected("0000000000000000")).toBe(false);
+    expect(isRfidDetected("0")).toBe(false);
+  });
+
+  it("treats null / empty / whitespace as no tag", () => {
+    expect(isRfidDetected(null)).toBe(false);
+    expect(isRfidDetected("")).toBe(false);
+    expect(isRfidDetected("   ")).toBe(false);
   });
 });

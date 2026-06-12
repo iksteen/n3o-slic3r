@@ -515,6 +515,7 @@ pub fn create_instance(
                         feed: FeedKind::Direct,
                         filament_identity: Some(filament_slug),
                         color: None,
+                        tag_uid: None,
                     }],
                 }
             })
@@ -536,6 +537,7 @@ pub fn create_instance(
                     feed: FeedKind::Ams,
                     filament_identity: Some(filament_slug.clone()),
                     color: None,
+                    tag_uid: None,
                 });
             }
         }
@@ -543,6 +545,7 @@ pub fn create_instance(
             feed: FeedKind::Direct,
             filament_identity: Some(filament_slug.clone()),
             color: None,
+            tag_uid: None,
         });
         vec![ExtruderState {
             installed_nozzle: NozzleSku {
@@ -1027,6 +1030,7 @@ pub(crate) fn rebuild_ams_slots(inst: &mut PrinterInstance, id: &str, ams_units:
                 feed: target_feed,
                 filament_identity: default_slug.clone(),
                 color: None,
+                tag_uid: None,
             },
         };
         new_slots.push(slot);

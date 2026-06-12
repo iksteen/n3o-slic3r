@@ -98,26 +98,31 @@ fn bambi() -> PrinterInstance {
                     feed: FeedKind::Ams,
                     filament_identity: Some("generic-pla".to_owned()),
                     color: Some("#111827".to_owned()),
+                    tag_uid: None,
                 },
                 SlotBinding {
                     feed: FeedKind::Ams,
                     filament_identity: Some("generic-pla".to_owned()),
                     color: Some("#d4a017".to_owned()),
+                    tag_uid: None,
                 },
                 SlotBinding {
                     feed: FeedKind::Ams,
                     filament_identity: Some("generic-pla".to_owned()),
                     color: Some("#5b21b6".to_owned()),
+                    tag_uid: None,
                 },
                 SlotBinding {
                     feed: FeedKind::Ams,
                     filament_identity: Some("generic-pla".to_owned()),
                     color: Some("#ea580c".to_owned()),
+                    tag_uid: None,
                 },
                 SlotBinding {
                     feed: FeedKind::Direct,
                     filament_identity: Some("generic-pla".to_owned()),
                     color: Some("#dc2626".to_owned()),
+                    tag_uid: None,
                 },
             ],
         }],
@@ -142,6 +147,7 @@ fn snappy() -> PrinterInstance {
             feed: FeedKind::Direct,
             filament_identity: Some("generic-pla".to_owned()),
             color: Some(color.to_owned()),
+            tag_uid: None,
         }],
     };
     PrinterInstance {
