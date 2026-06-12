@@ -102,16 +102,17 @@ fn option_scope_classifies_known_keys() {
         lh.scope
     );
 
-    // wall_filament is in PrintRegionConfig.
-    let wf = option_def("wall_filament").expect("wall_filament");
+    // outer_wall_filament_id is in PrintRegionConfig (renamed from
+    // wall_filament upstream).
+    let wf = option_def("outer_wall_filament_id").expect("outer_wall_filament_id");
     assert!(
         wf.scope.is_region(),
-        "wall_filament should be REGION-scoped, got {:?}",
+        "outer_wall_filament_id should be REGION-scoped, got {:?}",
         wf.scope
     );
     assert!(
         !wf.scope.is_object(),
-        "wall_filament should NOT be OBJECT-scoped, got {:?}",
+        "outer_wall_filament_id should NOT be OBJECT-scoped, got {:?}",
         wf.scope
     );
 

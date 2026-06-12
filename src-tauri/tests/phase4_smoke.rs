@@ -88,13 +88,14 @@ fn slicer_options_carries_phase4_introspection() {
     // No capability predicate gates layer_height.
     assert!(lh.capability.is_none());
 
-    // wall_filament: PR-4-1 vocabulary check — region-scope.
-    let wf_opts = slicer_options(Some("wall_filament".into()));
+    // outer_wall_filament_id: PR-4-1 vocabulary check — region-scope.
+    // (renamed from wall_filament upstream.)
+    let wf_opts = slicer_options(Some("outer_wall_filament_id".into()));
     let wf = wf_opts
         .iter()
-        .find(|o| o.key == "wall_filament")
-        .expect("wall_filament present");
-    assert!(wf.scope.region, "wall_filament is region-scope");
+        .find(|o| o.key == "outer_wall_filament_id")
+        .expect("outer_wall_filament_id present");
+    assert!(wf.scope.region, "outer_wall_filament_id is region-scope");
 }
 
 /// A1 mini + U1 capability filter outcomes for the surviving process-bucket

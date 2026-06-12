@@ -549,14 +549,14 @@ mod tests {
             "layer_height has no printer-capability gating",
         );
 
-        // wall_filament is the canonical region-scope option per the
-        // same PrintConfig.hpp.
-        let wf_opts = slicer_options(Some("wall_filament".into()));
+        // outer_wall_filament_id is the canonical region-scope option per the
+        // same PrintConfig.hpp (renamed from wall_filament upstream).
+        let wf_opts = slicer_options(Some("outer_wall_filament_id".into()));
         let wf = wf_opts
             .iter()
-            .find(|o| o.key == "wall_filament")
-            .expect("wall_filament present");
-        assert!(wf.scope.region, "wall_filament is a region-scope option");
+            .find(|o| o.key == "outer_wall_filament_id")
+            .expect("outer_wall_filament_id present");
+        assert!(wf.scope.region, "outer_wall_filament_id is a region-scope option");
     }
 
     #[test]
