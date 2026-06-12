@@ -400,6 +400,28 @@ pub fn scene_move_object(
     Ok(report)
 }
 
+/// Move a set of objects from one plate to another, preserving their
+/// world transforms (the "Send to plate" action — keeps each object's
+/// authored XYZ, unlike auto-arrange). Whole groups move together and
+/// the moved materials' slot bindings follow. No-op for an empty set.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_move_objects_to_plate(
+    from_plate: PlateId,
+    to_plate: PlateId,
+    object_ids: Vec<ObjectId>,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let events = s
+        .move_objects_to_plate(from_plate, to_plate, &object_ids)
+        .map_err(|e| e.to_string())?;
+    drop(s);
+    emit_all(&window, &events);
+    Ok(())
+}
+
 /// Wipe every cascade override on an object.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]

@@ -476,6 +476,10 @@
     cursor: pointer;
   }
   .objects-selbar-btn:hover { background: var(--surface-2); }
+  .objects-selbar-btn.open {
+    background: var(--surface-2);
+    border-color: var(--accent);
+  }
   .objects-selbar-btn.primary {
     background: var(--accent);
     border-color: var(--accent);

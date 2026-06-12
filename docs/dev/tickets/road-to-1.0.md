@@ -49,32 +49,40 @@ with native exclusion-zone avoidance, single-plate for now: a unit the
 nester spills onto an extra bed (`bed_idx > 0`) is still reported as
 `AutoArrangeOverflow`, exactly like before.
 
-**Phase 2 (the remaining 1.0 work) — spill onto new plates (backend):** act
-on the spill — for each `bed_idx > 0` unit, create an extra plate bound to
-the same printer and move the unit there (the nester already hands us which
-extra bed each lands on). Drives the *create-and-move* backend op (below);
-plate-creation + the spill mapping are the new work.
+**Phase 2 done (2026-06-12):** the spill now lands on real plates — for
+each `bed_idx > 0` unit, auto-arrange creates an extra plate bound to the
+same printer (`add_plate(None)`) and moves the unit there via
+`move_objects_to_plate`. The exclusion zones *and* the wipe/prime tower are
+reserved as hard obstacles (fixed items, not the soft `excluded_regions`
+penalty) on **every** bed the pack opens — so objects clear the tower on
+the spill plates too, mirroring OrcaSlicer's `prepare_wipe_tower`. With
+that, #3 is complete.
 
-### 4. Send objects to another plate (UI)
-A UI to move selected objects to another plate — drag onto a plate tab, or
-a "send to plate" menu — targeting an *existing* plate or a *new* one. The
-trigger is manual; the work it does is the same backend ops #3 phase 2
-drives automatically.
+### 4. Send objects to another plate (UI) — done (2026-06-12)
+Manual move of the selected objects to another plate, from the objects
+panel: a "Send to ▾" button in the selection bar opens a plate picker (the
+other plates as targets, plus "New plate" → create-and-move on the same
+printer). The move keeps each object's authored XYZ. The selection bar now
+shows at one selected object so Send works on a single object; Group stays
+gated to two or more. Rides the same backend ops #3 phase 2 drives
+automatically (`scene_move_objects_to_plate` → `move_objects_to_plate`).
+Drag-onto-a-plate-tab was considered and dropped for the menu — discoverable
+and multi-select-native without a new drag interaction.
 
-### Shared backend: move objects between plates
+### Shared backend: move objects between plates — done (2026-06-12)
 Both #3 phase 2 (auto → new plate) and #4 (manual → existing or new) ride
 two backend ops, split along the two move *targets*, not along auto-vs-
 manual:
 
 - `move_objects_to_plate(object_ids, target_plate)` — move to an
-  **existing** plate. The common ground, used by both; build this first.
+  **existing** plate. The common ground, used by both. Whole groups move
+  together and the moved materials' slot bindings follow.
 - *create-and-move* — add a plate bound to the same printer, then move
-  onto it. Phase 2 needs it for spill; a complete #4 also wants it for
-  "send to a new plate." Layers on the first op.
+  onto it. Phase 2 uses it for spill; #4 uses it for "send to a new plate."
+  Layers on the first op.
 
 Both are cheap (per-plate objects with scene-wide mesh sharing — no mesh
-buffer copies), and neither feature blocks the other once the shared ops
-exist.
+buffer copies).
 
 Post-1.0 polish for #3: turn on `allow_rotations` for tighter packs (the
 FFI already supports it), and bound the hull cost on dense scenes (hull the

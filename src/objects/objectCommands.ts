@@ -89,6 +89,21 @@ export async function createMaterialForObject(
   await invoke("scene_set_object_material", { id, material });
 }
 
+/** Move a set of objects from one plate to another, keeping their
+ *  authored XYZ (the "Send to plate" action). Whole groups move
+ *  together and the moved materials' slot bindings follow. */
+export async function moveObjectsToPlate(
+  fromPlate: PlateId,
+  toPlate: PlateId,
+  ids: ObjectId[],
+): Promise<void> {
+  await invoke("scene_move_objects_to_plate", {
+    fromPlate,
+    toPlate,
+    objectIds: ids,
+  });
+}
+
 /** Group objects into one logical (multi-volume) object on the active
  *  plate. No-op for fewer than two ids (enforced backend-side). */
 export async function groupObjects(

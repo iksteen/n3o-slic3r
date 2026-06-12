@@ -16,6 +16,7 @@ import type {
   SceneObject,
   ObjectId,
   GroupId,
+  PlateId,
 } from "../viewport/types";
 import {
   flattenSlots,
@@ -28,11 +29,15 @@ import {
   deleteObject,
   groupObjects,
   loadModelFromDialog,
+  moveObjectsToPlate,
   renameGroup,
   setObjectMaterial,
   ungroupObjects,
   PRIMITIVE_KINDS,
 } from "./objectCommands";
+import { addPlate } from "../plates/plateCommands";
+import { usePlateTabs } from "../plates/usePlateTabs";
+import { SendToPlatePicker } from "./SendToPlatePicker";
 import { useFilamentCatalog } from "../material/useFilamentCatalog";
 import {
   materialOf,
@@ -78,7 +83,9 @@ export function ObjectsPanel({
   } | null>(null);
   const [collapsed, setCollapsed] = useState<Set<GroupId>>(() => new Set());
   const [editingGroup, setEditingGroup] = useState<GroupId | null>(null);
+  const [sendPicker, setSendPicker] = useState<DOMRect | null>(null);
   const { byIdentity: filamentByIdentity } = useFilamentCatalog();
+  const { plates } = usePlateTabs();
 
   const slots = useMemo<FlatSlotOption[]>(
     () => (instance ? flattenSlots(instance) : []),
@@ -171,6 +178,29 @@ export function ObjectsPanel({
         await invoke("scene_deselect");
       } catch (err) {
         console.error("[objects] group failed", err);
+      }
+    })();
+  };
+  // Send the current selection to another plate, keeping each object's
+  // authored XYZ. The backend clears the source selection on move, which
+  // collapses the selbar (and so this picker) once the snapshot lands.
+  const onSendToPlate = (toPlate: PlateId): void => {
+    if (!plate || selection.size === 0) return;
+    void moveObjectsToPlate(plate.plate_id, toPlate, [...selection]).catch(
+      (err) => console.error("[objects] moveObjectsToPlate failed", err),
+    );
+  };
+  const onSendToNewPlate = (): void => {
+    if (!plate || selection.size === 0) return;
+    const ids = [...selection];
+    const from = plate.plate_id;
+    void (async () => {
+      try {
+        // `null` → the new plate inherits the active plate's printer binding.
+        const toPlate = await addPlate(null);
+        await moveObjectsToPlate(from, toPlate, ids);
+      } catch (err) {
+        console.error("[objects] send to new plate failed", err);
       }
     })();
   };
@@ -433,16 +463,28 @@ export function ObjectsPanel({
         )}
       </div>
 
-      {!readOnly && selection.size >= 2 && (
+      {!readOnly && selection.size >= 1 && (
         <div className="objects-selbar">
           <span className="objects-selbar-count">{selection.size} selected</span>
           <div className="objects-selbar-actions">
+            {selection.size >= 2 && (
+              <button
+                className="objects-selbar-btn primary"
+                title="Group selected into one object"
+                onClick={onGroup}
+              >
+                Group
+              </button>
+            )}
             <button
-              className="objects-selbar-btn primary"
-              title="Group selected into one object"
-              onClick={onGroup}
+              className={`objects-selbar-btn ${sendPicker ? "open" : ""}`}
+              title="Send selected to another plate"
+              onClick={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                setSendPicker((p) => (p ? null : rect));
+              }}
             >
-              Group
+              Send to ▾
             </button>
             <button className="objects-selbar-btn" onClick={clearSelection}>
               Clear
@@ -477,6 +519,18 @@ export function ObjectsPanel({
           <span className="v">{objects.length}</span>
         </div>
       </div>
+
+      {!readOnly && sendPicker && plate && selection.size > 0 && (
+        <SendToPlatePicker
+          count={selection.size}
+          plates={plates}
+          currentPlateId={plate.plate_id}
+          anchorRect={sendPicker}
+          onSend={onSendToPlate}
+          onSendNew={onSendToNewPlate}
+          onClose={() => setSendPicker(null)}
+        />
+      )}
 
       {!readOnly &&
         materialPicker &&
