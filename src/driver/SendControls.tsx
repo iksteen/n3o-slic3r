@@ -11,6 +11,7 @@
 import { useEffect, useState } from "react";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { driverExportPlate, driverSendPlate } from "./invokes";
+import { captureThumbnail } from "../viewport/thumbnailCapture";
 import { pushLog } from "../logging/logStore";
 import { useDriverStatus } from "./useDriverStatus";
 import { isJobIdle, sendDisabledReason } from "./sendGate";
@@ -109,7 +110,10 @@ export function SendControls({
     if (driverId == null || plateId == null) return;
     setActionPending(true);
     try {
-      await driverSendPlate(driverId, plateId, lastSliceOutputPath);
+      // Render the plate preview off the live viewport; null (empty plate or
+      // no viewport) just sends without a thumbnail.
+      const thumbnail = captureThumbnail();
+      await driverSendPlate(driverId, plateId, lastSliceOutputPath, thumbnail);
       // Accepted — latch Send off (for this driver) until the job state
       // changes from what it is now or the link drops.
       setAwaiting({ driverId, sinceJob: jobToken(status) });
@@ -133,7 +137,10 @@ export function SendControls({
         // User cancelled the picker.
         return;
       }
-      await driverExportPlate(plateId, lastSliceOutputPath, path);
+      // Embed the same preview the send path would, so the exported bundle
+      // is representative (and lets you eyeball Metadata/plate_N.png offline).
+      const thumbnail = captureThumbnail();
+      await driverExportPlate(plateId, lastSliceOutputPath, path, thumbnail);
     } catch (e) {
       pushLog("error", `Export failed: ${String(e)}`);
     } finally {

@@ -28,6 +28,8 @@ import {
 } from "./eventBridge";
 import { createGizmo, type GizmoApi } from "./gizmo";
 import { SceneMirror } from "./sceneMirror";
+import { renderModelThumbnail } from "./thumbnail";
+import { registerThumbnailCapture } from "./thumbnailCapture";
 import { createTowerOverlay } from "./towerOverlay";
 import { getCachedTowerMesh, onTowerMeshCacheChange } from "./towerMeshCache";
 import { pushLog } from "../logging/logStore";
@@ -902,10 +904,16 @@ export function ViewportCanvas({
       renderer.render(scene, camera);
       raf = requestAnimationFrame(render);
     };
+    // Let the send path grab a print thumbnail off this scene's models.
+    registerThumbnailCapture((size) =>
+      renderModelThumbnail(mirror.objectGroup, size),
+    );
+
     raf = requestAnimationFrame(render);
 
     return () => {
       cancelAnimationFrame(raf);
+      registerThumbnailCapture(null);
       renderer.domElement.removeEventListener("click", onClick);
       renderer.domElement.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("pointermove", onPointerMove);

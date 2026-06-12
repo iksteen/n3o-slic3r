@@ -13,6 +13,7 @@ import { onEvents } from "../state/eventRouter";
 
 import { initialState, reduce } from "./reducer";
 import { SLICE_EVENT_NAMES, type JobId, type SliceEvent } from "./types";
+import { refreshThumbnailCache } from "../viewport/thumbnailCapture";
 
 const LAST_JOB_KEY = "n3o.slice.last_job_id";
 
@@ -80,6 +81,10 @@ export function useSliceJob() {
   }, []);
 
   const start = useCallback(async (): Promise<JobId> => {
+    // Capture the plate preview now, while the edit viewport is still
+    // mounted — slicing flips the app into preview mode (which unmounts
+    // it), and send/export then read this cached thumbnail.
+    refreshThumbnailCache();
     // Backend uses the project's active plate when `plateId` is
     // null. Future "slice plate N" affordances can pass a specific
     // PlateId here.

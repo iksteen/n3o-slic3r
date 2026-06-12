@@ -73,11 +73,13 @@ export function driverSendPlate(
   id: DriverId,
   plateId: number,
   gcodePath: string,
+  thumbnailPngBase64?: string | null,
 ): Promise<SendHandle> {
   return invoke<SendHandle>("driver_send_plate", {
     id,
     plateId,
     gcodePath,
+    thumbnailPngBase64: thumbnailPngBase64 ?? null,
   });
 }
 
@@ -89,10 +91,12 @@ export function driverExportPlate(
   plateId: number,
   gcodePath: string,
   outputPath: string,
+  thumbnailPngBase64?: string | null,
 ): Promise<void> {
   return invoke<void>("driver_export_plate", {
     plateId,
     gcodePath,
     outputPath,
+    thumbnailPngBase64: thumbnailPngBase64 ?? null,
   });
 }

@@ -14,6 +14,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use base64::Engine;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
@@ -294,6 +295,7 @@ async fn wrap_gcode_as_3mf(
     gcode_path: String,
     plate_id: u32,
     ams_bindings: Vec<AmsBinding>,
+    thumbnail_png: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let gcode_bytes =
@@ -305,6 +307,10 @@ async fn wrap_gcode_as_3mf(
         // AMS-equipped instance the picker drives the values.
         if let Some(plate) = input.plates.iter_mut().find(|p| p.plate_id == plate_id) {
             plate.ams_bindings = ams_bindings;
+            // The Bambu screen reads `Metadata/plate_N.png`; drop the
+            // frontend-rendered preview in so it shows the model, not a
+            // placeholder.
+            plate.thumbnail_png = thumbnail_png;
         }
         let tmp = tempfile::Builder::new()
             .suffix(".gcode.3mf")
@@ -379,13 +385,19 @@ pub async fn driver_export_plate(
     plate_id: u32,
     gcode_path: String,
     output_path: String,
+    thumbnail_png_base64: Option<String>,
     project: State<'_, Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
     // MQTT mapping isn't surfaced in the exported bundle, but pull it
     // anyway so the .gcode.3mf side stays consistent with what the
     // send path would emit.
     let ams = collect_ams_bindings(&project, plate_id);
-    let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
+    let thumbnail_png = thumbnail_png_base64.and_then(|b64| {
+        base64::engine::general_purpose::STANDARD
+            .decode(b64.as_bytes())
+            .ok()
+    });
+    let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, ams, thumbnail_png).await?;
     tauri::async_runtime::spawn_blocking(move || {
         std::fs::write(&output_path, &bytes).map_err(|e| format!("write {output_path}: {e}"))
     })
@@ -416,6 +428,11 @@ pub async fn driver_send_plate(
     id: DriverId,
     plate_id: u32,
     gcode_path: String,
+    // The active plate's preview, rendered by the viewport and passed as a
+    // base64 PNG. `None` falls back to no thumbnail (both printers tolerate
+    // its absence). Bambu embeds it in the `.gcode.3mf`; the U1 gets a
+    // base64 comment block prepended to its raw G-code.
+    thumbnail_png_base64: Option<String>,
     registry: State<'_, Arc<DriverRegistry>>,
     project: State<'_, Arc<Mutex<Project>>>,
     plugin_host: State<'_, PluginHostState>,
@@ -424,11 +441,22 @@ pub async fn driver_send_plate(
         .get(id)
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
     let kind = handle.lock().await.kind();
+    // Decode once; a malformed base64 is a soft failure — log and send
+    // without a thumbnail rather than failing the print.
+    let thumbnail_png: Option<Vec<u8>> = thumbnail_png_base64.and_then(|b64| {
+        match base64::engine::general_purpose::STANDARD.decode(b64.as_bytes()) {
+            Ok(bytes) => Some(bytes),
+            Err(e) => {
+                tracing::warn!(error = %e, "thumbnail base64 decode failed; sending without it");
+                None
+            }
+        }
+    });
     let payload = match kind {
         DriverKind::Bambu => {
             let ams = collect_ams_bindings(&project, plate_id);
             let (use_ams, ams_mapping, ams_mapping2) = collect_ams_mapping(&project, plate_id);
-            let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, ams).await?;
+            let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, ams, thumbnail_png).await?;
             SendPayload::Gcode3mf {
                 bytes,
                 plate_id,
@@ -439,6 +467,12 @@ pub async fn driver_send_plate(
         }
         DriverKind::U1 => {
             let bytes = read_gcode_bytes(gcode_path).await?;
+            // Prepend the Klipper/Moonraker thumbnail block so Mainsail /
+            // Fluidd show the preview; a bad PNG leaves the G-code untouched.
+            let bytes = match &thumbnail_png {
+                Some(png) => super::thumbnail::prepend_thumbnail(bytes, png),
+                None => bytes,
+            };
             SendPayload::Gcode {
                 bytes,
                 file_name: format!("plate-{plate_id}.gcode"),

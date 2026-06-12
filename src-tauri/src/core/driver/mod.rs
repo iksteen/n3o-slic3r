@@ -26,6 +26,7 @@ pub mod commands;
 pub mod registry;
 pub mod snapmaker;
 pub mod status;
+pub mod thumbnail;
 pub mod traits;
 
 pub use registry::DriverRegistry;
