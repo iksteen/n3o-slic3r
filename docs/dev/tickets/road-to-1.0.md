@@ -91,20 +91,29 @@ local mesh once, then transform — convex hull commutes with affine maps).
 ### 5. UI optimizations
 TBD — to discuss. Placeholder; capture specifics here as they're named.
 
-### 6. Sliced-output polish (`.gcode` / `.gcode.3mf`)
+### 6. Sliced-output polish (`.gcode` / `.gcode.3mf`) — thumbnails done (2026-06-12); project names pending
 The sliced bundle we write (and send) is currently bare. Two gaps, both
 in the output-writer / send path — not the frozen *project* format (the
 `.gcode.3mf` is the sliced-output container, distinct from
 `n3o_project.json`):
 
-- **Thumbnails.** Embed a plate preview image in the output so printers
-  and file browsers show it (Bambu's screen + Bambu Studio, Klipper /
-  Mainsail / Fluidd, the OS file manager). G-code carries it as a
-  base64 `; thumbnail begin … end` block; the `.gcode.3mf` carries PNGs
-  under `Metadata/`. libslic3r can emit these when the `thumbnails` /
-  `thumbnail_size` config is set during slice — first-pass: wire that
-  config + feed it a render (the viewport already has the scene), then
-  confirm both printers display it.
+- **Thumbnails — done (2026-06-12), hardware-verified on the A1 mini.**
+  The viewport renders a 3/4 iso PNG of the plate's models (transparent,
+  model-only) off the live scene, captured at slice start (slicing
+  unmounts the edit viewport for preview mode) and threaded to the send
+  path. The U1/Klipper path prepends a PrusaSlicer/Moonraker `; thumbnail
+  begin … end` base64 block to the raw G-code (Mainsail/Fluidd). The
+  Bambu path was the hard part: our `.gcode.3mf` was a minimal
+  printer-only bundle, so the A1 mini ignored the embedded PNG. Making it
+  show needed the full Bambu bundle structure — the `_rels/.rels`
+  cover-thumbnail-{middle,small} relationships, `model_settings.config`'s
+  `thumbnail_file` map, and crucially `slice_info.config` registering the
+  plate as a valid sliced job (time/weight/per-filament usage parsed from
+  the G-code the engine emits). The render route (frontend, not
+  libslic3r's GUI-tied `thumbnails` config) was confirmed the right one
+  per the original note. *Not* fully BBS-openable yet (no
+  `project_settings.config` / model geometry / no_light+top+pick
+  thumbnails); the printer is happy, Bambu Studio import isn't a goal.
 - **Proper project names.** Output is named generically today
   (`plate-1.gcode`, `n3o-<uuid>.3mf`) — derive the basename from the
   project name (+ plate), e.g. `<project>.gcode` /

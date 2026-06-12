@@ -48,6 +48,7 @@ mod bbs_meta;
 mod container;
 mod core_spec;
 pub mod paint;
+mod slice_info;
 mod sliced;
 mod writer;
 

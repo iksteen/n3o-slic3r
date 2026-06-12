@@ -102,11 +102,35 @@ pub fn write_sliced_3mf(input: &SlicedProjectInput, output: &Path) -> Result<(),
         content_types_xml().as_bytes(),
         opts,
     )?;
-    write_entry(&mut zip, "_rels/.rels", rels_xml().as_bytes(), opts)?;
+    write_entry(&mut zip, "_rels/.rels", rels_xml(input).as_bytes(), opts)?;
     write_entry(
         &mut zip,
         "3D/3dmodel.model",
         model_xml(input).as_bytes(),
+        opts,
+    )?;
+    // Bambu reads the per-plate gcode↔thumbnail mapping from
+    // model_settings.config (+ its rels), and the device cover image from the
+    // package `_rels/.rels` cover-thumbnail relationships above. Without these
+    // the printer can't locate the preview even though the PNG is present.
+    write_entry(
+        &mut zip,
+        "Metadata/model_settings.config",
+        model_settings_xml(input).as_bytes(),
+        opts,
+    )?;
+    write_entry(
+        &mut zip,
+        "Metadata/_rels/model_settings.config.rels",
+        model_settings_rels_xml(input).as_bytes(),
+        opts,
+    )?;
+    // Registers each plate as a valid sliced job (time/weight/filament) — the
+    // firmware needs this to treat the upload as sliced and surface its preview.
+    write_entry(
+        &mut zip,
+        "Metadata/slice_info.config",
+        super::slice_info::slice_info_config_xml(input).as_bytes(),
         opts,
     )?;
     for plate in &input.plates {
@@ -131,6 +155,14 @@ pub fn write_sliced_3mf(input: &SlicedProjectInput, output: &Path) -> Result<(),
         )?;
         if let Some(thumb) = &plate.thumbnail_png {
             write_entry(&mut zip, &format!("Metadata/plate_{n}.png"), thumb, opts)?;
+            // Bambu's cover-thumbnail-small relationship points at a separate
+            // `_small` file; reuse the same bytes (the firmware scales it).
+            write_entry(
+                &mut zip,
+                &format!("Metadata/plate_{n}_small.png"),
+                thumb,
+                opts,
+            )?;
         }
     }
     zip.finish()
@@ -263,13 +295,80 @@ fn content_types_xml() -> String {
     .into()
 }
 
-fn rels_xml() -> String {
-    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
- <Relationship Target="/3D/3dmodel.model" Id="rel-1" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
-</Relationships>
-"#
-    .into()
+fn rels_xml(input: &SlicedProjectInput) -> String {
+    let mut out = String::with_capacity(512);
+    out.push_str(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
+         <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n\
+         \x20<Relationship Target=\"/3D/3dmodel.model\" Id=\"rel-1\" \
+         Type=\"http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel\"/>\n",
+    );
+    // The device cover image: the standard OPC thumbnail relationship plus
+    // Bambu's own cover-thumbnail-{middle,small} types, pointing at the first
+    // plate that actually has a preview (matches a Bambu Studio sliced file).
+    if let Some(n) = input
+        .plates
+        .iter()
+        .find(|p| p.thumbnail_png.is_some())
+        .map(|p| p.plate_id)
+    {
+        out.push_str(&format!(
+            " <Relationship Target=\"/Metadata/plate_{n}.png\" Id=\"rel-2\" \
+             Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail\"/>\n\
+             \x20<Relationship Target=\"/Metadata/plate_{n}.png\" Id=\"rel-4\" \
+             Type=\"http://schemas.bambulab.com/package/2021/cover-thumbnail-middle\"/>\n\
+             \x20<Relationship Target=\"/Metadata/plate_{n}_small.png\" Id=\"rel-5\" \
+             Type=\"http://schemas.bambulab.com/package/2021/cover-thumbnail-small\"/>\n"
+        ));
+    }
+    out.push_str("</Relationships>\n");
+    out
+}
+
+/// `Metadata/model_settings.config` — Bambu's per-plate map from the plate to
+/// its gcode + thumbnail files. The firmware reads `thumbnail_file` to locate
+/// the plate preview; without this (and the cover relationships in
+/// `_rels/.rels`) it can't find the PNG even when it's embedded.
+fn model_settings_xml(input: &SlicedProjectInput) -> String {
+    let mut out = String::with_capacity(512);
+    out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<config>\n");
+    for plate in &input.plates {
+        let n = plate.plate_id;
+        out.push_str("  <plate>\n");
+        out.push_str(&format!(
+            "    <metadata key=\"plater_id\" value=\"{n}\"/>\n\
+             \x20\x20\x20\x20<metadata key=\"plater_name\" value=\"Plate {n}\"/>\n\
+             \x20\x20\x20\x20<metadata key=\"gcode_file\" value=\"Metadata/plate_{n}.gcode\"/>\n"
+        ));
+        if plate.thumbnail_png.is_some() {
+            out.push_str(&format!(
+                "    <metadata key=\"thumbnail_file\" value=\"Metadata/plate_{n}.png\"/>\n"
+            ));
+        }
+        out.push_str("  </plate>\n");
+    }
+    out.push_str("</config>\n");
+    out
+}
+
+/// `Metadata/_rels/model_settings.config.rels` — relates each plate's gcode
+/// part via Bambu's gcode relationship type.
+fn model_settings_rels_xml(input: &SlicedProjectInput) -> String {
+    let mut out = String::with_capacity(256);
+    out.push_str(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\n",
+    );
+    for (i, plate) in input.plates.iter().enumerate() {
+        let n = plate.plate_id;
+        out.push_str(&format!(
+            " <Relationship Target=\"/Metadata/plate_{n}.gcode\" Id=\"rel-{}\" \
+             Type=\"http://schemas.bambulab.com/package/2021/gcode\"/>\n",
+            i + 1
+        ));
+    }
+    out.push_str("</Relationships>\n");
+    out
 }
 
 fn model_xml(input: &SlicedProjectInput) -> String {
@@ -538,6 +637,17 @@ mod tests {
         zip.file_names().map(|s| s.to_owned()).collect()
     }
 
+    fn entry_text(path: &Path, name: &str) -> String {
+        let file = File::open(path).unwrap();
+        let mut zip = ZipArchive::new(file).unwrap();
+        let mut s = String::new();
+        zip.by_name(name)
+            .unwrap_or_else(|_| panic!("missing entry {name}"))
+            .read_to_string(&mut s)
+            .unwrap();
+        s
+    }
+
     #[test]
     fn read_sliced_round_trips_gcode_metadata_and_thumbnail() {
         let mut summary = PlateSummary {
@@ -747,6 +857,27 @@ mod tests {
         write_sliced_3mf(&input, &path).expect("write");
         let names = entry_names(&path);
         assert!(names.iter().any(|n| n == "Metadata/plate_1.png"));
+        // Bambu's cover-thumbnail-small points at a separate `_small` part.
+        assert!(names.iter().any(|n| n == "Metadata/plate_1_small.png"));
+
+        // The device finds the preview via the package cover relationships +
+        // model_settings.config's `thumbnail_file` — both must reference the
+        // actual plate PNG, or the printer shows no thumbnail.
+        let rels = entry_text(&path, "_rels/.rels");
+        assert!(
+            rels.contains("cover-thumbnail-middle"),
+            "_rels/.rels missing cover-thumbnail-middle: {rels}"
+        );
+        assert!(rels.contains("/Metadata/plate_1.png"));
+        assert!(rels.contains("cover-thumbnail-small"));
+        assert!(rels.contains("/Metadata/plate_1_small.png"));
+
+        let model_settings = entry_text(&path, "Metadata/model_settings.config");
+        assert!(
+            model_settings
+                .contains("key=\"thumbnail_file\" value=\"Metadata/plate_1.png\""),
+            "model_settings.config missing thumbnail_file: {model_settings}"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
