@@ -25,7 +25,7 @@ import {
 import { usePrinterInstance } from "../printer/usePrinterInstance";
 import type { DriverId } from "../driver/types";
 import { MaterialChip } from "./MaterialChip";
-import { boundMaterials, slotForMaterial } from "./materials";
+import { boundMaterials, isRfidDetected, slotForMaterial } from "./materials";
 import { SlotChipStrip } from "./SlotChipStrip";
 import { useFilamentCatalog } from "./useFilamentCatalog";
 
@@ -92,6 +92,25 @@ export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelP
     return null;
   }
 
+  // Push the just-edited slot's identity back to the printer (Bambu
+  // AMS lite). The edit *is* the trigger — no separate button. Gated to
+  // an editable AMS-feed slot on a connected driver; RFID slots are
+  // non-editable upstream (belt-and-suspenders here), and a missing
+  // driver simply skips the push (the local binding already persisted).
+  const pushSlotToAms = async (slot: SlotRef): Promise<void> => {
+    if (!instance || driverId == null) return;
+    const opt = slots.find(
+      (s) => s.ref.extruder === slot.extruder && s.ref.slot === slot.slot,
+    );
+    if (!opt || opt.feed !== "ams" || isRfidDetected(opt.tag_uid)) return;
+    await invoke("driver_ams_set_filament", {
+      driverId,
+      instanceId: instance.id,
+      extruderIdx: slot.extruder,
+      slotIdx: slot.slot,
+    });
+  };
+
   const onApplyPick = (
     slot: SlotRef,
     pick: { identity: string; color: string },
@@ -100,7 +119,9 @@ export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelP
     // Two backend writes — the second runs after the first resolves
     // so a fast-emitted `printer:instance_changed` between them
     // doesn't show a half-updated state. Either failing is logged
-    // but we still try the other.
+    // but we still try the other. Once both persist, auto-push the new
+    // identity to the AMS (the backend re-reads the freshly-written
+    // slot, so the push reflects this edit).
     void setSlotFilament(instance.id, slot.extruder, slot.slot, pick.identity)
       .catch((err) =>
         console.error("[slot-binding] setSlotFilament failed", err),
@@ -108,6 +129,11 @@ export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelP
       .then(() =>
         setSlotColor(instance.id, slot.extruder, slot.slot, pick.color).catch(
           (err) => console.error("[slot-binding] setSlotColor failed", err),
+        ),
+      )
+      .then(() =>
+        pushSlotToAms(slot).catch((err) =>
+          console.error("[slot-binding] driver_ams_set_filament failed", err),
         ),
       );
   };

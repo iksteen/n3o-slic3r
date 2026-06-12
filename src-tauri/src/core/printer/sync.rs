@@ -162,7 +162,11 @@ fn resolve_bambu(
                     Some(identity) => SlotUpdate {
                         extruder_idx,
                         slot_idx,
-                        filament_identity: resolve_bambu_identity(identity, library),
+                        filament_identity: resolve_bambu_identity(
+                            ext.slots.get(slot_idx),
+                            identity,
+                            library,
+                        ),
                         color: Some(hex8_to_css(&identity.color)),
                         tag_uid: identity.tag_uid.clone(),
                     },
@@ -193,7 +197,11 @@ fn resolve_bambu(
             out.push(SlotUpdate {
                 extruder_idx,
                 slot_idx,
-                filament_identity: resolve_bambu_identity(vt, library),
+                filament_identity: resolve_bambu_identity(
+                    ext.slots.get(slot_idx),
+                    vt,
+                    library,
+                ),
                 color: Some(hex8_to_css(&vt.color)),
                 // vt_tray (external spool) has no RFID reader — never
                 // RFID-detected, so it stays user-editable.
@@ -244,22 +252,68 @@ fn resolve_u1(
 }
 
 fn resolve_bambu_identity(
+    current: Option<&SlotBinding>,
     identity: &AmsFilament,
     library: &[FilamentFragmentSummary],
 ) -> Option<String> {
-    // Exact match first: the RFID tag's GFA-SKU is authoritative
-    // when we know it.
+    // Keep the current, more-specific binding when it's still
+    // consistent with the report. The AMS round-trip is *lossy* for
+    // generic sub-variants: "Generic PLA", "…Silk", "…Matte", "…CF" all
+    // collapse to the same `GFL99` sentinel + `tray_type:"PLA"` on the
+    // printer (there's no field for the variant). So a destructive
+    // overwrite could only ever downgrade the user's pick. If the bound
+    // fragment's SKU and material both still match what the printer
+    // reports, the user's choice stands — only the color follows the
+    // report. (Same rule the U1 path uses, see `resolve_u1_identity`.)
+    if let Some(slug) = current.and_then(|c| c.filament_identity.as_deref()) {
+        if let Some(cur) = library.iter().find(|f| f.identity == slug) {
+            if cur.filament_id.as_deref() == identity.filament_id.as_deref()
+                && cur.base_type.eq_ignore_ascii_case(identity.tray_type.trim())
+            {
+                return Some(slug.to_owned());
+            }
+        }
+    }
+    // No current match (a genuine change) — resolve fresh. Trust the
+    // reported SKU only when it uniquely identifies one fragment: a real
+    // RFID tag carries a unique vendor SKU (`GFA05` → Bambu PLA Silk),
+    // but Bambu stamps a generic sentinel (`GFL99` PLA / `GFG99` PETG /
+    // `GFB99` ABS …) on any non-RFID spool, and many bundled generics
+    // share each one. A first-match on a shared sentinel resolved the
+    // user's "Generic PLA" to whichever generic sorts first (it was
+    // `bambu-pla` → "Bambu PLA", the revert bug), so a shared SKU is not
+    // a discriminator.
     if let Some(fid) = identity.filament_id.as_deref() {
-        if let Some(hit) = library
+        let mut hits = library
             .iter()
-            .find(|f| f.filament_id.as_deref() == Some(fid))
-        {
+            .filter(|f| f.filament_id.as_deref() == Some(fid));
+        if let Some(first) = hits.next() {
+            if hits.next().is_none() {
+                return Some(first.identity.clone());
+            }
+        }
+    }
+    // Shared sentinel / unknown SKU: the variant is carried by the
+    // sub-brand label. We stamp the fragment's display name there on
+    // write (and RFID spools carry their own), so match it back to pin
+    // the exact variant — Generic PLA *Silk* survives the round-trip
+    // instead of collapsing to plain Generic PLA. Material must agree so
+    // a stale label can't cross a real material change.
+    if let Some(sub_brand) = identity
+        .sub_brand
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if let Some(hit) = library.iter().find(|f| {
+            f.display_name.eq_ignore_ascii_case(sub_brand)
+                && f.base_type.eq_ignore_ascii_case(identity.tray_type.trim())
+        }) {
             return Some(hit.identity.clone());
         }
     }
-    // Fall back to the generic variant matching the reported
-    // material type. Same rule the U1 path uses, so a tray with no
-    // tag still gets a sensible identity rather than null.
+    // Nothing specific to go on → the generic variant matching the
+    // reported material type, rather than the wrong vendor profile.
     generic_identity_for(&identity.tray_type, library)
 }
 
@@ -440,7 +494,9 @@ mod tests {
                 vendor: "Generic".into(),
                 nozzle_temp: 220,
                 bed_temp: 60,
-                filament_id: None,
+                // Shares the PLA generic sentinel with plain generic-pla
+                // — the printer can't tell silk from plain.
+                filament_id: Some("GFL99".into()),
             },
             FilamentFragmentSummary {
                 identity: "generic-pla-cf".into(),
@@ -450,6 +506,19 @@ mod tests {
                 nozzle_temp: 240,
                 bed_temp: 65,
                 filament_id: None,
+            },
+            // Shares the generic `GFL99` sentinel with `generic-pla`
+            // (in the real bundle ~19 fragments do) and is placed
+            // *first*, so a naive first-match would wrongly pick it.
+            // The resolver must treat the shared SKU as ambiguous.
+            FilamentFragmentSummary {
+                identity: "bambu-pla".into(),
+                display_name: "Bambu PLA".into(),
+                base_type: "PLA".into(),
+                vendor: "Bambu Lab".into(),
+                nozzle_temp: 220,
+                bed_temp: 60,
+                filament_id: Some("GFL99".into()),
             },
             FilamentFragmentSummary {
                 identity: "generic-pla".into(),
@@ -591,6 +660,119 @@ mod tests {
             Some("bambu-pla-basic-bbl-a1m")
         );
         assert_eq!(updates[0].color.as_deref(), Some("#ff0000"));
+    }
+
+    #[test]
+    fn bambu_sync_keeps_a_still_consistent_specific_variant() {
+        // The AMS can't represent generic sub-variants (silk/matte/cf
+        // all report GFL99 + tray_type PLA). A user who picked "Generic
+        // PLA Silk" must NOT have it downgraded to plain "Generic PLA"
+        // on every sync — the bound variant stands while the report is
+        // consistent (same SKU + material); only the color follows.
+        let mut inst = bambi();
+        inst.extruders[0].slots[0].filament_identity = Some("generic-pla-silk".into());
+        let ams = ams_with_trays(vec![tray_with(0, Some("GFL99"), "PLA", "1A1B1DFF")]);
+        let updates = resolve_updates(
+            &inst,
+            &DriverExtra::Bambu(BambuExtra {
+                ams: Some(ams),
+                ..Default::default()
+            }),
+            &lib(),
+        );
+        assert_eq!(
+            updates[0].filament_identity.as_deref(),
+            Some("generic-pla-silk"),
+            "a consistent specific variant is preserved, not downgraded",
+        );
+        assert_eq!(updates[0].color.as_deref(), Some("#1a1b1d"), "color follows report");
+    }
+
+    #[test]
+    fn bambu_sync_replaces_binding_when_material_genuinely_changes() {
+        // But a real change must still win: the slot holds silk (PLA),
+        // the printer now reports a PETG generic → re-resolve, don't keep
+        // the stale PLA binding.
+        let mut inst = bambi();
+        inst.extruders[0].slots[0].filament_identity = Some("generic-pla-silk".into());
+        let ams = ams_with_trays(vec![tray_with(0, Some("GFG99"), "PETG", "00AA88FF")]);
+        let updates = resolve_updates(
+            &inst,
+            &DriverExtra::Bambu(BambuExtra {
+                ams: Some(ams),
+                ..Default::default()
+            }),
+            &lib(),
+        );
+        assert_eq!(
+            updates[0].filament_identity.as_deref(),
+            Some("generic-petg"),
+            "a genuine material change re-resolves",
+        );
+    }
+
+    #[test]
+    fn bambu_sub_brand_label_pins_the_variant_without_a_local_binding() {
+        // The variant carrier: we stamp the fragment name into
+        // tray_sub_brands on write, so even a fresh instance (no local
+        // binding) resolves the right variant from the printer's report
+        // — `GFL99` + sub-brand "Generic PLA Silk" → generic-pla-silk,
+        // not plain generic-pla.
+        let inst = bambi(); // slots have no bound filament
+        let ams = AmsState {
+            units: vec![AmsUnit {
+                id: 0,
+                trays: vec![AmsTray {
+                    id: 0,
+                    identity: Some(AmsFilament {
+                        tray_type: "PLA".into(),
+                        color: "1A1B1DFF".into(),
+                        sub_brand: Some("Generic PLA Silk".into()),
+                        multi_colors: vec![],
+                        filament_id: Some("GFL99".into()),
+                        tag_uid: None,
+                    }),
+                }],
+            }],
+            active_slot: None,
+        };
+        let updates = resolve_updates(
+            &inst,
+            &DriverExtra::Bambu(BambuExtra {
+                ams: Some(ams),
+                ..Default::default()
+            }),
+            &lib(),
+        );
+        assert_eq!(
+            updates[0].filament_identity.as_deref(),
+            Some("generic-pla-silk"),
+            "sub-brand label resolves the exact variant",
+        );
+    }
+
+    #[test]
+    fn bambu_generic_sentinel_sku_falls_back_to_material_generic() {
+        // Bambu stamps the shared `GFL99` sentinel on a non-RFID generic
+        // spool (verified on the wire). Resolving it must NOT pick the
+        // first fragment carrying GFL99 (here `bambu-pla`, sorted first)
+        // — it must fall back to the material-type generic. This is the
+        // "reverts to Bambu PLA after sync" bug.
+        let inst = bambi();
+        let ams = ams_with_trays(vec![tray_with(0, Some("GFL99"), "PLA", "1A1B1DFF")]);
+        let updates = resolve_updates(
+            &inst,
+            &DriverExtra::Bambu(BambuExtra {
+                ams: Some(ams),
+                ..Default::default()
+            }),
+            &lib(),
+        );
+        assert_eq!(
+            updates[0].filament_identity.as_deref(),
+            Some("generic-pla"),
+            "shared GFL99 sentinel must resolve to the material generic, not bambu-pla",
+        );
     }
 
     #[test]

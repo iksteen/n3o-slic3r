@@ -176,6 +176,46 @@ pub trait Driver: Send + Sync {
     /// invalid transitions (pause from IDLE, resume from
     /// RUNNING, etc.) without contacting the printer.
     async fn command(&mut self, cmd: PrinterCommand) -> Result<(), DriverError>;
+
+    /// Write a filament identity back to an AMS tray. Only printers
+    /// with a writable AMS (Bambu AMS lite) implement this; the
+    /// default rejects it so a toolchanger (U1) or the test mock
+    /// don't have to. Used to push a UI-edited non-RFID slot to the
+    /// printer — RFID-detected slots are gated out upstream (a write
+    /// would be stomped on the next read).
+    async fn set_ams_filament(
+        &mut self,
+        _setting: AmsFilamentSetting,
+    ) -> Result<(), DriverError> {
+        Err(DriverError::Other(
+            "this printer has no writable AMS".into(),
+        ))
+    }
+}
+
+/// Parameters for writing one filament identity back to a Bambu AMS
+/// (lite) tray. The tray is addressed as `(ams_id, tray_id)`; the
+/// rest is the spool identity the printer should store. Mirrors the
+/// `ams_filament_setting` MQTT command fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmsFilamentSetting {
+    pub ams_id: u8,
+    pub tray_id: u8,
+    /// Slot position within the AMS unit. For a regular AMS (the A1
+    /// mini's AMS lite, `ams_id <= 3`) this equals `tray_id`. BambuStudio
+    /// sends it as a distinct field alongside `tray_id`; firmware can
+    /// reject the command without it (per bambuddy's packet captures).
+    pub slot_id: u8,
+    /// Bambu vendor SKU (`tray_info_idx`, e.g. `"GFL99"`).
+    pub tray_info_idx: String,
+    /// Material type (`"PLA"`, `"PETG"`, …).
+    pub tray_type: String,
+    /// Sub-brand label (e.g. `"PLA Basic"`); empty when unknown.
+    pub tray_sub_brands: String,
+    /// Spool color as Bambu `RRGGBBAA` hex8 (no `#`).
+    pub tray_color: String,
+    pub nozzle_temp_min: i32,
+    pub nozzle_temp_max: i32,
 }
 
 #[cfg(test)]

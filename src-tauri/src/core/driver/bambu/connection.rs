@@ -439,6 +439,51 @@ impl Driver for BambuDriver {
             .await
             .map_err(|_| DriverError::Protocol(format!("no ack for {verb} within 10s")))?
     }
+
+    async fn set_ams_filament(
+        &mut self,
+        setting: crate::core::driver::traits::AmsFilamentSetting,
+    ) -> Result<(), DriverError> {
+        let client = self.client.clone().ok_or(DriverError::NotConnected)?;
+        let device_id = self.device_id.clone().ok_or(DriverError::NotConnected)?;
+
+        let sequence_id = self.next_sequence_id();
+        let body = serde_json::to_vec(&AmsFilamentSettingRequest {
+            print: AmsFilamentSettingBody {
+                sequence_id: &sequence_id,
+                command: "ams_filament_setting",
+                ams_id: setting.ams_id,
+                tray_id: setting.tray_id,
+                slot_id: setting.slot_id,
+                tray_info_idx: &setting.tray_info_idx,
+                tray_type: &setting.tray_type,
+                tray_sub_brands: &setting.tray_sub_brands,
+                tray_color: &setting.tray_color,
+                nozzle_temp_min: setting.nozzle_temp_min,
+                nozzle_temp_max: setting.nozzle_temp_max,
+            },
+        })
+        .map_err(|e| DriverError::Other(format!("serialize ams_filament_setting: {e}")))?;
+
+        // Fire-and-forget at QoS 1 — unlike pause/resume/stop there's
+        // no job-state transition to await; the AMS report reflects the
+        // new tray identity on its next push, and the destructive sync
+        // mirrors it back into the slot.
+        let topic = format!("device/{device_id}/request");
+        tracing::debug!(
+            target: "mqtt",
+            serial = %device_id,
+            dir = "tx",
+            topic = %topic,
+            payload = %String::from_utf8_lossy(&body),
+            "ams_filament_setting",
+        );
+        client
+            .publish(&topic, QoS::AtLeastOnce, false, body)
+            .await
+            .map_err(|e| DriverError::Network(format!("publish ams_filament_setting: {e}")))?;
+        Ok(())
+    }
 }
 
 /// Loose state match — `Failed(_)` collapses to "any failed
@@ -483,6 +528,30 @@ struct CommandBody<'a> {
     sequence_id: &'a str,
     command: &'a str,
     param: &'a str,
+}
+
+/// `ams_filament_setting` MQTT command — writes a tray's filament
+/// identity. Field shape cross-referenced against Home Assistant's
+/// Bambu integration + `bambu-connect`; the AMS fields sit as
+/// siblings of `sequence_id`/`command` inside the `print` object.
+#[derive(Serialize)]
+struct AmsFilamentSettingRequest<'a> {
+    print: AmsFilamentSettingBody<'a>,
+}
+
+#[derive(Serialize)]
+struct AmsFilamentSettingBody<'a> {
+    sequence_id: &'a str,
+    command: &'a str,
+    ams_id: u8,
+    tray_id: u8,
+    slot_id: u8,
+    tray_info_idx: &'a str,
+    tray_type: &'a str,
+    tray_sub_brands: &'a str,
+    tray_color: &'a str,
+    nozzle_temp_min: i32,
+    nozzle_temp_max: i32,
 }
 
 /// `project_file` MQTT command — shape cross-referenced against

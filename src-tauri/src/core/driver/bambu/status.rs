@@ -43,6 +43,34 @@ mod de {
         }
     }
 
+    /// Like [`optional_string`] but **presence-preserving**: a present
+    /// empty string stays `Some("")` rather than collapsing to `None`.
+    /// Combined with `#[serde(default)]`, this lets the AMS merge tell a
+    /// field the printer *omitted* (absent → `None`, keep cached) from
+    /// one it *sent empty* (`Some("")`, overwrite/clear) — Bambu's
+    /// incremental pushes omit unchanged fields, so the distinction is
+    /// load-bearing. Only `null` maps to `None` alongside absence.
+    pub(super) fn present_string<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<String>, D::Error> {
+        match Value::deserialize(d)? {
+            Value::Null => Ok(None),
+            Value::String(s) => Ok(Some(s)),
+            Value::Number(n) => Ok(Some(n.to_string())),
+            Value::Bool(b) => Ok(Some(b.to_string())),
+            _ => Ok(None),
+        }
+    }
+
+    /// Presence-preserving vector deserializer — distinguishes an
+    /// omitted array (absent → `None`, keep cached) from a present one
+    /// (`Some(vec)`, overwrite, even when empty).
+    pub(super) fn present_vec<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<Vec<String>>, D::Error> {
+        Ok(Some(Vec::<String>::deserialize(d)?))
+    }
+
     pub(super) fn optional_i64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
         match Value::deserialize(d)? {
             Value::Null => Ok(None),
@@ -185,6 +213,11 @@ pub struct RawAmsUnit {
     pub tray: Vec<RawAmsTray>,
 }
 
+// Every string field uses `de::present_string` (not `optional_string`)
+// so a present-but-empty value survives as `Some("")`, distinct from an
+// omitted field (`None`). `merge_in` keys on that distinction; the
+// `to_typed` lowering (`tray_identity`) still filters empties/transparent
+// colors when it builds the user-facing `AmsFilament`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct RawAmsTray {
     #[serde(default, deserialize_with = "de::optional_i64")]
@@ -192,16 +225,16 @@ pub struct RawAmsTray {
     #[serde(
         default,
         rename = "tray_type",
-        deserialize_with = "de::optional_string"
+        deserialize_with = "de::present_string"
     )]
     pub material: Option<String>,
-    /// Bambu reports an empty/loaded color as `"00000000"` (fully
-    /// transparent black). The normalizer in `to_typed` treats
-    /// that as "no spool loaded" — the tray is empty.
+    /// Bambu reports an empty/unloaded color as `"00000000"` (fully
+    /// transparent black). Stored verbatim; `tray_identity` treats
+    /// transparent-black as "no color" when lowering.
     #[serde(
         default,
         rename = "tray_color",
-        deserialize_with = "de::optional_string"
+        deserialize_with = "de::present_string"
     )]
     pub color: Option<String>,
     /// Bambu's spool-specific identifier — varies by firmware
@@ -211,21 +244,23 @@ pub struct RawAmsTray {
         default,
         rename = "tray_sub_brands",
         alias = "tray_sub_brand",
-        deserialize_with = "de::optional_string"
+        deserialize_with = "de::present_string"
     )]
     pub sub_brand: Option<String>,
     /// Multi-color spool colors, populated for variegated
-    /// filaments. Empty for solid spools.
-    #[serde(default)]
-    pub cols: Vec<String>,
+    /// filaments. `None` = omitted; `Some(vec)` = present (possibly
+    /// empty for a solid spool).
+    #[serde(default, deserialize_with = "de::present_vec")]
+    pub cols: Option<Vec<String>>,
     /// Bambu's vendor SKU for the spool (e.g. "GFA00" for PLA
-    /// Basic). Stamped by the RFID read on tray insertion. Empty
-    /// string for untagged spools. PR-7c-2's sync resolver uses
-    /// this to look up the bundled fragment exactly.
+    /// Basic), or a `P`-prefixed local/custom preset id. Untagged
+    /// spools still report a real value (a generic SKU or preset),
+    /// not an empty string. PR-7c-2's sync resolver uses this to
+    /// look up the bundled fragment exactly.
     #[serde(
         default,
         rename = "tray_info_idx",
-        deserialize_with = "de::optional_string"
+        deserialize_with = "de::present_string"
     )]
     pub tray_info_idx: Option<String>,
     /// RFID tag id of the loaded spool — present only when the AMS
@@ -234,7 +269,7 @@ pub struct RawAmsTray {
     /// manually-set / third-party spool. Unlike `tray_info_idx`
     /// (set by both an RFID read and a manual filament pick), this is
     /// the reliable "auto-detected via RFID" discriminator.
-    #[serde(default, rename = "tag_uid", deserialize_with = "de::optional_string")]
+    #[serde(default, rename = "tag_uid", deserialize_with = "de::present_string")]
     pub tag_uid: Option<String>,
 }
 
@@ -242,45 +277,40 @@ impl RawAmsTray {
     /// Field-level merge for a tray patch — used for both AMS trays
     /// and the external `vt_tray`. BBL sends incremental pushes that
     /// carry only the changed field — e.g. `{"tray_color":"AC95D5FF"}`
-    /// when a spool is recolored on the printer — so a wholesale
-    /// replace would drop the `tray_type` / `id` / brand the last full
-    /// push established. Adopt each field individually instead, taking
-    /// it only when the patch carries a meaningful value (non-empty,
-    /// and non-transparent for color). That makes a placeholder push
-    /// (BBL's startup-time `tray_color = "00000000"` + empty strings) a
-    /// natural no-op — which is what used to require the explicit
-    /// `has_spool_data` replace gate.
+    /// on a recolor, or `{"id":"0"}` mid-transition — so a wholesale
+    /// replace would drop everything the last full push established.
+    ///
+    /// **Presence is the only rule**: a field the patch *carries*
+    /// (`Some`, thanks to `de::present_string` keeping empties)
+    /// overwrites the cached value — even when empty, because an empty
+    /// value is a real state ("this spool has no sub-brand / no tag").
+    /// A field the patch *omits* (`None`) is left untouched. No
+    /// emptiness or transparent-black heuristics here — that
+    /// interpretation belongs to `tray_identity`, which filters them
+    /// when lowering to the user-facing `AmsFilament`. Conflating
+    /// "omitted" with "sent empty" was the long-standing bug: a spool
+    /// swap that legitimately cleared a field (e.g. dropped an RFID
+    /// tag) left the stale value cached.
     pub fn merge_in(&mut self, patch: RawAmsTray) {
-        let text =
-            |opt: &Option<String>| opt.as_deref().map(str::trim).is_some_and(|s| !s.is_empty());
         if patch.id.is_some() {
             self.id = patch.id;
         }
-        if text(&patch.material) {
+        if patch.material.is_some() {
             self.material = patch.material;
         }
-        if patch
-            .color
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|c| !c.is_empty() && !is_transparent_black(c))
-        {
+        if patch.color.is_some() {
             self.color = patch.color;
         }
-        if text(&patch.sub_brand) {
+        if patch.sub_brand.is_some() {
             self.sub_brand = patch.sub_brand;
         }
-        if patch
-            .cols
-            .iter()
-            .any(|c| !c.trim().is_empty() && !is_transparent_black(c.trim()))
-        {
+        if patch.cols.is_some() {
             self.cols = patch.cols;
         }
-        if text(&patch.tray_info_idx) {
+        if patch.tray_info_idx.is_some() {
             self.tray_info_idx = patch.tray_info_idx;
         }
-        if text(&patch.tag_uid) {
+        if patch.tag_uid.is_some() {
             self.tag_uid = patch.tag_uid;
         }
     }
@@ -385,6 +415,7 @@ fn tray_identity(t: &RawAmsTray) -> Option<crate::core::driver::status::AmsFilam
     let multi_colors: Vec<String> = t
         .cols
         .iter()
+        .flatten()
         .map(|c| c.trim().to_owned())
         .filter(|c| !c.is_empty() && !is_transparent_black(c))
         .collect();
@@ -432,12 +463,14 @@ fn is_transparent_black(color: &str) -> bool {
 
 impl BambuReport {
     /// Apply a delta to the receiver. Last-write-wins for scalar
-    /// fields (when patch is `Some`); AMS uses a spool-aware
-    /// per-tray merge ([`RawAmsState::merge_in`]) that ignores
-    /// placeholder pushes — BBL emits empty-tray patches during
-    /// print startup (`tray_color = "00000000"`, empty material
-    /// strings) which a naive wholesale replace would let wipe
-    /// the real cached spool identities.
+    /// fields (when patch is `Some`); AMS uses a presence-based
+    /// per-tray merge ([`RawAmsState::merge_in`] →
+    /// [`RawAmsTray::merge_in`]): a field the push carries overwrites,
+    /// a field it omits is kept. BBL's incremental pushes omit
+    /// unchanged fields (e.g. a recolor sends only `tray_color`; a
+    /// mid-transition push sends only `{"id"}`), so the merge faithfully
+    /// tracks the printer's per-field state without emptiness
+    /// heuristics.
     pub fn merge(&mut self, patch: BambuReport) {
         macro_rules! lww {
             ($($f:ident),+ $(,)?) => {
@@ -1050,88 +1083,98 @@ mod tests {
 
     // ---- spool-aware AMS merge (the print-startup data-loss fix) ----
 
-    /// Helper: build a `RawAmsTray` quickly. `material=None` + empty
-    /// `color` + empty `sub_brand` + no `cols` is what BBL pushes
-    /// during print startup — a "placeholder" tray that signals
-    /// position-occupancy without carrying real spool identity.
-    fn placeholder_tray(id: i64) -> RawAmsTray {
-        RawAmsTray {
-            id: Some(id),
-            material: None,
-            color: Some("00000000".into()),
-            sub_brand: None,
-            cols: Vec::new(),
-            tray_info_idx: None,
-            tag_uid: None,
-        }
-    }
-
+    /// Helper: a real-spool tray. `cols: None` = the field was omitted
+    /// (not "present empty").
     fn real_tray(id: i64, material: &str, color: &str) -> RawAmsTray {
         RawAmsTray {
             id: Some(id),
             material: Some(material.into()),
             color: Some(color.into()),
             sub_brand: None,
-            cols: Vec::new(),
+            cols: None,
             tray_info_idx: None,
             tag_uid: None,
         }
     }
 
+    /// A partial / mid-transition push: only `id` is present, every
+    /// other field omitted — exactly what the A1 mini sends as
+    /// `{"id":"0"}` between a full state and the next (verified on the
+    /// wire). All non-id fields are `None` (absent), so the merge must
+    /// leave the cached tray untouched.
+    fn placeholder_tray(id: i64) -> RawAmsTray {
+        RawAmsTray {
+            id: Some(id),
+            ..Default::default()
+        }
+    }
+
     #[test]
-    fn tray_merge_in_adopts_meaningful_fields_and_skips_placeholders() {
-        // A placeholder patch (empty material, transparent color, blank
-        // brand, sentinel cols) must not touch a cached real tray.
+    fn tray_merge_is_presence_based_absent_keeps_present_overwrites() {
+        // Absent fields (a partial push) leave the cached tray intact.
         let mut cached = real_tray(0, "PLA", "FF8800FF");
         cached.merge_in(placeholder_tray(0));
         assert_eq!(cached.material.as_deref(), Some("PLA"));
         assert_eq!(cached.color.as_deref(), Some("FF8800FF"));
 
-        // Each meaningful field is adopted on its own (color / brand /
-        // multi-color cols), building up from an empty tray.
+        // A present field overwrites — built up one incremental push at
+        // a time, each carrying only its changed field.
         let mut t = RawAmsTray::default();
         t.merge_in(RawAmsTray {
             color: Some("FF0000FF".into()),
             ..Default::default()
         });
-        assert_eq!(t.color.as_deref(), Some("FF0000FF"));
         t.merge_in(RawAmsTray {
             sub_brand: Some("Bambu PLA Basic".into()),
             ..Default::default()
         });
-        assert_eq!(t.sub_brand.as_deref(), Some("Bambu PLA Basic"));
         t.merge_in(RawAmsTray {
-            cols: vec!["00FF00FF".into()],
+            cols: Some(vec!["00FF00FF".into()]),
             ..Default::default()
         });
-        assert_eq!(t.cols, vec!["00FF00FF".to_string()]);
+        assert_eq!(t.color.as_deref(), Some("FF0000FF"));
+        assert_eq!(t.sub_brand.as_deref(), Some("Bambu PLA Basic"));
+        assert_eq!(t.cols, Some(vec!["00FF00FF".to_string()]));
 
-        // Blanks / sentinels are skipped — they don't clobber the
-        // values established above.
+        // A present *empty* value is a real state change and overwrites
+        // (clears) — the bug this rewrite fixes. A spool swap that drops
+        // the RFID tag / sub-brand must not leave the stale value cached.
         t.merge_in(RawAmsTray {
-            id: Some(0),
-            material: Some("".into()),
-            color: Some("000000".into()),
-            sub_brand: Some("  ".into()),
-            cols: vec!["00000000".into()],
-            tray_info_idx: None,
-            tag_uid: None,
+            sub_brand: Some(String::new()),
+            tag_uid: Some(String::new()),
+            ..Default::default()
         });
-        assert_eq!(
-            t.color.as_deref(),
-            Some("FF0000FF"),
-            "transparent color skipped"
-        );
-        assert_eq!(
-            t.sub_brand.as_deref(),
-            Some("Bambu PLA Basic"),
-            "blank brand skipped"
-        );
-        assert_eq!(
-            t.cols,
-            vec!["00FF00FF".to_string()],
-            "sentinel cols skipped"
-        );
+        assert_eq!(t.sub_brand.as_deref(), Some(""), "present empty clears");
+        assert_eq!(t.tag_uid.as_deref(), Some(""), "present empty clears");
+        // ...but a field the same patch omitted is untouched.
+        assert_eq!(t.color.as_deref(), Some("FF0000FF"), "omitted color kept");
+    }
+
+    #[test]
+    fn tray_merge_distinguishes_omitted_from_empty_at_the_serde_boundary() {
+        // The distinction only exists in the wire JSON — prove it
+        // round-trips through deserialization, not just typed literals.
+        let mut cached: RawAmsTray =
+            serde_json::from_str(r#"{"id":"0","tray_info_idx":"GFA00","tag_uid":"BC6CF90100000100"}"#)
+                .unwrap();
+
+        // A `{"id":"0"}` partial push omits tray_info_idx/tag_uid → kept.
+        let partial: RawAmsTray = serde_json::from_str(r#"{"id":"0"}"#).unwrap();
+        cached.merge_in(partial);
+        assert_eq!(cached.tray_info_idx.as_deref(), Some("GFA00"));
+        assert_eq!(cached.tag_uid.as_deref(), Some("BC6CF90100000100"));
+
+        // A swap to a non-RFID generic: the printer sends a real new
+        // tray_info_idx and the all-zeros tag — both present → adopted.
+        let swap: RawAmsTray =
+            serde_json::from_str(r#"{"id":"0","tray_info_idx":"GFL99","tag_uid":"0000000000000000"}"#)
+                .unwrap();
+        cached.merge_in(swap);
+        assert_eq!(cached.tray_info_idx.as_deref(), Some("GFL99"));
+        assert_eq!(cached.tag_uid.as_deref(), Some("0000000000000000"));
+        assert!(!crate::core::driver::status::rfid_detected(
+            cached.tag_uid.as_deref()
+        ));
     }
 
     #[test]

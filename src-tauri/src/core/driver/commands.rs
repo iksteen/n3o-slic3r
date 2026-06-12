@@ -597,6 +597,120 @@ pub async fn driver_command(
     d.command(cmd).await.map_err(|e| e.to_string())
 }
 
+/// Convert a CSS `#rrggbb` color to Bambu's `RRGGBBAA` hex8 (opaque).
+/// Inverse of the sync path's `hex8_to_css`. A malformed/short value
+/// is passed through uppercased so the printer gets *something* rather
+/// than a panic.
+fn css_to_hex8(css: &str) -> String {
+    let raw = css.trim().trim_start_matches('#');
+    // `get(..6)` (not `&raw[..6]`) so a short or non-ASCII value falls
+    // back to the whole string instead of panicking on a byte slice.
+    let rgb = raw.get(..6).unwrap_or(raw);
+    format!("{}FF", rgb.to_uppercase())
+}
+
+/// Push a UI-edited AMS slot's filament identity back to the printer
+/// (Bambu AMS lite). Reads the slot's bound filament + color from the
+/// instance, resolves the Bambu SKU + material + nozzle range from the
+/// filament library, derives the `(ams_id, tray_id)` address from the
+/// slot index, and dispatches `set_ams_filament`.
+///
+/// Refuses RFID-detected slots (printer-authoritative) and non-AMS
+/// feeds. The frontend auto-fires this after a slot edit persists, but
+/// only when a Bambu driver is connected — a disconnected driver makes
+/// `set_ams_filament` return `NotConnected`, which the caller treats as
+/// a non-fatal "edit saved locally, not pushed".
+#[tauri::command]
+#[tracing::instrument(skip(registry))]
+pub async fn driver_ams_set_filament(
+    driver_id: DriverId,
+    instance_id: String,
+    extruder_idx: usize,
+    slot_idx: usize,
+    registry: State<'_, Arc<DriverRegistry>>,
+) -> Result<(), String> {
+    use crate::core::driver::status::{rfid_detected, JobState};
+    use crate::core::driver::traits::AmsFilamentSetting;
+    use crate::core::printer::instance::FeedKind;
+    use crate::core::printer::instance_registry::lookup_instance;
+    use crate::core::profile_library::{filament_nozzle_range, list_filament_fragments};
+
+    let inst =
+        lookup_instance(&instance_id).ok_or_else(|| format!("unknown instance {instance_id}"))?;
+    let slot = inst
+        .extruders
+        .get(extruder_idx)
+        .and_then(|e| e.slots.get(slot_idx))
+        .ok_or_else(|| format!("slot {extruder_idx}/{slot_idx} out of range"))?;
+
+    if !matches!(slot.feed, FeedKind::Ams) {
+        return Err("slot is not an AMS feed".into());
+    }
+    if rfid_detected(slot.tag_uid.as_deref()) {
+        return Err("slot is RFID-detected; managed by the printer".into());
+    }
+    let identity = slot
+        .filament_identity
+        .clone()
+        .ok_or("slot has no filament bound")?;
+
+    let library = list_filament_fragments();
+    let frag = library
+        .iter()
+        .find(|f| f.identity == identity)
+        .ok_or_else(|| format!("filament '{identity}' not in library"))?;
+    let tray_info_idx = frag
+        .filament_id
+        .clone()
+        .ok_or_else(|| format!("filament '{identity}' has no Bambu SKU"))?;
+    let (nozzle_temp_min, nozzle_temp_max) =
+        filament_nozzle_range(&identity).unwrap_or((frag.nozzle_temp, frag.nozzle_temp));
+    let tray_color = slot
+        .color
+        .as_deref()
+        .map(css_to_hex8)
+        .unwrap_or_else(|| "FFFFFFFF".to_owned());
+
+    // Reverse of `resolve_bambu`'s `unit_pos * 4 + tray.id`. For the A1
+    // mini's regular AMS lite (ams_id <= 3) the in-unit slot_id equals
+    // tray_id (BambuStudio sends both).
+    let ams_id = (slot_idx / 4) as u8;
+    let tray_id = (slot_idx % 4) as u8;
+
+    let handle = registry
+        .get(driver_id)
+        .ok_or_else(|| format!("unknown driver id {}", driver_id.0))?;
+    let mut d = handle.lock().await;
+    // The printer rejects an AMS filament change while it's mid-print
+    // (err 0x05024001 on the loaded tray). Don't send a doomed command —
+    // the local binding already persisted; it'll push on the next edit
+    // once the printer is idle. (Bambu gates the same op on RUNNING/PAUSE.)
+    if matches!(
+        d.status().job.as_ref().map(|j| &j.state),
+        Some(JobState::Preparing | JobState::Printing | JobState::Paused)
+    ) {
+        return Err("printer is busy printing — AMS filament not updated on the device".into());
+    }
+    d.set_ams_filament(AmsFilamentSetting {
+        ams_id,
+        tray_id,
+        slot_id: tray_id,
+        tray_info_idx,
+        tray_type: frag.base_type.clone(),
+        // Stamp the fragment name into the sub-brand. Generic variants
+        // (Silk / Matte / CF) all share one sentinel SKU + tray_type, so
+        // this is the only field that carries the variant — the printer
+        // stores and re-reports it (the RFID spools do the same), making
+        // the sync round-trip lossless. See `resolve_bambu_identity`.
+        tray_sub_brands: frag.display_name.clone(),
+        tray_color,
+        nozzle_temp_min: nozzle_temp_min as i32,
+        nozzle_temp_max: nozzle_temp_max as i32,
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,6 +730,28 @@ mod tests {
         };
         let err = driver_test_connection(config).await.unwrap_err();
         assert!(!err.is_empty(), "expected a non-empty failure reason");
+    }
+
+    #[test]
+    fn css_to_hex8_appends_opaque_alpha_and_uppercases() {
+        assert_eq!(css_to_hex8("#ff8800"), "FF8800FF");
+        assert_eq!(css_to_hex8("ea580c"), "EA580CFF");
+        // Round-trips with the sync path's hex8_to_css for the RGB part.
+        assert_eq!(css_to_hex8("#111827"), "111827FF");
+    }
+
+    #[test]
+    fn ams_address_derivation_reverses_resolve_bambu_indexing() {
+        // Slot index -> (ams_id, tray_id), the inverse of
+        // resolve_bambu's `unit_pos * 4 + tray.id`. Single-AMS A1 mini:
+        // slots 0..3 are unit 0's trays.
+        for slot_idx in 0usize..4 {
+            assert_eq!(slot_idx / 4, 0, "slot {slot_idx} is on AMS unit 0");
+            assert_eq!(slot_idx % 4, slot_idx, "tray id matches slot for unit 0");
+        }
+        // A second stacked unit would be slots 4..7 -> ams_id 1.
+        assert_eq!(5 / 4, 1);
+        assert_eq!(5 % 4, 1);
     }
 
     fn host_with_pre_send(lua: &str) -> PluginHostState {

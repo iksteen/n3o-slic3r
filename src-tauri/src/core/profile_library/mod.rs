@@ -735,6 +735,29 @@ pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
         .collect()
 }
 
+/// The `(min, max)` nozzle temperature range a filament fragment
+/// declares, for writing back to a Bambu AMS tray. Reads the BBS
+/// `nozzle_temperature_range_low` / `_high` scalars, falling back to
+/// the single `nozzle_temperature` for either bound when a range
+/// field is absent. `None` if the fragment is unknown or carries no
+/// temperature at all.
+pub fn filament_nozzle_range(identity: &str) -> Option<(u32, u32)> {
+    let asset = library().filament_fragments.get(identity)?;
+    let set = &asset.cascade.rules.first()?.set;
+    let one = set
+        .get("nozzle_temperature")
+        .and_then(|s| s.parse::<u32>().ok());
+    let lo = set
+        .get("nozzle_temperature_range_low")
+        .and_then(|s| s.parse::<u32>().ok())
+        .or(one)?;
+    let hi = set
+        .get("nozzle_temperature_range_high")
+        .and_then(|s| s.parse::<u32>().ok())
+        .or(one)?;
+    Some((lo, hi))
+}
+
 /// The `default_process_profile` slug declared in a nozzle.toml
 /// fragment, if any. Drives the Quality picker's rule-1 default —
 /// each nozzle profile registers its preferred process; the picker

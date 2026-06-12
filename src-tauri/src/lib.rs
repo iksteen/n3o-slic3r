@@ -273,6 +273,7 @@ pub fn run() {
             core::driver::commands::driver_send_plate,
             core::driver::commands::driver_export_plate,
             core::driver::commands::driver_command,
+            core::driver::commands::driver_ams_set_filament,
             core::plugin::commands::plugin_list,
             core::plugin::commands::plugin_set_enabled,
             core::plugin::commands::plugin_set_global_enabled,
