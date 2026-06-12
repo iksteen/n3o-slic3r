@@ -395,6 +395,42 @@ pub fn compose_cascade(
     Ok(Cascade { rules })
 }
 
+/// libslic3r's compiled-in default for every option, keyed by name.
+/// Built once per vector assembly so a fragment that doesn't set a
+/// per-filament / per-extruder key is padded with the *engine* default
+/// at its vector position — never a sibling fragment's value. Empty when
+/// the FFI isn't initialized (non-slice paths); the per-key fallback then
+/// degrades to an empty string, same as a key libslic3r has no default for.
+fn engine_default_map() -> std::collections::HashMap<String, String> {
+    slic3r_ffi::option_defs()
+        .into_iter()
+        .filter_map(|d| d.default_serialized.map(|v| (d.key, v)))
+        .collect()
+}
+
+/// Zip per-fragment scalar maps into one length-N vector string for
+/// `key`. The load-bearing invariant: a fragment that doesn't set the key
+/// gets `key`'s **engine default** at its position (the default's first
+/// element when it itself serializes as a vector) — so one fragment's
+/// value can never leak into another fragment's slot. (Padding with the
+/// first fragment's value used to: a key set only by filament 0 bled into
+/// every later filament that left it default.)
+fn zip_vector(
+    key: &str,
+    per_fragment: &[BTreeMap<String, String>],
+    engine_defaults: &std::collections::HashMap<String, String>,
+) -> String {
+    let default = engine_defaults
+        .get(key)
+        .map(|d| split_for_key(key, d).into_iter().next().unwrap_or_default())
+        .unwrap_or_default();
+    let values: Vec<String> = per_fragment
+        .iter()
+        .map(|m| m.get(key).cloned().unwrap_or_else(|| default.clone()))
+        .collect();
+    join_for_key(key, &values)
+}
+
 /// Walk the instance's extruders, load each one's nozzle fragment,
 /// and zip the scalar values into per-extruder vector strings keyed
 /// by the per-extruder option keys. libslic3r consumes per-extruder
@@ -433,24 +469,13 @@ fn assemble_nozzle_vectors(
         }
     }
 
-    // For each key, build a length-N vector where missing entries
-    // fall back to the same key's value on extruder 0 (the printer's
-    // canonical nozzle). Empty string if even extruder 0 doesn't
-    // declare the key — the adapter will reject downstream if that's
-    // a problem.
+    // For each key, build a length-N vector. A missing extruder entry is
+    // padded with the engine default for that key (see `zip_vector`), so
+    // one extruder's nozzle profile can't leak into another's slot.
+    let engine_defaults = engine_default_map();
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     for key in all_keys {
-        let values: Vec<String> = per_extruder
-            .iter()
-            .map(|scalars| {
-                scalars
-                    .get(&key)
-                    .cloned()
-                    .or_else(|| per_extruder.first().and_then(|p| p.get(&key).cloned()))
-                    .unwrap_or_default()
-            })
-            .collect();
-        let joined = join_for_key(&key, &values);
+        let joined = zip_vector(&key, &per_extruder, &engine_defaults);
         out.insert(key, joined);
     }
 
@@ -466,9 +491,10 @@ fn assemble_nozzle_vectors(
 ///
 /// Entries without a bound slot — or whose slot has no
 /// `filament_identity` — fall back to the instance's
-/// `default_filament_fragment_slug`. Per-key vector positions left
-/// empty by a fragment fall back to the first entry's value so
-/// length stays uniform across keys.
+/// `default_filament_fragment_slug`. Per-key vector positions a fragment
+/// doesn't set are filled with that key's libslic3r **engine default**
+/// (via `zip_vector`), keeping the vector length uniform without leaking
+/// one fragment's value into another's slot.
 ///
 /// Each fragment is resolved against a slot-scoped context (per
 /// `docs/dev/settings-model.md` §5 "Per-slot vector-key assembly")
@@ -518,20 +544,14 @@ fn assemble_filament_vectors(
         }
     }
 
-    // Build length-N vector strings per key.
+    // Build length-N vector strings per key. A filament that doesn't set a
+    // key is padded with that key's engine default (see `zip_vector`) — so
+    // a value (or quirk) in one filament's profile can never reach
+    // another filament's slot.
+    let engine_defaults = engine_default_map();
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     for key in all_keys {
-        let values: Vec<String> = per_filament
-            .iter()
-            .map(|scalars| {
-                scalars
-                    .get(&key)
-                    .cloned()
-                    .or_else(|| per_filament.first().and_then(|p| p.get(&key).cloned()))
-                    .unwrap_or_default()
-            })
-            .collect();
-        let joined = join_for_key(&key, &values);
+        let joined = zip_vector(&key, &per_filament, &engine_defaults);
         out.insert(key, joined);
     }
 
@@ -948,6 +968,37 @@ mod tests {
         assert!(
             vec_rule.set.get("nozzle_temperature_intial_layer").is_none(),
             "the typo key must not survive as a separate vector",
+        );
+    }
+
+    #[test]
+    fn zip_vector_pads_missing_with_engine_default_not_a_sibling() {
+        // The general cross-filament guard: filament 0 sets a key, filament 1
+        // doesn't. Filament 1's vector slot must be the ENGINE default, never
+        // filament 0's value — otherwise one filament's profile leaks into
+        // another's slot.
+        let _ = slic3r_ffi::init(None, 3);
+        let f0: BTreeMap<String, String> = [(
+            "nozzle_temperature_initial_layer".to_string(),
+            "200".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let f1: BTreeMap<String, String> = BTreeMap::new();
+        let defaults: std::collections::HashMap<String, String> = [(
+            "nozzle_temperature_initial_layer".to_string(),
+            "220".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let v = zip_vector(
+            "nozzle_temperature_initial_layer",
+            &[f0, f1],
+            &defaults,
+        );
+        assert_eq!(
+            v, "200,220",
+            "the unset filament must get the engine default (220), not filament 0's 200",
         );
     }
 
