@@ -477,6 +477,7 @@ fn assemble_nozzle_vectors(
 /// — match against THIS slot's bound filament, so the vector entry
 /// reflects per-slot conditional behavior rather than just the
 /// fragment's default rule.
+
 fn assemble_filament_vectors(
     instance: &PrinterInstance,
     filaments: &[FilamentEntry<'_>],
@@ -913,6 +914,40 @@ mod tests {
         assert!(
             all_keys.contains(&"layer_height".to_owned()),
             "process-bucket key missing"
+        );
+    }
+
+    #[test]
+    fn filament_vector_typo_key_does_not_zero_first_filament() {
+        // Regression: filament 0 (generic-pla-silk) sits ahead of a
+        // filament (generic-pla) that historically carried the Orca typo
+        // `nozzle_temperature_intial_layer`. The typo is now folded to
+        // canonical at import, so the bundled fragments carry one
+        // spelling and the per-filament vector can't be zeroed by a
+        // sibling. Pre-fix this produced a 0 °C first layer on filament 0.
+        let _registry = RegistryGuard::acquire();
+        let _ = slic3r_ffi::init(None, 3);
+        let mut bambi = lookup_instance("bambi").expect("bambi present");
+        bambi.extruders[0].slots[0].filament_identity = Some("generic-pla-silk".into());
+        bambi.extruders[0].slots[1].filament_identity = Some("generic-pla".into());
+        let cascade = compose_cascade(&bambi, &[], &BTreeMap::new()).expect("compose");
+        let vec_rule = cascade
+            .rules
+            .iter()
+            .find(|r| r.source.path.to_str() == Some("<filament-vector-assembly>"))
+            .expect("filament vector rule present");
+        let joined = vec_rule
+            .set
+            .get("nozzle_temperature_initial_layer")
+            .expect("initial-layer key present in the assembled vector");
+        let first = joined.split(',').next().unwrap_or("");
+        assert!(
+            first != "0" && !first.is_empty(),
+            "filament 0 first-layer temp must carry silk's real value, got vector {joined:?}",
+        );
+        assert!(
+            vec_rule.set.get("nozzle_temperature_intial_layer").is_none(),
+            "the typo key must not survive as a separate vector",
         );
     }
 

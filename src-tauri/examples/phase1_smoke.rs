@@ -110,7 +110,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest = Manifest::build();
     let adapt_result = adapt_with_overrides(&resolved_overridden, &ctx, &manifest)?;
     let mut dropped = 0usize;
-    let mut remapped = 0usize;
     let mut unknown = 0usize;
     let mut parse_err = 0usize;
     let mut expanded_keys = 0usize;
@@ -118,7 +117,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         use n3o_slic3r_lib::core::cascade_adapter::AdaptEvent;
         match event {
             AdaptEvent::Dropped { .. } => dropped += 1,
-            AdaptEvent::Remapped { .. } => remapped += 1,
             AdaptEvent::UnknownKey { .. } => unknown += 1,
             AdaptEvent::ParseValueError { .. } => parse_err += 1,
             AdaptEvent::BedTempExpanded { targets, .. } => expanded_keys += targets.len(),
@@ -127,9 +125,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let accepted = resolved_overridden.len() - dropped - unknown - parse_err;
     println!(
-        "  adapter: {} accepted, {} dropped, {} remapped, {} unknown, {} parse-error, \
+        "  adapter: {} accepted, {} dropped, {} unknown, {} parse-error, \
          {} keys filled by bed_temp expansion",
-        accepted, dropped, remapped, unknown, parse_err, expanded_keys
+        accepted, dropped, unknown, parse_err, expanded_keys
     );
 
     let layer_height_in_config = adapt_result.config.get("layer_height").unwrap_or_default();

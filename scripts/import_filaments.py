@@ -151,6 +151,32 @@ DENY_KEYS = frozenset({
     "filament_extruder_variant",
 })
 
+# ---- Orca-side typo keys ----
+#
+# A handful of upstream profiles misspell option names. libslic3r silently
+# drops unknown keys, so in OrcaSlicer the correctly-spelled sibling (or
+# the engine default) is what actually takes effect — the typo never does.
+# Fold each typo onto its canonical spelling here, at import, so the
+# generated fragments only ever carry the canonical key and the runtime
+# cascade doesn't have to remap (remapping per-filament at slice time
+# zeroed a sibling filament's first-layer temp — a typo'd key in one
+# filament must never reach another's slot). Canonical wins on collision,
+# matching what Orca uses; a lone typo is recovered to the canonical key.
+TYPO_REMAP = {
+    "detraction_speed": "deretraction_speed",
+    "inital_layer_height": "initial_layer_height",
+    "nozzle_temperature_intial_layer": "nozzle_temperature_initial_layer",
+    "tree_support_bramch_diameter_angle": "tree_support_branch_diameter_angle",
+}
+
+
+def fold_typo_keys(doc: dict[str, Any]) -> None:
+    """Rename Orca-side typo keys to canonical in place; canonical wins."""
+    for typo, canonical in TYPO_REMAP.items():
+        if typo in doc:
+            value = doc.pop(typo)
+            doc.setdefault(canonical, value)
+
 # ---- Compatibility overrides for upstream authoring bugs ----
 #
 # libslic3r selects the bed-temperature key by the active plate's
@@ -311,6 +337,7 @@ def flatten_leaf(leaf: Path, index: dict[str, list[Path]]) -> dict[str, Any] | N
             if k in ENVELOPE_KEYS:
                 continue
             merged[k] = v
+    fold_typo_keys(merged)
     leaf_doc = chain[0]
     name = leaf_doc.get("name") or leaf.stem
     merged.setdefault("filament_settings_id", name)

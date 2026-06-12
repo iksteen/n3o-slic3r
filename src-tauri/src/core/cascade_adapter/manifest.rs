@@ -20,7 +20,7 @@
 //!   on the Prusa cascade), with five Orca-side typos remapped to
 //!   their correct spellings rather than dropped.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// Curated list of OrcaSlicer-only keys we drop silently at adapt
 /// time. Sourced from the PR-0.5-1 / PR-0.5-2 finding docs. Keys
@@ -104,52 +104,31 @@ pub const DROP_LIST: &[&str] = &[
     "extruder_clearance_max_radius",
 ];
 
-/// Five Orca-side typos discovered in PR-0.5-2's finding (in
-/// OrcaSlicer's *own* profile JSONs). The adapter silently rewrites
-/// them to the correct spelling before pushing into libslic3r.
-///
-/// These have no effect in OrcaSlicer either — libslic3r silently
-/// drops unknown keys upstream — so remapping them recovers the
-/// authors' intent.
-pub const TYPO_REMAP: &[(&str, &str)] = &[
-    ("detraction_speed", "deretraction_speed"),
-    ("inital_layer_height", "initial_layer_height"),
-    (
-        "nozzle_temperature_intial_layer",
-        "nozzle_temperature_initial_layer",
-    ),
-    (
-        "tree_support_bramch_diameter_angle",
-        "tree_support_branch_diameter_angle",
-    ),
-    // wall_infill_order is in DROP_LIST today; once libslic3r exposes
-    // a canonical version, add the remap here.
-];
+// Orca-side typo keys (the upstream profiles misspell a handful of
+// option names) are folded to their canonical spelling at *import* time
+// — see `TYPO_REMAP` / `fold_typo_keys` in `scripts/import_filaments.py`.
+// The runtime cascade therefore only ever carries canonical keys; a typo
+// that somehow reaches the adapter is dropped as an unknown key, exactly
+// as libslic3r itself handles it. (Runtime remapping used to live here;
+// it let a typo'd key in one filament zero a sibling filament's value
+// during per-filament vector assembly.)
 
 /// Manifest lookup. Build once via `Manifest::build()` and pass to
-/// the adapter. Provides O(1) drop-list / typo-remap checks.
+/// the adapter. Provides an O(1) drop-list check.
 pub struct Manifest {
     drop_set: HashSet<&'static str>,
-    typo_map: HashMap<&'static str, &'static str>,
 }
 
 impl Manifest {
     pub fn build() -> Self {
         Self {
             drop_set: DROP_LIST.iter().copied().collect(),
-            typo_map: TYPO_REMAP.iter().copied().collect(),
         }
     }
 
     /// True if `key` should be silently dropped at adapt time.
     pub fn is_dropped(&self, key: &str) -> bool {
         self.drop_set.contains(key)
-    }
-
-    /// If `key` is an Orca-side typo, return the canonical libslic3r
-    /// spelling. Otherwise `None`.
-    pub fn typo_remap(&self, key: &str) -> Option<&'static str> {
-        self.typo_map.get(key).copied()
     }
 }
 
@@ -169,18 +148,4 @@ mod tests {
         assert!(m.is_dropped("bed_type"), "Prusa cascade extra");
     }
 
-    #[test]
-    fn typo_remap_recovers_authors_intent() {
-        let m = Manifest::build();
-        assert_eq!(m.typo_remap("detraction_speed"), Some("deretraction_speed"));
-        assert_eq!(
-            m.typo_remap("inital_layer_height"),
-            Some("initial_layer_height")
-        );
-        assert_eq!(
-            m.typo_remap("nozzle_temperature_intial_layer"),
-            Some("nozzle_temperature_initial_layer")
-        );
-        assert_eq!(m.typo_remap("layer_height"), None, "valid key not remapped");
-    }
 }

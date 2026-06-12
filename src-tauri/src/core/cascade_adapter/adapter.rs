@@ -44,12 +44,11 @@ pub struct AdaptResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind")]
 pub enum AdaptEvent {
-    /// Orca typo silently remapped to its canonical spelling.
-    Remapped { from: String, to: String },
     /// OrcaSlicer-only key dropped per the manifest.
     Dropped { key: String },
     /// Key isn't in the libslic3r schema *and* isn't in the manifest
-    /// drop list. Likely a typo the manifest doesn't know about.
+    /// drop list. An unrecognized or typo'd key (typos are folded at
+    /// import; anything still unknown here is dropped, as libslic3r does).
     UnknownKey { key: String },
     /// `Config::set` rejected the value (parse error). The value
     /// itself is captured in the event for trace + UI.
@@ -275,15 +274,16 @@ fn push_key(
     manifest: &Manifest,
     events: &mut Vec<AdaptEvent>,
 ) {
-    let effective_key: String = if let Some(canonical) = manifest.typo_remap(key) {
-        events.push(AdaptEvent::Remapped {
-            from: key.to_string(),
-            to: canonical.to_string(),
-        });
-        canonical.to_string()
-    } else {
-        key.to_string()
-    };
+    // Typo keys are folded to their canonical spelling at *import* time
+    // (the importer scripts), so by the time data reaches the runtime
+    // cascade it only ever carries canonical keys. A stray typo therefore
+    // falls through to the schema check below and is dropped as an
+    // unknown key — exactly what libslic3r/OrcaSlicer do with it. Runtime
+    // remapping used to live here; it let a typo'd key in one filament
+    // zero a *sibling* filament's value during per-filament vector
+    // assembly (the typo minted a phantom vector that overwrote the real
+    // one). Normalizing at import makes that structurally impossible.
+    let effective_key = key.to_string();
 
     if manifest.is_dropped(&effective_key) {
         events.push(AdaptEvent::Dropped { key: effective_key });
@@ -417,29 +417,29 @@ mod tests {
     }
 
     #[test]
-    fn typo_remap_recovers_authors_intent() {
+    fn runtime_does_not_remap_typos_it_drops_them_as_unknown() {
+        // Typo normalization moved to import time; the runtime adapter no
+        // longer remaps. A typo that somehow reaches here is treated as an
+        // unknown key and dropped (it does NOT silently become the
+        // canonical key), matching libslic3r's own unknown-key handling.
         ensure_ffi();
         let resolved = resolved_from([("inital_layer_height", "0.3")]);
         let manifest = Manifest::build();
         let result = adapt(&resolved, &ctx_pei(), &manifest).unwrap();
-        let remapped: Vec<(&str, &str)> = result
-            .events
-            .iter()
-            .filter_map(|e| match e {
-                AdaptEvent::Remapped { from, to } => Some((from.as_str(), to.as_str())),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            remapped,
-            vec![("inital_layer_height", "initial_layer_height")]
-        );
-        assert_eq!(
+        assert_ne!(
             result
                 .config
                 .get("initial_layer_height")
                 .unwrap_or_default(),
-            "0.3"
+            "0.3",
+            "the typo value must not be remapped onto the canonical key",
+        );
+        assert!(
+            result.events.iter().any(|e| matches!(
+                e,
+                AdaptEvent::UnknownKey { key } if key == "inital_layer_height"
+            )),
+            "the typo should be surfaced as an unknown-key drop",
         );
     }
 
