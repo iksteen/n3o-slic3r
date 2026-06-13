@@ -15,7 +15,11 @@ through a vendored Rust + C FFI shim (`crates/slic3r-ffi/`). The MVP
 targets two specific printers (Bambu Lab A1 mini and Snapmaker U1)
 configured simultaneously, with full slice-and-send workflow, a
 transparent settings cascade, and a Lua-based plugin system for G-code
-manipulation.
+manipulation. It also carries a profile for the full-size **Bambu Lab
+A1** — same Bambu MQTT driver as the mini, but a full 4-spool AMS
+(`ams_type = "AMS"`, chainable to 16) instead of the mini's AMS lite.
+The A1 mini + U1 remain the hardware-validated pair; the A1 profile is
+bundled and selectable (`resources/profiles/bbl/printer/bambu-lab-a1/`).
 
 ## Source-of-truth documents
 

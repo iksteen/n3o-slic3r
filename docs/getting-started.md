@@ -5,10 +5,14 @@ assign each plate to a printer, slice, preview the G-code, and send it
 to the printer over your LAN — all in one app. **You don't need any
 other slicer installed**: every step of the workflow happens here.
 
-The MVP supports two printers, configured at the same time:
+The MVP centers on two printers you can configure at the same time:
 
 - **Bambu Lab A1 mini** (AMS lite, single hotend, LAN over MQTT)
 - **Snapmaker U1** (4-toolhead toolchanger, LAN over Moonraker HTTP)
+
+It also ships a profile for the **Bambu Lab A1** (the full-size model — a
+full 4-spool AMS, chainable up to 16 slots; same LAN-over-MQTT driver as
+the mini).
 
 This guide takes you from a clean Linux machine to your first print.
 
