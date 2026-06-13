@@ -89,6 +89,7 @@ from pathlib import Path
 from typing import Any
 
 from _atomic_io import atomic_write_text
+from _profile_typos import fold_typo_keys
 
 
 ENVELOPE_KEYS = frozenset({
@@ -151,31 +152,8 @@ DENY_KEYS = frozenset({
     "filament_extruder_variant",
 })
 
-# ---- Orca-side typo keys ----
-#
-# A handful of upstream profiles misspell option names. libslic3r silently
-# drops unknown keys, so in OrcaSlicer the correctly-spelled sibling (or
-# the engine default) is what actually takes effect — the typo never does.
-# Fold each typo onto its canonical spelling here, at import, so the
-# generated fragments only ever carry the canonical key and the runtime
-# cascade doesn't have to remap (remapping per-filament at slice time
-# zeroed a sibling filament's first-layer temp — a typo'd key in one
-# filament must never reach another's slot). Canonical wins on collision,
-# matching what Orca uses; a lone typo is recovered to the canonical key.
-TYPO_REMAP = {
-    "detraction_speed": "deretraction_speed",
-    "inital_layer_height": "initial_layer_height",
-    "nozzle_temperature_intial_layer": "nozzle_temperature_initial_layer",
-    "tree_support_bramch_diameter_angle": "tree_support_branch_diameter_angle",
-}
-
-
-def fold_typo_keys(doc: dict[str, Any]) -> None:
-    """Rename Orca-side typo keys to canonical in place; canonical wins."""
-    for typo, canonical in TYPO_REMAP.items():
-        if typo in doc:
-            value = doc.pop(typo)
-            doc.setdefault(canonical, value)
+# Orca-side typo keys are folded to canonical at import — see
+# `_profile_typos.fold_typo_keys`, shared across every profile importer.
 
 # ---- Compatibility overrides for upstream authoring bugs ----
 #

@@ -30,6 +30,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from _profile_typos import fold_typo_keys
+
 
 ENVELOPE_KEYS = frozenset({
     "type",
@@ -108,6 +110,7 @@ def flatten_inheritance(leaf: Path, index: dict[str, list[Path]]) -> tuple[dict,
             if k in ENVELOPE_KEYS:
                 continue
             merged[k] = v
+    fold_typo_keys(merged)
     return merged, [p for p, _ in chain]
 
 

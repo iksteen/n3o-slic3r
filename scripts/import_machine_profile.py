@@ -56,6 +56,7 @@ from pathlib import Path
 from typing import Any
 
 from _atomic_io import atomic_write_text
+from _profile_typos import fold_typo_keys
 
 # Envelope metadata — describes the file, not the slicer config. Never
 # emitted.
@@ -188,6 +189,7 @@ def flatten_inheritance(leaf: Path, machine_dir: Path) -> dict:
             if k in ENVELOPE_KEYS:
                 continue
             merged[k] = v
+    fold_typo_keys(merged)
     return merged
 
 

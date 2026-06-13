@@ -83,6 +83,7 @@ from pathlib import Path
 from typing import Any
 
 from _atomic_io import atomic_write_text
+from _profile_typos import fold_typo_keys
 
 
 ENVELOPE_KEYS = frozenset({
@@ -178,6 +179,7 @@ def flatten_leaf(leaf: Path, index: dict[str, list[Path]]) -> dict[str, Any] | N
             if k in ENVELOPE_KEYS:
                 continue
             merged[k] = v
+    fold_typo_keys(merged)
     leaf_doc = chain[0]
     name = leaf_doc.get("name") or leaf.stem
     merged.setdefault("print_settings_id", name)

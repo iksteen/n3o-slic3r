@@ -14,12 +14,33 @@ export function renderModelThumbnail(
   size = 400,
 ): string | null {
   // Clone so we never disturb the live scene graph (re-parenting an object
-  // would yank it out of the viewport). Geometry + materials are shared by
-  // reference — cheap, and the real per-material colours carry through.
+  // would yank it out of the viewport). Geometry is shared by reference;
+  // materials are clone-and-cleared just below.
   const root = source.clone(true);
   const scene = new THREE.Scene();
   scene.add(root);
   scene.updateMatrixWorld(true);
+
+  // The clone shares materials by reference, so a *selected* object still
+  // carries its selection emissive tint (sceneMirror sets `material.emissive`).
+  // Swap in emissive-cleared clones so the preview shows the true material
+  // colour, not the on-screen selection glow — without mutating the live
+  // materials. Disposed in `finally`.
+  const ownedMaterials: THREE.Material[] = [];
+  const declink = (m: THREE.Material): THREE.Material => {
+    const clone = m.clone();
+    const std = clone as THREE.MeshStandardMaterial;
+    if (std.emissive) std.emissive.setHex(0x000000);
+    ownedMaterials.push(clone);
+    return clone;
+  };
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    mesh.material = Array.isArray(mesh.material)
+      ? mesh.material.map(declink)
+      : declink(mesh.material);
+  });
 
   const box = new THREE.Box3().setFromObject(root);
   if (box.isEmpty()) return null;
@@ -62,6 +83,7 @@ export function renderModelThumbnail(
     if (!dataUrl.startsWith(prefix)) return null;
     return dataUrl.slice(prefix.length);
   } finally {
+    for (const m of ownedMaterials) m.dispose();
     renderer.dispose();
     renderer.forceContextLoss();
   }

@@ -198,12 +198,17 @@ export const ANNOTATIONS: Record<string, string> = {
     "Some advanced flow tuning sets line_width > nozzle to push more " +
     "filament per pass; only do it if you've tuned max flow rate first.",
 
-  wall_filament:
-    "Which filament slot prints the part's walls. Default is filament 1; " +
-    "override per-region to make text or surface details print in a " +
-    "different color. Multi-material support is the headline use case — " +
-    "pair with `solid_infill_filament` if you want the color to follow " +
-    "through to the top/bottom shells.",
+  outer_wall_filament_id:
+    "Which filament slot prints the part's outer walls (the visible " +
+    "perimeter). Default is filament 1; override per-region to make text " +
+    "or surface details print in a different color. Multi-material is the " +
+    "headline use case — pair with `solid_infill_filament` if you want the " +
+    "color to follow through to the top/bottom shells.",
+
+  inner_wall_filament_id:
+    "Which filament slot prints the part's inner walls (the hidden " +
+    "perimeters). Usually left at filament 1; set it only to use a " +
+    "different material from the outer walls.",
 
   skirt_loops:
     "Loops of an outline drawn around (but not touching) the first layer. " +
