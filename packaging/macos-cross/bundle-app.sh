@@ -11,8 +11,8 @@
 #   - the shim dylib exists at build/slic3r-ffi-<arch>/RelWithDebInfo/ (the cargo
 #     build above produces it)
 #   - rcodesign on PATH  (cargo install apple-codesign)
-#   - for --dmg: a Linux HFS+ DMG tool (mkfs.hfsplus + an image), or genisoimage;
-#     see the dmg() note below.
+#   - for --dmg: genisoimage (cdrkit) + git/cmake/make/cc — libdmg-hfsplus's
+#     `dmg` tool is built in-tree on first use (see the --dmg block below).
 #
 # Usage:  bundle-app.sh <arm64|x86_64> [--dmg]
 set -euo pipefail
@@ -113,13 +113,25 @@ if [ "$WANT_DMG" = 1 ]; then
   # libdmg-hfsplus's `dmg`. (This is the same genisoimage→dmg path Bitcoin Core
   # uses for its cross-built macOS DMGs.) Validated end to end: hdiutil verify +
   # attach succeed and the .app stays codesign-valid on the mounted volume.
-  : "${DMG_TOOL:=$(command -v dmg || echo "$HOME/libdmg-hfsplus/dmg/dmg")}"
   command -v genisoimage >/dev/null || { echo "error: genisoimage not found (install cdrkit/cdrtools)" >&2; exit 1; }
-  [ -x "$DMG_TOOL" ] || {
-    echo "error: libdmg-hfsplus 'dmg' tool not found (set \$DMG_TOOL, or build it:" >&2
-    echo "       git clone https://github.com/fanquake/libdmg-hfsplus && cd libdmg-hfsplus && cmake . && make)" >&2
-    exit 1
-  }
+  # The `dmg` tool (libdmg-hfsplus) wraps the raw image into a compressed UDIF.
+  # Honor an explicit $DMG_TOOL or a `dmg` on PATH; otherwise build libdmg-hfsplus
+  # in-tree, into the gitignored .build/ scratch, so the .dmg step is
+  # self-contained (no dependency on a tool checked out under $HOME). Built once,
+  # then reused.
+  dmg_tool="${DMG_TOOL:-$(command -v dmg 2>/dev/null || true)}"
+  if [ -z "$dmg_tool" ] || [ ! -x "$dmg_tool" ]; then
+    src="$here/.build/libdmg-hfsplus"; dmg_tool="$src/dmg/dmg"
+    if [ ! -x "$dmg_tool" ]; then
+      for t in git cmake make cc; do command -v "$t" >/dev/null || { echo "error: building libdmg-hfsplus needs '$t'" >&2; exit 1; }; done
+      echo ":: building libdmg-hfsplus in-tree ($src)"
+      [ -d "$src/.git" ] || git clone --depth 1 https://github.com/fanquake/libdmg-hfsplus "$src" >/dev/null 2>&1 \
+        || { echo "error: git clone libdmg-hfsplus failed" >&2; exit 1; }
+      ( cd "$src" && cmake . -DCMAKE_BUILD_TYPE=Release && make -j"$(nproc)" ) >"$src/build.log" 2>&1 \
+        || { echo "error: libdmg-hfsplus build failed — see $src/build.log" >&2; tail -15 "$src/build.log" >&2; exit 1; }
+    fi
+    [ -x "$dmg_tool" ] || { echo "error: no usable dmg tool at $dmg_tool after build" >&2; exit 1; }
+  fi
   DMGDIR="target/$TRIPLE/release/bundle/dmg"
   OUTDMG="$DMGDIR/$APP_NAME.dmg"
   STAGE="$(mktemp -d)"; CONTENT="$STAGE/content"; mkdir -p "$CONTENT" "$DMGDIR"
@@ -131,7 +143,7 @@ if [ "$WANT_DMG" = 1 ]; then
   genisoimage -quiet -no-cache-inodes -D -l -probe -V "$APP_NAME" -no-pad -r \
     -dir-mode 0755 -apple -o "$STAGE/raw.img" "$CONTENT"
   echo ":: compressing to UDIF (.dmg)"
-  "$DMG_TOOL" "$STAGE/raw.img" "$OUTDMG"
+  "$dmg_tool" "$STAGE/raw.img" "$OUTDMG"
   rm -rf "$STAGE"
   echo ":: dmg -> $OUTDMG ($(du -h "$OUTDMG" | cut -f1))"
 fi

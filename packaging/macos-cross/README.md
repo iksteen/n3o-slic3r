@@ -118,15 +118,13 @@ loads — same as the native build).
 
 ### `--dmg`
 
-Needs **`genisoimage`** (cdrkit) and **libdmg-hfsplus**'s `dmg` tool:
+Needs **`genisoimage`** (cdrkit) and **libdmg-hfsplus**'s `dmg` tool. The `dmg`
+tool is built automatically on first use — `bundle-app.sh` clones + builds
+libdmg-hfsplus in-tree into `packaging/macos-cross/.build/libdmg-hfsplus/`
+(gitignored, reused after) using `git cmake make` + a C/C++ compiler. To use an
+existing build instead, set `$DMG_TOOL` or put a `dmg` on `PATH`.
 
-```bash
-git clone https://github.com/fanquake/libdmg-hfsplus ~/libdmg-hfsplus
-cd ~/libdmg-hfsplus && cmake . && make    # builds dmg/dmg
-```
-
-`bundle-app.sh` finds `dmg` on `PATH`, else `$DMG_TOOL`, else
-`~/libdmg-hfsplus/dmg/dmg`. The volume is built as **ISO9660 + Rock Ridge +
+The volume is built as **ISO9660 + Rock Ridge +
 Apple extensions** (current macOS mounts it as ISO9660 — the legacy HFS that
 `genisoimage` can emit is no longer mountable) and wrapped in a compressed UDIF
 by `dmg`. The mounted volume shows the `.app` + a drag-to-`/Applications`
