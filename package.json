@@ -12,6 +12,8 @@
     "publish:flatpak": "dotenv ./packaging/flatpak/publish.sh",
     "publish:arch": "dotenv ./packaging/arch/publish.sh",
     "publish:windows": "dotenv ./packaging/windows-cross/publish.sh",
+    "publish:mac-arm64": "dotenv ./packaging/macos-cross/publish.sh arm64",
+    "publish:mac-x86_64": "dotenv ./packaging/macos-cross/publish.sh x86_64",
     "publish:all": "npm run publish:flatpak && npm run publish:arch && npm run publish:windows"
   },
   "dependencies": {

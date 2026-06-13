@@ -145,3 +145,22 @@ Caveats:
 - **The DMG is functional, not styled** — no background image or icon layout
   (those need a binary, undocumented `.DS_Store` that's impractical to forge on
   Linux). You get a clean volume with the app + the `/Applications` symlink.
+
+## Step 4 — publish (one command)
+
+```bash
+npm run publish:mac-arm64      # or: publish:mac-x86_64
+```
+
+`publish.sh <arch>` is the release one-shot, mirroring the arch / flatpak /
+windows channels: it ensures the cross-deps prefix (builds it on demand if
+absent), cross-builds the app (`--features custom-protocol`), assembles + ad-hoc
+signs the `.app` and `.dmg`, names the artifact `n3o-slic3r_<version>_<aarch64|x64>.dmg`,
+**GPG-signs** it with the shared project release key, and uploads the `.dmg` + its
+detached `.sig` + the public key via `rsync`.
+
+Upload destination: `N3O_MAC_PUBLISH_DEST`, falling back to `N3O_WIN_PUBLISH_DEST`
+(the same `pkg/` dir the other channels use), so it works with the existing
+`.env`. When neither is set it prints the manual `rsync` + verify steps instead.
+The GPG signature is for `gpg --verify` integrity, not Apple notarization —
+Gatekeeper still prompts on download (right-click → Open).
