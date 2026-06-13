@@ -192,10 +192,17 @@ openvdb() {  # links libopenvdb.a; fork carries a clang19 patch. USE_BLOSC=OFF m
   build "$s/b"
 }
 
+# -fPIC -DPIC: GMP/MPFR default to non-PIC static libs, whose x86_64 code carries
+# text relocations that ld64 rejects when they're linked into the shared FFI
+# dylib ("illegal text-relocation to ___gmp_binvert_limb_table"). arm64 is always
+# position-independent so it never hit this, but build both PIC to match
+# OrcaSlicer's native GMP.cmake and keep the two arches consistent.
+GMP_CFLAGS="-O2 -DNDEBUG -fPIC -DPIC -mmacosx-version-min=$DEPLOY"
+
 gmp() {  # GMP cross-builds with autotools (unlike Windows, where it needed prebuilts)
   local s; s="$SRC/$(fetch https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz 'gmp-6.3.0')"
   ( cd "$s" && [ -f Makefile ] || CC="$CC_WRAP" CXX="$CXX_WRAP" \
-      CFLAGS="-mmacosx-version-min=$DEPLOY" \
+      CFLAGS="$GMP_CFLAGS" CXXFLAGS="$GMP_CFLAGS" \
       ./configure --host="$HOST_TRIPLE" --prefix="$MACCROSS_PREFIX" \
         --disable-shared --enable-static --enable-cxx >/dev/null )
   make -C "$s" -j "$JOBS"; make -C "$s" install
@@ -204,7 +211,7 @@ gmp() {  # GMP cross-builds with autotools (unlike Windows, where it needed preb
 mpfr() {  # depends on gmp in the prefix
   local s; s="$SRC/$(fetch https://www.mpfr.org/mpfr-4.2.1/mpfr-4.2.1.tar.xz 'mpfr-4.2.1')"
   ( cd "$s" && [ -f Makefile ] || CC="$CC_WRAP" \
-      CFLAGS="-mmacosx-version-min=$DEPLOY" \
+      CFLAGS="$GMP_CFLAGS" \
       ./configure --host="$HOST_TRIPLE" --prefix="$MACCROSS_PREFIX" \
         --with-gmp="$MACCROSS_PREFIX" --disable-shared --enable-static >/dev/null )
   make -C "$s" -j "$JOBS"; make -C "$s" install
