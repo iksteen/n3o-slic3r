@@ -282,10 +282,14 @@ fn content_types_xml() -> String {
     // Bambu's sliced 3MF declares the same content types as a
     // project 3MF, plus an explicit `.gcode` mapping so the
     // firmware can detect the body. `.md5` and `.json` follow.
+    // `.config` covers the `model_settings.config` / `slice_info.config`
+    // parts — without it the package is OPC-invalid and strict 3MF
+    // readers (Bambu Studio, validators) reject the bundle.
     r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
  <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
+ <Default Extension="config" ContentType="application/vnd.ms-package.3dmanufacturing-config+xml"/>
  <Default Extension="gcode" ContentType="text/x.gcode"/>
  <Default Extension="md5" ContentType="text/plain"/>
  <Default Extension="json" ContentType="application/json"/>
