@@ -585,7 +585,7 @@
   .brand-mark {
     width: 22px;
     height: 22px;
-    background: url("/brand-icon.png") center / contain no-repeat;
+    background: url("/brand-icon.svg") center / contain no-repeat;
   }
   .tb-spacer { flex: 1; }
   .tb-btn {
