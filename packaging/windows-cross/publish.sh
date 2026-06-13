@@ -22,13 +22,13 @@
 #                          defaults it to packaging/windows-cross/.build/prefix.
 #   N3O_WIN_GPG_KEY        Signing key fingerprint. Defaults to the same
 #                          dedicated project key the arch/flatpak channels use.
-#   N3O_WIN_URL            Public HTTPS base URL the installer is served from
-#                          (used only for the printed install commands).
-#                          Default: https://n3o.thegraveyard.org/pkg
-#   N3O_WIN_PUBLISH_DEST   Optional rsync/ssh destination, e.g.
-#                          user@host:/srv/www/n3o.thegraveyard.org/pkg.
-#                          When set, uploads the installer + signature + public
-#                          key; when unset, prints the manual steps.
+#   N3O_BASE_URL           Public HTTPS base URL of the site (printed install
+#                          commands only); this channel serves from <base>/pkg.
+#                          Default: https://n3o.thegraveyard.org
+#   N3O_PUBLISH_DEST       Optional rsync/ssh destination *base*, e.g.
+#                          user@host:/srv/www/n3o.thegraveyard.org. This channel
+#                          uploads to <dest>/pkg (installer + signature + public
+#                          key); when unset, prints the manual steps.
 #
 # Prereqs: cargo-xwin, the x86_64-pc-windows-msvc rust target, and node deps.
 # The cross-deps prefix is built on demand (build-deps.sh) when absent, then
@@ -41,8 +41,9 @@ repo="$(cd "${here}/../.." && pwd)"
 # Same dedicated release key as the arch/flatpak channels. Override to sign
 # with a different key.
 key="${N3O_WIN_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
-url="${N3O_WIN_URL:-https://n3o.thegraveyard.org/pkg}"
-url="${url%/}"
+# Single base URL for the whole site; this channel serves from <base>/pkg.
+base_url="${N3O_BASE_URL:-https://n3o.thegraveyard.org}"
+url="${base_url%/}/pkg"
 keyfile="${repo}/packaging/flatpak/n3o-slic3r-signing-key.asc"
 keyname="$(basename "${keyfile}")"
 target="x86_64-pc-windows-msvc"
@@ -88,10 +89,10 @@ echo "Built + signed:"
 echo "  installer: ${setup}"
 echo "  signature: ${sig}"
 
-if [[ -n "${N3O_WIN_PUBLISH_DEST:-}" ]]; then
-  dest="${N3O_WIN_PUBLISH_DEST%/}"
+if [[ -n "${N3O_PUBLISH_DEST:-}" ]]; then
+  dest="${N3O_PUBLISH_DEST%/}/pkg"
   echo
-  echo ":: uploading to ${dest}/ (N3O_WIN_PUBLISH_DEST set)"
+  echo ":: uploading to ${dest}/ (N3O_PUBLISH_DEST set)"
   # The installer + its detached signature + the public key so users can
   # import, trust, and verify it.
   rsync -a "${setup}" "${sig}" "${dest}/"
@@ -100,9 +101,9 @@ if [[ -n "${N3O_WIN_PUBLISH_DEST:-}" ]]; then
 else
   cat <<DONE
 
-Set N3O_WIN_PUBLISH_DEST=<rsync/ssh dest> (e.g.
-user@host:/srv/www/n3o.thegraveyard.org/pkg) to upload automatically,
-or by hand:
+Set N3O_PUBLISH_DEST=<rsync/ssh dest base> (e.g.
+user@host:/srv/www/n3o.thegraveyard.org) to upload automatically (this channel
+uploads to <dest>/pkg), or by hand:
   rsync -a "${setup}" "${sig}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
   rsync -a "${keyfile}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
 DONE

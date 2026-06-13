@@ -53,11 +53,12 @@ server-side software is needed.
 
 ## Per-release publish
 
-From the repo root, with the public URL set:
+From the repo root (the served base URL defaults to
+`https://n3o.thegraveyard.org`; the flatpak repo is served from `<base>/repo`,
+override with `N3O_BASE_URL`):
 
 ```bash
-N3O_FLATPAK_REPO_URL="https://n3o.thegraveyard.org/repo" \
-  packaging/flatpak/publish.sh
+packaging/flatpak/publish.sh
 ```
 
 `publish.sh` (the signed release path; `build.sh` is the unsigned dev
@@ -72,17 +73,17 @@ path):
 4. writes `packaging/flatpak/.gen/org.thegraveyard.n3o-slic3r.flatpakref`
    with the repo URL and the embedded public key.
 
-Then upload both to your host so they resolve under `$N3O_FLATPAK_REPO_URL`.
-Set **`N3O_FLATPAK_PUBLISH_DEST`** to an rsync/ssh destination and `publish.sh`
-does the upload for you (repo with `--delete`, then the ref alongside it):
+Then upload both to your host so they resolve under `<N3O_BASE_URL>/repo`.
+Set **`N3O_PUBLISH_DEST`** to the site *base* rsync/ssh destination and
+`publish.sh` does the upload for you to `<dest>/repo` (repo with `--delete`,
+then the ref alongside it):
 
 ```bash
-N3O_FLATPAK_REPO_URL="https://n3o.thegraveyard.org/repo" \
-N3O_FLATPAK_PUBLISH_DEST="your-server:/srv/www/n3o.thegraveyard.org/repo" \
+N3O_PUBLISH_DEST="your-server:/srv/www/n3o.thegraveyard.org" \
   packaging/flatpak/publish.sh
 ```
 
-Or upload by hand (what the script prints when `N3O_FLATPAK_PUBLISH_DEST` is
+Or upload by hand (what the script prints when `N3O_PUBLISH_DEST` is
 unset):
 
 ```bash

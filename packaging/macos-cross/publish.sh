@@ -19,14 +19,13 @@
 # Config (env):
 #   N3O_MAC_GPG_KEY        Signing key fingerprint. Defaults to the same
 #                          dedicated project key the other channels use.
-#   N3O_MAC_URL            Public HTTPS base URL the .dmg is served from (used
-#                          only for the printed install commands).
-#                          Default: https://n3o.thegraveyard.org/pkg
-#   N3O_MAC_PUBLISH_DEST   rsync/ssh destination, e.g.
-#                          user@host:/srv/www/n3o.thegraveyard.org/pkg.
-#                          Defaults to N3O_WIN_PUBLISH_DEST (the same pkg/ dir
-#                          the other channels upload to). When neither is set,
-#                          prints the manual upload steps instead.
+#   N3O_BASE_URL           Public HTTPS base URL of the site (printed install
+#                          commands only); this channel serves from <base>/pkg.
+#                          Default: https://n3o.thegraveyard.org
+#   N3O_PUBLISH_DEST       Optional rsync/ssh destination *base*, e.g.
+#                          user@host:/srv/www/n3o.thegraveyard.org. This channel
+#                          uploads to <dest>/pkg (.dmg + signature + public key);
+#                          when unset, prints the manual upload steps.
 #   OSXCROSS_ROOT          osxcross install dir (build.sh). Default ~/osxcross/target.
 #   DMG_TOOL               libdmg-hfsplus `dmg` tool (bundle-app.sh --dmg).
 #
@@ -47,7 +46,8 @@ repo="$(cd "${here}/../.." && pwd)"
 
 # Same dedicated release key as the arch/flatpak/windows channels.
 key="${N3O_MAC_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
-url="${N3O_MAC_URL:-https://n3o.thegraveyard.org/pkg}"; url="${url%/}"
+# Single base URL for the whole site; this channel serves from <base>/pkg.
+base_url="${N3O_BASE_URL:-https://n3o.thegraveyard.org}"; url="${base_url%/}/pkg"
 keyfile="${repo}/packaging/flatpak/n3o-slic3r-signing-key.asc"
 keyname="$(basename "${keyfile}")"
 version="$(grep -m1 '^version' "${repo}/src-tauri/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
@@ -91,19 +91,19 @@ echo "Built + signed:"
 echo "  dmg:       ${dmg}"
 echo "  signature: ${sig}"
 
-dest="${N3O_MAC_PUBLISH_DEST:-${N3O_WIN_PUBLISH_DEST:-}}"
-if [[ -n "${dest}" ]]; then
-  dest="${dest%/}"
+if [[ -n "${N3O_PUBLISH_DEST:-}" ]]; then
+  dest="${N3O_PUBLISH_DEST%/}/pkg"
   echo
-  echo ":: uploading to ${dest}/"
+  echo ":: uploading to ${dest}/ (N3O_PUBLISH_DEST set)"
   rsync -a "${dmg}" "${sig}" "${dest}/"
   [[ -f "${keyfile}" ]] && rsync -a "${keyfile}" "${dest}/"
   echo ":: uploaded."
 else
   cat <<DONE
 
-Set N3O_MAC_PUBLISH_DEST (or N3O_WIN_PUBLISH_DEST) =<rsync/ssh dest> (e.g.
-user@host:/srv/www/n3o.thegraveyard.org/pkg) to upload automatically, or by hand:
+Set N3O_PUBLISH_DEST=<rsync/ssh dest base> (e.g.
+user@host:/srv/www/n3o.thegraveyard.org) to upload automatically (this channel
+uploads to <dest>/pkg), or by hand:
   rsync -a "${dmg}" "${sig}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
   rsync -a "${keyfile}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
 DONE

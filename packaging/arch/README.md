@@ -48,14 +48,15 @@ follows the same commit-first discipline as a plain `makepkg` (it builds
 from the committed worktree snapshot).
 
 ```sh
-N3O_ARCH_PUBLISH_DEST="user@host:/srv/www/n3o.thegraveyard.org/pkg" \
+N3O_PUBLISH_DEST="user@host:/srv/www/n3o.thegraveyard.org" \
   packaging/arch/publish.sh
 ```
 
-With `N3O_ARCH_PUBLISH_DEST` unset it builds + signs and prints the
-manual upload + install steps instead. Override the signing key with
-`N3O_ARCH_GPG_KEY` and the served base URL with `N3O_ARCH_URL` (default
-`https://n3o.thegraveyard.org/pkg`). The public key is committed at
+`N3O_PUBLISH_DEST` is the site *base*; this channel uploads to `<dest>/pkg`.
+With it unset, the script builds + signs and prints the manual upload + install
+steps instead. Override the signing key with `N3O_ARCH_GPG_KEY` and the served
+base URL with `N3O_BASE_URL` (default `https://n3o.thegraveyard.org`; this
+channel serves from `<base>/pkg`). The public key is committed at
 `packaging/flatpak/n3o-slic3r-signing-key.asc` and uploaded alongside the
 package.
 

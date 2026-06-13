@@ -159,8 +159,10 @@ signs the `.app` and `.dmg`, names the artifact `n3o-slic3r_<version>_<aarch64|x
 **GPG-signs** it with the shared project release key, and uploads the `.dmg` + its
 detached `.sig` + the public key via `rsync`.
 
-Upload destination: `N3O_MAC_PUBLISH_DEST`, falling back to `N3O_WIN_PUBLISH_DEST`
-(the same `pkg/` dir the other channels use), so it works with the existing
-`.env`. When neither is set it prints the manual `rsync` + verify steps instead.
-The GPG signature is for `gpg --verify` integrity, not Apple notarization —
-Gatekeeper still prompts on download (right-click → Open).
+Upload destination: `N3O_PUBLISH_DEST` — the site *base* (e.g.
+`user@host:/srv/www/n3o.thegraveyard.org`); this channel uploads to `<dest>/pkg`,
+shared with the arch/windows channels. The served base URL is `N3O_BASE_URL`
+(default `https://n3o.thegraveyard.org`; this channel serves from `<base>/pkg`).
+When `N3O_PUBLISH_DEST` is unset it prints the manual `rsync` + verify steps
+instead. The GPG signature is for `gpg --verify` integrity, not Apple
+notarization — Gatekeeper still prompts on download (right-click → Open).

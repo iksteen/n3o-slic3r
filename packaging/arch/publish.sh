@@ -9,16 +9,15 @@
 # both sign with the same dedicated project key.
 #
 # Config (env):
-#   N3O_ARCH_GPG_KEY       Signing key fingerprint. Defaults to the same
-#                          dedicated project key the flatpak uses.
-#   N3O_ARCH_URL           Public HTTPS base URL the package is served
-#                          from (used only for the printed install
-#                          commands). Default: https://n3o.thegraveyard.org/pkg
-#   N3O_ARCH_PUBLISH_DEST  Optional rsync/ssh destination, e.g.
-#                          user@host:/srv/www/n3o.thegraveyard.org/pkg.
-#                          When set, the script uploads the package +
-#                          signature + public key there; when unset it
-#                          prints the manual steps.
+#   N3O_ARCH_GPG_KEY  Signing key fingerprint. Defaults to the same
+#                     dedicated project key the flatpak uses.
+#   N3O_BASE_URL      Public HTTPS base URL of the site (used only for the
+#                     printed install commands); this channel serves from
+#                     <base>/pkg. Default: https://n3o.thegraveyard.org
+#   N3O_PUBLISH_DEST  Optional rsync/ssh destination *base*, e.g.
+#                     user@host:/srv/www/n3o.thegraveyard.org. This channel
+#                     uploads to <dest>/pkg (package + signature + public
+#                     key); when unset it prints the manual steps.
 #
 # Build deps: the PKGBUILD's makedepends (rust, nodejs, npm, cmake,
 # ninja, git) must be installed — `makepkg -s` will pull missing ones
@@ -33,8 +32,9 @@ repo="$(cd "${here}/../.." && pwd)"
 # Same dedicated release key as the flatpak channel. Override to sign
 # with a different key.
 key="${N3O_ARCH_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
-url="${N3O_ARCH_URL:-https://n3o.thegraveyard.org/pkg}"
-url="${url%/}"
+# Single base URL for the whole site; this channel serves from <base>/pkg.
+base_url="${N3O_BASE_URL:-https://n3o.thegraveyard.org}"
+url="${base_url%/}/pkg"
 keyfile="${repo}/packaging/flatpak/n3o-slic3r-signing-key.asc"
 keyname="$(basename "${keyfile}")"
 
@@ -60,10 +60,10 @@ echo "Built + signed:"
 echo "  package:   ${pkg}"
 echo "  signature: ${sig}"
 
-if [[ -n "${N3O_ARCH_PUBLISH_DEST:-}" ]]; then
-  dest="${N3O_ARCH_PUBLISH_DEST%/}"
+if [[ -n "${N3O_PUBLISH_DEST:-}" ]]; then
+  dest="${N3O_PUBLISH_DEST%/}/pkg"
   echo
-  echo ":: uploading to ${dest}/ (N3O_ARCH_PUBLISH_DEST set)"
+  echo ":: uploading to ${dest}/ (N3O_PUBLISH_DEST set)"
   # The package + its detached signature (pacman -U fetches `<url>.sig`
   # alongside) + the public key so users can import and trust it.
   rsync -a "${pkg}" "${sig}" "${dest}/"
@@ -72,9 +72,9 @@ if [[ -n "${N3O_ARCH_PUBLISH_DEST:-}" ]]; then
 else
   cat <<DONE
 
-Set N3O_ARCH_PUBLISH_DEST=<rsync/ssh dest> (e.g.
-user@host:/srv/www/n3o.thegraveyard.org/pkg) to upload automatically,
-or by hand:
+Set N3O_PUBLISH_DEST=<rsync/ssh dest base> (e.g.
+user@host:/srv/www/n3o.thegraveyard.org) to upload automatically (this channel
+uploads to <dest>/pkg), or by hand:
   rsync -a "${pkg}" "${sig}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
   rsync -a "${keyfile}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
 DONE

@@ -5,14 +5,15 @@
 # path; this is the signed release path.)
 #
 # Config (env):
-#   N3O_FLATPAK_REPO_URL    REQUIRED. Public HTTPS base URL the repo is
-#                           served from, e.g. https://n3o.thegraveyard.org/repo
-#   N3O_FLATPAK_GPG_KEY     Signing key fingerprint. Defaults to the
-#                           dedicated project key created for PR-9-3.
-#   N3O_FLATPAK_PUBLISH_DEST  Optional rsync/ssh destination, e.g.
-#                           user@host:/srv/www/n3o.thegraveyard.org/repo. When set, the script
-#                           uploads the repo + ref there automatically;
-#                           when unset, it just prints the manual steps.
+#   N3O_BASE_URL        Public HTTPS base URL of the site; the flatpak repo is
+#                       served from <base>/repo (baked into the .flatpakref).
+#                       Default: https://n3o.thegraveyard.org
+#   N3O_FLATPAK_GPG_KEY Signing key fingerprint. Defaults to the
+#                       dedicated project key created for PR-9-3.
+#   N3O_PUBLISH_DEST    Optional rsync/ssh destination *base*, e.g.
+#                       user@host:/srv/www/n3o.thegraveyard.org. This channel
+#                       uploads the repo + ref to <dest>/repo; when unset, it
+#                       just prints the manual steps.
 #
 # See packaging/flatpak/PUBLISHING.md for the hosting setup.
 set -euo pipefail
@@ -21,7 +22,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "${here}/../.." && pwd)"
 appid=org.thegraveyard.n3o-slic3r
 
-: "${N3O_FLATPAK_REPO_URL:?set N3O_FLATPAK_REPO_URL to the public HTTPS base URL the repo is served from}"
+# Single base URL for the whole site; the flatpak repo is served from <base>/repo.
+base_url="${N3O_BASE_URL:-https://n3o.thegraveyard.org}"
+repo_url="${base_url%/}/repo"
 # Dedicated n3o-slic3r release signing key (PR-9-3). Override to sign
 # with a different key.
 key="${N3O_FLATPAK_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
@@ -62,7 +65,7 @@ cat > "${gen}/${appid}.flatpakref" <<REF
 [Flatpak Ref]
 Name=${appid}
 Branch=master
-Url=${N3O_FLATPAK_REPO_URL}
+Url=${repo_url}
 GPGKey=$(base64 -w0 "${gen}/${appid}.gpg")
 IsRuntime=false
 RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo
@@ -74,32 +77,32 @@ echo "Done."
 echo "  signed repo:  ${pubrepo}"
 echo "  flatpakref:   ${gen}/${appid}.flatpakref"
 
-if [[ -n "${N3O_FLATPAK_PUBLISH_DEST:-}" ]]; then
-  dest="${N3O_FLATPAK_PUBLISH_DEST%/}"
+if [[ -n "${N3O_PUBLISH_DEST:-}" ]]; then
+  dest="${N3O_PUBLISH_DEST%/}/repo"
   echo
-  echo ":: uploading to ${dest}/ (N3O_FLATPAK_PUBLISH_DEST set)"
+  echo ":: uploading to ${dest}/ (N3O_PUBLISH_DEST set)"
   # Repo contents first — `--delete` prunes stale ostree objects (and the
   # ref, re-added next) so the served tree matches the freshly-pruned repo.
   rsync -a --delete "${pubrepo}/" "${dest}/"
   # Then the ref alongside it, so it resolves at
-  # $N3O_FLATPAK_REPO_URL/${appid}.flatpakref.
+  # ${repo_url}/${appid}.flatpakref.
   rsync -a "${gen}/${appid}.flatpakref" "${dest}/"
   echo ":: uploaded."
   echo
   echo "Install on a clean machine (signed; no --no-gpg-verify needed):"
-  echo "  flatpak install --from ${N3O_FLATPAK_REPO_URL}/${appid}.flatpakref"
+  echo "  flatpak install --from ${repo_url}/${appid}.flatpakref"
 else
   cat <<DONE
 
-Set N3O_FLATPAK_PUBLISH_DEST=<rsync/ssh dest> (e.g. user@host:/srv/www/n3o.thegraveyard.org/repo)
-to upload automatically, or publish by hand:
-  1. Upload the repo so it's served at \$N3O_FLATPAK_REPO_URL:
+Set N3O_PUBLISH_DEST=<rsync/ssh dest base> (e.g. user@host:/srv/www/n3o.thegraveyard.org)
+to upload automatically (this channel uploads to <dest>/repo), or publish by hand:
+  1. Upload the repo so it's served at ${repo_url}:
        rsync -a --delete "${pubrepo}/" your-server:/srv/www/n3o.thegraveyard.org/repo/
   2. Upload the ref alongside it:
        scp "${gen}/${appid}.flatpakref" your-server:/srv/www/n3o.thegraveyard.org/repo/
-       (so it resolves at \$N3O_FLATPAK_REPO_URL/${appid}.flatpakref)
+       (so it resolves at ${repo_url}/${appid}.flatpakref)
 
 Install on a clean machine (signed; no --no-gpg-verify needed):
-  flatpak install --from ${N3O_FLATPAK_REPO_URL}/${appid}.flatpakref
+  flatpak install --from ${repo_url}/${appid}.flatpakref
 DONE
 fi
