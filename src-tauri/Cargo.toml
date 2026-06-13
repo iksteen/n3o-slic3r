@@ -18,6 +18,14 @@ default-run = "n3o-slic3r"
 name = "n3o_slic3r_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Tauri keys production vs. dev off this feature: is_dev() == !custom-protocol.
+# With it on, the app serves the embedded frontend (frontendDist); with it off
+# it loads build.devUrl (the dev server). `npm run tauri build` enables it
+# automatically; a raw `cargo build` (e.g. the Linux→macOS cross in
+# packaging/macos-cross/) must pass `--features custom-protocol`. DO NOT REMOVE.
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
