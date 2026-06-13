@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Assemble a relocatable, ad-hoc-signed n3o-slic3r.app (and optionally a .dmg)
+# for macOS from a Linux cross build. Tauri's own macOS bundler and `codesign`
+# are macOS-only, so this replicates the bundle layout that
+# src-tauri/tauri.macos.conf.json + tauri.conf.json describe and signs with
+# rcodesign (the apple-codesign crate — runs on Linux).
+#
+# Prereqs:
+#   - the app binary is cross-built:
+#       ./build.sh <arch> cargo build -p n3o-slic3r --target <triple> --release
+#   - the shim dylib exists at build/slic3r-ffi-<arch>/RelWithDebInfo/ (the cargo
+#     build above produces it)
+#   - rcodesign on PATH  (cargo install apple-codesign)
+#   - for --dmg: a Linux HFS+ DMG tool (mkfs.hfsplus + an image), or genisoimage;
+#     see the dmg() note below.
+#
+# Usage:  bundle-app.sh <arm64|x86_64> [--dmg]
+set -euo pipefail
+
+ARCH="${1:?usage: bundle-app.sh <arm64|x86_64> [--dmg]}"; shift || true
+case "$ARCH" in
+  arm64)  TRIPLE=aarch64-apple-darwin ;;
+  x86_64) TRIPLE=x86_64-apple-darwin ;;
+  *) echo "arch must be arm64 or x86_64" >&2; exit 2 ;;
+esac
+WANT_DMG=0; [ "${1:-}" = "--dmg" ] && WANT_DMG=1
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$here/../.." && pwd)"
+cd "$REPO_ROOT"
+
+APP_NAME="n3o-slic3r"
+IDENTIFIER="org.thegraveyard.n3o-slic3r"
+VERSION="$(grep -m1 '^version' src-tauri/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+DEPLOY=11.3
+
+BIN="target/$TRIPLE/release/$APP_NAME"
+DYLIB="build/slic3r-ffi-$ARCH/RelWithDebInfo/libslic3r_ffi.0.1.0.dylib"
+[ -f "$BIN" ]   || { echo "error: app binary not found: $BIN — cross-build it first" >&2; exit 1; }
+[ -f "$DYLIB" ] || { echo "error: shim dylib not found: $DYLIB" >&2; exit 1; }
+command -v rcodesign >/dev/null || { echo "error: rcodesign not on PATH (cargo install apple-codesign)" >&2; exit 1; }
+
+OUT="target/$TRIPLE/release/bundle/macos"
+APP="$OUT/$APP_NAME.app"
+C="$APP/Contents"
+
+echo ":: assembling $APP (v$VERSION, $ARCH)"
+rm -rf "$APP"
+mkdir -p "$C/MacOS" "$C/Frameworks" "$C/Resources"
+
+# Executable + the engine dylib (binary already carries an
+# @executable_path/../Frameworks rpath and links @rpath/libslic3r_ffi.0.dylib).
+cp "$BIN" "$C/MacOS/$APP_NAME"
+cp "$DYLIB" "$C/Frameworks/libslic3r_ffi.0.dylib"
+chmod 0755 "$C/MacOS/$APP_NAME" "$C/Frameworks/libslic3r_ffi.0.dylib"
+
+# Icon + bundled resources (same mapping as tauri.conf.json's bundle.resources).
+cp src-tauri/icons/icon.icns "$C/Resources/icon.icns"
+cp -R resources/profiles "$C/Resources/profiles"
+cp -R resources/plugins  "$C/Resources/plugins"
+
+cat > "$C/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>      <string>en</string>
+  <key>CFBundleDisplayName</key>            <string>${APP_NAME}</string>
+  <key>CFBundleExecutable</key>             <string>${APP_NAME}</string>
+  <key>CFBundleIconFile</key>               <string>icon.icns</string>
+  <key>CFBundleIdentifier</key>             <string>${IDENTIFIER}</string>
+  <key>CFBundleName</key>                   <string>${APP_NAME}</string>
+  <key>CFBundlePackageType</key>            <string>APPL</string>
+  <key>CFBundleShortVersionString</key>     <string>${VERSION}</string>
+  <key>CFBundleVersion</key>                <string>${VERSION}</string>
+  <key>CFBundleSupportedPlatforms</key>     <array><string>MacOSX</string></array>
+  <key>LSMinimumSystemVersion</key>         <string>${DEPLOY}</string>
+  <key>NSHighResolutionCapable</key>        <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key> <true/>
+</dict>
+</plist>
+PLIST
+
+# Ad-hoc sign (no cert): signs the nested dylib + the main executable. The
+# disable-library-validation entitlement lets the separately-signed engine dylib
+# load (matches src-tauri/entitlements.macos.plist on the native build).
+echo ":: ad-hoc signing with rcodesign"
+rcodesign sign \
+  --entitlements-xml-file src-tauri/entitlements.macos.plist \
+  "$APP"
+
+# rcodesign's `verify` is self-admittedly buggy on bundles; read the signature
+# back instead and assert the main executable is ad-hoc signed. Authoritative
+# validation (codesign -v / spctl) needs a Mac — and Gatekeeper still rejects an
+# ad-hoc app on download (no Developer-ID notarization), the same caveat the
+# native build carries.
+echo ":: signature readback"
+if rcodesign print-signature-info "$C/MacOS/$APP_NAME" 2>/dev/null \
+     | grep -q 'CodeSignatureFlags(ADHOC)'; then
+  echo ":: main executable is ad-hoc signed (entitlements embedded)"
+else
+  echo ":: WARNING: could not confirm an ad-hoc signature on the main executable" >&2
+fi
+
+echo ":: done -> $APP"
+
+if [ "$WANT_DMG" = 1 ]; then
+  # A proper macOS .dmg is an HFS+/APFS image. Building one on Linux needs
+  # libdmg-hfsplus (`dmg` tool) or mkfs.hfsplus + dd; neither is assumed present.
+  # Left as a follow-up so a missing tool doesn't fail the .app build.
+  echo ":: --dmg not implemented yet (needs libdmg-hfsplus on Linux); .app is ready" >&2
+fi

@@ -57,3 +57,8 @@ bugs.txt
 
 # Windows cross-compile scratch (sources + builds + prefix)
 packaging/windows-cross/.build/
+
+# macOS cross-compile scratch (sources + per-dep builds; deps install into the
+# arch-namespaced external/OrcaSlicer/deps/build/<arch>/ prefix, already ignored
+# with the submodule). Run logs are caught by *.log above.
+packaging/macos-cross/.build/

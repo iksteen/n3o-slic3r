@@ -34,6 +34,12 @@ fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let windows = target_os == "windows";
     let macos = target_os == "macos";
+    // Cross-compiling a macOS target from a non-macOS host (Linux + osxcross):
+    // build.rs itself is compiled for the build host, so cfg!(target_os) is the
+    // HOST os. A macOS *target* on a non-macOS host means we must drive cmake
+    // through the osxcross toolchain rather than the host clang. On a native
+    // macOS host this is false and the build is unchanged.
+    let macos_cross = macos && !cfg!(target_os = "macos");
 
     // OrcaSlicer's macOS build namespaces everything by arch — the deps
     // install prefix (build_release_macos.sh) and our own cmake build dir —
@@ -64,6 +70,9 @@ fn main() {
     // runner past its disk ceiling mid-build. The cross build defaults to
     // Release (smaller, and the cross-deps were built /MD-Release).
     println!("cargo:rerun-if-env-changed=N3O_SLIC3R_FFI_CMAKE_CONFIG");
+    // Cross from Linux keeps RelWithDebInfo (same as a native macOS build) so the
+    // bundle config's hardcoded build/slic3r-ffi-current/RelWithDebInfo/ dylib
+    // path resolves; only Windows defaults to Release.
     let cmake_config = env::var("N3O_SLIC3R_FFI_CMAKE_CONFIG")
         .unwrap_or_else(|_| if windows { "Release".into() } else { "RelWithDebInfo".into() });
     let cmake_config = cmake_config.as_str();
@@ -155,6 +164,32 @@ fn main() {
                 // dylib. Deployment target matches the deps (built at 11.3).
                 .arg(format!("-DCMAKE_OSX_ARCHITECTURES={mac_arch}"))
                 .arg("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.3");
+            if macos_cross {
+                // Cross from Linux: drive the build through osxcross. The wrapper
+                // (packaging/macos-cross/build.sh) exports the OSXCROSS_* env the
+                // toolchain file reads (it picks the arch via OSXCROSS_HOST) and
+                // MACCROSS_PREFIX. Fail early with guidance if it's not set up.
+                // OrcaSlicer builds a host dev-tool (encoding-check) and runs it
+                // during the build to verify source encodings. Cross-built it's a
+                // Mach-O binary that can't execute on the Linux build host
+                // (Exec format error). OrcaSlicer auto-disables it under
+                // IS_CROSS_COMPILE, but that isn't tripped by the osxcross setup —
+                // disable it explicitly. The check is irrelevant to the shim.
+                configure.arg("-DSLIC3R_ENC_CHECK=OFF");
+                // Gate the __isPlatformVersionAtLeast shim to this exact host/
+                // target combo (see ffi/macos_availability_shim.mm).
+                configure.arg("-DN3O_MACOS_CROSS=ON");
+                let tc = workspace_root.join("packaging/macos-cross/toolchain.cmake");
+                if env::var_os("OSXCROSS_TARGET_DIR").is_none() {
+                    panic!(
+                        "Cross-building a macOS target from this host needs osxcross.\n\
+                         Build through `packaging/macos-cross/build.sh <arch> <cargo|tauri ...>`,\n\
+                         which exports OSXCROSS_TARGET_DIR/OSXCROSS_HOST/MACCROSS_PREFIX, or\n\
+                         export them yourself (see packaging/macos-cross/README.md)."
+                    );
+                }
+                configure.arg(toolchain_arg("CMAKE_TOOLCHAIN_FILE", &tc));
+            }
         }
     }
     run(&mut configure, "cmake configure");

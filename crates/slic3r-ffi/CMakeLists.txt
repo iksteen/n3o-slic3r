@@ -76,6 +76,14 @@ set_target_properties(slic3r_ffi PROPERTIES
     VERSION      0.1.0
 )
 
+# Linux→macOS osxcross cross only: supply __isPlatformVersionAtLeast (the
+# compiler-runtime helper @available lowers to) that Apple's clang_rt would
+# otherwise provide. See ffi/macos_availability_shim.mm. build.rs sets
+# N3O_MACOS_CROSS exclusively for that host/target combination.
+if (N3O_MACOS_CROSS)
+    target_sources(slic3r_ffi PRIVATE ffi/macos_availability_shim.mm)
+endif()
+
 # On Windows (MSVC/clang-cl) the shim needs the same baseline defines libslic3r
 # compiles with — its public headers (calib.hpp, …) use M_PI (needs
 # _USE_MATH_DEFINES; MSVC's <cmath> doesn't expose it like glibc) and would trip

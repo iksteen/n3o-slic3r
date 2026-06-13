@@ -230,6 +230,18 @@ After that, the slic3r-ffi crate's `build.rs` invokes cmake to build
     is the obvious next step but is not wired up yet.
 - **Windows** is the cross-from-Linux path (`cargo xwin` + the
   `packaging/windows-cross/` toolchain); see `crates/slic3r-ffi/build.rs`.
+- **macOS can also cross from Linux** via osxcross (`packaging/macos-cross/`).
+  Same shape as the Windows cross: `build-deps.sh <arch>` rebuilds the dep tree
+  with the osxcross toolchain into the arch-namespaced
+  `deps/build/<arch>/OrcaSlicer_dep/usr/local` prefix the native build also
+  uses, then `build.sh <arch> cargo build … --target <arch>-apple-darwin`
+  builds the engine + shim + app (build.rs injects the osxcross toolchain when
+  it sees a macOS target on a non-macOS host). **Validated (2026-06-13):** the
+  full chain — deps → libslic3r → `libslic3r_ffi.0.dylib` → the `n3o-slic3r`
+  app binary — cross-compiles and links to arm64 Mach-O from Linux. The
+  remaining gap is `.app`/`.dmg` bundling: Tauri's macOS bundler + `codesign`
+  are macOS-only, so the Linux cross currently yields the binary + dylib, not a
+  packaged `.app`. See `packaging/macos-cross/README.md`.
 
 **macOS `.app` bundling** (`npm run tauri build`): the engine ships as a
 dylib, so the bundle must carry it and be re-signed to load it.
