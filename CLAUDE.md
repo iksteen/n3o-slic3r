@@ -241,10 +241,14 @@ After that, the slic3r-ffi crate's `build.rs` invokes cmake to build
   app binary — cross-compiles and links to arm64 Mach-O from Linux, and
   `packaging/macos-cross/bundle-app.sh` assembles a relocatable, ad-hoc-signed
   `n3o-slic3r.app` (Tauri's macOS bundler + `codesign` are macOS-only, so the
-  bundle is built by hand and signed with `rcodesign`). Open items: `.dmg`
-  packaging (needs `libdmg-hfsplus` on Linux), x86_64/universal, and
-  authoritative signature validation on a Mac. See
-  `packaging/macos-cross/README.md`.
+  bundle is built by hand and signed with `rcodesign`). `bundle-app.sh --dmg`
+  also produces a compressed UDIF `.dmg` (ISO9660+RockRidge volume via
+  `genisoimage`, wrapped by `libdmg-hfsplus`'s `dmg` — the Bitcoin-Core cross
+  recipe); validated on macOS 15 (`hdiutil verify`/`attach` + the inner `.app`
+  stays `codesign -v --strict` valid). Open items: x86_64/universal, a styled
+  DMG (needs a `.DS_Store` impractical to forge on Linux), and Developer-ID
+  notarization (needs a paid Apple account; Gatekeeper rejects the ad-hoc
+  app/dmg on download regardless). See `packaging/macos-cross/README.md`.
 
 **macOS `.app` bundling** (`npm run tauri build`): the engine ships as a
 dylib, so the bundle must carry it and be re-signed to load it.

@@ -105,7 +105,8 @@ Linux and ad-hoc signs with [`rcodesign`](https://github.com/indygreg/apple-plat
 (`cargo install apple-codesign`):
 
 ```bash
-./bundle-app.sh arm64        # -> target/aarch64-apple-darwin/release/bundle/macos/n3o-slic3r.app
+./bundle-app.sh arm64          # -> …/bundle/macos/n3o-slic3r.app
+./bundle-app.sh arm64 --dmg    # also -> …/bundle/dmg/n3o-slic3r.dmg
 ```
 
 It copies the cross-built binary + `libslic3r_ffi.0.dylib` (into
@@ -115,13 +116,32 @@ already targets), the icon, and the `profiles`/`plugins` resources, writes
 `disable-library-validation` entitlement (so the separately-signed engine dylib
 loads — same as the native build).
 
+### `--dmg`
+
+Needs **`genisoimage`** (cdrkit) and **libdmg-hfsplus**'s `dmg` tool:
+
+```bash
+git clone https://github.com/fanquake/libdmg-hfsplus ~/libdmg-hfsplus
+cd ~/libdmg-hfsplus && cmake . && make    # builds dmg/dmg
+```
+
+`bundle-app.sh` finds `dmg` on `PATH`, else `$DMG_TOOL`, else
+`~/libdmg-hfsplus/dmg/dmg`. The volume is built as **ISO9660 + Rock Ridge +
+Apple extensions** (current macOS mounts it as ISO9660 — the legacy HFS that
+`genisoimage` can emit is no longer mountable) and wrapped in a compressed UDIF
+by `dmg`. The mounted volume shows the `.app` + a drag-to-`/Applications`
+symlink. Validated on macOS 15: `hdiutil verify` + `attach` succeed, the inner
+binary hashes identically to the source, and the `.app` stays `codesign -v
+--strict` valid on the mounted volume. (Same `genisoimage`→`dmg` path Bitcoin
+Core uses for its cross-built macOS DMGs.)
+
 Caveats:
 - **Authoritative signature validation needs a Mac** (`codesign -v` / `spctl`).
   `rcodesign verify` is self-admittedly unreliable on bundles; the script reads
   the signature back instead and asserts an ad-hoc signature is present.
-- **Gatekeeper still rejects an ad-hoc `.app` on download** (no Developer-ID
-  notarization — needs a paid Apple account), the same caveat the native build
-  carries.
-- **`.dmg` is not built yet.** A macOS `.dmg` is an HFS+/APFS image; producing
-  one on Linux needs `libdmg-hfsplus` (or `mkfs.hfsplus`). `bundle-app.sh --dmg`
-  is stubbed for this follow-up.
+- **Gatekeeper still rejects an ad-hoc `.app`/`.dmg` on download** (no
+  Developer-ID notarization — needs a paid Apple account), the same caveat the
+  native build carries. The DMG is a tidy container, not Gatekeeper acceptance.
+- **The DMG is functional, not styled** — no background image or icon layout
+  (those need a binary, undocumented `.DS_Store` that's impractical to forge on
+  Linux). You get a clean volume with the app + the `/Applications` symlink.

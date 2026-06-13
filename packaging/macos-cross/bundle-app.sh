@@ -105,8 +105,33 @@ fi
 echo ":: done -> $APP"
 
 if [ "$WANT_DMG" = 1 ]; then
-  # A proper macOS .dmg is an HFS+/APFS image. Building one on Linux needs
-  # libdmg-hfsplus (`dmg` tool) or mkfs.hfsplus + dd; neither is assumed present.
-  # Left as a follow-up so a missing tool doesn't fail the .app build.
-  echo ":: --dmg not implemented yet (needs libdmg-hfsplus on Linux); .app is ready" >&2
+  # A macOS .dmg is a UDIF-wrapped filesystem image. Apple's hdiutil is
+  # macOS-only and the legacy HFS that genisoimage can emit is no longer
+  # mountable on current macOS — so build the volume as ISO9660 + Rock Ridge
+  # (-r: POSIX perms, symlinks, long names) + Apple extensions (-apple), which
+  # current macOS mounts as ISO9660, then wrap it in a compressed UDIF with
+  # libdmg-hfsplus's `dmg`. (This is the same genisoimage→dmg path Bitcoin Core
+  # uses for its cross-built macOS DMGs.) Validated end to end: hdiutil verify +
+  # attach succeed and the .app stays codesign-valid on the mounted volume.
+  : "${DMG_TOOL:=$(command -v dmg || echo "$HOME/libdmg-hfsplus/dmg/dmg")}"
+  command -v genisoimage >/dev/null || { echo "error: genisoimage not found (install cdrkit/cdrtools)" >&2; exit 1; }
+  [ -x "$DMG_TOOL" ] || {
+    echo "error: libdmg-hfsplus 'dmg' tool not found (set \$DMG_TOOL, or build it:" >&2
+    echo "       git clone https://github.com/fanquake/libdmg-hfsplus && cd libdmg-hfsplus && cmake . && make)" >&2
+    exit 1
+  }
+  DMGDIR="target/$TRIPLE/release/bundle/dmg"
+  OUTDMG="$DMGDIR/$APP_NAME.dmg"
+  STAGE="$(mktemp -d)"; CONTENT="$STAGE/content"; mkdir -p "$CONTENT" "$DMGDIR"
+  # What the mounted volume shows: the .app + a drag-to-install Applications
+  # symlink. cp -a preserves perms + the _CodeSignature.
+  cp -a "$APP" "$CONTENT/"
+  ln -s /Applications "$CONTENT/Applications"
+  echo ":: building DMG volume image"
+  genisoimage -quiet -no-cache-inodes -D -l -probe -V "$APP_NAME" -no-pad -r \
+    -dir-mode 0755 -apple -o "$STAGE/raw.img" "$CONTENT"
+  echo ":: compressing to UDIF (.dmg)"
+  "$DMG_TOOL" "$STAGE/raw.img" "$OUTDMG"
+  rm -rf "$STAGE"
+  echo ":: dmg -> $OUTDMG ($(du -h "$OUTDMG" | cut -f1))"
 fi
