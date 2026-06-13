@@ -89,10 +89,31 @@ Output:
   gated to this host/target combo (a native macOS build gets it from Apple's
   clang_rt and would otherwise hit a duplicate symbol).
 
-## Not yet wired: `.app` / `.dmg` bundling
+## Step 3 — bundle the `.app`
 
 `npm run tauri build` produces the bundle on macOS, but Tauri's macOS bundler
-and `codesign` are macOS-only. From Linux the cross build currently yields the
-**binary + dylib**, not a packaged `.app`. Assembling a relocatable, ad-hoc
-signed `.app` on Linux (manual bundle layout + an ld64 rpath/install_name pass +
-`rcodesign`) is the remaining step.
+and `codesign` are macOS-only. `bundle-app.sh` replicates the bundle layout on
+Linux and ad-hoc signs with [`rcodesign`](https://github.com/indygreg/apple-platform-rs)
+(`cargo install apple-codesign`):
+
+```bash
+./bundle-app.sh arm64        # -> target/aarch64-apple-darwin/release/bundle/macos/n3o-slic3r.app
+```
+
+It copies the cross-built binary + `libslic3r_ffi.0.dylib` (into
+`Contents/Frameworks`, which the binary's `@executable_path/../Frameworks` rpath
+already targets), the icon, and the `profiles`/`plugins` resources, writes
+`Info.plist`, and ad-hoc signs the nested dylib + main executable with the
+`disable-library-validation` entitlement (so the separately-signed engine dylib
+loads — same as the native build).
+
+Caveats:
+- **Authoritative signature validation needs a Mac** (`codesign -v` / `spctl`).
+  `rcodesign verify` is self-admittedly unreliable on bundles; the script reads
+  the signature back instead and asserts an ad-hoc signature is present.
+- **Gatekeeper still rejects an ad-hoc `.app` on download** (no Developer-ID
+  notarization — needs a paid Apple account), the same caveat the native build
+  carries.
+- **`.dmg` is not built yet.** A macOS `.dmg` is an HFS+/APFS image; producing
+  one on Linux needs `libdmg-hfsplus` (or `mkfs.hfsplus`). `bundle-app.sh --dmg`
+  is stubbed for this follow-up.

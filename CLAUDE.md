@@ -238,10 +238,13 @@ After that, the slic3r-ffi crate's `build.rs` invokes cmake to build
   builds the engine + shim + app (build.rs injects the osxcross toolchain when
   it sees a macOS target on a non-macOS host). **Validated (2026-06-13):** the
   full chain — deps → libslic3r → `libslic3r_ffi.0.dylib` → the `n3o-slic3r`
-  app binary — cross-compiles and links to arm64 Mach-O from Linux. The
-  remaining gap is `.app`/`.dmg` bundling: Tauri's macOS bundler + `codesign`
-  are macOS-only, so the Linux cross currently yields the binary + dylib, not a
-  packaged `.app`. See `packaging/macos-cross/README.md`.
+  app binary — cross-compiles and links to arm64 Mach-O from Linux, and
+  `packaging/macos-cross/bundle-app.sh` assembles a relocatable, ad-hoc-signed
+  `n3o-slic3r.app` (Tauri's macOS bundler + `codesign` are macOS-only, so the
+  bundle is built by hand and signed with `rcodesign`). Open items: `.dmg`
+  packaging (needs `libdmg-hfsplus` on Linux), x86_64/universal, and
+  authoritative signature validation on a Mac. See
+  `packaging/macos-cross/README.md`.
 
 **macOS `.app` bundling** (`npm run tauri build`): the engine ships as a
 dylib, so the bundle must carry it and be re-signed to load it.
