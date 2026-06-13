@@ -65,6 +65,13 @@ else
   "${here}/build-deps.sh" "${arch}"
 fi
 
+# Build the frontend bundle (dist/) fresh. The raw cargo build below — unlike
+# `tauri build` — does NOT run tauri.conf.json's beforeBuildCommand, so do it
+# here: ships the current UI and keeps the channel self-contained after
+# `npm run clean` (tauri-build embeds frontendDist at compile time).
+echo ":: building the frontend (npm run build)"
+( cd "${repo}" && npm run build )
+
 # --features custom-protocol is REQUIRED: without it Tauri builds a dev-mode
 # binary that loads the dev server (white screen) instead of the embedded UI.
 echo ":: cross-building the macOS app (${arch})"

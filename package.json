@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "tauri": "cross-env N3O_SLIC3R_RESOURCES_ROOT=./resources dotenv -- tauri",
+    "clean": "./scripts/clean.sh",
     "publish:flatpak": "dotenv ./packaging/flatpak/publish.sh",
     "publish:arch": "dotenv ./packaging/arch/publish.sh",
     "publish:windows": "dotenv ./packaging/windows-cross/publish.sh",
