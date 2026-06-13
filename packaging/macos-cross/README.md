@@ -54,8 +54,15 @@ toolchain via `OSXCROSS_*`/`MACCROSS_PREFIX`, cargo's target linker, and the
 # the engine + shim dylib (libslic3r builds cold ~15 min):
 ./build.sh arm64 cargo build -p slic3r-ffi --target aarch64-apple-darwin --release
 # the full app binary (links the shim + the whole Tauri crate graph):
-./build.sh arm64 cargo build -p n3o-slic3r  --target aarch64-apple-darwin --release
+./build.sh arm64 cargo build -p n3o-slic3r  --target aarch64-apple-darwin --release \
+  --features tauri/custom-protocol
 ```
+
+`--features tauri/custom-protocol` is **required** for the app. Tauri keys
+production vs. dev off that feature (`is_dev() == !custom-protocol`): without it
+the binary runs in dev mode and loads `build.devUrl` (`http://localhost:1420`)
+instead of the embedded frontend — a white screen. `npm run tauri build` enables
+it automatically; a plain `cargo build` does not.
 
 Output:
 - `build/slic3r-ffi-arm64/RelWithDebInfo/libslic3r_ffi.0.1.0.dylib` — arm64
