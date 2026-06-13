@@ -17,8 +17,8 @@
 # Usage:  publish.sh [arm64|x86_64]      (default: arm64)
 #
 # Config (env):
-#   N3O_MAC_GPG_KEY        Signing key fingerprint. Defaults to the same
-#                          dedicated project key the other channels use.
+#   N3O_GPG_KEY            Signing key fingerprint. Defaults to the shared
+#                          dedicated project release key (same across channels).
 #   N3O_BASE_URL           Public HTTPS base URL of the site (printed install
 #                          commands only); this channel serves from <base>/pkg.
 #                          Default: https://n3o.thegraveyard.org
@@ -44,8 +44,9 @@ esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "${here}/../.." && pwd)"
 
-# Same dedicated release key as the arch/flatpak/windows channels.
-key="${N3O_MAC_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
+# Shared dedicated release key (same across all channels). Override to sign
+# with a different key.
+key="${N3O_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
 # Single base URL for the whole site; this channel serves from <base>/pkg.
 base_url="${N3O_BASE_URL:-https://n3o.thegraveyard.org}"; url="${base_url%/}/pkg"
 keyfile="${repo}/packaging/flatpak/n3o-slic3r-signing-key.asc"

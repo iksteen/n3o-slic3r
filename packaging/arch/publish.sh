@@ -9,8 +9,8 @@
 # both sign with the same dedicated project key.
 #
 # Config (env):
-#   N3O_ARCH_GPG_KEY  Signing key fingerprint. Defaults to the same
-#                     dedicated project key the flatpak uses.
+#   N3O_GPG_KEY       Signing key fingerprint. Defaults to the shared
+#                     dedicated project release key (same across all channels).
 #   N3O_BASE_URL      Public HTTPS base URL of the site (used only for the
 #                     printed install commands); this channel serves from
 #                     <base>/pkg. Default: https://n3o.thegraveyard.org
@@ -29,9 +29,9 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "${here}/../.." && pwd)"
 
-# Same dedicated release key as the flatpak channel. Override to sign
+# Shared dedicated release key (same across all channels). Override to sign
 # with a different key.
-key="${N3O_ARCH_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
+key="${N3O_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
 # Single base URL for the whole site; this channel serves from <base>/pkg.
 base_url="${N3O_BASE_URL:-https://n3o.thegraveyard.org}"
 url="${base_url%/}/pkg"

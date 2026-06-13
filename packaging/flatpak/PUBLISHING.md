@@ -38,7 +38,7 @@ The secret key lives in the maintainer's GnuPG keyring. It is
 passphraseless so `publish.sh` can sign non-interactively; if you'd
 rather protect it, add a passphrase (`gpg --change-passphrase`) and run
 publish behind an unlocked `gpg-agent`. To rotate: generate a new key,
-update `N3O_FLATPAK_GPG_KEY` (or the default in `publish.sh`), re-export
+update `N3O_GPG_KEY` (or the default in `publish.sh`), re-export
 `n3o-slic3r-signing-key.asc`, and re-publish — clients pick up the new
 key from the updated `.flatpakref`.
 

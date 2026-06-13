@@ -8,8 +8,8 @@
 #   N3O_BASE_URL        Public HTTPS base URL of the site; the flatpak repo is
 #                       served from <base>/repo (baked into the .flatpakref).
 #                       Default: https://n3o.thegraveyard.org
-#   N3O_FLATPAK_GPG_KEY Signing key fingerprint. Defaults to the
-#                       dedicated project key created for PR-9-3.
+#   N3O_GPG_KEY         Signing key fingerprint. Defaults to the shared
+#                       dedicated project release key (same across channels).
 #   N3O_PUBLISH_DEST    Optional rsync/ssh destination *base*, e.g.
 #                       user@host:/srv/www/n3o.thegraveyard.org. This channel
 #                       uploads the repo + ref to <dest>/repo; when unset, it
@@ -25,9 +25,9 @@ appid=org.thegraveyard.n3o-slic3r
 # Single base URL for the whole site; the flatpak repo is served from <base>/repo.
 base_url="${N3O_BASE_URL:-https://n3o.thegraveyard.org}"
 repo_url="${base_url%/}/repo"
-# Dedicated n3o-slic3r release signing key (PR-9-3). Override to sign
+# Shared dedicated release key (same across all channels). Override to sign
 # with a different key.
-key="${N3O_FLATPAK_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
+key="${N3O_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
 
 gen="${here}/.gen"
 builddir="${here}/.build"

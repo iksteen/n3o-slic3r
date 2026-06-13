@@ -183,7 +183,7 @@ N3O_PUBLISH_DEST="user@host:/srv/www/n3o.thegraveyard.org" \
 
 `N3O_PUBLISH_DEST` is the site *base*; this channel uploads to `<dest>/pkg`. With
 it unset, the script builds + signs and prints the manual upload + verify steps.
-Override the key with `N3O_WIN_GPG_KEY` and the served base URL with
+Override the key with `N3O_GPG_KEY` and the served base URL with
 `N3O_BASE_URL` (default `https://n3o.thegraveyard.org`; this channel serves from
 `<base>/pkg`). This is GPG
 signing for cross-channel verification (`gpg --verify`), **not** Windows
