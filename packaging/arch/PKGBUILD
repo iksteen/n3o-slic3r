@@ -78,10 +78,25 @@ prepare() {
     # package source root. `--recurse-submodules` enumerates the
     # OrcaSlicer submodule's tracked files so we get its full source
     # without the per-workspace build artifacts (deps/build/, build/)
-    # a naive disk copy would slurp in. `--cached` only — commit-
-    # first discipline: uncommitted top-level or submodule edits do
-    # not make it into the package.
-    git -C "${repo_root}" ls-files -z --cached --recurse-submodules |
+    # a naive disk copy would slurp in.
+    #
+    # The OrcaSlicer submodule also carries the wave-overhang feature as a
+    # working-tree patch set (crates/slic3r-ffi/patches/wave-overhangs/).
+    # That patch MODIFIES tracked files — captured above, since tar reads
+    # the worktree, not the index — and ADDS a new WaveOverhangs/ module.
+    # The new files are untracked, so `ls-files --cached` drops them,
+    # leaving the patched hooks referencing a missing module and breaking
+    # the libslic3r build. Append the submodule's untracked, non-ignored
+    # files (just the wave module; ignored build dirs stay excluded) so
+    # the snapshot is complete.
+    {
+      git -C "${repo_root}" ls-files -z --cached --recurse-submodules
+      git -C "${repo_root}/external/OrcaSlicer" \
+          ls-files -z --others --exclude-standard |
+        while IFS= read -r -d '' p; do
+            printf 'external/OrcaSlicer/%s\0' "${p}"
+        done
+    } |
       while IFS= read -r -d '' path; do
           [[ -e "${repo_root}/${path}" ]] && printf '%s\0' "${path}"
       done |
