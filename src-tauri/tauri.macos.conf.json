@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "macOS": {
+      "frameworks": [
+        "../build/slic3r-ffi/RelWithDebInfo/libslic3r_ffi.0.dylib"
+      ],
+      "signingIdentity": "-",
+      "entitlements": "entitlements.macos.plist"
+    }
+  }
+}

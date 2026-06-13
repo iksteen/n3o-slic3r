@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    libslic3r_ffi.<ver>.dylib ships inside the bundle (Contents/Frameworks) and
+    is only ad-hoc signed (no Apple Team ID). The hardened runtime enforces
+    library validation, which refuses to load a dylib whose Team ID differs from
+    the main executable's — for two distinct ad-hoc signatures that is always a
+    mismatch ("mapping process and mapped file have different Team IDs"). This
+    entitlement turns library validation off so the embedded engine loads. It is
+    also the required entitlement for a Developer-ID-signed + notarized build
+    that links our own non-notarized engine dylib.
+  -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

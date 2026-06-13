@@ -31,7 +31,25 @@ use std::process::Command;
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let workspace_root = manifest_dir.join("..").join("..").canonicalize().unwrap();
-    let windows = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let windows = target_os == "windows";
+    let macos = target_os == "macos";
+
+    // OrcaSlicer's macOS deps build (build_release_macos.sh) namespaces the
+    // install prefix by arch so a universal build can hold an arm64 and an
+    // x86_64 tree side by side. Cargo's TARGET_ARCH is the LLVM spelling
+    // (aarch64); OrcaSlicer's directory uses the uname spelling (arm64).
+    let mac_deps_prefix = || -> PathBuf {
+        let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+        let arch = match target_arch.as_str() {
+            "aarch64" => "arm64",
+            "" => "arm64",
+            other => other,
+        };
+        workspace_root.join(format!(
+            "external/OrcaSlicer/deps/build/{arch}/OrcaSlicer_dep/usr/local"
+        ))
+    };
 
     let cmake_build_dir = workspace_root
         .join("build")
@@ -59,8 +77,11 @@ fn main() {
             );
         }
     } else {
-        let deps_prefix =
-            workspace_root.join("external/OrcaSlicer/deps/build/OrcaSlicer_dep/usr/local");
+        let deps_prefix = if macos {
+            mac_deps_prefix()
+        } else {
+            workspace_root.join("external/OrcaSlicer/deps/build/OrcaSlicer_dep/usr/local")
+        };
         if !deps_prefix.exists() {
             panic!(
                 "OrcaSlicer's dependency tree is not built yet ({} missing).\n\
@@ -119,6 +140,15 @@ fn main() {
             .env("WINCROSS_PREFIX", &prefix);
     } else {
         configure.arg("-G").arg("Ninja Multi-Config");
+        // The CMakeLists default deps prefix is the Linux layout
+        // (deps/build/OrcaSlicer_dep/...). On macOS the prefix is
+        // arch-namespaced, so point CMAKE_PREFIX_PATH at it explicitly.
+        if macos {
+            configure.arg(format!(
+                "-DCMAKE_PREFIX_PATH={}",
+                mac_deps_prefix().display()
+            ));
+        }
     }
     run(&mut configure, "cmake configure");
 

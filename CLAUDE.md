@@ -192,18 +192,48 @@ n3o-slic3r/
 └── docs/                       # user-facing docs; dev docs under docs/dev/
 ```
 
-Build flow (Linux; macOS / Windows post-MVP):
+Build flow (Linux and macOS native; Windows is cross-from-Linux):
 
 ```bash
 git submodule update --init --recursive
-./scripts/build.sh deps    # one-time, ~17 min — OrcaSlicer's deps tree
+./scripts/build.sh deps    # one-time — OrcaSlicer's deps tree
 cargo build                # 15 min cold, fast incremental
 npm install && npm run tauri dev
 ```
 
 `scripts/build.sh deps` is the only step that isn't driven by `cargo`.
 After that, the slic3r-ffi crate's `build.rs` invokes cmake to build
-`libslic3r_ffi.so` and that's the heaviest step in a `cargo build`.
+`libslic3r_ffi.{so,dylib}` and that's the heaviest step in a `cargo build`.
+
+**Platform notes for the deps + FFI build:**
+
+- **Linux** drives `external/OrcaSlicer/build_linux.sh` and installs the
+  deps prefix flat at `deps/build/OrcaSlicer_dep/usr/local`.
+- **macOS** (native, host arch — Apple Silicon validated) drives
+  `build_release_macos.sh -d -a <arch>`, which **arch-namespaces** the
+  prefix at `deps/build/<arch>/OrcaSlicer_dep/usr/local` (so a future
+  universal build can hold arm64 + x86_64 side by side). `scripts/build.sh`
+  and `crates/slic3r-ffi/build.rs` both branch on the host OS and select
+  the right prefix; on macOS `build.rs` passes `-DCMAKE_PREFIX_PATH`
+  explicitly (the CMakeLists default is the Linux layout). Prereqs come
+  from Homebrew: `cmake ninja pkg-config gettext libtool automake
+  autoconf texinfo node`, plus Rust via `rustup`. Cross-compilation
+  (universal / x86_64-on-arm64) is **not** wired up yet — host arch only.
+- **Windows** is the cross-from-Linux path (`cargo xwin` + the
+  `packaging/windows-cross/` toolchain); see `crates/slic3r-ffi/build.rs`.
+
+**macOS `.app` bundling** (`npm run tauri build`): the engine ships as a
+dylib, so the bundle must carry it and be re-signed to load it.
+`src-tauri/tauri.macos.conf.json` (auto-merged by the Tauri CLI, same as
+`tauri.windows.conf.json`) copies `libslic3r_ffi.0.dylib` into
+`Contents/Frameworks` and ad-hoc signs (`signingIdentity: "-"`);
+`src-tauri/build.rs` adds an `@executable_path/../Frameworks` rpath so the
+relocated app finds it; and `src-tauri/entitlements.macos.plist` sets
+`com.apple.security.cs.disable-library-validation` — **required**, because
+the hardened runtime otherwise refuses to load an ad-hoc-signed dylib that
+doesn't share the main executable's Team ID. The result is a relocatable,
+ad-hoc-signed `.app` + `.dmg`; Gatekeeper still rejects it on download
+(no Developer-ID notarization — needs a paid Apple account).
 
 ## Licensing and product principles
 
@@ -238,8 +268,12 @@ PRD §11 spells these out. The short version:
 
 ## Memory
 
-Per-session memories live in
-`~/.claude/projects/-home-ingmar-src-prive-n3o-slic3r/memory/`. Currently:
+Per-session memories live in a directory keyed by the working directory
+Claude Code launched from. The repo has been developed from more than one
+checkout location, so this path is host-specific — e.g.
+`~/.claude/projects/-Users-ingmar-Documents-GitHub-n3o-slic3r/memory/` on
+the macOS checkout, `~/.claude/projects/-home-ingmar-src-prive-n3o-slic3r/memory/`
+on the original Linux one. Memories seen so far:
 
 - `feedback_stop_chasing_bug_chains.md` — when a fix unmasks another
   instance of the same pattern, surface options instead of patching
