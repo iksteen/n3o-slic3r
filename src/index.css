@@ -585,16 +585,7 @@
   .brand-mark {
     width: 22px;
     height: 22px;
-    border-radius: 6px;
-    background: var(--text);
-    position: relative;
-  }
-  .brand-mark::after {
-    content: "";
-    position: absolute;
-    inset: 4px;
-    background: repeating-linear-gradient(45deg, transparent 0 2px, var(--bg) 2px 3px);
-    border-radius: 2px;
+    background: url("/brand-icon.png") center / contain no-repeat;
   }
   .tb-spacer { flex: 1; }
   .tb-btn {
