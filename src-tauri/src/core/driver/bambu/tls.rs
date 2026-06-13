@@ -59,6 +59,25 @@ fn build() -> Result<TlsConnector, String> {
     builder.use_sni(true);
     builder.add_root_certificate(ca);
     builder.danger_accept_invalid_hostnames(true);
+
+    // macOS: native-tls is backed by Security.framework, whose TLS trust
+    // policy enforces the CA/Browser-Forum maximum leaf-certificate validity
+    // (398 days for certs issued after 2020-09-01). Bambu device certs are
+    // minted with a ~10-year lifetime (e.g. 2025→2035), so SecTrustEvaluate
+    // rejects the otherwise-valid chain to the embedded BBL CA with
+    // errSecCertificateValidityPeriodTooLong — surfaced as "The validity
+    // period in the certificate exceeds the maximum allowed". The same chain
+    // verifies fine under OpenSSL on Linux. native-tls exposes no knob to
+    // relax *only* the validity rule, so on macOS we skip chain verification.
+    //
+    // The practical trust model is unchanged: this is a LAN connection to a
+    // user-entered device IP, still gated by the per-device access code in the
+    // MQTT credentials, and the serial probe (device_id.rs) continues to read
+    // the peer cert's CN regardless of verification. We keep full BBL-CA
+    // pinning on every other platform.
+    #[cfg(target_os = "macos")]
+    builder.danger_accept_invalid_certs(true);
+
     builder
         .build()
         .map_err(|e| format!("failed to build Bambu device TLS connector: {e}"))
