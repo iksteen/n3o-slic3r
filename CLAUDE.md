@@ -209,16 +209,25 @@ After that, the slic3r-ffi crate's `build.rs` invokes cmake to build
 
 - **Linux** drives `external/OrcaSlicer/build_linux.sh` and installs the
   deps prefix flat at `deps/build/OrcaSlicer_dep/usr/local`.
-- **macOS** (native, host arch — Apple Silicon validated) drives
-  `build_release_macos.sh -d -a <arch>`, which **arch-namespaces** the
-  prefix at `deps/build/<arch>/OrcaSlicer_dep/usr/local` (so a future
-  universal build can hold arm64 + x86_64 side by side). `scripts/build.sh`
-  and `crates/slic3r-ffi/build.rs` both branch on the host OS and select
-  the right prefix; on macOS `build.rs` passes `-DCMAKE_PREFIX_PATH`
-  explicitly (the CMakeLists default is the Linux layout). Prereqs come
-  from Homebrew: `cmake ninja pkg-config gettext libtool automake
-  autoconf texinfo node`, plus Rust via `rustup`. Cross-compilation
-  (universal / x86_64-on-arm64) is **not** wired up yet — host arch only.
+- **macOS** drives `build_release_macos.sh -d -a <arch>`, which
+  **arch-namespaces** the prefix at `deps/build/<arch>/OrcaSlicer_dep/usr/local`
+  so arm64 and x86_64 trees coexist. `scripts/build.sh` and
+  `crates/slic3r-ffi/build.rs` branch on platform/arch and select the right
+  prefix; on macOS `build.rs` passes `-DCMAKE_PREFIX_PATH`,
+  `-DCMAKE_OSX_ARCHITECTURES=<arch>` (matching the cargo target), and
+  `-DCMAKE_OSX_DEPLOYMENT_TARGET=11.3` (matching the deps), and namespaces
+  its own cmake build dir as `build/slic3r-ffi-<arch>`. Prereqs come from
+  Homebrew: `cmake ninja pkg-config gettext libtool automake autoconf
+  texinfo node`, plus Rust via `rustup`.
+  - **Native** (Apple Silicon, hardware-validated): `./scripts/build.sh deps`
+    then `cargo build` / `npm run tauri build`.
+  - **Intel cross from Apple Silicon** (validated — runs under Rosetta):
+    `rustup target add x86_64-apple-darwin` + Rosetta
+    (`softwareupdate --install-rosetta`), then
+    `./scripts/build.sh deps x86_64` (cross-builds the Intel deps) and
+    `npm run tauri build -- --target x86_64-apple-darwin`. Output lands under
+    `target/x86_64-apple-darwin/release/bundle/`. A `universal` lipo'd build
+    is the obvious next step but is not wired up yet.
 - **Windows** is the cross-from-Linux path (`cargo xwin` + the
   `packaging/windows-cross/` toolchain); see `crates/slic3r-ffi/build.rs`.
 
@@ -226,7 +235,12 @@ After that, the slic3r-ffi crate's `build.rs` invokes cmake to build
 dylib, so the bundle must carry it and be re-signed to load it.
 `src-tauri/tauri.macos.conf.json` (auto-merged by the Tauri CLI, same as
 `tauri.windows.conf.json`) copies `libslic3r_ffi.0.dylib` into
-`Contents/Frameworks` and ad-hoc signs (`signingIdentity: "-"`);
+`Contents/Frameworks` and ad-hoc signs (`signingIdentity: "-"`). Because the
+cmake build dir is arch-namespaced but the config path must be static,
+`build.rs` maintains a `build/slic3r-ffi-current` symlink pointing at the
+arch it just built; the config embeds the dylib through that symlink, so a
+native and a `--target x86_64-apple-darwin` build each bundle the matching
+dylib without a per-arch config.
 `src-tauri/build.rs` adds an `@executable_path/../Frameworks` rpath so the
 relocated app finds it; and `src-tauri/entitlements.macos.plist` sets
 `com.apple.security.cs.disable-library-validation` — **required**, because

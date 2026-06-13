@@ -4,7 +4,7 @@
 # this exists, `cargo build` from the workspace root drives everything
 # else (libslic3r, the FFI shim, bindgen, the Rust crates, Tauri).
 #
-# Usage: ./scripts/build.sh deps
+# Usage: ./scripts/build.sh deps [arch]
 #
 # Takes ~17 minutes on a fast machine. Idempotent; re-running is a no-op
 # once the deps prefix exists.
@@ -13,8 +13,12 @@
 # build_release_macos.sh, which namespaces the deps prefix by arch
 # (deps/build/<arch>/OrcaSlicer_dep/...) so universal builds can keep an
 # arm64 and an x86_64 tree side by side. The slic3r-ffi build.rs knows
-# both layouts and selects the prefix to match the host. Cross-compilation
-# is out of scope here — this builds for the host arch only.
+# both layouts and selects the prefix to match the cargo target arch.
+#
+# On macOS an optional second argument pins the deps arch (arm64 | x86_64),
+# defaulting to the host arch. `./scripts/build.sh deps x86_64` cross-builds
+# the Intel deps from an Apple Silicon host (needs Rosetta for the few deps
+# that run a freshly built target-arch tool). Linux ignores the arch arg.
 
 set -e
 
@@ -25,7 +29,7 @@ case "${1:-deps}" in
     deps)
         case "$(uname -s)" in
             Darwin)
-                ARCH="$(uname -m)"
+                ARCH="${2:-$(uname -m)}"
                 DEPS_INSTALL="${ORCA_DIR}/deps/build/${ARCH}/OrcaSlicer_dep/usr/local"
                 if [[ -d "${DEPS_INSTALL}" ]]; then
                     echo "deps: already built at ${DEPS_INSTALL}, skipping"

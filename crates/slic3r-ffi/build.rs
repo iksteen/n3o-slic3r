@@ -35,25 +35,28 @@ fn main() {
     let windows = target_os == "windows";
     let macos = target_os == "macos";
 
-    // OrcaSlicer's macOS deps build (build_release_macos.sh) namespaces the
-    // install prefix by arch so a universal build can hold an arm64 and an
-    // x86_64 tree side by side. Cargo's TARGET_ARCH is the LLVM spelling
-    // (aarch64); OrcaSlicer's directory uses the uname spelling (arm64).
-    let mac_deps_prefix = || -> PathBuf {
-        let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-        let arch = match target_arch.as_str() {
-            "aarch64" => "arm64",
-            "" => "arm64",
-            other => other,
-        };
-        workspace_root.join(format!(
-            "external/OrcaSlicer/deps/build/{arch}/OrcaSlicer_dep/usr/local"
-        ))
+    // OrcaSlicer's macOS build namespaces everything by arch — the deps
+    // install prefix (build_release_macos.sh) and our own cmake build dir —
+    // so an arm64 and an x86_64 tree coexist for cross-compiling / universal
+    // builds. Cargo's TARGET_ARCH is the LLVM spelling (aarch64); OrcaSlicer
+    // and Apple tooling use the uname spelling (arm64). For x86_64 they agree.
+    let mac_arch = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("aarch64") | Err(_) => "arm64".to_string(),
+        Ok(other) => other.to_string(),
     };
+    let mac_deps_prefix = workspace_root.join(format!(
+        "external/OrcaSlicer/deps/build/{mac_arch}/OrcaSlicer_dep/usr/local"
+    ));
 
-    let cmake_build_dir = workspace_root
-        .join("build")
-        .join(if windows { "slic3r-ffi-win" } else { "slic3r-ffi" });
+    let cmake_build_dir = workspace_root.join("build").join(if windows {
+        "slic3r-ffi-win".to_string()
+    } else if macos {
+        // Per-arch so a native arm64 build and a cross x86_64 build each keep
+        // their own cmake cache (no reconfigure churn when switching targets).
+        format!("slic3r-ffi-{mac_arch}")
+    } else {
+        "slic3r-ffi".to_string()
+    });
 
     // Default to RelWithDebInfo for local development (backtraces through
     // libslic3r are essential when a slice misbehaves). CI overrides to Release
@@ -78,7 +81,7 @@ fn main() {
         }
     } else {
         let deps_prefix = if macos {
-            mac_deps_prefix()
+            mac_deps_prefix.clone()
         } else {
             workspace_root.join("external/OrcaSlicer/deps/build/OrcaSlicer_dep/usr/local")
         };
@@ -140,14 +143,18 @@ fn main() {
             .env("WINCROSS_PREFIX", &prefix);
     } else {
         configure.arg("-G").arg("Ninja Multi-Config");
-        // The CMakeLists default deps prefix is the Linux layout
-        // (deps/build/OrcaSlicer_dep/...). On macOS the prefix is
-        // arch-namespaced, so point CMAKE_PREFIX_PATH at it explicitly.
         if macos {
-            configure.arg(format!(
-                "-DCMAKE_PREFIX_PATH={}",
-                mac_deps_prefix().display()
-            ));
+            configure
+                // The CMakeLists default deps prefix is the Linux layout
+                // (deps/build/OrcaSlicer_dep/...). On macOS the prefix is
+                // arch-namespaced, so point CMAKE_PREFIX_PATH at it explicitly.
+                .arg(format!("-DCMAKE_PREFIX_PATH={}", mac_deps_prefix.display()))
+                // Build libslic3r + the shim for the cargo target arch (native
+                // arm64 or cross x86_64), not the host default — otherwise a
+                // cross build would link x86_64 cargo objects against an arm64
+                // dylib. Deployment target matches the deps (built at 11.3).
+                .arg(format!("-DCMAKE_OSX_ARCHITECTURES={mac_arch}"))
+                .arg("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.3");
         }
     }
     run(&mut configure, "cmake configure");
@@ -172,6 +179,20 @@ fn main() {
     } else {
         cmake_build_dir.join(cmake_config)
     };
+
+    // macOS: keep a stable `build/slic3r-ffi-current` symlink pointing at the
+    // arch-specific build dir we just produced. tauri.macos.conf.json embeds
+    // `build/slic3r-ffi-current/<config>/libslic3r_ffi.0.dylib`, so this lets a
+    // native `tauri build` and a cross `tauri build --target x86_64-apple-darwin`
+    // each bundle the matching-arch dylib through one static config path — the
+    // cargo build (which runs this script for the target arch) always repoints
+    // the link just before tauri bundles.
+    if macos {
+        let link = workspace_root.join("build").join("slic3r-ffi-current");
+        if let Err(e) = update_symlink(&link, &format!("slic3r-ffi-{mac_arch}")) {
+            println!("cargo:warning=could not update slic3r-ffi-current symlink: {e}");
+        }
+    }
 
     // ---- bindgen ----
 
@@ -244,6 +265,19 @@ fn main() {
 // accepts forward slashes everywhere, including on Windows-targeted builds.
 fn toolchain_arg(var: &str, path: &Path) -> String {
     format!("-D{var}={}", path.display())
+}
+
+// Replace `link` with a relative symlink to `target` (a sibling name). Used for
+// the macOS `slic3r-ffi-current` pointer. Unix-only — the only macOS-targeting
+// build host is a Mac; the Windows target cross-builds from Linux (also unix).
+#[cfg(unix)]
+fn update_symlink(link: &Path, target: &str) -> std::io::Result<()> {
+    let _ = std::fs::remove_file(link);
+    std::os::unix::fs::symlink(target, link)
+}
+#[cfg(not(unix))]
+fn update_symlink(_link: &Path, _target: &str) -> std::io::Result<()> {
+    Ok(())
 }
 
 // Apply `<base>/patches/*.patch` to the OrcaSlicer submodule in place (the

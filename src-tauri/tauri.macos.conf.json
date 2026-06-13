@@ -3,7 +3,7 @@
   "bundle": {
     "macOS": {
       "frameworks": [
-        "../build/slic3r-ffi/RelWithDebInfo/libslic3r_ffi.0.dylib"
+        "../build/slic3r-ffi-current/RelWithDebInfo/libslic3r_ffi.0.dylib"
       ],
       "signingIdentity": "-",
       "entitlements": "entitlements.macos.plist"
