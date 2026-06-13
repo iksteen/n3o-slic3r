@@ -83,6 +83,13 @@ fn main() {
         .arg(&cmake_build_dir)
         .env("CMAKE_POLICY_VERSION_MINIMUM", "3.5");
 
+    // Wave-overhang engine feature — carried as build-time patches on the
+    // pinned OrcaSlicer submodule (crates/slic3r-ffi/patches/wave-overhangs/).
+    // Apply on EVERY target, before cmake configure, so a clean build links
+    // the wave module that the scraped option tables already advertise.
+    // Idempotent (reverse-apply --check skips an already-patched tree).
+    apply_submodule_patches(&workspace_root, &manifest_dir.join("patches/wave-overhangs"));
+
     if windows {
         // Cross: the clang-cl/LLD toolchain + the cross-deps prefix. Single-config
         // Ninja (the cross toolchain is validated with CMAKE_BUILD_TYPE=Release).
@@ -93,7 +100,7 @@ fn main() {
                 .unwrap_or_else(|_| format!("{}/.cache", env::var("HOME").unwrap()));
             format!("{cache}/cargo-xwin/xwin")
         });
-        apply_orca_patches(&workspace_root, &wc);
+        apply_submodule_patches(&workspace_root, &wc);
         configure
             .arg("-G")
             .arg("Ninja")
@@ -152,6 +159,11 @@ fn main() {
         "cargo:rerun-if-changed={}",
         manifest_dir.join("CMakeLists.txt").display()
     );
+    // Re-run (and re-apply) if a carried wave-overhang patch changes.
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("patches/wave-overhangs/patches").display()
+    );
 
     // The header is ABI-clean (only <stddef.h>/<stdint.h>, fixed-width types), so
     // host-target bindgen produces correct bindings for the windows-msvc target.
@@ -204,12 +216,14 @@ fn toolchain_arg(var: &str, path: &Path) -> String {
     format!("-D{var}={}", path.display())
 }
 
-// Apply packaging/windows-cross/patches/*.patch to the OrcaSlicer submodule in
-// place (the submodule tree is otherwise left pinned). Idempotent: a patch that
-// is already applied (reverse-apply --check succeeds) is skipped.
-fn apply_orca_patches(workspace_root: &Path, wc: &Path) {
+// Apply `<base>/patches/*.patch` to the OrcaSlicer submodule in place (the
+// submodule tree is otherwise left pinned). Used for both the windows-cross
+// build patches and the wave-overhang engine carry. Idempotent: a patch that
+// is already applied (reverse-apply --check succeeds) is skipped, so it's safe
+// to run on every build and on an already-patched tree.
+fn apply_submodule_patches(workspace_root: &Path, base: &Path) {
     let orca = workspace_root.join("external/OrcaSlicer");
-    let patches_dir = wc.join("patches");
+    let patches_dir = base.join("patches");
     let mut patches: Vec<PathBuf> = match std::fs::read_dir(&patches_dir) {
         Ok(rd) => rd
             .filter_map(|e| e.ok().map(|e| e.path()))
