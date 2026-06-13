@@ -38,7 +38,11 @@ BIN="target/$TRIPLE/release/$APP_NAME"
 DYLIB="build/slic3r-ffi-$ARCH/RelWithDebInfo/libslic3r_ffi.0.1.0.dylib"
 [ -f "$BIN" ]   || { echo "error: app binary not found: $BIN — cross-build it first" >&2; exit 1; }
 [ -f "$DYLIB" ] || { echo "error: shim dylib not found: $DYLIB" >&2; exit 1; }
-command -v rcodesign >/dev/null || { echo "error: rcodesign not on PATH (cargo install apple-codesign)" >&2; exit 1; }
+# rcodesign (apple-codesign). `cargo install` puts it in ~/.cargo/bin, which
+# isn't on PATH when cargo came from a system package (and not under `npm run`).
+# Add it so the publish doesn't depend on the caller's PATH setup.
+command -v rcodesign >/dev/null || PATH="$HOME/.cargo/bin:$PATH"
+command -v rcodesign >/dev/null || { echo "error: rcodesign not found (cargo install apple-codesign, or add ~/.cargo/bin to PATH)" >&2; exit 1; }
 
 OUT="target/$TRIPLE/release/bundle/macos"
 APP="$OUT/$APP_NAME.app"
