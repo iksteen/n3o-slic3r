@@ -38,21 +38,22 @@ url="${base_url%/}/pkg"
 keyfile="${repo}/packaging/flatpak/n3o-slic3r-signing-key.asc"
 keyname="$(basename "${keyfile}")"
 
-cd "${here}"
+echo ":: build (makepkg, unsigned)"
+"${here}/build.sh"
 
-echo ":: makepkg build + GPG sign (key ${key})"
-# -s: install missing makedepends; -f: rebuild even if a package exists;
-# --sign --key: produce a detached `${pkg}.sig` with the project key.
-makepkg -sf --sign --key "${key}"
-
-# Resolve the exact built artifact (honors a maintainer's PKGDEST /
-# PKGEXT instead of assuming the filename).
-pkg="$(makepkg --packagelist | head -n1)"
-sig="${pkg}.sig"
-if [[ ! -f "${pkg}" || ! -f "${sig}" ]]; then
-  echo "error: expected a signed package at ${pkg} (+ ${sig}) after build" >&2
+# Resolve the exact built artifact (honors a maintainer's PKGDEST / PKGEXT
+# instead of assuming the filename); --packagelist needs the PKGBUILD dir.
+pkg="$(cd "${here}" && makepkg --packagelist | head -n1)"
+if [[ ! -f "${pkg}" ]]; then
+  echo "error: expected a built package at ${pkg} after build" >&2
   exit 1
 fi
+
+echo ":: GPG sign $(basename "${pkg}") (key ${key})"
+# Detached signature next to the package — pacman -U fetches `<url>.sig`.
+gpg --batch --yes --local-user "${key}" --detach-sign "${pkg}"
+sig="${pkg}.sig"
+[[ -f "${sig}" ]] || { echo "error: signing did not produce ${sig}" >&2; exit 1; }
 pkgfile="$(basename "${pkg}")"
 
 echo

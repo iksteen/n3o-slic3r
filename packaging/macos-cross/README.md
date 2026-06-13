@@ -46,15 +46,17 @@ success.
 
 ## Step 2 — cross-build the FFI shim and/or the app
 
-The `build.sh` wrapper exports the osxcross env three consumers read (the cmake
-toolchain via `OSXCROSS_*`/`MACCROSS_PREFIX`, cargo's target linker, and the
-`cc` crate's `CC_/CXX_/AR_` vars), then runs the command you give it:
+For the whole app artifact in one shot (deps + frontend + cross build + bundled
+`.app`/`.dmg`), just use `./build.sh <arch>` (Step 3). To run individual cross
+builds, the `env.sh` wrapper exports the osxcross env three consumers read (the
+cmake toolchain via `OSXCROSS_*`/`MACCROSS_PREFIX`, cargo's target linker, and
+the `cc` crate's `CC_/CXX_/AR_` vars), then runs the command you give it:
 
 ```bash
 # the engine + shim dylib (libslic3r builds cold ~15 min):
-./build.sh arm64 cargo build -p slic3r-ffi --target aarch64-apple-darwin --release
+./env.sh arm64 cargo build -p slic3r-ffi --target aarch64-apple-darwin --release
 # the full app binary (links the shim + the whole Tauri crate graph):
-./build.sh arm64 cargo build -p n3o-slic3r  --target aarch64-apple-darwin --release \
+./env.sh arm64 cargo build -p n3o-slic3r  --target aarch64-apple-darwin --release \
   --features custom-protocol
 ```
 

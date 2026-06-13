@@ -231,12 +231,13 @@ After that, the slic3r-ffi crate's `build.rs` invokes cmake to build
 - **Windows** is the cross-from-Linux path (`cargo xwin` + the
   `packaging/windows-cross/` toolchain); see `crates/slic3r-ffi/build.rs`.
 - **macOS can also cross from Linux** via osxcross (`packaging/macos-cross/`).
-  Same shape as the Windows cross: `build-deps.sh <arch>` rebuilds the dep tree
-  with the osxcross toolchain into the arch-namespaced
+  Same shape as the Windows cross: `build.sh <arch>` ensures the dep tree
+  (`build-deps.sh <arch>` → the arch-namespaced
   `deps/build/<arch>/OrcaSlicer_dep/usr/local` prefix the native build also
-  uses, then `build.sh <arch> cargo build … --target <arch>-apple-darwin`
-  builds the engine + shim + app (build.rs injects the osxcross toolchain when
-  it sees a macOS target on a non-macOS host). **Validated (2026-06-13):** the
+  uses), builds the frontend, cross-builds the engine + shim + app, and bundles
+  the `.app`/`.dmg` (build.rs injects the osxcross toolchain when it sees a macOS
+  target on a non-macOS host; `env.sh <arch> <cmd>` runs an individual cross
+  command with that toolchain wired up). **Validated (2026-06-13):** the
   full chain — deps → libslic3r → `libslic3r_ffi.0.dylib` → the `n3o-slic3r`
   app binary — cross-compiles and links to arm64 Mach-O from Linux, and
   `packaging/macos-cross/bundle-app.sh` assembles a relocatable, ad-hoc-signed
@@ -249,6 +250,19 @@ After that, the slic3r-ffi crate's `build.rs` invokes cmake to build
   DMG (needs a `.DS_Store` impractical to forge on Linux), and Developer-ID
   notarization (needs a paid Apple account; Gatekeeper rejects the ad-hoc
   app/dmg on download regardless). See `packaging/macos-cross/README.md`.
+
+**Normalized packaging.** Every release channel under `packaging/<target>/`
+(arch, flatpak, windows-cross, macos-cross) exposes the same trio:
+`build.sh` (produce the unsigned artifact, self-contained — ensures its dep tree
+on demand), `publish.sh` (calls `build.sh`, then GPG-signs with the shared key +
+uploads), and `clean.sh` (removes that target's artifacts). npm mirrors them as
+`build:<t>` / `clean:<t>` / `publish:<t>` (+ `build:all` / `publish:all`), and
+top-level `npm run clean` (`scripts/clean.sh`) composes the per-target cleans +
+sweeps the shared cargo/FFI/deps/dist remainder. Publish env is normalized to
+`N3O_BASE_URL` (→ `<base>/{pkg,repo}`), `N3O_PUBLISH_DEST` (→ `<dest>/{pkg,repo}`),
+and `N3O_GPG_KEY`. The macOS cross also keeps `env.sh <arch> <cmd>` (run one
+cross command with the osxcross toolchain wired) + `build-deps.sh` / `bundle-app.sh`
+as helpers `build.sh` calls.
 
 **macOS `.app` bundling** (`npm run tauri build`): the engine ships as a
 dylib, so the bundle must carry it and be re-signed to load it.

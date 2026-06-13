@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Cross-build the Windows app + NSIS installer from Linux — no Windows host, no
-# wine. Drives `cargo xwin` (clang-cl + the xwin MSVC CRT/SDK) for the app and
-# `tauri build` (makensis on Linux) for the installer.
+# wine. Ensures the cross-deps tree (build-deps.sh, one-time), then drives
+# `cargo xwin` (clang-cl + the xwin MSVC CRT/SDK) for the app and `tauri build`
+# (makensis on Linux) for the installer. publish.sh GPG-signs + uploads it.
 #
 # Prereqs:
-#   - `packaging/windows-cross/build-deps.sh` has produced the cross-deps prefix.
 #   - `cargo install cargo-xwin`; `rustup target add x86_64-pc-windows-msvc`.
 #   - node deps installed (`npm install`) for the frontend + tauri-cli.
 #
@@ -24,15 +24,17 @@ root="$(cd "$here/../.." && pwd)"
 : "${BUNDLES:=nsis}"
 export WINCROSS_PREFIX XWIN_DIR
 
-# Gate on the completion stamp, not just lib/: a partial/interrupted build-deps
-# run leaves early deps' libs in place, which would otherwise sail past here and
-# fail deep in the FFI cmake configure (e.g. find_package(Boost) not found).
-[[ -f "$WINCROSS_PREFIX/.deps-complete" ]] || {
-  echo "error: cross-deps prefix not complete: $WINCROSS_PREFIX" >&2
-  echo "       (.deps-complete stamp missing — an interrupted or partial deps build)." >&2
-  echo "       Run packaging/windows-cross/build-deps.sh to build the full tree first." >&2
-  exit 1
-}
+# Ensure the cross-deps tree. Gate on the completion stamp, not just lib/: a
+# partial/interrupted build-deps run leaves early deps' libs behind, which would
+# otherwise sail past here and fail deep in the FFI cmake configure (e.g.
+# find_package(Boost) not found). build-deps.sh is the slow one-time step.
+if [[ -f "$WINCROSS_PREFIX/.deps-complete" ]]; then
+  echo ":: reusing complete cross-deps prefix at $WINCROSS_PREFIX"
+else
+  echo ":: cross-deps prefix missing or incomplete — building it (one-time, slow)"
+  "$here/build-deps.sh"
+fi
+
 # tauri execs the runner as a bare `cargo-xwin` binary, so its dir must be on
 # PATH — cargo resolves `cargo xwin` subcommands itself, but tauri does not, and
 # $CARGO_HOME/bin isn't always on PATH. Prepend it, then verify.

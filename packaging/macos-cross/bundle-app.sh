@@ -7,7 +7,8 @@
 #
 # Prereqs:
 #   - the app binary is cross-built:
-#       ./build.sh <arch> cargo build -p n3o-slic3r --target <triple> --release
+#       ./env.sh <arch> cargo build -p n3o-slic3r --target <triple> --release
+#     (or `./build.sh <arch>`, which does deps + frontend + cross build + this)
 #   - the shim dylib exists at build/slic3r-ffi-<arch>/RelWithDebInfo/ (the cargo
 #     build above produces it)
 #   - rcodesign on PATH  (cargo install apple-codesign)

@@ -53,32 +53,11 @@ keyfile="${repo}/packaging/flatpak/n3o-slic3r-signing-key.asc"
 keyname="$(basename "${keyfile}")"
 version="$(grep -m1 '^version' "${repo}/src-tauri/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
 
-# Self-contained like the windows channel: ensure the arch-namespaced cross-deps
-# prefix before building. build-deps.sh is the slow one-time step (the whole
-# libslic3r dep tree); reuse only when *complete* (the .deps-complete stamp),
-# not when a partial/interrupted run left early deps behind.
-prefix="${repo}/external/OrcaSlicer/deps/build/${arch}/OrcaSlicer_dep/usr/local"
-if [[ -f "${prefix}/.deps-complete" ]]; then
-  echo ":: reusing complete cross-deps prefix at ${prefix} (rm it or run build-deps.sh ${arch} to rebuild)"
-else
-  echo ":: cross-deps prefix for ${arch} missing or incomplete — building it (one-time, slow)"
-  "${here}/build-deps.sh" "${arch}"
-fi
-
-# Build the frontend bundle (dist/) fresh. The raw cargo build below — unlike
-# `tauri build` — does NOT run tauri.conf.json's beforeBuildCommand, so do it
-# here: ships the current UI and keeps the channel self-contained after
-# `npm run clean` (tauri-build embeds frontendDist at compile time).
-echo ":: building the frontend (npm run build)"
-( cd "${repo}" && npm run build )
-
-# --features custom-protocol is REQUIRED: without it Tauri builds a dev-mode
-# binary that loads the dev server (white screen) instead of the embedded UI.
-echo ":: cross-building the macOS app (${arch})"
-"${here}/build.sh" "${arch}" cargo build -p n3o-slic3r --target "${triple}" --release --features custom-protocol
-
-echo ":: assembling + ad-hoc signing the .app and .dmg"
-"${here}/bundle-app.sh" "${arch}" --dmg
+# build.sh is self-contained: it ensures the arch-namespaced cross-deps tree
+# (build-deps.sh, the slow one-time step), builds the frontend, cross-builds the
+# app, and assembles + ad-hoc signs the .app and .dmg.
+echo ":: building the macOS app + .dmg (${arch})"
+"${here}/build.sh" "${arch}"
 
 # Give the published artifact a versioned, arch-specific name (tauri's native
 # convention: n3o-slic3r_<version>_<aarch64|x64>.dmg) so arm64 and x86_64 don't

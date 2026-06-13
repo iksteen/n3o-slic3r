@@ -24,7 +24,11 @@ appid=org.thegraveyard.n3o-slic3r
 
 gen="${here}/.gen"
 builddir="${here}/.build"
-repodir="${here}/.repo"
+# Output ostree repo (publish.sh points this at .publish-repo). Optional GPG
+# signing when N3O_GPG_KEY is set (publish.sh sets it; the dev build is unsigned).
+repodir="${FLATPAK_REPO:-${here}/.repo}"
+sign=()
+[[ -n "${N3O_GPG_KEY:-}" ]] && sign=(--gpg-sign="${N3O_GPG_KEY}")
 mkdir -p "${gen}"
 
 # Resolve the manifest template.
@@ -73,6 +77,7 @@ flatpak-builder \
   --force-clean \
   --state-dir="${here}/.flatpak-builder" \
   --repo="${repodir}" \
+  "${sign[@]}" \
   "${extra[@]}" \
   "${builddir}" \
   "${gen}/${appid}.yml"

@@ -1,60 +1,45 @@
 #!/usr/bin/env bash
-# Run a cargo / tauri build for a macOS target from Linux through osxcross.
+# Build the macOS app for an arch from Linux via osxcross: ensure the cross-deps
+# tree (build-deps.sh, the slow one-time step), build the frontend, cross-compile
+# the app, and assemble + ad-hoc-sign the .app and .dmg. publish.sh then GPG-signs
+# + uploads the .dmg.
 #
-# Sets the osxcross env that three consumers read:
-#   - crates/slic3r-ffi/build.rs   (cmake toolchain: OSXCROSS_*, MACCROSS_PREFIX)
-#   - cargo's target linker         (CARGO_TARGET_<triple>_LINKER → ld64 wrapper)
-#   - the `cc` crate                (CC_/CXX_/AR_<triple> for C deps in the tree)
+# Usage:  build.sh <arm64|x86_64>          (default: arm64)
 #
-# Usage:  build.sh <arm64|x86_64> <command...>
-#   build.sh arm64  cargo build -p n3o-slic3r --target aarch64-apple-darwin --release
-#   build.sh arm64  npm run tauri build -- --target aarch64-apple-darwin
-#   build.sh x86_64 cargo build -p n3o-slic3r --target x86_64-apple-darwin --release
-#
-# The deps tree for the arch must already be cross-built
-# (./build-deps.sh <arch>); this only wires the toolchain, it does not build deps.
+# Env: OSXCROSS_ROOT (env.sh), DMG_TOOL (bundle-app.sh). See README.md.
 set -euo pipefail
 
-ARCH="${1:?usage: build.sh <arm64|x86_64> <command...>}"; shift || true
-case "$ARCH" in
-  arm64)  RUST_TRIPLE=aarch64-apple-darwin ;;
-  x86_64) RUST_TRIPLE=x86_64-apple-darwin ;;
+arch="${1:-arm64}"
+case "$arch" in
+  arm64)  triple=aarch64-apple-darwin ;;
+  x86_64) triple=x86_64-apple-darwin ;;
   *) echo "arch must be arm64 or x86_64" >&2; exit 2 ;;
 esac
-[ "$#" -gt 0 ] || { echo "error: no command given" >&2; exit 2; }
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$here/../.." && pwd)"
+repo="$(cd "${here}/../.." && pwd)"
+prefix="${repo}/external/OrcaSlicer/deps/build/${arch}/OrcaSlicer_dep/usr/local"
 
-: "${OSXCROSS_ROOT:=$HOME/osxcross/target}"
-export PATH="$OSXCROSS_ROOT/bin:$PATH"
-command -v osxcross-conf >/dev/null || { echo "error: osxcross-conf not on PATH (OSXCROSS_ROOT=$OSXCROSS_ROOT)" >&2; exit 1; }
-eval "$(osxcross-conf)"
-export OSXCROSS_TARGET_DIR OSXCROSS_SDK OSXCROSS_TARGET
-DARWIN="${OSXCROSS_TARGET#darwin}"
-export OSXCROSS_HOST="${ARCH}-apple-darwin${DARWIN}"   # toolchain.cmake reads this to pick the arch
+# Ensure the arch-namespaced cross-deps tree. build-deps.sh is the slow one-time
+# step; reuse only when *complete* (the .deps-complete stamp), not when a
+# partial/interrupted run left early deps behind.
+if [[ -f "${prefix}/.deps-complete" ]]; then
+  echo ":: reusing complete cross-deps prefix at ${prefix}"
+else
+  echo ":: cross-deps prefix for ${arch} missing or incomplete — building it (one-time, slow)"
+  "${here}/build-deps.sh" "${arch}"
+fi
 
-# The osxcross per-arch clang wrapper (links Mach-O via ld64; the aarch64 spelling
-# is the automake-friendly alias and is what cmake/automake projects use too).
-WRAP_TRIPLE="$([ "$ARCH" = arm64 ] && echo "aarch64-apple-darwin${DARWIN}" || echo "x86_64-apple-darwin${DARWIN}")"
-CC_BIN="$OSXCROSS_TARGET_DIR/bin/${WRAP_TRIPLE}-clang"
-CXX_BIN="$OSXCROSS_TARGET_DIR/bin/${WRAP_TRIPLE}-clang++"
-AR_BIN="$OSXCROSS_TARGET_DIR/bin/${WRAP_TRIPLE}-ar"
-[ -x "$CC_BIN" ] || { echo "error: osxcross wrapper missing: $CC_BIN — is osxcross built?" >&2; exit 1; }
+# Build the frontend bundle (dist/). The raw cargo build below — unlike
+# `tauri build` — does NOT run tauri.conf.json's beforeBuildCommand, so build it
+# here (ships the current UI; self-contained after `npm run clean`).
+echo ":: building the frontend (npm run build)"
+( cd "${repo}" && npm run build )
 
-# The cross-deps prefix build.rs's cmake toolchain searches (find_root_path).
-export MACCROSS_PREFIX="$REPO_ROOT/external/OrcaSlicer/deps/build/${ARCH}/OrcaSlicer_dep/usr/local"
-[ -f "$MACCROSS_PREFIX/.deps-complete" ] || echo ":: warning: $MACCROSS_PREFIX has no .deps-complete — run ./build-deps.sh $ARCH first" >&2
+# --features custom-protocol is REQUIRED: without it Tauri builds a dev-mode
+# binary that loads the dev server (white screen) instead of the embedded UI.
+echo ":: cross-building the macOS app (${arch})"
+"${here}/env.sh" "${arch}" cargo build -p n3o-slic3r --target "${triple}" --release --features custom-protocol
 
-# cargo target linker (UPPER_SNAKE of the rust triple).
-LINK_VAR="CARGO_TARGET_$(echo "$RUST_TRIPLE" | tr 'a-z-' 'A-Z_')_LINKER"
-export "$LINK_VAR=$CC_BIN"
-# `cc` crate vars for C/C++ deps compiled for the target. Bash identifiers can't
-# contain '-', so use the underscore spelling (the cc crate also looks up
-# CC_<triple-with-underscores>, e.g. CC_aarch64_apple_darwin).
-TRIPLE_US="${RUST_TRIPLE//-/_}"
-export "CC_${TRIPLE_US}=$CC_BIN" "CXX_${TRIPLE_US}=$CXX_BIN" "AR_${TRIPLE_US}=$AR_BIN"
-
-echo ":: macOS cross — arch=$ARCH triple=$RUST_TRIPLE host=$OSXCROSS_HOST SDK=$OSXCROSS_SDK_VERSION"
-echo ":: $*"
-exec "$@"
+echo ":: assembling + ad-hoc signing the .app and .dmg"
+"${here}/bundle-app.sh" "${arch}" --dmg

@@ -30,25 +30,14 @@ repo_url="${base_url%/}/repo"
 key="${N3O_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
 
 gen="${here}/.gen"
-builddir="${here}/.build"
 pubrepo="${here}/.publish-repo"
 mkdir -p "${gen}"
 
-# Resolve the manifest template + regenerate the OrcaSlicer source
-# tarball (mirrors build.sh's prep).
-sed "s|@REPO@|${repo}|g" "${here}/${appid}.yml" > "${gen}/${appid}.yml"
-git -C "${repo}/external/OrcaSlicer" archive --format=tar --prefix=OrcaSlicer/ HEAD \
-  -o "${gen}/orca-src.tar"
-
+# Signed build + export into the publish repo via build.sh (it resolves the
+# manifest, regenerates the OrcaSlicer source tarball, and runs flatpak-builder;
+# FLATPAK_REPO targets .publish-repo and N3O_GPG_KEY makes it a signed build).
 echo ":: signed build + export into ${pubrepo} (key ${key})"
-flatpak-builder \
-  --user \
-  --force-clean \
-  --state-dir="${here}/.flatpak-builder" \
-  --gpg-sign="${key}" \
-  --repo="${pubrepo}" \
-  "${builddir}" \
-  "${gen}/${appid}.yml"
+FLATPAK_REPO="${pubrepo}" N3O_GPG_KEY="${key}" "${here}/build.sh"
 
 echo ":: sign repo metadata + static deltas"
 flatpak build-update-repo \

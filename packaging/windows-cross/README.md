@@ -173,7 +173,8 @@ installer includes it. Installer signing is skipped on a Linux host (set
 
 `publish.sh` is the signed release path (parallel to `packaging/arch/publish.sh`
 and `packaging/flatpak/publish.sh`): it cross-builds the installer via
-`build-app.sh`, GPG-signs it with the project release key, and uploads the
+`build.sh` (which ensures the cross-deps tree, then runs `cargo xwin` +
+`tauri build`), GPG-signs it with the project release key, and uploads the
 `-setup.exe` + its detached `.sig` + the public key.
 
 ```sh
