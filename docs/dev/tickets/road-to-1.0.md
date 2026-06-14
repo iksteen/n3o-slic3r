@@ -9,11 +9,20 @@ live in `Execution_Plan.md` §16; this file is for what we found in use.
 
 ## Features (discovered in use, 2026-06-07)
 
-### 1. Send progress bar
+### 1. Send progress bar ✅ DONE (2026-06-15)
 Driver-layer, self-contained. Send already uploads the sliced bundle
 (Bambu over FTPS, U1 over Moonraker HTTP) but it's fire-and-forget from
 `SendControls`. Add upload-progress callbacks in the driver → a progress
 event → a bar at the send site. No scene impact. Smallest of the set.
+
+**Shipped (2026-06-15).** `Driver::send` takes an `UploadProgressFn`
+callback reporting real `(sent, total)` bytes — Bambu via a `ProgressReader`
+wrapping the FTPS `put_file` stream, U1 via a chunked streaming multipart body
+(reqwest `stream` feature). `commands.rs` throttles (~50 ms + a guaranteed
+final 100%) and emits `driver:upload_progress`. UI is **not** a topbar bar (the
+topbar is buttons-only) but a floating window: extracted a shared
+`src/ui/ProgressWindow.tsx` that both the slice and send windows render, in one
+bottom-left stack so they never overlap.
 
 ### 2. Lay an object flat on the build plate ✅ DONE (2026-06-08)
 Transform op. Tractable version: **"place on face"** — click a face,
