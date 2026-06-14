@@ -274,6 +274,10 @@ into CI and add an authenticode signer. Neither is an unknown.
 
 ## Other pending (not 1.0 features, just TODOs)
 
+- **Object-level overrides missing in the cascade ladder** (noted 2026-06-15).
+  The cascade ladder (printer → plate → nozzle → filament → user → project →
+  object) is missing the **object** tier — per-object setting overrides aren't
+  surfaced/applied in the ladder. Wire the object-level override layer in.
 - **Arch self-hosted publish — verify end-to-end.**
   `packaging/arch/publish.sh` (+ README section) builds a signed
   `.pkg.tar.zst` for bare `pacman -U`. Written, `bash -n`-clean, and the
