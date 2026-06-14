@@ -261,8 +261,12 @@ top-level `npm run clean` (`scripts/clean.sh`) composes the per-target cleans +
 sweeps the shared cargo/FFI/deps/dist remainder. Publish env is normalized to
 `N3O_BASE_URL` (→ `<base>/{pkg,repo}`), `N3O_PUBLISH_DEST` (→ `<dest>/{pkg,repo}`),
 and `N3O_GPG_KEY`. The macOS cross also keeps `env.sh <arch> <cmd>` (run one
-cross command with the osxcross toolchain wired) + `build-deps.sh` / `bundle-app.sh`
-as helpers `build.sh` calls.
+cross command with the osxcross toolchain wired) + `build-deps.sh` /
+`bundle-app.sh` as helpers `build.sh` calls. **osxcross itself is built in-tree**
+by `ensure-osxcross.sh` on first use (into the gitignored `.build/osxcross/`,
+like the dmg tool) — pinned commit + a pinned/checksummed public macOS SDK (15.5),
+so the macOS cross needs no Mac and nothing in `$HOME`; set `OSXCROSS_ROOT` to
+reuse an existing install.
 
 **macOS `.app` bundling** (`npm run tauri build`): the engine ships as a
 dylib, so the bundle must carry it and be re-signed to load it.

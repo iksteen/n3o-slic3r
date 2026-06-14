@@ -11,25 +11,27 @@ build uses, and `crates/slic3r-ffi/build.rs` drives the engine + shim build
 through the osxcross toolchain when it detects a macOS target on a non-macOS
 host.
 
-Validated for **arm64** (SDK 15.4, target `arm64-apple-darwin`). The script
-takes `x86_64` too; the two are independent (separate prefix, separate cargo
-target).
+Validated for **arm64** (target `arm64-apple-darwin`). The script takes `x86_64`
+too; the two are independent (separate prefix, separate cargo target).
 
-## One-time: build osxcross with a packaged SDK
+## osxcross (built automatically, in-tree)
 
-```bash
-git clone https://github.com/tpoechtrager/osxcross.git ~/osxcross
-# Package a macOS SDK from a Mac you have access to (here: CommandLineTools' SDK):
-ssh mac 'tar -C /Library/Developer/CommandLineTools/SDKs -cf - MacOSX15.4.sdk' \
-  | xz -T0 -3 > ~/osxcross/tarballs/MacOSX15.4.sdk.tar.xz
-cd ~/osxcross && UNATTENDED=1 ./build.sh
-```
+`ensure-osxcross.sh` builds osxcross on first use into the gitignored
+`.build/osxcross/` (the same in-tree pattern as the `.dmg` tool) — **no Mac and
+nothing in `$HOME` needed**. It pins osxcross to a commit and fetches a pinned,
+checksummed **public macOS SDK** (15.5, from
+[joseluisq/macosx-sdks](https://github.com/joseluisq/macosx-sdks)) into
+osxcross's `tarballs/`, then runs `UNATTENDED=1 ./build.sh`. `build-deps.sh` and
+`env.sh` call it to resolve the toolchain. Host packages (Arch):
+`clang lld llvm cmake ninja curl unzip git`.
 
-This produces `~/osxcross/target/bin/{arm64,x86_64}-apple-darwin<NN>-clang` and
-`~/osxcross/target/toolchain.cmake`. Override the location with `OSXCROSS_ROOT`
-(default `~/osxcross/target`).
+To reuse an existing install instead (e.g. `~/osxcross/target` or a
+system/`/usr/local` one with a usable SDK), set `OSXCROSS_ROOT` — it takes
+precedence over the in-tree build. To change SDK version, edit the pinned
+`SDK_URL`/`SDK_SHA256` in `ensure-osxcross.sh`.
 
-Host packages (Arch): `clang lld llvm cmake ninja curl unzip git`.
+> The SDK is Apple's and not redistributable by Apple; the mirror is a community
+> convenience — use it only if you hold a macOS license.
 
 ## Step 1 — cross-build the dependency tree
 

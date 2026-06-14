@@ -9,15 +9,15 @@
 # so crates/slic3r-ffi/build.rs (its macOS branch) finds it unchanged.
 #
 # Prereqs:
-#   - osxcross built at ~/osxcross (OSXCROSS_TARGET_DIR/bin on demand below),
-#     with a MacOSX SDK packaged in. `osxcross-conf` must be on PATH or under
-#     $OSXCROSS_ROOT/bin.
+#   - osxcross: built in-tree on first use by ensure-osxcross.sh (with a pinned,
+#     checksummed public macOS SDK) — no Mac and nothing in $HOME needed. Set
+#     OSXCROSS_ROOT to reuse an existing install instead.
 #   - Arch host pkgs: clang lld llvm cmake ninja curl unzip git
 #
 # Usage:   ./build-deps.sh [arm64|x86_64]      (default: arm64)
 #
 # Env:
-#   OSXCROSS_ROOT   osxcross install dir.  Default: $HOME/osxcross/target
+#   OSXCROSS_ROOT   osxcross install dir. Default: built in-tree (ensure-osxcross.sh)
 #   BUILD_DIR       scratch (sources + per-dep builds). Default: ./.build
 #   MACCROSS_PREFIX install prefix. Default: the arch-namespaced OrcaSlicer path
 #   JOBS            parallelism. Default: nproc
@@ -34,7 +34,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$here/../.." && pwd)"
 ORCA="$REPO_ROOT/external/OrcaSlicer/deps"   # version pins + patches we reuse
 
-: "${OSXCROSS_ROOT:=$HOME/osxcross/target}"
+# Resolve osxcross (builds it in-tree on first use; honors a preset OSXCROSS_ROOT).
+OSXCROSS_ROOT="$("$here/ensure-osxcross.sh")"
+export OSXCROSS_ROOT
 export PATH="$OSXCROSS_ROOT/bin:$PATH"
 command -v osxcross-conf >/dev/null || { echo "error: osxcross-conf not on PATH (OSXCROSS_ROOT=$OSXCROSS_ROOT)" >&2; exit 1; }
 eval "$(osxcross-conf)"                       # OSXCROSS_TARGET_DIR, OSXCROSS_SDK, OSXCROSS_TARGET, OSXCROSS_SDK_VERSION

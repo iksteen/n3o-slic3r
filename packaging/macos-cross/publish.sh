@@ -26,7 +26,8 @@
 #                          user@host:/srv/www/n3o.thegraveyard.org. This channel
 #                          uploads to <dest>/pkg (.dmg + signature + public key);
 #                          when unset, prints the manual upload steps.
-#   OSXCROSS_ROOT          osxcross install dir (build.sh). Default ~/osxcross/target.
+#   OSXCROSS_ROOT          reuse an existing osxcross install; default is the
+#                          in-tree build (ensure-osxcross.sh).
 #   DMG_TOOL               libdmg-hfsplus `dmg` tool (bundle-app.sh --dmg).
 #
 # Prereqs: osxcross with a packaged SDK, the cross-deps tree (built on demand

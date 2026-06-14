@@ -28,7 +28,9 @@ esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$here/../.." && pwd)"
 
-: "${OSXCROSS_ROOT:=$HOME/osxcross/target}"
+# Resolve osxcross (builds it in-tree on first use; honors a preset OSXCROSS_ROOT).
+OSXCROSS_ROOT="$("$here/ensure-osxcross.sh")"
+export OSXCROSS_ROOT
 export PATH="$OSXCROSS_ROOT/bin:$PATH"
 command -v osxcross-conf >/dev/null || { echo "error: osxcross-conf not on PATH (OSXCROSS_ROOT=$OSXCROSS_ROOT)" >&2; exit 1; }
 eval "$(osxcross-conf)"
