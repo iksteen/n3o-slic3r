@@ -142,7 +142,9 @@ pub struct DriverSummary {
 mod tests {
     use super::*;
     use crate::core::driver::status::{BambuExtra, DriverExtra, PrinterStatus};
-    use crate::core::driver::traits::{DriverError, PrinterCommand, SendHandle, SendPayload};
+    use crate::core::driver::traits::{
+        DriverError, PrinterCommand, SendHandle, SendPayload, UploadProgressFn,
+    };
     use async_trait::async_trait;
     use tokio::sync::watch;
 
@@ -200,7 +202,11 @@ mod tests {
         fn subscribe_status(&self) -> watch::Receiver<PrinterStatus> {
             self.receiver.clone()
         }
-        async fn send(&mut self, _: SendPayload) -> Result<SendHandle, DriverError> {
+        async fn send(
+            &mut self,
+            _: SendPayload,
+            _on_progress: UploadProgressFn,
+        ) -> Result<SendHandle, DriverError> {
             Err(DriverError::NotConnected)
         }
         async fn command(&mut self, _: PrinterCommand) -> Result<(), DriverError> {

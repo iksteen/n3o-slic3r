@@ -18,13 +18,34 @@
 //! once, then the cancel mode shifted to firmware-side. Easier to
 //! just drop `/cache/` entirely and upload to root.
 
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::time::Duration;
 
 use suppaftp::types::FileType;
 use suppaftp::{Mode, NativeTlsConnector, NativeTlsFtpStream};
 
-use crate::core::driver::traits::DriverError;
+use crate::core::driver::traits::{DriverError, UploadProgressFn};
+
+/// A `Read` wrapper that reports cumulative bytes read through a callback —
+/// `put_file` pumps it to the data socket, so this reflects real upload
+/// progress. `(bytes_sent, total)` after each non-empty read.
+struct ProgressReader<R> {
+    inner: R,
+    sent: u64,
+    total: u64,
+    on_progress: UploadProgressFn,
+}
+
+impl<R: Read> Read for ProgressReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if n > 0 {
+            self.sent += n as u64;
+            (self.on_progress)(self.sent, self.total);
+        }
+        Ok(n)
+    }
+}
 
 const FTPS_PORT: u16 = 990;
 const FTP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -70,10 +91,49 @@ pub fn upload(
     client: &mut NativeTlsFtpStream,
     remote_name: &str,
     bytes: &[u8],
+    on_progress: UploadProgressFn,
 ) -> Result<String, DriverError> {
-    let mut cursor = Cursor::new(bytes);
+    let total = bytes.len() as u64;
+    let mut reader = ProgressReader {
+        inner: Cursor::new(bytes),
+        sent: 0,
+        total,
+        on_progress,
+    };
     client
-        .put_file(remote_name, &mut cursor)
+        .put_file(remote_name, &mut reader)
         .map_err(|e| DriverError::Network(format!("FTPS STOR {remote_name}: {e}")))?;
     Ok(remote_name.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn progress_reader_reports_monotonic_bytes_up_to_total() {
+        let data = vec![7u8; 10_000];
+        let seen: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_cb = seen.clone();
+        let mut reader = ProgressReader {
+            inner: Cursor::new(&data[..]),
+            sent: 0,
+            total: data.len() as u64,
+            on_progress: Arc::new(move |sent, _total| seen_cb.lock().unwrap().push(sent)),
+        };
+        // Drain in fixed chunks, mimicking how put_file pumps the socket.
+        let mut buf = [0u8; 1024];
+        loop {
+            let n = reader.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+        }
+        let seen = seen.lock().unwrap();
+        assert!(!seen.is_empty(), "callback fired");
+        assert!(seen.windows(2).all(|w| w[0] < w[1]), "monotonic increase");
+        assert_eq!(*seen.last().unwrap(), data.len() as u64, "ends at total");
+    }
 }

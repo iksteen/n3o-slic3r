@@ -27,6 +27,7 @@ import { ObjectsPanel } from "./objects/ObjectsPanel";
 import { PreviewWorkspace } from "./preview/PreviewWorkspace";
 import { useSlicePreviewBridge } from "./preview/useSlicePreviewBridge";
 import { SendControls } from "./driver/SendControls";
+import { SendProgressWindow } from "./driver/SendProgressWindow";
 import { DevicesView } from "./driver/DevicesView";
 import { useDriverConnections } from "./driver/useDriverConnections";
 import { usePrinterInstances } from "./printer/usePrinterInstances";
@@ -457,10 +458,13 @@ function App() {
   // stage, never to the surrounding panels or the slider.
   const canvasOverlays = (
     <>
-      <SlicingWindow
-        state={slice.state}
-        objectCount={sliceObjectCount ?? slicingPlate?.objects.length ?? 0}
-      />
+      <div className="progress-window-stack">
+        <SlicingWindow
+          state={slice.state}
+          objectCount={sliceObjectCount ?? slicingPlate?.objects.length ?? 0}
+        />
+        <SendProgressWindow driverId={activeConnection?.driverId ?? null} />
+      </div>
       <ErrorConsole />
     </>
   );
@@ -554,7 +558,7 @@ function App() {
           // ── Prepare layout: objects · canvas · settings ──
           <div className="layout-prepare">
             {objectsPanel}
-            <div className="canvas-stage">
+            <div className="canvas-stage canvas-stage-prepare">
               <ViewportCanvas
                 leading={modeToggle}
                 gizmoMode={gizmoMode}

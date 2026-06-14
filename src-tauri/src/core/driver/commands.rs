@@ -24,6 +24,7 @@ use super::snapmaker::{U1Config, U1Driver};
 use super::status::PrinterStatus;
 use super::traits::{
     Driver, DriverConfig, DriverId, DriverKind, PrinterCommand, SendHandle, SendPayload,
+    UploadProgressFn,
 };
 use crate::core::plugin::commands::PluginHostState;
 use crate::core::plugin::{DispatchGate, HookKind, PayloadKind, PreSendHook, SendTarget};
@@ -38,6 +39,56 @@ use crate::core::threemf::{fixture_input, write_sliced_3mf, AmsBinding};
 struct StatusUpdateEvent {
     driver_id: DriverId,
     status: PrinterStatus,
+}
+
+/// Wire-shape for the `driver:upload_progress` Tauri event the frontend's
+/// `useUploadProgress` hook subscribes to. Emitted (throttled) while a send is
+/// pushing the bundle to the printer; the hook filters on `driver_id`.
+#[derive(Debug, Clone, Serialize)]
+struct UploadProgress {
+    driver_id: DriverId,
+    file_name: String,
+    sent: u64,
+    total: u64,
+    percent: u8,
+}
+
+/// Build the [`UploadProgressFn`] a driver's `send` calls as bytes go out. It
+/// derives a percent and emits `driver:upload_progress`, throttled to ~one event
+/// per 50 ms (plus a guaranteed final 100%) — the same cadence as
+/// `SliceEvent::PlateProgress`, so a fast LAN upload doesn't flood the channel.
+fn upload_progress_emitter(
+    app: AppHandle,
+    driver_id: DriverId,
+    file_name: String,
+) -> UploadProgressFn {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let last_ms = Arc::new(AtomicU64::new(0));
+    Arc::new(move |sent: u64, total: u64| {
+        let percent = if total > 0 {
+            ((sent.min(total) * 100) / total) as u8
+        } else {
+            0
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let prev = last_ms.load(Ordering::Relaxed);
+        if percent >= 100 || now_ms.saturating_sub(prev) >= 50 {
+            last_ms.store(now_ms, Ordering::Relaxed);
+            let _ = app.emit(
+                "driver:upload_progress",
+                UploadProgress {
+                    driver_id,
+                    file_name: file_name.clone(),
+                    sent,
+                    total,
+                    percent,
+                },
+            );
+        }
+    })
 }
 
 /// Spawn a tokio task that pumps a driver's internal
@@ -269,17 +320,23 @@ pub async fn driver_status(
 /// [`SendHandle`] correlating the new job with subsequent
 /// status events.
 #[tauri::command]
-#[tracing::instrument(skip(registry, payload), fields(payload_kind = ?std::mem::discriminant(&payload)))]
+#[tracing::instrument(skip(registry, payload, app), fields(payload_kind = ?std::mem::discriminant(&payload)))]
 pub async fn driver_send(
     id: DriverId,
     payload: SendPayload,
+    app: AppHandle,
     registry: State<'_, Arc<DriverRegistry>>,
 ) -> Result<SendHandle, String> {
     let handle = registry
         .get(id)
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
+    let file_name = match &payload {
+        SendPayload::Gcode { file_name, .. } => file_name.clone(),
+        SendPayload::Gcode3mf { plate_id, .. } => format!("plate-{plate_id}.gcode.3mf"),
+    };
+    let on_progress = upload_progress_emitter(app, id, file_name);
     let mut d = handle.lock().await;
-    d.send(payload).await.map_err(|e| e.to_string())
+    d.send(payload, on_progress).await.map_err(|e| e.to_string())
 }
 
 /// Wrap a raw G-code file on disk into a Bambu-flavored
@@ -423,11 +480,12 @@ pub async fn driver_export_plate(
 ///   the print in the same multipart upload (see
 ///   `core/driver/snapmaker/http.rs`).
 #[tauri::command]
-#[tracing::instrument(skip(registry, project, plugin_host))]
+#[tracing::instrument(skip(registry, project, plugin_host, app))]
 pub async fn driver_send_plate(
     id: DriverId,
     plate_id: u32,
     gcode_path: String,
+    app: AppHandle,
     // The active plate's preview, rendered by the viewport and passed as a
     // base64 PNG. `None` falls back to no thumbnail (both printers tolerate
     // its absence). Bambu embeds it in the `.gcode.3mf`; the U1 gets a
@@ -486,8 +544,13 @@ pub async fn driver_send_plate(
     // skipped even without a Lua self-guard).
     let printer_model = plate_printer_model(&project, plate_id);
     let payload = apply_pre_send(plugin_host.inner(), payload, plate_id, kind, printer_model);
+    let file_name = match kind {
+        DriverKind::Bambu => format!("plate-{plate_id}.gcode.3mf"),
+        DriverKind::U1 => format!("plate-{plate_id}.gcode"),
+    };
+    let on_progress = upload_progress_emitter(app, id, file_name);
     let mut d = handle.lock().await;
-    d.send(payload).await.map_err(|e| e.to_string())
+    d.send(payload, on_progress).await.map_err(|e| e.to_string())
 }
 
 /// Run the pre-send hook over `payload`, swapping in any plugin-edited

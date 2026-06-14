@@ -17,8 +17,12 @@ use std::time::Duration;
 
 use reqwest::multipart::{Form, Part};
 
-use crate::core::driver::traits::{PrinterCommand, SendHandle};
+use crate::core::driver::traits::{PrinterCommand, SendHandle, UploadProgressFn};
 use crate::core::driver::DriverError;
+
+/// Stream the upload body in chunks this size, reporting progress per chunk —
+/// small enough for smooth feedback, large enough not to add overhead.
+const UPLOAD_CHUNK: usize = 64 * 1024;
 
 /// HTTP timeout for every request to the printer. The upload path
 /// can be slow for large jobs, but Moonraker buffers the whole body
@@ -43,13 +47,28 @@ pub(super) async fn upload_and_start(
     port: u16,
     file_name: &str,
     bytes: Vec<u8>,
+    on_progress: UploadProgressFn,
 ) -> Result<SendHandle, DriverError> {
     let url = format!("http://{host}:{port}/server/files/upload");
+    // Stream the body in chunks so reqwest reports real upload progress as it
+    // drains them to the socket — `Part::bytes` would buffer the whole body and
+    // give no signal. The source `bytes` is shared (Arc) and sliced one chunk at
+    // a time (64 KiB copy), so peak memory stays flat. `on_progress(sent, total)`
+    // fires per chunk as the stream is polled.
+    let total = bytes.len() as u64;
+    let buf = std::sync::Arc::new(bytes);
+    let n_chunks = buf.len().div_ceil(UPLOAD_CHUNK);
+    let body_stream = futures_util::stream::iter((0..n_chunks).map(move |i| {
+        let start = i * UPLOAD_CHUNK;
+        let end = (start + UPLOAD_CHUNK).min(buf.len());
+        on_progress(end as u64, total);
+        Ok::<Vec<u8>, std::io::Error>(buf[start..end].to_vec())
+    }));
     // Moonraker's upload endpoint keys on the `file` form field's
     // filename header — that becomes `print_stats.filename` in
     // subsequent status events. We thread `file_name` through
     // verbatim so the caller controls the printer-side identity.
-    let file_part = Part::bytes(bytes)
+    let file_part = Part::stream_with_length(reqwest::Body::wrap_stream(body_stream), total)
         .file_name(file_name.to_owned())
         .mime_str("application/octet-stream")
         .map_err(|e| DriverError::Other(format!("multipart body build: {e}")))?;
@@ -138,11 +157,26 @@ mod tests {
             .mount(&server)
             .await;
         let (host, port) = host_port(&server);
-        let handle = upload_and_start(&host, port, "Cube.gcode", b"G28\n".to_vec())
-            .await
-            .unwrap();
+        // Capture progress: a 4-byte body is one chunk, so the callback fires
+        // once and reaches (total, total).
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u64, u64)>::new()));
+        let seen_cb = seen.clone();
+        let handle = upload_and_start(
+            &host,
+            port,
+            "Cube.gcode",
+            b"G28\n".to_vec(),
+            std::sync::Arc::new(move |sent, total| seen_cb.lock().unwrap().push((sent, total))),
+        )
+        .await
+        .unwrap();
         assert_eq!(handle.id, "Cube.gcode");
         assert_eq!(handle.file_name, "Cube.gcode");
+        assert_eq!(
+            seen.lock().unwrap().last().copied(),
+            Some((4, 4)),
+            "upload progress fires and reaches total",
+        );
     }
 
     #[tokio::test]
@@ -157,16 +191,22 @@ mod tests {
             .mount(&server)
             .await;
         let (host, port) = host_port(&server);
-        let err = upload_and_start(&host, port, "x.gcode", b"G28\n".to_vec())
-            .await
-            .unwrap_err();
+        let err = upload_and_start(
+            &host,
+            port,
+            "x.gcode",
+            b"G28\n".to_vec(),
+            std::sync::Arc::new(|_, _| {}),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, DriverError::Protocol(_)), "{err:?}");
     }
 
     #[tokio::test]
     async fn upload_unreachable_host_maps_to_network_error() {
         // Reserved port — nothing should be listening.
-        let err = upload_and_start("127.0.0.1", 1, "x.gcode", vec![])
+        let err = upload_and_start("127.0.0.1", 1, "x.gcode", vec![], std::sync::Arc::new(|_, _| {}))
             .await
             .unwrap_err();
         assert!(matches!(err, DriverError::Network(_)), "{err:?}");

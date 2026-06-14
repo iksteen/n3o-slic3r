@@ -32,6 +32,7 @@ use crate::core::driver::backoff::{reconnect_backoff_secs, CONNECT_TIMEOUT};
 use crate::core::driver::status::{ConnectionState, DriverExtra, PrinterStatus, U1Extra};
 use crate::core::driver::traits::{
     Driver, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle, SendPayload,
+    UploadProgressFn,
 };
 
 /// Per-driver connection config. Pulled out of
@@ -157,10 +158,21 @@ impl Driver for U1Driver {
         self.status_rx.clone()
     }
 
-    async fn send(&mut self, payload: SendPayload) -> Result<SendHandle, DriverError> {
+    async fn send(
+        &mut self,
+        payload: SendPayload,
+        on_progress: UploadProgressFn,
+    ) -> Result<SendHandle, DriverError> {
         match payload {
             SendPayload::Gcode { bytes, file_name } => {
-                http::upload_and_start(&self.config.host, self.config.port, &file_name, bytes).await
+                http::upload_and_start(
+                    &self.config.host,
+                    self.config.port,
+                    &file_name,
+                    bytes,
+                    on_progress,
+                )
+                .await
             }
             SendPayload::Gcode3mf { .. } => Err(DriverError::Other(
                 "U1 expects raw G-code (SendPayload::Gcode); .gcode.3mf is Bambu-only".into(),
@@ -504,7 +516,10 @@ mod tests {
             ams_mapping: Vec::new(),
             ams_mapping2: Vec::new(),
         };
-        let err = driver.send(payload).await.unwrap_err();
+        let err = driver
+            .send(payload, std::sync::Arc::new(|_, _| {}))
+            .await
+            .unwrap_err();
         match err {
             DriverError::Other(msg) => {
                 assert!(msg.contains("U1"));

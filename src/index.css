@@ -910,17 +910,27 @@
   .gizmo-hint .axis { font-weight: 600; }
   .gizmo-hint-sep { opacity: 0.45; }
 
-  /* ─────────── Slicing progress — non-blocking corner window ───────────
-   * Ported from the design's `.slicing-window` block (docs/design/
-   * styles.css). Floats over the viewport's lower-left while a slice
-   * is in flight; `pointer-events: none` so it never traps canvas
-   * interaction. The Cancel control stays in the topbar — this window
-   * is read-only progress. */
-  .slicing-window {
+  /* ─────────── Shared progress window — non-blocking corner window ───────────
+   * The slice-progress and send-upload-progress UIs both render this (see
+   * src/ui/ProgressWindow.tsx). Ported from the design's `.slicing-window`
+   * block. Floats over the viewport's lower-left while work is in flight;
+   * `pointer-events: none` so it never traps canvas interaction. Read-only —
+   * any controls (Cancel, etc.) stay in the topbar. */
+  /* Bottom-left stack of progress windows (slice + send) — they flow within it
+     so they never overlap. Corner-aligned in preview; lifted above the axis-hint
+     legend (.gizmo-hint) only in the prepare/edit viewport. */
+  .progress-window-stack {
     position: absolute;
     left: 12px;
-    bottom: 50px;
+    bottom: 12px;
     z-index: 12;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+  }
+  .canvas-stage-prepare .progress-window-stack { bottom: 50px; }
+  .progress-window {
     width: 248px;
     padding: 11px 13px 12px;
     background: color-mix(in oklch, var(--surface) 88%, transparent);
@@ -929,41 +939,40 @@
     border: 1px solid var(--border-strong);
     border-radius: 9px;
     box-shadow: var(--shadow-lg);
-    animation: slicing-window-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
-    pointer-events: none;
+    animation: progress-window-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
   }
-  @keyframes slicing-window-in {
+  @keyframes progress-window-in {
     from { opacity: 0; transform: translateY(6px) scale(0.98); }
     to   { opacity: 1; transform: none; }
   }
-  .slicing-window-head {
+  .progress-window-head {
     display: flex;
     align-items: center;
     gap: 7px;
     margin-bottom: 9px;
   }
-  .slicing-window-spinner {
+  .progress-window-spinner {
     width: 11px;
     height: 11px;
     flex-shrink: 0;
     border: 1.6px solid color-mix(in oklch, var(--accent) 28%, transparent);
     border-top-color: var(--accent);
     border-radius: 50%;
-    animation: slicing-window-spin 0.7s linear infinite;
+    animation: progress-window-spin 0.7s linear infinite;
   }
-  @keyframes slicing-window-spin { to { transform: rotate(360deg); } }
-  .slicing-window-title {
+  @keyframes progress-window-spin { to { transform: rotate(360deg); } }
+  .progress-window-title {
     font-size: 12px;
     font-weight: 600;
     letter-spacing: -0.005em;
     color: var(--text);
   }
-  .slicing-window-count {
+  .progress-window-count {
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--text-dim);
   }
-  .slicing-window-pct {
+  .progress-window-pct {
     margin-left: auto;
     font-family: var(--font-mono);
     font-size: 11.5px;
@@ -971,33 +980,33 @@
     color: var(--accent-text);
     font-variant-numeric: tabular-nums;
   }
-  .slicing-window-track {
+  .progress-window-track {
     height: 4px;
     background: var(--surface-3);
     border-radius: 3px;
     overflow: hidden;
   }
-  .slicing-window-fill {
+  .progress-window-fill {
     height: 100%;
     background: var(--accent);
     border-radius: 3px;
     transition: width 0.12s linear;
   }
-  .slicing-window-stages {
+  .progress-window-stages {
     display: flex;
     flex-wrap: wrap;
     gap: 4px 6px;
     margin-top: 9px;
   }
-  .slicing-window-stage {
+  .progress-window-stage {
     font-family: var(--font-mono);
     font-size: 9.5px;
     color: var(--text-dim);
     opacity: 0.5;
     transition: color 0.2s, opacity 0.2s;
   }
-  .slicing-window-stage.done { color: var(--text-muted); opacity: 0.85; }
-  .slicing-window-stage.active {
+  .progress-window-stage.done { color: var(--text-muted); opacity: 0.85; }
+  .progress-window-stage.active {
     color: var(--accent-text);
     opacity: 1;
     font-weight: 600;

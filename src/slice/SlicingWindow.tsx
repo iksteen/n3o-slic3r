@@ -12,6 +12,7 @@
 // rather than fabricating a done/active/upcoming progression we don't
 // actually have.
 
+import { ProgressWindow } from "../ui/ProgressWindow";
 import type { SliceState } from "./types";
 
 export interface SlicingWindowProps {
@@ -54,21 +55,11 @@ export function SlicingWindow({
         : "Preparing…";
 
   return (
-    <div className="slicing-window" role="status" aria-live="polite">
-      <div className="slicing-window-head">
-        <span className="slicing-window-spinner" aria-hidden />
-        <span className="slicing-window-title">{title}</span>
-        <span className="slicing-window-count">
-          {objectCount} object{objectCount !== 1 ? "s" : ""}
-        </span>
-        <span className="slicing-window-pct">{pct}%</span>
-      </div>
-      <div className="slicing-window-track">
-        <div className="slicing-window-fill" style={{ width: `${pct}%` }} />
-      </div>
-      <div className="slicing-window-stages">
-        <span className="slicing-window-stage active">{stageLabel}</span>
-      </div>
-    </div>
+    <ProgressWindow
+      title={title}
+      percent={pct}
+      count={`${objectCount} object${objectCount !== 1 ? "s" : ""}`}
+      footer={<span className="progress-window-stage active">{stageLabel}</span>}
+    />
   );
 }

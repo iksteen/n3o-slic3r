@@ -14,6 +14,7 @@ import { driverExportPlate, driverSendPlate } from "./invokes";
 import { captureThumbnail } from "../viewport/thumbnailCapture";
 import { pushLog } from "../logging/logStore";
 import { useDriverStatus } from "./useDriverStatus";
+import { beginUpload, endUpload } from "./useUploadProgress";
 import { isJobIdle, sendDisabledReason } from "./sendGate";
 import type { ConnectionSummary } from "./useDriverConnections";
 import type { DriverId, PrinterStatus } from "./types";
@@ -109,6 +110,9 @@ export function SendControls({
   const handleSend = async (): Promise<void> => {
     if (driverId == null || plateId == null) return;
     setActionPending(true);
+    // Drives the floating SendProgressWindow (over the canvas); cleared in the
+    // finally so a failed upload doesn't leave the window stuck.
+    beginUpload(driverId);
     try {
       // Render the plate preview off the live viewport; null (empty plate or
       // no viewport) just sends without a thumbnail.
@@ -121,6 +125,7 @@ export function SendControls({
       pushLog("error", `Send failed: ${String(e)}`);
     } finally {
       setActionPending(false);
+      endUpload(driverId);
     }
   };
 

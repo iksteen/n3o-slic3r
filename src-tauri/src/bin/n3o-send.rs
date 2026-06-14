@@ -158,8 +158,9 @@ async fn send_bambu(
         ams_mapping,
         ams_mapping2,
     };
+    // CLI: no progress UI (it prints its own "✓ uploaded" line), so a no-op.
     let handle = driver
-        .send(payload)
+        .send(payload, std::sync::Arc::new(|_, _| {}))
         .await
         .map_err(|e| format!("send failed: {e}"))?;
     eprintln!(
@@ -225,7 +226,7 @@ async fn send_u1(
         },
     );
     let handle = driver
-        .send(SendPayload::Gcode { bytes, file_name })
+        .send(SendPayload::Gcode { bytes, file_name }, std::sync::Arc::new(|_, _| {}))
         .await
         .map_err(|e| format!("send failed: {e}"))?;
     eprintln!("✓ uploaded as {} and print started", handle.file_name);

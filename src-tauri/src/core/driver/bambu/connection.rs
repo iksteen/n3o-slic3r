@@ -38,6 +38,7 @@ use crate::core::driver::status::{
 };
 use crate::core::driver::traits::{
     Driver, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle, SendPayload,
+    UploadProgressFn,
 };
 
 const KEEPALIVE: Duration = Duration::from_secs(60);
@@ -238,7 +239,11 @@ impl Driver for BambuDriver {
         self.status_rx.clone()
     }
 
-    async fn send(&mut self, payload: SendPayload) -> Result<SendHandle, DriverError> {
+    async fn send(
+        &mut self,
+        payload: SendPayload,
+        on_progress: UploadProgressFn,
+    ) -> Result<SendHandle, DriverError> {
         let (bytes, plate_id, use_ams, ams_mapping, ams_mapping2) = match payload {
             SendPayload::Gcode3mf {
                 bytes,
@@ -270,9 +275,11 @@ impl Driver for BambuDriver {
         let access_code = self.config.access_code.clone();
         let remote_for_task = remote_name.clone();
         let bytes_for_task = bytes;
+        let progress_for_task = on_progress;
         let remote_path = tokio::task::spawn_blocking(move || {
             let mut ftps = super::ftps::connect(&host, &access_code)?;
-            let path = super::ftps::upload(&mut ftps, &remote_for_task, &bytes_for_task)?;
+            let path =
+                super::ftps::upload(&mut ftps, &remote_for_task, &bytes_for_task, progress_for_task)?;
             // Quit politely; ignore errors — the upload has
             // already landed by this point.
             let _ = ftps.quit();

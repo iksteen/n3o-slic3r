@@ -160,3 +160,13 @@ export interface StatusUpdateEvent {
   driver_id: DriverId;
   status: PrinterStatus;
 }
+
+/** Payload of the `driver:upload_progress` Tauri event — emitted (throttled)
+ *  while a send pushes the sliced bundle to the printer. `percent` is 0..100. */
+export interface UploadProgress {
+  driver_id: DriverId;
+  file_name: string;
+  sent: number;
+  total: number;
+  percent: number;
+}

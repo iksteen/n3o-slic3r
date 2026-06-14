@@ -133,6 +133,12 @@ pub enum DriverError {
     Other(String),
 }
 
+/// Upload-progress callback: `(bytes_sent, total_bytes)`, invoked as the
+/// driver pushes the bundle to the printer. `Arc<dyn Fn ...>` (not a generic
+/// param) keeps [`Driver`] object-safe and lets the closure clone into Bambu's
+/// blocking FTPS task and U1's async upload stream.
+pub type UploadProgressFn = std::sync::Arc<dyn Fn(u64, u64) + Send + Sync>;
+
 /// The lifecycle + command surface shared by every printer
 /// driver. See the module-level docs in [`super`] for the
 /// design rationale.
@@ -169,7 +175,15 @@ pub trait Driver: Send + Sync {
 
     /// Upload + start a print. Returns a handle the caller can
     /// correlate against subsequent status updates.
-    async fn send(&mut self, payload: SendPayload) -> Result<SendHandle, DriverError>;
+    ///
+    /// `on_progress(bytes_sent, total_bytes)` fires as the bundle is pushed to
+    /// the printer — drivers report real upload progress through it. The caller
+    /// throttles before surfacing it to the UI.
+    async fn send(
+        &mut self,
+        payload: SendPayload,
+        on_progress: UploadProgressFn,
+    ) -> Result<SendHandle, DriverError>;
 
     /// Pause / resume / stop the current print. State guards
     /// inside the impl block return `DriverError::Other` for
