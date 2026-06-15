@@ -20,14 +20,12 @@ use glam::{Quat, Vec3};
 
 use super::model::{Plate, PlateId, Project};
 use crate::core::printer::profile::{BoundingBox, PrinterProfile};
-use crate::core::scene::bed::{self, BedMesh};
-use crate::core::scene::events::{
-    MirrorAxis, MoveReport, RepositionReason, SceneEvent, SceneOpError, SelectMode,
-};
+use crate::core::scene::bed;
+use crate::core::scene::events::{SceneEvent, SceneOpError, SelectMode};
 use crate::core::scene::primitives::{self, PrimitiveKind, PrimitiveParams};
 use crate::core::scene::state::{
-    mesh_bb_corners, z_extent, Group, GroupId, Mesh, MeshId, MeshProvenance, NewMesh,
-    NewSceneObject, ObjectId, SceneObject,
+    mesh_bb_corners, Group, GroupId, Mesh, MeshId, MeshProvenance, NewMesh, NewSceneObject,
+    ObjectId, SceneObject,
 };
 use crate::core::scene::transform::Transform;
 
@@ -447,70 +445,6 @@ impl Project {
     }
 
     // ---- Plate metadata ----------------------------------
-
-    /// Move a plate to position `order` in the composition queue,
-    /// shifting sibling plates' `composition_order` to keep the
-    /// queue a dense `[1..plates.len()]` sequence with no gaps.
-    ///
-    /// Validates `1 <= order <= plates.len()`. No-op (no event) when
-    /// the value is unchanged.
-    ///
-    /// Emits one `PlateMetadataChanged` per plate whose order
-    /// actually changed — the moved plate plus every plate between
-    /// its old and new positions (inclusive of one endpoint). The
-    /// frontend mirror re-renders the affected tab badges.
-    pub fn set_plate_composition_order(
-        &mut self,
-        plate_id: PlateId,
-        order: u32,
-    ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        let n = self.plates.len() as u32;
-        if order < 1 || order > n {
-            return Err(SceneOpError::InvalidPlateMetadata {
-                plate_id,
-                message: format!("composition_order must be in 1..={n}, got {order}",),
-            });
-        }
-        let idx = self
-            .plate_index(plate_id)
-            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
-        let old_order = self.plates[idx].metadata.composition_order;
-        if old_order == order {
-            return Ok(Vec::new());
-        }
-
-        // Standard drag-and-drop reorder: every plate strictly
-        // between old and new (inclusive of the endpoint nearer
-        // `new`) shifts by ±1 to make room. The moved plate
-        // takes `order`.
-        let (range_lo, range_hi, shift): (u32, u32, i32) = if order < old_order {
-            // Moving UP (lower number = earlier in queue). Plates
-            // in [order, old_order - 1] shift +1.
-            (order, old_order - 1, 1)
-        } else {
-            // Moving DOWN. Plates in [old_order + 1, order] shift -1.
-            (old_order + 1, order, -1)
-        };
-
-        let mut affected: Vec<PlateId> = Vec::new();
-        for plate in self.plates.iter_mut() {
-            if plate.id == plate_id {
-                continue;
-            }
-            let o = plate.metadata.composition_order;
-            if o >= range_lo && o <= range_hi {
-                plate.metadata.composition_order = (o as i32 + shift) as u32;
-                affected.push(plate.id);
-            }
-        }
-        self.plates[idx].metadata.composition_order = order;
-
-        let mut events = vec![SceneEvent::PlateMetadataChanged { plate_id }];
-        for id in affected {
-            events.push(SceneEvent::PlateMetadataChanged { plate_id: id });
-        }
-        Ok(events)
-    }
 
     /// Rename a plate (backs the tab-strip dblclick-rename UI).
     /// Trims surrounding whitespace, rejects an empty result and any
@@ -999,29 +933,6 @@ impl Project {
 
     // ---- Per-object transforms (active plate) ---------------------
 
-    /// Apply a delta translation to an object on the active plate.
-    pub fn translate_object(
-        &mut self,
-        id: ObjectId,
-        delta: Vec3,
-    ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        let active = self.active_plate;
-        let plate_id = self.plates[active].id;
-        let obj = self.plates[active]
-            .scene
-            .objects
-            .get_mut(&id)
-            .ok_or(SceneOpError::UnknownObject(id))?;
-        obj.transform = Transform::translation(delta).compose(obj.transform);
-        let clone = obj.clone();
-        let mut events = vec![SceneEvent::ObjectUpdated {
-            plate_id,
-            object: clone,
-        }];
-        events.extend(self.out_of_bounds_event(id));
-        Ok(events)
-    }
-
     /// Set an object's material — its 1-based `extruder_id` — on the
     /// active plate, ensuring that material has a slot binding (the same
     /// auto-binding the add path applies). Emits `ObjectUpdated` for the
@@ -1189,228 +1100,6 @@ impl Project {
             self.plates[active].scene.groups.remove(&g);
         }
         events
-    }
-
-    /// Rotate an object around `axis` by `radians`. Pivot defaults
-    /// to the object's current world-space center; `pivot_override`
-    /// rotates around an explicit world-space point instead.
-    pub fn rotate_object(
-        &mut self,
-        id: ObjectId,
-        axis: Vec3,
-        radians: f32,
-        pivot_override: Option<Vec3>,
-    ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        let active = self.active_plate;
-        let mesh_bb = {
-            let obj = self.plates[active]
-                .scene
-                .objects
-                .get(&id)
-                .ok_or(SceneOpError::UnknownObject(id))?;
-            self.meshes
-                .get(&obj.mesh)
-                .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
-                .bounding_box
-        };
-
-        let plate_id = self.plates[active].id;
-        let obj = self.plates[active].scene.objects.get_mut(&id).unwrap();
-        let pivot = match pivot_override {
-            Some(p) => p,
-            None => {
-                let local_center = Vec3::new(
-                    ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32,
-                    ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32,
-                    ((mesh_bb.min[2] + mesh_bb.max[2]) * 0.5) as f32,
-                );
-                obj.transform.apply_point(local_center)
-            }
-        };
-        let rotation = Quat::from_axis_angle(axis.normalize(), radians);
-        // Rotate-around-pivot: translate(-pivot) → rotate →
-        // translate(+pivot), applied as a world-space *prefix* to
-        // the current transform.
-        let rotate_around_pivot = Transform::translation(pivot)
-            .compose(Transform::rotation(rotation))
-            .compose(Transform::translation(-pivot));
-        obj.transform = rotate_around_pivot.compose(obj.transform);
-        let clone = obj.clone();
-        let mut events = vec![SceneEvent::ObjectUpdated {
-            plate_id,
-            object: clone,
-        }];
-        events.extend(self.out_of_bounds_event(id));
-        Ok(events)
-    }
-
-    /// Scale an object by per-axis factors. Non-uniform scale emits
-    /// an extra `NonUniformScale` warning event so the UI can flag
-    /// the object; it's not blocking. Dimensional cascade settings
-    /// (line widths, top-surface thresholds) reason about physical
-    /// extents, and stretching one axis silently breaks those.
-    pub fn scale_object(
-        &mut self,
-        id: ObjectId,
-        factor: Vec3,
-    ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        let active = self.active_plate;
-        let plate_id = self.plates[active].id;
-        let obj = self.plates[active]
-            .scene
-            .objects
-            .get_mut(&id)
-            .ok_or(SceneOpError::UnknownObject(id))?;
-        obj.transform = Transform::scale(factor).compose(obj.transform);
-        let clone = obj.clone();
-        let mut events = vec![SceneEvent::ObjectUpdated {
-            plate_id,
-            object: clone,
-        }];
-        if is_non_uniform(factor) {
-            events.push(SceneEvent::NonUniformScale {
-                plate_id,
-                object_id: id,
-            });
-        }
-        events.extend(self.out_of_bounds_event(id));
-        Ok(events)
-    }
-
-    /// Mirror an object across a world-axis through the object's
-    /// world-space center. Two mirrors across the same axis return
-    /// the object to its original transform (modulo float error).
-    pub fn mirror_object(
-        &mut self,
-        id: ObjectId,
-        axis: MirrorAxis,
-    ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        let center = self.world_center(id)?;
-        let factor = match axis {
-            MirrorAxis::X => Vec3::new(-1.0, 1.0, 1.0),
-            MirrorAxis::Y => Vec3::new(1.0, -1.0, 1.0),
-            MirrorAxis::Z => Vec3::new(1.0, 1.0, -1.0),
-        };
-        // Mirror-around-center: translate(-c) → scale(±1) →
-        // translate(+c), applied as a world-space *prefix* to the
-        // current transform.
-        let mirror_around_center = Transform::translation(center)
-            .compose(Transform::scale(factor))
-            .compose(Transform::translation(-center));
-        let active = self.active_plate;
-        let plate_id = self.plates[active].id;
-        let obj = self.plates[active].scene.objects.get_mut(&id).unwrap();
-        obj.transform = mirror_around_center.compose(obj.transform);
-        let clone = obj.clone();
-        let mut events = vec![SceneEvent::ObjectUpdated {
-            plate_id,
-            object: clone,
-        }];
-        events.extend(self.out_of_bounds_event(id));
-        Ok(events)
-    }
-
-    /// Lay-flat heuristic: re-orient the object to minimize its
-    /// world-space Z extent, then drop it so the new minimum Z is
-    /// exactly the active plate's surface (Z=0 for an identity-
-    /// transform plate). Searches the 24 axis-aligned cube rotations
-    /// and picks the one that produces the smallest Z extent —
-    /// fast, deterministic, no mesh-face analysis. MVP per the
-    /// ticket; library + Phase 4 UI can introduce
-    /// "lay flat on selected face" later when the user can pick a
-    /// face from the viewport.
-    pub fn lay_flat_object(&mut self, id: ObjectId) -> Result<Vec<SceneEvent>, SceneOpError> {
-        // Quick, engine-free flatten: pick the axis-aligned cube orientation
-        // with the smallest Z extent, then settle it onto the plate. The
-        // FFI-backed auto-orient shares place_with_rotation below.
-        let (mesh_bb, current_scale, current_trans) = {
-            let obj = self.plates[self.active_plate]
-                .scene
-                .objects
-                .get(&id)
-                .ok_or(SceneOpError::UnknownObject(id))?;
-            let bb = self
-                .meshes
-                .get(&obj.mesh)
-                .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
-                .bounding_box;
-            let (scale, _rot, trans) = obj.transform.to_mat4().to_scale_rotation_translation();
-            (bb, scale, trans)
-        };
-        let local_corners = mesh_bb_corners(&mesh_bb);
-        let z_extent_of = |rot: &Quat| {
-            let candidate =
-                glam::Mat4::from_scale_rotation_translation(current_scale, *rot, current_trans);
-            let (min_z, max_z) = z_extent(&local_corners, &candidate);
-            max_z - min_z
-        };
-        let best_rotation = cube_rotations()
-            .into_iter()
-            .min_by(|a, b| {
-                z_extent_of(a)
-                    .partial_cmp(&z_extent_of(b))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .expect("24 rotations is non-empty");
-        self.place_with_rotation(id, best_rotation)
-    }
-
-    /// Replace an object's orientation with `rotation` (object-local → world),
-    /// preserving scale and XY center, then settle it onto the plate (min Z → 0).
-    /// Shared by [`Self::lay_flat_object`] (best cube rotation) and the FFI-backed
-    /// auto-orient (the engine-computed rotation).
-    pub fn place_with_rotation(
-        &mut self,
-        id: ObjectId,
-        rotation: Quat,
-    ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        let active = self.active_plate;
-        let mesh_bb = {
-            let obj = self.plates[active]
-                .scene
-                .objects
-                .get(&id)
-                .ok_or(SceneOpError::UnknownObject(id))?;
-            self.meshes
-                .get(&obj.mesh)
-                .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
-                .bounding_box
-        };
-        let local_corners = mesh_bb_corners(&mesh_bb);
-        let local_center = Vec3::new(
-            ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32,
-            ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32,
-            ((mesh_bb.min[2] + mesh_bb.max[2]) * 0.5) as f32,
-        );
-
-        let plate_id = self.plates[active].id;
-        let obj = self.plates[active].scene.objects.get_mut(&id).unwrap();
-        let current = obj.transform.to_mat4();
-        // Decompose so we keep scale + position and only replace the rotation.
-        // glam's decomposition is sound for affine matrices without shear; our
-        // transforms are translate/rotate/scale compositions only, so this holds.
-        let (current_scale, _current_rot, current_trans) = current.to_scale_rotation_translation();
-        let current_world_center = obj.transform.apply_point(local_center);
-
-        let chosen =
-            glam::Mat4::from_scale_rotation_translation(current_scale, rotation, current_trans);
-        let (min_z, _max_z) = z_extent(&local_corners, &chosen);
-        let post_rot_center = chosen.transform_point3(local_center);
-        let delta = glam::Vec3::new(
-            current_world_center.x - post_rot_center.x,
-            current_world_center.y - post_rot_center.y,
-            -min_z,
-        );
-        let final_xform = glam::Mat4::from_translation(delta) * chosen;
-        obj.transform = Transform::from_mat4(final_xform);
-
-        let clone = obj.clone();
-        let mut events = vec![SceneEvent::ObjectUpdated {
-            plate_id,
-            object: clone,
-        }];
-        events.extend(self.out_of_bounds_event(id));
-        Ok(events)
     }
 
     /// Build one combined **world-space** mesh from a set of objects — each
@@ -1795,49 +1484,6 @@ impl Project {
         changed
     }
 
-    /// Duplicate an object on the active plate. The clone gets a
-    /// fresh `ObjectId` and is offset by `+10 mm` in X to avoid
-    /// z-fighting with the original.
-    pub fn duplicate_object(
-        &mut self,
-        id: ObjectId,
-    ) -> Result<(ObjectId, Vec<SceneEvent>), SceneOpError> {
-        let original = self
-            .active_plate()
-            .scene
-            .objects
-            .get(&id)
-            .ok_or(SceneOpError::UnknownObject(id))?
-            .clone();
-        let new_id = self.register_object(NewSceneObject {
-            mesh: original.mesh,
-            transform: Transform::translation(Vec3::new(10.0, 0.0, 0.0))
-                .compose(original.transform),
-            name: format!("{} (copy)", original.name),
-            visible: original.visible,
-            extruder_id: original.extruder_id,
-            // Duplicate breaks group membership — copying one volume
-            // of a multi-volume object yields a solo object, not a
-            // 3rd member of the source's group.
-            group: None,
-        });
-        let plate_id = self.active_plate().id;
-        let cloned_obj = self
-            .active_plate()
-            .scene
-            .objects
-            .get(&new_id)
-            .unwrap()
-            .clone();
-        Ok((
-            new_id,
-            vec![SceneEvent::ObjectAdded {
-                plate_id,
-                object: cloned_obj,
-            }],
-        ))
-    }
-
     // ---- Per-object overrides ----------------------------
 
     /// Upsert one override on a specific (plate, object).
@@ -2006,135 +1652,15 @@ impl Project {
         }])
     }
 
-    // ---- Move object between plates ---------------------
-
-    /// Move an object from `from_plate` to `to_plate`, preserving
-    /// its world-space transform when the target plate's build
-    /// volume can accept it. Per-object overrides travel with the
-    /// object.
-    ///
-    /// Returns a [`MoveReport`] documenting whether the object had
-    /// to be repositioned to fit on the target plate's bed.
-    pub fn move_object(
-        &mut self,
-        from_plate: PlateId,
-        to_plate: PlateId,
-        object_id: ObjectId,
-    ) -> Result<(MoveReport, Vec<SceneEvent>), SceneOpError> {
-        if from_plate == to_plate {
-            return Err(SceneOpError::SamePlate(from_plate));
-        }
-        let from_idx = self
-            .plate_index(from_plate)
-            .ok_or(SceneOpError::UnknownPlate(from_plate))?;
-        let to_idx = self
-            .plate_index(to_plate)
-            .ok_or(SceneOpError::UnknownPlate(to_plate))?;
-
-        let object = self.plates[from_idx]
-            .scene
-            .objects
-            .get(&object_id)
-            .ok_or(SceneOpError::UnknownObject(object_id))?
-            .clone();
-        let overrides = self.plates[from_idx]
-            .scene
-            .object_overrides
-            .remove(&object_id);
-        let was_selected = self.plates[from_idx].scene.selection.remove(&object_id);
-        let moved_material = object.extruder_id.unwrap_or(1);
-        self.plates[from_idx].scene.objects.remove(&object_id);
-
-        let mesh_bb = self
-            .meshes
-            .get(&object.mesh)
-            .ok_or(SceneOpError::UnknownMesh(object.mesh))?
-            .bounding_box;
-        let (final_obj, reposition_reason) = match (
-            self.plates[from_idx].scene.bed.as_ref(),
-            self.plates[to_idx].scene.bed.as_ref(),
-        ) {
-            // Both plates have a bed configured: check if the
-            // object's current world position fits the target bed.
-            (Some(_), Some(target_bed)) => {
-                let reason = object_repositioning_reason(&object, &mesh_bb, target_bed);
-                match reason {
-                    None => (object, None),
-                    Some(why) => {
-                        let recentered = recenter_on_bed(&object, &mesh_bb, target_bed);
-                        (recentered, Some(why))
-                    }
-                }
-            }
-            // Either plate has no bed → no bed-relative check
-            // possible; keep the transform as-is.
-            _ => (object, None),
-        };
-        let new_position = final_obj.transform.apply_point(Vec3::ZERO);
-        let report = MoveReport {
-            object_id,
-            new_position: [new_position.x, new_position.y, new_position.z],
-            repositioned: reposition_reason,
-        };
-
-        self.plates[to_idx]
-            .scene
-            .objects
-            .insert(object_id, final_obj.clone());
-        if let Some(map) = overrides {
-            self.plates[to_idx]
-                .scene
-                .object_overrides
-                .insert(object_id, map);
-        }
-
-        let mut events = vec![
-            SceneEvent::ObjectRemoved {
-                plate_id: from_plate,
-                object_id,
-            },
-            SceneEvent::ObjectAdded {
-                plate_id: to_plate,
-                object: final_obj,
-            },
-        ];
-        if was_selected {
-            let mut sorted: Vec<ObjectId> = self.plates[from_idx]
-                .scene
-                .selection
-                .iter()
-                .copied()
-                .collect();
-            sorted.sort();
-            events.push(SceneEvent::SelectionChanged {
-                plate_id: from_plate,
-                selected: sorted,
-            });
-        }
-        // The destination plate's auto-bind for the moved object's
-        // material doesn't fire here (move_object_to_plate uses
-        // `objects.insert` directly, not `register_object`), so the
-        // destination's material→slot map is unaffected by the
-        // arrival. We *do* prune the source plate, though: a moved
-        // object behaves like a deleted one from the source plate's
-        // perspective.
-        let mut moved_set = BTreeSet::new();
-        moved_set.insert(moved_material);
-        if self.prune_orphan_material_bindings(from_idx, &moved_set) {
-            events.push(SceneEvent::MaterialSlotChanged {
-                plate_id: from_plate,
-            });
-        }
-        Ok((report, events))
-    }
+    // ---- Move objects between plates --------------------
 
     /// Move a *set* of objects from one plate to another — the shared backend
     /// for auto-arrange spill (#3 phase 2) and a manual "send to plate" (#4).
     ///
     /// The ids are expanded to whole-group membership so a group is never split
     /// across plates, and each object's transform is **preserved**, so a moved
-    /// group keeps its arrangement (unlike the single-object [`Self::move_object`],
-    /// there's no per-object recentering — that would scatter a group; anything
+    /// group keeps its arrangement (there's no per-object recentering — that
+    /// would scatter a group; anything
     /// off the target bed surfaces through the normal bounds check when that
     /// plate is viewed). Per-object overrides and each moved group's name travel
     /// with the objects; the source plate's selection and now-orphaned material
@@ -2281,29 +1807,6 @@ impl Project {
         }
     }
 
-    /// World-space center of an object's mesh bounding box on the
-    /// active plate. Pulled out so mirror + future bbox-anchored
-    /// ops share one path.
-    fn world_center(&self, id: ObjectId) -> Result<Vec3, SceneOpError> {
-        let obj = self
-            .active_plate()
-            .scene
-            .objects
-            .get(&id)
-            .ok_or(SceneOpError::UnknownObject(id))?;
-        let mesh_bb = self
-            .meshes
-            .get(&obj.mesh)
-            .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
-            .bounding_box;
-        let local_center = Vec3::new(
-            ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32,
-            ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32,
-            ((mesh_bb.min[2] + mesh_bb.max[2]) * 0.5) as f32,
-        );
-        Ok(obj.transform.apply_point(local_center))
-    }
-
     /// Check `object_id` on the active plate against its bed and
     /// emit warnings for every reason it's out of bounds. No bed =
     /// no check (silently). Designed to be called by every
@@ -2352,129 +1855,6 @@ impl Project {
             })
         }
     }
-}
-
-// ---- Free helpers --------------------------------------------------
-
-fn is_non_uniform(factor: Vec3) -> bool {
-    let eps = 1e-5_f32;
-    (factor.x - factor.y).abs() > eps
-        || (factor.x - factor.z).abs() > eps
-        || (factor.y - factor.z).abs() > eps
-}
-
-/// Why an object had to be repositioned when moving to a different
-/// plate. `None` = its world-space position fits the target bed
-/// verbatim.
-fn object_repositioning_reason(
-    obj: &SceneObject,
-    mesh_bb: &BoundingBox,
-    target_bed: &BedMesh,
-) -> Option<RepositionReason> {
-    let corners = mesh_bb_corners(mesh_bb);
-    let xform = obj.transform.to_mat4();
-    let mut min = Vec3::splat(f32::INFINITY);
-    let mut max = Vec3::splat(f32::NEG_INFINITY);
-    for c in corners {
-        let p = xform.transform_point3(c);
-        min = min.min(p);
-        max = max.max(p);
-    }
-    if min.z < -1e-3 {
-        return Some(RepositionReason::BelowBedSurface);
-    }
-    let bed_min = Vec3::new(
-        target_bed.extents.min[0] as f32,
-        target_bed.extents.min[1] as f32,
-        target_bed.extents.min[2] as f32,
-    );
-    let bed_max = Vec3::new(
-        target_bed.extents.max[0] as f32,
-        target_bed.extents.max[1] as f32,
-        target_bed.extents.max[2] as f32,
-    );
-    if min.x < bed_min.x - 1e-3
-        || min.y < bed_min.y - 1e-3
-        || max.x > bed_max.x + 1e-3
-        || max.y > bed_max.y + 1e-3
-    {
-        return Some(RepositionReason::OutOfBounds);
-    }
-    for zone in &target_bed.exclusion_zones {
-        let z_min = [zone.bounds.min[0] as f32, zone.bounds.min[1] as f32];
-        let z_max = [zone.bounds.max[0] as f32, zone.bounds.max[1] as f32];
-        let overlap_x = !(max.x < z_min[0] || min.x > z_max[0]);
-        let overlap_y = !(max.y < z_min[1] || min.y > z_max[1]);
-        if overlap_x && overlap_y {
-            return Some(RepositionReason::OnExclusionZone);
-        }
-    }
-    None
-}
-
-/// Drop `obj` onto the target plate's XY center at bed Z. Preserves
-/// the rotation + scale of the original transform; only the
-/// translation part changes.
-fn recenter_on_bed(obj: &SceneObject, mesh_bb: &BoundingBox, target_bed: &BedMesh) -> SceneObject {
-    let current = obj.transform.to_mat4();
-    let (scale, rotation, _trans) = current.to_scale_rotation_translation();
-    let local_center = Vec3::new(
-        ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32,
-        ((mesh_bb.min[1] + mesh_bb.max[1]) * 0.5) as f32,
-        ((mesh_bb.min[2] + mesh_bb.max[2]) * 0.5) as f32,
-    );
-    let no_translation = glam::Mat4::from_scale_rotation_translation(scale, rotation, Vec3::ZERO);
-    let post_rs_center = no_translation.transform_point3(local_center);
-    let corners = mesh_bb_corners(mesh_bb);
-    let mut min_z_after_rs = f32::INFINITY;
-    for c in corners {
-        let p = no_translation.transform_point3(c);
-        if p.z < min_z_after_rs {
-            min_z_after_rs = p.z;
-        }
-    }
-    let bed_cx = ((target_bed.extents.min[0] + target_bed.extents.max[0]) * 0.5) as f32;
-    let bed_cy = ((target_bed.extents.min[1] + target_bed.extents.max[1]) * 0.5) as f32;
-    let delta = Vec3::new(
-        bed_cx - post_rs_center.x,
-        bed_cy - post_rs_center.y,
-        -min_z_after_rs,
-    );
-    let final_xform = glam::Mat4::from_translation(delta) * no_translation;
-    SceneObject {
-        transform: Transform::from_mat4(final_xform),
-        ..obj.clone()
-    }
-}
-
-/// The 24 proper rotations of a cube. Generated as compositions of
-/// identity + (90/180/270)° around each of the three principal axes
-/// — that yields 24 distinct rotations (the full chiral octahedral
-/// group). Used by [`Project::lay_flat_object`] to pick the
-/// orientation that minimizes the world-space Z extent.
-fn cube_rotations() -> Vec<Quat> {
-    use std::f32::consts::FRAC_PI_2;
-    let face_rots = [
-        Quat::IDENTITY,
-        Quat::from_rotation_y(FRAC_PI_2),
-        Quat::from_rotation_y(std::f32::consts::PI),
-        Quat::from_rotation_y(-FRAC_PI_2),
-        Quat::from_rotation_x(FRAC_PI_2),
-        Quat::from_rotation_x(-FRAC_PI_2),
-    ];
-    let z_spins = [
-        Quat::IDENTITY,
-        Quat::from_rotation_z(FRAC_PI_2),
-        Quat::from_rotation_z(std::f32::consts::PI),
-        Quat::from_rotation_z(-FRAC_PI_2),
-    ];
-    let mut out = Vec::with_capacity(24);
-    for f in face_rots {
-        for s in z_spins {
-            out.push(f * s);
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -2705,25 +2085,6 @@ mod tests {
         }
     }
 
-    fn small_printer() -> PrinterProfile {
-        use crate::core::printer::profile::{BoundingBox, Toolhead};
-        PrinterProfile {
-            model: "Small".into(),
-            supported_build_plates: vec!["Plain".into()],
-            toolheads: vec![Toolhead {
-                default_nozzle_diameter: "0.4".to_string(),
-                hotend_type: "stainless_steel".into(),
-                max_temp: 300.0,
-            }],
-            build_volume: BoundingBox {
-                min: [0.0, 0.0, 0.0],
-                max: [100.0, 100.0, 100.0],
-            },
-            exclusion_zones: vec![],
-            ..Default::default()
-        }
-    }
-
     // ---- Basic registry behavior ----------------------------------
 
     #[test]
@@ -2781,31 +2142,6 @@ mod tests {
     // ---- Selection + basic transforms -----------------------------
 
     #[test]
-    fn load_then_select_then_translate_emits_expected_event_stream() {
-        let mut p = Project::default();
-        let (_mesh, obj) = add_cube(&mut p);
-
-        let events = p.select(&[obj], SelectMode::Replace);
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            SceneEvent::SelectionChanged { selected, .. } => {
-                assert_eq!(selected, &vec![obj]);
-            }
-            other => panic!("expected SelectionChanged, got {other:?}"),
-        }
-
-        let events = p.translate_object(obj, Vec3::new(5.0, 0.0, 0.0)).unwrap();
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            SceneEvent::ObjectUpdated { object: o, .. } => {
-                let center = o.transform.apply_point(Vec3::new(0.5, 0.5, 0.5));
-                assert!((center - Vec3::new(5.5, 0.5, 0.5)).length() < 1e-5);
-            }
-            other => panic!("expected ObjectUpdated, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn select_no_op_emits_no_event() {
         let mut p = Project::default();
         let (_mesh, obj) = add_cube(&mut p);
@@ -2843,31 +2179,6 @@ mod tests {
     }
 
     #[test]
-    fn rotate_around_object_center() {
-        let mut p = Project::default();
-        let (_mesh, obj) = add_cube(&mut p);
-        // Cube center is at (0.5, 0.5, 0.5); rotate 180° around Z.
-        let _ = p
-            .rotate_object(obj, Vec3::Z, std::f32::consts::PI, None)
-            .unwrap();
-        let o = p.active_plate().scene.objects.get(&obj).unwrap();
-        let corner = o.transform.apply_point(Vec3::ZERO);
-        assert!((corner - Vec3::new(1.0, 1.0, 0.0)).length() < 1e-4);
-    }
-
-    #[test]
-    fn rotate_with_explicit_pivot_preserves_relative_position() {
-        let mut p = Project::default();
-        let (_mesh, obj) = add_cube(&mut p);
-        let _ = p
-            .rotate_object(obj, Vec3::Z, std::f32::consts::FRAC_PI_2, Some(Vec3::ZERO))
-            .unwrap();
-        let o = p.active_plate().scene.objects.get(&obj).unwrap();
-        let corner = o.transform.apply_point(Vec3::X);
-        assert!((corner - Vec3::Y).length() < 1e-4);
-    }
-
-    #[test]
     fn delete_objects_clears_selection_for_deleted_ids() {
         let mut p = Project::default();
         let (_mesh, obj1) = add_cube(&mut p);
@@ -2888,31 +2199,11 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_object_offsets_by_10mm_x() {
-        let mut p = Project::default();
-        let (_mesh, obj) = add_cube(&mut p);
-        let (new_id, events) = p.duplicate_object(obj).unwrap();
-        assert_ne!(new_id, obj);
-        match &events[0] {
-            SceneEvent::ObjectAdded { object: o, .. } => {
-                let new_corner = o.transform.apply_point(Vec3::ZERO);
-                assert!((new_corner - Vec3::new(10.0, 0.0, 0.0)).length() < 1e-5);
-                assert!(o.name.contains("(copy)"));
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    #[test]
     fn unknown_object_ops_return_error() {
         let mut p = Project::default();
         let bad = ObjectId(42);
         assert!(matches!(
-            p.translate_object(bad, Vec3::ZERO),
-            Err(SceneOpError::UnknownObject(_))
-        ));
-        assert!(matches!(
-            p.rotate_object(bad, Vec3::Z, 0.0, None),
+            p.set_object_transform(bad, Transform::IDENTITY),
             Err(SceneOpError::UnknownObject(_))
         ));
         assert!(p.delete_objects(&[bad]).is_empty());
@@ -2940,104 +2231,15 @@ mod tests {
         assert_eq!(obj.extruder_id, Some(2));
     }
 
-    // ---- Mirror + scale + lay_flat --------------------------------
-
-    #[test]
-    fn double_mirror_across_x_returns_to_original() {
-        let mut p = Project::default();
-        let (_, obj) = add_cube(&mut p);
-        let probe = Vec3::new(0.25, 0.5, 0.5);
-        let before = p
-            .active_plate()
-            .scene
-            .objects
-            .get(&obj)
-            .unwrap()
-            .transform
-            .apply_point(probe);
-
-        p.mirror_object(obj, MirrorAxis::X).unwrap();
-        p.mirror_object(obj, MirrorAxis::X).unwrap();
-
-        let after = p
-            .active_plate()
-            .scene
-            .objects
-            .get(&obj)
-            .unwrap()
-            .transform
-            .apply_point(probe);
-        assert!((after - before).length() < 1e-4);
-    }
-
-    #[test]
-    fn mirror_x_flips_x_through_world_center() {
-        let mut p = Project::default();
-        let (_, obj) = add_cube(&mut p);
-        p.mirror_object(obj, MirrorAxis::X).unwrap();
-        let probe = Vec3::new(1.0, 0.5, 0.5);
-        let mirrored = p
-            .active_plate()
-            .scene
-            .objects
-            .get(&obj)
-            .unwrap()
-            .transform
-            .apply_point(probe);
-        assert!((mirrored - Vec3::new(0.0, 0.5, 0.5)).length() < 1e-5);
-    }
-
-    #[test]
-    fn non_uniform_scale_emits_warning_event() {
-        let mut p = Project::default();
-        let (_, obj) = add_cube(&mut p);
-        let events = p.scale_object(obj, Vec3::new(2.0, 1.0, 1.0)).unwrap();
-        assert!(matches!(events[0], SceneEvent::ObjectUpdated { .. }));
-        assert!(matches!(
-            events.get(1),
-            Some(SceneEvent::NonUniformScale { object_id, .. }) if *object_id == obj,
-        ));
-    }
-
-    #[test]
-    fn uniform_scale_does_not_emit_warning() {
-        let mut p = Project::default();
-        let (_, obj) = add_cube(&mut p);
-        let events = p.scale_object(obj, Vec3::new(1.5, 1.5, 1.5)).unwrap();
-        assert_eq!(events.len(), 1, "uniform scale: only ObjectUpdated");
-    }
-
-    #[test]
-    fn lay_flat_settles_rotated_cube_to_z_zero_min() {
-        let mut p = Project::default();
-        let (_, obj) = add_cube(&mut p);
-        p.translate_object(obj, Vec3::new(0.0, 0.0, 5.0)).unwrap();
-        p.rotate_object(obj, Vec3::X, 0.5, None).unwrap();
-        p.lay_flat_object(obj).unwrap();
-
-        let xform = p.active_plate().scene.objects.get(&obj).unwrap().transform;
-        let mesh_bb = &p.meshes.values().next().unwrap().bounding_box;
-        let mut min_z = f32::INFINITY;
-        let mut max_z = f32::NEG_INFINITY;
-        for &x in &[mesh_bb.min[0] as f32, mesh_bb.max[0] as f32] {
-            for &y in &[mesh_bb.min[1] as f32, mesh_bb.max[1] as f32] {
-                for &z in &[mesh_bb.min[2] as f32, mesh_bb.max[2] as f32] {
-                    let pt = xform.apply_point(Vec3::new(x, y, z));
-                    min_z = min_z.min(pt.z);
-                    max_z = max_z.max(pt.z);
-                }
-            }
-        }
-        assert!(min_z.abs() < 1e-4, "expected min_z ≈ 0, got {min_z}");
-        assert!((max_z - 1.0).abs() < 1e-4, "got max_z={max_z}");
-    }
+    // ---- Auto-orient + lay-flat -----------------------------------
 
     #[test]
     fn auto_orient_identity_preserves_xy_and_settles_on_bed() {
         let mut p = Project::default();
         let (_, obj) = add_cube(&mut p);
         // Place it off-origin and floating above the bed.
-        p.translate_object(obj, Vec3::new(50.0, 30.0, 7.0)).unwrap();
+        p.set_object_transform(obj, Transform::translation(Vec3::new(50.0, 30.0, 7.0)))
+            .unwrap();
         let mesh_bb = p.meshes.values().next().unwrap().bounding_box;
         let center_local = Vec3::new(
             ((mesh_bb.min[0] + mesh_bb.max[0]) * 0.5) as f32,
@@ -3094,7 +2296,7 @@ mod tests {
             bed.extents.max[0] as f32
         };
         // Push the unit cube partly off the +X edge of the bed.
-        p.translate_object(obj, Vec3::new(bed_max_x - 0.5, 30.0, 0.0))
+        p.set_object_transform(obj, Transform::translation(Vec3::new(bed_max_x - 0.5, 30.0, 0.0)))
             .unwrap();
         // Even with no reorientation, the clamp must pull the footprint back in.
         p.orient_objects(&[obj], Quat::IDENTITY, None).unwrap();
@@ -3119,7 +2321,7 @@ mod tests {
     fn lay_flat_on_pivots_about_contact_and_settles_lowest_to_z_zero() {
         let mut p = Project::default();
         let (_, obj) = add_cube(&mut p);
-        p.translate_object(obj, Vec3::new(40.0, 40.0, 20.0))
+        p.set_object_transform(obj, Transform::translation(Vec3::new(40.0, 40.0, 20.0)))
             .unwrap();
         // A world point on the object's surface (the ray hit) and a lay-flat
         // rotation. The selection pivots about `contact` — so the clicked spot's
@@ -3168,7 +2370,7 @@ mod tests {
         // Unit cube hanging 0.5 off the +X edge. The post-rotation X/Y clamp must
         // pull the footprint back on (here identity rotation, so it's purely the
         // clamp doing the work).
-        p.translate_object(obj, Vec3::new(bed_max_x - 0.5, 30.0, 0.0))
+        p.set_object_transform(obj, Transform::translation(Vec3::new(bed_max_x - 0.5, 30.0, 0.0)))
             .unwrap();
         p.orient_objects(
             &[obj],
@@ -3207,7 +2409,8 @@ mod tests {
                 ((e.min[1] + e.max[1]) * 0.5) as f32,
             )
         };
-        p.translate_object(obj, Vec3::new(cx, cy, 50.0)).unwrap();
+        p.set_object_transform(obj, Transform::translation(Vec3::new(cx, cy, 50.0)))
+            .unwrap();
         // A 45° tilt: the bbox corner now dips well below the true geometry, so a
         // bbox-based settle would leave the solid floating and the bbox bounds
         // check over-reports below-plate.
@@ -3263,7 +2466,7 @@ mod tests {
         // not below-plate — but it pierces the Z ceiling, which must still warn:
         // the seated suppression only drops below-plate, not too-tall.
         let z_max = p.active_plate().scene.bed.as_ref().unwrap().extents.max[2] as f32;
-        p.scale_object(obj, Vec3::new(1.0, 1.0, z_max * 2.0 + 100.0))
+        p.set_object_transform(obj, Transform::scale(Vec3::new(1.0, 1.0, z_max * 2.0 + 100.0)))
             .unwrap();
         let events = p.orient_objects(&[obj], Quat::IDENTITY, None).unwrap();
 
@@ -3311,7 +2514,8 @@ mod tests {
         };
         let mesh_id = p.register_mesh(mesh);
         let obj = p.register_object(NewSceneObject::at_origin(mesh_id, "empty"));
-        p.translate_object(obj, Vec3::new(10.0, 10.0, 5.0)).unwrap();
+        p.set_object_transform(obj, Transform::translation(Vec3::new(10.0, 10.0, 5.0)))
+            .unwrap();
         p.orient_objects(&[obj], Quat::IDENTITY, None).unwrap();
 
         let xform = p.active_plate().scene.objects.get(&obj).unwrap().transform;
@@ -3325,7 +2529,8 @@ mod tests {
     fn orient_aborts_without_mutating_a_sibling_when_an_id_is_missing() {
         let mut p = Project::default();
         let (_, a) = add_cube(&mut p);
-        p.translate_object(a, Vec3::new(20.0, 20.0, 9.0)).unwrap();
+        p.set_object_transform(a, Transform::translation(Vec3::new(20.0, 20.0, 9.0)))
+            .unwrap();
         let before = p.active_plate().scene.objects.get(&a).unwrap().transform;
         // A bogus id alongside a real one (the auto-orient lock-release window
         // can drop an id mid-flight). The op must abort up front and leave the
@@ -3520,7 +2725,9 @@ mod tests {
         // clear it before the move.
         p.plates[0].scene.bed = None;
         let (_, obj) = add_cube(&mut p);
-        let events = p.translate_object(obj, Vec3::new(500.0, 0.0, 0.0)).unwrap();
+        let events = p
+            .set_object_transform(obj, Transform::translation(Vec3::new(500.0, 0.0, 0.0)))
+            .unwrap();
         assert!(events
             .iter()
             .all(|e| !matches!(e, SceneEvent::ObjectOutOfBounds { .. })));
@@ -3536,12 +2743,18 @@ mod tests {
             SceneEvent::BedChanged { bed: Some(_), .. },
         ));
 
-        let events = p.translate_object(obj, Vec3::new(50.0, 0.0, 0.0)).unwrap();
+        let events = p
+            .set_object_transform(obj, Transform::translation(Vec3::new(50.0, 0.0, 0.0)))
+            .unwrap();
         assert!(events
             .iter()
             .all(|e| !matches!(e, SceneEvent::ObjectOutOfBounds { .. })));
 
-        let events = p.translate_object(obj, Vec3::new(200.0, 0.0, 0.0)).unwrap();
+        // A further +200 in X (250 absolute from origin) shoves the cube off
+        // the bed; the op must flag the object out of bounds.
+        let events = p
+            .set_object_transform(obj, Transform::translation(Vec3::new(250.0, 0.0, 0.0)))
+            .unwrap();
         assert!(events.iter().any(|e| matches!(
             e,
             SceneEvent::ObjectOutOfBounds { object_id, reasons, .. }
@@ -3555,13 +2768,19 @@ mod tests {
         let mut p = Project::default();
         let (_, obj) = add_cube(&mut p);
         p.set_active_printer(Some(&a1_mini_for_test()));
+        // Rotate 180° about X around the world origin (the pivot). The unit cube
+        // at the origin flips its z∈[0,1] extent down to z∈[-1,0], dropping below
+        // the plate. Replicates the old rotate-around-pivot composition:
+        // translate(pivot) · rotation · translate(-pivot) prefixed onto the
+        // current (identity) transform; with pivot=origin that's just the rotation.
+        let pivot = Vec3::new(0.0, 0.0, 0.0);
+        let rotation = Quat::from_axis_angle(Vec3::X.normalize(), std::f32::consts::PI);
+        let current = p.active_plate().scene.objects.get(&obj).unwrap().transform;
+        let rotate_around_pivot = Transform::translation(pivot)
+            .compose(Transform::rotation(rotation))
+            .compose(Transform::translation(-pivot));
         let events = p
-            .rotate_object(
-                obj,
-                Vec3::X,
-                std::f32::consts::PI,
-                Some(Vec3::new(0.0, 0.0, 0.0)),
-            )
+            .set_object_transform(obj, rotate_around_pivot.compose(current))
             .unwrap();
         let oob = events
             .iter()
@@ -4026,76 +3245,7 @@ mod tests {
         );
     }
 
-    // ---- move_object ------------------------------------
-
-    #[test]
-    fn move_object_errors_on_same_plate() {
-        let mut p = Project::default();
-        let (_, obj) = add_cube(&mut p);
-        let err = p.move_object(PlateId(1), PlateId(1), obj).unwrap_err();
-        assert_eq!(err, SceneOpError::SamePlate(PlateId(1)));
-    }
-
-    #[test]
-    fn move_object_errors_on_unknown_plate() {
-        let mut p = Project::default();
-        p.add_plate(None);
-        let (_, obj) = add_cube(&mut p);
-        assert_eq!(
-            p.move_object(PlateId(1), PlateId(99), obj).unwrap_err(),
-            SceneOpError::UnknownPlate(PlateId(99)),
-        );
-    }
-
-    #[test]
-    fn move_object_relocates_and_emits_remove_add() {
-        let mut p = Project::default();
-        let (id_b, _) = p.add_plate(None);
-        let (_, obj) = add_cube(&mut p);
-        let (report, events) = p.move_object(PlateId(1), id_b, obj).unwrap();
-        assert_eq!(report.object_id, obj);
-        assert!(report.repositioned.is_none());
-        assert!(matches!(
-            events[0],
-            SceneEvent::ObjectRemoved { object_id, .. } if object_id == obj,
-        ));
-        assert!(matches!(events[1], SceneEvent::ObjectAdded { .. }));
-        assert!(!p.plates[0].scene.objects.contains_key(&obj));
-        assert!(p.plates[1].scene.objects.contains_key(&obj));
-    }
-
-    #[test]
-    fn move_object_carries_per_object_overrides() {
-        let mut p = Project::default();
-        let (id_b, _) = p.add_plate(None);
-        let (_, obj) = add_cube(&mut p);
-        p.object_override_set(PlateId(1), obj, "layer_height".into(), "0.12".into())
-            .unwrap();
-        p.move_object(PlateId(1), id_b, obj).unwrap();
-        assert!(!p.plates[0].scene.object_overrides.contains_key(&obj));
-        let landed = p.plates[1].scene.object_overrides.get(&obj).unwrap();
-        assert_eq!(landed["layer_height"], "0.12");
-    }
-
-    #[test]
-    fn move_object_recenters_when_target_bed_smaller() {
-        let mut p = Project::default();
-        let (id_b, _) = p.add_plate(None);
-        p.set_active_printer(Some(&a1_mini_for_test()));
-        let (_, obj) = add_cube(&mut p);
-        p.translate_object(obj, Vec3::new(160.0, 160.0, 0.0))
-            .unwrap();
-        p.set_active_plate(id_b).unwrap();
-        p.set_active_printer(Some(&small_printer()));
-
-        let (report, _) = p.move_object(PlateId(1), id_b, obj).unwrap();
-        assert_eq!(report.repositioned, Some(RepositionReason::OutOfBounds));
-        let landed = p.plates[1].scene.objects.get(&obj).unwrap();
-        let center = landed.transform.apply_point(Vec3::new(0.5, 0.5, 0.5));
-        assert!((center.x - 50.0).abs() < 1.0);
-        assert!((center.y - 50.0).abs() < 1.0);
-        assert!(center.z > 0.0 && center.z < 1.0);
-    }
+    // ---- move_objects_to_plate --------------------------
 
     #[test]
     fn move_objects_to_plate_relocates_a_set_preserving_transforms() {
@@ -4103,8 +3253,10 @@ mod tests {
         let (id_b, _) = p.add_plate(None);
         let (_, a) = add_cube(&mut p);
         let (_, b) = add_cube(&mut p);
-        p.translate_object(a, Vec3::new(20.0, 0.0, 0.0)).unwrap();
-        p.translate_object(b, Vec3::new(60.0, 0.0, 0.0)).unwrap();
+        p.set_object_transform(a, Transform::translation(Vec3::new(20.0, 0.0, 0.0)))
+            .unwrap();
+        p.set_object_transform(b, Transform::translation(Vec3::new(60.0, 0.0, 0.0)))
+            .unwrap();
         let (ta, tb) = (
             p.plates[0].scene.objects.get(&a).unwrap().transform,
             p.plates[0].scene.objects.get(&b).unwrap().transform,
@@ -4131,7 +3283,8 @@ mod tests {
         let (id_b, _) = p.add_plate(None);
         let (_, a) = add_cube(&mut p);
         let (_, b) = add_cube(&mut p);
-        p.translate_object(b, Vec3::new(40.0, 5.0, 0.0)).unwrap();
+        p.set_object_transform(b, Transform::translation(Vec3::new(40.0, 5.0, 0.0)))
+            .unwrap();
         p.group_objects(&[a, b], "duo".into()).unwrap();
         let g = p.plates[0].scene.objects.get(&a).unwrap().group.unwrap();
         let origin = |p: &Project, plate: usize, id| {
@@ -4396,115 +3549,6 @@ mod tests {
         let json = serde_json::to_string(&p).unwrap();
         let parsed: Project = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.plates[0].name, "Calibration");
-    }
-
-    // ---- Composition order -------------------------------
-
-    fn plate_orders(p: &Project) -> Vec<(PlateId, u32)> {
-        p.plates
-            .iter()
-            .map(|pl| (pl.id, pl.metadata.composition_order))
-            .collect()
-    }
-
-    #[test]
-    fn set_composition_order_moves_plate_down_shifts_others_up() {
-        let mut p = Project::default();
-        let (id_b, _) = p.add_plate(None); // composition_order=2
-        let (id_c, _) = p.add_plate(None); // composition_order=3
-        let (id_d, _) = p.add_plate(None); // composition_order=4
-                                           // Initial: [A=1, B=2, C=3, D=4].
-                                           // Move A (composition_order=1) → 3.
-                                           // Expected: A=3, B=1, C=2, D=4.
-        let events = p.set_plate_composition_order(PlateId(1), 3).unwrap();
-        let orders = plate_orders(&p);
-        assert_eq!(
-            orders,
-            vec![(PlateId(1), 3), (id_b, 1), (id_c, 2), (id_d, 4),]
-        );
-        // 3 plates affected: the moved one + 2 shifted siblings.
-        assert_eq!(events.len(), 3);
-    }
-
-    #[test]
-    fn set_composition_order_moves_plate_up_shifts_others_down() {
-        let mut p = Project::default();
-        let (id_b, _) = p.add_plate(None);
-        let (id_c, _) = p.add_plate(None);
-        let (id_d, _) = p.add_plate(None);
-        // Initial: [A=1, B=2, C=3, D=4].
-        // Move D (composition_order=4) → 2.
-        // Expected: A=1, B=3, C=4, D=2.
-        let events = p.set_plate_composition_order(id_d, 2).unwrap();
-        let orders = plate_orders(&p);
-        assert_eq!(
-            orders,
-            vec![(PlateId(1), 1), (id_b, 3), (id_c, 4), (id_d, 2),]
-        );
-        assert_eq!(events.len(), 3);
-    }
-
-    #[test]
-    fn set_composition_order_preserves_dense_sequence() {
-        let mut p = Project::default();
-        p.add_plate(None);
-        p.add_plate(None);
-        p.add_plate(None);
-        // Perform several reorders and verify the orders always
-        // form a dense [1..N] set.
-        p.set_plate_composition_order(PlateId(1), 4).unwrap();
-        p.set_plate_composition_order(PlateId(3), 1).unwrap();
-        p.set_plate_composition_order(PlateId(2), 2).unwrap();
-        let mut orders: Vec<u32> = p
-            .plates
-            .iter()
-            .map(|pl| pl.metadata.composition_order)
-            .collect();
-        orders.sort();
-        assert_eq!(orders, vec![1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn set_composition_order_to_current_is_silent_noop() {
-        let mut p = Project::default();
-        p.add_plate(None);
-        let events = p.set_plate_composition_order(PlateId(1), 1).unwrap();
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn set_composition_order_zero_errors() {
-        let mut p = Project::default();
-        let err = p.set_plate_composition_order(PlateId(1), 0).unwrap_err();
-        assert!(matches!(
-            err,
-            SceneOpError::InvalidPlateMetadata {
-                plate_id: PlateId(1),
-                ..
-            },
-        ));
-    }
-
-    #[test]
-    fn set_composition_order_above_plate_count_errors() {
-        let mut p = Project::default();
-        p.add_plate(None);
-        // 2 plates → valid range is 1..=2. 3 is too big.
-        let err = p.set_plate_composition_order(PlateId(1), 3).unwrap_err();
-        assert!(matches!(
-            err,
-            SceneOpError::InvalidPlateMetadata {
-                plate_id: PlateId(1),
-                ..
-            },
-        ));
-    }
-
-    #[test]
-    fn set_composition_order_unknown_plate_errors() {
-        let mut p = Project::default();
-        let err = p.set_plate_composition_order(PlateId(99), 1).unwrap_err();
-        assert_eq!(err, SceneOpError::UnknownPlate(PlateId(99)));
     }
 
     // ---- Material → slot routing ------------------------

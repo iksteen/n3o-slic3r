@@ -92,8 +92,10 @@ later costs more than it had to.
     (translate/rotate/scale) is renderer-local UI state owned by
     `App`. The gizmo *pivot* override (`GizmoState`, `GizmoChanged`,
     `set_gizmo`) is gone; re-add a `core/scene` pivot field + setter
-    command if a pivot-setting UI is built. (`rotate_object` still
-    takes an optional explicit-pivot arg as a transform primitive.)
+    command if a pivot-setting UI is built. The per-axis transform
+    primitives (`translate_object` / `rotate_object` / `scale_object`)
+    are also gone — `set_object_transform` (full-matrix) is the only
+    transform mutation; re-add per-axis ops with the gizmo UI if needed.
   - *Camera* — there is no `CameraState`/`ProjectionMode` in the
     scene model. The renderer owns its own Three.js camera and frames
     from the bed (`initialFrameForBed`); it never synced or restored

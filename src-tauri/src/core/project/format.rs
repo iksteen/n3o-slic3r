@@ -521,7 +521,7 @@ mod tests {
 
     #[test]
     fn round_trip_handles_shared_mesh_duplicated_object() {
-        // Regression: two objects sharing one mesh (the duplicate_object
+        // Regression: two objects sharing one mesh (a duplicated-object
         // shape) used to fail read_project with GeometryMismatch — the writer
         // emits one mesh resource per object, but the reader checked the
         // *distinct* mesh count. The reader now reconstructs the per-object

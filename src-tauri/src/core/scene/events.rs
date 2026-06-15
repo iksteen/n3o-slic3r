@@ -74,16 +74,6 @@ pub enum SceneEvent {
         object_id: ObjectId,
         reasons: Vec<OutOfBoundsReason>,
     },
-    /// Non-uniform scale was just applied to an object (factor
-    /// components differ). Non-blocking — the renderer pairs
-    /// this with the ObjectUpdated to flag the affected object
-    /// in the UI, since dimensional cascade settings (line
-    /// widths, top-surface thresholds) assume physical extents
-    /// and a stretched object skews those.
-    NonUniformScale {
-        plate_id: PlateId,
-        object_id: ObjectId,
-    },
     /// Auto-arrange on a plate could not fit every visible object.
     /// Non-blocking; the placed objects still moved. UI flags the
     /// listed ids in the outliner so the user can resize / remove /
@@ -161,7 +151,6 @@ impl SceneEvent {
             Self::SelectionChanged { .. } => "scene:selection_changed",
             Self::BedChanged { .. } => "scene:bed_changed",
             Self::ObjectOutOfBounds { .. } => "scene:object_out_of_bounds",
-            Self::NonUniformScale { .. } => "scene:non_uniform_scale",
             Self::AutoArrangeOverflow { .. } => "scene:auto_arrange_overflow",
             Self::PlateAdded { .. } => "scene:plate_added",
             Self::PlateRemoved { .. } => "scene:plate_removed",
@@ -176,14 +165,6 @@ impl SceneEvent {
             Self::ProjectImported { .. } => "project:imported",
         }
     }
-}
-
-/// Which world-space axis a mirror op reflects across.
-#[derive(Debug, Clone, Copy, Serialize, serde::Deserialize, PartialEq, Eq)]
-pub enum MirrorAxis {
-    X,
-    Y,
-    Z,
 }
 
 /// How a selection command merges with the existing selection.
@@ -207,7 +188,7 @@ pub enum SceneOpError {
     UnknownPlate(PlateId),
     /// Tried to remove the only remaining plate.
     LastPlate,
-    /// `move_object` was called with `from_plate == to_plate`
+    /// A move-between-plates op was called with `from_plate == to_plate`
     ///. Caller should check the source/dest are distinct.
     SamePlate(PlateId),
     /// Plate metadata validation rejected the new value.
@@ -238,33 +219,6 @@ impl std::fmt::Display for SceneOpError {
             }
         }
     }
-}
-
-/// Result of a [`SceneState::move_object`] call. The
-/// frontend reads `repositioned` to surface a toast when the
-/// target's geometry forced the object away from its original
-/// world position.
-#[derive(Debug, Clone, Serialize)]
-pub struct MoveReport {
-    pub object_id: ObjectId,
-    pub new_position: [f32; 3],
-    /// `Some(reason)` when the original world-space position didn't
-    /// fit on the target plate and the object was re-anchored.
-    pub repositioned: Option<RepositionReason>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind")]
-pub enum RepositionReason {
-    /// The object's world-space bounding box landed outside the
-    /// target plate's build volume in XY.
-    OutOfBounds,
-    /// The object's world-space bounding box intersects one of
-    /// the target's exclusion zones.
-    OnExclusionZone,
-    /// The object's world-space minimum Z is below the target
-    /// plate's bed surface.
-    BelowBedSurface,
 }
 
 /// Outcome of a [`Project::rebind_plate_printer`] call.

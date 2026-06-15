@@ -704,7 +704,12 @@ mod tests {
         let (_, b, _) = s.add_from_primitive(PrimitiveKind::Cube, cube);
         // Offset b so the group has internal structure, and add a loose cube so
         // the pack actually has to move the group.
-        s.translate_object(b, Vec3::new(40.0, 5.0, 0.0)).unwrap();
+        let b_current = s.active_plate().scene.objects.get(&b).unwrap().transform;
+        s.set_object_transform(
+            b,
+            Transform::translation(Vec3::new(40.0, 5.0, 0.0)).compose(b_current),
+        )
+        .unwrap();
         let (_, _c, _) = s.add_from_primitive(PrimitiveKind::Cube, cube);
         s.group_objects(&[a, b], "grp".into()).unwrap();
 

@@ -23,6 +23,7 @@ use n3o_slic3r_lib::core::project::Project;
 use n3o_slic3r_lib::core::scene::events::SelectMode;
 use n3o_slic3r_lib::core::scene::primitives::{PrimitiveKind, PrimitiveParams};
 use n3o_slic3r_lib::core::scene::state::ObjectId;
+use n3o_slic3r_lib::core::scene::transform::Transform;
 use std::time::{Duration, Instant};
 
 const OBJECT_COUNT: usize = 1000;
@@ -73,7 +74,8 @@ fn translate_single_object_under_5ms_p99_on_1000_object_scene() {
         // Alternate +X / -X so the object stays near origin and the
         // operation cost doesn't drift up over many iterations.
         let dx = if i % 2 == 0 { 1.0 } else { -1.0 };
-        let _ = state.translate_object(target, glam::Vec3::new(dx, 0.0, 0.0));
+        let _ =
+            state.set_object_transform(target, Transform::translation(glam::Vec3::new(dx, 0.0, 0.0)));
     });
     println!("translate mean={:?} p99={:?}", mean, p99);
     assert!(
@@ -93,7 +95,10 @@ fn rotate_single_object_under_5ms_p99_on_1000_object_scene() {
     let (mean, p99) = measure(|i| {
         // ±10° around Z, alternating direction.
         let radians = if i % 2 == 0 { 0.17 } else { -0.17 };
-        let _ = state.rotate_object(target, glam::Vec3::Z, radians, None);
+        let _ = state.set_object_transform(
+            target,
+            Transform::rotation_around(glam::Vec3::Z, radians),
+        );
     });
     println!("rotate mean={:?} p99={:?}", mean, p99);
     assert!(mean < Duration::from_millis(5), "rotate mean {mean:?}");
@@ -106,7 +111,7 @@ fn scale_single_object_under_5ms_p99_on_1000_object_scene() {
     let target = ids[OBJECT_COUNT / 2];
     let (mean, p99) = measure(|i| {
         let f = if i % 2 == 0 { 1.001 } else { 0.999 };
-        let _ = state.scale_object(target, glam::Vec3::splat(f));
+        let _ = state.set_object_transform(target, Transform::scale(glam::Vec3::splat(f)));
     });
     println!("scale mean={:?} p99={:?}", mean, p99);
     assert!(mean < Duration::from_millis(5), "scale mean {mean:?}");

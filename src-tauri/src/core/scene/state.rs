@@ -327,19 +327,3 @@ pub(crate) fn mesh_bb_corners(bb: &BoundingBox) -> [Vec3; 8] {
         Vec3::new(mx[0], mx[1], mx[2]),
     ]
 }
-
-/// Return (min_z, max_z) of the corners after applying `xform`.
-pub(crate) fn z_extent(corners: &[Vec3; 8], xform: &glam::Mat4) -> (f32, f32) {
-    let mut min_z = f32::INFINITY;
-    let mut max_z = f32::NEG_INFINITY;
-    for c in corners {
-        let p = xform.transform_point3(*c);
-        if p.z < min_z {
-            min_z = p.z;
-        }
-        if p.z > max_z {
-            max_z = p.z;
-        }
-    }
-    (min_z, max_z)
-}

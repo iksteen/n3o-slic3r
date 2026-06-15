@@ -8,7 +8,7 @@
 //
 // Deliberately EXCLUDES non-edits: selection (`scene:selection_changed`),
 // navigation (`scene:active_plate_changed`), structural add/remove of empty
-// plates, and the warning events (out-of-bounds, non-uniform-scale, …).
+// plates, and the warning events (out-of-bounds, …).
 
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { onEvents } from "../state/eventRouter";

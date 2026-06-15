@@ -227,10 +227,6 @@ export type SceneEvent =
       };
     }
   | {
-      kind: "NonUniformScale";
-      data: { plate_id: PlateId; object_id: ObjectId };
-    }
-  | {
       kind: "AutoArrangeOverflow";
       data: { plate_id: PlateId; un_placed: ObjectId[] };
     }

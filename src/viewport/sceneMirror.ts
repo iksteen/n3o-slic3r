@@ -347,7 +347,6 @@ export class SceneMirror {
         break;
       }
       case "ObjectOutOfBounds":
-      case "NonUniformScale":
       case "AutoArrangeOverflow":
         // Non-blocking warnings; the UI layer (toast) handles these.
         // The mirror just notifies listeners.

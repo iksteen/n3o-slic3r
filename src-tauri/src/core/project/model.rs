@@ -26,7 +26,7 @@
 //! Mutation methods live in [`super::mutation`] to keep this file
 //! focused on the type shape. Project-level mutations
 //! (`add_plate`, `remove_plate`, `set_active_plate`) and scene
-//! mutations (`translate_object`, `select`, …) both operate on
+//! mutations (`set_object_transform`, `select`, …) both operate on
 //! `&mut Project` via the same impl block.
 
 use std::collections::{BTreeMap, HashMap};

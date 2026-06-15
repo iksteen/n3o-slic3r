@@ -470,13 +470,6 @@ export function ViewportCanvas({
               .join(", ")}`,
           );
           break;
-        case "NonUniformScale":
-          if (evt.data.plate_id !== activeId) break;
-          pushToast(
-            "warn",
-            `object ${evt.data.object_id} now has non-uniform scale — dimensional settings may be off`,
-          );
-          break;
         case "AutoArrangeOverflow":
           if (evt.data.plate_id !== activeId) break;
           pushToast(

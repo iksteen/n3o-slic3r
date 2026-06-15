@@ -20,7 +20,6 @@ describe("editEvents classification", () => {
       "scene:plate_added",
       "scene:plate_removed",
       "scene:object_out_of_bounds",
-      "scene:non_uniform_scale",
       "scene:mesh_loaded",
     ]) {
       expect(isEditEvent(name)).toBe(false);

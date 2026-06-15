@@ -41,7 +41,6 @@ const EVENT_NAMES = [
   "scene:selection_changed",
   "scene:bed_changed",
   "scene:object_out_of_bounds",
-  "scene:non_uniform_scale",
   "scene:auto_arrange_overflow",
   // Plate list mutations (PR-5-2)
   "scene:plate_added",

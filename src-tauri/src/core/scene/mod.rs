@@ -41,7 +41,7 @@ pub mod transform;
 
 pub use bed::{bed_for_printer, object_out_of_bounds, BedMesh, BoundsAxis, OutOfBoundsReason};
 pub use build_plate::BuildPlate;
-pub use events::{MirrorAxis, SceneEvent, SceneOpError, SelectMode};
+pub use events::{SceneEvent, SceneOpError, SelectMode};
 pub use state::{
     ActivePlate, ExclusionZone, Mesh, MeshId, MeshProvenance, ObjectId, PlateSceneState,
     SceneObject,
