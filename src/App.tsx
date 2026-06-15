@@ -22,6 +22,7 @@ import {
   message as messageDialog,
 } from "@tauri-apps/plugin-dialog";
 import { onEvents } from "./state/eventRouter";
+import { PROJECT_REPLACED_EVENTS } from "./project/editEvents";
 import { SettingsPanelHost } from "./settings/SettingsPanelHost";
 import { ObjectsPanel } from "./objects/ObjectsPanel";
 import { PreviewWorkspace } from "./preview/PreviewWorkspace";
@@ -221,6 +222,17 @@ function App() {
       cancelled = true;
       void pending.then((un) => un());
     };
+  }, []);
+
+  // Opening / importing a project replaces the scene wholesale, so its
+  // per-plate slice artifacts (output paths, preview, tower mesh) are dropped
+  // by their caches. If we were *in* preview when that happened, leave preview
+  // explicitly rather than leaning on `showPreview`'s `&& canPreview` mask —
+  // the freshly-loaded project has nothing sliced. Devices view is left alone.
+  useEffect(() => {
+    return onEvents(PROJECT_REPLACED_EVENTS, () => {
+      setMode((current) => (current === "preview" ? "scene" : current));
+    });
   }, []);
 
   const goPrepare = (): void => {

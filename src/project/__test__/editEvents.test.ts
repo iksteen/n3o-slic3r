@@ -3,6 +3,7 @@ import {
   isEditEvent,
   isSavedEvent,
   PLATE_EDIT_EVENTS,
+  PROJECT_REPLACED_EVENTS,
   PROJECT_WIDE_EDIT_EVENT,
 } from "../editEvents";
 
@@ -31,5 +32,18 @@ describe("editEvents classification", () => {
       expect(isSavedEvent(name)).toBe(true);
       expect(isEditEvent(name)).toBe(false);
     }
+  });
+
+  it("project replacement = load + import, but NOT save (slice artifacts)", () => {
+    // Open / import swap the project wholesale → stale every plate's slice
+    // artifacts (output, preview, tower). Save does not — the slice stays
+    // valid — so it must be excluded from the invalidation set.
+    expect([...PROJECT_REPLACED_EVENTS].sort()).toEqual([
+      "project:imported",
+      "project:loaded",
+    ]);
+    expect((PROJECT_REPLACED_EVENTS as readonly string[]).includes("project:saved")).toBe(
+      false,
+    );
   });
 });

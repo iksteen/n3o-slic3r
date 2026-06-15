@@ -37,6 +37,19 @@ export const SAVED_EVENTS = [
   "project:imported",
 ] as const;
 
+/** Wholesale project replacement — Open project (native load or transparent
+ *  foreign import). Not an *edit* (the in-memory project is swapped out, not
+ *  mutated), but every per-plate slice artifact keyed by plate id — last-slice
+ *  output, G-code preview, priming-tower mesh — is now stale (plate ids are
+ *  reused across projects, so a cache entry for "plate 1" would otherwise show
+ *  the previous project's slice). So it invalidates ALL plates, routed through
+ *  `listenPlateEdits`' `onAll`. `project:saved` is deliberately excluded:
+ *  saving doesn't change geometry, the slice stays valid. */
+export const PROJECT_REPLACED_EVENTS = [
+  "project:loaded",
+  "project:imported",
+] as const;
+
 const EDIT_SET: ReadonlySet<string> = new Set([
   ...PLATE_EDIT_EVENTS,
   PROJECT_WIDE_EDIT_EVENT,
@@ -58,9 +71,11 @@ interface EditPayload {
 }
 
 /** Subscribe to content edits via the shared event router. `onPlate(plateId)`
- *  fires for a plate-scoped edit; `onAll()` for a project-wide one. Returns a
- *  single unsubscribe. Async-returning for caller compatibility (the router
- *  registration itself is synchronous). */
+ *  fires for a plate-scoped edit; `onAll()` for a project-wide one — a
+ *  project-wide override edit OR a wholesale project replacement (Open /
+ *  import), both of which stale every plate. Returns a single unsubscribe.
+ *  Async-returning for caller compatibility (the router registration itself is
+ *  synchronous). */
 export async function listenPlateEdits(
   onPlate: (plateId: number) => void,
   onAll: () => void,
@@ -70,8 +85,10 @@ export async function listenPlateEdits(
     if (plateId != null) onPlate(plateId);
   });
   const offAll = onEvents([PROJECT_WIDE_EDIT_EVENT], () => onAll());
+  const offReplaced = onEvents(PROJECT_REPLACED_EVENTS, () => onAll());
   return () => {
     offPlate();
     offAll();
+    offReplaced();
   };
 }

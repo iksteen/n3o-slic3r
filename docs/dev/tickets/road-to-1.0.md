@@ -290,10 +290,20 @@ into CI and add an authenticode signer. Neither is an unknown.
   row highlight now follow the active tab (object tab = selected object;
   project tab = union of project overrides + **any** object's overrides,
   matching the objects-overriding badge).
-- **Opening a project doesn't invalidate the preview** (noted 2026-06-15).
-  The G-code preview from a prior slice survives an Open-project, so it shows
-  stale toolpaths for the just-loaded project until the next slice. Opening a
-  project should drop the per-plate last-slice/preview state.
+- **Opening a project doesn't invalidate slice artifacts ✅ DONE (2026-06-15).**
+  The G-code preview (and two siblings) from a prior slice survived an
+  Open-project. Root cause: three per-plate slice artifacts keyed by plate id —
+  last-slice output (`useLastSliceOutput`), G-code preview
+  (`useSlicePreviewBridge`), and the priming-tower mesh (`towerMeshCache`) —
+  weren't dropped on a wholesale project swap, and plate ids are reused across
+  projects, so a "plate 1" cache entry showed the previous project's slice.
+  Fixed by a single classification, `PROJECT_REPLACED_EVENTS`
+  (`project:loaded` + `project:imported`, **not** `project:saved`) in
+  `editEvents.ts`, routed through `listenPlateEdits`' `onAll` (covers the two
+  hooks) + a `clearAll` in `towerMeshCache`; `App` also resets preview→scene
+  mode. The project dirty mark was checked too — correctly cleared on open
+  (`isSavedEvent`); import-marked-clean is the documented MVP deferral, not a
+  bug.
 - **Arch self-hosted publish — verify end-to-end.**
   `packaging/arch/publish.sh` (+ README section) builds a signed
   `.pkg.tar.zst` for bare `pacman -U`. Written, `bash -n`-clean, and the

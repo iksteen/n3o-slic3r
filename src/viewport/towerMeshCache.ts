@@ -14,6 +14,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { onEvents } from "../state/eventRouter";
+import { PROJECT_REPLACED_EVENTS } from "../project/editEvents";
 import type { TowerGeometry, TowerMesh } from "./types";
 
 interface CachedTowerMesh {
@@ -58,13 +59,30 @@ function notify(plateId: number): void {
   for (const cb of subscribers) cb(plateId);
 }
 
+/** Drop every cached tower mesh and notify so the viewport re-renders without
+ *  them. Used on a wholesale project replacement (Open / import): plate ids are
+ *  reused across projects, so a cached mesh for "plate 1" would otherwise show
+ *  the previous project's tower on the freshly-loaded plate 1. */
+function clearAll(): void {
+  if (cache.size === 0) return;
+  const plateIds = [...cache.keys()];
+  cache.clear();
+  latestSeq.clear();
+  for (const plateId of plateIds) notify(plateId);
+}
+
 /** Wire the app-lifetime `slice:plate_finished` → cache handler via the router.
  *  Call once from an always-mounted component (App); await + invoke the
  *  returned unsubscribe on teardown. */
 export async function setupTowerMeshCache(): Promise<UnlistenFn> {
+  // A wholesale project replacement (Open / import) stales every cached tower
+  // — drop them all, the same way the slice-output + preview caches invalidate.
+  const offReplaced = onEvents(PROJECT_REPLACED_EVENTS, () => clearAll());
   // SliceEvent serializes tagged (`#[serde(tag="kind", content="data")]`),
   // so the payload is `{ kind, data: {...} }` — the fields are under `.data`.
-  return onEvents<{ data: { plate_id: number; tower_mesh: TowerMesh | null } }>(
+  const offFinished = onEvents<{
+    data: { plate_id: number; tower_mesh: TowerMesh | null };
+  }>(
     ["slice:plate_finished"],
     (e) => {
       const { plate_id, tower_mesh } = e.payload.data;
@@ -101,4 +119,8 @@ export async function setupTowerMeshCache(): Promise<UnlistenFn> {
         });
     },
   );
+  return () => {
+    offReplaced();
+    offFinished();
+  };
 }
