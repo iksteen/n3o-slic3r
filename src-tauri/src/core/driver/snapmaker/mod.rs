@@ -12,15 +12,21 @@
 //! statement in `core/printer/snapmaker/mod.rs` and PRD AD-7):
 //! the U1 actually exposes a vanilla Moonraker endpoint over
 //! plain HTTP+WS on port 80. The Snapmaker-specific pair/mTLS
-//! dance the overlay also implements is webcam-only and out of
-//! scope here. PR-7b-6 updates the doc.
+//! dance is webcam-only — print + status ride the plain Moonraker
+//! endpoint — and is implemented here (`pairing`, `mtls`,
+//! `snap_token`, `camera`) to drive the live camera.
 //!
 //! [`iksteen/bambu-overlay`]: https://github.com/iksteen/bambu-overlay
 
+pub mod camera;
+pub mod commands;
 pub mod connection;
 pub mod http;
 pub mod moonraker;
+pub mod mtls;
+pub mod pairing;
 pub mod probe;
+pub mod snap_token;
 pub mod status;
 
 pub use connection::{U1Config, U1Driver};

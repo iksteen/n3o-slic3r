@@ -305,9 +305,11 @@ function CameraPanel({
   config: DriverConfig | null;
   offline: boolean;
 }): React.JSX.Element {
-  // Only Bambu LAN cameras are wired today; other backends show the
-  // unavailable state without opening a stream.
-  const supported = config?.kind === "Bambu";
+  // Bambu LAN and Snapmaker U1 cameras are wired. An unpaired U1 still
+  // counts as "supported" — camera_start rejects with pairing guidance,
+  // which surfaces as the error placeholder rather than a generic
+  // "not available".
+  const supported = config?.kind === "Bambu" || config?.kind === "U1";
   const active = supported && !offline;
   const { frameUrl, error } = useCameraStream(
     instanceId,

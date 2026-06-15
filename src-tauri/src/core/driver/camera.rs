@@ -44,6 +44,9 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::State;
 use tokio_util::sync::CancellationToken;
 
+use super::snapmaker::camera as u1_camera;
+use super::snapmaker::camera::SnapMonitorSession;
+use super::snapmaker::snap_token::{self, SnapToken};
 use super::traits::{DriverConfig, DriverError};
 
 /// Reconnect backoff bounds — mirrors the driver/status reconnect feel.
@@ -105,18 +108,79 @@ impl CameraSource for BambuCameraSource {
     }
 }
 
-/// Build the camera source for a connection config, or an error if that
-/// backend has no camera support yet.
-fn source_for(config: DriverConfig) -> Result<Box<dyn CameraSource>, DriverError> {
+/// The Snapmaker U1 camera: a Moonraker JPEG poll kept alive by a
+/// session-long mTLS "monitor mode" wake. `setup` opens the mTLS session
+/// and starts monitor mode; `attempt` runs the poll loop; `teardown`
+/// releases monitor mode. The session is held across the whole view (the
+/// daemon only emits while an authorized client stays subscribed), so it
+/// lives in an async `Mutex` set by `setup` and taken by `teardown`.
+struct U1CameraSource {
+    /// Moonraker HTTP host:port (the print/status endpoint, typically :80).
+    host: String,
+    port: u16,
+    /// Paired mTLS material — drives the wake and identifies the device.
+    token: SnapToken,
+    client: reqwest::Client,
+    session: tokio::sync::Mutex<Option<SnapMonitorSession>>,
+}
+
+#[async_trait]
+impl CameraSource for U1CameraSource {
+    async fn setup(&self) {
+        let session = u1_camera::wake(&self.token).await;
+        *self.session.lock().await = session;
+    }
+
+    async fn attempt(&self, sink: &FrameSink) -> Result<(), DriverError> {
+        let url = u1_camera::monitor_url(&self.host, self.port);
+        let mut last_modified: Option<String> = None;
+        loop {
+            let outcome = u1_camera::poll_frame(&self.client, &url, last_modified.as_deref()).await?;
+            if let Some(value) = outcome.last_modified {
+                last_modified = Some(value);
+            }
+            if let Some(frame) = outcome.frame {
+                if !sink.send(frame) {
+                    return Ok(()); // consumer gone — clean stop
+                }
+            }
+            tokio::time::sleep(u1_camera::POLL_INTERVAL).await;
+        }
+    }
+
+    async fn teardown(&self) {
+        if let Some(session) = self.session.lock().await.take() {
+            session.release().await;
+        }
+    }
+}
+
+/// Build the camera source for an instance + connection config, or an
+/// error if the backend has no camera support (a U1 that isn't paired).
+fn source_for(
+    instance_id: &str,
+    config: DriverConfig,
+) -> Result<Box<dyn CameraSource>, DriverError> {
     match config {
         DriverConfig::Bambu { host, access_code } => {
             Ok(Box::new(BambuCameraSource { host, access_code }))
         }
-        // The U1 has a camera (Moonraker poll + an mTLS wake), but it is
-        // not wired yet — a clear seam for a future `U1CameraSource`.
-        DriverConfig::U1 { .. } => Err(DriverError::Other(
-            "camera streaming is not implemented for this printer yet".to_owned(),
-        )),
+        DriverConfig::U1 { host, port } => {
+            let token = snap_token::load(instance_id).ok_or_else(|| {
+                DriverError::Other(
+                    "printer is not paired — pair it in the printer's Connection settings to \
+                     enable the camera"
+                        .to_owned(),
+                )
+            })?;
+            Ok(Box::new(U1CameraSource {
+                host,
+                port,
+                token,
+                client: u1_camera::poll_client()?,
+                session: tokio::sync::Mutex::new(None),
+            }))
+        }
     }
 }
 
@@ -239,8 +303,11 @@ pub fn camera_start(
     instance_id: String,
     config: DriverConfig,
     channel: Channel<InvokeResponseBody>,
-) -> Result<(), DriverError> {
-    let source = source_for(config)?;
+) -> Result<(), String> {
+    // Errors cross the IPC boundary as their Display string (matching every
+    // other driver command), so the frontend shows the message rather than
+    // a serialized `DriverError` enum.
+    let source = source_for(&instance_id, config).map_err(|e| e.to_string())?;
     manager.start(instance_id, source, channel);
     Ok(())
 }
@@ -380,22 +447,30 @@ mod tests {
     }
 
     #[test]
-    fn source_for_rejects_u1_for_now() {
-        let err = source_for(DriverConfig::U1 {
-            host: "h".into(),
-            port: 80,
-        })
+    fn source_for_rejects_an_unpaired_u1() {
+        // No printers root is configured in unit tests, so the U1 has no
+        // pairing token — source_for must reject it with pairing guidance.
+        let err = source_for(
+            "some-instance",
+            DriverConfig::U1 {
+                host: "h".into(),
+                port: 80,
+            },
+        )
         .err()
-        .expect("U1 has no camera source yet");
-        assert!(err.to_string().contains("not implemented"));
+        .expect("unpaired U1 has no camera source");
+        assert!(err.to_string().contains("not paired"));
     }
 
     #[test]
     fn source_for_builds_a_bambu_source() {
-        assert!(source_for(DriverConfig::Bambu {
-            host: "h".into(),
-            access_code: "12345678".into(),
-        })
+        assert!(source_for(
+            "some-instance",
+            DriverConfig::Bambu {
+                host: "h".into(),
+                access_code: "12345678".into(),
+            },
+        )
         .is_ok());
     }
 }

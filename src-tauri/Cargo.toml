@@ -66,6 +66,10 @@ native-tls = "0.2"
 tokio-native-tls = "0.3"
 rumqttc = { version = "0.25", default-features = false, features = ["use-native-tls"] }
 x509-parser = "0.18"
+# Snapmaker U1 camera pairing: the printer issues PKCS#1 RSA client keys,
+# but native-tls's Identity::from_pkcs8 requires the PKCS#8 wrapper — the
+# `rsa` crate does the one-call re-encode.
+rsa = "0.9"
 # FTPS upload to Bambu's /cache/ directory (PR-7a-5). Same crate +
 # feature set bambu-overlay uses for downloads; `deprecated` brings
 # in the explicit `connect_secure_implicit` constructor we need

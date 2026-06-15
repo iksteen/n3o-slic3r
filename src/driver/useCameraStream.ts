@@ -10,7 +10,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { cameraStart, cameraStop } from "./invokes";
+import { onEvents } from "../state/eventRouter";
 import type { DriverConfig } from "./types";
+
+/** Fired by the backend when an instance's U1 pairing changes (paired /
+ *  unpaired). The camera stream re-attempts on it so a just-paired U1
+ *  connects without a tab-switch remount. */
+const PAIRING_CHANGED_EVENT = "u1:pairing_changed";
 
 export interface CameraStream {
   /** Object URL of the latest frame, or null before the first frame. */
@@ -48,6 +54,17 @@ export function useCameraStream(
   configRef.current = config;
   const sig = configSignature(config);
 
+  // Re-attempt when this instance's pairing changes. An unpaired U1's
+  // camera_start fails once and never retries (no worker is spawned), so
+  // without this a just-paired U1 only connects on a remount (tab switch).
+  // Unpairing likewise re-runs and tears the stream down.
+  const [pairingEpoch, setPairingEpoch] = useState(0);
+  useEffect(() => {
+    return onEvents<string>([PAIRING_CHANGED_EVENT], (event) => {
+      if (event.payload === instanceId) setPairingEpoch((n) => n + 1);
+    });
+  }, [instanceId]);
+
   useEffect(() => {
     const cfg = configRef.current;
     if (!active || cfg == null) return;
@@ -82,8 +99,9 @@ export function useCameraStream(
       setLive(false);
     };
     // `config` is read via the ref; `sig` captures the parts that matter.
+    // `pairingEpoch` forces a re-attempt when this instance is (un)paired.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instanceId, active, sig]);
+  }, [instanceId, active, sig, pairingEpoch]);
 
   return { frameUrl, live, error };
 }

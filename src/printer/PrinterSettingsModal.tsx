@@ -36,7 +36,13 @@ import {
 } from "./connectionValidation";
 import { usePrinterCatalog } from "./usePrinterCatalog";
 import { configForConnection } from "../driver/useDriverConnections";
-import { driverTestConnection } from "../driver/invokes";
+import {
+  driverTestConnection,
+  u1Pair,
+  u1PairingStatus,
+  u1Unpair,
+  type PairingStatus,
+} from "../driver/invokes";
 import type { PlateSnapshot } from "../viewport/types";
 import { usePlugins } from "../plugins/usePlugins";
 import { PluginManager } from "../plugins/PluginManager";
@@ -467,6 +473,7 @@ export function PrinterSettingsModal({
             {active === "connection" && driverKind && (
               <ConnectionSection
                 driverKind={driverKind}
+                instanceId={instance.id}
                 profileLabel={profile?.model ?? instance.vendor_profile_ref}
                 draft={draft}
                 setDraft={setDraft}
@@ -872,8 +879,142 @@ function GeneralSection({
   );
 }
 
+/** U1 camera pairing control. Pairing obtains the printer's mTLS camera
+ *  credentials via an on-screen Approve tap; the keypair is stored
+ *  server-side (never here), so this only ever shows paired/unpaired + the
+ *  serial. Lives in the U1 Connection tab, beside Test connection. */
+function U1PairingControl({
+  instanceId,
+  host,
+}: {
+  instanceId: string;
+  /** Current draft IP — pairing dials this. */
+  host: string;
+}): React.JSX.Element {
+  const [status, setStatus] = useState<PairingStatus | null>(null);
+  const [pairing, setPairing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load the persisted pairing state for this instance.
+  useEffect(() => {
+    let alive = true;
+    void u1PairingStatus(instanceId)
+      .then((s) => {
+        if (alive) setStatus(s);
+      })
+      .catch(() => {
+        /* status stays null → treated as unpaired */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [instanceId]);
+
+  const hostReady = host.trim().length > 0;
+  const paired = status?.paired ?? false;
+
+  const runPair = async (): Promise<void> => {
+    setPairing(true);
+    setError(null);
+    try {
+      setStatus(await u1Pair(instanceId, host.trim()));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setPairing(false);
+    }
+  };
+
+  const runUnpair = async (): Promise<void> => {
+    setError(null);
+    try {
+      await u1Unpair(instanceId);
+      setStatus({ paired: false, serial: null });
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  return (
+    <div className="psm-field">
+      <label>Camera pairing</label>
+      <div className="psm-conn-note" role="note">
+        <svg
+          className="psm-conn-note-ico"
+          width="15"
+          height="15"
+          viewBox="0 0 16 16"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path
+            d="M8 1.5l5.5 2.4v3.2c0 3.2-2.3 6-5.5 7-3.2-1-5.5-3.8-5.5-7V3.9L8 1.5z"
+            stroke="currentColor"
+            strokeWidth="1.2"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M8 6v3.2M8 11.2h.01"
+            stroke="currentColor"
+            strokeWidth="1.3"
+            strokeLinecap="round"
+          />
+        </svg>
+        <div className="psm-conn-note-body">
+          <strong>Pairing needs LAN mode — but only while pairing.</strong>{" "}
+          <span>
+            Enable <em>LAN Mode</em> on the printer, pair, then tap{" "}
+            <em>Approve</em> when it prompts. Once paired you can reconnect
+            the printer to the cloud — the pairing stays active.
+          </span>
+        </div>
+      </div>
+      <div className="psm-conn-test">
+        <button
+          type="button"
+          className="apm-btn"
+          onClick={() => void runPair()}
+          disabled={!hostReady || pairing}
+          title="Pair with the printer to enable the live camera. You'll tap Approve on the printer screen."
+        >
+          {pairing
+            ? "Pairing… tap Approve on the printer"
+            : paired
+              ? "Re-pair"
+              : "Pair with printer"}
+        </button>
+        {paired && status?.serial && (
+          <span className="apm-name-hint psm-conn-test-ok">
+            ✓ Paired ({status.serial})
+          </span>
+        )}
+        {paired && !pairing && (
+          <button
+            type="button"
+            className="psm-delete-trigger"
+            onClick={() => void runUnpair()}
+            title="Forget this pairing"
+          >
+            Unpair
+          </button>
+        )}
+      </div>
+      {error ? (
+        <div className="apm-name-hint error">{error}</div>
+      ) : (
+        <div className="apm-name-hint">
+          {paired
+            ? "The live camera in Devices is enabled, and stays active even after the printer returns to cloud mode. Re-pair if you replaced the printer or cleared its pairing."
+            : "Enables the live camera in Devices."}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ConnectionSection({
   driverKind,
+  instanceId,
   profileLabel,
   draft,
   setDraft,
@@ -884,6 +1025,7 @@ function ConnectionSection({
   onEdit,
 }: {
   driverKind: "bambu" | "u1";
+  instanceId: string;
   profileLabel: string;
   draft: Draft;
   setDraft: React.Dispatch<React.SetStateAction<Draft>>;
@@ -1001,6 +1143,10 @@ function ConnectionSection({
             </div>
           )}
         </div>
+      )}
+
+      {driverKind === "u1" && (
+        <U1PairingControl instanceId={instanceId} host={draft.host} />
       )}
 
       {driverKind === "bambu" && (

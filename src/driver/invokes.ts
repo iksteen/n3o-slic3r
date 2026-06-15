@@ -101,6 +101,30 @@ export function cameraStop(instanceId: string): Promise<void> {
   return invoke<void>("camera_stop", { instanceId });
 }
 
+/** U1 LAN pairing state — whether the instance holds mTLS material, and
+ *  the paired printer serial (for display). Never carries key material. */
+export interface PairingStatus {
+  paired: boolean;
+  serial: string | null;
+}
+
+/** Run the Snapmaker U1 pairing dance against `host`. Resolves once the
+ *  user taps Approve on the printer (or rejects on the ~60s timeout). The
+ *  mTLS keypair is persisted server-side; only the status comes back. */
+export function u1Pair(instanceId: string, host: string): Promise<PairingStatus> {
+  return invoke<PairingStatus>("u1_pair", { instanceId, host });
+}
+
+/** Whether the U1 instance is paired (and its serial). */
+export function u1PairingStatus(instanceId: string): Promise<PairingStatus> {
+  return invoke<PairingStatus>("u1_pairing_status", { instanceId });
+}
+
+/** Forget the U1 instance's pairing. Idempotent. */
+export function u1Unpair(instanceId: string): Promise<void> {
+  return invoke<void>("u1_unpair", { instanceId });
+}
+
 /** Diagnostic: wrap the plate's gcode into the same `.gcode.3mf`
  * bundle the send path produces and write it to disk. Lets us
  * grab exactly what we'd send for offline diffing against BBS /

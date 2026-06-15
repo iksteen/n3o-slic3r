@@ -152,10 +152,11 @@ module-scoped var into `App` state (now controlled via `selectedId` /
 Send can drive it. The closure captures the destination at click time, so
 switching the active plate mid-upload still lands on the printer you sent to.
 
-### 8. Live printer webcam in the Devices view ✅ DONE — Bambu (2026-06-15)
+### 8. Live printer webcam in the Devices view ✅ DONE — Bambu + U1 (2026-06-15)
 The Devices monitor shipped with a stubbed "Webcam — not implemented"
-panel; this wires a live stream, **A1 mini (Bambu LAN) first**, hardware
-verified.
+panel; this wires a live stream for **both MVP printers** — the A1 mini
+(Bambu LAN) and the Snapmaker U1 (Moonraker poll + paired mTLS wake) —
+hardware verified on each.
 
 - **Bambu protocol** (`bambu/camera.rs`): the A1 mini's bespoke camera
   stream on TCP `:6000` behind the *same* BBL-CA device TLS the MQTT/FTPS
@@ -169,9 +170,21 @@ verified.
   `attempt`; the Snapmaker U1's session-long mTLS `camera.start_monitor`
   wake + `stop_monitor` release map onto `setup`/`teardown`. Cancellation
   is a `CancellationToken` (not `JoinHandle::abort`) precisely so async
-  teardown runs. Only the Bambu arm is wired — `source_for` returns a
-  clear "not implemented yet" for U1; a `U1CameraSource` (Moonraker poll +
-  the mTLS wake) slots in as a new arm without touching the worker.
+  teardown runs — both `U1CameraSource` (mTLS wake → poll → release) and
+  `BambuCameraSource` (push socket) are arms of it.
+- **Snapmaker U1** (`snapmaker/{pairing,mtls,snap_token,camera}.rs`): the
+  camera needs *pairing* first — a cleartext-MQTT `:1884` dance
+  (`request_lan_auth` → on-screen **Approve** tap → `notify_lan_auth`
+  yields per-client mTLS material). The keypair is persisted **server-side
+  only** (`<printers_root>/<id>.snap.json`, key-redacted `Debug`) — never
+  in `ConnectionInfo`, the wire `DriverConfig`, or a `.3mf`. The camera
+  source opens a session-long mTLS MQTT wake (`camera.start_monitor` /
+  `stop_monitor`, `setup`/`teardown`) and polls `monitor.jpg` over HTTP
+  (`attempt`). Pairing UI lives in the U1 Connection tab; a
+  `u1:pairing_changed` event re-attempts the camera so a just-paired U1
+  connects without a remount. Pairing needs LAN mode *only while pairing* —
+  it survives the printer returning to cloud. (`rsa` dep: the U1 ships
+  PKCS#1 keys, native-tls needs PKCS#8.)
 - **Frontend-driven lifecycle, backend push**: `camera_start` /
   `camera_stop` open/close the link as the camera panel becomes active /
   hidden (no always-on capture); frames are **pushed** to the webview over
@@ -183,8 +196,8 @@ verified.
   on the UI thread with no Tokio reactor — the worker spawns via
   `tauri::async_runtime::spawn`, not `tokio::spawn`.
 
-Follow-ups: the U1 camera source (Moonraker poll + mTLS wake); a generic
-Moonraker/Klipper MJPEG source for plain Klipper printers.
+Follow-ups: a generic Moonraker/Klipper MJPEG source for plain Klipper
+printers (the U1's poll + wake is Snapmaker-specific).
 
 ### 7. Orient / lay-flat without a pre-selection ✅ DONE (2026-06-09)
 Reconsider the current requirement to select an object *before* the
