@@ -28,6 +28,7 @@ use super::traits::{
 };
 use crate::core::plugin::commands::PluginHostState;
 use crate::core::plugin::{DispatchGate, HookKind, PayloadKind, PreSendHook, SendTarget};
+use crate::core::project::model::sanitize_basename;
 use crate::core::project::{PlateId, Project};
 use crate::core::slice::pre_slice_gate::{ams_bindings_for_plate, ams_mapping_for_plate};
 use crate::core::threemf::{fixture_input, write_sliced_3mf, AmsBinding};
@@ -332,7 +333,7 @@ pub async fn driver_send(
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
     let file_name = match &payload {
         SendPayload::Gcode { file_name, .. } => file_name.clone(),
-        SendPayload::Gcode3mf { plate_id, .. } => format!("plate-{plate_id}.gcode.3mf"),
+        SendPayload::Gcode3mf { file_basename, .. } => format!("{file_basename}.gcode.3mf"),
     };
     let on_progress = upload_progress_emitter(app, id, file_name);
     let mut d = handle.lock().await;
@@ -351,6 +352,7 @@ pub async fn driver_send(
 async fn wrap_gcode_as_3mf(
     gcode_path: String,
     plate_id: u32,
+    title: String,
     ams_bindings: Vec<AmsBinding>,
     thumbnail_png: Option<Vec<u8>>,
 ) -> Result<Vec<u8>, String> {
@@ -358,6 +360,12 @@ async fn wrap_gcode_as_3mf(
         let gcode_bytes =
             std::fs::read(&gcode_path).map_err(|e| format!("read gcode at {gcode_path}: {e}"))?;
         let mut input = fixture_input(plate_id, gcode_bytes);
+        // Human-readable project/plate Title — the writer emits it as
+        // `<metadata name="Title">` in the bundle's 3dmodel.model so the
+        // printer / a re-import shows where the job came from.
+        input
+            .file_metadata
+            .insert("Title".to_owned(), title);
         // Inject the per-plate AMS slot map. For Bambi
         // standalone (1 slot, no AMS) this is `[{material: 1,
         // ams_slot: 1}]` — identity-shaped. For a future
@@ -391,6 +399,34 @@ async fn read_gcode_bytes(gcode_path: String) -> Result<Vec<u8>, String> {
     })
     .await
     .map_err(|e| format!("read task join: {e}"))?
+}
+
+/// Derive the user-facing names for a plate's sliced output from the
+/// project title + the plate's name:
+/// - a filename-safe combined basename (`MyPrint_Lid`) for the FTPS
+///   upload / U1 store name / export default, and
+/// - a human-readable Title (`MyPrint — Lid`) for the `.gcode.3mf`
+///   `Title` metadata.
+///
+/// Falls back to `untitled_Plate <n>` shape when the plate is unknown
+/// (the project still contributes its title), so the names are always
+/// well-formed.
+fn derive_send_names(project: &Mutex<Project>, plate_id: u32) -> (String, String) {
+    let p = project
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let project_title = p.title();
+    let plate_name = p
+        .plate(PlateId(plate_id))
+        .map(|pl| pl.name.clone())
+        .unwrap_or_else(|| format!("Plate {plate_id}"));
+    let combined = format!(
+        "{}_{}",
+        sanitize_basename(&project_title),
+        sanitize_basename(&plate_name)
+    );
+    let title = format!("{project_title} — {plate_name}");
+    (combined, title)
 }
 
 /// Look up the active project's plate-side AMS bindings for use in
@@ -449,12 +485,13 @@ pub async fn driver_export_plate(
     // anyway so the .gcode.3mf side stays consistent with what the
     // send path would emit.
     let ams = collect_ams_bindings(&project, plate_id);
+    let (_basename, title) = derive_send_names(&project, plate_id);
     let thumbnail_png = thumbnail_png_base64.and_then(|b64| {
         base64::engine::general_purpose::STANDARD
             .decode(b64.as_bytes())
             .ok()
     });
-    let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, ams, thumbnail_png).await?;
+    let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, title, ams, thumbnail_png).await?;
     tauri::async_runtime::spawn_blocking(move || {
         std::fs::write(&output_path, &bytes).map_err(|e| format!("write {output_path}: {e}"))
     })
@@ -510,14 +547,16 @@ pub async fn driver_send_plate(
             }
         }
     });
+    let (basename, title) = derive_send_names(&project, plate_id);
     let payload = match kind {
         DriverKind::Bambu => {
             let ams = collect_ams_bindings(&project, plate_id);
             let (use_ams, ams_mapping, ams_mapping2) = collect_ams_mapping(&project, plate_id);
-            let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, ams, thumbnail_png).await?;
+            let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, title, ams, thumbnail_png).await?;
             SendPayload::Gcode3mf {
                 bytes,
                 plate_id,
+                file_basename: basename.clone(),
                 use_ams,
                 ams_mapping,
                 ams_mapping2,
@@ -533,7 +572,7 @@ pub async fn driver_send_plate(
             };
             SendPayload::Gcode {
                 bytes,
-                file_name: format!("plate-{plate_id}.gcode"),
+                file_name: format!("{basename}.gcode"),
             }
         }
     };
@@ -545,8 +584,8 @@ pub async fn driver_send_plate(
     let printer_model = plate_printer_model(&project, plate_id);
     let payload = apply_pre_send(plugin_host.inner(), payload, plate_id, kind, printer_model);
     let file_name = match kind {
-        DriverKind::Bambu => format!("plate-{plate_id}.gcode.3mf"),
-        DriverKind::U1 => format!("plate-{plate_id}.gcode"),
+        DriverKind::Bambu => format!("{basename}.gcode.3mf"),
+        DriverKind::U1 => format!("{basename}.gcode"),
     };
     let on_progress = upload_progress_emitter(app, id, file_name);
     let mut d = handle.lock().await;
@@ -631,6 +670,7 @@ fn apply_pre_send(
         },
         SendPayload::Gcode3mf {
             plate_id,
+            file_basename,
             use_ams,
             ams_mapping,
             ams_mapping2,
@@ -638,6 +678,7 @@ fn apply_pre_send(
         } => SendPayload::Gcode3mf {
             bytes: edited,
             plate_id,
+            file_basename,
             use_ams,
             ams_mapping,
             ams_mapping2,
@@ -796,6 +837,31 @@ mod tests {
     }
 
     #[test]
+    fn derive_send_names_combines_project_title_and_plate_name() {
+        use std::path::PathBuf;
+
+        // Unsaved, default-named plate → untitled_Plate 1.
+        let mut project = Project::default();
+        let (basename, title) = derive_send_names(&Mutex::new(project.clone()), 1);
+        assert_eq!(basename, "Untitled_Plate_1");
+        assert_eq!(title, "Untitled — Plate 1");
+
+        // Saved as MyPrint.3mf, plate renamed "Lid".
+        project.source_path = Some(PathBuf::from("/tmp/MyPrint.3mf"));
+        if let Some(plate) = project.plates.first_mut() {
+            plate.name = "Lid".into();
+        }
+        let (basename, title) = derive_send_names(&Mutex::new(project.clone()), 1);
+        assert_eq!(basename, "MyPrint_Lid");
+        assert_eq!(title, "MyPrint — Lid");
+
+        // Unknown plate id still produces a well-formed name from the project.
+        let (basename, title) = derive_send_names(&Mutex::new(project), 9);
+        assert_eq!(basename, "MyPrint_Plate_9");
+        assert_eq!(title, "MyPrint — Plate 9");
+    }
+
+    #[test]
     fn css_to_hex8_appends_opaque_alpha_and_uppercases() {
         assert_eq!(css_to_hex8("#ff8800"), "FF8800FF");
         assert_eq!(css_to_hex8("ea580c"), "EA580CFF");
@@ -908,6 +974,7 @@ mod tests {
         let payload = SendPayload::Gcode3mf {
             bytes: original.clone(),
             plate_id: 3,
+            file_basename: "MyPrint_Lid".into(),
             use_ams: true,
             ams_mapping: vec![],
             ams_mapping2: vec![],
@@ -916,11 +983,13 @@ mod tests {
             SendPayload::Gcode3mf {
                 bytes,
                 plate_id,
+                file_basename,
                 use_ams,
                 ..
             } => {
                 assert_eq!(bytes, original, ".gcode.3mf bytes must be untouched");
                 assert_eq!(plate_id, 3);
+                assert_eq!(file_basename, "MyPrint_Lid");
                 assert!(use_ams);
             }
             other => panic!("expected Gcode3mf, got {other:?}"),

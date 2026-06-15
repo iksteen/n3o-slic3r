@@ -513,6 +513,8 @@ function App() {
               printerIdentity={printerIdentity}
               connection={activeConnection}
               plateId={activePlateId}
+              projectName={projectName}
+              plateName={activePlate?.name ?? null}
               lastSliceOutputPath={lastSliceOutputPath}
             />
           </>

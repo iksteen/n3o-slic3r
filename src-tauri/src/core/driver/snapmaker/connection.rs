@@ -512,6 +512,7 @@ mod tests {
         let payload = SendPayload::Gcode3mf {
             bytes: vec![],
             plate_id: 1,
+            file_basename: "untitled_Plate_1".into(),
             use_ams: false,
             ams_mapping: Vec::new(),
             ams_mapping2: Vec::new(),

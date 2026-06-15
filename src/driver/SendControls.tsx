@@ -28,9 +28,28 @@ export interface SendControlsProps {
   connection: ConnectionSummary | null;
   /** Active plate id — needed for the send call's subtask name. */
   plateId: number | null;
+  /** Project file name (e.g. `MyPrint.3mf`, or `Untitled.3mf` unsaved) —
+   *  contributes the project half of the export default filename. */
+  projectName: string;
+  /** Active plate's display name (e.g. `Plate 1`, or a renamed `Lid`) —
+   *  the plate half of the export default filename. */
+  plateName: string | null;
   /** Path of the active plate's most recent slice output, or `null`
    *  until the first slice completes. */
   lastSliceOutputPath: string | null;
+}
+
+/** Filename-safe basename, mirroring the backend's `sanitize_basename`:
+ *  keep `[A-Za-z0-9._-]`, map the rest to `_`, collapse runs, trim
+ *  separators, fall back to `untitled`. Used only for the export
+ *  default — the user can still override it in the picker, and the
+ *  backend re-derives the printer-visible names on send. */
+function sanitizeBasename(s: string): string {
+  const collapsed = s
+    .replace(/[^A-Za-z0-9._-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^[._-]+|[._-]+$/g, "");
+  return collapsed === "" ? "untitled" : collapsed;
 }
 
 /** The "we just sent and the printer hasn't acted yet" latch lives at
@@ -53,6 +72,8 @@ export function SendControls({
   printerIdentity,
   connection,
   plateId,
+  projectName,
+  plateName,
   lastSliceOutputPath,
 }: SendControlsProps): React.JSX.Element | null {
   const driverId = connection?.driverId ?? null;
@@ -133,9 +154,14 @@ export function SendControls({
     if (plateId == null) return;
     setActionPending(true);
     try {
+      // Mirror the backend's combined basename: project title (the file
+      // name minus its `.3mf`) + the plate's name. User can override.
+      const projectTitle = projectName.replace(/\.3mf$/i, "");
+      const plateTitle = plateName ?? `Plate ${plateId}`;
+      const defaultName = `${sanitizeBasename(projectTitle)}_${sanitizeBasename(plateTitle)}.gcode.3mf`;
       const path = await saveDialog({
         title: "Export .gcode.3mf",
-        defaultPath: `plate-${plateId}.gcode.3mf`,
+        defaultPath: defaultName,
         filters: [{ name: "Bambu sliced bundle", extensions: ["gcode.3mf"] }],
       });
       if (path == null) {

@@ -226,11 +226,64 @@ fn bind_preferred_else_first_in_place(plate: &mut Plate, preferred: Option<&str>
     plate.set_printer(Some(inst.id.clone()), Some(&profile));
 }
 
+/// Filename-safe basename for sliced output: keep `[A-Za-z0-9._-]`, map any other
+/// char (spaces, slashes, …) to `_`, collapse `_` runs, trim leading/trailing
+/// separators, and fall back to "untitled" if nothing usable remains.
+pub fn sanitize_basename(s: &str) -> String {
+    let mapped: String = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut out = String::with_capacity(mapped.len());
+    let mut prev_us = false;
+    for c in mapped.chars() {
+        if c == '_' {
+            if !prev_us {
+                out.push('_');
+            }
+            prev_us = true;
+        } else {
+            out.push(c);
+            prev_us = false;
+        }
+    }
+    let trimmed = out.trim_matches(|c| c == '_' || c == '.' || c == '-');
+    if trimmed.is_empty() {
+        "untitled".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
 impl Project {
     /// Empty single-plate project. Same as [`Project::default`];
     /// kept as a named constructor for callsite readability.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Human-readable project title for sliced-output naming + the `.gcode.3mf`
+    /// `Title` metadata: a loaded non-empty `Title`, else the project file's stem,
+    /// else "Untitled".
+    pub fn title(&self) -> String {
+        self.file_metadata
+            .get("Title")
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                self.source_path
+                    .as_ref()
+                    .and_then(|p| p.file_stem())
+                    .map(|s| s.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "Untitled".to_owned())
     }
 
     /// Empty single-plate project whose bootstrap plate binds `preferred` if
@@ -464,6 +517,39 @@ mod tests {
         assert!(p.meshes.is_empty());
         assert_eq!(p.next_mesh_id, 0);
         assert_eq!(p.next_object_id, 0);
+    }
+
+    #[test]
+    fn sanitize_basename_keeps_safe_chars_collapses_runs_trims() {
+        assert_eq!(sanitize_basename("My Print"), "My_Print");
+        assert_eq!(sanitize_basename("a/b\\c"), "a_b_c");
+        assert_eq!(sanitize_basename("  spaced  "), "spaced");
+        assert_eq!(sanitize_basename("a___b"), "a_b");
+        assert_eq!(sanitize_basename("v1.2-final"), "v1.2-final");
+        // Nothing usable left → the documented fallback.
+        assert_eq!(sanitize_basename(""), "untitled");
+        assert_eq!(sanitize_basename("///"), "untitled");
+        assert_eq!(sanitize_basename("   "), "untitled");
+    }
+
+    #[test]
+    fn title_prefers_metadata_then_stem_then_untitled() {
+        // Bare project: no Title metadata, no source path.
+        let mut p = Project::default();
+        assert_eq!(p.title(), "Untitled");
+
+        // A loaded source path contributes its file stem.
+        p.source_path = Some(PathBuf::from("/tmp/MyPrint.3mf"));
+        assert_eq!(p.title(), "MyPrint");
+
+        // A non-empty Title metadata wins over the stem.
+        p.file_metadata
+            .insert("Title".into(), "Authored Name".into());
+        assert_eq!(p.title(), "Authored Name");
+
+        // A blank Title falls back to the stem (trimmed/empty is ignored).
+        p.file_metadata.insert("Title".into(), "   ".into());
+        assert_eq!(p.title(), "MyPrint");
     }
 
     #[test]

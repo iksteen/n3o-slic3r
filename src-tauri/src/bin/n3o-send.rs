@@ -151,9 +151,14 @@ async fn send_bambu(
         .await
         .map_err(|e| format!("connecting to Bambu at {host}: {e}"))?;
 
+    // CLI sends an already-built bundle: derive the printer-visible name from
+    // the input file's stem (drop `.gcode.3mf` / `.3mf`), so it keeps whatever
+    // the slicing step named it.
+    let file_basename = bundle_basename(file);
     let payload = SendPayload::Gcode3mf {
         bytes,
         plate_id: args.plate,
+        file_basename,
         use_ams,
         ams_mapping,
         ams_mapping2,
@@ -447,6 +452,23 @@ fn has_ext(p: &Path, ext: &str) -> bool {
 
 fn file_name_of(p: &Path) -> &str {
     p.file_name().and_then(|n| n.to_str()).unwrap_or("file")
+}
+
+/// Printer-visible basename for an already-built bundle: the file name with the
+/// `.gcode.3mf` / `.3mf` (and a residual `.gcode`) extensions stripped, so a
+/// `MyPrint_Lid.gcode.3mf` input keeps showing as `MyPrint_Lid`.
+fn bundle_basename(p: &Path) -> String {
+    let name = file_name_of(p);
+    let stem = name
+        .strip_suffix(".gcode.3mf")
+        .or_else(|| name.strip_suffix(".3mf"))
+        .or_else(|| name.strip_suffix(".gcode"))
+        .unwrap_or(name);
+    if stem.is_empty() {
+        "untitled".to_owned()
+    } else {
+        stem.to_owned()
+    }
 }
 
 /// Parse an `--ams` spec into the Bambu `(use_ams, ams_mapping, ams_mapping2)`

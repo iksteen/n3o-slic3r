@@ -88,6 +88,9 @@ pub enum SendPayload {
     Gcode3mf {
         bytes: Vec<u8>,
         plate_id: u32,
+        /// Project+plate-derived, filename-safe basename for the FTPS upload /
+        /// the printer-visible job name (`<file_basename>.gcode.3mf`).
+        file_basename: String,
         use_ams: bool,
         ams_mapping: Vec<i8>,
         ams_mapping2: Vec<AmsMappingV2>,
@@ -250,6 +253,7 @@ mod tests {
         let bambu = SendPayload::Gcode3mf {
             bytes: vec![1, 2, 3],
             plate_id: 1,
+            file_basename: "MyPrint_Lid".into(),
             use_ams: true,
             ams_mapping: vec![-1, 0],
             ams_mapping2: vec![
@@ -269,12 +273,14 @@ mod tests {
             SendPayload::Gcode3mf {
                 plate_id,
                 bytes,
+                file_basename,
                 use_ams,
                 ams_mapping,
                 ams_mapping2,
             } => {
                 assert_eq!(plate_id, 1);
                 assert_eq!(bytes, vec![1, 2, 3]);
+                assert_eq!(file_basename, "MyPrint_Lid");
                 assert!(use_ams);
                 assert_eq!(ams_mapping, vec![-1, 0]);
                 assert_eq!(

@@ -244,14 +244,15 @@ impl Driver for BambuDriver {
         payload: SendPayload,
         on_progress: UploadProgressFn,
     ) -> Result<SendHandle, DriverError> {
-        let (bytes, plate_id, use_ams, ams_mapping, ams_mapping2) = match payload {
+        let (bytes, plate_id, file_basename, use_ams, ams_mapping, ams_mapping2) = match payload {
             SendPayload::Gcode3mf {
                 bytes,
                 plate_id,
+                file_basename,
                 use_ams,
                 ams_mapping,
                 ams_mapping2,
-            } => (bytes, plate_id, use_ams, ams_mapping, ams_mapping2),
+            } => (bytes, plate_id, file_basename, use_ams, ams_mapping, ams_mapping2),
             SendPayload::Gcode { .. } => {
                 return Err(DriverError::Other(
                     "BambuDriver only accepts SendPayload::Gcode3mf".into(),
@@ -261,14 +262,12 @@ impl Driver for BambuDriver {
         let client = self.client.clone().ok_or(DriverError::NotConnected)?;
         let device_id = self.device_id.clone().ok_or(DriverError::NotConnected)?;
 
-        // Unique remote name keeps concurrent sends from
-        // colliding + makes it easy to grep server-side logs
-        // for our uploads vs Bambu Studio's.
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let remote_name = format!("n3o-{plate_id}-{nanos}.gcode.3mf");
+        // Project+plate-derived remote name — the printer's
+        // recent-files list shows which project/plate this came
+        // from. Re-sending the same plate overwrites the prior
+        // upload; (project, plate) is unique enough that we don't
+        // need a nonce suffix.
+        let remote_name = format!("{file_basename}.gcode.3mf");
 
         // FTPS is blocking — push it onto Tokio's blocking pool.
         let host = self.config.host.clone();

@@ -100,7 +100,7 @@ local mesh once, then transform — convex hull commutes with affine maps).
 ### 5. UI optimizations
 TBD — to discuss. Placeholder; capture specifics here as they're named.
 
-### 6. Sliced-output polish (`.gcode` / `.gcode.3mf`) — thumbnails done (2026-06-12); project names pending
+### 6. Sliced-output polish (`.gcode` / `.gcode.3mf`) ✅ DONE — thumbnails (2026-06-12); project names (2026-06-15)
 The sliced bundle we write (and send) is currently bare. Two gaps, both
 in the output-writer / send path — not the frozen *project* format (the
 `.gcode.3mf` is the sliced-output container, distinct from
@@ -123,12 +123,19 @@ in the output-writer / send path — not the frozen *project* format (the
   per the original note. *Not* fully BBS-openable yet (no
   `project_settings.config` / model geometry / no_light+top+pick
   thumbnails); the printer is happy, Bambu Studio import isn't a goal.
-- **Proper project names.** Output is named generically today
-  (`plate-1.gcode`, `n3o-<uuid>.3mf`) — derive the basename from the
-  project name (+ plate), e.g. `<project>.gcode` /
-  `<project>_plate-1.gcode.3mf`, and set the matching title in the
-  `.gcode.3mf` metadata. Needs a surfaced project-name field threaded
-  into the slice-output naming and the 3MF writer.
+- **Proper project names — done (2026-06-15).** The user-visible names
+  now derive from the project title + the plate's name. `Project::title()`
+  (`file_metadata["Title"]` → `source_path` stem → `"Untitled"`) and the
+  plate's `name` feed a `sanitize_basename`-cleaned combined basename
+  (`MyPrint_Lid`); the command layer (`driver/commands.rs::derive_send_names`)
+  builds it for the Bambu FTPS upload name, the U1 store name, and the
+  export-dialog default, and a human Title (`MyPrint — Lid`) goes into the
+  `.gcode.3mf` `<metadata name="Title">`. Bambu's per-send nonce suffix is
+  dropped (re-send overwrites; (project, plate) is unique enough). The
+  frozen bundle-internal paths (`Metadata/plate_N.gcode`) and the MQTT
+  `param`/`subtask` shape are untouched — only the outer/visible names +
+  Title changed. Frontend mirrors the basename in the export default
+  (`SendControls`), user-overridable in the picker.
 
 ### 7. Orient / lay-flat without a pre-selection (maybe)
 Reconsider the current requirement to select an object *before* the
@@ -278,6 +285,10 @@ into CI and add an authenticode signer. Neither is an unknown.
   The cascade ladder (printer → plate → nozzle → filament → user → project →
   object) is missing the **object** tier — per-object setting overrides aren't
   surfaced/applied in the ladder. Wire the object-level override layer in.
+- **Opening a project doesn't invalidate the preview** (noted 2026-06-15).
+  The G-code preview from a prior slice survives an Open-project, so it shows
+  stale toolpaths for the just-loaded project until the next slice. Opening a
+  project should drop the per-plate last-slice/preview state.
 - **Arch self-hosted publish — verify end-to-end.**
   `packaging/arch/publish.sh` (+ README section) builds a signed
   `.pkg.tar.zst` for bare `pacman -U`. Written, `bash -n`-clean, and the
