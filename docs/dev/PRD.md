@@ -170,7 +170,7 @@ Presentation vs mechanism. The UI presents the cascade as values-by-source-file 
 
 - **FR-CAS-9.** Settings panel header shows count of overrides relative to printer + filament + plate defaults (i.e. how many settings the user/project changed beyond what the structured profiles imply).
 
-- **FR-CAS-10.** Show-modified filter: a toggle on the settings panel that narrows the list to only the settings overridden at the active editing layer (project or object), so the user can review and revert their changes at a glance. A modified setting stays visible regardless of the Simple/Advanced/Expert mode (with an ADV/EXP tier-tag when it's above the active mode), so a change is never hidden. (The originally-scoped multi-baseline diff — *vs last save*, *defaults + filament*, and *vs another project plate* — was dropped 2026-06-06 in favor of this single "what have I changed" view.)
+- **FR-CAS-10.** Show-modified filter: a toggle on the settings panel that narrows the list to only the settings overridden at the active editing layer (project or object), so the user can review and revert their changes at a glance. A modified setting stays visible regardless of the Simple/Advanced/Expert mode (with an ADV/EXP tier-tag when it's above the active mode), so a change is never hidden.
 
 - **FR-CAS-11.** Cascade resolution time for a full settings panel render is under 100ms on mid-range hardware for a 4-slot printer with full context. (Higher than the original 50ms target because per-slot resolution multiplies the work.)
 
@@ -226,7 +226,7 @@ Presentation vs mechanism. The UI presents the cascade as values-by-source-file 
 
 - **FR-UI-9.** Editing context tabs: the settings panel has a Project tab (active by default) and an Object tab (active when an object is selected in the viewport; disabled otherwise). Writes from the settings panel land in the active tab's override tier (project or per-object). The active tab is visually distinguished and shows which object is being edited when Object is active.
 
-- **FR-UI-10.** Object library / scaffolding panel on the left side of the viewport. Sections include Primitives (cube, cylinder, sphere, cone, torus — quick test geometry) and Imported (user-loaded STL/3MF files for the current session). Clicking an item adds it to the active plate. *(A Calibration section — temperature/flow/retraction fixtures — was descoped from the MVP (2026-06-05): the fixtures aren't vendored and several upstream ones ship as Draco `.drc` our loaders don't read; calibration **wizards** were already a non-goal, §3.2. Re-add as a post-MVP item if/when fixtures are sourced.)*
+- **FR-UI-10.** Object library / scaffolding panel on the left side of the viewport. Sections include Primitives (cube, cylinder, sphere, cone, torus — quick test geometry) and Imported (user-loaded STL/3MF files for the current session). Clicking an item adds it to the active plate. (A Calibration section — temperature/flow/retraction fixtures — is out of MVP scope: the fixtures aren't vendored and several upstream ones ship as Draco `.drc` our loaders don't read, and calibration **wizards** are a non-goal, §3.2. Post-MVP item if/when fixtures are sourced.)
 
 ## 6.4 3D viewport
 
@@ -242,7 +242,7 @@ Presentation vs mechanism. The UI presents the cascade as values-by-source-file 
 
 - **FR-3D-6.** Basic supports: auto-generate, on/off toggle per object. Paint-on supports are out of MVP scope.
 
-- **FR-3D-7.** Scene state lives in Rust in a renderer-agnostic structure (objects, transforms, mesh data, selections, gizmo state). The renderer (Three.js for MVP, possibly wgpu later) is a read-only consumer that reflects state changes pushed via Tauri events. All scene mutations go through Tauri commands; the renderer never owns authoritative state. This rule exists so switching renderers does not require touching the state model. See AD-8 for the design rationale and consequences.
+- **FR-3D-7.** Scene state lives in Rust in a renderer-agnostic structure (objects, transforms, mesh data, selections). The renderer (Three.js for MVP, possibly wgpu later) is a read-only consumer that reflects state changes pushed via Tauri events. All scene mutations go through Tauri commands; the renderer never owns authoritative state. This rule exists so switching renderers does not require touching the state model. See AD-8 for the design rationale and consequences.
 
 ## 6.5 Slicing pipeline
 
@@ -376,17 +376,17 @@ Model materials are abstract extruder indices (1..N) assigned to objects, paint 
 
 - **FR-PL-2.** Plugin manifest (TOML) declares name, version, hooks, printer compatibility, exposed settings.
 
-- **FR-PL-3.** Hook points: pre-slice (read/modify settings), post-slice (read/modify G-code per plate), pre-send (per-printer transforms), and compose (project-level hook that runs after all plates are sliced, with access to all plate G-codes and project metadata, producing a transformed project bundle). **Compose is deferred to post-MVP** (2026-05-30; see `docs/dev/tickets/phase-8.md`) — the MVP ships pre-slice / post-slice / pre-send only. Its sole intended MVP consumer, platecycler, was simplified to a post-slice macro append that doesn't need it.
+- **FR-PL-3.** Hook points: pre-slice (read/modify settings), post-slice (read/modify G-code per plate), pre-send (per-printer transforms), and compose (project-level hook that runs after all plates are sliced, with access to all plate G-codes and project metadata, producing a transformed project bundle). **Compose is post-MVP** — the MVP ships pre-slice / post-slice / pre-send only. Its sole intended MVP consumer, platecycler, is a post-slice macro append that doesn't need it.
 
 - **FR-PL-4.** Structured G-code API: plugins see a typed sequence of Move / Comment / LayerChange / ToolChange / Other, not raw strings.
 
-- **FR-PL-5.** *(Deferred to post-MVP — 2026-05-30; see `docs/dev/tickets/phase-8.md`.)* Compose hook API: plugins implementing compose receive an array of (plate, typed-gcode, metadata) inputs and return a transformed project bundle. The API includes read/write access to 3MF-level metadata (thumbnails, filament aggregates, print time totals) and to the plate composition order. Compose plugins can emit a different plate count than they received. This was the mechanism intended to support multi-plate PlateCycler batch workflows; the MVP platecycler instead appends the PlateCycler swap macro at post-slice (single plate auto-ejects on completion), so no compose hook is needed for the MVP and this API moves to v1.1.
+- **FR-PL-5.** *(Post-MVP.)* Compose hook API: plugins implementing compose receive an array of (plate, typed-gcode, metadata) inputs and return a transformed project bundle. The API includes read/write access to 3MF-level metadata (thumbnails, filament aggregates, print time totals) and to the plate composition order. Compose plugins can emit a different plate count than they received. This is the mechanism intended to support multi-plate PlateCycler batch workflows; the MVP platecycler instead appends the PlateCycler swap macro at post-slice (single plate auto-ejects on completion), so no compose hook is needed for the MVP.
 
 - **FR-PL-6.** Plugin-declared settings appear in the settings UI under a Plugins category, participate in the cascade. Plate-level settings (cycle counts, composition order) are exposed by compose plugins via plate metadata, not via the global settings cascade.
 
 - **FR-PL-7.** Plugins can read live filament state for the active printer (per-slot identity, loaded flag) via a read-only API, enabling printer- and material-aware plugin behavior.
 
-- **FR-PL-8.** *(Deferred to post-MVP.)* Hot reload: changes to plugin files in the plugins folder are detected and applied without restart via a folder watcher. For the MVP, plugins load on launch and can be reloaded manually (`plugin_reload`); the automatic file watcher is post-MVP.
+- **FR-PL-8.** *(Post-MVP.)* Hot reload: changes to plugin files in the plugins folder are detected and applied without restart via a folder watcher. For the MVP, plugins load on launch and can be reloaded manually (`plugin_reload`); the automatic file watcher is post-MVP.
 
 - **FR-PL-9.** Plugin errors are caught, logged, and surfaced in a Plugins panel without crashing the host.
 
@@ -429,7 +429,7 @@ Model materials are abstract extruder indices (1..N) assigned to objects, paint 
 
 - **core/project.** Project model, plate/printer binding, plate metadata (cycle counts), material bindings, persistence.
 
-- **core/scene.** Renderer-agnostic 3D scene state per AD-8 / FR-3D-7. Owns mesh registry, per-object transforms and metadata, selection, exclusion-zone data. Exposes Tauri commands for mutations and emits typed events for view sync. The frontend renderer (Three.js for MVP) consumes events; it does not hold authoritative state. (Gizmo and camera state were dormant view-state and have been removed from the scene model — see §9.2; re-add them here when a pivot-setting UI or persisted-view feature is actually built.)
+- **core/scene.** Renderer-agnostic 3D scene state per AD-8 / FR-3D-7. Owns mesh registry, per-object transforms and metadata, selection, exclusion-zone data. Exposes Tauri commands for mutations and emits typed events for view sync. The frontend renderer (Three.js for MVP) consumes events; it does not hold authoritative state. Transform *mode* is renderer-local and the renderer owns its own camera (see §9.2); the scene model gains a pivot or camera field when a pivot-setting UI or persisted-view feature is built.
 
 - **core/slice.** FFI wrapper, slice orchestration, progress events.
 
@@ -555,7 +555,7 @@ Decision (acknowledged limitation): the U1 driver speaks vanilla Moonraker over 
 
 - **Resolves:** U1 firmware updates that change Snapmaker's vendor objects are tracked; upstream Klipper / Moonraker changes affect us only via the standard endpoints (`printer.objects.subscribe`, `/server/files/upload`, `/printer/print/*`) which are stable. A future Voron/RatRig user gets a Moonraker driver, not a 'U1-compatible' driver.
 
-- **Note:** the prior version of this decision claimed U1 used a "Snapmaker HTTP wrapper, not Moonraker." That was incorrect — the U1 exposes standard Moonraker, just with extra Snapmaker-specific status objects layered in. Corrected during PR-7b-6 (PRD §11.3 living-documents).
+- **Note:** the U1 exposes standard Moonraker, with extra Snapmaker-specific status objects layered in — not a "Snapmaker HTTP wrapper."
 
 ### AD-8: 3D scene state lives in Rust, not in the renderer
 
@@ -567,13 +567,11 @@ Decision: the authoritative 3D scene model (objects with mesh handles, transform
   - Scene graph: per-plate object list with parent/child relationships (modifier meshes, paint volumes nested under their parent object).
   - Per-object: mesh handle (id into a mesh registry; the actual triangle data is owned by Rust), transform (translation/rotation/scale matrices), filament binding, per-object setting overrides, visibility flag, lock flag.
   - Selection: which objects are selected on the active plate.
-  - Gizmo: active gizmo kind (move/rotate/scale/mirror/none), target object(s), local-vs-world space, snap settings.
-  - Camera: position, look-at, projection mode (perspective/ortho), zoom level.
   - Bed visualization data: per-printer bed bounds, exclusion zones, origin marker location — pulled from the active plate's printer profile.
   - Mesh registry: Rust-side store of triangle data, indexed by mesh handle. The renderer requests mesh bytes for a handle when it needs to upload to GPU; the renderer's GPU buffers are a derived view of the registry, not the source of truth.
 
 - **What flows over the IPC boundary:**
-  - Renderer → backend (Tauri commands): user intent — `scene_select(ids)`, `object_translate(id, delta)`, `gizmo_set(kind, ids)`, `camera_orbit(yaw, pitch)`, etc. Commands return updated state.
+  - Renderer → backend (Tauri commands): user intent — `scene_select(ids)`, `set_object_transform(id, transform)`, etc. (Transform mode and camera are renderer-local; see §9.2.) Commands return updated state.
   - Backend → renderer (Tauri events): authoritative state changes — `scene_changed(diff)`, `selection_changed(ids)`, `mesh_uploaded(handle, bytes)`. The renderer applies the diff to its local mirror.
   - Mesh data crosses once per upload (Rust → renderer); transforms and selections cross every frame at human interaction rates (~60 Hz worst case for orbit, much less for object drag).
 
@@ -581,7 +579,7 @@ Decision: the authoritative 3D scene model (objects with mesh handles, transform
 
 - **Performance contract:** the Rust state model must support ≥1000 objects in a scene without state operations exceeding 5ms p99 (selection, transform application, scene-diff computation). The renderer's frame budget (FR-3D-5: 30fps on 20M-tri scene) is a *renderer* concern; state-side budget is separate.
 
-- **What this is *not*:** it is not a ban on the renderer caching derived data. Three.js's scene graph, GPU buffers, BVH for picking — all fine as renderer-internal caches keyed off the authoritative state. The rule is about *ownership of the truth*, not about avoiding caches. The line is *observable, persisted scene truth* vs. *ephemeral view UI*. Concretely: the gizmo's active transform *mode* (translate/rotate/scale) is renderer-local — it never affects geometry, slice output, or the saved project, so it lives in the viewport (`App`), not `core/scene`. The gizmo *pivot* override was removed from the scene model for now (no pivot-setting UI shipped); re-add a `core/scene` pivot field + setter command when one does. The `rotate_object` mutation still takes an optional explicit-pivot argument as a transform primitive. **Camera state** was likewise removed from `core/scene`: the renderer owns its Three.js camera and frames from the bed, and never synced or restored a persisted camera. To ship "restore per-plate view on reopen," re-add a camera field + a `scene_camera_set` the renderer commits on orbit-end and reads back on load.
+- **What this is *not*:** it is not a ban on the renderer caching derived data. Three.js's scene graph, GPU buffers, BVH for picking — all fine as renderer-internal caches keyed off the authoritative state. The rule is about *ownership of the truth*, not about avoiding caches. The line is *observable, persisted scene truth* vs. *ephemeral view UI*. Concretely: the active transform *mode* (translate/rotate/scale) is renderer-local — it never affects geometry, slice output, or the saved project, so it lives in the viewport (`App`), not `core/scene`. There is no gizmo *pivot* override in the scene model; a `core/scene` pivot field + setter command is added when a pivot-setting UI is built. (The transform primitive still accepts an optional explicit-pivot argument.) **Camera state** is likewise renderer-owned: the renderer owns its Three.js camera and frames from the bed. To ship "restore per-plate view on reopen," add a camera field + a `scene_camera_set` the renderer commits on orbit-end and reads back on load.
 
 - **Out-of-scope for MVP but architecturally enabled:** scriptable scene operations (Lua plugins inspecting/mutating scene state via the same command surface the renderer uses), headless rendering for thumbnails, alternate renderers (a side-by-side wgpu viewport, an SVG top-down view for plate previews) — all become tractable when state is renderer-agnostic.
 
@@ -664,7 +662,7 @@ A CLAUDE.md at the project root captures the durable context Claude Code needs e
 
 - orca-slicer-ffi is owned in-house (this project's author wrote it). FFI extensions are first-party work, not external dependencies.
 
-- platecycler is owned in-house. The MVP ships it as a Lua plugin using the compose hook.
+- platecycler is owned in-house. The MVP ships it as a Lua plugin using the post-slice hook (a macro append that auto-ejects the finished plate at print end).
 
 - Licensing: AGPL-3.0-or-later. Plugin licensing model is documented separately.
 

@@ -7,10 +7,6 @@
 //! assertion rather than at some downstream consumer's leaf
 //! test.
 //!
-//! Procedure (human-driven half, includes the slice + send-to-
-//! printer walkthrough this Rust test omits) lives in
-//! `docs/dev/phase-5-smoke.md`.
-//!
 //! What this test covers:
 //!   1. Build the 3-plate exit fixture programmatically (plate
 //!      1 → A1 mini, plates 2-3 → Snapmaker U1).

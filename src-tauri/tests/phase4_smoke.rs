@@ -4,8 +4,7 @@
 //! regression in the introspection surface or the capability filter
 //! fails loudly. The frontend halves (form-component contracts,
 //! categorize / mode-filter / diff / slot helpers, annotations
-//! coverage) are exercised in the vitest suite — see
-//! `docs/dev/phase-4-smoke.md` for the full procedure.
+//! coverage) are exercised in the vitest suite.
 
 use std::sync::Once;
 

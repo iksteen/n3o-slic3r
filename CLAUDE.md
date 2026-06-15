@@ -4,8 +4,7 @@ This file captures the durable context any Claude Code session in this
 repo should pick up immediately. Source-of-truth development documents
 live in `docs/dev/` (user-facing docs — getting-started, troubleshooting,
 release-notes — stay at the top of `docs/`); this file points at them and
-records facts that have already been corrected once during prior sessions
-and should not need re-correcting.
+records durable domain facts that aren't obvious from the code.
 
 ## What this project is
 
@@ -29,41 +28,25 @@ Read these before reasoning about scope, design, or behavior:
   criteria, feature requirements (FR-CAS-*, FR-MP-*, FR-UI-*, …),
   printer capability matrix, architecture decisions (AD-1..AD-7),
   working practices (§11).
-- **`docs/dev/Execution_Plan.md`** — 10-phase plan, ~37.5 person-weeks.
-  Phase ordering and dependencies are real; calendar dates are not.
-  **Status (2026-06-07):** Phases 0–8 are done — the full vertical
-  slice ships (cascade resolver + adapter, viewport, end-to-end slice +
-  G-code parser + 3MF I/O, settings UI, multi-printer project model,
-  G-code preview, both printer drivers + filament sync, Lua plugin
-  system with platecycler hardware-validated). **Phase 9 (polish,
-  Linux flatpak, release prep) is complete — the MVP candidate is
-  reached.** Done: flatpak
-  build + self-hosted signed-repo distribution (validated on Arch,
-  Ubuntu, and Fedora, including a full open→slice→print→monitor cycle on
-  both printers under WSL2/WSLg), first-run onboarding, OrcaSlicer
-  `.3mf` project import, user docs (getting-started / troubleshooting /
-  release notes — PR-9-7), Linux CI. The **independence-audit exit
-  gate** (PR-9-8) is **met** (2026-06-07): the clean-WSL2 full-cycle run
-  on both printers plus an external (non-lead) tester reaching send in
-  ~5 min prove "standalone at runtime" (no host slicer/libslic3r), and
-  the §3.3 feature criteria are proven in-phase. The audit surfaced one
-  finding — the Bambu **Developer Mode** requirement (recent firmware
-  rejects third-party MQTT commands, err_code 84033543) wasn't
-  discoverable in-app — now fixed (n3o surfaces the command-rejection
-  `err_code` with Developer-Mode guidance). The
-  `.3mf`/`n3o_project.json` format is **finalized for MVP** (PR-9-5,
-  2026-06-07): the field-by-field review landed — derived/transient
-  state dropped, logical-key overrides, writer stamp, UUID group
-  identity. With that, **all of Phase 9 is done.** Post-MVP deferrals (plugin
-  compose hook, hot reload, Orca preset importer) live in plan §16.
+- **`docs/dev/Execution_Plan.md`** — 10-phase plan. Phase ordering and
+  dependencies are real; calendar dates are not. All phases are
+  complete — the full vertical slice ships: cascade resolver + adapter,
+  viewport, end-to-end slice + G-code parser + 3MF I/O, settings UI,
+  multi-printer project model, G-code preview, both printer drivers +
+  filament sync, the Lua plugin system (platecycler hardware-validated),
+  flatpak + self-hosted signed-repo distribution, first-run onboarding,
+  OrcaSlicer `.3mf` project import, user docs, and Linux CI. The app is
+  standalone at runtime (no host slicer/libslic3r needed), and the
+  `.3mf`/`n3o_project.json` format is finalized for MVP. Post-MVP
+  deferrals (plugin compose hook, hot reload, Orca preset importer) live
+  in plan §16.
 - **`docs/dev/profiles.md`** — Rule-cascade design of record. Two-phase
   resolution (authored cascade + `!important`-style override tiers),
   TOML schema, translation adapter to libslic3r's `DynamicPrintConfig`,
   option scope mechanism. The PRD's §6.1 codifies the requirements;
   this doc owns the design.
-- **`docs/dev/design.md`** — Mockup review. What in `docs/dev/design/` is
-  reusable as-is, what to port, what to replace. Known design gaps
-  (plate-printer assignment UI, filament sync, G-code preview).
+- **`docs/dev/design.md`** — Mockup review: what in `docs/dev/design/` is
+  reusable as-is, what to port, what to replace.
 - **`docs/dev/libslic3r-workarounds.md`** — The set of pre-`apply` and
   post-`apply` workarounds the shim applies to compensate for
   libslic3r's headless-mode quirks. Required reading before bumping
@@ -83,25 +66,17 @@ later costs more than it had to.
   selection) is a renderer-agnostic data structure in `core/scene/`.
   Three.js is a read-only consumer that reflects state events into
   pixels. All scene mutations go through Tauri commands; the renderer
-  never owns state. This is so we can swap renderers (Phase 2 risk:
-  if webview 3D performance is insufficient, we switch to wgpu in a
-  native window) without rewriting state management. See PRD FR-3D-7
-  and AD-8 for the full design. **What is NOT in the scene model
-  (ripped out as dormant view-state; re-add when actually wired):**
-  - *Gizmo* — there is none. The active *transform mode*
-    (translate/rotate/scale) is renderer-local UI state owned by
-    `App`. The gizmo *pivot* override (`GizmoState`, `GizmoChanged`,
-    `set_gizmo`) is gone; re-add a `core/scene` pivot field + setter
-    command if a pivot-setting UI is built. The per-axis transform
-    primitives (`translate_object` / `rotate_object` / `scale_object`)
-    are also gone — `set_object_transform` (full-matrix) is the only
-    transform mutation; re-add per-axis ops with the gizmo UI if needed.
-  - *Camera* — there is no `CameraState`/`ProjectionMode` in the
-    scene model. The renderer owns its own Three.js camera and frames
-    from the bed (`initialFrameForBed`); it never synced or restored
-    a persisted camera. To add "restore per-plate view on reopen,"
-    re-add a `core/scene` camera field + a `scene_camera_set` that the
-    renderer commits on orbit-end and reads back on load.
+  never owns state. This is so we can swap renderers (if webview 3D
+  performance proves insufficient, to wgpu in a native window) without
+  rewriting state management. See PRD FR-3D-7 and AD-8 for the full
+  design. Two boundaries that follow from it:
+  - *Transforms* — `set_object_transform` (full-matrix) is the only
+    object-transform mutation. The active transform *mode*
+    (translate/rotate/scale) is renderer-local UI state owned by `App`;
+    `core/scene` holds no gizmo or pivot state.
+  - *Camera* — the renderer owns its own Three.js camera and frames
+    from the bed (`initialFrameForBed`); the scene model holds no camera
+    or projection state.
 
 - **Configs are pure data.** No embedded code, no expressions, no
   template strings. The rule cascade (PRD §6.1, docs/dev/profiles.md)
@@ -118,10 +93,9 @@ later costs more than it had to.
 - **Standalone at runtime.** The app must complete every workflow
   with no other slicer installed. UX principle from PRD §5.
 
-## Facts that have already been corrected
+## Domain facts
 
-These came up during planning and prior implementation sessions. Don't
-reason from contrary priors.
+Non-obvious facts about the hardware and architecture worth having up front.
 
 - **Snapmaker U1 is a 4-toolhead CoreXY toolchanger** with magnetically
   docked toolheads on steel-ball kinematic couplings, eddy-current
@@ -149,33 +123,23 @@ reason from contrary priors.
   external dependencies.
 - **`platecycler` is owned in-house.** The MVP ships it as a Lua
   plugin using the **post-slice** hook — a macro append that
-  auto-ejects the finished plate at print end (Phase 8 scope decision
-  2). The originally-scoped compose hook (FR-PL-5) is deferred
-  post-MVP.
-- **The cascade resolver *is* built** (corrected 2026-05-30; this
-  bullet previously said it wasn't). The rule-cascade resolver lives
+  auto-ejects the finished plate at print end. The originally-scoped
+  compose hook (FR-PL-5) is deferred post-MVP.
+- **The cascade resolver is built.** The rule-cascade resolver lives
   in `src-tauri/src/core/cascade/` (`resolver`, `loader`, `overrides`,
   `trace`, `validate`) and the libslic3r translation in
   `src-tauri/src/core/cascade_adapter/` (`adapter` does the
   `bed_temp` → per-plate-type dimensional expansion + `curr_bed_type`
-  set). `tests/reference_profiles.rs` exercises it end-to-end. Design
-  of record is still `docs/dev/profiles.md`.
-  - **CONFIRMED (2026-05-31, PR-9-1):** the live *slice* path **does**
-    route through the resolver + adapter, not the input's embedded
-    config. `core/slice/orchestrator.rs::resolve_cascade` composes a
-    fresh cascade from the bound `PrinterInstance`, `cascade::resolve`
-    + `cascade_adapter::adapt` build the `DynamicPrintConfig`, and the
-    `.3mf`/STL is loaded for **geometry only**. Verified via G-code
-    (`tests/slice_orchestrator.rs::resolved_bed_temp_reaches_the_engine_for_both_printers`):
-    slicing a raw STL (no embedded config to leak), the engine's body
-    `M140`/`M190` carry the cascade-resolved `textured_plate_temp`,
-    `curr_bed_type` is the context's plate type, and the two MVP
-    printers resolve to different temps from their own fragments.
-    The old "`hot_plate_temp=60` not `55`" observation was the *wrong
-    key* (the active plate is Textured PEI → `textured_plate_temp`) and
-    pre-dated the compose-context fix (310f7b6); the U1 snapmaker-pla
-    `55` rule now fires at compose time, guarded by
-    `composer::tests::u1_filament_fragment_printer_rule_fires_at_compose_time`.
+  set). `tests/reference_profiles.rs` exercises it end-to-end. The live
+  *slice* path routes through the resolver + adapter, not the input's
+  embedded config: `core/slice/orchestrator.rs::resolve_cascade`
+  composes a fresh cascade from the bound `PrinterInstance`,
+  `cascade::resolve` + `cascade_adapter::adapt` build the
+  `DynamicPrintConfig`, and the `.3mf`/STL is loaded for **geometry
+  only** (verified end-to-end in
+  `tests/slice_orchestrator.rs::resolved_bed_temp_reaches_the_engine_for_both_printers`,
+  where the two MVP printers resolve to different bed temps from their
+  own fragments). Design of record is `docs/dev/profiles.md`.
 
 ## Project shape and build
 
@@ -239,9 +203,9 @@ After that, the slic3r-ffi crate's `build.rs` invokes cmake to build
   uses), builds the frontend, cross-builds the engine + shim + app, and bundles
   the `.app`/`.dmg` (build.rs injects the osxcross toolchain when it sees a macOS
   target on a non-macOS host; `env.sh <arch> <cmd>` runs an individual cross
-  command with that toolchain wired up). **Validated (2026-06-13):** the
-  full chain — deps → libslic3r → `libslic3r_ffi.0.dylib` → the `n3o-slic3r`
-  app binary — cross-compiles and links to arm64 Mach-O from Linux, and
+  command with that toolchain wired up). The full chain is validated:
+  deps → libslic3r → `libslic3r_ffi.0.dylib` → the `n3o-slic3r`
+  app binary cross-compiles and links to arm64 Mach-O from Linux, and
   `packaging/macos-cross/bundle-app.sh` assembles a relocatable, ad-hoc-signed
   `n3o-slic3r.app` (Tauri's macOS bundler + `codesign` are macOS-only, so the
   bundle is built by hand and signed with `rcodesign`). `bundle-app.sh --dmg`
@@ -322,18 +286,9 @@ PRD §11 spells these out. The short version:
 ## Memory
 
 Per-session memories live in a directory keyed by the working directory
-Claude Code launched from. The repo has been developed from more than one
-checkout location, so this path is host-specific — e.g.
+Claude Code launched from, so the path is host-specific — e.g.
 `~/.claude/projects/-Users-ingmar-Documents-GitHub-n3o-slic3r/memory/` on
 the macOS checkout, `~/.claude/projects/-home-ingmar-src-prive-n3o-slic3r/memory/`
-on the original Linux one. Memories seen so far:
-
-- `feedback_stop_chasing_bug_chains.md` — when a fix unmasks another
-  instance of the same pattern, surface options instead of patching
-  deeper.
-- `feedback_ask_before_filesystem_search.md` — don't `find ~` for
-  tooling of uncertain existence; ask the user.
-
-The memory directory is keyed by the working directory Claude Code
-launched from. If the project moves on disk, the memory must move too
-(see "Build & path-operation gotchas" in `README.md`).
+on the Linux one. `MEMORY.md` in that directory is the index of what's
+recorded. If the project moves on disk, the memory must move too (see
+"Build & path-operation gotchas" in `README.md`).

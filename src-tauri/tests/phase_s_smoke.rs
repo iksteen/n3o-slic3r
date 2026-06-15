@@ -19,9 +19,6 @@
 //!      filament/process copy mechanic is a tracked MVP exclusion
 //!      (settings-model.md §9); covering it requires that surface to
 //!      land first.
-//!
-//! Procedure for the human-driven half lives in
-//! `docs/dev/phase-s-smoke.md`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};

@@ -1,8 +1,7 @@
 //! Phase 2 Rust-side smoke (PR-2-12).
 //!
 //! Drives the loader → scene → arrange path end-to-end without the
-//! UI. Mirrors the steps in `docs/dev/phase-2-smoke.md` that don't
-//! require a human-driven GUI:
+//! UI — the steps that don't require a human-driven GUI:
 //!
 //! - Active printer set, bed visualization derived.
 //! - Procedural primitive added, ends up on the plate.
@@ -152,8 +151,7 @@ fn step_4_stormtrooper_loads_under_budget_when_present() {
     let fixture = workspace_root().join("examples/perf-fixture/stormtrooper-helmet.3mf");
     if !fixture.exists() {
         eprintln!(
-            "skipping: stormtrooper helmet fixture not staged at {fixture:?}\n\
-             see docs/dev/phase-2-smoke.md for staging instructions."
+            "skipping: stormtrooper helmet fixture not staged at {fixture:?}"
         );
         return;
     }

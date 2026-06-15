@@ -162,7 +162,7 @@ Goal: functional 3D scene with model load, transform operations, and bed visuali
 
 ### Deliverables
 
-- **Renderer-agnostic scene state in Rust (FR-3D-7 / AD-8).** Build this before the Three.js layer — it's the foundation the renderer sits on. Scope: typed scene model (mesh registry, per-object transforms and metadata, hierarchy, selection, exclusion-zone data); Tauri command surface for mutations (`scene_select`, `object_translate`, `object_set_transform`, etc.); Tauri event surface for state diffs the renderer applies. Lives in `core/scene/` per PRD §8.2. Unit tests cover the command/event contract without any renderer present. (Gizmo-pivot and camera scene state + their `gizmo_set`/`camera_*` commands were built then removed as dormant view-state — see PRD §9.2; transform *mode* is renderer-local and the renderer owns its own camera. Re-add to the scene model when a pivot-setting UI or persisted-view feature lands.)
+- **Renderer-agnostic scene state in Rust (FR-3D-7 / AD-8).** Build this before the Three.js layer — it's the foundation the renderer sits on. Scope: typed scene model (mesh registry, per-object transforms and metadata, hierarchy, selection, exclusion-zone data); Tauri command surface for mutations (`scene_select`, `set_object_transform`, etc.); Tauri event surface for state diffs the renderer applies. Lives in `core/scene/` per PRD §8.2. Unit tests cover the command/event contract without any renderer present. (Transform *mode* is renderer-local and the renderer owns its own camera — see PRD §9.2; the scene model gains pivot/camera state when a pivot-setting UI or persisted-view feature lands.)
 
 - Three.js scene with orbit controls, perspective + ortho toggle, gizmo for move/rotate/scale. The renderer is a *view*: it subscribes to scene events, applies them to its local mirror, and emits user-intent through the command surface. It does not hold authoritative state.
 
@@ -170,7 +170,7 @@ Goal: functional 3D scene with model load, transform operations, and bed visuali
 
 - Object operations: move, rotate, scale, mirror, lay flat, duplicate, delete. Each is a Tauri command operating on the Rust scene state. The renderer reflects the resulting state diff; it does not compute transforms itself.
 
-- Object library / scaffolding panel (FR-UI-10): left side of viewport, sections for Primitives (cube/cylinder/sphere/cone/torus) and Imported (user-loaded files this session). Clicking an item adds it to the active plate. (The Calibration section was descoped from the MVP — 2026-06-05; no vendored fixtures. See PRD FR-UI-10.)
+- Object library / scaffolding panel (FR-UI-10): left side of viewport, sections for Primitives (cube/cylinder/sphere/cone/torus) and Imported (user-loaded files this session). Clicking an item adds it to the active plate. (A Calibration section is out of MVP scope; no vendored fixtures. See PRD FR-UI-10.)
 
 - Auto-arrange (single plate, no rotation for MVP).
 
@@ -270,7 +270,7 @@ Goal: the cascade-aware settings UI that is this project's primary differentiato
 
 - Override count indicator at category and panel level.
 
-- Show-modified filter: a toggle narrowing the panel to settings overridden at the active editing layer (project/object). (The originally-scoped multi-baseline diff — vs printer default / vs last save — was dropped 2026-06-06; see PRD FR-CAS-10.)
+- Show-modified filter: a toggle narrowing the panel to settings overridden at the active editing layer (project/object). (See PRD FR-CAS-10.)
 
 - Tooltips combining libslic3r tooltip + 'why this matters' annotations (initially seeded with ~30 hand-written annotations for highest-impact options).
 
@@ -292,7 +292,7 @@ Goal: the cascade-aware settings UI that is this project's primary differentiato
 
 ### Cut candidates
 
-- Show-modified filter (FR-CAS-10) — saves ~1 day. Override visibility remains via the override-count badges + the cascade ladder. (Was "diff vs another plate / vs last save"; the multi-baseline diff was replaced by the show-modified toggle, 2026-06-06.)
+- Show-modified filter (FR-CAS-10) — saves ~1 day. Override visibility remains via the override-count badges + the cascade ladder.
 
 - 'Why this matters' annotations beyond the first 30 — saves 3 days.
 
@@ -470,7 +470,7 @@ Filament sync ties the printer comms (7a, 7b) to the cascade (Phase 1) and the m
 
 - Auto-binding heuristic (manual binding only on first assignment) — saves 2 days. Hurts UX but binding still works.
 
-- (Removed) The former "filament mismatch detection" cut candidate is gone: there is no model-vs-slot mismatch feature to trim — a model carries no intended filament (PRD FR-FS-8/9). Slot-loaded/available validation (FR-MP-8) stays; it is not a cut candidate.
+- There is no "filament mismatch detection" cut candidate: there is no model-vs-slot mismatch feature to trim — a model carries no intended filament (PRD FR-FS-8/9). Slot-loaded/available validation (FR-MP-8) stays; it is not a cut candidate.
 
 - Manual filament-identity override (use printer-reported only) — saves 2 days. Hurts third-party-spool users.
 
@@ -488,17 +488,17 @@ Runs in parallel with Phase 7 since it has no printer dependency, and reuses the
 
 - Lua bindings to live filament state from Phase 7c (read-only): per-slot identity, loaded flag, availability. Enables material-aware plugins.
 
-- Hook dispatch at pre-slice, post-slice, and pre-send. *(The compose hook — FR-PL-5 — is **deferred to post-MVP**; see §16 and `docs/dev/tickets/phase-8.md`.)*
+- Hook dispatch at pre-slice, post-slice, and pre-send. *(The compose hook — FR-PL-5 — is post-MVP; see §16.)*
 
-- ~~Compose hook API: 3MF-level read/write, plate composition order, plate count transformation.~~ **Deferred to post-MVP.** Its only intended MVP consumer (platecycler) was simplified to a post-slice macro append that doesn't require it, so building a cross-plate transform with no MVP consumer is cut.
+- Compose hook API (3MF-level read/write, plate composition order, plate count transformation) is post-MVP. Its only intended MVP consumer (platecycler) is a post-slice macro append that doesn't require it, so a cross-plate transform with no MVP consumer is out of scope.
 
 - Plugin-declared settings integrated into the cascade UI under a Plugins category. Plate-level metadata (cycle counts, composition order) editable in the plate tab UI.
 
-- ~~Hot reload via file watcher on the plugins folder.~~ **Deferred to post-MVP** (see §16). The MVP loads plugins on launch; the manual `plugin_reload` command (error recovery + a "reload" affordance) stays, but the automatic `notify`-based folder watcher is cut.
+- Hot reload via file watcher on the plugins folder is post-MVP (see §16). The MVP loads plugins on launch; the manual `plugin_reload` command (error recovery + a "reload" affordance) stays, but the automatic `notify`-based folder watcher is out of scope.
 
 - Plugins panel in UI: enabled state, errors, per-printer scoping.
 
-- **Flagship example plugin — platecycler** *(simplified 2026-05-30).* A **post-slice** plugin that appends the Chitu PlateCycler eject/swap macro to the tail of a single plate's G-code, so the finished plate auto-ejects and a fresh one loads on print completion. Not the original multi-plate concatenation (that needed the now-deferred compose hook); no 3MF rewriting, no Python/Pillow dependency. Validated end-to-end on the project lead's A1 mini + PlateCycler hardware.
+- **Flagship example plugin — platecycler.** A **post-slice** plugin that appends the Chitu PlateCycler eject/swap macro to the tail of a single plate's G-code, so the finished plate auto-ejects and a fresh one loads on print completion. Not a multi-plate concatenation (that needs the post-MVP compose hook); no 3MF rewriting, no Python/Pillow dependency. Validated end-to-end on the project lead's A1 mini + PlateCycler hardware.
 
 - Three smaller example plugins exercising the per-plate hooks: 'beep at layer N' (post-slice), 'insert pause at layer N' (post-slice), 'rewrite bed temperature by range' (pre-slice).
 
@@ -510,7 +510,7 @@ Runs in parallel with Phase 7 since it has no printer dependency, and reuses the
 
 - Plugin errors are caught and surfaced without crashing the host.
 
-- platecycler plugin appends its eject/swap macro to a real A1 mini print's G-code such that the PlateCycler auto-ejects the finished plate at print end on the project lead's A1 mini + PlateCycler hardware. This is the reduced proof point (the original compose-hook `.platecycler.3mf` criterion went with the deferred compose hook) that the plugin architecture works end-to-end.
+- platecycler plugin appends its eject/swap macro to a real A1 mini print's G-code such that the PlateCycler auto-ejects the finished plate at print end on the project lead's A1 mini + PlateCycler hardware. This is the proof point that the plugin architecture works end-to-end.
 
 ### Cut candidates
 
@@ -538,7 +538,7 @@ Goal: Linux flatpak build, basic onboarding, release-readiness. Windows and macO
 
 - Project file format: .3mf extension finalized (per FR-MP-4).
 
-- OrcaSlicer `.3mf` **project** import (one-time, not a runtime dependency): open a Bambu Studio / OrcaSlicer project and reconstruct an n3o project — geometry + plate layout + the project's settings. Optional for users; extends the existing 3MF reader. *(Rescoped 2026-05-31: the MVP import item is project import, not the user-facing **profile/preset** importer — the latter moved to §16 post-MVP. See `docs/dev/tickets/phase-9.md` scope decision 2.)*
+- OrcaSlicer `.3mf` **project** import (one-time, not a runtime dependency): open a Bambu Studio / OrcaSlicer project and reconstruct an n3o project — geometry + plate layout + the project's settings. Optional for users; extends the existing 3MF reader. *(The MVP import item is project import, not the user-facing **profile/preset** importer — the latter is post-MVP, §16.)*
 
 - Documentation: getting started (Linux flatpak install path), plugin authoring guide, troubleshooting. Does not reference any other slicer as a required tool.
 
@@ -659,11 +659,11 @@ Out of scope for this plan, but worth listing so MVP decisions don't paint into 
 
 - Plugin marketplace and signed plugin distribution.
 
-- **Compose hook (FR-PL-5)** — the project-level plugin hook receiving all sliced plates + metadata and returning a transformed bundle (3MF metadata read/write, plate composition order, plate-count transform). Deferred from the MVP (2026-05-30) once the MVP platecycler was simplified to a post-slice macro append, leaving compose with no MVP consumer.
+- **Compose hook (FR-PL-5)** — the project-level plugin hook receiving all sliced plates + metadata and returning a transformed bundle (3MF metadata read/write, plate composition order, plate-count transform). Out of MVP scope: the MVP platecycler is a post-slice macro append, leaving compose with no MVP consumer.
 
 - **Multi-plate batch platecycler** — the original concatenate-N-plates-into-one-job behavior (cycle counts, swap macro between plates, 3MF aggregate rewriting), which the compose hook enables. The MVP ships only the single-plate post-slice macro append.
 
-- **Plugin hot reload (FR-PL-8)** — a `notify`-based folder watcher on the plugins root that detects manifest/`.lua` create/modify/remove and reloads the affected plugin without a restart (debounced, atomic with respect to an in-flight slice), restoring the "edit → active in under 60 seconds" author loop. Descoped from the MVP (2026-05-31); the MVP loads plugins on launch and keeps the manual `plugin_reload` command (also the error-recovery path) — the watcher just calls that same reload automatically.
+- **Plugin hot reload (FR-PL-8)** — a `notify`-based folder watcher on the plugins root that detects manifest/`.lua` create/modify/remove and reloads the affected plugin without a restart (debounced, atomic with respect to an in-flight slice), restoring the "edit → active in under 60 seconds" author loop. Out of MVP scope; the MVP loads plugins on launch and keeps the manual `plugin_reload` command (also the error-recovery path) — the watcher just calls that same reload automatically.
 
 - WASM plugin runtime alongside Lua.
 
@@ -673,6 +673,6 @@ Out of scope for this plan, but worth listing so MVP decisions don't paint into 
 
 - Community profile sharing format.
 
-- **OrcaSlicer profile/preset importer** — a user-facing one-time tool to import OrcaSlicer `.json` machine/process/filament presets into a user-profile-library overlay as cascade fragments (reusing the `scripts/import_*.py` field knowledge + the FFI bucket classification). Descoped from the MVP (2026-05-31): the MVP import item is OrcaSlicer `.3mf` *project* import (§11), not preset import through the UI.
+- **OrcaSlicer profile/preset importer** — a user-facing one-time tool to import OrcaSlicer `.json` machine/process/filament presets into a user-profile-library overlay as cascade fragments (reusing the `scripts/import_*.py` field knowledge + the FFI bucket classification). The MVP import item is OrcaSlicer `.3mf` *project* import (§11), not preset import through the UI.
 
 - Advanced G-code preview features: time-based scrubbing, head trajectory animation, simulated print time visualization.

@@ -5,9 +5,6 @@
 //! preview-load → color-encode → stats → drop fails loudly with a
 //! step-named assertion, rather than at some downstream consumer.
 //!
-//! Procedure (human-driven half — drag-drop, plate switching, etc.)
-//! lives in `docs/dev/phase-6-smoke.md`.
-//!
 //! What this test covers:
 //!   1. Slice a real .stl through the orchestrator (PR-3-2 +
 //!      PR-6-1).

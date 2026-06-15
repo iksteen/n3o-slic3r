@@ -6,7 +6,7 @@ Target design for n3o-slic3r's printer / filament / process configuration system
 
 **Backwards compatibility:** none. MVP, no projects in the wild yet.
 
-**Compatibility with existing cascade:** 100%. The cascade format, resolver, and ladder (PR-1-2 / PR-1-3 / PR-1-4 / PR-1-5) are unchanged. What changes is how cascade inputs are assembled: previously bundled as one pre-baked TOML per printer; in this model composed at slice time from per-bucket vendor profiles + user overrides + instance state.
+**Compatibility with existing cascade:** 100%. The cascade format, resolver, and ladder are unchanged. What changes is how cascade inputs are assembled: previously bundled as one pre-baked TOML per printer; in this model composed at slice time from per-bucket vendor profiles + user overrides + instance state.
 
 ---
 
@@ -304,7 +304,7 @@ The settings panel surfaces a subtle "synced across N plates / N instances" indi
 - **PrinterPicker** (exists) — picks `PrinterInstance` from user's library. Drives everything downstream.
 - **NozzlePicker** (new) — per extruder. Hides when the extruder has only one available nozzle.
 - **BedPicker** (uses existing `BuildPlateSelector`, relocated to the top row) — picks `current_bed` on the printer instance.
-- **MaterialBindingPanel** (exists, PR-5-6 UI) — slot → filament-identity binding, with auto-bind. Stays as the canonical filament binding UX.
+- **MaterialBindingPanel** (exists) — slot → filament-identity binding, with auto-bind. Stays as the canonical filament binding UX.
 
 All selector writes route to the `PrinterInstance` and re-render every plate panel that references the same instance.
 
@@ -316,7 +316,7 @@ All selector writes route to the `PrinterInstance` and re-render every plate pan
 **Visual indicators:**
 
 - Dot/asterisk on a field when overrides are present (vendor-vs-overridden, or copy-vs-base)
-- Tier tints (existing, PR-4-7) extended to show: vendor / instance-override / filament-override / process-override / plate / object
+- Tier tints (existing) extended to show: vendor / instance-override / filament-override / process-override / plate / object
 - "Synced across N plates" badge near printer/filament/nozzle/bed selectors when more than one plate uses the same instance
 
 **Printer panel (`PrinterPanel.tsx`)** stays focused on runtime/driver concerns: Connect / Send / Stop / AMS-live-state. Not settings editing.
@@ -332,8 +332,8 @@ What stays:
 - **MaterialBindingPanel + auto-bind** — keep shape, change storage target from `Plate.material_bindings` to `PrinterInstance.extruders[T].slots[S]`.
 - **PrinterPicker** — keep, drives PrinterInstance selection.
 - **BuildPlateSelector** — keep the component, relocate to top selectors row.
-- **Pre-slice gate** (PR-210) — keep, extend validation to check vector-key correctness in addition to binding presence.
-- **Dry-run send** (PR-212) — unaffected.
+- **Pre-slice gate** — keep, extend validation to check vector-key correctness in addition to binding presence.
+- **Dry-run send** — unaffected.
 
 What changes shape:
 
@@ -402,8 +402,8 @@ To be resolved during ticket drafting, not before:
    - **PR-S-5**: `build_slice_input` cascade composer + per-slot vector-key assembly.
    - **PR-S-6**: Pre-slice gate extension (vector-key correctness).
    - **PR-S-7**: SettingsPanelHost top-row selectors (NozzlePicker added, BuildPlateSelector relocated).
-   - **PR-S-8**: SettingsPanel rewrite — drop SlotTabStrip + sync-edit + vector rendering; show process-bucket only. **Done.** SlotTabStrip + sync-edit were removed during the PR-S-2 era; the panel is filtered to Process bucket only. Vector-typed Process keys (`post_process`, `print_extruder_id`, `print_extruder_variant`, `small_area_infill_flow_compensation_model`, `wiping_volumes_extruders`) still render through a read-only fallback at `SettingsPanel.tsx:634`.
+   - **PR-S-8**: SettingsPanel rewrite — drop SlotTabStrip + sync-edit + vector rendering; show process-bucket only. SlotTabStrip + sync-edit are removed; the panel is filtered to Process bucket only. Vector-typed Process keys (`post_process`, `print_extruder_id`, `print_extruder_variant`, `small_area_infill_flow_compensation_model`, `wiping_volumes_extruders`) render through a read-only fallback in `SettingsPanel.tsx`.
    - **PR-S-9**: Project format rewrite (no migration). **Ice-boxed alongside PR-S-10.** The new format's only novel fields (`process_binding`, `process_overrides` per plate, references to filament/process copies) carry no information until the profile-editor UI surfaces land and let the user set them. Renaming the few existing fields in isolation would deliver no behavioral payoff and would force migration risk on every saved `.3mf`. Revisit when PR-S-10 unblocks.
    - **PR-S-10**: Edit-routing + override indicators + "synced across N plates" badges. **Ice-boxed.** Depends on UI surfaces that don't exist yet — no filament editor, no machine settings editor, no process profile selector, no profile-creation flow. The bucket-wide override storage (`filament-overrides.json` / `process-overrides.json`) and the edit-routing dispatcher have no consumers until those surfaces land. Unblocks: filament/process/machine editor + profile-CRUD UI tickets (not yet drafted).
-   - **PR-S-11**: Exit-criteria smoke (multi-filament A1 + AMS Lite, multi-instance project, copy-vs-vendor binding). Legs 1 + 2 landed as `phase_s_smoke.rs` (see `docs/dev/phase-s-smoke.md`); leg 3 deferred behind the in-app filament/process copy mechanic (§9 MVP exclusion).
+   - **PR-S-11**: Exit-criteria smoke (multi-filament A1 + AMS Lite, multi-instance project, copy-vs-vendor binding). Legs 1 + 2 landed as `phase_s_smoke.rs`; leg 3 deferred behind the in-app filament/process copy mechanic (§9 MVP exclusion).
 3. Sequence: PR-7c (filament sync) blocks on PR-S-3/4/5 at minimum. PR-7a-8 (real-print smoke) can run independently on the current model since the send pipeline is downstream of the cascade.

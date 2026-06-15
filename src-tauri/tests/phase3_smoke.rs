@@ -8,8 +8,6 @@
 //! The 50 MB / 3 s parser perf gate from PR-3-6 lives in
 //! `gcode_parser_perf.rs` and runs as part of the same
 //! `cargo test --workspace` step; we don't duplicate it here.
-//!
-//! Procedure (human-driven half) lives in `docs/dev/phase-3-smoke.md`.
 
 use std::io::Read;
 use std::path::PathBuf;

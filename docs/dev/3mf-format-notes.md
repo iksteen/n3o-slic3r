@@ -1,8 +1,7 @@
 # `.3mf` format notes
 
-Knowledge artifact from PR-2-4. Captures what we learned reading
-BambuStudio + OrcaSlicer fixtures so the next person touching 3MF code
-doesn't have to rediscover it.
+Captures what we learned reading BambuStudio + OrcaSlicer fixtures so the
+next person touching 3MF code doesn't have to rediscover it.
 
 ## Container
 
@@ -176,12 +175,9 @@ models).
 
 ## The n3o-slic3r project container (`Metadata/n3o_project.json`)
 
-> ⚠️ **PROVISIONAL — to be reviewed before MVP sign-off.** The custom
-> project entry below is the format of record *today* (FR-MP-4), and is
-> versioned (`format_version` + a reader-side mismatch reject), but the
-> project lead wants a deliberate review of the custom format before the
-> MVP is stamped complete — so treat the schema as not-yet-frozen. A
-> schema change before 1.0 should bump `FORMAT_VERSION` and add a
+> **Finalized for MVP.** The custom project entry below is the format of
+> record (FR-MP-4), versioned (`format_version` + a reader-side mismatch
+> reject). A schema change post-MVP bumps `FORMAT_VERSION` and adds a
 > migration/compat decision (see below). Source of record:
 > `src-tauri/src/core/project/format.rs`.
 

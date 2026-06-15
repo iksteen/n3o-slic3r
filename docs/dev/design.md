@@ -56,8 +56,9 @@ Past the napkin-sketch stage.
   disclosure) and **FR-CAS-7b** (objects-overriding-this badge). The
   rendering pattern is what should ship.
 
-- **ObjectsPanel sections** (`ObjectsPanel.jsx`): Primitives,
-  Calibration, Imported. Directly maps to **FR-UI-10**.
+- **ObjectsPanel sections** (`ObjectsPanel.jsx`): Primitives and
+  Imported. Directly maps to **FR-UI-10**. (The mockup's Calibration
+  section is out of MVP scope — see FR-UI-10.)
 
 - **Settings search and jump-rail** (`SettingsPanel.jsx`). Fuzzy
   match with category breadcrumbs. **FR-UI-3**.
@@ -78,8 +79,7 @@ Past the napkin-sketch stage.
   the execution plan).
 
 - **`ObjectsPanel.jsx`'s mock library** (placeholder STL names,
-  primitive shapes). Becomes real importable geometry and bundled
-  calibration models.
+  primitive shapes). Becomes real importable geometry and primitives.
 
 ### Replace
 
@@ -175,8 +175,8 @@ respective phases start:
 
 - **Filament sync.** PRD §6.8 is substantial — 14 FRs covering live
   AMS state reads, model-material→slot binding per (plate, printer),
-  mismatch detection, sync-on-send metadata. None of it is in the
-  mockup. This is one of the project's main differentiators ("the
+  slot-loaded/available validation, sync-on-send metadata. None of it
+  is in the mockup. This is one of the project's main differentiators ("the
   integration that current slicers handle poorly for U1 and other
   multi-printer setups") and needs its own design pass. Required for
   Phase 7.

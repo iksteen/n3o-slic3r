@@ -154,44 +154,19 @@ if (!cfg.has("nozzle_volume_type"))
 The temporary-copy approach means the caller's config remains
 untouched.
 
-**Update during PR-0.5-3 — and walked back during PR-3-11.** An
-additional zero-coerce block for the `wall_filament` /
-`sparse_infill_filament` / `solid_infill_filament` /
-`support_filament` / `support_interface_filament` selectors was
-originally part of this workaround. PR-0.5-3 removed it, claiming
-the coerce was redundant once the `filament_map` normalization
-above was in place ("all 16 api tests green; `Config::get` reports
-the source's 0 end-to-end through `Print::full_print_config` and
-`PrintObject::config`"). The premise was that since the *in-memory*
-config carries 0 cleanly, the engine must handle the sentinel
-internally.
-
-The premise was wrong. The api tests + spike1/spike2 don't exercise
-the multi-color (4 filament) path through `ToolOrdering::
-sort_and_build_data` →
+**Per-region filament selectors also need resolving — split by axis.**
+The `wall_filament` / `sparse_infill_filament` /
+`solid_infill_filament` / `support_filament` /
+`support_interface_filament` selectors carry `0` ("use default") in
+3MFs. Without resolution, the multi-color (4 filament) path through
+`ToolOrdering::sort_and_build_data` →
 `ToolOrdering::reorder_extruders_for_minimum_flush_volume` →
-`Slic3r::check_filament_printable_after_group`. The fourcolor.3mf
-case in `examples/spike3/` does — and **without** the coerce, that
-path SIGSEGVs deterministically before producing any output.
-
-`git bisect` between the 2026-05-22 LKG (06261cc, PR-0.5-3 spike3
-run) and HEAD pinpointed commit `1bcf46d` ("PR-0.5-3: document
-tool-change disparity investigation + CI memory fix") as the
-introducer; restoring the coerce restores the slice.
-
-The coerce stays in — but the **shape** of the coerce matters,
-and PR-3-11 corrected the shape twice in two passes:
-
-**Pass 1 (intermediate).** Restored the pre-1bcf46d block in
-its original form: hardcoded-1 for all five selectors
-(`wall_filament`, `sparse_infill_filament`,
-`solid_infill_filament`, `support_filament`,
-`support_interface_filament`). Fixed the SIGSEGV but kept the
-76-vs-7 tool-change disparity — actually CAUSED it, since
-pinning support_filament to any non-zero value suppresses
-libslic3r's per-layer support-extruder routing.
-
-**Pass 2 (final).** Split the resolution by axis:
+`Slic3r::check_filament_printable_after_group` SIGSEGVs
+deterministically before producing any output (the api tests and
+spike1/spike2 don't exercise it; `examples/spike3/fourcolor.3mf`
+does). The resolution must split by axis — pinning all five to a
+non-zero value fixes the SIGSEGV but suppresses libslic3r's per-layer
+support-extruder routing, blowing up the tool-change count:
 
 - **Per-REGION selectors** (`wall_filament`,
   `sparse_infill_filament`, `solid_infill_filament`): MUST be
@@ -218,9 +193,9 @@ the embedded BBS config: 7 mid-print tool changes
 (`T0×1 + T1×2 + T2×2 + T3×2`), 1h 6m 23s estimated print time,
 matching the BBS reference within slicing-arithmetic precision.
 
-Loud `// Per-REGION… Per-OBJECT…` comment block in the FFI
+A loud `// Per-REGION… Per-OBJECT…` comment block in the FFI
 shim cross-links both halves of the resolution + the SIGSEGV /
-tool-change history so neither side can be quietly undone.
+tool-change rationale so neither side can be quietly undone.
 
 ---
 

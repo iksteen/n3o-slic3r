@@ -1,7 +1,9 @@
 # Config & Profiles Strategy
 
-> Status: design notes, pre-implementation. Captured during early
-> exploration on 2026-05-22. Revisit when we start building the resolver.
+> Design of record for the rule cascade: format, two-phase resolution,
+> translation adapter, and option scope. The resolver
+> (`src-tauri/src/core/cascade/`) and adapter
+> (`src-tauri/src/core/cascade_adapter/`) implement this design.
 
 ## Conclusion (for the impatient)
 
