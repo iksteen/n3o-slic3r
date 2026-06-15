@@ -34,7 +34,6 @@ pub mod bed;
 pub mod build_plate;
 pub mod commands;
 pub mod events;
-pub mod library;
 pub mod loaders;
 pub mod primitives;
 pub mod state;
