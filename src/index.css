@@ -1011,6 +1011,31 @@
     opacity: 1;
     font-weight: 600;
   }
+  /* Operation control (e.g. Cancel) — its own row below the text, right-aligned. */
+  .progress-window-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 9px;
+  }
+  .progress-window-cancel {
+    /* The stack is pointer-events:none so it never traps canvas clicks;
+       re-enable on the one interactive control. */
+    pointer-events: auto;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    background: var(--surface-3);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .progress-window-cancel:hover:not(:disabled) {
+    color: var(--text);
+    border-color: var(--accent);
+  }
+  .progress-window-cancel:disabled { opacity: 0.55; cursor: default; }
 
   /* ─────────── Settings panel chrome ─────────── */
   .sp-host {

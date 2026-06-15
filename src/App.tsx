@@ -5,7 +5,7 @@ import { ErrorConsole } from "./logging/ErrorConsole";
 import { setupLogSinks } from "./logging/logStore";
 import type { GizmoMode } from "./viewport/types";
 import { SlicePanel } from "./slice/SlicePanel";
-import { SlicingWindow } from "./slice/SlicingWindow";
+import { SliceProgressWindow } from "./slice/SliceProgressWindow";
 import { useSliceJob } from "./slice/useSliceJob";
 import { useLastSliceOutput } from "./slice/useLastSliceOutput";
 import { PlateTabs } from "./plates/PlateTabs";
@@ -138,8 +138,8 @@ function App() {
 
   const bridge = useSlicePreviewBridge(activePlateId ?? null);
   // Slice-job state lives here (not in SlicePanel) so the topbar button
-  // and the floating SlicingWindow over the canvas read one job, and so
-  // the event subscription survives the topbar unmounting in Devices.
+  // and the floating SliceProgressWindow over the canvas read one job, and
+  // so the event subscription survives the topbar unmounting in Devices.
   const slice = useSliceJob();
   // Resume-only fallback for the progress window's object count: on a
   // reload mid-slice the submit path didn't run, so `sliceObjectCount`
@@ -476,9 +476,10 @@ function App() {
   const canvasOverlays = (
     <>
       <div className="progress-window-stack">
-        <SlicingWindow
+        <SliceProgressWindow
           state={slice.state}
           objectCount={sliceObjectCount ?? slicingPlate?.objects.length ?? 0}
+          cancel={slice.cancel}
         />
         <SendProgressWindow driverId={activeConnection?.driverId ?? null} />
       </div>
@@ -524,7 +525,6 @@ function App() {
                 setSliceObjectCount(activePlate?.objects.length ?? 0);
                 return slice.start();
               }}
-              cancel={slice.cancel}
             />
             <SendControls
               printerIdentity={printerIdentity}

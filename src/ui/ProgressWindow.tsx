@@ -1,9 +1,10 @@
 // Shared non-blocking progress window — floats over the canvas's lower-left
 // while a long operation is in flight. Both the slice-progress
-// (src/slice/SlicingWindow.tsx) and send-upload-progress
+// (src/slice/SliceProgressWindow.tsx) and send-upload-progress
 // (src/driver/SendProgressWindow.tsx) UIs render through this, so the chrome
 // (spinner + title + bar) lives in one place. Styling: `.progress-window*` in
-// src/index.css. Read-only — any controls stay in the topbar.
+// src/index.css. The window owns the operation's controls (e.g. Cancel) via
+// the `action` slot — the topbar action button just disables while it runs.
 
 export interface ProgressWindowProps {
   /** Head label, e.g. "Slicing", "Sending…". */
@@ -12,8 +13,11 @@ export interface ProgressWindowProps {
   percent: number;
   /** Optional head chip after the title (slice: "N objects"). */
   count?: React.ReactNode;
-  /** Optional row below the bar (slice: the active stage chip). */
+  /** Optional lower-left content (slice: the active stage chip). */
   footer?: React.ReactNode;
+  /** Optional lower-right control(s) for the operation — e.g. a Cancel
+   *  button. Lives in the window, not the topbar. */
+  action?: React.ReactNode;
 }
 
 export function ProgressWindow({
@@ -21,6 +25,7 @@ export function ProgressWindow({
   percent,
   count,
   footer,
+  action,
 }: ProgressWindowProps): React.JSX.Element {
   const pct = Math.max(0, Math.min(100, percent));
   return (
@@ -36,6 +41,9 @@ export function ProgressWindow({
       </div>
       {footer != null && (
         <div className="progress-window-stages">{footer}</div>
+      )}
+      {action != null && (
+        <div className="progress-window-actions">{action}</div>
       )}
     </div>
   );

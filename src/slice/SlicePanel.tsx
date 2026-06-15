@@ -1,9 +1,10 @@
 // Slice / Cancel button for the topbar (PR-3-4, rewired in PR-6-3).
 // Post-slice stats (time / filament / layers) and the clear button
 // were dropped from the header — the slice result surfaces in Preview.
-// In-flight progress moved out of the topbar into the floating
-// `SlicingWindow` over the canvas (design's `.slicing-window`); this
-// panel is now just the action button + any start/failure error text.
+// In-flight progress (and the Cancel control) moved out of the topbar
+// into the floating `SliceProgressWindow` over the canvas (design's
+// `.slicing-window`); this panel is now just the Slice button, which
+// disables while a slice runs rather than swapping to a Cancel button.
 //
 // Post-PR-6-3 the Slice button drives off live project state via
 // `slice_active_plate` — no file picker, no model-path tracking.
@@ -46,10 +47,9 @@ export interface SlicePanelProps {
   snapshot: SceneSnapshot | null;
   activePlate: PlateSnapshot | null;
   /** Live slice-job state, owned by `App` and shared with the
-   *  `SlicingWindow`. */
+   *  `SliceProgressWindow`. */
   state: SliceState;
   start: () => Promise<JobId>;
-  cancel: () => Promise<void>;
 }
 
 export function SlicePanel({
@@ -57,7 +57,6 @@ export function SlicePanel({
   activePlate,
   state,
   start,
-  cancel,
 }: SlicePanelProps) {
   const [busy, setBusy] = useState(false);
 
@@ -67,7 +66,6 @@ export function SlicePanel({
     state.status === "cancelling";
 
   const disabledReason = whyDisabled(snapshot, activePlate);
-  const sliceDisabled = disabledReason != null || busy;
 
   async function doSlice() {
     if (disabledReason != null) return;
@@ -83,41 +81,26 @@ export function SlicePanel({
     }
   }
 
-  async function doCancel() {
-    setBusy(true);
-    try {
-      await cancel();
-    } finally {
-      setBusy(false);
-    }
-  }
-
+  // The button stays in place and just disables while a slice runs — the
+  // Cancel control lives in the floating SliceProgressWindow.
   return (
     <div className="flex items-center gap-2">
-      {!inFlight && (
-        <button
-          type="button"
-          onClick={() => void doSlice()}
-          disabled={sliceDisabled}
-          className="tb-btn primary"
-          title={disabledReason ?? "Slice the active plate"}
-        >
-          Slice
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
-            <path d="M3 3l6 3-6 3V3z" fill="currentColor" />
-          </svg>
-        </button>
-      )}
-      {inFlight && (
-        <button
-          type="button"
-          onClick={() => void doCancel()}
-          disabled={state.status === "cancelling" || busy}
-          className="tb-btn"
-        >
-          {state.status === "cancelling" ? "Cancelling…" : "Cancel"}
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={() => void doSlice()}
+        disabled={disabledReason != null || busy || inFlight}
+        className="tb-btn primary"
+        title={
+          inFlight
+            ? "Slicing… (cancel in the slice window)"
+            : (disabledReason ?? "Slice the active plate")
+        }
+      >
+        Slice
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+          <path d="M3 3l6 3-6 3V3z" fill="currentColor" />
+        </svg>
+      </button>
     </div>
   );
 }
