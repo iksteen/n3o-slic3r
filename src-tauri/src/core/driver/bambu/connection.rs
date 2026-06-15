@@ -269,23 +269,13 @@ impl Driver for BambuDriver {
         // need a nonce suffix.
         let remote_name = format!("{file_basename}.gcode.3mf");
 
-        // FTPS is blocking — push it onto Tokio's blocking pool.
-        let host = self.config.host.clone();
-        let access_code = self.config.access_code.clone();
-        let remote_for_task = remote_name.clone();
-        let bytes_for_task = bytes;
-        let progress_for_task = on_progress;
-        let remote_path = tokio::task::spawn_blocking(move || {
-            let mut ftps = super::ftps::connect(&host, &access_code)?;
-            let path =
-                super::ftps::upload(&mut ftps, &remote_for_task, &bytes_for_task, progress_for_task)?;
-            // Quit politely; ignore errors — the upload has
-            // already landed by this point.
-            let _ = ftps.quit();
-            Ok::<String, DriverError>(path)
-        })
-        .await
-        .map_err(|e| DriverError::Other(format!("upload join: {e}")))??;
+        // FTPS over suppaftp's tokio-async-native-tls stack — fully async, so a
+        // cancelled send just drops this future (the command layer races it
+        // against the cancel token) and the connection tears down.
+        let mut ftps = super::ftps::connect(&self.config.host, &self.config.access_code).await?;
+        let remote_path = super::ftps::upload(&mut ftps, &remote_name, bytes, on_progress).await?;
+        // Quit politely; ignore errors — the upload has already landed.
+        let _ = ftps.quit().await;
 
         // Publish the project_file MQTT command. Field shape
         // pinned against a real BBS capture (single-color AMS

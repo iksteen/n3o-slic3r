@@ -18,32 +18,45 @@
 //! once, then the cancel mode shifted to firmware-side. Easier to
 //! just drop `/cache/` entirely and upload to root.
 
-use std::io::{Cursor, Read};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
+use suppaftp::tokio::{AsyncNativeTlsConnector, AsyncNativeTlsFtpStream};
 use suppaftp::types::FileType;
-use suppaftp::{Mode, NativeTlsConnector, NativeTlsFtpStream};
+use suppaftp::Mode;
+use tokio::io::{AsyncRead, ReadBuf};
 
 use crate::core::driver::traits::{DriverError, UploadProgressFn};
 
-/// A `Read` wrapper that reports cumulative bytes read through a callback —
-/// `put_file` pumps it to the data socket, so this reflects real upload
-/// progress. `(bytes_sent, total)` after each non-empty read.
-struct ProgressReader<R> {
-    inner: R,
-    sent: u64,
+/// An `AsyncRead` over an in-memory buffer that reports cumulative bytes
+/// through a callback as `put_file` pulls them — real upload progress.
+/// Reads never park (no actual IO), so this never stalls the task. There's no
+/// cancellation logic here: the send is fully async, so a cancelled send just
+/// drops the future (a `select!` at the command layer), which aborts the STOR.
+struct ProgressReader {
+    bytes: Vec<u8>,
+    pos: usize,
     total: u64,
     on_progress: UploadProgressFn,
 }
 
-impl<R: Read> Read for ProgressReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let n = self.inner.read(buf)?;
-        if n > 0 {
-            self.sent += n as u64;
-            (self.on_progress)(self.sent, self.total);
+impl AsyncRead for ProgressReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let me = self.get_mut();
+        let remaining = me.bytes.len() - me.pos;
+        if remaining == 0 {
+            return Poll::Ready(Ok(())); // EOF
         }
-        Ok(n)
+        let n = remaining.min(buf.remaining());
+        buf.put_slice(&me.bytes[me.pos..me.pos + n]);
+        me.pos += n;
+        (me.on_progress)(me.pos as u64, me.total);
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -55,30 +68,41 @@ const FTP_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Open + log in to the printer's FTPS endpoint. Blocking; the
 /// caller is expected to wrap in `tokio::task::spawn_blocking`.
-pub fn connect(host: &str, access_code: &str) -> Result<NativeTlsFtpStream, DriverError> {
+pub async fn connect(
+    host: &str,
+    access_code: &str,
+) -> Result<AsyncNativeTlsFtpStream, DriverError> {
     let address = if host.contains(':') {
         format!("[{host}]:{FTPS_PORT}")
     } else {
         format!("{host}:{FTPS_PORT}")
     };
-    let connector = NativeTlsConnector::from(super::tls::connector().map_err(DriverError::Other)?);
-    let mut client = NativeTlsFtpStream::connect_secure_implicit(address.as_str(), connector, host)
-        .map_err(|e| DriverError::Network(format!("FTPS connect {address}: {e}")))?;
-    client
-        .get_ref()
-        .set_read_timeout(Some(FTP_TIMEOUT))
-        .map_err(|e| DriverError::Network(format!("FTPS read timeout: {e}")))?;
-    client
-        .get_ref()
-        .set_write_timeout(Some(FTP_TIMEOUT))
-        .map_err(|e| DriverError::Network(format!("FTPS write timeout: {e}")))?;
+    let connector =
+        AsyncNativeTlsConnector::from(super::tls::async_connector().map_err(DriverError::Other)?);
+    // Bound the connect so an unreachable host fails fast rather than hanging on
+    // the OS TCP timeout (the async stream has no per-socket read/write timeout
+    // knob like the blocking one did).
+    let mut client = tokio::time::timeout(
+        FTP_TIMEOUT,
+        AsyncNativeTlsFtpStream::connect_secure_implicit(address.as_str(), connector, host),
+    )
+    .await
+    .map_err(|_| {
+        DriverError::Network(format!(
+            "FTPS connect {address}: timed out after {}s",
+            FTP_TIMEOUT.as_secs()
+        ))
+    })?
+    .map_err(|e| DriverError::Network(format!("FTPS connect {address}: {e}")))?;
     client.set_passive_nat_workaround(true);
     client.set_mode(Mode::Passive);
     client
         .login("bblp", access_code)
+        .await
         .map_err(|e| DriverError::Auth(format!("FTPS login: {e}")))?;
     client
         .transfer_type(FileType::Binary)
+        .await
         .map_err(|e| DriverError::Protocol(format!("FTPS set binary: {e}")))?;
     Ok(client)
 }
@@ -87,21 +111,22 @@ pub fn connect(host: &str, access_code: &str) -> Result<NativeTlsFtpStream, Driv
 /// `remote_name` verbatim — the MQTT `project_file` URL is built
 /// as `ftp://<remote_name>` (two slashes, no path prefix).
 /// Blocking; wrap in `spawn_blocking`.
-pub fn upload(
-    client: &mut NativeTlsFtpStream,
+pub async fn upload(
+    client: &mut AsyncNativeTlsFtpStream,
     remote_name: &str,
-    bytes: &[u8],
+    bytes: Vec<u8>,
     on_progress: UploadProgressFn,
 ) -> Result<String, DriverError> {
     let total = bytes.len() as u64;
     let mut reader = ProgressReader {
-        inner: Cursor::new(bytes),
-        sent: 0,
+        bytes,
+        pos: 0,
         total,
         on_progress,
     };
     client
         .put_file(remote_name, &mut reader)
+        .await
         .map_err(|e| DriverError::Network(format!("FTPS STOR {remote_name}: {e}")))?;
     Ok(remote_name.to_owned())
 }
@@ -109,24 +134,24 @@ pub fn upload(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Read;
     use std::sync::{Arc, Mutex};
+    use tokio::io::AsyncReadExt;
 
-    #[test]
-    fn progress_reader_reports_monotonic_bytes_up_to_total() {
+    #[tokio::test]
+    async fn progress_reader_reports_monotonic_bytes_up_to_total() {
         let data = vec![7u8; 10_000];
         let seen: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
         let seen_cb = seen.clone();
         let mut reader = ProgressReader {
-            inner: Cursor::new(&data[..]),
-            sent: 0,
+            bytes: data.clone(),
+            pos: 0,
             total: data.len() as u64,
             on_progress: Arc::new(move |sent, _total| seen_cb.lock().unwrap().push(sent)),
         };
         // Drain in fixed chunks, mimicking how put_file pumps the socket.
         let mut buf = [0u8; 1024];
         loop {
-            let n = reader.read(&mut buf).unwrap();
+            let n = reader.read(&mut buf).await.unwrap();
             if n == 0 {
                 break;
             }

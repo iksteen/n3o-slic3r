@@ -182,6 +182,10 @@ pub trait Driver: Send + Sync {
     /// `on_progress(bytes_sent, total_bytes)` fires as the bundle is pushed to
     /// the printer — drivers report real upload progress through it. The caller
     /// throttles before surfacing it to the UI.
+    ///
+    /// Cancellation is the caller's job: every driver's `send` is fully async,
+    /// so the command layer aborts an in-flight upload by dropping this future
+    /// (raced against a cancel signal in `tokio::select!`).
     async fn send(
         &mut self,
         payload: SendPayload,

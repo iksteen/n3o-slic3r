@@ -83,6 +83,29 @@ fn build() -> Result<TlsConnector, String> {
         .map_err(|e| format!("failed to build Bambu device TLS connector: {e}"))
 }
 
+/// Async (tokio) twin of [`connector`] for the FTPS upload path, which runs on
+/// `suppaftp`'s `tokio-async-native-tls` stack. Same BBL-CA pinning + invalid-
+/// hostname acceptance. `async-native-tls` exposes no `disable_built_in_roots`,
+/// but the device cert still validates against the added BBL CA — the extra
+/// system roots are simply unused, not a trust change for this LAN connection.
+/// Built fresh per call (FTPS connects once per send; no need to memoize).
+pub fn async_connector() -> Result<suppaftp::async_native_tls::TlsConnector, String> {
+    let ca = Certificate::from_pem(BBL_CA_CERT_PEM.as_bytes())
+        .map_err(|e| format!("failed to parse embedded BBL CA: {e}"))?;
+    #[allow(unused_mut)]
+    let mut connector = suppaftp::async_native_tls::TlsConnector::new()
+        .use_sni(true)
+        .add_root_certificate(ca)
+        .danger_accept_invalid_hostnames(true);
+    // macOS: same Security.framework validity-period quirk as the sync path —
+    // skip chain verification there (see the note above).
+    #[cfg(target_os = "macos")]
+    {
+        connector = connector.danger_accept_invalid_certs(true);
+    }
+    Ok(connector)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

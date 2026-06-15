@@ -83,6 +83,13 @@ export function driverSendPlate(
   });
 }
 
+/** Cancel an in-flight send to `id`. No-op if nothing is uploading; the
+ *  pending `driverSendPlate` rejects with a cancellation error (which the
+ *  caller treats as a user action, not a failure). */
+export function driverSendCancel(id: DriverId): Promise<void> {
+  return invoke<void>("driver_send_cancel", { id });
+}
+
 /** Open a live camera stream for a printer instance. The backend pushes
  *  raw JPEG frames over `channel` (each delivered as an `ArrayBuffer`).
  *  Lifecycle is frontend-driven: call this when the camera panel becomes

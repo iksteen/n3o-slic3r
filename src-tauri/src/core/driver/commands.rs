@@ -12,11 +12,13 @@
 //! (PR-7a-3 / PR-7b-3) hook the event emission into their
 //! rate-limited `watch::Sender<PrinterStatus>` pipelines.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use base64::Engine;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
+use tokio_util::sync::CancellationToken;
 
 use super::bambu::connection::{BambuConfig, BambuDriver};
 use super::registry::{DriverRegistry, DriverSummary};
@@ -52,6 +54,34 @@ struct UploadProgress {
     sent: u64,
     total: u64,
     percent: u8,
+}
+
+/// Per-driver cancellation tokens for in-flight sends. `driver_send_plate`
+/// arms a fresh token per send; `driver_send_cancel` fires it, and the
+/// `tokio::select!` in `driver_send_plate` then drops the in-flight `send`
+/// future to abort the upload. Keyed by driver id — at most one send is in
+/// flight per driver (the send holds the driver's lock), and `arm` overwrites
+/// the previous, settled token, so the map stays one-entry-per-driver.
+/// Tauri-managed; `.manage(...)` it from `lib.rs`.
+#[derive(Default)]
+pub struct SendCancelRegistry {
+    tokens: Mutex<HashMap<DriverId, CancellationToken>>,
+}
+
+impl SendCancelRegistry {
+    /// Register a fresh token for `id` and return a clone to race in `select!`.
+    fn arm(&self, id: DriverId) -> CancellationToken {
+        let token = CancellationToken::new();
+        self.tokens.lock().unwrap().insert(id, token.clone());
+        token
+    }
+    /// Fire `id`'s token if a send is in flight; firing a settled token is a
+    /// harmless no-op (nothing awaits it).
+    fn cancel(&self, id: DriverId) {
+        if let Some(token) = self.tokens.lock().unwrap().get(&id) {
+            token.cancel();
+        }
+    }
 }
 
 /// Build the [`UploadProgressFn`] a driver's `send` calls as bytes go out. It
@@ -494,7 +524,7 @@ pub async fn driver_export_plate(
 ///   the print in the same multipart upload (see
 ///   `core/driver/snapmaker/http.rs`).
 #[tauri::command]
-#[tracing::instrument(skip(registry, project, plugin_host, app))]
+#[tracing::instrument(skip(registry, project, plugin_host, app, sends))]
 pub async fn driver_send_plate(
     id: DriverId,
     plate_id: u32,
@@ -508,6 +538,7 @@ pub async fn driver_send_plate(
     registry: State<'_, Arc<DriverRegistry>>,
     project: State<'_, Arc<Mutex<Project>>>,
     plugin_host: State<'_, PluginHostState>,
+    sends: State<'_, Arc<SendCancelRegistry>>,
 ) -> Result<SendHandle, String> {
     let handle = registry
         .get(id)
@@ -565,8 +596,29 @@ pub async fn driver_send_plate(
         DriverKind::U1 => format!("{basename}.gcode"),
     };
     let on_progress = upload_progress_emitter(app, id, file_name);
+    // Arm a cancel token for this upload. `driver_send_cancel` fires it; the
+    // select! then drops the in-flight `send` future, which aborts the upload
+    // (every driver's `send` is fully async — Bambu's FTPS too).
+    let cancel = sends.arm(id);
     let mut d = handle.lock().await;
-    d.send(payload, on_progress).await.map_err(|e| e.to_string())
+    tokio::select! {
+        r = d.send(payload, on_progress) => r.map_err(|e| e.to_string()),
+        _ = cancel.cancelled() => Err(super::traits::DriverError::Cancelled.to_string()),
+    }
+}
+
+/// Cancel an in-flight send to `id`. No-op when nothing is uploading. The
+/// upload aborts with `DriverError::Cancelled`, which `driver_send_plate`
+/// returns as an error the frontend recognizes (and treats as a user action,
+/// not a failure).
+#[tauri::command]
+#[tracing::instrument(skip(sends))]
+pub fn driver_send_cancel(
+    id: DriverId,
+    sends: State<'_, Arc<SendCancelRegistry>>,
+) -> Result<(), String> {
+    sends.cancel(id);
+    Ok(())
 }
 
 /// Run the pre-send hook over `payload`, swapping in any plugin-edited

@@ -152,7 +152,14 @@ export function SendControls({
       // whether it's connected). Done after the latch so a throw above skips it.
       onSent?.();
     } catch (e) {
-      pushLog("error", `Send failed: ${String(e)}`);
+      const msg = String(e);
+      // A user-initiated cancel (driver_send_cancel → DriverError::Cancelled)
+      // isn't a failure — log it quietly and don't latch / jump.
+      if (/cancel/i.test(msg)) {
+        pushLog("info", "Send cancelled");
+      } else {
+        pushLog("error", `Send failed: ${msg}`);
+      }
     } finally {
       setActionPending(false);
       endUpload(driverId);

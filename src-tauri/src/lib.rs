@@ -60,6 +60,7 @@ pub fn run() {
         .manage(Arc::new(core::preview::PreviewRegistry::new()))
         .manage(Arc::new(core::driver::DriverRegistry::new()))
         .manage(Arc::new(core::driver::camera::CameraManager::new()))
+        .manage(Arc::new(core::driver::commands::SendCancelRegistry::default()))
         .setup(|app| {
             use tauri::Manager;
 
@@ -233,6 +234,7 @@ pub fn run() {
             core::driver::commands::driver_disconnect,
             core::driver::commands::driver_status,
             core::driver::commands::driver_send_plate,
+            core::driver::commands::driver_send_cancel,
             core::driver::commands::driver_export_plate,
             core::driver::commands::driver_command,
             core::driver::commands::driver_ams_set_filament,
