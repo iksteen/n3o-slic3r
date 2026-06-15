@@ -281,10 +281,15 @@ into CI and add an authenticode signer. Neither is an unknown.
 
 ## Other pending (not 1.0 features, just TODOs)
 
-- **Object-level overrides missing in the cascade ladder** (noted 2026-06-15).
-  The cascade ladder (printer → plate → nozzle → filament → user → project →
-  object) is missing the **object** tier — per-object setting overrides aren't
-  surfaced/applied in the ladder. Wire the object-level override layer in.
+- **Object tier in the cascade ladder ✅ DONE (2026-06-15).** The backend
+  resolver/override-tiers/trace + the per-object `object_overrides` storage
+  already carried the object tier end-to-end; the gap was purely the
+  settings UI. Fixed: in object scope the selected object now joins the
+  hover ladder as its top tier (`CascadeLadder` `objectTier` /
+  `SettingsPanel`); the per-category "changed" count and the settings-list
+  row highlight now follow the active tab (object tab = selected object;
+  project tab = union of project overrides + **any** object's overrides,
+  matching the objects-overriding badge).
 - **Opening a project doesn't invalidate the preview** (noted 2026-06-15).
   The G-code preview from a prior slice survives an Open-project, so it shows
   stale toolpaths for the just-loaded project until the next slice. Opening a

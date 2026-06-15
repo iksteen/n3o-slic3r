@@ -32,9 +32,11 @@ export type LadderLayer = {
   value: string | null;
 };
 
-/** The seven layers in priority order (low → high), matching
- *  docs/dev/design/data.jsx. The `object` layer is elided from the main
- *  list and rendered in its own per-object section below. */
+/** The cascade layers in priority order (low → high), matching
+ *  docs/dev/design/data.jsx. The `object` tier is appended only when the
+ *  panel is in object scope (see `objectTier`); in project scope it stays
+ *  elided and the objects that override are listed in the per-object
+ *  section below instead. */
 const LAYER_ORDER: ReadonlyArray<{ id: CascadeLayer; label: string }> = [
   { id: "default", label: "Defaults" },
   { id: "printer", label: "Printer" },
@@ -84,6 +86,12 @@ export interface CascadeLadderProps {
   /** Objects on the plate that override this setting. Empty when
    *  no per-object overrides (or PR-4-9 hasn't populated yet). */
   objectOverrides?: readonly ObjectOverrideEntry[];
+  /** When the panel is in object scope, the selected object joins the
+   *  ladder as its top (highest-priority) tier. `label` is the row name
+   *  (the object's name); the value comes from the `object` entry of the
+   *  `layers` map. `null` in project scope — the object tier stays out of
+   *  the ladder and overriding objects are listed below instead. */
+  objectTier?: { label: string } | null;
   /** Upstream libslic3r tooltip describing what the setting does.
    *  Rendered as a small dim paragraph above the cascade title.
    *  `null` when the schema has no tooltip text. */
@@ -108,6 +116,7 @@ export function CascadeLadder({
   onMouseLeave,
   cascadeFallback = null,
   objectOverrides = [],
+  objectTier = null,
   description = null,
   whyThisMatters = null,
 }: CascadeLadderProps) {
@@ -150,7 +159,7 @@ export function CascadeLadder({
     // `cascadeFallback`, and the layers (length isn't truly stable
     // but for our setting it's enough to depend on the open/anchor
     // pair plus the description-affecting props).
-  }, [open, anchor, description, whyThisMatters, cascadeFallback, objectOverrides]);
+  }, [open, anchor, description, whyThisMatters, cascadeFallback, objectOverrides, objectTier]);
 
   if (!open) return null;
 
@@ -176,7 +185,10 @@ export function CascadeLadder({
       <div className="ladder-title">
         Cascade · {settingLabel || settingKey}
       </div>
-      {LAYER_ORDER.map(({ id, label }) => {
+      {(objectTier
+        ? [...LAYER_ORDER, { id: "object" as CascadeLayer, label: objectTier.label }]
+        : LAYER_ORDER
+      ).map(({ id, label }) => {
         const v = layers.get(id) ?? null;
         const defined = v !== null;
         const isWinner = id === winningLayer;
@@ -201,7 +213,7 @@ export function CascadeLadder({
               }}
               aria-hidden
             />
-            <span className="l-name">{label}</span>
+            <span className="l-name" title={label}>{label}</span>
             <span className="l-val" style={defined ? undefined : { fontStyle: "italic", color: "var(--text-dim)" }}>
               {defined ? v : "—"}
             </span>

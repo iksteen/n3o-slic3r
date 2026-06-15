@@ -255,14 +255,17 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const groups = useMemo(() => categorize(visibleOptions), [visibleOptions]);
 
   const overriddenKeys = useMemo(() => {
-    // Project + object overrides combined for the per-category
-    // override-count badge. PR-4-7 will refine to read from the
-    // cascade trace (which knows the actual winning layer).
+    // Per-category override-count badge follows the active editing tab.
+    // Object tab: just the selected object's overrides. Project tab: the
+    // union of project overrides + every object's overrides on the plate —
+    // from the project vantage the object tier is "below" you, so any
+    // object's changes count toward the total (not just the selected one).
+    if (contextLayer === "object") return new Set(Object.keys(objectOverrides));
     const out = new Set<string>();
     for (const k of Object.keys(projectOverrides)) out.add(k);
-    for (const k of Object.keys(objectOverrides)) out.add(k);
+    for (const o of allObjects) for (const k of Object.keys(o.overrides)) out.add(k);
     return out;
-  }, [projectOverrides, objectOverrides]);
+  }, [contextLayer, projectOverrides, objectOverrides, allObjects]);
 
   const counts = useMemo(
     () => categoryCounts(groups, overriddenKeys),
@@ -543,6 +546,11 @@ export function SettingsPanel(props: SettingsPanelProps) {
                   }))
               : []
           }
+          objectTier={
+            contextLayer === "object" && selectedObject != null
+              ? { label: `Object: ${selectedObject.name}` }
+              : null
+          }
         />
       )}
         </>
@@ -774,11 +782,18 @@ function SettingRow({
   ) : null;
 
   const kind = optionTypeKind(schema);
-  const winningLayer = winningLayerFor(
-    schema.key,
-    projectOverrides,
-    objectOverrides,
-  );
+  // Row highlight (tint). Object tab: the selected object's overrides win.
+  // Project tab: any object overriding the setting tints it the object tier
+  // (matching the trailing objects-overriding badge + the per-category
+  // count), falling back to the project tier, then the cascade.
+  const winningLayer: CascadeLayer =
+    contextLayer === "object"
+      ? winningLayerFor(schema.key, projectOverrides, objectOverrides)
+      : overridingObjects.length > 0
+        ? "object"
+        : schema.key in projectOverrides
+          ? "project"
+          : "cascade";
   return (
     <Field
       schema={schema}
