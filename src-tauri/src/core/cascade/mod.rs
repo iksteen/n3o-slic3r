@@ -27,10 +27,7 @@ pub mod trace;
 pub mod types;
 pub mod validate;
 
-pub use commands::{
-    cascade_context_dimensions, cascade_load, cascade_resolve, cascade_trace, CascadeHandle,
-    CascadeRegistry, ContextJson, OverrideFileSpec, ResolvedEntryJson, ResolvedJson,
-};
+pub use commands::{ContextJson, OverrideFileSpec};
 pub use loader::{load_cascade, CascadeLoadError};
 pub use overrides::{
     load_override_file, parse_override_str, resolve_with_overrides, FlatOverrides, OverrideTier,
@@ -45,30 +42,11 @@ pub use validate::{default_known_dimensions, validate_cascade, KnownDimensions};
 
 use serde::Serialize;
 use slic3r_ffi::{
-    display_order_of, option_defs, version, OptMode as FfiOptMode, OptScope as FfiOptScope, OptType,
+    display_order_of, option_defs, OptMode as FfiOptMode, OptScope as FfiOptScope, OptType,
 };
 
 use crate::core::printer::profile::PrinterProfile;
 use crate::core::schema::{capability_for_key, CapabilityPredicate};
-
-#[derive(Serialize)]
-pub struct SlicerInfo {
-    pub version: String,
-    pub option_count: usize,
-}
-
-/// Banner: libslic3r version + count of options registered.
-/// Drives the UI's connection-confirmation header.
-#[tauri::command]
-#[tracing::instrument]
-pub fn slicer_info() -> SlicerInfo {
-    let info = SlicerInfo {
-        version: version(),
-        option_count: option_defs().len(),
-    };
-    tracing::info!(version = %info.version, options = info.option_count, "slicer_info");
-    info
-}
 
 /// Wire-format mode for the FR-UI-2 Simple / Advanced / Expert
 /// filter. Mirrors `slic3r_ffi::OptMode` but serializes as a stable
@@ -259,11 +237,10 @@ pub struct OptionSummary {
     /// Object-tab "project-scope setting" read-only badge.
     pub scope: OptScopeFlags,
     /// Printer-capability predicate that gates this option's
-    /// visibility (FR-UI-7). `None` = always show. The generic
-    /// `slicer_options` command always returns the predicate
-    /// verbatim; `slicer_options_for_printer` returns the same
-    /// data plus a pre-evaluated `hidden` flag against the
-    /// supplied printer.
+    /// visibility (FR-UI-7). `None` = always show.
+    /// [`panel_option_summaries`] returns the predicate verbatim;
+    /// `slicer_options_for_printer` returns the same data plus a
+    /// pre-evaluated `hidden` flag against the supplied printer.
     pub capability: Option<CapabilityPredicate>,
 }
 
@@ -326,13 +303,13 @@ fn is_panel_visible(d: &slic3r_ffi::OptionDef) -> bool {
     d.bucket == Some(slic3r_ffi::OptBucket::Process) && d.scope.is_fff()
 }
 
-/// Filtered option introspection. The filter matches against the
-/// canonical key and the display label, case-insensitively. Does
-/// **not** evaluate capability predicates — callers that want a
-/// printer-aware hide/show should use [`slicer_options_for_printer`].
-#[tauri::command]
-#[tracing::instrument]
-pub fn slicer_options(filter: Option<String>) -> Vec<OptionSummary> {
+/// Settings-panel option summaries for `filter` (matched against the
+/// canonical key and display label, case-insensitively), sorted into
+/// Orca's UI display order. Capability predicates are returned verbatim,
+/// not evaluated against any printer. Shared core of
+/// [`slicer_options_for_printer`], which adds the per-printer `hidden`
+/// flag.
+fn panel_option_summaries(filter: Option<String>) -> Vec<OptionSummary> {
     let needle = filter.unwrap_or_default().to_lowercase();
     let mut out: Vec<OptionSummary> = option_defs()
         .into_iter()
@@ -341,13 +318,12 @@ pub fn slicer_options(filter: Option<String>) -> Vec<OptionSummary> {
         .map(summary_from_def)
         .collect();
     sort_by_display_order(&mut out, |s| &s.key);
-    tracing::info!(matched = out.len(), "slicer_options");
     out
 }
 
 /// The engine's compiled-in default for `key`, serialized exactly as
 /// libslic3r emits it (e.g. `wipe_tower_x` → `"15"`). Exact-key match
-/// over the raw FFI option table — unlike [`slicer_options`] it applies
+/// over the raw FFI option table — unlike [`panel_option_summaries`] it applies
 /// no panel-visibility or capability filter, so capability-gated keys
 /// (the `wipe_tower_*` family) still return their default. `None` when
 /// libslic3r has no compile-time default for the key.
@@ -389,22 +365,18 @@ pub struct PrinterAwareOptionSummary {
     pub hidden: bool,
 }
 
-/// Same shape as [`slicer_options`] but with each option's
-/// capability predicate pre-evaluated against the supplied printer.
-/// Filter behavior is identical to [`slicer_options`].
+/// Per-option printer-aware view: [`panel_option_summaries`] plus each
+/// option's capability predicate pre-evaluated against the supplied
+/// printer. Filter behavior matches the shared core.
 #[tauri::command]
 #[tracing::instrument(skip(printer))]
 pub fn slicer_options_for_printer(
     printer: PrinterProfile,
     filter: Option<String>,
 ) -> Vec<PrinterAwareOptionSummary> {
-    let needle = filter.unwrap_or_default().to_lowercase();
-    let mut out: Vec<PrinterAwareOptionSummary> = option_defs()
+    let out: Vec<PrinterAwareOptionSummary> = panel_option_summaries(filter)
         .into_iter()
-        .filter(is_panel_visible)
-        .filter(|d| matches_filter(d, &needle))
-        .map(|d| {
-            let summary = summary_from_def(d);
+        .map(|summary| {
             let hidden = summary
                 .capability
                 .map(|c| !c.satisfied_by(&printer))
@@ -412,7 +384,6 @@ pub fn slicer_options_for_printer(
             PrinterAwareOptionSummary { summary, hidden }
         })
         .collect();
-    sort_by_display_order(&mut out, |s| &s.summary.key);
     let hidden_count = out.iter().filter(|s| s.hidden).count();
     tracing::info!(
         matched = out.len(),
@@ -456,7 +427,7 @@ mod tests {
             dangling.is_empty(),
             "panel surfaced non-FFF-settable (dangling) options whose overrides are inert: {dangling:?}",
         );
-        let keys: Vec<String> = slicer_options(None).into_iter().map(|s| s.key).collect();
+        let keys: Vec<String> = panel_option_summaries(None).into_iter().map(|s| s.key).collect();
         assert!(
             keys.iter().any(|k| k == "layer_height"),
             "a real FFF option must still be present",
@@ -510,7 +481,7 @@ mod tests {
     fn engine_default_serialized_returns_capability_gated_key_default() {
         ensure_ffi();
         // wipe_tower_x is capability-gated (RequiresPurgeTower) so it can be
-        // filtered out of `slicer_options`; the exact-match accessor must
+        // filtered out of `panel_option_summaries`; the exact-match accessor must
         // still surface its compiled default. The priming-tower overlay
         // leans on this for printers (the U1) that pin no position.
         let d = engine_default_serialized("wipe_tower_x")
@@ -525,7 +496,7 @@ mod tests {
     #[test]
     fn slicer_options_carries_mode_scope_tooltip_capability() {
         ensure_ffi();
-        let opts = slicer_options(Some("layer_height".into()));
+        let opts = panel_option_summaries(Some("layer_height".into()));
         // The schema is huge; layer_height is the canonical
         // representative the rest of the project keys off.
         let lh = opts
@@ -551,7 +522,7 @@ mod tests {
 
         // outer_wall_filament_id is the canonical region-scope option per the
         // same PrintConfig.hpp (renamed from wall_filament upstream).
-        let wf_opts = slicer_options(Some("outer_wall_filament_id".into()));
+        let wf_opts = panel_option_summaries(Some("outer_wall_filament_id".into()));
         let wf = wf_opts
             .iter()
             .find(|o| o.key == "outer_wall_filament_id")
@@ -675,7 +646,7 @@ mod tests {
         // seam_position — a Process-bucket Enum that the panel
         // routinely shows.
         ensure_ffi();
-        let opts = slicer_options(Some("seam_position".into()));
+        let opts = panel_option_summaries(Some("seam_position".into()));
         let opt = opts
             .iter()
             .find(|o| o.key == "seam_position")
@@ -700,7 +671,7 @@ mod tests {
         // End-to-end: the live FFI default for the regression key lands
         // as a Vector of 10 entries, each carrying readable text.
         ensure_ffi();
-        let opts = slicer_options(Some("small_area_infill_flow_compensation_model".into()));
+        let opts = panel_option_summaries(Some("small_area_infill_flow_compensation_model".into()));
         let opt = opts
             .iter()
             .find(|o| o.key == "small_area_infill_flow_compensation_model")

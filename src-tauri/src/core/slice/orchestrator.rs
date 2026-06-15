@@ -13,7 +13,7 @@
 //!
 //! ## Threading
 //!
-//! - The Tauri command `slice_start_job` allocates a [`JobId`],
+//! - The orchestrator's start path allocates a [`JobId`],
 //!   builds a [`ResolvedJob`] (cascade lookup + context conversion),
 //!   inserts a [`JobHandle`] into the registry, spawns the worker,
 //!   and returns the id immediately.

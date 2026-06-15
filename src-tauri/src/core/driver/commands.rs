@@ -317,29 +317,6 @@ pub async fn driver_status(
     Ok(d.status())
 }
 
-/// Upload + start a print on the driver. Returns the
-/// [`SendHandle`] correlating the new job with subsequent
-/// status events.
-#[tauri::command]
-#[tracing::instrument(skip(registry, payload, app), fields(payload_kind = ?std::mem::discriminant(&payload)))]
-pub async fn driver_send(
-    id: DriverId,
-    payload: SendPayload,
-    app: AppHandle,
-    registry: State<'_, Arc<DriverRegistry>>,
-) -> Result<SendHandle, String> {
-    let handle = registry
-        .get(id)
-        .ok_or_else(|| format!("unknown driver id {}", id.0))?;
-    let file_name = match &payload {
-        SendPayload::Gcode { file_name, .. } => file_name.clone(),
-        SendPayload::Gcode3mf { file_basename, .. } => format!("{file_basename}.gcode.3mf"),
-    };
-    let on_progress = upload_progress_emitter(app, id, file_name);
-    let mut d = handle.lock().await;
-    d.send(payload, on_progress).await.map_err(|e| e.to_string())
-}
-
 /// Wrap a raw G-code file on disk into a Bambu-flavored
 /// `.gcode.3mf` bundle byte buffer. Minimum-viable packaging — the
 /// bytes are well-formed enough for the printer to accept, but

@@ -9,7 +9,7 @@
 
 use std::sync::Once;
 
-use n3o_slic3r_lib::core::cascade::{slicer_options, slicer_options_for_printer, OptMode};
+use n3o_slic3r_lib::core::cascade::{slicer_options_for_printer, OptMode};
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
 use n3o_slic3r_lib::core::schema::CapabilityPredicate;
 use slic3r_ffi::init as ffi_init;
@@ -73,29 +73,31 @@ fn snapmaker_u1() -> PrinterProfile {
 #[test]
 fn slicer_options_carries_phase4_introspection() {
     ensure_ffi();
-    let opts = slicer_options(Some("layer_height".into()));
+    // Neither key is capability-gated, so the printer-aware view returns
+    // them unhidden; read introspection off the inner `summary`.
+    let opts = slicer_options_for_printer(a1_mini(), Some("layer_height".into()));
     let lh = opts
         .iter()
-        .find(|o| o.key == "layer_height")
+        .find(|o| o.summary.key == "layer_height")
         .expect("layer_height present");
     // Mode is surfaced.
-    assert_eq!(lh.mode, OptMode::Simple);
+    assert_eq!(lh.summary.mode, OptMode::Simple);
     // libslic3r ships a tooltip we surface.
-    assert!(lh.tooltip.is_some());
+    assert!(lh.summary.tooltip.is_some());
     // Scope: layer_height is per-object (PrintObjectConfig).
-    assert!(lh.scope.object, "layer_height is object-scope");
-    assert!(!lh.scope.project, "layer_height is not project-scope");
+    assert!(lh.summary.scope.object, "layer_height is object-scope");
+    assert!(!lh.summary.scope.project, "layer_height is not project-scope");
     // No capability predicate gates layer_height.
-    assert!(lh.capability.is_none());
+    assert!(lh.summary.capability.is_none());
 
     // outer_wall_filament_id: PR-4-1 vocabulary check — region-scope.
     // (renamed from wall_filament upstream.)
-    let wf_opts = slicer_options(Some("outer_wall_filament_id".into()));
+    let wf_opts = slicer_options_for_printer(a1_mini(), Some("outer_wall_filament_id".into()));
     let wf = wf_opts
         .iter()
-        .find(|o| o.key == "outer_wall_filament_id")
+        .find(|o| o.summary.key == "outer_wall_filament_id")
         .expect("outer_wall_filament_id present");
-    assert!(wf.scope.region, "outer_wall_filament_id is region-scope");
+    assert!(wf.summary.scope.region, "outer_wall_filament_id is region-scope");
 }
 
 /// A1 mini + U1 capability filter outcomes for the surviving process-bucket

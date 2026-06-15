@@ -238,6 +238,14 @@ mod tests {
     }
 
     #[test]
+    fn default_dimensions_include_canonical_set() {
+        let dims = default_known_dimensions().dimensions;
+        for expected in ["printer.model", "filament.type", "plate.type"] {
+            assert!(dims.iter().any(|d| d == expected), "missing {expected}");
+        }
+    }
+
+    #[test]
     fn canonical_cascade_validates() {
         let src = "\
 layer_height = 0.2

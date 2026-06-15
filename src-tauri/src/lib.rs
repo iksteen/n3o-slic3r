@@ -56,9 +56,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(std::sync::Mutex::new(
-            core::cascade::CascadeRegistry::default(),
-        ))
         .manage(core::slice::JobRegistry::new())
         .manage(Arc::new(core::preview::PreviewRegistry::new()))
         .manage(Arc::new(core::driver::DriverRegistry::new()))
@@ -151,13 +148,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            core::cascade::slicer_info,
-            core::cascade::slicer_options,
             core::cascade::slicer_options_for_printer,
-            core::cascade::commands::cascade_load,
-            core::cascade::commands::cascade_resolve,
-            core::cascade::commands::cascade_trace,
-            core::cascade::commands::cascade_context_dimensions,
             core::scene::commands::scene_snapshot,
             core::scene::commands::scene_mesh_buffers,
             core::scene::commands::scene_mesh_paint,
@@ -165,14 +156,8 @@ pub fn run() {
             core::scene::commands::scene_deselect,
             core::scene::commands::scene_load_mesh_from_path,
             core::scene::commands::scene_load_3mf,
-            core::scene::commands::scene_object_translate,
-            core::scene::commands::scene_object_rotate,
-            core::scene::commands::scene_object_scale,
             core::scene::commands::scene_object_set_transform,
             core::scene::commands::scene_object_delete,
-            core::scene::commands::scene_object_duplicate,
-            core::scene::commands::scene_object_mirror,
-            core::scene::commands::scene_object_lay_flat,
             core::scene::commands::scene_object_auto_orient,
             core::scene::commands::scene_object_lay_flat_on,
             core::scene::commands::scene_object_align_axis,
@@ -194,7 +179,6 @@ pub fn run() {
             core::scene::commands::scene_project_override_clear_all,
             core::scene::commands::scene_user_override_set,
             core::scene::commands::scene_user_override_clear,
-            core::scene::commands::scene_move_object,
             core::scene::commands::scene_move_objects_to_plate,
             core::scene::commands::scene_rebind_plate_printer,
             core::scene::commands::scene_unbind_plate_printer,
@@ -209,7 +193,6 @@ pub fn run() {
             core::printer::printer_instance_create,
             core::printer::printer_instance_delete,
             core::printer::printer_instance_delete_with_reassign,
-            core::printer::filament_catalog_list,
             core::printer::filament_profile_list,
             core::printer::process_fragment_list,
             core::printer::printer_instance_set_quality_profile,
@@ -218,7 +201,6 @@ pub fn run() {
             core::printer::printer_instance_set_connection,
             core::printer::printer_instance_update,
             core::printer::printer_instance_sync_from_driver,
-            core::project::commands::project_set_plate_composition_order,
             core::project::commands::project_set_plate_quality_profile,
             core::project::commands::plate_cascade_resolve,
             core::project::commands::plate_tower_geometry,
@@ -232,12 +214,8 @@ pub fn run() {
             core::project::commands::project_autosave_disable,
             core::project::commands::project_autosave_list,
             core::project::commands::project_autosave_drop,
-            core::scene::commands::library_primitives,
-            core::scene::commands::library_imported,
             core::scene::commands::scene_object_add_from_primitive,
             core::scene::commands::scene_auto_arrange,
-            core::slice::slicer_slice,
-            core::slice::commands::slice_start_job,
             core::slice::commands::slice_active_plate,
             core::slice::commands::slice_cancel,
             core::slice::commands::slice_status,
@@ -254,7 +232,6 @@ pub fn run() {
             core::driver::commands::driver_connect,
             core::driver::commands::driver_disconnect,
             core::driver::commands::driver_status,
-            core::driver::commands::driver_send,
             core::driver::commands::driver_send_plate,
             core::driver::commands::driver_export_plate,
             core::driver::commands::driver_command,
@@ -265,7 +242,6 @@ pub fn run() {
             core::driver::snapmaker::commands::u1_pairing_status,
             core::driver::snapmaker::commands::u1_unpair,
             core::plugin::commands::plugin_list,
-            core::plugin::commands::plugin_set_enabled,
             core::plugin::commands::plugin_set_global_enabled,
             core::plugin::commands::plugin_set_global_setting,
             core::plugin::commands::plugin_reload,

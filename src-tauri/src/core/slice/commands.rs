@@ -1,14 +1,14 @@
 //! Tauri command surface for the slice orchestrator.
 //!
 //! Thin layer over [`super::orchestrator::start_slice_job`] +
-//! [`super::job::JobRegistry`]. Tauri-managed state is the registry
-//! itself; cascade lookups read the shared `Mutex<CascadeRegistry>`.
+//! [`super::job::JobRegistry`]. Tauri-managed state is the job registry
+//! itself; the cascade is composed per-job inside the orchestrator.
 //!
 //! ## `slice_active_plate`
 //!
 //! The state-driven slice command. Takes an optional plate id
 //! (defaulting to the project's active plate), builds a
-//! [`SliceJobInput`] from project state via
+//! [`SliceJobInput`](super::job::SliceJobInput) from project state via
 //! [`super::input::build_slice_input`], spawns the orchestrator with
 //! a sink that cleans up the temp `.3mf` on the job's terminal
 //! event. Replaces the path-based `slice_start_default_a1mini` flow.
@@ -21,29 +21,13 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::events::SliceEvent;
 use super::input::{build_slice_input, SliceInputError};
-use super::job::{JobId, JobRegistry, JobStatus, SliceJobInput};
+use super::job::{JobId, JobRegistry, JobStatus};
 use super::orchestrator::{
-    start_slice_job as run_start, start_slice_job_with_sink_and_plugins, EventSink, SliceStartError,
+    start_slice_job_with_sink_and_plugins, EventSink, SliceStartError,
 };
 use super::pre_slice_gate::validate_pre_slice;
 use crate::core::plugin::commands::PluginHostState;
 use crate::core::project::{PlateId, Project};
-
-/// Kick off a slice job. Returns the allocated [`JobId`]
-/// synchronously; the worker thread drives lifecycle events
-/// through the Tauri event channel.
-///
-/// Pre-flight is just cascade composition + output-dir
-/// writability, both delegated to the orchestrator.
-#[tauri::command]
-#[tracing::instrument(skip(app_handle, jobs, input))]
-pub fn slice_start_job(
-    input: SliceJobInput,
-    app_handle: AppHandle,
-    jobs: State<JobRegistry>,
-) -> Result<JobId, String> {
-    run_start(input, app_handle, jobs.inner()).map_err(|e: SliceStartError| e.to_string())
-}
 
 /// Flip the cancel flag on a running job. The worker thread reads
 /// it between plates (and, when the FFI's mid-process cancel hook
@@ -72,7 +56,7 @@ pub fn slice_status(job_id: JobId, jobs: State<JobRegistry>) -> Result<JobStatus
 }
 
 /// Slice the active plate (or the requested `plate_id`) using live
-/// project state. Builds a [`SliceJobInput`] from `project` via
+/// project state. Builds a [`SliceJobInput`](super::job::SliceJobInput) from `project` via
 /// [`build_slice_input`], spawns the orchestrator, and registers a
 /// cleanup hook so the temp `.3mf` gets deleted on the job's
 /// terminal event.

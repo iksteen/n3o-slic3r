@@ -27,24 +27,9 @@ pub fn plugin_list(host: State<'_, PluginHostState>) -> Result<Vec<PluginSummary
     Ok(lock_host(&host).list())
 }
 
-#[tauri::command]
-pub fn plugin_set_enabled(
-    name: String,
-    enabled: bool,
-    host: State<'_, PluginHostState>,
-    app: AppHandle,
-) -> Result<(), String> {
-    lock_host(&host)
-        .set_enabled(&name, enabled)
-        .map_err(|e| e.to_string())?;
-    let _ = app.emit(CHANGED_EVENT, ());
-    Ok(())
-}
-
 /// Set a plugin's **global** activation (the panel's on/off toggle) and
 /// persist it to `config.toml`. This is the global tier — per-project /
-/// per-plate overrides still win over it. Distinct from
-/// `plugin_set_enabled`, which flips the session **health** flag.
+/// per-plate overrides still win over it.
 #[tauri::command]
 pub fn plugin_set_global_enabled(
     name: String,

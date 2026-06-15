@@ -1,11 +1,11 @@
 //! Slice job model + registry.
 //!
 //! The orchestrator's input shape, opaque handle, status snapshot,
-//! and the registry that owns in-flight jobs. The frontend builds a
-//! [`SliceJobInput`] from its current scene + cascade selection,
-//! sends it through `slice_start_job`, gets back a [`JobId`], and
-//! drives the lifecycle via Tauri events plus [`slice_status`] for
-//! reconnect.
+//! and the registry that owns in-flight jobs. The `slice_active_plate`
+//! command builds a [`SliceJobInput`] from the active plate's scene +
+//! cascade selection, runs it through the orchestrator, returns a
+//! [`JobId`], and drives the lifecycle via Tauri events plus
+//! [`slice_status`] for reconnect.
 //!
 //! Cancellation is cooperative: each job carries an `Arc<AtomicBool>`
 //! the worker thread polls between plates (and in the future, between
@@ -26,11 +26,9 @@ use crate::core::cascade::commands::ContextJson;
 #[serde(transparent)]
 pub struct JobId(pub u64);
 
-/// What the frontend hands to `slice_start_job`.
-///
-/// `context` is the same shape the cascade-command surface accepts —
-/// the frontend already builds these for `cascade_resolve` /
-/// `cascade_trace`, so wire format stays consistent.
+/// The orchestrator's resolved input for one slice job, built by
+/// [`super::input::build_slice_input`] from the active plate.
+/// `context` is the serialized cascade context ([`ContextJson`]).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SliceJobInput {
     /// Filesystem path of the model to slice. The UI's `scene_load_*`
@@ -93,8 +91,8 @@ pub struct SliceJobInput {
 #[serde(tag = "kind", content = "data")]
 pub enum JobStatus {
     /// Queued but worker hasn't picked it up yet. Brief window —
-    /// today the worker thread spawns synchronously inside
-    /// `slice_start_job`.
+    /// today the worker thread spawns synchronously inside the
+    /// orchestrator's start path.
     Queued,
     /// Worker is processing a plate. `percent` / `stage` reflect the
     /// most recent libslic3r progress tick.

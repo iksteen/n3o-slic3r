@@ -7,14 +7,14 @@
 //! pure methods; this file only validates the Tauri plumbing.
 
 use super::bed::BedMesh;
-use super::events::{MirrorAxis, MoveReport, SceneEvent, SceneOpError, SelectMode};
+use super::events::{SceneEvent, SceneOpError, SelectMode};
 use super::state::{
     ActivePlate, ExclusionZone, Group, GroupId, MeshHeader, MeshId, ObjectId, SceneObject,
 };
 use super::transform::Transform;
 use crate::core::printer::profile::PrinterProfile;
 use crate::core::project::{PlateId, Project};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use tauri::ipc::Response;
@@ -378,28 +378,6 @@ pub fn scene_unbind_plate_printer(
     Ok(())
 }
 
-/// Move an object from one plate to another. Returns
-/// a `MoveReport` describing whether the world-space position
-/// had to be reset (out-of-bounds, on-exclusion-zone, or
-/// below-bed on the target plate).
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn scene_move_object(
-    from_plate: PlateId,
-    to_plate: PlateId,
-    object_id: ObjectId,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<MoveReport, String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let (report, events) = s
-        .move_object(from_plate, to_plate, object_id)
-        .map_err(|e| e.to_string())?;
-    drop(s);
-    emit_all(&window, &events);
-    Ok(report)
-}
-
 /// Move a set of objects from one plate to another, preserving their
 /// world transforms (the "Send to plate" action — keeps each object's
 /// authored XYZ, unlike auto-arrange). Whole groups move together and
@@ -528,21 +506,6 @@ pub fn scene_user_override_clear(
     drop(s);
     emit_all(&window, &events);
     Ok(())
-}
-
-#[tauri::command]
-#[tracing::instrument]
-pub fn library_primitives() -> Vec<super::library::PrimitiveDescriptor> {
-    super::library::list_primitives()
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(state))]
-pub fn library_imported(
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<Vec<super::library::ImportedDescriptor>, String> {
-    let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    Ok(super::library::list_imported(&s))
 }
 
 /// Add a procedural primitive to the scene at plate origin. Mesh
@@ -676,72 +639,6 @@ pub fn scene_deselect(window: Window, state: State<Arc<Mutex<Project>>>) -> Resu
     Ok(())
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct Vec3Json {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-}
-
-impl From<Vec3Json> for glam::Vec3 {
-    fn from(v: Vec3Json) -> Self {
-        Self::new(v.x, v.y, v.z)
-    }
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn scene_object_translate(
-    id: ObjectId,
-    delta: Vec3Json,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s
-        .translate_object(id, delta.into())
-        .map_err(op_err_to_string)?;
-    drop(s);
-    emit_all(&window, &events);
-    Ok(())
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn scene_object_rotate(
-    id: ObjectId,
-    axis: Vec3Json,
-    radians: f32,
-    pivot: Option<Vec3Json>,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s
-        .rotate_object(id, axis.into(), radians, pivot.map(Into::into))
-        .map_err(op_err_to_string)?;
-    drop(s);
-    emit_all(&window, &events);
-    Ok(())
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn scene_object_scale(
-    id: ObjectId,
-    factor: Vec3Json,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s
-        .scale_object(id, factor.into())
-        .map_err(op_err_to_string)?;
-    drop(s);
-    emit_all(&window, &events);
-    Ok(())
-}
-
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_object_set_transform(
@@ -768,35 +665,6 @@ pub fn scene_object_delete(
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s.delete_objects(&ids);
-    drop(s);
-    emit_all(&window, &events);
-    Ok(())
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn scene_object_mirror(
-    id: ObjectId,
-    axis: MirrorAxis,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.mirror_object(id, axis).map_err(op_err_to_string)?;
-    drop(s);
-    emit_all(&window, &events);
-    Ok(())
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn scene_object_lay_flat(
-    id: ObjectId,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.lay_flat_object(id).map_err(op_err_to_string)?;
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -1048,20 +916,6 @@ pub fn scene_rename_group(
     drop(s);
     emit_all(&window, &events);
     Ok(())
-}
-
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn scene_object_duplicate(
-    id: ObjectId,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<ObjectId, String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let (new_id, events) = s.duplicate_object(id).map_err(op_err_to_string)?;
-    drop(s);
-    emit_all(&window, &events);
-    Ok(new_id)
 }
 
 fn op_err_to_string(e: SceneOpError) -> String {

@@ -34,7 +34,6 @@ pub use instance_registry::{
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
 pub use registry::{bundled_catalog, default_printer_identity, lookup, CatalogEntry};
 
-use crate::core::filament::{bundled_catalog as filament_bundled_catalog, FilamentProfile};
 use crate::core::profile_library::{
     list_filament_fragments, list_process_fragments, FilamentFragmentSummary,
     ProcessFragmentSummary,
@@ -344,16 +343,6 @@ pub fn printer_instance_set_slot_color(
     Ok(updated)
 }
 
-/// Tauri command: the bundled filament catalog — the cascade-
-/// context profiles (currently just `Generic PLA`, the
-/// `base_type`-driven cascade-resolve fallback). The slot picker
-/// reads [`filament_profile_list`] instead for the richer vendor-
-/// fragment surface.
-#[tauri::command]
-pub fn filament_catalog_list() -> Vec<FilamentProfile> {
-    filament_bundled_catalog()
-}
-
 /// Tauri command: bundled vendor filament fragments
 /// (`profiles/<vendor>/filament/<slug>.toml`). Each entry
 /// carries the slug (the wire `filament_identity` the slot panel
@@ -362,9 +351,7 @@ pub fn filament_catalog_list() -> Vec<FilamentProfile> {
 /// the picker swatch.
 ///
 /// Drives the slot-binding panel's filament dropdown — what the
-/// user actually picks from when binding a slot. The cascade-
-/// context `filament_catalog_list` above is for the slice-time
-/// resolver, not the picker.
+/// user actually picks from when binding a slot.
 #[tauri::command]
 pub fn filament_profile_list() -> Vec<FilamentFragmentSummary> {
     list_filament_fragments()
