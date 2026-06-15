@@ -152,7 +152,7 @@ module-scoped var into `App` state (now controlled via `selectedId` /
 Send can drive it. The closure captures the destination at click time, so
 switching the active plate mid-upload still lands on the printer you sent to.
 
-### 7. Orient / lay-flat without a pre-selection (maybe)
+### 7. Orient / lay-flat without a pre-selection ✅ DONE (2026-06-09)
 Reconsider the current requirement to select an object *before* the
 orient / lay-flat tools light up (the MVP gates both on a selection and
 greys the buttons otherwise). A lower-friction model:
@@ -178,6 +178,17 @@ for the no-selection case, never a replacement: selection exists → operate
 on the selected set (which may be one child of a group); selection empty →
 fall back to pick-to-orient / click-to-lay-flat. Revisit the rollout once
 the plate features (#3/#4) settle the multi-object interactions.
+
+**Shipped (2026-06-09, `eff1af8`).** `ViewportCanvas` arms a crosshair pick
+mode when a selection-only tool runs with nothing selected: `runAutoOrient`
+arms `orientPick` (next clicked object's group → `scene_object_auto_orient`),
+`toggleLayFlatPick` arms the existing face pick, both as the additive
+no-selection fallback — with a selection they still operate on the selected
+set (a group child included), exactly as settled above. The pick modes are
+mutually exclusive (arming one cancels the others) and the gizmo is
+suppressed while a pick is live so its handles don't intercept the click.
+Beyond the ticket's scope, **Align X/Y** got the same pick-when-empty
+treatment (the next clicked object's group aligns to the carried axis).
 
 **Format note:** none of #3/#4 touch the frozen MVP project format —
 per-plate objects and extra plates already round-trip, so 1.0 plate
