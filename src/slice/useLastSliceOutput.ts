@@ -30,11 +30,27 @@ export function useLastSliceOutput(): UseLastSliceOutputResult {
   const [paths, setPaths] = useState<Record<number, string>>({});
 
   useEffect(() => {
-    return onEvents<SliceEvent>(["slice:plate_finished"], (e) => {
-      if (e.payload.kind !== "PlateFinished") return;
-      const { plate_id, output_path } = e.payload.data;
-      setPaths((prev) => ({ ...prev, [plate_id]: output_path }));
-    });
+    return onEvents<SliceEvent>(
+      ["slice:plate_started", "slice:plate_finished"],
+      (e) => {
+        if (e.payload.kind === "PlateStarted") {
+          // A new slice for this plate just began: its prior output is now
+          // stale. Drop it immediately so Send/Export gate ("Slice the
+          // plate first") until the new slice lands — a re-slice (or one
+          // that then fails/cancels) can never push the old gcode.
+          const { plate_id } = e.payload.data;
+          setPaths((prev) => {
+            if (!(plate_id in prev)) return prev;
+            const next = { ...prev };
+            delete next[plate_id];
+            return next;
+          });
+        } else if (e.payload.kind === "PlateFinished") {
+          const { plate_id, output_path } = e.payload.data;
+          setPaths((prev) => ({ ...prev, [plate_id]: output_path }));
+        }
+      },
+    );
   }, []);
 
   // Editing a plate invalidates its last slice: drop the path so Send/Export

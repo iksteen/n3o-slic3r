@@ -99,6 +99,16 @@ export function useSlicePreviewBridge(
         setTick((t) => t + 1);
       }
     };
+    // A new slice beginning for a plate stales its preview the same way an
+    // edit does — blank it now so the prior gcode can't be shown (or sent)
+    // while the new slice runs.
+    const offStarted = onEvents<{ data?: { plate_id?: number } }>(
+      ["slice:plate_started"],
+      (e) => {
+        const plateId = e.payload?.data?.plate_id;
+        if (plateId) dropPlate(plateId);
+      },
+    );
     void (async () => {
       unlisten = await listenPlateEdits(dropPlate, () => {
         if (cacheRef.current.size === 0) return;
@@ -110,6 +120,7 @@ export function useSlicePreviewBridge(
       });
     })();
     return () => {
+      offStarted();
       if (unlisten) unlisten();
     };
   }, []);
