@@ -44,10 +44,6 @@ pub struct CascadeRegistry {
 }
 
 impl CascadeRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn insert(&mut self, cascade: Cascade) -> CascadeHandle {
         let id = self.next_handle;
         self.next_handle = self.next_handle.wrapping_add(1);
@@ -312,7 +308,7 @@ mod tests {
     #[test]
     fn load_then_resolve_then_trace_via_registry() {
         ensure_ffi();
-        let registry = Arc::new(Mutex::new(CascadeRegistry::new()));
+        let registry = Arc::new(Mutex::new(CascadeRegistry::default()));
 
         let files = vec![OverrideFileSpec {
             label: "test.toml".into(),
@@ -356,7 +352,7 @@ mod tests {
     #[test]
     fn unknown_handle_errors_cleanly() {
         ensure_ffi();
-        let registry = Mutex::new(CascadeRegistry::new());
+        let registry = Mutex::new(CascadeRegistry::default());
         let reg = registry.lock().unwrap();
         assert!(reg.get(9999).is_none());
     }

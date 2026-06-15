@@ -122,49 +122,6 @@ export function commitColor(text: string): CommitResult<string> {
   return { ok: true, value: t.toLowerCase(), serialized: t.toLowerCase() };
 }
 
-/** Parse a libslic3r vector-serialized string (`"0.4,0.4,0.4,0.4"`,
- *  `"1;2;3;4"`, or a plain bool list `"1,0,1,1"`) into typed slots.
- *  Returns `[]` for empty / unparseable input. */
-export function parseVector(text: string): string[] {
-  const trimmed = text.trim();
-  if (trimmed === "") return [];
-  // libslic3r accepts both ',' and ';' as separators across config
-  // versions; normalize.
-  return trimmed.split(/[,;]/).map((s) => s.trim());
-}
-
-/** Serialize a vector back to libslic3r's `,`-joined form. */
-export function formatVector(values: string[]): string {
-  return values.join(",");
-}
-
-/** Update a vector's value at `index`. When `syncAll` is true (the
- *  multi-slot panel's "Sync edits across slots" toggle is ON, per
- *  FR-UI-8), the new value broadcasts to every index. */
-export function commitVectorEdit(
-  prev: string[],
-  index: number,
-  next: string,
-  syncAll: boolean,
-): string[] {
-  if (syncAll) return prev.map(() => next);
-  const out = [...prev];
-  if (index < out.length) out[index] = next;
-  return out;
-}
-
-/** Pad a vector to `length` slots using the cascade's wrap-extend
- *  convention (libslic3r's `get_at` wraps to `values.front()` on
- *  out-of-range; the slot-adaptive panel matches that semantics for
- *  display so the row never renders empty). */
-export function padVector(values: string[], length: number): string[] {
-  if (values.length >= length) return values.slice(0, length);
-  const padded = [...values];
-  const fill = values[values.length - 1] ?? "";
-  while (padded.length < length) padded.push(fill);
-  return padded;
-}
-
 /** Parse `"1"` / `"true"` / `"0"` / `"false"` to bool. libslic3r
  *  serializes bools as `"1"` / `"0"`. */
 export function parseBool(text: string): boolean | null {

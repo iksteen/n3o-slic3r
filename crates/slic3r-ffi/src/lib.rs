@@ -381,7 +381,7 @@ impl OptScope {
     pub const SLA_PRINTER: Self = Self(sys::SLIC3R_SCOPE_SLA_PRINTER as u32);
 
     /// True if `other`'s bits are all set on `self`.
-    pub fn contains(self, other: Self) -> bool {
+    fn contains(self, other: Self) -> bool {
         (self.0 & other.0) == other.0 && other.0 != 0
     }
 
@@ -394,17 +394,8 @@ impl OptScope {
     pub fn is_region(self) -> bool {
         self.contains(Self::REGION)
     }
-    pub fn is_sla_print(self) -> bool {
-        self.contains(Self::SLA_PRINT)
-    }
-    pub fn is_sla_object(self) -> bool {
-        self.contains(Self::SLA_OBJECT)
-    }
     pub fn is_sla_material(self) -> bool {
         self.contains(Self::SLA_MATERIAL)
-    }
-    pub fn is_sla_printer(self) -> bool {
-        self.contains(Self::SLA_PRINTER)
     }
 
     /// True for any FFF scope (Print / Object / Region).

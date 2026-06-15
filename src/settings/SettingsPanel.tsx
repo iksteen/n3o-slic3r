@@ -300,7 +300,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const jumpToCategory = (id: string) => {
     setActiveCat(id);
     const el = scrollRef.current?.querySelector<HTMLElement>(
-      `[data-cat-id="${cssEscape(id)}"]`,
+      `[data-cat-id="${CSS.escape(id)}"]`,
     );
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -945,10 +945,4 @@ export function filterRow(
     (opt.label?.toLowerCase().includes(needle) ?? false) ||
     (opt.category?.toLowerCase().includes(needle) ?? false)
   );
-}
-
-/** Minimal CSS.escape polyfill — Tauri's bundled CSS environment has
- *  the global, but we don't rely on it for cross-runtime safety. */
-function cssEscape(s: string): string {
-  return s.replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
 }

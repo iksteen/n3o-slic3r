@@ -832,13 +832,6 @@ impl ProgressThrottle {
     }
 }
 
-/// Compatibility re-export — used by [`crate::core::cascade`] tests
-/// and downstream code that wanted `Path` paths instead of `&str`.
-#[allow(dead_code)]
-fn _path_alias(p: &Path) -> &Path {
-    p
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

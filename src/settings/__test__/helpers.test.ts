@@ -14,18 +14,14 @@ import {
   commitFloatOrPercent,
   commitNumber,
   commitPercent,
-  commitVectorEdit,
   formatBool,
   formatFloatOrPercent,
   formatNumber,
-  formatVector,
   isValidHexColor,
-  padVector,
   parseBool,
   parseFloatOrPercent,
   parseNumber,
   parsePercent,
-  parseVector,
 } from "../inputs/helpers";
 
 describe("parseNumber", () => {
@@ -148,48 +144,6 @@ describe("color validation", () => {
       value: "#ffaa00",
       serialized: "#ffaa00",
     });
-  });
-});
-
-describe("vector helpers", () => {
-  it("parses comma and semicolon separators", () => {
-    expect(parseVector("a,b,c")).toEqual(["a", "b", "c"]);
-    expect(parseVector("1;2;3")).toEqual(["1", "2", "3"]);
-  });
-
-  it("rejoins with comma", () => {
-    expect(formatVector(["1", "2", "3"])).toBe("1,2,3");
-  });
-
-  it("commit at index without sync", () => {
-    expect(commitVectorEdit(["a", "b", "c", "d"], 2, "X", false)).toEqual([
-      "a",
-      "b",
-      "X",
-      "d",
-    ]);
-  });
-
-  it("commit at index with sync broadcasts to every slot", () => {
-    expect(commitVectorEdit(["a", "b", "c", "d"], 2, "X", true)).toEqual([
-      "X",
-      "X",
-      "X",
-      "X",
-    ]);
-  });
-
-  it("padVector wraps the last value to reach length", () => {
-    expect(padVector(["1"], 4)).toEqual(["1", "1", "1", "1"]);
-    expect(padVector(["1", "2"], 4)).toEqual(["1", "2", "2", "2"]);
-  });
-
-  it("padVector clips when input is longer than length", () => {
-    expect(padVector(["1", "2", "3", "4", "5"], 3)).toEqual(["1", "2", "3"]);
-  });
-
-  it("padVector returns empty-string-padded when input is empty", () => {
-    expect(padVector([], 3)).toEqual(["", "", ""]);
   });
 });
 

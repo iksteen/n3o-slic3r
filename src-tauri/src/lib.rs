@@ -56,7 +56,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(std::sync::Mutex::new(core::cascade::CascadeRegistry::new()))
+        .manage(std::sync::Mutex::new(
+            core::cascade::CascadeRegistry::default(),
+        ))
         .manage(core::slice::JobRegistry::new())
         .manage(Arc::new(core::preview::PreviewRegistry::new()))
         .manage(Arc::new(core::driver::DriverRegistry::new()))
@@ -71,29 +73,11 @@ pub fn run() {
             tracing::info!("libslic3r initialized");
 
             // Resolve the bundled-resources root once: the shipped trees
-            // (`profiles/`, `plugins/`) live directly under it. For a
-            // packaged build this is the Tauri resource dir (configured
-            // via tauri.conf.json::bundle.resources); dev runs override
-            // it with `N3O_SLIC3R_RESOURCES_ROOT=./resources`.
-            //
-            // Why the override exists: `tauri-build`'s copy of
-            // `bundle.resources` into `target/<profile>/` runs only on
-            // tracked-file changes and never prunes, so a source-tree
-            // restructure can leave stale fragments shadowing the right
-            // ones (see profile_library's same-slug collision warning
-            // for the failure mode). Dev passes
-            // `N3O_SLIC3R_RESOURCES_ROOT=./resources` through the npm
-            // `tauri` script (`cross-env` in package.json) and reads
-            // straight from source; production never sets it and gets the
-            // bundled `resource_dir` path. The override is explicit so an
-            // unset env in prod doesn't silently fall back to a baked-in
-            // source path that won't exist on the user's machine.
-            //
-            // Relative override paths resolve against the workspace root
-            // baked in at compile time (one dir above `src-tauri`), not
-            // the binary's runtime CWD — Tauri's dev mode may set CWD to
-            // `src-tauri/`, so a naive `./resources` resolved against
-            // process CWD would land at the wrong place.
+            // (`profiles/`, `plugins/`) live directly under it. See
+            // `resources_root` for why the dev override exists and how
+            // relative paths resolve. (The stale-fragment failure mode it
+            // guards against is profile_library's same-slug collision
+            // warning.)
             let resources = resources_root(app);
 
             // Load the bundled profile tree.

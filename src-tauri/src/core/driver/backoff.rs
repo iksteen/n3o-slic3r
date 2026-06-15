@@ -33,11 +33,6 @@ pub fn reconnect_backoff_secs(attempt: u32) -> u64 {
         .min(RECONNECT_CAP_SECS)
 }
 
-/// [`reconnect_backoff_secs`] as a [`Duration`].
-pub fn reconnect_backoff(attempt: u32) -> Duration {
-    Duration::from_secs(reconnect_backoff_secs(attempt))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
