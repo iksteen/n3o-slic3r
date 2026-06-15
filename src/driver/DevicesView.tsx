@@ -19,8 +19,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDriverStatus } from "./useDriverStatus";
 import { driverCommand } from "./invokes";
+import { useCameraStream } from "./useCameraStream";
+import { configForConnection } from "./useDriverConnections";
 import type { ConnectionSummary } from "./useDriverConnections";
-import type { AmsFilament, AmsTray, PrinterStatus } from "./types";
+import { isConnectionUsable } from "../printer/connectionValidation";
+import type { AmsFilament, AmsTray, DriverConfig, PrinterStatus } from "./types";
 import { cssColorFromHex } from "./colorUtils";
 import type { PrinterInstance } from "../printer/printerInstance";
 import { usePrinterCatalog } from "../printer/usePrinterCatalog";
@@ -239,33 +242,96 @@ function PrinterRail({
   );
 }
 
-// ───────── Camera (stubbed) ─────────
+// ───────── Camera ─────────
 
-function CameraPanel(): React.JSX.Element {
+/** The camera glyph. `slashed` draws the struck-through (disabled) form
+ *  for the unavailable/offline states; the plain form reads as "live /
+ *  connecting". */
+function CameraIcon({ slashed }: { slashed: boolean }): React.JSX.Element {
+  return (
+    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" opacity="0.4">
+      <rect x="3" y="8" width="20" height="16" rx="2" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="M23 13l6-3v12l-6-3z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      {slashed && <path d="M3 3l26 26" stroke="currentColor" strokeWidth="1.5" />}
+    </svg>
+  );
+}
+
+export interface CameraPlaceholder {
+  title: string;
+  detail: string | null;
+  /** Draw the struck-through camera glyph (disabled look). */
+  slashed: boolean;
+}
+
+/** Pick the non-live camera placeholder, most-specific case first. Pure so
+ *  the state logic is unit-testable without a DOM. */
+export function cameraPlaceholder(args: {
+  /** Backend has a wired camera (Bambu today). */
+  supported: boolean;
+  offline: boolean;
+  /** Stream start error, if any. */
+  error: string | null;
+}): CameraPlaceholder {
+  if (!args.supported) {
+    return { title: "Webcam", detail: "Not available for this printer", slashed: true };
+  }
+  if (args.offline) {
+    return { title: "Webcam", detail: "Printer offline", slashed: true };
+  }
+  if (args.error) {
+    return { title: "Camera unavailable", detail: args.error, slashed: true };
+  }
+  return { title: "Connecting to camera…", detail: null, slashed: false };
+}
+
+/** Live printer camera. The stream is opened only while this panel is
+ *  mounted and the printer is online (the frontend owns the lifecycle —
+ *  see `useCameraStream`); the backend pushes JPEG frames we render into an
+ *  `<img>`. Non-camera backends (and offline printers) show a placeholder
+ *  without opening any link. */
+function CameraPanel({
+  instanceId,
+  config,
+  offline,
+}: {
+  instanceId: string;
+  /** The instance's driver config, or null when unconfigured. */
+  config: DriverConfig | null;
+  offline: boolean;
+}): React.JSX.Element {
+  // Only Bambu LAN cameras are wired today; other backends show the
+  // unavailable state without opening a stream.
+  const supported = config?.kind === "Bambu";
+  const active = supported && !offline;
+  const { frameUrl, error } = useCameraStream(
+    instanceId,
+    active ? config : null,
+    active,
+  );
+
+  if (active && frameUrl) {
+    return (
+      <div className="device-camera">
+        <img className="device-camera-img" src={frameUrl} alt="Printer camera" />
+      </div>
+    );
+  }
+
+  const placeholder = cameraPlaceholder({ supported, offline, error });
+
   return (
     <div className="device-camera off">
       <div className="device-camera-frame">
         <div className="device-camera-off-msg">
-          <svg width="32" height="32" viewBox="0 0 32 32" fill="none" opacity="0.4">
-            <rect
-              x="3"
-              y="8"
-              width="20"
-              height="16"
-              rx="2"
-              stroke="currentColor"
-              strokeWidth="1.5"
-            />
-            <path
-              d="M23 13l6-3v12l-6-3z"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinejoin="round"
-            />
-            <path d="M3 3l26 26" stroke="currentColor" strokeWidth="1.5" />
-          </svg>
-          <div>Webcam</div>
-          <div className="dim">Not implemented yet</div>
+          <CameraIcon slashed={placeholder.slashed} />
+          <div>{placeholder.title}</div>
+          {placeholder.detail && <div className="dim">{placeholder.detail}</div>}
         </div>
       </div>
     </div>
@@ -801,7 +867,15 @@ function DeviceMonitor({
       {!notConfigured && (
         <div className="device-monitor-body">
           <div className="device-monitor-left">
-            <CameraPanel />
+            <CameraPanel
+              instanceId={instance.id}
+              config={
+                instance.connection && isConnectionUsable(instance.connection)
+                  ? configForConnection(instance.connection)
+                  : null
+              }
+              offline={offline}
+            />
             <CurrentJobPanel status={offline ? null : status} />
           </div>
           <div className="device-monitor-right">

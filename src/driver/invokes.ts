@@ -5,7 +5,7 @@
 // camelCase — Tauri auto-translates to the snake_case the Rust
 // commands expect.
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   DriverConfig,
   DriverId,
@@ -81,6 +81,24 @@ export function driverSendPlate(
     gcodePath,
     thumbnailPngBase64: thumbnailPngBase64 ?? null,
   });
+}
+
+/** Open a live camera stream for a printer instance. The backend pushes
+ *  raw JPEG frames over `channel` (each delivered as an `ArrayBuffer`).
+ *  Lifecycle is frontend-driven: call this when the camera panel becomes
+ *  active and `cameraStop` when it's hidden. Rejects for backends without
+ *  camera support (only Bambu LAN cameras are wired today). */
+export function cameraStart(
+  instanceId: string,
+  config: DriverConfig,
+  channel: Channel<ArrayBuffer>,
+): Promise<void> {
+  return invoke<void>("camera_start", { instanceId, config, channel });
+}
+
+/** Close the live camera stream for a printer instance. Idempotent. */
+export function cameraStop(instanceId: string): Promise<void> {
+  return invoke<void>("camera_stop", { instanceId });
 }
 
 /** Diagnostic: wrap the plate's gcode into the same `.gcode.3mf`

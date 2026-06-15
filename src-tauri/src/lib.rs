@@ -60,6 +60,7 @@ pub fn run() {
         .manage(core::slice::JobRegistry::new())
         .manage(Arc::new(core::preview::PreviewRegistry::new()))
         .manage(Arc::new(core::driver::DriverRegistry::new()))
+        .manage(Arc::new(core::driver::camera::CameraManager::new()))
         .setup(|app| {
             use tauri::Manager;
 
@@ -274,6 +275,8 @@ pub fn run() {
             core::driver::commands::driver_export_plate,
             core::driver::commands::driver_command,
             core::driver::commands::driver_ams_set_filament,
+            core::driver::camera::camera_start,
+            core::driver::camera::camera_stop,
             core::plugin::commands::plugin_list,
             core::plugin::commands::plugin_set_enabled,
             core::plugin::commands::plugin_set_global_enabled,

@@ -152,6 +152,40 @@ module-scoped var into `App` state (now controlled via `selectedId` /
 Send can drive it. The closure captures the destination at click time, so
 switching the active plate mid-upload still lands on the printer you sent to.
 
+### 8. Live printer webcam in the Devices view ✅ DONE — Bambu (2026-06-15)
+The Devices monitor shipped with a stubbed "Webcam — not implemented"
+panel; this wires a live stream, **A1 mini (Bambu LAN) first**, hardware
+verified.
+
+- **Bambu protocol** (`bambu/camera.rs`): the A1 mini's bespoke camera
+  stream on TCP `:6000` behind the *same* BBL-CA device TLS the MQTT/FTPS
+  paths use — send one 80-byte `bblp`+access-code auth packet, then read
+  length-prefixed JPEG frames (16-byte header, LE-u32 size, JPEG body).
+  Framing/auth verified against `iksteen/machin3d-overlay`.
+- **Vendor-neutral source abstraction** (`driver/camera.rs`): a
+  `CameraSource` trait with `setup` / `attempt` / `teardown` hooks driven
+  by a generic worker that owns retry/backoff. Push sources (Bambu's
+  socket) and poll sources (Moonraker MJPEG / `monitor.jpg`) both fit
+  `attempt`; the Snapmaker U1's session-long mTLS `camera.start_monitor`
+  wake + `stop_monitor` release map onto `setup`/`teardown`. Cancellation
+  is a `CancellationToken` (not `JoinHandle::abort`) precisely so async
+  teardown runs. Only the Bambu arm is wired — `source_for` returns a
+  clear "not implemented yet" for U1; a `U1CameraSource` (Moonraker poll +
+  the mTLS wake) slots in as a new arm without touching the worker.
+- **Frontend-driven lifecycle, backend push**: `camera_start` /
+  `camera_stop` open/close the link as the camera panel becomes active /
+  hidden (no always-on capture); frames are **pushed** to the webview over
+  a `tauri::ipc::Channel` as raw bytes (`ArrayBuffer` in JS, no base64).
+  `useCameraStream` turns each frame into an object URL and swaps the
+  `<img>`; `CameraPanel` shows live video, or offline/unsupported/
+  connecting/error placeholders. Gated on Bambu + online.
+- Gotcha fixed in review: the Tauri commands are synchronous, so they run
+  on the UI thread with no Tokio reactor — the worker spawns via
+  `tauri::async_runtime::spawn`, not `tokio::spawn`.
+
+Follow-ups: the U1 camera source (Moonraker poll + mTLS wake); a generic
+Moonraker/Klipper MJPEG source for plain Klipper printers.
+
 ### 7. Orient / lay-flat without a pre-selection ✅ DONE (2026-06-09)
 Reconsider the current requirement to select an object *before* the
 orient / lay-flat tools light up (the MVP gates both on a selection and

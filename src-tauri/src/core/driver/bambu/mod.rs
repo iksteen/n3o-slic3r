@@ -8,6 +8,7 @@
 //!
 //! [`iksteen/bambu-overlay`]: https://github.com/iksteen/bambu-overlay
 
+pub mod camera;
 pub mod connection;
 pub mod device_id;
 pub mod ftps;

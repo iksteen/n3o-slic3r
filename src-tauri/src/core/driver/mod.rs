@@ -22,6 +22,7 @@
 
 pub mod backoff;
 pub mod bambu;
+pub mod camera;
 pub mod commands;
 pub mod registry;
 pub mod snapmaker;
