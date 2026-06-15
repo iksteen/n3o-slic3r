@@ -12,7 +12,7 @@ bundled example.
 > **Not available (deferred post-MVP):** a project-level *compose* hook
 > (cross-plate transforms) and *automatic hot reload* of plugin files.
 > Plugins load on launch; after editing one, relaunch the app or use the
-> Plugins panel's reload. See `docs/dev/tickets/phase-8.md`.
+> Plugins panel's reload.
 
 ---
 

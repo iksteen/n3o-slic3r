@@ -26,8 +26,7 @@
 //!
 //! Resist adding "string-only" fast paths around this model. The
 //! oracle stops working the moment the renderer or a plugin can
-//! reach around the typed shape; see `docs/dev/tickets/phase-3.md`
-//! for the architecture note.
+//! reach around the typed shape.
 
 use serde::{Deserialize, Serialize};
 
