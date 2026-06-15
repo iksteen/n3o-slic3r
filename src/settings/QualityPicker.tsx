@@ -8,7 +8,8 @@
 // (printer, nozzle); selection writes back via
 // `setInstanceQualityProfile`.
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { usePopoverDismiss } from "../ui/usePopoverDismiss";
 import type { ProcessFragmentSummary } from "./processFragment";
 
 export interface QualityPickerProps {
@@ -49,16 +50,7 @@ export function QualityPicker({
 }: QualityPickerProps): React.ReactElement {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (!wrapRef.current) return;
-      if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open]);
+  usePopoverDismiss(wrapRef, () => setOpen(false), open);
 
   const pick = (next: string): void => {
     setOpen(false);

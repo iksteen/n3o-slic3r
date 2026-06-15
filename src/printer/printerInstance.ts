@@ -312,6 +312,38 @@ export function deriveExtruderLabel(
   return `T${extIdx + 1}`;
 }
 
+/** Position of a slot within an AMS-style multi-slot extruder, shared
+ *  by the two slot-label formatters. Ams-feed slots are numbered
+ *  1-based across the extruder, grouped into AMS-unit letters of 4 once
+ *  there are >4 (multi-AMS-unit topology); the trailing Direct-feed slot
+ *  is the external spool. */
+type SlotPosition =
+  | { kind: "ams"; unitIdx: number; idxInUnit: number; multiUnit: boolean }
+  | { kind: "direct" }
+  | { kind: "none" };
+
+function amsSlotPosition(
+  slotIdx: number,
+  slots: readonly SlotBinding[],
+): SlotPosition {
+  const multiUnit = slots.filter((s) => s.feed === "ams").length > 4;
+  let idxInUnit = 0;
+  let unitIdx = 0;
+  for (let i = 0; i < slots.length; i++) {
+    if (slots[i].feed === "ams") {
+      if (idxInUnit === 4) {
+        idxInUnit = 0;
+        unitIdx += 1;
+      }
+      idxInUnit += 1;
+      if (i === slotIdx) return { kind: "ams", unitIdx, idxInUnit, multiUnit };
+    } else if (i === slotIdx) {
+      return { kind: "direct" };
+    }
+  }
+  return { kind: "none" };
+}
+
 /** Long-form label for a slot, used in tooltips + the picker
  *  dropdown. Slot-scope only (doesn't include the extruder label) —
  *  `flattenSlots` combines this with the extruder label via " — ".
@@ -319,10 +351,9 @@ export function deriveExtruderLabel(
  *  Single-slot extruders: surface identity through the extruder
  *  label on multi-extruder printers, through a `Direct` / `AMS:1`
  *  feed-kind label on single-extruder printers.
- *  Multi-slot extruders are AMS-style: Ams-feed slots numbered
- *  1-based; if >4 (multi-AMS-unit topology) prefix with a unit
- *  letter (`AMS A:1..AMS B:4`); trailing Direct-feed slot is `Ext`. */
-export function deriveSlotLabel(
+ *  Multi-slot extruders are AMS-style (`AMS A:1..AMS B:4`, trailing
+ *  `Ext`) — see [`amsSlotPosition`]. */
+function deriveSlotLabel(
   slotIdx: number,
   slots: readonly SlotBinding[],
   totalExtruders: number,
@@ -331,32 +362,13 @@ export function deriveSlotLabel(
     if (totalExtruders > 1) return "";
     return slots[0].feed === "direct" ? "Direct" : "AMS:1";
   }
-  const amsCount = slots.filter((s) => s.feed === "ams").length;
-  const multiUnit = amsCount > 4;
-  // Number Ams-feed slots 1-based across the extruder, optionally
-  // grouped into AMS-unit letters of 4.
-  let amsIdxInUnit = 0;
-  let unitIdx = 0;
-  for (let i = 0; i < slots.length; i++) {
-    const s = slots[i];
-    if (s.feed === "ams") {
-      if (amsIdxInUnit === 4) {
-        amsIdxInUnit = 0;
-        unitIdx += 1;
-      }
-      amsIdxInUnit += 1;
-      if (i === slotIdx) {
-        return multiUnit
-          ? `AMS ${String.fromCharCode(65 + unitIdx)}:${amsIdxInUnit}`
-          : `AMS:${amsIdxInUnit}`;
-      }
-    } else if (i === slotIdx) {
-      // Direct-feed slot in an AMS-style multi-slot extruder is
-      // the trailing external spool.
-      return "Ext";
-    }
+  const pos = amsSlotPosition(slotIdx, slots);
+  if (pos.kind === "ams") {
+    return pos.multiUnit
+      ? `AMS ${String.fromCharCode(65 + pos.unitIdx)}:${pos.idxInUnit}`
+      : `AMS:${pos.idxInUnit}`;
   }
-  return "";
+  return pos.kind === "direct" ? "Ext" : "";
 }
 
 /** Compact label for a slot pill — fits inside a 22px chip alongside
@@ -392,28 +404,13 @@ export function deriveSlotShortLabel(
     return slots[0].feed === "direct" ? "Ext" : "1";
   }
   // Single-extruder + multi-slot AMS layout.
-  const amsCount = slots.filter((s) => s.feed === "ams").length;
-  const multiUnit = amsCount > 4;
-  let amsIdxInUnit = 0;
-  let unitIdx = 0;
-  for (let i = 0; i < slots.length; i++) {
-    const s = slots[i];
-    if (s.feed === "ams") {
-      if (amsIdxInUnit === 4) {
-        amsIdxInUnit = 0;
-        unitIdx += 1;
-      }
-      amsIdxInUnit += 1;
-      if (i === slotIdx) {
-        return multiUnit
-          ? `${String.fromCharCode(65 + unitIdx)}:${amsIdxInUnit}`
-          : `${amsIdxInUnit}`;
-      }
-    } else if (i === slotIdx) {
-      return "Ext";
-    }
+  const pos = amsSlotPosition(slotIdx, slots);
+  if (pos.kind === "ams") {
+    return pos.multiUnit
+      ? `${String.fromCharCode(65 + pos.unitIdx)}:${pos.idxInUnit}`
+      : `${pos.idxInUnit}`;
   }
-  return "";
+  return pos.kind === "direct" ? "Ext" : "";
 }
 
 export function flattenSlots(instance: PrinterInstance): FlatSlotOption[] {

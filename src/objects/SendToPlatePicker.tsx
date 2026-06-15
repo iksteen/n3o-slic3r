@@ -6,7 +6,9 @@
 // Reuses the `material-picker` visual language (same floating popover,
 // rows, separator) so the two pickers read as siblings.
 
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useRef } from "react";
+import { usePopoverDismiss } from "../ui/usePopoverDismiss";
+import { popoverPosition } from "../ui/popoverPosition";
 import type { PlateId } from "../viewport/types";
 import type { PlateTabView } from "../plates/usePlateTabs";
 
@@ -34,42 +36,13 @@ export function SendToPlatePicker({
   onClose,
 }: SendToPlatePickerProps) {
   const menuRef = useRef<HTMLDivElement>(null);
-  // Latest onClose via a ref so the document listeners attach once on
-  // mount rather than re-subscribing every render.
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  useEffect(() => {
-    const onDoc = (e: MouseEvent): void => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        onCloseRef.current();
-      }
-    };
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") onCloseRef.current();
-    };
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, []);
+  usePopoverDismiss(menuRef, onClose);
 
   const targets = plates.filter((p) => p.id !== currentPlateId);
 
-  // Fixed position, clamped to the viewport; below the button, flipped
-  // above when it would overflow the bottom edge.
   const rowCount = targets.length + 1;
   const estH = 36 + rowCount * 34;
-  const style: CSSProperties = {
-    position: "fixed",
-    left: Math.max(8, Math.min(anchorRect.left, window.innerWidth - MENU_W - 8)),
-    top:
-      anchorRect.bottom + estH > window.innerHeight - 8
-        ? Math.max(8, anchorRect.top - estH - 4)
-        : anchorRect.bottom + 4,
-  };
+  const style = popoverPosition(anchorRect, MENU_W, estH);
 
   return (
     <div

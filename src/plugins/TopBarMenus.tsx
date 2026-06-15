@@ -5,8 +5,9 @@
 // Minimal dropdowns (the brand/project menu CSS already lives in
 // index.css). Each toggles on click and closes on outside-click or Esc.
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { type ThemeMode, useTheme } from "../theme/useTheme";
+import { usePopoverDismiss } from "../ui/usePopoverDismiss";
 
 function useDropdown(): {
   open: boolean;
@@ -15,21 +16,7 @@ function useDropdown(): {
 } {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  usePopoverDismiss(ref, () => setOpen(false), open);
   return { open, setOpen, ref };
 }
 

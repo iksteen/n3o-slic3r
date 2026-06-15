@@ -1,7 +1,8 @@
 // Build plate selector — chip + popover, matches PrinterPicker
 // shape so the two read as a pair in the settings config strip.
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { usePopoverDismiss } from "../ui/usePopoverDismiss";
 
 export interface BuildPlateSelectorProps {
   /** All plate identities this printer supports. */
@@ -24,16 +25,7 @@ export function BuildPlateSelector({
 }: BuildPlateSelectorProps) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (!wrapRef.current) return;
-      if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open]);
+  usePopoverDismiss(wrapRef, () => setOpen(false), open);
 
   const pick = (next: string): void => {
     setOpen(false);

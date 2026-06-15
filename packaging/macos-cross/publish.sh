@@ -44,14 +44,8 @@ esac
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "${here}/../.." && pwd)"
-
-# Shared dedicated release key (same across all channels). Override to sign
-# with a different key.
-key="${N3O_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
-# Single base URL for the whole site; this channel serves from <base>/pkg.
-base_url="${N3O_BASE_URL:-https://n3o.thegraveyard.org}"; url="${base_url%/}/pkg"
-keyfile="${repo}/packaging/flatpak/n3o-slic3r-signing-key.asc"
-keyname="$(basename "${keyfile}")"
+source "${repo}/packaging/lib/sign-and-upload.sh"
+n3o_signing_init
 version="$(grep -m1 '^version' "${repo}/src-tauri/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
 
 # build.sh is self-contained: it ensures the arch-namespaced cross-deps tree
@@ -69,33 +63,7 @@ dmg="${repo}/target/${triple}/release/bundle/dmg/n3o-slic3r_${version}_${label}.
 cp -f "${built_dmg}" "${dmg}"
 dmgfile="$(basename "${dmg}")"
 
-echo ":: GPG sign ${dmgfile} (key ${key})"
-gpg --batch --yes --local-user "${key}" --detach-sign "${dmg}"
-sig="${dmg}.sig"
-[[ -f "${sig}" ]] || { echo "error: signing did not produce ${sig}" >&2; exit 1; }
-
-echo
-echo "Built + signed:"
-echo "  dmg:       ${dmg}"
-echo "  signature: ${sig}"
-
-if [[ -n "${N3O_PUBLISH_DEST:-}" ]]; then
-  dest="${N3O_PUBLISH_DEST%/}/pkg"
-  echo
-  echo ":: uploading to ${dest}/ (N3O_PUBLISH_DEST set)"
-  rsync -a "${dmg}" "${sig}" "${dest}/"
-  [[ -f "${keyfile}" ]] && rsync -a "${keyfile}" "${dest}/"
-  echo ":: uploaded."
-else
-  cat <<DONE
-
-Set N3O_PUBLISH_DEST=<rsync/ssh dest base> (e.g.
-user@host:/srv/www/n3o.thegraveyard.org) to upload automatically (this channel
-uploads to <dest>/pkg), or by hand:
-  rsync -a "${dmg}" "${sig}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
-  rsync -a "${keyfile}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
-DONE
-fi
+n3o_sign_and_upload "${dmg}" dmg
 
 cat <<INSTALL
 

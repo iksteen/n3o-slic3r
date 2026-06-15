@@ -10,7 +10,8 @@
 // A "+ New printer…" row at the bottom of the menu opens the
 // add-printer modal, which the App-level handler wires up.
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { usePopoverDismiss } from "../ui/usePopoverDismiss";
 import { usePrinterCatalog } from "./usePrinterCatalog";
 import { rebindPlatePrinter } from "./printerCommands";
 import type { PrinterInstance } from "./printerInstance";
@@ -61,20 +62,7 @@ export function PrinterPicker({
   const { entries: catalog } = usePrinterCatalog();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  // Click-outside-to-close. Listen at document level so a click on
-  // a non-picker chip / row also dismisses.
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (!wrapRef.current) return;
-      if (!wrapRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open]);
+  usePopoverDismiss(wrapRef, () => setOpen(false), open);
 
   const selectInstance = (instanceId: string): void => {
     if (plateId === null) return;

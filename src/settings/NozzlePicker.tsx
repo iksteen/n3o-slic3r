@@ -12,7 +12,8 @@
 // diameter swaps; the backend mutation preserves whatever material
 // was set.
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { usePopoverDismiss } from "../ui/usePopoverDismiss";
 
 export interface NozzlePickerProps {
   /** 0-based extruder position. Multi-extruder printers show
@@ -60,16 +61,7 @@ export function NozzlePicker({
 }: NozzlePickerProps): React.ReactElement {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (!wrapRef.current) return;
-      if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open]);
+  usePopoverDismiss(wrapRef, () => setOpen(false), open);
 
   const pick = (next: string): void => {
     setOpen(false);

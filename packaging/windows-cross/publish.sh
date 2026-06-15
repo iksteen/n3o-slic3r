@@ -37,15 +37,8 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "${here}/../.." && pwd)"
-
-# Shared dedicated release key (same across all channels). Override to sign
-# with a different key.
-key="${N3O_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
-# Single base URL for the whole site; this channel serves from <base>/pkg.
-base_url="${N3O_BASE_URL:-https://n3o.thegraveyard.org}"
-url="${base_url%/}/pkg"
-keyfile="${repo}/packaging/flatpak/n3o-slic3r-signing-key.asc"
-keyname="$(basename "${keyfile}")"
+source "${repo}/packaging/lib/sign-and-upload.sh"
+n3o_signing_init
 target="x86_64-pc-windows-msvc"
 
 # build.sh is self-contained: it ensures the cross-deps tree (build-deps.sh, the
@@ -61,41 +54,9 @@ if [[ -z "${setup}" || ! -f "${setup}" ]]; then
   echo "error: no *-setup.exe in ${bundle_dir} after build" >&2
   exit 1
 fi
-
-echo ":: GPG sign $(basename "${setup}") (key ${key})"
-# Detached signature next to the installer; users verify with `gpg --verify`.
-gpg --batch --yes --local-user "${key}" --detach-sign "${setup}"
-sig="${setup}.sig"
-if [[ ! -f "${sig}" ]]; then
-  echo "error: signing did not produce ${sig}" >&2
-  exit 1
-fi
 setupfile="$(basename "${setup}")"
 
-echo
-echo "Built + signed:"
-echo "  installer: ${setup}"
-echo "  signature: ${sig}"
-
-if [[ -n "${N3O_PUBLISH_DEST:-}" ]]; then
-  dest="${N3O_PUBLISH_DEST%/}/pkg"
-  echo
-  echo ":: uploading to ${dest}/ (N3O_PUBLISH_DEST set)"
-  # The installer + its detached signature + the public key so users can
-  # import, trust, and verify it.
-  rsync -a "${setup}" "${sig}" "${dest}/"
-  [[ -f "${keyfile}" ]] && rsync -a "${keyfile}" "${dest}/"
-  echo ":: uploaded."
-else
-  cat <<DONE
-
-Set N3O_PUBLISH_DEST=<rsync/ssh dest base> (e.g.
-user@host:/srv/www/n3o.thegraveyard.org) to upload automatically (this channel
-uploads to <dest>/pkg), or by hand:
-  rsync -a "${setup}" "${sig}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
-  rsync -a "${keyfile}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
-DONE
-fi
+n3o_sign_and_upload "${setup}" installer
 
 cat <<INSTALL
 

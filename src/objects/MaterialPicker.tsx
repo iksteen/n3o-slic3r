@@ -8,7 +8,9 @@
 // resolved to a slot via the plate's material_to_slot table) — the same
 // the SlotBindingPanel Materials section manages. No new entity.
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useRef, useState } from "react";
+import { usePopoverDismiss } from "../ui/usePopoverDismiss";
+import { popoverPosition } from "../ui/popoverPosition";
 import type { SlotRef, FlatSlotOption } from "../printer/printerInstance";
 import type { FilamentSummary } from "../material/filamentSummary";
 import { slotForMaterial, slotColor, swatchStyle } from "../material/materials";
@@ -50,28 +52,7 @@ export function MaterialPicker({
 }: MaterialPickerProps) {
   const [creating, setCreating] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  // Latest onClose via a ref so the document listeners attach once on
-  // mount rather than re-subscribing on every render (onClose is an
-  // inline arrow from the parent).
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  useEffect(() => {
-    const onDoc = (e: MouseEvent): void => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        onCloseRef.current();
-      }
-    };
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") onCloseRef.current();
-    };
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, []);
+  usePopoverDismiss(menuRef, onClose);
 
   const slotFor = (m: number): FlatSlotOption | null =>
     slotForMaterial(m, materialToSlot, slots);
@@ -83,18 +64,9 @@ export function MaterialPicker({
     );
   };
 
-  // Fixed position, clamped to the viewport; below the badge, flipped
-  // above when it would overflow the bottom edge.
   const rowCount = creating ? slots.length : materials.length + 1;
   const estH = 36 + rowCount * 34;
-  const style: CSSProperties = {
-    position: "fixed",
-    left: Math.max(8, Math.min(anchorRect.left, window.innerWidth - MENU_W - 8)),
-    top:
-      anchorRect.bottom + estH > window.innerHeight - 8
-        ? Math.max(8, anchorRect.top - estH - 4)
-        : anchorRect.bottom + 4,
-  };
+  const style = popoverPosition(anchorRect, MENU_W, estH);
 
   return (
     <div

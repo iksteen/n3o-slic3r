@@ -9,7 +9,8 @@
 // current filament; clicking a slot rewrites the plate's
 // `material_to_slot` map.
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { usePopoverDismiss } from "../ui/usePopoverDismiss";
 import {
   deriveSlotShortLabel,
   type FlatSlotOption,
@@ -86,16 +87,7 @@ export function MaterialChip({
 }: MaterialChipProps): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent): void => {
-      if (!wrapRef.current) return;
-      if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
+  usePopoverDismiss(wrapRef, () => setOpen(false), open);
 
   const currentFil = current?.filament_identity
     ? (filamentByIdentity.get(current.filament_identity) ?? null)
