@@ -820,15 +820,17 @@ function DeviceMonitor({
 
 // ───────── Root ─────────
 
-// Selected printer, persisted at module scope: DevicesView fully
-// unmounts on every Prepare/Preview tab switch, so component-local
-// selection would snap back to the first printer on return. Survives
-// the unmount the way the send latch + status store do.
-let lastSelectedId: string | null = null;
-
 export interface DevicesViewProps {
   instances: PrinterInstance[];
   connections: Record<string, ConnectionSummary>;
+  /** Selected printer instance id (controlled). App owns this state so it
+   *  survives DevicesView's unmount on every Prepare/Preview tab switch, and
+   *  so a Send can pre-select the destination printer before the view mounts.
+   *  `null` (or an id no longer in `instances`) falls back to the first
+   *  printer. */
+  selectedId: string | null;
+  /** Commit a rail selection up to App's owned state. */
+  onSelectId: (id: string) => void;
   onAddPrinter: () => void;
   onEditPrinter: (id: string) => void;
 }
@@ -836,17 +838,12 @@ export interface DevicesViewProps {
 export function DevicesView({
   instances,
   connections,
+  selectedId,
+  onSelectId,
   onAddPrinter,
   onEditPrinter,
 }: DevicesViewProps): React.JSX.Element {
   const modelLabel = useModelLabels();
-  const [selectedId, setSelectedIdState] = useState<string | null>(
-    () => lastSelectedId,
-  );
-  const setSelectedId = (id: string): void => {
-    lastSelectedId = id;
-    setSelectedIdState(id);
-  };
 
   // Default to the first printer; keep the selection valid as the
   // instance list changes (e.g. the selected printer is deleted).
@@ -860,7 +857,7 @@ export function DevicesView({
         connections={connections}
         modelLabel={modelLabel}
         selectedId={selected?.id ?? null}
-        onSelect={setSelectedId}
+        onSelect={onSelectId}
         onAddPrinter={onAddPrinter}
       />
       <DeviceMonitor

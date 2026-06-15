@@ -76,6 +76,11 @@ interface ImportReport {
 
 function App() {
   const [mode, setMode] = useState<"scene" | "preview" | "devices">("scene");
+  // Selected printer in the Devices view, owned here (App is always mounted) so
+  // it survives DevicesView's unmount on tab switches and so a Send can
+  // pre-select the destination printer before the view mounts. `null` falls
+  // back to the first printer.
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   // Gizmo transform mode lives here (not in ViewportCanvas) so it
   // survives the unmount/remount ViewportCanvas undergoes on
   // prepare↔preview↔devices switches.
@@ -528,6 +533,19 @@ function App() {
               projectName={projectName}
               plateName={activePlate?.name ?? null}
               lastSliceOutputPath={lastSliceOutputPath}
+              onSent={() => {
+                // Land the user on the destination printer's live monitor —
+                // but only when it's actually connected (otherwise the monitor
+                // has nothing to show). Select before switching so the view
+                // mounts already pointing at the right printer.
+                if (
+                  activeInstance != null &&
+                  activeConnection?.status === "connected"
+                ) {
+                  setSelectedDeviceId(activeInstance.id);
+                  setMode("devices");
+                }
+              }}
             />
           </>
         )}
@@ -553,6 +571,8 @@ function App() {
         <DevicesView
           instances={printers.instances}
           connections={driverConnections}
+          selectedId={selectedDeviceId}
+          onSelectId={setSelectedDeviceId}
           onAddPrinter={() => setShowAddPrinter(true)}
           onEditPrinter={(id) => setEditingPrinterId(id)}
         />

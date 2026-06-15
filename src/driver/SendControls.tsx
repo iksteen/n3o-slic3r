@@ -37,6 +37,11 @@ export interface SendControlsProps {
   /** Path of the active plate's most recent slice output, or `null`
    *  until the first slice completes. */
   lastSliceOutputPath: string | null;
+  /** Fired after the printer accepts a Send. App uses it to jump to the
+   *  Devices monitor for the destination printer (when it's connected) so
+   *  the user lands on the live job. SendControls has no instance/connection
+   *  context of its own — App supplies it. */
+  onSent?: () => void;
 }
 
 /** Filename-safe basename, mirroring the backend's `sanitize_basename`:
@@ -75,6 +80,7 @@ export function SendControls({
   projectName,
   plateName,
   lastSliceOutputPath,
+  onSent,
 }: SendControlsProps): React.JSX.Element | null {
   const driverId = connection?.driverId ?? null;
   const [actionPending, setActionPending] = useState(false);
@@ -142,6 +148,9 @@ export function SendControls({
       // Accepted — latch Send off (for this driver) until the job state
       // changes from what it is now or the link drops.
       setAwaiting({ driverId, sinceJob: jobToken(status) });
+      // Jump the user to the destination printer's live monitor (App decides
+      // whether it's connected). Done after the latch so a throw above skips it.
+      onSent?.();
     } catch (e) {
       pushLog("error", `Send failed: ${String(e)}`);
     } finally {

@@ -137,6 +137,21 @@ in the output-writer / send path — not the frozen *project* format (the
   Title changed. Frontend mirrors the basename in the export default
   (`SendControls`), user-overridable in the picker.
 
+### 6b. Jump to the destination printer's monitor after Send ✅ DONE (2026-06-15)
+Quality-of-life, not on the original list. After a successful Send to a
+**connected** printer, the app switches to the Devices tab and pre-selects
+that printer, landing the user on the live job monitor. If the destination
+isn't connected (nothing to watch), nothing changes — you stay on the
+canvas. `SendControls` gained an `onSent` callback fired after the printer
+accepts the upload (inside the try, after the duplicate-send latch, so a
+failed send skips it); `App` supplies the handler (it owns the
+instance/connection context) and pre-selects before `setMode("devices")` to
+avoid a select-flash. `DevicesView`'s selection was lifted from a
+module-scoped var into `App` state (now controlled via `selectedId` /
+`onSelectId`) so it persists across the view's unmount on tab switches and a
+Send can drive it. The closure captures the destination at click time, so
+switching the active plate mid-upload still lands on the printer you sent to.
+
 ### 7. Orient / lay-flat without a pre-selection (maybe)
 Reconsider the current requirement to select an object *before* the
 orient / lay-flat tools light up (the MVP gates both on a selection and
