@@ -10,6 +10,7 @@
 // require multi-file edits.
 
 import type { CSSProperties, ReactNode } from "react";
+import { useHotkeyInhibit } from "./hotkeyInhibit";
 
 export interface ModalBackdropProps {
   /** Click-outside dismissal handler. Backdrop click + child
@@ -35,6 +36,10 @@ export function ModalBackdrop({
   cardStyle,
   children,
 }: ModalBackdropProps): React.JSX.Element {
+  // Mask app hotkeys while any modal is open (re-entrant — stacked modals each
+  // hold one inhibit). So Backspace in a dialog field can't delete a scene
+  // object behind it, regardless of where focus sits.
+  useHotkeyInhibit();
   return (
     <div className="modal-backdrop" onClick={onDismiss}>
       <div

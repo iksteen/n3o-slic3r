@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ViewportCanvas } from "./viewport/ViewportCanvas";
 import { setupTowerMeshCache } from "./viewport/towerMeshCache";
 import { ErrorConsole } from "./logging/ErrorConsole";
+import { shouldIgnoreHotkey } from "./ui/hotkeyInhibit";
 import { setupLogSinks } from "./logging/logStore";
 import type { GizmoMode } from "./viewport/types";
 import { SlicePanel } from "./slice/SlicePanel";
@@ -257,10 +258,7 @@ function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== "p" && e.key !== "P") return;
-      const el = document.activeElement;
-      const tag = el?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if ((el as HTMLElement | null)?.isContentEditable) return;
+      if (shouldIgnoreHotkey(e)) return;
       setMode((current) => {
         if (current === "preview") {
           return "scene";

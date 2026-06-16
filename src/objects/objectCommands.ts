@@ -64,6 +64,24 @@ export async function deleteObject(id: ObjectId): Promise<void> {
   await invoke("scene_object_delete", { ids: [id] });
 }
 
+/** Clone the given objects on the active plate, then auto-arrange. `copies`
+ *  is the number of copies to make; pass `null` for "fill plate" — clone the
+ *  set until the next copy would need another plate. Per-object settings and
+ *  group structure are duplicated with the geometry. `expandGroups` (like the
+ *  orient/align tools) expands `ids` to whole groups first, so cloning a single
+ *  picked volume clones its siblings. Returns the new object ids. */
+export async function cloneObjects(
+  ids: ObjectId[],
+  copies: number | null,
+  expandGroups = false,
+): Promise<ObjectId[]> {
+  return invoke<ObjectId[]>("scene_object_clone", {
+    ids,
+    copies,
+    expandGroups,
+  });
+}
+
 /** Assign an existing material (1-based) to an object. The backend
  *  auto-binds the material to a slot if it had none. */
 export async function setObjectMaterial(

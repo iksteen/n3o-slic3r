@@ -26,6 +26,7 @@ import {
   switchMode,
 } from "./layerWindow";
 import type { LayerWindow } from "./types";
+import { shouldIgnoreHotkey } from "../ui/hotkeyInhibit";
 
 export interface LayerSliderProps {
   layerCount: number;
@@ -43,7 +44,7 @@ export function LayerSlider({
   useEffect(() => {
     if (layerCount <= 0) return;
     const onKey = (e: KeyboardEvent): void => {
-      if (isTextInputFocused()) return;
+      if (shouldIgnoreHotkey(e)) return;
       const step = e.shiftKey ? 10 : 1;
       switch (e.key) {
         case "ArrowUp":
@@ -225,16 +226,6 @@ function labelFor(value: LayerWindow, layerCount: number): string {
     case "range":
       return `Layers ${value.min + 1}..${value.max + 1} of ${layerCount}`;
   }
-}
-
-function isTextInputFocused(): boolean {
-  const el = document.activeElement;
-  if (!el) return false;
-  const tag = el.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
-    return true;
-  }
-  return (el as HTMLElement).isContentEditable === true;
 }
 
 // Re-export defaultWindow so panel consumers don't have to

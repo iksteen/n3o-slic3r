@@ -33,6 +33,9 @@ import { registerThumbnailCapture } from "./thumbnailCapture";
 import { createTowerOverlay } from "./towerOverlay";
 import { getCachedTowerMesh, onTowerMeshCacheChange } from "./towerMeshCache";
 import { pushLog } from "../logging/logStore";
+import { shouldIgnoreHotkey } from "../ui/hotkeyInhibit";
+import { cloneObjects } from "../objects/objectCommands";
+import { CloneDialog } from "../objects/CloneDialog";
 import type { BedMesh, GizmoMode, ObjectId, TowerGeometry } from "./types";
 
 interface ToastMessage {
@@ -148,24 +151,39 @@ export function ViewportCanvas({
       point: [number, number, number];
     } | null;
   } | null>(null);
+  // "Clone" with no selection arms the same pick-an-object pattern: the next
+  // clicked object's group is the clone target, then the count dialog opens.
+  const [clonePick, setClonePick] = useState(false);
+  // When set, the clone dialog is open for these ids (expanding to groups when
+  // the ids came from a canvas pick). `null` = closed.
+  const [cloneDialog, setCloneDialog] = useState<{
+    ids: ObjectId[];
+    expandGroups: boolean;
+  } | null>(null);
   const layFlatPickRef = useRef(false);
   const orientPickRef = useRef(false);
   const alignPickRef = useRef<"X" | "Y" | null>(null);
   const faceAlignRef = useRef<typeof faceAlign>(null);
+  const clonePickRef = useRef(false);
   useEffect(() => {
     layFlatPickRef.current = layFlatPick;
     orientPickRef.current = orientPick;
     alignPickRef.current = alignPick;
     faceAlignRef.current = faceAlign;
+    clonePickRef.current = clonePick;
     const picking =
-      layFlatPick || orientPick || alignPick !== null || faceAlign !== null;
+      layFlatPick ||
+      orientPick ||
+      alignPick !== null ||
+      faceAlign !== null ||
+      clonePick;
     if (containerRef.current) {
       containerRef.current.style.cursor = picking ? "crosshair" : "";
     }
     // Hide the gizmo + disable interaction while picking so its handles
     // neither draw over the model nor intercept the pick click.
     if (gizmoRef.current) gizmoRef.current.setSuppressed(picking);
-  }, [layFlatPick, orientPick, alignPick, faceAlign]);
+  }, [layFlatPick, orientPick, alignPick, faceAlign, clonePick]);
 
   const plateHasObjects = () =>
     (mirrorRef.current?.activePlate()?.objects.size ?? 0) > 0;
@@ -191,6 +209,7 @@ export function ViewportCanvas({
     setLayFlatPick(false); // the pick modes are mutually exclusive
     setAlignPick(null);
     setFaceAlign(null);
+    setClonePick(false);
     setOrientPick(true);
   };
 
@@ -203,6 +222,7 @@ export function ViewportCanvas({
     setOrientPick(false); // the pick modes are mutually exclusive
     setAlignPick(null);
     setFaceAlign(null);
+    setClonePick(false);
     setLayFlatPick(true);
   };
 
@@ -219,6 +239,7 @@ export function ViewportCanvas({
     setLayFlatPick(false); // the pick modes are mutually exclusive
     setOrientPick(false);
     setAlignPick(null);
+    setClonePick(false);
     setFaceAlign({ ref: null });
     notify("info", "Face-align: click the reference face, then the face to align.");
   };
@@ -232,6 +253,7 @@ export function ViewportCanvas({
     setOrientPick(false);
     setAlignPick(null);
     setFaceAlign(null);
+    setClonePick(false);
     void invoke("scene_auto_arrange").catch((err) =>
       notify("error", `Arrange failed: ${err}`),
     );
@@ -258,7 +280,39 @@ export function ViewportCanvas({
     setLayFlatPick(false); // the pick modes are mutually exclusive
     setOrientPick(false);
     setFaceAlign(null);
+    setClonePick(false);
     setAlignPick(axis);
+  };
+
+  // "Clone": with a selection, open the count/fill-plate dialog on it. With no
+  // selection, arm pick-to-clone — the next clicked object's group becomes the
+  // target, then the dialog opens. Clicking the button while armed cancels.
+  const runClone = () => {
+    if (clonePick) {
+      setClonePick(false);
+      return;
+    }
+    const ids = mirrorRef.current?.selectedIds() ?? [];
+    if (ids.length > 0) {
+      setCloneDialog({ ids, expandGroups: false });
+      return;
+    }
+    if (!plateHasObjects()) return; // nothing to pick
+    setLayFlatPick(false); // the pick modes are mutually exclusive
+    setOrientPick(false);
+    setAlignPick(null);
+    setFaceAlign(null);
+    setClonePick(true);
+  };
+
+  // Dialog confirmed: run the clone (copies = number, or null for fill-plate).
+  const onCloneConfirm = (copies: number | null) => {
+    const dlg = cloneDialog;
+    setCloneDialog(null);
+    if (!dlg) return;
+    void cloneObjects(dlg.ids, copies, dlg.expandGroups).catch((err) =>
+      notify("error", `Clone failed: ${err}`),
+    );
   };
 
   useEffect(() => {
@@ -760,6 +814,22 @@ export function ViewportCanvas({
         }
         return; // consume the click — never select while picking a face
       }
+      if (clonePickRef.current) {
+        // Pick-to-clone: click any object, select its whole group as feedback,
+        // and open the count dialog targeting that group (the backend expands
+        // it via expandGroups). A click on empty space stays in pick mode.
+        const objId = hits[0]?.object.userData.objectId as ObjectId | undefined;
+        if (objId != null) {
+          void invoke("scene_select", {
+            ids: [objId],
+            mode: "Replace",
+            expandGroups: true,
+          }).catch((err) => notify("error", `Select failed: ${err}`));
+          setClonePick(false);
+          setCloneDialog({ ids: [objId], expandGroups: true });
+        }
+        return; // consume the click — never select while picking
+      }
       const additive = ev.shiftKey || ev.metaKey || ev.ctrlKey;
       if (hits.length === 0) {
         if (!additive) {
@@ -883,6 +953,9 @@ export function ViewportCanvas({
 
     // ---- Keyboard shortcuts ------------------------------------------
     const onKeyDown = (ev: KeyboardEvent) => {
+      // Off while a modal is open or a text field is focused — otherwise
+      // Backspace in a dialog/settings field deletes the selected object.
+      if (shouldIgnoreHotkey(ev)) return;
       if ((ev.key === "Delete" || ev.key === "Backspace") && selectedSnapshot().length > 0) {
         void invoke("scene_object_delete", { ids: selectedSnapshot() });
       }
@@ -1175,8 +1248,50 @@ export function ViewportCanvas({
               );
             })()}
           </div>
+          <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
+            <button
+              type="button"
+              disabled={!hasObjects && !clonePick}
+              className={`px-2 py-1.5 ${
+                clonePick
+                  ? "bg-neutral-700"
+                  : hasObjects
+                    ? "hover:bg-neutral-700/60"
+                    : "opacity-40 cursor-not-allowed"
+              }`}
+              onClick={runClone}
+              title={
+                hasSelection
+                  ? "Clone selection — choose how many copies, or fill the plate"
+                  : hasObjects || clonePick
+                    ? "Clone — click an object to clone its group"
+                    : "Clone — add an object first"
+              }
+              aria-label="Clone selected objects"
+              aria-pressed={clonePick}
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                {/* two overlapping rounded rects — the copy/duplicate glyph */}
+                <rect x="5" y="5" width="7" height="7" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
+                <path
+                  d="M9 5V3.2A1.2 1.2 0 0 0 7.8 2H3.2A1.2 1.2 0 0 0 2 3.2v4.6A1.2 1.2 0 0 0 3.2 9H5"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
+      {cloneDialog && (
+        <CloneDialog
+          count={cloneDialog.ids.length}
+          onConfirm={onCloneConfirm}
+          onCancel={() => setCloneDialog(null)}
+        />
+      )}
       <div className="gizmo-hint pointer-events-none">
         <span className="axes" aria-label="Axes">
           <span className="axis axis-x">X</span>

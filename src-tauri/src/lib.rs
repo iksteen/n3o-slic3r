@@ -217,6 +217,7 @@ pub fn run() {
             core::project::commands::project_autosave_drop,
             core::scene::commands::scene_object_add_from_primitive,
             core::scene::commands::scene_auto_arrange,
+            core::scene::commands::scene_object_clone,
             core::slice::commands::slice_active_plate,
             core::slice::commands::slice_cancel,
             core::slice::commands::slice_status,

@@ -538,6 +538,97 @@ pub fn scene_auto_arrange(
     Ok(un_placed)
 }
 
+/// Clone the given objects on the active plate. Per-object settings and group
+/// structure are duplicated with the geometry (see [`Project::clone_objects`]).
+///
+/// - `copies = Some(n)`: make exactly `n` copies of the whole `ids` set,
+///   stacked in place on their originals (no auto-arrange — the user positions
+///   them).
+/// - `copies = None`: "fill plate" — clone the set one copy at a time, packing
+///   the plate with the nester after each, until the next copy would spill onto
+///   another plate, then stop. Needs an active printer (its bed bounds drive the
+///   fit test); errors without one.
+///
+/// `expand_groups` (like the orient/align tools): when set, expand `ids` to
+/// whole groups first, so cloning a single picked volume clones its siblings.
+///
+/// Returns the new object ids.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_object_clone(
+    ids: Vec<ObjectId>,
+    copies: Option<u32>,
+    expand_groups: Option<bool>,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<Vec<ObjectId>, String> {
+    if ids.is_empty() {
+        return Err("clone: no objects selected".into());
+    }
+    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let ids = if expand_groups.unwrap_or(false) {
+        s.group_expanded_ids(&ids)
+    } else {
+        ids
+    };
+    let bed = s.active_plate().scene.bed.clone();
+    let mut events = Vec::new();
+    let new_ids;
+
+    match copies {
+        Some(n) => {
+            // Clone in place — no arrange; the copies stack on their originals
+            // and the user moves them where they want.
+            let (ids_new, evs) = s.clone_objects(&ids, n);
+            new_ids = ids_new;
+            events.extend(evs);
+        }
+        None => {
+            let Some(bed) = bed.as_ref() else {
+                return Err("Fill plate needs an active printer.".into());
+            };
+            // Clone one copy at a time, keeping the last packing that still fits
+            // this single plate. ponytail: hard cap so a tiny part on a huge bed
+            // can't loop unbounded — 1000 copies is well past useful; warn if hit.
+            const MAX_COPIES: u32 = 1000;
+            let mut kept_ids = Vec::new();
+            let mut last_plan = None;
+            let mut hit_cap = true;
+            for _ in 0..MAX_COPIES {
+                let (batch, evs) = s.clone_objects(&ids, 1);
+                let plan = super::arrange::plan_arrangement(&s, bed);
+                if plan.spilled.is_empty() && plan.un_placed.is_empty() {
+                    events.extend(evs);
+                    kept_ids.extend(batch);
+                    last_plan = Some(plan);
+                } else {
+                    // This copy overflows the plate — undo it and stop. Its
+                    // ObjectAdded events were never emitted, so the matching
+                    // ObjectRemoved ones are dropped too: the copy never existed
+                    // for the UI.
+                    let _ = s.delete_objects(&batch);
+                    hit_cap = false;
+                    break;
+                }
+            }
+            if hit_cap {
+                tracing::warn!(max = MAX_COPIES, "fill-plate hit the copy cap");
+            }
+            // Apply the last packing that fit (repositions originals + all kept
+            // copies on the single plate).
+            if let Some(plan) = last_plan {
+                let (evs, _) = super::arrange::apply_arrangement(&mut s, plan);
+                events.extend(evs);
+            }
+            new_ids = kept_ids;
+        }
+    }
+
+    drop(s);
+    emit_all(&window, &events);
+    Ok(new_ids)
+}
+
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_object_add_from_primitive(

@@ -14,7 +14,7 @@
 //! when they need to mutate sibling plates — the borrow checker
 //! wants index-then-deref, not a borrowed `Plate`.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use glam::{Quat, Vec3};
 
@@ -832,6 +832,85 @@ impl Project {
         });
         events.extend(self.out_of_bounds_event(obj_id));
         (mesh_id, obj_id, events)
+    }
+
+    /// Clone `ids` (objects on the active plate) `times` times back onto the
+    /// active plate. Geometry is shared (same `MeshId`); each copy is placed at
+    /// the source's transform — the caller auto-arranges to spread the copies
+    /// out instead of stacking them on the originals.
+    ///
+    /// Everything that makes a copy a faithful duplicate travels with it:
+    /// per-object setting overrides are copied, and grouping is preserved *per
+    /// copy* — objects that shared a group get a fresh shared `GroupId` (plus
+    /// the group's display name) in each copy, so a multi-volume object stays
+    /// rigid yet arranges as its own unit, independent of the original.
+    ///
+    /// Returns the new object ids (copy-major: copy 0's objects, then copy 1's,
+    /// …) and the `ObjectAdded` events to emit.
+    pub fn clone_objects(
+        &mut self,
+        ids: &[ObjectId],
+        times: u32,
+    ) -> (Vec<ObjectId>, Vec<SceneEvent>) {
+        let active = self.active_plate;
+        // Snapshot the sources up front so every copy clones the *original*,
+        // never a copy. Skip unknown ids; carry each source's per-object
+        // overrides alongside it.
+        let sources: Vec<(SceneObject, Option<HashMap<String, String>>)> = ids
+            .iter()
+            .filter_map(|id| {
+                let plate = &self.plates[active].scene;
+                let obj = plate.objects.get(id)?.clone();
+                let overrides = plate.object_overrides.get(id).cloned();
+                Some((obj, overrides))
+            })
+            .collect();
+
+        let mut new_ids = Vec::new();
+        let mut events = Vec::new();
+        if sources.is_empty() {
+            return (new_ids, events);
+        }
+
+        for _ in 0..times {
+            // One fresh group id per source group, shared within this copy.
+            let mut group_remap: HashMap<GroupId, GroupId> = HashMap::new();
+            for (src, overrides) in &sources {
+                let group = src
+                    .group
+                    .map(|g| *group_remap.entry(g).or_insert_with(GroupId::fresh));
+                let obj_id = self.register_object(NewSceneObject {
+                    mesh: src.mesh,
+                    transform: src.transform,
+                    name: src.name.clone(),
+                    visible: src.visible,
+                    extruder_id: src.extruder_id,
+                    group,
+                });
+                if let Some(ov) = overrides {
+                    self.plates[active]
+                        .scene
+                        .object_overrides
+                        .insert(obj_id, ov.clone());
+                }
+                let plate_id = self.plates[active].id;
+                let object = self.plates[active]
+                    .scene
+                    .objects
+                    .get(&obj_id)
+                    .expect("just registered")
+                    .clone();
+                events.push(SceneEvent::ObjectAdded { plate_id, object });
+                new_ids.push(obj_id);
+            }
+            // Carry the group display names onto the fresh group ids.
+            for (src_g, new_g) in &group_remap {
+                if let Some(g) = self.plates[active].scene.groups.get(src_g).cloned() {
+                    self.plates[active].scene.groups.insert(*new_g, g);
+                }
+            }
+        }
+        (new_ids, events)
     }
 
     // ---- Selection -----------------------------------------------
@@ -3119,6 +3198,65 @@ mod tests {
                 .unwrap_err(),
             SceneOpError::UnknownObject(ObjectId(9999)),
         );
+    }
+
+    // ---- Clone ------------------------------------------
+
+    #[test]
+    fn clone_objects_copies_geometry_overrides_and_group_structure() {
+        let mut p = Project::default();
+        let (mesh_a, a) = add_cube(&mut p);
+        let (mesh_b, b) = add_cube(&mut p);
+        let active_id = p.active_plate().id;
+        // Group the two cubes and give one of them a per-object override.
+        p.group_objects(&[a, b], "duo".into()).unwrap();
+        p.object_override_set(active_id, a, "layer_height".into(), "0.12".into())
+            .unwrap();
+        let src_group = p.active_plate().scene.objects[&a].group.unwrap();
+
+        // Two copies of the whole group.
+        let (new_ids, events) = p.clone_objects(&[a, b], 2);
+        assert_eq!(new_ids.len(), 4, "2 copies × 2 members");
+        assert_eq!(
+            p.active_plate().scene.objects.len(),
+            6,
+            "2 originals + 4 clones"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, SceneEvent::ObjectAdded { .. }))
+                .count(),
+            4,
+        );
+
+        // Geometry is shared — clones reuse their source's mesh, none minted.
+        assert_eq!(p.meshes.len(), 2, "no new meshes for clones");
+        // new_ids is copy-major: [copy0.a, copy0.b, copy1.a, copy1.b].
+        let (c0a, c0b, c1a, c1b) = (new_ids[0], new_ids[1], new_ids[2], new_ids[3]);
+        assert_eq!(p.active_plate().scene.objects[&c0a].mesh, mesh_a);
+        assert_eq!(p.active_plate().scene.objects[&c1a].mesh, mesh_a);
+        assert_eq!(p.active_plate().scene.objects[&c0b].mesh, mesh_b);
+        assert_eq!(p.active_plate().scene.objects[&c1b].mesh, mesh_b);
+        // Each copy is its own group (fresh id, distinct from the source and the
+        // other copy); its two members share that one id; "duo" name carried.
+        let g0 = p.active_plate().scene.objects[&c0a].group.unwrap();
+        let g1 = p.active_plate().scene.objects[&c1a].group.unwrap();
+        assert_eq!(p.active_plate().scene.objects[&c0b].group, Some(g0));
+        assert_eq!(p.active_plate().scene.objects[&c1b].group, Some(g1));
+        assert_ne!(g0, src_group);
+        assert_ne!(g1, src_group);
+        assert_ne!(g0, g1);
+        assert_eq!(p.active_plate().scene.groups[&g0].name, "duo");
+        assert_eq!(p.active_plate().scene.groups[&g1].name, "duo");
+
+        // The override on `a` rode along to each copy's clone-of-a; the
+        // clone-of-b carries none.
+        let ov = &p.active_plate().scene.object_overrides;
+        assert_eq!(ov[&c0a]["layer_height"], "0.12");
+        assert_eq!(ov[&c1a]["layer_height"], "0.12");
+        assert!(!ov.contains_key(&c0b));
+        assert!(!ov.contains_key(&c1b));
     }
 
     // ---- User-tier (project-wide) overrides -------------
