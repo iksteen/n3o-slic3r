@@ -566,10 +566,12 @@ pub fn scene_object_clone(
         return Err("clone: no objects selected".into());
     }
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    // Order the selection through the active plate's object list — `clone_objects`
+    // requires an `OrderedIds`, so the clones can't inherit the wire order.
     let ids = if expand_groups.unwrap_or(false) {
         s.group_expanded_ids(&ids)
     } else {
-        ids
+        s.active_plate().scene.objects.in_order(&ids)
     };
     let bed = s.active_plate().scene.bed.clone();
     let mut events = Vec::new();
@@ -709,7 +711,7 @@ pub fn scene_select(
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let ids = if expand_groups.unwrap_or(false) {
-        s.group_expanded_ids(&ids)
+        s.group_expanded_ids(&ids).to_vec()
     } else {
         ids
     };
@@ -786,7 +788,7 @@ pub fn scene_object_auto_orient(
     let (vertices, indices) = {
         let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
         if expand_groups.unwrap_or(false) {
-            ids = s.group_expanded_ids(&ids);
+            ids = s.group_expanded_ids(&ids).to_vec();
         }
         s.objects_world_mesh(&ids).map_err(op_err_to_string)?
     };
@@ -827,7 +829,7 @@ pub fn scene_object_align_axis(
     let events = {
         let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
         if expand_groups.unwrap_or(false) {
-            ids = s.group_expanded_ids(&ids);
+            ids = s.group_expanded_ids(&ids).to_vec();
         }
         let (vertices, indices) = s.objects_world_mesh(&ids).map_err(op_err_to_string)?;
         let Some(angle) = super::align::axis_alignment_rotation(&vertices, &indices, axis) else {
@@ -879,7 +881,7 @@ pub fn scene_object_align_face(
     let events = {
         let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
         if expand_groups.unwrap_or(false) {
-            ids = s.group_expanded_ids(&ids);
+            ids = s.group_expanded_ids(&ids).to_vec();
         }
         s.align_face_coplanar(
             &ids,
@@ -929,7 +931,7 @@ pub fn scene_object_lay_flat_on(
     let events = {
         let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
         let ids = if expand_groups.unwrap_or(false) {
-            s.group_expanded_ids(&ids)
+            s.group_expanded_ids(&ids).to_vec()
         } else {
             ids
         };

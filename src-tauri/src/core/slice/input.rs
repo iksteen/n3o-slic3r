@@ -439,6 +439,10 @@ fn build_plate_geometry(
         })
         .collect();
 
+    // Emit objects in the plate's authored order (ObjectList preserves it).
+    // That order is what libslic3r sees, and where two objects of different
+    // materials overlap, the *last* one wins — so a stable order keeps the
+    // overlap region's filament stable between slices.
     let geometry_objects: Vec<ProjectObject> = plate
         .scene
         .objects
@@ -947,6 +951,33 @@ mod tests {
         assert_eq!(reloaded.meshes.len(), 1, "plate 2's mesh excluded");
         assert_eq!(reloaded.objects.len(), 1);
         assert_eq!(reloaded.objects[0].name, "a");
+
+        std::fs::remove_file(&temp_path).ok();
+    }
+
+    #[test]
+    fn objects_emit_in_stable_id_order() {
+        // The temp .3mf's object order is what libslic3r sees — and for
+        // overlapping objects of different materials the last one wins. The
+        // slice path emits in the plate's authored (ObjectList) order; this pins
+        // that the order survives to the temp file (here: creation order).
+        let _registry = RegistryGuard::acquire();
+        let mut project = Project::default();
+        project.plates[0].set_printer(Some("bambi".into()), None);
+        let mesh = project.register_mesh(triangle_mesh());
+        for i in 0..8 {
+            project.register_object(NewSceneObject::at_origin(mesh, format!("obj-{i}")));
+        }
+
+        let (_, temp_path) =
+            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let reloaded = crate::core::threemf::load_3mf(&temp_path).expect("reload");
+        let names: Vec<&str> = reloaded.objects.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["obj-0", "obj-1", "obj-2", "obj-3", "obj-4", "obj-5", "obj-6", "obj-7"],
+            "objects must slice in ascending-id (creation) order",
+        );
 
         std::fs::remove_file(&temp_path).ok();
     }

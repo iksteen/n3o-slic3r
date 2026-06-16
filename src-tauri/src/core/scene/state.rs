@@ -18,7 +18,7 @@ use super::build_plate::BuildPlate;
 use super::transform::Transform;
 use crate::core::printer::profile::BoundingBox;
 use glam::Vec3;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
@@ -269,9 +269,204 @@ pub struct ExclusionZone {
 /// **not** here — they live scene-wide on [`SceneState`] so a
 /// move-between-plates op doesn't have to copy mesh
 /// buffers, and ids stay unique across plates.
+/// The plate's objects, in **authored order** — position is the order of
+/// record. It's what the Objects panel shows top-to-bottom and the order
+/// libslic3r sees (where two objects of different materials overlap, the later
+/// one wins), so it must be stable and reproducible — never HashMap iteration.
+///
+/// Storage is a `Vec` (order is the data; reorder = move an element;
+/// serialization is a plain ordered array) **plus** an `id → index` map so
+/// the by-id access every command needs stays O(1) — a Vec scan per lookup
+/// would be wasteful given everything addresses objects by id. The map is
+/// rebuilt on the rare structural ops (remove / reorder); pushes and lookups
+/// touch it in O(1). The two are kept in sync internally — the fields are
+/// private and only these methods mutate them. `Deref<Target=[SceneObject]>`
+/// gives ordered iteration, `len`, `is_empty`, and indexing for free.
+#[derive(Debug, Clone, Default)]
+pub struct ObjectList {
+    /// Objects in authored order — the source of truth for both contents and
+    /// order. Owns the `SceneObject`s.
+    objects: Vec<SceneObject>,
+    /// `ObjectId` → its position in `objects`. A lookup acceleration structure,
+    /// always kept consistent with `objects` by the mutators below.
+    index: HashMap<ObjectId, usize>,
+}
+
+/// A set of object ids **proven to be in authored order**, the order of the
+/// [`ObjectList`] they came from.
+///
+/// Its field is private and the only constructor is [`ObjectList::in_order`],
+/// so an `OrderedIds` can never carry a caller's incidental ordering (e.g. a
+/// `HashSet` iteration). Order-sensitive mutations — anything that materializes
+/// or relocates a selection and thereby sets object order — take an
+/// `OrderedIds` rather than a raw `&[ObjectId]`, so the type system forces order
+/// to trace back to the authoritative object list. Derefs to `[ObjectId]` for
+/// reading.
+#[derive(Debug, Clone)]
+pub struct OrderedIds(Vec<ObjectId>);
+
+impl std::ops::Deref for OrderedIds {
+    type Target = [ObjectId];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl ObjectList {
+    fn from_objects(objects: Vec<SceneObject>) -> Self {
+        let mut list = Self {
+            objects,
+            index: HashMap::new(),
+        };
+        list.rebuild_index();
+        list
+    }
+
+    /// Re-derive `index` from `objects`. Called after any op that shifts
+    /// positions (remove / reorder); O(n), but those ops are rare.
+    fn rebuild_index(&mut self) {
+        self.index = self
+            .objects
+            .iter()
+            .enumerate()
+            .map(|(i, o)| (o.id, i))
+            .collect();
+    }
+
+    // The read surface mirrors `HashMap<ObjectId, SceneObject>` (taking
+    // `&ObjectId`) so call sites read identically — but `get`/`get_mut`/
+    // `contains_key` are O(1) via `index`, and `iter`/`values`/`keys` yield
+    // results in authored (Vec) order instead of HashMap's random order.
+
+    /// The object with this id, if present. O(1).
+    pub fn get(&self, id: &ObjectId) -> Option<&SceneObject> {
+        self.index.get(id).map(|&i| &self.objects[i])
+    }
+
+    /// Mutable handle to the object with this id, if present. O(1).
+    pub fn get_mut(&mut self, id: &ObjectId) -> Option<&mut SceneObject> {
+        let i = *self.index.get(id)?;
+        Some(&mut self.objects[i])
+    }
+
+    /// Whether an object with this id is on the plate. O(1).
+    pub fn contains_key(&self, id: &ObjectId) -> bool {
+        self.index.contains_key(id)
+    }
+
+    /// Objects in authored order.
+    pub fn values(&self) -> std::slice::Iter<'_, SceneObject> {
+        self.objects.iter()
+    }
+
+    /// Objects in authored order, mutable. Safe: field edits can't change ids
+    /// or the set, so `index` stays valid.
+    pub fn values_mut(&mut self) -> std::slice::IterMut<'_, SceneObject> {
+        self.objects.iter_mut()
+    }
+
+    /// `(id, object)` pairs in authored order — mirrors `HashMap::iter`.
+    pub fn iter(&self) -> impl Iterator<Item = (&ObjectId, &SceneObject)> {
+        self.objects.iter().map(|o| (&o.id, o))
+    }
+
+    /// Object ids in authored order.
+    pub fn keys(&self) -> impl Iterator<Item = &ObjectId> {
+        self.objects.iter().map(|o| &o.id)
+    }
+
+    /// The given ids in **authored order** (this list's order), as an
+    /// [`OrderedIds`] — the proof-type an order-sensitive op (clone,
+    /// move-to-plate) requires. `ids` is treated as an unordered *set*: its own
+    /// order is ignored (it routinely arrives from a HashSet), unknown ids are
+    /// dropped. This is the **only** way to construct an `OrderedIds`, so order
+    /// always traces back to the authoritative object list — never a caller's
+    /// incidental ordering.
+    pub fn in_order(&self, ids: &[ObjectId]) -> OrderedIds {
+        let want: HashSet<ObjectId> = ids.iter().copied().collect();
+        OrderedIds(
+            self.objects
+                .iter()
+                .filter(|o| want.contains(&o.id))
+                .map(|o| o.id)
+                .collect(),
+        )
+    }
+
+    pub fn len(&self) -> usize {
+        self.objects.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.objects.is_empty()
+    }
+
+    /// Append an object (ids are scene-wide unique, so this is never an
+    /// upsert — a fresh object lands at the end / newest position). O(1).
+    pub fn push(&mut self, obj: SceneObject) {
+        self.index.insert(obj.id, self.objects.len());
+        self.objects.push(obj);
+    }
+
+    /// Remove the object with this id, preserving the order of the rest.
+    /// Returns it if it was present.
+    pub fn remove(&mut self, id: &ObjectId) -> Option<SceneObject> {
+        let i = self.index.get(id).copied()?;
+        let obj = self.objects.remove(i);
+        self.rebuild_index();
+        Some(obj)
+    }
+
+    /// Move `id` to `new_index` (clamped), shifting the rest — the primitive a
+    /// future "reorder in the panel" gesture drives. No-op if `id` is absent.
+    pub fn move_object(&mut self, id: &ObjectId, new_index: usize) {
+        let Some(from) = self.index.get(id).copied() else {
+            return;
+        };
+        let to = new_index.min(self.objects.len() - 1);
+        if from == to {
+            return;
+        }
+        let obj = self.objects.remove(from);
+        self.objects.insert(to, obj);
+        self.rebuild_index();
+    }
+}
+
+// `objects[&id]` panics on a missing key, mirroring `HashMap`'s indexing.
+impl std::ops::Index<&ObjectId> for ObjectList {
+    type Output = SceneObject;
+    fn index(&self, id: &ObjectId) -> &SceneObject {
+        self.get(id).expect("no object with that id")
+    }
+}
+
+impl std::ops::IndexMut<&ObjectId> for ObjectList {
+    fn index_mut(&mut self, id: &ObjectId) -> &mut SceneObject {
+        self.get_mut(id).expect("no object with that id")
+    }
+}
+
+// Persisted as a plain ordered array of objects; `index` is rebuilt on load.
+impl Serialize for ObjectList {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.objects.serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for ObjectList {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self::from_objects(Vec::<SceneObject>::deserialize(d)?))
+    }
+}
+
+/// Per-plate scene state — everything one plate owns: placed
+/// objects, selection, bed + exclusion zones,
+/// active-build-plate identity. Phase 5 turns the historically
+/// single-global scene into N of these.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlateSceneState {
-    pub objects: HashMap<ObjectId, SceneObject>,
+    pub objects: ObjectList,
     /// Live selection — transient UI state, deliberately **not
     /// persisted**. A reopened project starts with nothing selected.
     #[serde(skip)]
@@ -326,4 +521,79 @@ pub(crate) fn mesh_bb_corners(bb: &BoundingBox) -> [Vec3; 8] {
         Vec3::new(mn[0], mx[1], mx[2]),
         Vec3::new(mx[0], mx[1], mx[2]),
     ]
+}
+
+#[cfg(test)]
+mod object_list_tests {
+    use super::*;
+
+    fn obj(id: u64) -> SceneObject {
+        SceneObject {
+            id: ObjectId(id),
+            mesh: MeshId(1),
+            transform: Transform::IDENTITY,
+            name: format!("o{id}"),
+            visible: true,
+            extruder_id: None,
+            group: None,
+        }
+    }
+
+    fn ids(list: &ObjectList) -> Vec<u64> {
+        list.values().map(|o| o.id.0).collect()
+    }
+
+    #[test]
+    fn push_keeps_order_and_indexes_by_id() {
+        let mut list = ObjectList::default();
+        for id in [10, 7, 22, 3] {
+            list.push(obj(id));
+        }
+        assert_eq!(ids(&list), [10, 7, 22, 3], "values() is authored order");
+        // by-id lookup resolves regardless of position
+        assert_eq!(list.get(&ObjectId(22)).unwrap().name, "o22");
+        assert!(list.contains_key(&ObjectId(7)));
+        assert!(list.get(&ObjectId(999)).is_none());
+    }
+
+    #[test]
+    fn remove_preserves_order_and_rebuilds_index() {
+        let mut list = ObjectList::default();
+        for id in [1, 2, 3, 4] {
+            list.push(obj(id));
+        }
+        assert_eq!(list.remove(&ObjectId(2)).unwrap().id, ObjectId(2));
+        assert_eq!(ids(&list), [1, 3, 4]);
+        // the index must still point shifted elements at the right object
+        assert_eq!(list.get(&ObjectId(4)).unwrap().name, "o4");
+        assert!(!list.contains_key(&ObjectId(2)));
+        assert!(list.remove(&ObjectId(2)).is_none());
+    }
+
+    #[test]
+    fn move_object_reorders_and_keeps_index_valid() {
+        let mut list = ObjectList::default();
+        for id in [1, 2, 3, 4] {
+            list.push(obj(id));
+        }
+        list.move_object(&ObjectId(4), 0);
+        assert_eq!(ids(&list), [4, 1, 2, 3]);
+        list.move_object(&ObjectId(4), 99); // index clamps to the end
+        assert_eq!(ids(&list), [1, 2, 3, 4]);
+        assert_eq!(list.get(&ObjectId(1)).unwrap().name, "o1");
+    }
+
+    #[test]
+    fn serde_round_trips_as_ordered_array() {
+        let mut list = ObjectList::default();
+        for id in [5, 1, 9] {
+            list.push(obj(id));
+        }
+        let json = serde_json::to_string(&list).unwrap();
+        assert!(json.starts_with('['), "serializes as an array: {json}");
+        let back: ObjectList = serde_json::from_str(&json).unwrap();
+        assert_eq!(ids(&back), [5, 1, 9], "order survives the round-trip");
+        // index is rebuilt on load, so by-id lookup works again
+        assert_eq!(back.get(&ObjectId(9)).unwrap().name, "o9");
+    }
 }

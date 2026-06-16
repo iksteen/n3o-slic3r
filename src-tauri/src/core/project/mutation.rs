@@ -25,7 +25,7 @@ use crate::core::scene::events::{SceneEvent, SceneOpError, SelectMode};
 use crate::core::scene::primitives::{self, PrimitiveKind, PrimitiveParams};
 use crate::core::scene::state::{
     mesh_bb_corners, Group, GroupId, Mesh, MeshId, MeshProvenance, NewMesh, NewSceneObject,
-    ObjectId, SceneObject,
+    ObjectId, OrderedIds, SceneObject,
 };
 use crate::core::scene::transform::Transform;
 
@@ -93,18 +93,15 @@ impl Project {
         let id = self.next_object_id();
         let active = self.active_plate;
         let extruder_id = new_obj.extruder_id;
-        self.plates[active].scene.objects.insert(
+        self.plates[active].scene.objects.push(SceneObject {
             id,
-            SceneObject {
-                id,
-                mesh: new_obj.mesh,
-                transform: new_obj.transform,
-                name: new_obj.name,
-                visible: new_obj.visible,
-                extruder_id,
-                group: new_obj.group,
-            },
-        );
+            mesh: new_obj.mesh,
+            transform: new_obj.transform,
+            name: new_obj.name,
+            visible: new_obj.visible,
+            extruder_id,
+            group: new_obj.group,
+        });
         self.ensure_default_material_slot_on_active(extruder_id.unwrap_or(1));
         id
     }
@@ -849,17 +846,19 @@ impl Project {
     /// …) and the `ObjectAdded` events to emit.
     pub fn clone_objects(
         &mut self,
-        ids: &[ObjectId],
+        ids: &OrderedIds,
         times: u32,
     ) -> (Vec<ObjectId>, Vec<SceneEvent>) {
         let active = self.active_plate;
         // Snapshot the sources up front so every copy clones the *original*,
-        // never a copy. Skip unknown ids; carry each source's per-object
+        // never a copy. `ids` is an OrderedIds (authored order, guaranteed by the
+        // type), so the clones land in the same order as their originals — there
+        // is no way to pass an unordered selection here. Carry each source's
         // overrides alongside it.
+        let plate = &self.plates[active].scene;
         let sources: Vec<(SceneObject, Option<HashMap<String, String>>)> = ids
             .iter()
             .filter_map(|id| {
-                let plate = &self.plates[active].scene;
                 let obj = plate.objects.get(id)?.clone();
                 let overrides = plate.object_overrides.get(id).cloned();
                 Some((obj, overrides))
@@ -918,33 +917,35 @@ impl Project {
     /// Apply a selection change on the active plate. Returns one
     /// `SelectionChanged` event (sorted for deterministic output)
     /// or empty if the selection didn't actually change.
-    /// Expand `ids` to include every object sharing a group with any of
-    /// them. Ungrouped ids pass through unchanged; the result is deduped.
+    /// Expand `ids` to include every object sharing a group with any of them,
+    /// returned in authored order as an [`OrderedIds`]. Ungrouped ids pass
+    /// through (still ordered); the result is deduped.
     fn expand_to_groups(
         plate: &crate::core::scene::state::PlateSceneState,
         ids: &[ObjectId],
-    ) -> Vec<ObjectId> {
+    ) -> OrderedIds {
         let groups: HashSet<GroupId> = ids
             .iter()
             .filter_map(|id| plate.objects.get(id).and_then(|o| o.group))
             .collect();
         if groups.is_empty() {
-            return ids.to_vec();
+            return plate.objects.in_order(ids);
         }
-        let mut out: HashSet<ObjectId> = ids.iter().copied().collect();
+        let mut want: HashSet<ObjectId> = ids.iter().copied().collect();
         for o in plate.objects.values() {
             if o.group.is_some_and(|g| groups.contains(&g)) {
-                out.insert(o.id);
+                want.insert(o.id);
             }
         }
-        out.into_iter().collect()
+        let want: Vec<ObjectId> = want.into_iter().collect();
+        plate.objects.in_order(&want)
     }
 
-    /// Expand `ids` to whole-group membership on the active plate. The
-    /// canvas uses this so clicking one part selects the whole group;
-    /// the object list passes ids straight to `select` to keep parts
+    /// Expand `ids` to whole-group membership on the active plate (in authored
+    /// order). The canvas uses this so clicking one part selects the whole
+    /// group; the object list passes ids straight to `select` to keep parts
     /// individually selectable.
-    pub fn group_expanded_ids(&self, ids: &[ObjectId]) -> Vec<ObjectId> {
+    pub fn group_expanded_ids(&self, ids: &[ObjectId]) -> OrderedIds {
         Self::expand_to_groups(&self.plates[self.active_plate].scene, ids)
     }
 
@@ -1760,12 +1761,14 @@ impl Project {
             .plate_index(to_plate)
             .ok_or(SceneOpError::UnknownPlate(to_plate))?;
 
-        // Whole groups move together (no split across plates).
+        // Whole groups move together (no split across plates). expand_to_groups
+        // returns an OrderedIds (authored order), so the objects keep their
+        // relative order on the target plate.
         let ids = Self::expand_to_groups(&self.plates[from_idx].scene, ids);
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        for &id in &ids {
+        for &id in ids.iter() {
             if !self.plates[from_idx].scene.objects.contains_key(&id) {
                 return Err(SceneOpError::UnknownObject(id));
             }
@@ -1775,7 +1778,7 @@ impl Project {
         let mut moved_materials: BTreeSet<u8> = BTreeSet::new();
         let mut moving_groups: HashSet<GroupId> = HashSet::new();
         let mut any_was_selected = false;
-        for &id in &ids {
+        for &id in ids.iter() {
             let obj = self.plates[from_idx].scene.objects.remove(&id).unwrap();
             if let Some(g) = obj.group {
                 moving_groups.insert(g);
@@ -1785,7 +1788,7 @@ impl Project {
             if self.plates[from_idx].scene.selection.remove(&id) {
                 any_was_selected = true;
             }
-            self.plates[to_idx].scene.objects.insert(id, obj.clone());
+            self.plates[to_idx].scene.objects.push(obj.clone());
             if let Some(map) = overrides {
                 self.plates[to_idx].scene.object_overrides.insert(id, map);
             }
@@ -2118,14 +2121,15 @@ mod tests {
         let (_, c) = add_cube(&mut p);
         p.group_objects(&[a, b], "G".into()).unwrap();
 
-        // The canvas's expansion helper pulls in the whole group...
-        let mut exp = p.group_expanded_ids(&[a]);
-        exp.sort();
-        let mut want = vec![a, b];
-        want.sort();
-        assert_eq!(exp, want, "grouped object expands to its group");
+        // The canvas's expansion helper pulls in the whole group, in authored
+        // order (a, b registered before c).
         assert_eq!(
-            p.group_expanded_ids(&[c]),
+            p.group_expanded_ids(&[a]).to_vec(),
+            vec![a, b],
+            "grouped object expands to its group",
+        );
+        assert_eq!(
+            p.group_expanded_ids(&[c]).to_vec(),
             vec![c],
             "ungrouped passes through"
         );
@@ -3203,6 +3207,30 @@ mod tests {
     // ---- Clone ------------------------------------------
 
     #[test]
+    fn clone_objects_lands_in_authored_order_regardless_of_input() {
+        // `ids` is a selection *set* (its order is meaningless — it can arrive
+        // from a HashSet, e.g. the click-to-select-group path). The clones must
+        // follow the originals' authored order. Pass ids scrambled and confirm.
+        let mut p = Project::default();
+        let (ma, a) = add_cube(&mut p);
+        let (mb, b) = add_cube(&mut p);
+        let (mc, c) = add_cube(&mut p);
+
+        // Order the scrambled selection through the plate; clone preserves it.
+        let ids = p.active_plate().scene.objects.in_order(&[c, a, b]);
+        let (new_ids, _) = p.clone_objects(&ids, 1);
+        let meshes: Vec<MeshId> = new_ids
+            .iter()
+            .map(|id| p.active_plate().scene.objects.get(id).unwrap().mesh)
+            .collect();
+        assert_eq!(
+            meshes,
+            vec![ma, mb, mc],
+            "clones follow authored order, not the input id order",
+        );
+    }
+
+    #[test]
     fn clone_objects_copies_geometry_overrides_and_group_structure() {
         let mut p = Project::default();
         let (mesh_a, a) = add_cube(&mut p);
@@ -3215,7 +3243,8 @@ mod tests {
         let src_group = p.active_plate().scene.objects[&a].group.unwrap();
 
         // Two copies of the whole group.
-        let (new_ids, events) = p.clone_objects(&[a, b], 2);
+        let ids = p.active_plate().scene.objects.in_order(&[a, b]);
+        let (new_ids, events) = p.clone_objects(&ids, 2);
         assert_eq!(new_ids.len(), 4, "2 copies × 2 members");
         assert_eq!(
             p.active_plate().scene.objects.len(),
@@ -3439,6 +3468,23 @@ mod tests {
         // The group's name travels with it.
         assert!(!p.plates[0].scene.groups.contains_key(&g));
         assert_eq!(p.plates[1].scene.groups.get(&g).unwrap().name, "duo");
+    }
+
+    #[test]
+    fn move_objects_to_plate_preserves_authored_order_on_target() {
+        // Same class as the clone bug: moving a group routed its members through
+        // expand_to_groups' HashSet, so they used to land on the target plate in
+        // random relative order. They must arrive in authored order.
+        let mut p = Project::default();
+        let (id_b, _) = p.add_plate(None);
+        let (_, a) = add_cube(&mut p);
+        let (_, b) = add_cube(&mut p);
+        let (_, c) = add_cube(&mut p);
+        p.group_objects(&[a, b, c], "trio".into()).unwrap();
+
+        p.move_objects_to_plate(PlateId(1), id_b, &[a]).unwrap();
+        let order: Vec<ObjectId> = p.plates[1].scene.objects.values().map(|o| o.id).collect();
+        assert_eq!(order, vec![a, b, c], "moved group keeps authored order on target");
     }
 
     #[test]
