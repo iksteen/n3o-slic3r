@@ -17,8 +17,8 @@
 # Usage:  publish.sh [arm64|x86_64]      (default: arm64)
 #
 # Config (env):
-#   N3O_GPG_KEY            Signing key fingerprint. Defaults to the shared
-#                          dedicated project release key (same across channels).
+#   N3O_GPG_KEY            Signing key fingerprint. Unset → unsigned .dmg (no
+#                          default key); set it to GPG-sign.
 #   N3O_BASE_URL           Public HTTPS base URL of the site (printed install
 #                          commands only); this channel serves from <base>/pkg.
 #                          Default: https://n3o.thegraveyard.org
@@ -55,10 +55,10 @@ version="$(grep -m1 '^version' "${repo}/src-tauri/Cargo.toml" | sed -E 's/.*"([^
 echo ":: building + signing the macOS app + .dmg (${arch})"
 "${here}/build.sh" "${arch}"
 
-# build.sh produced the final, versioned, GPG-signed .dmg — just upload it.
+# build.sh produced the final, versioned .dmg (GPG-signed when N3O_GPG_KEY is
+# set) — just upload it.
 dmg="${repo}/target/${triple}/release/bundle/dmg/n3o-slic3r_${version}_${label}.dmg"
-[[ -f "${dmg}" && -f "${dmg}.sig" ]] || {
-  echo "error: expected a signed ${dmg} (+ .sig) after build" >&2; exit 1; }
+[[ -f "${dmg}" ]] || { echo "error: expected ${dmg} after build" >&2; exit 1; }
 dmgfile="$(basename "${dmg}")"
 
 n3o_upload "${dmg}" "${dmg}.sig"

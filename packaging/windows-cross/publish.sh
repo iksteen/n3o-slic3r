@@ -20,8 +20,8 @@
 # Config (env):
 #   WINCROSS_PREFIX        Cross-deps prefix from build-deps.sh. build-app.sh
 #                          defaults it to packaging/windows-cross/.build/prefix.
-#   N3O_GPG_KEY            Signing key fingerprint. Defaults to the shared
-#                          dedicated project release key (same across channels).
+#   N3O_GPG_KEY            Signing key fingerprint. Unset → unsigned installer
+#                          (no default key); set it to GPG-sign.
 #   N3O_BASE_URL           Public HTTPS base URL of the site (printed install
 #                          commands only); this channel serves from <base>/pkg.
 #                          Default: https://n3o.thegraveyard.org
@@ -42,8 +42,9 @@ n3o_signing_init
 target="x86_64-pc-windows-msvc"
 
 # build.sh is self-contained: it ensures the cross-deps tree (build-deps.sh, the
-# slow one-time step) and cross-builds the app + NSIS installer.
-echo ":: cross-building the Windows app + NSIS installer"
+# slow one-time step), cross-builds the app + NSIS installer, and GPG-signs the
+# installer (when N3O_GPG_KEY is set). publish.sh just uploads the result.
+echo ":: cross-building + signing the Windows app + NSIS installer"
 "${here}/build.sh"
 
 # Resolve the produced installer (the version is in the filename, so glob it
@@ -56,7 +57,7 @@ if [[ -z "${setup}" || ! -f "${setup}" ]]; then
 fi
 setupfile="$(basename "${setup}")"
 
-n3o_sign_and_upload "${setup}" installer
+n3o_upload "${setup}" "${setup}.sig"
 
 cat <<INSTALL
 

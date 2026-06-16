@@ -9,8 +9,8 @@
 # both sign with the same dedicated project key.
 #
 # Config (env):
-#   N3O_GPG_KEY       Signing key fingerprint. Defaults to the shared
-#                     dedicated project release key (same across all channels).
+#   N3O_GPG_KEY       Signing key fingerprint. Unset → unsigned package (no
+#                     default key); set it to GPG-sign (same key across channels).
 #   N3O_BASE_URL      Public HTTPS base URL of the site (used only for the
 #                     printed install commands); this channel serves from
 #                     <base>/pkg. Default: https://n3o.thegraveyard.org
@@ -31,7 +31,8 @@ repo="$(cd "${here}/../.." && pwd)"
 source "${repo}/packaging/lib/sign-and-upload.sh"
 n3o_signing_init
 
-echo ":: build (makepkg, unsigned)"
+# build.sh is self-contained: makepkg + GPG-sign (when N3O_GPG_KEY is set).
+echo ":: build + sign (makepkg)"
 "${here}/build.sh"
 
 # Resolve the exact built artifact (honors a maintainer's PKGDEST / PKGEXT
@@ -43,7 +44,7 @@ if [[ ! -f "${pkg}" ]]; then
 fi
 pkgfile="$(basename "${pkg}")"
 
-n3o_sign_and_upload "${pkg}" package
+n3o_upload "${pkg}" "${pkg}.sig"
 
 cat <<INSTALL
 

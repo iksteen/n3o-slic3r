@@ -8,20 +8,22 @@
 #
 #   n3o_signing_init               # sets: key, base_url, url, keyfile, keyname
 #   <resolve the built artifact into $art>
-#   n3o_sign "$art" <label>        # GPG-sign + print; sets $sig
+#   n3o_sign "$art" <label>        # GPG-sign (if a key is set) + print; sets $sig
 #   n3o_upload "$art" "$sig"       # upload (or print manual steps)
 #
-# `n3o_sign_and_upload` is the two combined, for channels (arch, windows) that
-# sign + upload in one publish step. The macOS channel splits them: build.sh
-# signs (so a `build` produces the final, signed artifact), publish.sh uploads.
-# The caller owns artifact resolution and any per-OS INSTALL instructions.
+# Each channel's build.sh signs (so a `build` produces the final, signed
+# artifact) and its publish.sh uploads. The caller owns artifact resolution and
+# any per-OS INSTALL instructions.
+#
+# Signing is OPTIONAL: with N3O_GPG_KEY unset, n3o_sign is a no-op (no default
+# key) and n3o_upload ships the bare artifact.
 
-# Resolve the shared release-key + site-URL config. Requires `repo`.
-# Sets: key, base_url, url, keyfile, keyname.
+# Resolve the release-key + site-URL config. Requires `repo`.
+# Sets: key (may be empty → unsigned), base_url, url, keyfile, keyname.
 n3o_signing_init() {
-  # Shared dedicated release key (same across all channels). Override to
-  # sign with a different key.
-  key="${N3O_GPG_KEY:-B3D305B467D790E9328FFDF3D0B98FE70335DC53}"
+  # Release key fingerprint. Unset → unsigned build (no default: we never
+  # sign with a key the operator didn't ask for).
+  key="${N3O_GPG_KEY:-}"
   # Single base URL for the whole site; this channel serves from <base>/pkg.
   base_url="${N3O_BASE_URL:-https://n3o.thegraveyard.org}"
   url="${base_url%/}/pkg"
@@ -29,11 +31,19 @@ n3o_signing_init() {
   keyname="$(basename "${keyfile}")"
 }
 
-# GPG-sign $1 (detached) and print the result. $2 is a noun for the "Built +
-# signed:" line (default "artifact"). Sets `sig` for the caller. Requires
-# n3o_signing_init to have run.
+# GPG-sign $1 (detached) and print the result — unless no key is set, in which
+# case it's a no-op and `sig` is left empty. $2 is a noun for the output line
+# (default "artifact"). Sets `sig` for the caller. Requires n3o_signing_init.
 n3o_sign() {
   local art="$1" label="${2:-artifact}"
+
+  if [[ -z "${key}" ]]; then
+    sig=""
+    echo
+    echo "Built (unsigned — set N3O_GPG_KEY to sign):"
+    printf '  %-11s%s\n' "${label}:" "${art}"
+    return
+  fi
 
   echo ":: GPG sign $(basename "${art}") (key ${key})"
   # Detached signature next to the artifact; users verify with `gpg --verify`
@@ -48,18 +58,25 @@ n3o_sign() {
   printf '  %-11s%s\n' "signature:" "${sig}"
 }
 
-# Upload artifact $1 + its signature $2 + the public key to $N3O_PUBLISH_DEST/pkg
-# when set, else print the manual steps. Requires n3o_signing_init to have run.
+# Upload artifact $1 (+ its signature $2 if non-empty + the public key) to
+# $N3O_PUBLISH_DEST/pkg when set, else print the manual steps. An empty $2 means
+# the build was unsigned — only the artifact ships. Requires n3o_signing_init.
 n3o_upload() {
-  local art="$1" sig="$2"
+  local art="$1" sig="${2:-}"
+  # Files to ship: artifact always; signature + public key only when the
+  # signature actually exists (callers pass the expected .sig path regardless,
+  # so gate on the file, not the string).
+  local files=("${art}")
+  if [[ -n "${sig}" && -f "${sig}" ]]; then
+    files+=("${sig}")
+    [[ -f "${keyfile}" ]] && files+=("${keyfile}")
+  fi
+
   if [[ -n "${N3O_PUBLISH_DEST:-}" ]]; then
     local dest="${N3O_PUBLISH_DEST%/}/pkg"
     echo
     echo ":: uploading to ${dest}/ (N3O_PUBLISH_DEST set)"
-    # The artifact + its detached signature + the public key so users can
-    # import, trust, and verify it.
-    rsync -a "${art}" "${sig}" "${dest}/"
-    [[ -f "${keyfile}" ]] && rsync -a "${keyfile}" "${dest}/"
+    rsync -a "${files[@]}" "${dest}/"
     echo ":: uploaded."
   else
     cat <<DONE
@@ -67,15 +84,7 @@ n3o_upload() {
 Set N3O_PUBLISH_DEST=<rsync/ssh dest base> (e.g.
 user@host:/srv/www/n3o.thegraveyard.org) to upload automatically (this channel
 uploads to <dest>/pkg), or by hand:
-  rsync -a "${art}" "${sig}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
-  rsync -a "${keyfile}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
+  rsync -a ${files[*]} your-server:/srv/www/n3o.thegraveyard.org/pkg/
 DONE
   fi
-}
-
-# Sign + upload in one step — for channels that do both in publish.sh (arch,
-# windows). Sets `sig`.
-n3o_sign_and_upload() {
-  n3o_sign "$1" "${2:-artifact}"
-  n3o_upload "$1" "${sig}"
 }
