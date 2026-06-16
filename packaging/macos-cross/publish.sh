@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Release publish for the n3o-slic3r macOS app: cross-build the app on Linux via
-# osxcross (build.sh), assemble + ad-hoc-sign the .app and a .dmg (bundle-app.sh),
-# GPG-sign the .dmg with the project release key, and upload the signed .dmg (+
-# its detached .sig and the public key) so users can verify it with the same key
-# the arch / flatpak / windows channels use.
+# Release publish for the n3o-slic3r macOS app: cross-build + sign the app on
+# Linux via osxcross (build.sh — which ad-hoc-signs the .app/.dmg, names the
+# .dmg, and GPG-signs it with the project release key), then upload the signed
+# .dmg (+ its detached .sig and the public key) so users can verify it with the
+# same key the arch / flatpak / windows channels use.
 #
 # NOTE: the GPG signature is for cross-channel integrity/authenticity
 # (`gpg --verify`), NOT Apple notarization. The .app/.dmg is only ad-hoc signed
@@ -50,20 +50,18 @@ version="$(grep -m1 '^version' "${repo}/src-tauri/Cargo.toml" | sed -E 's/.*"([^
 
 # build.sh is self-contained: it ensures the arch-namespaced cross-deps tree
 # (build-deps.sh, the slow one-time step), builds the frontend, cross-builds the
-# app, and assembles + ad-hoc signs the .app and .dmg.
-echo ":: building the macOS app + .dmg (${arch})"
+# app, assembles + ad-hoc signs the .app and .dmg, names the .dmg, and GPG-signs
+# it.
+echo ":: building + signing the macOS app + .dmg (${arch})"
 "${here}/build.sh" "${arch}"
 
-# Give the published artifact a versioned, arch-specific name (tauri's native
-# convention: n3o-slic3r_<version>_<aarch64|x64>.dmg) so arm64 and x86_64 don't
-# collide on the server and users see what they're getting.
-built_dmg="${repo}/target/${triple}/release/bundle/dmg/n3o-slic3r.dmg"
-[[ -f "${built_dmg}" ]] || { echo "error: no .dmg at ${built_dmg} after bundle" >&2; exit 1; }
+# build.sh produced the final, versioned, GPG-signed .dmg — just upload it.
 dmg="${repo}/target/${triple}/release/bundle/dmg/n3o-slic3r_${version}_${label}.dmg"
-cp -f "${built_dmg}" "${dmg}"
+[[ -f "${dmg}" && -f "${dmg}.sig" ]] || {
+  echo "error: expected a signed ${dmg} (+ .sig) after build" >&2; exit 1; }
 dmgfile="$(basename "${dmg}")"
 
-n3o_sign_and_upload "${dmg}" dmg
+n3o_upload "${dmg}" "${dmg}.sig"
 
 cat <<INSTALL
 

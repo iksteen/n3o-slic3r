@@ -4,16 +4,17 @@
 # <base>/pkg). The flatpak channel is an ostree repo and does its own
 # thing, so it does NOT use this.
 #
-# Source it from a publish.sh that has already set `repo`, then:
+# Source it from a build.sh / publish.sh that has already set `repo`, then:
 #
 #   n3o_signing_init               # sets: key, base_url, url, keyfile, keyname
 #   <resolve the built artifact into $art>
-#   n3o_sign_and_upload "$art" <label>   # signs, prints, uploads; sets $sig
-#   cat <<INSTALL ... INSTALL      # per-OS install steps (use $url/$key/$keyname)
+#   n3o_sign "$art" <label>        # GPG-sign + print; sets $sig
+#   n3o_upload "$art" "$sig"       # upload (or print manual steps)
 #
-# The caller owns artifact resolution and the per-OS INSTALL instructions;
-# everything between (the shared release key, the detached-sign step, and
-# the upload-or-print-manual-steps block) lives here.
+# `n3o_sign_and_upload` is the two combined, for channels (arch, windows) that
+# sign + upload in one publish step. The macOS channel splits them: build.sh
+# signs (so a `build` produces the final, signed artifact), publish.sh uploads.
+# The caller owns artifact resolution and any per-OS INSTALL instructions.
 
 # Resolve the shared release-key + site-URL config. Requires `repo`.
 # Sets: key, base_url, url, keyfile, keyname.
@@ -28,12 +29,10 @@ n3o_signing_init() {
   keyname="$(basename "${keyfile}")"
 }
 
-# GPG-sign $1 (detached), print the result, and upload the artifact + its
-# `.sig` + the public key to $N3O_PUBLISH_DEST/pkg when set, else print the
-# manual steps. $2 is a noun for the "Built + signed:" line (default
-# "artifact"). Sets `sig` for the caller's INSTALL block. Requires
+# GPG-sign $1 (detached) and print the result. $2 is a noun for the "Built +
+# signed:" line (default "artifact"). Sets `sig` for the caller. Requires
 # n3o_signing_init to have run.
-n3o_sign_and_upload() {
+n3o_sign() {
   local art="$1" label="${2:-artifact}"
 
   echo ":: GPG sign $(basename "${art}") (key ${key})"
@@ -47,7 +46,12 @@ n3o_sign_and_upload() {
   echo "Built + signed:"
   printf '  %-11s%s\n' "${label}:" "${art}"
   printf '  %-11s%s\n' "signature:" "${sig}"
+}
 
+# Upload artifact $1 + its signature $2 + the public key to $N3O_PUBLISH_DEST/pkg
+# when set, else print the manual steps. Requires n3o_signing_init to have run.
+n3o_upload() {
+  local art="$1" sig="$2"
   if [[ -n "${N3O_PUBLISH_DEST:-}" ]]; then
     local dest="${N3O_PUBLISH_DEST%/}/pkg"
     echo
@@ -67,4 +71,11 @@ uploads to <dest>/pkg), or by hand:
   rsync -a "${keyfile}" your-server:/srv/www/n3o.thegraveyard.org/pkg/
 DONE
   fi
+}
+
+# Sign + upload in one step — for channels that do both in publish.sh (arch,
+# windows). Sets `sig`.
+n3o_sign_and_upload() {
+  n3o_sign "$1" "${2:-artifact}"
+  n3o_upload "$1" "${sig}"
 }

@@ -1,24 +1,30 @@
 #!/usr/bin/env bash
 # Build the macOS app for an arch from Linux via osxcross: ensure the cross-deps
 # tree (build-deps.sh, the slow one-time step), build the frontend, cross-compile
-# the app, and assemble + ad-hoc-sign the .app and .dmg. publish.sh then GPG-signs
-# + uploads the .dmg.
+# the app, assemble + ad-hoc-sign the .app and .dmg, give the .dmg its final
+# versioned name, and GPG-sign it with the project release key. publish.sh then
+# just uploads the result.
 #
 # Usage:  build.sh <arm64|x86_64>          (default: arm64)
 #
-# Env: OSXCROSS_ROOT (env.sh), DMG_TOOL (bundle-app.sh). See README.md.
+# Env: N3O_GPG_KEY (release key, for the GPG signature), OSXCROSS_ROOT (env.sh),
+# DMG_TOOL (bundle-app.sh). See README.md.
 set -euo pipefail
 
 arch="${1:-arm64}"
 case "$arch" in
-  arm64)  triple=aarch64-apple-darwin ;;
-  x86_64) triple=x86_64-apple-darwin ;;
+  arm64)  triple=aarch64-apple-darwin; label=aarch64 ;;
+  x86_64) triple=x86_64-apple-darwin;  label=x64 ;;
   *) echo "arch must be arm64 or x86_64" >&2; exit 2 ;;
 esac
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "${here}/../.." && pwd)"
 prefix="${repo}/external/OrcaSlicer/deps/build/${arch}/OrcaSlicer_dep/usr/local"
+
+source "${repo}/packaging/lib/sign-and-upload.sh"
+n3o_signing_init
+version="$(grep -m1 '^version' "${repo}/src-tauri/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
 
 # Ensure the arch-namespaced cross-deps tree. build-deps.sh is the slow one-time
 # step; reuse only when *complete* (the .deps-complete stamp), not when a
@@ -43,3 +49,13 @@ echo ":: cross-building the macOS app (${arch})"
 
 echo ":: assembling + ad-hoc signing the .app and .dmg"
 "${here}/bundle-app.sh" "${arch}" --dmg
+
+# Give the .dmg its final, versioned, arch-specific name (tauri's native
+# convention: n3o-slic3r_<version>_<aarch64|x64>.dmg) so arm64 and x86_64 don't
+# collide and users see what they're getting — then GPG-sign it. publish.sh
+# just uploads the result.
+built_dmg="${repo}/target/${triple}/release/bundle/dmg/n3o-slic3r.dmg"
+[[ -f "${built_dmg}" ]] || { echo "error: no .dmg at ${built_dmg} after bundle" >&2; exit 1; }
+dmg="${repo}/target/${triple}/release/bundle/dmg/n3o-slic3r_${version}_${label}.dmg"
+mv -f "${built_dmg}" "${dmg}"
+n3o_sign "${dmg}" dmg
