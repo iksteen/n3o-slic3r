@@ -41,6 +41,8 @@ __pycache__
 # fixtures under `examples/` and `external/` aren't matched.
 /*.gcode.3mf
 /*.3mf
+# Native project saves — user data, never a fixture, so ignore anywhere.
+*.n3o
 
 # Editor directories and files
 .vscode/*
