@@ -57,12 +57,11 @@ pub use sliced::{
     fixture_input, md5_hex, read_sliced_3mf, write_sliced_3mf, AmsBinding, SlicedPlate,
     SlicedPlateMetadata, SlicedPlateRead, SlicedProjectInput, SlicedRead,
 };
-pub use writer::{project_from_objects, write_3mf, write_3mf_with_extras};
+pub use writer::{project_from_objects, write_3mf};
 
 /// Open a `.3mf` and read a single named entry, returning `None`
-/// when the entry is absent. Companion to [`write_3mf_with_extras`]
-/// for callers that need to peek at custom metadata (e.g.
-/// `Metadata/n3o_project.json` for project save format)
+/// when the entry is absent — for peeking at custom metadata (e.g.
+/// detecting a foreign project's `Metadata/project_settings.config`)
 /// without re-parsing the geometry.
 pub fn read_3mf_extra_entry(path: &Path, entry: &str) -> Result<Option<Vec<u8>>, LoadError> {
     let mut container = container::Container::open(path)?;

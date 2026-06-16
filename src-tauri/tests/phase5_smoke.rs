@@ -72,7 +72,7 @@ fn triangle_mesh() -> NewMesh {
 /// Tempfile path scoped to this test process so concurrent
 /// `cargo test --workspace` runs don't trip on each other.
 fn temp_3mf_path() -> PathBuf {
-    std::env::temp_dir().join(format!("n3o-phase5-smoke-{}.3mf", std::process::id()))
+    std::env::temp_dir().join(format!("n3o-phase5-smoke-{}.n3o", std::process::id()))
 }
 
 /// Build the 3-plate exit fixture from scratch. Mirrors the

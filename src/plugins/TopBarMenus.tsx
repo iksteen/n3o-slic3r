@@ -108,7 +108,7 @@ function AppearanceItem({ label, value, current, onSelect }: AppearanceItemProps
 
 export interface ProjectMenuProps {
   /** The current project's filename (e.g. "thing.3mf"), or
-   * "Untitled.3mf" when the project has never been saved. */
+   * "Untitled.n3o" when the project has never been saved. */
   projectName?: string | null;
   /** True when the project has unsaved edits — shows a `•` marker. */
   dirty?: boolean;
@@ -148,7 +148,7 @@ export function ProjectMenu({
             •
           </span>
         )}
-        <span>{projectName ?? "Untitled.3mf"}</span>
+        <span>{projectName ?? "Untitled.n3o"}</span>
         <Chevron />
       </button>
       {open && (

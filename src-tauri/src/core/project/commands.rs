@@ -434,8 +434,12 @@ pub fn project_load(
     let (loaded, import_report) = match format::read_project(path_ref) {
         Ok(p) => (p, None),
         Err(format::ProjectIoError::ForeignProject { .. }) => {
-            let (project, report) =
+            let (mut project, report) =
                 crate::core::orca_import::import(path_ref).map_err(|e| format!("import: {e}"))?;
+            // A foreign .3mf import becomes a *native* project — point its save
+            // target at the matching `.n3o` name so the app reflects that (the
+            // user saves a native project, never back to the foreign 3mf).
+            project.source_path = Some(path_ref.with_extension("n3o"));
             (project, Some(report))
         }
         Err(e) => return Err(e.to_string()),

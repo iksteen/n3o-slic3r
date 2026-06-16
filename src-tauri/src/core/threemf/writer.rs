@@ -51,28 +51,9 @@ const N3O_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// (`load_3mf`) produces — re-reading the written file yields a
 /// `Project3mf` with the same mesh data + objects + per-part
 /// extruder hints + plate assignments (within floating-point
-/// precision the writer emits).
+/// precision the writer emits). Used for the slice temp `.3mf`
+/// libslic3r consumes (and a future "export to 3MF" feature).
 pub fn write_3mf(project: &Project3mf, output: &Path) -> Result<(), LoadError> {
-    write_3mf_with_extras(project, &std::collections::BTreeMap::new(), output)
-}
-
-/// Same as [`write_3mf`] but appends extra entries to the zip
-/// container. The project-save path uses this to embed an n3o
-/// JSON skeleton (`Metadata/n3o_project.json`) alongside the
-/// standard 3MF geometry — foreign slicers (Bambu Studio,
-/// OrcaSlicer) ignore unrecognized `Metadata/*` entries, so the
-/// 3MF stays interoperable.
-///
-/// `extras` keys are container-relative paths (e.g.
-/// `"Metadata/n3o_project.json"`); values are the raw body
-/// strings. Entries colliding with the writer's own outputs (e.g.
-/// `3D/3dmodel.model`) clash at zip-author time; callers should
-/// pick distinct names.
-pub fn write_3mf_with_extras(
-    project: &Project3mf,
-    extras: &std::collections::BTreeMap<String, String>,
-    output: &Path,
-) -> Result<(), LoadError> {
     let file = File::create(output).map_err(|e| LoadError::Io {
         path: output.into(),
         source: e,
@@ -109,9 +90,6 @@ pub fn write_3mf_with_extras(
         opts,
         output,
     )?;
-    for (name, body) in extras {
-        write_entry(&mut zip, name, body, opts, output)?;
-    }
 
     zip.finish().map_err(|e| LoadError::Parse {
         path: output.into(),
@@ -192,22 +170,31 @@ struct Layout {
 }
 
 impl Layout {
-    fn from_project(project: &Project3mf) -> Self {
+    fn from_objects(objects: &[ProjectObject]) -> Self {
         // Walk the object list once, recording the first occurrence
         // of each group and the leaf indices that belong to it.
         // Solos and unique groups are emitted in their original
         // position; multi-member groups attach to the position of
         // their first member to keep build-item order deterministic.
-        let mut group_order: Vec<Option<GroupId>> = Vec::new();
+        // Record each slot at its first-appearance position: an ungrouped
+        // object carries its own index; a group carries its id (members
+        // collected separately). The solo index must be the object's *actual*
+        // index — not a running counter, which undercounts past a multi-member
+        // group and would point a later solo at a group member.
+        enum Slot {
+            Solo(usize),
+            Group(GroupId),
+        }
+        let mut order: Vec<Slot> = Vec::new();
         let mut group_members: std::collections::BTreeMap<GroupId, Vec<usize>> =
             std::collections::BTreeMap::new();
-        for (idx, obj) in project.objects.iter().enumerate() {
+        for (idx, obj) in objects.iter().enumerate() {
             match obj.group {
-                None => group_order.push(None),
+                None => order.push(Slot::Solo(idx)),
                 Some(gid) => {
                     let entry = group_members.entry(gid).or_default();
                     if entry.is_empty() {
-                        group_order.push(Some(gid));
+                        order.push(Slot::Group(gid));
                     }
                     entry.push(idx);
                 }
@@ -215,19 +202,13 @@ impl Layout {
         }
 
         // Group resource ids start above all leaf ids. Leaves use
-        // `idx + 1`; the first group is `project.objects.len() + 1`.
-        let mut next_group_id = project.objects.len() as u32 + 1;
-        let mut build_units: Vec<BuildUnit> = Vec::with_capacity(group_order.len());
-        let mut leaf_cursor = 0usize;
-        for entry in group_order {
-            match entry {
-                None => {
-                    build_units.push(BuildUnit::Solo {
-                        object_idx: leaf_cursor,
-                    });
-                    leaf_cursor += 1;
-                }
-                Some(gid) => {
+        // `idx + 1`; the first group is `objects.len() + 1`.
+        let mut next_group_id = objects.len() as u32 + 1;
+        let mut build_units: Vec<BuildUnit> = Vec::with_capacity(order.len());
+        for slot in order {
+            match slot {
+                Slot::Solo(object_idx) => build_units.push(BuildUnit::Solo { object_idx }),
+                Slot::Group(gid) => {
                     let members = group_members.remove(&gid).expect("group recorded");
                     if members.len() == 1 {
                         // A "group" of one is just a solo — emit as
@@ -245,13 +226,13 @@ impl Layout {
                             member_indices: members,
                         });
                     }
-                    leaf_cursor += 1;
                 }
             }
         }
         Layout { build_units }
     }
 }
+
 
 fn model_xml(project: &Project3mf) -> String {
     let mut out = String::with_capacity(8 * 1024 + project.meshes.len() * 1024);
@@ -280,7 +261,7 @@ fn model_xml(project: &Project3mf) -> String {
         ));
     }
 
-    let layout = Layout::from_project(project);
+    let layout = Layout::from_objects(&project.objects);
 
     out.push_str(" <resources>\n");
     // Pass 1 — leaf objects (mesh-bearing). Every ProjectObject gets
@@ -451,7 +432,7 @@ fn model_settings_xml(project: &Project3mf) -> String {
     // <object id> in 3dmodel.model. BBS's reader uses the part id
     // (`ID_ATTR` in bbs_3mf.cpp's `_handle_start_config_volume`) to
     // correlate the part with its component subobject.
-    let layout = Layout::from_project(project);
+    let layout = Layout::from_objects(&project.objects);
     for unit in &layout.build_units {
         match unit {
             BuildUnit::Solo { object_idx } => {
@@ -490,9 +471,8 @@ fn model_settings_xml(project: &Project3mf) -> String {
                 member_indices,
             } => {
                 out.push_str(&format!("  <object id=\"{group_resource_id}\">\n"));
-                // Group-level name = first member's name as a
-                // reasonable default. (Future: surface an
-                // explicit group name field on Project3mf.)
+                // Group-level name = first member's name as a reasonable
+                // default (the slice 3MF only needs valid BBS structure).
                 let first = &project.objects[member_indices[0]];
                 out.push_str(&format!(
                     "    <metadata key=\"name\" value=\"{}\"/>\n",

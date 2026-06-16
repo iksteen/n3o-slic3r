@@ -388,9 +388,16 @@ function App() {
   // "Untitled.3mf" for an unsaved project.
   const sourcePath = session.snapshot?.source_path ?? null;
   const projectName = sourcePath
-    ? sourcePath.split(/[\\/]/).pop() || "Untitled.3mf"
-    : "Untitled.3mf";
-  const projectFilters = [{ name: "n3o project", extensions: ["3mf"] }];
+    ? sourcePath.split(/[\\/]/).pop() || "Untitled.n3o"
+    : "Untitled.n3o";
+  // Open accepts native .n3o projects AND foreign Bambu/Orca .3mf (imported);
+  // Save only writes the native .n3o container.
+  const openFilters = [
+    { name: "Project", extensions: ["n3o", "3mf"] },
+    { name: "n3o project", extensions: ["n3o"] },
+    { name: "Bambu / Orca 3MF", extensions: ["3mf"] },
+  ];
+  const saveFilters = [{ name: "n3o project", extensions: ["n3o"] }];
 
   // Surface a project file-op failure to the user (a native dialog), not
   // just the console — opening e.g. an OrcaSlicer .3mf via "Open project"
@@ -410,7 +417,7 @@ function App() {
 
   const handleOpenProject = async (): Promise<void> => {
     try {
-      const picked = await openDialog({ multiple: false, filters: projectFilters });
+      const picked = await openDialog({ multiple: false, filters: openFilters });
       if (typeof picked !== "string") return; // cancelled
       await projectLoad(picked); // → project:loaded → session refetch
     } catch (err) {
@@ -423,7 +430,7 @@ function App() {
       const picked = await saveDialog({
         title: "Save project as",
         defaultPath: projectName,
-        filters: projectFilters,
+        filters: saveFilters,
       });
       if (typeof picked !== "string") return; // cancelled
       await projectSaveAs(picked); // adopts the new source_path

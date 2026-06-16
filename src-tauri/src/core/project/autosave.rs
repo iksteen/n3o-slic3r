@@ -1,7 +1,7 @@
 //! Autosave + recovery (FR-MP-4 recovery half).
 //!
 //! Every `interval` seconds, snapshot the current [`Project`]
-//! state to `<autosave_dir>/<project-uuid>.3mf` so a crash or
+//! state to `<autosave_dir>/<project-uuid>.n3o` so a crash or
 //! force-quit doesn't lose more than one cycle's worth of work.
 //! On app launch, [`scan_recoveries`] enumerates candidate
 //! autosave files; the frontend's recovery dialog presents them
@@ -236,9 +236,9 @@ fn write_one_tick(
 }
 
 /// Resolve the on-disk path for `project`'s autosave file:
-/// `<dir>/<uuid>.3mf`.
+/// `<dir>/<uuid>.n3o`.
 pub fn autosave_path_for(dir: &Path, project: &Project) -> PathBuf {
-    dir.join(format!("{}.3mf", project.uuid))
+    dir.join(format!("{}.n3o", project.uuid))
 }
 
 /// Default location for autosaves. On Linux: `$XDG_DATA_HOME` or
@@ -251,7 +251,7 @@ pub fn default_autosave_dir() -> PathBuf {
 }
 
 /// Enumerate autosave files in `dir`. Returns entries newest-
-/// first. Files that don't end in `.3mf` are ignored. Missing
+/// first. Files that don't end in `.n3o` are ignored. Missing
 /// or unreadable directories return an empty Vec (not an
 /// error) — fresh app installs have no autosave dir yet.
 pub fn scan_recoveries(dir: &Path) -> std::io::Result<Vec<AutosaveEntry>> {
@@ -267,7 +267,7 @@ pub fn scan_recoveries(dir: &Path) -> std::io::Result<Vec<AutosaveEntry>> {
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else {
             continue;
         };
-        if path.extension().and_then(|e| e.to_str()) != Some("3mf") {
+        if path.extension().and_then(|e| e.to_str()) != Some("n3o") {
             continue;
         }
         let meta = entry.metadata()?;
@@ -290,12 +290,12 @@ pub fn scan_recoveries(dir: &Path) -> std::io::Result<Vec<AutosaveEntry>> {
     Ok(entries)
 }
 
-/// Delete the autosave file `<dir>/<uuid>.3mf`. Silent no-op
+/// Delete the autosave file `<dir>/<uuid>.n3o`. Silent no-op
 /// when the file isn't present (idempotent — the discard button
 /// works regardless of whether another instance already cleaned
 /// up).
 pub fn drop_autosave(dir: &Path, uuid: &str) -> std::io::Result<()> {
-    let path = dir.join(format!("{uuid}.3mf"));
+    let path = dir.join(format!("{uuid}.n3o"));
     match fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),

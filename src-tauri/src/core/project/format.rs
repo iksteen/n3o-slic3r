@@ -1,139 +1,83 @@
-//! Project `.3mf` save/load.
+//! Native project save/load — the `.n3o` container.
 //!
-//! The project format is a standard 3MF zip with one extra entry:
-//! `Metadata/n3o_project.json` carrying the serialized [`Project`]
-//! (plate list, printer + material bindings, plate metadata,
-//! project-tier overrides, file metadata). Foreign slicers (Bambu
-//! Studio, OrcaSlicer, PrusaSlicer) read the geometry + standard
-//! 3MF `<metadata>` fields and ignore the unrecognized
-//! `Metadata/n3o_project.json` entry.
+//! A `.n3o` file is a plain zip with our own entries:
 //!
-//! ## Why split JSON + 3MF
+//! - `project.json` — `serde_json` of the [`Project`] (plates, bindings,
+//!   material maps, overrides, groups, **objects with stable ids**, and `Mesh`
+//!   headers). The heavy vertex/normal/index/paint buffers are `#[serde(skip)]`,
+//!   so the JSON stays small. Wrapped in a [`ProjectFile`] that adds the
+//!   `format_version` marker + the writing build's stamp.
+//! - `geometry/<MeshId>.bin` — one tight binary blob per mesh, carrying its
+//!   buffers. Geometry is keyed by `MeshId`: an object references its mesh by id,
+//!   and load fills that mesh's buffers from its blob. Shared geometry (cloned
+//!   objects → one `MeshId`) is one blob shared by all.
 //!
-//! - **Geometry** (mesh vertex / normal / index buffers, object
-//!   placements, plate assignments) lives in the standard 3MF
-//!   structure — foreign-slicer interop + a battle-tested
-//!   container format we already read + write.
-//! - **Project state** (bindings, plate metadata, project-tier
-//!   overrides, file metadata) lives in `Metadata/n3o_project.json`.
-//!   Just a `serde_json::to_string(&Project)` — the heavy mesh
-//!   buffers are `#[serde(skip)]`, so the JSON stays small.
-//! - **Derived / transient state is *not* stored.** The bed mesh +
-//!   exclusion zones (a pure function of the bound printer profile),
-//!   the live selection, and `source_path` are all `#[serde(skip)]`:
-//!   `read_project` re-derives the bed via [`Plate::set_printer`] and
-//!   re-stamps the path; selection defaults empty. Cascade overrides
-//!   are stored as **logical** keys — the adapter owns the libslic3r
-//!   translation — so the file isn't coupled to libslic3r option names.
-//! - **Writer provenance.** `app_name` / `app_version` stamp the build
-//!   that wrote the file (optional fields, for diagnostics + any future
-//!   migration).
+//! Foreign Bambu/Orca `.3mf` projects are imported through a separate path
+//! ([`crate::core::threemf::load_3mf`] + the importer); `read_project` detects a
+//! `.3mf` handed to it and returns [`ProjectIoError::ForeignProject`] so the
+//! "open project" surface routes it to the importer.
 //!
-//! On load the two layers reunite: the JSON gives the project
-//! skeleton (including [`Mesh`] entries with empty buffers); the
-//! 3MF supplies the buffers. They match by position — the writer
-//! emits meshes sorted by [`MeshId`] ascending, the reader walks
-//! the loaded project's meshes in the same order and zips them
-//! with the 3MF's geometry.
-//!
-//! ## Format version
-//!
-//! [`FORMAT_VERSION`] is the schema marker baked into every
-//! written project. The reader rejects mismatched versions with
-//! [`ProjectIoError::SchemaMismatch`]. Bump it whenever the JSON
-//! schema changes incompatibly.
+//! Derived / transient state is not stored: the bed + exclusion zones (a pure
+//! function of the bound printer) are re-derived on load via
+//! `Plate::set_printer`; the live selection and `source_path` are
+//! `#[serde(skip)]`. Cascade overrides persist as **logical** keys (the adapter
+//! owns the libslic3r translation), so the file isn't coupled to option names.
 
-use std::collections::BTreeMap;
-use std::io;
+use std::fs::File;
+use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-use super::model::{Plate, Project};
-use crate::core::scene::loaders::LoadError;
-use crate::core::scene::state::{MeshId, NewMesh};
-use crate::core::scene::transform::Transform;
-use crate::core::threemf::{
-    load_3mf, project_from_objects, read_3mf_extra_entry, write_3mf_with_extras, ProjectObject,
-};
+use super::model::Project;
+use crate::core::scene::state::{Mesh, MeshId};
 
-/// Schema version baked into every written project. Bump on
-/// incompatible schema changes; the reader rejects mismatched
-/// versions with [`ProjectIoError::SchemaMismatch`].
+/// Schema version of the `.n3o` container. The reader rejects any other version
+/// with [`ProjectIoError::SchemaMismatch`]. Bump on incompatible changes.
 pub const FORMAT_VERSION: &str = "1";
 
-/// 3MF metadata entry holding the serialized project skeleton.
-pub const METADATA_FILENAME: &str = "Metadata/n3o_project.json";
+/// The zip entry holding the serialized project skeleton.
+const PROJECT_ENTRY: &str = "project.json";
 
 #[derive(Debug)]
 pub enum ProjectIoError {
-    /// Filesystem I/O failure when reading or writing the
-    /// container file.
+    /// Filesystem / zip I/O failure reading or writing the container.
     Io { path: PathBuf, source: io::Error },
-    /// 3MF container error from the underlying reader / writer
-    /// (zip-level, XML-parse, or geometry-parse).
-    Threemf(LoadError),
-    /// `Metadata/n3o_project.json` failed to deserialize.
+    /// `project.json` failed to (de)serialize.
     Json { path: PathBuf, message: String },
-    /// The schema version in the loaded file doesn't match what
-    /// this build can read.
+    /// The container's `format_version` doesn't match this build.
     SchemaMismatch { found: String, expected: String },
-    /// `Metadata/n3o_project.json` is missing — the file was not
-    /// written by us (or by a future / older format version that
-    /// removed the entry).
+    /// Not an n3o project and not a recognizable foreign 3MF either.
     NotAProjectFile { path: PathBuf },
-    /// No `n3o_project.json`, but the file carries OrcaSlicer / Bambu
-    /// Studio project metadata (`project_settings.config`). It's a
-    /// foreign project — openable only via the (in-progress) importer,
-    /// not as an n3o project. Distinguished so the UI can say so.
+    /// A foreign OrcaSlicer / Bambu Studio `.3mf` — openable via the importer,
+    /// not as a native project. Distinguished so the UI can route it there.
     ForeignProject { path: PathBuf },
-    /// The geometry side of the file disagrees with the project
-    /// skeleton: the 3MF has a different number of meshes than
-    /// the JSON's mesh map. Symptomatic of a corrupted file or a
-    /// mid-write crash.
-    GeometryMismatch {
-        path: PathBuf,
-        json_mesh_count: usize,
-        threemf_mesh_count: usize,
-    },
 }
 
 impl std::fmt::Display for ProjectIoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io { path, source } => write!(f, "I/O on {}: {source}", path.display()),
-            Self::Threemf(e) => write!(f, "3MF: {e}"),
             Self::Json { path, message } => {
-                write!(f, "{} project JSON: {message}", path.display())
+                write!(f, "{}: {message}", path.display())
             }
             Self::SchemaMismatch { found, expected } => write!(
                 f,
                 "project schema version mismatch: file has \"{found}\", \
                  this build reads \"{expected}\"",
             ),
-            Self::NotAProjectFile { path } => write!(
-                f,
-                "{}: no {METADATA_FILENAME} — not an n3o-slic3r project",
-                path.display(),
-            ),
+            Self::NotAProjectFile { path } => {
+                write!(f, "{}: not an n3o-slic3r project", path.display())
+            }
             Self::ForeignProject { path } => write!(
                 f,
-                "{} is an OrcaSlicer / Bambu Studio project, not an n3o \
-                 project — n3o can't open it as a project yet. (Importing \
-                 OrcaSlicer projects is in progress.)",
+                "{} is an OrcaSlicer / Bambu Studio project, not a native n3o \
+                 project — open it via the importer.",
                 path.file_name()
                     .map(|n| n.to_string_lossy())
                     .unwrap_or_default(),
-            ),
-            Self::GeometryMismatch {
-                path,
-                json_mesh_count,
-                threemf_mesh_count,
-            } => write!(
-                f,
-                "{}: geometry/skeleton mesh-count mismatch \
-                 (json={json_mesh_count}, 3mf={threemf_mesh_count})",
-                path.display(),
             ),
         }
     }
@@ -141,187 +85,92 @@ impl std::fmt::Display for ProjectIoError {
 
 impl std::error::Error for ProjectIoError {}
 
-impl From<LoadError> for ProjectIoError {
-    fn from(e: LoadError) -> Self {
-        Self::Threemf(e)
-    }
+/// `project.json` payload: the serialized project plus the version marker and
+/// the writing build's stamp. Borrowing variant for write (no `Project` clone),
+/// owning variant for read.
+#[derive(Serialize)]
+struct ProjectFileRef<'a> {
+    format_version: &'a str,
+    app_name: &'a str,
+    app_version: &'a str,
+    project: &'a Project,
 }
 
-/// JSON-side payload: the project skeleton plus the
-/// `format_version` marker plus side-fields that don't belong on
-/// the in-memory `Project` shape. Kept as its own struct so the
-/// runtime type stays small while the on-disk form can grow
-/// portability/diagnostic hints.
-///
-/// `app_name` / `app_version` stamp the writing build for diagnostics.
-/// `plate_printer_identities` is the portability side-field — vendor
-/// printer identities indexed by `PlateId`, populated at save time from
-/// each plate's bound `PrinterInstance.vendor_profile_ref`. In-memory
-/// state only carries `printer_instance_id`; the denormalization
-/// survives "saved on machine A, opened on machine B where that instance
-/// isn't registered" so the loader can hand the user a meaningful
-/// "rebind to a Bambu A1 mini" prompt instead of just "unbound."
-///
-/// All side-fields are `#[serde(default)]` so they can be added or
-/// dropped without a [`FORMAT_VERSION`] bump.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Deserialize)]
 struct ProjectFile {
     format_version: String,
-    /// Name of the build that wrote the file (`CARGO_PKG_NAME`).
     #[serde(default)]
+    #[allow(dead_code)]
     app_name: String,
-    /// Version of the build that wrote the file (`CARGO_PKG_VERSION`).
     #[serde(default)]
+    #[allow(dead_code)]
     app_version: String,
     project: Project,
-    #[serde(default)]
-    plate_printer_identities: BTreeMap<u32, String>,
 }
 
-/// Write `project` to `output` as a `.3mf` project file.
-///
-/// Overwrites `output` if it exists. The 3MF geometry side is
-/// built from `project.meshes` (sorted by [`MeshId`] for
-/// deterministic order) + every plate's `scene.objects`; the
-/// project skeleton ships as `Metadata/n3o_project.json`.
+/// Write `project` to `output` as a `.n3o` file (overwrites if it exists).
 pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoError> {
-    // Build the geometry payload. Meshes are sorted by MeshId so
-    // the read side can zip them back by position without needing
-    // an explicit mapping table.
-    let mut mesh_id_order: Vec<MeshId> = project.meshes.keys().copied().collect();
-    mesh_id_order.sort();
-    let mesh_id_to_idx: std::collections::HashMap<MeshId, usize> = mesh_id_order
-        .iter()
-        .enumerate()
-        .map(|(i, id)| (*id, i))
-        .collect();
+    let file = File::create(output).map_err(|e| ProjectIoError::Io {
+        path: output.into(),
+        source: e,
+    })?;
+    let mut zip = ZipWriter::new(file);
+    let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
-    let geometry_meshes: Vec<NewMesh> = mesh_id_order
-        .iter()
-        .map(|id| {
-            let m = &project.meshes[id];
-            NewMesh {
-                vertices: m.vertices.clone(),
-                normals: m.normals.clone(),
-                indices: m.indices.clone(),
-                // MMU paint is #[serde(skip)] — it travels with the geometry
-                // in the 3MF, so it MUST be carried here or a save/reopen
-                // silently drops all painting and the model degrades to
-                // single-material.
-                paint_colors: m.paint_colors.clone(),
-                bounding_box: m.bounding_box,
-                provenance: m.provenance.clone(),
-            }
-        })
-        .collect();
-
-    // Flatten objects across plates. plate_id on the ProjectObject
-    // is the wire-side u32 — foreign slicers see this as the BBS
-    // plater id. We use Project.plates[i].id.0 for one-to-one
-    // mapping with our PlateId.
-    let mut geometry_objects: Vec<ProjectObject> = Vec::new();
-    for plate in &project.plates {
-        for obj in plate.scene.objects.values() {
-            let mesh_idx =
-                mesh_id_to_idx
-                    .get(&obj.mesh)
-                    .copied()
-                    .ok_or_else(|| ProjectIoError::Json {
-                        path: output.into(),
-                        message: format!(
-                            "object {} references unknown mesh {}",
-                            obj.id.0, obj.mesh.0,
-                        ),
-                    })?;
-            geometry_objects.push(ProjectObject {
-                mesh_idx,
-                transform: obj.transform,
-                name: obj.name.clone(),
-                extruder_id: obj.extruder_id,
-                plate_id: plate.id.0,
-                group: obj.group,
-                // Object overrides round-trip via n3o_project.json, not the
-                // geometry 3MF's model_settings — empty on this save path.
-                overrides: Default::default(),
-            });
-        }
-    }
-
-    // Emit geometry in ascending-mesh-idx (== sorted-MeshId) order.
-    // `read_project` re-associates the loaded buffers to MeshIds by zipping the
-    // sorted MeshId list against the 3MF's document order, so that document
-    // order MUST be sorted — but the loop above walks `objects.values()`
-    // (HashMap, randomized per process). Without this sort a multi-mesh project
-    // lands each mesh's geometry on the wrong MeshId on a reopen whenever the
-    // HashMap order differs from sorted order, scrambling the layout.
-    geometry_objects.sort_by_key(|o| o.mesh_idx);
-
-    let project_3mf = project_from_objects(
-        geometry_meshes,
-        geometry_objects,
-        project.file_metadata.clone(),
-    );
-
-    // Denormalize each plate's bound printer identity from its
-    // `PrinterInstance.vendor_profile_ref` — see `ProjectFile`'s
-    // docs for the cross-machine-portability rationale. Skipped
-    // for unbound plates or instances no longer in the registry.
-    let plate_printer_identities: BTreeMap<u32, String> = project
-        .plates
-        .iter()
-        .filter_map(|plate| {
-            let instance_id = plate.printer_instance_id()?;
-            let instance = crate::core::printer::lookup_instance(instance_id)?;
-            Some((plate.id.0, instance.vendor_profile_ref))
-        })
-        .collect();
-
-    // Build the JSON-side payload + the extras map.
-    let project_json = serde_json::to_string_pretty(&ProjectFile {
-        format_version: FORMAT_VERSION.into(),
-        app_name: env!("CARGO_PKG_NAME").into(),
-        app_version: env!("CARGO_PKG_VERSION").into(),
-        project: project.clone(),
-        plate_printer_identities,
+    let project_json = serde_json::to_vec_pretty(&ProjectFileRef {
+        format_version: FORMAT_VERSION,
+        app_name: env!("CARGO_PKG_NAME"),
+        app_version: env!("CARGO_PKG_VERSION"),
+        project,
     })
     .map_err(|e| ProjectIoError::Json {
         path: output.into(),
         message: format!("serialize: {e}"),
     })?;
-    let mut extras: BTreeMap<String, String> = BTreeMap::new();
-    extras.insert(METADATA_FILENAME.into(), project_json);
+    zip_write(&mut zip, PROJECT_ENTRY, &project_json, opts, output)?;
 
-    write_3mf_with_extras(&project_3mf, &extras, output)?;
+    // One geometry blob per mesh, keyed by MeshId. Objects reference meshes by
+    // id, so load resolves buffers by id — no ordering involved.
+    for (id, mesh) in &project.meshes {
+        let blob = pack_geometry(mesh).map_err(|e| ProjectIoError::Json {
+            path: output.into(),
+            message: format!("encode geometry for mesh {}: {e}", id.0),
+        })?;
+        zip_write(&mut zip, &format!("geometry/{}.bin", id.0), &blob, opts, output)?;
+    }
+    zip.finish().map_err(|e| ProjectIoError::Json {
+        path: output.into(),
+        message: format!("finalize zip: {e}"),
+    })?;
     Ok(())
 }
 
-/// Read a `.3mf` project file at `input`. The reader expects both
-/// the standard 3MF geometry layer and our
-/// `Metadata/n3o_project.json` skeleton — files missing the
-/// skeleton are rejected with [`ProjectIoError::NotAProjectFile`].
+/// Read a `.n3o` project at `input`.
 ///
-/// The returned [`Project`] has `source_path = Some(input)` so
-/// subsequent "save" calls overwrite the loaded file; `save_as`
-/// is the surface for "save to a different path."
+/// A `.3mf` handed here returns [`ProjectIoError::ForeignProject`] (route to the
+/// importer); anything else without our `project.json` is `NotAProjectFile`.
 pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
-    // 1. JSON skeleton. If it's absent, distinguish a foreign
-    //    OrcaSlicer/Bambu project (has project_settings.config) from a
-    //    file that isn't a slicer project at all, so the UI can point
-    //    the user at the importer rather than a generic "not a project".
-    let raw = match read_3mf_extra_entry(input, METADATA_FILENAME)? {
-        Some(raw) => raw,
+    let file = File::open(input).map_err(|e| ProjectIoError::Io {
+        path: input.into(),
+        source: e,
+    })?;
+    let mut zip = ZipArchive::new(file).map_err(|_| ProjectIoError::NotAProjectFile {
+        path: input.into(),
+    })?;
+
+    // Our container has project.json; a foreign 3MF has 3D/3dmodel.model.
+    let raw = match read_zip_entry(&mut zip, PROJECT_ENTRY) {
+        Some(bytes) => bytes,
         None => {
-            let is_foreign = read_3mf_extra_entry(input, "Metadata/project_settings.config")
-                .ok()
-                .flatten()
-                .is_some();
-            return Err(if is_foreign {
+            let is_3mf = zip.by_name("3D/3dmodel.model").is_ok();
+            return Err(if is_3mf {
                 ProjectIoError::ForeignProject { path: input.into() }
             } else {
                 ProjectIoError::NotAProjectFile { path: input.into() }
             });
         }
     };
+
     let file: ProjectFile = serde_json::from_slice(&raw).map_err(|e| ProjectIoError::Json {
         path: input.into(),
         message: format!("parse: {e}"),
@@ -334,62 +183,30 @@ pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
     }
     let mut project = file.project;
 
-    // 2. Geometry. The geometry 3MF carries one mesh resource PER OBJECT —
-    //    the writer keeps shared geometry as distinct resources so per-object
-    //    metadata (extruder hint, name) stays separate (see threemf::writer),
-    //    and `write_project` emits them in ascending mesh_idx (== sorted
-    //    MeshId) order. So reconstruct the same per-object MeshId sequence and
-    //    zip positionally: a mesh shared by N objects (e.g. a duplicated
-    //    object) appears N times and each fill writes the same buffer
-    //    (harmless). Using the per-object sequence — not the distinct mesh
-    //    set — is what lets a duplicated-object project round-trip instead of
-    //    failing the count check.
-    //
-    //    Skip when there are no objects: load_3mf rejects empty containers
-    //    with LoadError::Empty, the wrong signal for a legitimately-empty
-    //    project. A brand-new project saved before adding geometry round-trips
-    //    cleanly via this path.
-    let mut object_mesh_order: Vec<MeshId> = project
-        .plates
-        .iter()
-        .flat_map(|plate| plate.scene.objects.values().map(|o| o.mesh))
-        .collect();
-    object_mesh_order.sort();
-    if !object_mesh_order.is_empty() {
-        let geometry = load_3mf(input)?;
-        if object_mesh_order.len() != geometry.meshes.len() {
-            return Err(ProjectIoError::GeometryMismatch {
+    // Fill each mesh's buffers from its geometry blob.
+    let ids: Vec<MeshId> = project.meshes.keys().copied().collect();
+    for id in ids {
+        let blob = read_zip_entry(&mut zip, &format!("geometry/{}.bin", id.0)).ok_or_else(|| {
+            ProjectIoError::Json {
                 path: input.into(),
-                json_mesh_count: object_mesh_order.len(),
-                threemf_mesh_count: geometry.meshes.len(),
-            });
-        }
-        for (id, new_mesh) in object_mesh_order.iter().zip(geometry.meshes) {
-            let mesh = project
-                .meshes
-                .get_mut(id)
-                .expect("object references a known mesh");
-            mesh.vertices = new_mesh.vertices;
-            mesh.normals = new_mesh.normals;
-            mesh.indices = new_mesh.indices;
-            // MMU paint lives only in the geometry 3MF (it's #[serde(skip)],
-            // absent from the JSON skeleton), so it must be copied back here
-            // or a save/reopen drops all painting.
-            mesh.paint_colors = new_mesh.paint_colors;
-            // bbox + provenance already round-trip via the JSON;
-            // the 3MF reader's copies match within float precision.
-        }
+                message: format!("missing geometry for mesh {}", id.0),
+            }
+        })?;
+        let g: GeometryBlob =
+            postcard::from_bytes(&blob).map_err(|e| ProjectIoError::Json {
+                path: input.into(),
+                message: format!("geometry for mesh {}: {e}", id.0),
+            })?;
+        let mesh = project.meshes.get_mut(&id).expect("id from keys");
+        mesh.vertices = g.vertices;
+        mesh.normals = g.normals;
+        mesh.indices = g.indices;
+        mesh.paint_colors = g.paint_colors;
     }
 
-    // 3. Re-derive scene state we no longer persist. `bed` +
-    //    `exclusion_zones` are a pure function of the bound printer
-    //    profile (skipped in the JSON to keep it small + drift-free), so
-    //    rebuild them per plate through the one binding path,
-    //    `set_printer`. An instance/profile that no longer resolves
-    //    (project opened where it isn't registered) leaves the plate
-    //    bound-but-bedless — the same state as an unresolved binding,
-    //    which the rebind prompt (plate_printer_identities) handles.
-    //    `selection` + the vestigial `plate` field default to empty/None.
+    // Re-derive the bed + exclusion zones we don't persist (pure function of the
+    // bound printer profile) through the one binding path. An instance/profile
+    // that no longer resolves leaves the plate bound-but-bedless.
     for plate in &mut project.plates {
         let Some(instance_id) = plate.printer_instance_id().map(str::to_owned) else {
             continue;
@@ -403,83 +220,96 @@ pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
         plate.set_printer(Some(instance_id), Some(&profile));
     }
 
-    // 4. Stamp source_path so the next "save" knows where to go.
     project.source_path = Some(input.into());
-
     Ok(project)
 }
 
-/// Convert a [`Plate`]'s scene-side objects to the geometry side's
-/// [`ProjectObject`] shape. Pulled out for cross-file reuse if
-/// the slice orchestrator ever wants to materialize a Project3mf
-/// for a single plate without going through `write_project`.
-#[allow(dead_code)]
-pub fn plate_to_project_objects(
-    plate: &Plate,
-    mesh_id_to_idx: &std::collections::HashMap<MeshId, usize>,
-) -> Result<Vec<ProjectObject>, String> {
-    plate
-        .scene
-        .objects
-        .values()
-        .map(|obj| {
-            let mesh_idx = mesh_id_to_idx
-                .get(&obj.mesh)
-                .copied()
-                .ok_or_else(|| format!("unknown mesh {}", obj.mesh.0))?;
-            Ok(ProjectObject {
-                mesh_idx,
-                transform: obj.transform,
-                name: obj.name.clone(),
-                extruder_id: obj.extruder_id,
-                plate_id: plate.id.0,
-                group: obj.group,
-                overrides: Default::default(),
-            })
-        })
-        .collect()
+// ── zip helpers ────────────────────────────────────────────────
+
+fn zip_write(
+    zip: &mut ZipWriter<File>,
+    name: &str,
+    body: &[u8],
+    opts: SimpleFileOptions,
+    output: &Path,
+) -> Result<(), ProjectIoError> {
+    zip.start_file(name, opts).map_err(|e| ProjectIoError::Json {
+        path: output.into(),
+        message: format!("start_file {name}: {e}"),
+    })?;
+    zip.write_all(body).map_err(|e| ProjectIoError::Io {
+        path: output.into(),
+        source: e,
+    })?;
+    Ok(())
 }
 
-// Silence the `Transform` unused-import warning when only the
-// fn pointer above is gated by `#[allow(dead_code)]`.
-#[allow(dead_code)]
-fn _force_transform_import_used(t: Transform) -> Transform {
-    t
+fn read_zip_entry<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str) -> Option<Vec<u8>> {
+    let mut f = zip.by_name(name).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
+
+// ── geometry blob ──────────────────────────────────────────────
+//
+// One per mesh, serialized with postcard (compact binary serde). Borrowed
+// shape for writing (no buffer copy), owned for reading.
+
+#[derive(Serialize)]
+struct GeometryBlobRef<'a> {
+    vertices: &'a [f32],
+    normals: &'a [f32],
+    indices: &'a [u32],
+    paint_colors: &'a Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct GeometryBlob {
+    vertices: Vec<f32>,
+    normals: Vec<f32>,
+    indices: Vec<u32>,
+    paint_colors: Option<Vec<String>>,
+}
+
+fn pack_geometry(m: &Mesh) -> Result<Vec<u8>, postcard::Error> {
+    postcard::to_allocvec(&GeometryBlobRef {
+        vertices: &m.vertices,
+        normals: &m.normals,
+        indices: &m.indices,
+        paint_colors: &m.paint_colors,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::printer::profile::BoundingBox;
-    use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
+    use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject, ObjectId};
+    use crate::core::scene::transform::Transform;
 
-    fn tempfile_3mf() -> PathBuf {
-        let dir = std::env::temp_dir();
-        dir.join(format!(
-            "n3o-project-test-{}.3mf",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
-        ))
+    fn tmp() -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("n3o-fmt-{}-{nanos}.n3o", std::process::id()))
     }
 
     fn triangle() -> NewMesh {
         NewMesh {
-            vertices: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            vertices: vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0],
             normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             indices: vec![0, 1, 2],
             paint_colors: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
-                max: [1.0, 1.0, 0.0],
+                max: [10.0, 10.0, 0.0],
             },
-            provenance: MeshProvenance::Primitive("triangle".into()),
+            provenance: MeshProvenance::Primitive("tri".into()),
         }
     }
 
-    /// A triangle whose first vertex x encodes `marker`, so a test can
-    /// detect geometry landing on the wrong MeshId after a round-trip.
     fn marked_triangle(marker: f32) -> NewMesh {
         let mut t = triangle();
         t.vertices[0] = marker;
@@ -487,411 +317,255 @@ mod tests {
     }
 
     #[test]
-    fn round_trip_keeps_each_meshs_geometry_on_its_own_id() {
-        // Regression: `write_project` emitted geometry in `objects.values()`
-        // (HashMap, randomized per process) order while `read_project` re-zips
-        // the loaded buffers onto sorted MeshIds. A multi-mesh project
-        // therefore scrambled geometry onto the wrong MeshId whenever the two
-        // orders differed — intermittently, since the HashMap reseeds per
-        // process ("sometimes the layout is messed up after a recovery save").
+    fn pack_unpack_geometry_round_trips() {
         let mut p = Project::default();
-        let mut expected: Vec<(MeshId, f32)> = Vec::new();
-        for i in 0..6u32 {
-            let marker = (i as f32 + 1.0) * 10.0;
-            let mesh_id = p.register_mesh(marked_triangle(marker));
-            p.register_object(NewSceneObject::at_origin(mesh_id, &format!("obj{i}")));
-            expected.push((mesh_id, marker));
-        }
-
-        let path = tempfile_3mf();
-        write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
-
-        assert_eq!(parsed.meshes.len(), 6);
-        for (mesh_id, marker) in expected {
-            let m = parsed.meshes.get(&mesh_id).expect("mesh preserved by id");
-            assert_eq!(
-                m.vertices[0], marker,
-                "mesh {} received another mesh's geometry — scrambled order",
-                mesh_id.0,
-            );
-        }
-        std::fs::remove_file(&path).ok();
+        let mut nm = triangle();
+        nm.paint_colors = Some(vec!["".into(), "3".into(), "12".into()]);
+        let id = p.register_mesh(nm);
+        let blob = pack_geometry(&p.meshes[&id]).expect("pack");
+        let g: GeometryBlob = postcard::from_bytes(&blob).expect("unpack");
+        assert_eq!(g.vertices, p.meshes[&id].vertices);
+        assert_eq!(g.normals, p.meshes[&id].normals);
+        assert_eq!(g.indices, p.meshes[&id].indices);
+        assert_eq!(g.paint_colors, Some(vec!["".into(), "3".into(), "12".into()]));
+        // truncated blob is a clean error, not a panic.
+        assert!(postcard::from_bytes::<GeometryBlob>(&blob[..3]).is_err());
     }
-
-    #[test]
-    fn round_trip_handles_shared_mesh_duplicated_object() {
-        // Regression: two objects sharing one mesh (a duplicated-object
-        // shape) used to fail read_project with GeometryMismatch — the writer
-        // emits one mesh resource per object, but the reader checked the
-        // *distinct* mesh count. The reader now reconstructs the per-object
-        // MeshId sequence, so a shared mesh round-trips.
-        let mut p = Project::default();
-        let mesh_id = p.register_mesh(marked_triangle(77.0));
-        p.register_object(NewSceneObject::at_origin(mesh_id, "orig"));
-        p.register_object(NewSceneObject::at_origin(mesh_id, "copy"));
-
-        let path = tempfile_3mf();
-        write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("shared-mesh project round-trips");
-
-        assert_eq!(parsed.meshes.len(), 1, "still one distinct mesh");
-        assert_eq!(
-            parsed.plates[0].scene.objects.len(),
-            2,
-            "both objects survive"
-        );
-        assert_eq!(
-            parsed
-                .meshes
-                .get(&mesh_id)
-                .expect("shared mesh preserved")
-                .vertices[0],
-            77.0,
-            "shared geometry buffer round-trips",
-        );
-        for obj in parsed.plates[0].scene.objects.values() {
-            assert_eq!(
-                obj.mesh, mesh_id,
-                "both objects still reference the one mesh"
-            );
-        }
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn round_trip_mixed_shared_and_distinct_meshes() {
-        // Mesh A shared by 2 objects, B by 1, C by 3 — six objects, three
-        // distinct meshes with multiplicity. Exercises the per-object ordering
-        // + zip: each marker must land on its own MeshId.
-        let mut p = Project::default();
-        let a = p.register_mesh(marked_triangle(1.0));
-        let b = p.register_mesh(marked_triangle(2.0));
-        let c = p.register_mesh(marked_triangle(3.0));
-        for (m, n) in [(a, 2u32), (b, 1), (c, 3)] {
-            for _ in 0..n {
-                p.register_object(NewSceneObject::at_origin(m, "o"));
-            }
-        }
-
-        let path = tempfile_3mf();
-        write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
-
-        assert_eq!(parsed.meshes.len(), 3);
-        assert_eq!(parsed.plates[0].scene.objects.len(), 6);
-        assert_eq!(parsed.meshes.get(&a).unwrap().vertices[0], 1.0);
-        assert_eq!(parsed.meshes.get(&b).unwrap().vertices[0], 2.0);
-        assert_eq!(parsed.meshes.get(&c).unwrap().vertices[0], 3.0);
-        std::fs::remove_file(&path).ok();
-    }
-
-    const A1_MINI_INSTANCE: &str = "bambi";
-    const U1_INSTANCE: &str = "snappy";
 
     #[test]
     fn round_trip_minimal_default_project() {
         let p = Project::default();
-        let path = tempfile_3mf();
+        let path = tmp();
         write_project(&p, &path).expect("write");
         let parsed = read_project(&path).expect("read");
         assert_eq!(parsed.plates.len(), 1);
+        assert_eq!(parsed.uuid, p.uuid);
         assert_eq!(parsed.source_path, Some(path.clone()));
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn derived_and_transient_state_is_not_serialized_and_build_is_stamped() {
-        // Format-finalization decisions (PR-9-5): derived state (bed +
-        // exclusion zones), transient UI state (selection), and the
-        // re-stamped-on-load source_path must NOT appear in the JSON; the
-        // writing build's name + version must.
-        let p = Project::default();
-        let path = tempfile_3mf();
-        write_project(&p, &path).expect("write");
-        let raw = read_3mf_extra_entry(&path, METADATA_FILENAME)
-            .expect("read entry")
-            .expect("n3o_project.json present");
-        let json = String::from_utf8(raw).expect("utf8");
-
-        for absent in [
-            "\"bed\"",
-            "\"exclusion_zones\"",
-            "\"selection\"",
-            "\"source_path\"",
-        ] {
-            assert!(
-                !json.contains(absent),
-                "{absent} is derived/transient and must not be persisted",
-            );
-        }
-        assert!(json.contains("\"app_name\""), "writer name must be stamped");
-        assert!(
-            json.contains(env!("CARGO_PKG_VERSION")),
-            "writer version must be stamped",
-        );
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn round_trip_preserves_plate_metadata_and_bindings() {
+    fn round_trip_geometry_buffers_and_paint() {
         let mut p = Project::default();
-        p.user_overrides.insert("travel_speed".into(), "300".into());
-        p.file_metadata
-            .insert("Title".into(), "Fixture Project".into());
-        // Plate 0: printer + bindings + project override.
-        p.plates[0].set_printer(Some(A1_MINI_INSTANCE.into()), None);
-        p.plates[0]
-            .project_overrides
-            .insert("layer_height".into(), "0.12".into());
-        // Add a second plate so the list-shape survives.
-        p.add_plate(None);
+        let mut nm = triangle();
+        nm.paint_colors = Some(vec!["4".into()]);
+        let mesh_id = p.register_mesh(nm);
+        let obj = p.register_object(NewSceneObject::at_origin(mesh_id, "tri"));
 
-        let path = tempfile_3mf();
+        let path = tmp();
         write_project(&p, &path).expect("write");
         let parsed = read_project(&path).expect("read");
 
-        assert_eq!(
-            parsed
-                .user_overrides
-                .get("travel_speed")
-                .map(|s| s.as_str()),
-            Some("300"),
-        );
-        assert_eq!(
-            parsed.file_metadata.get("Title").map(|s| s.as_str()),
-            Some("Fixture Project"),
-        );
-        assert_eq!(parsed.plates.len(), 2);
-        assert_eq!(
-            parsed.plates[0].printer_instance_id(),
-            Some(A1_MINI_INSTANCE),
-        );
-        assert_eq!(
-            parsed.plates[0]
-                .project_overrides
-                .get("layer_height")
-                .map(|s| s.as_str()),
-            Some("0.12"),
-        );
+        // Ids are stable across save/load — resolve directly.
+        assert!(parsed.plates[0].scene.objects.contains_key(&obj));
+        let m = &parsed.meshes[&mesh_id];
+        assert_eq!(m.vertices.len(), 9);
+        assert_eq!(m.indices, vec![0, 1, 2]);
+        assert_eq!(m.paint_colors, Some(vec!["4".into()]));
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn round_trip_preserves_geometry() {
+    fn round_trip_shared_mesh_stays_shared() {
         let mut p = Project::default();
-        let mesh_id = p.register_mesh(triangle());
-        let _obj = p.register_object(NewSceneObject::at_origin(mesh_id, "tri"));
+        let mesh_id = p.register_mesh(marked_triangle(77.0));
+        let a = p.register_object(NewSceneObject::at_origin(mesh_id, "orig"));
+        let b = p.register_object(NewSceneObject::at_origin(mesh_id, "copy"));
 
-        let path = tempfile_3mf();
+        let path = tmp();
         write_project(&p, &path).expect("write");
         let parsed = read_project(&path).expect("read");
 
-        assert_eq!(parsed.meshes.len(), 1);
-        let m = parsed.meshes.get(&mesh_id).expect("mesh preserved by id");
-        assert_eq!(m.vertices.len(), 9, "vertex buffer round-trips");
-        assert_eq!(m.indices.len(), 3);
-        assert_eq!(
-            parsed.plates[0].scene.objects.len(),
-            1,
-            "object preserved on plate 0",
-        );
-        let obj = parsed.plates[0].scene.objects.values().next().unwrap();
-        assert_eq!(obj.mesh, mesh_id, "mesh reference preserved");
+        assert_eq!(parsed.meshes.len(), 1, "one distinct mesh, one blob");
+        assert_eq!(parsed.plates[0].scene.objects[&a].mesh, mesh_id);
+        assert_eq!(parsed.plates[0].scene.objects[&b].mesh, mesh_id);
+        assert_eq!(parsed.meshes[&mesh_id].vertices[0], 77.0);
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn round_trip_preserves_mmu_paint() {
-        // MMU paint is #[serde(skip)] — it travels with the geometry in the
-        // 3MF, not the JSON. A painted triangle carries a non-empty paint
-        // string (the opaque BBS TriangleSelector encoding); the save path
-        // must carry it through or a save/reopen silently drops all painting.
-        let mut p = Project::default();
-        let mut mesh = triangle();
-        mesh.paint_colors = Some(vec!["4".to_string()]);
-        let mesh_id = p.register_mesh(mesh);
-        let _obj = p.register_object(NewSceneObject::at_origin(mesh_id, "painted"));
-
-        let path = tempfile_3mf();
-        write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
-
-        let m = parsed.meshes.get(&mesh_id).expect("mesh preserved by id");
-        assert_eq!(
-            m.paint_colors,
-            Some(vec!["4".to_string()]),
-            "MMU paint must survive a save/reopen round-trip",
-        );
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn round_trip_preserves_object_overrides() {
+    fn round_trip_object_overrides() {
+        // Overrides serialize directly in project.json (logical keys) — no gate,
+        // no FFI, ids stable.
         let mut p = Project::default();
         let mesh_id = p.register_mesh(triangle());
         let obj = p.register_object(NewSceneObject::at_origin(mesh_id, "tri"));
-        let active_id = p.active_plate().id;
-        p.object_override_set(active_id, obj, "layer_height".into(), "0.10".into())
+        let plate = p.active_plate().id;
+        p.object_override_set(plate, obj, "layer_height".into(), "0.10".into())
             .unwrap();
 
-        let path = tempfile_3mf();
+        let path = tmp();
         write_project(&p, &path).expect("write");
         let parsed = read_project(&path).expect("read");
-        let overrides = parsed.plates[0]
-            .scene
-            .object_overrides
-            .get(&obj)
-            .expect("overrides preserved");
-        assert_eq!(overrides["layer_height"], "0.10");
+
+        assert_eq!(
+            parsed.plates[0].scene.object_overrides[&obj]["layer_height"],
+            "0.10",
+        );
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn round_trip_preserves_active_plate_index() {
-        let mut p = Project::default();
-        let (id_b, _) = p.add_plate(None);
-        p.set_active_plate(id_b).unwrap();
-
-        let path = tempfile_3mf();
-        write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
-        assert_eq!(parsed.active_plate, 1);
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn round_trip_preserves_uuid() {
-        let p = Project::default();
-        let path = tempfile_3mf();
-        write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
-        assert_eq!(parsed.uuid, p.uuid);
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn round_trip_preserves_object_groups_and_names() {
-        // A named, multi-member group must survive save/reopen: both members
-        // keep the same GroupId and the group's name round-trips. Guards the
-        // GroupId(Uuid) on-disk shape (PR-9-5 item 6) — the `group` field and
-        // the `groups` map (a HashMap keyed by a UUID newtype) serialize and
-        // reload intact.
+    fn round_trip_groups_and_names() {
         let mut p = Project::default();
         let mesh_id = p.register_mesh(triangle());
         let a = p.register_object(NewSceneObject::at_origin(mesh_id, "lower"));
         let b = p.register_object(NewSceneObject::at_origin(mesh_id, "upper"));
-        p.group_objects(&[a, b], "Bracket".into()).expect("group");
-        let gid = p.active_plate().scene.objects[&a]
-            .group
-            .expect("a is grouped");
+        p.group_objects(&[a, b], "Bracket".into()).unwrap();
+        let gid = p.active_plate().scene.objects[&a].group.unwrap();
 
-        let path = tempfile_3mf();
+        let path = tmp();
         write_project(&p, &path).expect("write");
         let parsed = read_project(&path).expect("read");
 
         let plate = &parsed.plates[0];
-        assert_eq!(
-            plate.scene.objects[&a].group,
-            Some(gid),
-            "member a keeps its group id across a round-trip",
-        );
-        assert_eq!(
-            plate.scene.objects[&b].group,
-            Some(gid),
-            "member b still shares the same group id",
-        );
-        assert_eq!(
-            plate.scene.groups.get(&gid).map(|g| g.name.as_str()),
-            Some("Bracket"),
-            "group name round-trips via the groups map",
-        );
+        assert_eq!(plate.scene.objects[&a].group, Some(gid));
+        assert_eq!(plate.scene.objects[&b].group, Some(gid));
+        assert_eq!(plate.scene.groups[&gid].name, "Bracket");
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn read_project_rejects_3mf_without_metadata() {
-        // Write a plain 3MF (no n3o_project.json) and confirm
-        // read_project says NotAProjectFile.
+    fn round_trip_visibility() {
+        let mut p = Project::default();
+        let m = p.register_mesh(triangle());
+        let shown = p.register_object(NewSceneObject::at_origin(m, "shown"));
+        let hidden = p.register_object(NewSceneObject::at_origin(m, "hidden"));
+        p.plates[0].scene.objects.get_mut(&hidden).unwrap().visible = false;
+
+        let path = tmp();
+        write_project(&p, &path).expect("write");
+        let parsed = read_project(&path).expect("read");
+
+        assert!(parsed.plates[0].scene.objects[&shown].visible);
+        assert!(!parsed.plates[0].scene.objects[&hidden].visible);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn round_trip_multi_plate_and_bindings() {
+        let mut p = Project::default();
+        p.user_overrides.insert("travel_speed".into(), "300".into());
+        p.file_metadata.insert("Title".into(), "Fixture".into());
+        p.plates[0].set_printer(Some("bambi".into()), None);
+        p.plates[0]
+            .project_overrides
+            .insert("layer_height".into(), "0.12".into());
+        let m = p.register_mesh(triangle());
+        p.register_object(NewSceneObject::at_origin(m, "on1"));
+        let (id2, _) = p.add_plate(None);
+        p.set_active_plate(id2).unwrap();
+        p.register_object(NewSceneObject::at_origin(m, "on2"));
+        p.set_active_plate(p.plates[0].id).unwrap();
+
+        let path = tmp();
+        write_project(&p, &path).expect("write");
+        let parsed = read_project(&path).expect("read");
+
+        assert_eq!(parsed.plates.len(), 2);
+        assert_eq!(parsed.active_plate, 0);
+        assert_eq!(parsed.plates[0].scene.objects.len(), 1);
+        assert_eq!(parsed.plates[1].scene.objects.len(), 1);
+        assert_eq!(parsed.plates[0].printer_instance_id(), Some("bambi"));
+        assert_eq!(parsed.plates[0].project_overrides["layer_height"], "0.12");
+        assert_eq!(parsed.user_overrides["travel_speed"], "300");
+        assert_eq!(parsed.file_metadata["Title"], "Fixture");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn derived_and_transient_state_not_in_project_json() {
+        let p = Project::default();
+        let path = tmp();
+        write_project(&p, &path).expect("write");
+        let file = File::open(&path).unwrap();
+        let mut zip = ZipArchive::new(file).unwrap();
+        let raw = read_zip_entry(&mut zip, PROJECT_ENTRY).unwrap();
+        let json = String::from_utf8(raw).unwrap();
+        for absent in ["\"bed\"", "\"exclusion_zones\"", "\"selection\"", "\"source_path\""] {
+            assert!(!json.contains(absent), "{absent} must not be persisted");
+        }
+        assert!(json.contains("\"format_version\""));
+        assert!(json.contains(env!("CARGO_PKG_VERSION")));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn read_project_flags_a_foreign_3mf() {
         use crate::core::threemf::write_3mf;
-        let path = tempfile_3mf();
-        let project_3mf = project_from_objects(vec![], vec![], BTreeMap::new());
-        write_3mf(&project_3mf, &path).expect("write plain 3mf");
+        // A plain 3MF (no project.json) → ForeignProject so the UI routes it to
+        // the importer.
+        let proj3mf = crate::core::threemf::project_from_objects(
+            vec![triangle()],
+            vec![crate::core::threemf::ProjectObject {
+                mesh_idx: 0,
+                transform: Transform::IDENTITY,
+                name: "x".into(),
+                extruder_id: None,
+                plate_id: 1,
+                group: None,
+                overrides: Default::default(),
+            }],
+            std::collections::BTreeMap::new(),
+        );
+        let path = tmp();
+        write_3mf(&proj3mf, &path).expect("write 3mf");
+        let err = read_project(&path).unwrap_err();
+        assert!(matches!(err, ProjectIoError::ForeignProject { .. }), "got {err:?}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn read_project_rejects_non_zip() {
+        let path = tmp();
+        std::fs::write(&path, b"not a zip").unwrap();
         let err = read_project(&path).unwrap_err();
         assert!(matches!(err, ProjectIoError::NotAProjectFile { .. }));
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn read_project_flags_a_foreign_orca_project() {
-        // An OrcaSlicer/BBS project (project_settings.config, no
-        // n3o_project.json) is distinguished from "not a project" so the
-        // UI can point at the importer. fourcolor.3mf is such a file.
-        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("examples/spike3/fourcolor.3mf");
-        let err = read_project(&fixture).unwrap_err();
-        assert!(
-            matches!(err, ProjectIoError::ForeignProject { .. }),
-            "expected ForeignProject, got {err:?}",
-        );
-        // And the message names OrcaSlicer (the whole point).
-        assert!(err.to_string().contains("OrcaSlicer"));
-    }
-
-    #[test]
     fn read_project_rejects_schema_mismatch() {
-        // Hand-craft a project file with a wrong format_version
-        // and confirm SchemaMismatch fires.
-        let p = Project::default();
-        let path = tempfile_3mf();
-        write_project(&p, &path).expect("write");
-        // Re-write with a tampered version field.
-        let body = serde_json::to_string(&serde_json::json!({
+        // A container whose project.json declares a future version.
+        let body = serde_json::to_vec(&serde_json::json!({
             "format_version": "999",
-            "project": p,
+            "project": Project::default(),
         }))
         .unwrap();
-        let mut extras = BTreeMap::new();
-        extras.insert(METADATA_FILENAME.into(), body);
-        let project_3mf = project_from_objects(vec![], vec![], BTreeMap::new());
-        write_3mf_with_extras(&project_3mf, &extras, &path).expect("rewrite");
+        let path = tmp();
+        {
+            let f = File::create(&path).unwrap();
+            let mut zip = ZipWriter::new(f);
+            let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            zip.start_file(PROJECT_ENTRY, opts).unwrap();
+            zip.write_all(&body).unwrap();
+            zip.finish().unwrap();
+        }
         let err = read_project(&path).unwrap_err();
         assert!(matches!(err, ProjectIoError::SchemaMismatch { .. }));
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn write_then_overwrite_clobbers_existing_file() {
+    fn write_then_overwrite_clobbers() {
         let p = Project::default();
-        let path = tempfile_3mf();
+        let path = tmp();
         write_project(&p, &path).expect("write 1");
         write_project(&p, &path).expect("write 2");
-        let _ = read_project(&path).expect("read");
+        read_project(&path).expect("read");
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn round_trip_three_plate_fixture_per_ticket_spec() {
-        // 3 plates, one bound to each of two printers, per-plate
-        // metadata, material bindings. Verifies the full save/load
-        // shape end-to-end.
+    fn load_keeps_object_ids_stable() {
         let mut p = Project::default();
-        p.plates[0].set_printer(Some(A1_MINI_INSTANCE.into()), None);
-        let (_b, _) = p.add_plate(Some(U1_INSTANCE.into()));
-        let (_c, _) = p.add_plate(Some(U1_INSTANCE.into()));
-
-        let path = tempfile_3mf();
+        let m = p.register_mesh(triangle());
+        let a = p.register_object(NewSceneObject::at_origin(m, "a"));
+        let _ = ObjectId(0); // import sanity
+        let path = tmp();
         write_project(&p, &path).expect("write");
         let parsed = read_project(&path).expect("read");
-        assert_eq!(parsed.plates.len(), 3);
-        let instances: Vec<&str> = parsed
-            .plates
-            .iter()
-            .map(|pl| pl.printer_instance_id().unwrap_or("<unbound>"))
-            .collect();
-        assert_eq!(instances, vec![A1_MINI_INSTANCE, U1_INSTANCE, U1_INSTANCE],);
+        assert!(parsed.plates[0].scene.objects.contains_key(&a), "object id is stable");
         std::fs::remove_file(&path).ok();
     }
 }
