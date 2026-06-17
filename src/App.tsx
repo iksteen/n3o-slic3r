@@ -17,11 +17,8 @@ import {
 } from "./project/AutosaveRecoveryDialog";
 import { autosaveEnable } from "./project/autosaveCommands";
 import { projectNew, projectLoad, projectSave, projectSaveAs } from "./project/projectFile";
-import {
-  open as openDialog,
-  save as saveDialog,
-  message as messageDialog,
-} from "@tauri-apps/plugin-dialog";
+import { message as messageDialog } from "@tauri-apps/plugin-dialog";
+import { openFile, saveFile } from "./ui/fileDialog";
 import { onEvents } from "./state/eventRouter";
 import { PROJECT_REPLACED_EVENTS } from "./project/editEvents";
 import { SettingsPanelHost } from "./settings/SettingsPanelHost";
@@ -417,8 +414,8 @@ function App() {
 
   const handleOpenProject = async (): Promise<void> => {
     try {
-      const picked = await openDialog({ multiple: false, filters: openFilters });
-      if (typeof picked !== "string") return; // cancelled
+      const picked = await openFile({ filters: openFilters });
+      if (picked == null) return; // cancelled
       await projectLoad(picked); // → project:loaded → session refetch
     } catch (err) {
       reportProjectError("Open project", err);
@@ -427,12 +424,12 @@ function App() {
 
   const handleSaveProjectAs = async (): Promise<void> => {
     try {
-      const picked = await saveDialog({
+      const picked = await saveFile({
         title: "Save project as",
         defaultPath: projectName,
         filters: saveFilters,
       });
-      if (typeof picked !== "string") return; // cancelled
+      if (picked == null) return; // cancelled
       await projectSaveAs(picked); // adopts the new source_path
     } catch (err) {
       reportProjectError("Save project as", err);

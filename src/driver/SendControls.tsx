@@ -9,7 +9,7 @@
 // controls send the active plate's last slice to its bound printer.
 
 import { useEffect, useState } from "react";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { saveFile } from "../ui/fileDialog";
 import { driverExportPlate, driverSendPlate } from "./invokes";
 import { captureThumbnail } from "../viewport/thumbnailCapture";
 import { pushLog } from "../logging/logStore";
@@ -171,11 +171,11 @@ export function SendControls({
     setActionPending(true);
     try {
       // Mirror the backend's combined basename: project title (the file
-      // name minus its `.3mf`) + the plate's name. User can override.
-      const projectTitle = projectName.replace(/\.3mf$/i, "");
+      // name minus its `.n3o`) + the plate's name. User can override.
+      const projectTitle = projectName.replace(/\.n3o$/i, "");
       const plateTitle = plateName ?? `Plate ${plateId}`;
       const defaultName = `${sanitizeBasename(projectTitle)}_${sanitizeBasename(plateTitle)}.gcode.3mf`;
-      const path = await saveDialog({
+      const path = await saveFile({
         title: "Export .gcode.3mf",
         defaultPath: defaultName,
         filters: [{ name: "Bambu sliced bundle", extensions: ["gcode.3mf"] }],

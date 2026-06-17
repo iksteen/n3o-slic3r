@@ -7,6 +7,7 @@
 //! our module tree.
 
 pub mod core;
+mod dialog;
 
 use std::sync::{Arc, Mutex};
 
@@ -248,6 +249,8 @@ pub fn run() {
             core::plugin::commands::plugin_set_global_enabled,
             core::plugin::commands::plugin_set_global_setting,
             core::plugin::commands::plugin_reload,
+            dialog::dialog_open_file,
+            dialog::dialog_save_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

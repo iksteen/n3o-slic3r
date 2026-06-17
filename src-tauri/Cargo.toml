@@ -103,6 +103,19 @@ mlua = { version = "0.11", features = ["lua54", "vendored", "send"] }
 # manifest's `version` parses as semver; the string is stored verbatim.
 semver = "1"
 
+# File open/save dialogs. On Linux the flatpak sandbox's
+# xdg-desktop-portal is unreliable (fails when logind marks the
+# graphical session inactive), so we drive GTK's in-process
+# FileChooserDialog directly — it browses the `--filesystem=home` mount
+# without the portal. Pinned to 0.18 to share tao/wry's already-linked
+# GTK3 (gtk 0.18.2 in the lockfile); a second gtk-sys would fail to link.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
+# macOS/Windows have no portal indirection; rfd gives the native dialog.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+rfd = "0.16"
+
 [dev-dependencies]
 # HTTP/WebSocket fixture servers for the U1 driver unit tests
 # (PR-7b-*). Pinned to wiremock's tokio-1 compatibility.

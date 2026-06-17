@@ -4,7 +4,7 @@
 // snapshot it refetches on the emitted scene events.
 
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openFile } from "../ui/fileDialog";
 import type { ObjectId, MeshId, PlateId, GroupId } from "../viewport/types";
 import type { SlotRef } from "../printer/printerInstance";
 
@@ -42,11 +42,10 @@ export async function addPrimitive(kind: PrimitiveKind): Promise<ObjectId> {
  *  project settings (that's the separate "open project" import).
  *  Cancelling is a no-op. */
 export async function loadModelFromDialog(): Promise<void> {
-  const path = await openDialog({
-    multiple: false,
+  const path = await openFile({
     filters: [{ name: "Model", extensions: ["stl", "obj", "3mf"] }],
   });
-  if (typeof path !== "string") return; // cancelled
+  if (path == null) return; // cancelled
   if (path.toLowerCase().endsWith(".3mf")) {
     // Geometry-only import — multiple objects, no single one to select.
     await invoke("scene_load_3mf", { path });
