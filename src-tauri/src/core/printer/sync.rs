@@ -483,6 +483,7 @@ mod tests {
                 nozzle_temp: 220,
                 bed_temp: 60,
                 filament_id: Some("GFA00".into()),
+                edited: false,
             },
             // Specialty PLA variants placed *before* generic-pla so
             // the test catches the "first vendor+base_type match
@@ -497,6 +498,7 @@ mod tests {
                 // Shares the PLA generic sentinel with plain generic-pla
                 // — the printer can't tell silk from plain.
                 filament_id: Some("GFL99".into()),
+                edited: false,
             },
             FilamentFragmentSummary {
                 identity: "generic-pla-cf".into(),
@@ -506,6 +508,7 @@ mod tests {
                 nozzle_temp: 240,
                 bed_temp: 65,
                 filament_id: None,
+                edited: false,
             },
             // Shares the generic `GFL99` sentinel with `generic-pla`
             // (in the real bundle ~19 fragments do) and is placed
@@ -519,6 +522,7 @@ mod tests {
                 nozzle_temp: 220,
                 bed_temp: 60,
                 filament_id: Some("GFL99".into()),
+                edited: false,
             },
             FilamentFragmentSummary {
                 identity: "generic-pla".into(),
@@ -528,6 +532,7 @@ mod tests {
                 nozzle_temp: 210,
                 bed_temp: 60,
                 filament_id: Some("GFL99".into()),
+                edited: false,
             },
             FilamentFragmentSummary {
                 identity: "generic-petg".into(),
@@ -537,6 +542,7 @@ mod tests {
                 nozzle_temp: 240,
                 bed_temp: 80,
                 filament_id: None,
+                edited: false,
             },
             // Specialty-only family — no plain `generic-pa`. Used
             // by the "no base variant" test below.
@@ -548,6 +554,7 @@ mod tests {
                 nozzle_temp: 295,
                 bed_temp: 100,
                 filament_id: None,
+                edited: false,
             },
         ]
     }

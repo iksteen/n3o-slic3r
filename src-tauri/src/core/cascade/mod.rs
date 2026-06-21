@@ -525,6 +525,73 @@ pub fn slicer_extruder_options_for_printer(
         .collect()
 }
 
+/// Filament-settings-visible options: the **Filament** bucket, minus
+/// readonly + SLA keys, keeping only keys Orca actually lays out an editor
+/// for (`filament_page_of` is `Some`). Like the printer surfaces, filament
+/// options carry no libslic3r `category` of their own — their grouping is
+/// scraped from `TabFilament` — so this both filters (drops metadata like
+/// `compatible_printers` / `filament_settings_id` with no editor) and is
+/// the source of the page/optgroup grouping applied in
+/// [`filament_option_summaries`].
+///
+/// Filament keys are stored per-filament *vectors* in libslic3r but the
+/// editor edits a single filament, so the frontend renders each as its
+/// scalar element (`scalarElementKind`). The override we persist is the
+/// scalar value the composer zips into the vector at compose time.
+fn is_filament_visible(d: &slic3r_ffi::OptionDef) -> bool {
+    d.bucket == Some(slic3r_ffi::OptBucket::Filament)
+        && !d.readonly
+        && !d.scope.is_sla()
+        && slic3r_ffi::filament_page_of(&d.key).is_some()
+}
+
+fn filament_option_summaries(filter: Option<String>) -> Vec<OptionSummary> {
+    let needle = filter.unwrap_or_default().to_lowercase();
+    let mut out: Vec<OptionSummary> = option_defs()
+        .into_iter()
+        .filter(is_filament_visible)
+        .filter(|d| matches_filter(d, &needle))
+        .map(summary_from_def)
+        // Filament options carry no libslic3r category; use the scraped
+        // TabFilament page as the nav category and the optgroup as the
+        // sub-header (same shape the machine panel uses for printer keys).
+        .map(|mut s| {
+            s.category = slic3r_ffi::filament_page_of(&s.key).map(str::to_owned);
+            s.group = slic3r_ffi::filament_subgroup_of(&s.key).map(str::to_owned);
+            // Disambiguate keys whose libslic3r label is generic ("Other
+            // layers" / "First layer") by prefixing the multi-option line
+            // label Orca lays them out under (the plate type for bed temps,
+            // "Nozzle" for print temps) — otherwise the bed-temperature
+            // section is a wall of identical labels.
+            if let Some(line) = slic3r_ffi::filament_line_of(&s.key) {
+                let label = s.label.as_deref().unwrap_or("");
+                if label != line {
+                    s.label = Some(format!("{line} · {label}"));
+                }
+            }
+            s
+        })
+        .collect();
+    sort_by_display_order(&mut out, |s| &s.key);
+    out
+}
+
+/// Filament-bucket option summaries for the filament settings editor.
+/// Not printer-gated — a user filament isn't bound to a printer — so the
+/// `PrinterAwareOptionSummary` shape carries `hidden = false` throughout
+/// (keeps the frontend `categorize()` + section components shared with the
+/// machine panel without a separate non-printer-aware path).
+#[tauri::command]
+pub fn slicer_filament_options(filter: Option<String>) -> Vec<PrinterAwareOptionSummary> {
+    filament_option_summaries(filter)
+        .into_iter()
+        .map(|summary| PrinterAwareOptionSummary {
+            summary,
+            hidden: false,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -545,6 +612,37 @@ mod tests {
     /// class, so nothing reads it and any override is inert. `is_panel_
     /// visible` filters these out; this guards that it keeps doing so (and
     /// that a real option like `layer_height` still shows).
+    #[test]
+    fn filament_panel_surfaces_filament_bucket_only() {
+        ensure_ffi();
+        let keys: Vec<String> = filament_option_summaries(None)
+            .into_iter()
+            .map(|s| s.key)
+            .collect();
+        // Real, editable filament settings are present...
+        for expect in ["nozzle_temperature", "filament_flow_ratio", "fan_max_speed"] {
+            assert!(
+                keys.iter().any(|k| k == expect),
+                "filament panel missing Filament-bucket `{expect}`",
+            );
+        }
+        // ...Process- and Printer-bucket settings are not...
+        for other in ["layer_height", "gcode_flavor", "nozzle_diameter"] {
+            assert!(
+                !keys.iter().any(|k| k == other),
+                "filament panel must not surface non-filament `{other}`",
+            );
+        }
+        // ...and every surfaced key really is Filament-bucket.
+        for k in &keys {
+            assert_eq!(
+                slic3r_ffi::bucket_of(k),
+                Some(slic3r_ffi::OptBucket::Filament),
+                "`{k}` leaked into the filament panel but isn't Filament-bucket",
+            );
+        }
+    }
+
     #[test]
     fn panel_surfaces_only_fff_settable_options() {
         ensure_ffi();

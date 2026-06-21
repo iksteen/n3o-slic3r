@@ -112,6 +112,17 @@ pub fn run() {
             core::printer::instance_storage::init_root(printers_root);
             tracing::info!("printer instance library initialized");
 
+            // User-owned filament library — editable filaments duplicated
+            // from a bundled fragment. Same writable-root pattern as the
+            // printer instances; first launch starts empty.
+            let filaments_root = app
+                .path()
+                .config_dir()
+                .expect("config_dir")
+                .join("n3o-slic3r/filaments");
+            core::filament::library::init_root(filaments_root);
+            tracing::info!("user filament library initialized");
+
             // Project state is constructed AFTER the storage roots
             // are wired so the bootstrap plate's printer lookup sees
             // the real on-disk library, not a registry pinned to
@@ -153,6 +164,11 @@ pub fn run() {
             core::cascade::slicer_options_for_printer,
             core::cascade::slicer_machine_options_for_printer,
             core::cascade::slicer_extruder_options_for_printer,
+            core::cascade::slicer_filament_options,
+            core::filament::user_filament_get,
+            core::filament::user_filament_revert,
+            core::filament::user_filament_set_override,
+            core::filament::user_filament_resolved_config,
             core::scene::commands::scene_snapshot,
             core::scene::commands::scene_mesh_buffers,
             core::scene::commands::scene_mesh_paint,

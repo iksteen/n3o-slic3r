@@ -538,23 +538,29 @@ fn assemble_filament_vectors(
 ) -> Result<BTreeMap<String, String>, ComposeError> {
     let mut per_filament: Vec<BTreeMap<String, String>> = Vec::new();
     for entry in filaments {
-        let slug = entry
+        let identity = entry
             .slot
             .and_then(|s| s.filament_identity.as_deref())
             .unwrap_or(&instance.default_filament_fragment_slug);
-        let cascade = load_filament_fragment(slug)
-            .ok_or_else(|| ComposeError::UnknownFilamentFragment(slug.to_owned()))?;
+        // A slot may bind a bundled fragment slug OR a user-library
+        // filament id; the latter resolves to its base fragment + the
+        // user's filament-bucket overrides.
+        let (slug, overrides) = resolve_filament_ref(identity);
+        let cascade = load_filament_fragment(&slug)
+            .ok_or_else(|| ComposeError::UnknownFilamentFragment(slug.clone()))?;
         // Resolve against this slot's *complete* context — the global
         // dimensions (printer.model, plate.type) plus this slot's
         // filament.* — so conditional rules in the fragment match
         // whether they key on `when.filament.*` OR `when.printer.model`
         // / `when.plate.type`. Falls through to the unconditional default
         // rule when no filament profile is registered for this slug.
-        let slot_ctx = slot_filament_context(slug, printer_model, plate_type);
-        let scalars: BTreeMap<String, String> = resolve(&cascade, &slot_ctx)
+        let slot_ctx = slot_filament_context(&slug, printer_model, plate_type);
+        let mut scalars: BTreeMap<String, String> = resolve(&cascade, &slot_ctx)
             .into_iter()
             .map(|(k, v)| (k, v.value))
             .collect();
+        // User overrides win over the base fragment's resolved scalars.
+        scalars.extend(overrides);
         per_filament.push(scalars);
     }
 
@@ -667,6 +673,34 @@ fn slot_filament_context(slug: &str, printer_model: &str, plate_type: &str) -> M
         }
     }
     ctx
+}
+
+/// Resolve a slot's `filament_identity` (always a bundled slug) into the
+/// fragment slug to load plus the user overrides to fold on top. When the
+/// user has edited this filament in place, their override profile (keyed by
+/// the same slug) supplies the overrides; otherwise there are none.
+fn resolve_filament_ref(identity: &str) -> (String, BTreeMap<String, String>) {
+    let overrides = filament::library::lookup(identity)
+        .map(|uf| uf.overrides)
+        .unwrap_or_default();
+    (identity.to_owned(), overrides)
+}
+
+/// Resolve a bundled filament fragment's scalar values with no
+/// printer/plate context — the *base* values the filament settings editor
+/// shows beneath any user override. Printer/plate-conditional fragment
+/// rules (the U1 bed-temp block) aren't reflected here; the editor shows
+/// the unconditional + filament-typed base, which is what a per-filament
+/// override is authored against.
+pub fn resolve_base_scalars(slug: &str) -> BTreeMap<String, String> {
+    let Some(cascade) = load_filament_fragment(slug) else {
+        return BTreeMap::new();
+    };
+    let ctx = slot_filament_context(slug, "", "");
+    resolve(&cascade, &ctx)
+        .into_iter()
+        .map(|(k, v)| (k, v.value))
+        .collect()
 }
 
 /// Default per-slot color for unbound slots — Orca's bundled
@@ -1026,6 +1060,38 @@ mod tests {
             v, "200,220",
             "the unset filament must get the engine default (220), not filament 0's 200",
         );
+    }
+
+    #[test]
+    fn user_filament_override_reaches_assembled_vector() {
+        // A slot bound to a bundled slug whose filament the user has edited
+        // in place resolves to the fragment + the user's override; the
+        // override must land at that slot's position in the assembled
+        // per-filament vector.
+        let _registry = RegistryGuard::acquire();
+        let _ = slic3r_ffi::init(None, 3);
+        filament::library::set_override("generic-pla", "nozzle_temperature".into(), Some("250".into()))
+            .expect("generic-pla is bundled");
+
+        let mut bambi = lookup_instance("bambi").expect("bambi present");
+        bambi.extruders[0].slots[0].filament_identity = Some("generic-pla".into());
+        let cascade = compose_cascade(&bambi, &[], &BTreeMap::new()).expect("compose");
+        let fil = cascade
+            .rules
+            .iter()
+            .find(|r| r.source.path.to_str() == Some("<filament-vector-assembly>"))
+            .expect("filament-vector rule present");
+        let joined = fil
+            .set
+            .get("nozzle_temperature")
+            .expect("nozzle_temperature assembled");
+        assert_eq!(
+            joined.split(',').next(),
+            Some("250"),
+            "slot 0's edited-filament override must win, got vector {joined:?}",
+        );
+
+        filament::library::revert("generic-pla");
     }
 
     #[test]

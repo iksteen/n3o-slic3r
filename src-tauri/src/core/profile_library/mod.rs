@@ -47,7 +47,8 @@ use crate::core::printer::profile::PrinterProfile;
 
 pub mod composer;
 pub use composer::{
-    compose_cascade, join_for_key, split_for_key, with_quality_profile, ComposeError,
+    compose_cascade, join_for_key, resolve_base_scalars, split_for_key, with_quality_profile,
+    ComposeError,
 };
 
 /// Errors emitted by [`ProfileLibrary::load`]. The Tauri setup hook
@@ -653,6 +654,12 @@ pub struct FilamentFragmentSummary {
     pub nozzle_temp: u32,
     pub bed_temp: u32,
     pub filament_id: Option<String>,
+    /// True when the user has edited this filament in place (a non-empty
+    /// override profile exists for its slug). The picker shows a Revert
+    /// affordance for edited filaments. Filled in by `filament_profile_list`
+    /// (this layer can't see the user library); `false` here.
+    #[serde(default)]
+    pub edited: bool,
 }
 
 /// Enumerate every bundled vendor filament fragment. Parses the
@@ -730,6 +737,7 @@ pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
                 nozzle_temp,
                 bed_temp,
                 filament_id,
+                edited: false,
             })
         })
         .collect()

@@ -399,7 +399,20 @@ pub fn printer_instance_set_slot_color(
 /// user actually picks from when binding a slot.
 #[tauri::command]
 pub fn filament_profile_list() -> Vec<FilamentFragmentSummary> {
+    // Bundled filaments are edited in place: each keeps its identity, and
+    // carries an `edited` flag when the user has an override profile for it
+    // (which the picker surfaces as a Revert affordance).
+    let edited: std::collections::HashSet<String> = crate::core::filament::library::list()
+        .into_iter()
+        .map(|f| f.base)
+        .collect();
     list_filament_fragments()
+        .into_iter()
+        .map(|mut s| {
+            s.edited = edited.contains(&s.identity);
+            s
+        })
+        .collect()
 }
 
 /// Tauri command: change the process fragment ("Quality" picker)
