@@ -9,5 +9,6 @@ export { NumberInput, type NumberInputProps } from "./NumberInput";
 export { PercentInput, type PercentInputProps } from "./PercentInput";
 export { DropdownInput, type DropdownInputProps } from "./DropdownInput";
 export { ColorInput, type ColorInputProps } from "./ColorInput";
+export { PointInput, type PointInputProps } from "./PointInput";
 
 export * from "./helpers";

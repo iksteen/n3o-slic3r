@@ -68,6 +68,10 @@ export type OptionSummary = {
   ty: string;
   label: string | null;
   category: string | null;
+  /** Optgroup within the category/page — e.g. "Printable space" under
+   *  "Basic information". The printer panel renders these as sub-headers.
+   *  Null for options with no sub-group. */
+  group: string | null;
   default_value: DefaultValue | null;
   /** True for libslic3r options flagged `multiline` — freeform
    *  textareas (start_gcode, end_gcode, the small-area infill flow
@@ -79,6 +83,9 @@ export type OptionSummary = {
    *  directly — no per-key lookup at render time. */
   enum_values: ReadonlyArray<readonly [string, string]>;
   tooltip: string | null;
+  /** Unit suffix (mm, mm/s, %, °C, …) from libslic3r's `sidetext`, shown
+   *  after the input. Null for unitless options. */
+  sidetext: string | null;
   mode: OptMode;
   scope: OptScopeFlags;
   capability: CapabilityPredicate | null;
@@ -160,6 +167,7 @@ export type OptionTypeKind =
   | "vector-string"
   | "vector-enum"
   | "point"
+  | "vector-point"
   | "point3"
   | "unknown";
 
@@ -179,7 +187,7 @@ const TYPE_KIND_MAP: Record<string, OptionTypeKind> = {
   Enum: "enum",
   Enums: "vector-enum",
   Point: "point",
-  Points: "point",
+  Points: "vector-point",
   Point3: "point3",
 };
 
@@ -203,4 +211,13 @@ export function optionTypeKind(opt: OptionSummary): OptionTypeKind {
  *  (PR-4-6) renders the active slot's index only. */
 export function isVectorKind(kind: OptionTypeKind): boolean {
   return kind.startsWith("vector-");
+}
+
+/** The scalar element kind of a vector kind (`vector-float` → `float`),
+ *  for rendering one entry of a per-extruder vector as a scalar input.
+ *  Returns scalar kinds unchanged. */
+export function scalarElementKind(kind: OptionTypeKind): OptionTypeKind {
+  return kind.startsWith("vector-")
+    ? (kind.slice("vector-".length) as OptionTypeKind)
+    : kind;
 }

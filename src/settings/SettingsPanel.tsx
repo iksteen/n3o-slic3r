@@ -27,6 +27,7 @@ import {
   Field,
   NumberInput,
   PercentInput,
+  PointInput,
 } from "./inputs";
 import {
   CategorySidebar,
@@ -845,7 +846,7 @@ function SettingRow({
 }
 
 /** Render a scalar input for a single-value option. */
-function renderScalarInput(
+export function renderScalarInput(
   kind: OptionTypeKind,
   schema: OptionSummary,
   value: string | null,
@@ -870,12 +871,22 @@ function renderScalarInput(
           value={value}
           onChange={onChange}
           disabled={disabled}
+          unit={schema.sidetext}
         />
       );
     case "percent":
     case "float-or-percent":
       return (
         <PercentInput
+          schema={schema}
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+        />
+      );
+    case "point":
+      return (
+        <PointInput
           schema={schema}
           value={value}
           onChange={onChange}
@@ -902,7 +913,6 @@ function renderScalarInput(
         />
       );
     case "string":
-    case "point":
     case "point3":
     case "unknown":
     default:
