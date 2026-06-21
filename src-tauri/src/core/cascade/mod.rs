@@ -213,6 +213,11 @@ pub struct OptionSummary {
     pub ty: String,
     pub label: Option<String>,
     pub category: Option<String>,
+    /// Optgroup within the category (page) — e.g. "Printable space" under
+    /// the "Basic information" page. The printer panel renders these as
+    /// sub-headers within a page. `None` for options with no sub-group
+    /// (Process-panel options, per-extruder keys, unscraped keys).
+    pub group: Option<String>,
     /// Typed default. `None` when libslic3r has no compile-time
     /// default for this option. See [`DefaultValue`] for the wire
     /// shape and why vectors are pre-split server-side.
@@ -230,6 +235,9 @@ pub struct OptionSummary {
     /// libslic3r tooltip text (FR-UI-6, tooltip surface
     /// consumes this).
     pub tooltip: Option<String>,
+    /// Unit suffix shown after the input (mm, mm/s, %, °C, …), from
+    /// libslic3r's `sidetext`. `None` for unitless options.
+    pub sidetext: Option<String>,
     /// Simple / Advanced / Expert / Develop — drives the FR-UI-2
     /// mode filter on the settings panel.
     pub mode: OptMode,
@@ -266,6 +274,7 @@ fn summary_from_def(d: slic3r_ffi::OptionDef) -> OptionSummary {
         .collect();
     OptionSummary {
         capability: capability_for_key(&d.key),
+        group: slic3r_ffi::printer_subgroup_of(&d.key).map(str::to_owned),
         key: d.key,
         ty: format!("{:?}", d.ty),
         label: d.label,
@@ -274,6 +283,7 @@ fn summary_from_def(d: slic3r_ffi::OptionDef) -> OptionSummary {
         multiline: d.multiline,
         enum_values,
         tooltip: d.tooltip,
+        sidetext: d.sidetext,
         mode: d.mode.into(),
         scope: d.scope.into(),
     }
@@ -394,6 +404,127 @@ pub fn slicer_options_for_printer(
     out
 }
 
+/// Machine/printer-settings-visible options: the **Printer** bucket,
+/// minus readonly and SLA-only keys. Unlike [`is_panel_visible`] this is
+/// *not* gated on `is_fff()` — that bitmask covers Print/Object/Region
+/// only, and Printer-bucket options live in the printer preset with no
+/// Process scope, so the guard would drop every one of them.
+fn is_machine_visible(d: &slic3r_ffi::OptionDef) -> bool {
+    if d.bucket != Some(slic3r_ffi::OptBucket::Printer) || d.readonly || d.scope.is_sla() {
+        return false;
+    }
+    // The machine-limits family (libslic3r category "Machine limits"):
+    // always shown, including the per-mode `machine_max_*` vectors (Orca
+    // builds these via `append_option_line` + string concatenation, so they
+    // carry no scraped editor — the category is their signal). Rendered
+    // Normal/Silent.
+    if d.category.as_deref() == Some("Machine limits") {
+        return true;
+    }
+    // Everything else: only scalars/multiline that Orca actually lays out an
+    // editor for (`printer_page_of` is Some). This drops capability flags
+    // (silent_mode, support_*), metadata (printer_model — BBL detection,
+    // printer_variant, default_*), and print-host/network keys (the
+    // Connection section owns those) that are Printer-bucket but not
+    // user-tunable here. Non-machine-limits vectors are per-extruder
+    // (extruder tabs) or per-bed-type (no editor yet).
+    !d.ty.is_vector() && slic3r_ffi::printer_page_of(&d.key).is_some()
+}
+
+fn is_extruder_visible(d: &slic3r_ffi::OptionDef) -> bool {
+    // Per-extruder settings: Printer-bucket keys in libslic3r's per-extruder
+    // set (`is_per_extruder`) that Orca *also* lays out an editor for
+    // (`printer_page_of` is Some). The membership test alone includes keys
+    // whose editor is commented out / handled elsewhere (extruder_colour,
+    // default_filament_profile, nozzle_flush_dataset, …); like the machine
+    // panel we only surface what's actually settable.
+    d.bucket == Some(slic3r_ffi::OptBucket::Printer)
+        && !d.readonly
+        && !d.scope.is_sla()
+        && slic3r_ffi::is_per_extruder(&d.key)
+        && slic3r_ffi::printer_page_of(&d.key).is_some()
+}
+
+/// Shared summary builder for the printer-bucket surfaces. Filters by
+/// `visible`, then overrides each option's `category` with its Orca
+/// `TabPrinter` grouping (`printer_page_of` — page for machine-wide keys,
+/// optgroup for per-extruder keys), since printer options carry no
+/// libslic3r `category` of their own.
+fn printer_bucket_summaries(
+    filter: Option<String>,
+    visible: fn(&slic3r_ffi::OptionDef) -> bool,
+) -> Vec<OptionSummary> {
+    let needle = filter.unwrap_or_default().to_lowercase();
+    let mut out: Vec<OptionSummary> = option_defs()
+        .into_iter()
+        .filter(|d| visible(d))
+        .filter(|d| matches_filter(d, &needle))
+        .map(summary_from_def)
+        .map(|mut s| {
+            // Keep the machine-limits family under libslic3r's "Machine
+            // limits" so the per-mode set groups together; everything else
+            // uses its scraped Orca page/optgroup.
+            if s.category.as_deref() != Some("Machine limits") {
+                if let Some(cat) = slic3r_ffi::printer_page_of(&s.key) {
+                    s.category = Some(cat.to_owned());
+                }
+            }
+            s
+        })
+        .collect();
+    sort_by_display_order(&mut out, |s| &s.key);
+    out
+}
+
+fn machine_option_summaries(filter: Option<String>) -> Vec<OptionSummary> {
+    printer_bucket_summaries(filter, is_machine_visible)
+}
+
+/// Printer-bucket ("machine settings") option summaries, printer-aware —
+/// the [`slicer_options_for_printer`] analogue for the per-printer
+/// settings surface in the printer panel. Capability predicates are
+/// pre-evaluated against the supplied printer, same as the Process panel.
+#[tauri::command]
+#[tracing::instrument(skip(printer))]
+pub fn slicer_machine_options_for_printer(
+    printer: PrinterProfile,
+    filter: Option<String>,
+) -> Vec<PrinterAwareOptionSummary> {
+    machine_option_summaries(filter)
+        .into_iter()
+        .map(|summary| {
+            let hidden = summary
+                .capability
+                .map(|c| !c.satisfied_by(&printer))
+                .unwrap_or(false);
+            PrinterAwareOptionSummary { summary, hidden }
+        })
+        .collect()
+}
+
+/// Per-extruder ("toolhead") Printer-bucket options — the set the printer
+/// panel's per-extruder tabs surface. Same shape as
+/// [`slicer_machine_options_for_printer`]; the frontend renders one tab
+/// per toolhead, showing each option's value at that extruder's vector
+/// index.
+#[tauri::command]
+#[tracing::instrument(skip(printer))]
+pub fn slicer_extruder_options_for_printer(
+    printer: PrinterProfile,
+    filter: Option<String>,
+) -> Vec<PrinterAwareOptionSummary> {
+    printer_bucket_summaries(filter, is_extruder_visible)
+        .into_iter()
+        .map(|summary| {
+            let hidden = summary
+                .capability
+                .map(|c| !c.satisfied_by(&printer))
+                .unwrap_or(false);
+            PrinterAwareOptionSummary { summary, hidden }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,6 +567,81 @@ mod tests {
             !keys.iter().any(|k| k == "ironing_expansion"),
             "the dangling `ironing_expansion` must no longer appear",
         );
+    }
+
+    #[test]
+    fn machine_panel_surfaces_printer_bucket_only() {
+        ensure_ffi();
+        let keys: Vec<String> = machine_option_summaries(None)
+            .into_iter()
+            .map(|s| s.key)
+            .collect();
+        // Scalars + the per-mode machine-limits vectors are present...
+        for expect in [
+            "gcode_flavor",
+            "z_offset",
+            "machine_start_gcode",
+            "machine_max_acceleration_x",
+        ] {
+            assert!(
+                keys.iter().any(|k| k == expect),
+                "machine panel missing Printer-bucket `{expect}`",
+            );
+        }
+        // ...Process-bucket settings are not...
+        assert!(
+            !keys.iter().any(|k| k == "layer_height"),
+            "machine panel must not surface the Process-bucket `layer_height`",
+        );
+        // ...per-extruder vectors go to the extruder tabs, not here...
+        for vector in ["retraction_length", "nozzle_diameter"] {
+            assert!(
+                !keys.iter().any(|k| k == vector),
+                "machine panel must not surface per-extruder vector `{vector}`",
+            );
+        }
+        // ...and capability flags / metadata / print-host keys are not
+        // user-tunable settings, so they're hidden (no Orca editor).
+        for hidden in [
+            "silent_mode",
+            "support_parallel_printheads",
+            "printer_model",
+            "printer_variant",
+            "print_host",
+            "printhost_apikey",
+            "default_print_profile",
+        ] {
+            assert!(
+                !keys.iter().any(|k| k == hidden),
+                "machine panel must not surface non-setting `{hidden}`",
+            );
+        }
+    }
+
+    #[test]
+    fn extruder_panel_surfaces_rendered_per_extruder_only() {
+        ensure_ffi();
+        let keys: Vec<String> = printer_bucket_summaries(None, is_extruder_visible)
+            .into_iter()
+            .map(|s| s.key)
+            .collect();
+        // Per-extruder keys with a live Orca editor are present...
+        for expect in ["retraction_length", "z_hop", "nozzle_diameter"] {
+            assert!(
+                keys.iter().any(|k| k == expect),
+                "extruder panel missing `{expect}`",
+            );
+        }
+        // ...keys in libslic3r's per-extruder set but with no live editor
+        // (commented out / metadata / internal) are not surfaced...
+        for hidden in ["extruder_colour", "default_filament_profile", "nozzle_flush_dataset"] {
+            assert!(
+                !keys.iter().any(|k| k == hidden),
+                "extruder panel must not surface non-rendered `{hidden}`",
+            );
+        }
+        // ...and machine-wide keys don't leak in.
+        assert!(!keys.iter().any(|k| k == "gcode_flavor"));
     }
 
     fn a1_mini() -> PrinterProfile {

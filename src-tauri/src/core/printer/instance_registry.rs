@@ -290,6 +290,18 @@ pub fn set_plugin_override(
     key: String,
     value: Option<String>,
 ) -> Result<PrinterInstance, InstanceMutError> {
+    set_config_override(id, key, value)
+}
+
+/// Set (or clear, with `None`) any entry in the instance's
+/// `config_overrides`. The map is the printer-instance cascade tier; the
+/// command layer restricts which key namespaces it accepts (`plugin.*`
+/// for plugin settings, Printer-bucket keys for machine settings).
+pub fn set_config_override(
+    id: &str,
+    key: String,
+    value: Option<String>,
+) -> Result<PrinterInstance, InstanceMutError> {
     mutate_instance(id, move |inst| {
         match value {
             Some(v) => {

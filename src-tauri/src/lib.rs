@@ -151,6 +151,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             core::cascade::slicer_options_for_printer,
+            core::cascade::slicer_machine_options_for_printer,
+            core::cascade::slicer_extruder_options_for_printer,
             core::scene::commands::scene_snapshot,
             core::scene::commands::scene_mesh_buffers,
             core::scene::commands::scene_mesh_paint,
@@ -190,6 +192,8 @@ pub fn run() {
             core::printer::printer_instance_set_slot_filament,
             core::printer::printer_instance_set_slot_color,
             core::printer::printer_instance_set_plugin_override,
+            core::printer::printer_instance_set_config_override,
+            core::printer::printer_instance_resolved_config,
             core::printer::printer_instance_set_extruder_nozzle_diameter,
             core::printer::printer_instance_set_bed,
             core::printer::printer_instance_create,

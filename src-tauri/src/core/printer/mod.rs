@@ -28,7 +28,8 @@ pub use instance_registry::{
     create_instance, delete_instance, list_instances, lookup_instance, mutate_instance,
     set_extruder_nozzle_diameter, set_instance_ams_units, set_instance_bed,
     set_instance_connection, set_instance_display_name, set_instance_quality_profile,
-    set_plugin_override, set_slot_color, set_slot_filament, update_instance, InstanceMutError,
+    set_config_override, set_plugin_override, set_slot_color, set_slot_filament, update_instance,
+    InstanceMutError,
     InstancePatch,
 };
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
@@ -96,6 +97,50 @@ pub fn printer_instance_set_plugin_override(
         tracing::warn!(error = %e, "printer:instance_changed emit failed");
     }
     Ok(updated)
+}
+
+/// Tauri command: set (or clear, with `value = None`) a machine-settings
+/// override on the instance — the printer-instance tier for Printer-bucket
+/// keys. Only keys libslic3r classifies as Printer-bucket are accepted, so
+/// this can't be used to smuggle process/filament keys past the cascade.
+/// Emits `printer:instance_changed`.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn printer_instance_set_config_override(
+    id: String,
+    key: String,
+    value: Option<String>,
+    window: tauri::Window,
+) -> Result<PrinterInstance, String> {
+    if slic3r_ffi::bucket_of(&key) != Some(slic3r_ffi::OptBucket::Printer) {
+        return Err(format!("`{key}` is not a machine (printer-bucket) setting"));
+    }
+    let updated = set_config_override(&id, key, value).map_err(|e| e.to_string())?;
+    use tauri::Emitter;
+    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
+        tracing::warn!(error = %e, "printer:instance_changed emit failed");
+    }
+    Ok(updated)
+}
+
+/// Tauri command: resolve a printer instance's cascade and return the
+/// flat `key → value` map. The machine-settings panel uses it to show
+/// each option's *resolved* base value (the printer fragment's machine
+/// globals + any instance override), so a row reads the printer's real
+/// configured value rather than libslic3r's compile-time default.
+#[tauri::command]
+#[tracing::instrument]
+pub fn printer_instance_resolved_config(
+    id: String,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let inst =
+        lookup_instance(&id).ok_or_else(|| format!("unknown printer instance `{id}`"))?;
+    let resolved = crate::core::project::commands::resolve_instance_cascade(
+        &inst,
+        None,
+        &std::collections::BTreeMap::new(),
+    )?;
+    Ok(resolved.into_iter().map(|(k, v)| (k, v.value)).collect())
 }
 
 /// Tauri command: register a new `PrinterInstance` from a bundled

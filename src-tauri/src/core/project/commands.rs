@@ -189,6 +189,21 @@ fn resolve_plate(
     };
     let instance = crate::core::printer::lookup_instance(instance_id)
         .ok_or_else(|| format!("unknown printer instance `{instance_id}`"))?;
+    resolve_instance_cascade(&instance, plate.quality_profile.as_deref(), overrides).map(Some)
+}
+
+/// Compose + resolve a printer instance's cascade, independent of any
+/// plate. `quality_profile` overrides the instance's bound process when
+/// set (the plate path passes the plate's); `overrides` folds in as the
+/// top-precedence layer. The instance's own slot loadout supplies the
+/// filament context for `when.filament.*` predicates. Used by the plate
+/// resolve above and by the printer panel's machine-settings surface (to
+/// show each option's resolved base value, not the bare engine default).
+pub fn resolve_instance_cascade(
+    instance: &crate::core::printer::PrinterInstance,
+    quality_profile: Option<&str>,
+    overrides: &std::collections::BTreeMap<String, String>,
+) -> Result<crate::core::cascade::Resolved, String> {
     let printer = crate::core::printer::lookup(&instance.vendor_profile_ref)
         .ok_or_else(|| format!("unknown vendor profile `{}`", instance.vendor_profile_ref))?;
     let bed_identity = instance.bed.identity.clone();
@@ -231,10 +246,7 @@ fn resolve_plate(
         })
         .collect();
 
-    let effective = crate::core::profile_library::with_quality_profile(
-        &instance,
-        plate.quality_profile.as_deref(),
-    );
+    let effective = crate::core::profile_library::with_quality_profile(instance, quality_profile);
     let cascade = crate::core::profile_library::compose_cascade(&effective, &[], overrides)
         .map_err(|e| format!("compose: {e}"))?;
     let ctx = crate::core::project::SlicingContext::new(
@@ -242,7 +254,7 @@ fn resolve_plate(
         std::sync::Arc::new(bed),
         filaments,
     );
-    Ok(Some(crate::core::cascade::resolve(&cascade, &ctx)))
+    Ok(crate::core::cascade::resolve(&cascade, &ctx))
 }
 
 /// Resolved priming-tower placement + footprint for one plate, in bed

@@ -376,6 +376,32 @@ pub fn compose_cascade(
         })?;
     rules.extend(process.rules);
 
+    // 5b. Machine-setting overrides — the per-printer-instance tier for
+    //     Printer-bucket keys, set from the printer panel and stored in the
+    //     instance's `config_overrides` (alongside the `plugin.*` entries,
+    //     which are filtered out here — they drive the plugin gate, not the
+    //     engine config). `!important` so they win over the printer
+    //     fragment's machine globals; pushed before plate overrides so an
+    //     explicit plate override still wins on a (rare, cross-bucket) key
+    //     collision.
+    let machine_overrides: BTreeMap<String, String> = instance
+        .config_overrides
+        .iter()
+        .filter(|(k, _)| !k.starts_with("plugin."))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    if !machine_overrides.is_empty() {
+        rules.push(Rule {
+            when: Predicate::default(),
+            set: machine_overrides,
+            source: SourceLocation {
+                path: PathBuf::from("<machine-overrides>"),
+                line: 1,
+            },
+            important: true,
+        });
+    }
+
     // 6. Plate overrides — the `!important` override tier: they win over
     //    every authored rule regardless of specificity (a profile option set
     //    under a `when` predicate must still lose to an explicit override).
