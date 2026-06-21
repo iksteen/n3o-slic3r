@@ -602,6 +602,15 @@ export function ViewportCanvas({
         const plate = mirror.activePlate();
         setHasObjects((plate?.objects.size ?? 0) > 0);
         setHasSelection((plate?.selection.size ?? 0) > 0);
+        // Frame the camera to the bed on mount. The initial snapshot emits no
+        // BedChanged/ActivePlateChanged (those fire only for subsequent
+        // changes), so without this the camera keeps its default pose on first
+        // load and on every remount — the canvas unmounts/remounts on each
+        // Prepare↔Preview/Devices switch, so returning to Prepare (or a printer
+        // switch made while away) would otherwise leave the plate unframed.
+        if (plate?.bed) {
+          initialFrameForBed(camera, controls, plate.bed);
+        }
         void refreshTower();
       })
       .catch((err) => {
