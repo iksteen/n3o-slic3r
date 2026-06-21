@@ -324,7 +324,12 @@ export function ViewportCanvas({
       antialias: true,
       preserveDrawingBuffer: false,
     });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    // Cap the device pixel ratio: a HiDPI panel reports 2×+, which quadruples
+    // the fragments per frame (4× the GPU work) for a build-plate view that
+    // doesn't need pixel-perfect AA. 1.5 keeps edges crisp at a fraction of
+    // the cost — a big win on integrated GPUs, especially through WebKitGTK's
+    // software compositing path (the `WEBKIT_DISABLE_DMABUF_RENDERER` build).
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.setClearColor(0x1a1a1a);
     container.appendChild(renderer.domElement);
 
