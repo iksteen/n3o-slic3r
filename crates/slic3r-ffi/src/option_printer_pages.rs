@@ -1,16 +1,16 @@
-//! Per-key printer-settings category + per-extruder flag, scraped from
-//! OrcaSlicer.
+//! Per-key printer/filament-settings category, scraped from OrcaSlicer.
 //!
 //! AUTO-GENERATED — do not edit by hand. Regenerate with
 //! `scripts/scrape_option_printer_pages.py` after pulling new upstream
 //! OrcaSlicer source.
 //!
-//! Category (from `src/slic3r/GUI/Tab.cpp` `TabPrinter`): the
-//! `add_options_page` title the key appears under (Basic information,
-//! Machine G-code, …) for machine-wide options, or the `new_optgroup`
-//! title (Retraction, Z-Hop, …) for keys in the extruder-page loop —
-//! printer options carry no libslic3r `category` of their own. Keys absent
-//! from the table return `None`; callers fall back to an "Other" bucket.
+//! Printer + filament options carry no libslic3r `category` of their own;
+//! their grouping lives in `src/slic3r/GUI/Tab.cpp` (`TabPrinter` /
+//! `TabFilament`). Each table maps a key to the `add_options_page` title it
+//! appears under (and `new_optgroup` sub-title). Keys absent from a table
+//! return `None`; callers fall back to an "Other" bucket. `printer_page_of`
+//! / `filament_page_of` being `Some` is also the "Orca lays out an editor
+//! for this key" signal the machine + filament panels gate visibility on.
 //!
 //! Per-extruder set (from `src/libslic3r/PrintConfig.cpp`
 //! `m_extruder_option_keys`): the authoritative list of options sized to
@@ -203,6 +203,233 @@ const PRINTER_SUBGROUPS: &[(&str, &str)] = &[
     ("z_offset", "Printable space"),
 ];
 
+const FILAMENT_PAGES: &[(&str, &str)] = &[
+    ("activate_air_filtration", "Cooling"),
+    ("activate_air_filtration_during_print", "Cooling"),
+    ("activate_air_filtration_on_completion", "Cooling"),
+    ("activate_chamber_temp_control", "Filament"),
+    ("adaptive_pressure_advance", "Filament"),
+    ("adaptive_pressure_advance_bridges", "Filament"),
+    ("adaptive_pressure_advance_model", "Filament"),
+    ("adaptive_pressure_advance_overhangs", "Filament"),
+    ("additional_cooling_fan_speed", "Cooling"),
+    ("chamber_temperature", "Filament"),
+    ("close_fan_the_first_x_layers", "Cooling"),
+    ("compatible_printers", "Dependencies"),
+    ("compatible_printers_condition", "Dependencies"),
+    ("compatible_prints", "Dependencies"),
+    ("compatible_prints_condition", "Dependencies"),
+    ("complete_print_exhaust_fan_speed", "Cooling"),
+    ("cool_plate_temp", "Filament"),
+    ("cool_plate_temp_initial_layer", "Filament"),
+    ("default_filament_colour", "Filament"),
+    ("dont_slow_down_outer_wall", "Cooling"),
+    ("during_print_exhaust_fan_speed", "Cooling"),
+    ("enable_overhang_bridge_fan", "Cooling"),
+    ("enable_pressure_advance", "Filament"),
+    ("eng_plate_temp", "Filament"),
+    ("eng_plate_temp_initial_layer", "Filament"),
+    ("fan_cooling_layer_time", "Cooling"),
+    ("fan_max_speed", "Cooling"),
+    ("fan_min_speed", "Cooling"),
+    ("filament_adaptive_volumetric_speed", "Filament"),
+    ("filament_adhesiveness_category", "Filament"),
+    ("filament_change_extrusion_role_gcode", "Advanced"),
+    ("filament_change_length", "Filament"),
+    ("filament_colour", "Filament"),
+    ("filament_cooling_final_speed", "Multimaterial"),
+    ("filament_cooling_initial_speed", "Multimaterial"),
+    ("filament_cooling_moves", "Multimaterial"),
+    ("filament_cost", "Filament"),
+    ("filament_density", "Filament"),
+    ("filament_diameter", "Filament"),
+    ("filament_end_gcode", "Advanced"),
+    ("filament_flow_ratio", "Filament"),
+    ("filament_flush_temp", "Multimaterial"),
+    ("filament_flush_volumetric_speed", "Multimaterial"),
+    ("filament_is_support", "Filament"),
+    ("filament_loading_speed", "Multimaterial"),
+    ("filament_loading_speed_start", "Multimaterial"),
+    ("filament_max_volumetric_speed", "Filament"),
+    ("filament_minimal_purge_on_wipe_tower", "Multimaterial"),
+    ("filament_multitool_ramming", "Multimaterial"),
+    ("filament_multitool_ramming_flow", "Multimaterial"),
+    ("filament_multitool_ramming_volume", "Multimaterial"),
+    ("filament_notes", "Notes"),
+    ("filament_ramming_parameters", "Multimaterial"),
+    ("filament_shrink", "Filament"),
+    ("filament_shrinkage_compensation_z", "Filament"),
+    ("filament_soluble", "Filament"),
+    ("filament_stamping_distance", "Multimaterial"),
+    ("filament_stamping_loading_speed", "Multimaterial"),
+    ("filament_start_gcode", "Advanced"),
+    ("filament_toolchange_delay", "Multimaterial"),
+    ("filament_tower_interface_pre_extrusion_dist", "Multimaterial"),
+    ("filament_tower_interface_pre_extrusion_length", "Multimaterial"),
+    ("filament_tower_interface_print_temp", "Multimaterial"),
+    ("filament_tower_interface_purge_volume", "Multimaterial"),
+    ("filament_tower_ironing_area", "Multimaterial"),
+    ("filament_type", "Filament"),
+    ("filament_unloading_speed", "Multimaterial"),
+    ("filament_unloading_speed_start", "Multimaterial"),
+    ("filament_vendor", "Filament"),
+    ("full_fan_speed_layer", "Cooling"),
+    ("hot_plate_temp", "Filament"),
+    ("hot_plate_temp_initial_layer", "Filament"),
+    ("idle_temperature", "Filament"),
+    ("internal_bridge_fan_speed", "Cooling"),
+    ("ironing_fan_speed", "Cooling"),
+    ("long_retractions_when_ec", "Multimaterial"),
+    ("nozzle_temperature", "Filament"),
+    ("nozzle_temperature_initial_layer", "Filament"),
+    ("nozzle_temperature_range_high", "Filament"),
+    ("nozzle_temperature_range_low", "Filament"),
+    ("overhang_fan_speed", "Cooling"),
+    ("overhang_fan_threshold", "Cooling"),
+    ("pellet_flow_coefficient", "Filament"),
+    ("pressure_advance", "Filament"),
+    ("reduce_fan_stop_start_freq", "Cooling"),
+    ("retraction_distances_when_ec", "Multimaterial"),
+    ("slow_down_for_layer_cooling", "Cooling"),
+    ("slow_down_layer_time", "Cooling"),
+    ("slow_down_min_speed", "Cooling"),
+    ("supertack_plate_temp", "Filament"),
+    ("supertack_plate_temp_initial_layer", "Filament"),
+    ("support_material_interface_fan_speed", "Cooling"),
+    ("temperature_vitrification", "Filament"),
+    ("textured_cool_plate_temp", "Filament"),
+    ("textured_cool_plate_temp_initial_layer", "Filament"),
+    ("textured_plate_temp", "Filament"),
+    ("textured_plate_temp_initial_layer", "Filament"),
+];
+
+const FILAMENT_SUBGROUPS: &[(&str, &str)] = &[
+    ("activate_air_filtration", "Exhaust fan"),
+    ("activate_air_filtration_during_print", "Exhaust fan"),
+    ("activate_air_filtration_on_completion", "Exhaust fan"),
+    ("activate_chamber_temp_control", "Print chamber temperature"),
+    ("adaptive_pressure_advance", "Flow ratio and Pressure Advance"),
+    ("adaptive_pressure_advance_bridges", "Flow ratio and Pressure Advance"),
+    ("adaptive_pressure_advance_model", "Flow ratio and Pressure Advance"),
+    ("adaptive_pressure_advance_overhangs", "Flow ratio and Pressure Advance"),
+    ("additional_cooling_fan_speed", "Auxiliary part cooling fan"),
+    ("chamber_temperature", "Print chamber temperature"),
+    ("close_fan_the_first_x_layers", "Cooling for specific layer"),
+    ("compatible_printers", "Compatible printers"),
+    ("compatible_printers_condition", "Compatible printers"),
+    ("compatible_prints", "Compatible process profiles"),
+    ("compatible_prints_condition", "Compatible process profiles"),
+    ("complete_print_exhaust_fan_speed", "Exhaust fan"),
+    ("cool_plate_temp", "Bed temperature"),
+    ("cool_plate_temp_initial_layer", "Bed temperature"),
+    ("default_filament_colour", "Basic information"),
+    ("dont_slow_down_outer_wall", "Part cooling fan"),
+    ("during_print_exhaust_fan_speed", "Exhaust fan"),
+    ("enable_overhang_bridge_fan", "Part cooling fan"),
+    ("enable_pressure_advance", "Flow ratio and Pressure Advance"),
+    ("eng_plate_temp", "Bed temperature"),
+    ("eng_plate_temp_initial_layer", "Bed temperature"),
+    ("fan_cooling_layer_time", "Part cooling fan"),
+    ("fan_max_speed", "Part cooling fan"),
+    ("fan_min_speed", "Part cooling fan"),
+    ("filament_adaptive_volumetric_speed", "Volumetric speed limitation"),
+    ("filament_adhesiveness_category", "Basic information"),
+    ("filament_change_extrusion_role_gcode", "Change extrusion role G-code"),
+    ("filament_change_length", "Basic information"),
+    ("filament_colour", "Basic information"),
+    ("filament_cooling_final_speed", "Tool change parameters with single extruder MM printers"),
+    ("filament_cooling_initial_speed", "Tool change parameters with single extruder MM printers"),
+    ("filament_cooling_moves", "Tool change parameters with single extruder MM printers"),
+    ("filament_cost", "Basic information"),
+    ("filament_density", "Basic information"),
+    ("filament_diameter", "Basic information"),
+    ("filament_end_gcode", "Filament end G-code"),
+    ("filament_flow_ratio", "Flow ratio and Pressure Advance"),
+    ("filament_flush_temp", "Multi Filament"),
+    ("filament_flush_volumetric_speed", "Multi Filament"),
+    ("filament_is_support", "Basic information"),
+    ("filament_loading_speed", "Tool change parameters with single extruder MM printers"),
+    ("filament_loading_speed_start", "Tool change parameters with single extruder MM printers"),
+    ("filament_max_volumetric_speed", "Volumetric speed limitation"),
+    ("filament_minimal_purge_on_wipe_tower", "Wipe tower parameters"),
+    ("filament_multitool_ramming", "Tool change parameters with multi extruder MM printers"),
+    ("filament_multitool_ramming_flow", "Tool change parameters with multi extruder MM printers"),
+    ("filament_multitool_ramming_volume", "Tool change parameters with multi extruder MM printers"),
+    ("filament_notes", "Notes"),
+    ("filament_ramming_parameters", "Tool change parameters with single extruder MM printers"),
+    ("filament_shrink", "Basic information"),
+    ("filament_shrinkage_compensation_z", "Basic information"),
+    ("filament_soluble", "Basic information"),
+    ("filament_stamping_distance", "Tool change parameters with single extruder MM printers"),
+    ("filament_stamping_loading_speed", "Tool change parameters with single extruder MM printers"),
+    ("filament_start_gcode", "Filament start G-code"),
+    ("filament_toolchange_delay", "Tool change parameters with single extruder MM printers"),
+    ("filament_tower_interface_pre_extrusion_dist", "Wipe tower parameters"),
+    ("filament_tower_interface_pre_extrusion_length", "Wipe tower parameters"),
+    ("filament_tower_interface_print_temp", "Wipe tower parameters"),
+    ("filament_tower_interface_purge_volume", "Wipe tower parameters"),
+    ("filament_tower_ironing_area", "Wipe tower parameters"),
+    ("filament_type", "Basic information"),
+    ("filament_unloading_speed", "Tool change parameters with single extruder MM printers"),
+    ("filament_unloading_speed_start", "Tool change parameters with single extruder MM printers"),
+    ("filament_vendor", "Basic information"),
+    ("full_fan_speed_layer", "Cooling for specific layer"),
+    ("hot_plate_temp", "Bed temperature"),
+    ("hot_plate_temp_initial_layer", "Bed temperature"),
+    ("idle_temperature", "Basic information"),
+    ("internal_bridge_fan_speed", "Part cooling fan"),
+    ("ironing_fan_speed", "Part cooling fan"),
+    ("long_retractions_when_ec", "Multi Filament"),
+    ("nozzle_temperature", "Print temperature"),
+    ("nozzle_temperature_initial_layer", "Print temperature"),
+    ("nozzle_temperature_range_high", "Basic information"),
+    ("nozzle_temperature_range_low", "Basic information"),
+    ("overhang_fan_speed", "Part cooling fan"),
+    ("overhang_fan_threshold", "Part cooling fan"),
+    ("pellet_flow_coefficient", "Flow ratio and Pressure Advance"),
+    ("pressure_advance", "Flow ratio and Pressure Advance"),
+    ("reduce_fan_stop_start_freq", "Part cooling fan"),
+    ("retraction_distances_when_ec", "Multi Filament"),
+    ("slow_down_for_layer_cooling", "Part cooling fan"),
+    ("slow_down_layer_time", "Part cooling fan"),
+    ("slow_down_min_speed", "Part cooling fan"),
+    ("supertack_plate_temp", "Bed temperature"),
+    ("supertack_plate_temp_initial_layer", "Bed temperature"),
+    ("support_material_interface_fan_speed", "Part cooling fan"),
+    ("temperature_vitrification", "Basic information"),
+    ("textured_cool_plate_temp", "Bed temperature"),
+    ("textured_cool_plate_temp_initial_layer", "Bed temperature"),
+    ("textured_plate_temp", "Bed temperature"),
+    ("textured_plate_temp_initial_layer", "Bed temperature"),
+];
+
+const FILAMENT_LINES: &[(&str, &str)] = &[
+    ("activate_air_filtration_during_print", "During print"),
+    ("activate_air_filtration_on_completion", "Complete print"),
+    ("complete_print_exhaust_fan_speed", "Complete print"),
+    ("cool_plate_temp", "Cool Plate"),
+    ("cool_plate_temp_initial_layer", "Cool Plate"),
+    ("during_print_exhaust_fan_speed", "During print"),
+    ("eng_plate_temp", "Engineering Plate"),
+    ("eng_plate_temp_initial_layer", "Engineering Plate"),
+    ("fan_cooling_layer_time", "Min fan speed threshold"),
+    ("fan_max_speed", "Max fan speed threshold"),
+    ("fan_min_speed", "Min fan speed threshold"),
+    ("hot_plate_temp", "Smooth PEI Plate / High Temp Plate"),
+    ("hot_plate_temp_initial_layer", "Smooth PEI Plate / High Temp Plate"),
+    ("nozzle_temperature", "Nozzle"),
+    ("nozzle_temperature_initial_layer", "Nozzle"),
+    ("nozzle_temperature_range_high", "Recommended nozzle temperature"),
+    ("nozzle_temperature_range_low", "Recommended nozzle temperature"),
+    ("slow_down_layer_time", "Max fan speed threshold"),
+    ("supertack_plate_temp", "Cool Plate (SuperTack)"),
+    ("supertack_plate_temp_initial_layer", "Cool Plate (SuperTack)"),
+    ("textured_cool_plate_temp", "Textured Cool Plate"),
+    ("textured_cool_plate_temp_initial_layer", "Textured Cool Plate"),
+    ("textured_plate_temp", "Textured PEI Plate"),
+    ("textured_plate_temp_initial_layer", "Textured PEI Plate"),
+];
+
 const PER_EXTRUDER: &[&str] = &[
     "default_filament_profile",
     "default_nozzle_volume_type",
@@ -237,9 +464,8 @@ const PER_EXTRUDER: &[&str] = &[
     "z_hop_types",
 ];
 
-/// The printer-settings category the option key appears under in Orca's
-/// `TabPrinter` (page for machine-wide keys, optgroup for per-extruder
-/// keys), or `None` for keys not laid out there.
+/// The printer-settings category the key appears under in Orca's `TabPrinter`
+/// (page for machine-wide keys, optgroup for per-extruder keys), or `None`.
 pub fn printer_page_of(key: &str) -> Option<&'static str> {
     PRINTER_PAGES
         .binary_search_by_key(&key, |(k, _)| *k)
@@ -247,15 +473,42 @@ pub fn printer_page_of(key: &str) -> Option<&'static str> {
         .map(|i| PRINTER_PAGES[i].1)
 }
 
-/// The optgroup (sub-section within a page) a machine-wide option appears
-/// under — e.g. "Printable space" under the "Basic information" page. The
-/// panel renders these as sub-headers within the page. `None` for keys with
-/// no sub-group (per-extruder keys, or keys not laid out in Tab.cpp).
+/// The optgroup (sub-section within a page) a machine-wide option appears under,
+/// or `None`.
 pub fn printer_subgroup_of(key: &str) -> Option<&'static str> {
     PRINTER_SUBGROUPS
         .binary_search_by_key(&key, |(k, _)| *k)
         .ok()
         .map(|i| PRINTER_SUBGROUPS[i].1)
+}
+
+/// The filament-settings page the key appears under in Orca's `TabFilament`
+/// (Filament, Print temperature, Cooling, …), or `None` for keys not laid out
+/// there (metadata, internal). This is the filament editor's visibility signal.
+pub fn filament_page_of(key: &str) -> Option<&'static str> {
+    FILAMENT_PAGES
+        .binary_search_by_key(&key, |(k, _)| *k)
+        .ok()
+        .map(|i| FILAMENT_PAGES[i].1)
+}
+
+/// The optgroup within a filament page (e.g. "Basic information" under the
+/// "Filament" page), or `None`.
+pub fn filament_subgroup_of(key: &str) -> Option<&'static str> {
+    FILAMENT_SUBGROUPS
+        .binary_search_by_key(&key, |(k, _)| *k)
+        .ok()
+        .map(|i| FILAMENT_SUBGROUPS[i].1)
+}
+
+/// The label of the multi-option line a filament key sits on (the plate type
+/// for bed temps, "Nozzle" for print temps), or `None`. Disambiguates keys
+/// whose own label is generic ("Other layers" / "First layer").
+pub fn filament_line_of(key: &str) -> Option<&'static str> {
+    FILAMENT_LINES
+        .binary_search_by_key(&key, |(k, _)| *k)
+        .ok()
+        .map(|i| FILAMENT_LINES[i].1)
 }
 
 /// True if the option is laid out per-extruder (one value per toolhead)
@@ -270,15 +523,12 @@ mod tests {
 
     #[test]
     fn tables_are_sorted_for_binary_search() {
-        let mut last = "";
-        for (key, _) in PRINTER_PAGES {
-            assert!(*key > last, "PRINTER_PAGES must be sorted; {key} <= {last}");
-            last = key;
-        }
-        let mut last = "";
-        for (key, _) in PRINTER_SUBGROUPS {
-            assert!(*key > last, "PRINTER_SUBGROUPS must be sorted; {key} <= {last}");
-            last = key;
+        for table in [PRINTER_PAGES, PRINTER_SUBGROUPS, FILAMENT_PAGES, FILAMENT_SUBGROUPS, FILAMENT_LINES] {
+            let mut last = "";
+            for (key, _) in table {
+                assert!(*key > last, "table must be sorted; {key} <= {last}");
+                last = key;
+            }
         }
         let mut last = "";
         for key in PER_EXTRUDER {
@@ -298,6 +548,30 @@ mod tests {
     }
 
     #[test]
+    fn filament_keys_map_to_their_orca_page() {
+        // Page = the add_options_page title; subgroup = the optgroup.
+        assert_eq!(filament_page_of("nozzle_temperature"), Some("Filament"));
+        assert_eq!(filament_subgroup_of("nozzle_temperature"), Some("Print temperature"));
+        assert_eq!(filament_page_of("filament_type"), Some("Filament"));
+        assert_eq!(filament_subgroup_of("filament_type"), Some("Basic information"));
+        assert_eq!(filament_page_of("fan_max_speed"), Some("Cooling"));
+        // Process / printer keys are not in the filament tables.
+        assert!(filament_page_of("gcode_flavor").is_none());
+        assert!(filament_page_of("layer_height").is_none());
+    }
+
+    #[test]
+    fn bed_temp_keys_carry_their_plate_line_label() {
+        // The plate type is the multi-option line label; the key's own label
+        // is just "Other layers" / "First layer".
+        assert_eq!(filament_line_of("cool_plate_temp"), Some("Cool Plate"));
+        assert_eq!(filament_line_of("textured_plate_temp"), Some("Textured PEI Plate"));
+        assert_eq!(filament_line_of("nozzle_temperature"), Some("Nozzle"));
+        // A self-labeled single-option line has no line label.
+        assert!(filament_line_of("filament_type").is_none());
+    }
+
+    #[test]
     fn per_extruder_flag_matches_libslic3r_set() {
         assert!(is_per_extruder("retraction_length"));
         assert!(is_per_extruder("z_hop"));
@@ -313,6 +587,7 @@ mod tests {
     #[test]
     fn unknown_key_returns_none() {
         assert!(printer_page_of("totally_made_up_option").is_none());
+        assert!(filament_page_of("totally_made_up_option").is_none());
         assert!(!is_per_extruder("totally_made_up_option"));
     }
 }

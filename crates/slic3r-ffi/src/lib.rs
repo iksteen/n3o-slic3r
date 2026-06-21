@@ -438,7 +438,10 @@ mod option_display_order;
 pub use option_display_order::display_order_of;
 
 mod option_printer_pages;
-pub use option_printer_pages::{is_per_extruder, printer_page_of, printer_subgroup_of};
+pub use option_printer_pages::{
+    filament_line_of, filament_page_of, filament_subgroup_of, is_per_extruder, printer_page_of,
+    printer_subgroup_of,
+};
 
 /// An owned, allocated copy of a `slic3r_option_def_t` view, decoded into Rust types.
 /// The original C struct's strings are process-lifetime so we _could_ borrow them,
