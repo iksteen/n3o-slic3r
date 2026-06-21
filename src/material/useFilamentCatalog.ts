@@ -27,7 +27,9 @@ const NO_FILAMENTS: FilamentSummary[] = [];
 export const filamentCatalogQuery = defineQuery<FilamentSummary[]>({
   key: "filament_catalog",
   fetch: () => invoke<FilamentSummary[]>("filament_profile_list"),
-  invalidateOn: [],
+  // User-library edits (duplicate / delete / rename) emit `filament:changed`
+  // backend-side; bundled fragments are static, so that's the only churn.
+  invalidateOn: ["filament:changed"],
 });
 
 /** The bundled filament catalog, indexed by identity. Shared across every

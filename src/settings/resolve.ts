@@ -122,6 +122,37 @@ export function useExtruderOptions(
   return usePrinterAwareOptions("slicer_extruder_options_for_printer", printer);
 }
 
+/** Filament-bucket options for the filament settings editor. Not
+ *  printer-gated (a user filament isn't bound to a printer), so this is a
+ *  plain one-shot fetch — the option *set* is static for the session. */
+export function useFilamentOptions(): {
+  options: PrinterAwareOptionSummary[];
+  loading: boolean;
+} {
+  const [options, setOptions] = useState<PrinterAwareOptionSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    invoke<PrinterAwareOptionSummary[]>("slicer_filament_options", {
+      filter: null,
+    })
+      .then((opts) => {
+        if (!cancelled) {
+          setOptions(opts);
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        console.error("[settings] slicer_filament_options failed", err);
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return { options, loading };
+}
+
 /** Shared fetch for the two printer-aware option commands. Cached per
  *  printer model + toolhead count (the inputs the capability predicates
  *  read), keyed by a stable JSON serialization so referentially-different

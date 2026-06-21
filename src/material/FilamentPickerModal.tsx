@@ -41,6 +41,12 @@ export interface FilamentPickerModalProps {
   currentColor: string | null;
   onPick: (pick: FilamentPickerPick) => void;
   onClose: () => void;
+  /** Open the settings editor for a filament (edited in place). Omit to
+   *  hide the edit affordance. */
+  onEdit?: (identity: string) => void;
+  /** Discard a filament's user overrides — shown only for edited filaments
+   *  (`summary.edited`). */
+  onRevert?: (identity: string) => void;
 }
 
 // One brand row in the rail. `short` is a 2-3 letter tag for the
@@ -91,6 +97,8 @@ export function FilamentPickerModal({
   currentColor,
   onPick,
   onClose,
+  onEdit,
+  onRevert,
 }: FilamentPickerModalProps): React.JSX.Element {
   const catalog = useMemo(() => groupByBrand(filaments), [filaments]);
   const materials = useMemo(() => {
@@ -136,9 +144,15 @@ export function FilamentPickerModal({
 
   const customInputRef = useRef<HTMLInputElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
+  // Refs to the seeded-active brand + product rows, so the slot's current
+  // filament is scrolled into view on open instead of being lost mid-list.
+  const activeBrandRef = useRef<HTMLLIElement | null>(null);
+  const activeProductRef = useRef<HTMLLIElement | null>(null);
 
   useEffect(() => {
     searchRef.current?.focus();
+    activeBrandRef.current?.scrollIntoView({ block: "nearest" });
+    activeProductRef.current?.scrollIntoView({ block: "nearest" });
   }, []);
 
   useModalDismiss(onClose, { active: true });
@@ -311,6 +325,7 @@ export function FilamentPickerModal({
             {visibleBrands.map((b) => (
               <li
                 key={b.brand}
+                ref={b._origIdx === brandIdx ? activeBrandRef : undefined}
                 className={`fp-brand-row${b._origIdx === brandIdx ? " active" : ""}`}
                 onClick={() => {
                   setBrandIdx(b._origIdx);
@@ -337,17 +352,54 @@ export function FilamentPickerModal({
             {currentBrandProducts.map((p, i) => (
               <li
                 key={p.identity}
-                className={`fp-product-row${i === productIdx ? " active" : ""}`}
+                ref={i === productIdx ? activeProductRef : undefined}
+                className={`fp-product-row${i === productIdx ? " active" : ""}${p.edited ? " is-edited" : ""}`}
                 onClick={() => setProductIdx(i)}
               >
                 <span className="fp-product-main">
-                  <span className="fp-product-name">{p.display_name}</span>
+                  <span className="fp-product-name">
+                    {p.display_name}
+                    {p.edited && <span className="fp-edited-tag">edited</span>}
+                  </span>
                   <span className="fp-product-meta">
                     <span className="fp-mat-tag">{p.base_type}</span>
                     <span>
                       {p.nozzle_temp}°C / {p.bed_temp}°C bed
                     </span>
                   </span>
+                </span>
+                {/* Manager affordances. Every filament is editable in
+                    place; edited ones also offer Revert. stopPropagation so
+                    the click doesn't also re-select the product row. */}
+                <span className="fp-product-actions">
+                  {p.edited && onRevert && (
+                    <button
+                      type="button"
+                      className="fp-product-action danger"
+                      title="Revert to bundled defaults"
+                      aria-label={`Revert ${p.display_name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRevert(p.identity);
+                      }}
+                    >
+                      ↺
+                    </button>
+                  )}
+                  {onEdit && (
+                    <button
+                      type="button"
+                      className="fp-product-action"
+                      title="Edit settings"
+                      aria-label={`Edit ${p.display_name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onEdit(p.identity);
+                      }}
+                    >
+                      ✎
+                    </button>
+                  )}
                 </span>
               </li>
             ))}

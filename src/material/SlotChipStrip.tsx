@@ -28,6 +28,8 @@ import {
   FilamentPickerModal,
   type FilamentPickerPick,
 } from "./FilamentPickerModal";
+import { FilamentSettingsModal } from "./FilamentSettingsModal";
+import { revertUserFilament } from "./userFilament";
 import { isRfidDetected } from "./materials";
 import type { FilamentSummary } from "./filamentSummary";
 
@@ -284,6 +286,8 @@ function SlotChip({
   onApplyPick,
 }: SlotChipProps): React.JSX.Element {
   const [open, setOpen] = useState(false);
+  // Which filament's settings editor is open (over the picker), by slug.
+  const [editing, setEditing] = useState<string | null>(null);
 
   const empty = !option.filament_identity;
   const swatch = option.color ?? UNASSIGNED_SWATCH;
@@ -348,6 +352,27 @@ function SlotChip({
             onApplyPick(pick);
           }}
           onClose={() => setOpen(false)}
+          onEdit={(identity) => setEditing(identity)}
+          onRevert={(identity) => {
+            if (
+              !window.confirm("Revert this filament to its bundled defaults?")
+            ) {
+              return;
+            }
+            revertUserFilament(identity).catch((e) =>
+              console.error("[filament] revert failed", e),
+            );
+          }}
+        />
+      )}
+      {editing && (
+        <FilamentSettingsModal
+          base={editing}
+          name={
+            filaments.find((f) => f.identity === editing)?.display_name ??
+            editing
+          }
+          onClose={() => setEditing(null)}
         />
       )}
     </>

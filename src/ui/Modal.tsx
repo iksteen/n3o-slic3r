@@ -20,6 +20,9 @@ export interface ModalBackdropProps {
    *  modal-specific class (`printer-settings-modal`,
    *  `add-printer-modal`) and the dialog role. */
   cardClassName: string;
+  /** Extra class on the `.modal-backdrop` itself — e.g. to raise its
+   *  z-index above another modal it was opened from. */
+  backdropClassName?: string;
   ariaLabelledBy?: string;
   ariaModal?: boolean;
   role?: "dialog" | "alertdialog";
@@ -30,6 +33,7 @@ export interface ModalBackdropProps {
 export function ModalBackdrop({
   onDismiss,
   cardClassName,
+  backdropClassName,
   ariaLabelledBy,
   ariaModal = true,
   role = "dialog",
@@ -41,7 +45,10 @@ export function ModalBackdrop({
   // object behind it, regardless of where focus sits.
   useHotkeyInhibit();
   return (
-    <div className="modal-backdrop" onClick={onDismiss}>
+    <div
+      className={`modal-backdrop${backdropClassName ? ` ${backdropClassName}` : ""}`}
+      onClick={onDismiss}
+    >
       <div
         className={cardClassName}
         onClick={(e) => e.stopPropagation()}

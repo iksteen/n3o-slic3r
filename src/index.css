@@ -3496,6 +3496,37 @@
     font-size: 12px;
     color: var(--text-muted);
   }
+  /* Inline rename in the filament editor header — looks like the h2 until
+     focused, then reveals an editable field. */
+  .fsm-name-input {
+    margin: 0 0 2px;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--text);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    padding: 1px 5px;
+    margin-left: -5px;
+    width: 100%;
+    max-width: 360px;
+    font-family: inherit;
+  }
+  .fsm-name-input:hover { border-color: var(--border, var(--surface-3)); }
+  .fsm-name-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    background: var(--surface-1, var(--surface-2));
+  }
+  .fsm-error {
+    margin: 0 18px 8px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--danger, #e5484d);
+    background: color-mix(in oklch, var(--danger, #e5484d) 12%, transparent);
+  }
   .psm-profile-label { color: var(--text); }
   .psm-mono {
     font-family: var(--font-mono);
@@ -4021,6 +4052,8 @@
      Ported from docs/design/styles.css (PR-7c-3a).
      ─────────────────────────────────────────────────────────────── */
   .fp-modal-backdrop { z-index: 1100; }
+  /* Filament editor is launched from the picker (z 1100) — stack it above. */
+  .fsm-backdrop { z-index: 1200; }
   .fp-modal {
     width: min(960px, calc(100vw - 48px));
     height: min(640px, calc(100vh - 48px));
@@ -4206,6 +4239,37 @@
   .fp-product-row.active {
     background: var(--accent-soft, color-mix(in oklch, var(--accent) 14%, transparent));
   }
+  /* Manager affordances (duplicate / edit / delete). Hidden until the row
+     is hovered/active so the list stays clean; always reachable by tab. */
+  .fp-product-actions {
+    display: flex; align-items: center; gap: 2px;
+    opacity: 0; transition: opacity 0.1s;
+  }
+  .fp-product-row:hover .fp-product-actions,
+  .fp-product-row.active .fp-product-actions,
+  .fp-product-row.is-edited .fp-product-actions,
+  .fp-product-actions:focus-within { opacity: 1; }
+  /* "edited" marker next to an edited filament's name. */
+  .fp-edited-tag {
+    margin-left: 7px;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 1px 5px;
+    border-radius: 999px;
+    color: var(--accent);
+    background: var(--accent-soft, color-mix(in oklch, var(--accent) 16%, transparent));
+    vertical-align: middle;
+  }
+  .fp-product-action {
+    border: none; background: transparent; cursor: pointer;
+    font-size: 13px; line-height: 1;
+    padding: 4px 5px; border-radius: 5px;
+    color: var(--text-dim, var(--text));
+  }
+  .fp-product-action:hover { background: var(--surface-3, var(--surface-2)); color: var(--text); }
+  .fp-product-action.danger:hover { color: var(--danger, #e5484d); }
   .fp-product-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
   .fp-product-name {
     font-size: 13px;

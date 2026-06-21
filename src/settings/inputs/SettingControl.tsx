@@ -66,8 +66,10 @@ export function SettingControl({
 }
 
 /** Read-only G-code preview + an "Edit" button that opens a textarea
- *  pop-out. Commits the edited text on Save. */
-function MultilineEditor({
+ *  pop-out. Commits the edited text on Save. Exported so the filament
+ *  editor (whose fields are vectors, so it can't use `SettingControl`
+ *  wholesale) can reuse the same pop-out for its multiline fields. */
+export function MultilineEditor({
   schema,
   value,
   onChange,

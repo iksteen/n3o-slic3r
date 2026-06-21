@@ -14,4 +14,8 @@ export interface FilamentSummary {
    *  (PR-7c-2) uses this to translate AMS reports back into our
    *  bundled identity. `null` for fragments that don't have one. */
   filament_id: string | null;
+  /** True when the user has edited this filament in place (an override
+   *  profile exists for its slug). The picker shows a Revert affordance for
+   *  edited filaments; every filament is editable regardless. */
+  edited?: boolean;
 }
