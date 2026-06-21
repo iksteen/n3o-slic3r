@@ -816,6 +816,48 @@ upstream data) or with branded filaments that lack their printer's
 tunings. With it, every (printer × filament) pairing produces a
 coherent slice.
 
+#### Concrete example — ASA chamber temperature control
+
+A verified instance of exactly this shape in upstream OrcaSlicer.
+ASA's `activate_chamber_temp_control` ("Activate temperature
+control", a `coBool`) is **off** in the base `fdm_filament_asa`
+preset — and our `generic/filament/generic-asa.toml` carries
+`activate_chamber_temp_control = "0"` unconditionally, with no
+`[[rule]]` re-enabling it. But OrcaSlicer turns it **on** in eight
+printer-specific ASA filament presets:
+
+```jsonc
+// Creality/filament/Generic ASA @K2 Plus-all.json
+{ "inherits": "fdm_filament_asa",        // base: control off
+  "activate_chamber_temp_control": "1",  // printer variant turns it ON
+  "chamber_temperature": "50" }
+```
+
+All eight are **Creality K2-series** (K2 / K2 Plus / K2 Pro) — the
+only profiles with an *actively heated* chamber. No Bambu (X1C/A1)
+or Snapmaker (U1) ASA preset enables it; passive-chamber and
+open-frame printers leave it off.
+
+In our cascade this is a per-printer rule on the printer profile,
+not a fork of the filament fragment — the ASA fragment stays off,
+and a (future) K2 printer profile carries:
+
+```toml
+[[rule]]
+when.material.class = "ASA"
+set.activate_chamber_temp_control = "1"
+set.chamber_temperature = "50"
+```
+
+None of our bundled printers (A1 mini, A1, U1) have a heated
+chamber, so generic ASA correctly resolves to *disabled* for all of
+them and no rule is needed today. A heated-chamber printer (K2-class)
+is the concrete trigger for adding one — and is also the first real
+case that would want **user-authored** conditional overrides in the
+filament editor, which currently stores flat (unconditional)
+overrides only (see the editor notes). Until such hardware lands,
+flat overrides suffice.
+
 ## Open: cascade `include:` directive (post-MVP)
 
 BambuStudio's machine profiles split G-code macros into sibling
