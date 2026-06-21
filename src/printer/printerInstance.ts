@@ -155,6 +155,31 @@ export async function setExtruderNozzleDiameter(
   );
 }
 
+/** Set (or clear, with `value = null`) a machine-settings override on
+ *  the instance — a Printer-bucket key in `config_overrides`. The backend
+ *  rejects non-Printer-bucket keys. Emits `printer:instance_changed`. */
+export async function setMachineOverride(
+  id: string,
+  key: string,
+  value: string | null,
+): Promise<PrinterInstance> {
+  return invoke<PrinterInstance>("printer_instance_set_config_override", {
+    id,
+    key,
+    value,
+  });
+}
+
+/** Resolve the instance's cascade to a flat `key → value` map — the
+ *  machine panel shows these as each option's base (pre-override) value. */
+export async function resolvedInstanceConfig(
+  id: string,
+): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>("printer_instance_resolved_config", {
+    id,
+  });
+}
+
 /** Change the bed currently loaded on this instance. Validated
  *  backend-side against the bound printer profile's
  *  `supported_build_plates`. Emits `printer:instance_changed`. */

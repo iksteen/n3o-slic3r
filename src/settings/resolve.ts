@@ -102,11 +102,39 @@ export type ResolvedMap = Record<string, ResolvedEntry>;
 export function usePrinterOptions(
   printer: PrinterProfileJson | null,
 ): { options: PrinterAwareOptionSummary[]; loading: boolean } {
+  return usePrinterAwareOptions("slicer_options_for_printer", printer);
+}
+
+/** The printer-bucket ("machine settings") analogue of
+ *  [`usePrinterOptions`] — same shape, sourced from
+ *  `slicer_machine_options_for_printer`. */
+export function useMachineOptions(
+  printer: PrinterProfileJson | null,
+): { options: PrinterAwareOptionSummary[]; loading: boolean } {
+  return usePrinterAwareOptions("slicer_machine_options_for_printer", printer);
+}
+
+/** Per-extruder Printer-bucket options (one value per toolhead), for the
+ *  printer panel's per-extruder tabs. */
+export function useExtruderOptions(
+  printer: PrinterProfileJson | null,
+): { options: PrinterAwareOptionSummary[]; loading: boolean } {
+  return usePrinterAwareOptions("slicer_extruder_options_for_printer", printer);
+}
+
+/** Shared fetch for the two printer-aware option commands. Cached per
+ *  printer model + toolhead count (the inputs the capability predicates
+ *  read), keyed by a stable JSON serialization so referentially-different
+ *  but value-identical PrinterProfile objects don't refire the effect. */
+function usePrinterAwareOptions(
+  command:
+    | "slicer_options_for_printer"
+    | "slicer_machine_options_for_printer"
+    | "slicer_extruder_options_for_printer",
+  printer: PrinterProfileJson | null,
+): { options: PrinterAwareOptionSummary[]; loading: boolean } {
   const [options, setOptions] = useState<PrinterAwareOptionSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  // Reduce the printer to a stable JSON key so React's effect-deps
-  // don't refire on referentially-different but value-identical
-  // PrinterProfile objects.
   const key = useMemo(() => JSON.stringify(printer ?? null), [printer]);
   useEffect(() => {
     if (printer == null) {
@@ -116,10 +144,7 @@ export function usePrinterOptions(
     }
     let cancelled = false;
     setLoading(true);
-    invoke<PrinterAwareOptionSummary[]>("slicer_options_for_printer", {
-      printer,
-      filter: null,
-    })
+    invoke<PrinterAwareOptionSummary[]>(command, { printer, filter: null })
       .then((opts) => {
         if (!cancelled) {
           setOptions(opts);
@@ -127,15 +152,15 @@ export function usePrinterOptions(
         }
       })
       .catch((err) => {
-        console.error("[settings] slicer_options_for_printer failed", err);
+        console.error(`[settings] ${command} failed`, err);
         if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-    // We re-key by the JSON serialization above to dedupe.
+    // Re-keyed by the JSON serialization above to dedupe.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [command, key]);
   return { options, loading };
 }
 

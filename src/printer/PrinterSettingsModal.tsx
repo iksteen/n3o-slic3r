@@ -48,10 +48,26 @@ import { usePlugins } from "../plugins/usePlugins";
 import { PluginManager } from "../plugins/PluginManager";
 import { instancePluginWriters } from "../plugins/pluginWriters";
 import { pluginSupportsPrinter } from "../plugins/pluginCascade";
+import { useMachineOptions, useExtruderOptions } from "../settings/resolve";
+import { categorize } from "../settings/nav/categories";
+import { setMachineOverride, resolvedInstanceConfig } from "./printerInstance";
+import { MachineSettingsSection } from "./MachineSettingsSection";
+import { ExtruderSettingsSection } from "./ExtruderSettingsSection";
 
 /** Bambu printers need a LAN access code; U1 needs a Moonraker port.
  *  Default Moonraker port matches the existing PrinterCredentialsDialog. */
 const DEFAULT_U1_PORT = 80;
+
+/** categorize() emits canonical categories (incl. the "Other" catch-all)
+ *  before the scraped TabPrinter pages; push "Other"/"Others" last so the
+ *  real pages lead in the printer-settings nav. */
+function orderGroupsOtherLast<T extends { id: string }>(groups: T[]): T[] {
+  const isOther = (id: string) => id === "Other" || id === "Others";
+  return [
+    ...groups.filter((g) => !isOther(g.id)),
+    ...groups.filter((g) => isOther(g.id)),
+  ];
+}
 
 export interface PrinterSettingsModalProps {
   /** The instance the cog opened. The modal scopes everything to it. */
@@ -208,9 +224,13 @@ export function PrinterSettingsModal({
   const driverKind = driverKindFromProfile(profile);
 
   const [draft, setDraft] = useState<Draft>(() => initialDraft(instance));
-  const [active, setActive] = useState<"general" | "connection" | "plugins">(
-    "general",
-  );
+  // Top-level tab: "general" (general/connection/plugins), "machine" (the
+  // machine-wide settings categories), or "ext:<n>" (per-toolhead settings).
+  const [topTab, setTopTab] = useState<string>("general");
+  // The selected left-nav item within the active top tab. Base sections
+  // are fixed ids; machine-settings categories add their (dynamic,
+  // scraped) page titles as further nav ids — hence `string`.
+  const [active, setActive] = useState<string>("general");
   /** Which modal-blocking confirmation overlay is showing, if any.
    *  One union instead of three mutually-exclusive booleans —
    *  delete / discard / amsShrink never co-occur, so a single state
@@ -233,6 +253,7 @@ export function PrinterSettingsModal({
   // instance (parent swaps the prop). Resets all UI state too.
   useEffect(() => {
     setDraft(initialDraft(instance));
+    setTopTab("general");
     setActive("general");
     setOverlay(null);
     setSaveError(null);
@@ -249,6 +270,75 @@ export function PrinterSettingsModal({
     [changed, driverKind],
   );
   const dirty = sectionDirty.general || sectionDirty.connection;
+
+  // Machine + per-extruder (Printer-bucket) settings — auto-populated from
+  // libslic3r and grouped by Orca's TabPrinter pages/optgroups. Each group
+  // is a left-nav category; overrides persist live to `config_overrides`.
+  const { options: machineOptions } = useMachineOptions(profile);
+  const { options: extruderOptions } = useExtruderOptions(profile);
+  const machineGroups = useMemo(
+    () => orderGroupsOtherLast(categorize(machineOptions)),
+    [machineOptions],
+  );
+  // The per-extruder option set is identical across toolheads; only the
+  // displayed vector index differs. Categorize once, share across tabs.
+  const extruderGroups = useMemo(
+    () => orderGroupsOtherLast(categorize(extruderOptions)),
+    [extruderOptions],
+  );
+  const extruderCount = instance.extruders.length;
+  const [resolved, setResolved] = useState<Record<string, string>>({});
+  // Gates the Silent column on the machine-limits rows. libslic3r serializes
+  // the bool as "1"/"0"; treat anything truthy as on.
+  const silentMode =
+    resolved["silent_mode"] === "1" || resolved["silent_mode"] === "true";
+  // Re-resolve when the instance's overrides change (a `when`-gated value
+  // elsewhere can shift); keyed on a serialization so it's value-stable.
+  const overridesKey = JSON.stringify(instance.config_overrides);
+  useEffect(() => {
+    let cancelled = false;
+    resolvedInstanceConfig(instance.id)
+      .then((r) => {
+        if (!cancelled) setResolved(r);
+      })
+      .catch((e) => console.error("[printer] resolved config failed", e));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instance.id, overridesKey]);
+  const onSetMachine = (key: string, value: string): void => {
+    setMachineOverride(instance.id, key, value).catch((e) =>
+      setSaveError(String(e)),
+    );
+  };
+  const onClearMachine = (key: string): void => {
+    setMachineOverride(instance.id, key, null).catch((e) =>
+      setSaveError(String(e)),
+    );
+  };
+  // Per-tab left-nav groups for the non-"general" tabs.
+  const isExtruderTab = topTab.startsWith("ext:");
+  const extruderIndex = isExtruderTab ? Number(topTab.slice(4)) : 0;
+  const currentGroups =
+    topTab === "machine"
+      ? machineGroups
+      : isExtruderTab
+        ? extruderGroups
+        : [];
+  // Categories load async; if `active` isn't (yet) one of the current tab's
+  // groups, fall back to the first so the tab always shows content.
+  const navActive = currentGroups.some((g) => g.id === active)
+    ? active
+    : (currentGroups[0]?.id ?? "");
+
+  // Switch top tab and land on a valid left-nav item for it.
+  const selectTopTab = (tab: string): void => {
+    setTopTab(tab);
+    if (tab === "general") setActive("general");
+    else if (tab === "machine") setActive(machineGroups[0]?.id ?? "");
+    else setActive(extruderGroups[0]?.id ?? "");
+  };
 
   // Name validation: trim, reject empty, reject if matches another
   // instance's display_name (case-sensitive — display names are
@@ -437,30 +527,83 @@ export function PrinterSettingsModal({
           <ModalCloseButton onClick={requestClose} />
         </header>
 
+        <div className="psm-tabs" role="tablist" aria-label="Printer settings">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={topTab === "general"}
+            className={`psm-tab${topTab === "general" ? " active" : ""}${
+              dirty ? " dirty" : ""
+            }`}
+            onClick={() => selectTopTab("general")}
+          >
+            General
+            {dirty && <span className="psm-nav-dot" aria-label="Unsaved changes" />}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={topTab === "machine"}
+            className={`psm-tab${topTab === "machine" ? " active" : ""}`}
+            onClick={() => selectTopTab("machine")}
+            disabled={machineGroups.length === 0}
+          >
+            Machine
+          </button>
+          {extruderGroups.length > 0 &&
+            Array.from({ length: extruderCount }, (_, i) => {
+              const id = `ext:${i}`;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={topTab === id}
+                  className={`psm-tab${topTab === id ? " active" : ""}`}
+                  onClick={() => selectTopTab(id)}
+                >
+                  {extruderCount > 1 ? `Extruder ${i + 1}` : "Extruder"}
+                </button>
+              );
+            })}
+        </div>
+
         <div className="psm-body">
           <nav className="psm-nav" aria-label="Settings sections">
-            {sections.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className={`psm-nav-item${active === s.id ? " active" : ""}${s.dirty ? " dirty" : ""}`}
-                onClick={() => setActive(s.id)}
-              >
-                <span className="psm-nav-icon">{s.icon}</span>
-                <span>{s.label}</span>
-                {s.dirty && (
-                  <span
-                    className="psm-nav-dot"
-                    title="Unsaved changes"
-                    aria-label="Unsaved changes"
-                  />
-                )}
-              </button>
-            ))}
+            {topTab === "general"
+              ? sections.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className={`psm-nav-item${active === s.id ? " active" : ""}${s.dirty ? " dirty" : ""}`}
+                    onClick={() => setActive(s.id)}
+                  >
+                    <span className="psm-nav-icon">{s.icon}</span>
+                    <span>{s.label}</span>
+                    {s.dirty && (
+                      <span
+                        className="psm-nav-dot"
+                        title="Unsaved changes"
+                        aria-label="Unsaved changes"
+                      />
+                    )}
+                  </button>
+                ))
+              : currentGroups.map((g) => (
+                  <button
+                    key={g.id}
+                    type="button"
+                    className={`psm-nav-item${navActive === g.id ? " active" : ""}`}
+                    onClick={() => setActive(g.id)}
+                  >
+                    <span className="psm-nav-icon">{g.icon}</span>
+                    <span>{g.name}</span>
+                  </button>
+                ))}
           </nav>
 
           <section className="psm-content">
-            {active === "general" && profile && (
+            {topTab === "general" && active === "general" && profile && (
               <GeneralSection
                 draft={draft}
                 setDraft={setDraft}
@@ -470,7 +613,7 @@ export function PrinterSettingsModal({
                 nameInUse={nameInUse}
               />
             )}
-            {active === "connection" && driverKind && (
+            {topTab === "general" && active === "connection" && driverKind && (
               <ConnectionSection
                 driverKind={driverKind}
                 instanceId={instance.id}
@@ -495,12 +638,40 @@ export function PrinterSettingsModal({
                 onEdit={() => setForgetConnection(false)}
               />
             )}
-            {active === "plugins" && (
+            {topTab === "general" && active === "plugins" && (
               <PluginsSection
                 instance={instance}
                 printerModel={profile?.model ?? null}
               />
             )}
+            {topTab === "machine" &&
+              machineGroups.map((g) =>
+              navActive === g.id ? (
+                <MachineSettingsSection
+                  key={g.id}
+                  settings={g.settings}
+                  overrides={instance.config_overrides}
+                  resolved={resolved}
+                  silentMode={silentMode}
+                  onSet={onSetMachine}
+                  onClear={onClearMachine}
+                />
+              ) : null,
+            )}
+            {isExtruderTab &&
+              extruderGroups.map((g) =>
+                navActive === g.id ? (
+                  <ExtruderSettingsSection
+                    key={g.id}
+                    extruderIndex={extruderIndex}
+                    settings={g.settings}
+                    overrides={instance.config_overrides}
+                    resolved={resolved}
+                    onSet={onSetMachine}
+                    onClear={onClearMachine}
+                  />
+                ) : null,
+              )}
           </section>
         </div>
 
