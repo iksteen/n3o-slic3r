@@ -18,7 +18,7 @@ import { onEvents } from "../state/eventRouter";
 export function WgpuViewport() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cam = useRef({ az: 0.9, el: 0.6, dist: 350, center: [0, 0, 0] as [number, number, number] });
-  const drag = useRef<{ x: number; y: number } | null>(null);
+  const drag = useRef<{ x: number; y: number; button: number } | null>(null);
   const inflight = useRef(false);
   const dirty = useRef(false);
 
@@ -88,29 +88,63 @@ export function WgpuViewport() {
       }
     }
 
+    // Right-drag pans: move the look-at center in the view plane, scaled so the
+    // grabbed point tracks the cursor (world-units-per-pixel at the focal plane).
+    const pan = (dx: number, dy: number) => {
+      const c = cam.current;
+      const ce = Math.cos(c.el),
+        se = Math.sin(c.el);
+      const ca = Math.cos(c.az),
+        sa = Math.sin(c.az);
+      // forward = eye→center = -(center→eye dir)
+      const fx = -ce * ca,
+        fy = -ce * sa,
+        fz = -se;
+      // right = normalize(forward × worldUp(0,0,1)) = normalize(fy, -fx, 0)
+      const rl = Math.hypot(fy, fx) || 1;
+      const rx = fy / rl,
+        ry = -fx / rl;
+      // up = right × forward
+      const ux = ry * fz,
+        uy = -rx * fz,
+        uz = rx * fy - ry * fx;
+      const k = (2 * c.dist * Math.tan((45 * Math.PI) / 180 / 2)) / Math.max(1, canvas.height);
+      c.center[0] += (-dx * rx + dy * ux) * k;
+      c.center[1] += (-dx * ry + dy * uy) * k;
+      c.center[2] += dy * uz * k;
+      void render();
+    };
+
     let moved = false; // distinguishes an orbit drag from a click-to-select
     const onDown = (e: MouseEvent) => {
-      if (e.button === 0) {
-        drag.current = { x: e.clientX, y: e.clientY };
+      if (e.button === 0 || e.button === 2) {
+        drag.current = { x: e.clientX, y: e.clientY, button: e.button };
         moved = false;
+        if (e.button === 2) e.preventDefault();
       }
     };
     const onUp = (e: MouseEvent) => {
-      const wasDragging = drag.current !== null;
+      const wasDragging = drag.current?.button === 0;
       drag.current = null;
       if (wasDragging && !moved && e.button === 0) void pick(e.clientX, e.clientY);
     };
     const onMove = (e: MouseEvent) => {
-      if (!drag.current) return;
-      const dx = e.clientX - drag.current.x;
-      const dy = e.clientY - drag.current.y;
+      const d = drag.current;
+      if (!d) return;
+      const dx = e.clientX - d.x;
+      const dy = e.clientY - d.y;
       if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
-      drag.current = { x: e.clientX, y: e.clientY };
+      drag.current = { x: e.clientX, y: e.clientY, button: d.button };
+      if (d.button === 2) {
+        pan(dx, dy);
+        return;
+      }
       const c = cam.current;
       c.az -= dx * 0.01;
       c.el = Math.min(1.45, Math.max(-1.45, c.el + dy * 0.01));
       void render();
     };
+    const onCtxMenu = (e: MouseEvent) => e.preventDefault(); // right-drag pans, no menu
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const c = cam.current;
@@ -136,6 +170,7 @@ export function WgpuViewport() {
     window.addEventListener("mouseup", onUp);
     window.addEventListener("mousemove", onMove);
     canvas.addEventListener("wheel", onWheel, { passive: false });
+    canvas.addEventListener("contextmenu", onCtxMenu);
     ro.observe(canvas);
 
     // Re-render when the scene changes; re-frame on bed/plate/project change.
@@ -164,6 +199,7 @@ export function WgpuViewport() {
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("mousemove", onMove);
       canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("contextmenu", onCtxMenu);
       ro.disconnect();
     };
   }, []);

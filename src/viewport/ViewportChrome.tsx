@@ -74,7 +74,7 @@ export function ViewportChrome({
           </button>
         </div>
       </div>
-      <ViewportLegend hints="LMB rotate · scroll zoom" />
+      <ViewportLegend hints="LMB rotate · RMB pan · scroll zoom" />
     </>
   );
 }
