@@ -1,9 +1,19 @@
 # Decision record — replace the Three.js viewport with a Rust-side wgpu renderer
 
 **Status: GO.** Adopt **option B — one wgpu renderer**, delete the **edit
-viewport's** Three.js (`src/viewport/`) and replace it with wgpu. The Linux
-present path is **wgpu → GtkGLArea, zero-copy**, validated end-to-end on real
-Intel hardware. Honest effort: **~5–7 weeks**.
+viewport's** Three.js (`src/viewport/`) and replace it with wgpu. Honest effort:
+**~5–7 weeks**.
+
+**Linux present path — corrected after phase-1 implementation: Strategy A
+(offscreen wgpu → opaque `<canvas>` blit), NOT GtkGLArea.** The GtkGLArea path
+(wgpu composited behind a transparent webview) was throughput- and feel-validated
+on real Intel hardware, but it requires a **transparent WebKitGTK webview**, and
+that does not work for our UI: WebKitGTK does not clear removed DOM in transparent
+mode, so dynamic overlays (tooltips, toasts, the progress window, the console)
+that land over the viewport **smear** — their pixels persist when dismissed. See
+"Phase-1 finding: transparency is dead on Linux" below. Strategy A needs no
+transparency (opaque canvas, DOM overlays composite normally) at the cost of a
+per-frame copy — acceptable at edit-viewport sizes.
 
 **Scope decided:** the G-code preview (`src/preview/`) **stays on Three.js for
 now** — it gets its own full redesign + wgpu rewrite *after* the prepare tab is
@@ -67,31 +77,71 @@ how the finished frame reaches the screen differs:
 
 | platform | present shim | status |
 | --- | --- | --- |
-| **Linux** | **wgpu → GtkGLArea** (adopt the widget's GL context, render offscreen, `glBlitFramebuffer` into GTK's FBO) | **built + validated** (`gtk-glarea-stl`) |
+| **Linux** | **Strategy A** — offscreen wgpu → readback → opaque `<canvas>` blit (the GtkGLArea path is dead — needs webview transparency; see the transparency finding below) | chosen; building |
 | **macOS** | wgpu → `CAMetalLayer` (native, zero-copy), or Strategy A (~5 GB/s measured — also fine) | not built; both paths known-good |
-| **Windows** | DXGI swapchain on a child HWND / DirectComposition | not built; needs real-hw check |
+| **Windows** | DXGI swapchain on a child HWND / DirectComposition, or Strategy A | not built; needs real-hw check |
 
-The Linux bridge — the previously-unbuilt, highest-risk piece — is done:
-1. In `connect_render`, `wgpu_hal::gles::Adapter::new_external` builds a wgpu
-   adapter on the GLArea's *own* current GL context (loader =
-   `epoxy::get_proc_addr`; libepoxy exports `epoxy_*` dispatch pointers, not
-   plain `glFoo`).
-2. wgpu renders the scene into an offscreen texture (its own depth, lighting).
-3. `glBlitFramebuffer` composites that texture into GTK's framebuffer — captured
-   at frame-top, because wgpu's submit leaves *its* FBO bound. **No CPU
-   readback**; the texture never leaves the GPU.
-
-**Why the win generalizes (the key reframe):** `gtk-glarea-stl` is visibly
-smoother than the WebKitGTK viewport **even on an RTX 5070 Ti** — a GPU nowhere
-near its limit. So the Linux bottleneck is WebKit's *CPU* software-raster, not
-GPU class. Every Linux user benefits — discrete GPUs included — not just the
-weak-iGPU case. The Intel laptop then confirmed it on the actual target.
+**Why the GtkGLArea path was so attractive (and why it still lost):**
+`gtk-glarea-stl` is visibly smoother than the WebKitGTK viewport **even on an
+RTX 5070 Ti** — a GPU nowhere near its limit. So the Linux bottleneck is WebKit's
+*CPU* software-raster, not GPU class; every Linux user benefits, not just the
+weak-iGPU case. The GtkGLArea bridge (wgpu adopts the widget's GL context via
+`wgpu_hal::gles::Adapter::new_external`, renders offscreen, `glBlitFramebuffer`
+into GTK's FBO — zero readback) was built and felt "staggering" on the Intel
+laptop. But presenting it *behind* the DOM requires a **transparent webview**,
+which WebKitGTK can't do without smearing dynamic overlays — so it's out for the
+real UI (see the transparency finding below). Strategy A keeps the GPU-rasterization win (the heavy part) and
+pays a per-frame copy for present; it loses the zero-copy compositing, but it's
+the only path that coexists with the dynamic DOM overlays.
 
 **The AD-8 dividend.** Scene *state* (geometry, transforms, selection, MMU paint,
 spool colors) already lives in Rust (`core/scene/`), exposed via the binary
 `scene_mesh_buffers` IPC + `scene:*` events. A wgpu renderer consumes that
 unchanged — the state half of the port is genuinely free, which is what the old
 2–3 wk estimate was really measuring.
+
+---
+
+## Phase-1 finding: transparency is dead on Linux (WebKitGTK)
+
+Phase 1 set out to retire the one unretired risk — the **hole-punch layout**: a
+transparent webview on top, GPU content showing through the viewport region. The
+compositing half *works* (a `GtkGLArea` behind a transparent webview shows
+through — orange visible in the viewport, panels opaque, input intact). The
+**repaint** half does not, and it kills the approach:
+
+**WebKitGTK does not clear its transparent surface when DOM is removed.** A
+dynamic transient drawn over the viewport (a tooltip at the cursor, a toast, the
+slicing progress window, the console drawer) **leaves its pixels behind** when
+dismissed — it smears. These overlays land *anywhere* over the viewport and are
+intrinsic to the UI, so this is fatal, not cosmetic.
+
+Ruled out exhaustively (each tested on the running app):
+- **Every way of enabling transparency is the same call on Linux.** wry 0.55
+  `webkitgtk/mod.rs:289` is *ungated*: `if attributes.transparent {
+  webview.set_background_color(0,0,0,0) }`. The `transparent` Cargo feature only
+  gates the macOS/Windows paths. So config `transparent`, runtime
+  `set_background_color`, and builder `.transparent(true)` are byte-for-byte
+  identical here — and all smear.
+- **X11 and Wayland both smear** (`GDK_BACKEND=x11` included).
+- **`WEBKIT_DISABLE_COMPOSITING_MODE=1`** — no help.
+- **Smears over the bare desktop** (transparent webview, no GLArea behind) — so
+  it's WebKit's own surface, not the GTK overlay/GLArea compositing.
+- **wry's `examples/wgpu.rs` doesn't disprove it**: it `panic!`s on Wayland, and
+  on X11 it never adds/removes DOM — it only demonstrates *static* transparent
+  compositing (which we also have). It never exercises clear-on-removal.
+
+The alternative that needs no transparency — **GtkGLArea *on top* of an opaque
+webview** — is also out: the dynamic overlays above must render *over* the 3D, and
+an opaque GL widget on top hides them (and hiding the GL while any transient is up
+would flash the viewport away constantly).
+
+**Conclusion:** on Linux/WebKitGTK there is no way to composite native GPU content
+*under* dynamic DOM. The 3D must live *inside* the webview as an opaque surface →
+**Strategy A** (offscreen wgpu → `<canvas>` blit). It forfeits zero-copy present
+(per-frame readback + transport, ~330 MB/s on WebKitGTK — fine at edit-viewport
+sizes, degrades at 4K) but keeps the GPU-rasterization win and lets every dynamic
+overlay composite normally over an ordinary canvas.
 
 ---
 
@@ -118,14 +168,15 @@ face-normal parity with three.js.
 
 ---
 
-## 5. Phased plan (Strategy A/GtkGLArea, edit viewport first)
+## 5. Phased plan (Strategy A, edit viewport first)
 
-1. **Foundation** — GtkGLArea present shim into the real app's GTK window
-   (`default_vbox()` + the `gtk-glarea-stl` bridge), `invalidate()`-driven
-   `queue_render()`, glam camera consuming `scene:*`. *Adds: the hole-punch
-   layout — transparent webview over the GLArea so React panels frame a central
-   GL region. Unverified: transparent WebKitGTK over a GL widget on Wayland — do
-   this early, it's the one remaining Linux integration unknown.*
+1. **Foundation** — Strategy-A present loop: wgpu renders the scene to an
+   offscreen texture sized to the viewport, reads it back, and serves the bytes
+   to JS (custom URI scheme); the frontend draws them into an opaque `<canvas>`
+   where the Three.js renderer is today. Camera/input stay in JS → forwarded to
+   Rust; Rust re-renders on change (on-demand). glam camera consuming `scene:*`.
+   *(The hole-punch / GtkGLArea path was retired here — see the transparency
+   finding above.)*
 2. **Scene parity** — meshes + lighting + bed/axes/exclusion overlays +
    spool-color chain + MMU per-face paint + selection tint, from
    `scene_mesh_buffers`.
@@ -146,10 +197,11 @@ face-normal parity with three.js.
 
 ## 6. Open items / risks
 
-- **Hole-punch layout** (transparent webview over GLArea on Wayland/flatpak) —
-  the one Linux integration unknown left; retire it in phase 1. The
-  coexistence half is already proven (`gtk-glarea`); transparency + input
-  z-order is not.
+- **Hole-punch layout** — *resolved: dead* (transparency finding above).
+  Strategy A replaces it. New Linux risk to watch instead: per-frame transport
+  cost at large/HiDPI viewport sizes — mitigate with render-at-viewport-size +
+  DPR 1 + on-demand; measure the actual fps on the Intel laptop before committing
+  to canvas dimensions.
 - **Windows present path** — only ever measured in a GPU-less VM. Needs a
   real-hardware DXGI/DComp check (not on the Linux critical path).
 - **Preview renderer** — *decided OUT* (stays Three.js → own redesign + wgpu
