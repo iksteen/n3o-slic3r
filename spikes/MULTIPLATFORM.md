@@ -57,6 +57,10 @@ smoother than the WebKitGTK renderer **even on an RTX 5070 Ti** — i.e. on a fa
 discrete GPU where the GPU is nowhere near the limit. That confirms the Linux
 bottleneck is WebKit's *CPU* software-raster, not GPU class: the win from option
 B isn't Intel-only, the whole Linux userbase (discrete GPUs included) gets it.
+**Confirmed on the target hardware too:** run on the Intel laptop (Mesa Iris Xe,
+`i915`, Wayland), the orbit is "incredibly smooth, the difference is staggering"
+vs the current viewport. Both gates (throughput + feel) are passed → option B is
+a go for the Linux present path.
 
 ## The decision is binary (you can't mix renderers)
 

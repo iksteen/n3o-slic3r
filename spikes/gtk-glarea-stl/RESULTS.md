@@ -36,10 +36,15 @@ Zero-copy, no readback:
 `N3O_DUMP=1` writes the offscreen texture to `/tmp/wgpu-dump.ppm` once — the
 debug check that isolated "wgpu rendered fine" from "the blit was wrong".
 
-## Status
+## Status — feel gate PASSED on real Intel
 
-Built + driven headless (Xvfb, xdotool): renders correctly, orbit + zoom work,
-no crashes (validated on the RTX dev box via the GL backend). The bridge is the
-real one the production renderer would use. **Remaining: run it on the Intel box
-and feel the orbit** — the throughput gate (`../wgpu-mesh-fps/RESULTS.md`) is
-already passed; this confirms present + input latency.
+Built + driven headless (Xvfb, xdotool) on the RTX dev box, then run interactively
+on the **Intel laptop (Mesa Iris Xe / RPL-P, `i915`, Wayland)** — wgpu adapter
+came up as `Mesa Intel(R) Iris(R) Xe Graphics (RPL-P) | Gl`, the exact production
+path (wgpu on the iGPU → GtkGLArea composite). Orbit + zoom are **"incredibly
+smooth, the difference [vs the WebKitGTK viewport] is staggering"** (user, on the
+hardware). No stutter/tearing/input-lag.
+
+Both gates are now passed: throughput (`../wgpu-mesh-fps/RESULTS.md`) and feel
+(present + input latency, here). Nothing left to de-risk on the Linux present
+path — option B (wgpu everywhere, edit viewport first) is a go.
