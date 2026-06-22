@@ -1,0 +1,25 @@
+# Spike: does a GtkGLArea (GTK-composited GL content) coexist with the
+# WebKitWebView in one Tauri window on Linux/Wayland? If yes, native GPU content
+# can sit beside the webview WITHOUT the Strategy-B raw-swapchain surface
+# conflict AND without the Strategy-A ~330 MB/s webview transport (a GL texture
+# upload replaces the IPC copy). Standalone (own [workspace]).
+[package]
+name = "gtk-glarea-poc"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+# Linux-only: reach into Tauri's GTK window + draw GL into a GtkGLArea.
+# gtk 0.18 matches the version tao/wry already link (no second gtk-sys).
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+epoxy = "0.1"
+libloading = "0.8"

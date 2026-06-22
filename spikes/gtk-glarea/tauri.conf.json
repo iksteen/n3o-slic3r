@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "gtk-glarea-poc",
+  "version": "0.0.0",
+  "identifier": "org.thegraveyard.gtk-glarea-poc",
+  "build": {
+    "frontendDist": "dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "GtkGLArea + webview PoC",
+        "width": 1000,
+        "height": 800
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}
