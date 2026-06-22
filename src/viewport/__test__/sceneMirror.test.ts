@@ -232,8 +232,8 @@ describe("SceneMirror", () => {
         },
       },
     });
-    // Grid lines + outline + X axis + Y axis + 1 zone wireframe = 5 children.
-    expect(mirror.bedChildCount()).toBe(5);
+    // Grid + outline + X/Y/Z axes + 1 zone wireframe = 6 children.
+    expect(mirror.bedChildCount()).toBe(6);
 
     await mirror.applyEvent({
       kind: "BedChanged",

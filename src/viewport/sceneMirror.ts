@@ -898,15 +898,23 @@ function buildBedOverlay(group: THREE.Group, bed: BedMesh): void {
   outline.name = "n3o:bed-outline";
   group.add(outline);
 
-  // Axis markers at the world origin: a short +X line (red) and +Y line
-  // (green), lifted a hair above the grid so they don't z-fight with it.
+  // Axis markers at the world origin: short +X (red), +Y (green) and +Z
+  // (blue) lines, matching the corner legend. The in-plane lines are lifted
+  // a hair above the grid so they don't z-fight with it; +Z rises off the
+  // plate. Colours mirror the legend's axis hues.
   const axisLen = Math.min(maxX - minX, maxY - minY) * 0.18;
   const axisZ = z + 0.05;
-  const addAxis = (dx: number, dy: number, color: number, name: string) => {
+  const addAxis = (
+    dx: number,
+    dy: number,
+    dz: number,
+    color: number,
+    name: string,
+  ) => {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute(
       "position",
-      new THREE.Float32BufferAttribute([0, 0, axisZ, dx, dy, axisZ], 3),
+      new THREE.Float32BufferAttribute([0, 0, axisZ, dx, dy, axisZ + dz], 3),
     );
     const line = new THREE.LineSegments(
       geo,
@@ -915,8 +923,9 @@ function buildBedOverlay(group: THREE.Group, bed: BedMesh): void {
     line.name = name;
     group.add(line);
   };
-  addAxis(axisLen, 0, 0xff4444, "n3o:axis-x");
-  addAxis(0, axisLen, 0x44dd44, "n3o:axis-y");
+  addAxis(axisLen, 0, 0, 0xff4444, "n3o:axis-x");
+  addAxis(0, axisLen, 0, 0x44dd44, "n3o:axis-y");
+  addAxis(0, 0, axisLen, 0x4488ff, "n3o:axis-z");
 
   // Exclusion zones (red wireframe AABBs).
   for (const zone of exclusion_zones) {
