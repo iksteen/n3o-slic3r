@@ -1,0 +1,14 @@
+# Spike 0 (Strategy A make-or-break): how cheap is wgpu offscreen render +
+# GPU->CPU readback? Standalone crate (own [workspace]) so it does NOT pull in
+# the n3o-slic3r workspace / the 15-minute libslic3r build. Throwaway.
+[package]
+name = "wgpu-readback-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+wgpu = "0.20"
+pollster = "0.3"
