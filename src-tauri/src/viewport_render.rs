@@ -33,7 +33,7 @@ struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
   var o: VO; o.p = u.mvp * vec4<f32>(pos, 1.0); o.n = nrm; return o;
 }
 @fragment fn fs(i: VO) -> @location(0) vec4<f32> {
-  if (dot(i.n, i.n) < 0.01) { return vec4<f32>(0.34, 0.36, 0.40, 1.0); } // grid line
+  if (dot(i.n, i.n) < 0.01) { return vec4<f32>(u.color.rgb, 1.0); } // unlit line (grid / bbox bracket)
   let n = normalize(i.n);
   // Matte, two-sided lighting matching the Three.js viewport (ambient 0.55 +
   // key + fill). High ambient + abs() compresses contrast so the source model's
@@ -54,6 +54,38 @@ const UNIFORM_BYTES: u64 = 80;
 const DEFAULT_BED: ([f64; 3], [f64; 3]) = ([-110.0, -110.0, 0.0], [110.0, 110.0, 200.0]);
 const SELECTED_RGB: [f32; 3] = [0.231, 0.510, 0.965]; // tailwind blue-500 (#3b82f6)
 const DEFAULT_RGB: [f32; 3] = [0.694, 0.694, 0.694]; // #b1b1b1, matches the Three.js fallback
+const GRID_LINE: [f32; 4] = [0.34, 0.36, 0.40, 1.0];
+const BRACKET: [f32; 4] = [0.85, 0.88, 0.97, 1.0]; // selection bbox corner brackets
+
+/// Corner-bracket line segments for selected objects' bounding boxes: at each of
+/// the 8 corners, three short segments (25% of the edge) toward the adjacent
+/// corners. Built in world space (corners transformed by the object's model).
+fn bbox_brackets(boxes: &[(Mat4, [f32; 3], [f32; 3])]) -> Vec<Vertex> {
+    let mut v = Vec::new();
+    for (model, min, max) in boxes {
+        let corner = |sx: bool, sy: bool, sz: bool| {
+            Vec3::new(
+                if sx { max[0] } else { min[0] },
+                if sy { max[1] } else { min[1] },
+                if sz { max[2] } else { min[2] },
+            )
+        };
+        for &sx in &[false, true] {
+            for &sy in &[false, true] {
+                for &sz in &[false, true] {
+                    let c = corner(sx, sy, sz);
+                    let cw = model.transform_point3(c);
+                    for n in [corner(!sx, sy, sz), corner(sx, !sy, sz), corner(sx, sy, !sz)] {
+                        let ew = model.transform_point3(c + (n - c) * 0.25);
+                        v.push(Vertex { pos: cw.to_array(), nrm: [0.0; 3] });
+                        v.push(Vertex { pos: ew.to_array(), nrm: [0.0; 3] });
+                    }
+                }
+            }
+        }
+    }
+    v
+}
 
 /// Parse a CSS hex color (`#rrggbb`[`aa`]) to linear-ish 0..1 rgb.
 fn parse_hex(s: &str) -> Option<[f32; 3]> {
@@ -363,7 +395,7 @@ impl ViewportRenderer {
         self.resize(w, h);
 
         // --- gather under the project lock (cheap): bed + per-object models ---
-        let (bmin, bmax, draws) = {
+        let (bmin, bmax, draws, boxes) = {
             let p = project.lock().unwrap();
             let plate = p.active_plate();
             let (bmin, bmax) = plate
@@ -378,6 +410,11 @@ impl ViewportRenderer {
                 .printer_instance_id()
                 .and_then(instance_registry::lookup_instance);
             let mut draws: Vec<(MeshId, Mat4, [f32; 3])> = Vec::new();
+            // One outer AABB enclosing the whole selection (world space) → a
+            // single set of corner brackets, not one box per group member.
+            let mut sel_min = [f32::MAX; 3];
+            let mut sel_max = [f32::MIN; 3];
+            let mut any_sel = false;
             for (id, obj) in plate.scene.objects.iter() {
                 if !obj.visible {
                     continue;
@@ -395,15 +432,46 @@ impl ViewportRenderer {
                     }
                 }
                 if self.meshes.contains_key(&obj.mesh) {
-                    let color = if plate.scene.selection.contains(id) {
+                    let model = obj.transform.to_mat4();
+                    let selected = plate.scene.selection.contains(id);
+                    let color = if selected {
                         SELECTED_RGB
                     } else {
                         spool_color(&plate.material_to_slot, instance.as_ref(), obj.extruder_id)
                     };
-                    draws.push((obj.mesh, obj.transform.to_mat4(), color));
+                    draws.push((obj.mesh, model, color));
+                    if selected {
+                        if let Some(bb) = p.meshes.get(&obj.mesh).map(|m| m.bounding_box) {
+                            // Accumulate this object's 8 world-space bbox corners
+                            // into the selection's outer AABB.
+                            for &sx in &[false, true] {
+                                for &sy in &[false, true] {
+                                    for &sz in &[false, true] {
+                                        let c = Vec3::new(
+                                            (if sx { bb.max[0] } else { bb.min[0] }) as f32,
+                                            (if sy { bb.max[1] } else { bb.min[1] }) as f32,
+                                            (if sz { bb.max[2] } else { bb.min[2] }) as f32,
+                                        );
+                                        let w = model.transform_point3(c).to_array();
+                                        for k in 0..3 {
+                                            sel_min[k] = sel_min[k].min(w[k]);
+                                            sel_max[k] = sel_max[k].max(w[k]);
+                                        }
+                                    }
+                                }
+                            }
+                            any_sel = true;
+                        }
+                    }
                 }
             }
-            (bmin, bmax, draws)
+            // One axis-aligned box (identity model — corners are already world).
+            let boxes = if any_sel {
+                vec![(Mat4::IDENTITY, sel_min, sel_max)]
+            } else {
+                Vec::new()
+            };
+            (bmin, bmax, draws, boxes)
         };
         let bmin = bmin.map(|v| v as f32);
         let bmax = bmax.map(|v| v as f32);
@@ -413,19 +481,36 @@ impl ViewportRenderer {
         // Camera (frontend-owned), z up.
         let vp = view_proj(w as f32, h as f32, req.az, req.el, req.dist, Vec3::from(req.center));
 
-        // Pack uniforms per slot: [mat4 mvp][vec4 color]. Slot 0 = grid (its
-        // color is unused — the grid uses a fixed line color), slots 1.. = each
-        // object's vp*model + base color.
-        self.ensure_mvp_capacity(1 + draws.len() as u32);
-        let mut bytes = vec![0u8; self.slot as usize * (1 + draws.len())];
+        // Selection bbox corner brackets (world-space lines).
+        let bracket_verts = bbox_brackets(&boxes);
+        let bracket_vb = (!bracket_verts.is_empty()).then(|| {
+            self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("viewport.brackets"),
+                contents: bytemuck::cast_slice(&bracket_verts),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        });
+        let bracket_slot = 1 + draws.len();
+        let total_slots = bracket_slot + bracket_vb.is_some() as usize;
+
+        // Pack uniforms per slot: [mat4 mvp][vec4 color]. Slot 0 = grid (vp + grid
+        // line color), slots 1.. = each object's vp*model + base color, final slot
+        // (when there's a selection) = brackets (vp + bracket color).
+        self.ensure_mvp_capacity(total_slots as u32);
+        let mut bytes = vec![0u8; self.slot as usize * total_slots];
         bytes[0..64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
-        bytes[64..80].copy_from_slice(bytemuck::cast_slice(&[1.0f32, 1.0, 1.0, 1.0]));
+        bytes[64..80].copy_from_slice(bytemuck::cast_slice(&GRID_LINE));
         for (i, (_, model, color)) in draws.iter().enumerate() {
             let off = (i + 1) * self.slot as usize;
             bytes[off..off + 64]
                 .copy_from_slice(bytemuck::cast_slice(&(vp * *model).to_cols_array()));
             let rgba = [color[0], color[1], color[2], 1.0f32];
             bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
+        }
+        if bracket_vb.is_some() {
+            let off = bracket_slot * self.slot as usize;
+            bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
+            bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&BRACKET));
         }
         self.queue.write_buffer(&self.ubuf, 0, &bytes);
 
@@ -472,6 +557,13 @@ impl ViewportRenderer {
                 rp.set_vertex_buffer(0, gm.vb.slice(..));
                 rp.set_index_buffer(gm.ib.slice(..), wgpu::IndexFormat::Uint32);
                 rp.draw_indexed(0..gm.n_indices, 0, 0..1);
+            }
+            // selection bbox corner brackets
+            if let Some(vb) = &bracket_vb {
+                rp.set_pipeline(&self.line_pipe);
+                rp.set_bind_group(0, &self.bind, &[(bracket_slot as u32) * self.slot]);
+                rp.set_vertex_buffer(0, vb.slice(..));
+                rp.draw(0..bracket_verts.len() as u32, 0..1);
             }
         }
         enc.copy_texture_to_buffer(
