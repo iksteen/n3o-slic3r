@@ -12,6 +12,15 @@ fn report(line: String, app: tauri::AppHandle) {
     println!("[bench] {line}");
     use std::io::Write;
     let _ = std::io::stdout().flush();
+    // Also append to a fixed file — when the app is launched into a GUI session
+    // (macOS `launchctl asuser`) stdout detaches, so the file is how we capture.
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/blit-bench.log")
+    {
+        let _ = writeln!(f, "{line}");
+    }
     if line == "DONE" {
         app.exit(0);
     }
