@@ -25,6 +25,17 @@ wgpu takes the `wl_surface` and presents fine; the moment the GTK/WebKit webview
 also renders to that same surface it's a Wayland protocol violation (two clients
 on one surface) → fatal `Gdk Error 71`.
 
+**The `WEBKIT_DISABLE_DMABUF_RENDERER=1` workaround does NOT fix it** (tested, and
+it was set in the run above). Adding `WEBKIT_DISABLE_COMPOSITING_MODE=1` on top
+also still crashes identically. Those vars change WebKit's *internal* renderer
+(dmabuf vs software / accelerated compositing on/off), but this crash is
+*upstream* of WebKit: wgpu owns the GtkWindow's `wl_surface` (a Vulkan WSI
+swapchain), so when GTK attaches its own buffer to that same `wl_surface` for the
+webview, the Wayland compositor rejects it (Error 71). It's a surface-ownership
+conflict at the GTK/Wayland level, not WebKit's render path — a different class of
+crash from the app's normal webview-on-Wayland failure that the dmabuf flag does
+fix.
+
 **XWayland (`GDK_BACKEND=x11`):**
 - No crash. `window handle: Xlib(...)`, wgpu presents magenta, app stays up.
 - But the screenshot is **100% magenta — the webview is invisible.** wgpu's
