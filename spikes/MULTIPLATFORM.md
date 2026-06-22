@@ -52,6 +52,12 @@ The 3D-perf symptom (fans/CPU) is **Linux/WebKitGTK-specific**: only there does
 the webview fall back to software WebGL. macOS/Windows GPU-accelerate the
 existing renderer.
 
+**Observed (`gtk-glarea-stl` feel test):** the wgpu→GtkGLArea path is visibly
+smoother than the WebKitGTK renderer **even on an RTX 5070 Ti** — i.e. on a fast
+discrete GPU where the GPU is nowhere near the limit. That confirms the Linux
+bottleneck is WebKit's *CPU* software-raster, not GPU class: the win from option
+B isn't Intel-only, the whole Linux userbase (discrete GPUs included) gets it.
+
 ## The decision is binary (you can't mix renderers)
 
 A renderer is the whole scene system — meshes, materials, the spool-color chain,
