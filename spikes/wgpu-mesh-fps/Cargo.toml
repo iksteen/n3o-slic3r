@@ -1,0 +1,16 @@
+# Does the GPU rasterize a representative scene fast? Headless wgpu render-fps
+# at several triangle counts — the decisive "will it be faster on the Intel
+# iGPU than WebKitGTK's software WebGL" measurement. Runs over SSH (no GUI).
+[package]
+name = "wgpu-mesh-fps"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+wgpu = "0.20"
+pollster = "0.3"
+glam = "0.29"
+bytemuck = { version = "1", features = ["derive"] }
