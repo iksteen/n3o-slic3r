@@ -570,22 +570,8 @@ export function ViewportCanvas({
     const detachToastsListener = mirror.onEvent((evt) => {
       const activeId = mirror.activePlateIdOrNull();
       switch (evt.kind) {
-        case "ObjectOutOfBounds":
-          if (evt.data.plate_id !== activeId) break;
-          pushToast(
-            "warn",
-            `object ${evt.data.object_id} out of bounds: ${evt.data.reasons
-              .map((r) => r.kind)
-              .join(", ")}`,
-          );
-          break;
-        case "AutoArrangeOverflow":
-          if (evt.data.plate_id !== activeId) break;
-          pushToast(
-            "warn",
-            `auto-arrange could not place ${evt.data.un_placed.length} object(s)`,
-          );
-          break;
+        // ObjectOutOfBounds / AutoArrangeOverflow are handled by ViewportToasts
+        // (mounted outside the viewport switch).
         case "ObjectUpdated":
           if (evt.data.plate_id !== activeId) break;
           // A selected object's transform changed programmatically (e.g.

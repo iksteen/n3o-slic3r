@@ -3,8 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { ViewportLegend } from "./ViewportLegend";
 
 /**
- * Renderer-agnostic chrome for the wgpu viewport: the mode toggle, plate-level
- * actions, and the axis/input legend. The gizmo-mode, lay-flat / align /
+ * Chrome for the wgpu viewport: the mode toggle, plate-level actions (arrange,
+ * auto-orient), and the axis/input legend. The gizmo-mode, lay-flat / align /
  * face-align and clone controls stay in the Three.js `ViewportCanvas` for now —
  * they depend on the wgpu gizmo + face-picking, which aren't built yet.
  */

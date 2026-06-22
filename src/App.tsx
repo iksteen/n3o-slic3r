@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ViewportCanvas } from "./viewport/ViewportCanvas";
 import { WgpuViewport } from "./viewport/WgpuViewport";
 import { ViewportChrome } from "./viewport/ViewportChrome";
+import { ViewportToasts } from "./viewport/ViewportToasts";
 import { setupTowerMeshCache } from "./viewport/towerMeshCache";
 import { ErrorConsole } from "./logging/ErrorConsole";
 import { shouldIgnoreHotkey } from "./ui/hotkeyInhibit";
@@ -621,6 +622,8 @@ function App() {
                 />
               )}
               {canvasOverlays}
+              {/* Scene warnings (OOB / overflow) for whichever viewport is mounted. */}
+              <ViewportToasts />
             </div>
             <SettingsPanelHost
               session={session}
