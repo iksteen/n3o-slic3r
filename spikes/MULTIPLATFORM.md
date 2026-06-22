@@ -40,40 +40,53 @@ mostly moot: on macOS/Windows you'd never do it — you'd just keep rendering in
 the (GPU-accelerated) webview. You only need an alternative on **Linux**, where
 the webview itself is the slow software path.
 
-## Per-platform conclusion
+## Where the perf problem lives
 
-| platform | webview | in-webview WebGL (the *existing* renderer) | needs the wgpu work? |
-| --- | --- | --- | --- |
-| **macOS** | WKWebView | GPU-accelerated (Metal) → fine | **No** |
-| **Windows** | WebView2 | GPU-accelerated (D3D) on real hw → fine | **No** (VM showed slow *transport*, but that's the wrong question — see below) |
-| **Linux** | WebKitGTK | **software** (GPU path crashes → `WEBKIT_DISABLE_DMABUF_RENDERER=1`) → slow | **only here** |
+| platform | webview | in-webview WebGL (today's Three.js renderer) |
+| --- | --- | --- |
+| **macOS** | WKWebView | GPU-accelerated (Metal) → fine |
+| **Windows** | WebView2 | GPU-accelerated (D3D) on real hw → fine |
+| **Linux** | WebKitGTK | **software** (GPU path crashes → `WEBKIT_DISABLE_DMABUF_RENDERER=1`) → slow |
 
-## The reframe (the actual conclusion)
+The 3D-perf symptom (fans/CPU) is **Linux/WebKitGTK-specific**: only there does
+the webview fall back to software WebGL. macOS/Windows GPU-accelerate the
+existing renderer.
 
-This investigation started from a Linux symptom (fans/CPU) and the framing was
-"swap the renderer to wgpu." After measuring all three platforms, the cleaner
-truth is: **the 3D-perf problem is Linux/WebKitGTK-specific, and macOS/Windows
-need no change at all.** Their webviews GPU-accelerate the existing Three.js
-WebGL renderer; only WebKitGTK falls back to software.
+## The decision is binary (you can't mix renderers)
 
-So the native-GPU work is a **Linux-only** concern, and it's **GtkGLArea**
-(proven — `gtk-glarea/RESULTS.md`), not a cross-platform port. macOS and Windows
-keep Three.js exactly as-is.
+A renderer is the whole scene system — meshes, materials, the spool-color chain,
+MMU paint, selection, the gizmo, picking, the bed overlay, *and the separate
+G-code preview renderer*. "Keep Three.js on macOS/Windows, use wgpu on Linux"
+means writing and maintaining **all of that twice** — once in TS, once in Rust,
+kept in sync forever. Nobody does that to fix one platform. So it's one or the
+other, everywhere:
 
-The cost/shape of the decision is therefore:
-- **Do nothing more** — keep Three.js everywhere; Linux stays on software WebGL,
-  mitigated by the on-demand rendering already shipped. Cheapest.
-- **Linux-only native renderer** (wgpu + GtkGLArea) — best Linux perf, but means
-  **maintaining a second renderer** just for one platform (Three.js for mac/win,
-  wgpu for Linux). Real, ongoing cost.
-- **Fix WebKitGTK's GPU path on Linux** (the dmabuf crash) so in-webview WebGL is
-  hardware-accelerated like the others — no second renderer, but it's a
-  WebKitGTK/driver bug largely outside our control.
+- **A) Keep Three.js everywhere.** One render path (JS). Linux stays on software
+  WebGL — mitigated by the on-demand rendering already shipped, but the ceiling
+  is WebKit's software compositor. macOS/Windows unaffected. **Cheapest; Linux
+  doesn't get faster.**
+- **B) Go wgpu everywhere.** One render path (Rust); delete Three.js. The *scene
+  renderer* is shared across platforms; only a **thin per-platform present shim**
+  differs (how the finished frame reaches the screen) — that is NOT a second
+  renderer:
+  - **Linux:** GtkGLArea (proven). Strategy A's transport (~330 MB/s) is too slow;
+    GtkGLArea composites in-process.
+  - **macOS:** wgpu can present **directly to a `CAMetalLayer`** (a layer-backed
+    NSView) — zero-copy native — or just Strategy A (measured ~5 GB/s, plenty).
+  - **Windows:** present a DXGI swapchain on a child HWND / via DirectComposition,
+    or Strategy A *if* real-hw transport is fast (the VM said ~95 MB/s, but that's
+    a no-GPU VM — unresolved; worst case use the native DXGI/DComp present).
+  Best perf everywhere and uniform, but it's the full renderer port (~8–12 wk,
+  two renderers if the G-code preview is in scope) **plus** three thin-but-bespoke
+  present shims.
+- **C) Fix WebKitGTK's GPU path on Linux** (the dmabuf crash) so in-webview WebGL
+  is hardware-accelerated like the other two. No port, no second anything — but
+  it's a WebKitGTK/driver bug largely outside our control.
 
-"Strategy A everywhere" is **not** the answer: shipping frames to the webview is
-slow on both WebKitGTK (~330 MB/s) and Windows-WebView2 (~95 MB/s in-VM); only
-macOS is fast. But you'd only ever do that on Linux anyway — and there,
-GtkGLArea (in-process GTK composite, no transport) beats it.
+Note what's ruled out: **"Strategy A everywhere"** is not viable — shipping frames
+to the webview is slow on WebKitGTK (~330 MB/s) and Windows-WebView2 (~95 MB/s,
+VM), fast only on macOS. Under option B the present shim is per-platform precisely
+because of this (GtkGLArea/CAMetalLayer/DXGI, not a uniform canvas blit).
 
 ## Caveats / open items
 - **Windows number is from a GPU-less VM** (release build, so not a debug
