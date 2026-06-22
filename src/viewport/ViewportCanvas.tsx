@@ -13,6 +13,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { onEvents } from "../state/eventRouter";
+import { ViewportLegend } from "./ViewportLegend";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -1361,17 +1362,7 @@ export function ViewportCanvas({
           onCancel={() => setCloneDialog(null)}
         />
       )}
-      <div className="gizmo-hint pointer-events-none">
-        <span className="axes" aria-label="Axes">
-          <span className="axis axis-x">X</span>
-          <span className="axis axis-y">Y</span>
-          <span className="axis axis-z">Z</span>
-        </span>
-        <span className="gizmo-hint-sep" aria-hidden>
-          ·
-        </span>
-        Drag · LMB rotate · RMB pan · scroll zoom
-      </div>
+      <ViewportLegend hints="Drag · LMB rotate · RMB pan · scroll zoom" />
       {/* Pinned above the console toggle (bottom:12px, ~26px tall) so the
           lowest toast clears it rather than rendering behind it. */}
       <div className="absolute bottom-12 right-3 flex flex-col gap-1 pointer-events-none">

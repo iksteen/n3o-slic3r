@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ViewportCanvas } from "./viewport/ViewportCanvas";
 import { WgpuViewport } from "./viewport/WgpuViewport";
+import { ViewportChrome } from "./viewport/ViewportChrome";
 import { setupTowerMeshCache } from "./viewport/towerMeshCache";
 import { ErrorConsole } from "./logging/ErrorConsole";
 import { shouldIgnoreHotkey } from "./ui/hotkeyInhibit";
@@ -603,9 +604,11 @@ function App() {
               {(window as typeof window & { __N3O_WGPU?: boolean }).__N3O_WGPU ? (
                 <>
                   <WgpuViewport />
-                  <div style={{ position: "absolute", top: 12, left: 12, zIndex: 10 }}>
-                    {modeToggle}
-                  </div>
+                  <ViewportChrome
+                    leading={modeToggle}
+                    objectIds={(activePlate?.objects ?? []).map((o) => o.id)}
+                    selectedIds={activePlate?.selection ?? []}
+                  />
                 </>
               ) : (
                 <ViewportCanvas
