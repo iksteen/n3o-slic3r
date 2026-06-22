@@ -1,11 +1,16 @@
 # Decision record — replace the Three.js viewport with a Rust-side wgpu renderer
 
-**Status: GO.** Adopt **option B — one wgpu renderer for all platforms**, delete
-Three.js, start with the **edit viewport** (`src/viewport/`); leave the G-code
-preview (`src/preview/`) on its own track (it's due a redesign anyway). The
-Linux present path is **wgpu → GtkGLArea, zero-copy**, validated end-to-end on
-real Intel hardware. Honest effort: **~5–7 weeks edit-viewport-only**, ~8–12 wk
-if the preview renderer is pulled in too.
+**Status: GO.** Adopt **option B — one wgpu renderer**, delete the **edit
+viewport's** Three.js (`src/viewport/`) and replace it with wgpu. The Linux
+present path is **wgpu → GtkGLArea, zero-copy**, validated end-to-end on real
+Intel hardware. Honest effort: **~5–7 weeks**.
+
+**Scope decided:** the G-code preview (`src/preview/`) **stays on Three.js for
+now** — it gets its own full redesign + wgpu rewrite *after* the prepare tab is
+finished, not as part of this port. So the edit viewport and the preview run
+different renderers for an interim period (acceptable: they're separate screens,
+not kept in sync). The ~8–12 wk "full parity" figure below is the eventual
+two-renderer total, for reference — it is **not** this project's scope.
 
 This record consolidates six spikes (branch `spike/wgpu-spike0`, worktree
 `../n3o-slic3r-wgpu`, dir `spikes/`). It supersedes the 2–3 week figure in PRD
@@ -129,9 +134,11 @@ face-normal parity with three.js.
 6. **Thumbnail** — headless wgpu offscreen → PNG for `.gcode.3mf`/U1.
 7. **Cross-platform present shims** — CAMetalLayer (macOS), DXGI/DComp
    (Windows); verify Windows on real hardware.
-8. **(If in scope) G-code preview renderer** — the second renderer; otherwise it
-   stays on Three.js, but then the WebGL stack (and its Linux pain) stays for
-   preview.
+8. **G-code preview renderer — OUT of this project.** Stays on Three.js until
+   the prepare tab is done, then gets its own full redesign + wgpu rewrite. The
+   WebGL stack therefore lingers for the preview screen in the interim — known
+   and accepted. (Preview is a separate screen, so the interim two-renderer
+   split costs nothing in sync.)
 
 ---
 
@@ -143,8 +150,9 @@ face-normal parity with three.js.
   z-order is not.
 - **Windows present path** — only ever measured in a GPU-less VM. Needs a
   real-hardware DXGI/DComp check (not on the Linux critical path).
-- **Preview renderer in/out of scope** — the single biggest scope lever
-  (~3,080 LOC, doubles the renderer count). Decide explicitly.
+- **Preview renderer** — *decided OUT* (stays Three.js → own redesign + wgpu
+  rewrite after the prepare tab). Not a risk for this project; noted so the
+  interim two-renderer split is a conscious choice, not drift.
 - **Gizmo** — no off-the-shelf Rust equivalent to `TransformControls`; budget it
   as the largest single task.
 - **flatpak** — the GtkGLArea path must work inside the sandbox (same stack that
@@ -155,9 +163,9 @@ face-normal parity with three.js.
 
 ## 7. Recommendation
 
-Commit to option B, edit-viewport-first. Every kill-criterion spike passed and
-the highest-risk piece (the Linux zero-copy present bridge) is built and feels
-"staggering" on the actual Intel target. Sequence the work as §5; gate phase 1
-on the transparent-webview-over-GLArea check, which is the only Linux unknown
-left. Hold an explicit decision on whether the G-code preview renderer is in the
-first cut — that's the difference between a ~6 week and a ~10 week project.
+Commit to option B for the **edit viewport** (~5–7 wk); the preview renderer is
+explicitly out (Three.js until the prepare tab lands, then its own wgpu rewrite).
+Every kill-criterion spike passed and the highest-risk piece (the Linux zero-copy
+present bridge) is built and feels "staggering" on the actual Intel target.
+Sequence the work as §5; the one remaining Linux unknown is the
+transparent-webview-over-GLArea check — gate phase 1 on it.
