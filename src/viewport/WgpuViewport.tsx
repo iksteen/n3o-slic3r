@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { onEvents } from "../state/eventRouter";
 
 /**
  * Strategy-A wgpu viewport (Linux, `N3O_WGPU=1`): the 3D scene is rendered in
@@ -79,16 +80,48 @@ export function WgpuViewport() {
       c.dist = Math.min(2000, Math.max(20, c.dist * (1 + Math.sign(e.deltaY) * 0.1)));
       void render();
     };
-    const ro = new ResizeObserver(() => void render());
+    // Pull the bed-framed camera (center + distance) from the backend, then draw.
+    async function reframe() {
+      try {
+        const info = await invoke<{ center: [number, number, number]; distance: number }>(
+          "viewport_scene_info",
+        );
+        cam.current.center = info.center;
+        cam.current.dist = info.distance;
+      } catch (e) {
+        console.error("viewport_scene_info failed", e);
+      }
+      void render();
+    }
 
+    const ro = new ResizeObserver(() => void render());
     canvas.addEventListener("mousedown", onDown);
     window.addEventListener("mouseup", onUp);
     window.addEventListener("mousemove", onMove);
     canvas.addEventListener("wheel", onWheel, { passive: false });
     ro.observe(canvas);
-    void render();
+
+    // Re-render when the scene changes; re-frame on bed/plate/project change.
+    const offRender = onEvents(
+      [
+        "scene:mesh_loaded",
+        "scene:object_added",
+        "scene:object_updated",
+        "scene:object_removed",
+        "scene:selection_changed",
+      ],
+      () => void render(),
+    );
+    const offReframe = onEvents(
+      ["scene:bed_changed", "scene:active_plate_changed", "project:loaded"],
+      () => void reframe(),
+    );
+
+    void reframe();
 
     return () => {
+      offRender();
+      offReframe();
       canvas.removeEventListener("mousedown", onDown);
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("mousemove", onMove);

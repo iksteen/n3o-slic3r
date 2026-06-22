@@ -173,6 +173,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             wgpu_viewport_enabled,
             viewport_render::viewport_frame,
+            viewport_render::viewport_scene_info,
             core::cascade::slicer_options_for_printer,
             core::cascade::slicer_machine_options_for_printer,
             core::cascade::slicer_extruder_options_for_printer,
