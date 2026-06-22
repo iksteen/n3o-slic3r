@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ViewportCanvas } from "./viewport/ViewportCanvas";
+import { WgpuViewport } from "./viewport/WgpuViewport";
 import { setupTowerMeshCache } from "./viewport/towerMeshCache";
 import { ErrorConsole } from "./logging/ErrorConsole";
 import { shouldIgnoreHotkey } from "./ui/hotkeyInhibit";
@@ -595,11 +596,24 @@ function App() {
           <div className="layout-prepare">
             {objectsPanel}
             <div className="canvas-stage canvas-stage-prepare">
-              <ViewportCanvas
-                leading={modeToggle}
-                gizmoMode={gizmoMode}
-                onGizmoMode={setGizmoMode}
-              />
+              {/* Strategy-A wgpu viewport (Linux, N3O_WGPU=1): an opaque canvas
+                  fed by Rust-rendered frames, in place of the Three.js renderer.
+                  Mode toggle kept reachable. (Interim — replaces Three.js once
+                  at parity.) */}
+              {(window as typeof window & { __N3O_WGPU?: boolean }).__N3O_WGPU ? (
+                <>
+                  <WgpuViewport />
+                  <div style={{ position: "absolute", top: 12, left: 12, zIndex: 10 }}>
+                    {modeToggle}
+                  </div>
+                </>
+              ) : (
+                <ViewportCanvas
+                  leading={modeToggle}
+                  gizmoMode={gizmoMode}
+                  onGizmoMode={setGizmoMode}
+                />
+              )}
               {canvasOverlays}
             </div>
             <SettingsPanelHost

@@ -8,8 +8,17 @@
 
 pub mod core;
 mod dialog;
+mod viewport_render;
 
 use std::sync::{Arc, Mutex};
+
+/// Whether the Strategy-A wgpu viewport is active (`N3O_WGPU=1`). The frontend
+/// reads this once at boot to mount the wgpu canvas instead of the Three.js
+/// viewport. (Interim flag — default off — until wgpu reaches parity.)
+#[tauri::command]
+fn wgpu_viewport_enabled() -> bool {
+    viewport_render::enabled()
+}
 
 use slic3r_ffi::init;
 
@@ -62,6 +71,7 @@ pub fn run() {
         .manage(Arc::new(core::driver::DriverRegistry::new()))
         .manage(Arc::new(core::driver::camera::CameraManager::new()))
         .manage(Arc::new(core::driver::commands::SendCancelRegistry::default()))
+        .manage(viewport_render::ViewportState::default())
         .setup(|app| {
             use tauri::Manager;
 
@@ -161,6 +171,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            wgpu_viewport_enabled,
+            viewport_render::viewport_frame,
             core::cascade::slicer_options_for_printer,
             core::cascade::slicer_machine_options_for_printer,
             core::cascade::slicer_extruder_options_for_printer,
