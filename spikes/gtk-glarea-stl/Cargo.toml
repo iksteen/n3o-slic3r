@@ -1,0 +1,24 @@
+# Spike: the REAL feel test — wgpu renders an STL on a build plate into a
+# GtkGLArea (zero-copy: wgpu uses the GLArea's own GL context via the gles
+# backend, blits its result into the GLArea framebuffer), orbitable by mouse.
+# Standalone GTK3 app (no Tauri/webview — coexistence is proven separately;
+# this isolates orbit "feel" on Intel). Own [workspace].
+[package]
+name = "gtk-glarea-stl"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+gtk = "0.18"
+epoxy = "0.1"
+libloading = "0.8"
+glam = "0.29"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.3"
+stl_io = "0.8"
+wgpu = "0.20"
+wgpu-hal = { version = "0.21", features = ["gles"] }
+glow = "0.13"
