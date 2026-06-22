@@ -174,6 +174,7 @@ pub fn run() {
             wgpu_viewport_enabled,
             viewport_render::viewport_frame,
             viewport_render::viewport_scene_info,
+            viewport_render::viewport_pick,
             core::cascade::slicer_options_for_printer,
             core::cascade::slicer_machine_options_for_printer,
             core::cascade::slicer_extruder_options_for_printer,

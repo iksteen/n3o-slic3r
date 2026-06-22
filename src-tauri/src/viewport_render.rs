@@ -25,7 +25,7 @@ struct Vertex {
 }
 
 const SHADER: &str = r#"
-struct U { mvp: mat4x4<f32> };
+struct U { mvp: mat4x4<f32>, tint: vec4<f32> };
 @group(0) @binding(0) var<uniform> u: U;
 struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
 @vertex fn vs(@location(0) pos: vec3<f32>, @location(1) nrm: vec3<f32>) -> VO {
@@ -41,11 +41,14 @@ struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
   let key = normalize(vec3<f32>(0.5, -0.5, 0.85));
   let fill = normalize(vec3<f32>(-0.5, 0.5, 0.33));
   let d = 0.55 + abs(dot(n, key)) * 0.4 + abs(dot(n, fill)) * 0.1;
-  return vec4<f32>(vec3<f32>(0.82, 0.72, 0.45) * min(d, 1.0), 1.0);
+  // tint = per-object color multiplier (white normally, cool/bright when selected).
+  return vec4<f32>(vec3<f32>(0.82, 0.72, 0.45) * min(d, 1.0) * u.tint.rgb, 1.0);
 }
 "#;
 
 const COLOR_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+/// Per-object uniform: `mat4 mvp` (64) + `vec4 tint` (16).
+const UNIFORM_BYTES: u64 = 80;
 // Bed extents are f64 (BoundingBox); converted to f32 for the GPU.
 const DEFAULT_BED: ([f64; 3], [f64; 3]) = ([-110.0, -110.0, 0.0], [110.0, 110.0, 200.0]);
 
@@ -182,11 +185,12 @@ impl ViewportRenderer {
             label: None,
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                // mvp is read in the vertex stage, tint in the fragment stage.
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
-                    min_binding_size: std::num::NonZeroU64::new(64),
+                    min_binding_size: std::num::NonZeroU64::new(UNIFORM_BYTES),
                 },
                 count: None,
             }],
@@ -333,8 +337,8 @@ impl ViewportRenderer {
                 .as_ref()
                 .map(|b| (b.extents.min, b.extents.max))
                 .unwrap_or(DEFAULT_BED);
-            let mut draws: Vec<(MeshId, Mat4)> = Vec::new();
-            for (_, obj) in plate.scene.objects.iter() {
+            let mut draws: Vec<(MeshId, Mat4, bool)> = Vec::new();
+            for (id, obj) in plate.scene.objects.iter() {
                 if !obj.visible {
                     continue;
                 }
@@ -351,7 +355,8 @@ impl ViewportRenderer {
                     }
                 }
                 if self.meshes.contains_key(&obj.mesh) {
-                    draws.push((obj.mesh, obj.transform.to_mat4()));
+                    let selected = plate.scene.selection.contains(id);
+                    draws.push((obj.mesh, obj.transform.to_mat4(), selected));
                 }
             }
             (bmin, bmax, draws)
@@ -362,22 +367,21 @@ impl ViewportRenderer {
         self.ensure_grid(bmin, bmax);
 
         // Camera (frontend-owned), z up.
-        let center = Vec3::from(req.center);
-        let (ce, se) = (req.el.cos(), req.el.sin());
-        let (ca, sa) = (req.az.cos(), req.az.sin());
-        let eye = center + req.dist * Vec3::new(ce * ca, ce * sa, se);
-        let far = (req.dist * 10.0).max(1000.0);
-        let proj = Mat4::perspective_rh(45f32.to_radians(), w as f32 / h as f32, 0.1, far);
-        let vp = proj * Mat4::look_at_rh(eye, center, Vec3::Z);
+        let vp = view_proj(w as f32, h as f32, req.az, req.el, req.dist, Vec3::from(req.center));
 
-        // Pack MVPs: slot 0 = grid (model identity), slots 1.. = vp * model.
+        // Pack uniforms: slot 0 = grid (identity, white tint), slots 1.. =
+        // vp*model + per-object tint (white, or a cool highlight when selected).
+        const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+        const SELECTED: [f32; 4] = [0.55, 0.75, 1.6, 1.0];
         self.ensure_mvp_capacity(1 + draws.len() as u32);
         let mut bytes = vec![0u8; self.slot as usize * (1 + draws.len())];
         bytes[0..64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
-        for (i, (_, model)) in draws.iter().enumerate() {
-            let mvp = vp * *model;
+        bytes[64..80].copy_from_slice(bytemuck::cast_slice(&WHITE));
+        for (i, (_, model, sel)) in draws.iter().enumerate() {
             let off = (i + 1) * self.slot as usize;
-            bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&mvp.to_cols_array()));
+            bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&(vp * *model).to_cols_array()));
+            let tint = if *sel { SELECTED } else { WHITE };
+            bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&tint));
         }
         self.queue.write_buffer(&self.ubuf, 0, &bytes);
 
@@ -417,7 +421,7 @@ impl ViewportRenderer {
             rp.draw(0..self.n_grid, 0..1);
             // meshes
             rp.set_pipeline(&self.mesh_pipe);
-            for (i, (mesh_id, _)) in draws.iter().enumerate() {
+            for (i, (mesh_id, _, _)) in draws.iter().enumerate() {
                 let off = ((i + 1) as u32) * self.slot;
                 let gm = &self.meshes[mesh_id];
                 rp.set_bind_group(0, &self.bind, &[off]);
@@ -478,7 +482,7 @@ fn make_bind(
             resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                 buffer: ubuf,
                 offset: 0,
-                size: std::num::NonZeroU64::new(64),
+                size: std::num::NonZeroU64::new(UNIFORM_BYTES),
             }),
         }],
     })
@@ -567,6 +571,94 @@ pub fn viewport_scene_info(project: tauri::State<'_, Arc<Mutex<Project>>>) -> Sc
         ],
         distance: (span * 1.7) as f32,
     }
+}
+
+/// View-projection for the orbit camera (z up). Shared by render and pick so the
+/// click ray matches exactly what's drawn.
+fn view_proj(w: f32, h: f32, az: f32, el: f32, dist: f32, center: Vec3) -> Mat4 {
+    let (ce, se) = (el.cos(), el.sin());
+    let (ca, sa) = (az.cos(), az.sin());
+    let eye = center + dist * Vec3::new(ce * ca, ce * sa, se);
+    let far = (dist * 10.0).max(1000.0);
+    let proj = Mat4::perspective_rh(45f32.to_radians(), w / h, 0.1, far);
+    proj * Mat4::look_at_rh(eye, center, Vec3::Z)
+}
+
+/// Möller–Trumbore, two-sided. Returns the ray parameter `t` (>0) at the hit.
+fn ray_tri(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    let (e1, e2) = (b - a, c - a);
+    let pv = d.cross(e2);
+    let det = e1.dot(pv);
+    if det.abs() < 1e-7 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    let tv = o - a;
+    let u = tv.dot(pv) * inv;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let qv = tv.cross(e1);
+    let v = d.dot(qv) * inv;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = e2.dot(qv) * inv;
+    (t > 1e-4).then_some(t)
+}
+
+#[derive(serde::Deserialize)]
+pub struct PickRequest {
+    pub width: u32,
+    pub height: u32,
+    pub x: f32, // click, pixels, top-left origin
+    pub y: f32,
+    pub az: f32,
+    pub el: f32,
+    pub dist: f32,
+    pub center: [f32; 3],
+}
+
+/// Ray-cast the click into the scene; returns the nearest hit object's id (CPU,
+/// against the scene's mesh geometry). The frontend turns this into
+/// `scene_select`/`scene_deselect`.
+#[tauri::command]
+pub fn viewport_pick(
+    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    req: PickRequest,
+) -> Option<u64> {
+    let p = project.lock().unwrap();
+    let plate = p.active_plate();
+    let (w, h) = (req.width.max(1) as f32, req.height.max(1) as f32);
+    let vp = view_proj(w, h, req.az, req.el, req.dist, Vec3::from(req.center));
+    let inv = vp.inverse();
+    let ndc = Vec3::new(2.0 * req.x / w - 1.0, 1.0 - 2.0 * req.y / h, 0.0);
+    let ro = inv.project_point3(ndc);
+    let far = inv.project_point3(Vec3::new(ndc.x, ndc.y, 1.0));
+    let rd = (far - ro).normalize();
+
+    let mut best: Option<(f32, u64)> = None;
+    for (id, obj) in plate.scene.objects.iter() {
+        if !obj.visible {
+            continue;
+        }
+        let Some(m) = p.meshes.get(&obj.mesh) else {
+            continue;
+        };
+        let model = obj.transform.to_mat4();
+        let vert = |vi: u32| {
+            let i = vi as usize * 3;
+            model.transform_point3(Vec3::new(m.vertices[i], m.vertices[i + 1], m.vertices[i + 2]))
+        };
+        for t3 in m.indices.chunks_exact(3) {
+            if let Some(t) = ray_tri(ro, rd, vert(t3[0]), vert(t3[1]), vert(t3[2])) {
+                if best.map_or(true, |(bt, _)| t < bt) {
+                    best = Some((t, id.0));
+                }
+            }
+        }
+    }
+    best.map(|(_, id)| id)
 }
 
 /// Whether the Strategy-A wgpu viewport is enabled (`N3O_WGPU=1`).

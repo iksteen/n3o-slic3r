@@ -58,16 +58,53 @@ export function WgpuViewport() {
       }
     }
 
+    // Ray-cast the click into the scene (Rust) → select the hit, or clear.
+    async function pick(clientX: number, clientY: number) {
+      const cv = canvasRef.current;
+      if (!cv) return;
+      const rect = cv.getBoundingClientRect();
+      const c = cam.current;
+      try {
+        const id = await invoke<number | null>("viewport_pick", {
+          req: {
+            width: cv.width,
+            height: cv.height,
+            x: clientX - rect.left,
+            y: clientY - rect.top,
+            az: c.az,
+            el: c.el,
+            dist: c.dist,
+            center: c.center,
+          },
+        });
+        if (id != null) {
+          await invoke("scene_select", { ids: [id], mode: "Replace", expandGroups: true });
+        } else {
+          await invoke("scene_deselect");
+        }
+        // selection_changed event drives the re-render (tint).
+      } catch (e) {
+        console.error("viewport_pick failed", e);
+      }
+    }
+
+    let moved = false; // distinguishes an orbit drag from a click-to-select
     const onDown = (e: MouseEvent) => {
-      if (e.button === 0) drag.current = { x: e.clientX, y: e.clientY };
+      if (e.button === 0) {
+        drag.current = { x: e.clientX, y: e.clientY };
+        moved = false;
+      }
     };
-    const onUp = () => {
+    const onUp = (e: MouseEvent) => {
+      const wasDragging = drag.current !== null;
       drag.current = null;
+      if (wasDragging && !moved && e.button === 0) void pick(e.clientX, e.clientY);
     };
     const onMove = (e: MouseEvent) => {
       if (!drag.current) return;
       const dx = e.clientX - drag.current.x;
       const dy = e.clientY - drag.current.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
       drag.current = { x: e.clientX, y: e.clientY };
       const c = cam.current;
       c.az -= dx * 0.01;
