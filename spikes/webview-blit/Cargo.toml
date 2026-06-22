@@ -1,0 +1,16 @@
+# Strategy A make-or-break (webview half): how cheap is the transfer + canvas
+# blit + WebKit *software* composite of a rendered frame? Standalone Tauri 2 app
+# (own [workspace]); JS reports results back through a `report` command.
+[package]
+name = "webview-blit-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }

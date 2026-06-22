@@ -1,0 +1,125 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
+      #cv { width: 100%; height: 100%; display: block; }
+    </style>
+  </head>
+  <body>
+    <canvas id="cv"></canvas>
+    <script>
+      const invoke = window.__TAURI__.core.invoke;
+      const report = (s) => invoke("report", { line: s });
+      const cv = document.getElementById("cv");
+
+      function makeImageData(w, h) {
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        const img = c.getContext("2d").createImageData(w, h);
+        const d = img.data;
+        for (let i = 0; i < d.length; i += 4) {
+          d[i] = (i >> 2) & 255; d[i + 1] = 90; d[i + 2] = 200; d[i + 3] = 255;
+        }
+        return img;
+      }
+
+      // Median synchronous putImageData cost — the per-frame data copy into the
+      // canvas backing store (scales with render resolution).
+      async function syncCost(w, h) {
+        cv.width = w; cv.height = h;
+        const ctx = cv.getContext("2d");
+        const img = makeImageData(w, h);
+        for (let i = 0; i < 5; i++) ctx.putImageData(img, 0, 0);
+        const N = 40, ts = [];
+        for (let i = 0; i < N; i++) {
+          img.data[0] = i & 255;
+          const t = performance.now();
+          ctx.putImageData(img, 0, 0);
+          ts.push(performance.now() - t);
+        }
+        ts.sort((a, b) => a - b);
+        await report(`putImageData ${w}x${h}: ${ts[N >> 1].toFixed(2)} ms/call (median)`);
+      }
+
+      // Achieved present cadence: putImageData a full frame every rAF and
+      // measure the frame interval (captures composite + present on screen).
+      function cadence(w, h, frames) {
+        return new Promise((res) => {
+          cv.width = w; cv.height = h;
+          const ctx = cv.getContext("2d");
+          const img = makeImageData(w, h);
+          let i = 0, last = performance.now(), ts = [];
+          function f(now) {
+            img.data[(i * 4) % img.data.length] = i & 255;
+            ctx.putImageData(img, 0, 0);
+            const dt = now - last; last = now;
+            if (i >= 15) ts.push(dt);
+            i++;
+            if (i < frames + 15) requestAnimationFrame(f);
+            else {
+              ts.sort((a, b) => a - b);
+              const med = ts[ts.length >> 1];
+              report(`cadence ${w}x${h}: ${med.toFixed(2)} ms/frame median (${(1000 / med).toFixed(0)} fps)`).then(res);
+            }
+          }
+          requestAnimationFrame(f);
+        });
+      }
+
+      // Rust→JS per-frame transfer over the raw binary IPC channel.
+      async function transport(bytes, calls) {
+        // warmup
+        for (let i = 0; i < 3; i++) await invoke("frame_bytes", { n: bytes });
+        const t = performance.now();
+        let touched = 0;
+        for (let i = 0; i < calls; i++) {
+          const buf = await invoke("frame_bytes", { n: bytes });
+          touched ^= new Uint8Array(buf)[0];
+        }
+        const ms = (performance.now() - t) / calls;
+        const mb = bytes / 1048576;
+        await report(`transport ${mb.toFixed(0)}MB: ${ms.toFixed(2)} ms/call (${(mb / (ms / 1000)).toFixed(0)} MB/s) [${touched}]`);
+      }
+
+      // Rust→JS per-frame transfer over a custom URI scheme (the realistic,
+      // asset-serving path) instead of the slow invoke channel.
+      async function transportFetch(bytes, calls) {
+        const url = `frame://localhost/${bytes}`;
+        try {
+          for (let i = 0; i < 3; i++) await (await fetch(url)).arrayBuffer();
+        } catch (e) {
+          await report(`fetch-protocol ${(bytes / 1048576).toFixed(0)}MB: FAILED ${e}`);
+          return;
+        }
+        const t = performance.now();
+        let touched = 0;
+        for (let i = 0; i < calls; i++) {
+          const b = await (await fetch(url)).arrayBuffer();
+          touched ^= new Uint8Array(b)[0];
+        }
+        const ms = (performance.now() - t) / calls;
+        const mb = bytes / 1048576;
+        await report(`fetch-protocol ${mb.toFixed(0)}MB: ${ms.toFixed(2)} ms/call (${(mb / (ms / 1000)).toFixed(0)} MB/s) [${touched}]`);
+      }
+
+      (async () => {
+        await report(`env: dpr=${devicePixelRatio} screen=${screen.width}x${screen.height} ua=${navigator.userAgent.slice(0, 40)}`);
+        await syncCost(1920, 1080);
+        await syncCost(2560, 1440);
+        await syncCost(3840, 2160);
+        await cadence(1920, 1080, 120);
+        await cadence(2560, 1440, 120);
+        await cadence(3840, 2160, 120);
+        await report("-- transport: invoke channel --");
+        await transport(1920 * 1080 * 4, 40);
+        await transport(3840 * 2160 * 4, 25);
+        await report("-- transport: custom protocol (fetch) --");
+        await transportFetch(1920 * 1080 * 4, 60);
+        await transportFetch(3840 * 2160 * 4, 40);
+        await report("DONE");
+      })().catch((e) => report("ERROR " + e));
+    </script>
+  </body>
+</html>
