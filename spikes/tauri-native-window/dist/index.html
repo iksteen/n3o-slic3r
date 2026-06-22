@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #0b3d2e;
+        color: #9effce;
+        font-family: system-ui, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+      }
+      div { padding: 0 24px; }
+    </style>
+  </head>
+  <body>
+    <div>
+      <h2>WEBVIEW PANEL</h2>
+      <p>
+        Magenta on the left = native wgpu drawing to the Tauri window surface.<br />
+        This green panel on the right = a child webview in the SAME window.<br />
+        Both visible &amp; stable ⇒ Strategy B coexists.
+      </p>
+    </div>
+  </body>
+</html>
