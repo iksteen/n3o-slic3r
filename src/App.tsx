@@ -603,7 +603,10 @@ function App() {
                   at parity.) */}
               {(window as typeof window & { __N3O_WGPU?: boolean }).__N3O_WGPU ? (
                 <>
-                  <WgpuViewport />
+                  <WgpuViewport
+                    objects={activePlate?.objects ?? []}
+                    selectedIds={activePlate?.selection ?? []}
+                  />
                   <ViewportChrome
                     leading={modeToggle}
                     objectIds={(activePlate?.objects ?? []).map((o) => o.id)}

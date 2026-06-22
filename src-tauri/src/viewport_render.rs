@@ -120,6 +120,9 @@ fn spool_color(
 }
 
 /// Camera + target the frontend passes per frame (camera is frontend-owned).
+/// `drag_*` is a transient local drag preview: the listed objects are offset by
+/// world (dx,dy) for this frame only — no scene-state change — so dragging stays
+/// smooth; the real transforms commit once on release.
 #[derive(serde::Deserialize)]
 pub struct FrameRequest {
     pub width: u32,
@@ -128,6 +131,12 @@ pub struct FrameRequest {
     pub el: f32,
     pub dist: f32,
     pub center: [f32; 3],
+    #[serde(default)]
+    pub drag_ids: Vec<u64>,
+    #[serde(default)]
+    pub drag_dx: f32,
+    #[serde(default)]
+    pub drag_dy: f32,
 }
 
 struct GpuMesh {
@@ -415,6 +424,9 @@ impl ViewportRenderer {
             let mut sel_min = [f32::MAX; 3];
             let mut sel_max = [f32::MIN; 3];
             let mut any_sel = false;
+            // Local drag preview: offset the dragged objects in world XY.
+            let drag_t = Vec3::new(req.drag_dx, req.drag_dy, 0.0);
+            let dragging = !req.drag_ids.is_empty();
             for (id, obj) in plate.scene.objects.iter() {
                 if !obj.visible {
                     continue;
@@ -432,7 +444,10 @@ impl ViewportRenderer {
                     }
                 }
                 if self.meshes.contains_key(&obj.mesh) {
-                    let model = obj.transform.to_mat4();
+                    let mut model = obj.transform.to_mat4();
+                    if dragging && req.drag_ids.contains(&id.0) {
+                        model = Mat4::from_translation(drag_t) * model;
+                    }
                     let selected = plate.scene.selection.contains(id);
                     let color = if selected {
                         SELECTED_RGB
