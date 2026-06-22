@@ -113,6 +113,12 @@ export function ViewportCanvas({
   // the gizmo's transform mode directly (mode is renderer-local — held
   // in App, not round-tripped through backend scene state).
   const gizmoRef = useRef<GizmoApi | null>(null);
+  // Request a render. On-demand rendering: the canvas only draws when
+  // something changes (see the animation loop). Exposed via a ref so effects
+  // outside the canvas effect (gizmo mode / suppression) can trigger a frame.
+  // Pass a ms window to keep rendering briefly — e.g. while an async update
+  // (mesh decode, tower geometry) lands a frame or two after the event.
+  const invalidateRef = useRef<((ms?: number) => void) | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   // Whether the active plate has any selection — gates the selection-only
   // toolbar tools (auto orient / lay flat on). Kept in sync with the mirror's
@@ -183,6 +189,7 @@ export function ViewportCanvas({
     // Hide the gizmo + disable interaction while picking so its handles
     // neither draw over the model nor intercept the pick click.
     if (gizmoRef.current) gizmoRef.current.setSuppressed(picking);
+    invalidateRef.current?.();
   }, [layFlatPick, orientPick, alignPick, faceAlign, clonePick]);
 
   const plateHasObjects = () =>
@@ -351,6 +358,41 @@ export function ViewportCanvas({
     const camera = makePerspectiveCamera(aspect);
     const controls: OrbitControls = makeControls(camera, renderer.domElement);
 
+    // ---- On-demand render loop ---------------------------------------
+    //
+    // The viewport renders only when something changes — a static scene (an
+    // empty plate) must not spin a CPU core / the GPU at 60fps. `invalidate`
+    // schedules a frame; `frame` renders once and reschedules only while the
+    // camera is still easing (OrbitControls damping) or within a requested
+    // time window (`invalidate(ms)`, to ride out an async update that lands a
+    // frame or two after its triggering event). When idle, the loop parks.
+    //
+    // EVERY change to the rendered picture must call `invalidate()` — see the
+    // hooks below (controls, gizmo, scene events, resize, tower) and
+    // `invalidateRef` for effects outside this one. A missed call = a frame
+    // that doesn't update until the next interaction.
+    let raf = 0;
+    let renderUntil = 0;
+    // `invalidate` is the single scheduler; its `if (!raf)` guard makes
+    // scheduling idempotent. `frame` re-arms through it rather than calling
+    // requestAnimationFrame directly — during damping `controls.update()`
+    // dispatches `change` (→ a guarded `invalidate`), so a direct re-arm
+    // here would double-schedule and compound.
+    const invalidate = (ms = 0): void => {
+      renderUntil = Math.max(renderUntil, performance.now() + ms);
+      if (!raf) raf = requestAnimationFrame(frame);
+    };
+    function frame(): void {
+      raf = 0;
+      const moving = controls.update();
+      renderer.render(scene, camera);
+      if (moving || performance.now() < renderUntil) invalidate();
+    }
+    invalidateRef.current = invalidate;
+    // Orbit/pan/zoom + the damping tail (OrbitControls dispatches `change`
+    // from update(); `frame` keeps going while update() reports motion).
+    controls.addEventListener("change", () => invalidate());
+
     // Mirror + groups.
     const mirror = new SceneMirror(
       tauriMeshBufferProvider(),
@@ -379,6 +421,8 @@ export function ViewportCanvas({
       controls.enabled = !dragging;
       if (!dragging) swallowGizmoClick = true;
     });
+    // Gizmo handle hover-highlight + live drag both dispatch `change`.
+    gizmo.controls.addEventListener("change", () => invalidate());
     gizmoRef.current = gizmo;
 
     // ---- Priming-tower overlay ----------------------------------------
@@ -517,6 +561,11 @@ export function ViewportCanvas({
     // plate would render against the wrong workspace. (Frontend
     // PlateTabs receives ActivePlateChanged separately and swaps the
     // viewport's framing.)
+    // Every scene event mutates the mirror's groups before listeners run, so
+    // one invalidate here covers all of them (object add/remove/transform,
+    // selection, bed, plate switch). The window rides out async mesh decode
+    // that adds geometry a frame or two after the event.
+    const detachInvalidate = mirror.onEvent(() => invalidate(400));
     const detachToastsListener = mirror.onEvent((evt) => {
       const activeId = mirror.activePlateIdOrNull();
       switch (evt.kind) {
@@ -617,6 +666,8 @@ export function ViewportCanvas({
           initialFrameForBed(camera, controls, plate.bed);
         }
         void refreshTower();
+        // First paint on mount (the snapshot fired no event to invalidate on).
+        invalidate(400);
       })
       .catch((err) => {
         pushToast("error", `viewport init failed: ${err}`);
@@ -637,7 +688,10 @@ export function ViewportCanvas({
         "scene:material_slot_changed",
       ],
       () => {
+        // eventRouter events (not mirror events), so invalidate explicitly;
+        // the window covers the async refreshTower roundtrip.
         void refreshTower();
+        invalidate(400);
       },
     );
 
@@ -648,7 +702,10 @@ export function ViewportCanvas({
     // changes for the active plate; on a fresh mount, refreshTower below
     // already reads the cache.
     const detachTowerCache = onTowerMeshCacheChange((plateId) => {
-      if (plateId === mirror.activePlateIdOrNull()) void refreshTower();
+      if (plateId === mirror.activePlateIdOrNull()) {
+        void refreshTower();
+        invalidate(400);
+      }
     });
 
     // ---- Resize handling ---------------------------------------------
@@ -663,7 +720,7 @@ export function ViewportCanvas({
       // drawing buffer, and ResizeObserver fires after layout but before paint;
       // without an in-callback render, that frame paints a blank canvas — which
       // shows as flicker during a continuous resize (e.g. the settings-panel
-      // collapse animation), where the rAF loop's render ran before the resize.
+      // collapse animation).
       renderer.render(scene, camera);
     };
     onResize();
@@ -937,6 +994,7 @@ export function ViewportCanvas({
       if (nx !== towerGeom.x || ny !== towerGeom.y) towerDrag.moved = true;
       towerGeom = { ...towerGeom, x: nx, y: ny };
       tower.place(towerGeom, towerBedZ);
+      invalidate();
     };
     const onPointerUp = () => {
       if (!towerDrag) return;
@@ -977,22 +1035,18 @@ export function ViewportCanvas({
     const selectedSnapshot = () => mirror.selectedIds();
     window.addEventListener("keydown", onKeyDown);
 
-    // ---- Animation loop ----------------------------------------------
-    let raf = 0;
-    const render = () => {
-      controls.update();
-      renderer.render(scene, camera);
-      raf = requestAnimationFrame(render);
-    };
     // Let the send path grab a print thumbnail off this scene's models.
     registerThumbnailCapture((size) =>
       renderModelThumbnail(mirror.objectGroup, size),
     );
 
-    raf = requestAnimationFrame(render);
+    // Initial paint; further frames are driven on demand (see `invalidate`).
+    invalidate();
 
     return () => {
       cancelAnimationFrame(raf);
+      invalidateRef.current = null;
+      detachInvalidate();
       registerThumbnailCapture(null);
       renderer.domElement.removeEventListener("click", onClick);
       renderer.domElement.removeEventListener("pointerdown", onPointerDown, true);
@@ -1032,6 +1086,7 @@ export function ViewportCanvas({
   // toolbar change, and after a remount with an App-preserved mode.
   useEffect(() => {
     gizmoRef.current?.setMode(gizmoMode);
+    invalidateRef.current?.();
   }, [gizmoMode]);
 
   return (

@@ -77,6 +77,16 @@ later costs more than it had to.
   - *Camera* — the renderer owns its own Three.js camera and frames
     from the bed (`initialFrameForBed`); the scene model holds no camera
     or projection state.
+  - *Rendering is on-demand.* `ViewportCanvas` does **not** run a
+    continuous rAF loop — it would peg a CPU core + the GPU on a static
+    scene (an empty plate). It renders only when something changes, via
+    `invalidate()` (`invalidate(ms)` keeps drawing for a window, to ride
+    out an async update like mesh decode). **Any code that changes the
+    rendered picture MUST call `invalidate()`** — camera, gizmo, scene
+    events, tower, resize are already hooked; effects outside the canvas
+    effect use `invalidateRef.current?.()`. A new viewport visual that
+    forgets this shows as a frame that doesn't update until the next
+    interaction. The device pixel ratio is capped at 1.5 for fill-rate.
 
 - **Configs are pure data.** No embedded code, no expressions, no
   template strings. The rule cascade (PRD §6.1, docs/dev/profiles.md)
