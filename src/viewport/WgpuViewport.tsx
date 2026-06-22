@@ -146,6 +146,7 @@ export function WgpuViewport() {
         "scene:object_updated",
         "scene:object_removed",
         "scene:selection_changed",
+        "scene:material_slot_changed",
       ],
       () => void render(),
     );

@@ -8,12 +8,13 @@
 //! `MeshId`, and drawn each frame with their object transforms. Camera stays
 //! frontend-owned (passed in per frame).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
+use crate::core::printer::{instance_registry, PrinterInstance, SlotRef};
 use crate::core::project::Project;
 use crate::core::scene::state::MeshId;
 
@@ -25,7 +26,7 @@ struct Vertex {
 }
 
 const SHADER: &str = r#"
-struct U { mvp: mat4x4<f32>, tint: vec4<f32> };
+struct U { mvp: mat4x4<f32>, color: vec4<f32> };
 @group(0) @binding(0) var<uniform> u: U;
 struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
 @vertex fn vs(@location(0) pos: vec3<f32>, @location(1) nrm: vec3<f32>) -> VO {
@@ -41,8 +42,8 @@ struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
   let key = normalize(vec3<f32>(0.5, -0.5, 0.85));
   let fill = normalize(vec3<f32>(-0.5, 0.5, 0.33));
   let d = 0.55 + abs(dot(n, key)) * 0.4 + abs(dot(n, fill)) * 0.1;
-  // tint = per-object color multiplier (white normally, cool/bright when selected).
-  return vec4<f32>(vec3<f32>(0.82, 0.72, 0.45) * min(d, 1.0) * u.tint.rgb, 1.0);
+  // color = the object's base color (spool color, or selection blue when picked).
+  return vec4<f32>(u.color.rgb * min(d, 1.0), 1.0);
 }
 "#;
 
@@ -51,6 +52,40 @@ const COLOR_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const UNIFORM_BYTES: u64 = 80;
 // Bed extents are f64 (BoundingBox); converted to f32 for the GPU.
 const DEFAULT_BED: ([f64; 3], [f64; 3]) = ([-110.0, -110.0, 0.0], [110.0, 110.0, 200.0]);
+const SELECTED_RGB: [f32; 3] = [0.231, 0.510, 0.965]; // tailwind blue-500 (#3b82f6)
+const DEFAULT_RGB: [f32; 3] = [0.694, 0.694, 0.694]; // #b1b1b1, matches the Three.js fallback
+
+/// Parse a CSS hex color (`#rrggbb`[`aa`]) to linear-ish 0..1 rgb.
+fn parse_hex(s: &str) -> Option<[f32; 3]> {
+    let s = s.trim_start_matches('#');
+    if s.len() < 6 {
+        return None;
+    }
+    let ch = |i: usize| u8::from_str_radix(&s[i..i + 2], 16).ok().map(|v| v as f32 / 255.0);
+    Some([ch(0)?, ch(2)?, ch(4)?])
+}
+
+/// Resolve an object's spool color: extruder_id (default 1) → `material_to_slot`
+/// → the bound instance's slot color, falling back to neutral gray. Mirrors the
+/// frontend's `colorForObject`.
+fn spool_color(
+    material_to_slot: &BTreeMap<u8, SlotRef>,
+    instance: Option<&PrinterInstance>,
+    extruder_id: Option<u8>,
+) -> [f32; 3] {
+    let material = extruder_id.unwrap_or(1);
+    material_to_slot
+        .get(&material)
+        .and_then(|sr| {
+            let slot = instance?
+                .extruders
+                .get(sr.extruder as usize)?
+                .slots
+                .get(sr.slot as usize)?;
+            parse_hex(slot.color.as_deref()?)
+        })
+        .unwrap_or(DEFAULT_RGB)
+}
 
 /// Camera + target the frontend passes per frame (camera is frontend-owned).
 #[derive(serde::Deserialize)]
@@ -337,7 +372,12 @@ impl ViewportRenderer {
                 .as_ref()
                 .map(|b| (b.extents.min, b.extents.max))
                 .unwrap_or(DEFAULT_BED);
-            let mut draws: Vec<(MeshId, Mat4, bool)> = Vec::new();
+            // The bound printer instance carries the per-slot spool colors.
+            // (project→registry lock order matches the rest of the code.)
+            let instance = plate
+                .printer_instance_id()
+                .and_then(instance_registry::lookup_instance);
+            let mut draws: Vec<(MeshId, Mat4, [f32; 3])> = Vec::new();
             for (id, obj) in plate.scene.objects.iter() {
                 if !obj.visible {
                     continue;
@@ -355,8 +395,12 @@ impl ViewportRenderer {
                     }
                 }
                 if self.meshes.contains_key(&obj.mesh) {
-                    let selected = plate.scene.selection.contains(id);
-                    draws.push((obj.mesh, obj.transform.to_mat4(), selected));
+                    let color = if plate.scene.selection.contains(id) {
+                        SELECTED_RGB
+                    } else {
+                        spool_color(&plate.material_to_slot, instance.as_ref(), obj.extruder_id)
+                    };
+                    draws.push((obj.mesh, obj.transform.to_mat4(), color));
                 }
             }
             (bmin, bmax, draws)
@@ -369,19 +413,19 @@ impl ViewportRenderer {
         // Camera (frontend-owned), z up.
         let vp = view_proj(w as f32, h as f32, req.az, req.el, req.dist, Vec3::from(req.center));
 
-        // Pack uniforms: slot 0 = grid (identity, white tint), slots 1.. =
-        // vp*model + per-object tint (white, or a cool highlight when selected).
-        const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-        const SELECTED: [f32; 4] = [0.55, 0.75, 1.6, 1.0];
+        // Pack uniforms per slot: [mat4 mvp][vec4 color]. Slot 0 = grid (its
+        // color is unused — the grid uses a fixed line color), slots 1.. = each
+        // object's vp*model + base color.
         self.ensure_mvp_capacity(1 + draws.len() as u32);
         let mut bytes = vec![0u8; self.slot as usize * (1 + draws.len())];
         bytes[0..64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
-        bytes[64..80].copy_from_slice(bytemuck::cast_slice(&WHITE));
-        for (i, (_, model, sel)) in draws.iter().enumerate() {
+        bytes[64..80].copy_from_slice(bytemuck::cast_slice(&[1.0f32, 1.0, 1.0, 1.0]));
+        for (i, (_, model, color)) in draws.iter().enumerate() {
             let off = (i + 1) * self.slot as usize;
-            bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&(vp * *model).to_cols_array()));
-            let tint = if *sel { SELECTED } else { WHITE };
-            bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&tint));
+            bytes[off..off + 64]
+                .copy_from_slice(bytemuck::cast_slice(&(vp * *model).to_cols_array()));
+            let rgba = [color[0], color[1], color[2], 1.0f32];
+            bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
         }
         self.queue.write_buffer(&self.ubuf, 0, &bytes);
 
