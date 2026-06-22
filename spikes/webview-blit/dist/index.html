@@ -83,10 +83,40 @@
         await report(`transport ${mb.toFixed(0)}MB: ${ms.toFixed(2)} ms/call (${(mb / (ms / 1000)).toFixed(0)} MB/s) [${touched}]`);
       }
 
+      // Custom-scheme base differs by platform: macOS/Linux use
+      // `frame://localhost/`, Windows/WebView2 maps it to `http://frame.localhost/`.
+      // Probe candidates once and cache the one that actually serves bytes.
+      let frameBase = null;
+      async function findFrameBase() {
+        if (frameBase) return frameBase;
+        const cands = [
+          "frame://localhost/",
+          "http://frame.localhost/",
+          "https://frame.localhost/",
+        ];
+        for (const b of cands) {
+          try {
+            const r = await fetch(b + "1024");
+            if (r.ok && (await r.arrayBuffer()).byteLength === 1024) {
+              frameBase = b;
+              await report(`custom-scheme base: ${b}`);
+              return b;
+            }
+          } catch (_) { /* try next */ }
+        }
+        await report("custom-scheme base: NONE worked");
+        return null;
+      }
+
       // Rust→JS per-frame transfer over a custom URI scheme (the realistic,
       // asset-serving path) instead of the slow invoke channel.
       async function transportFetch(bytes, calls) {
-        const url = `frame://localhost/${bytes}`;
+        const base = await findFrameBase();
+        if (!base) {
+          await report(`fetch-protocol ${(bytes / 1048576).toFixed(0)}MB: SKIP (no scheme)`);
+          return;
+        }
+        const url = `${base}${bytes}`;
         try {
           for (let i = 0; i < 3; i++) await (await fetch(url)).arrayBuffer();
         } catch (e) {
