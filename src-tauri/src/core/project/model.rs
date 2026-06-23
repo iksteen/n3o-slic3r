@@ -364,13 +364,22 @@ impl Project {
             .map(|o| o.extruder_id.unwrap_or(1))
             .collect();
         for obj in plate.scene.objects.values() {
-            if let Some(mesh) = self.meshes.get(&obj.mesh) {
-                if let Some(paint) = &mesh.paint_colors {
-                    out.extend(crate::core::threemf::referenced_states(paint));
-                }
-            }
+            out.extend(self.mesh_painted_materials(obj.mesh));
         }
         out
+    }
+
+    /// The MMU-painted filament states (`>= 1`) carried by `mesh`, or an empty
+    /// set when the mesh is unknown or unpainted. Painted filaments are named
+    /// only here — no object's `extruder_id` references them — so every
+    /// "materials in use" derivation (rebind, orphan cleanup, the materials
+    /// list) routes through this rather than reading objects alone.
+    pub(crate) fn mesh_painted_materials(&self, mesh: MeshId) -> std::collections::BTreeSet<u8> {
+        self.meshes
+            .get(&mesh)
+            .and_then(|m| m.paint_colors.as_ref())
+            .map(|p| crate::core::threemf::referenced_states(p))
+            .unwrap_or_default()
     }
 }
 

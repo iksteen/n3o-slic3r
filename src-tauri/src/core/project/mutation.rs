@@ -103,6 +103,14 @@ impl Project {
             group: new_obj.group,
         });
         self.ensure_default_material_slot_on_active(extruder_id.unwrap_or(1));
+        // MMU face-painted materials live on the mesh, not the object's
+        // extruder_id, so bind them too — else adding a single painted
+        // multi-material object surfaces only its base material in the list
+        // (the preview already shows both). Mirrors the Orca importer, which
+        // binds painted filaments via ensure_material_bound_on_active.
+        for material in self.mesh_painted_materials(new_obj.mesh) {
+            self.ensure_default_material_slot_on_active(material);
+        }
         id
     }
 
@@ -1517,6 +1525,14 @@ impl Project {
                     selected: sorted,
                 });
             }
+        }
+        // Painted (MMU) materials are named by the mesh's paint, not any
+        // object's extruder_id, so add the removed meshes' paint states to the
+        // orphan candidates — else a face-painted material's slot binding
+        // lingers after its object is gone. The prune itself re-checks
+        // `materials_on_plate`, so a state still painted elsewhere is kept.
+        for mid in &removed_meshes {
+            removed_materials.extend(self.mesh_painted_materials(*mid));
         }
         if self.prune_orphan_material_bindings(active, &removed_materials) {
             events.push(SceneEvent::MaterialSlotChanged { plate_id });
@@ -3810,6 +3826,53 @@ mod tests {
             extruder_id: Some(mat),
             group: None,
         })
+    }
+
+    /// A single base-material-1 object whose mesh is MMU-painted with filament
+    /// 2 (`paint_colors = ["8"]` → state 2). No object carries `extruder = 2`.
+    fn add_painted_cube(p: &mut Project) -> ObjectId {
+        let mesh = NewMesh {
+            paint_colors: Some(vec!["8".into()]),
+            ..cube_mesh()
+        };
+        let mesh_id = p.register_mesh(mesh);
+        p.register_object(NewSceneObject {
+            mesh: mesh_id,
+            transform: Transform::IDENTITY,
+            name: "painted".into(),
+            visible: true,
+            extruder_id: Some(1),
+            group: None,
+        })
+    }
+
+    #[test]
+    fn register_object_binds_painted_material() {
+        // A single object painted with filament 2 must surface *both* materials
+        // (base 1 + painted 2) as slot bindings — the materials list reads
+        // `material_to_slot`, and the preview already shows both.
+        let mut p = Project::default(); // boots bound to Bambi
+        add_painted_cube(&mut p);
+        assert!(p.plates[0].material_to_slot.contains_key(&1));
+        assert!(
+            p.plates[0].material_to_slot.contains_key(&2),
+            "the MMU-painted filament 2 must be auto-bound, not just the base",
+        );
+    }
+
+    #[test]
+    fn delete_objects_prunes_orphan_painted_material_binding() {
+        // Deleting the painted object must clean up the painted material's
+        // binding too — it's named by the mesh paint, not any extruder_id, so
+        // the delete path has to consult the paint or the binding lingers.
+        let mut p = Project::default();
+        let id = add_painted_cube(&mut p);
+        assert!(p.plates[0].material_to_slot.contains_key(&2));
+        p.delete_objects(&[id]);
+        assert!(
+            !p.plates[0].material_to_slot.contains_key(&2),
+            "painted material 2's binding should be pruned once its object is gone",
+        );
     }
 
     #[test]
