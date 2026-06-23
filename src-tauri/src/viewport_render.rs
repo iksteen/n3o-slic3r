@@ -770,8 +770,11 @@ impl ViewportRenderer {
             }
             // One outer AABB enclosing the whole selection (world space) → a single
             // set of corner brackets, not one box per group member. Brackets hug
-            // the live (drag-previewed) bounds.
-            let boxes = selection_world_aabb(&p, &req.drag_ids, drag_pre)
+            // the live (drag-previewed) bounds. They're the affordance for the
+            // no-tool XY-plane move, so they're hidden once a gizmo is active.
+            let boxes = (req.gizmo == GizmoMode::None)
+                .then(|| selection_world_aabb(&p, &req.drag_ids, drag_pre))
+                .flatten()
                 .map(|(mn, mx)| vec![(Mat4::IDENTITY, mn.to_array(), mx.to_array())])
                 .unwrap_or_default();
             // The gizmo is sized + placed from the *resting* selection (no drag
