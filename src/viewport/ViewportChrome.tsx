@@ -235,6 +235,8 @@ export function ViewportChrome({
               <path d="M3 2.5v9M11 2.5v9M10 7H5.5M7 5.5 5.5 7 7 8.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
+        </div>
+        <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
           <button
             type="button"
             disabled={!hasObjects}
