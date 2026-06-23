@@ -90,7 +90,9 @@ function App() {
   const [wgpuGizmo, setWgpuGizmo] = useState<"none" | "move" | "rotate" | "scale">("none");
   // wgpu viewport's armed placing tool (lay-flat / align). Mutually exclusive
   // with the gizmo: arming a tool clears the gizmo and vice versa.
-  const [wgpuTool, setWgpuTool] = useState<"none" | "layflat" | "alignX" | "alignY">("none");
+  const [wgpuTool, setWgpuTool] = useState<
+    "none" | "layflat" | "alignX" | "alignY" | "facematch"
+  >("none");
   // Object count frozen at the moment a slice is submitted — what the
   // backend actually snapshots and slices (build_slice_input). Held
   // here so the progress window's count stays put across tab switches

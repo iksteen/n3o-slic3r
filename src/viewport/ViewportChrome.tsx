@@ -10,7 +10,7 @@ import type { SceneObject } from "./types";
  * they depend on the wgpu gizmo + face-picking, which aren't built yet.
  */
 type GizmoMode = "none" | "move" | "rotate" | "scale";
-type Tool = "none" | "layflat" | "alignX" | "alignY";
+type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch";
 
 export function ViewportChrome({
   leading,
@@ -217,6 +217,20 @@ export function ViewportChrome({
               <text x="3" y="5.5" fontSize="5" fill="currentColor" stroke="none">X</text>
             </svg>
           </button>
+          <button
+            type="button"
+            disabled={!hasObjects}
+            className={tool === "facematch" ? "px-2 py-1.5 bg-neutral-700" : btn(hasObjects)}
+            onClick={() => hasObjects && onTool("facematch")}
+            title="Match face — click a reference face, then the face to align to it"
+            aria-label="Match a face to a reference face on another object"
+            aria-pressed={tool === "facematch"}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              {/* two faces (vertical bars) + an arrow bringing the right one onto the left reference */}
+              <path d="M3 2.5v9M11 2.5v9M10 7H5.5M7 5.5 5.5 7 7 8.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
         </div>
       </div>
       <ViewportLegend hints={toolHint(tool)} />
@@ -232,6 +246,8 @@ function toolHint(tool: Tool): string {
       return "Click an object to align it to X · Esc to cancel";
     case "alignY":
       return "Click an object to align it to Y · Esc to cancel";
+    case "facematch":
+      return "Click the reference face, then the face to match it to · Esc to cancel";
     default:
       return "LMB rotate · RMB pan · scroll zoom";
   }

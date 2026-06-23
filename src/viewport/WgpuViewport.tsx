@@ -80,7 +80,7 @@ const PLANES: { n: Vec3; a: Vec3; b: Vec3 }[] = [
  * drags — the axis/plane handles (move) or axis rings (rotate) drive constrained
  * transforms instead. Frames render on-demand and coalesce (one in flight).
  */
-type Tool = "none" | "layflat" | "alignX" | "alignY";
+type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch";
 
 export function WgpuViewport({
   objects,
@@ -108,6 +108,9 @@ export function WgpuViewport({
   toolRef.current = tool;
   const onToolDoneRef = useRef(onToolDone);
   onToolDoneRef.current = onToolDone;
+  // Face-match is a two-click pick: the first click stashes the reference face's
+  // world normal + point here; the second matches the target face to it.
+  const faceMatchRef = useRef<{ normal: Vec3; point: Vec3 } | null>(null);
   // Lets effects outside the mount-once effect trigger a redraw / gizmo refresh.
   const renderRef = useRef<(() => void) | null>(null);
   const refreshGizmoRef = useRef<(() => void) | null>(null);
@@ -249,6 +252,36 @@ export function WgpuViewport({
           await invoke("scene_object_align_axis", { ids: [id], axis, expandGroups: true });
         } catch (e) {
           console.error("align failed", e);
+        }
+        return true;
+      }
+      if (toolNow === "facematch") {
+        // Two clicks: first stash the reference face, then yaw the target's group
+        // so its clicked face matches the reference's heading + slide coplanar.
+        const hit = await castPickFace(sx, sy);
+        if (!hit) return false;
+        if (!faceMatchRef.current) {
+          faceMatchRef.current = { normal: hit.normal, point: hit.point };
+          // Select the reference object as feedback that the click registered.
+          await invoke("scene_select", { ids: [hit.id], mode: "Replace", expandGroups: true }).catch(
+            (e) => console.error("select failed", e),
+          );
+          return false; // stay armed for the second click
+        }
+        const ref = faceMatchRef.current;
+        faceMatchRef.current = null;
+        try {
+          await invoke("scene_select", { ids: [hit.id], mode: "Replace", expandGroups: true });
+          await invoke("scene_object_align_face", {
+            ids: [hit.id],
+            refNormal: ref.normal,
+            faceNormal: hit.normal,
+            refPoint: ref.point,
+            facePoint: hit.point,
+            expandGroups: true,
+          });
+        } catch (e) {
+          console.error("align face failed", e);
         }
         return true;
       }
@@ -967,6 +1000,11 @@ export function WgpuViewport({
     void refreshGizmoRef.current?.();
     renderRef.current?.();
   }, [gizmoMode]);
+
+  // Leaving face-match (cancel / switch / complete) drops the stashed reference.
+  useEffect(() => {
+    if (tool !== "facematch") faceMatchRef.current = null;
+  }, [tool]);
 
   return <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />;
 }
