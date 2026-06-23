@@ -87,6 +87,10 @@ const SELECTED_RGB: [f32; 3] = [0.231, 0.510, 0.965]; // tailwind blue-500 (#3b8
 const DEFAULT_RGB: [f32; 3] = [0.694, 0.694, 0.694]; // #b1b1b1, matches the Three.js fallback
 const GRID_LINE: [f32; 4] = [0.34, 0.36, 0.40, 1.0];
 const BRACKET: [f32; 4] = [0.85, 0.88, 0.97, 1.0]; // selection bbox corner brackets
+// Origin axis-marker colors (mirror the Three.js viewport + corner legend).
+const AXIS_X: [f32; 4] = [1.0, 0.267, 0.267, 1.0]; // #ff4444
+const AXIS_Y: [f32; 4] = [0.267, 0.867, 0.267, 1.0]; // #44dd44
+const AXIS_Z: [f32; 4] = [0.267, 0.533, 1.0, 1.0]; // #4488ff
 
 /// Corner-bracket line segments for selected objects' bounding boxes: at each of
 /// the 8 corners, three short segments (25% of the edge) toward the adjacent
@@ -299,6 +303,22 @@ fn grid_verts(min: [f32; 3], max: [f32; 3]) -> Vec<Vertex> {
         v.push(Vertex { pos: [max[0], y, z], nrm: [0.0; 3] });
     }
     v
+}
+
+/// Origin axis markers: three short segments (+X, +Y, +Z) from the world origin,
+/// lifted a hair off the grid. Two verts per axis; drawn with the per-axis color.
+fn axes_verts(min: [f32; 3], max: [f32; 3]) -> [Vertex; 6] {
+    let len = (max[0] - min[0]).min(max[1] - min[1]) * 0.18;
+    let z = min[2] + 0.05;
+    let o = Vertex { pos: [0.0, 0.0, z], nrm: [0.0; 3] };
+    [
+        o,
+        Vertex { pos: [len, 0.0, z], nrm: [0.0; 3] },
+        o,
+        Vertex { pos: [0.0, len, z], nrm: [0.0; 3] },
+        o,
+        Vertex { pos: [0.0, 0.0, z + len], nrm: [0.0; 3] },
+    ]
 }
 
 /// One flat quad (two triangles, single normal). Winding-agnostic — the gizmo
@@ -613,6 +633,7 @@ pub struct ViewportRenderer {
     grid_key: Option<[f32; 6]>,
     vb_grid: wgpu::Buffer,
     n_grid: u32,
+    vb_axes: wgpu::Buffer,
     // size-dependent targets
     size: (u32, u32),
     color: wgpu::Texture,
@@ -770,6 +791,11 @@ impl ViewportRenderer {
             contents: bytemuck::cast_slice(&gverts),
             usage: wgpu::BufferUsages::VERTEX,
         });
+        let vb_axes = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("viewport.axes"),
+            contents: bytemuck::cast_slice(&axes_verts(gmin, gmax)),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
 
         let (color, msaa_view, depth_view, readback, padded_bpr) = make_targets(&device, 8, 8);
         ViewportRenderer {
@@ -787,6 +813,7 @@ impl ViewportRenderer {
             slots_cap,
             meshes: HashMap::new(),
             vb_grid,
+            vb_axes,
             size: (0, 0),
             color,
             msaa_view,
@@ -821,6 +848,11 @@ impl ViewportRenderer {
             usage: wgpu::BufferUsages::VERTEX,
         });
         self.n_grid = gverts.len() as u32;
+        self.vb_axes = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("viewport.axes"),
+            contents: bytemuck::cast_slice(&axes_verts(min, max)),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
         self.grid_key = Some(key);
     }
 
@@ -941,7 +973,9 @@ impl ViewportRenderer {
             })
         });
         let bracket_slot = 1 + draws.len();
-        let total_slots = bracket_slot + bracket_vb.is_some() as usize;
+        // Three more slots after the brackets: one per origin axis color.
+        let axis_slot = bracket_slot + bracket_vb.is_some() as usize;
+        let total_slots = axis_slot + 3;
 
         // Scale gizmo axes follow the object's orientation (world for multi).
         let basis_q = Quat::from_xyzw(
@@ -1002,6 +1036,11 @@ impl ViewportRenderer {
             bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
             bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&BRACKET));
         }
+        for (k, color) in [AXIS_X, AXIS_Y, AXIS_Z].iter().enumerate() {
+            let off = (axis_slot + k) * self.slot as usize;
+            bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
+            bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(color));
+        }
         self.queue.write_buffer(&self.ubuf, 0, &bytes);
 
         let color_view = self.color.create_view(&Default::default());
@@ -1038,6 +1077,12 @@ impl ViewportRenderer {
             rp.set_bind_group(0, &self.bind, &[0]);
             rp.set_vertex_buffer(0, self.vb_grid.slice(..));
             rp.draw(0..self.n_grid, 0..1);
+            // origin axis markers: each 2-vert segment with its own color slot.
+            rp.set_vertex_buffer(0, self.vb_axes.slice(..));
+            for k in 0..3u32 {
+                rp.set_bind_group(0, &self.bind, &[(axis_slot as u32 + k) * self.slot]);
+                rp.draw(k * 2..k * 2 + 2, 0..1);
+            }
             // meshes
             rp.set_pipeline(&self.mesh_pipe);
             for (i, (mesh_id, gi, _, _)) in draws.iter().enumerate() {
