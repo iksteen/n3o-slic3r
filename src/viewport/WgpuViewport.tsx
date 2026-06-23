@@ -163,10 +163,20 @@ export function WgpuViewport({
         return null;
       }
     };
-    const applySelect = async (id: number | null) => {
+    // Modifier-click (shift/ctrl/cmd) extends: Toggle adds the clicked object's
+    // whole group (or removes it if already selected); a plain click replaces.
+    // An additive click on empty space keeps the selection. Mirrors ViewportCanvas.
+    const applySelect = async (id: number | null, additive: boolean) => {
       try {
-        if (id != null) await invoke("scene_select", { ids: [id], mode: "Replace", expandGroups: true });
-        else await invoke("scene_deselect");
+        if (id != null) {
+          await invoke("scene_select", {
+            ids: [id],
+            mode: additive ? "Toggle" : "Replace",
+            expandGroups: true,
+          });
+        } else if (!additive) {
+          await invoke("scene_deselect");
+        }
       } catch (e) {
         console.error("select failed", e);
       }
@@ -481,10 +491,12 @@ export function WgpuViewport({
         return;
       }
       // A click (no drag) on empty space or an unselected object selects it; a
-      // click on an already-selected object keeps the selection.
+      // click on an already-selected object keeps the selection. Shift/ctrl/cmd
+      // extends the selection instead of replacing it.
       if (!moved) {
         const [sx, sy] = rel(e);
-        void castPick(sx, sy).then(applySelect);
+        const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+        void castPick(sx, sy).then((id) => applySelect(id, additive));
       }
     };
     const onMove = (e: MouseEvent) => {
