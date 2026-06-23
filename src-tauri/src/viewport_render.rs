@@ -1038,6 +1038,16 @@ pub fn viewport_frame(
     tauri::ipc::Response::new(r.frame(&req, project.inner()))
 }
 
+/// Drop the cached GPU meshes. `MeshId`s restart at 1 in a freshly loaded
+/// project, so without this the renderer would serve the previous project's
+/// geometry under the reused ids. Called by the frontend on `project:loaded`.
+#[tauri::command]
+pub fn viewport_reset(state: tauri::State<'_, ViewportState>) {
+    if let Some(r) = state.0.lock().unwrap().as_mut() {
+        r.meshes.clear();
+    }
+}
+
 /// Initial camera framing for the active plate's bed — the frontend sets the
 /// orbit center + distance from this on load / bed change.
 #[derive(serde::Serialize)]

@@ -585,9 +585,20 @@ export function WgpuViewport({
       },
     );
     const offReframe = onEvents(
-      ["scene:bed_changed", "scene:active_plate_changed", "project:loaded"],
+      ["scene:bed_changed", "scene:active_plate_changed"],
       () => void reframe(),
     );
+    // A new project reuses MeshIds from 1, so the renderer's GPU mesh cache must
+    // be dropped or it would draw the previous project's geometry. Reset, then
+    // reframe (which renders) for the fresh scene.
+    const offLoaded = onEvents(["project:loaded"], async () => {
+      try {
+        await invoke("viewport_reset");
+      } catch (e) {
+        console.error("viewport_reset failed", e);
+      }
+      void reframe();
+    });
 
     renderRef.current = render;
     refreshGizmoRef.current = refreshGizmo;
@@ -599,6 +610,7 @@ export function WgpuViewport({
       refreshGizmoRef.current = null;
       offRender();
       offReframe();
+      offLoaded();
       canvas.removeEventListener("mousedown", onDown);
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("mousemove", onMove);

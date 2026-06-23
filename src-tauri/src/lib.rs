@@ -176,6 +176,7 @@ pub fn run() {
             viewport_render::viewport_scene_info,
             viewport_render::viewport_pick,
             viewport_render::viewport_gizmo,
+            viewport_render::viewport_reset,
             core::cascade::slicer_options_for_printer,
             core::cascade::slicer_machine_options_for_printer,
             core::cascade::slicer_extruder_options_for_printer,
