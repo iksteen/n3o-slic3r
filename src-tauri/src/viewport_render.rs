@@ -72,6 +72,9 @@ struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32>, @locatio
 "#;
 
 const COLOR_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+/// 4x MSAA — cheap edge anti-aliasing; the multisampled target resolves into the
+/// single-sample `color` that's read back.
+const SAMPLES: u32 = 4;
 /// Per-object uniform: `mat4 mvp` (64) + `vec4 tint` (16).
 const UNIFORM_BYTES: u64 = 80;
 // Bed extents are f64 (BoundingBox); converted to f32 for the GPU.
@@ -501,6 +504,7 @@ pub struct ViewportRenderer {
     // size-dependent targets
     size: (u32, u32),
     color: wgpu::Texture,
+    msaa_view: wgpu::TextureView,
     depth_view: wgpu::TextureView,
     readback: wgpu::Buffer,
     padded_bpr: u32,
@@ -590,7 +594,10 @@ impl ViewportRenderer {
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                multisample: Default::default(),
+                multisample: wgpu::MultisampleState {
+                    count: SAMPLES,
+                    ..Default::default()
+                },
                 multiview: None,
             })
         };
@@ -636,7 +643,10 @@ impl ViewportRenderer {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState {
+                count: SAMPLES,
+                ..Default::default()
+            },
             multiview: None,
         });
 
@@ -649,7 +659,7 @@ impl ViewportRenderer {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let (color, depth_view, readback, padded_bpr) = make_targets(&device, 8, 8);
+        let (color, msaa_view, depth_view, readback, padded_bpr) = make_targets(&device, 8, 8);
         ViewportRenderer {
             n_grid: gverts.len() as u32,
             grid_key: Some([gmin[0], gmin[1], gmin[2], gmax[0], gmax[1], gmax[2]]),
@@ -667,6 +677,7 @@ impl ViewportRenderer {
             vb_grid,
             size: (0, 0),
             color,
+            msaa_view,
             depth_view,
             readback,
             padded_bpr,
@@ -678,8 +689,9 @@ impl ViewportRenderer {
             return;
         }
         self.size = (w, h);
-        let (color, depth_view, readback, padded_bpr) = make_targets(&self.device, w, h);
+        let (color, msaa_view, depth_view, readback, padded_bpr) = make_targets(&self.device, w, h);
         self.color = color;
+        self.msaa_view = msaa_view;
         self.depth_view = depth_view;
         self.readback = readback;
         self.padded_bpr = padded_bpr;
@@ -845,8 +857,8 @@ impl ViewportRenderer {
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &color_view,
-                    resolve_target: None,
+                    view: &self.msaa_view,
+                    resolve_target: Some(&color_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.10,
@@ -904,8 +916,8 @@ impl ViewportRenderer {
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("viewport.gizmo"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &color_view,
-                    resolve_target: None,
+                    view: &self.msaa_view,
+                    resolve_target: Some(&color_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
@@ -989,12 +1001,13 @@ fn make_targets(
     device: &wgpu::Device,
     w: u32,
     h: u32,
-) -> (wgpu::Texture, wgpu::TextureView, wgpu::Buffer, u32) {
+) -> (wgpu::Texture, wgpu::TextureView, wgpu::TextureView, wgpu::Buffer, u32) {
     let ext = wgpu::Extent3d {
         width: w,
         height: h,
         depth_or_array_layers: 1,
     };
+    // Single-sample resolve target — what gets read back.
     let color = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("viewport.color"),
         size: ext,
@@ -1005,11 +1018,22 @@ fn make_targets(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
+    // Multisampled color the scene actually renders into.
+    let msaa = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("viewport.msaa"),
+        size: ext,
+        mip_level_count: 1,
+        sample_count: SAMPLES,
+        dimension: wgpu::TextureDimension::D2,
+        format: COLOR_FMT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
     let depth = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("viewport.depth"),
         size: ext,
         mip_level_count: 1,
-        sample_count: 1,
+        sample_count: SAMPLES,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Depth32Float,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -1022,7 +1046,13 @@ fn make_targets(
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    (color, depth.create_view(&Default::default()), readback, padded_bpr)
+    (
+        color,
+        msaa.create_view(&Default::default()),
+        depth.create_view(&Default::default()),
+        readback,
+        padded_bpr,
+    )
 }
 
 /// Tauri-managed renderer (lazily created on first frame; wgpu init is ~100ms).
