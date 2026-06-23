@@ -20,7 +20,7 @@ type DragState = {
   x: number;
   y: number;
   button: number;
-  mode: "pending" | "orbit" | "move" | "rotate" | "scale" | "pan" | "inert";
+  mode: "pending" | "orbit" | "move" | "rotate" | "scale" | "pan" | "inert" | "tower";
   moveTargets?: { id: number; start: number[] }[];
   // Constrained move: intersect the cursor ray with this fixed plane; with
   // `axisDir` set, keep only the component along it (single-axis handle),
@@ -40,6 +40,10 @@ type DragState = {
   uniform?: boolean;
   basisQuat?: [number, number, number, number];
   basisAxes?: [Vec3, Vec3, Vec3];
+  // Tower drag: bed-point → tower-corner offset at grab; `towerMoved` gates the
+  // commit so a click without a drag doesn't pin a wipe_tower override.
+  towerOffset?: [number, number];
+  towerMoved?: boolean;
 };
 
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -161,6 +165,44 @@ export function WgpuViewport({
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+
+    // Priming-tower drag state: the last-resolved geometry + its on-bed footprint
+    // (the sliced mesh's bbox when shown, else the square box), and the bed
+    // extents — all kept current by refreshTower / reframe and read by the drag.
+    type Footprint = { minX: number; minY: number; maxX: number; maxY: number };
+    let towerGeom: TowerGeometry | null = null;
+    let towerFp: Footprint | null = null;
+    let bedMin: Vec3 = [0, 0, 0];
+    let bedMax: Vec3 = [0, 0, 0];
+    const fmtCoord = (v: number): string => (Math.round(v * 10) / 10).toString();
+    // Corner range so the footprint (+brim) stays on the bed (ports
+    // clampTowerCorner; assumes no tower rotation, as both MVP printers default to 0).
+    const clampTowerCorner = (x: number, y: number): { x: number; y: number } => {
+      if (!towerGeom) return { x, y };
+      const b = towerGeom.brim;
+      const minLX = towerFp ? towerFp.minX : -b;
+      const maxLX = towerFp ? towerFp.maxX : towerGeom.width + b;
+      const minLY = towerFp ? towerFp.minY : -b;
+      const maxLY = towerFp ? towerFp.maxY : towerGeom.width + b;
+      const loX = bedMin[0] - minLX,
+        hiX = bedMax[0] - maxLX;
+      const loY = bedMin[1] - minLY,
+        hiY = bedMax[1] - maxLY;
+      return {
+        x: Math.min(Math.max(x, loX), Math.max(loX, hiX)),
+        y: Math.min(Math.max(y, loY), Math.max(loY, hiY)),
+      };
+    };
+    // Whether a bed-plane point lands on the tower's footprint (+brim).
+    const overTower = (bx: number, by: number): boolean => {
+      if (!towerGeom) return false;
+      const b = towerGeom.brim;
+      const x0 = towerGeom.x + (towerFp ? towerFp.minX : -b);
+      const x1 = towerGeom.x + (towerFp ? towerFp.maxX : towerGeom.width + b);
+      const y0 = towerGeom.y + (towerFp ? towerFp.minY : -b);
+      const y1 = towerGeom.y + (towerFp ? towerFp.maxY : towerGeom.width + b);
+      return bx >= x0 && bx <= x1 && by >= y0 && by <= y1;
+    };
 
     async function render() {
       if (inflight.current) {
@@ -767,7 +809,8 @@ export function WgpuViewport({
         return;
       }
 
-      // No gizmo: pressing a selected object free-moves the selection on its XY plane.
+      // No gizmo: pressing a selected object free-moves the selection on its XY
+      // plane; pressing the tower (with no object in front) drags it on the bed.
       void castPick(sx, sy).then((id) => {
         if (drag.current !== press) return; // released or superseded
         if (id != null && selRef.current.includes(id)) {
@@ -780,9 +823,18 @@ export function WgpuViewport({
           press.axisDir = null;
           press.startHit = ray ? rayPlanePoint(ray, [0, 0, 1], [0, 0, planeZ]) : null;
           press.moveTargets = collectMoveTargets();
-        } else {
-          press.mode = "orbit";
+          return;
         }
+        if (id == null && towerGeom) {
+          const ray = makeRay(sx, sy);
+          const bedHit = ray ? rayPlanePoint(ray, [0, 0, 1], [0, 0, bedMin[2]]) : null;
+          if (bedHit && overTower(bedHit[0], bedHit[1])) {
+            press.mode = "tower";
+            press.towerOffset = [bedHit[0] - towerGeom.x, bedHit[1] - towerGeom.y];
+            return;
+          }
+        }
+        press.mode = "orbit";
       });
     };
     const onUp = (e: MouseEvent) => {
@@ -803,6 +855,25 @@ export function WgpuViewport({
               m: pre.clone().multiply(new THREE.Matrix4().fromArray(t.start)).toArray(),
             })),
           );
+        }
+        return;
+      }
+      if (d.mode === "tower") {
+        // Commit the dragged position as project overrides; the resolved
+        // (clamped) box settles back in via project_overrides_changed →
+        // refreshTower. A click without a drag doesn't pin an override.
+        if (d.towerMoved && towerGeom && activePlateIdRef.current != null) {
+          const plateId = activePlateIdRef.current;
+          void invoke("scene_project_override_set", {
+            plateId,
+            key: "wipe_tower_x",
+            value: fmtCoord(towerGeom.x),
+          }).catch((err) => console.error("override set failed", err));
+          void invoke("scene_project_override_set", {
+            plateId,
+            key: "wipe_tower_y",
+            value: fmtCoord(towerGeom.y),
+          }).catch((err) => console.error("override set failed", err));
         }
         return;
       }
@@ -840,6 +911,17 @@ export function WgpuViewport({
         const c = cam.current;
         c.az -= dx * 0.01;
         c.el = Math.min(1.45, Math.max(-1.45, c.el + dy * 0.01));
+        void render();
+      } else if (d.mode === "tower" && d.towerOffset && towerGeom) {
+        const [sx, sy] = rel(e);
+        const ray = makeRay(sx, sy);
+        const bedHit = ray ? rayPlanePoint(ray, [0, 0, 1], [0, 0, bedMin[2]]) : null;
+        if (!bedHit) return;
+        const c = clampTowerCorner(bedHit[0] - d.towerOffset[0], bedHit[1] - d.towerOffset[1]);
+        if (c.x !== towerGeom.x || c.y !== towerGeom.y) d.towerMoved = true;
+        towerGeom = { ...towerGeom, x: c.x, y: c.y };
+        // Move-only update (no mesh re-upload) for a smooth drag.
+        void invoke("viewport_move_tower", { x: c.x, y: c.y }).catch(() => {});
         void render();
       } else if (d.mode === "move" && d.moveTargets && d.startHit && d.planeN && d.planeP) {
         const [sx, sy] = rel(e);
@@ -930,6 +1012,8 @@ export function WgpuViewport({
     async function reframe() {
       try {
         const info = await invoke<{ min: Vec3; max: Vec3 }>("viewport_scene_info");
+        bedMin = info.min;
+        bedMax = info.max;
         const [minX, minY, minZ] = info.min;
         const [maxX, maxY] = info.max;
         const center: Vec3 = [(minX + maxX) / 2, (minY + maxY) / 2, minZ];
@@ -974,22 +1058,41 @@ export function WgpuViewport({
     async function refreshTower() {
       const id = activePlateIdRef.current;
       let tower: Record<string, unknown> | null = null;
+      towerGeom = null;
+      towerFp = null;
       try {
         if (id != null) {
           const geom = await invoke<TowerGeometry | null>("plate_tower_geometry", { plateId: id });
-          if (geom) {
+          if (id === activePlateIdRef.current && geom) {
             const cached = getCachedTowerMesh(id);
             const valid =
               cached &&
               cached.materialCount === geom.material_count &&
               cached.printerInstanceId === geom.printer_instance_id;
+            const mesh = valid ? cached.mesh : null;
+            towerGeom = geom;
+            // The drag clamp uses the sliced mesh's true on-bed footprint when
+            // shown (it can be wider/asymmetric than the square box).
+            if (mesh) {
+              let nx = Infinity,
+                ny = Infinity,
+                xx = -Infinity,
+                xy = -Infinity;
+              for (let i = 0; i < mesh.vertices.length; i += 3) {
+                nx = Math.min(nx, mesh.vertices[i]);
+                xx = Math.max(xx, mesh.vertices[i]);
+                ny = Math.min(ny, mesh.vertices[i + 1]);
+                xy = Math.max(xy, mesh.vertices[i + 1]);
+              }
+              if (nx <= xx) towerFp = { minX: nx, minY: ny, maxX: xx, maxY: xy };
+            }
             tower = {
               x: geom.x,
               y: geom.y,
               width: geom.width,
               brim: geom.brim,
               rotation: geom.rotation,
-              mesh: valid ? { vertices: cached.mesh.vertices, indices: cached.mesh.indices } : null,
+              mesh: mesh ? { vertices: mesh.vertices, indices: mesh.indices } : null,
             };
           }
         }
@@ -1055,6 +1158,9 @@ export function WgpuViewport({
         void refreshTower(); // active plate may have changed → re-push its mesh
       },
     );
+    // A committed tower drag (or any project override) re-resolves the tower so
+    // the authoritative, clamped placement settles in.
+    const offOverrides = onEvents(["scene:project_overrides_changed"], () => void refreshTower());
     // A new project reuses MeshIds from 1, so the renderer's GPU mesh cache must
     // be dropped or it would draw the previous project's geometry. Reset, then
     // reframe (which renders) for the fresh scene.
@@ -1104,6 +1210,7 @@ export function WgpuViewport({
       refreshGizmoRef.current = null;
       offRender();
       offReframe();
+      offOverrides();
       offLoaded();
       offTower();
       registerThumbnailCapture(null);

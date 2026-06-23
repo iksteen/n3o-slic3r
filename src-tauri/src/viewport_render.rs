@@ -1711,6 +1711,16 @@ pub fn viewport_set_tower(state: tauri::State<'_, ViewportState>, tower: Option<
     r.set_tower(tower);
 }
 
+/// Move the tower's placement corner without re-uploading its mesh, for a smooth
+/// bed-plane drag. No-op when no tower is set.
+#[tauri::command]
+pub fn viewport_move_tower(state: tauri::State<'_, ViewportState>, x: f32, y: f32) {
+    if let Some(t) = state.0.lock().unwrap().as_mut().and_then(|r| r.tower.as_mut()) {
+        t.x = x;
+        t.y = y;
+    }
+}
+
 /// Render a square iso print thumbnail (models only, transparent background) and
 /// return it as tight RGBA8 — the frontend encodes it to a PNG for the send path.
 #[tauri::command]
