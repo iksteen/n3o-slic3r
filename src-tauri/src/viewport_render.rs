@@ -42,7 +42,8 @@ struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
   let key = normalize(vec3<f32>(0.5, -0.5, 0.85));
   let fill = normalize(vec3<f32>(-0.5, 0.5, 0.33));
   let d = 0.55 + abs(dot(n, key)) * 0.4 + abs(dot(n, fill)) * 0.1;
-  // color = the object's base color (spool color, or selection blue when picked).
+  // color = the face group's resolved color (object base / per-filament paint,
+  // already selection-tinted CPU-side).
   return vec4<f32>(u.color.rgb * min(d, 1.0), 1.0);
 }
 "#;
@@ -205,10 +206,21 @@ fn ident_quat() -> [f32; 4] {
     [0.0, 0.0, 0.0, 1.0]
 }
 
-struct GpuMesh {
-    vb: wgpu::Buffer,
+/// One paint-state index group within a mesh: the triangles painted with
+/// filament `state` (0 = unpainted → object's base color), as an index buffer
+/// into the shared vertex buffer.
+struct MeshGroup {
+    state: u8,
     ib: wgpu::Buffer,
     n_indices: u32,
+}
+
+struct GpuMesh {
+    vb: wgpu::Buffer,
+    // One group for an unpainted mesh (state 0); one per filament for a painted
+    // mesh. The vertices stay shared/indexed — only the triangles are partitioned,
+    // so painting never multiplies the vertex count.
+    groups: Vec<MeshGroup>,
 }
 
 /// Build our interleaved vertex buffer for a `Mesh` and upload it. Normals are
@@ -233,24 +245,40 @@ fn upload_mesh(device: &wgpu::Device, m: &crate::core::scene::state::Mesh) -> Gp
         }
     }
     let verts: Vec<Vertex> = (0..vcount)
-        .map(|i| Vertex {
-            pos: pos[i].to_array(),
-            nrm: nrm[i].normalize_or_zero().to_array(),
-        })
+        .map(|i| Vertex { pos: pos[i].to_array(), nrm: nrm[i].normalize_or_zero().to_array() })
         .collect();
-    GpuMesh {
-        vb: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("viewport.mesh.vb"),
-            contents: bytemuck::cast_slice(&verts),
-            usage: wgpu::BufferUsages::VERTEX,
-        }),
+    let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("viewport.mesh.vb"),
+        contents: bytemuck::cast_slice(&verts),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    let make_ib = |state: u8, indices: &[u32]| MeshGroup {
+        state,
         ib: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("viewport.mesh.ib"),
-            contents: bytemuck::cast_slice(&m.indices),
+            contents: bytemuck::cast_slice(indices),
             usage: wgpu::BufferUsages::INDEX,
         }),
-        n_indices: m.indices.len() as u32,
-    }
+        n_indices: indices.len() as u32,
+    };
+    // MMU paint: partition triangles by their dominant filament state into index
+    // groups (vertices stay shared, so painting never multiplies vertex count).
+    let states = m
+        .paint_colors
+        .as_deref()
+        .and_then(crate::core::threemf::decode_dominant_states)
+        .filter(|s| s.len() == m.indices.len() / 3);
+    let groups = match states {
+        Some(states) => {
+            let mut by_state: BTreeMap<u8, Vec<u32>> = BTreeMap::new();
+            for (t, tri) in m.indices.chunks_exact(3).enumerate() {
+                by_state.entry(states[t]).or_default().extend_from_slice(tri);
+            }
+            by_state.into_iter().map(|(s, idx)| make_ib(s, &idx)).collect()
+        }
+        None => vec![make_ib(0, &m.indices)],
+    };
+    GpuMesh { vb, groups }
 }
 
 /// Build-plate grid lines on the bed floor (`z = min.z`), ~10mm spacing.
@@ -830,7 +858,9 @@ impl ViewportRenderer {
             let instance = plate
                 .printer_instance_id()
                 .and_then(instance_registry::lookup_instance);
-            let mut draws: Vec<(MeshId, Mat4, [f32; 3])> = Vec::new();
+            // One draw item per (object, paint-state group): (mesh, group index,
+            // model, resolved color).
+            let mut draws: Vec<(MeshId, usize, Mat4, [f32; 3])> = Vec::new();
             // Local drag preview: world pre-multiply applied to dragged objects.
             let drag_pre = Mat4::from_cols_array(&req.drag_pre);
             let dragging = !req.drag_ids.is_empty();
@@ -850,18 +880,33 @@ impl ViewportRenderer {
                         ),
                     }
                 }
-                if self.meshes.contains_key(&obj.mesh) {
-                    let mut model = obj.transform.to_mat4();
-                    if dragging && req.drag_ids.contains(&id.0) {
-                        model = drag_pre * model;
-                    }
-                    let selected = plate.scene.selection.contains(id);
-                    let color = if selected {
+                let Some(gm) = self.meshes.get(&obj.mesh) else {
+                    continue;
+                };
+                let mut model = obj.transform.to_mat4();
+                if dragging && req.drag_ids.contains(&id.0) {
+                    model = drag_pre * model;
+                }
+                let selected = plate.scene.selection.contains(id);
+                for (gi, g) in gm.groups.iter().enumerate() {
+                    // state 0 → object's base material; state N → filament N. Both
+                    // via the spool-color chain; selection tints toward blue.
+                    let material = if g.state == 0 { obj.extruder_id.unwrap_or(1) } else { g.state };
+                    let base = spool_color(&plate.material_to_slot, instance.as_ref(), Some(material));
+                    let color = if selected && g.state == 0 {
                         SELECTED_RGB
+                    } else if selected {
+                        // mix toward selection blue (matches the Three.js paint tint)
+                        let b = SELECTED_RGB;
+                        [
+                            base[0] * 0.45 + b[0] * 0.55,
+                            base[1] * 0.45 + b[1] * 0.55,
+                            base[2] * 0.45 + b[2] * 0.55,
+                        ]
                     } else {
-                        spool_color(&plate.material_to_slot, instance.as_ref(), obj.extruder_id)
+                        base
                     };
-                    draws.push((obj.mesh, model, color));
+                    draws.push((obj.mesh, gi, model, color));
                 }
             }
             // One outer AABB enclosing the whole selection (world space) → a single
@@ -945,7 +990,7 @@ impl ViewportRenderer {
         let mut bytes = vec![0u8; self.slot as usize * total_slots];
         bytes[0..64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
         bytes[64..80].copy_from_slice(bytemuck::cast_slice(&GRID_LINE));
-        for (i, (_, model, color)) in draws.iter().enumerate() {
+        for (i, (_, _, model, color)) in draws.iter().enumerate() {
             let off = (i + 1) * self.slot as usize;
             bytes[off..off + 64]
                 .copy_from_slice(bytemuck::cast_slice(&(vp * *model).to_cols_array()));
@@ -995,13 +1040,14 @@ impl ViewportRenderer {
             rp.draw(0..self.n_grid, 0..1);
             // meshes
             rp.set_pipeline(&self.mesh_pipe);
-            for (i, (mesh_id, _, _)) in draws.iter().enumerate() {
+            for (i, (mesh_id, gi, _, _)) in draws.iter().enumerate() {
                 let off = ((i + 1) as u32) * self.slot;
                 let gm = &self.meshes[mesh_id];
+                let g = &gm.groups[*gi];
                 rp.set_bind_group(0, &self.bind, &[off]);
                 rp.set_vertex_buffer(0, gm.vb.slice(..));
-                rp.set_index_buffer(gm.ib.slice(..), wgpu::IndexFormat::Uint32);
-                rp.draw_indexed(0..gm.n_indices, 0, 0..1);
+                rp.set_index_buffer(g.ib.slice(..), wgpu::IndexFormat::Uint32);
+                rp.draw_indexed(0..g.n_indices, 0, 0..1);
             }
             // selection bbox corner brackets
             if let Some(vb) = &bracket_vb {
