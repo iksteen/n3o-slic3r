@@ -177,6 +177,7 @@ pub fn run() {
             viewport_render::viewport_pick,
             viewport_render::viewport_pick_face,
             viewport_render::viewport_gizmo,
+            viewport_render::viewport_selection_extent,
             viewport_render::viewport_reset,
             viewport_render::viewport_set_tower,
             viewport_render::viewport_move_tower,

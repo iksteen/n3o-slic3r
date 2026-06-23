@@ -1785,6 +1785,51 @@ pub fn viewport_gizmo(project: tauri::State<'_, Arc<Mutex<Project>>>) -> Option<
     Some(GizmoInfo { center: c.to_array(), length: l })
 }
 
+/// The active plate's selection's bounding-box size along the axes of `basis`
+/// (quaternion xyzw). With the object's own orientation this is its true local
+/// dimensions; identity gives the world-axis extent. Drives the scale gizmo's
+/// 1mm dimension snap. `[0,0,0]` when nothing's selected.
+#[tauri::command]
+pub fn viewport_selection_extent(
+    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    basis: [f32; 4],
+) -> [f32; 3] {
+    let p = project.lock().unwrap();
+    let plate = p.active_plate();
+    let inv = Quat::from_xyzw(basis[0], basis[1], basis[2], basis[3])
+        .normalize()
+        .inverse();
+    let mut mn = Vec3::splat(f32::MAX);
+    let mut mx = Vec3::splat(f32::MIN);
+    let mut any = false;
+    for (id, obj) in plate.scene.objects.iter() {
+        if !obj.visible || !plate.scene.selection.contains(id) {
+            continue;
+        }
+        let Some(m) = p.meshes.get(&obj.mesh) else {
+            continue;
+        };
+        let model = obj.transform.to_mat4();
+        let bb = m.bounding_box;
+        for &sx in &[false, true] {
+            for &sy in &[false, true] {
+                for &sz in &[false, true] {
+                    let c = Vec3::new(
+                        (if sx { bb.max[0] } else { bb.min[0] }) as f32,
+                        (if sy { bb.max[1] } else { bb.min[1] }) as f32,
+                        (if sz { bb.max[2] } else { bb.min[2] }) as f32,
+                    );
+                    let w = inv * model.transform_point3(c); // into the basis frame
+                    mn = mn.min(w);
+                    mx = mx.max(w);
+                    any = true;
+                }
+            }
+        }
+    }
+    if any { (mx - mn).to_array() } else { [0.0; 3] }
+}
+
 /// View-projection for the orbit camera (z up). Shared by render and pick so the
 /// click ray matches exactly what's drawn.
 fn view_proj(w: f32, h: f32, az: f32, el: f32, dist: f32, center: Vec3) -> Mat4 {

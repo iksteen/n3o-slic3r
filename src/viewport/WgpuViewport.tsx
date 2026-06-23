@@ -15,6 +15,11 @@ const IDENT_QUAT: [number, number, number, number] = [0, 0, 0, 1];
 // Move/Scale gizmo handle length as a fraction of the eye→gizmo distance
 // (constant on-screen size). Must match GIZMO_SCREEN_K in viewport_render.rs.
 const GIZMO_SCREEN_K = 0.13;
+// Gizmo snap (matches the Three.js gizmo): 1 mm translate, 15° rotate, no scale
+// snap. Holding Shift during a drag disables it (freehand).
+const TRANSLATE_SNAP_MM = 1;
+const ROTATE_SNAP_RAD = (15 * Math.PI) / 180;
+const snapTo = (v: number, step: number) => Math.round(v / step) * step;
 
 type DragState = {
   x: number;
@@ -40,6 +45,8 @@ type DragState = {
   uniform?: boolean;
   basisQuat?: [number, number, number, number];
   basisAxes?: [Vec3, Vec3, Vec3];
+  // Selection size along the basis axes at drag start, for the 1 mm scale snap.
+  scaleExtent?: Vec3;
   // Tower drag: bed-point → tower-corner offset at grab; `towerMoved` gates the
   // commit so a click without a drag doesn't pin a wipe_tower override.
   towerOffset?: [number, number];
@@ -791,6 +798,12 @@ export function WgpuViewport({
               press.basisQuat = gizmoBasis.current.quat;
               press.basisAxes = gizmoBasis.current.axes;
               press.startHit = rayPlanePoint(ray, handle.planeN!, handle.planeP!);
+              // Selection dimensions along the basis axes, for the 1 mm snap.
+              void invoke<Vec3>("viewport_selection_extent", {
+                basis: gizmoBasis.current.quat,
+              }).then((ext) => {
+                if (drag.current === press) press.scaleExtent = ext;
+              });
             } else {
               press.mode = "move";
               press.planeN = handle.planeN;
@@ -931,6 +944,14 @@ export function WgpuViewport({
         if (!hit) return;
         let t = sub(hit, d.startHit);
         if (d.axisDir) t = scale(d.axisDir, dot(t, d.axisDir)); // single-axis only
+        // Snap the translation to 1 mm per axis unless Shift is held (freehand).
+        if (!e.shiftKey) {
+          t = [
+            snapTo(t[0], TRANSLATE_SNAP_MM),
+            snapTo(t[1], TRANSLATE_SNAP_MM),
+            snapTo(t[2], TRANSLATE_SNAP_MM),
+          ];
+        }
         // Preview-only: pre-multiply the dragged objects this frame; no commit yet.
         dragOverride.current = { ids: d.moveTargets.map((x) => x.id), pre: translationMat(t) };
         void render();
@@ -940,7 +961,9 @@ export function WgpuViewport({
         if (!ray) return;
         const hit = rayPlanePoint(ray, d.rotAxis, d.pivot);
         if (!hit) return;
-        const angle = signedAngle(sub(d.startHit, d.pivot), sub(hit, d.pivot), d.rotAxis);
+        let angle = signedAngle(sub(d.startHit, d.pivot), sub(hit, d.pivot), d.rotAxis);
+        // Snap to 15° unless Shift is held (freehand).
+        if (!e.shiftKey) angle = snapTo(angle, ROTATE_SNAP_RAD);
         dragOverride.current = {
           ids: d.moveTargets.map((x) => x.id),
           pre: pivotRotation(d.rotAxis, angle, d.pivot),
@@ -985,6 +1008,17 @@ export function WgpuViewport({
           const curProj = dot(sub(hit, d.pivot), g);
           const ref = Math.abs(startProj) > 1e-3 ? startProj : GIZMO_SCREEN_K * eyeDist(d.pivot);
           f = curProj / ref;
+        }
+        // Snap the resulting dimension to 1 mm (Shift = freehand). Scale is one
+        // factor across the masked axes, so snap the largest masked dimension —
+        // the most stable reference — to whole mm and derive the factor from it.
+        if (!e.shiftKey && d.scaleExtent) {
+          let refExt = 0;
+          for (let k = 0; k < 3; k++) if (mask[k]) refExt = Math.max(refExt, d.scaleExtent[k]);
+          if (refExt > 1e-3) {
+            const snapped = Math.max(TRANSLATE_SNAP_MM, Math.round(refExt * f));
+            f = snapped / refExt;
+          }
         }
         f = Math.max(0.01, f); // never collapse to zero / mirror
         const ratio: Vec3 = [mask[0] ? f : 1, mask[1] ? f : 1, mask[2] ? f : 1];
