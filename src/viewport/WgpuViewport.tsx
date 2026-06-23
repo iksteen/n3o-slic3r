@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import * as THREE from "three";
 import { onEvents } from "../state/eventRouter";
+import { shouldIgnoreHotkey } from "../ui/hotkeyInhibit";
 import type { SceneObject } from "./types";
 
 type Vec3 = [number, number, number];
@@ -786,6 +787,17 @@ export function WgpuViewport({
       void render();
     }
 
+    // Delete / Backspace removes the current selection (off while a modal or
+    // text field has focus, so editing a field doesn't delete objects).
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (shouldIgnoreHotkey(e)) return;
+      if ((e.key === "Delete" || e.key === "Backspace") && selRef.current.length > 0) {
+        void invoke("scene_object_delete", { ids: selRef.current }).catch((err) =>
+          console.error("delete failed", err),
+        );
+      }
+    };
+
     // Cursor left the canvas → drop any handle highlight.
     const onLeave = () => {
       if (hoverHandle.current !== -1) {
@@ -801,6 +813,7 @@ export function WgpuViewport({
     canvas.addEventListener("mouseleave", onLeave);
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("contextmenu", onCtxMenu);
+    window.addEventListener("keydown", onKeyDown);
     ro.observe(canvas);
 
     const offRender = onEvents(
@@ -850,6 +863,7 @@ export function WgpuViewport({
       canvas.removeEventListener("mouseleave", onLeave);
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("contextmenu", onCtxMenu);
+      window.removeEventListener("keydown", onKeyDown);
       ro.disconnect();
     };
   }, []);
