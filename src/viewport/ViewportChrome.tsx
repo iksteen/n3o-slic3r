@@ -20,6 +20,7 @@ export function ViewportChrome({
   tool,
   onTool,
   onClone,
+  faceMatchRefSet = false,
 }: {
   leading: ReactNode;
   objects: SceneObject[];
@@ -29,6 +30,8 @@ export function ViewportChrome({
   tool: Tool;
   onTool: (tool: Tool) => void;
   onClone: () => void;
+  /** Match-face: the reference face has been clicked (awaiting the target). */
+  faceMatchRefSet?: boolean;
 }) {
   const hasObjects = objects.length > 0;
 
@@ -249,12 +252,12 @@ export function ViewportChrome({
           </button>
         </div>
       </div>
-      <ViewportLegend hints={toolHint(tool)} prompt={tool !== "none"} />
+      <ViewportLegend hints={toolHint(tool, faceMatchRefSet)} prompt={tool !== "none"} />
     </>
   );
 }
 
-function toolHint(tool: Tool): string {
+function toolHint(tool: Tool, faceMatchRefSet: boolean): string {
   switch (tool) {
     case "layflat":
       return "Click a face to lay it on the plate · Esc to cancel";
@@ -263,7 +266,9 @@ function toolHint(tool: Tool): string {
     case "alignY":
       return "Click an object to align it to Y · Esc to cancel";
     case "facematch":
-      return "Click the reference face, then the face to match it to · Esc to cancel";
+      return faceMatchRefSet
+        ? "Now click the face to match to the reference · Esc to cancel"
+        : "Select the reference face · Esc to cancel";
     case "clone":
       return "Click an object to clone · Esc to cancel";
     default:

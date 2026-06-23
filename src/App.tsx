@@ -91,6 +91,8 @@ function App() {
   >("none");
   // wgpu clone dialog (open with a set of ids; null = closed).
   const [wgpuClone, setWgpuClone] = useState<{ ids: number[]; expandGroups: boolean } | null>(null);
+  // Match-face two-click sub-state: true once the reference face is picked.
+  const [wgpuFaceMatchStep, setWgpuFaceMatchStep] = useState(false);
   // Object count frozen at the moment a slice is submitted — what the
   // backend actually snapshots and slices (build_slice_input). Held
   // here so the progress window's count stays put across tab switches
@@ -199,6 +201,11 @@ function App() {
       setMode((current) => (current === "devices" ? current : "preview"));
     });
   }, [bridge, activePlateId]);
+
+  // Reset the match-face step whenever the armed tool changes (arm/disarm/switch).
+  useEffect(() => {
+    setWgpuFaceMatchStep(false);
+  }, [wgpuTool]);
 
   // App-lifetime listener feeding the priming-tower mesh cache. Lives here
   // (App is always mounted) rather than in ViewportCanvas, which unmounts
@@ -617,6 +624,7 @@ function App() {
                   setWgpuTool("none");
                   setWgpuClone({ ids: [id], expandGroups: true });
                 }}
+                onFaceMatchStep={setWgpuFaceMatchStep}
               />
               <ViewportChrome
                 leading={modeToggle}
@@ -643,6 +651,7 @@ function App() {
                     setWgpuTool((cur) => (cur === "clone" ? "none" : "clone"));
                   }
                 }}
+                faceMatchRefSet={wgpuFaceMatchStep}
               />
               {wgpuClone && (
                 <CloneDialog

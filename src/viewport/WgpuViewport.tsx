@@ -103,6 +103,7 @@ export function WgpuViewport({
   tool = "none",
   onToolDone,
   onClonePick,
+  onFaceMatchStep,
 }: {
   objects: SceneObject[];
   selectedIds: number[];
@@ -111,6 +112,8 @@ export function WgpuViewport({
   tool?: Tool;
   onToolDone?: () => void;
   onClonePick?: (id: number) => void;
+  /** Match-face: reference face clicked (true) → waiting on the target. */
+  onFaceMatchStep?: (refSet: boolean) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // Match the Three.js default framing: camera at (0, -260, 200) looking at the
@@ -136,6 +139,8 @@ export function WgpuViewport({
   onToolDoneRef.current = onToolDone;
   const onClonePickRef = useRef(onClonePick);
   onClonePickRef.current = onClonePick;
+  const onFaceMatchStepRef = useRef(onFaceMatchStep);
+  onFaceMatchStepRef.current = onFaceMatchStep;
   const activePlateIdRef = useRef(activePlateId);
   activePlateIdRef.current = activePlateId;
   // Face-match is a two-click pick: the first click stashes the reference face's
@@ -324,7 +329,7 @@ export function WgpuViewport({
         if (id == null) return false;
         const axis = toolNow === "alignX" ? "X" : "Y";
         try {
-          await invoke("scene_select", { ids: [id], mode: "Replace", expandGroups: true });
+          // Act on the clicked group (expandGroups); leave the selection as-is.
           await invoke("scene_object_align_axis", { ids: [id], axis, expandGroups: true });
         } catch (e) {
           console.error("align failed", e);
@@ -338,16 +343,13 @@ export function WgpuViewport({
         if (!hit) return false;
         if (!faceMatchRef.current) {
           faceMatchRef.current = { normal: hit.normal, point: hit.point };
-          // Select the reference object as feedback that the click registered.
-          await invoke("scene_select", { ids: [hit.id], mode: "Replace", expandGroups: true }).catch(
-            (e) => console.error("select failed", e),
-          );
+          onFaceMatchStepRef.current?.(true); // prompt now asks for the target face
           return false; // stay armed for the second click
         }
         const ref = faceMatchRef.current;
         faceMatchRef.current = null;
         try {
-          await invoke("scene_select", { ids: [hit.id], mode: "Replace", expandGroups: true });
+          // Act on the clicked group (expandGroups); leave the selection as-is.
           await invoke("scene_object_align_face", {
             ids: [hit.id],
             refNormal: ref.normal,
