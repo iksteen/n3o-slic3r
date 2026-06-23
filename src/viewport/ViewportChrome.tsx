@@ -12,10 +12,14 @@ export function ViewportChrome({
   leading,
   objectIds,
   selectedIds,
+  moveMode,
+  onToggleMove,
 }: {
   leading: ReactNode;
   objectIds: number[];
   selectedIds: number[];
+  moveMode: boolean;
+  onToggleMove: () => void;
 }) {
   const hasObjects = objectIds.length > 0;
 
@@ -38,6 +42,26 @@ export function ViewportChrome({
     <>
       <div className="absolute top-2 left-2 flex gap-2 pointer-events-auto" style={{ zIndex: 10 }}>
         {leading}
+        <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
+          <button
+            type="button"
+            className={`px-2 py-1.5 ${moveMode ? "bg-neutral-700" : "hover:bg-neutral-700/60"}`}
+            onClick={onToggleMove}
+            title="Move — drag the axis/plane handles"
+            aria-label="Move gizmo"
+            aria-pressed={moveMode}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path
+                d="M7 1.5v11M1.5 7h11M7 1.5 5.3 3.4M7 1.5 8.7 3.4M7 12.5 5.3 10.6M7 12.5 8.7 10.6M1.5 7 3.4 5.3M1.5 7 3.4 8.7M12.5 7 10.6 5.3M12.5 7 10.6 8.7"
+                stroke="currentColor"
+                strokeWidth="1.1"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
         <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
           <button
             type="button"

@@ -47,6 +47,30 @@ struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
 }
 "#;
 
+/// Gizmo vertex: position, normal (for shading the rods/balls), per-vertex color
+/// (axes/planes are multi-colored in one draw).
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GizmoVertex {
+    pos: [f32; 3],
+    nrm: [f32; 3],
+    color: [f32; 3],
+}
+
+const GIZMO_SHADER: &str = r#"
+struct U { mvp: mat4x4<f32>, color: vec4<f32> };
+@group(0) @binding(0) var<uniform> u: U;
+struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32>, @location(1) c: vec3<f32> };
+@vertex fn vs(@location(0) pos: vec3<f32>, @location(1) nrm: vec3<f32>, @location(2) col: vec3<f32>) -> VO {
+  var o: VO; o.p = u.mvp * vec4<f32>(pos, 1.0); o.n = nrm; o.c = col; return o;
+}
+@fragment fn fs(i: VO) -> @location(0) vec4<f32> {
+  let l = normalize(vec3<f32>(0.4, 0.5, 0.9));
+  let d = abs(dot(normalize(i.n), l)) * 0.45 + 0.55; // soft, stays bright
+  return vec4<f32>(i.c * d, 1.0);
+}
+"#;
+
 const COLOR_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Per-object uniform: `mat4 mvp` (64) + `vec4 tint` (16).
 const UNIFORM_BYTES: u64 = 80;
@@ -137,6 +161,19 @@ pub struct FrameRequest {
     pub drag_dx: f32,
     #[serde(default)]
     pub drag_dy: f32,
+    #[serde(default)]
+    pub drag_dz: f32,
+    /// Show the move gizmo at the selection center.
+    #[serde(default)]
+    pub gizmo_move: bool,
+    /// Hovered gizmo handle to highlight: 0/1/2 = X/Y/Z axis, 3/4/5 = XY/YZ/XZ
+    /// plane, -1 = none.
+    #[serde(default = "neg_one")]
+    pub gizmo_hover: i32,
+}
+
+fn neg_one() -> i32 {
+    -1
 }
 
 struct GpuMesh {
@@ -207,12 +244,158 @@ fn grid_verts(min: [f32; 3], max: [f32; 3]) -> Vec<Vertex> {
     v
 }
 
+/// One flat quad (two triangles, single normal). Winding-agnostic — the gizmo
+/// pipeline culls nothing and shades two-sided.
+fn push_quad(v: &mut Vec<GizmoVertex>, a: Vec3, b: Vec3, c: Vec3, d: Vec3, n: Vec3, col: [f32; 3]) {
+    let n = n.to_array();
+    for p in [a, b, c, a, c, d] {
+        v.push(GizmoVertex { pos: p.to_array(), nrm: n, color: col });
+    }
+}
+
+/// Square rod from `start` along `dir` for `len`, half-width `hw`. Six faces,
+/// per-face normals — a solid bar instead of a 1px line.
+fn push_rod(v: &mut Vec<GizmoVertex>, start: Vec3, dir: Vec3, len: f32, hw: f32, col: [f32; 3]) {
+    // Two axes orthogonal to dir.
+    let up = if dir.x.abs() > 0.9 { Vec3::Y } else { Vec3::X };
+    let u = dir.cross(up).normalize();
+    let w = dir.cross(u).normalize();
+    let end = start + dir * len;
+    for (base, n) in [(start, -dir), (end, dir)] {
+        let p = [base + u * hw + w * hw, base - u * hw + w * hw, base - u * hw - w * hw, base + u * hw - w * hw];
+        push_quad(v, p[0], p[1], p[2], p[3], n, col);
+    }
+    for (n, t) in [(u, w), (-u, w), (w, u), (-w, u)] {
+        let a = start + n * hw + t * hw;
+        let b = start + n * hw - t * hw;
+        let c = end + n * hw - t * hw;
+        let d = end + n * hw + t * hw;
+        push_quad(v, a, b, c, d, n, col);
+    }
+}
+
+/// UV sphere at `c`, radius `r`, smooth radial normals.
+fn push_ball(v: &mut Vec<GizmoVertex>, c: Vec3, r: f32, col: [f32; 3]) {
+    const STACKS: usize = 8;
+    const SLICES: usize = 12;
+    let pt = |i: usize, j: usize| -> Vec3 {
+        let phi = std::f32::consts::PI * (i as f32) / (STACKS as f32);
+        let theta = std::f32::consts::TAU * (j as f32) / (SLICES as f32);
+        Vec3::new(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos())
+    };
+    let tri = |a: Vec3, b: Vec3, cc: Vec3, v: &mut Vec<GizmoVertex>| {
+        for d in [a, b, cc] {
+            v.push(GizmoVertex { pos: (c + d * r).to_array(), nrm: d.to_array(), color: col });
+        }
+    };
+    for i in 0..STACKS {
+        for j in 0..SLICES {
+            let (p00, p01, p10, p11) = (pt(i, j), pt(i, j + 1), pt(i + 1, j), pt(i + 1, j + 1));
+            tri(p00, p10, p11, v);
+            tri(p00, p11, p01, v);
+        }
+    }
+}
+
+/// Lerp a handle color halfway to white when hovered.
+fn hl(c: [f32; 3], on: bool) -> [f32; 3] {
+    if on {
+        [c[0] * 0.5 + 0.5, c[1] * 0.5 + 0.5, c[2] * 0.5 + 0.5]
+    } else {
+        c
+    }
+}
+
+/// Move gizmo at `center` with axis length `l`: one rod+ball handle per axis
+/// (X/Y/Z) + a filled square per plane (XY/YZ/XZ). `hover` brightens one handle
+/// (0/1/2 = X/Y/Z axis, 3/4/5 = XY/YZ/XZ plane, -1 = none).
+fn gizmo_geometry(center: Vec3, l: f32, hover: i32) -> Vec<GizmoVertex> {
+    let mut v = Vec::new();
+    let rod_len = l; // rod runs all the way into the ball at the tip
+    let rod_hw = l * 0.025;
+    let ball_r = l * 0.07;
+    let axes = [
+        (Vec3::X, [0.90, 0.27, 0.27]),
+        (Vec3::Y, [0.30, 0.80, 0.33]),
+        (Vec3::Z, [0.36, 0.48, 0.96]),
+    ];
+    for (i, (dir, color)) in axes.into_iter().enumerate() {
+        let color = hl(color, hover == i as i32);
+        push_rod(&mut v, center, dir, rod_len, rod_hw, color);
+        push_ball(&mut v, center + dir * l, ball_r, color);
+    }
+    // Filled planar handles, offset into each plane; normal is the third axis.
+    let planes = [
+        (Vec3::X, Vec3::Y, Vec3::Z, [0.92, 0.82, 0.28]),
+        (Vec3::Y, Vec3::Z, Vec3::X, [0.28, 0.82, 0.86]),
+        (Vec3::X, Vec3::Z, Vec3::Y, [0.86, 0.36, 0.86]),
+    ];
+    let (o, s) = (l * 0.28, l * 0.24);
+    for (i, (a, b, n, color)) in planes.into_iter().enumerate() {
+        let color = hl(color, hover == 3 + i as i32);
+        let c0 = center + a * o + b * o;
+        let c1 = center + a * (o + s) + b * o;
+        let c2 = center + a * (o + s) + b * (o + s);
+        let c3 = center + a * o + b * (o + s);
+        push_quad(&mut v, c0, c1, c2, c3, n, color);
+    }
+    v
+}
+
+/// Gizmo center + axis length from a selection's world AABB. Length is a fixed
+/// fraction of the largest extent (min 3mm) so it scales with the object on zoom.
+/// Shared by the renderer and the hit-test command so both agree on handle size.
+fn gizmo_center_len(mn: Vec3, mx: Vec3) -> (Vec3, f32) {
+    let ext = mx - mn;
+    let l = (ext.x.max(ext.y).max(ext.z) * 0.6).max(3.0);
+    ((mn + mx) * 0.5, l)
+}
+
+/// World-space AABB enclosing the active plate's current selection, with `drag`
+/// added to the translation of `drag_ids` (so brackets/gizmo follow a preview).
+fn selection_world_aabb(p: &Project, drag_ids: &[u64], drag: Vec3) -> Option<(Vec3, Vec3)> {
+    let plate = p.active_plate();
+    let mut mn = Vec3::splat(f32::MAX);
+    let mut mx = Vec3::splat(f32::MIN);
+    let mut any = false;
+    for (id, obj) in plate.scene.objects.iter() {
+        if !obj.visible || !plate.scene.selection.contains(id) {
+            continue;
+        }
+        let Some(m) = p.meshes.get(&obj.mesh) else {
+            continue;
+        };
+        let mut model = obj.transform.to_mat4();
+        if drag_ids.contains(&id.0) {
+            model = Mat4::from_translation(drag) * model;
+        }
+        let bb = m.bounding_box;
+        for &sx in &[false, true] {
+            for &sy in &[false, true] {
+                for &sz in &[false, true] {
+                    let c = Vec3::new(
+                        (if sx { bb.max[0] } else { bb.min[0] }) as f32,
+                        (if sy { bb.max[1] } else { bb.min[1] }) as f32,
+                        (if sz { bb.max[2] } else { bb.min[2] }) as f32,
+                    );
+                    let w = model.transform_point3(c);
+                    mn = mn.min(w);
+                    mx = mx.max(w);
+                    any = true;
+                }
+            }
+        }
+    }
+    any.then_some((mn, mx))
+}
+
 pub struct ViewportRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     bgl: wgpu::BindGroupLayout,
     mesh_pipe: wgpu::RenderPipeline,
     line_pipe: wgpu::RenderPipeline,
+    gizmo_pipe: wgpu::RenderPipeline,
     // per-object MVP, one 256-aligned slot each
     ubuf: wgpu::Buffer,
     bind: wgpu::BindGroup,
@@ -325,6 +508,46 @@ impl ViewportRenderer {
         let mesh_pipe = make_pipe(wgpu::PrimitiveTopology::TriangleList, None);
         let line_pipe = make_pipe(wgpu::PrimitiveTopology::LineList, None);
 
+        // Gizmo: solid lit triangles, drawn in its own depth-cleared pass so it
+        // sits on top of the scene yet self-occludes (near rod hides far rod).
+        let gizmo_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(GIZMO_SHADER.into()),
+        });
+        let gizmo_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("viewport.gizmo"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &gizmo_shader,
+                entry_point: "vs",
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<GizmoVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &gizmo_shader,
+                entry_point: "fs",
+                compilation_options: Default::default(),
+                targets: &[Some(COLOR_FMT.into())],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+        });
+
         let gmin = DEFAULT_BED.0.map(|v| v as f32);
         let gmax = DEFAULT_BED.1.map(|v| v as f32);
         let gverts = grid_verts(gmin, gmax);
@@ -343,6 +566,7 @@ impl ViewportRenderer {
             bgl,
             mesh_pipe,
             line_pipe,
+            gizmo_pipe,
             ubuf,
             bind,
             slot,
@@ -419,13 +643,8 @@ impl ViewportRenderer {
                 .printer_instance_id()
                 .and_then(instance_registry::lookup_instance);
             let mut draws: Vec<(MeshId, Mat4, [f32; 3])> = Vec::new();
-            // One outer AABB enclosing the whole selection (world space) → a
-            // single set of corner brackets, not one box per group member.
-            let mut sel_min = [f32::MAX; 3];
-            let mut sel_max = [f32::MIN; 3];
-            let mut any_sel = false;
-            // Local drag preview: offset the dragged objects in world XY.
-            let drag_t = Vec3::new(req.drag_dx, req.drag_dy, 0.0);
+            // Local drag preview: offset the dragged objects in world space.
+            let drag_t = Vec3::new(req.drag_dx, req.drag_dy, req.drag_dz);
             let dragging = !req.drag_ids.is_empty();
             for (id, obj) in plate.scene.objects.iter() {
                 if !obj.visible {
@@ -455,37 +674,13 @@ impl ViewportRenderer {
                         spool_color(&plate.material_to_slot, instance.as_ref(), obj.extruder_id)
                     };
                     draws.push((obj.mesh, model, color));
-                    if selected {
-                        if let Some(bb) = p.meshes.get(&obj.mesh).map(|m| m.bounding_box) {
-                            // Accumulate this object's 8 world-space bbox corners
-                            // into the selection's outer AABB.
-                            for &sx in &[false, true] {
-                                for &sy in &[false, true] {
-                                    for &sz in &[false, true] {
-                                        let c = Vec3::new(
-                                            (if sx { bb.max[0] } else { bb.min[0] }) as f32,
-                                            (if sy { bb.max[1] } else { bb.min[1] }) as f32,
-                                            (if sz { bb.max[2] } else { bb.min[2] }) as f32,
-                                        );
-                                        let w = model.transform_point3(c).to_array();
-                                        for k in 0..3 {
-                                            sel_min[k] = sel_min[k].min(w[k]);
-                                            sel_max[k] = sel_max[k].max(w[k]);
-                                        }
-                                    }
-                                }
-                            }
-                            any_sel = true;
-                        }
-                    }
                 }
             }
-            // One axis-aligned box (identity model — corners are already world).
-            let boxes = if any_sel {
-                vec![(Mat4::IDENTITY, sel_min, sel_max)]
-            } else {
-                Vec::new()
-            };
+            // One outer AABB enclosing the whole selection (world space) → a single
+            // set of corner brackets + the gizmo, not one box per group member.
+            let boxes = selection_world_aabb(&p, &req.drag_ids, drag_t)
+                .map(|(mn, mx)| vec![(Mat4::IDENTITY, mn.to_array(), mx.to_array())])
+                .unwrap_or_default();
             (bmin, bmax, draws, boxes)
         };
         let bmin = bmin.map(|v| v as f32);
@@ -507,6 +702,25 @@ impl ViewportRenderer {
         });
         let bracket_slot = 1 + draws.len();
         let total_slots = bracket_slot + bracket_vb.is_some() as usize;
+
+        // Move gizmo at the selection center (draws with slot 0's vp; own colors).
+        let gizmo_verts = req
+            .gizmo_move
+            .then(|| {
+                boxes.first().map(|(_, mn, mx)| {
+                    let (c, l) = gizmo_center_len(Vec3::from(*mn), Vec3::from(*mx));
+                    gizmo_geometry(c, l, req.gizmo_hover)
+                })
+            })
+            .flatten()
+            .filter(|v| !v.is_empty());
+        let gizmo_vb = gizmo_verts.as_ref().map(|verts| {
+            self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("viewport.gizmo"),
+                contents: bytemuck::cast_slice(verts),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        });
 
         // Pack uniforms per slot: [mat4 mvp][vec4 color]. Slot 0 = grid (vp + grid
         // line color), slots 1.. = each object's vp*model + base color, final slot
@@ -580,6 +794,35 @@ impl ViewportRenderer {
                 rp.set_vertex_buffer(0, vb.slice(..));
                 rp.draw(0..bracket_verts.len() as u32, 0..1);
             }
+        }
+        // Move gizmo: second pass, color preserved + depth cleared, so it draws
+        // over the scene yet self-occludes (slot 0 = vp).
+        if let (Some(vb), Some(verts)) = (&gizmo_vb, &gizmo_verts) {
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("viewport.gizmo"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &color_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rp.set_pipeline(&self.gizmo_pipe);
+            rp.set_bind_group(0, &self.bind, &[0]);
+            rp.set_vertex_buffer(0, vb.slice(..));
+            rp.draw(0..verts.len() as u32, 0..1);
         }
         enc.copy_texture_to_buffer(
             wgpu::ImageCopyTexture {
@@ -722,6 +965,23 @@ pub fn viewport_scene_info(project: tauri::State<'_, Arc<Mutex<Project>>>) -> Sc
         ],
         distance: (span * 1.7) as f32,
     }
+}
+
+/// Move gizmo placement for the current selection: world center + axis length.
+/// `None` when nothing is selected. The frontend rebuilds the (fixed) handle
+/// layout from these to hit-test and drive constrained drags.
+#[derive(serde::Serialize)]
+pub struct GizmoInfo {
+    pub center: [f32; 3],
+    pub length: f32,
+}
+
+#[tauri::command]
+pub fn viewport_gizmo(project: tauri::State<'_, Arc<Mutex<Project>>>) -> Option<GizmoInfo> {
+    let p = project.lock().unwrap();
+    let (mn, mx) = selection_world_aabb(&p, &[], Vec3::ZERO)?;
+    let (c, l) = gizmo_center_len(mn, mx);
+    Some(GizmoInfo { center: c.to_array(), length: l })
 }
 
 /// View-projection for the orbit camera (z up). Shared by render and pick so the
