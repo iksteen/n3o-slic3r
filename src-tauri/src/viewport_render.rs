@@ -538,9 +538,11 @@ fn push_torus(v: &mut Vec<GizmoVertex>, center: Vec3, axis: Vec3, r: f32, tube: 
     }
 }
 
-/// Rotate gizmo at `center` with ring radius `l`: one ring per axis (X/Y/Z) in
-/// the plane perpendicular to it. `hover` brightens ring 0/1/2 (X/Y/Z), -1 none.
-fn gizmo_rotate_geometry(center: Vec3, l: f32, hover: i32) -> Vec<GizmoVertex> {
+/// Rotate gizmo at `center`: one ring per axis (X/Y/Z) of radius `radius` (sized
+/// to the object so the ring wraps it), each a torus of `tube` thickness. The
+/// radius is object-sized but `tube` is screen-constant (passed in), so the rings
+/// don't get chunkier on bigger parts. `hover` brightens ring 0/1/2 (X/Y/Z).
+fn gizmo_rotate_geometry(center: Vec3, radius: f32, tube: f32, hover: i32) -> Vec<GizmoVertex> {
     let mut v = Vec::new();
     let rings = [
         (Vec3::X, [0.90, 0.27, 0.27]),
@@ -548,7 +550,7 @@ fn gizmo_rotate_geometry(center: Vec3, l: f32, hover: i32) -> Vec<GizmoVertex> {
         (Vec3::Z, [0.36, 0.48, 0.96]),
     ];
     for (i, (axis, color)) in rings.into_iter().enumerate() {
-        push_torus(&mut v, center, axis, l, l * 0.012, hl(color, hover == i as i32));
+        push_torus(&mut v, center, axis, radius, tube, hl(color, hover == i as i32));
     }
     v
 }
@@ -1194,7 +1196,7 @@ impl ViewportRenderer {
                     let c = Mat4::from_cols_array(&req.drag_pre).transform_point3(c);
                     gizmo_geometry(c, screen_l(c), req.gizmo_hover)
                 }
-                GizmoMode::Rotate => gizmo_rotate_geometry(c, r, req.gizmo_hover),
+                GizmoMode::Rotate => gizmo_rotate_geometry(c, r, screen_l(c) * 0.012, req.gizmo_hover),
                 GizmoMode::Scale => gizmo_scale_geometry(c, screen_l(c), basis, req.gizmo_hover, guide),
                 GizmoMode::None => Vec::new(),
             })
