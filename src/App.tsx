@@ -87,7 +87,7 @@ function App() {
   // prepare↔preview↔devices switches.
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>("Translate");
   // wgpu viewport's move-gizmo toggle (its gizmo is separate from the Three one).
-  const [wgpuMove, setWgpuMove] = useState(false);
+  const [wgpuGizmo, setWgpuGizmo] = useState<"none" | "move" | "rotate">("none");
   // Object count frozen at the moment a slice is submitted — what the
   // backend actually snapshots and slices (build_slice_input). Held
   // here so the progress window's count stays put across tab switches
@@ -609,14 +609,14 @@ function App() {
                   <WgpuViewport
                     objects={activePlate?.objects ?? []}
                     selectedIds={activePlate?.selection ?? []}
-                    gizmoMove={wgpuMove}
+                    gizmoMode={wgpuGizmo}
                   />
                   <ViewportChrome
                     leading={modeToggle}
                     objectIds={(activePlate?.objects ?? []).map((o) => o.id)}
                     selectedIds={activePlate?.selection ?? []}
-                    moveMode={wgpuMove}
-                    onToggleMove={() => setWgpuMove((m) => !m)}
+                    gizmoMode={wgpuGizmo}
+                    onGizmoMode={(m) => setWgpuGizmo((cur) => (cur === m ? "none" : m))}
                   />
                 </>
               ) : (

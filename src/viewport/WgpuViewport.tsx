@@ -5,13 +5,15 @@ import { onEvents } from "../state/eventRouter";
 import type { SceneObject } from "./types";
 
 type Vec3 = [number, number, number];
+type GizmoMode = "none" | "move" | "rotate";
 type GizmoInfo = { center: Vec3; length: number };
+const IDENTITY16 = new THREE.Matrix4().toArray();
 
 type DragState = {
   x: number;
   y: number;
   button: number;
-  mode: "pending" | "orbit" | "move" | "pan" | "inert";
+  mode: "pending" | "orbit" | "move" | "rotate" | "pan" | "inert";
   moveTargets?: { id: number; start: number[] }[];
   // Constrained move: intersect the cursor ray with this fixed plane; with
   // `axisDir` set, keep only the component along it (single-axis handle),
@@ -20,6 +22,10 @@ type DragState = {
   planeP?: Vec3;
   startHit?: Vec3 | null;
   axisDir?: Vec3 | null;
+  // Constrained rotate: signed angle of the cursor about `rotAxis` through the
+  // `pivot`, in the ring's plane (normal = rotAxis).
+  rotAxis?: Vec3;
+  pivot?: Vec3;
 };
 
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -53,18 +59,18 @@ const PLANES: { n: Vec3; a: Vec3; b: Vec3 }[] = [
  *
  * Navigation: left-drag orbits, right-drag pans, wheel zooms. Click selects via
  * a Rust ray-cast. With a selection, pressing on the selected object(s) and
- * dragging moves it on the X,Y plane; in gizmo move mode the body never drags —
- * the axis (X/Y/Z) and plane (XY/YZ/XZ) handles drive constrained moves instead.
- * Frames render on-demand and coalesce (one in flight).
+ * dragging moves it on the X,Y plane; in gizmo move/rotate mode the body never
+ * drags — the axis/plane handles (move) or axis rings (rotate) drive constrained
+ * transforms instead. Frames render on-demand and coalesce (one in flight).
  */
 export function WgpuViewport({
   objects,
   selectedIds,
-  gizmoMove = false,
+  gizmoMode = "none",
 }: {
   objects: SceneObject[];
   selectedIds: number[];
-  gizmoMove?: boolean;
+  gizmoMode?: GizmoMode;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cam = useRef({ az: 0.9, el: 0.6, dist: 350, center: [0, 0, 0] as [number, number, number] });
@@ -73,16 +79,17 @@ export function WgpuViewport({
   objectsRef.current = objects;
   const selRef = useRef(selectedIds);
   selRef.current = selectedIds;
-  const gizmoMoveRef = useRef(gizmoMove);
-  gizmoMoveRef.current = gizmoMove;
+  const gizmoModeRef = useRef(gizmoMode);
+  gizmoModeRef.current = gizmoMode;
   // Lets effects outside the mount-once effect trigger a redraw / gizmo refresh.
   const renderRef = useRef<(() => void) | null>(null);
   const refreshGizmoRef = useRef<(() => void) | null>(null);
 
   const drag = useRef<DragState | null>(null);
-  // Local drag preview: the renderer offsets these ids by (dx,dy) per frame
-  // without touching scene state; the real transforms commit on release.
-  const dragOverride = useRef<{ ids: number[]; dx: number; dy: number; dz: number } | null>(null);
+  // Local drag preview: the renderer world-pre-multiplies these ids by `pre`
+  // (column-major 4x4) per frame without touching scene state; the real
+  // transforms commit on release.
+  const dragOverride = useRef<{ ids: number[]; pre: number[] } | null>(null);
   const inflight = useRef(false);
   const dirty = useRef(false);
   // Gizmo placement cache + the currently hovered handle (-1 = none), so idle
@@ -120,10 +127,8 @@ export function WgpuViewport({
             dist: c.dist,
             center: c.center,
             drag_ids: ov?.ids ?? [],
-            drag_dx: ov?.dx ?? 0,
-            drag_dy: ov?.dy ?? 0,
-            drag_dz: ov?.dz ?? 0,
-            gizmo_move: gizmoMoveRef.current,
+            drag_pre: ov?.pre ?? IDENTITY16,
+            gizmo: gizmoModeRef.current,
             gizmo_hover: hoverHandle.current,
           },
         });
@@ -224,13 +229,18 @@ export function WgpuViewport({
       return { dist: vlen(sub(pc, qc)), t };
     };
 
-    // idx mirrors gizmo_geometry's handle order: 0/1/2 = X/Y/Z, 3/4/5 = XY/YZ/XZ.
-    type Handle = { planeN: Vec3; planeP: Vec3; axisDir: Vec3 | null; idx: number };
-    // Hit-test the gizmo handles for `ray`; nearest hit (axis rod+ball or plane
-    // quad) wins, returning the constraint its drag should follow.
-    const pickHandle = (ray: THREE.Ray, gi: GizmoInfo): Handle | null => {
-      const c = gi.center;
-      const l = gi.length;
+    // idx mirrors the gizmo geometry's handle order: Move 0/1/2 = X/Y/Z axis,
+    // 3/4/5 = XY/YZ/XZ plane; Rotate 0/1/2 = X/Y/Z ring. A handle carries either
+    // a translate constraint (planeN/planeP/axisDir) or a rotate one (rotAxis).
+    type Handle = {
+      idx: number;
+      planeN?: Vec3;
+      planeP?: Vec3;
+      axisDir?: Vec3 | null;
+      rotAxis?: Vec3;
+    };
+    // Hit-test the move handles (axis rod+ball / plane quad) for `ray`.
+    const pickMoveHandle = (ray: THREE.Ray, c: Vec3, l: number): { t: number; h: Handle } | null => {
       let best: { t: number; h: Handle } | null = null;
       const pickR = l * 0.14;
       AXES.forEach((dir, i) => {
@@ -256,13 +266,31 @@ export function WgpuViewport({
             best = { t, h: { planeN: pl.n, planeP: c, axisDir: null, idx: 3 + i } };
         }
       }
-      return best?.h ?? null;
+      return best;
+    };
+    // Hit-test the rotate rings (radius l, in the plane ⟂ each axis) for `ray`.
+    const pickRotateHandle = (ray: THREE.Ray, c: Vec3, l: number): { t: number; h: Handle } | null => {
+      let best: { t: number; h: Handle } | null = null;
+      const tol = l * 0.12;
+      AXES.forEach((axis, i) => {
+        const hit = rayPlanePoint(ray, axis, c);
+        if (!hit) return;
+        if (Math.abs(vlen(sub(hit, c)) - l) > tol) return;
+        const t = dot(sub(hit, rayOrigin(ray)), rayDir(ray));
+        if (!best || t < best.t) best = { t, h: { rotAxis: axis, idx: i } };
+      });
+      return best;
+    };
+    // Nearest gizmo handle under `ray` for the current mode, or null.
+    const pickHandle = (ray: THREE.Ray, gi: GizmoInfo): Handle | null => {
+      const picker = gizmoModeRef.current === "rotate" ? pickRotateHandle : pickMoveHandle;
+      return picker(ray, gi.center, gi.length)?.h ?? null;
     };
 
-    // Refresh the cached gizmo placement (null when not in move mode / no
-    // selection). Driven by the scene-change events, not per-frame.
+    // Refresh the cached gizmo placement (null when no gizmo / no selection).
+    // Driven by the scene-change events, not per-frame.
     const refreshGizmo = async () => {
-      if (!gizmoMoveRef.current) {
+      if (gizmoModeRef.current === "none") {
         gizmoInfoRef.current = null;
         return;
       }
@@ -274,7 +302,7 @@ export function WgpuViewport({
       }
     };
 
-    // Highlight the handle under the cursor while idle in move mode.
+    // Highlight the handle under the cursor while idle in a gizmo mode.
     const updateHover = (e: MouseEvent) => {
       let idx = -1;
       const gi = gizmoInfoRef.current;
@@ -289,12 +317,33 @@ export function WgpuViewport({
       }
     };
 
-    // Selected objects + their starting transforms, for a move drag.
+    // Selected objects + their starting transforms, for a move/rotate drag.
     const collectMoveTargets = () =>
       selRef.current
         .map((sid) => objectsRef.current.find((o) => o.id === sid))
         .filter((o): o is SceneObject => !!o)
         .map((o) => ({ id: o.id, start: [...o.transform] }));
+
+    const translationMat = (t: Vec3): number[] =>
+      new THREE.Matrix4().makeTranslation(t[0], t[1], t[2]).toArray();
+    // World rotation of `angle` about `axis` through `pivot` (column-major).
+    const pivotRotation = (axis: Vec3, angle: number, pivot: Vec3): number[] => {
+      const p = new THREE.Vector3(...pivot);
+      return new THREE.Matrix4()
+        .makeTranslation(p.x, p.y, p.z)
+        .multiply(new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(...axis).normalize(), angle))
+        .multiply(new THREE.Matrix4().makeTranslation(-p.x, -p.y, -p.z))
+        .toArray();
+    };
+    // Signed angle from v0 to v1 measured about `axis` (right-hand rule).
+    const signedAngle = (v0: Vec3, v1: Vec3, axis: Vec3): number => {
+      const cr: Vec3 = [
+        v0[1] * v1[2] - v0[2] * v1[1],
+        v0[2] * v1[0] - v0[0] * v1[2],
+        v0[0] * v1[1] - v0[1] * v1[0],
+      ];
+      return Math.atan2(dot(axis, cr), dot(v0, v1));
+    };
 
     // Commit object transforms, coalesced (one batch in flight, latest per id).
     let commitInflight = false;
@@ -359,25 +408,32 @@ export function WgpuViewport({
       drag.current = press;
       const [sx, sy] = rel(e);
 
-      if (gizmoMoveRef.current) {
-        // Gizmo mode: only the handles drive moves; the body never free-drags.
+      if (gizmoModeRef.current !== "none") {
+        // Gizmo mode: only the handles drive transforms; the body never drags.
         void invoke<GizmoInfo | null>("viewport_gizmo").then(async (gi) => {
           if (drag.current !== press) return;
           gizmoInfoRef.current = gi;
           const ray = makeRay(sx, sy);
           const handle = gi && ray ? pickHandle(ray, gi) : null;
           if (handle && ray) {
-            press.mode = "move";
-            press.planeN = handle.planeN;
-            press.planeP = handle.planeP;
-            press.axisDir = handle.axisDir;
-            press.startHit = rayPlanePoint(ray, handle.planeN, handle.planeP);
             press.moveTargets = collectMoveTargets();
             hoverHandle.current = handle.idx; // keep it lit through the drag
+            if (handle.rotAxis) {
+              press.mode = "rotate";
+              press.rotAxis = handle.rotAxis;
+              press.pivot = gi!.center;
+              press.startHit = rayPlanePoint(ray, handle.rotAxis, gi!.center);
+            } else {
+              press.mode = "move";
+              press.planeN = handle.planeN;
+              press.planeP = handle.planeP;
+              press.axisDir = handle.axisDir;
+              press.startHit = rayPlanePoint(ray, handle.planeN!, handle.planeP!);
+            }
             return;
           }
-          // Missed every handle: pressing the selected body does nothing (moves
-          // go through the handles); pressing empty space orbits to navigate.
+          // Missed every handle: pressing the selected body does nothing (the
+          // handles drive transforms); pressing empty space orbits to navigate.
           const id = await castPick(sx, sy);
           if (drag.current !== press) return;
           press.mode = id != null && selRef.current.includes(id) ? "inert" : "orbit";
@@ -407,21 +463,19 @@ export function WgpuViewport({
       const d = drag.current;
       drag.current = null;
       if (!d || d.button !== 0) return;
-      if (d.mode === "move") {
-        // Commit the previewed offset once. Clear the override first; the
-        // object_updated event then re-renders at the (identical) committed
-        // position — the on-screen preview never jumps.
+      if (d.mode === "move" || d.mode === "rotate") {
+        // Commit the previewed transform once (new = pre * start). Clear the
+        // override first; the object_updated event then re-renders at the
+        // (identical) committed pose — the on-screen preview never jumps.
         const ov = dragOverride.current;
         dragOverride.current = null;
         if (ov && d.moveTargets) {
+          const pre = new THREE.Matrix4().fromArray(ov.pre);
           commitMove(
-            d.moveTargets.map((t) => {
-              const m = [...t.start];
-              m[12] += ov.dx;
-              m[13] += ov.dy;
-              m[14] += ov.dz;
-              return { id: t.id, m };
-            }),
+            d.moveTargets.map((t) => ({
+              id: t.id,
+              m: pre.clone().multiply(new THREE.Matrix4().fromArray(t.start)).toArray(),
+            })),
           );
         }
         return;
@@ -436,7 +490,7 @@ export function WgpuViewport({
     const onMove = (e: MouseEvent) => {
       const d = drag.current;
       if (!d) {
-        if (gizmoMoveRef.current) updateHover(e); // idle handle highlight
+        if (gizmoModeRef.current !== "none") updateHover(e); // idle handle highlight
         return;
       }
       const dx = e.clientX - d.x;
@@ -459,8 +513,20 @@ export function WgpuViewport({
         if (!hit) return;
         let t = sub(hit, d.startHit);
         if (d.axisDir) t = scale(d.axisDir, dot(t, d.axisDir)); // single-axis only
-        // Preview-only: offset the dragged objects this frame; no commit yet.
-        dragOverride.current = { ids: d.moveTargets.map((x) => x.id), dx: t[0], dy: t[1], dz: t[2] };
+        // Preview-only: pre-multiply the dragged objects this frame; no commit yet.
+        dragOverride.current = { ids: d.moveTargets.map((x) => x.id), pre: translationMat(t) };
+        void render();
+      } else if (d.mode === "rotate" && d.moveTargets && d.startHit && d.rotAxis && d.pivot) {
+        const [sx, sy] = rel(e);
+        const ray = makeRay(sx, sy);
+        if (!ray) return;
+        const hit = rayPlanePoint(ray, d.rotAxis, d.pivot);
+        if (!hit) return;
+        const angle = signedAngle(sub(d.startHit, d.pivot), sub(hit, d.pivot), d.rotAxis);
+        dragOverride.current = {
+          ids: d.moveTargets.map((x) => x.id),
+          pre: pivotRotation(d.rotAxis, angle, d.pivot),
+        };
         void render();
       }
       // mode === "pending": waiting on the pick — next move acts.
@@ -548,7 +614,7 @@ export function WgpuViewport({
     hoverHandle.current = -1;
     void refreshGizmoRef.current?.();
     renderRef.current?.();
-  }, [gizmoMove]);
+  }, [gizmoMode]);
 
   return <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />;
 }

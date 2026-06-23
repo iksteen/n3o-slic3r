@@ -8,18 +8,20 @@ import { ViewportLegend } from "./ViewportLegend";
  * face-align and clone controls stay in the Three.js `ViewportCanvas` for now —
  * they depend on the wgpu gizmo + face-picking, which aren't built yet.
  */
+type GizmoMode = "none" | "move" | "rotate";
+
 export function ViewportChrome({
   leading,
   objectIds,
   selectedIds,
-  moveMode,
-  onToggleMove,
+  gizmoMode,
+  onGizmoMode,
 }: {
   leading: ReactNode;
   objectIds: number[];
   selectedIds: number[];
-  moveMode: boolean;
-  onToggleMove: () => void;
+  gizmoMode: GizmoMode;
+  onGizmoMode: (mode: GizmoMode) => void;
 }) {
   const hasObjects = objectIds.length > 0;
 
@@ -45,17 +47,42 @@ export function ViewportChrome({
         <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
           <button
             type="button"
-            className={`px-2 py-1.5 ${moveMode ? "bg-neutral-700" : "hover:bg-neutral-700/60"}`}
-            onClick={onToggleMove}
+            className={`px-2 py-1.5 ${gizmoMode === "move" ? "bg-neutral-700" : "hover:bg-neutral-700/60"}`}
+            onClick={() => onGizmoMode("move")}
             title="Move — drag the axis/plane handles"
             aria-label="Move gizmo"
-            aria-pressed={moveMode}
+            aria-pressed={gizmoMode === "move"}
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
               <path
                 d="M7 1.5v11M1.5 7h11M7 1.5 5.3 3.4M7 1.5 8.7 3.4M7 12.5 5.3 10.6M7 12.5 8.7 10.6M1.5 7 3.4 5.3M1.5 7 3.4 8.7M12.5 7 10.6 5.3M12.5 7 10.6 8.7"
                 stroke="currentColor"
                 strokeWidth="1.1"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className={`px-2 py-1.5 ${gizmoMode === "rotate" ? "bg-neutral-700" : "hover:bg-neutral-700/60"}`}
+            onClick={() => onGizmoMode("rotate")}
+            title="Rotate — drag the axis rings"
+            aria-label="Rotate gizmo"
+            aria-pressed={gizmoMode === "rotate"}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path
+                d="M11.5 7a4.5 4.5 0 1 1-1.32-3.18"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M10.4 1.2v2.7H7.7"
+                stroke="currentColor"
+                strokeWidth="1.2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />

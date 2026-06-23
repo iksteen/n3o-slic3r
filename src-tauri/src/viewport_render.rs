@@ -143,10 +143,20 @@ fn spool_color(
         .unwrap_or(DEFAULT_RGB)
 }
 
+/// Which gizmo to draw at the selection center.
+#[derive(serde::Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum GizmoMode {
+    #[default]
+    None,
+    Move,
+    Rotate,
+}
+
 /// Camera + target the frontend passes per frame (camera is frontend-owned).
-/// `drag_*` is a transient local drag preview: the listed objects are offset by
-/// world (dx,dy) for this frame only — no scene-state change — so dragging stays
-/// smooth; the real transforms commit once on release.
+/// `drag_pre` is a transient local drag preview: the listed objects are
+/// world-space pre-multiplied by it for this frame only — no scene-state change —
+/// so dragging stays smooth; the real transforms commit once on release.
 #[derive(serde::Deserialize)]
 pub struct FrameRequest {
     pub width: u32,
@@ -157,23 +167,24 @@ pub struct FrameRequest {
     pub center: [f32; 3],
     #[serde(default)]
     pub drag_ids: Vec<u64>,
+    /// World-space transform applied to `drag_ids` this frame (column-major 4x4).
+    #[serde(default = "identity16")]
+    pub drag_pre: [f32; 16],
+    /// Which gizmo to show at the selection center.
     #[serde(default)]
-    pub drag_dx: f32,
-    #[serde(default)]
-    pub drag_dy: f32,
-    #[serde(default)]
-    pub drag_dz: f32,
-    /// Show the move gizmo at the selection center.
-    #[serde(default)]
-    pub gizmo_move: bool,
-    /// Hovered gizmo handle to highlight: 0/1/2 = X/Y/Z axis, 3/4/5 = XY/YZ/XZ
-    /// plane, -1 = none.
+    pub gizmo: GizmoMode,
+    /// Hovered gizmo handle to highlight: for Move 0/1/2 = X/Y/Z axis, 3/4/5 =
+    /// XY/YZ/XZ plane; for Rotate 0/1/2 = X/Y/Z ring; -1 = none.
     #[serde(default = "neg_one")]
     pub gizmo_hover: i32,
 }
 
 fn neg_one() -> i32 {
     -1
+}
+
+fn identity16() -> [f32; 16] {
+    Mat4::IDENTITY.to_cols_array()
 }
 
 struct GpuMesh {
@@ -342,18 +353,99 @@ fn gizmo_geometry(center: Vec3, l: f32, hover: i32) -> Vec<GizmoVertex> {
     v
 }
 
-/// Gizmo center + axis length from a selection's world AABB. Length is a fixed
-/// fraction of the largest extent (min 3mm) so it scales with the object on zoom.
-/// Shared by the renderer and the hit-test command so both agree on handle size.
-fn gizmo_center_len(mn: Vec3, mx: Vec3) -> (Vec3, f32) {
-    let ext = mx - mn;
-    let l = (ext.x.max(ext.y).max(ext.z) * 0.6).max(3.0);
-    ((mn + mx) * 0.5, l)
+/// Torus around `axis` at `center`, major radius `r`, tube radius `tube`, smooth
+/// outward normals. Winding-agnostic (the gizmo shades two-sided).
+fn push_torus(v: &mut Vec<GizmoVertex>, center: Vec3, axis: Vec3, r: f32, tube: f32, col: [f32; 3]) {
+    const MAJOR: usize = 48;
+    const MINOR: usize = 10;
+    let up = if axis.x.abs() > 0.9 { Vec3::Y } else { Vec3::X };
+    let e1 = axis.cross(up).normalize();
+    let e2 = axis.cross(e1).normalize();
+    // Tube center + outward radial at major angle u; surface point at minor angle x.
+    let pt = |i: usize, j: usize| -> (Vec3, Vec3) {
+        let u = std::f32::consts::TAU * (i as f32) / (MAJOR as f32);
+        let x = std::f32::consts::TAU * (j as f32) / (MINOR as f32);
+        let radial = e1 * u.cos() + e2 * u.sin();
+        let c = center + radial * r;
+        let n = radial * x.cos() + axis * x.sin();
+        (c + n * tube, n)
+    };
+    let quad = |a: (Vec3, Vec3), b: (Vec3, Vec3), c: (Vec3, Vec3), d: (Vec3, Vec3), v: &mut Vec<GizmoVertex>| {
+        for (p, n) in [a, b, c, a, c, d] {
+            v.push(GizmoVertex { pos: p.to_array(), nrm: n.to_array(), color: col });
+        }
+    };
+    for i in 0..MAJOR {
+        for j in 0..MINOR {
+            quad(pt(i, j), pt(i + 1, j), pt(i + 1, j + 1), pt(i, j + 1), v);
+        }
+    }
 }
 
-/// World-space AABB enclosing the active plate's current selection, with `drag`
-/// added to the translation of `drag_ids` (so brackets/gizmo follow a preview).
-fn selection_world_aabb(p: &Project, drag_ids: &[u64], drag: Vec3) -> Option<(Vec3, Vec3)> {
+/// Rotate gizmo at `center` with ring radius `l`: one ring per axis (X/Y/Z) in
+/// the plane perpendicular to it. `hover` brightens ring 0/1/2 (X/Y/Z), -1 none.
+fn gizmo_rotate_geometry(center: Vec3, l: f32, hover: i32) -> Vec<GizmoVertex> {
+    let mut v = Vec::new();
+    let rings = [
+        (Vec3::X, [0.90, 0.27, 0.27]),
+        (Vec3::Y, [0.30, 0.80, 0.33]),
+        (Vec3::Z, [0.36, 0.48, 0.96]),
+    ];
+    for (i, (axis, color)) in rings.into_iter().enumerate() {
+        push_torus(&mut v, center, axis, l, l * 0.012, hl(color, hover == i as i32));
+    }
+    v
+}
+
+/// Gizmo center + handle length for the active plate's selection: the world AABB
+/// center, and the bounding-*sphere* radius (max distance from that center to any
+/// world corner). A handle at that radius encloses the part for any shape — every
+/// point is within it by definition — and it's invariant to orientation (rotating
+/// a part keeps its corners equidistant from the center), so the gizmo holds its
+/// size through a turn where a bounding-box extent would grow/shrink. Min 3mm;
+/// shared by the renderer and the hit-test command. `None` if nothing's selected.
+fn selection_gizmo(p: &Project) -> Option<(Vec3, f32)> {
+    let plate = p.active_plate();
+    let mut corners: Vec<Vec3> = Vec::new();
+    for (id, obj) in plate.scene.objects.iter() {
+        if !obj.visible || !plate.scene.selection.contains(id) {
+            continue;
+        }
+        let Some(m) = p.meshes.get(&obj.mesh) else {
+            continue;
+        };
+        let model = obj.transform.to_mat4();
+        let bb = m.bounding_box;
+        for &sx in &[false, true] {
+            for &sy in &[false, true] {
+                for &sz in &[false, true] {
+                    let c = Vec3::new(
+                        (if sx { bb.max[0] } else { bb.min[0] }) as f32,
+                        (if sy { bb.max[1] } else { bb.min[1] }) as f32,
+                        (if sz { bb.max[2] } else { bb.min[2] }) as f32,
+                    );
+                    corners.push(model.transform_point3(c));
+                }
+            }
+        }
+    }
+    if corners.is_empty() {
+        return None;
+    }
+    let mut mn = Vec3::splat(f32::MAX);
+    let mut mx = Vec3::splat(f32::MIN);
+    for c in &corners {
+        mn = mn.min(*c);
+        mx = mx.max(*c);
+    }
+    let center = (mn + mx) * 0.5;
+    let radius = corners.iter().map(|c| (*c - center).length()).fold(0.0, f32::max);
+    Some((center, radius.max(3.0)))
+}
+
+/// World-space AABB enclosing the active plate's current selection, with `pre`
+/// applied to `drag_ids` (so brackets/gizmo follow a preview).
+fn selection_world_aabb(p: &Project, drag_ids: &[u64], pre: Mat4) -> Option<(Vec3, Vec3)> {
     let plate = p.active_plate();
     let mut mn = Vec3::splat(f32::MAX);
     let mut mx = Vec3::splat(f32::MIN);
@@ -367,7 +459,7 @@ fn selection_world_aabb(p: &Project, drag_ids: &[u64], drag: Vec3) -> Option<(Ve
         };
         let mut model = obj.transform.to_mat4();
         if drag_ids.contains(&id.0) {
-            model = Mat4::from_translation(drag) * model;
+            model = pre * model;
         }
         let bb = m.bounding_box;
         for &sx in &[false, true] {
@@ -628,7 +720,7 @@ impl ViewportRenderer {
         self.resize(w, h);
 
         // --- gather under the project lock (cheap): bed + per-object models ---
-        let (bmin, bmax, draws, boxes) = {
+        let (bmin, bmax, draws, boxes, gizmo) = {
             let p = project.lock().unwrap();
             let plate = p.active_plate();
             let (bmin, bmax) = plate
@@ -643,8 +735,8 @@ impl ViewportRenderer {
                 .printer_instance_id()
                 .and_then(instance_registry::lookup_instance);
             let mut draws: Vec<(MeshId, Mat4, [f32; 3])> = Vec::new();
-            // Local drag preview: offset the dragged objects in world space.
-            let drag_t = Vec3::new(req.drag_dx, req.drag_dy, req.drag_dz);
+            // Local drag preview: world pre-multiply applied to dragged objects.
+            let drag_pre = Mat4::from_cols_array(&req.drag_pre);
             let dragging = !req.drag_ids.is_empty();
             for (id, obj) in plate.scene.objects.iter() {
                 if !obj.visible {
@@ -665,7 +757,7 @@ impl ViewportRenderer {
                 if self.meshes.contains_key(&obj.mesh) {
                     let mut model = obj.transform.to_mat4();
                     if dragging && req.drag_ids.contains(&id.0) {
-                        model = Mat4::from_translation(drag_t) * model;
+                        model = drag_pre * model;
                     }
                     let selected = plate.scene.selection.contains(id);
                     let color = if selected {
@@ -677,11 +769,15 @@ impl ViewportRenderer {
                 }
             }
             // One outer AABB enclosing the whole selection (world space) → a single
-            // set of corner brackets + the gizmo, not one box per group member.
-            let boxes = selection_world_aabb(&p, &req.drag_ids, drag_t)
+            // set of corner brackets, not one box per group member. Brackets hug
+            // the live (drag-previewed) bounds.
+            let boxes = selection_world_aabb(&p, &req.drag_ids, drag_pre)
                 .map(|(mn, mx)| vec![(Mat4::IDENTITY, mn.to_array(), mx.to_array())])
                 .unwrap_or_default();
-            (bmin, bmax, draws, boxes)
+            // The gizmo is sized + placed from the *resting* selection (no drag
+            // preview) so it holds a fixed size through a drag.
+            let gizmo = selection_gizmo(&p);
+            (bmin, bmax, draws, boxes, gizmo)
         };
         let bmin = bmin.map(|v| v as f32);
         let bmax = bmax.map(|v| v as f32);
@@ -703,16 +799,13 @@ impl ViewportRenderer {
         let bracket_slot = 1 + draws.len();
         let total_slots = bracket_slot + bracket_vb.is_some() as usize;
 
-        // Move gizmo at the selection center (draws with slot 0's vp; own colors).
-        let gizmo_verts = req
-            .gizmo_move
-            .then(|| {
-                boxes.first().map(|(_, mn, mx)| {
-                    let (c, l) = gizmo_center_len(Vec3::from(*mn), Vec3::from(*mx));
-                    gizmo_geometry(c, l, req.gizmo_hover)
-                })
+        // Gizmo at the selection center (draws with slot 0's vp; own colors).
+        let gizmo_verts = gizmo
+            .map(|(c, l)| match req.gizmo {
+                GizmoMode::Move => gizmo_geometry(c, l, req.gizmo_hover),
+                GizmoMode::Rotate => gizmo_rotate_geometry(c, l, req.gizmo_hover),
+                GizmoMode::None => Vec::new(),
             })
-            .flatten()
             .filter(|v| !v.is_empty());
         let gizmo_vb = gizmo_verts.as_ref().map(|verts| {
             self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -795,9 +888,16 @@ impl ViewportRenderer {
                 rp.draw(0..bracket_verts.len() as u32, 0..1);
             }
         }
-        // Move gizmo: second pass, color preserved + depth cleared, so it draws
-        // over the scene yet self-occludes (slot 0 = vp).
+        // Gizmo: second pass, color preserved, always self-occluding (depth Less +
+        // write). Move clears depth first so its handles stay on top of the scene
+        // and remain grabbable; rotate loads the scene depth so the model occludes
+        // the rings' far arcs (a ring reads as wrapping around the part).
         if let (Some(vb), Some(verts)) = (&gizmo_vb, &gizmo_verts) {
+            let depth_load = if req.gizmo == GizmoMode::Rotate {
+                wgpu::LoadOp::Load
+            } else {
+                wgpu::LoadOp::Clear(1.0)
+            };
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("viewport.gizmo"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -811,7 +911,7 @@ impl ViewportRenderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: depth_load,
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -979,8 +1079,7 @@ pub struct GizmoInfo {
 #[tauri::command]
 pub fn viewport_gizmo(project: tauri::State<'_, Arc<Mutex<Project>>>) -> Option<GizmoInfo> {
     let p = project.lock().unwrap();
-    let (mn, mx) = selection_world_aabb(&p, &[], Vec3::ZERO)?;
-    let (c, l) = gizmo_center_len(mn, mx);
+    let (c, l) = selection_gizmo(&p)?;
     Some(GizmoInfo { center: c.to_array(), length: l })
 }
 
