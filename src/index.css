@@ -908,6 +908,19 @@
   }
   .gizmo-hint .axes { display: inline-flex; gap: 8px; }
   .gizmo-hint .axis { font-weight: 600; }
+  /* The axis chips are buttons (click → snap the camera to that axis view);
+     strip the native button chrome and light up on hover. */
+  .gizmo-hint .axis-btn {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    line-height: 1;
+    opacity: 0.85;
+  }
+  .gizmo-hint .axis-btn:hover { opacity: 1; }
   .gizmo-hint-sep { opacity: 0.45; }
   .gizmo-hint-text { color: inherit; }
 
@@ -932,8 +945,8 @@
    * `pointer-events: none` so it never traps canvas interaction. Read-only —
    * any controls (Cancel, etc.) stay in the topbar. */
   /* Bottom-left stack of progress windows (slice + send) — they flow within it
-     so they never overlap. Corner-aligned in preview; lifted above the axis-hint
-     legend (.gizmo-hint) only in the prepare/edit viewport. */
+     so they never overlap. Lifted above the axis-hint legend (.gizmo-hint),
+     which sits bottom-left in both the prepare and preview viewports. */
   .progress-window-stack {
     position: absolute;
     left: 12px;
@@ -944,7 +957,7 @@
     gap: 8px;
     pointer-events: none;
   }
-  .canvas-stage-prepare .progress-window-stack { bottom: 50px; }
+  .canvas-stage .progress-window-stack { bottom: 50px; }
   .progress-window {
     width: 248px;
     padding: 11px 13px 12px;

@@ -1807,6 +1807,8 @@ fn view_proj(w: f32, h: f32, az: f32, el: f32, dist: f32, center: Vec3) -> Mat4 
     let eye = center + dist * Vec3::new(ce * ca, ce * sa, se);
     let far = (dist * 10.0).max(1000.0);
     let proj = Mat4::perspective_rh(45f32.to_radians(), w / h, 0.1, far);
+    // The frontend clamps `el` just shy of ±90° (EL_LIMIT), so the eye never sits
+    // exactly over the center and world-Z up stays well-defined.
     proj * Mat4::look_at_rh(eye, center, Vec3::Z)
 }
 

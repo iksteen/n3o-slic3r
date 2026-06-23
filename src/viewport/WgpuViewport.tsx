@@ -5,6 +5,7 @@ import { onEvents } from "../state/eventRouter";
 import { shouldIgnoreHotkey } from "../ui/hotkeyInhibit";
 import { getCachedTowerMesh, onTowerMeshCacheChange } from "./towerMeshCache";
 import { registerThumbnailCapture } from "./thumbnailCapture";
+import { registerAxisView, type AxisView } from "./cameraControl";
 import type { SceneObject, TowerGeometry } from "./types";
 
 type Vec3 = [number, number, number];
@@ -15,6 +16,10 @@ const IDENT_QUAT: [number, number, number, number] = [0, 0, 0, 1];
 // Move/Scale gizmo handle length as a fraction of the eye→gizmo distance
 // (constant on-screen size). Must match GIZMO_SCREEN_K in viewport_render.rs.
 const GIZMO_SCREEN_K = 0.13;
+// Orbit elevation limit — just shy of straight down/up (±90°). Stops a hair
+// before the pole so world-Z up never degenerates (the renderer + pick ray both
+// assume Z up); close enough to read as fully overhead / underneath.
+const EL_LIMIT = Math.PI / 2 - 0.001;
 // Gizmo snap (matches the Three.js gizmo): 1 mm translate, 15° rotate, no scale
 // snap. Holding Shift during a drag disables it (freehand).
 const TRANSLATE_SNAP_MM = 1;
@@ -409,7 +414,7 @@ export function WgpuViewport({
       const c = cam.current;
       const { eye } = camFrame();
       const cam3 = new THREE.PerspectiveCamera(45, cv.width / cv.height, 0.1, Math.max(1000, c.dist * 10));
-      cam3.up.set(0, 0, 1);
+      cam3.up.set(0, 0, 1); // matches view_proj; el is clamped shy of the pole
       cam3.position.set(eye[0], eye[1], eye[2]);
       cam3.lookAt(c.center[0], c.center[1], c.center[2]);
       cam3.updateMatrixWorld();
@@ -908,7 +913,7 @@ export function WgpuViewport({
       } else if (d.mode === "orbit") {
         const c = cam.current;
         c.az -= dx * 0.01;
-        c.el = Math.min(1.45, Math.max(-1.45, c.el + dy * 0.01));
+        c.el = Math.min(EL_LIMIT, Math.max(-EL_LIMIT, c.el + dy * 0.01));
         void render();
       } else if (d.mode === "tower" && d.towerOffset && towerGeom) {
         const [sx, sy] = rel(e);
@@ -1213,6 +1218,23 @@ export function WgpuViewport({
       }
     });
 
+    // Axis-snap views from the legend's X/Y/Z chips. X → front (look along +Y,
+    // X horizontal), Y → side (look along -X, Y horizontal), Z → top (straight
+    // down). Reorients only; keeps the current center + zoom.
+    registerAxisView((axis: AxisView) => {
+      const c = cam.current;
+      if (axis === "x") {
+        c.az = -Math.PI / 2;
+        c.el = 0;
+      } else if (axis === "y") {
+        c.az = 0;
+        c.el = 0;
+      } else {
+        c.el = EL_LIMIT; // top-down (the same near-pole limit orbit clamps to)
+      }
+      void render();
+    });
+
     renderRef.current = render;
     refreshGizmoRef.current = refreshGizmo;
     void reframe();
@@ -1228,6 +1250,7 @@ export function WgpuViewport({
       offLoaded();
       offTower();
       registerThumbnailCapture(null);
+      registerAxisView(null);
       canvas.removeEventListener("mousedown", onDown);
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("mousemove", onMove);

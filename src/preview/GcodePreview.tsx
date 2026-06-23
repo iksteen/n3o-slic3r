@@ -11,6 +11,8 @@
 // down. The renderer just reflects what the props say.
 
 import { useEffect, useRef } from "react";
+import { ViewportLegend } from "../viewport/ViewportLegend";
+import { registerAxisView, setAxisView, type AxisView } from "../viewport/cameraControl";
 
 import {
   previewBuffers as fetchBuffers,
@@ -79,8 +81,25 @@ export function GcodePreview({
     });
     ro.observe(el);
 
+    // Legend axis-snap: reposition the OrbitControls camera along the axis at
+    // the current target distance. X → front (+Y), Y → side (−X), Z → top. Top
+    // sits a hair off vertical so z-up never goes degenerate. Matches the
+    // prepare viewport's snaps (registered on the shared cameraControl singleton
+    // — only one viewport is mounted at a time).
+    registerAxisView((axis: AxisView) => {
+      const { camera, controls } = scene;
+      const t = controls.target;
+      const d = camera.position.distanceTo(t);
+      if (axis === "x") camera.position.set(t.x, t.y - d, t.z);
+      else if (axis === "y") camera.position.set(t.x + d, t.y, t.z);
+      else camera.position.set(t.x, t.y - d * 0.001, t.z + d);
+      camera.lookAt(t);
+      controls.update();
+    });
+
     return () => {
       ro.disconnect();
+      registerAxisView(null);
       scene.dispose();
       sceneRef.current = null;
     };
@@ -210,6 +229,8 @@ export function GcodePreview({
       ref={containerRef}
       className="gcode-preview"
       style={{ width: "100%", height: "100%", position: "relative" }}
-    />
+    >
+      <ViewportLegend hints="LMB rotate · RMB pan · scroll zoom" onAxis={setAxisView} />
+    </div>
   );
 }

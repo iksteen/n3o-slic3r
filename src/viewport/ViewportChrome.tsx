@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ViewportLegend } from "./ViewportLegend";
+import { setAxisView } from "./cameraControl";
 import type { SceneObject } from "./types";
 
 /**
@@ -256,7 +257,7 @@ export function ViewportChrome({
           </button>
         </div>
       </div>
-      <ViewportLegend hints={toolHint(tool, faceMatchRefSet)} prompt={tool !== "none"} />
+      <ViewportLegend hints={toolHint(tool, faceMatchRefSet)} prompt={tool !== "none"} onAxis={setAxisView} />
     </>
   );
 }
