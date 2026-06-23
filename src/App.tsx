@@ -613,7 +613,7 @@ function App() {
                   />
                   <ViewportChrome
                     leading={modeToggle}
-                    objectIds={(activePlate?.objects ?? []).map((o) => o.id)}
+                    objects={activePlate?.objects ?? []}
                     selectedIds={activePlate?.selection ?? []}
                     gizmoMode={wgpuGizmo}
                     onGizmoMode={(m) => setWgpuGizmo((cur) => (cur === m ? "none" : m))}

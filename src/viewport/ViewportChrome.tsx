@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ViewportLegend } from "./ViewportLegend";
+import type { SceneObject } from "./types";
 
 /**
  * Chrome for the wgpu viewport: the mode toggle, plate-level actions (arrange,
@@ -12,29 +13,42 @@ type GizmoMode = "none" | "move" | "rotate" | "scale";
 
 export function ViewportChrome({
   leading,
-  objectIds,
+  objects,
   selectedIds,
   gizmoMode,
   onGizmoMode,
 }: {
   leading: ReactNode;
-  objectIds: number[];
+  objects: SceneObject[];
   selectedIds: number[];
   gizmoMode: GizmoMode;
   onGizmoMode: (mode: GizmoMode) => void;
 }) {
-  const hasObjects = objectIds.length > 0;
+  const hasObjects = objects.length > 0;
 
   const runArrange = () => {
     void invoke("scene_auto_arrange").catch((e) => console.error("arrange failed", e));
   };
-  const runAutoOrient = () => {
-    // Orient the selection, or everything on the plate if nothing's selected.
-    const ids = selectedIds.length ? selectedIds : objectIds;
-    if (ids.length === 0) return;
-    void invoke("scene_object_auto_orient", { ids }).catch((e) =>
-      console.error("auto-orient failed", e),
-    );
+  const runAutoOrient = async () => {
+    // Orient the selection, or everything on the plate if nothing's selected —
+    // each object (or group, as a unit) individually, not the whole set as one
+    // rigid mesh. The backend treats one `ids` call as a single unit, so fan out:
+    // one call per group (expanded to its members) + one per solo object.
+    const targets = selectedIds.length ? selectedIds : objects.map((o) => o.id);
+    const seenGroups = new Set<string>();
+    for (const id of targets) {
+      const obj = objects.find((o) => o.id === id);
+      if (!obj) continue;
+      if (obj.group) {
+        if (seenGroups.has(obj.group)) continue; // group already oriented
+        seenGroups.add(obj.group);
+      }
+      try {
+        await invoke("scene_object_auto_orient", { ids: [id], expandGroups: true });
+      } catch (e) {
+        console.error("auto-orient failed", e);
+      }
+    }
   };
 
   const btn = (enabled: boolean) =>
