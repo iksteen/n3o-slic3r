@@ -3,6 +3,8 @@ import { ViewportCanvas } from "./viewport/ViewportCanvas";
 import { WgpuViewport } from "./viewport/WgpuViewport";
 import { ViewportChrome } from "./viewport/ViewportChrome";
 import { ViewportToasts } from "./viewport/ViewportToasts";
+import { CloneDialog } from "./objects/CloneDialog";
+import { cloneObjects } from "./objects/objectCommands";
 import { setupTowerMeshCache } from "./viewport/towerMeshCache";
 import { ErrorConsole } from "./logging/ErrorConsole";
 import { shouldIgnoreHotkey } from "./ui/hotkeyInhibit";
@@ -91,8 +93,10 @@ function App() {
   // wgpu viewport's armed placing tool (lay-flat / align). Mutually exclusive
   // with the gizmo: arming a tool clears the gizmo and vice versa.
   const [wgpuTool, setWgpuTool] = useState<
-    "none" | "layflat" | "alignX" | "alignY" | "facematch"
+    "none" | "layflat" | "alignX" | "alignY" | "facematch" | "clone"
   >("none");
+  // wgpu clone dialog (open with a set of ids; null = closed).
+  const [wgpuClone, setWgpuClone] = useState<{ ids: number[]; expandGroups: boolean } | null>(null);
   // Object count frozen at the moment a slice is submitted — what the
   // backend actually snapshots and slices (build_slice_input). Held
   // here so the progress window's count stays put across tab switches
@@ -617,6 +621,10 @@ function App() {
                     gizmoMode={wgpuGizmo}
                     tool={wgpuTool}
                     onToolDone={() => setWgpuTool("none")}
+                    onClonePick={(id) => {
+                      setWgpuTool("none");
+                      setWgpuClone({ ids: [id], expandGroups: true });
+                    }}
                   />
                   <ViewportChrome
                     leading={modeToggle}
@@ -632,7 +640,31 @@ function App() {
                       setWgpuGizmo("none");
                       setWgpuTool((cur) => (cur === t ? "none" : t));
                     }}
+                    onClone={() => {
+                      // With a selection, open the dialog on it; otherwise arm
+                      // pick-to-clone (the next clicked object's group).
+                      const sel = activePlate?.selection ?? [];
+                      if (sel.length > 0) {
+                        setWgpuClone({ ids: sel, expandGroups: false });
+                      } else {
+                        setWgpuGizmo("none");
+                        setWgpuTool((cur) => (cur === "clone" ? "none" : "clone"));
+                      }
+                    }}
                   />
+                  {wgpuClone && (
+                    <CloneDialog
+                      count={wgpuClone.ids.length}
+                      onConfirm={(copies) => {
+                        const dlg = wgpuClone;
+                        setWgpuClone(null);
+                        void cloneObjects(dlg.ids, copies, dlg.expandGroups).catch((e) =>
+                          console.error("clone failed", e),
+                        );
+                      }}
+                      onCancel={() => setWgpuClone(null)}
+                    />
+                  )}
                 </>
               ) : (
                 <ViewportCanvas

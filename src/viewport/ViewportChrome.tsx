@@ -10,7 +10,7 @@ import type { SceneObject } from "./types";
  * they depend on the wgpu gizmo + face-picking, which aren't built yet.
  */
 type GizmoMode = "none" | "move" | "rotate" | "scale";
-type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch";
+type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch" | "clone";
 
 export function ViewportChrome({
   leading,
@@ -20,6 +20,7 @@ export function ViewportChrome({
   onGizmoMode,
   tool,
   onTool,
+  onClone,
 }: {
   leading: ReactNode;
   objects: SceneObject[];
@@ -28,6 +29,7 @@ export function ViewportChrome({
   onGizmoMode: (mode: GizmoMode) => void;
   tool: Tool;
   onTool: (tool: Tool) => void;
+  onClone: () => void;
 }) {
   const hasObjects = objects.length > 0;
 
@@ -231,6 +233,21 @@ export function ViewportChrome({
               <path d="M3 2.5v9M11 2.5v9M10 7H5.5M7 5.5 5.5 7 7 8.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
+          <button
+            type="button"
+            disabled={!hasObjects}
+            className={tool === "clone" ? "px-2 py-1.5 bg-neutral-700" : btn(hasObjects)}
+            onClick={() => hasObjects && onClone()}
+            title={selectedIds.length ? "Clone selection" : "Clone — click an object to clone"}
+            aria-label="Clone objects"
+            aria-pressed={tool === "clone"}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              {/* two overlapping rounded rects — the copy/duplicate glyph */}
+              <rect x="5" y="5" width="7" height="7" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M9 5V3.2A1.2 1.2 0 0 0 7.8 2H3.2A1.2 1.2 0 0 0 2 3.2v4.6A1.2 1.2 0 0 0 3.2 9H5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
         </div>
       </div>
       <ViewportLegend hints={toolHint(tool)} />
@@ -248,6 +265,8 @@ function toolHint(tool: Tool): string {
       return "Click an object to align it to Y · Esc to cancel";
     case "facematch":
       return "Click the reference face, then the face to match it to · Esc to cancel";
+    case "clone":
+      return "Click an object to clone · Esc to cancel";
     default:
       return "LMB rotate · RMB pan · scroll zoom";
   }

@@ -80,7 +80,7 @@ const PLANES: { n: Vec3; a: Vec3; b: Vec3 }[] = [
  * drags — the axis/plane handles (move) or axis rings (rotate) drive constrained
  * transforms instead. Frames render on-demand and coalesce (one in flight).
  */
-type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch";
+type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch" | "clone";
 
 export function WgpuViewport({
   objects,
@@ -88,12 +88,14 @@ export function WgpuViewport({
   gizmoMode = "none",
   tool = "none",
   onToolDone,
+  onClonePick,
 }: {
   objects: SceneObject[];
   selectedIds: number[];
   gizmoMode?: GizmoMode;
   tool?: Tool;
   onToolDone?: () => void;
+  onClonePick?: (id: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cam = useRef({ az: 0.9, el: 0.6, dist: 350, center: [0, 0, 0] as [number, number, number] });
@@ -108,6 +110,8 @@ export function WgpuViewport({
   toolRef.current = tool;
   const onToolDoneRef = useRef(onToolDone);
   onToolDoneRef.current = onToolDone;
+  const onClonePickRef = useRef(onClonePick);
+  onClonePickRef.current = onClonePick;
   // Face-match is a two-click pick: the first click stashes the reference face's
   // world normal + point here; the second matches the target face to it.
   const faceMatchRef = useRef<{ normal: Vec3; point: Vec3 } | null>(null);
@@ -243,6 +247,14 @@ export function WgpuViewport({
     // Run the armed placing tool for a click at (sx,sy). Returns true when it
     // acted (so the tool disarms); false to stay armed (e.g. clicked empty space).
     const runTool = async (toolNow: Tool, sx: number, sy: number): Promise<boolean> => {
+      if (toolNow === "clone") {
+        // Pick an object → hand its id up so App opens the clone dialog on its
+        // whole group.
+        const id = await castPick(sx, sy);
+        if (id == null) return false;
+        onClonePickRef.current?.(id);
+        return true;
+      }
       if (toolNow === "alignX" || toolNow === "alignY") {
         const id = await castPick(sx, sy);
         if (id == null) return false;
