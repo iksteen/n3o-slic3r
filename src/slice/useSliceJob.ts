@@ -83,8 +83,9 @@ export function useSliceJob() {
   const start = useCallback(async (): Promise<JobId> => {
     // Capture the plate preview now, while the edit viewport is still
     // mounted — slicing flips the app into preview mode (which unmounts
-    // it), and send/export then read this cached thumbnail.
-    refreshThumbnailCache();
+    // it), and send/export then read this cached thumbnail. Awaited so an
+    // async (wgpu, offscreen+IPC) capture lands before we move on.
+    await refreshThumbnailCache();
     // Backend uses the project's active plate when `plateId` is
     // null. Future "slice plate N" affordances can pass a specific
     // PlateId here.

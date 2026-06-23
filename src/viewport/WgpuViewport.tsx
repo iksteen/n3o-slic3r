@@ -4,6 +4,7 @@ import * as THREE from "three";
 import { onEvents } from "../state/eventRouter";
 import { shouldIgnoreHotkey } from "../ui/hotkeyInhibit";
 import { getCachedTowerMesh, onTowerMeshCacheChange } from "./towerMeshCache";
+import { registerThumbnailCapture } from "./thumbnailCapture";
 import type { SceneObject, TowerGeometry } from "./types";
 
 type Vec3 = [number, number, number];
@@ -1072,6 +1073,26 @@ export function WgpuViewport({
       if (plateId === activePlateIdRef.current) void refreshTower();
     });
 
+    // Print thumbnail for the send/export path: Rust renders an iso view of the
+    // models only (transparent bg) to RGBA; encode it to a PNG via a canvas.
+    registerThumbnailCapture(async (size = 512) => {
+      try {
+        const buf = await invoke<ArrayBuffer>("viewport_thumbnail", { size });
+        const tc = document.createElement("canvas");
+        tc.width = size;
+        tc.height = size;
+        const tctx = tc.getContext("2d");
+        if (!tctx) return null;
+        tctx.putImageData(new ImageData(new Uint8ClampedArray(buf), size, size), 0, 0);
+        const url = tc.toDataURL("image/png");
+        const prefix = "data:image/png;base64,";
+        return url.startsWith(prefix) ? url.slice(prefix.length) : null;
+      } catch (e) {
+        console.error("viewport_thumbnail failed", e);
+        return null;
+      }
+    });
+
     renderRef.current = render;
     refreshGizmoRef.current = refreshGizmo;
     void reframe();
@@ -1085,6 +1106,7 @@ export function WgpuViewport({
       offReframe();
       offLoaded();
       offTower();
+      registerThumbnailCapture(null);
       canvas.removeEventListener("mousedown", onDown);
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("mousemove", onMove);

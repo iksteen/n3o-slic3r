@@ -1429,6 +1429,154 @@ impl ViewportRenderer {
         self.readback.unmap();
         out
     }
+
+    /// Render a 3/4 iso print thumbnail of the active plate's models only —
+    /// transparent background, no bed/grid/gizmo/tower — to `size`x`size` RGBA.
+    /// Mirrors the Three.js `renderModelThumbnail` (the frontend encodes it to a
+    /// PNG). Returns a transparent image when there's nothing to show.
+    pub fn thumbnail(&mut self, size: u32, project: &Arc<Mutex<Project>>) -> Vec<u8> {
+        let size = size.max(1);
+        let empty = || vec![0u8; (size * size * 4) as usize];
+        let (draws, center, radius) = {
+            let p = project.lock().unwrap();
+            let plate = p.active_plate();
+            let instance = plate.printer_instance_id().and_then(instance_registry::lookup_instance);
+            let mut draws: Vec<(MeshId, usize, Mat4, [f32; 3])> = Vec::new();
+            let mut mn = Vec3::splat(f32::MAX);
+            let mut mx = Vec3::splat(f32::MIN);
+            for (_, obj) in plate.scene.objects.iter() {
+                if !obj.visible {
+                    continue;
+                }
+                if !self.meshes.contains_key(&obj.mesh) {
+                    if let Some(m) = p.meshes.get(&obj.mesh) {
+                        self.meshes.insert(obj.mesh, upload_mesh(&self.device, m));
+                    }
+                }
+                let Some(gm) = self.meshes.get(&obj.mesh) else {
+                    continue;
+                };
+                let model = obj.transform.to_mat4();
+                if let Some(m) = p.meshes.get(&obj.mesh) {
+                    let bb = m.bounding_box;
+                    for &sx in &[false, true] {
+                        for &sy in &[false, true] {
+                            for &sz in &[false, true] {
+                                let c = Vec3::new(
+                                    (if sx { bb.max[0] } else { bb.min[0] }) as f32,
+                                    (if sy { bb.max[1] } else { bb.min[1] }) as f32,
+                                    (if sz { bb.max[2] } else { bb.min[2] }) as f32,
+                                );
+                                let w = model.transform_point3(c);
+                                mn = mn.min(w);
+                                mx = mx.max(w);
+                            }
+                        }
+                    }
+                }
+                let n_groups = gm.groups.len();
+                for gi in 0..n_groups {
+                    let state = self.meshes[&obj.mesh].groups[gi].state;
+                    let material = if state == 0 { obj.extruder_id.unwrap_or(1) } else { state };
+                    let color = spool_color(&plate.material_to_slot, instance.as_ref(), Some(material));
+                    draws.push((obj.mesh, gi, model, color));
+                }
+            }
+            if draws.is_empty() || mn.x > mx.x {
+                return empty();
+            }
+            let center = (mn + mx) * 0.5;
+            let radius = (mx - center).length().max(0.1);
+            (draws, center, radius)
+        };
+
+        // Iso 3/4 camera framing the bounding sphere (matches thumbnail.ts).
+        let fov = 35f32.to_radians();
+        let dir = Vec3::new(1.0, -1.0, 0.8).normalize();
+        let dist = radius / (fov * 0.5).sin() * 1.15;
+        let eye = center + dir * dist;
+        let far = dist + radius * 2.0 + 100.0;
+        let vp = Mat4::perspective_rh(fov, 1.0, (dist * 0.01).max(0.1), far)
+            * Mat4::look_at_rh(eye, center, Vec3::Z);
+
+        let (color, msaa_view, depth_view, readback, padded_bpr) =
+            make_targets(&self.device, size, size);
+        self.ensure_mvp_capacity(draws.len() as u32);
+        let mut bytes = vec![0u8; self.slot as usize * draws.len()];
+        for (i, (_, _, model, col)) in draws.iter().enumerate() {
+            let off = i * self.slot as usize;
+            bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&(vp * *model).to_cols_array()));
+            let rgba = [col[0], col[1], col[2], 1.0f32];
+            bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
+        }
+        self.queue.write_buffer(&self.ubuf, 0, &bytes);
+
+        let color_view = color.create_view(&Default::default());
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        {
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("viewport.thumbnail"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &msaa_view,
+                    resolve_target: Some(&color_view),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rp.set_pipeline(&self.mesh_pipe);
+            for (i, (mesh_id, gi, _, _)) in draws.iter().enumerate() {
+                let gm = &self.meshes[mesh_id];
+                let g = &gm.groups[*gi];
+                rp.set_bind_group(0, &self.bind, &[(i as u32) * self.slot]);
+                rp.set_vertex_buffer(0, gm.vb.slice(..));
+                rp.set_index_buffer(g.ib.slice(..), wgpu::IndexFormat::Uint32);
+                rp.draw_indexed(0..g.n_indices, 0, 0..1);
+            }
+        }
+        enc.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture {
+                texture: &color,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::ImageCopyBuffer {
+                buffer: &readback,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bpr),
+                    rows_per_image: Some(size),
+                },
+            },
+            wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+        );
+        self.queue.submit(Some(enc.finish()));
+        let slice = readback.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::Maintain::Wait);
+        let mapped = slice.get_mapped_range();
+        let row = (size * 4) as usize;
+        let mut out = vec![0u8; row * size as usize];
+        for y in 0..size as usize {
+            let src = y * padded_bpr as usize;
+            out[y * row..(y + 1) * row].copy_from_slice(&mapped[src..src + row]);
+        }
+        drop(mapped);
+        readback.unmap();
+        out
+    }
 }
 
 fn make_bind(
@@ -1561,6 +1709,19 @@ pub fn viewport_set_tower(state: tauri::State<'_, ViewportState>, tower: Option<
     let mut guard = state.0.lock().unwrap();
     let r = guard.get_or_insert_with(ViewportRenderer::new);
     r.set_tower(tower);
+}
+
+/// Render a square iso print thumbnail (models only, transparent background) and
+/// return it as tight RGBA8 — the frontend encodes it to a PNG for the send path.
+#[tauri::command]
+pub fn viewport_thumbnail(
+    state: tauri::State<'_, ViewportState>,
+    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    size: u32,
+) -> tauri::ipc::Response {
+    let mut guard = state.0.lock().unwrap();
+    let r = guard.get_or_insert_with(ViewportRenderer::new);
+    tauri::ipc::Response::new(r.thumbnail(size, project.inner()))
 }
 
 /// The active plate's bed extents — the frontend frames the camera (center +
