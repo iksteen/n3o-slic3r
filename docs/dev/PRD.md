@@ -242,7 +242,7 @@ Presentation vs mechanism. The UI presents the cascade as values-by-source-file 
 
 - **FR-3D-6.** Basic supports: auto-generate, on/off toggle per object. Paint-on supports are out of MVP scope.
 
-- **FR-3D-7.** Scene state lives in Rust in a renderer-agnostic structure (objects, transforms, mesh data, selections). The renderer (Three.js for MVP, possibly wgpu later) is a read-only consumer that reflects state changes pushed via Tauri events. All scene mutations go through Tauri commands; the renderer never owns authoritative state. This rule exists so switching renderers does not require touching the state model. See AD-8 for the design rationale and consequences.
+- **FR-3D-7.** Scene state lives in Rust in a renderer-agnostic structure (objects, transforms, mesh data, selections). The renderer — wgpu for the prepare-tab edit viewport, Three.js for the G-code preview — is a read-only consumer that reflects state changes pushed via Tauri events. All scene mutations go through Tauri commands; the renderer never owns authoritative state. This rule exists so switching renderers does not require touching the state model. See AD-8 for the design rationale and consequences.
 
 ## 6.5 Slicing pipeline
 
@@ -411,7 +411,7 @@ Model materials are abstract extruder indices (1..N) assigned to objects, paint 
 
 - **Shell.** Tauri 2.x. Rust core, web frontend via system webview.
 
-- **Frontend.** TypeScript + React + Tailwind. Three.js for the 3D viewport (with a wgpu native viewport as a fallback plan if webview perf is insufficient).
+- **Frontend.** TypeScript + React + Tailwind. wgpu for the prepare-tab edit viewport (Strategy A: wgpu renders offscreen in Rust and the finished frame is blitted into an opaque webview `<canvas>`; mesh geometry never crosses the IPC bridge). Three.js for the G-code preview.
 
 - **Slicing engine.** orca-slicer-ffi (this project's existing FFI) wrapping libslic3r. Linked as a Rust crate in the Tauri core.
 
@@ -429,7 +429,7 @@ Model materials are abstract extruder indices (1..N) assigned to objects, paint 
 
 - **core/project.** Project model, plate/printer binding, plate metadata (cycle counts), material bindings, persistence.
 
-- **core/scene.** Renderer-agnostic 3D scene state per AD-8 / FR-3D-7. Owns mesh registry, per-object transforms and metadata, selection, exclusion-zone data. Exposes Tauri commands for mutations and emits typed events for view sync. The frontend renderer (Three.js for MVP) consumes events; it does not hold authoritative state. Transform *mode* is renderer-local and the renderer owns its own camera (see §9.2); the scene model gains a pivot or camera field when a pivot-setting UI or persisted-view feature is built.
+- **core/scene.** Renderer-agnostic 3D scene state per AD-8 / FR-3D-7. Owns mesh registry, per-object transforms and metadata, selection, exclusion-zone data. Exposes Tauri commands for mutations and emits typed events for view sync. The frontend renderer (wgpu for the edit viewport, Three.js for the G-code preview) consumes events; it does not hold authoritative state. Transform *mode* is renderer-local and the renderer owns its own camera (see §9.2); the scene model gains a pivot or camera field when a pivot-setting UI or persisted-view feature is built.
 
 - **core/slice.** FFI wrapper, slice orchestration, progress events.
 
@@ -559,9 +559,9 @@ Decision (acknowledged limitation): the U1 driver speaks vanilla Moonraker over 
 
 ### AD-8: 3D scene state lives in Rust, not in the renderer
 
-Decision: the authoritative 3D scene model (objects with mesh handles, transforms, hierarchy, selection state, gizmo state, camera state, exclusion-zone data) lives in Rust as a renderer-agnostic data structure. The frontend renderer (Three.js for the MVP) is a read-only view that reflects state into pixels. State mutations flow renderer → Tauri command → Rust state update → Tauri event → renderer re-render. The renderer never holds authoritative state and never mutates state directly.
+Decision: the authoritative 3D scene model (objects with mesh handles, transforms, hierarchy, selection state, gizmo state, camera state, exclusion-zone data) lives in Rust as a renderer-agnostic data structure. The frontend renderer is a read-only view that reflects state into pixels. State mutations flow renderer → Tauri command → Rust state update → Tauri event → renderer re-render. The renderer never holds authoritative state and never mutates state directly.
 
-- **Why now, not when we hit the wall.** Phase 2 carries an explicit risk (PRD §10) that webview 3D performance is insufficient for our target scene sizes, with the documented mitigation "switch to wgpu in a native Tauri window." That mitigation is only cheap if the renderer is a swappable view. If Three.js owns scene state, switching it out means rewriting state management at the same time — a much harder cut. The separation cost is small upfront (a clean API boundary) and dwarfs the cost of unwinding it later.
+- **Why now, not when we hit the wall.** Phase 2 carries an explicit risk (PRD §10) that webview 3D performance is insufficient for our target scene sizes, with the documented mitigation "switch to wgpu." That mitigation is only cheap if the renderer is a swappable view; if the renderer owned scene state, switching it out would mean rewriting state management at the same time — a much harder cut. The separation cost is small upfront (a clean API boundary) and dwarfs the cost of unwinding it later. This has since been exercised cleanly: the prepare-tab edit viewport was swapped from Three.js to a wgpu renderer (Strategy A: offscreen wgpu → opaque webview canvas) without touching the state model, realizing this decision. (The G-code preview is still Three.js; its own wgpu rewrite is a separate, later effort.)
 
 - **What the state model contains:**
   - Scene graph: per-plate object list with parent/child relationships (modifier meshes, paint volumes nested under their parent object).
@@ -579,7 +579,7 @@ Decision: the authoritative 3D scene model (objects with mesh handles, transform
 
 - **Performance contract:** the Rust state model must support ≥1000 objects in a scene without state operations exceeding 5ms p99 (selection, transform application, scene-diff computation). The renderer's frame budget (FR-3D-5: 30fps on 20M-tri scene) is a *renderer* concern; state-side budget is separate.
 
-- **What this is *not*:** it is not a ban on the renderer caching derived data. Three.js's scene graph, GPU buffers, BVH for picking — all fine as renderer-internal caches keyed off the authoritative state. The rule is about *ownership of the truth*, not about avoiding caches. The line is *observable, persisted scene truth* vs. *ephemeral view UI*. Concretely: the active transform *mode* (translate/rotate/scale) is renderer-local — it never affects geometry, slice output, or the saved project, so it lives in the viewport (`App`), not `core/scene`. There is no gizmo *pivot* override in the scene model; a `core/scene` pivot field + setter command is added when a pivot-setting UI is built. (The transform primitive still accepts an optional explicit-pivot argument.) **Camera state** is likewise renderer-owned: the renderer owns its Three.js camera and frames from the bed. To ship "restore per-plate view on reopen," add a camera field + a `scene_camera_set` the renderer commits on orbit-end and reads back on load.
+- **What this is *not*:** it is not a ban on the renderer caching derived data. Three.js's scene graph, GPU buffers, BVH for picking — all fine as renderer-internal caches keyed off the authoritative state. The rule is about *ownership of the truth*, not about avoiding caches. The line is *observable, persisted scene truth* vs. *ephemeral view UI*. Concretely: the active transform *mode* (translate/rotate/scale) is renderer-local — it never affects geometry, slice output, or the saved project, so it lives in the viewport (`App`), not `core/scene`. There is no gizmo *pivot* override in the scene model; a `core/scene` pivot field + setter command is added when a pivot-setting UI is built. (The transform primitive still accepts an optional explicit-pivot argument.) **Camera state** is likewise renderer-owned: the wgpu edit viewport owns its camera ({az, el, dist, center}, frontend-side) and frames the plate from the bed. To ship "restore per-plate view on reopen," add a camera field + a `scene_camera_set` the renderer commits on orbit-end and reads back on load.
 
 - **Out-of-scope for MVP but architecturally enabled:** scriptable scene operations (Lua plugins inspecting/mutating scene state via the same command surface the renderer uses), headless rendering for thumbnails, alternate renderers (a side-by-side wgpu viewport, an SVG top-down view for plate previews) — all become tractable when state is renderer-agnostic.
 
@@ -613,7 +613,7 @@ These are listed to confirm the architecture generalizes, not as commitments to 
 
 | **Risk** | **Likelihood** | **Impact** | **Mitigation** |
 | --- | --- | --- | --- |
-| Webview 3D performance ceiling exceeded by large meshes | Medium | High | Prototype viewport in week 2 with stress test models. If insufficient, switch to wgpu in native Tauri window. Cost is bounded because scene state lives in Rust independent of the renderer (AD-8 / FR-3D-7); only the rendering layer changes. Estimate 2–3 weeks for the swap given the separation, down from 4–6 weeks if state and renderer were entangled. |
+| Webview 3D performance ceiling exceeded by large meshes | Medium | High | Realized and mitigated: the prepare-tab edit viewport moved off Three.js to a wgpu renderer (Strategy A: wgpu renders offscreen in Rust, the finished frame is blitted into an opaque webview canvas; mesh geometry never crosses the IPC bridge). The swap was cheap because scene state lives in Rust independent of the renderer (AD-8 / FR-3D-7); only the rendering layer changed. (The G-code preview remains Three.js; its own wgpu rewrite is a separate, later effort.) |
 | Snapmaker U1 toolchange G-code edge cases | High | Medium | Build U1 profile from Snapmaker Orca's published profile as starting point. libslic3r already supports toolchanger-style multi-material G-code (Prusa XL pattern). Print test models early. |
 | Bambu MQTT protocol changes | Low | Medium | Use community libraries as reference, pin protocol version, document fallbacks. |
 | OrcaSlicer submodule churn breaks FFI on bump | Medium | Low | Pin submodule, bump deliberately, not on every upstream commit. |

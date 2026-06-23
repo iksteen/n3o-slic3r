@@ -1,8 +1,21 @@
 # Decision record — replace the Three.js viewport with a Rust-side wgpu renderer
 
-**Status: GO.** Adopt **option B — one wgpu renderer**, delete the **edit
-viewport's** Three.js (`src/viewport/`) and replace it with wgpu. Honest effort:
-**~5–7 weeks**.
+**Status: IMPLEMENTED / SHIPPED.** Adopted **option B — one wgpu renderer**,
+**Strategy A** (offscreen wgpu → opaque `<canvas>` blit): the prepare-tab edit
+viewport is now the wgpu renderer; the Three.js prepare viewport is deleted.
+Original honest effort estimate: **~5–7 weeks**.
+
+**Implemented.** Feature parity reached: meshes, spool colors, per-face MMU
+paint, selection, picking, gizmos (move/rotate/scale with snap), placing tools
+(lay-flat, align X/Y, match-face), clone, auto-orient, arrange, axis markers,
+priming tower (box + sliced mesh, draggable), print thumbnail, MSAA, and camera
+framing all match the old viewport. The Three.js prepare cluster (`ViewportCanvas`,
+`sceneMirror`, `gizmo.ts`, `cameraControls`, `eventBridge`, `paintColors`,
+`thumbnail.ts`, `towerOverlay`) and the backend `scene_mesh_buffers` /
+`scene_mesh_paint` commands were removed. Mesh geometry never crosses the IPC
+bridge — it is uploaded straight to the GPU Rust-side. The G-code preview
+(`src/preview/`) still runs Three.js; its wgpu rewrite is a later, separate
+effort (see §8).
 
 **Linux present path — corrected after phase-1 implementation: Strategy A
 (offscreen wgpu → opaque `<canvas>` blit), NOT GtkGLArea.** The GtkGLArea path
@@ -77,7 +90,7 @@ how the finished frame reaches the screen differs:
 
 | platform | present shim | status |
 | --- | --- | --- |
-| **Linux** | **Strategy A** — offscreen wgpu → readback → opaque `<canvas>` blit (the GtkGLArea path is dead — needs webview transparency; see the transparency finding below) | chosen; building |
+| **Linux** | **Strategy A** — offscreen wgpu → readback → opaque `<canvas>` blit (the GtkGLArea path is dead — needs webview transparency; see the transparency finding below) | shipped |
 | **macOS** | wgpu → `CAMetalLayer` (native, zero-copy), or Strategy A (~5 GB/s measured — also fine) | not built; both paths known-good |
 | **Windows** | DXGI swapchain on a child HWND / DirectComposition, or Strategy A | not built; needs real-hw check |
 
@@ -95,10 +108,12 @@ pays a per-frame copy for present; it loses the zero-copy compositing, but it's
 the only path that coexists with the dynamic DOM overlays.
 
 **The AD-8 dividend.** Scene *state* (geometry, transforms, selection, MMU paint,
-spool colors) already lives in Rust (`core/scene/`), exposed via the binary
-`scene_mesh_buffers` IPC + `scene:*` events. A wgpu renderer consumes that
-unchanged — the state half of the port is genuinely free, which is what the old
-2–3 wk estimate was really measuring.
+spool colors) already lived in Rust (`core/scene/`). A wgpu renderer consumes that
+in-process — the state half of the port was genuinely free, which is what the old
+2–3 wk estimate was really measuring. In the shipped renderer the mesh geometry no
+longer crosses the IPC bridge at all (the binary `scene_mesh_buffers` IPC was
+removed); it is uploaded straight to the GPU Rust-side, with `scene:*` events
+driving updates.
 
 ---
 
@@ -170,21 +185,25 @@ face-normal parity with three.js.
 
 ## 5. Phased plan (Strategy A, edit viewport first)
 
-1. **Foundation** — Strategy-A present loop: wgpu renders the scene to an
+Steps 1–6 are the edit-viewport work that shipped; steps 7–8 remain ahead.
+
+1. **Foundation** *(done)* — Strategy-A present loop: wgpu renders the scene to an
    offscreen texture sized to the viewport, reads it back, and serves the bytes
-   to JS (custom URI scheme); the frontend draws them into an opaque `<canvas>`
-   where the Three.js renderer is today. Camera/input stay in JS → forwarded to
-   Rust; Rust re-renders on change (on-demand). glam camera consuming `scene:*`.
+   to JS; the frontend draws them into an opaque `<canvas>` where the Three.js
+   renderer used to be. Camera/input stay in JS → forwarded to Rust; Rust
+   re-renders on change (on-demand). glam camera consuming `scene:*`.
    *(The hole-punch / GtkGLArea path was retired here — see the transparency
    finding above.)*
-2. **Scene parity** — meshes + lighting + bed/axes/exclusion overlays +
-   spool-color chain + MMU per-face paint + selection tint, from
-   `scene_mesh_buffers`.
-3. **Picking + selection** — Rust BVH; closest-hit object + face-pick world
-   normal parity vs three.js across all 5 modes.
-4. **Gizmo** — hand-rolled T/R/S, multi-select pivot, snapping (longest pole).
-5. **Overlays + text** — tower overlay, dimension/axis labels (glyph pipeline).
-6. **Thumbnail** — headless wgpu offscreen → PNG for `.gcode.3mf`/U1.
+2. **Scene parity** *(done)* — meshes + lighting + bed/axes/exclusion overlays +
+   spool-color chain + MMU per-face paint + selection tint, with geometry
+   uploaded GPU-side rather than over the (now-removed) `scene_mesh_buffers` IPC.
+3. **Picking + selection** *(done)* — Rust BVH; closest-hit object + face-pick
+   world normal parity vs three.js across all 5 modes.
+4. **Gizmo** *(done)* — hand-rolled T/R/S, multi-select pivot, snapping (was the
+   longest pole).
+5. **Overlays + text** *(done)* — tower overlay, dimension/axis labels (glyph
+   pipeline).
+6. **Thumbnail** *(done)* — headless wgpu offscreen → PNG for `.gcode.3mf`/U1.
 7. **Cross-platform present shims** — CAMetalLayer (macOS), DXGI/DComp
    (Windows); verify Windows on real hardware.
 8. **G-code preview renderer — OUT of this project.** Stays on Three.js until
@@ -198,10 +217,9 @@ face-normal parity with three.js.
 ## 6. Open items / risks
 
 - **Hole-punch layout** — *resolved: dead* (transparency finding above).
-  Strategy A replaces it. New Linux risk to watch instead: per-frame transport
-  cost at large/HiDPI viewport sizes — mitigate with render-at-viewport-size +
-  DPR 1 + on-demand; measure the actual fps on the Intel laptop before committing
-  to canvas dimensions.
+  Strategy A replaced it. The Linux risk it raised — per-frame transport cost at
+  large/HiDPI viewport sizes — was mitigated as planned (render-at-viewport-size +
+  DPR 1 + on-demand) and held up at edit-viewport sizes in the shipped renderer.
 - **Windows present path** — only ever measured in a GPU-less VM. Needs a
   real-hardware DXGI/DComp check (not on the Linux critical path).
 - **Preview renderer** — *decided OUT* (stays Three.js → own redesign + wgpu
@@ -217,9 +235,12 @@ face-normal parity with three.js.
 
 ## 7. Recommendation
 
-Commit to option B for the **edit viewport** (~5–7 wk); the preview renderer is
-explicitly out (Three.js until the prepare tab lands, then its own wgpu rewrite).
-Every kill-criterion spike passed and the highest-risk piece (the Linux zero-copy
-present bridge) is built and feels "staggering" on the actual Intel target.
-Sequence the work as §5; the one remaining Linux unknown is the
-transparent-webview-over-GLArea check — gate phase 1 on it.
+The recommendation was option B for the **edit viewport** (~5–7 wk), with the
+preview renderer explicitly out (Three.js until the prepare tab lands, then its
+own wgpu rewrite). That is what shipped: the edit-viewport port (§5 steps 1–6)
+is complete at feature parity, the Three.js prepare cluster is deleted, and the
+preview stays on Three.js as planned. Every kill-criterion spike passed and the
+highest-risk piece (the Linux present path) landed on Strategy A after the
+transparency finding retired the GtkGLArea/transparent-webview route. The
+remaining open work is the cross-platform present shims (§5 step 7) and the
+preview rewrite (§5 step 8).

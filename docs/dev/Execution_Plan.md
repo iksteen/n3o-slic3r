@@ -162,9 +162,9 @@ Goal: functional 3D scene with model load, transform operations, and bed visuali
 
 ### Deliverables
 
-- **Renderer-agnostic scene state in Rust (FR-3D-7 / AD-8).** Build this before the Three.js layer — it's the foundation the renderer sits on. Scope: typed scene model (mesh registry, per-object transforms and metadata, hierarchy, selection, exclusion-zone data); Tauri command surface for mutations (`scene_select`, `set_object_transform`, etc.); Tauri event surface for state diffs the renderer applies. Lives in `core/scene/` per PRD §8.2. Unit tests cover the command/event contract without any renderer present. (Transform *mode* is renderer-local and the renderer owns its own camera — see PRD §9.2; the scene model gains pivot/camera state when a pivot-setting UI or persisted-view feature lands.)
+- **Renderer-agnostic scene state in Rust (FR-3D-7 / AD-8).** Build this before the renderer layer — it's the foundation the renderer sits on. Scope: typed scene model (mesh registry, per-object transforms and metadata, hierarchy, selection, exclusion-zone data); Tauri command surface for mutations (`scene_select`, `set_object_transform`, etc.); Tauri event surface for state diffs the renderer applies. Lives in `core/scene/` per PRD §8.2. Unit tests cover the command/event contract without any renderer present. (Transform *mode* is renderer-local and the renderer owns its own camera — see PRD §9.2; the scene model gains pivot/camera state when a pivot-setting UI or persisted-view feature lands.)
 
-- Three.js scene with orbit controls, perspective + ortho toggle, gizmo for move/rotate/scale. The renderer is a *view*: it subscribes to scene events, applies them to its local mirror, and emits user-intent through the command surface. It does not hold authoritative state.
+- Edit-viewport renderer with orbit controls, perspective + ortho toggle, gizmo for move/rotate/scale. The renderer is a *view*: it emits user-intent through the command surface and does not hold authoritative state. *(The prepare-tab edit viewport now ships as a Rust-side wgpu renderer — Strategy A: wgpu renders offscreen in Rust and the finished frame is blitted into an opaque webview `<canvas>`, so mesh geometry never crosses the IPC bridge. The Three.js viewport this phase originally built has been retired; the AD-8 separation made the swap a renderer-layer change. The Phase 6 G-code preview is still Three.js — its own wgpu rewrite is a separate, later effort.)*
 
 - Load STL, OBJ, and .3mf (project format): geometry, object positions, and as much project metadata as the file carries. Loader runs in Rust, populates the scene state directly; the renderer learns of new meshes via the standard event flow. Bambu Studio, OrcaSlicer, and Snapmaker Orca all save projects as .3mf — this is the migration path for users.
 
@@ -176,7 +176,7 @@ Goal: functional 3D scene with model load, transform operations, and bed visuali
 
 - Bed mesh with grid, origin marker, A1 mini exclusion zone, U1 toolhead parking bay visualization.
 
-- Performance stress test: 20M-triangle scene runs at >=30fps on integrated GPU laptop. Decision point: continue with Three.js or pivot to wgpu native window. The state-vs-renderer separation (AD-8) keeps the pivot cost bounded to the renderer layer — see PRD §10 risk row.
+- Performance stress test: 20M-triangle scene runs at >=30fps on integrated GPU laptop. Decision point: continue with Three.js or pivot to wgpu. The state-vs-renderer separation (AD-8) keeps the pivot cost bounded to the renderer layer — see PRD §10 risk row. *(Resolved: the prepare-tab edit viewport was moved to a Rust-side wgpu renderer — Strategy A, offscreen render blitted into an opaque webview canvas — bounded to the renderer layer exactly as AD-8 predicted.)*
 
 - Renderer-side performance: applying scene diffs at 60 Hz worst-case interaction rates (orbit, drag) without dropping below the 30fps render target. Tested with a 1000-object scene to validate the state-side budget (≤5ms p99 for selection / transform / diff computation, per AD-8).
 
@@ -184,7 +184,7 @@ Goal: functional 3D scene with model load, transform operations, and bed visuali
 
 - Load a 50MB STL and a Bambu-Studio-authored .3mf, manipulate them, save and reload position.
 
-- Performance target met or pivot decision made and scheduled.
+- Performance target met or pivot decision made and scheduled. *(The wgpu pivot for the prepare-tab edit viewport has since shipped.)*
 
 - Scene-state Rust module's command/event surface is fully covered by tests that run without any renderer attached. Swapping in a stub viewer that just logs events produces sensible output for typical interaction sequences (load → select → transform → deselect).
 
@@ -667,7 +667,7 @@ Out of scope for this plan, but worth listing so MVP decisions don't paint into 
 
 - WASM plugin runtime alongside Lua.
 
-- Wgpu native viewport if webview perf is insufficient at production scale.
+- ~~Wgpu native viewport if webview perf is insufficient at production scale.~~ **Done** (ahead of need): the prepare-tab edit viewport now renders via wgpu in Rust (Strategy A — offscreen render blitted into an opaque webview canvas). The Phase 6 G-code preview remains Three.js; its wgpu rewrite is a separate later effort.
 
 - Print farm / fleet management UI.
 
