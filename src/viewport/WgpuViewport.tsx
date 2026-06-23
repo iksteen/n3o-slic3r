@@ -9,9 +9,9 @@ type GizmoMode = "none" | "move" | "rotate" | "scale";
 type GizmoInfo = { center: Vec3; length: number };
 const IDENTITY16 = new THREE.Matrix4().toArray();
 const IDENT_QUAT: [number, number, number, number] = [0, 0, 0, 1];
-// Scale gizmo handle length as a fraction of the eye→gizmo distance (constant
-// on-screen size). Must match SCALE_SCREEN_K in viewport_render.rs.
-const SCALE_SCREEN_K = 0.13;
+// Move/Scale gizmo handle length as a fraction of the eye→gizmo distance
+// (constant on-screen size). Must match GIZMO_SCREEN_K in viewport_render.rs.
+const GIZMO_SCREEN_K = 0.13;
 
 type DragState = {
   x: number;
@@ -404,13 +404,14 @@ export function WgpuViewport({
       const fwd: Vec3 = [-ce * ca, -ce * sa, -se]; // eye → center
       return norm(cross(fwd, [0, 0, 1]));
     };
-    // Nearest gizmo handle under `ray` for the current mode, or null. The scale
-    // gizmo is constant on-screen size, so its hit-test length tracks the camera.
+    // Nearest gizmo handle under `ray` for the current mode, or null. Move and
+    // Scale are constant on-screen size, so their hit-test length tracks the
+    // camera; Rotate is sized to the object.
     const pickHandle = (ray: THREE.Ray, gi: GizmoInfo): Handle | null => {
       if (gizmoModeRef.current === "rotate") return pickRotateHandle(ray, gi.center, gi.length)?.h ?? null;
-      if (gizmoModeRef.current === "scale")
-        return pickScaleHandle(ray, gi.center, SCALE_SCREEN_K * eyeDist(gi.center))?.h ?? null;
-      return pickMoveHandle(ray, gi.center, gi.length)?.h ?? null;
+      const l = GIZMO_SCREEN_K * eyeDist(gi.center);
+      if (gizmoModeRef.current === "scale") return pickScaleHandle(ray, gi.center, l)?.h ?? null;
+      return pickMoveHandle(ray, gi.center, l)?.h ?? null;
     };
 
     // Scale gizmo orientation: a single selection scales along its own (rotated)
@@ -736,7 +737,7 @@ export function WgpuViewport({
           // so it's a zoom: factor doubles/halves per handle-length of drag.
           const radial = sub(d.startHit, d.pivot);
           const g = vlen(radial) > 1e-3 ? norm(radial) : camRight();
-          const l = SCALE_SCREEN_K * eyeDist(d.pivot);
+          const l = GIZMO_SCREEN_K * eyeDist(d.pivot);
           f = Math.pow(2, dot(sub(hit, d.startHit), g) / l);
         } else {
           // 1:1 — the grabbed point tracks the cursor: a point at startProj along
@@ -750,7 +751,7 @@ export function WgpuViewport({
           ]);
           const startProj = dot(sub(d.startHit, d.pivot), g);
           const curProj = dot(sub(hit, d.pivot), g);
-          const ref = Math.abs(startProj) > 1e-3 ? startProj : SCALE_SCREEN_K * eyeDist(d.pivot);
+          const ref = Math.abs(startProj) > 1e-3 ? startProj : GIZMO_SCREEN_K * eyeDist(d.pivot);
           f = curProj / ref;
         }
         f = Math.max(0.01, f); // never collapse to zero / mirror

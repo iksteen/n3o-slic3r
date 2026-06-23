@@ -75,9 +75,9 @@ const COLOR_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// 4x MSAA — cheap edge anti-aliasing; the multisampled target resolves into the
 /// single-sample `color` that's read back.
 const SAMPLES: u32 = 4;
-/// Scale gizmo handle length as a fraction of the eye→gizmo distance, so it holds
-/// a constant on-screen size (a TransformControls port). Must match the frontend.
-const SCALE_SCREEN_K: f32 = 0.13;
+/// Move/Scale gizmo handle length as a fraction of the eye→gizmo distance, so it
+/// holds a constant on-screen size (a TransformControls port). Match the frontend.
+const GIZMO_SCREEN_K: f32 = 0.13;
 /// Per-object uniform: `mat4 mvp` (64) + `vec4 tint` (16).
 const UNIFORM_BYTES: u64 = 80;
 // Bed extents are f64 (BoundingBox); converted to f32 for the GPU.
@@ -303,26 +303,37 @@ fn push_rod(v: &mut Vec<GizmoVertex>, start: Vec3, dir: Vec3, len: f32, hw: f32,
     }
 }
 
-/// UV sphere at `c`, radius `r`, smooth radial normals.
-fn push_ball(v: &mut Vec<GizmoVertex>, c: Vec3, r: f32, col: [f32; 3]) {
-    const STACKS: usize = 8;
-    const SLICES: usize = 12;
-    let pt = |i: usize, j: usize| -> Vec3 {
-        let phi = std::f32::consts::PI * (i as f32) / (STACKS as f32);
-        let theta = std::f32::consts::TAU * (j as f32) / (SLICES as f32);
-        Vec3::new(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos())
+/// Cone (arrowhead) with apex at `tip`, pointing along `dir`, of `height` and
+/// base `radius`. Slanted side normals + a base cap.
+fn push_cone(v: &mut Vec<GizmoVertex>, tip: Vec3, dir: Vec3, height: f32, radius: f32, col: [f32; 3]) {
+    const SEG: usize = 16;
+    let base = tip - dir * height;
+    let up = if dir.x.abs() > 0.9 { Vec3::Y } else { Vec3::X };
+    let e1 = dir.cross(up).normalize();
+    let e2 = dir.cross(e1).normalize();
+    let rim = |i: usize| -> Vec3 {
+        let a = std::f32::consts::TAU * (i as f32) / (SEG as f32);
+        base + (e1 * a.cos() + e2 * a.sin()) * radius
     };
-    let tri = |a: Vec3, b: Vec3, cc: Vec3, v: &mut Vec<GizmoVertex>| {
-        for d in [a, b, cc] {
-            v.push(GizmoVertex { pos: (c + d * r).to_array(), nrm: d.to_array(), color: col });
-        }
+    // Slant normal at a rim point: radial outward tilted toward the apex.
+    let slant = (radius / height.max(1e-6)).atan();
+    let norm_at = |i: usize| -> Vec3 {
+        let a = std::f32::consts::TAU * (i as f32) / (SEG as f32);
+        let radial = e1 * a.cos() + e2 * a.sin();
+        (radial * slant.cos() + dir * slant.sin()).normalize()
     };
-    for i in 0..STACKS {
-        for j in 0..SLICES {
-            let (p00, p01, p10, p11) = (pt(i, j), pt(i, j + 1), pt(i + 1, j), pt(i + 1, j + 1));
-            tri(p00, p10, p11, v);
-            tri(p00, p11, p01, v);
-        }
+    for i in 0..SEG {
+        let (p0, p1) = (rim(i), rim(i + 1));
+        let (n0, n1) = (norm_at(i), norm_at(i + 1));
+        let napex = (n0 + n1).normalize_or_zero();
+        v.push(GizmoVertex { pos: p0.to_array(), nrm: n0.to_array(), color: col });
+        v.push(GizmoVertex { pos: p1.to_array(), nrm: n1.to_array(), color: col });
+        v.push(GizmoVertex { pos: tip.to_array(), nrm: napex.to_array(), color: col });
+        // Base cap (normal -dir).
+        let nd = (-dir).to_array();
+        v.push(GizmoVertex { pos: base.to_array(), nrm: nd, color: col });
+        v.push(GizmoVertex { pos: p1.to_array(), nrm: nd, color: col });
+        v.push(GizmoVertex { pos: p0.to_array(), nrm: nd, color: col });
     }
 }
 
@@ -340,9 +351,10 @@ fn hl(c: [f32; 3], on: bool) -> [f32; 3] {
 /// (0/1/2 = X/Y/Z axis, 3/4/5 = XY/YZ/XZ plane, -1 = none).
 fn gizmo_geometry(center: Vec3, l: f32, hover: i32) -> Vec<GizmoVertex> {
     let mut v = Vec::new();
-    let rod_len = l; // rod runs all the way into the ball at the tip
-    let rod_hw = l * 0.025;
-    let ball_r = l * 0.07;
+    let rod_hw = l * 0.012; // matches the rotate ring tube
+    let cone_h = l * 0.22;
+    let cone_r = l * 0.07;
+    let rod_len = l - cone_h; // rod runs up to the arrowhead base
     let axes = [
         (Vec3::X, [0.90, 0.27, 0.27]),
         (Vec3::Y, [0.30, 0.80, 0.33]),
@@ -351,7 +363,7 @@ fn gizmo_geometry(center: Vec3, l: f32, hover: i32) -> Vec<GizmoVertex> {
     for (i, (dir, color)) in axes.into_iter().enumerate() {
         let color = hl(color, hover == i as i32);
         push_rod(&mut v, center, dir, rod_len, rod_hw, color);
-        push_ball(&mut v, center + dir * l, ball_r, color);
+        push_cone(&mut v, center + dir * l, dir, cone_h, cone_r, color);
     }
     // Filled planar handles, offset into each plane; normal is the third axis.
     let planes = [
@@ -439,7 +451,7 @@ fn gizmo_scale_geometry(
     let mut v = Vec::new();
     let [ex, ey, ez] = basis;
     let rod_len = l; // rod runs all the way into the cube at the tip
-    let rod_hw = l * 0.015;
+    let rod_hw = l * 0.012; // matches the rotate ring tube
     let cube_h = l * 0.06;
     let axes = [(ex, [0.90, 0.27, 0.27]), (ey, [0.30, 0.80, 0.33]), (ez, [0.36, 0.48, 0.96])];
     // Guide line: a long thin rod through the active axis, drawn first (behind).
@@ -902,16 +914,19 @@ impl ViewportRenderer {
         // Active axis guide line, shown while dragging an axis handle.
         let guide = (req.gizmo_dragging && (0..=2).contains(&req.gizmo_hover))
             .then_some(req.gizmo_hover as usize);
-        // Gizmo at the selection center (draws with slot 0's vp; own colors).
+        // Gizmo at the selection center (draws with slot 0's vp; own colors). Move
+        // and Scale are constant on-screen size (length tracks eye distance); Move
+        // also follows the dragged object (drag_pre is a translation). Rotate is
+        // sized to the object (ring radius `r`) and stays put.
+        let screen_l = |c: Vec3| GIZMO_SCREEN_K * (eye - c).length();
         let gizmo_verts = gizmo
-            .map(|(c, l)| match req.gizmo {
-                GizmoMode::Move => gizmo_geometry(c, l, req.gizmo_hover),
-                GizmoMode::Rotate => gizmo_rotate_geometry(c, l, req.gizmo_hover),
-                GizmoMode::Scale => {
-                    // Constant on-screen size: length scales with eye distance.
-                    let ls = SCALE_SCREEN_K * (eye - c).length();
-                    gizmo_scale_geometry(c, ls, basis, req.gizmo_hover, guide)
+            .map(|(c, r)| match req.gizmo {
+                GizmoMode::Move => {
+                    let c = Mat4::from_cols_array(&req.drag_pre).transform_point3(c);
+                    gizmo_geometry(c, screen_l(c), req.gizmo_hover)
                 }
+                GizmoMode::Rotate => gizmo_rotate_geometry(c, r, req.gizmo_hover),
+                GizmoMode::Scale => gizmo_scale_geometry(c, screen_l(c), basis, req.gizmo_hover, guide),
                 GizmoMode::None => Vec::new(),
             })
             .filter(|v| !v.is_empty());
