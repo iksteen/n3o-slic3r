@@ -309,21 +309,26 @@ pub fn tower_geometry_for_plate(
     let Some(plate) = p.plate(plate_id) else {
         return Ok(None);
     };
-    // A wipe/prime tower is only generated for a multi-material print —
-    // ≥2 distinct filament indices among the plate's objects. With a single
-    // material there are no tool changes, so libslic3r emits no tower
-    // regardless of `enable_prime_tower`; the overlay must match. (Same
-    // "referenced materials" notion the pre-slice gate uses:
-    // `extruder_id.unwrap_or(1)`.)
-    let distinct_materials: std::collections::HashSet<u8> = plate
-        .scene
-        .objects
-        .values()
-        .map(|o| o.extruder_id.unwrap_or(1))
-        .collect();
-    if distinct_materials.len() < 2 {
+    // A wipe/prime tower is only generated for a multi-material print — ≥2
+    // distinct physical filament *slots* in use. With a single slot there are no
+    // tool changes, so libslic3r emits no tower regardless of `enable_prime_tower`;
+    // the overlay must match. `materials_on_plate` counts each object's base
+    // `extruder_id` *and* any MMU paint within its mesh (so a single painted
+    // object reads as multi-material); mapping each material through
+    // `material_to_slot` then collapses two materials that share one slot — same
+    // physical filament, no swap, no tower. Unmapped materials key on their own
+    // index so they stay distinct.
+    let mut slots: std::collections::HashSet<(bool, u8, u8)> = std::collections::HashSet::new();
+    for m in p.materials_on_plate(plate) {
+        match plate.material_to_slot.get(&m) {
+            Some(sr) => slots.insert((true, sr.extruder, sr.slot)),
+            None => slots.insert((false, m, 0)),
+        };
+    }
+    if slots.len() < 2 {
         return Ok(None);
     }
+    let material_count = slots.len();
     // Fold the plate's project-tier overrides into the compose exactly as
     // the slice path does, so a dragged position resolves here too.
     let overrides: std::collections::BTreeMap<String, String> =
@@ -357,7 +362,7 @@ pub fn tower_geometry_for_plate(
         width: num("prime_tower_width").unwrap_or(0.0),
         brim: num("prime_tower_brim_width").unwrap_or(0.0),
         rotation: num("wipe_tower_rotation_angle").unwrap_or(0.0),
-        material_count: distinct_materials.len(),
+        material_count,
         printer_instance_id: plate.printer_instance_id().map(str::to_owned),
     }))
 }
@@ -683,6 +688,26 @@ mod tests {
                 .expect("ok")
                 .is_none(),
             "single-material plate must not show a tower",
+        );
+    }
+
+    #[test]
+    fn tower_geometry_is_none_when_two_materials_share_one_slot() {
+        let _ = slic3r_ffi::init(None, 3);
+        let mut project = Project::default();
+        let plate_id = project.plates[0].id;
+        add_cube(&mut project, 1);
+        add_cube(&mut project, 2);
+        // Both materials mapped to the same physical slot → same filament, no
+        // swap, no tower (even though two distinct material indices are in use).
+        let sr = crate::core::printer::SlotRef { extruder: 0, slot: 0 };
+        project.plates[0].material_to_slot.insert(1, sr);
+        project.plates[0].material_to_slot.insert(2, sr);
+        assert!(
+            tower_geometry_for_plate(&project, plate_id)
+                .expect("ok")
+                .is_none(),
+            "two materials on one slot must not show a tower",
         );
     }
 

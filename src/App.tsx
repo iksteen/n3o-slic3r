@@ -618,6 +618,7 @@ function App() {
                   <WgpuViewport
                     objects={activePlate?.objects ?? []}
                     selectedIds={activePlate?.selection ?? []}
+                    activePlateId={activePlateId}
                     gizmoMode={wgpuGizmo}
                     tool={wgpuTool}
                     onToolDone={() => setWgpuTool("none")}

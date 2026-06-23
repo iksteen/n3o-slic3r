@@ -72,6 +72,23 @@ struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32>, @locatio
 }
 "#;
 
+// Translucent priming tower: lit, alpha from the uniform (drawn with blending).
+const TOWER_SHADER: &str = r#"
+struct U { mvp: mat4x4<f32>, color: vec4<f32> };
+@group(0) @binding(0) var<uniform> u: U;
+struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
+@vertex fn vs(@location(0) pos: vec3<f32>, @location(1) nrm: vec3<f32>) -> VO {
+  var o: VO; o.p = u.mvp * vec4<f32>(pos, 1.0); o.n = nrm; return o;
+}
+@fragment fn fs(i: VO) -> @location(0) vec4<f32> {
+  let n = normalize(i.n);
+  let d = 0.6 + abs(n.z) * 0.4;
+  return vec4<f32>(u.color.rgb * d, u.color.a);
+}
+"#;
+const TOWER_RGB: [f32; 3] = [0.231, 0.510, 0.965]; // #3b82f6, matches the Three.js overlay
+const TOWER_BOX_H: f32 = 50.0; // indicative box height (the real tower is as tall as the print)
+
 const COLOR_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// 4x MSAA — cheap edge anti-aliasing; the multisampled target resolves into the
 /// single-sample `color` that's read back.
@@ -219,6 +236,24 @@ struct MeshGroup {
     n_indices: u32,
 }
 
+/// Priming tower the frontend pushes (a slice/overlay artifact, not part of the
+/// Rust scene). Placement is `x`/`y` corner + `width`/`brim`/`rotation` (bed mm);
+/// `mesh` is the exact sliced shape when one's valid (else the predicted box).
+struct TowerState {
+    x: f32,
+    y: f32,
+    width: f32,
+    brim: f32,
+    rotation: f32,
+    mesh: Option<TowerGpu>,
+}
+
+struct TowerGpu {
+    vb: wgpu::Buffer,
+    ib: wgpu::Buffer,
+    n_indices: u32,
+}
+
 struct GpuMesh {
     vb: wgpu::Buffer,
     // One group for an unpainted mesh (state 0); one per filament for a painted
@@ -301,6 +336,44 @@ fn grid_verts(min: [f32; 3], max: [f32; 3]) -> Vec<Vertex> {
         let y = min[1] + j as f32 * step;
         v.push(Vertex { pos: [min[0], y, z], nrm: [0.0; 3] });
         v.push(Vertex { pos: [max[0], y, z], nrm: [0.0; 3] });
+    }
+    v
+}
+
+/// Unit cube centred at the origin (±0.5), per-face normals — the priming-tower
+/// box, scaled/placed by its model matrix.
+fn unit_cube_verts() -> Vec<Vertex> {
+    let mut v = Vec::new();
+    let faces = [
+        ([1.0, 0.0, 0.0], [[0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5], [0.5, -0.5, 0.5]]),
+        ([-1.0, 0.0, 0.0], [[-0.5, 0.5, -0.5], [-0.5, -0.5, -0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5]]),
+        ([0.0, 1.0, 0.0], [[0.5, 0.5, -0.5], [-0.5, 0.5, -0.5], [-0.5, 0.5, 0.5], [0.5, 0.5, 0.5]]),
+        ([0.0, -1.0, 0.0], [[-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [-0.5, -0.5, 0.5]]),
+        ([0.0, 0.0, 1.0], [[-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5]]),
+        ([0.0, 0.0, -1.0], [[-0.5, 0.5, -0.5], [0.5, 0.5, -0.5], [0.5, -0.5, -0.5], [-0.5, -0.5, -0.5]]),
+    ];
+    for (n, q) in faces {
+        for &i in &[0usize, 1, 2, 0, 2, 3] {
+            v.push(Vertex { pos: q[i], nrm: n });
+        }
+    }
+    v
+}
+
+/// The 12 edges of the unit cube as line segments (24 verts) — the box outline.
+fn unit_cube_edges() -> Vec<Vertex> {
+    let c = |x: f32, y: f32, z: f32| Vertex { pos: [x, y, z], nrm: [0.0; 3] };
+    let p = |s: f32| if s < 0.5 { -0.5 } else { 0.5 };
+    let corner = |i: u32| c(p((i & 1) as f32), p(((i >> 1) & 1) as f32), p(((i >> 2) & 1) as f32));
+    let mut v = Vec::new();
+    for a in 0u32..8 {
+        for bit in 0u32..3 {
+            let b = a ^ (1 << bit);
+            if b > a {
+                v.push(corner(a));
+                v.push(corner(b));
+            }
+        }
     }
     v
 }
@@ -634,6 +707,12 @@ pub struct ViewportRenderer {
     vb_grid: wgpu::Buffer,
     n_grid: u32,
     vb_axes: wgpu::Buffer,
+    // Priming tower: translucent pipeline + the box's static cube geometry, plus
+    // the exact sliced mesh (pushed by the frontend; not part of the Rust scene).
+    tower_pipe: wgpu::RenderPipeline,
+    vb_cube: wgpu::Buffer,
+    vb_cube_edges: wgpu::Buffer,
+    tower: Option<TowerState>,
     // size-dependent targets
     size: (u32, u32),
     color: wgpu::Texture,
@@ -783,6 +862,58 @@ impl ViewportRenderer {
             multiview: None,
         });
 
+        // Priming tower: lit translucent triangles, alpha-blended, no depth write.
+        let tower_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(TOWER_SHADER.into()),
+        });
+        let tower_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("viewport.tower"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &tower_shader,
+                entry_point: "vs",
+                compilation_options: Default::default(),
+                buffers: std::slice::from_ref(&vbl),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &tower_shader,
+                entry_point: "fs",
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: COLOR_FMT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false, // translucent — test but don't occlude
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: SAMPLES,
+                ..Default::default()
+            },
+            multiview: None,
+        });
+        let vb_cube = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("viewport.tower.cube"),
+            contents: bytemuck::cast_slice(&unit_cube_verts()),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let vb_cube_edges = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("viewport.tower.cube_edges"),
+            contents: bytemuck::cast_slice(&unit_cube_edges()),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
         let gmin = DEFAULT_BED.0.map(|v| v as f32);
         let gmax = DEFAULT_BED.1.map(|v| v as f32);
         let gverts = grid_verts(gmin, gmax);
@@ -814,6 +945,10 @@ impl ViewportRenderer {
             meshes: HashMap::new(),
             vb_grid,
             vb_axes,
+            tower_pipe,
+            vb_cube,
+            vb_cube_edges,
+            tower: None,
             size: (0, 0),
             color,
             msaa_view,
@@ -821,6 +956,53 @@ impl ViewportRenderer {
             readback,
             padded_bpr,
         }
+    }
+
+    /// Set (or clear) the priming tower: placement + an optional exact mesh.
+    /// Mesh normals are recomputed smooth, like `upload_mesh`.
+    fn set_tower(&mut self, t: Option<TowerArg>) {
+        self.tower = t.map(|t| {
+            let mesh = t.mesh.map(|m| {
+                let vcount = m.vertices.len() / 3;
+                let pos: Vec<Vec3> = (0..vcount)
+                    .map(|i| Vec3::new(m.vertices[3 * i], m.vertices[3 * i + 1], m.vertices[3 * i + 2]))
+                    .collect();
+                let mut nrm = vec![Vec3::ZERO; vcount];
+                for tri in m.indices.chunks_exact(3) {
+                    let (a, b, c) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+                    if a < vcount && b < vcount && c < vcount {
+                        let face = (pos[b] - pos[a]).cross(pos[c] - pos[a]);
+                        nrm[a] += face;
+                        nrm[b] += face;
+                        nrm[c] += face;
+                    }
+                }
+                let verts: Vec<Vertex> = (0..vcount)
+                    .map(|i| Vertex { pos: pos[i].to_array(), nrm: nrm[i].normalize_or_zero().to_array() })
+                    .collect();
+                TowerGpu {
+                    vb: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("viewport.tower.mesh.vb"),
+                        contents: bytemuck::cast_slice(&verts),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    }),
+                    ib: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("viewport.tower.mesh.ib"),
+                        contents: bytemuck::cast_slice(&m.indices),
+                        usage: wgpu::BufferUsages::INDEX,
+                    }),
+                    n_indices: m.indices.len() as u32,
+                }
+            });
+            TowerState {
+                x: t.x,
+                y: t.y,
+                width: t.width,
+                brim: t.brim,
+                rotation: t.rotation,
+                mesh,
+            }
+        });
     }
 
     fn resize(&mut self, w: u32, h: u32) {
@@ -975,7 +1157,40 @@ impl ViewportRenderer {
         let bracket_slot = 1 + draws.len();
         // Three more slots after the brackets: one per origin axis color.
         let axis_slot = bracket_slot + bracket_vb.is_some() as usize;
-        let total_slots = axis_slot + 3;
+        // Two tower slots: the box/mesh model (solid + box edges) + the brim.
+        let tower_slot = axis_slot + 3;
+        let total_slots = tower_slot + 2;
+
+        // Priming tower: the frontend pushed an exact sliced mesh (mesh mode) or
+        // just the placement (box mode). (mesh?, vp*model, alpha, brim verts)
+        let bed_z = bmin[2];
+        let tower = self.tower.as_ref().map(|g| {
+            let rot = Mat4::from_rotation_z(g.rotation.to_radians());
+            if g.mesh.is_some() {
+                let model = Mat4::from_translation(Vec3::new(g.x, g.y, bed_z)) * rot;
+                (true, vp * model, 0.45f32, None)
+            } else {
+                let w = g.width.max(0.1);
+                let c = Vec3::new(g.x + w * 0.5, g.y + w * 0.5, bed_z + TOWER_BOX_H * 0.5);
+                let model = Mat4::from_translation(c) * rot * Mat4::from_scale(Vec3::new(w, w, TOWER_BOX_H));
+                let (x0, y0) = (g.x - g.brim, g.y - g.brim);
+                let (x1, y1) = (g.x + g.width + g.brim, g.y + g.width + g.brim);
+                let z = bed_z + 0.05;
+                let v = |x, y| Vertex { pos: [x, y, z], nrm: [0.0; 3] };
+                let brim = vec![
+                    v(x0, y0), v(x1, y0), v(x1, y0), v(x1, y1),
+                    v(x1, y1), v(x0, y1), v(x0, y1), v(x0, y0),
+                ];
+                (false, vp * model, 0.28f32, Some(brim))
+            }
+        });
+        let tower_brim_vb = tower.as_ref().and_then(|(_, _, _, brim)| brim.as_ref()).map(|verts| {
+            self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("viewport.tower.brim"),
+                contents: bytemuck::cast_slice(verts),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        });
 
         // Scale gizmo axes follow the object's orientation (world for multi).
         let basis_q = Quat::from_xyzw(
@@ -1041,6 +1256,18 @@ impl ViewportRenderer {
             bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
             bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(color));
         }
+        if let Some((_, mvp, alpha, _)) = &tower {
+            // model slot: tower color + its alpha (solid + box edges share it).
+            let off = tower_slot * self.slot as usize;
+            bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&mvp.to_cols_array()));
+            let rgba = [TOWER_RGB[0], TOWER_RGB[1], TOWER_RGB[2], *alpha];
+            bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
+            // brim slot: world lines, opaque tower color.
+            let boff = (tower_slot + 1) * self.slot as usize;
+            bytes[boff..boff + 64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
+            let brgba = [TOWER_RGB[0], TOWER_RGB[1], TOWER_RGB[2], 1.0f32];
+            bytes[boff + 64..boff + 80].copy_from_slice(bytemuck::cast_slice(&brgba));
+        }
         self.queue.write_buffer(&self.ubuf, 0, &bytes);
 
         let color_view = self.color.create_view(&Default::default());
@@ -1100,6 +1327,33 @@ impl ViewportRenderer {
                 rp.set_bind_group(0, &self.bind, &[(bracket_slot as u32) * self.slot]);
                 rp.set_vertex_buffer(0, vb.slice(..));
                 rp.draw(0..bracket_verts.len() as u32, 0..1);
+            }
+            // Priming tower (translucent, after opaque so it blends over).
+            if let Some((is_mesh, _, _, _)) = &tower {
+                let mslot = &[(tower_slot as u32) * self.slot];
+                if *is_mesh {
+                    let m = self.tower.as_ref().and_then(|t| t.mesh.as_ref()).unwrap();
+                    rp.set_pipeline(&self.tower_pipe);
+                    rp.set_bind_group(0, &self.bind, mslot);
+                    rp.set_vertex_buffer(0, m.vb.slice(..));
+                    rp.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32);
+                    rp.draw_indexed(0..m.n_indices, 0, 0..1);
+                } else {
+                    // box solid + its wireframe edges (both off the model slot)…
+                    rp.set_pipeline(&self.tower_pipe);
+                    rp.set_bind_group(0, &self.bind, mslot);
+                    rp.set_vertex_buffer(0, self.vb_cube.slice(..));
+                    rp.draw(0..36, 0..1);
+                    rp.set_pipeline(&self.line_pipe);
+                    rp.set_vertex_buffer(0, self.vb_cube_edges.slice(..));
+                    rp.draw(0..24, 0..1);
+                    // …and the brim outline on the bed.
+                    if let Some(vb) = &tower_brim_vb {
+                        rp.set_bind_group(0, &self.bind, &[(tower_slot as u32 + 1) * self.slot]);
+                        rp.set_vertex_buffer(0, vb.slice(..));
+                        rp.draw(0..8, 0..1);
+                    }
+                }
             }
         }
         // Gizmo: second pass, color preserved, always self-occluding (depth Less +
@@ -1278,6 +1532,35 @@ pub fn viewport_reset(state: tauri::State<'_, ViewportState>) {
     if let Some(r) = state.0.lock().unwrap().as_mut() {
         r.meshes.clear();
     }
+}
+
+#[derive(serde::Deserialize)]
+pub struct TowerMeshArg {
+    pub vertices: Vec<f32>,
+    pub indices: Vec<u32>,
+}
+
+/// The active plate's priming tower: placement (bed mm) + an optional exact
+/// sliced mesh (a slice/overlay artifact the frontend resolves; not part of the
+/// Rust scene). The frontend decides box-vs-mesh (staleness) and pushes the mesh
+/// only when valid; `None` clears the tower.
+#[derive(serde::Deserialize)]
+pub struct TowerArg {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub brim: f32,
+    pub rotation: f32,
+    pub mesh: Option<TowerMeshArg>,
+}
+
+/// Set (or clear) the active plate's priming tower. Pushed by the frontend on
+/// scene / material / active-plate / slice changes — not per frame.
+#[tauri::command]
+pub fn viewport_set_tower(state: tauri::State<'_, ViewportState>, tower: Option<TowerArg>) {
+    let mut guard = state.0.lock().unwrap();
+    let r = guard.get_or_insert_with(ViewportRenderer::new);
+    r.set_tower(tower);
 }
 
 /// Initial camera framing for the active plate's bed — the frontend sets the

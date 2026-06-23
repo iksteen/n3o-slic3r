@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import * as THREE from "three";
 import { onEvents } from "../state/eventRouter";
 import { shouldIgnoreHotkey } from "../ui/hotkeyInhibit";
-import type { SceneObject } from "./types";
+import { getCachedTowerMesh, onTowerMeshCacheChange } from "./towerMeshCache";
+import type { SceneObject, TowerGeometry } from "./types";
 
 type Vec3 = [number, number, number];
 type GizmoMode = "none" | "move" | "rotate" | "scale";
@@ -85,6 +86,7 @@ type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch" | "clone";
 export function WgpuViewport({
   objects,
   selectedIds,
+  activePlateId = null,
   gizmoMode = "none",
   tool = "none",
   onToolDone,
@@ -92,6 +94,7 @@ export function WgpuViewport({
 }: {
   objects: SceneObject[];
   selectedIds: number[];
+  activePlateId?: number | null;
   gizmoMode?: GizmoMode;
   tool?: Tool;
   onToolDone?: () => void;
@@ -112,6 +115,8 @@ export function WgpuViewport({
   onToolDoneRef.current = onToolDone;
   const onClonePickRef = useRef(onClonePick);
   onClonePickRef.current = onClonePick;
+  const activePlateIdRef = useRef(activePlateId);
+  activePlateIdRef.current = activePlateId;
   // Face-match is a two-click pick: the first click stashes the reference face's
   // world normal + point here; the second matches the target face to it.
   const faceMatchRef = useRef<{ normal: Vec3; point: Vec3 } | null>(null);
@@ -921,6 +926,40 @@ export function WgpuViewport({
       void render();
     }
 
+    // Resolve the active plate's tower placement + decide box-vs-mesh (the
+    // cached sliced mesh is valid while its material count + printer match the
+    // live geometry), then push to the renderer. Driven by scene / material /
+    // active-plate / slice changes — not per frame (the geometry needs a cascade
+    // resolve, too costly to run every frame).
+    async function refreshTower() {
+      const id = activePlateIdRef.current;
+      let tower: Record<string, unknown> | null = null;
+      try {
+        if (id != null) {
+          const geom = await invoke<TowerGeometry | null>("plate_tower_geometry", { plateId: id });
+          if (geom) {
+            const cached = getCachedTowerMesh(id);
+            const valid =
+              cached &&
+              cached.materialCount === geom.material_count &&
+              cached.printerInstanceId === geom.printer_instance_id;
+            tower = {
+              x: geom.x,
+              y: geom.y,
+              width: geom.width,
+              brim: geom.brim,
+              rotation: geom.rotation,
+              mesh: valid ? { vertices: cached.mesh.vertices, indices: cached.mesh.indices } : null,
+            };
+          }
+        }
+        await invoke("viewport_set_tower", { tower });
+      } catch (e) {
+        console.error("viewport_set_tower failed", e);
+      }
+      void render();
+    }
+
     // Delete / Backspace removes the current selection (off while a modal or
     // text field has focus, so editing a field doesn't delete objects).
     const onKeyDown = (e: KeyboardEvent) => {
@@ -965,12 +1004,16 @@ export function WgpuViewport({
       ],
       () => {
         void refreshGizmo();
+        void refreshTower(); // materials/positions affect the tower geometry
         void render();
       },
     );
     const offReframe = onEvents(
       ["scene:bed_changed", "scene:active_plate_changed"],
-      () => void reframe(),
+      () => {
+        void reframe();
+        void refreshTower(); // active plate may have changed → re-push its mesh
+      },
     );
     // A new project reuses MeshIds from 1, so the renderer's GPU mesh cache must
     // be dropped or it would draw the previous project's geometry. Reset, then
@@ -982,12 +1025,19 @@ export function WgpuViewport({
         console.error("viewport_reset failed", e);
       }
       void reframe();
+      void refreshTower(); // drop any tower mesh from the previous project
+    });
+    // The sliced tower mesh lands asynchronously after a slice; re-push when the
+    // cache changes for the active plate.
+    const offTower = onTowerMeshCacheChange((plateId) => {
+      if (plateId === activePlateIdRef.current) void refreshTower();
     });
 
     renderRef.current = render;
     refreshGizmoRef.current = refreshGizmo;
     void reframe();
     void refreshGizmo();
+    void refreshTower();
 
     return () => {
       renderRef.current = null;
@@ -995,6 +1045,7 @@ export function WgpuViewport({
       offRender();
       offReframe();
       offLoaded();
+      offTower();
       canvas.removeEventListener("mousedown", onDown);
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("mousemove", onMove);
