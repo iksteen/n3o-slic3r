@@ -1493,11 +1493,13 @@ impl Project {
         // *before* removal — otherwise we can't tell which bindings
         // might now be orphaned.
         let mut removed_materials: BTreeSet<u8> = BTreeSet::new();
+        let mut removed_meshes: BTreeSet<MeshId> = BTreeSet::new();
         {
             let plate = &mut self.plates[active].scene;
             for id in ids {
                 if let Some(obj) = plate.objects.remove(id) {
                     removed_materials.insert(obj.extruder_id.unwrap_or(1));
+                    removed_meshes.insert(obj.mesh);
                     events.push(SceneEvent::ObjectRemoved {
                         plate_id,
                         object_id: *id,
@@ -1519,7 +1521,31 @@ impl Project {
         if self.prune_orphan_material_bindings(active, &removed_materials) {
             events.push(SceneEvent::MaterialSlotChanged { plate_id });
         }
+        self.prune_orphan_meshes(&removed_meshes);
         events
+    }
+
+    /// Drop meshes (and their primitive-cache entries) in `candidates` that no
+    /// object on *any* plate references any more. Meshes are global and can be
+    /// shared (primitive dedup, group volumes), so a mesh only goes once its last
+    /// referencing object is gone — otherwise a deleted import's geometry lingers
+    /// in `meshes` and bloats the next `.n3o` save (it's serialized per mesh).
+    fn prune_orphan_meshes(&mut self, candidates: &BTreeSet<MeshId>) {
+        if candidates.is_empty() {
+            return;
+        }
+        let referenced: HashSet<MeshId> = self
+            .plates
+            .iter()
+            .flat_map(|p| p.scene.objects.values())
+            .map(|o| o.mesh)
+            .collect();
+        for id in candidates {
+            if !referenced.contains(id) {
+                self.meshes.remove(id);
+                self.primitive_cache.retain(|(_, _, mid)| mid != id);
+            }
+        }
     }
 
     /// Drop `material_to_slot` entries on `plate_idx` for any material
@@ -2259,6 +2285,27 @@ mod tests {
         // Second deselect_all is a no-op.
         let events = p.deselect_all();
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn delete_objects_prunes_the_orphaned_mesh() {
+        let mut p = Project::default();
+        let (mesh1, obj1) = add_cube(&mut p);
+        let (mesh2, _obj2) = add_cube(&mut p);
+        assert_ne!(mesh1, mesh2, "distinct meshes");
+        p.delete_objects(&[obj1]);
+        assert!(!p.meshes.contains_key(&mesh1), "deleted object's mesh is GC'd");
+        assert!(p.meshes.contains_key(&mesh2), "the surviving object's mesh stays");
+    }
+
+    #[test]
+    fn delete_objects_keeps_a_mesh_another_object_still_uses() {
+        let mut p = Project::default();
+        let mesh = p.register_mesh(unit_cube_mesh());
+        let obj1 = p.register_object(NewSceneObject::at_origin(mesh, "a"));
+        let _obj2 = p.register_object(NewSceneObject::at_origin(mesh, "b"));
+        p.delete_objects(&[obj1]);
+        assert!(p.meshes.contains_key(&mesh), "shared mesh kept while obj2 uses it");
     }
 
     #[test]
