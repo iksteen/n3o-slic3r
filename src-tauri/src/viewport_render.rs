@@ -1563,12 +1563,12 @@ pub fn viewport_set_tower(state: tauri::State<'_, ViewportState>, tower: Option<
     r.set_tower(tower);
 }
 
-/// Initial camera framing for the active plate's bed — the frontend sets the
-/// orbit center + distance from this on load / bed change.
+/// The active plate's bed extents — the frontend frames the camera (center +
+/// distance) from this on load / bed change with a view-aware fit.
 #[derive(serde::Serialize)]
 pub struct SceneInfo {
-    pub center: [f32; 3],
-    pub distance: f32,
+    pub min: [f32; 3],
+    pub max: [f32; 3],
 }
 
 #[tauri::command]
@@ -1581,14 +1581,9 @@ pub fn viewport_scene_info(project: tauri::State<'_, Arc<Mutex<Project>>>) -> Sc
         .as_ref()
         .map(|b| (b.extents.min, b.extents.max))
         .unwrap_or(DEFAULT_BED);
-    let span = (max[0] - min[0]).max(max[1] - min[1]).max(1.0);
     SceneInfo {
-        center: [
-            ((min[0] + max[0]) / 2.0) as f32,
-            ((min[1] + max[1]) / 2.0) as f32,
-            0.0,
-        ],
-        distance: (span * 1.7) as f32,
+        min: min.map(|v| v as f32),
+        max: max.map(|v| v as f32),
     }
 }
 

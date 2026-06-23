@@ -101,7 +101,16 @@ export function WgpuViewport({
   onClonePick?: (id: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const cam = useRef({ az: 0.9, el: 0.6, dist: 350, center: [0, 0, 0] as [number, number, number] });
+  // Match the Three.js default framing: camera at (0, -260, 200) looking at the
+  // origin (cameraControls.ts). Zero X offset → screen-right is world +X, so the
+  // bed's front edge (the X axis) is horizontal along the bottom and the origin
+  // sits at the lower-left; az = -90°, el = the ~37° elevation.
+  const cam = useRef({
+    az: -Math.PI / 2,
+    el: Math.atan2(200, 260),
+    dist: 350,
+    center: [0, 0, 0] as [number, number, number],
+  });
   // Kept fresh each render so the (mount-once) effect's handlers see live values.
   const objectsRef = useRef(objects);
   objectsRef.current = objects;
@@ -912,14 +921,44 @@ export function WgpuViewport({
       void render();
     };
 
-    // Pull the bed-framed camera (center + distance) from the backend, then draw.
+    // Frame the active plate's footprint with a view-aware fit (ports
+    // cameraControls.ts frameBox/initialFrameForBed): center on the plate plane,
+    // pull the camera back along the current view direction just far enough that
+    // every projected corner stays inside the frustum. Z is collapsed to the
+    // plate plane so it frames the footprint, not the whole build volume.
     async function reframe() {
       try {
-        const info = await invoke<{ center: [number, number, number]; distance: number }>(
-          "viewport_scene_info",
-        );
-        cam.current.center = info.center;
-        cam.current.dist = info.distance;
+        const info = await invoke<{ min: Vec3; max: Vec3 }>("viewport_scene_info");
+        const [minX, minY, minZ] = info.min;
+        const [maxX, maxY] = info.max;
+        const center: Vec3 = [(minX + maxX) / 2, (minY + maxY) / 2, minZ];
+        const c = cam.current;
+        const ce = Math.cos(c.el),
+          se = Math.sin(c.el),
+          ca = Math.cos(c.az),
+          sa = Math.sin(c.az);
+        const dir: Vec3 = [ce * ca, ce * sa, se]; // center → eye
+        const forward = scale(dir, -1);
+        let right = cross([0, 0, 1], dir);
+        right = vlen(right) < 1e-6 ? [1, 0, 0] : norm(right);
+        const up = norm(cross(dir, right));
+        const cv = canvasRef.current;
+        const aspect = cv && cv.clientHeight > 0 ? cv.clientWidth / cv.clientHeight : 1;
+        const margin = 1.08;
+        const tanV = Math.tan(((45 * Math.PI) / 180) * 0.5);
+        const tanH = tanV * aspect;
+        let dist = 0.1;
+        for (const cx of [minX, maxX]) {
+          for (const cy of [minY, maxY]) {
+            const v = sub([cx, cy, minZ], center);
+            const a = Math.abs(dot(v, right));
+            const b = Math.abs(dot(v, up));
+            const cc = dot(v, forward);
+            dist = Math.max(dist, (a * margin) / tanH - cc, (b * margin) / tanV - cc);
+          }
+        }
+        cam.current.center = center;
+        cam.current.dist = dist;
       } catch (e) {
         console.error("viewport_scene_info failed", e);
       }
