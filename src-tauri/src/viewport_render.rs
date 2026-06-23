@@ -695,6 +695,7 @@ pub struct ViewportRenderer {
     bgl: wgpu::BindGroupLayout,
     mesh_pipe: wgpu::RenderPipeline,
     line_pipe: wgpu::RenderPipeline,
+    axis_pipe: wgpu::RenderPipeline,
     gizmo_pipe: wgpu::RenderPipeline,
     // per-object MVP, one 256-aligned slot each
     ubuf: wgpu::Buffer,
@@ -778,7 +779,7 @@ impl ViewportRenderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
         };
-        let make_pipe = |topology, cull| {
+        let make_pipe = |topology, cull, depth_compare, depth_write_enabled| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: None,
                 layout: Some(&layout),
@@ -801,8 +802,8 @@ impl ViewportRenderer {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::Less,
+                    depth_write_enabled,
+                    depth_compare,
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -813,11 +814,17 @@ impl ViewportRenderer {
                 multiview: None,
             })
         };
+        use wgpu::CompareFunction::{Always, Less};
+        use wgpu::PrimitiveTopology::{LineList, TriangleList};
         // No back-face culling: imported meshes (STL etc.) have no winding
         // guarantee, and mixed winding would drop valid front faces (holes). The
         // depth test still resolves the nearest face correctly.
-        let mesh_pipe = make_pipe(wgpu::PrimitiveTopology::TriangleList, None);
-        let line_pipe = make_pipe(wgpu::PrimitiveTopology::LineList, None);
+        let mesh_pipe = make_pipe(TriangleList, None, Less, true);
+        let line_pipe = make_pipe(LineList, None, Less, true);
+        // Origin axis markers lie in the bed plane on top of the grid's x=0/y=0
+        // lines, so they z-fight with it. Draw them always-on-top of the grid
+        // (Always, no depth write) — still before the meshes, so objects occlude.
+        let axis_pipe = make_pipe(LineList, None, Always, false);
 
         // Gizmo: solid lit triangles, drawn in its own depth-cleared pass so it
         // sits on top of the scene yet self-occludes (near rod hides far rod).
@@ -937,6 +944,7 @@ impl ViewportRenderer {
             bgl,
             mesh_pipe,
             line_pipe,
+            axis_pipe,
             gizmo_pipe,
             ubuf,
             bind,
@@ -1305,6 +1313,9 @@ impl ViewportRenderer {
             rp.set_vertex_buffer(0, self.vb_grid.slice(..));
             rp.draw(0..self.n_grid, 0..1);
             // origin axis markers: each 2-vert segment with its own color slot.
+            // Always-on-top-of-the-grid pipe so they don't z-fight the x=0/y=0
+            // grid lines they sit on.
+            rp.set_pipeline(&self.axis_pipe);
             rp.set_vertex_buffer(0, self.vb_axes.slice(..));
             for k in 0..3u32 {
                 rp.set_bind_group(0, &self.bind, &[(axis_slot as u32 + k) * self.slot]);
