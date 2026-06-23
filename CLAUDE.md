@@ -64,29 +64,30 @@ later costs more than it had to.
 - **3D scene state lives in Rust, not in the renderer.** The
   authoritative scene model (objects, transforms, mesh data,
   selection) is a renderer-agnostic data structure in `core/scene/`.
-  Three.js is a read-only consumer that reflects state events into
+  The renderer is a read-only consumer that reflects state events into
   pixels. All scene mutations go through Tauri commands; the renderer
-  never owns state. This is so we can swap renderers (if webview 3D
-  performance proves insufficient, to wgpu in a native window) without
-  rewriting state management. See PRD FR-3D-7 and AD-8 for the full
-  design. Two boundaries that follow from it:
+  never owns state. The AD-8 payoff is realized: the **prepare-tab edit
+  viewport is the Rust wgpu renderer** (`src-tauri/src/viewport_render.rs`
+  + `src/viewport/WgpuViewport.tsx`) — Strategy A: wgpu renders offscreen
+  in Rust and the frame is blitted into an opaque webview `<canvas>` (a
+  transparent webview over GPU content smears on WebKitGTK; see
+  `docs/dev/wgpu-renderer.md`). Mesh geometry never crosses the IPC bridge
+  — it's uploaded straight to the GPU Rust-side. The **G-code preview**
+  still renders with Three.js (`src/preview/`), pending its own wgpu
+  rewrite. See PRD FR-3D-7 and AD-8. Two boundaries that follow:
   - *Transforms* — `set_object_transform` (full-matrix) is the only
     object-transform mutation. The active transform *mode*
     (translate/rotate/scale) is renderer-local UI state owned by `App`;
     `core/scene` holds no gizmo or pivot state.
-  - *Camera* — the renderer owns its own Three.js camera and frames
-    from the bed (`initialFrameForBed`); the scene model holds no camera
-    or projection state.
-  - *Rendering is on-demand.* `ViewportCanvas` does **not** run a
+  - *Camera* — the renderer owns its camera; the wgpu viewport holds
+    `{az, el, dist, center}` frontend-side and frames the plate footprint
+    from the bed (a view-aware corner fit). The scene model holds no
+    camera or projection state.
+  - *Rendering is on-demand.* The wgpu viewport does **not** run a
     continuous rAF loop — it would peg a CPU core + the GPU on a static
-    scene (an empty plate). It renders only when something changes, via
-    `invalidate()` (`invalidate(ms)` keeps drawing for a window, to ride
-    out an async update like mesh decode). **Any code that changes the
-    rendered picture MUST call `invalidate()`** — camera, gizmo, scene
-    events, tower, resize are already hooked; effects outside the canvas
-    effect use `invalidateRef.current?.()`. A new viewport visual that
-    forgets this shows as a frame that doesn't update until the next
-    interaction. The device pixel ratio is capped at 1.5 for fill-rate.
+    scene. It renders only when something changes (`render()`, coalesced
+    one-in-flight), driven by scene events, camera moves, drags, resize.
+    Any code that changes the rendered picture must trigger a `render()`.
 
 - **Configs are pure data.** No embedded code, no expressions, no
   template strings. The rule cascade (PRD §6.1, docs/dev/profiles.md)

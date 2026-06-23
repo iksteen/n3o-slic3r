@@ -12,14 +12,6 @@ mod viewport_render;
 
 use std::sync::{Arc, Mutex};
 
-/// Whether the Strategy-A wgpu viewport is active (`N3O_WGPU=1`). The frontend
-/// reads this once at boot to mount the wgpu canvas instead of the Three.js
-/// viewport. (Interim flag — default off — until wgpu reaches parity.)
-#[tauri::command]
-fn wgpu_viewport_enabled() -> bool {
-    viewport_render::enabled()
-}
-
 use slic3r_ffi::init;
 
 /// Resolve the bundled-resources root — the directory the shipped
@@ -171,7 +163,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            wgpu_viewport_enabled,
             viewport_render::viewport_frame,
             viewport_render::viewport_scene_info,
             viewport_render::viewport_pick,
@@ -191,8 +182,6 @@ pub fn run() {
             core::filament::user_filament_set_override,
             core::filament::user_filament_resolved_config,
             core::scene::commands::scene_snapshot,
-            core::scene::commands::scene_mesh_buffers,
-            core::scene::commands::scene_mesh_paint,
             core::scene::commands::scene_select,
             core::scene::commands::scene_deselect,
             core::scene::commands::scene_load_mesh_from_path,

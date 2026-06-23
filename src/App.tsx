@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { ViewportCanvas } from "./viewport/ViewportCanvas";
 import { WgpuViewport } from "./viewport/WgpuViewport";
 import { ViewportChrome } from "./viewport/ViewportChrome";
 import { ViewportToasts } from "./viewport/ViewportToasts";
@@ -9,7 +8,6 @@ import { setupTowerMeshCache } from "./viewport/towerMeshCache";
 import { ErrorConsole } from "./logging/ErrorConsole";
 import { shouldIgnoreHotkey } from "./ui/hotkeyInhibit";
 import { setupLogSinks } from "./logging/logStore";
-import type { GizmoMode } from "./viewport/types";
 import { SlicePanel } from "./slice/SlicePanel";
 import { SliceProgressWindow } from "./slice/SliceProgressWindow";
 import { useSliceJob } from "./slice/useSliceJob";
@@ -84,11 +82,7 @@ function App() {
   // pre-select the destination printer before the view mounts. `null` falls
   // back to the first printer.
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
-  // Gizmo transform mode lives here (not in ViewportCanvas) so it
-  // survives the unmount/remount ViewportCanvas undergoes on
-  // prepare↔preview↔devices switches.
-  const [gizmoMode, setGizmoMode] = useState<GizmoMode>("Translate");
-  // wgpu viewport's move-gizmo toggle (its gizmo is separate from the Three one).
+  // The wgpu viewport's gizmo mode.
   const [wgpuGizmo, setWgpuGizmo] = useState<"none" | "move" | "rotate" | "scale">("none");
   // wgpu viewport's armed placing tool (lay-flat / align). Mutually exclusive
   // with the gizmo: arming a tool clears the gizmo and vice versa.
@@ -609,69 +603,58 @@ function App() {
           <div className="layout-prepare">
             {objectsPanel}
             <div className="canvas-stage canvas-stage-prepare">
-              {/* Strategy-A wgpu viewport (Linux, N3O_WGPU=1): an opaque canvas
-                  fed by Rust-rendered frames, in place of the Three.js renderer.
-                  Mode toggle kept reachable. (Interim — replaces Three.js once
-                  at parity.) */}
-              {(window as typeof window & { __N3O_WGPU?: boolean }).__N3O_WGPU ? (
-                <>
-                  <WgpuViewport
-                    objects={activePlate?.objects ?? []}
-                    selectedIds={activePlate?.selection ?? []}
-                    activePlateId={activePlateId}
-                    gizmoMode={wgpuGizmo}
-                    tool={wgpuTool}
-                    onToolDone={() => setWgpuTool("none")}
-                    onClonePick={(id) => {
-                      setWgpuTool("none");
-                      setWgpuClone({ ids: [id], expandGroups: true });
-                    }}
-                  />
-                  <ViewportChrome
-                    leading={modeToggle}
-                    objects={activePlate?.objects ?? []}
-                    selectedIds={activePlate?.selection ?? []}
-                    gizmoMode={wgpuGizmo}
-                    onGizmoMode={(m) => {
-                      setWgpuTool("none");
-                      setWgpuGizmo((cur) => (cur === m ? "none" : m));
-                    }}
-                    tool={wgpuTool}
-                    onTool={(t) => {
-                      setWgpuGizmo("none");
-                      setWgpuTool((cur) => (cur === t ? "none" : t));
-                    }}
-                    onClone={() => {
-                      // With a selection, open the dialog on it; otherwise arm
-                      // pick-to-clone (the next clicked object's group).
-                      const sel = activePlate?.selection ?? [];
-                      if (sel.length > 0) {
-                        setWgpuClone({ ids: sel, expandGroups: false });
-                      } else {
-                        setWgpuGizmo("none");
-                        setWgpuTool((cur) => (cur === "clone" ? "none" : "clone"));
-                      }
-                    }}
-                  />
-                  {wgpuClone && (
-                    <CloneDialog
-                      count={wgpuClone.ids.length}
-                      onConfirm={(copies) => {
-                        const dlg = wgpuClone;
-                        setWgpuClone(null);
-                        void cloneObjects(dlg.ids, copies, dlg.expandGroups).catch((e) =>
-                          console.error("clone failed", e),
-                        );
-                      }}
-                      onCancel={() => setWgpuClone(null)}
-                    />
-                  )}
-                </>
-              ) : (
-                <ViewportCanvas
-                  leading={modeToggle}
-                  gizmoMode={gizmoMode}
-                  onGizmoMode={setGizmoMode}
+              {/* Strategy-A wgpu viewport: an opaque canvas fed by Rust-rendered
+                  frames. The 3D scene state is authoritative in Rust; this is a
+                  read-only consumer. */}
+              <WgpuViewport
+                objects={activePlate?.objects ?? []}
+                selectedIds={activePlate?.selection ?? []}
+                activePlateId={activePlateId}
+                gizmoMode={wgpuGizmo}
+                tool={wgpuTool}
+                onToolDone={() => setWgpuTool("none")}
+                onClonePick={(id) => {
+                  setWgpuTool("none");
+                  setWgpuClone({ ids: [id], expandGroups: true });
+                }}
+              />
+              <ViewportChrome
+                leading={modeToggle}
+                objects={activePlate?.objects ?? []}
+                selectedIds={activePlate?.selection ?? []}
+                gizmoMode={wgpuGizmo}
+                onGizmoMode={(m) => {
+                  setWgpuTool("none");
+                  setWgpuGizmo((cur) => (cur === m ? "none" : m));
+                }}
+                tool={wgpuTool}
+                onTool={(t) => {
+                  setWgpuGizmo("none");
+                  setWgpuTool((cur) => (cur === t ? "none" : t));
+                }}
+                onClone={() => {
+                  // With a selection, open the dialog on it; otherwise arm
+                  // pick-to-clone (the next clicked object's group).
+                  const sel = activePlate?.selection ?? [];
+                  if (sel.length > 0) {
+                    setWgpuClone({ ids: sel, expandGroups: false });
+                  } else {
+                    setWgpuGizmo("none");
+                    setWgpuTool((cur) => (cur === "clone" ? "none" : "clone"));
+                  }
+                }}
+              />
+              {wgpuClone && (
+                <CloneDialog
+                  count={wgpuClone.ids.length}
+                  onConfirm={(copies) => {
+                    const dlg = wgpuClone;
+                    setWgpuClone(null);
+                    void cloneObjects(dlg.ids, copies, dlg.expandGroups).catch((e) =>
+                      console.error("clone failed", e),
+                    );
+                  }}
+                  onCancel={() => setWgpuClone(null)}
                 />
               )}
               {canvasOverlays}

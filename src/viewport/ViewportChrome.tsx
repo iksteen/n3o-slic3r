@@ -4,10 +4,9 @@ import { ViewportLegend } from "./ViewportLegend";
 import type { SceneObject } from "./types";
 
 /**
- * Chrome for the wgpu viewport: the mode toggle, plate-level actions (arrange,
- * auto-orient), and the axis/input legend. The gizmo-mode, lay-flat / align /
- * face-align and clone controls stay in the Three.js `ViewportCanvas` for now —
- * they depend on the wgpu gizmo + face-picking, which aren't built yet.
+ * Chrome for the wgpu viewport: the gizmo-mode toggle, placing tools (lay-flat,
+ * align X/Y, match-face), clone, plate-level actions (arrange, auto-orient), and
+ * the axis/input legend.
  */
 type GizmoMode = "none" | "move" | "rotate" | "scale";
 type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch" | "clone";

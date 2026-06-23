@@ -1976,8 +1976,3 @@ pub fn viewport_pick_face(
         }
     })
 }
-
-/// Whether the Strategy-A wgpu viewport is enabled (`N3O_WGPU=1`).
-pub fn enabled() -> bool {
-    std::env::var_os("N3O_WGPU").is_some()
-}

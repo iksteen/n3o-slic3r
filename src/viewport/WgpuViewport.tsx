@@ -81,9 +81,9 @@ const PLANES: { n: Vec3; a: Vec3; b: Vec3 }[] = [
 ];
 
 /**
- * Strategy-A wgpu viewport (Linux, `N3O_WGPU=1`): the 3D scene is rendered in
- * Rust (wgpu, offscreen) and the finished frame is blitted into this opaque
- * `<canvas>`. WebKitGTK can't composite a transparent webview over GPU content
+ * Strategy-A wgpu viewport: the 3D scene is rendered in Rust (wgpu, offscreen)
+ * and the finished frame is blitted into this opaque `<canvas>`. WebKitGTK can't
+ * composite a transparent webview over GPU content
  * (it smears dynamic DOM — see docs/dev/wgpu-renderer.md), so the render comes
  * to the webview as pixels rather than the webview sitting over a GL surface.
  *

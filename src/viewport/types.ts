@@ -66,12 +66,6 @@ export interface SceneObject {
 }
 
 
-// Transform-tool mode is renderer-local UI state (not part of the
-// backend scene model). It lives here only because the viewport's
-// gizmo + toolbar use it. There is no "off" mode — the gizmo simply
-// detaches when nothing is selected.
-export type GizmoMode = "Translate" | "Rotate" | "Scale";
-
 export interface ExclusionZone {
   label: string;
   bounds: BoundingBox;
@@ -183,9 +177,8 @@ export interface SceneSnapshot {
   source_path: string | null;
   user_overrides: Record<string, string>;
   file_metadata: Record<string, string>;
-  /** Scene-wide mesh registry. Headers only; the renderer follows
-   * up per-mesh with `scene_mesh_buffers(id)` for the binary
-   * vertex / normal / index data. */
+  /** Scene-wide mesh registry — headers only (geometry lives Rust-side and is
+   * uploaded straight to the GPU by the wgpu renderer). */
   meshes: MeshHeader[];
   /** All plates in declaration order. */
   plates: PlateSnapshot[];

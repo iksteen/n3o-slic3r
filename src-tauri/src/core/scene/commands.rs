@@ -17,7 +17,6 @@ use crate::core::project::{PlateId, Project};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-use tauri::ipc::Response;
 use tauri::{Emitter, State, Window};
 
 /// Emit each event on the given window. Errors are dropped — a
@@ -39,8 +38,8 @@ pub(crate) fn emit_all(window: &Window, events: &[SceneEvent]) {
 /// local mirror from scratch; subsequent updates arrive as scoped
 /// `SceneEvent`s (each carrying its `plate_id`).
 ///
-/// Mesh buffers are *not* included — only their headers; the
-/// frontend fetches the buffers per-mesh via `scene_mesh_buffers`.
+/// Mesh buffers are *not* included — only their headers. Geometry stays
+/// Rust-side; the wgpu renderer uploads it straight to the GPU.
 #[derive(Debug, Clone, Serialize)]
 pub struct SceneSnapshot {
     /// Stable per-project identifier baked at project creation.
@@ -647,53 +646,6 @@ pub fn scene_object_add_from_primitive(
     drop(s);
     emit_all(&window, &events);
     Ok((mesh_id, obj_id))
-}
-
-/// Return the binary vertex/normal/index buffers for one mesh.
-/// Sequential layout: `[vertices_f32 ...][normals_f32 ...][indices_u32 ...]`
-/// in little-endian. Lengths derive from the matching `MeshHeader`.
-/// Sent as a binary `Response` to skip the JSON-array-of-floats
-/// stringification entirely (47 MB STL → 36 MB binary, vs ~100 MB
-/// JSON).
-#[tauri::command]
-#[tracing::instrument(skip(state))]
-pub fn scene_mesh_buffers(
-    mesh_id: MeshId,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<Response, String> {
-    let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let mesh = s
-        .meshes
-        .get(&mesh_id)
-        .ok_or_else(|| format!("unknown mesh id {mesh_id:?}"))?;
-    Ok(Response::new(mesh.pack_buffers()))
-}
-
-/// Return per-triangle MMU paint state for one mesh — one byte per triangle
-/// (in `indices`-triple order): `0` = unpainted (render with the object's
-/// base material), `N` = filament `N`. The renderer maps each to a colour via
-/// the plate's material→slot binding and paints faces individually.
-///
-/// An EMPTY response means the mesh has no painting (the common case), so the
-/// renderer skips the per-face path. Kept separate from `scene_mesh_buffers`
-/// so unpainted meshes pay nothing and the hot buffer path stays unchanged.
-#[tauri::command]
-#[tracing::instrument(skip(state))]
-pub fn scene_mesh_paint(
-    mesh_id: MeshId,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<Response, String> {
-    let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let mesh = s
-        .meshes
-        .get(&mesh_id)
-        .ok_or_else(|| format!("unknown mesh id {mesh_id:?}"))?;
-    let states = mesh
-        .paint_colors
-        .as_ref()
-        .and_then(|p| crate::core::threemf::decode_dominant_states(p))
-        .unwrap_or_default();
-    Ok(Response::new(states))
 }
 
 /// Replace / add / toggle the selection.

@@ -120,25 +120,6 @@ impl Mesh {
         }
     }
 
-    /// Encode vertex / normal / index buffers into one concatenated
-    /// little-endian byte sequence: `[vertices_f32...][normals_f32...][indices_u32...]`.
-    /// The frontend slices it by lengths from the matching `MeshHeader`.
-    pub fn pack_buffers(&self) -> Vec<u8> {
-        let vert_bytes = self.vertices.len() * std::mem::size_of::<f32>();
-        let norm_bytes = self.normals.len() * std::mem::size_of::<f32>();
-        let idx_bytes = self.indices.len() * std::mem::size_of::<u32>();
-        let mut out = Vec::with_capacity(vert_bytes + norm_bytes + idx_bytes);
-        for f in &self.vertices {
-            out.extend_from_slice(&f.to_le_bytes());
-        }
-        for f in &self.normals {
-            out.extend_from_slice(&f.to_le_bytes());
-        }
-        for i in &self.indices {
-            out.extend_from_slice(&i.to_le_bytes());
-        }
-        out
-    }
 }
 
 /// JSON-wire shape of a `Mesh` — everything except the heavy buffers.
