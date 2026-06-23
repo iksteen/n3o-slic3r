@@ -73,8 +73,10 @@ export function ViewportChrome({
     }
   };
 
-  const btn = (enabled: boolean) =>
-    `px-2 py-1.5 ${enabled ? "hover:bg-neutral-700/60" : "opacity-40 cursor-not-allowed"}`;
+  const btn = (enabled: boolean, active = false) =>
+    `px-2 py-1.5 ${
+      active ? "bg-neutral-700" : enabled ? "hover:bg-neutral-700/60" : "opacity-40 cursor-not-allowed"
+    }`;
 
   return (
     <>
@@ -181,7 +183,7 @@ export function ViewportChrome({
           <button
             type="button"
             disabled={!hasObjects}
-            className={tool === "layflat" ? "px-2 py-1.5 bg-neutral-700" : btn(hasObjects)}
+            className={btn(hasObjects, tool === "layflat")}
             onClick={() => hasObjects && onTool("layflat")}
             title="Lay flat — click a face to lay it on the plate"
             aria-label="Lay flat on face"
@@ -196,7 +198,7 @@ export function ViewportChrome({
           <button
             type="button"
             disabled={!hasObjects}
-            className={tool === "alignY" ? "px-2 py-1.5 bg-neutral-700" : btn(hasObjects)}
+            className={btn(hasObjects, tool === "alignY")}
             onClick={() => runAlign("alignY")}
             title={selectedIds.length ? "Align selection to Y" : "Align — click an object to align to Y"}
             aria-label="Align to Y"
@@ -210,7 +212,7 @@ export function ViewportChrome({
           <button
             type="button"
             disabled={!hasObjects}
-            className={tool === "alignX" ? "px-2 py-1.5 bg-neutral-700" : btn(hasObjects)}
+            className={btn(hasObjects, tool === "alignX")}
             onClick={() => runAlign("alignX")}
             title={selectedIds.length ? "Align selection to X" : "Align — click an object to align to X"}
             aria-label="Align to X"
@@ -224,7 +226,7 @@ export function ViewportChrome({
           <button
             type="button"
             disabled={!hasObjects}
-            className={tool === "facematch" ? "px-2 py-1.5 bg-neutral-700" : btn(hasObjects)}
+            className={btn(hasObjects, tool === "facematch")}
             onClick={() => hasObjects && onTool("facematch")}
             title="Match face — click a reference face, then the face to align to it"
             aria-label="Match a face to a reference face on another object"
@@ -240,7 +242,7 @@ export function ViewportChrome({
           <button
             type="button"
             disabled={!hasObjects}
-            className={tool === "clone" ? "px-2 py-1.5 bg-neutral-700" : btn(hasObjects)}
+            className={btn(hasObjects, tool === "clone")}
             onClick={() => hasObjects && onClone()}
             title={selectedIds.length ? "Clone selection" : "Clone — click an object to clone"}
             aria-label="Clone objects"

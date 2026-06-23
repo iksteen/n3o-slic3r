@@ -264,20 +264,22 @@ export function WgpuViewport({
       return [e.clientX - r.left, e.clientY - r.top];
     };
 
-    // Ray-cast (Rust) → nearest hit object id, or null.
-    const castPick = async (sx: number, sy: number): Promise<number | null> => {
+    // Ray-cast (Rust): build the pick request from the current camera and invoke
+    // `cmd`. `viewport_pick` → object id; `viewport_pick_face` → FacePick.
+    const cast = async <T,>(cmd: string, sx: number, sy: number): Promise<T | null> => {
       const cv = canvasRef.current;
       if (!cv) return null;
       const c = cam.current;
       try {
-        return await invoke<number | null>("viewport_pick", {
+        return await invoke<T>(cmd, {
           req: { width: cv.width, height: cv.height, x: sx, y: sy, az: c.az, el: c.el, dist: c.dist, center: c.center },
         });
       } catch (e) {
-        console.error("viewport_pick failed", e);
+        console.error(`${cmd} failed`, e);
         return null;
       }
     };
+    const castPick = (sx: number, sy: number) => cast<number>("viewport_pick", sx, sy);
     // Modifier-click (shift/ctrl/cmd) extends: Toggle adds the clicked object's
     // whole group (or removes it if already selected); a plain click replaces.
     // An additive click on empty space keeps the selection. Mirrors ViewportCanvas.
@@ -299,19 +301,7 @@ export function WgpuViewport({
 
     // Face-pick (Rust): nearest hit's object id + world face normal + hit point.
     type FacePick = { id: number; normal: Vec3; point: Vec3 };
-    const castPickFace = async (sx: number, sy: number): Promise<FacePick | null> => {
-      const cv = canvasRef.current;
-      if (!cv) return null;
-      const c = cam.current;
-      try {
-        return await invoke<FacePick | null>("viewport_pick_face", {
-          req: { width: cv.width, height: cv.height, x: sx, y: sy, az: c.az, el: c.el, dist: c.dist, center: c.center },
-        });
-      } catch (e) {
-        console.error("viewport_pick_face failed", e);
-        return null;
-      }
-    };
+    const castPickFace = (sx: number, sy: number) => cast<FacePick>("viewport_pick_face", sx, sy);
 
     // Run the armed placing tool for a click at (sx,sy). Returns true when it
     // acted (so the tool disarms); false to stay armed (e.g. clicked empty space).
@@ -397,23 +387,30 @@ export function WgpuViewport({
       return true;
     };
 
+    // Camera eye position + forward (eye→center) unit vector from the orbit
+    // params. The single source for every place that needs the camera basis.
+    const camFrame = (): { eye: Vec3; fwd: Vec3 } => {
+      const c = cam.current;
+      const ce = Math.cos(c.el),
+        se = Math.sin(c.el);
+      const ca = Math.cos(c.az),
+        sa = Math.sin(c.az);
+      return {
+        eye: [c.center[0] + c.dist * ce * ca, c.center[1] + c.dist * ce * sa, c.center[2] + c.dist * se],
+        fwd: [-ce * ca, -ce * sa, -se],
+      };
+    };
+
     // Cursor ray in world space. A Three.js camera posed exactly like the Rust
     // one (eye/center/up/fov/aspect) gives a ray matching what's drawn.
     const makeRay = (sx: number, sy: number): THREE.Ray | null => {
       const cv = canvasRef.current;
       if (!cv) return null;
       const c = cam.current;
-      const ce = Math.cos(c.el),
-        se = Math.sin(c.el);
-      const ca = Math.cos(c.az),
-        sa = Math.sin(c.az);
+      const { eye } = camFrame();
       const cam3 = new THREE.PerspectiveCamera(45, cv.width / cv.height, 0.1, Math.max(1000, c.dist * 10));
       cam3.up.set(0, 0, 1);
-      cam3.position.set(
-        c.center[0] + c.dist * ce * ca,
-        c.center[1] + c.dist * ce * sa,
-        c.center[2] + c.dist * se,
-      );
+      cam3.position.set(eye[0], eye[1], eye[2]);
       cam3.lookAt(c.center[0], c.center[1], c.center[2]);
       cam3.updateMatrixWorld();
       cam3.updateProjectionMatrix();
@@ -567,30 +564,10 @@ export function WgpuViewport({
       return best;
     };
     // Eye→point distance for the current camera (matches view_proj's eye).
-    const eyeDist = (p: Vec3): number => {
-      const c = cam.current;
-      const ce = Math.cos(c.el),
-        se = Math.sin(c.el);
-      const ca = Math.cos(c.az),
-        sa = Math.sin(c.az);
-      const eye: Vec3 = [
-        c.center[0] + c.dist * ce * ca,
-        c.center[1] + c.dist * ce * sa,
-        c.center[2] + c.dist * se,
-      ];
-      return vlen(sub(eye, p));
-    };
+    const eyeDist = (p: Vec3): number => vlen(sub(camFrame().eye, p));
     // Camera right vector — the uniform-scale gesture direction when the handle
     // is grabbed dead-center (no radial direction to use).
-    const camRight = (): Vec3 => {
-      const c = cam.current;
-      const ce = Math.cos(c.el),
-        se = Math.sin(c.el),
-        ca = Math.cos(c.az),
-        sa = Math.sin(c.az);
-      const fwd: Vec3 = [-ce * ca, -ce * sa, -se]; // eye → center
-      return norm(cross(fwd, [0, 0, 1]));
-    };
+    const camRight = (): Vec3 => norm(cross(camFrame().fwd, [0, 0, 1]));
     // Nearest gizmo handle under `ray` for the current mode, or null. Move and
     // Scale are constant on-screen size, so their hit-test length tracks the
     // camera; Rotate is sized to the object.
@@ -734,13 +711,7 @@ export function WgpuViewport({
     // grabbed point tracks the cursor (world-units-per-pixel at the focal plane).
     const pan = (dx: number, dy: number) => {
       const c = cam.current;
-      const ce = Math.cos(c.el),
-        se = Math.sin(c.el);
-      const ca = Math.cos(c.az),
-        sa = Math.sin(c.az);
-      const fx = -ce * ca,
-        fy = -ce * sa,
-        fz = -se;
+      const [fx, fy, fz] = camFrame().fwd;
       const rl = Math.hypot(fy, fx) || 1;
       const rx = fy / rl,
         ry = -fx / rl;
@@ -1053,13 +1024,8 @@ export function WgpuViewport({
         const [minX, minY, minZ] = info.min;
         const [maxX, maxY] = info.max;
         const center: Vec3 = [(minX + maxX) / 2, (minY + maxY) / 2, minZ];
-        const c = cam.current;
-        const ce = Math.cos(c.el),
-          se = Math.sin(c.el),
-          ca = Math.cos(c.az),
-          sa = Math.sin(c.az);
-        const dir: Vec3 = [ce * ca, ce * sa, se]; // center → eye
-        const forward = scale(dir, -1);
+        const forward = camFrame().fwd; // eye → center
+        const dir = scale(forward, -1); // center → eye
         let right = cross([0, 0, 1], dir);
         right = vlen(right) < 1e-6 ? [1, 0, 0] : norm(right);
         const up = norm(cross(dir, right));

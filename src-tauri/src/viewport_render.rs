@@ -16,7 +16,7 @@ use wgpu::util::DeviceExt;
 
 use crate::core::printer::{instance_registry, PrinterInstance, SlotRef};
 use crate::core::project::Project;
-use crate::core::scene::state::MeshId;
+use crate::core::scene::state::{mesh_bb_corners, MeshId};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -262,19 +262,18 @@ struct GpuMesh {
     groups: Vec<MeshGroup>,
 }
 
-/// Build our interleaved vertex buffer for a `Mesh` and upload it. Normals are
-/// **recomputed** (area-weighted smooth vertex normals from the geometry), not
-/// taken from `m.normals`: imported models often carry bad/flat per-vertex
+/// Interleave positions with **recomputed** area-weighted smooth vertex normals
+/// (not the source `normals`): imported models often carry bad/flat per-vertex
 /// normals that shade as faceted "missing shapes" even though the geometry is
 /// fine (it slices smooth). The mesh is welded (shared vertices), so accumulating
 /// face normals per vertex yields the smooth shading the slice shows.
-fn upload_mesh(device: &wgpu::Device, m: &crate::core::scene::state::Mesh) -> GpuMesh {
-    let vcount = m.vertices.len() / 3;
+fn smooth_verts(vertices: &[f32], indices: &[u32]) -> Vec<Vertex> {
+    let vcount = vertices.len() / 3;
     let pos: Vec<Vec3> = (0..vcount)
-        .map(|i| Vec3::new(m.vertices[3 * i], m.vertices[3 * i + 1], m.vertices[3 * i + 2]))
+        .map(|i| Vec3::new(vertices[3 * i], vertices[3 * i + 1], vertices[3 * i + 2]))
         .collect();
     let mut nrm = vec![Vec3::ZERO; vcount];
-    for tri in m.indices.chunks_exact(3) {
+    for tri in indices.chunks_exact(3) {
         let (a, b, c) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
         if a < vcount && b < vcount && c < vcount {
             let face = (pos[b] - pos[a]).cross(pos[c] - pos[a]); // area-weighted
@@ -283,9 +282,15 @@ fn upload_mesh(device: &wgpu::Device, m: &crate::core::scene::state::Mesh) -> Gp
             nrm[c] += face;
         }
     }
-    let verts: Vec<Vertex> = (0..vcount)
+    (0..vcount)
         .map(|i| Vertex { pos: pos[i].to_array(), nrm: nrm[i].normalize_or_zero().to_array() })
-        .collect();
+        .collect()
+}
+
+/// Build our interleaved vertex buffer for a `Mesh` (smooth normals) and upload
+/// it, partitioning triangles into per-paint-state index groups.
+fn upload_mesh(device: &wgpu::Device, m: &crate::core::scene::state::Mesh) -> GpuMesh {
+    let verts = smooth_verts(&m.vertices, &m.indices);
     let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("viewport.mesh.vb"),
         contents: bytemuck::cast_slice(&verts),
@@ -623,19 +628,7 @@ fn selection_gizmo(p: &Project) -> Option<(Vec3, f32)> {
             continue;
         };
         let model = obj.transform.to_mat4();
-        let bb = m.bounding_box;
-        for &sx in &[false, true] {
-            for &sy in &[false, true] {
-                for &sz in &[false, true] {
-                    let c = Vec3::new(
-                        (if sx { bb.max[0] } else { bb.min[0] }) as f32,
-                        (if sy { bb.max[1] } else { bb.min[1] }) as f32,
-                        (if sz { bb.max[2] } else { bb.min[2] }) as f32,
-                    );
-                    corners.push(model.transform_point3(c));
-                }
-            }
-        }
+        corners.extend(mesh_bb_corners(&m.bounding_box).map(|c| model.transform_point3(c)));
     }
     if corners.is_empty() {
         return None;
@@ -669,21 +662,11 @@ fn selection_world_aabb(p: &Project, drag_ids: &[u64], pre: Mat4) -> Option<(Vec
         if drag_ids.contains(&id.0) {
             model = pre * model;
         }
-        let bb = m.bounding_box;
-        for &sx in &[false, true] {
-            for &sy in &[false, true] {
-                for &sz in &[false, true] {
-                    let c = Vec3::new(
-                        (if sx { bb.max[0] } else { bb.min[0] }) as f32,
-                        (if sy { bb.max[1] } else { bb.min[1] }) as f32,
-                        (if sz { bb.max[2] } else { bb.min[2] }) as f32,
-                    );
-                    let w = model.transform_point3(c);
-                    mn = mn.min(w);
-                    mx = mx.max(w);
-                    any = true;
-                }
-            }
+        for c in mesh_bb_corners(&m.bounding_box) {
+            let w = model.transform_point3(c);
+            mn = mn.min(w);
+            mx = mx.max(w);
+            any = true;
         }
     }
     any.then_some((mn, mx))
@@ -971,23 +954,7 @@ impl ViewportRenderer {
     fn set_tower(&mut self, t: Option<TowerArg>) {
         self.tower = t.map(|t| {
             let mesh = t.mesh.map(|m| {
-                let vcount = m.vertices.len() / 3;
-                let pos: Vec<Vec3> = (0..vcount)
-                    .map(|i| Vec3::new(m.vertices[3 * i], m.vertices[3 * i + 1], m.vertices[3 * i + 2]))
-                    .collect();
-                let mut nrm = vec![Vec3::ZERO; vcount];
-                for tri in m.indices.chunks_exact(3) {
-                    let (a, b, c) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
-                    if a < vcount && b < vcount && c < vcount {
-                        let face = (pos[b] - pos[a]).cross(pos[c] - pos[a]);
-                        nrm[a] += face;
-                        nrm[b] += face;
-                        nrm[c] += face;
-                    }
-                }
-                let verts: Vec<Vertex> = (0..vcount)
-                    .map(|i| Vertex { pos: pos[i].to_array(), nrm: nrm[i].normalize_or_zero().to_array() })
-                    .collect();
+                let verts = smooth_verts(&m.vertices, &m.indices);
                 TowerGpu {
                     vb: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("viewport.tower.mesh.vb"),
@@ -1425,20 +1392,7 @@ impl ViewportRenderer {
             },
         );
         self.queue.submit(Some(enc.finish()));
-
-        let slice = self.readback.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
-        self.device.poll(wgpu::Maintain::Wait);
-        let mapped = slice.get_mapped_range();
-        let row = (w * 4) as usize;
-        let mut out = vec![0u8; row * h as usize];
-        for y in 0..h as usize {
-            let src = y * self.padded_bpr as usize;
-            out[y * row..(y + 1) * row].copy_from_slice(&mapped[src..src + row]);
-        }
-        drop(mapped);
-        self.readback.unmap();
-        out
+        read_rgba(&self.device, &self.readback, self.padded_bpr, w, h)
     }
 
     /// Render a 3/4 iso print thumbnail of the active plate's models only —
@@ -1469,20 +1423,10 @@ impl ViewportRenderer {
                 };
                 let model = obj.transform.to_mat4();
                 if let Some(m) = p.meshes.get(&obj.mesh) {
-                    let bb = m.bounding_box;
-                    for &sx in &[false, true] {
-                        for &sy in &[false, true] {
-                            for &sz in &[false, true] {
-                                let c = Vec3::new(
-                                    (if sx { bb.max[0] } else { bb.min[0] }) as f32,
-                                    (if sy { bb.max[1] } else { bb.min[1] }) as f32,
-                                    (if sz { bb.max[2] } else { bb.min[2] }) as f32,
-                                );
-                                let w = model.transform_point3(c);
-                                mn = mn.min(w);
-                                mx = mx.max(w);
-                            }
-                        }
+                    for c in mesh_bb_corners(&m.bounding_box) {
+                        let w = model.transform_point3(c);
+                        mn = mn.min(w);
+                        mx = mx.max(w);
                     }
                 }
                 let n_groups = gm.groups.len();
@@ -1574,20 +1518,26 @@ impl ViewportRenderer {
             wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
         );
         self.queue.submit(Some(enc.finish()));
-        let slice = readback.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
-        self.device.poll(wgpu::Maintain::Wait);
-        let mapped = slice.get_mapped_range();
-        let row = (size * 4) as usize;
-        let mut out = vec![0u8; row * size as usize];
-        for y in 0..size as usize {
-            let src = y * padded_bpr as usize;
-            out[y * row..(y + 1) * row].copy_from_slice(&mapped[src..src + row]);
-        }
-        drop(mapped);
-        readback.unmap();
-        out
+        read_rgba(&self.device, &readback, padded_bpr, size, size)
     }
+}
+
+/// Map the readback buffer, drop the 256-byte row padding, and return tight
+/// RGBA8 (top row first).
+fn read_rgba(device: &wgpu::Device, readback: &wgpu::Buffer, padded_bpr: u32, w: u32, h: u32) -> Vec<u8> {
+    let slice = readback.slice(..);
+    slice.map_async(wgpu::MapMode::Read, |_| {});
+    device.poll(wgpu::Maintain::Wait);
+    let mapped = slice.get_mapped_range();
+    let row = (w * 4) as usize;
+    let mut out = vec![0u8; row * h as usize];
+    for y in 0..h as usize {
+        let src = y * padded_bpr as usize;
+        out[y * row..(y + 1) * row].copy_from_slice(&mapped[src..src + row]);
+    }
+    drop(mapped);
+    readback.unmap();
+    out
 }
 
 fn make_bind(
@@ -1810,21 +1760,11 @@ pub fn viewport_selection_extent(
             continue;
         };
         let model = obj.transform.to_mat4();
-        let bb = m.bounding_box;
-        for &sx in &[false, true] {
-            for &sy in &[false, true] {
-                for &sz in &[false, true] {
-                    let c = Vec3::new(
-                        (if sx { bb.max[0] } else { bb.min[0] }) as f32,
-                        (if sy { bb.max[1] } else { bb.min[1] }) as f32,
-                        (if sz { bb.max[2] } else { bb.min[2] }) as f32,
-                    );
-                    let w = inv * model.transform_point3(c); // into the basis frame
-                    mn = mn.min(w);
-                    mx = mx.max(w);
-                    any = true;
-                }
-            }
+        for c in mesh_bb_corners(&m.bounding_box) {
+            let w = inv * model.transform_point3(c); // into the basis frame
+            mn = mn.min(w);
+            mx = mx.max(w);
+            any = true;
         }
     }
     if any { (mx - mn).to_array() } else { [0.0; 3] }
@@ -1884,38 +1824,7 @@ pub fn viewport_pick(
     project: tauri::State<'_, Arc<Mutex<Project>>>,
     req: PickRequest,
 ) -> Option<u64> {
-    let p = project.lock().unwrap();
-    let plate = p.active_plate();
-    let (w, h) = (req.width.max(1) as f32, req.height.max(1) as f32);
-    let vp = view_proj(w, h, req.az, req.el, req.dist, Vec3::from(req.center));
-    let inv = vp.inverse();
-    let ndc = Vec3::new(2.0 * req.x / w - 1.0, 1.0 - 2.0 * req.y / h, 0.0);
-    let ro = inv.project_point3(ndc);
-    let far = inv.project_point3(Vec3::new(ndc.x, ndc.y, 1.0));
-    let rd = (far - ro).normalize();
-
-    let mut best: Option<(f32, u64)> = None;
-    for (id, obj) in plate.scene.objects.iter() {
-        if !obj.visible {
-            continue;
-        }
-        let Some(m) = p.meshes.get(&obj.mesh) else {
-            continue;
-        };
-        let model = obj.transform.to_mat4();
-        let vert = |vi: u32| {
-            let i = vi as usize * 3;
-            model.transform_point3(Vec3::new(m.vertices[i], m.vertices[i + 1], m.vertices[i + 2]))
-        };
-        for t3 in m.indices.chunks_exact(3) {
-            if let Some(t) = ray_tri(ro, rd, vert(t3[0]), vert(t3[1]), vert(t3[2])) {
-                if best.map_or(true, |(bt, _)| t < bt) {
-                    best = Some((t, id.0));
-                }
-            }
-        }
-    }
-    best.map(|(_, id)| id)
+    viewport_pick_face(project, req).map(|f| f.id)
 }
 
 /// Nearest face hit: the object id, the hit triangle's world-space outward
