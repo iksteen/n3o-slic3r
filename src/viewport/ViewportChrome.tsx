@@ -249,7 +249,7 @@ export function ViewportChrome({
           </button>
         </div>
       </div>
-      <ViewportLegend hints={toolHint(tool)} />
+      <ViewportLegend hints={toolHint(tool)} prompt={tool !== "none"} />
     </>
   );
 }
