@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
 
 use crate::core::printer::{instance_registry, PrinterInstance, SlotRef};
@@ -75,6 +75,9 @@ const COLOR_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// 4x MSAA — cheap edge anti-aliasing; the multisampled target resolves into the
 /// single-sample `color` that's read back.
 const SAMPLES: u32 = 4;
+/// Scale gizmo handle length as a fraction of the eye→gizmo distance, so it holds
+/// a constant on-screen size (a TransformControls port). Must match the frontend.
+const SCALE_SCREEN_K: f32 = 0.13;
 /// Per-object uniform: `mat4 mvp` (64) + `vec4 tint` (16).
 const UNIFORM_BYTES: u64 = 80;
 // Bed extents are f64 (BoundingBox); converted to f32 for the GPU.
@@ -154,6 +157,7 @@ pub enum GizmoMode {
     None,
     Move,
     Rotate,
+    Scale,
 }
 
 /// Camera + target the frontend passes per frame (camera is frontend-owned).
@@ -176,6 +180,13 @@ pub struct FrameRequest {
     /// Which gizmo to show at the selection center.
     #[serde(default)]
     pub gizmo: GizmoMode,
+    /// Orientation for the scale gizmo's axes (quaternion xyzw): a single
+    /// selection scales along its own (rotated) axes; multi/identity is world.
+    #[serde(default = "ident_quat")]
+    pub gizmo_basis: [f32; 4],
+    /// A handle drag is in progress — draws the active axis guide line.
+    #[serde(default)]
+    pub gizmo_dragging: bool,
     /// Hovered gizmo handle to highlight: for Move 0/1/2 = X/Y/Z axis, 3/4/5 =
     /// XY/YZ/XZ plane; for Rotate 0/1/2 = X/Y/Z ring; -1 = none.
     #[serde(default = "neg_one")]
@@ -188,6 +199,10 @@ fn neg_one() -> i32 {
 
 fn identity16() -> [f32; 16] {
     Mat4::IDENTITY.to_cols_array()
+}
+
+fn ident_quat() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0]
 }
 
 struct GpuMesh {
@@ -397,6 +412,63 @@ fn gizmo_rotate_geometry(center: Vec3, l: f32, hover: i32) -> Vec<GizmoVertex> {
     for (i, (axis, color)) in rings.into_iter().enumerate() {
         push_torus(&mut v, center, axis, l, l * 0.012, hl(color, hover == i as i32));
     }
+    v
+}
+
+/// Axis-aligned-in-`basis` cube centered at `c`, half-extent `h`, per-face normals.
+fn push_cube(v: &mut Vec<GizmoVertex>, c: Vec3, h: f32, basis: [Vec3; 3], col: [f32; 3]) {
+    let [ex, ey, ez] = basis;
+    for (n, u, w) in [(ex, ey, ez), (-ex, ey, ez), (ey, ex, ez), (-ey, ex, ez), (ez, ex, ey), (-ez, ex, ey)] {
+        let f = c + n * h;
+        push_quad(v, f + u * h + w * h, f - u * h + w * h, f - u * h - w * h, f + u * h - w * h, n, col);
+    }
+}
+
+/// Scale gizmo at `center`, axis length `l`, oriented by `basis` (the object's
+/// axes for a single selection, world for multi): a rod tipped with a cube per
+/// axis (X/Y/Z), a filled square per plane (XY/YZ/XZ), and a center cube for
+/// uniform scale. `hover` brightens one handle (0/1/2 axis, 3/4/5 plane, 6 center).
+/// `guide` (an axis index) draws a long thin guide line through that axis.
+fn gizmo_scale_geometry(
+    center: Vec3,
+    l: f32,
+    basis: [Vec3; 3],
+    hover: i32,
+    guide: Option<usize>,
+) -> Vec<GizmoVertex> {
+    let mut v = Vec::new();
+    let [ex, ey, ez] = basis;
+    let rod_len = l; // rod runs all the way into the cube at the tip
+    let rod_hw = l * 0.015;
+    let cube_h = l * 0.06;
+    let axes = [(ex, [0.90, 0.27, 0.27]), (ey, [0.30, 0.80, 0.33]), (ez, [0.36, 0.48, 0.96])];
+    // Guide line: a long thin rod through the active axis, drawn first (behind).
+    if let Some(gi) = guide {
+        let dir = basis[gi];
+        let big = l * 40.0;
+        push_rod(&mut v, center - dir * big, dir, big * 2.0, l * 0.004, axes[gi].1);
+    }
+    for (i, (dir, color)) in axes.into_iter().enumerate() {
+        let color = hl(color, hover == i as i32);
+        push_rod(&mut v, center, dir, rod_len, rod_hw, color);
+        push_cube(&mut v, center + dir * l, cube_h, basis, color);
+    }
+    let planes = [
+        (ex, ey, ez, [0.92, 0.82, 0.28]),
+        (ey, ez, ex, [0.28, 0.82, 0.86]),
+        (ex, ez, ey, [0.86, 0.36, 0.86]),
+    ];
+    let (o, s) = (l * 0.28, l * 0.24);
+    for (i, (a, b, n, color)) in planes.into_iter().enumerate() {
+        let color = hl(color, hover == 3 + i as i32);
+        let c0 = center + a * o + b * o;
+        let c1 = center + a * (o + s) + b * o;
+        let c2 = center + a * (o + s) + b * (o + s);
+        let c3 = center + a * o + b * (o + s);
+        push_quad(&mut v, c0, c1, c2, c3, n, color);
+    }
+    // Uniform 3-axis scale handle: a cube at the center.
+    push_cube(&mut v, center, l * 0.12, basis, hl([0.85, 0.85, 0.88], hover == 6));
     v
 }
 
@@ -814,11 +886,32 @@ impl ViewportRenderer {
         let bracket_slot = 1 + draws.len();
         let total_slots = bracket_slot + bracket_vb.is_some() as usize;
 
+        // Scale gizmo axes follow the object's orientation (world for multi).
+        let basis_q = Quat::from_xyzw(
+            req.gizmo_basis[0],
+            req.gizmo_basis[1],
+            req.gizmo_basis[2],
+            req.gizmo_basis[3],
+        )
+        .normalize();
+        let basis = [basis_q * Vec3::X, basis_q * Vec3::Y, basis_q * Vec3::Z];
+        // Eye position (matches view_proj), for the scale gizmo's screen-constant size.
+        let (ce, se) = (req.el.cos(), req.el.sin());
+        let (ca, sa) = (req.az.cos(), req.az.sin());
+        let eye = Vec3::from(req.center) + req.dist * Vec3::new(ce * ca, ce * sa, se);
+        // Active axis guide line, shown while dragging an axis handle.
+        let guide = (req.gizmo_dragging && (0..=2).contains(&req.gizmo_hover))
+            .then_some(req.gizmo_hover as usize);
         // Gizmo at the selection center (draws with slot 0's vp; own colors).
         let gizmo_verts = gizmo
             .map(|(c, l)| match req.gizmo {
                 GizmoMode::Move => gizmo_geometry(c, l, req.gizmo_hover),
                 GizmoMode::Rotate => gizmo_rotate_geometry(c, l, req.gizmo_hover),
+                GizmoMode::Scale => {
+                    // Constant on-screen size: length scales with eye distance.
+                    let ls = SCALE_SCREEN_K * (eye - c).length();
+                    gizmo_scale_geometry(c, ls, basis, req.gizmo_hover, guide)
+                }
                 GizmoMode::None => Vec::new(),
             })
             .filter(|v| !v.is_empty());

@@ -8,7 +8,7 @@ import { ViewportLegend } from "./ViewportLegend";
  * face-align and clone controls stay in the Three.js `ViewportCanvas` for now —
  * they depend on the wgpu gizmo + face-picking, which aren't built yet.
  */
-type GizmoMode = "none" | "move" | "rotate";
+type GizmoMode = "none" | "move" | "rotate" | "scale";
 
 export function ViewportChrome({
   leading,
@@ -86,6 +86,25 @@ export function ViewportChrome({
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className={`px-2 py-1.5 ${gizmoMode === "scale" ? "bg-neutral-700" : "hover:bg-neutral-700/60"}`}
+            onClick={() => onGizmoMode("scale")}
+            title="Scale — drag the axis/plane handles"
+            aria-label="Scale gizmo"
+            aria-pressed={gizmoMode === "scale"}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path
+                d="M2 12 12 2M12 2H8.5M12 2v3.5"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <rect x="1.5" y="9.5" width="3" height="3" rx="0.4" fill="currentColor" />
             </svg>
           </button>
         </div>

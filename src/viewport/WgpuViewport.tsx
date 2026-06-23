@@ -5,15 +5,19 @@ import { onEvents } from "../state/eventRouter";
 import type { SceneObject } from "./types";
 
 type Vec3 = [number, number, number];
-type GizmoMode = "none" | "move" | "rotate";
+type GizmoMode = "none" | "move" | "rotate" | "scale";
 type GizmoInfo = { center: Vec3; length: number };
 const IDENTITY16 = new THREE.Matrix4().toArray();
+const IDENT_QUAT: [number, number, number, number] = [0, 0, 0, 1];
+// Scale gizmo handle length as a fraction of the eye→gizmo distance (constant
+// on-screen size). Must match SCALE_SCREEN_K in viewport_render.rs.
+const SCALE_SCREEN_K = 0.13;
 
 type DragState = {
   x: number;
   y: number;
   button: number;
-  mode: "pending" | "orbit" | "move" | "rotate" | "pan" | "inert";
+  mode: "pending" | "orbit" | "move" | "rotate" | "scale" | "pan" | "inert";
   moveTargets?: { id: number; start: number[] }[];
   // Constrained move: intersect the cursor ray with this fixed plane; with
   // `axisDir` set, keep only the component along it (single-axis handle),
@@ -26,12 +30,24 @@ type DragState = {
   // `pivot`, in the ring's plane (normal = rotAxis).
   rotAxis?: Vec3;
   pivot?: Vec3;
+  // Scale: cursor displacement along the handle's gesture direction (over the
+  // handle length) drives a factor on the selected local axes (`scaleMask`) or
+  // all of them (`uniform`). `basisAxes` are the gizmo's world axes at drag start.
+  scaleMask?: [boolean, boolean, boolean];
+  uniform?: boolean;
+  basisQuat?: [number, number, number, number];
+  basisAxes?: [Vec3, Vec3, Vec3];
 };
 
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const addv = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const scale = (a: Vec3, k: number): Vec3 => [a[0] * k, a[1] * k, a[2] * k];
 const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a: Vec3, b: Vec3): Vec3 => [
+  a[1] * b[2] - a[2] * b[1],
+  a[2] * b[0] - a[0] * b[2],
+  a[0] * b[1] - a[1] * b[0],
+];
 const vlen = (a: Vec3) => Math.hypot(a[0], a[1], a[2]);
 const norm = (a: Vec3): Vec3 => {
   const l = vlen(a) || 1;
@@ -96,6 +112,16 @@ export function WgpuViewport({
   // mouse-moves can hit-test handles without an IPC round-trip per frame.
   const gizmoInfoRef = useRef<GizmoInfo | null>(null);
   const hoverHandle = useRef(-1);
+  // Scale gizmo orientation: a single selection scales along its own axes, multi
+  // along world axes (identity). Cached with the placement, refreshed on change.
+  const gizmoBasis = useRef<{ quat: [number, number, number, number]; axes: [Vec3, Vec3, Vec3] }>({
+    quat: IDENT_QUAT,
+    axes: [
+      [1, 0, 0],
+      [0, 1, 0],
+      [0, 0, 1],
+    ],
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -129,6 +155,8 @@ export function WgpuViewport({
             drag_ids: ov?.ids ?? [],
             drag_pre: ov?.pre ?? IDENTITY16,
             gizmo: gizmoModeRef.current,
+            gizmo_basis: gizmoBasis.current.quat,
+            gizmo_dragging: drag.current?.mode === "scale",
             gizmo_hover: hoverHandle.current,
           },
         });
@@ -239,15 +267,28 @@ export function WgpuViewport({
       return { dist: vlen(sub(pc, qc)), t };
     };
 
+    // Distance from `ray` to point `p`, plus the ray parameter at the closest
+    // point (for picking the center uniform-scale handle).
+    const rayPointDist = (ray: THREE.Ray, p: Vec3): { dist: number; t: number } => {
+      const O = rayOrigin(ray);
+      const t = Math.max(0, dot(sub(p, O), rayDir(ray)));
+      const q = addv(O, scale(rayDir(ray), t));
+      return { dist: vlen(sub(p, q)), t };
+    };
+
     // idx mirrors the gizmo geometry's handle order: Move 0/1/2 = X/Y/Z axis,
-    // 3/4/5 = XY/YZ/XZ plane; Rotate 0/1/2 = X/Y/Z ring. A handle carries either
-    // a translate constraint (planeN/planeP/axisDir) or a rotate one (rotAxis).
+    // 3/4/5 = XY/YZ/XZ plane; Rotate 0/1/2 = X/Y/Z ring; Scale 0/1/2 = X/Y/Z
+    // axis, 3/4/5 = plane, 6 = center uniform. A handle carries a translate
+    // constraint (planeN/planeP/axisDir), a rotate one (rotAxis), or a scale one
+    // (planeN/planeP + scaleMask/uniform).
     type Handle = {
       idx: number;
       planeN?: Vec3;
       planeP?: Vec3;
       axisDir?: Vec3 | null;
       rotAxis?: Vec3;
+      scaleMask?: [boolean, boolean, boolean];
+      uniform?: boolean;
     };
     // Hit-test the move handles (axis rod+ball / plane quad) for `ray`.
     const pickMoveHandle = (ray: THREE.Ray, c: Vec3, l: number): { t: number; h: Handle } | null => {
@@ -291,10 +332,116 @@ export function WgpuViewport({
       });
       return best;
     };
-    // Nearest gizmo handle under `ray` for the current mode, or null.
+    // Hit-test the scale handles (axis rod+cube / plane quad / center cube) for
+    // `ray`, using the gizmo's oriented basis axes.
+    const pickScaleHandle = (ray: THREE.Ray, c: Vec3, l: number): { t: number; h: Handle } | null => {
+      const axes = gizmoBasis.current.axes;
+      // Center uniform 3-axis handle first: the axis rods all pass through the
+      // center, so without priority here one of them always wins the tie.
+      const ctr = rayPointDist(ray, c);
+      if (ctr.dist < l * 0.16) {
+        return { t: ctr.t, h: { idx: 6, planeN: norm(rayDir(ray)), planeP: c, uniform: true } };
+      }
+      let best: { t: number; h: Handle } | null = null;
+      const pickR = l * 0.14;
+      for (let i = 0; i < axes.length; i++) {
+        const dir = axes[i];
+        const { dist, t } = raySegDist(ray, c, addv(c, scale(dir, l)));
+        if (dist < pickR && (!best || t < best.t)) {
+          const view = norm(rayDir(ray));
+          let n = sub(view, scale(dir, dot(view, dir)));
+          if (vlen(n) < 1e-4) n = axes[(i + 1) % 3];
+          const mask: [boolean, boolean, boolean] = [i === 0, i === 1, i === 2];
+          best = { t, h: { idx: i, planeN: norm(n), planeP: c, scaleMask: mask } };
+        }
+      }
+      // Planar handles: pairs (XY, YZ, XZ) of the basis axes; normal = third.
+      const planeDefs: [number, number, number][] = [
+        [0, 1, 2],
+        [1, 2, 0],
+        [0, 2, 1],
+      ];
+      const o = l * 0.28,
+        s = l * 0.24;
+      for (let i = 0; i < planeDefs.length; i++) {
+        const [ai, bi, ni] = planeDefs[i];
+        const hit = rayPlanePoint(ray, axes[ni], c);
+        if (!hit) continue;
+        const da = dot(sub(hit, c), axes[ai]),
+          db = dot(sub(hit, c), axes[bi]);
+        if (da >= o && da <= o + s && db >= o && db <= o + s) {
+          const t = dot(sub(hit, rayOrigin(ray)), rayDir(ray));
+          const mask: [boolean, boolean, boolean] = [false, false, false];
+          mask[ai] = true;
+          mask[bi] = true;
+          if (!best || t < best.t) best = { t, h: { idx: 3 + i, planeN: axes[ni], planeP: c, scaleMask: mask } };
+        }
+      }
+      return best;
+    };
+    // Eye→point distance for the current camera (matches view_proj's eye).
+    const eyeDist = (p: Vec3): number => {
+      const c = cam.current;
+      const ce = Math.cos(c.el),
+        se = Math.sin(c.el);
+      const ca = Math.cos(c.az),
+        sa = Math.sin(c.az);
+      const eye: Vec3 = [
+        c.center[0] + c.dist * ce * ca,
+        c.center[1] + c.dist * ce * sa,
+        c.center[2] + c.dist * se,
+      ];
+      return vlen(sub(eye, p));
+    };
+    // Camera right vector — the uniform-scale gesture direction when the handle
+    // is grabbed dead-center (no radial direction to use).
+    const camRight = (): Vec3 => {
+      const c = cam.current;
+      const ce = Math.cos(c.el),
+        se = Math.sin(c.el),
+        ca = Math.cos(c.az),
+        sa = Math.sin(c.az);
+      const fwd: Vec3 = [-ce * ca, -ce * sa, -se]; // eye → center
+      return norm(cross(fwd, [0, 0, 1]));
+    };
+    // Nearest gizmo handle under `ray` for the current mode, or null. The scale
+    // gizmo is constant on-screen size, so its hit-test length tracks the camera.
     const pickHandle = (ray: THREE.Ray, gi: GizmoInfo): Handle | null => {
-      const picker = gizmoModeRef.current === "rotate" ? pickRotateHandle : pickMoveHandle;
-      return picker(ray, gi.center, gi.length)?.h ?? null;
+      if (gizmoModeRef.current === "rotate") return pickRotateHandle(ray, gi.center, gi.length)?.h ?? null;
+      if (gizmoModeRef.current === "scale")
+        return pickScaleHandle(ray, gi.center, SCALE_SCREEN_K * eyeDist(gi.center))?.h ?? null;
+      return pickMoveHandle(ray, gi.center, gi.length)?.h ?? null;
+    };
+
+    // Scale gizmo orientation: a single selection scales along its own (rotated)
+    // axes; multi (or none) is world-aligned. Mirrors how the renderer orients
+    // the scale handles, so hit-test and drawing agree.
+    const computeBasis = () => {
+      const sel = selRef.current;
+      if (sel.length === 1) {
+        const o = objectsRef.current.find((x) => x.id === sel[0]);
+        if (o) {
+          const q = new THREE.Quaternion();
+          new THREE.Matrix4().fromArray(o.transform).decompose(new THREE.Vector3(), q, new THREE.Vector3());
+          const ax = (v: THREE.Vector3): Vec3 => {
+            const r = v.applyQuaternion(q);
+            return [r.x, r.y, r.z];
+          };
+          gizmoBasis.current = {
+            quat: [q.x, q.y, q.z, q.w],
+            axes: [ax(new THREE.Vector3(1, 0, 0)), ax(new THREE.Vector3(0, 1, 0)), ax(new THREE.Vector3(0, 0, 1))],
+          };
+          return;
+        }
+      }
+      gizmoBasis.current = {
+        quat: IDENT_QUAT,
+        axes: [
+          [1, 0, 0],
+          [0, 1, 0],
+          [0, 0, 1],
+        ],
+      };
     };
 
     // Refresh the cached gizmo placement (null when no gizmo / no selection).
@@ -304,6 +451,7 @@ export function WgpuViewport({
         gizmoInfoRef.current = null;
         return;
       }
+      computeBasis();
       try {
         gizmoInfoRef.current = await invoke<GizmoInfo | null>("viewport_gizmo");
       } catch (e) {
@@ -353,6 +501,21 @@ export function WgpuViewport({
         v0[0] * v1[1] - v0[1] * v1[0],
       ];
       return Math.atan2(dot(axis, cr), dot(v0, v1));
+    };
+    // World scale by `ratio` about `pivot` in the `quat` frame (column-major): for
+    // a single selection that scales along the object's own axes (no shear); for
+    // multi `quat` is identity so it's a world-axis scale about the center.
+    const scalePre = (ratio: Vec3, pivot: Vec3, quat: [number, number, number, number]): number[] => {
+      const p = new THREE.Vector3(...pivot);
+      const R = new THREE.Matrix4().makeRotationFromQuaternion(new THREE.Quaternion(...quat));
+      const Rinv = R.clone().transpose();
+      return new THREE.Matrix4()
+        .makeTranslation(p.x, p.y, p.z)
+        .multiply(R)
+        .multiply(new THREE.Matrix4().makeScale(ratio[0], ratio[1], ratio[2]))
+        .multiply(Rinv)
+        .multiply(new THREE.Matrix4().makeTranslation(-p.x, -p.y, -p.z))
+        .toArray();
     };
 
     // Commit object transforms, coalesced (one batch in flight, latest per id).
@@ -433,6 +596,16 @@ export function WgpuViewport({
               press.rotAxis = handle.rotAxis;
               press.pivot = gi!.center;
               press.startHit = rayPlanePoint(ray, handle.rotAxis, gi!.center);
+            } else if (handle.scaleMask || handle.uniform) {
+              press.mode = "scale";
+              press.planeN = handle.planeN;
+              press.planeP = handle.planeP;
+              press.pivot = gi!.center;
+              press.scaleMask = handle.scaleMask;
+              press.uniform = handle.uniform;
+              press.basisQuat = gizmoBasis.current.quat;
+              press.basisAxes = gizmoBasis.current.axes;
+              press.startHit = rayPlanePoint(ray, handle.planeN!, handle.planeP!);
             } else {
               press.mode = "move";
               press.planeN = handle.planeN;
@@ -473,7 +646,7 @@ export function WgpuViewport({
       const d = drag.current;
       drag.current = null;
       if (!d || d.button !== 0) return;
-      if (d.mode === "move" || d.mode === "rotate") {
+      if (d.mode === "move" || d.mode === "rotate" || d.mode === "scale") {
         // Commit the previewed transform once (new = pre * start). Clear the
         // override first; the object_updated event then re-renders at the
         // (identical) committed pose — the on-screen preview never jumps.
@@ -538,6 +711,53 @@ export function WgpuViewport({
         dragOverride.current = {
           ids: d.moveTargets.map((x) => x.id),
           pre: pivotRotation(d.rotAxis, angle, d.pivot),
+        };
+        void render();
+      } else if (
+        d.mode === "scale" &&
+        d.moveTargets &&
+        d.startHit &&
+        d.planeN &&
+        d.planeP &&
+        d.pivot &&
+        d.basisQuat &&
+        d.basisAxes
+      ) {
+        const [sx, sy] = rel(e);
+        const ray = makeRay(sx, sy);
+        if (!ray) return;
+        const hit = rayPlanePoint(ray, d.planeN, d.planeP);
+        if (!hit) return;
+        const mask: [boolean, boolean, boolean] = d.uniform ? [true, true, true] : d.scaleMask!;
+        const [ax, ay, az] = d.basisAxes;
+        let f: number;
+        if (d.uniform) {
+          // The center handle has no directional anchor (grabbed at the pivot),
+          // so it's a zoom: factor doubles/halves per handle-length of drag.
+          const radial = sub(d.startHit, d.pivot);
+          const g = vlen(radial) > 1e-3 ? norm(radial) : camRight();
+          const l = SCALE_SCREEN_K * eyeDist(d.pivot);
+          f = Math.pow(2, dot(sub(hit, d.startHit), g) / l);
+        } else {
+          // 1:1 — the grabbed point tracks the cursor: a point at startProj along
+          // the gesture direction scales to sit where the cursor now projects.
+          // The axis/plane handles are offset from the pivot, so startProj is a
+          // safe (non-zero) reference.
+          const g = norm([
+            (mask[0] ? ax[0] : 0) + (mask[1] ? ay[0] : 0) + (mask[2] ? az[0] : 0),
+            (mask[0] ? ax[1] : 0) + (mask[1] ? ay[1] : 0) + (mask[2] ? az[1] : 0),
+            (mask[0] ? ax[2] : 0) + (mask[1] ? ay[2] : 0) + (mask[2] ? az[2] : 0),
+          ]);
+          const startProj = dot(sub(d.startHit, d.pivot), g);
+          const curProj = dot(sub(hit, d.pivot), g);
+          const ref = Math.abs(startProj) > 1e-3 ? startProj : SCALE_SCREEN_K * eyeDist(d.pivot);
+          f = curProj / ref;
+        }
+        f = Math.max(0.01, f); // never collapse to zero / mirror
+        const ratio: Vec3 = [mask[0] ? f : 1, mask[1] ? f : 1, mask[2] ? f : 1];
+        dragOverride.current = {
+          ids: d.moveTargets.map((x) => x.id),
+          pre: scalePre(ratio, d.pivot, d.basisQuat),
         };
         void render();
       }
