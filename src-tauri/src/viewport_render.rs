@@ -96,6 +96,11 @@ const SAMPLES: u32 = 4;
 /// Move/Scale gizmo handle length as a fraction of the eye→gizmo distance, so it
 /// holds a constant on-screen size (a TransformControls port). Match the frontend.
 const GIZMO_SCREEN_K: f32 = 0.13;
+/// Shared move/scale handle proportions (fractions of the arm length `l`) so the
+/// two gizmos read as one family: identical rods + matched endpoint footprint.
+const GIZMO_ROD_R: f32 = 0.012; // rod radius (also the rotate ring tube)
+const GIZMO_TIP: f32 = 0.12; // endpoint size: move cone base Ø == scale cube width
+const GIZMO_CONE_H: f32 = 0.2; // move arrowhead length, beyond the full-length rod
 /// Per-object uniform: `mat4 mvp` (64) + `vec4 tint` (16).
 const UNIFORM_BYTES: u64 = 80;
 // Bed extents are f64 (BoundingBox); converted to f32 for the GPU.
@@ -408,24 +413,39 @@ fn push_quad(v: &mut Vec<GizmoVertex>, a: Vec3, b: Vec3, c: Vec3, d: Vec3, n: Ve
     }
 }
 
-/// Square rod from `start` along `dir` for `len`, half-width `hw`. Six faces,
-/// per-face normals — a solid bar instead of a 1px line.
-fn push_rod(v: &mut Vec<GizmoVertex>, start: Vec3, dir: Vec3, len: f32, hw: f32, col: [f32; 3]) {
-    // Two axes orthogonal to dir.
+/// Round rod (cylinder) of `radius` from `start` along `dir` for `len`, with end
+/// caps and smooth radial normals — a solid bar instead of a 1px line. `dir` is
+/// assumed unit-length (the gizmo passes axis vectors).
+fn push_cylinder(v: &mut Vec<GizmoVertex>, start: Vec3, dir: Vec3, len: f32, radius: f32, col: [f32; 3]) {
+    const SEG: usize = 16;
     let up = if dir.x.abs() > 0.9 { Vec3::Y } else { Vec3::X };
-    let u = dir.cross(up).normalize();
-    let w = dir.cross(u).normalize();
+    let b1 = dir.cross(up).normalize();
+    let b2 = dir.cross(b1).normalize();
     let end = start + dir * len;
-    for (base, n) in [(start, -dir), (end, dir)] {
-        let p = [base + u * hw + w * hw, base - u * hw + w * hw, base - u * hw - w * hw, base + u * hw - w * hw];
-        push_quad(v, p[0], p[1], p[2], p[3], n, col);
-    }
-    for (n, t) in [(u, w), (-u, w), (w, u), (-w, u)] {
-        let a = start + n * hw + t * hw;
-        let b = start + n * hw - t * hw;
-        let c = end + n * hw - t * hw;
-        let d = end + n * hw + t * hw;
-        push_quad(v, a, b, c, d, n, col);
+    // Per-ring point i: radial offset (× radius) and its outward normal.
+    let ring = |i: usize| -> (Vec3, Vec3) {
+        let a = std::f32::consts::TAU * (i as f32) / (SEG as f32);
+        let radial = b1 * a.cos() + b2 * a.sin();
+        (radial * radius, radial)
+    };
+    let mut push = |p: Vec3, n: Vec3| v.push(GizmoVertex { pos: p.to_array(), nrm: n.to_array(), color: col });
+    for i in 0..SEG {
+        let (o0, n0) = ring(i);
+        let (o1, n1) = ring(i + 1);
+        // Side wall (two tris).
+        push(start + o0, n0);
+        push(start + o1, n1);
+        push(end + o1, n1);
+        push(start + o0, n0);
+        push(end + o1, n1);
+        push(end + o0, n0);
+        // End cap (+dir) and start cap (-dir).
+        push(end, dir);
+        push(end + o0, dir);
+        push(end + o1, dir);
+        push(start, -dir);
+        push(start + o1, -dir);
+        push(start + o0, -dir);
     }
 }
 
@@ -472,15 +492,16 @@ fn hl(c: [f32; 3], on: bool) -> [f32; 3] {
     }
 }
 
-/// Move gizmo at `center` with axis length `l`: one rod+ball handle per axis
-/// (X/Y/Z) + a filled square per plane (XY/YZ/XZ). `hover` brightens one handle
-/// (0/1/2 = X/Y/Z axis, 3/4/5 = XY/YZ/XZ plane, -1 = none).
-fn gizmo_geometry(center: Vec3, l: f32, hover: i32) -> Vec<GizmoVertex> {
+/// Move gizmo at `center`: one rod+arrowhead handle per axis (X/Y/Z) + a filled
+/// square per plane (XY/YZ/XZ). `arm` is the rod length (object-sized, = the
+/// rotate ring radius, so the gizmo scales with the part); `l` is the
+/// screen-constant thickness scale (rod/tip radii hold a fixed on-screen size).
+/// `hover` brightens one handle (0/1/2 = X/Y/Z axis, 3/4/5 = XY/YZ/XZ plane).
+fn gizmo_geometry(center: Vec3, l: f32, arm: f32, hover: i32) -> Vec<GizmoVertex> {
     let mut v = Vec::new();
-    let rod_hw = l * 0.012; // matches the rotate ring tube
-    let cone_h = l * 0.22;
-    let cone_r = l * 0.07;
-    let rod_len = l - cone_h; // rod runs up to the arrowhead base
+    let rod_r = l * GIZMO_ROD_R;
+    let cone_h = l * GIZMO_CONE_H;
+    let cone_r = l * GIZMO_TIP * 0.5; // base radius → base Ø == scale cube width
     let axes = [
         (Vec3::X, [0.90, 0.27, 0.27]),
         (Vec3::Y, [0.30, 0.80, 0.33]),
@@ -488,8 +509,9 @@ fn gizmo_geometry(center: Vec3, l: f32, hover: i32) -> Vec<GizmoVertex> {
     ];
     for (i, (dir, color)) in axes.into_iter().enumerate() {
         let color = hl(color, hover == i as i32);
-        push_rod(&mut v, center, dir, rod_len, rod_hw, color);
-        push_cone(&mut v, center + dir * l, dir, cone_h, cone_r, color);
+        // Object-length rod, screen-constant arrowhead seated on its end.
+        push_cylinder(&mut v, center, dir, arm, rod_r, color);
+        push_cone(&mut v, center + dir * (arm + cone_h), dir, cone_h, cone_r, color);
     }
     // Filled planar handles, offset into each plane; normal is the third axis.
     let planes = [
@@ -564,34 +586,37 @@ fn push_cube(v: &mut Vec<GizmoVertex>, c: Vec3, h: f32, basis: [Vec3; 3], col: [
     }
 }
 
-/// Scale gizmo at `center`, axis length `l`, oriented by `basis` (the object's
-/// axes for a single selection, world for multi): a rod tipped with a cube per
-/// axis (X/Y/Z), a filled square per plane (XY/YZ/XZ), and a center cube for
-/// uniform scale. `hover` brightens one handle (0/1/2 axis, 3/4/5 plane, 6 center).
-/// `guide` (an axis index) draws a long thin guide line through that axis.
+/// Scale gizmo at `center`, oriented by `basis` (the object's axes for a single
+/// selection, world for multi): a rod tipped with a cube per axis (X/Y/Z), a
+/// filled square per plane (XY/YZ/XZ), and a center cube for uniform scale. `arm`
+/// is the rod length (object-sized, = the rotate ring radius); `l` is the
+/// screen-constant thickness scale (rod/cube radii hold a fixed on-screen size).
+/// `hover` brightens one handle (0/1/2 axis, 3/4/5 plane, 6 center). `guide` (an
+/// axis index) draws a long thin guide line through that axis.
 fn gizmo_scale_geometry(
     center: Vec3,
     l: f32,
+    arm: f32,
     basis: [Vec3; 3],
     hover: i32,
     guide: Option<usize>,
 ) -> Vec<GizmoVertex> {
     let mut v = Vec::new();
     let [ex, ey, ez] = basis;
-    let rod_len = l; // rod runs all the way into the cube at the tip
-    let rod_hw = l * 0.012; // matches the rotate ring tube
-    let cube_h = l * 0.06;
+    let rod_len = arm; // object-length rod, screen-constant cube on its end
+    let rod_r = l * GIZMO_ROD_R;
+    let cube_h = l * GIZMO_TIP * 0.5; // half-extent → width == move cone base Ø
     let axes = [(ex, [0.90, 0.27, 0.27]), (ey, [0.30, 0.80, 0.33]), (ez, [0.36, 0.48, 0.96])];
     // Guide line: a long thin rod through the active axis, drawn first (behind).
     if let Some(gi) = guide {
         let dir = basis[gi];
         let big = l * 40.0;
-        push_rod(&mut v, center - dir * big, dir, big * 2.0, l * 0.004, axes[gi].1);
+        push_cylinder(&mut v, center - dir * big, dir, big * 2.0, l * 0.004, axes[gi].1);
     }
     for (i, (dir, color)) in axes.into_iter().enumerate() {
         let color = hl(color, hover == i as i32);
-        push_rod(&mut v, center, dir, rod_len, rod_hw, color);
-        push_cube(&mut v, center + dir * l, cube_h, basis, color);
+        push_cylinder(&mut v, center, dir, rod_len, rod_r, color);
+        push_cube(&mut v, center + dir * arm, cube_h, basis, color);
     }
     let planes = [
         (ex, ey, ez, [0.92, 0.82, 0.28]),
@@ -607,8 +632,10 @@ fn gizmo_scale_geometry(
         let c3 = center + a * o + b * (o + s);
         push_quad(&mut v, c0, c1, c2, c3, n, color);
     }
-    // Uniform 3-axis scale handle: a cube at the center.
-    push_cube(&mut v, center, l * 0.12, basis, hl([0.85, 0.85, 0.88], hover == 6));
+    // Uniform 3-axis scale handle: a cube at the center, same size as the axis
+    // tip cubes. Its hit radius (thick * 0.16 in the picker) stays generous so
+    // it's easy to grab despite the small visual.
+    push_cube(&mut v, center, cube_h, basis, hl([0.85, 0.85, 0.88], hover == 6));
     v
 }
 
@@ -1194,10 +1221,10 @@ impl ViewportRenderer {
             .map(|(c, r)| match req.gizmo {
                 GizmoMode::Move => {
                     let c = Mat4::from_cols_array(&req.drag_pre).transform_point3(c);
-                    gizmo_geometry(c, screen_l(c), req.gizmo_hover)
+                    gizmo_geometry(c, screen_l(c), r, req.gizmo_hover)
                 }
                 GizmoMode::Rotate => gizmo_rotate_geometry(c, r, screen_l(c) * 0.012, req.gizmo_hover),
-                GizmoMode::Scale => gizmo_scale_geometry(c, screen_l(c), basis, req.gizmo_hover, guide),
+                GizmoMode::Scale => gizmo_scale_geometry(c, screen_l(c), r, basis, req.gizmo_hover, guide),
                 GizmoMode::None => Vec::new(),
             })
             .filter(|v| !v.is_empty());

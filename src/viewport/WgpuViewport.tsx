@@ -474,12 +474,19 @@ export function WgpuViewport({
       scaleMask?: [boolean, boolean, boolean];
       uniform?: boolean;
     };
-    // Hit-test the move handles (axis rod+ball / plane quad) for `ray`.
-    const pickMoveHandle = (ray: THREE.Ray, c: Vec3, l: number): { t: number; h: Handle } | null => {
+    // Hit-test the move handles (axis rod+arrow / plane quad) for `ray`. `arm` is
+    // the object-sized rod length; `thick` the screen-constant tolerance scale
+    // (matching the renderer: arm length object-sized, handle bulk screen-fixed).
+    const pickMoveHandle = (
+      ray: THREE.Ray,
+      c: Vec3,
+      arm: number,
+      thick: number,
+    ): { t: number; h: Handle } | null => {
       let best: { t: number; h: Handle } | null = null;
-      const pickR = l * 0.14;
+      const pickR = thick * 0.14;
       AXES.forEach((dir, i) => {
-        const { dist, t } = raySegDist(ray, c, addv(c, scale(dir, l)));
+        const { dist, t } = raySegDist(ray, c, addv(c, scale(dir, arm)));
         if (dist < pickR && (!best || t < best.t)) {
           const view = norm(rayDir(ray));
           let n = sub(view, scale(dir, dot(view, dir)));
@@ -487,8 +494,8 @@ export function WgpuViewport({
           best = { t, h: { planeN: norm(n), planeP: c, axisDir: dir, idx: i } };
         }
       });
-      const o = l * 0.28,
-        s = l * 0.24;
+      const o = thick * 0.28,
+        s = thick * 0.24;
       for (let i = 0; i < PLANES.length; i++) {
         const pl = PLANES[i];
         const hit = rayPlanePoint(ray, pl.n, c);
@@ -518,19 +525,24 @@ export function WgpuViewport({
     };
     // Hit-test the scale handles (axis rod+cube / plane quad / center cube) for
     // `ray`, using the gizmo's oriented basis axes.
-    const pickScaleHandle = (ray: THREE.Ray, c: Vec3, l: number): { t: number; h: Handle } | null => {
+    const pickScaleHandle = (
+      ray: THREE.Ray,
+      c: Vec3,
+      arm: number,
+      thick: number,
+    ): { t: number; h: Handle } | null => {
       const axes = gizmoBasis.current.axes;
       // Center uniform 3-axis handle first: the axis rods all pass through the
       // center, so without priority here one of them always wins the tie.
       const ctr = rayPointDist(ray, c);
-      if (ctr.dist < l * 0.16) {
+      if (ctr.dist < thick * 0.16) {
         return { t: ctr.t, h: { idx: 6, planeN: norm(rayDir(ray)), planeP: c, uniform: true } };
       }
       let best: { t: number; h: Handle } | null = null;
-      const pickR = l * 0.14;
+      const pickR = thick * 0.14;
       for (let i = 0; i < axes.length; i++) {
         const dir = axes[i];
-        const { dist, t } = raySegDist(ray, c, addv(c, scale(dir, l)));
+        const { dist, t } = raySegDist(ray, c, addv(c, scale(dir, arm)));
         if (dist < pickR && (!best || t < best.t)) {
           const view = norm(rayDir(ray));
           let n = sub(view, scale(dir, dot(view, dir)));
@@ -545,8 +557,8 @@ export function WgpuViewport({
         [1, 2, 0],
         [0, 2, 1],
       ];
-      const o = l * 0.28,
-        s = l * 0.24;
+      const o = thick * 0.28,
+        s = thick * 0.24;
       for (let i = 0; i < planeDefs.length; i++) {
         const [ai, bi, ni] = planeDefs[i];
         const hit = rayPlanePoint(ray, axes[ni], c);
@@ -568,14 +580,14 @@ export function WgpuViewport({
     // Camera right vector — the uniform-scale gesture direction when the handle
     // is grabbed dead-center (no radial direction to use).
     const camRight = (): Vec3 => norm(cross(camFrame().fwd, [0, 0, 1]));
-    // Nearest gizmo handle under `ray` for the current mode, or null. Move and
-    // Scale are constant on-screen size, so their hit-test length tracks the
-    // camera; Rotate is sized to the object.
+    // Nearest gizmo handle under `ray` for the current mode, or null. All three
+    // gizmos are object-sized in reach (gi.length = the selection radius); move
+    // and scale keep a screen-constant handle thickness for tolerances.
     const pickHandle = (ray: THREE.Ray, gi: GizmoInfo): Handle | null => {
       if (gizmoModeRef.current === "rotate") return pickRotateHandle(ray, gi.center, gi.length)?.h ?? null;
-      const l = GIZMO_SCREEN_K * eyeDist(gi.center);
-      if (gizmoModeRef.current === "scale") return pickScaleHandle(ray, gi.center, l)?.h ?? null;
-      return pickMoveHandle(ray, gi.center, l)?.h ?? null;
+      const thick = GIZMO_SCREEN_K * eyeDist(gi.center);
+      if (gizmoModeRef.current === "scale") return pickScaleHandle(ray, gi.center, gi.length, thick)?.h ?? null;
+      return pickMoveHandle(ray, gi.center, gi.length, thick)?.h ?? null;
     };
 
     // Scale gizmo orientation: a single selection scales along its own (rotated)
