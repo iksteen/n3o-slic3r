@@ -1368,6 +1368,65 @@ pub fn viewport_pick(
     best.map(|(_, id)| id)
 }
 
+/// Nearest face hit: the object id, the hit triangle's world-space outward
+/// normal, and the world hit point. Drives lay-flat (and later face-align):
+/// the frontend rotates the picked face's normal to point down and drops the
+/// contact onto the bed.
+#[derive(serde::Serialize)]
+pub struct FacePick {
+    pub id: u64,
+    pub normal: [f32; 3],
+    pub point: [f32; 3],
+}
+
+#[tauri::command]
+pub fn viewport_pick_face(
+    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    req: PickRequest,
+) -> Option<FacePick> {
+    let p = project.lock().unwrap();
+    let plate = p.active_plate();
+    let (w, h) = (req.width.max(1) as f32, req.height.max(1) as f32);
+    let vp = view_proj(w, h, req.az, req.el, req.dist, Vec3::from(req.center));
+    let inv = vp.inverse();
+    let ndc = Vec3::new(2.0 * req.x / w - 1.0, 1.0 - 2.0 * req.y / h, 0.0);
+    let ro = inv.project_point3(ndc);
+    let far = inv.project_point3(Vec3::new(ndc.x, ndc.y, 1.0));
+    let rd = (far - ro).normalize();
+
+    let mut best: Option<(f32, u64, Vec3, Vec3, Vec3)> = None;
+    for (id, obj) in plate.scene.objects.iter() {
+        if !obj.visible {
+            continue;
+        }
+        let Some(m) = p.meshes.get(&obj.mesh) else {
+            continue;
+        };
+        let model = obj.transform.to_mat4();
+        let vert = |vi: u32| {
+            let i = vi as usize * 3;
+            model.transform_point3(Vec3::new(m.vertices[i], m.vertices[i + 1], m.vertices[i + 2]))
+        };
+        for t3 in m.indices.chunks_exact(3) {
+            let (a, b, c) = (vert(t3[0]), vert(t3[1]), vert(t3[2]));
+            if let Some(t) = ray_tri(ro, rd, a, b, c) {
+                if best.map_or(true, |(bt, ..)| t < bt) {
+                    best = Some((t, id.0, a, b, c));
+                }
+            }
+        }
+    }
+    best.map(|(t, id, a, b, c)| {
+        // Geometric normal of the world-space triangle (winding gives outward).
+        let normal = (b - a).cross(c - a).normalize_or_zero();
+        FacePick {
+            id,
+            normal: normal.to_array(),
+            point: (ro + rd * t).to_array(),
+        }
+    })
+}
+
 /// Whether the Strategy-A wgpu viewport is enabled (`N3O_WGPU=1`).
 pub fn enabled() -> bool {
     std::env::var_os("N3O_WGPU").is_some()

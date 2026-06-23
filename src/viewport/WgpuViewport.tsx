@@ -80,14 +80,20 @@ const PLANES: { n: Vec3; a: Vec3; b: Vec3 }[] = [
  * drags — the axis/plane handles (move) or axis rings (rotate) drive constrained
  * transforms instead. Frames render on-demand and coalesce (one in flight).
  */
+type Tool = "none" | "layflat" | "alignX" | "alignY";
+
 export function WgpuViewport({
   objects,
   selectedIds,
   gizmoMode = "none",
+  tool = "none",
+  onToolDone,
 }: {
   objects: SceneObject[];
   selectedIds: number[];
   gizmoMode?: GizmoMode;
+  tool?: Tool;
+  onToolDone?: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cam = useRef({ az: 0.9, el: 0.6, dist: 350, center: [0, 0, 0] as [number, number, number] });
@@ -98,6 +104,10 @@ export function WgpuViewport({
   selRef.current = selectedIds;
   const gizmoModeRef = useRef(gizmoMode);
   gizmoModeRef.current = gizmoMode;
+  const toolRef = useRef(tool);
+  toolRef.current = tool;
+  const onToolDoneRef = useRef(onToolDone);
+  onToolDoneRef.current = onToolDone;
   // Lets effects outside the mount-once effect trigger a redraw / gizmo refresh.
   const renderRef = useRef<(() => void) | null>(null);
   const refreshGizmoRef = useRef<(() => void) | null>(null);
@@ -209,6 +219,71 @@ export function WgpuViewport({
       } catch (e) {
         console.error("select failed", e);
       }
+    };
+
+    // Face-pick (Rust): nearest hit's object id + world face normal + hit point.
+    type FacePick = { id: number; normal: Vec3; point: Vec3 };
+    const castPickFace = async (sx: number, sy: number): Promise<FacePick | null> => {
+      const cv = canvasRef.current;
+      if (!cv) return null;
+      const c = cam.current;
+      try {
+        return await invoke<FacePick | null>("viewport_pick_face", {
+          req: { width: cv.width, height: cv.height, x: sx, y: sy, az: c.az, el: c.el, dist: c.dist, center: c.center },
+        });
+      } catch (e) {
+        console.error("viewport_pick_face failed", e);
+        return null;
+      }
+    };
+
+    // Run the armed placing tool for a click at (sx,sy). Returns true when it
+    // acted (so the tool disarms); false to stay armed (e.g. clicked empty space).
+    const runTool = async (toolNow: Tool, sx: number, sy: number): Promise<boolean> => {
+      if (toolNow === "alignX" || toolNow === "alignY") {
+        const id = await castPick(sx, sy);
+        if (id == null) return false;
+        const axis = toolNow === "alignX" ? "X" : "Y";
+        try {
+          await invoke("scene_select", { ids: [id], mode: "Replace", expandGroups: true });
+          await invoke("scene_object_align_axis", { ids: [id], axis, expandGroups: true });
+        } catch (e) {
+          console.error("align failed", e);
+        }
+        return true;
+      }
+      // layflat: click a face → rotate its outward normal to point down (-Z) and
+      // drop the contact onto the bed. With a selection, lay the selected set flat
+      // (exact, no group expand) and require the click to land on it; with none,
+      // lay the clicked object's whole group flat.
+      const hit = await castPickFace(sx, sy);
+      if (!hit) return false;
+      const sel = selRef.current;
+      let ids: number[];
+      let expandGroups: boolean;
+      if (sel.length > 0) {
+        if (!sel.includes(hit.id)) return false; // off-selection click — stay armed
+        ids = sel;
+        expandGroups = false;
+      } else {
+        ids = [hit.id];
+        expandGroups = true;
+      }
+      const q = new THREE.Quaternion().setFromUnitVectors(
+        new THREE.Vector3(...hit.normal),
+        new THREE.Vector3(0, 0, -1),
+      );
+      try {
+        await invoke("scene_object_lay_flat_on", {
+          ids,
+          rotation: [q.x, q.y, q.z, q.w],
+          contact: hit.point,
+          expandGroups,
+        });
+      } catch (e) {
+        console.error("lay flat failed", e);
+      }
+      return true;
     };
 
     // Cursor ray in world space. A Three.js camera posed exactly like the Rust
@@ -583,6 +658,12 @@ export function WgpuViewport({
       drag.current = press;
       const [sx, sy] = rel(e);
 
+      if (toolRef.current !== "none") {
+        // A placing tool is armed: drags orbit, the click (in onUp) runs the tool.
+        press.mode = "orbit";
+        return;
+      }
+
       if (gizmoModeRef.current !== "none") {
         // Gizmo mode: only the handles drive transforms; the body never drags.
         void invoke<GizmoInfo | null>("viewport_gizmo").then(async (gi) => {
@@ -665,14 +746,22 @@ export function WgpuViewport({
         }
         return;
       }
+      if (moved) return;
+      const [sx, sy] = rel(e);
+      // A placing tool is armed: the click runs it (and disarms on success);
+      // otherwise it's a normal selection click.
+      if (toolRef.current !== "none") {
+        const t = toolRef.current;
+        void runTool(t, sx, sy).then((acted) => {
+          if (acted) onToolDoneRef.current?.();
+        });
+        return;
+      }
       // A click (no drag) on empty space or an unselected object selects it; a
       // click on an already-selected object keeps the selection. Shift/ctrl/cmd
       // extends the selection instead of replacing it.
-      if (!moved) {
-        const [sx, sy] = rel(e);
-        const additive = e.shiftKey || e.metaKey || e.ctrlKey;
-        void castPick(sx, sy).then((id) => applySelect(id, additive));
-      }
+      const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+      void castPick(sx, sy).then((id) => applySelect(id, additive));
     };
     const onMove = (e: MouseEvent) => {
       const d = drag.current;
@@ -791,6 +880,10 @@ export function WgpuViewport({
     // text field has focus, so editing a field doesn't delete objects).
     const onKeyDown = (e: KeyboardEvent) => {
       if (shouldIgnoreHotkey(e)) return;
+      if (e.key === "Escape" && toolRef.current !== "none") {
+        onToolDoneRef.current?.(); // cancel the armed placing tool
+        return;
+      }
       if ((e.key === "Delete" || e.key === "Backspace") && selRef.current.length > 0) {
         void invoke("scene_object_delete", { ids: selRef.current }).catch((err) =>
           console.error("delete failed", err),

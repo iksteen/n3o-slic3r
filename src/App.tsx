@@ -88,6 +88,9 @@ function App() {
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>("Translate");
   // wgpu viewport's move-gizmo toggle (its gizmo is separate from the Three one).
   const [wgpuGizmo, setWgpuGizmo] = useState<"none" | "move" | "rotate" | "scale">("none");
+  // wgpu viewport's armed placing tool (lay-flat / align). Mutually exclusive
+  // with the gizmo: arming a tool clears the gizmo and vice versa.
+  const [wgpuTool, setWgpuTool] = useState<"none" | "layflat" | "alignX" | "alignY">("none");
   // Object count frozen at the moment a slice is submitted — what the
   // backend actually snapshots and slices (build_slice_input). Held
   // here so the progress window's count stays put across tab switches
@@ -610,13 +613,23 @@ function App() {
                     objects={activePlate?.objects ?? []}
                     selectedIds={activePlate?.selection ?? []}
                     gizmoMode={wgpuGizmo}
+                    tool={wgpuTool}
+                    onToolDone={() => setWgpuTool("none")}
                   />
                   <ViewportChrome
                     leading={modeToggle}
                     objects={activePlate?.objects ?? []}
                     selectedIds={activePlate?.selection ?? []}
                     gizmoMode={wgpuGizmo}
-                    onGizmoMode={(m) => setWgpuGizmo((cur) => (cur === m ? "none" : m))}
+                    onGizmoMode={(m) => {
+                      setWgpuTool("none");
+                      setWgpuGizmo((cur) => (cur === m ? "none" : m));
+                    }}
+                    tool={wgpuTool}
+                    onTool={(t) => {
+                      setWgpuGizmo("none");
+                      setWgpuTool((cur) => (cur === t ? "none" : t));
+                    }}
                   />
                 </>
               ) : (

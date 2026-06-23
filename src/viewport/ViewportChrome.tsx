@@ -10,6 +10,7 @@ import type { SceneObject } from "./types";
  * they depend on the wgpu gizmo + face-picking, which aren't built yet.
  */
 type GizmoMode = "none" | "move" | "rotate" | "scale";
+type Tool = "none" | "layflat" | "alignX" | "alignY";
 
 export function ViewportChrome({
   leading,
@@ -17,17 +18,34 @@ export function ViewportChrome({
   selectedIds,
   gizmoMode,
   onGizmoMode,
+  tool,
+  onTool,
 }: {
   leading: ReactNode;
   objects: SceneObject[];
   selectedIds: number[];
   gizmoMode: GizmoMode;
   onGizmoMode: (mode: GizmoMode) => void;
+  tool: Tool;
+  onTool: (tool: Tool) => void;
 }) {
   const hasObjects = objects.length > 0;
 
   const runArrange = () => {
     void invoke("scene_auto_arrange").catch((e) => console.error("arrange failed", e));
+  };
+  // Align X/Y: with a selection, rotate it about Z so its dominant line is
+  // parallel to the axis immediately. With no selection, arm pick-to-align — the
+  // next clicked object's group is aligned (handled in WgpuViewport).
+  const runAlign = (axis: "alignX" | "alignY") => {
+    if (selectedIds.length > 0) {
+      const a = axis === "alignX" ? "X" : "Y";
+      void invoke("scene_object_align_axis", { ids: selectedIds, axis: a }).catch((e) =>
+        console.error("align failed", e),
+      );
+      return;
+    }
+    if (hasObjects) onTool(axis);
   };
   const runAutoOrient = async () => {
     // Orient the selection, or everything on the plate if nothing's selected —
@@ -156,9 +174,65 @@ export function ViewportChrome({
               />
             </svg>
           </button>
+          <button
+            type="button"
+            disabled={!hasObjects}
+            className={tool === "layflat" ? "px-2 py-1.5 bg-neutral-700" : btn(hasObjects)}
+            onClick={() => hasObjects && onTool("layflat")}
+            title="Lay flat — click a face to lay it on the plate"
+            aria-label="Lay flat on face"
+            aria-pressed={tool === "layflat"}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              {/* a face (parallelogram) on the bed + a down arrow onto it */}
+              <path d="M2 9.4 7 6.6l5 2.8-5 2.6z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+              <path d="M7 1.3v3.4M5.4 3.1 7 4.7l1.6-1.6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            disabled={!hasObjects}
+            className={tool === "alignY" ? "px-2 py-1.5 bg-neutral-700" : btn(hasObjects)}
+            onClick={() => runAlign("alignY")}
+            title={selectedIds.length ? "Align selection to Y" : "Align — click an object to align to Y"}
+            aria-label="Align to Y"
+            aria-pressed={tool === "alignY"}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M7 12.5v-11M7 1.5 5.2 3.3M7 1.5 8.8 3.3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              <text x="8.5" y="11" fontSize="5" fill="currentColor" stroke="none">Y</text>
+            </svg>
+          </button>
+          <button
+            type="button"
+            disabled={!hasObjects}
+            className={tool === "alignX" ? "px-2 py-1.5 bg-neutral-700" : btn(hasObjects)}
+            onClick={() => runAlign("alignX")}
+            title={selectedIds.length ? "Align selection to X" : "Align — click an object to align to X"}
+            aria-label="Align to X"
+            aria-pressed={tool === "alignX"}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M1.5 7h11M12.5 7 10.7 5.2M12.5 7 10.7 8.8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              <text x="3" y="5.5" fontSize="5" fill="currentColor" stroke="none">X</text>
+            </svg>
+          </button>
         </div>
       </div>
-      <ViewportLegend hints="LMB rotate · RMB pan · scroll zoom" />
+      <ViewportLegend hints={toolHint(tool)} />
     </>
   );
+}
+
+function toolHint(tool: Tool): string {
+  switch (tool) {
+    case "layflat":
+      return "Click a face to lay it on the plate · Esc to cancel";
+    case "alignX":
+      return "Click an object to align it to X · Esc to cancel";
+    case "alignY":
+      return "Click an object to align it to Y · Esc to cancel";
+    default:
+      return "LMB rotate · RMB pan · scroll zoom";
+  }
 }
