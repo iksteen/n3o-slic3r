@@ -12,7 +12,20 @@ import {
   jumpTo,
   stepLayer,
   switchMode,
+  windowBounds,
 } from "../layerWindow";
+
+describe("windowBounds", () => {
+  it("single collapses to one layer", () => {
+    expect(windowBounds({ mode: "single", layer: 12 })).toEqual([12, 12]);
+  });
+  it("up-to starts at zero", () => {
+    expect(windowBounds({ mode: "up-to", max: 40 })).toEqual([0, 40]);
+  });
+  it("range passes its own bounds", () => {
+    expect(windowBounds({ mode: "range", min: 10, max: 30 })).toEqual([10, 30]);
+  });
+});
 
 describe("switchMode", () => {
   it("single → up-to preserves the current layer as max", () => {

@@ -264,7 +264,6 @@ pub fn run() {
             core::preview::commands::preview_drop,
             toolpath_render::toolpath_frame,
             toolpath_render::toolpath_pick,
-            toolpath_render::toolpath_drop,
             core::driver::commands::driver_register,
             core::driver::commands::driver_test_connection,
             core::driver::commands::driver_unregister,

@@ -88,6 +88,14 @@ export function HoverTooltip({
           </span>
         </div>
       )}
+      {!isTravel && (
+        <div className="preview-hover-row">
+          <span className="preview-hover-label">Line</span>
+          <span className="preview-hover-value">
+            {detail.width.toFixed(2)} × {detail.height.toFixed(2)} mm
+          </span>
+        </div>
+      )}
     </div>
   );
 }

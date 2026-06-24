@@ -259,17 +259,21 @@ pub fn preview_segment_detail(
         .ok_or_else(|| format!("unknown preview handle {}", handle.0))?
 }
 
-/// Drop the preview at `handle`. Frees the line stream + IR;
-/// subsequent lookups error with `unknown preview handle`.
-/// Silent no-op when the handle wasn't registered (e.g. dropped
-/// twice).
+/// Drop the preview at `handle`. Frees the line stream + IR *and* the
+/// renderer's cached GPU buffers for that handle (one lifecycle, so a
+/// switched-away preview leaks neither). Silent no-op when the handle
+/// wasn't registered (e.g. dropped twice).
 #[tauri::command]
-#[tracing::instrument(skip(registry))]
+#[tracing::instrument(skip(registry, toolpath))]
 pub fn preview_drop(
     handle: PreviewHandle,
     registry: State<Arc<PreviewRegistry>>,
+    toolpath: State<crate::toolpath_render::ToolpathState>,
 ) -> Result<(), String> {
     registry.remove(handle);
+    if let Some(r) = toolpath.0.lock().unwrap().as_mut() {
+        r.drop_handle(handle);
+    }
     Ok(())
 }
 

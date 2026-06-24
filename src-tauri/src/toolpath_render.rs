@@ -92,6 +92,37 @@ struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32>, @locatio
 }
 "#;
 
+/// Unlit bed-grid lines — shares the uniform's `vp`, flat grid color.
+const GRID_SHADER: &str = r#"
+struct U { vp: mat4x4<f32>, lmin: f32, lmax: f32, _p0: f32, _p1: f32 };
+@group(0) @binding(0) var<uniform> u: U;
+@vertex fn vs(@location(0) pos: vec3<f32>) -> @builtin(position) vec4<f32> {
+  return u.vp * vec4<f32>(pos, 1.0);
+}
+@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(0.34, 0.36, 0.40, 1.0); }
+"#;
+
+/// Build-plate grid lines on the bed floor (`z = min.z`), ~10mm spacing.
+/// Positions only (the grid shader is unlit). Mirrors the scene viewport.
+fn grid_verts(min: [f32; 3], max: [f32; 3]) -> Vec<[f32; 3]> {
+    let z = min[2];
+    let step = 10.0_f32;
+    let mut v = Vec::new();
+    let nx = ((max[0] - min[0]) / step).ceil() as i32;
+    let ny = ((max[1] - min[1]) / step).ceil() as i32;
+    for i in 0..=nx {
+        let x = min[0] + i as f32 * step;
+        v.push([x, min[1], z]);
+        v.push([x, max[1], z]);
+    }
+    for j in 0..=ny {
+        let y = min[1] + j as f32 * step;
+        v.push([min[0], y, z]);
+        v.push([max[0], y, z]);
+    }
+    v
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Tmpl {
@@ -181,11 +212,16 @@ pub struct ToolpathRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipe: wgpu::RenderPipeline,
+    grid_pipe: wgpu::RenderPipeline,
     ubuf: wgpu::Buffer,
     bind: wgpu::BindGroup,
     template_vb: wgpu::Buffer,
     template_ib: wgpu::Buffer,
     template_n: u32,
+    // Bed grid, rebuilt when the extents change.
+    grid_vb: Option<wgpu::Buffer>,
+    grid_n: u32,
+    grid_key: Option<[f32; 6]>,
     cache: HashMap<PreviewHandle, GpuToolpath>,
     // size-dependent targets
     size: (u32, u32),
@@ -302,6 +338,47 @@ impl ToolpathRenderer {
             multiview: None,
         });
 
+        let grid_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("toolpath.grid.shader"),
+            source: wgpu::ShaderSource::Wgsl(GRID_SHADER.into()),
+        });
+        let grid_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("toolpath.grid.pipe"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &grid_shader,
+                entry_point: "vs",
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: (3 * std::mem::size_of::<f32>()) as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &grid_shader,
+                entry_point: "fs",
+                compilation_options: Default::default(),
+                targets: &[Some(COLOR_FMT.into())],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: SAMPLES,
+                ..Default::default()
+            },
+            multiview: None,
+        });
+
         let (tverts, tidx) = tube_template();
         let template_vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("toolpath.template.vb"),
@@ -319,11 +396,15 @@ impl ToolpathRenderer {
             device,
             queue,
             pipe,
+            grid_pipe,
             ubuf,
             bind,
             template_vb,
             template_ib,
             template_n: tidx.len() as u32,
+            grid_vb: None,
+            grid_n: 0,
+            grid_key: None,
             cache: HashMap::new(),
             size: (0, 0),
             color,
@@ -353,6 +434,18 @@ impl ToolpathRenderer {
             contents: bytes,
             usage: wgpu::BufferUsages::VERTEX,
         })
+    }
+
+    /// (Re)build the bed grid buffer when the extents change.
+    fn ensure_grid(&mut self, min: [f32; 3], max: [f32; 3]) {
+        let key = [min[0], min[1], min[2], max[0], max[1], max[2]];
+        if self.grid_key == Some(key) {
+            return;
+        }
+        let verts = grid_verts(min, max);
+        self.grid_n = verts.len() as u32;
+        self.grid_vb = Some(self.vbuf("toolpath.grid", bytemuck::cast_slice(&verts)));
+        self.grid_key = Some(key);
     }
 
     /// Per-extrusion colors (one RGB per instance) from the existing encoder,
@@ -474,6 +567,14 @@ impl ToolpathRenderer {
         let (w, h) = (req.width.max(1), req.height.max(1));
         self.resize(w, h);
 
+        let draw_grid = match (req.bed_min, req.bed_max) {
+            (Some(min), Some(max)) => {
+                self.ensure_grid(min, max);
+                self.grid_vb.is_some()
+            }
+            _ => false,
+        };
+
         let vp = view_proj(w as f32, h as f32, req.az, req.el, req.dist, Vec3::from(req.center));
         let uni = Uniform {
             vp: vp.to_cols_array(),
@@ -512,6 +613,15 @@ impl ToolpathRenderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+            // Bed grid first (floor), so the toolpath draws over it.
+            if draw_grid {
+                if let Some(vb) = &self.grid_vb {
+                    rp.set_pipeline(&self.grid_pipe);
+                    rp.set_bind_group(0, &self.bind, &[]);
+                    rp.set_vertex_buffer(0, vb.slice(..));
+                    rp.draw(0..self.grid_n, 0..1);
+                }
+            }
             if let Some(gp) = self.cache.get(&handle) {
                 // Extrusions always; travels / retractions per visibility toggle.
                 let mut sets: Vec<&InstanceSet> = Vec::new();
@@ -579,11 +689,16 @@ impl GpuToolpath {
     }
 }
 
-/// Closest extrusion segment to the cursor ray, honoring the layer window
-/// (so hover only hits what's visible). Pure CPU over the IR — no GPU.
+/// The extrusion segment under the cursor, honoring the layer window and
+/// occlusion. Among the segments whose tube the ray actually pierces (within
+/// the tube tolerance), returns the one *nearest along the ray* — the front
+/// -most surface, matching what's drawn — not merely the centerline closest
+/// to the ray line (which would happily pick a support strand behind the
+/// outer wall). Pure CPU over the IR — no GPU. ponytail: O(n) scan; a
+/// per-layer spatial index if a 10M-segment print ever lags the hover.
 pub fn pick_segment(geom: &PreviewGeometry, ro: Vec3, rd: Vec3, lmin: f32, lmax: f32) -> Option<u32> {
     let s = &geom.extrusions;
-    let mut best: Option<(f32, u32)> = None;
+    let mut best: Option<(f32, u32)> = None; // (ray param t, index)
     for i in 0..s.len() {
         let layer = s.layer_index[2 * i];
         if layer < lmin - 0.5 || layer > lmax + 0.5 {
@@ -591,10 +706,10 @@ pub fn pick_segment(geom: &PreviewGeometry, ro: Vec3, rd: Vec3, lmin: f32, lmax:
         }
         let a = Vec3::new(s.positions[6 * i], s.positions[6 * i + 1], s.positions[6 * i + 2]);
         let b = Vec3::new(s.positions[6 * i + 3], s.positions[6 * i + 4], s.positions[6 * i + 5]);
-        let (dist, _) = ray_seg_dist(ro, rd, a, b);
+        let (dist, t) = ray_seg_dist(ro, rd, a, b);
         let tol = s.width[i].max(MIN_DIM_MM) * 0.5 + PICK_SLOP_MM;
-        if dist <= tol && best.map_or(true, |(bd, _)| dist < bd) {
-            best = Some((dist, i as u32));
+        if dist <= tol && best.map_or(true, |(bt, _)| t < bt) {
+            best = Some((t, i as u32));
         }
     }
     best.map(|(_, i)| i)
@@ -622,6 +737,11 @@ pub struct ToolpathFrameRequest {
     pub palette: Palette,
     pub show_travels: bool,
     pub show_retractions: bool,
+    /// Bed extents for the floor grid (mm). `None` skips the grid.
+    #[serde(default)]
+    pub bed_min: Option<[f32; 3]>,
+    #[serde(default)]
+    pub bed_max: Option<[f32; 3]>,
 }
 
 /// Render the toolpath for `handle` and return tight RGBA8 bytes.
@@ -665,14 +785,6 @@ pub fn toolpath_pick(
         .flatten()
 }
 
-/// Free the cached GPU buffers for `handle` (called alongside `preview_drop`).
-#[tauri::command]
-pub fn toolpath_drop(state: tauri::State<'_, ToolpathState>, handle: PreviewHandle) {
-    if let Some(r) = state.0.lock().unwrap().as_mut() {
-        r.drop_handle(handle);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,6 +822,9 @@ mod tests {
         assert_eq!(pick_segment(&geom, ro, rd, 0.0, 0.0), Some(0));
         // Window = layer 1 only → segment 1.
         assert_eq!(pick_segment(&geom, ro, rd, 1.0, 1.0), Some(1));
+        // Both layers visible: the ray pierces both, so occlusion decides —
+        // the camera at z=100 sees the higher segment (z=0.4, layer 1) first.
+        assert_eq!(pick_segment(&geom, ro, rd, 0.0, 1.0), Some(1));
         // A ray that misses both (off to the side) → None.
         let miss = Vec3::new(50.0, 50.0, 100.0);
         assert_eq!(pick_segment(&geom, miss, rd, 0.0, 1.0), None);

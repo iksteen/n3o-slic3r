@@ -92,12 +92,23 @@ export function jumpTo(
 }
 
 /** Default window for a freshly-loaded preview: up-to with max
- * = top layer (show the whole print). The shader's depth-fade
- * (shaderMaterial.ts FADE_LAYERS) keeps the rendering legible
- * by emphasizing the top ~25 layers and fading older ones
- * toward the background. */
+ * = top layer (show the whole print). */
 export function defaultWindow(layerCount: number): LayerWindow {
   return { mode: "up-to", max: Math.max(0, layerCount - 1) };
+}
+
+/** Inclusive `[min, max]` layer-index bounds the renderer culls
+ * against. `single` collapses to one layer; `up-to` starts at 0;
+ * `range` is its own min/max. */
+export function windowBounds(window: LayerWindow): [number, number] {
+  switch (window.mode) {
+    case "single":
+      return [window.layer, window.layer];
+    case "up-to":
+      return [0, window.max];
+    case "range":
+      return [window.min, window.max];
+  }
 }
 
 /** Best-effort "what layer is currently visible at the top of

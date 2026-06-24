@@ -17,6 +17,30 @@ import type {
   SegmentDetail,
 } from "./types";
 
+/** Camera + render parameters for one toolpath frame. The renderer
+ * owns the GPU buffers (uploaded once per handle); this is the
+ * per-frame state. `layer_min`/`layer_max` are the inclusive window
+ * the shader culls against; `color_mode`/`palette` pick the
+ * per-instance colors. */
+export interface ToolpathFrameReq {
+  handle: PreviewHandle;
+  width: number;
+  height: number;
+  az: number;
+  el: number;
+  dist: number;
+  center: [number, number, number];
+  layer_min: number;
+  layer_max: number;
+  color_mode: ColorMode;
+  palette: Palette;
+  show_travels: boolean;
+  show_retractions: boolean;
+  /** Bed extents for the floor grid (mm). null skips the grid. */
+  bed_min: [number, number, number] | null;
+  bed_max: [number, number, number] | null;
+}
+
 /** Parse the gcode at `path`, build the IR + stats, return a
  * handle the renderer follows up with. */
 export function previewLoad(path: string): Promise<PreviewLoadResponse> {
@@ -35,23 +59,30 @@ export function previewLoadGcode3mf(
   });
 }
 
-/** Fetch the binary buffer (positions + colors + layer indices
- * for extrusions, travels, retractions) for one color mode.
- * Returns the raw bytes; the geometry builder slices them by
- * the counts the load response carried. */
-export async function previewBuffers(
-  handle: PreviewHandle,
-  colorMode: ColorMode,
-  palette: Palette,
-): Promise<ArrayBuffer> {
-  // Tauri's binary Response surfaces as `ArrayBuffer` when
-  // invoked. The `invoke<ArrayBuffer>` type tells the IPC layer
-  // to skip JSON decoding.
-  return invoke<ArrayBuffer>("preview_buffers", {
-    handle,
-    colorMode,
-    palette,
-  });
+/** Render one toolpath frame Rust-side (wgpu, offscreen) and get it
+ * back as tight RGBA8 (`ArrayBuffer`) to blit into the canvas. The
+ * geometry stays GPU-resident — only pixels cross the bridge. */
+export function toolpathFrame(req: ToolpathFrameReq): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>("toolpath_frame", { req });
+}
+
+/** Cursor → nearest visible extrusion segment index (or null). The
+ * pick is a Rust ray-vs-segment sweep over the IR, window-filtered so
+ * only on-screen segments hit. */
+export function toolpathPick(req: {
+  handle: PreviewHandle;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+  az: number;
+  el: number;
+  dist: number;
+  center: [number, number, number];
+  layer_min: number;
+  layer_max: number;
+}): Promise<number | null> {
+  return invoke<number | null>("toolpath_pick", { req });
 }
 
 export function previewLayerStats(

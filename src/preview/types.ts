@@ -95,6 +95,9 @@ export interface SegmentDetail {
   layer_index: number;
   tool: number;
   extrusion_mm: number;
+  /** Extrusion line width / layer height (mm) for the hover tooltip. */
+  width: number;
+  height: number;
 }
 
 /** Mirror of Rust's `FeatureType` — internally-tagged enum where
