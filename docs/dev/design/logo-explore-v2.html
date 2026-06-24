@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>n3o-slic3r — orbital logo exploration</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="styles.css"/>
+<style>
+  html, body { margin: 0; height: 100%; }
+  #app { height: 100vh; }
+
+  .lc {
+    display: flex; flex-direction: column; gap: 12px;
+    height: 100%; padding: 16px;
+    font-family: var(--font-sans);
+  }
+  .lc-hero {
+    display: flex; align-items: center; justify-content: center; gap: 24px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 24px 0;
+  }
+  .ls-mark { display: inline-flex; color: var(--text); }
+  .ls-mark svg { display: block; width: 100%; height: 100%; }
+  .lc-hero-mark { width: 78px; height: 78px; }
+  .lc-hero-mono { width: 40px; height: 40px; }
+  .lc-hero-tiny { width: 22px; height: 22px; }
+
+  .ls-strip {
+    display: flex; align-items: center; gap: 8px;
+    height: 44px; padding: 0 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+  }
+  .ls-brand { display: inline-flex; align-items: center; gap: 8px; }
+  .ls-mark-22 { width: 22px; height: 22px; }
+  .ls-word { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+  .ls-caret { opacity: 0.5; }
+  .ls-strip-div { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+  .ls-file {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12.5px; color: var(--text-muted);
+  }
+
+  .lc-note {
+    margin: 2px 0 0; font-size: 12px; line-height: 1.5;
+    color: var(--text-muted); text-wrap: pretty;
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="logo-marks-v2.jsx"></script>
+<script type="text/babel" src="logo-explore-v2.jsx"></script>
+</body>
+</html>

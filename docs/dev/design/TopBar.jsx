@@ -5,6 +5,29 @@
 // The topbar holds the brand, project file-menu, and whatever primary /
 // secondary action makes sense for the current view.
 
+// BrandMark — the layered-N: three sliced layers (blue / centre / red) forming
+// an N. Centre band is currentColor so it themes (ink on light, white on dark);
+// blue + red keep their gradients. No ring/glow at chrome size — stays crisp.
+function BrandMark() {
+  const uid = React.useId();
+  const c = `${uid}-c`, r = `${uid}-r`;
+  return (
+    <svg viewBox="-15 -5 210 175" fill="none" aria-hidden="true">
+      <defs>
+        <linearGradient id={c} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#00f2fe"/><stop offset="1" stopColor="#4facfe"/>
+        </linearGradient>
+        <linearGradient id={r} x1="0" y1="1" x2="1" y2="0">
+          <stop offset="0" stopColor="#ff4d5e"/><stop offset="1" stopColor="#ff1f3a"/>
+        </linearGradient>
+      </defs>
+      <path d="M0 105 L50 105 L66 80 L116 155 L180 155" fill="none" stroke={`url(#${r})`} strokeWidth="14" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M0 70 L50 70 L66 45 L116 120 L180 120" fill="none" stroke="currentColor" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M0 35 L50 35 L66 10 L116 85 L180 85" fill="none" stroke={`url(#${c})`} strokeWidth="14" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
 function TopBar({
   projectName,
   primary,    // { label, onClick, kind?: 'primary'|'ghost', title?, icon? }
@@ -46,7 +69,7 @@ function TopBar({
           onClick={() => setBrandOpen(v => !v)}
           title="n3o-slic3r"
         >
-          <div className="brand-mark"/>
+          <span className="brand-mark"><BrandMark/></span>
           n3o-slic3r
           <svg className="brand-caret" width="9" height="9" viewBox="0 0 10 10" fill="none">
             <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
@@ -56,7 +79,7 @@ function TopBar({
         {brandOpen && (
           <div className="brand-menu" onClick={() => setBrandOpen(false)}>
             <div className="brand-menu-app">
-              <div className="brand-mark"/>
+              <span className="brand-mark"><BrandMark/></span>
               <span className="brand-menu-app-name">n3o-slic3r</span>
               <span className="brand-menu-app-ver">v0.4.1</span>
             </div>

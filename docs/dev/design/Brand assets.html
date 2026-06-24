@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>n3o-slic3r — brand mark assets</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+  :root{
+    --bg:#f4f5f7; --ink:#16181f; --muted:#6b7280; --line:rgba(15,17,21,.1);
+    --panelD:#14151c; --panelL:#ffffff;
+    --sans:"Geist",ui-sans-serif,system-ui,sans-serif;
+    --mono:"Geist Mono",ui-monospace,Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;}
+  .sheet{max-width:1080px;margin:0 auto;padding:56px 40px 96px;}
+  header h1{font-size:26px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px;}
+  header p{margin:0;color:var(--muted);font-size:14px;}
+
+  .sec{margin-top:52px;}
+  .sec-label{
+    font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.08em;
+    text-transform:uppercase;color:var(--muted);
+    padding-bottom:10px;margin-bottom:20px;border-bottom:1px solid var(--line);
+    display:flex;justify-content:space-between;align-items:baseline;
+  }
+  .sec-label span{text-transform:none;letter-spacing:0;font-weight:400;}
+
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .panel{border-radius:16px;padding:30px;border:1px solid var(--line);}
+  .panel-dark{background:var(--panelD);border-color:rgba(255,255,255,.07);}
+  .panel-light{background:var(--panelL);}
+  .panel-title{
+    font-family:var(--mono);font-size:11px;letter-spacing:.04em;margin-bottom:22px;
+  }
+  .panel-dark .panel-title{color:#8a91a0;}
+  .panel-light .panel-title{color:var(--muted);}
+
+  .row{display:flex;align-items:flex-end;gap:30px;flex-wrap:wrap;}
+  .item{display:flex;flex-direction:column;align-items:center;gap:9px;}
+  .item .cap{font-family:var(--mono);font-size:10px;}
+  .panel-dark .cap{color:#5b6270;}
+  .panel-light .cap{color:#9aa0aa;}
+  .item svg{display:block;}
+
+  /* toolbar strips */
+  .strip{display:flex;align-items:center;gap:8px;height:46px;padding:0 12px;border-radius:9px;}
+  .strip-dark{background:#15181d;border:1px solid rgba(255,255,255,.08);color:#e6e9ee;}
+  .strip-light{background:#fff;border:1px solid var(--line);color:#0f1115;}
+  .strip .wm{font-size:14px;font-weight:600;letter-spacing:-.01em;}
+  .strip .caret{opacity:.5;}
+  .strip .div{width:1px;height:20px;margin:0 4px;}
+  .strip-dark .div{background:rgba(255,255,255,.12);}
+  .strip-light .div{background:var(--line);}
+  .strip .file{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;opacity:.65;}
+
+  .wordmark{display:flex;align-items:center;gap:12px;}
+  .wordmark .name{font-size:30px;font-weight:600;letter-spacing:-.02em;}
+  .panel-dark .wordmark .name{color:#f0f2f5;}
+
+  .note{margin-top:14px;color:var(--muted);font-size:12.5px;line-height:1.55;max-width:62ch;}
+</style>
+</head>
+<body>
+<!-- shared gradient + glow defs, referenced by every mark below -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <linearGradient id="nCyan" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#00f2fe"/><stop offset="1" stop-color="#4facfe"/>
+  </linearGradient>
+  <linearGradient id="nRed" x1="0" y1="1" x2="1" y2="0">
+    <stop offset="0" stop-color="#ff4d5e"/><stop offset="1" stop-color="#ff1f3a"/>
+  </linearGradient>
+  <filter id="glowC" x="-40%" y="-40%" width="180%" height="180%">
+    <feGaussianBlur stdDeviation="6" result="b"/><feComposite in="SourceGraphic" in2="b" operator="over"/>
+  </filter>
+  <filter id="glowR" x="-40%" y="-40%" width="180%" height="180%">
+    <feGaussianBlur stdDeviation="5" result="b"/><feComposite in="SourceGraphic" in2="b" operator="over"/>
+  </filter>
+</defs></svg>
+
+<div class="sheet">
+  <header>
+    <h1>n3o-slic3r — brand mark</h1>
+    <p>A layered “N” of sliced layers — bright blue, white, bright red — inside a toolpath ring. Variants for every surface.</p>
+  </header>
+
+  <section class="sec">
+    <div class="sec-label">App icon <span>full mark · ring + glow · for launchers, splash, store listings</span></div>
+    <div class="pair">
+      <div class="panel panel-dark"><div class="panel-title">DARK</div>
+        <div class="row" id="ai-dark"></div></div>
+      <div class="panel panel-light"><div class="panel-title">LIGHT</div>
+        <div class="row" id="ai-light"></div></div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="sec-label">Favicon / small icon <span>rounded chip · ring dropped · for tabs &amp; dock</span></div>
+    <div class="pair">
+      <div class="panel panel-dark"><div class="panel-title">DARK</div>
+        <div class="row" id="fav-dark"></div></div>
+      <div class="panel panel-light"><div class="panel-title">LIGHT</div>
+        <div class="row" id="fav-light"></div></div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="sec-label">Toolbar glyph <span>bare mark · no background · sits in app chrome</span></div>
+    <div class="pair">
+      <div class="panel panel-dark"><div class="panel-title">DARK · sizes</div>
+        <div class="row" id="tg-dark" style="margin-bottom:26px"></div>
+        <div class="strip strip-dark" id="strip-dark"></div></div>
+      <div class="panel panel-light"><div class="panel-title">LIGHT · sizes</div>
+        <div class="row" id="tg-light" style="margin-bottom:26px"></div>
+        <div class="strip strip-light" id="strip-light"></div></div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="sec-label">Monochrome <span>single ink · stamps, watermarks, disabled / 1-color print</span></div>
+    <div class="pair">
+      <div class="panel panel-dark"><div class="panel-title">KNOCKOUT (white)</div>
+        <div class="row" id="mono-dark"></div></div>
+      <div class="panel panel-light"><div class="panel-title">SOLID (ink)</div>
+        <div class="row" id="mono-light"></div></div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="sec-label">Wordmark lockup <span>glyph + name · headers, footers, about</span></div>
+    <div class="pair">
+      <div class="panel panel-dark"><div class="panel-title">DARK</div>
+        <div class="wordmark" id="wm-dark"></div></div>
+      <div class="panel panel-light"><div class="panel-title">LIGHT</div>
+        <div class="wordmark" id="wm-light"></div></div>
+    </div>
+    <p class="note">The white centre band is the highlight on dark surfaces; on light surfaces it swaps to ink (<code>#161a22</code>) so the three layers stay legible. The toolpath ring is decorative — drop it below ~32&nbsp;px.</p>
+  </section>
+</div>
+
+<script>
+  // Layered-N glyph, viewBox -15 -5 210 175 (aspect 1.2:1). Order: red(back) → mid → blue(front).
+  function glyph(mid, glow){
+    const gc = glow ? ' filter="url(#glowC)"' : '';
+    const gr = glow ? ' filter="url(#glowR)"' : '';
+    return `
+      <path d="M0 105 L50 105 L66 80 L116 155 L180 155" fill="none" stroke="url(#nRed)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"${gr}/>
+      <path d="M0 70 L50 70 L66 45 L116 120 L180 120" fill="none" stroke="${mid}" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M0 35 L50 35 L66 10 L116 85 L180 85" fill="none" stroke="url(#nCyan)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"${gc}/>`;
+  }
+  function glyphMono(color){
+    return `
+      <path d="M0 105 L50 105 L66 80 L116 155 L180 155" fill="none" stroke="${color}" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M0 70 L50 70 L66 45 L116 120 L180 120" fill="none" stroke="${color}" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
+      <path d="M0 35 L50 35 L66 10 L116 85 L180 85" fill="none" stroke="${color}" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }
+  function ring(dark){
+    const op = dark ? 0.42 : 0.5;
+    return `
+      <circle cx="50" cy="50" r="34" fill="none" stroke="url(#nCyan)" stroke-width="0.9" stroke-dasharray="3 4 22 4 3 4 40 4" opacity="${op}" transform="rotate(-45 50 50)"/>
+      <circle cx="50" cy="50" r="37.5" fill="none" stroke="url(#nCyan)" stroke-width="0.4" stroke-dasharray="1 2.2" opacity="0.28"/>`;
+  }
+  function appIcon(size, dark){
+    const bg = dark ? '#14151c' : '#eef1f5';
+    const mid = dark ? '#ffffff' : '#161a22';
+    return `<svg width="${size}" height="${size}" viewBox="0 0 100 100">
+      <rect width="100" height="100" rx="22" fill="${bg}"/>
+      ${ring(dark)}
+      <svg x="22" y="27" width="56" height="47" viewBox="-15 -5 210 175">${glyph(mid, dark)}</svg>
+    </svg>`;
+  }
+  function chip(size, dark){
+    const bg = dark ? '#14151c' : '#eef1f5';
+    const mid = dark ? '#ffffff' : '#161a22';
+    return `<svg width="${size}" height="${size}" viewBox="0 0 100 100">
+      <rect width="100" height="100" rx="22" fill="${bg}"/>
+      <svg x="16" y="24" width="68" height="57" viewBox="-15 -5 210 175">${glyph(mid, dark && size>40)}</svg>
+    </svg>`;
+  }
+  function mark(h, dark){
+    const mid = dark ? '#ffffff' : '#161a22';
+    return `<svg width="${(h*1.2).toFixed(0)}" height="${h}" viewBox="-15 -5 210 175">${glyph(mid, dark && h>40)}</svg>`;
+  }
+  function markMono(h, color){
+    return `<svg width="${(h*1.2).toFixed(0)}" height="${h}" viewBox="-15 -5 210 175">${glyphMono(color)}</svg>`;
+  }
+  const cap = (s,el)=>`<div class="item">${s}<div class="cap">${el}</div></div>`;
+
+  document.getElementById('ai-dark').innerHTML  = [128,64,32].map(s=>cap(appIcon(s,true), s+'px')).join('');
+  document.getElementById('ai-light').innerHTML = [128,64,32].map(s=>cap(appIcon(s,false),s+'px')).join('');
+  document.getElementById('fav-dark').innerHTML  = [48,32,16].map(s=>cap(chip(s,true), s+'px')).join('');
+  document.getElementById('fav-light').innerHTML = [48,32,16].map(s=>cap(chip(s,false),s+'px')).join('');
+  document.getElementById('tg-dark').innerHTML  = [40,24,20,16].map(s=>cap(mark(s,true), s+'px')).join('');
+  document.getElementById('tg-light').innerHTML = [40,24,20,16].map(s=>cap(mark(s,false),s+'px')).join('');
+  document.getElementById('mono-dark').innerHTML  = [48,24,16].map(s=>cap(markMono(s,'#ffffff'), s+'px')).join('');
+  document.getElementById('mono-light').innerHTML = [48,24,16].map(s=>cap(markMono(s,'#16181f'),s+'px')).join('');
+
+  const caret = `<svg class="caret" width="9" height="9" viewBox="0 0 10 10" fill="none"><path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const folder = `<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h2.4l1.4 1.5H10.5A1.5 1.5 0 0 1 12 5v5.5A1.5 1.5 0 0 1 10.5 12h-7A1.5 1.5 0 0 1 2 10.5v-7z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
+  const stripInner = (dark)=>`${mark(22,dark)}<span class="wm">n3o-slic3r</span>${caret}<span class="div"></span><span class="file">${folder} balcony-clip</span>`;
+  document.getElementById('strip-dark').innerHTML  = stripInner(true);
+  document.getElementById('strip-light').innerHTML = stripInner(false);
+
+  document.getElementById('wm-dark').innerHTML  = `${mark(46,true)}<span class="name">n3o-slic3r</span>`;
+  document.getElementById('wm-light').innerHTML = `${mark(46,false)}<span class="name">n3o-slic3r</span>`;
+</script>
+</body>
+</html>
