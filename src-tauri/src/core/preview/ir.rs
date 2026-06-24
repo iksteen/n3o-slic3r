@@ -73,6 +73,12 @@ pub struct SegmentSet {
     /// by hover inspection to surface the source
     /// command for a raycast-hit segment.
     pub source_line: Vec<u32>,
+    /// Extrusion line width per segment, mm (`;WIDTH:` / `; LINE_WIDTH:`).
+    /// Sizes the tube cross-section's horizontal extent. 0 for travels.
+    pub width: Vec<f32>,
+    /// Extrusion layer height per segment, mm (`;HEIGHT:` / `; LAYER_HEIGHT:`).
+    /// The tube cross-section's vertical extent. 0 for travels.
+    pub height: Vec<f32>,
 }
 
 impl SegmentSet {
@@ -105,6 +111,8 @@ impl SegmentSet {
         self.flow.push(seg.flow);
         self.tool.push(seg.tool);
         self.source_line.push(seg.source_line);
+        self.width.push(seg.width);
+        self.height.push(seg.height);
     }
 }
 
@@ -120,6 +128,8 @@ pub(crate) struct Segment {
     pub flow: f32,
     pub tool: u8,
     pub source_line: u32,
+    pub width: f32,
+    pub height: f32,
 }
 
 /// Marker for a retract point — `E` decreased without an XY move.

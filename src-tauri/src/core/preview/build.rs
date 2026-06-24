@@ -39,6 +39,15 @@ const FILAMENT_DIAMETER_MM: f32 = 1.75;
 const FILAMENT_CROSS_SECTION_MM2: f32 =
     std::f32::consts::PI * (FILAMENT_DIAMETER_MM * 0.5) * (FILAMENT_DIAMETER_MM * 0.5);
 
+/// Tube dimensions used when the gcode carries no `;WIDTH:`/`;HEIGHT:`
+/// annotation. Both MVP printers always emit them, so this only bites
+/// foreign gcode (3MF import from a slicer that omits the tags); an
+/// approximate-but-visible tube beats a zero-width invisible one.
+/// ponytail: constant fallback; flow/(speed·height) gives a per-segment
+/// width estimate if a real slicer that drops the tags ever matters.
+const DEFAULT_EXTRUSION_WIDTH_MM: f32 = 0.42;
+const DEFAULT_LAYER_HEIGHT_MM: f32 = 0.2;
+
 /// State carried through the walk. Initial position is at the
 /// origin with no extrusion + no feedrate — `G28` would establish
 /// this in real printer flow, but we don't depend on seeing it.
@@ -56,6 +65,10 @@ struct WalkState {
     feature: FeatureType,
     layer_index: u32,
     layer_z: f32,
+    /// Most recent `;WIDTH:` / `;HEIGHT:` annotation (mm). 0 = none
+    /// seen yet → the push site substitutes the default.
+    width: f32,
+    height: f32,
 }
 
 impl Default for WalkState {
@@ -75,6 +88,8 @@ impl Default for WalkState {
             feature: FeatureType::Travel,
             layer_index: 0,
             layer_z: 0.0,
+            width: 0.0,
+            height: 0.0,
         }
     }
 }
@@ -134,6 +149,16 @@ pub fn build_preview(lines: &[Line]) -> PreviewGeometry {
                         state.layer_z,
                         geom.extrusions.len() as u32,
                     );
+                    let width = if state.width > 1e-4 {
+                        state.width
+                    } else {
+                        DEFAULT_EXTRUSION_WIDTH_MM
+                    };
+                    let height = if state.height > 1e-4 {
+                        state.height
+                    } else {
+                        DEFAULT_LAYER_HEIGHT_MM
+                    };
                     for w in points.windows(2) {
                         let (a, b) = (w[0], w[1]);
                         let length = euclidean(a, b);
@@ -153,6 +178,8 @@ pub fn build_preview(lines: &[Line]) -> PreviewGeometry {
                             flow: flow_mm3_s,
                             tool: state.tool,
                             source_line: line_idx,
+                            width,
+                            height,
                         });
                         geom.bounding_box.extend(a);
                         geom.bounding_box.extend(b);
@@ -184,6 +211,9 @@ pub fn build_preview(lines: &[Line]) -> PreviewGeometry {
                             flow: 0.0,
                             tool: state.tool,
                             source_line: line_idx,
+                            // Travels render as a fixed thin tube; w/h unused.
+                            width: 0.0,
+                            height: 0.0,
                         });
                     }
                 }
@@ -228,6 +258,10 @@ pub fn build_preview(lines: &[Line]) -> PreviewGeometry {
                     // future extrusion segments).
                     state.layer_z = *z;
                     state.z = *z;
+                } else if let Some(SemanticComment::Width(w)) = &c.semantic {
+                    state.width = *w;
+                } else if let Some(SemanticComment::Height(h)) = &c.semantic {
+                    state.height = *h;
                 }
             }
 
@@ -514,6 +548,21 @@ mod tests {
         // Travel at index 0, extrusions at indices 1 and 2.
         assert_eq!(g.travels.source_line, vec![0]);
         assert_eq!(g.extrusions.source_line, vec![1, 2]);
+    }
+
+    #[test]
+    fn width_height_track_comments_then_fall_back() {
+        // First extrusion picks up the preceding `;WIDTH:`/`;HEIGHT:`;
+        // the second has no fresh annotation but inherits the last seen;
+        // an extrusion before any annotation gets the defaults.
+        let src = "G1 X0 Y0 Z0.2 F1800\n\
+                   G1 X10 Y0 E0.5 F1200\n\
+                   ;WIDTH:0.6\n;HEIGHT:0.3\n\
+                   G1 X10 Y10 E1.0 F1200\n\
+                   G1 X0 Y10 E1.5 F1200\n";
+        let g = build(src);
+        assert_eq!(g.extrusions.width, vec![DEFAULT_EXTRUSION_WIDTH_MM, 0.6, 0.6]);
+        assert_eq!(g.extrusions.height, vec![DEFAULT_LAYER_HEIGHT_MM, 0.3, 0.3]);
     }
 
     #[test]

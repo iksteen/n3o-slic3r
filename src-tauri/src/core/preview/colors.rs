@@ -316,6 +316,8 @@ mod tests {
             flow: 5.0,
             tool: 0,
             source_line: 0,
+            width: 0.45,
+            height: 0.2,
         });
         s.push(Segment {
             start: [10.0, 0.0, 0.2],
@@ -326,6 +328,8 @@ mod tests {
             flow: 10.0,
             tool: 1,
             source_line: 1,
+            width: 0.45,
+            height: 0.2,
         });
         s
     }
@@ -361,6 +365,8 @@ mod tests {
                 flow: 5.0,
                 tool,
                 source_line: 0,
+                width: 0.45,
+                height: 0.2,
             });
         }
         let c = encode_colors(&s, ColorMode::Tool, Palette::Default, None);
@@ -408,6 +414,8 @@ mod tests {
             flow: 5.0,
             tool: 0,
             source_line: 0,
+            width: 0.45,
+            height: 0.2,
         });
         s.push(Segment {
             start: [0.0; 3],
@@ -418,6 +426,8 @@ mod tests {
             flow: 5.0,
             tool: 0,
             source_line: 1,
+            width: 0.45,
+            height: 0.2,
         });
         // Layer 0 fast, layer 1 slow.
         let layer_times = vec![10.0_f32, 120.0_f32];
@@ -448,6 +458,8 @@ mod tests {
                 flow: 5.0,
                 tool: 0,
                 source_line: 0,
+                width: 0.45,
+                height: 0.2,
             });
         }
         let c = encode_colors(&s, ColorMode::Speed, Palette::Default, None);

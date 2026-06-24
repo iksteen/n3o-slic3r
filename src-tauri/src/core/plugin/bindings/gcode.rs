@@ -309,6 +309,8 @@ fn semantic_name(s: &SemanticComment) -> &'static str {
         SemanticComment::PrinterModel(_) => "printer_model",
         SemanticComment::ExtruderTemp(_) => "extruder_temp",
         SemanticComment::BedTemp(_) => "bed_temp",
+        SemanticComment::Width(_) => "width",
+        SemanticComment::Height(_) => "height",
     }
 }
 

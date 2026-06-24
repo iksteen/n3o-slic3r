@@ -474,14 +474,26 @@ fn parse_semantic_comment(content: &str, last_seen_z: &mut Option<f32>) -> Optio
         }
     }
 
-    // `;HEIGHT:<height>` is NOT a Z marker — it's the per-
-    // extrusion line thickness annotation (variable layer height,
-    // bridges, etc.). The earlier "map to Z" mapping was wrong and
-    // caused preview segments to render at the bridge/top-shell
-    // height (e.g., 0.4 or 0.2) instead of their actual layer Z
-    // — the cap appeared to render at z=0. We intentionally drop
-    // this token rather than introduce a new SemanticComment
-    // variant; no consumer needs per-segment thickness today.
+    // Per-extrusion line width / layer height. These size the
+    // preview tubes. Two flavors: `;WIDTH:`/`;HEIGHT:` (non-BBL,
+    // e.g. Snapmaker U1) and `; LINE_WIDTH: `/`; LAYER_HEIGHT: `
+    // (BBL, e.g. A1 mini). HEIGHT is NOT a Z marker — mapping it to
+    // Z (an old bug) rendered top-shell/bridge segments at the wrong
+    // layer; it's the segment's own thickness, kept separate.
+    for prefix in ["line_width:", "width:"] {
+        if let Some(rest) = strip_prefix_ci(trimmed, prefix) {
+            if let Ok(w) = rest.trim().parse::<f32>() {
+                return Some(SemanticComment::Width(w));
+            }
+        }
+    }
+    for prefix in ["layer_height:", "height:"] {
+        if let Some(rest) = strip_prefix_ci(trimmed, prefix) {
+            if let Ok(h) = rest.trim().parse::<f32>() {
+                return Some(SemanticComment::Height(h));
+            }
+        }
+    }
 
     // `; estimated printing time (normal mode) = …` /
     // `; estimated printing time = …`
@@ -764,24 +776,35 @@ mod tests {
     }
 
     #[test]
-    fn height_comment_is_not_treated_as_z() {
-        // Regression: `;HEIGHT:0.4` (Bambu/Prusa per-extrusion line
-        // thickness annotation) used to be miscoerced into a `;Z:0.4`
-        // semantic, which then reset state.z in the preview IR. A
-        // bridge segment in the middle of layer 80 (z=16.2) would
-        // render at z=0.4 in the preview, making the "top cap"
-        // appear to bleed down to the bed when scrubbing the layer
-        // slider. `;HEIGHT:` should be ignored at the semantic
-        // layer: not Z, not anything we care about today.
+    fn height_comment_is_thickness_not_z() {
+        // Regression: `;HEIGHT:0.4` (the per-extrusion thickness
+        // annotation) was once miscoerced into a `;Z:0.4` semantic,
+        // resetting state.z in the preview IR — a bridge segment mid
+        // -layer (z=16.2) rendered at z=0.4, the "top cap" bleeding to
+        // the bed when scrubbing the slider. It must parse as Height
+        // (the tube thickness), never Z.
         let src = ";HEIGHT:0.4\n";
-        let lines = parse_str(src);
-        match &lines[0] {
-            Line::Comment(c) => assert!(
-                c.semantic.is_none(),
-                ";HEIGHT: should not produce a semantic, got {:?}",
-                c.semantic,
-            ),
+        match &parse_str(src)[0] {
+            Line::Comment(c) => assert_eq!(c.semantic, Some(SemanticComment::Height(0.4))),
             other => panic!("expected Comment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn width_height_both_flavors_parse() {
+        // Non-BBL (U1) emits `;WIDTH:`/`;HEIGHT:`; BBL (A1 mini) emits
+        // `; LINE_WIDTH: `/`; LAYER_HEIGHT: `. Both must reach the IR.
+        let cases = [
+            (";WIDTH:0.42\n", SemanticComment::Width(0.42)),
+            ("; LINE_WIDTH: 0.45\n", SemanticComment::Width(0.45)),
+            (";HEIGHT:0.2\n", SemanticComment::Height(0.2)),
+            ("; LAYER_HEIGHT: 0.16\n", SemanticComment::Height(0.16)),
+        ];
+        for (src, want) in cases {
+            match &parse_str(src)[0] {
+                Line::Comment(c) => assert_eq!(c.semantic.as_ref(), Some(&want), "src {src:?}"),
+                other => panic!("expected Comment for {src:?}, got {other:?}"),
+            }
         }
     }
 

@@ -254,6 +254,12 @@ pub enum SemanticComment {
     ExtruderTemp(f32),
     /// `M140 S60` / `M190 S60` bed temp likewise.
     BedTemp(f32),
+    /// Per-extrusion line width (mm). `;WIDTH:<w>` (non-BBL flavor)
+    /// or `; LINE_WIDTH: <w>` (BBL flavor). Sizes the preview tubes.
+    Width(f32),
+    /// Per-extrusion layer height (mm). `;HEIGHT:<h>` (non-BBL) or
+    /// `; LAYER_HEIGHT: <h>` (BBL). The tube's vertical thickness.
+    Height(f32),
 }
 
 /// Feature-type classification for a Move. Matches FR-GP-3's list,
