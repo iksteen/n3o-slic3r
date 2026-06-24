@@ -1,16 +1,13 @@
 //! Tauri command surface for the preview pipeline.
 //!
-//! Five commands cover the renderer's full lifecycle:
+//! These commands cover the preview's load + inspection lifecycle.
+//! Rendering is owned by [`crate::toolpath_render`], which pulls the
+//! IR from the registry by handle and draws it as instanced tubes —
+//! geometry never crosses the IPC bridge.
 //!
 //! - [`preview_load`] — parse + build IR + compute stats. Returns
 //!   a [`PreviewLoadResponse`] with the handle, header metadata,
-//!   and layer/segment counts the frontend needs to allocate
-//!   buffer space.
-//! - [`preview_buffers`] — return the binary vertex buffers
-//!   for one color mode. Mirrors the `scene_mesh_buffers` pattern
-//!   (binary `tauri::ipc::Response`) — 50MB G-code → ~36MB binary
-//!   payload, ~3× faster across the IPC boundary than the
-//!   JSON-stringified equivalent.
+//!   and layer/segment counts the frontend needs.
 //! - [`preview_layer_stats`] — per-layer stats as JSON (small;
 //!   one row per layer).
 //! - [`preview_segment_detail`] — hover-inspection lookup for one
@@ -29,12 +26,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::{ipc::Response, State};
+use tauri::State;
 
 use crate::core::gcode::{parse_str, FeatureType, HeaderMetadata, Line, Move};
 
 use super::build::build_preview;
-use super::colors::{encode_colors, ColorMode, Palette};
 use super::ir::BoundingBox;
 use super::registry::{LoadedPreview, PreviewHandle, PreviewRegistry};
 use super::stats::{compute_job_stats, compute_layer_stats, FullJobStats, PerLayerStats};
@@ -181,39 +177,6 @@ fn register_preview(
     }
 }
 
-/// Return the binary vertex + color + layer-index buffers for the
-/// requested handle + color mode. Mirrors the
-/// `scene_mesh_buffers` pattern: sent as a binary `Response` so
-/// the IPC layer skips JSON stringification of millions of floats.
-///
-/// Buffer layout (little-endian):
-///
-/// ```text
-/// [extrusion positions: 6 × extrusion_count floats]
-/// [extrusion colors:    6 × extrusion_count floats]
-/// [extrusion layers:    2 × extrusion_count floats]
-/// [travel positions:    6 × travel_count    floats]
-/// [travel layers:       2 × travel_count    floats]
-/// [retraction positions: 3 × retraction_count floats]
-/// [retraction layers:    1 × retraction_count floats]
-/// ```
-///
-/// Caller computes section offsets from the counts the load
-/// response carried.
-#[tauri::command]
-#[tracing::instrument(skip(registry))]
-pub fn preview_buffers(
-    handle: PreviewHandle,
-    color_mode: ColorMode,
-    palette: Palette,
-    registry: State<Arc<PreviewRegistry>>,
-) -> Result<Response, String> {
-    let bytes = registry
-        .with(handle, |p| pack_buffers(p, color_mode, palette))
-        .ok_or_else(|| format!("unknown preview handle {}", handle.0))?;
-    Ok(Response::new(bytes))
-}
-
 /// Return the per-layer stats as JSON. Small payload (~one row
 /// per layer × ~200 bytes/row) — JSON is fine here, no binary
 /// optimization required.
@@ -289,6 +252,8 @@ pub fn preview_segment_detail(
                 layer_index: segs.layer_index[i * 2] as u32,
                 tool: segs.tool[i],
                 extrusion_mm,
+                width: segs.width[i],
+                height: segs.height[i],
             })
         })
         .ok_or_else(|| format!("unknown preview handle {}", handle.0))?
@@ -322,6 +287,9 @@ pub struct SegmentDetail {
     pub layer_index: u32,
     pub tool: u8,
     pub extrusion_mm: f32,
+    /// Extrusion line width / layer height (mm) for the hover tooltip.
+    pub width: f32,
+    pub height: f32,
 }
 
 fn line_raw_text(line: &Line) -> String {
@@ -347,54 +315,6 @@ fn euclidean(a: [f32; 3], b: [f32; 3]) -> f32 {
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
-fn pack_buffers(preview: &LoadedPreview, color_mode: ColorMode, palette: Palette) -> Vec<u8> {
-    let layer_times = preview
-        .layer_stats
-        .iter()
-        .map(|s| s.duration_seconds)
-        .collect::<Vec<_>>();
-    let ext_colors = encode_colors(
-        &preview.geometry.extrusions,
-        color_mode,
-        palette,
-        Some(&layer_times),
-    );
-
-    let ext = &preview.geometry.extrusions;
-    let tra = &preview.geometry.travels;
-    let ret = &preview.geometry.retractions;
-
-    // Pre-size: positions + colors + layers for extrusions +
-    // positions + layers for travels + (3 + 1) per retraction.
-    let cap_f32 = ext.positions.len()
-        + ext_colors.len()
-        + ext.layer_index.len()
-        + tra.positions.len()
-        + tra.layer_index.len()
-        + ret.len() * 4;
-    let mut out = Vec::with_capacity(cap_f32 * 4);
-
-    write_f32_slice(&mut out, &ext.positions);
-    write_f32_slice(&mut out, &ext_colors);
-    write_f32_slice(&mut out, &ext.layer_index);
-    write_f32_slice(&mut out, &tra.positions);
-    write_f32_slice(&mut out, &tra.layer_index);
-    for r in ret {
-        out.extend_from_slice(&r.position[0].to_le_bytes());
-        out.extend_from_slice(&r.position[1].to_le_bytes());
-        out.extend_from_slice(&r.position[2].to_le_bytes());
-    }
-    for r in ret {
-        out.extend_from_slice(&(r.layer_index as f32).to_le_bytes());
-    }
-    out
-}
-
-fn write_f32_slice(out: &mut Vec<u8>, slice: &[f32]) {
-    for &v in slice {
-        out.extend_from_slice(&v.to_le_bytes());
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -455,34 +375,6 @@ mod tests {
     }
 
     #[test]
-    fn buffers_pack_matches_expected_byte_count() {
-        let src = fixture_gcode();
-        let lines = parse_str(&src);
-        let geom = build_preview(&lines);
-        let ls = compute_layer_stats(&geom);
-        let js = compute_job_stats(&geom, &ls);
-        let preview = LoadedPreview {
-            source_path: PathBuf::from("(in-memory)"),
-            header: HeaderMetadata::default(),
-            geometry: geom,
-            layer_stats: ls,
-            job_stats: js,
-            lines,
-        };
-
-        let bytes = pack_buffers(&preview, ColorMode::Feature, Palette::Default);
-        let ext_count = preview.geometry.extrusions.len();
-        let tra_count = preview.geometry.travels.len();
-        let ret_count = preview.geometry.retractions.len();
-        // 4 bytes per f32; per-segment counts:
-        //   extrusion positions 6, colors 6, layers 2 → 14 floats
-        //   travel positions 6, layers 2 → 8 floats
-        //   retraction position 3, layer 1 → 4 floats
-        let expected_floats = ext_count * (6 + 6 + 2) + tra_count * (6 + 2) + ret_count * 4;
-        assert_eq!(bytes.len(), expected_floats * 4);
-    }
-
-    #[test]
     fn segment_detail_surfaces_source_line_text() {
         let src = fixture_gcode();
         let lines = parse_str(&src);
@@ -517,6 +409,8 @@ mod tests {
                     layer_index: segs.layer_index[0] as u32,
                     tool: segs.tool[i],
                     extrusion_mm: 0.5,
+                    width: segs.width[i],
+                    height: segs.height[i],
                 })
             })
             .unwrap()

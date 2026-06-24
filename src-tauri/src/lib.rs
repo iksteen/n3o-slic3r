@@ -8,6 +8,8 @@
 
 pub mod core;
 mod dialog;
+mod toolpath_render;
+mod viewport_gpu;
 mod viewport_render;
 
 use std::sync::{Arc, Mutex};
@@ -64,6 +66,7 @@ pub fn run() {
         .manage(Arc::new(core::driver::camera::CameraManager::new()))
         .manage(Arc::new(core::driver::commands::SendCancelRegistry::default()))
         .manage(viewport_render::ViewportState::default())
+        .manage(toolpath_render::ToolpathState::default())
         .setup(|app| {
             use tauri::Manager;
 
@@ -256,10 +259,12 @@ pub fn run() {
             core::slice::commands::slice_status,
             core::preview::commands::preview_load,
             core::preview::commands::preview_load_gcode_3mf,
-            core::preview::commands::preview_buffers,
             core::preview::commands::preview_layer_stats,
             core::preview::commands::preview_segment_detail,
             core::preview::commands::preview_drop,
+            toolpath_render::toolpath_frame,
+            toolpath_render::toolpath_pick,
+            toolpath_render::toolpath_drop,
             core::driver::commands::driver_register,
             core::driver::commands::driver_test_connection,
             core::driver::commands::driver_unregister,
