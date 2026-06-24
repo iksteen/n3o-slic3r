@@ -69,6 +69,10 @@ struct WalkState {
     /// seen yet → the push site substitutes the default.
     width: f32,
     height: f32,
+    /// `M83` relative-extrusion mode. Orca/Bambu emit `M83` in the
+    /// preamble, so every `G1 ... E<v>` carries the *increment*, not a
+    /// cumulative position. Absolute (`M82`) is the G-code default.
+    relative_e: bool,
 }
 
 impl Default for WalkState {
@@ -90,6 +94,7 @@ impl Default for WalkState {
             layer_z: 0.0,
             width: 0.0,
             height: 0.0,
+            relative_e: false,
         }
     }
 }
@@ -115,13 +120,19 @@ pub fn build_preview(lines: &[Line]) -> PreviewGeometry {
                 let target_x = mv.target.x.unwrap_or(state.x);
                 let target_y = mv.target.y.unwrap_or(state.y);
                 let target_z = mv.target.z.unwrap_or(state.z);
-                let target_e = mv.target.e.unwrap_or(state.e);
 
                 if let Some(f) = mv.feedrate {
                     state.feedrate = f as f32;
                 }
 
-                let delta_e = target_e - state.e;
+                // Relative (`M83`): the E field IS the increment. Absolute
+                // (`M82`): the increment is `target_e - state.e`. Getting this
+                // wrong drops constant-E extrusions (uniform walls) as travels.
+                let delta_e = if state.relative_e {
+                    mv.target.e.unwrap_or(0.0)
+                } else {
+                    mv.target.e.unwrap_or(state.e) - state.e
+                };
                 let start = [state.x, state.y, state.z];
                 let end = [target_x, target_y, target_z];
 
@@ -222,7 +233,14 @@ pub fn build_preview(lines: &[Line]) -> PreviewGeometry {
                 state.x = target_x;
                 state.y = target_y;
                 state.z = target_z;
-                state.e = target_e;
+                // Absolute: E tracks the position. Relative: accumulate the
+                // increment (only used so an absolute G92 reset has something
+                // to reset; classification already used `delta_e` directly).
+                state.e = if state.relative_e {
+                    state.e + delta_e
+                } else {
+                    mv.target.e.unwrap_or(state.e)
+                };
             }
 
             Line::LayerChange(lc) => {
@@ -265,9 +283,20 @@ pub fn build_preview(lines: &[Line]) -> PreviewGeometry {
                 }
             }
 
-            Line::Other(_) => {
-                // M-commands, blank lines, unknown G-codes — no
-                // effect on the preview IR.
+            Line::Other(o) => {
+                // The extrusion-mode toggle + E reset live here (the parser
+                // treats M/G-config commands as `Other`). M83 → relative,
+                // M82 → absolute, G92 E<v> → set the absolute E counter.
+                let head = o.raw.trim_start().split([' ', '\t', ';']).next().unwrap_or("");
+                if head.eq_ignore_ascii_case("M83") {
+                    state.relative_e = true;
+                } else if head.eq_ignore_ascii_case("M82") {
+                    state.relative_e = false;
+                } else if head.eq_ignore_ascii_case("G92") {
+                    if let Some(e) = e_param(&o.raw) {
+                        state.e = e;
+                    }
+                }
             }
         }
     }
@@ -324,6 +353,12 @@ fn euclidean(a: [f32; 3], b: [f32; 3]) -> f32 {
     let dy = b[1] - a[1];
     let dz = b[2] - a[2];
     (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
+/// Extract the `E<value>` parameter from a raw G-code line (e.g. `G92 E0`).
+fn e_param(raw: &str) -> Option<f32> {
+    raw.split([' ', '\t'])
+        .find_map(|t| t.strip_prefix(['E', 'e']).and_then(|v| v.trim().parse::<f32>().ok()))
 }
 
 /// Tessellate a `G2`/`G3` arc into a polyline (both endpoints inclusive) so
@@ -563,6 +598,29 @@ mod tests {
         let g = build(src);
         assert_eq!(g.extrusions.width, vec![DEFAULT_EXTRUSION_WIDTH_MM, 0.6, 0.6]);
         assert_eq!(g.extrusions.height, vec![DEFAULT_LAYER_HEIGHT_MM, 0.3, 0.3]);
+    }
+
+    #[test]
+    fn relative_extrusion_mode_keeps_constant_e_walls() {
+        // M83: each `G1 ... E` is the increment, not a cumulative position.
+        // A square wall extrudes the same increment per side. In absolute
+        // mode the delta reads 0 for every side after the first and they'd
+        // drop to travels — the "missing walls" bug. With M83 honored, all
+        // four equal-E sides are extrusions.
+        let src = "M83\n\
+                   G1 X0 Y0 Z0.2 F1800\n\
+                   G1 X10 Y0 E0.5 F1200\n\
+                   G1 X10 Y10 E0.5 F1200\n\
+                   G1 X0 Y10 E0.5 F1200\n\
+                   G1 X0 Y0 E0.5 F1200\n";
+        let g = build(src);
+        assert_eq!(g.extrusions.len(), 4, "all four equal-E walls extrude");
+        // The single non-extruding move is the initial Z positioning.
+        assert_eq!(g.travels.len(), 1);
+
+        // Same gcode without M83 (absolute) drops the constant-E sides.
+        let abs = build(&src.replace("M83\n", ""));
+        assert_eq!(abs.extrusions.len(), 1, "absolute mode reads constant E as travel");
     }
 
     #[test]

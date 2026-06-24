@@ -323,12 +323,27 @@ impl FeatureType {
     }
 }
 
-/// Canonical lowercase strings → `FeatureType`. Sourced from
-/// OrcaSlicer's `GCodeProcessor.cpp` extrusion-role names (the
-/// canonical emitter on `;TYPE:` comments). PrusaSlicer's output
-/// differs slightly ("Internal infill" vs. "internal-infill"); the
-/// lower-cased match covers both.
+/// Canonical lowercase strings → `FeatureType`. Covers two emitter
+/// vocabularies on the `;TYPE:` comment: modern OrcaSlicer/Bambu role
+/// names (`ExtrusionEntity::role_to_string` — "Outer wall", "Sparse
+/// infill", …) and the legacy PrusaSlicer/Slic3r names ("External
+/// perimeter", "Internal infill", …). Match is exact on the
+/// lower-cased token, so both spellings resolve to the same variant.
 const CANONICAL_FEATURE_TOKENS: &[(&str, FeatureType)] = &[
+    // Modern OrcaSlicer / Bambu Studio role names.
+    ("outer wall", FeatureType::ExternalPerimeter),
+    ("inner wall", FeatureType::Perimeter),
+    ("overhang wall", FeatureType::ExternalPerimeter),
+    ("sparse infill", FeatureType::Infill),
+    ("internal solid infill", FeatureType::SolidInfill),
+    ("top surface", FeatureType::TopSolidInfill),
+    ("bottom surface", FeatureType::SolidInfill),
+    ("ironing", FeatureType::TopSolidInfill),
+    ("internal bridge", FeatureType::Bridge),
+    ("gap infill", FeatureType::SolidInfill),
+    ("support interface", FeatureType::Support),
+    ("support transition", FeatureType::Support),
+    // Legacy PrusaSlicer / Slic3r role names.
     ("perimeter", FeatureType::Perimeter),
     ("external perimeter", FeatureType::ExternalPerimeter),
     ("internal infill", FeatureType::Infill),
@@ -530,6 +545,21 @@ mod tests {
         assert_eq!(FeatureType::parse("Skirt"), FeatureType::Skirt);
         assert_eq!(FeatureType::parse("Brim"), FeatureType::Brim);
         assert_eq!(FeatureType::parse("Travel"), FeatureType::Travel);
+    }
+
+    #[test]
+    fn feature_type_parses_modern_bambu_role_names() {
+        // The strings OrcaSlicer/Bambu actually emit on `;TYPE:` today
+        // (ExtrusionEntity::role_to_string) — distinct from the legacy
+        // PrusaSlicer spellings above. Without these every Bambu feature
+        // collapsed to Other → one flat color in Feature mode.
+        assert_eq!(FeatureType::parse("Outer wall"), FeatureType::ExternalPerimeter);
+        assert_eq!(FeatureType::parse("Inner wall"), FeatureType::Perimeter);
+        assert_eq!(FeatureType::parse("Sparse infill"), FeatureType::Infill);
+        assert_eq!(FeatureType::parse("Internal solid infill"), FeatureType::SolidInfill);
+        assert_eq!(FeatureType::parse("Top surface"), FeatureType::TopSolidInfill);
+        assert_eq!(FeatureType::parse("Bridge"), FeatureType::Bridge);
+        assert_eq!(FeatureType::parse("Support"), FeatureType::Support);
     }
 
     #[test]
