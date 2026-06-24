@@ -849,12 +849,12 @@ pub fn scene_object_align_face(
 }
 
 /// "Lay flat on…": lay a clicked face of the selection onto the plate.
-/// `rotation` is a world-frame unit quaternion that aligns the clicked face's
-/// outward normal with -Z; `contact` is a world point on that face (the ray
-/// hit). The selection rotates rigidly about the contact point, then drops so
-/// the contact — and its now-horizontal face — sits on the plate. The clicked
-/// triangle defines the contact plane, so the placement is exact (no
-/// bounding-box gap / float).
+/// `normal` is the clicked face's world-space outward normal (from
+/// `viewport_pick_face`); the command rotates it onto -Z so the face lands flat.
+/// `contact` is a world point on that face (the ray hit). The selection rotates
+/// rigidly about the contact point, then drops so the contact — and its
+/// now-horizontal face — sits on the plate. The clicked triangle defines the
+/// contact plane, so the placement is exact (no bounding-box gap / float).
 ///
 /// `expand_groups` supports the selection-less pick path: when the user lays
 /// flat with nothing selected, the click identifies a single object, and we
@@ -865,7 +865,7 @@ pub fn scene_object_align_face(
 #[tracing::instrument(skip(state, window))]
 pub fn scene_object_lay_flat_on(
     ids: Vec<ObjectId>,
-    rotation: [f32; 4],
+    normal: [f32; 3],
     contact: [f32; 3],
     expand_groups: Option<bool>,
     window: Window,
@@ -874,11 +874,12 @@ pub fn scene_object_lay_flat_on(
     if ids.is_empty() {
         return Ok(());
     }
-    let q = glam::Quat::from_xyzw(rotation[0], rotation[1], rotation[2], rotation[3]);
-    if q.length_squared() < 1e-6 {
-        return Err("lay_flat_on: degenerate rotation".into());
+    let n = glam::Vec3::from(normal);
+    if n.length_squared() < 1e-6 {
+        return Err("lay_flat_on: degenerate normal".into());
     }
-    let q = q.normalize();
+    // Shortest-arc rotation taking the clicked face's outward normal to -Z.
+    let q = glam::Quat::from_rotation_arc(n.normalize(), -glam::Vec3::Z);
     let contact = glam::Vec3::new(contact[0], contact[1], contact[2]);
     let events = {
         let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;

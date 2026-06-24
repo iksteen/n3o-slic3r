@@ -16,7 +16,7 @@ use wgpu::util::DeviceExt;
 
 use crate::core::printer::{instance_registry, PrinterInstance, SlotRef};
 use crate::core::project::Project;
-use crate::core::scene::state::{mesh_bb_corners, MeshId};
+use crate::core::scene::state::{mesh_bb_corners, MeshId, ObjectId};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -188,9 +188,10 @@ pub enum GizmoMode {
 }
 
 /// Camera + target the frontend passes per frame (camera is frontend-owned).
-/// `drag_pre` is a transient local drag preview: the listed objects are
-/// world-space pre-multiplied by it for this frame only — no scene-state change —
-/// so dragging stays smooth; the real transforms commit once on release.
+/// `gizmo_drag`, when present, is a transient drag preview: the active gizmo
+/// handle + cursor are resolved Rust-side into a world pre-multiply applied to
+/// the selection for this frame only — no scene-state change — so dragging stays
+/// smooth; the real transforms commit once on release (`viewport_gizmo_commit`).
 #[derive(serde::Deserialize)]
 pub struct FrameRequest {
     pub width: u32,
@@ -199,37 +200,32 @@ pub struct FrameRequest {
     pub el: f32,
     pub dist: f32,
     pub center: [f32; 3],
-    #[serde(default)]
-    pub drag_ids: Vec<u64>,
-    /// World-space transform applied to `drag_ids` this frame (column-major 4x4).
-    #[serde(default = "identity16")]
-    pub drag_pre: [f32; 16],
     /// Which gizmo to show at the selection center.
     #[serde(default)]
     pub gizmo: GizmoMode,
-    /// Orientation for the scale gizmo's axes (quaternion xyzw): a single
-    /// selection scales along its own (rotated) axes; multi/identity is world.
-    #[serde(default = "ident_quat")]
-    pub gizmo_basis: [f32; 4],
-    /// A handle drag is in progress — draws the active axis guide line.
+    /// An in-progress handle drag: the grabbed handle + current cursor. The
+    /// preview transform is derived from it Rust-side (see `compute_pre`).
     #[serde(default)]
-    pub gizmo_dragging: bool,
+    pub gizmo_drag: Option<GizmoDrag>,
     /// Hovered gizmo handle to highlight: for Move 0/1/2 = X/Y/Z axis, 3/4/5 =
     /// XY/YZ/XZ plane; for Rotate 0/1/2 = X/Y/Z ring; -1 = none.
     #[serde(default = "neg_one")]
     pub gizmo_hover: i32,
 }
 
+/// A live handle drag: the handle captured at grab time plus the current cursor
+/// (canvas pixels) and whether Shift (freehand, no snap) is held.
+#[derive(serde::Deserialize)]
+pub struct GizmoDrag {
+    pub grab: GizmoGrab,
+    pub sx: f32,
+    pub sy: f32,
+    #[serde(default)]
+    pub shift: bool,
+}
+
 fn neg_one() -> i32 {
     -1
-}
-
-fn identity16() -> [f32; 16] {
-    Mat4::IDENTITY.to_cols_array()
-}
-
-fn ident_quat() -> [f32; 4] {
-    [0.0, 0.0, 0.0, 1.0]
 }
 
 /// One paint-state index group within a mesh: the triangles painted with
@@ -701,6 +697,409 @@ fn selection_world_aabb(p: &Project, drag_ids: &[u64], pre: Mat4) -> Option<(Vec
     any.then_some((mn, mx))
 }
 
+// ─────────────────── gizmo interaction: Rust-owned hit-test + drag math ───────────
+//
+// The frontend captures pointer input and blits frames; all 3D math lives here.
+// `viewport_grab` hit-tests the cursor against the active gizmo's handles (or the
+// selected body / empty space) and returns a `GizmoGrab` capturing the constraint.
+// Each frame of a drag passes that grab back via `FrameRequest::gizmo_drag`;
+// `frame` calls `compute_pre` to turn grab + cursor into a world pre-multiply
+// applied to the selection (preview only). On release `viewport_gizmo_commit`
+// recomputes the same matrix and returns `pre · start` per selected object.
+
+/// 1 mm translation snap and 15° rotation snap — mirror the frontend defaults.
+const TRANSLATE_SNAP_MM: f32 = 1.0;
+const ROTATE_SNAP_RAD: f32 = std::f32::consts::PI * 15.0 / 180.0;
+
+fn snap_to(v: f32, step: f32) -> f32 {
+    (v / step).round() * step
+}
+
+/// Which transform a grabbed handle drives.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GrabKind {
+    Move,
+    Rotate,
+    Scale,
+}
+
+/// A grabbed gizmo handle (or free-move body): the constraint captured at grab
+/// time, stateless so drag/commit can recompute the transform from the cursor
+/// alone. Round-trips to the frontend as an opaque blob.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy)]
+pub struct GizmoGrab {
+    /// Handle index (Move 0/1/2 axis, 3/4/5 plane; Rotate 0/1/2 ring; Scale
+    /// 0/1/2 axis, 3/4/5 plane, 6 center). -1 for the free-move body.
+    pub idx: i32,
+    pub kind: GrabKind,
+    /// Constraint plane (move/scale) the cursor ray intersects to track motion.
+    pub plane_n: [f32; 3],
+    pub plane_p: [f32; 3],
+    /// Single-axis move direction; `None` → full in-plane delta (planar / free).
+    pub axis_dir: Option<[f32; 3]>,
+    /// Rotate ring axis.
+    pub rot_axis: Option<[f32; 3]>,
+    /// Scale: which local axes the factor applies to (with `uniform` = all).
+    pub scale_mask: Option<[bool; 3]>,
+    pub uniform: bool,
+    pub pivot: [f32; 3],
+    /// Cursor's world hit on the constraint plane at grab time (delta origin).
+    pub start_hit: [f32; 3],
+    /// Scale basis (object axes for a single selection, world otherwise), xyzw.
+    pub basis: [f32; 4],
+    /// Selection size along the basis axes, for the 1 mm scale-dimension snap.
+    pub scale_extent: [f32; 3],
+}
+
+/// What the cursor grabbed. `Empty` = hit nothing/unselected (the frontend then
+/// checks the tower, else orbits); `Inert` = pressed the selected body in a
+/// gizmo mode (no drag); `Orbit` = navigate.
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum GrabResult {
+    Orbit,
+    Inert,
+    Empty,
+    Gizmo { grab: GizmoGrab },
+}
+
+/// Cursor world ray (origin, unit dir) for the orbit camera — the same
+/// unprojection the pick uses, so handle hit-tests match what's drawn.
+fn cursor_ray(w: f32, h: f32, x: f32, y: f32, az: f32, el: f32, dist: f32, center: Vec3) -> (Vec3, Vec3) {
+    let inv = view_proj(w, h, az, el, dist, center).inverse();
+    let ndc = Vec3::new(2.0 * x / w - 1.0, 1.0 - 2.0 * y / h, 0.0);
+    let ro = inv.project_point3(ndc);
+    let far = inv.project_point3(Vec3::new(ndc.x, ndc.y, 1.0));
+    (ro, (far - ro).normalize())
+}
+
+/// Cursor eye position (matches `view_proj`) — for screen-constant handle sizing.
+fn cam_eye(az: f32, el: f32, dist: f32, center: Vec3) -> Vec3 {
+    let (ce, se) = (el.cos(), el.sin());
+    let (ca, sa) = (az.cos(), az.sin());
+    center + dist * Vec3::new(ce * ca, ce * sa, se)
+}
+
+/// Ray↔plane intersection. `None` when parallel or the hit is behind the camera
+/// (matches three.js `Ray.intersectPlane`, which the frontend used).
+fn ray_plane(ro: Vec3, rd: Vec3, n: Vec3, p: Vec3) -> Option<Vec3> {
+    let denom = n.dot(rd);
+    if denom.abs() < 1e-9 {
+        return None;
+    }
+    let t = n.dot(p - ro) / denom;
+    (t >= 0.0).then_some(ro + rd * t)
+}
+
+/// Closest distance between the ray and segment [a,b], with the ray parameter at
+/// the closest point (picks the nearest handle to the camera).
+fn ray_seg_dist(ro: Vec3, rd: Vec3, a: Vec3, b: Vec3) -> (f32, f32) {
+    let ab = b - a;
+    let r = ro - a;
+    let (aa, bb, d, e) = (ab.dot(ab), ab.dot(rd), ab.dot(r), rd.dot(r));
+    let denom = aa - bb * bb;
+    let s = if denom > 1e-9 { ((d - bb * e) / denom).clamp(0.0, 1.0) } else { 0.0 };
+    let t = (bb * s - e).max(0.0);
+    ((a + ab * s - (ro + rd * t)).length(), t)
+}
+
+/// Distance from the ray to point `p`, with the ray parameter at the closest
+/// point (picks the center uniform-scale handle).
+fn ray_point_dist(ro: Vec3, rd: Vec3, p: Vec3) -> (f32, f32) {
+    let t = (p - ro).dot(rd).max(0.0);
+    ((p - (ro + rd * t)).length(), t)
+}
+
+/// Signed angle from `v0` to `v1` measured about `axis` (right-hand rule).
+fn signed_angle(v0: Vec3, v1: Vec3, axis: Vec3) -> f32 {
+    axis.dot(v0.cross(v1)).atan2(v0.dot(v1))
+}
+
+/// Scale-gizmo basis: a single selected object scales along its own (rotated)
+/// axes; multi/none is world-aligned. Mirrors the frontend `computeBasis`.
+fn selection_basis(p: &Project) -> Quat {
+    let plate = p.active_plate();
+    if plate.scene.selection.len() == 1 {
+        if let Some((_, o)) = plate
+            .scene
+            .objects
+            .iter()
+            .find(|(id, _)| plate.scene.selection.contains(id))
+        {
+            let (_, q, _) = o.transform.to_mat4().to_scale_rotation_translation();
+            if q.is_finite() {
+                return q.normalize();
+            }
+        }
+    }
+    Quat::IDENTITY
+}
+
+/// Selection bounding-box size along the axes of `basis` (the scale-snap reference).
+fn selection_extent(p: &Project, basis: Quat) -> Vec3 {
+    let plate = p.active_plate();
+    let inv = basis.inverse();
+    let mut mn = Vec3::splat(f32::MAX);
+    let mut mx = Vec3::splat(f32::MIN);
+    let mut any = false;
+    for (id, obj) in plate.scene.objects.iter() {
+        if !obj.visible || !plate.scene.selection.contains(id) {
+            continue;
+        }
+        let Some(m) = p.meshes.get(&obj.mesh) else { continue };
+        let model = obj.transform.to_mat4();
+        for c in mesh_bb_corners(&m.bounding_box) {
+            let w = inv * model.transform_point3(c);
+            mn = mn.min(w);
+            mx = mx.max(w);
+            any = true;
+        }
+    }
+    if any { mx - mn } else { Vec3::ZERO }
+}
+
+/// Nearest mesh hit under the ray: object id, world face normal, hit point.
+fn nearest_hit(p: &Project, ro: Vec3, rd: Vec3) -> Option<(ObjectId, Vec3, Vec3)> {
+    let plate = p.active_plate();
+    let mut best: Option<(f32, ObjectId, Vec3, Vec3, Vec3)> = None;
+    for (id, obj) in plate.scene.objects.iter() {
+        if !obj.visible {
+            continue;
+        }
+        let Some(m) = p.meshes.get(&obj.mesh) else { continue };
+        let model = obj.transform.to_mat4();
+        let vert = |vi: u32| {
+            let i = vi as usize * 3;
+            model.transform_point3(Vec3::new(m.vertices[i], m.vertices[i + 1], m.vertices[i + 2]))
+        };
+        for t3 in m.indices.chunks_exact(3) {
+            let (a, b, c) = (vert(t3[0]), vert(t3[1]), vert(t3[2]));
+            if let Some(t) = ray_tri(ro, rd, a, b, c) {
+                if best.map_or(true, |(bt, ..)| t < bt) {
+                    best = Some((t, *id, a, b, c));
+                }
+            }
+        }
+    }
+    best.map(|(t, id, a, b, c)| (id, (b - a).cross(c - a).normalize_or_zero(), ro + rd * t))
+}
+
+/// Hit-test the active gizmo's handles for the cursor ray; nearest handle → grab.
+fn pick_gizmo(p: &Project, ro: Vec3, rd: Vec3, eye: Vec3, mode: GizmoMode) -> Option<GizmoGrab> {
+    let (center, arm) = selection_gizmo(p)?;
+    let basis_q = selection_basis(p);
+    let extent = selection_extent(p, basis_q);
+    let thick = GIZMO_SCREEN_K * (eye - center).length();
+    // Common grab builder: `start_hit` is the cursor's hit on the constraint plane.
+    let mk = |idx: i32,
+              kind: GrabKind,
+              plane_n: Vec3,
+              plane_p: Vec3,
+              axis_dir: Option<[f32; 3]>,
+              rot_axis: Option<[f32; 3]>,
+              scale_mask: Option<[bool; 3]>,
+              uniform: bool|
+     -> GizmoGrab {
+        GizmoGrab {
+            idx,
+            kind,
+            plane_n: plane_n.to_array(),
+            plane_p: plane_p.to_array(),
+            axis_dir,
+            rot_axis,
+            scale_mask,
+            uniform,
+            pivot: center.to_array(),
+            start_hit: ray_plane(ro, rd, plane_n, plane_p).unwrap_or(plane_p).to_array(),
+            basis: basis_q.to_array(),
+            scale_extent: extent.to_array(),
+        }
+    };
+    match mode {
+        GizmoMode::Move => {
+            let mut best: Option<(f32, GizmoGrab)> = None;
+            let pick_r = thick * 0.14;
+            let axes = [Vec3::X, Vec3::Y, Vec3::Z];
+            for (i, dir) in axes.iter().enumerate() {
+                let (dist, t) = ray_seg_dist(ro, rd, center, center + *dir * arm);
+                if dist < pick_r && best.as_ref().map_or(true, |(bt, _)| t < *bt) {
+                    let mut n = rd - *dir * rd.dot(*dir);
+                    if n.length() < 1e-4 {
+                        n = axes[(i + 1) % 3];
+                    }
+                    best = Some((t, mk(i as i32, GrabKind::Move, n.normalize(), center, Some(dir.to_array()), None, None, false)));
+                }
+            }
+            let (o, s) = (thick * 0.28, thick * 0.24);
+            let planes = [(Vec3::Z, Vec3::X, Vec3::Y), (Vec3::X, Vec3::Y, Vec3::Z), (Vec3::Y, Vec3::X, Vec3::Z)];
+            for (i, (n, a, b)) in planes.iter().enumerate() {
+                if let Some(hit) = ray_plane(ro, rd, *n, center) {
+                    let (da, db) = ((hit - center).dot(*a), (hit - center).dot(*b));
+                    if da >= o && da <= o + s && db >= o && db <= o + s {
+                        let t = (hit - ro).dot(rd);
+                        if best.as_ref().map_or(true, |(bt, _)| t < *bt) {
+                            best = Some((t, mk(3 + i as i32, GrabKind::Move, *n, center, None, None, None, false)));
+                        }
+                    }
+                }
+            }
+            best.map(|(_, g)| g)
+        }
+        GizmoMode::Rotate => {
+            let mut best: Option<(f32, GizmoGrab)> = None;
+            let tol = arm * 0.12;
+            for (i, axis) in [Vec3::X, Vec3::Y, Vec3::Z].iter().enumerate() {
+                if let Some(hit) = ray_plane(ro, rd, *axis, center) {
+                    if ((hit - center).length() - arm).abs() > tol {
+                        continue;
+                    }
+                    let t = (hit - ro).dot(rd);
+                    if best.as_ref().map_or(true, |(bt, _)| t < *bt) {
+                        best = Some((t, mk(i as i32, GrabKind::Rotate, *axis, center, None, Some(axis.to_array()), None, false)));
+                    }
+                }
+            }
+            best.map(|(_, g)| g)
+        }
+        GizmoMode::Scale => {
+            let axes = [basis_q * Vec3::X, basis_q * Vec3::Y, basis_q * Vec3::Z];
+            // Center uniform handle first: the axis rods pass through the center,
+            // so without priority one of them always wins the tie.
+            let (cd, _) = ray_point_dist(ro, rd, center);
+            if cd < thick * 0.16 {
+                return Some(mk(6, GrabKind::Scale, rd, center, None, None, None, true));
+            }
+            let mut best: Option<(f32, GizmoGrab)> = None;
+            let pick_r = thick * 0.14;
+            for i in 0..3 {
+                let dir = axes[i];
+                let (dist, t) = ray_seg_dist(ro, rd, center, center + dir * arm);
+                if dist < pick_r && best.as_ref().map_or(true, |(bt, _)| t < *bt) {
+                    let mut n = rd - dir * rd.dot(dir);
+                    if n.length() < 1e-4 {
+                        n = axes[(i + 1) % 3];
+                    }
+                    let mut mask = [false; 3];
+                    mask[i] = true;
+                    best = Some((t, mk(i as i32, GrabKind::Scale, n.normalize(), center, None, None, Some(mask), false)));
+                }
+            }
+            let plane_defs = [(0usize, 1usize, 2usize), (1, 2, 0), (0, 2, 1)];
+            let (o, s) = (thick * 0.28, thick * 0.24);
+            for (i, (ai, bi, ni)) in plane_defs.iter().enumerate() {
+                if let Some(hit) = ray_plane(ro, rd, axes[*ni], center) {
+                    let (da, db) = ((hit - center).dot(axes[*ai]), (hit - center).dot(axes[*bi]));
+                    if da >= o && da <= o + s && db >= o && db <= o + s {
+                        let t = (hit - ro).dot(rd);
+                        let mut mask = [false; 3];
+                        mask[*ai] = true;
+                        mask[*bi] = true;
+                        if best.as_ref().map_or(true, |(bt, _)| t < *bt) {
+                            best = Some((t, mk(3 + i as i32, GrabKind::Scale, axes[*ni], center, None, None, Some(mask), false)));
+                        }
+                    }
+                }
+            }
+            best.map(|(_, g)| g)
+        }
+        GizmoMode::None => None,
+    }
+}
+
+/// Resolve a grab + the current cursor ray into the world pre-multiply matrix
+/// (preview / commit). Pure: depends only on the grab's captured constraint, the
+/// cursor ray (origin `ro`, unit dir `rd`), and the camera `eye`/`cam_center`
+/// (the latter only for the dead-center uniform-scale fallback direction).
+/// Identity when the ray misses the constraint plane.
+fn compute_pre(grab: &GizmoGrab, ro: Vec3, rd: Vec3, eye: Vec3, cam_center: Vec3, shift: bool) -> Mat4 {
+    let pivot = Vec3::from(grab.pivot);
+    let start_hit = Vec3::from(grab.start_hit);
+    let plane_n = Vec3::from(grab.plane_n);
+    let plane_p = Vec3::from(grab.plane_p);
+    match grab.kind {
+        GrabKind::Move => {
+            let Some(hit) = ray_plane(ro, rd, plane_n, plane_p) else { return Mat4::IDENTITY };
+            let mut t = hit - start_hit;
+            if let Some(ax) = grab.axis_dir {
+                let ax = Vec3::from(ax);
+                t = ax * t.dot(ax); // single-axis only
+            }
+            if !shift {
+                t = Vec3::new(
+                    snap_to(t.x, TRANSLATE_SNAP_MM),
+                    snap_to(t.y, TRANSLATE_SNAP_MM),
+                    snap_to(t.z, TRANSLATE_SNAP_MM),
+                );
+            }
+            Mat4::from_translation(t)
+        }
+        GrabKind::Rotate => {
+            let axis = Vec3::from(grab.rot_axis.unwrap_or([0.0, 0.0, 1.0]));
+            let Some(hit) = ray_plane(ro, rd, axis, pivot) else { return Mat4::IDENTITY };
+            let mut angle = signed_angle(start_hit - pivot, hit - pivot, axis);
+            if !shift {
+                angle = snap_to(angle, ROTATE_SNAP_RAD);
+            }
+            Mat4::from_translation(pivot)
+                * Mat4::from_axis_angle(axis.normalize(), angle)
+                * Mat4::from_translation(-pivot)
+        }
+        GrabKind::Scale => {
+            let Some(hit) = ray_plane(ro, rd, plane_n, plane_p) else { return Mat4::IDENTITY };
+            let basis_q = Quat::from_array(grab.basis).normalize();
+            let axes = [basis_q * Vec3::X, basis_q * Vec3::Y, basis_q * Vec3::Z];
+            let mask = if grab.uniform { [true; 3] } else { grab.scale_mask.unwrap_or([false; 3]) };
+            let mut f = if grab.uniform {
+                // Center handle: no directional anchor → a zoom, doubling per
+                // handle-length of drag along the radial (or camera-right) direction.
+                let radial = start_hit - pivot;
+                let g = if radial.length() > 1e-3 {
+                    radial.normalize()
+                } else {
+                    (cam_center - eye).normalize().cross(Vec3::Z).normalize_or_zero()
+                };
+                let l = GIZMO_SCREEN_K * (eye - pivot).length();
+                2f32.powf((hit - start_hit).dot(g) / l)
+            } else {
+                // 1:1 — the grabbed point tracks the cursor along the gesture dir.
+                let g = ((if mask[0] { axes[0] } else { Vec3::ZERO })
+                    + (if mask[1] { axes[1] } else { Vec3::ZERO })
+                    + (if mask[2] { axes[2] } else { Vec3::ZERO }))
+                .normalize_or_zero();
+                let start_proj = (start_hit - pivot).dot(g);
+                let cur_proj = (hit - pivot).dot(g);
+                let r = if start_proj.abs() > 1e-3 { start_proj } else { GIZMO_SCREEN_K * (eye - pivot).length() };
+                cur_proj / r
+            };
+            // Snap the largest masked dimension to whole mm (the stable reference).
+            if !shift {
+                let mut ref_ext = 0.0f32;
+                for k in 0..3 {
+                    if mask[k] {
+                        ref_ext = ref_ext.max(grab.scale_extent[k]);
+                    }
+                }
+                if ref_ext > 1e-3 {
+                    let snapped = TRANSLATE_SNAP_MM.max((ref_ext * f).round());
+                    f = snapped / ref_ext;
+                }
+            }
+            f = f.max(0.01); // never collapse to zero / mirror
+            let ratio = Vec3::new(
+                if mask[0] { f } else { 1.0 },
+                if mask[1] { f } else { 1.0 },
+                if mask[2] { f } else { 1.0 },
+            );
+            Mat4::from_translation(pivot)
+                * Mat4::from_quat(basis_q)
+                * Mat4::from_scale(ratio)
+                * Mat4::from_quat(basis_q.inverse())
+                * Mat4::from_translation(-pivot)
+        }
+    }
+}
+
 pub struct ViewportRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -1062,7 +1461,7 @@ impl ViewportRenderer {
         self.resize(w, h);
 
         // --- gather under the project lock (cheap): bed + per-object models ---
-        let (bmin, bmax, draws, boxes, gizmo) = {
+        let (bmin, bmax, draws, boxes, gizmo, basis, drag_pre) = {
             let p = project.lock().unwrap();
             let plate = p.active_plate();
             let (bmin, bmax) = plate
@@ -1079,9 +1478,29 @@ impl ViewportRenderer {
             // One draw item per (object, paint-state group): (mesh, group index,
             // model, resolved color).
             let mut draws: Vec<(MeshId, usize, Mat4, [f32; 3])> = Vec::new();
-            // Local drag preview: world pre-multiply applied to dragged objects.
-            let drag_pre = Mat4::from_cols_array(&req.drag_pre);
-            let dragging = !req.drag_ids.is_empty();
+            // Scale-gizmo basis follows the object's orientation (world for multi).
+            let basis = selection_basis(&p);
+            // Local drag preview: the active grab + cursor resolve (Rust-side) to a
+            // world pre-multiply applied to the whole selection this frame only.
+            let (drag_pre, drag_ids): (Mat4, Vec<u64>) = match &req.gizmo_drag {
+                Some(gd) => {
+                    let cam_center = Vec3::from(req.center);
+                    let (ro, rd) =
+                        cursor_ray(w as f32, h as f32, gd.sx, gd.sy, req.az, req.el, req.dist, cam_center);
+                    let eye = cam_eye(req.az, req.el, req.dist, cam_center);
+                    let pre = compute_pre(&gd.grab, ro, rd, eye, cam_center, gd.shift);
+                    let ids = plate
+                        .scene
+                        .objects
+                        .iter()
+                        .filter(|(id, o)| o.visible && plate.scene.selection.contains(id))
+                        .map(|(id, _)| id.0)
+                        .collect();
+                    (pre, ids)
+                }
+                None => (Mat4::IDENTITY, Vec::new()),
+            };
+            let dragging = !drag_ids.is_empty();
             for (id, obj) in plate.scene.objects.iter() {
                 if !obj.visible {
                     continue;
@@ -1102,7 +1521,7 @@ impl ViewportRenderer {
                     continue;
                 };
                 let mut model = obj.transform.to_mat4();
-                if dragging && req.drag_ids.contains(&id.0) {
+                if dragging && drag_ids.contains(&id.0) {
                     model = drag_pre * model;
                 }
                 let selected = plate.scene.selection.contains(id);
@@ -1132,14 +1551,14 @@ impl ViewportRenderer {
             // the live (drag-previewed) bounds. They're the affordance for the
             // no-tool XY-plane move, so they're hidden once a gizmo is active.
             let boxes = (req.gizmo == GizmoMode::None)
-                .then(|| selection_world_aabb(&p, &req.drag_ids, drag_pre))
+                .then(|| selection_world_aabb(&p, &drag_ids, drag_pre))
                 .flatten()
                 .map(|(mn, mx)| vec![(Mat4::IDENTITY, mn.to_array(), mx.to_array())])
                 .unwrap_or_default();
             // The gizmo is sized + placed from the *resting* selection (no drag
             // preview) so it holds a fixed size through a drag.
             let gizmo = selection_gizmo(&p);
-            (bmin, bmax, draws, boxes, gizmo)
+            (bmin, bmax, draws, boxes, gizmo, basis, drag_pre)
         };
         let bmin = bmin.map(|v| v as f32);
         let bmax = bmax.map(|v| v as f32);
@@ -1196,21 +1615,13 @@ impl ViewportRenderer {
             })
         });
 
-        // Scale gizmo axes follow the object's orientation (world for multi).
-        let basis_q = Quat::from_xyzw(
-            req.gizmo_basis[0],
-            req.gizmo_basis[1],
-            req.gizmo_basis[2],
-            req.gizmo_basis[3],
-        )
-        .normalize();
-        let basis = [basis_q * Vec3::X, basis_q * Vec3::Y, basis_q * Vec3::Z];
+        // Scale gizmo axes follow the object's orientation (basis derived Rust-side
+        // from the selection — its own axes for a single object, world for multi).
+        let basis_axes = [basis * Vec3::X, basis * Vec3::Y, basis * Vec3::Z];
         // Eye position (matches view_proj), for the scale gizmo's screen-constant size.
-        let (ce, se) = (req.el.cos(), req.el.sin());
-        let (ca, sa) = (req.az.cos(), req.az.sin());
-        let eye = Vec3::from(req.center) + req.dist * Vec3::new(ce * ca, ce * sa, se);
+        let eye = cam_eye(req.az, req.el, req.dist, Vec3::from(req.center));
         // Active axis guide line, shown while dragging an axis handle.
-        let guide = (req.gizmo_dragging && (0..=2).contains(&req.gizmo_hover))
+        let guide = (req.gizmo_drag.is_some() && (0..=2).contains(&req.gizmo_hover))
             .then_some(req.gizmo_hover as usize);
         // Gizmo at the selection center (draws with slot 0's vp; own colors). Move
         // and Scale are constant on-screen size (length tracks eye distance); Move
@@ -1220,11 +1631,11 @@ impl ViewportRenderer {
         let gizmo_verts = gizmo
             .map(|(c, r)| match req.gizmo {
                 GizmoMode::Move => {
-                    let c = Mat4::from_cols_array(&req.drag_pre).transform_point3(c);
+                    let c = drag_pre.transform_point3(c);
                     gizmo_geometry(c, screen_l(c), r, req.gizmo_hover)
                 }
                 GizmoMode::Rotate => gizmo_rotate_geometry(c, r, screen_l(c) * 0.012, req.gizmo_hover),
-                GizmoMode::Scale => gizmo_scale_geometry(c, screen_l(c), r, basis, req.gizmo_hover, guide),
+                GizmoMode::Scale => gizmo_scale_geometry(c, screen_l(c), r, basis_axes, req.gizmo_hover, guide),
                 GizmoMode::None => Vec::new(),
             })
             .filter(|v| !v.is_empty());
@@ -1764,39 +2175,153 @@ pub fn viewport_gizmo(project: tauri::State<'_, Arc<Mutex<Project>>>) -> Option<
     Some(GizmoInfo { center: c.to_array(), length: l })
 }
 
-/// The active plate's selection's bounding-box size along the axes of `basis`
-/// (quaternion xyzw). With the object's own orientation this is its true local
-/// dimensions; identity gives the world-axis extent. Drives the scale gizmo's
-/// 1mm dimension snap. `[0,0,0]` when nothing's selected.
+/// Camera + cursor (canvas pixels) + the active gizmo mode, for a grab/hover test.
+#[derive(serde::Deserialize)]
+pub struct GrabRequest {
+    pub width: u32,
+    pub height: u32,
+    pub x: f32,
+    pub y: f32,
+    pub az: f32,
+    pub el: f32,
+    pub dist: f32,
+    pub center: [f32; 3],
+    #[serde(default)]
+    pub gizmo: GizmoMode,
+}
+
+/// Hit-test the cursor for a press (or hover): the active gizmo's handles, else
+/// the selected body / empty space. The returned `GizmoGrab` is opaque to the
+/// frontend — it passes it back via `gizmo_drag` (preview) and to
+/// `viewport_gizmo_commit` (release). Also serves the idle hover highlight (read
+/// the grab's handle `idx`).
 #[tauri::command]
-pub fn viewport_selection_extent(
+pub fn viewport_grab(
     project: tauri::State<'_, Arc<Mutex<Project>>>,
-    basis: [f32; 4],
-) -> [f32; 3] {
+    req: GrabRequest,
+) -> GrabResult {
     let p = project.lock().unwrap();
+    let (w, h) = (req.width.max(1) as f32, req.height.max(1) as f32);
+    let center = Vec3::from(req.center);
+    let (ro, rd) = cursor_ray(w, h, req.x, req.y, req.az, req.el, req.dist, center);
+    let eye = cam_eye(req.az, req.el, req.dist, center);
     let plate = p.active_plate();
-    let inv = Quat::from_xyzw(basis[0], basis[1], basis[2], basis[3])
-        .normalize()
-        .inverse();
-    let mut mn = Vec3::splat(f32::MAX);
-    let mut mx = Vec3::splat(f32::MIN);
-    let mut any = false;
-    for (id, obj) in plate.scene.objects.iter() {
-        if !obj.visible || !plate.scene.selection.contains(id) {
-            continue;
+
+    if req.gizmo != GizmoMode::None {
+        if let Some(grab) = pick_gizmo(&p, ro, rd, eye, req.gizmo) {
+            return GrabResult::Gizmo { grab };
         }
-        let Some(m) = p.meshes.get(&obj.mesh) else {
-            continue;
+        // Missed every handle: pressing the selected body is inert (handles drive
+        // transforms); pressing empty space orbits to navigate.
+        return match nearest_hit(&p, ro, rd) {
+            Some((id, _, _)) if plate.scene.selection.contains(&id) => GrabResult::Inert,
+            _ => GrabResult::Orbit,
         };
-        let model = obj.transform.to_mat4();
-        for c in mesh_bb_corners(&m.bounding_box) {
-            let w = inv * model.transform_point3(c); // into the basis frame
-            mn = mn.min(w);
-            mx = mx.max(w);
-            any = true;
-        }
     }
-    if any { (mx - mn).to_array() } else { [0.0; 3] }
+
+    // No gizmo: pressing a selected object free-moves the selection on its XY
+    // plane (a Move grab with no axis constraint); an unselected object orbits
+    // (selection happens on click); empty space → frontend checks the tower.
+    match nearest_hit(&p, ro, rd) {
+        Some((id, _, _)) if plate.scene.selection.contains(&id) => {
+            let plane_z = plate.scene.objects.get(&id).map_or(0.0, |o| o.transform.to_mat4().w_axis.z);
+            let plane_n = Vec3::Z;
+            let plane_p = Vec3::new(0.0, 0.0, plane_z);
+            GrabResult::Gizmo {
+                grab: GizmoGrab {
+                    idx: -1,
+                    kind: GrabKind::Move,
+                    plane_n: plane_n.to_array(),
+                    plane_p: plane_p.to_array(),
+                    axis_dir: None,
+                    rot_axis: None,
+                    scale_mask: None,
+                    uniform: false,
+                    pivot: plane_p.to_array(),
+                    start_hit: ray_plane(ro, rd, plane_n, plane_p).unwrap_or(plane_p).to_array(),
+                    basis: Quat::IDENTITY.to_array(),
+                    scale_extent: [0.0; 3],
+                },
+            }
+        }
+        Some(_) => GrabResult::Orbit,
+        None => GrabResult::Empty,
+    }
+}
+
+/// Camera + cursor + the grabbed handle, for a drag commit.
+#[derive(serde::Deserialize)]
+pub struct CommitRequest {
+    pub width: u32,
+    pub height: u32,
+    pub sx: f32,
+    pub sy: f32,
+    pub az: f32,
+    pub el: f32,
+    pub dist: f32,
+    pub center: [f32; 3],
+    pub grab: GizmoGrab,
+    #[serde(default)]
+    pub shift: bool,
+}
+
+/// One object's committed world transform (column-major 4x4).
+#[derive(serde::Serialize)]
+pub struct TransformUpdate {
+    pub id: u64,
+    pub transform: [f32; 16],
+}
+
+/// Resolve the final drag matrix and return `pre · start` for each selected
+/// object. The frontend commits them via `scene_object_set_transform` (so the
+/// mutation + events stay in the scene layer). Read-only on the project.
+#[tauri::command]
+pub fn viewport_gizmo_commit(
+    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    req: CommitRequest,
+) -> Vec<TransformUpdate> {
+    let p = project.lock().unwrap();
+    let cam_center = Vec3::from(req.center);
+    let (ro, rd) = cursor_ray(
+        req.width.max(1) as f32, req.height.max(1) as f32, req.sx, req.sy,
+        req.az, req.el, req.dist, cam_center,
+    );
+    let eye = cam_eye(req.az, req.el, req.dist, cam_center);
+    let pre = compute_pre(&req.grab, ro, rd, eye, cam_center, req.shift);
+    let plate = p.active_plate();
+    plate
+        .scene
+        .objects
+        .iter()
+        .filter(|(id, o)| o.visible && plate.scene.selection.contains(id))
+        .map(|(id, o)| TransformUpdate {
+            id: id.0,
+            transform: (pre * o.transform.to_mat4()).to_cols_array(),
+        })
+        .collect()
+}
+
+/// Camera + cursor + a world plane, for tower dragging (the frontend's only
+/// remaining ray need). Returns the cursor ray's hit on the plane, or `None`.
+#[derive(serde::Deserialize)]
+pub struct RayPlaneRequest {
+    pub width: u32,
+    pub height: u32,
+    pub x: f32,
+    pub y: f32,
+    pub az: f32,
+    pub el: f32,
+    pub dist: f32,
+    pub center: [f32; 3],
+    pub plane_n: [f32; 3],
+    pub plane_p: [f32; 3],
+}
+
+#[tauri::command]
+pub fn viewport_ray_plane(req: RayPlaneRequest) -> Option<[f32; 3]> {
+    let (w, h) = (req.width.max(1) as f32, req.height.max(1) as f32);
+    let (ro, rd) = cursor_ray(w, h, req.x, req.y, req.az, req.el, req.dist, Vec3::from(req.center));
+    ray_plane(ro, rd, Vec3::from(req.plane_n), Vec3::from(req.plane_p)).map(|v| v.to_array())
 }
 
 /// View-projection for the orbit camera (z up). Shared by render and pick so the
@@ -1875,44 +2400,127 @@ pub fn viewport_pick_face(
     req: PickRequest,
 ) -> Option<FacePick> {
     let p = project.lock().unwrap();
-    let plate = p.active_plate();
     let (w, h) = (req.width.max(1) as f32, req.height.max(1) as f32);
-    let vp = view_proj(w, h, req.az, req.el, req.dist, Vec3::from(req.center));
-    let inv = vp.inverse();
-    let ndc = Vec3::new(2.0 * req.x / w - 1.0, 1.0 - 2.0 * req.y / h, 0.0);
-    let ro = inv.project_point3(ndc);
-    let far = inv.project_point3(Vec3::new(ndc.x, ndc.y, 1.0));
-    let rd = (far - ro).normalize();
+    let (ro, rd) = cursor_ray(w, h, req.x, req.y, req.az, req.el, req.dist, Vec3::from(req.center));
+    nearest_hit(&p, ro, rd).map(|(id, normal, point)| FacePick {
+        id: id.0,
+        normal: normal.to_array(),
+        point: point.to_array(),
+    })
+}
 
-    let mut best: Option<(f32, u64, Vec3, Vec3, Vec3)> = None;
-    for (id, obj) in plate.scene.objects.iter() {
-        if !obj.visible {
-            continue;
-        }
-        let Some(m) = p.meshes.get(&obj.mesh) else {
-            continue;
-        };
-        let model = obj.transform.to_mat4();
-        let vert = |vi: u32| {
-            let i = vi as usize * 3;
-            model.transform_point3(Vec3::new(m.vertices[i], m.vertices[i + 1], m.vertices[i + 2]))
-        };
-        for t3 in m.indices.chunks_exact(3) {
-            let (a, b, c) = (vert(t3[0]), vert(t3[1]), vert(t3[2]));
-            if let Some(t) = ray_tri(ro, rd, a, b, c) {
-                if best.map_or(true, |(bt, ..)| t < bt) {
-                    best = Some((t, id.0, a, b, c));
-                }
-            }
+#[cfg(test)]
+mod gizmo_tests {
+    //! Constraint-solve parity for the gizmo drag math (ported from the former
+    //! frontend `onMove`). Each test feeds a constructed cursor ray straight at a
+    //! known plane so the expected transform is hand-computable.
+    use super::*;
+
+    const IDENT: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+    fn grab(kind: GrabKind) -> GizmoGrab {
+        GizmoGrab {
+            idx: 0,
+            kind,
+            plane_n: [0.0, 0.0, 1.0],
+            plane_p: [0.0; 3],
+            axis_dir: None,
+            rot_axis: None,
+            scale_mask: None,
+            uniform: false,
+            pivot: [0.0; 3],
+            start_hit: [0.0; 3],
+            basis: IDENT,
+            scale_extent: [0.0; 3],
         }
     }
-    best.map(|(t, id, a, b, c)| {
-        // Geometric normal of the world-space triangle (winding gives outward).
-        let normal = (b - a).cross(c - a).normalize_or_zero();
-        FacePick {
-            id,
-            normal: normal.to_array(),
-            point: (ro + rd * t).to_array(),
-        }
-    })
+
+    fn close(a: Vec3, b: Vec3) {
+        assert!((a - b).length() < 1e-3, "{a:?} != {b:?}");
+    }
+
+    #[test]
+    fn snap_rounds_to_step() {
+        assert_eq!(snap_to(5.4, 1.0), 5.0);
+        assert_eq!(snap_to(5.6, 1.0), 6.0);
+    }
+
+    #[test]
+    fn signed_angle_is_ccw_about_axis() {
+        // X → Y about +Z is +90°.
+        let a = signed_angle(Vec3::X, Vec3::Y, Vec3::Z);
+        assert!((a - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+    }
+
+    #[test]
+    fn ray_plane_misses_behind_camera() {
+        // Ray pointing away from the plane (+Z from above) never hits z=0.
+        assert!(ray_plane(Vec3::new(0.0, 0.0, 10.0), Vec3::Z, Vec3::Z, Vec3::ZERO).is_none());
+    }
+
+    #[test]
+    fn move_single_axis_projects_and_snaps() {
+        // Cursor ray straight down hits the XY plane at (5.4, 3.0); an X-axis
+        // handle keeps only X, snapped to 1 mm → translate (5, 0, 0).
+        let mut g = grab(GrabKind::Move);
+        g.axis_dir = Some([1.0, 0.0, 0.0]);
+        let pre = compute_pre(
+            &g,
+            Vec3::new(5.4, 3.0, 100.0),
+            -Vec3::Z,
+            Vec3::new(0.0, 0.0, 100.0),
+            Vec3::ZERO,
+            false,
+        );
+        close(pre.w_axis.truncate(), Vec3::new(5.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn move_planar_uses_full_delta() {
+        // No axis constraint → full in-plane delta, each component snapped.
+        let pre = compute_pre(
+            &grab(GrabKind::Move),
+            Vec3::new(5.4, 3.0, 100.0),
+            -Vec3::Z,
+            Vec3::new(0.0, 0.0, 100.0),
+            Vec3::ZERO,
+            false,
+        );
+        close(pre.w_axis.truncate(), Vec3::new(5.0, 3.0, 0.0));
+    }
+
+    #[test]
+    fn rotate_about_z_turns_x_to_y() {
+        // Grab at (10,0,0); cursor now at (0,10,0) → +90° about Z.
+        let mut g = grab(GrabKind::Rotate);
+        g.rot_axis = Some([0.0, 0.0, 1.0]);
+        g.start_hit = [10.0, 0.0, 0.0];
+        let pre = compute_pre(
+            &g,
+            Vec3::new(0.0, 10.0, 100.0),
+            -Vec3::Z,
+            Vec3::new(0.0, 0.0, 100.0),
+            Vec3::ZERO,
+            false,
+        );
+        close(pre.transform_vector3(Vec3::X), Vec3::Y);
+    }
+
+    #[test]
+    fn scale_axis_factor_tracks_cursor() {
+        // Grabbed at x=10 on the X handle; cursor now projects to x=20 → ×2.
+        let mut g = grab(GrabKind::Scale);
+        g.plane_n = [0.0, 1.0, 0.0];
+        g.scale_mask = Some([true, false, false]);
+        g.start_hit = [10.0, 0.0, 0.0];
+        let pre = compute_pre(
+            &g,
+            Vec3::new(20.0, 5.0, 0.0),
+            -Vec3::Y,
+            Vec3::new(0.0, 0.0, 100.0),
+            Vec3::ZERO,
+            false,
+        );
+        close(pre.transform_point3(Vec3::X), Vec3::new(2.0, 0.0, 0.0));
+    }
 }

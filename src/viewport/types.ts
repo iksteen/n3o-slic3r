@@ -28,7 +28,7 @@ export interface Group {
   name: string;
 }
 
-/** Column-major [f32; 16] matrix matching glam + THREE.Matrix4.
+/** Column-major [f32; 16] matrix matching glam's `Mat4`.
  *  The Rust `Transform` is `#[serde(transparent)]` over `[f32; 16]`,
  *  so the wire shape is a bare 16-element number array — *not* an
  *  object with a `matrix` field. Keep this typed as a tuple so any

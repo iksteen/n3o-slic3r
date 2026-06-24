@@ -614,7 +614,6 @@ function App() {
                   frames. The 3D scene state is authoritative in Rust; this is a
                   read-only consumer. */}
               <WgpuViewport
-                objects={activePlate?.objects ?? []}
                 selectedIds={activePlate?.selection ?? []}
                 activePlateId={activePlateId}
                 gizmoMode={wgpuGizmo}
