@@ -90,6 +90,18 @@ typedef enum {
     SLIC3R_SCOPE_SLA_PRINTER  = 1u << 6
 } slic3r_opt_scope;
 
+/* Preset bucket — which OrcaSlicer preset tab owns this option, from
+ * Preset::print_options() / filament_options() / printer_options() (the last
+ * unions machine-limits + per-extruder/nozzle keys). Single-valued, unlike
+ * scope: NONE for keys in zero or more-than-one bucket (per-preset metadata
+ * like compatible_printers / inherits, or non-FFF / SLA-only keys). */
+typedef enum {
+    SLIC3R_BUCKET_NONE     = 0,
+    SLIC3R_BUCKET_PRINTER  = 1,
+    SLIC3R_BUCKET_FILAMENT = 2,
+    SLIC3R_BUCKET_PROCESS  = 3
+} slic3r_opt_bucket;
+
 /* Borrowed view over a single ConfigOptionDef. All pointers point into
  * process-lifetime storage owned by libslic3r (the global print_config_def).
  * Strings are NUL-terminated UTF-8; nullable fields are NULL when absent. */
@@ -120,6 +132,9 @@ typedef struct {
      * declared by any known static config class — currently unreachable
      * for keys in print_config_def but defensible as a default. */
     unsigned int        scope;
+    /* Preset bucket (slic3r_opt_bucket value): which preset tab owns this
+     * option. SLIC3R_BUCKET_NONE for metadata / non-FFF keys. */
+    unsigned int        bucket;
 } slic3r_option_def_t;
 
 /* ---- Library lifecycle ---- */

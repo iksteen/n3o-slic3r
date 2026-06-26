@@ -411,19 +411,18 @@ impl OptScope {
     }
 }
 
-/// Preset-bucket classification, scraped from OrcaSlicer's `Preset.cpp`.
+/// Preset-bucket classification — which OrcaSlicer preset tab owns an option.
 ///
 /// Every FFF config-key belongs to exactly one bucket — Printer, Filament, or
-/// Process. The partitioning comes from `Preset::printer_options()` /
-/// `filament_options()` / `print_options()`; extruder-keyed printer options
-/// (per-extruder vectors) fall under `Printer` because that's where their
-/// vendor preset stores them. See `docs/dev/orcaslicer-settings-classification.md`
-/// for the upstream rationale.
+/// Process. The partitioning comes from libslic3r's `Preset::print_options()` /
+/// `filament_options()` / `printer_options()` (the last unions the
+/// machine-limits + per-extruder/nozzle keys); the FFI computes it C++-side in
+/// `DefCache::build`, exactly like `scope`. See
+/// `docs/dev/orcaslicer-settings-classification.md` for the upstream rationale.
 ///
-/// Some metadata keys (`compatible_printers`, `inherits`, …) appear in all
-/// three buckets upstream; they're omitted from the table, and
-/// [`bucket_of`] returns `None` for them — correct UX since they're not
-/// user-editable settings.
+/// Some metadata keys (`compatible_printers`, `inherits`, …) appear in more
+/// than one preset vector; they resolve to `None` (`bucket_of` returns `None`)
+/// — correct UX since they're not user-editable settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptBucket {
     Printer,
@@ -431,8 +430,37 @@ pub enum OptBucket {
     Process,
 }
 
-mod option_buckets;
-pub use option_buckets::bucket_of;
+impl OptBucket {
+    /// Decode the C `slic3r_opt_bucket` value; `SLIC3R_BUCKET_NONE` and any
+    /// unknown value map to `None`.
+    fn from_raw(v: u32) -> Option<OptBucket> {
+        // `as u32`: the SLIC3R_BUCKET_* constants are u32 under GCC but i32
+        // under MSVC; the values are small positive, so the cast is lossless.
+        match v {
+            x if x == sys::SLIC3R_BUCKET_PRINTER as u32 => Some(OptBucket::Printer),
+            x if x == sys::SLIC3R_BUCKET_FILAMENT as u32 => Some(OptBucket::Filament),
+            x if x == sys::SLIC3R_BUCKET_PROCESS as u32 => Some(OptBucket::Process),
+            _ => None,
+        }
+    }
+}
+
+/// Bucket for an option key, or `None` for keys not owned by a single preset
+/// tab (metadata, SLA-only, internal). Backed by the FFI-computed buckets on
+/// [`option_defs`], cached on first call. Call after [`init`].
+pub fn bucket_of(key: &str) -> Option<OptBucket> {
+    static BUCKET_BY_KEY: std::sync::OnceLock<std::collections::HashMap<String, OptBucket>> =
+        std::sync::OnceLock::new();
+    BUCKET_BY_KEY
+        .get_or_init(|| {
+            option_defs()
+                .into_iter()
+                .filter_map(|d| d.bucket.map(|b| (d.key, b)))
+                .collect()
+        })
+        .get(key)
+        .copied()
+}
 
 mod option_display_order;
 pub use option_display_order::display_order_of;
@@ -513,7 +541,7 @@ impl OptionDef {
                 min: raw.min,
                 max: raw.max,
                 scope: OptScope(raw.scope),
-                bucket: None, // populated by `option_defs()` from the scraped table
+                bucket: OptBucket::from_raw(raw.bucket),
             }
         }
     }
@@ -528,9 +556,7 @@ pub fn option_defs() -> Vec<OptionDef> {
     for i in 0..count {
         let status = unsafe { sys::slic3r_option_def_at(i, &mut raw) };
         if status == sys::SLIC3R_OK {
-            let mut def = OptionDef::from_raw(&raw);
-            def.bucket = bucket_of(&def.key);
-            out.push(def);
+            out.push(OptionDef::from_raw(&raw));
         }
     }
     out

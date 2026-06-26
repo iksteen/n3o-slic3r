@@ -111,17 +111,32 @@ The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
 > release builds never compile the fixtures or the fake-printer fallback.
 > Verified: release path compiles fixture-free; `--features test-fixtures` →
 > 946 passed; plain `cargo test` → 912 passed (gated files skip, 0 fail); tsc +
-> 275 vitest green. **Still pending: X-2 (.n3o `Mesh.normals` / format change),
-> X-3 (option_buckets → FFI), X-11 (DROP_LIST, low priority).**
+> 275 vitest green.
+>
+> **2b done, verified:** X-2 dropped `Mesh.normals` everywhere + from the `.n3o`
+> geometry blob; per the owner's reversal, **no legacy read-tolerance** — the
+> format bumps to `"2"` and `"1"` files fail with a clean version mismatch
+> (not silent mis-deserialize). X-3 computes `bucket` in the FFI's
+> `DefCache::build` from `Preset::{print,filament,printer}_options()` and deletes
+> the 721-line scraped table + the Python scraper; a full all-keys parity diff
+> vs the old table matched 666/670 and **corrected 4** keys the old scraper
+> wrongly included (its regex matched string literals inside `/* */` comments —
+> 3 phantom non-options + `filament_colour`, which n3o sets via the slot UI).
+> The bucket correction surfaced that the adapter used `bucket==Filament` as a
+> proxy for "per-filament vector"; restored via a documented `is_per_filament_vector`
+> predicate (the lone `filament_colour` exception is irreducible — libslic3r feeds
+> it from the model, not any preset, so no FFI signal captures it). Verified:
+> release compiles; `--features test-fixtures` → 943 passed (incl. FFI bucket
+> parity test); tsc + 275 vitest green. **Still pending: X-11 (DROP_LIST, low priority).**
 
 - [ ] **X-1 — _retired_ (DP-1 chose wire-in, not delete).** The two-phase cascade override modules are kept and made live — see **C-1** in Phase 3.
 
-- [ ] **X-2 — `Mesh.normals` dead data (compute/store/persist/clone, zero consumers)** *(MEDIUM; cheaper before the format ships)*
+- [x] **X-2 — `Mesh.normals` dead data (compute/store/persist/clone, zero consumers)** *(MEDIUM; cheaper before the format ships)*
   `core/scene/state.rs:92-94`, `loaders/mod.rs:91 compute_vertex_normals`, `core/project/format.rs:202,278`, `core/slice/input.rs:431`
   Delete `Mesh.normals`/`NewMesh.normals`/`compute_vertex_normals`; drop the normals chunk from the format geometry blob (schema-version guard already exists). Renderer/libslic3r recompute their own. (Pairs with D-2.)
   *Verify:* load + re-save a `.n3o`, slice both printers, confirm geometry + G-code unchanged; files smaller, geometry RAM ~halved.
 
-- [ ] **X-3 — `option_buckets.rs` scraper → compute C++-side like `scope`** *(MEDIUM; ~900 lines)*
+- [x] **X-3 — `option_buckets.rs` scraper → compute C++-side like `scope`** *(MEDIUM; ~900 lines)*
   `crates/slic3r-ffi/src/option_buckets.rs` (721 lines), `scripts/scrape_option_buckets.py`, `lib.rs:532`, `ffi/slic3r_ffi.cpp:268-275` (scope pattern)
   Add a `bucket` field to `slic3r_option_def_t`; populate it in `DefCache::build` by masking each key against `Preset::print_options()/filament_options()/printer_options()` (union nozzle+machine_limits into Printer). Map it in `OptionDef::from_raw`. Delete the scraper + table + the pin-bump checklist's bucket step + the empty `core/printer/bambu/mod.rs` placeholder (or reduce to a pointer).
   *Verify:* compare `bucket` for all keys against the old table for both printers — zero diff; re-run the option scrapers note in `project_orca_pin_bump_checklist`.

@@ -9,8 +9,8 @@
 //! and cmake builds libslic3r and the shim. Subsequent runs are fast.
 
 use slic3r_ffi::{
-    clear_log_sink, init, option_def, option_defs, set_log_sink, slice, version, Config, ErrorKind,
-    LogLevel, Model, OptType,
+    bucket_of, clear_log_sink, init, option_def, option_defs, set_log_sink, slice, version, Config,
+    ErrorKind, LogLevel, Model, OptBucket, OptType,
 };
 use std::path::PathBuf;
 use std::sync::Once;
@@ -81,6 +81,24 @@ fn option_def_layer_height_shape() {
     assert_eq!(d.default_serialized.as_deref(), Some("0.2"));
     assert!(d.label.is_some(), "label should be populated");
     assert!(d.category.is_some(), "category should be populated");
+}
+
+#[test]
+fn option_buckets_match_preset_partitioning() {
+    ensure_init();
+    // Buckets are computed C++-side from Preset::{print,filament,printer}_options().
+    // Spot-check one key per bucket plus a metadata key that spans vectors (None).
+    assert_eq!(bucket_of("layer_height"), Some(OptBucket::Process));
+    assert_eq!(bucket_of("nozzle_diameter"), Some(OptBucket::Printer));
+    assert_eq!(bucket_of("nozzle_temperature"), Some(OptBucket::Filament));
+    assert_eq!(bucket_of("filament_type"), Some(OptBucket::Filament));
+    assert_eq!(bucket_of("machine_max_speed_x"), Some(OptBucket::Printer));
+    // Appears in multiple preset vectors → per-preset metadata → None.
+    assert_eq!(bucket_of("compatible_printers"), None);
+    assert_eq!(bucket_of("nonexistent_key"), None);
+    // A healthy share of options carry a bucket.
+    let tagged = option_defs().iter().filter(|d| d.bucket.is_some()).count();
+    assert!(tagged > 100, "implausibly few bucketed options: {tagged}");
 }
 
 #[test]

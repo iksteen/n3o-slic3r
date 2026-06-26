@@ -5,6 +5,7 @@
 
 #include <libslic3r/Config.hpp>
 #include <libslic3r/PrintConfig.hpp>
+#include <libslic3r/Preset.hpp>
 #include <libslic3r/Model.hpp>
 #include <libslic3r/Print.hpp>
 #include <libslic3r/PrintBase.hpp>
@@ -210,6 +211,7 @@ struct DefCache {
         double min;
         double max;
         unsigned int scope;
+        unsigned int bucket;
     };
 
     std::vector<std::unique_ptr<Entry>> entries; // unique_ptr so c_str() pointers don't move on grow
@@ -230,6 +232,18 @@ struct DefCache {
         const auto keys_sla_print    = to_set(SLAPrintConfig().keys());
         const auto keys_sla_material = to_set(SLAMaterialConfig().keys());
         const auto keys_sla_printer  = to_set(SLAPrinterConfig().keys());
+
+        // Bucket is the preset tab that owns a key, from the same Preset
+        // option vectors the (now-removed) Python scraper read:
+        //   Process  = Preset::print_options()
+        //   Filament = Preset::filament_options()
+        //   Printer  = Preset::printer_options() (already unions
+        //              s_Preset_machine_limits_options + nozzle/extruder keys)
+        // A key in exactly one bucket gets it; a key in zero or more than one
+        // (per-preset metadata like compatible_printers/inherits) is NONE.
+        const auto bkt_process  = to_set(Preset::print_options());
+        const auto bkt_filament = to_set(Preset::filament_options());
+        const auto bkt_printer  = to_set(Preset::printer_options());
 
         entries.reserve(print_config_def.options.size());
         for (const auto& kv : print_config_def.options) {
@@ -274,6 +288,13 @@ struct DefCache {
             if (keys_sla_material.count(kv.first)) e->scope |= SLIC3R_SCOPE_SLA_MATERIAL;
             if (keys_sla_printer.count(kv.first))  e->scope |= SLIC3R_SCOPE_SLA_PRINTER;
 
+            int bucket_hits = 0;
+            e->bucket = SLIC3R_BUCKET_NONE;
+            if (bkt_process.count(kv.first))  { bucket_hits++; e->bucket = SLIC3R_BUCKET_PROCESS; }
+            if (bkt_filament.count(kv.first)) { bucket_hits++; e->bucket = SLIC3R_BUCKET_FILAMENT; }
+            if (bkt_printer.count(kv.first))  { bucket_hits++; e->bucket = SLIC3R_BUCKET_PRINTER; }
+            if (bucket_hits != 1) e->bucket = SLIC3R_BUCKET_NONE;
+
             by_key.emplace(e->key, entries.size());
             entries.push_back(std::move(e));
         }
@@ -298,6 +319,7 @@ struct DefCache {
         out->min                = e.min;
         out->max                = e.max;
         out->scope              = e.scope;
+        out->bucket             = e.bucket;
     }
 };
 

@@ -227,14 +227,28 @@ fn filament_vector_len(resolved: &Resolved) -> Option<usize> {
     Some(v.split(',').count())
 }
 
-/// Reject the resolved config if any per-filament vector is SHORTER than
+/// A vector option libslic3r indexes per *filament* (0..num_filaments), so a
+/// value shorter than the filament count OOB-reads in MMU segmentation.
+///
+/// The signal is the schema's Filament bucket + `is_vector` — derived, not a
+/// curated list — with exactly one exception, `filament_colour`. It is a
+/// genuine per-filament vector libslic3r reads from the *model*, but it's
+/// commented out of `s_Preset_filament_options` upstream, so it belongs to no
+/// preset and the FFI can't bucket it (there is no "per-filament" FFI flag
+/// distinct from "per-physical-extruder", which would wrongly pull in
+/// `nozzle_diameter` et al.). The composer special-cases it for the same
+/// reason — see `assemble_filament_colours`.
+fn is_per_filament_vector(key: &str, schema: &crate::core::schema::OptionSchema) -> bool {
+    schema.is_vector
+        && (matches!(schema.bucket, Some(OptBucket::Filament)) || key == "filament_colour")
+}
+
+/// Reject the resolved config if any [`is_per_filament_vector`] is SHORTER than
 /// `filament_diameter` (libslic3r's `num_extruders`). A short vector makes
 /// MMU segmentation read past its end — the segfault this guards against.
-///
-/// Filament-bucket vector keys are identified from the schema's bucket +
-/// is_vector signals (not a curated list). Element counts use the composer's
-/// cstyle-aware [`split_for_key`] so a `;` inside a quoted string element
-/// (e.g. the `;`-comments in `filament_start_gcode`) isn't miscounted.
+/// Element counts use the composer's cstyle-aware [`split_for_key`] so a `;`
+/// inside a quoted string element (e.g. the `;`-comments in
+/// `filament_start_gcode`) isn't miscounted.
 ///
 /// Longer-than-`num_extruders` vectors are NOT an error: libslic3r ignores
 /// the surplus filament indices (no OOB), so they pass through untouched.
@@ -248,7 +262,7 @@ fn check_filament_vector_lengths(resolved: &Resolved) -> Result<(), AdaptError> 
         let Some(schema) = schema_by_key(key) else {
             continue;
         };
-        if matches!(schema.bucket, Some(OptBucket::Filament)) && schema.is_vector {
+        if is_per_filament_vector(key, schema) {
             let len = split_for_key(key, &rv.value).len();
             if len < expected {
                 offenders.push((key.clone(), len));
