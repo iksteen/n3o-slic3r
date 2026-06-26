@@ -6,7 +6,7 @@
 //! libraries are ignored for MVP; object library can
 //! re-introduce them when the renderer cares about textures.
 
-use super::{compute_bounding_box, compute_vertex_normals, LoadError};
+use super::{compute_bounding_box, LoadError};
 use crate::core::scene::state::{MeshProvenance, NewMesh};
 use std::path::Path;
 
@@ -37,17 +37,10 @@ pub fn load(path: &Path) -> Result<NewMesh, LoadError> {
     // buffer keeps referring to the right vertices.
     let mut vertices: Vec<f32> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
-    let mut all_normals: Vec<f32> = Vec::new();
-    let mut have_normals_for_all = true;
 
     for m in &models {
         let vert_base = (vertices.len() / 3) as u32;
         vertices.extend_from_slice(&m.mesh.positions);
-        if m.mesh.normals.len() == m.mesh.positions.len() {
-            all_normals.extend_from_slice(&m.mesh.normals);
-        } else {
-            have_normals_for_all = false;
-        }
         for idx in &m.mesh.indices {
             indices.push(idx + vert_base);
         }
@@ -57,16 +50,10 @@ pub fn load(path: &Path) -> Result<NewMesh, LoadError> {
         return Err(LoadError::Empty { path: path.into() });
     }
 
-    let normals = if have_normals_for_all && all_normals.len() == vertices.len() {
-        all_normals
-    } else {
-        compute_vertex_normals(&vertices, &indices)
-    };
     let bounding_box = compute_bounding_box(&vertices);
 
     Ok(NewMesh {
         vertices,
-        normals,
         indices,
         paint_colors: None,
         bounding_box,
@@ -108,27 +95,6 @@ f 1 2 3
         assert_eq!(mesh.vertices.len(), 9, "3 vertices × 3 coords");
         assert_eq!(mesh.bounding_box.min, [0.0, 0.0, 0.0]);
         assert_eq!(mesh.bounding_box.max, [1.0, 1.0, 0.0]);
-        // Normals computed from face data — should point +Z.
-        for chunk in mesh.normals.chunks_exact(3) {
-            assert!((chunk[2] - 1.0).abs() < 1e-4, "got {chunk:?}");
-        }
-    }
-
-    #[test]
-    fn obj_with_explicit_normals_uses_them() {
-        // Same triangle but with vn declarations + f a//c form.
-        let src = "\
-v 0 0 0
-v 1 0 0
-v 0 1 0
-vn 0 0 1
-f 1//1 2//1 3//1
-";
-        let f = write_obj(src);
-        let mesh = load(f.path()).expect("load");
-        for chunk in mesh.normals.chunks_exact(3) {
-            assert!((chunk[2] - 1.0).abs() < 1e-4, "got {chunk:?}");
-        }
     }
 
     #[test]

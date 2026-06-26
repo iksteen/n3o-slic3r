@@ -1,13 +1,13 @@
 //! STL loader.
 //!
 //! Reads both ASCII (`solid …`) and binary STL via the `stl_io` crate
-//! and produces a [`super::super::state::Mesh`] with computed
-//! per-vertex normals + bounding box. The 80-byte binary STL header
+//! and produces a [`super::super::state::Mesh`] with a computed
+//! bounding box. The 80-byte binary STL header
 //! starts with the characters `solid` *some* of the time, so we
 //! always go through `stl_io::create_stl_reader`, which sniffs both
 //! variants internally.
 
-use super::{compute_bounding_box, compute_vertex_normals, LoadError};
+use super::{compute_bounding_box, LoadError};
 use crate::core::scene::state::{MeshProvenance, NewMesh};
 use std::fs::File;
 use std::io::BufReader;
@@ -44,14 +44,10 @@ pub fn load(path: &Path) -> Result<NewMesh, LoadError> {
         return Err(LoadError::Empty { path: path.into() });
     }
 
-    // STL gives us per-face normals; we want per-vertex for smooth
-    // shading. Recompute area-weighted per-vertex normals.
-    let normals = compute_vertex_normals(&vertices, &indices);
     let bounding_box = compute_bounding_box(&vertices);
 
     Ok(NewMesh {
         vertices,
-        normals,
         indices,
         paint_colors: None,
         bounding_box,
@@ -65,8 +61,7 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    /// ASCII STL of one triangle in the XY-plane. Per-vertex normals
-    /// after compute_vertex_normals should be (0,0,1).
+    /// ASCII STL of one triangle in the XY-plane.
     const ASCII_TRI: &str = "\
 solid triangle
   facet normal 0 0 1
@@ -92,10 +87,6 @@ endsolid triangle
         let mesh = load(f.path()).expect("load");
         assert_eq!(mesh.vertices.len(), 9, "3 vertices × 3 coords");
         assert_eq!(mesh.indices.len(), 3, "1 triangle × 3 indices");
-        // All per-vertex normals point +Z for a CCW XY triangle.
-        for chunk in mesh.normals.chunks_exact(3) {
-            assert!((chunk[2] - 1.0).abs() < 1e-4, "got {chunk:?}");
-        }
         assert_eq!(mesh.bounding_box.min, [0.0, 0.0, 0.0]);
         assert_eq!(mesh.bounding_box.max, [1.0, 1.0, 0.0]);
         assert!(matches!(mesh.provenance, MeshProvenance::File(_)));
@@ -133,9 +124,6 @@ endsolid triangle
         // stl_io dedupes vertices — for this triangle that's 3
         // distinct (one per corner).
         assert_eq!(mesh.vertices.len(), 9);
-        for chunk in mesh.normals.chunks_exact(3) {
-            assert!((chunk[2] - 1.0).abs() < 1e-4);
-        }
     }
 
     #[test]

@@ -612,7 +612,6 @@ mod tests {
     fn one_triangle_mesh() -> NewMesh {
         NewMesh {
             vertices: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-            normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             indices: vec![0, 1, 2],
             paint_colors: None,
             bounding_box: BoundingBox {
@@ -642,7 +641,6 @@ mod tests {
         // round-trip libslic3r relies on to segment painted faces.
         let mesh = NewMesh {
             vertices: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
-            normals: vec![0.0; 12],
             indices: vec![0, 1, 2, 1, 3, 2],
             paint_colors: Some(vec!["4".to_string(), String::new()]),
             bounding_box: BoundingBox {

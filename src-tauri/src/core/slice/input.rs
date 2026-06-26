@@ -428,7 +428,6 @@ fn build_plate_geometry(
             let m = &project.meshes[id];
             NewMesh {
                 vertices: m.vertices.clone(),
-                normals: m.normals.clone(),
                 indices: m.indices.clone(),
                 // Carry MMU paint into the slice .3mf so libslic3r segments
                 // the painted faces to their filaments.
@@ -563,7 +562,6 @@ mod tests {
     fn triangle_mesh() -> NewMesh {
         NewMesh {
             vertices: vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0],
-            normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             indices: vec![0, 1, 2],
             paint_colors: None,
             bounding_box: BoundingBox {

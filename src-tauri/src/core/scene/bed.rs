@@ -210,7 +210,6 @@ mod tests {
         let mesh = Mesh {
             id: MeshId(1),
             vertices: vec![],
-            normals: vec![],
             indices: vec![],
             paint_colors: None,
             bounding_box: BoundingBox {

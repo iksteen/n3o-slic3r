@@ -4,7 +4,7 @@
 //!
 //! - `project.json` — `serde_json` of the [`Project`] (plates, bindings,
 //!   material maps, overrides, groups, **objects with stable ids**, and `Mesh`
-//!   headers). The heavy vertex/normal/index/paint buffers are `#[serde(skip)]`,
+//!   headers). The heavy vertex/index/paint buffers are `#[serde(skip)]`,
 //!   so the JSON stays small. Wrapped in a [`ProjectFile`] that adds the
 //!   `format_version` marker + the writing build's stamp.
 //! - `geometry/<MeshId>.bin` — one tight binary blob per mesh, carrying its
@@ -36,7 +36,12 @@ use crate::core::scene::state::{Mesh, MeshId};
 
 /// Schema version of the `.n3o` container. The reader rejects any other version
 /// with [`ProjectIoError::SchemaMismatch`]. Bump on incompatible changes.
-pub const FORMAT_VERSION: &str = "1";
+///
+/// `"2"` dropped the per-vertex `normals` chunk that `"1"` geometry blobs
+/// carried — nothing consumes stored normals (the renderer and libslic3r
+/// recompute them). `"1"` files are not read; they fail with a clean version
+/// mismatch rather than being silently mis-deserialized.
+pub const FORMAT_VERSION: &str = "2";
 
 /// The zip entry holding the serialized project skeleton.
 const PROJECT_ENTRY: &str = "project.json";
@@ -199,7 +204,6 @@ pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
             })?;
         let mesh = project.meshes.get_mut(&id).expect("id from keys");
         mesh.vertices = g.vertices;
-        mesh.normals = g.normals;
         mesh.indices = g.indices;
         mesh.paint_colors = g.paint_colors;
     }
@@ -259,7 +263,6 @@ fn read_zip_entry<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str) -> Option
 #[derive(Serialize)]
 struct GeometryBlobRef<'a> {
     vertices: &'a [f32],
-    normals: &'a [f32],
     indices: &'a [u32],
     paint_colors: &'a Option<Vec<String>>,
 }
@@ -267,7 +270,6 @@ struct GeometryBlobRef<'a> {
 #[derive(Deserialize)]
 struct GeometryBlob {
     vertices: Vec<f32>,
-    normals: Vec<f32>,
     indices: Vec<u32>,
     paint_colors: Option<Vec<String>>,
 }
@@ -275,7 +277,6 @@ struct GeometryBlob {
 fn pack_geometry(m: &Mesh) -> Result<Vec<u8>, postcard::Error> {
     postcard::to_allocvec(&GeometryBlobRef {
         vertices: &m.vertices,
-        normals: &m.normals,
         indices: &m.indices,
         paint_colors: &m.paint_colors,
     })
@@ -299,7 +300,6 @@ mod tests {
     fn triangle() -> NewMesh {
         NewMesh {
             vertices: vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0],
-            normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             indices: vec![0, 1, 2],
             paint_colors: None,
             bounding_box: BoundingBox {
@@ -325,7 +325,6 @@ mod tests {
         let blob = pack_geometry(&p.meshes[&id]).expect("pack");
         let g: GeometryBlob = postcard::from_bytes(&blob).expect("unpack");
         assert_eq!(g.vertices, p.meshes[&id].vertices);
-        assert_eq!(g.normals, p.meshes[&id].normals);
         assert_eq!(g.indices, p.meshes[&id].indices);
         assert_eq!(g.paint_colors, Some(vec!["".into(), "3".into(), "12".into()]));
         // truncated blob is a clean error, not a panic.

@@ -86,10 +86,6 @@ pub struct Mesh {
     /// serialized — uploaded GPU-side, never crosses IPC.
     #[serde(skip, default)]
     pub vertices: Vec<f32>,
-    /// Flat `[x, y, z, ...]` per-vertex normals; same length as
-    /// `vertices`. Not serialized.
-    #[serde(skip, default)]
-    pub normals: Vec<f32>,
     /// Triangle vertex indices (3 per triangle). Not serialized.
     #[serde(skip, default)]
     pub indices: Vec<u32>,
@@ -175,7 +171,6 @@ pub struct SceneObject {
 #[derive(Debug, Clone)]
 pub struct NewMesh {
     pub vertices: Vec<f32>,
-    pub normals: Vec<f32>,
     pub indices: Vec<u32>,
     /// Per-triangle `paint_color` strings (see [`Mesh::paint_colors`]).
     /// `None` for procedurally-generated / unpainted meshes.

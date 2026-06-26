@@ -68,7 +68,6 @@ impl Project {
             Mesh {
                 id,
                 vertices: new_mesh.vertices,
-                normals: new_mesh.normals,
                 indices: new_mesh.indices,
                 paint_colors: new_mesh.paint_colors,
                 bounding_box: new_mesh.bounding_box,
@@ -1999,7 +1998,6 @@ mod tests {
                 0.0, 1.0, 1.0, //
                 1.0, 1.0, 1.0, //
             ],
-            normals: vec![0.0; 24],
             indices: vec![
                 0, 1, 2, 1, 3, 2, // bottom
                 4, 6, 5, 5, 6, 7, // top
@@ -2045,7 +2043,6 @@ mod tests {
                 0.0, 0.0, r, // 4 +z (apex)
                 0.0, 0.0, -r, // 5 -z (nadir)
             ],
-            normals: vec![0.0; 18],
             indices: vec![
                 4, 0, 2, 4, 2, 1, 4, 1, 3, 4, 3, 0, // top fan
                 5, 2, 0, 5, 1, 2, 5, 3, 1, 5, 0, 3, // bottom fan
@@ -2645,7 +2642,6 @@ mod tests {
         // settle must not translate it to z = -∞ (a non-finite min_z).
         let mesh = NewMesh {
             vertices: vec![],
-            normals: vec![],
             indices: vec![],
             paint_colors: None,
             bounding_box: BoundingBox {
@@ -2813,7 +2809,6 @@ mod tests {
         let mut p = Project::default();
         let mesh = NewMesh {
             vertices: vec![-5.0, -5.0, -3.0, 5.0, -5.0, -3.0, 0.0, 5.0, 3.0],
-            normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             indices: vec![0, 1, 2],
             paint_colors: None,
             bounding_box: BoundingBox {
@@ -2840,7 +2835,6 @@ mod tests {
         let mut p = Project::default();
         let mesh = NewMesh {
             vertices: vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 5.0],
-            normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
             indices: vec![0, 1, 2],
             paint_colors: None,
             bounding_box: BoundingBox {
@@ -3799,7 +3793,6 @@ mod tests {
     fn cube_mesh() -> NewMesh {
         NewMesh {
             vertices: vec![0.0; 24],
-            normals: vec![0.0; 24],
             indices: vec![0, 1, 2],
             paint_colors: None,
             bounding_box: BoundingBox {

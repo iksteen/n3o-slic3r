@@ -2,16 +2,9 @@
 //!
 //! Generates mesh data for the five primitive types the object
 //! library exposes: cube, cylinder, sphere, cone, torus. Each
-//! returns a [`NewMesh`] with per-vertex normals and a computed
-//! bounding box — the same shape the file loaders in
-//! `loaders/{stl,obj,threemf}` produce, so the registry layer
-//! doesn't care where the geometry came from.
-//!
-//! Vertex normals are *not* per-face for these primitives; they're
-//! averaged per vertex so the renderer's smooth-shading model
-//! produces clean curved surfaces (cylinder side, sphere, torus).
-//! Edges that should stay sharp (cube corners) are handled by
-//! splitting vertices so each face contributes a distinct normal.
+//! returns a [`NewMesh`] with a computed bounding box — the same
+//! shape the file loaders in `loaders/{stl,obj,threemf}` produce,
+//! so the registry layer doesn't care where the geometry came from.
 //!
 //! Dimensions are in millimeters — the same units the rest of the
 //! scene uses.
@@ -125,66 +118,45 @@ pub fn generate(kind: PrimitiveKind, params: PrimitiveParams) -> NewMesh {
 }
 
 /// Axis-aligned box with sharp edges. We split per-face — each face
-/// owns 4 vertices with the face normal — so the renderer doesn't
-/// average across edges.
+/// owns 4 vertices — so the renderer doesn't average across edges.
 fn cube(w: f32, d: f32, h: f32) -> NewMesh {
     let hx = w * 0.5;
     let hy = d * 0.5;
     let hz = h * 0.5;
     // 6 faces × 4 corner vertices = 24 vertices; 6 × 2 triangles = 36 indices.
     let mut vertices = Vec::with_capacity(72);
-    let mut normals = Vec::with_capacity(72);
     let mut indices = Vec::with_capacity(36);
 
     // Face emit helper. Vertex winding is CCW seen from outside.
-    let mut emit = |corners: [[f32; 3]; 4], normal: [f32; 3]| {
+    let mut emit = |corners: [[f32; 3]; 4]| {
         let base = (vertices.len() / 3) as u32;
         for c in &corners {
             vertices.extend_from_slice(c);
-            normals.extend_from_slice(&normal);
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     };
 
-    emit(
-        [[-hx, -hy, hz], [hx, -hy, hz], [hx, hy, hz], [-hx, hy, hz]],
-        [0.0, 0.0, 1.0],
-    );
-    emit(
-        [
-            [-hx, hy, -hz],
-            [hx, hy, -hz],
-            [hx, -hy, -hz],
-            [-hx, -hy, -hz],
-        ],
-        [0.0, 0.0, -1.0],
-    );
-    emit(
-        [[hx, -hy, -hz], [hx, hy, -hz], [hx, hy, hz], [hx, -hy, hz]],
-        [1.0, 0.0, 0.0],
-    );
-    emit(
-        [
-            [-hx, hy, -hz],
-            [-hx, -hy, -hz],
-            [-hx, -hy, hz],
-            [-hx, hy, hz],
-        ],
-        [-1.0, 0.0, 0.0],
-    );
-    emit(
-        [[hx, hy, -hz], [-hx, hy, -hz], [-hx, hy, hz], [hx, hy, hz]],
-        [0.0, 1.0, 0.0],
-    );
-    emit(
-        [
-            [-hx, -hy, -hz],
-            [hx, -hy, -hz],
-            [hx, -hy, hz],
-            [-hx, -hy, hz],
-        ],
-        [0.0, -1.0, 0.0],
-    );
+    emit([[-hx, -hy, hz], [hx, -hy, hz], [hx, hy, hz], [-hx, hy, hz]]);
+    emit([
+        [-hx, hy, -hz],
+        [hx, hy, -hz],
+        [hx, -hy, -hz],
+        [-hx, -hy, -hz],
+    ]);
+    emit([[hx, -hy, -hz], [hx, hy, -hz], [hx, hy, hz], [hx, -hy, hz]]);
+    emit([
+        [-hx, hy, -hz],
+        [-hx, -hy, -hz],
+        [-hx, -hy, hz],
+        [-hx, hy, hz],
+    ]);
+    emit([[hx, hy, -hz], [-hx, hy, -hz], [-hx, hy, hz], [hx, hy, hz]]);
+    emit([
+        [-hx, -hy, -hz],
+        [hx, -hy, -hz],
+        [hx, -hy, hz],
+        [-hx, -hy, hz],
+    ]);
 
     let bounding_box = BoundingBox {
         min: [-hx as f64, -hy as f64, -hz as f64],
@@ -192,7 +164,6 @@ fn cube(w: f32, d: f32, h: f32) -> NewMesh {
     };
     NewMesh {
         vertices,
-        normals,
         indices,
         paint_colors: None,
         bounding_box,
@@ -205,31 +176,23 @@ fn cylinder(radius: f32, height: f32, segments: u32) -> NewMesh {
     let segs = segments as usize;
     // 2*segs vertices for side strip (top + bottom ring) with shared
     // wrap-around — we duplicate the seam vertex so UV mapping would
-    // work later; for normals smoothness across the seam we'd need
-    // identical normals on both copies, which we have. Plus 2 caps
-    // (each with one center vertex + segs ring vertices).
+    // work later. Plus 2 caps (each with one center vertex + segs ring
+    // vertices).
     let mut vertices: Vec<f32> = Vec::new();
-    let mut normals: Vec<f32> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
     let two_pi = std::f32::consts::PI * 2.0;
 
     // --- Side strip ----------------------------------------------------
-    // Two rings (top + bottom). The vertex normal points radially
-    // outward; that's what makes the cylinder look smooth-shaded
-    // around its perimeter.
+    // Two rings (top + bottom).
     let side_base = (vertices.len() / 3) as u32;
     for i in 0..=segs {
         let theta = (i as f32 / segs as f32) * two_pi;
         let (sx, sy) = (theta.cos(), theta.sin());
-        let nx = sx;
-        let ny = sy;
         // Bottom
         vertices.extend_from_slice(&[sx * radius, sy * radius, 0.0]);
-        normals.extend_from_slice(&[nx, ny, 0.0]);
         // Top
         vertices.extend_from_slice(&[sx * radius, sy * radius, height]);
-        normals.extend_from_slice(&[nx, ny, 0.0]);
     }
     for i in 0..segs as u32 {
         let b0 = side_base + i * 2;
@@ -242,12 +205,10 @@ fn cylinder(radius: f32, height: f32, segments: u32) -> NewMesh {
     // --- Top cap --------------------------------------------------------
     let top_center = (vertices.len() / 3) as u32;
     vertices.extend_from_slice(&[0.0, 0.0, height]);
-    normals.extend_from_slice(&[0.0, 0.0, 1.0]);
     let top_ring_base = (vertices.len() / 3) as u32;
     for i in 0..segs {
         let theta = (i as f32 / segs as f32) * two_pi;
         vertices.extend_from_slice(&[theta.cos() * radius, theta.sin() * radius, height]);
-        normals.extend_from_slice(&[0.0, 0.0, 1.0]);
     }
     for i in 0..segs as u32 {
         let next = (i + 1) % segs as u32;
@@ -257,12 +218,10 @@ fn cylinder(radius: f32, height: f32, segments: u32) -> NewMesh {
     // --- Bottom cap -----------------------------------------------------
     let bot_center = (vertices.len() / 3) as u32;
     vertices.extend_from_slice(&[0.0, 0.0, 0.0]);
-    normals.extend_from_slice(&[0.0, 0.0, -1.0]);
     let bot_ring_base = (vertices.len() / 3) as u32;
     for i in 0..segs {
         let theta = (i as f32 / segs as f32) * two_pi;
         vertices.extend_from_slice(&[theta.cos() * radius, theta.sin() * radius, 0.0]);
-        normals.extend_from_slice(&[0.0, 0.0, -1.0]);
     }
     for i in 0..segs as u32 {
         let next = (i + 1) % segs as u32;
@@ -276,7 +235,6 @@ fn cylinder(radius: f32, height: f32, segments: u32) -> NewMesh {
     };
     NewMesh {
         vertices,
-        normals,
         indices,
         paint_colors: None,
         bounding_box,
@@ -291,7 +249,6 @@ fn sphere(radius: f32, segments: u32) -> NewMesh {
     let lat_count = segments.max(2) as usize;
     let lon_count = (segments.max(2) * 2) as usize;
     let mut vertices: Vec<f32> = Vec::new();
-    let mut normals: Vec<f32> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
     let pi = std::f32::consts::PI;
@@ -308,7 +265,6 @@ fn sphere(radius: f32, segments: u32) -> NewMesh {
             let ny = sin_phi * theta.sin();
             let nz = cos_phi;
             vertices.extend_from_slice(&[nx * radius, ny * radius, nz * radius]);
-            normals.extend_from_slice(&[nx, ny, nz]);
         }
     }
     let stride = lon_count + 1;
@@ -328,7 +284,6 @@ fn sphere(radius: f32, segments: u32) -> NewMesh {
     };
     NewMesh {
         vertices,
-        normals,
         indices,
         paint_colors: None,
         bounding_box,
@@ -340,16 +295,9 @@ fn sphere(radius: f32, segments: u32) -> NewMesh {
 fn cone(radius: f32, height: f32, segments: u32) -> NewMesh {
     let segs = segments as usize;
     let mut vertices: Vec<f32> = Vec::new();
-    let mut normals: Vec<f32> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
     let two_pi = std::f32::consts::PI * 2.0;
-    // The cone's side normal isn't purely radial — it tilts towards
-    // the apex. Slant length normalizes the (radius, height) tuple
-    // for a unit normal.
-    let slant = (radius * radius + height * height).sqrt();
-    let nz_side = radius / slant;
-    let nr_side = height / slant;
 
     // Side strip: triangles from each base segment to the apex.
     let base_ring_start = (vertices.len() / 3) as u32;
@@ -358,16 +306,12 @@ fn cone(radius: f32, height: f32, segments: u32) -> NewMesh {
         let (cx, cy) = (theta.cos(), theta.sin());
         // Base vertex.
         vertices.extend_from_slice(&[cx * radius, cy * radius, 0.0]);
-        normals.extend_from_slice(&[cx * nr_side, cy * nr_side, nz_side]);
     }
-    // Apex vertex per segment (split so the normal can twist around
-    // the tip rather than collapse to a degenerate average).
+    // Apex vertex per segment (split so the tip stays a distinct
+    // vertex per face rather than a single shared apex).
     let apex_start = (vertices.len() / 3) as u32;
-    for i in 0..segs {
-        let theta = ((i as f32 + 0.5) / segs as f32) * two_pi;
-        let (cx, cy) = (theta.cos(), theta.sin());
+    for _ in 0..segs {
         vertices.extend_from_slice(&[0.0, 0.0, height]);
-        normals.extend_from_slice(&[cx * nr_side, cy * nr_side, nz_side]);
     }
     for i in 0..segs as u32 {
         indices.extend_from_slice(&[base_ring_start + i, base_ring_start + i + 1, apex_start + i]);
@@ -376,12 +320,10 @@ fn cone(radius: f32, height: f32, segments: u32) -> NewMesh {
     // Bottom cap (faces down).
     let cap_center = (vertices.len() / 3) as u32;
     vertices.extend_from_slice(&[0.0, 0.0, 0.0]);
-    normals.extend_from_slice(&[0.0, 0.0, -1.0]);
     let cap_ring_start = (vertices.len() / 3) as u32;
     for i in 0..segs {
         let theta = (i as f32 / segs as f32) * two_pi;
         vertices.extend_from_slice(&[theta.cos() * radius, theta.sin() * radius, 0.0]);
-        normals.extend_from_slice(&[0.0, 0.0, -1.0]);
     }
     for i in 0..segs as u32 {
         let next = (i + 1) % segs as u32;
@@ -394,7 +336,6 @@ fn cone(radius: f32, height: f32, segments: u32) -> NewMesh {
     };
     NewMesh {
         vertices,
-        normals,
         indices,
         paint_colors: None,
         bounding_box,
@@ -411,7 +352,6 @@ fn torus(major_radius: f32, minor_radius: f32, tube_segments: u32, ring_segments
     let tube = tube_segments.max(3) as usize;
     let ring = ring_segments.max(3) as usize;
     let mut vertices: Vec<f32> = Vec::new();
-    let mut normals: Vec<f32> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
     let two_pi = std::f32::consts::PI * 2.0;
@@ -424,12 +364,7 @@ fn torus(major_radius: f32, minor_radius: f32, tube_segments: u32, ring_segments
             let x = (major_radius + minor_radius * cv) * cu;
             let y = (major_radius + minor_radius * cv) * su;
             let z = minor_radius * sv;
-            // Normal points outward from the tube's centerline.
-            let nx = cu * cv;
-            let ny = su * cv;
-            let nz = sv;
             vertices.extend_from_slice(&[x, y, z]);
-            normals.extend_from_slice(&[nx, ny, nz]);
         }
     }
     let stride = ring + 1;
@@ -450,7 +385,6 @@ fn torus(major_radius: f32, minor_radius: f32, tube_segments: u32, ring_segments
     };
     NewMesh {
         vertices,
-        normals,
         indices,
         paint_colors: None,
         bounding_box,
@@ -464,18 +398,12 @@ mod tests {
 
     fn closed_mesh_invariants(mesh: &NewMesh) {
         assert_eq!(mesh.vertices.len() % 3, 0, "vertices flat XYZ");
-        assert_eq!(mesh.normals.len(), mesh.vertices.len(), "1:1 normals");
         assert_eq!(mesh.indices.len() % 3, 0, "triangle triples");
         for i in &mesh.indices {
             assert!(
                 (*i as usize) * 3 < mesh.vertices.len(),
                 "index out of range"
             );
-        }
-        // Normals should be roughly unit length.
-        for chunk in mesh.normals.chunks_exact(3) {
-            let len = (chunk[0] * chunk[0] + chunk[1] * chunk[1] + chunk[2] * chunk[2]).sqrt();
-            assert!((len - 1.0).abs() < 1e-3, "non-unit normal len={len}");
         }
     }
 

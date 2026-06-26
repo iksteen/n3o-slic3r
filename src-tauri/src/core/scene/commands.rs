@@ -1104,7 +1104,6 @@ mod tests {
     fn unit_cube_mesh() -> NewMesh {
         NewMesh {
             vertices: vec![0.0; 24],
-            normals: vec![0.0; 24],
             indices: vec![0, 1, 2],
             paint_colors: None,
             bounding_box: BoundingBox {

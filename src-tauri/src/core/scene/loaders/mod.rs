@@ -2,7 +2,7 @@
 //!
 //! STL + OBJ here; .3mf (project shape) lives in a sibling
 //! submodule. Each loader produces a [`super::state::Mesh`] with
-//! computed normals + bounding box; format dispatch is by file
+//! a computed bounding box; format dispatch is by file
 //! extension with a magic-byte fallback for STL's ASCII/binary
 //! variants.
 
@@ -81,52 +81,6 @@ pub fn load_mesh_from_path(path: &Path) -> Result<NewMesh, LoadError> {
     }
 }
 
-/// Compute per-vertex normals by summing each triangle's face normal
-/// into its three vertices, then normalizing. Synthesizes smooth-
-/// shading normals for loaders whose source format only carries
-/// per-face normals (STL) or none at all (OBJ without `vn` lines).
-///
-/// Vertices laid out flat [x, y, z, x, y, z, ...]; indices triple
-/// (3 per triangle, ccw winding).
-pub(crate) fn compute_vertex_normals(vertices: &[f32], indices: &[u32]) -> Vec<f32> {
-    let vert_count = vertices.len() / 3;
-    let mut normals = vec![0.0_f32; vert_count * 3];
-
-    for tri in indices.chunks_exact(3) {
-        let (a, b, c) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
-        let va = glam::Vec3::new(vertices[a * 3], vertices[a * 3 + 1], vertices[a * 3 + 2]);
-        let vb = glam::Vec3::new(vertices[b * 3], vertices[b * 3 + 1], vertices[b * 3 + 2]);
-        let vc = glam::Vec3::new(vertices[c * 3], vertices[c * 3 + 1], vertices[c * 3 + 2]);
-        let face_n = (vb - va).cross(vc - va);
-        if face_n.length_squared() < f32::EPSILON {
-            continue; // degenerate
-        }
-        // Area-weighted accumulation: don't normalize the face
-        // normal before summing — larger faces contribute more,
-        // which produces better smooth-shaded results on irregular
-        // meshes.
-        for &i in &[a, b, c] {
-            normals[i * 3] += face_n.x;
-            normals[i * 3 + 1] += face_n.y;
-            normals[i * 3 + 2] += face_n.z;
-        }
-    }
-
-    // Normalize.
-    for i in 0..vert_count {
-        let n = glam::Vec3::new(normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]);
-        let len_sq = n.length_squared();
-        if len_sq > f32::EPSILON {
-            let n = n / len_sq.sqrt();
-            normals[i * 3] = n.x;
-            normals[i * 3 + 1] = n.y;
-            normals[i * 3 + 2] = n.z;
-        }
-    }
-
-    normals
-}
-
 /// Bounding box over a packed vertex array.
 pub(crate) fn compute_bounding_box(vertices: &[f32]) -> BoundingBox {
     let mut min = [f64::INFINITY; 3];
@@ -154,24 +108,6 @@ pub(crate) fn compute_bounding_box(vertices: &[f32]) -> BoundingBox {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn vertex_normals_on_unit_quad_point_up_z() {
-        // Two triangles forming a flat XY-plane quad. Vertex normals
-        // should all point along +Z (since the face normal of a
-        // CCW-wound XY triangle is +Z).
-        let vertices = vec![
-            0.0, 0.0, 0.0, //
-            1.0, 0.0, 0.0, //
-            1.0, 1.0, 0.0, //
-            0.0, 1.0, 0.0, //
-        ];
-        let indices = vec![0, 1, 2, 0, 2, 3];
-        let normals = compute_vertex_normals(&vertices, &indices);
-        for chunk in normals.chunks_exact(3) {
-            assert!((chunk[2] - 1.0).abs() < 1e-5, "got {chunk:?}");
-        }
-    }
 
     #[test]
     fn bounding_box_basic() {

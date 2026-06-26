@@ -629,7 +629,6 @@ mod tests {
         use crate::core::scene::transform::Transform;
         let mesh = p.register_mesh(NewMesh {
             vertices: vec![0.0; 24],
-            normals: vec![0.0; 24],
             indices: vec![0, 1, 2],
             paint_colors: None,
             bounding_box: crate::core::printer::profile::BoundingBox {

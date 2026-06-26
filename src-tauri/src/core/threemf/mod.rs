@@ -71,7 +71,7 @@ pub fn read_3mf_extra_entry(path: &Path, entry: &str) -> Result<Option<Vec<u8>>,
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use crate::core::scene::loaders::{compute_bounding_box, compute_vertex_normals, LoadError};
+use crate::core::scene::loaders::{compute_bounding_box, LoadError};
 use crate::core::scene::state::{GroupId, MeshProvenance, NewMesh};
 use crate::core::scene::transform::Transform;
 
@@ -318,7 +318,6 @@ fn expand(
                             path: source.into(),
                         });
                     }
-                    let normals = compute_vertex_normals(vertices, indices);
                     let bounding_box = compute_bounding_box(vertices);
                     let provenance = MeshProvenance::File(format!(
                         "{}#{}{}",
@@ -333,7 +332,6 @@ fn expand(
                     let idx = meshes.len();
                     meshes.push(NewMesh {
                         vertices: vertices.clone(),
-                        normals,
                         indices: indices.clone(),
                         paint_colors: (!paint_colors.is_empty()).then(|| paint_colors.clone()),
                         bounding_box,
