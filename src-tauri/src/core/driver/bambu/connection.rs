@@ -217,11 +217,16 @@ impl Driver for BambuDriver {
         // shutdown channel; the status worker exits when its
         // mpsc receiver drops (which happens when the event-loop
         // task exits and the raw_tx sender goes out of scope).
-        for handle in std::mem::take(&mut self.tasks) {
-            match tokio::time::timeout(Duration::from_secs(5), handle).await {
+        for mut handle in std::mem::take(&mut self.tasks) {
+            // Give the task its graceful exit (shutdown channel + raw_tx
+            // drop), but never let a wedged task hang disconnect: abort on
+            // timeout instead of detaching it (a dropped JoinHandle leaves
+            // the task — and its TLS socket — running).
+            match tokio::time::timeout(Duration::from_secs(5), &mut handle).await {
                 Ok(_) => {}
                 Err(_) => {
-                    tracing::warn!(driver = %self.id, "bambu task did not exit in 5s")
+                    tracing::warn!(driver = %self.id, "bambu task did not exit in 5s; aborting");
+                    handle.abort();
                 }
             }
         }
@@ -709,7 +714,17 @@ async fn event_loop(
                             };
                             s.last_updated = std::time::SystemTime::now();
                         });
-                        tokio::time::sleep(Duration::from_secs(delay)).await;
+                        // Race the backoff against shutdown so teardown
+                        // interrupts a pending reconnect window instead of
+                        // waiting it out (up to 60s).
+                        tokio::select! {
+                            biased;
+                            _ = &mut shutdown_rx => {
+                                tracing::debug!(driver_serial = %device_id, "bambu task shutdown during backoff");
+                                return;
+                            }
+                            _ = tokio::time::sleep(Duration::from_secs(delay)) => {}
+                        }
                     }
                     Err(e) => {
                         // Network error — rumqttc surfaces these
@@ -727,7 +742,16 @@ async fn event_loop(
                             };
                             s.last_updated = std::time::SystemTime::now();
                         });
-                        tokio::time::sleep(Duration::from_secs(delay)).await;
+                        // Same as the Disconnect arm: a shutdown during the
+                        // backoff window must drop the task promptly.
+                        tokio::select! {
+                            biased;
+                            _ = &mut shutdown_rx => {
+                                tracing::debug!(driver_serial = %device_id, "bambu task shutdown during backoff");
+                                return;
+                            }
+                            _ = tokio::time::sleep(Duration::from_secs(delay)) => {}
+                        }
                     }
                     _ => {
                         // PingResp / SubAck / etc — uninteresting.
