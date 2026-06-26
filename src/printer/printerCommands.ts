@@ -19,26 +19,12 @@ export interface PrinterCatalogEntry {
   profile: PrinterProfileJson;
 }
 
-/** Mirror of `PrinterChangeReport`. `incompatible` + `clamped` are
- * always empty until the validation walk lands; surfaced anyway so
- * the picker can render the warning panel once they populate. */
+/** Mirror of `PrinterChangeReport`. */
 export interface PrinterChangeReport {
   plate_id: PlateId;
   previous_printer: string | null;
   new_printer: string;
   new_build_plate: string;
-  incompatible: IncompatibleSetting[];
-  clamped: ClampedSetting[];
-}
-export interface IncompatibleSetting {
-  key: string;
-  value: string;
-  reason: string;
-}
-export interface ClampedSetting {
-  key: string;
-  from: string;
-  to: string;
 }
 
 /** Fetch the bundled printer catalog. Static data — the picker

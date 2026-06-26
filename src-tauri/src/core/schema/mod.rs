@@ -7,9 +7,9 @@
 //!   dimensions and `set.*` keys at load time, so cascades with typos fail
 //!   with file:line errors rather than silently dropping settings at slice
 //!   time.
-//! - **`cascade_adapter`** reads `dimensional` to decide whether a
-//!   resolved logical key needs expansion across a dimension (bed temp →
-//!   14 per-plate-type keys) or maps 1:1.
+//! - **`cascade_adapter`** expands the logical `bed_temp` key into the
+//!   per-plate-type [`BED_TEMP_KEYS`] family (selected at slice time by
+//!   `curr_bed_type`); other keys map 1:1.
 //! - **`printer::profile`** cross-references schema keys when
 //!   declaring which options a printer profile fixes vs leaves cascade-set.
 //!
@@ -30,8 +30,7 @@ use std::sync::OnceLock;
 /// A single libslic3r option, decorated with Phase-1-specific metadata.
 ///
 /// This is the schema entry the resolver, adapter, and UI all consume.
-/// Built from `slic3r_ffi::OptionDef` plus a static binding table that
-/// marks dimensional axes (territory).
+/// Built from `slic3r_ffi::OptionDef`.
 #[derive(Debug, Clone)]
 pub struct OptionSchema {
     pub key: String,
@@ -47,11 +46,6 @@ pub struct OptionSchema {
     /// from `ty.is_vector()`; surfaced here so callers don't need to
     /// import `OptType`'s method namespace just to check.
     pub is_vector: bool,
-    /// Non-`None` when this option is part of a dimensional expansion the
-    /// adapter performs (e.g. `hot_plate_temp` is one of the
-    /// `BedTempPerPlate` family). The adapter consults this to decide
-    /// whether to apply expansion or write the value verbatim.
-    pub dimensional: Option<DimensionalKind>,
     pub label: Option<String>,
     pub category: Option<String>,
     /// `(enum_key, enum_label)` pairs, in declaration order. Empty for
@@ -60,42 +54,11 @@ pub struct OptionSchema {
     pub default_serialized: Option<String>,
 }
 
-/// Marker for an option's membership in one of libslic3r's dimensional
-/// expansion families.
-///
-/// A "dimensional" option is one where the cascade carries a *single*
-/// logical key (e.g. `bed_temp`) but libslic3r consumes a *family* of
-/// keys (one per dimension value). The adapter resolves the cascade
-/// against each dimension value and writes the corresponding libslic3r
-/// key. See `docs/dev/profiles.md` "Translating to libslic3r → Dimensional
-/// expansion" for the worked bed-temp example.
-///
-/// Variants are added as the adapter surfaces them. Start small
-/// — every variant means more adapter code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DimensionalKind {
-    /// Per-plate-type bed temperature, selected at slice time by
-    /// `curr_bed_type`. 14 libslic3r keys (7 plate types × {steady,
-    /// initial_layer}). Cascade authors a single logical `bed_temp` per
-    /// `(filament, plate)` context; the adapter expands across plates.
-    BedTempPerPlate,
-}
-
-/// Cascade-side logical keys — names the *resolver* understands that
-/// the *libslic3r option universe* doesn't. The cascade adapter
-/// expands each logical key into one or more libslic3r keys.
-///
-/// Currently just `bed_temp` → `BedTempPerPlate` family. Validators
-/// check against this list as a sibling to `schema_by_key`
-/// so cascades that author `set.bed_temp = "65"` pass validation
-/// while typos like `set.bd_temp` still fail.
-pub const LOGICAL_KEYS: &[&str] = &["bed_temp"];
-
-/// True iff `key` is either a libslic3r option (per
-/// [`schema_by_key`]) or a recognized cascade-side logical key (per
-/// [`LOGICAL_KEYS`]).
+/// True iff `key` is either a libslic3r option (per [`schema_by_key`])
+/// or the cascade-side logical key `bed_temp` (which the adapter expands
+/// into the per-plate-type [`BED_TEMP_KEYS`] family).
 pub fn is_known_cascade_key(key: &str) -> bool {
-    schema_by_key(key).is_some() || LOGICAL_KEYS.contains(&key)
+    schema_by_key(key).is_some() || key == "bed_temp"
 }
 
 /// The 12 libslic3r keys in the `BedTempPerPlate` family, as declared
@@ -139,7 +102,6 @@ fn build_cache() -> SchemaCache {
     let mut by_key = HashMap::with_capacity(defs.len());
 
     for (idx, def) in defs.into_iter().enumerate() {
-        let dimensional = dimensional_for_key(&def.key);
         let enum_values = def
             .enum_values
             .iter()
@@ -157,7 +119,6 @@ fn build_cache() -> SchemaCache {
             scope: def.scope,
             bucket: def.bucket,
             is_vector: def.ty.is_vector(),
-            dimensional,
             label: def.label,
             category: def.category,
             enum_values,
@@ -168,14 +129,6 @@ fn build_cache() -> SchemaCache {
     }
 
     SchemaCache { options, by_key }
-}
-
-fn dimensional_for_key(key: &str) -> Option<DimensionalKind> {
-    if BED_TEMP_KEYS.contains(&key) {
-        Some(DimensionalKind::BedTempPerPlate)
-    } else {
-        None
-    }
 }
 
 /// All registered libslic3r options as Phase-1 `OptionSchema` entries.
@@ -271,7 +224,6 @@ mod tests {
         let s = schema_by_key("layer_height").expect("layer_height in schema");
         assert_eq!(s.ty, OptType::Float, "layer_height type");
         assert!(!s.is_vector, "layer_height is scalar");
-        assert!(s.dimensional.is_none(), "layer_height is not dimensional");
         assert!(s.scope.is_object(), "layer_height is object-scoped");
     }
 
@@ -300,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn hot_plate_temp_is_bed_temp_dimensional_vector() {
+    fn hot_plate_temp_is_per_filament_ints_vector() {
         ensure_ffi();
         let s = schema_by_key("hot_plate_temp").expect("hot_plate_temp in schema");
         // Note: libslic3r declares the temperature families as coInts
@@ -308,25 +260,15 @@ mod tests {
         // per-filament temperature.
         assert_eq!(s.ty, OptType::Ints, "hot_plate_temp is per-filament Ints");
         assert!(s.is_vector, "hot_plate_temp is vector");
-        assert_eq!(
-            s.dimensional,
-            Some(DimensionalKind::BedTempPerPlate),
-            "hot_plate_temp must be tagged BedTempPerPlate"
-        );
     }
 
     #[test]
-    fn all_bed_temp_keys_are_tagged_dimensional() {
+    fn all_bed_temp_keys_exist_in_schema() {
         ensure_ffi();
         for key in BED_TEMP_KEYS {
-            let s = schema_by_key(key).unwrap_or_else(|| {
+            schema_by_key(key).unwrap_or_else(|| {
                 panic!("{key} not in libslic3r schema — BED_TEMP_KEYS out of sync")
             });
-            assert_eq!(
-                s.dimensional,
-                Some(DimensionalKind::BedTempPerPlate),
-                "{key} must be tagged BedTempPerPlate"
-            );
         }
     }
 

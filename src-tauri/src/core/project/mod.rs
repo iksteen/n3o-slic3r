@@ -33,5 +33,5 @@ pub mod mutation;
 pub use crate::core::scene::state::PlateSceneState;
 pub use context::SlicingContext;
 pub use metadata::PlateMetadata;
-pub use model::{Plate, PlateId, Project, ProjectMutError};
+pub use model::{Plate, PlateId, Project};
 pub use mutation::PLATE_NAME_MAX;

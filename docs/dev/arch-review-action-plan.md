@@ -102,6 +102,18 @@ Pure doc/comment edits. Fixes the dominant defect class (CLAUDE.md says
 
 The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
 
+> **Status (2a done, verified):** X-4/5/6/8/9/10 done as planned; X-7 trimmed to
+> the *truly* dead items only (a read-only scope pass found `dispatch`,
+> `set_enabled`, `PayloadKind::Gcode3mf`, `Severity`, `current_stage`, the
+> `serial` field, and `SendPayload` serde all live or test-guarded — kept); X-12
+> done via a non-default **`test-fixtures` cargo feature** (a plain `cfg(test)`
+> gate breaks integration tests, which link the lib without `cfg(test)`) so
+> release builds never compile the fixtures or the fake-printer fallback.
+> Verified: release path compiles fixture-free; `--features test-fixtures` →
+> 946 passed; plain `cargo test` → 912 passed (gated files skip, 0 fail); tsc +
+> 275 vitest green. **Still pending: X-2 (.n3o `Mesh.normals` / format change),
+> X-3 (option_buckets → FFI), X-11 (DROP_LIST, low priority).**
+
 - [ ] **X-1 — _retired_ (DP-1 chose wire-in, not delete).** The two-phase cascade override modules are kept and made live — see **C-1** in Phase 3.
 
 - [ ] **X-2 — `Mesh.normals` dead data (compute/store/persist/clone, zero consumers)** *(MEDIUM; cheaper before the format ships)*
@@ -114,31 +126,31 @@ The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
   Add a `bucket` field to `slic3r_option_def_t`; populate it in `DefCache::build` by masking each key against `Preset::print_options()/filament_options()/printer_options()` (union nozzle+machine_limits into Printer). Map it in `OptionDef::from_raw`. Delete the scraper + table + the pin-bump checklist's bucket step + the empty `core/printer/bambu/mod.rs` placeholder (or reduce to a pointer).
   *Verify:* compare `bucket` for all keys against the old table for both printers — zero diff; re-run the option scrapers note in `project_orca_pin_bump_checklist`.
 
-- [ ] **X-4 — Logical-key dimensional-expansion machinery (unused)** *(independent of DP-1)*
+- [x] **X-4 — Logical-key dimensional-expansion machinery (unused)** *(independent of DP-1)*
   `core/schema/mod.rs:76 DimensionalKind,92 LOGICAL_KEYS,173 dimensional_for_key`; `cascade_adapter/adapter.rs:141-172` bed_temp branch. No profile emits a logical `bed_temp`. This is a *separate* `profiles.md` feature from the override tiers C-1 wires in — decide on its own: delete it, or implement+keep if logical dimensional keys are wanted. Lazy default: delete until a profile needs it.
 
-- [ ] **X-5 — Speculative empty placeholders: `IncompatibleSetting`/`ClampedSetting`**
+- [x] **X-5 — Speculative empty placeholders: `IncompatibleSetting`/`ClampedSetting`**
   `core/scene/events.rs:230-265`, always-empty `PrinterChangeReport.incompatible/.clamped` at `core/project/mutation.rs:663-664` (tests assert empty `:3622-3623`). Frontend discards the report anyway. Drop the two structs + two fields (re-add when a producer exists).
 
-- [ ] **X-6 — Dead orchestrator entry points**
+- [x] **X-6 — Dead orchestrator entry points**
   `core/slice/orchestrator.rs:164-190` (`start_slice_job`, `plugin_host_from_app`, `app_handle_sink`), `:278-284` (`start_slice_job_with_sink`), `core/slice/mod.rs:28` (`start_slice_job_internal` re-export). Keep `start_slice_job_with_sink_and_plugins` (prod) + `run_slice_job_blocking*` (tests).
 
-- [ ] **X-7 — Misc dead types/variants/API**
+- [x] **X-7 — Misc dead types/variants/API**
   `core/project/model.rs:487-505 ProjectMutError` (+ `mod.rs:36` re-export; dupes `SceneOpError`) · plugin host `host.rs:147 any_hook, :231 dispatch, DispatchGate::all, :341/:428 set_enabled` (rewrite affected tests onto `dispatch_gated`) · `core/plugin/hooks.rs:149-165 PayloadKind::Gcode3mf` unreachable arm · `crates/slic3r-ffi/src/lib.rs:788-803 Severity` single-variant → `diagnostics: Vec<String>` · `core/gcode/model.rs LayerSource::Heuristic` (with D-11) · dead U1 status fields `core/driver/status.rs:204 current_stage`, `snapmaker/connection.rs:50-52,83-86 serial`/`serial()` · `driver/bambu/connection.rs:66,113-123,185 raw_messages_rx/raw_messages()/device_id()` · trait Phase-8 serde derives `driver/traits.rs:5-7` (`SendPayload`, `DriverError` Serialize/Deserialize/Clone — unless C-3 adopts typed errors).
 
-- [ ] **X-8 — Stale `#[allow(dead_code)]` masking live code**
+- [x] **X-8 — Stale `#[allow(dead_code)]` masking live code**
   `core/driver/snapmaker/http.rs:44,104`, `moonraker.rs:231,242,249,257`, ~16 total in `src-tauri/src`. Delete every suppression whose item is now referenced; for the genuinely-unused few, remove the item. *Verify:* `cargo build`, treat each resulting `dead_code` warning as a delete candidate.
 
-- [ ] **X-9 — Spike examples + `n3o-send`** *(n3o-send: see DP-2)*
+- [x] **X-9 — Spike examples + `n3o-send`** *(n3o-send: see DP-2)*
   Delete `src-tauri/examples/spike1.rs,spike2.rs,spike3.rs` + their `[[example]]` entries; fold `phase1_smoke.rs` into `tests/` or drop. Keep `slice_repro`/`slice_to_gcode_3mf` as living repro tools. Per DP-2, delete `src-tauri/src/bin/n3o-send.rs` (632 lines) + the `default-run` line, or install+document it.
 
-- [ ] **X-10 — `RequiresChamberHeater` stub** *(`KnownDimensions` now stays — `validate.rs` is live per C-1)*
+- [x] **X-10 — `RequiresChamberHeater` stub** *(`KnownDimensions` now stays — `validate.rs` is live per C-1)*
   `core/schema/capability.rs:75,105,159`. Drop `RequiresChamberHeater` until `PrinterProfile` carries the field. `core/cascade/validate.rs:64 KnownDimensions` is no longer a deletion candidate (validate.rs becomes live in C-1) — collapse it to the canonical dimension set if it's still loose, else leave. *(Reviewer tagged ACCEPT as an anticipated extension point — fine to defer.)*
 
 - [ ] **X-11 — Hand-curated `DROP_LIST`** *(low priority)*
   `core/cascade_adapter/manifest.rs:29-133`. Either treat all schema-misses uniformly (log fork-only noise at debug) or generate the list rather than hand-maintaining 80 entries. Defer if it earns its keep.
 
-- [ ] **X-12 — Gate test fixtures out of the production binary**
+- [x] **X-12 — Gate test fixtures out of the production binary**
   `core/printer/instance_library.rs` (not `cfg(test)`), fallback `instance_registry.rs:41-50`, `printer/mod.rs:24-26`. Gate `bundled_instances()` behind `#[cfg(test)]`; the no-root production path returns empty. Removes the silent fake-printer fallback from release.
 
 ---

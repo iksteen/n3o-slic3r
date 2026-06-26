@@ -1,4 +1,5 @@
-//! Phase 5 exit-criteria smoke (PR-5-12).
+#![cfg(feature = "test-fixtures")]
+//! Phase 5 exit-criteria smoke.
 //!
 //! Chains every Phase 5 deliverable that affects project-state
 //! shape into one repeatable test so a regression in the

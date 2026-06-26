@@ -32,7 +32,6 @@ use crate::core::driver::status::{
 /// status map. `connection` is passed in because the WS layer
 /// owns connection lifecycle — the decoder only knows about
 /// payload state.
-#[allow(dead_code)] // consumed by the U1Driver worker
 pub(super) fn decode(status: &Map<String, Value>, connection: ConnectionState) -> PrinterStatus {
     PrinterStatus {
         connection,

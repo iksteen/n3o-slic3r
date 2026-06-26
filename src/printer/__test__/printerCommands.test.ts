@@ -53,8 +53,6 @@ describe("rebindPlatePrinter", () => {
       previous_printer: null,
       new_printer: "bambu-lab-a1-mini",
       new_build_plate: "Supertack Plate",
-      incompatible: [],
-      clamped: [],
     });
     const report = await rebindPlatePrinter(1, "bambi");
     expect(invokeMock).toHaveBeenCalledWith("scene_rebind_plate_printer", {
@@ -62,7 +60,6 @@ describe("rebindPlatePrinter", () => {
       instanceId: "bambi",
     });
     expect(report.new_printer).toBe("bambu-lab-a1-mini");
-    expect(report.incompatible).toEqual([]);
   });
 });
 

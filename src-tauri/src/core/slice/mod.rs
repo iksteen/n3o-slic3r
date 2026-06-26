@@ -25,5 +25,5 @@ pub use commands::{slice_active_plate, slice_cancel, slice_status};
 pub use errors::{classify_libslic3r_error, SliceError};
 pub use events::SliceEvent;
 pub use job::{JobHandle, JobId, JobRegistry, JobStatus, SliceJobInput};
-pub use orchestrator::{start_slice_job as start_slice_job_internal, SliceStartError};
+pub use orchestrator::SliceStartError;
 pub use summary::{build_summary, build_summary_from_bytes, PlateSummary};

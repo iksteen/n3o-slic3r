@@ -482,26 +482,6 @@ impl Plate {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProjectMutError {
-    LastPlate,
-    NoSuchPlate(PlateId),
-}
-
-impl std::fmt::Display for ProjectMutError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LastPlate => write!(
-                f,
-                "cannot remove the last plate (a project must have ≥ 1 plate)",
-            ),
-            Self::NoSuchPlate(id) => write!(f, "no plate with id {}", id.0),
-        }
-    }
-}
-
-impl std::error::Error for ProjectMutError {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

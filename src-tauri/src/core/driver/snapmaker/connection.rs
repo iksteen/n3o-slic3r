@@ -46,9 +46,6 @@ pub struct U1Config {
 pub struct U1Driver {
     id: DriverId,
     config: U1Config,
-    /// Resolved serial — populated by `connect()` via the
-    /// `/machine/system_info` probe.
-    serial: Option<String>,
     /// Status publisher. Cloned across `subscribe_status` callers.
     status_tx: watch::Sender<PrinterStatus>,
     status_rx: watch::Receiver<PrinterStatus>,
@@ -68,20 +65,11 @@ impl U1Driver {
         Self {
             id,
             config,
-            serial: None,
             status_tx,
             status_rx,
             tasks: Vec::new(),
             shutdown_tx: None,
         }
-    }
-
-    /// The serial-derived device id, available after a successful
-    /// `connect()`. Useful for cross-printer correlation in
-    /// multi-instance projects (leg 2 territory).
-    #[allow(dead_code)] // surfaced once the UI needs it
-    pub fn serial(&self) -> Option<&str> {
-        self.serial.as_deref()
     }
 
     fn publish_state(&self, state: ConnectionState) {
@@ -109,14 +97,11 @@ impl Driver for U1Driver {
         }
         self.publish_state(ConnectionState::Connecting);
 
-        // Probe the serial via /machine/system_info. We fail loud
-        // here rather than letting the worker race — a wrong host
+        // Probe /machine/system_info as a connectivity check. We fail
+        // loud here rather than letting the worker race — a wrong host
         // yields a clean "could not reach printer at <host>" instead
         // of "connecting…" stuck forever.
-        let serial = probe::probe_system_info(&self.config.host, self.config.port)
-            .await?
-            .serial;
-        self.serial = Some(serial);
+        probe::probe_system_info(&self.config.host, self.config.port).await?;
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);

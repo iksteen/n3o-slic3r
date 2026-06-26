@@ -1,4 +1,5 @@
-//! PR-S exit-criteria smoke (PR-S-11).
+#![cfg(feature = "test-fixtures")]
+//! Multi-printer project exit-criteria smoke.
 //!
 //! Locks the multi-instance + multi-filament work from PR-S-1
 //! through PR-S-10 into CI. If the cascade composer regresses

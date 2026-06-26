@@ -1,3 +1,4 @@
+#![cfg(feature = "test-fixtures")]
 //! Post-slice plugin hook, verified end-to-end against real G-code.
 //!
 //! Slices a real cube through the orchestrator with the bundled

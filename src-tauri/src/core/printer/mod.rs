@@ -10,6 +10,11 @@
 
 pub mod bambu;
 pub mod instance;
+/// Bundled A1 mini + U1 instance fixtures. Test-only — gated out of release
+/// builds (see the `test-fixtures` feature in Cargo.toml) so the shipped
+/// binary ships no fixtures and a missing storage root yields an empty
+/// registry, not fabricated printers.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod instance_library;
 pub mod instance_registry;
 pub mod instance_storage;
@@ -22,6 +27,7 @@ pub use instance::{
     BedRef, ConnectionInfo, ExtruderState, FeedKind, NozzleMaterial, NozzleSku, PrinterInstance,
     SlotBinding, SlotRef,
 };
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use instance_library::{
     bundled_instances, instance_id_for_vendor_profile, BAMBI_ID, SNAPPY_ID,
 };

@@ -143,7 +143,7 @@ pub struct DispatchGate {
 impl DispatchGate {
     /// A permissive gate: no printer filter, no per-level overrides
     /// (every plugin resolves to its global/default activation). The
-    /// plain `dispatch` / `any_hook` use this.
+    /// plain `dispatch` uses this.
     pub fn all() -> Self {
         Self::default()
     }
@@ -335,16 +335,10 @@ impl PluginHost {
         }
     }
 
-    /// Whether any enabled, loaded plugin declares `kind` (permissive
-    /// gate). Lets a caller skip building a hook payload entirely when
-    /// nothing would run (e.g. the orchestrator avoids re-parsing G-code).
-    pub fn any_hook(&self, kind: HookKind) -> bool {
-        self.any_active_hook(kind, &DispatchGate::all())
-    }
-
-    /// As [`Self::any_hook`], but only counts plugins that pass `gate`
-    /// (healthy + printer-compatible + activated) — so the orchestrator
-    /// skips the G-code round-trip when nothing would run for this plate.
+    /// Whether any plugin declaring `kind` passes `gate` (healthy +
+    /// printer-compatible + activated) — lets a caller skip building a
+    /// hook payload when nothing would run (e.g. the orchestrator skips
+    /// the G-code round-trip when no plugin would run for this plate).
     pub fn any_active_hook(&self, kind: HookKind, gate: &DispatchGate) -> bool {
         self.plugins
             .iter()

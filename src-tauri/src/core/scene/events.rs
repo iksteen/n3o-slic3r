@@ -221,12 +221,9 @@ impl std::fmt::Display for SceneOpError {
     }
 }
 
-/// Outcome of a [`Project::rebind_plate_printer`] call.
-/// Surfaces the from/to printer identities + any settings that no
-/// longer fit the new printer's bounds so the UI can decide what
-/// to warn about. `incompatible` / `clamped` are populated by a
-/// future PR once the validation walk lands; for the MVP they
-/// ride out as empty vectors.
+/// Outcome of a [`Project::rebind_plate_printer`] call: the from/to
+/// printer identities and the new build plate, so the UI can update its
+/// binding display.
 #[derive(Debug, Clone, Serialize)]
 pub struct PrinterChangeReport {
     pub plate_id: PlateId,
@@ -235,32 +232,6 @@ pub struct PrinterChangeReport {
     pub previous_printer: Option<String>,
     pub new_printer: String,
     pub new_build_plate: String,
-    /// Settings whose authored value (project- or object-tier) is
-    /// now out of range / not applicable for the new printer.
-    /// MVP: always empty pending the validation walk.
-    pub incompatible: Vec<IncompatibleSetting>,
-    /// Settings auto-clamped to the new printer's range (e.g.
-    /// extruder selector reduced when toolheads count drops). MVP:
-    /// always empty.
-    pub clamped: Vec<ClampedSetting>,
-}
-
-/// Per-setting incompatibility entry — placeholder shape; the
-/// validation walk in a future PR populates it.
-#[derive(Debug, Clone, Serialize)]
-pub struct IncompatibleSetting {
-    pub key: String,
-    pub value: String,
-    pub reason: String,
-}
-
-/// Per-setting clamp entry — placeholder shape; same lineage as
-/// `IncompatibleSetting`.
-#[derive(Debug, Clone, Serialize)]
-pub struct ClampedSetting {
-    pub key: String,
-    pub from: String,
-    pub to: String,
 }
 
 impl std::error::Error for SceneOpError {}

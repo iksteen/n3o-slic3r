@@ -1,4 +1,5 @@
-//! Slice orchestrator integration test (PR-3-2; reshaped by PR-S-5c).
+#![cfg(feature = "test-fixtures")]
+//! Slice orchestrator integration test.
 //!
 //! Drives the full chain end-to-end without spinning up Tauri:
 //! construct a `SliceJobInput` with `printer_instance_id`, call

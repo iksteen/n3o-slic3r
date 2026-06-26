@@ -48,7 +48,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
 
 use super::errors::{classify_libslic3r_error, SliceError};
 use super::events::SliceEvent;
@@ -75,7 +74,7 @@ use std::collections::BTreeMap;
 /// post-slice step is then skipped entirely.
 pub type PluginHostRef = Arc<Mutex<PluginHost>>;
 
-/// Errors `start_slice_job` returns synchronously (before the
+/// Errors the orchestrator returns synchronously (before the
 /// worker thread spawns). Post-spawn errors flow out via the
 /// `slice:job_failed` event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,8 +112,9 @@ impl std::fmt::Display for SliceStartError {
 impl std::error::Error for SliceStartError {}
 
 /// Event-sink callback the worker thread uses to surface every
-/// lifecycle transition. `AppHandle::emit` is the production path;
-/// tests inject a `Vec`-pushing closure to inspect the stream.
+/// lifecycle transition. The production path (`slice::commands`) emits
+/// each event on its Tauri channel; tests inject a `Vec`-pushing
+/// closure to inspect the stream.
 pub type EventSink = Box<dyn Fn(SliceEvent) + Send + Sync + 'static>;
 
 /// Resolve the [`Cascade`] this job slices against.
@@ -158,37 +158,6 @@ fn resolve_cascade(input: &SliceJobInput) -> Result<Cascade, SliceStartError> {
     let effective = with_quality_profile(&instance, input.quality_profile.as_deref());
     compose_cascade(&effective, &input.material_layout, &plate_overrides)
         .map_err(|e| SliceStartError::PrinterInstanceCompose(e.to_string()))
-}
-
-/// Spawn the worker thread for a slice job. Returns the allocated
-/// [`JobId`] immediately; the worker drives the rest of the
-/// lifecycle through Tauri events.
-pub fn start_slice_job(
-    input: SliceJobInput,
-    app_handle: AppHandle,
-    registry: &JobRegistry,
-) -> Result<JobId, SliceStartError> {
-    let host = plugin_host_from_app(&app_handle);
-    spawn_worker(input, registry, app_handle_sink(app_handle), host)
-}
-
-/// Pull the managed plugin host off the app, or `None` when it isn't
-/// managed (headless tests). Cheap Arc clone.
-fn plugin_host_from_app(app: &AppHandle) -> Option<PluginHostRef> {
-    use tauri::Manager;
-    app.try_state::<PluginHostRef>().map(|s| s.inner().clone())
-}
-
-/// Production sink — emits each event on the matching Tauri
-/// channel. Errors are logged + swallowed (a disconnected frontend
-/// shouldn't kill the worker thread).
-fn app_handle_sink(app: AppHandle) -> EventSink {
-    Box::new(move |event: SliceEvent| {
-        let name = event.name();
-        if let Err(e) = app.emit(name, &event) {
-            tracing::warn!(event = name, error = %e, "slice event emit failed");
-        }
-    })
 }
 
 /// Shared pre-flight: validate, resolve the cascade + context,
@@ -272,21 +241,11 @@ fn prepare_job(
     Ok((job_id, resolved, handle))
 }
 
-/// Testable orchestrator entry — same as [`start_slice_job`] but
-/// takes a generic event sink instead of a Tauri AppHandle. The
-/// integration test under `src-tauri/tests/slice_orchestrator.rs`
-/// uses this to capture every event into a `Vec` without spinning
-/// up a Tauri runtime. No plugin host (no post-slice hook).
-pub fn start_slice_job_with_sink(
-    input: SliceJobInput,
-    registry: &JobRegistry,
-    sink: EventSink,
-) -> Result<JobId, SliceStartError> {
-    spawn_worker(input, registry, sink, None)
-}
-
-/// As [`start_slice_job_with_sink`], but dispatches the post-slice hook
-/// through `host`. The production slice path uses this.
+/// The production slice path entry: spawns the worker, capturing events
+/// through `sink` and dispatching the post-slice hook through `host`.
+/// The integration test under `src-tauri/tests/slice_orchestrator.rs`
+/// uses the blocking variants below to capture events without a Tauri
+/// runtime.
 pub fn start_slice_job_with_sink_and_plugins(
     input: SliceJobInput,
     registry: &JobRegistry,

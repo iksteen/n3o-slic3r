@@ -5,9 +5,6 @@ description = "n3o-slic3r: a modern desktop slicer UI driving libslic3r via orca
 authors = ["Ingmar Steen <iksteen@gmail.com>"]
 edition = "2021"
 license = "AGPL-3.0-or-later"
-# With the n3o-send CLI added as a second bin, `cargo run` is ambiguous;
-# pin the bare `cargo run` to the slicer app.
-default-run = "n3o-slic3r"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -25,6 +22,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # automatically; a raw `cargo build` (e.g. the Linux→macOS cross in
 # packaging/macos-cross/) must pass `--features custom-protocol`. DO NOT REMOVE.
 custom-protocol = ["tauri/custom-protocol"]
+
+# Test-only: compiles the bundled A1 mini + U1 instance fixtures and the
+# registry's no-storage-root fallback that seeds them. Enabled for the test
+# build (`cargo test --features test-fixtures`, and CI) plus the lib's own
+# unit tests via `cfg(test)`; NEVER enabled for release builds, so the
+# shipped binary carries no fixtures and a missing storage root yields an
+# empty registry rather than silently fabricated printers. Integration tests
+# that need the fixtures are themselves `#![cfg(feature = "test-fixtures")]`,
+# so a plain `cargo test` (no feature) skips them instead of failing.
+test-fixtures = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -124,25 +131,9 @@ gtk = "0.18"
 rfd = "0.16"
 
 [dev-dependencies]
-# HTTP/WebSocket fixture servers for the U1 driver unit tests
-# (PR-7b-*). Pinned to wiremock's tokio-1 compatibility.
+# HTTP/WebSocket fixture servers for the U1 driver unit tests.
+# Pinned to wiremock's tokio-1 compatibility.
 wiremock = "0.6"
-
-[[example]]
-name = "spike1"
-path = "examples/spike1.rs"
-
-[[example]]
-name = "spike2"
-path = "examples/spike2.rs"
-
-[[example]]
-name = "spike3"
-path = "examples/spike3.rs"
-
-[[example]]
-name = "phase1_smoke"
-path = "examples/phase1_smoke.rs"
 
 [[example]]
 name = "slice_to_gcode_3mf"

@@ -229,7 +229,6 @@ impl MoonrakerSession {
 /// Pull a string field from a nested object in the merged status
 /// map. Returns `None` when either the object or the field is
 /// absent, or when the value isn't a JSON string.
-#[allow(dead_code)] // status decoder consumes
 pub(super) fn get_string<'a>(
     status: &'a Map<String, Value>,
     object: &str,
@@ -240,14 +239,12 @@ pub(super) fn get_string<'a>(
 
 /// Pull an `f64` from a nested object. Returns `None` for absent
 /// fields or non-numeric values.
-#[allow(dead_code)] // status decoder consumes
 pub(super) fn get_f64(status: &Map<String, Value>, object: &str, field: &str) -> Option<f64> {
     status.get(object)?.get(field)?.as_f64()
 }
 
 /// Pull an `i64` from `print_stats.info.<field>` — the sub-object
 /// Moonraker uses for layer counts on klipper >= 0.12.
-#[allow(dead_code)] // status decoder consumes
 pub(super) fn get_print_info_i64(status: &Map<String, Value>, field: &str) -> Option<i64> {
     status.get("print_stats")?.get("info")?.get(field)?.as_i64()
 }
@@ -255,7 +252,6 @@ pub(super) fn get_print_info_i64(status: &Map<String, Value>, field: &str) -> Op
 /// Collect every `extruder`, `extruder1`, …, `extruderN` object
 /// in the status map, keyed by zero-based index. The U1 reports
 /// one entry per docked toolhead.
-#[allow(dead_code)] // status decoder consumes
 pub(super) fn extruders(status: &Map<String, Value>) -> HashMap<usize, &Value> {
     let mut extruders = HashMap::new();
     for (key, value) in status {

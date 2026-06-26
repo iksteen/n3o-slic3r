@@ -122,7 +122,6 @@ pub fn persist(root: &Path, instance: &PrinterInstance) -> Result<(), StorageErr
 
 /// Remove `<root>/<id>.toml`. Silent no-op if the file doesn't
 /// exist (already gone, or never persisted because root wasn't set).
-#[allow(dead_code)]
 pub fn delete(root: &Path, id: &str) -> Result<(), StorageError> {
     let path = root.join(format!("{}.toml", id));
     if path.exists() {

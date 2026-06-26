@@ -44,8 +44,7 @@ export type CapabilityPredicate =
   | { kind: "RequiresMultiSlot" }
   | { kind: "RequiresToolchanger" }
   | { kind: "RequiresPurgeTower" }
-  | { kind: "RequiresBblPrinter" }
-  | { kind: "RequiresChamberHeater" };
+  | { kind: "RequiresBblPrinter" };
 
 /** Typed default-value wire shape (mirrors Rust's `cascade::DefaultValue`).
  *

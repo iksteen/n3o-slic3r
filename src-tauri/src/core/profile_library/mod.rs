@@ -112,7 +112,6 @@ struct CascadeAsset {
     /// Workspace-relative source path string (only used for human-
     /// readable display; once a fragment is parsed we don't refer
     /// back to the file).
-    #[allow(dead_code)]
     source_path: String,
 }
 

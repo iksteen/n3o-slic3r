@@ -28,7 +28,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS, Transport};
 use serde::Serialize;
-use tokio::sync::{mpsc, oneshot, watch, Mutex};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -61,9 +61,6 @@ pub struct BambuDriver {
     /// Status publisher. Cloned across `subscribe_status` callers.
     status_tx: watch::Sender<PrinterStatus>,
     status_rx: watch::Receiver<PrinterStatus>,
-    /// Sink that the background task pushes raw report payloads
-    /// into. The status parser drains it. `None` until connected.
-    raw_messages_rx: Option<Arc<Mutex<mpsc::Receiver<Vec<u8>>>>>,
     /// Handle to the spawned background tasks — held so `drop()`
     /// or `disconnect()` can abort them. Two tasks per driver:
     /// the rumqttc event loop and the status worker.
@@ -89,7 +86,6 @@ impl BambuDriver {
             device_id: None,
             status_tx,
             status_rx,
-            raw_messages_rx: None,
             tasks: Vec::new(),
             shutdown_tx: None,
             client: None,
@@ -112,13 +108,6 @@ impl BambuDriver {
     #[allow(dead_code)] // consumed by the status parser + command paths
     pub fn device_id(&self) -> Option<&str> {
         self.device_id.as_deref()
-    }
-
-    /// Channel the parser drains. The status worker wires this in
-    /// on driver setup.
-    #[allow(dead_code)] // consumed by the status worker
-    pub fn raw_messages(&self) -> Option<Arc<Mutex<mpsc::Receiver<Vec<u8>>>>> {
-        self.raw_messages_rx.clone()
     }
 
     fn set_connection_state(&self, state: ConnectionState) {
@@ -177,12 +166,8 @@ impl Driver for BambuDriver {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
 
-        // Status worker task. We keep no handle to its mpsc
-        // receiver because the worker owns it; the raw_messages_rx
-        // field is left None unless something needs out-of-band
-        // access to raw payloads.
-        let _ = &self.raw_messages_rx;
-
+        // Status worker task — owns the mpsc receiver; drains, parses,
+        // and emits to the watch sender.
         let status_tx_for_worker = self.status_tx.clone();
         let worker_task = tokio::spawn(super::status::run_worker(raw_rx, status_tx_for_worker));
         self.tasks.push(worker_task);

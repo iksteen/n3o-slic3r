@@ -256,7 +256,9 @@ jobs:
           # stay actionable; CI doesn't ship binaries so it doesn't
           # need the symbols.
           N3O_SLIC3R_FFI_CMAKE_CONFIG: Release
-        run: cargo build --workspace --tests --examples
+        # `test-fixtures` compiles the bundled instance fixtures the
+        # integration tests need; release builds never enable it.
+        run: cargo build --workspace --tests --examples --features n3o-slic3r/test-fixtures
 
       - name: Save libslic3r cmake build tree cache
         # Gated on the cargo build succeeding so a half-built
@@ -282,7 +284,7 @@ jobs:
           CARGO_BUILD_JOBS: 1
           CARGO_INCREMENTAL: 0
           N3O_SLIC3R_FFI_CMAKE_CONFIG: Release
-        run: cargo test --workspace
+        run: cargo test --workspace --features n3o-slic3r/test-fixtures
 
       - name: TypeScript typecheck
         run: npx tsc --noEmit

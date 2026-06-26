@@ -21,7 +21,7 @@
 //! predicate added later should:
 //!
 //! - Map to a discoverable property of `PrinterProfile` (or push a
-//!   new field onto it; see the `RequiresChamberHeater` note below).
+//!   new field onto it).
 //! - Cover a non-empty option set in libslic3r's catalog — adding a
 //!   predicate that nothing references is dead weight.
 //! - Have a tested A1 mini + Snapmaker U1 + synthetic-toolchanger
@@ -64,15 +64,6 @@ pub enum CapabilityPredicate {
     /// machine-specific G-code macros that only Bambu's firmware
     /// honors. Hidden on non-Bambu printers.
     RequiresBblPrinter,
-
-    /// Heated chamber options. **Not yet load-bearing** — the
-    /// initial `PrinterProfile` doesn't carry a `has_chamber_heater`
-    /// flag, so [`Self::satisfied_by`] returns `true` for this
-    /// variant unconditionally. The predicate exists in the
-    /// vocabulary so a future `PrinterProfile` extension can wire
-    /// the field in without a cascade of schema migrations; if no
-    /// such extension lands, drop this variant.
-    RequiresChamberHeater,
 }
 
 impl CapabilityPredicate {
@@ -99,10 +90,6 @@ impl CapabilityPredicate {
             Self::RequiresPurgeTower => printer.toolheads.len() == 1 && printer.ams_max > 0,
 
             Self::RequiresBblPrinter => printer.model.starts_with("Bambu"),
-
-            // Always-true placeholder until PrinterProfile grows the
-            // capability field. Documented as such on the variant.
-            Self::RequiresChamberHeater => true,
         }
     }
 }
@@ -151,13 +138,6 @@ pub fn capability_for_key(key: &str) -> Option<CapabilityPredicate> {
         // appear in the bundled A1 mini cascade.
         "best_object_pos" | "scan_first_layer" | "ams_stash_speed" => {
             Some(CapabilityPredicate::RequiresBblPrinter)
-        }
-
-        // Chamber heater control. Variant is a no-op until
-        // PrinterProfile carries the field; mapping table still
-        // tagged so the visibility surface is consistent.
-        "chamber_temperature" | "chamber_temperatures" => {
-            Some(CapabilityPredicate::RequiresChamberHeater)
         }
 
         _ => None,
@@ -258,15 +238,6 @@ mod tests {
     }
 
     #[test]
-    fn chamber_heater_unconditionally_satisfied_until_profile_field_exists() {
-        // Documented behavior: the variant exists in the vocabulary
-        // but does no hiding yet. Tested so a future field-addition
-        // intentionally breaks this test.
-        let p = single_material_voron();
-        assert!(CapabilityPredicate::RequiresChamberHeater.satisfied_by(&p));
-    }
-
-    #[test]
     fn capability_table_picks_up_canonical_keys() {
         assert_eq!(
             capability_for_key("filament_map_mode"),
@@ -280,10 +251,7 @@ mod tests {
             capability_for_key("extruder_clearance_radius"),
             Some(CapabilityPredicate::RequiresToolchanger),
         );
-        assert_eq!(
-            capability_for_key("chamber_temperature"),
-            Some(CapabilityPredicate::RequiresChamberHeater),
-        );
+        assert_eq!(capability_for_key("chamber_temperature"), None);
         assert_eq!(capability_for_key("layer_height"), None);
     }
 

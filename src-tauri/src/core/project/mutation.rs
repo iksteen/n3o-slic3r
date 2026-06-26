@@ -658,10 +658,6 @@ impl Project {
             previous_printer,
             new_printer,
             new_build_plate,
-            // Populated by the validation walk in a future PR; for the
-            // MVP we ship the picker without proactive warnings.
-            incompatible: Vec::new(),
-            clamped: Vec::new(),
         };
         Ok((report, events))
     }
@@ -3619,8 +3615,6 @@ mod tests {
         // carries on its `bed.identity` — the bambi fixture ships with
         // Supertack Plate as the default.
         assert_eq!(report.new_build_plate, "Supertack Plate");
-        assert!(report.incompatible.is_empty());
-        assert!(report.clamped.is_empty());
         // Events emitted: BedChanged + PlateMetadataChanged.
         assert_eq!(events.len(), 2);
         assert!(matches!(

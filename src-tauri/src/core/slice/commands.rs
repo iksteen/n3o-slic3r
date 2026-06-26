@@ -1,7 +1,7 @@
 //! Tauri command surface for the slice orchestrator.
 //!
-//! Thin layer over [`super::orchestrator::start_slice_job`] +
-//! [`super::job::JobRegistry`]. Tauri-managed state is the job registry
+//! Thin layer over [`super::orchestrator::start_slice_job_with_sink_and_plugins`]
+//! + [`super::job::JobRegistry`]. Tauri-managed state is the job registry
 //! itself; the cascade is composed per-job inside the orchestrator.
 //!
 //! ## `slice_active_plate`
@@ -91,7 +91,7 @@ pub fn slice_active_plate(
             .map_err(SliceStartError::SliceBlocked)
             .map_err(|e| e.to_string())?;
         let job_id_preview = jobs.alloc_id();
-        // Re-allocate properly inside start_slice_job; this is just
+        // Re-allocate properly inside the orchestrator; this is just
         // for the output_dir name. The actual JobId may differ if
         // another command lands between the alloc and the spawn —
         // that's harmless, the dir's just an opaque temp scope.

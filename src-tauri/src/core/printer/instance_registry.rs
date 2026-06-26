@@ -24,6 +24,7 @@ use super::instance::{
     BedRef, ConnectionInfo, ExtruderState, FeedKind, NozzleMaterial, NozzleSku, PrinterInstance,
     SlotBinding,
 };
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::instance_library::bundled_instances;
 use super::instance_storage;
 use crate::core::driver::traits::DriverKind;
@@ -35,9 +36,11 @@ fn registry() -> &'static Mutex<Vec<PrinterInstance>> {
         // First-access load. Production has a storage root registered
         // by Tauri's `setup()` and starts empty on first launch (the
         // empty-state UI fires; create_instance writes the first
-        // entry). Tests that never hit Tauri's setup fall back to
-        // the in-memory test fixtures so the wide test surface
-        // doesn't need temp-library plumbing per test.
+        // entry), so the `None` arm never fires in a release build — it
+        // returns an empty registry, never fabricated printers. Under
+        // the `test-fixtures` feature (and the lib's own `cfg(test)`
+        // unit tests), the wide test surface that never calls Tauri's
+        // setup falls back to the in-memory fixtures.
         let initial = match instance_storage::root() {
             Some(root) => instance_storage::load_from_disk(root).unwrap_or_else(|e| {
                 tracing::warn!(
@@ -46,7 +49,10 @@ fn registry() -> &'static Mutex<Vec<PrinterInstance>> {
                 );
                 Vec::new()
             }),
+            #[cfg(any(test, feature = "test-fixtures"))]
             None => bundled_instances(),
+            #[cfg(not(any(test, feature = "test-fixtures")))]
+            None => Vec::new(),
         };
         Mutex::new(initial)
     })

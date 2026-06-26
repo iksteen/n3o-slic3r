@@ -1,4 +1,5 @@
-//! Phase 3 exit-criteria smoke (PR-3-12).
+#![cfg(feature = "test-fixtures")]
+//! Phase 3 exit-criteria smoke.
 //!
 //! Chains every Phase 3 deliverable into one repeatable test so a
 //! future regression that breaks any link — slice, parse, serialize,

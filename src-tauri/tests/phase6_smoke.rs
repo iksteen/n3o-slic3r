@@ -1,4 +1,5 @@
-//! Phase 6 exit-criteria smoke (PR-6-17).
+#![cfg(feature = "test-fixtures")]
+//! Phase 6 exit-criteria smoke.
 //!
 //! Chains every Phase 6 deliverable that touches the preview
 //! pipeline into one repeatable test so a regression on slice →

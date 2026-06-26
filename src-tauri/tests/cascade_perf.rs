@@ -1,4 +1,5 @@
-//! Cascade pipeline perf gates (PR-1-10).
+#![cfg(feature = "test-fixtures")]
+//! Cascade pipeline perf gates.
 //!
 //! Drives the resolver + adapter in tight loops and asserts mean
 //! latency stays under FR-CAS-11's budgets:
