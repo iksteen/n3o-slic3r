@@ -1,4 +1,4 @@
-// Pure helpers for the slot-binding panel (PR-S-7).
+// Pure helpers for the slot-binding panel.
 
 import { describe, expect, it } from "vitest";
 import {

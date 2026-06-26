@@ -1,8 +1,8 @@
-// Setting label tooltip (PR-4-11) — FR-UI-6.
+// Setting label tooltip — FR-UI-6.
 //
 // Hover the row's label to see libslic3r's `tooltip` text + an
 // optional "💡 why this matters" annotation. The annotations are
-// authored in src/settings/annotations/data.ts (PR-4-12); this
+// authored in src/settings/annotations/data.ts; this
 // component is type-safe over the data shape but doesn't depend
 // on a populated map (annotations beyond ~30 are a cut candidate).
 

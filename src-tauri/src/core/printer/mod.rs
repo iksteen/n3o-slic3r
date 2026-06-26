@@ -1,11 +1,12 @@
-//! Printer drivers.
+//! Printer instances and catalog.
 //!
-//! Each driver owns its send path end-to-end, including any wrapping,
-//! transformation, or metadata injection the target printer requires.
-//! The slicer produces canonical G-code via libslic3r; the driver
-//! decides what to do with it before transmission. Adding a future
-//! printer is a self-contained exercise — write the driver, declare
-//! its capabilities, no shared-code changes (PRD §8.2 note).
+//! This module owns the user-binding state layered over immutable
+//! vendor printer profiles: the [`instance`] model (nozzles, slot
+//! bindings, connection config), its registry/library/storage, the
+//! catalog facade over the bundled printer profiles, and the Tauri
+//! command surface that creates, mutates, and queries instances.
+//! Driver comms — the network send/control path to a physical printer
+//! — live in `core/driver`, not here.
 
 pub mod bambu;
 pub mod instance;
@@ -469,7 +470,7 @@ pub fn process_fragment_list(
 }
 
 /// Tauri command: pull the named printer's current spool loadout
-/// from the live driver into the instance's SlotBindings (PR-7c-2).
+/// from the live driver into the instance's SlotBindings.
 ///
 /// Resolver lives in [`crate::core::printer::sync`]; this command
 /// is the I/O wrapper — grab a status snapshot, project it into

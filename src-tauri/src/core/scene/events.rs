@@ -1,6 +1,6 @@
 //! Scene events — the diff payloads the renderer subscribes to.
 //!
-//! `SceneState`'s mutation methods (`select`, `translate`, etc.) are
+//! `Project`'s mutation methods (`select`, `translate`, etc.) are
 //! *pure*: they take `&mut self` and return a `Vec<SceneEvent>`. The
 //! Tauri wrapper in `commands.rs` takes that list and emits each
 //! event via `Window::emit`. Tests bypass the Tauri layer and

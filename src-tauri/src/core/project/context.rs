@@ -7,8 +7,9 @@
 //! predicate values.
 //!
 //! Project state proper (per-plate cycle counts, multi-plate
-//! composition, .3mf persistence) is Phase 5 / FR-MP-* work; this
-//! file ships only the slice-time context Phase 1's resolver needs.
+//! composition, native `.n3o` persistence) lives elsewhere in the
+//! `project` module; this file holds only the slice-time context the
+//! resolver consumes.
 
 use crate::core::cascade::Context;
 use crate::core::filament::profile::FilamentProfile;

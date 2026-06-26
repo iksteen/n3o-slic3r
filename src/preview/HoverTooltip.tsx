@@ -1,4 +1,4 @@
-// Hover-inspection tooltip for the preview (PR-6-11).
+// Hover-inspection tooltip for the preview.
 //
 // Renders next to the cursor when GcodePreview's raycast lands
 // on a segment. Edge-flip logic keeps the tooltip inside the

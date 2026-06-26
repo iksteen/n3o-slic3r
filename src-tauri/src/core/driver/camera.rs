@@ -28,11 +28,12 @@
 //! `JoinHandle::abort`) precisely so `teardown` can run its async release
 //! before the task exits.
 //!
-//! Only the Bambu LAN source ([`super::bambu::camera`]) is wired today;
-//! `source_for` returns an error for other backends so the frontend can
-//! fall back to its "camera unavailable" state. A Moonraker/Klipper source
-//! and a U1 source (Moonraker poll + the mTLS wake) slot in as new
-//! [`CameraSource`] impls + `source_for` arms without touching the worker,
+//! Two sources are wired: the Bambu LAN source ([`super::bambu::camera`],
+//! a push socket) and the U1 source ([`super::snapmaker::camera`], a
+//! Moonraker MJPEG poll behind the mTLS monitor-mode wake). `source_for`
+//! returns an error for backends without a camera so the frontend can fall
+//! back to its "camera unavailable" state. A new backend slots in as another
+//! [`CameraSource`] impl + `source_for` arm without touching the worker,
 //! manager, or commands.
 
 use std::collections::HashMap;

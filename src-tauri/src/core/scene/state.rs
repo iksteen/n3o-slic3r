@@ -60,15 +60,14 @@ pub struct Group {
 
 /// Loaded mesh data + provenance.
 ///
-/// The vertex / normal / index buffers live on the Rust side; they
-/// reach the renderer via the dedicated `scene_mesh_buffers` Tauri
-/// command (binary IPC), NOT the JSON event/snapshot path. The
-/// `#[serde(skip)]` annotations enforce that — sending a 47 MB mesh
-/// as JSON arrays would be ~100 MB of stringified floats and
-/// gigabytes of JS-side parse work.
+/// The vertex / normal / index buffers live on the Rust side and
+/// never cross IPC — the wgpu renderer uploads them straight to the
+/// GPU Rust-side, keyed by [`MeshId`]. The `#[serde(skip)]`
+/// annotations enforce that — sending a 47 MB mesh as JSON arrays
+/// would be ~100 MB of stringified floats and gigabytes of JS-side
+/// parse work.
 ///
-/// Wire-side consumers see [`MeshHeader`] (lightweight metadata) and
-/// fetch the buffers separately.
+/// Wire-side consumers see [`MeshHeader`] (lightweight metadata) only.
 ///
 /// For multi-volume objects (3MF), each volume is its own `Mesh`
 /// and the source 3MF spawns one `SceneObject` per volume.
@@ -76,8 +75,7 @@ pub struct Group {
 /// **Eventual home: `core/geometry/`.** `Mesh` / `MeshHeader` /
 /// `NewMesh` / `MeshProvenance` are general mesh-data types, not
 /// scene-state types. `core/threemf` already imports them upward;
-/// when a third consumer appears (Phase 6 preview's mesh-handle
-/// plumbing is the likely candidate), extract them into a sibling
+/// when a third consumer appears, extract them into a sibling
 /// `core/geometry/` module so the dep direction stops being
 /// scene→peers and starts being peers→geometry. See
 /// `core/scene/mod.rs` for the architectural review note.
@@ -85,7 +83,7 @@ pub struct Group {
 pub struct Mesh {
     pub id: MeshId,
     /// Flat `[x0, y0, z0, x1, y1, z1, ...]` packed vertices. Not
-    /// serialized — fetched via `scene_mesh_buffers`.
+    /// serialized — uploaded GPU-side, never crosses IPC.
     #[serde(skip, default)]
     pub vertices: Vec<f32>,
     /// Flat `[x, y, z, ...]` per-vertex normals; same length as
@@ -123,9 +121,8 @@ impl Mesh {
 }
 
 /// JSON-wire shape of a `Mesh` — everything except the heavy buffers.
-/// `scene:mesh_loaded` events and `scene_snapshot` carry this; the
-/// frontend follows up with `scene_mesh_buffers(id)` to fetch the
-/// binary blob.
+/// `scene:mesh_loaded` events and `scene_snapshot` carry this; it's
+/// the only mesh data on the JSON wire (the buffers stay GPU-side).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeshHeader {
     pub id: MeshId,
@@ -247,8 +244,8 @@ pub struct ExclusionZone {
 /// single-global scene into N of these.
 ///
 /// Mesh data + the primitive-dedup cache + ID allocators are
-/// **not** here — they live scene-wide on [`SceneState`] so a
-/// move-between-plates op doesn't have to copy mesh
+/// **not** here — they live scene-wide on [`crate::core::project::Project`]
+/// so a move-between-plates op doesn't have to copy mesh
 /// buffers, and ids stay unique across plates.
 /// The plate's objects, in **authored order** — position is the order of
 /// record. It's what the Objects panel shows top-to-bottom and the order

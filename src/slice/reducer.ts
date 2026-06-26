@@ -1,4 +1,4 @@
-// Pure reducer over the Tauri `slice:*` event stream (PR-3-4).
+// Pure reducer over the Tauri `slice:*` event stream.
 //
 // Lives separately from `useSliceJob.ts` so the vitest can drive it
 // without spinning up React + the Tauri mocks. The hook layers the

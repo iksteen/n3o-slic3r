@@ -14,8 +14,9 @@ framing all match the old viewport. The Three.js prepare cluster (`ViewportCanva
 `thumbnail.ts`, `towerOverlay`) and the backend `scene_mesh_buffers` /
 `scene_mesh_paint` commands were removed. Mesh geometry never crosses the IPC
 bridge — it is uploaded straight to the GPU Rust-side. The G-code preview
-(`src/preview/`) still runs Three.js; its wgpu rewrite is a later, separate
-effort (see §8).
+(`src-tauri/src/toolpath_render.rs` + `src/preview/GcodePreview.tsx`) is now
+also a wgpu renderer (instanced tubes, same Strategy-A blit); no Three.js
+remains anywhere in the app.
 
 **Linux present path — corrected after phase-1 implementation: Strategy A
 (offscreen wgpu → opaque `<canvas>` blit), NOT GtkGLArea.** The GtkGLArea path
@@ -28,12 +29,12 @@ that land over the viewport **smear** — their pixels persist when dismissed. S
 transparency (opaque canvas, DOM overlays composite normally) at the cost of a
 per-frame copy — acceptable at edit-viewport sizes.
 
-**Scope decided:** the G-code preview (`src/preview/`) **stays on Three.js for
-now** — it gets its own full redesign + wgpu rewrite *after* the prepare tab is
-finished, not as part of this port. So the edit viewport and the preview run
-different renderers for an interim period (acceptable: they're separate screens,
-not kept in sync). The ~8–12 wk "full parity" figure below is the eventual
-two-renderer total, for reference — it is **not** this project's scope.
+**Scope, as it landed:** the edit viewport shipped first; the G-code preview was
+then migrated to its own wgpu renderer (`toolpath_render.rs`) as a separate
+follow-up — exactly the redesign anticipated here. Both screens now run wgpu, the
+interim two-renderer (wgpu + Three.js) split is over, and the Three.js/WebGL
+stack is fully removed. The ~8–12 wk "full parity" figure below was the original
+two-renderer estimate, kept for historical reference.
 
 This record consolidates six spikes. The raw measurement harnesses, per-spike
 `RESULTS.md` files, and the `gtk-glarea-stl` Linux-present bridge (the code the
@@ -82,17 +83,20 @@ Two ideas were *ruled out* by this, not just deprioritized:
 
 ## 3. The architecture
 
-**One renderer, thin per-platform present shim.** A renderer is the whole scene
+**One renderer, one cross-platform present path.** A renderer is the whole scene
 system (meshes, materials, spool-color chain, MMU paint, selection, gizmo,
-picking, bed overlay). You cannot keep Three.js on mac/win and wgpu on Linux —
-that's two full renderers kept in sync forever. So it's wgpu *everywhere*; only
-how the finished frame reaches the screen differs:
+picking, bed overlay). It's wgpu *everywhere*. The shipped present path —
+**Strategy A** (offscreen wgpu → readback → opaque `<canvas>` blit) — is pure
+offscreen render + readback with no per-platform code (`viewport_render.rs` has
+no `cfg(target_os)`, no `CAMetalLayer`/DXGI), so it already works on all three
+platforms today. The zero-copy native paths below are *optional optimizations*,
+not prerequisites for the viewport to function:
 
-| platform | present shim | status |
+| platform | present | status |
 | --- | --- | --- |
-| **Linux** | **Strategy A** — offscreen wgpu → readback → opaque `<canvas>` blit (the GtkGLArea path is dead — needs webview transparency; see the transparency finding below) | shipped |
-| **macOS** | wgpu → `CAMetalLayer` (native, zero-copy), or Strategy A (~5 GB/s measured — also fine) | not built; both paths known-good |
-| **Windows** | DXGI swapchain on a child HWND / DirectComposition, or Strategy A | not built; needs real-hw check |
+| **all** | **Strategy A** — offscreen wgpu → readback → opaque `<canvas>` blit (the GtkGLArea path is dead — needs webview transparency; see the transparency finding below) | shipped, cross-platform |
+| **macOS** | optional: wgpu → `CAMetalLayer` (zero-copy) instead of the readback (~5 GB/s measured) | optional optimization, not built |
+| **Windows** | optional: DXGI swapchain / DirectComposition instead of the readback | optional optimization, not built |
 
 **Why the GtkGLArea path was so attractive (and why it still lost):**
 `gtk-glarea-stl` is visibly smoother than the WebKitGTK viewport **even on an
@@ -170,22 +174,24 @@ raycasting, text labels):
 | --- | --- | --- | --- |
 | `cameraControls.ts` | 130 | glam camera math | trivial |
 | `sceneMirror.ts` (event→mesh, spool-color chain, selection tint, MMU per-face, bed/axes/exclusion overlays) | ~985 | scene mirror + materials + overlay geom | moderate–hard |
-| `ViewportCanvas.tsx` (5 pick modes, bed-plane raycast, input, loop) | ~1,396 | render graph + **BVH picker** + input glue | hard |
+| `ViewportCanvas.tsx` (5 pick modes, bed-plane raycast, input, loop) | ~1,396 | render graph + CPU ray/triangle picker + input glue | hard |
 | `gizmo.ts` (T/R/S, multi-select pivot, snap) | ~296 | **hand-rolled gizmo** (no off-the-shelf) | hard — biggest single long pole |
 | `thumbnail.ts` (iso PNG for `.gcode.3mf`/U1) | ~138 | headless wgpu offscreen → PNG | moderate |
 | `towerOverlay.ts` / `paintColors.ts` / axis text | ~250 | overlays + **glyph pipeline** (no DOM text) | moderate |
-| **`src/preview/*`** — the SECOND renderer (G-code preview, custom segment shader, hover raycast, layer windowing) | **~3,080** | second wgpu renderer | hard — the omitted half |
+| **`src/preview/*`** — the SECOND renderer (G-code preview, custom segment shader, hover raycast, layer windowing) | **~3,080** | second wgpu renderer (`toolpath_render.rs`) | **done** |
 
 **Edit-viewport-only ≈ 5–7 wk. Full parity (both renderers, 3 platforms) ≈ 8–12 wk.**
-Picking is CPU-side JS today (`Raycaster` + `Plane`); wgpu needs a Rust
-ray/triangle BVH — net-new, and the lay-flat/auto-orient/align modes need
-face-normal parity with three.js.
+Picking moved from CPU-side JS (`Raycaster` + `Plane`) to a Rust CPU
+ray/triangle scan (Möller–Trumbore over every triangle — `nearest_hit` in
+`viewport_render.rs`; a BVH is the obvious upgrade if a high-poly scene ever lags
+picking), with face-normal parity for the lay-flat/auto-orient/align modes.
 
 ---
 
 ## 5. Phased plan (Strategy A, edit viewport first)
 
-Steps 1–6 are the edit-viewport work that shipped; steps 7–8 remain ahead.
+Steps 1–6 are the edit-viewport work that shipped; step 8 (the preview renderer)
+shipped since as a follow-up; step 7 is an optional optimization.
 
 1. **Foundation** *(done)* — Strategy-A present loop: wgpu renders the scene to an
    offscreen texture sized to the viewport, reads it back, and serves the bytes
@@ -197,20 +203,20 @@ Steps 1–6 are the edit-viewport work that shipped; steps 7–8 remain ahead.
 2. **Scene parity** *(done)* — meshes + lighting + bed/axes/exclusion overlays +
    spool-color chain + MMU per-face paint + selection tint, with geometry
    uploaded GPU-side rather than over the (now-removed) `scene_mesh_buffers` IPC.
-3. **Picking + selection** *(done)* — Rust BVH; closest-hit object + face-pick
-   world normal parity vs three.js across all 5 modes.
+3. **Picking + selection** *(done)* — Rust CPU ray/triangle scan (`nearest_hit`,
+   Möller–Trumbore); closest-hit object + face-pick world normal parity vs the
+   old viewport across all 5 modes.
 4. **Gizmo** *(done)* — hand-rolled T/R/S, multi-select pivot, snapping (was the
    longest pole).
 5. **Overlays + text** *(done)* — tower overlay, dimension/axis labels (glyph
    pipeline).
 6. **Thumbnail** *(done)* — headless wgpu offscreen → PNG for `.gcode.3mf`/U1.
-7. **Cross-platform present shims** — CAMetalLayer (macOS), DXGI/DComp
-   (Windows); verify Windows on real hardware.
-8. **G-code preview renderer — OUT of this project.** Stays on Three.js until
-   the prepare tab is done, then gets its own full redesign + wgpu rewrite. The
-   WebGL stack therefore lingers for the preview screen in the interim — known
-   and accepted. (Preview is a separate screen, so the interim two-renderer
-   split costs nothing in sync.)
+7. **Cross-platform present optimizations** *(optional, not built)* — CAMetalLayer
+   (macOS), DXGI/DComp (Windows) to replace the readback with a zero-copy present.
+   Strategy A already works cross-platform, so these are only a perf optimization.
+8. **G-code preview renderer** *(done)* — migrated to its own wgpu renderer
+   (`toolpath_render.rs`, instanced tubes); the Three.js/WebGL stack is fully
+   removed. (Preview is a separate screen, so it was a clean standalone follow-up.)
 
 ---
 
@@ -220,27 +226,28 @@ Steps 1–6 are the edit-viewport work that shipped; steps 7–8 remain ahead.
   Strategy A replaced it. The Linux risk it raised — per-frame transport cost at
   large/HiDPI viewport sizes — was mitigated as planned (render-at-viewport-size +
   DPR 1 + on-demand) and held up at edit-viewport sizes in the shipped renderer.
-- **Windows present path** — only ever measured in a GPU-less VM. Needs a
-  real-hardware DXGI/DComp check (not on the Linux critical path).
-- **Preview renderer** — *decided OUT* (stays Three.js → own redesign + wgpu
-  rewrite after the prepare tab). Not a risk for this project; noted so the
-  interim two-renderer split is a conscious choice, not drift.
-- **Gizmo** — no off-the-shelf Rust equivalent to `TransformControls`; budget it
-  as the largest single task.
-- **flatpak** — the GtkGLArea path must work inside the sandbox (same stack that
-  needs the dmabuf workaround today); validate in the flatpak build, not just a
-  bare run.
+- **Windows present path** — Strategy A (readback) works cross-platform and is the
+  shipped path; a zero-copy DXGI/DComp present remains an optional optimization,
+  only ever measured in a GPU-less VM (not on the critical path).
+- **Preview renderer** — *done*: migrated to its own wgpu renderer
+  (`toolpath_render.rs`) after the prepare tab landed; the Three.js/WebGL stack is
+  fully removed.
+- **Gizmo** — no off-the-shelf Rust equivalent to `TransformControls`; was the
+  largest single task, now shipped.
+- **flatpak** — moot: the GtkGLArea path is dead, so there's no GTK GPU widget to
+  sandbox. Strategy A renders offscreen with wgpu inside the webview; the flatpak
+  channel ships.
 
 ---
 
 ## 7. Recommendation
 
 The recommendation was option B for the **edit viewport** (~5–7 wk), with the
-preview renderer explicitly out (Three.js until the prepare tab lands, then its
-own wgpu rewrite). That is what shipped: the edit-viewport port (§5 steps 1–6)
-is complete at feature parity, the Three.js prepare cluster is deleted, and the
-preview stays on Three.js as planned. Every kill-criterion spike passed and the
-highest-risk piece (the Linux present path) landed on Strategy A after the
-transparency finding retired the GtkGLArea/transparent-webview route. The
-remaining open work is the cross-platform present shims (§5 step 7) and the
-preview rewrite (§5 step 8).
+preview renderer as a separate follow-up. That is what shipped, and then some:
+the edit-viewport port (§5 steps 1–6) is complete at feature parity, the Three.js
+prepare cluster is deleted, and the preview was subsequently migrated to its own
+wgpu renderer too (§5 step 8) — so no Three.js remains. Every kill-criterion spike
+passed and the highest-risk piece (the Linux present path) landed on Strategy A
+after the transparency finding retired the GtkGLArea/transparent-webview route.
+The only remaining work is the optional zero-copy present optimizations (§5 step
+7), which Strategy A makes non-blocking.

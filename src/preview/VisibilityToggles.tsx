@@ -1,4 +1,4 @@
-// Travel + retraction visibility toggles (PR-6-10).
+// Travel + retraction visibility toggles.
 //
 // Two checkboxes. The renderer's prop interface already accepts
 // `showTravels` / `showRetractions`; this component just exposes

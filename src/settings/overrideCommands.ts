@@ -1,17 +1,13 @@
-// Real `invoke()` wrappers for per-object cascade overrides
-// (PR-5-7 frontend).
-//
-// PR-4-9 shipped the SettingsPanel with stub `onSetObjectOverride`
-// / `onClearObjectOverride` props that the panel host (App.tsx,
-// integrated by PR-5-9) is expected to wire to backend storage.
-// PR-5-7 added the backend half (storage + Tauri commands on
-// scene::commands); this module is what the host calls.
+// `invoke()` wrappers for per-object cascade overrides. The panel
+// host calls these to drive the SettingsPanel's `onSetObjectOverride`
+// / `onClearObjectOverride` props; the backend half (storage + Tauri
+// commands) lives on scene::commands.
 //
 // Each wrapper takes a `plateId` + `objectId` because per-object
 // overrides are scoped per-plate (the same object id on a
-// different plate could carry different overrides — PR-5-11's
-// move-between-plates relies on that). The host (PR-5-9) supplies
-// these from the active plate + selected object.
+// different plate could carry different overrides, which the
+// move-between-plates flow relies on). The host supplies these
+// from the active plate + selected object.
 //
 // **Returns a Promise** — fire-and-forget on the SettingsPanel
 // caller side is fine; the backend re-emits the panel's resolve
@@ -68,7 +64,7 @@ export function clearAllObjectOverrides(
 
 /** Build a `{ onSetObjectOverride, onClearObjectOverride }` pair
  * pre-bound to a specific (plate, object). Lets the SettingsPanel
- * host (PR-5-9) hand the panel ready-to-call callbacks without
+ * host hand the panel ready-to-call callbacks without
  * the panel ever needing to know plate/object ids.
  *
  * Pass `null` for either id to get callbacks that no-op silently

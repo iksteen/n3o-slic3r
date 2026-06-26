@@ -1,6 +1,4 @@
-// Tauri invoke wrappers for the autosave + recovery flow
-// (PR-5-10 UI). Backend mutations + commands shipped in
-// PR-5-10 backend.
+// Tauri invoke wrappers for the autosave + recovery flow.
 
 import { invoke } from "@tauri-apps/api/core";
 

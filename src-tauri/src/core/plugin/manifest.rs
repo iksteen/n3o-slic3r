@@ -225,7 +225,7 @@ pub enum ManifestError {
     EmptyHooks,
     #[error("unknown hook `{0}` (expected one of: pre_slice, post_slice, pre_send)")]
     UnknownHook(String),
-    #[error("unknown scope `{0}` (expected one of: global, project, plate)")]
+    #[error("unknown scope `{0}` (expected one of: global, printer-instance, project, plate)")]
     UnknownScope(String),
     #[error("setting `{key}`: {reason}")]
     BadSetting { key: String, reason: String },

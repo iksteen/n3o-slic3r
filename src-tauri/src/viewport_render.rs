@@ -38,7 +38,7 @@ struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
 @fragment fn fs(i: VO) -> @location(0) vec4<f32> {
   if (dot(i.n, i.n) < 0.01) { return vec4<f32>(u.color.rgb, 1.0); } // unlit line (grid / bbox bracket)
   let n = normalize(i.n);
-  // Matte, two-sided lighting matching the Three.js viewport (ambient 0.55 +
+  // Matte, two-sided lighting matching the previous viewport (ambient 0.55 +
   // key + fill). High ambient + abs() compresses contrast so the source model's
   // inconsistent/flipped normals don't carve stark facets (the "missing shapes"
   // artifact); a shinier, one-sided model exposed them.
@@ -89,7 +89,7 @@ struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
   return vec4<f32>(u.color.rgb * d, u.color.a);
 }
 "#;
-const TOWER_RGB: [f32; 3] = [0.231, 0.510, 0.965]; // #3b82f6, matches the Three.js overlay
+const TOWER_RGB: [f32; 3] = [0.231, 0.510, 0.965]; // #3b82f6, matches the previous overlay
 const TOWER_BOX_H: f32 = 50.0; // indicative box height (the real tower is as tall as the print)
 
 /// Move/Scale gizmo handle length as a fraction of the eye→gizmo distance, so it
@@ -105,10 +105,10 @@ const UNIFORM_BYTES: u64 = 80;
 // Bed extents are f64 (BoundingBox); converted to f32 for the GPU.
 const DEFAULT_BED: ([f64; 3], [f64; 3]) = ([-110.0, -110.0, 0.0], [110.0, 110.0, 200.0]);
 const SELECTED_RGB: [f32; 3] = [0.231, 0.510, 0.965]; // tailwind blue-500 (#3b82f6)
-const DEFAULT_RGB: [f32; 3] = [0.694, 0.694, 0.694]; // #b1b1b1, matches the Three.js fallback
+const DEFAULT_RGB: [f32; 3] = [0.694, 0.694, 0.694]; // #b1b1b1, matches the previous fallback
 const GRID_LINE: [f32; 4] = [0.34, 0.36, 0.40, 1.0];
 const BRACKET: [f32; 4] = [0.85, 0.88, 0.97, 1.0]; // selection bbox corner brackets
-// Origin axis-marker colors (mirror the Three.js viewport + corner legend).
+// Origin axis-marker colors (mirror the previous viewport + corner legend).
 const AXIS_X: [f32; 4] = [1.0, 0.267, 0.267, 1.0]; // #ff4444
 const AXIS_Y: [f32; 4] = [0.267, 0.867, 0.267, 1.0]; // #44dd44
 const AXIS_Z: [f32; 4] = [0.267, 0.533, 1.0, 1.0]; // #4488ff
@@ -764,7 +764,7 @@ pub enum GrabResult {
 }
 
 /// Ray↔plane intersection. `None` when parallel or the hit is behind the camera
-/// (matches three.js `Ray.intersectPlane`, which the frontend used).
+/// (matches the `Ray.intersectPlane` the frontend previously used).
 fn ray_plane(ro: Vec3, rd: Vec3, n: Vec3, p: Vec3) -> Option<Vec3> {
     let denom = n.dot(rd);
     if denom.abs() < 1e-9 {
@@ -1503,7 +1503,7 @@ impl ViewportRenderer {
                     let color = if selected && g.state == 0 {
                         SELECTED_RGB
                     } else if selected {
-                        // mix toward selection blue (matches the Three.js paint tint)
+                        // mix toward selection blue (matches the previous paint tint)
                         let b = SELECTED_RGB;
                         [
                             base[0] * 0.45 + b[0] * 0.55,
@@ -1807,7 +1807,7 @@ impl ViewportRenderer {
 
     /// Render a 3/4 iso print thumbnail of the active plate's models only —
     /// transparent background, no bed/grid/gizmo/tower — to `size`x`size` RGBA.
-    /// Mirrors the Three.js `renderModelThumbnail` (the frontend encodes it to a
+    /// Mirrors the previous `renderModelThumbnail` (the frontend encodes it to a
     /// PNG). Returns a transparent image when there's nothing to show.
     pub fn thumbnail(&mut self, size: u32, project: &Arc<Mutex<Project>>) -> Vec<u8> {
         let size = size.max(1);

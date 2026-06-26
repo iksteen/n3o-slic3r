@@ -1,4 +1,4 @@
-// PR-5-9 — Settings-panel host.
+// Settings-panel host.
 //
 // Translates the App-level `ProjectSession` (cascade handle, printer
 // profile, snapshot) into the SettingsPanel's prop shape, then
@@ -13,7 +13,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ProjectSession } from "../project/useProjectSession";
 import {
   SettingsPanel,
-  type PlateObjectStub,
+  type PlateObject,
   type PluginPlateSurface,
 } from "./SettingsPanel";
 import { usePlugins } from "../plugins/usePlugins";
@@ -55,7 +55,7 @@ export function activePlate(session: ProjectSession): PlateSnapshot | null {
 }
 
 /** First selected object on the plate, projected to the
- * SettingsPanel's `SelectedObjectStub` shape. `null` when nothing's
+ * SettingsPanel's `SelectedObject` shape. `null` when nothing's
  * selected or the plate is empty. Exported for tests. */
 export function selectedObject(
   plate: PlateSnapshot | null,
@@ -67,16 +67,16 @@ export function selectedObject(
 }
 
 /** Project the plate's objects to the SettingsPanel's
- * `PlateObjectStub[]` shape — drives the "N objects override" badge
+ * `PlateObject[]` shape — drives the "N objects override" badge
  * on Project-tab rows (FR-CAS-7b). Exported for tests. */
 export function allObjectsForPanel(
   plate: PlateSnapshot | null,
-): PlateObjectStub[] {
+): PlateObject[] {
   if (!plate) return [];
   return plate.objects.map((o) => ({
     id: o.id,
     name: o.name,
-    color: null, // Filament-color dots arrive with PR-7c filament sync.
+    color: null, // Filament-color dots arrive with filament sync.
     overrides: plate.object_overrides[o.id] ?? {},
   }));
 }

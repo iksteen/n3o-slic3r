@@ -1,4 +1,4 @@
-// Hover cascade ladder (PR-4-8) — FR-CAS-7.
+// Hover cascade ladder — FR-CAS-7.
 //
 // Renders every cascade layer for the hovered setting in a portal
 // at body level so the SettingsPanel's overflow scroll doesn't
@@ -13,9 +13,8 @@
 //   gets `winner` modifier; defined-but-losing layers get
 //   `overridden`.
 // - Per-object section appended when the hovered setting has
-//   object-tier overrides anywhere on the plate (PR-4-9 will fill
-//   the per-object list; PR-4-8 ships the section header + an
-//   empty body when no objects override).
+//   object-tier overrides anywhere on the plate (the section header
+//   shows with an empty body when no objects override).
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -84,7 +83,7 @@ export interface CascadeLadderProps {
    *  layer list. `null` when no override is active. */
   cascadeFallback?: string | null;
   /** Objects on the plate that override this setting. Empty when
-   *  no per-object overrides (or PR-4-9 hasn't populated yet). */
+   *  no per-object overrides. */
   objectOverrides?: readonly ObjectOverrideEntry[];
   /** When the panel is in object scope, the selected object joins the
    *  ladder as its top (highest-priority) tier. `label` is the row name

@@ -2,8 +2,8 @@
 //!
 //! Owns plate/printer binding, plate-level metadata (cycle counts,
 //! composition order), material → slot bindings per (plate, printer),
-//! and project persistence to/from .3mf with our own namespace
-//! extensions.
+//! and project persistence to/from the native `.n3o` container (see
+//! `format`).
 //!
 //! Owns FR-MP-1 through FR-MP-8 (PRD §6.2).
 //!

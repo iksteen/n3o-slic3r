@@ -1,6 +1,6 @@
 # libslic3r workarounds applied by the FFI shim
 
-> Status: as of OrcaSlicer submodule pin `956fcea7e2`. Re-verify before
+> Status: as of OrcaSlicer submodule pin `6bb7903b97`. Re-verify before
 > bumping the submodule; some of these may have been fixed upstream.
 
 OrcaSlicer's `libslic3r` was designed to be driven by its GUI (and to
@@ -14,7 +14,8 @@ non-obvious ways.
 
 All of these but §9 live in `crates/slic3r-ffi/ffi/slic3r_ffi.cpp`; §9 is
 a Rust-side adapter guard on what we *send* the engine rather than a patch
-to the engine's behavior. Line numbers below are stable as of writing.
+to the engine's behavior. References below anchor to function/symbol names
+rather than line numbers, which drift across submodule bumps.
 
 ---
 
@@ -29,12 +30,12 @@ working-copy backup of every loaded 3MF into `temporary_dir()/<plate
 id>/...` *before* parsing geometry. On a non-root user this fails
 permission-denied. The loader catches the failure, bails out with no
 objects populated, and the "empty file" message fires later in
-`Model.cpp:355` as a catch-all.
+`Model::read_from_file` as a catch-all.
 
 Upstream's CLI sets `temporary_dir` via `wxFileName::GetTempDir()`
-(OrcaSlicer.cpp:1255). The GUI sets it during app startup.
+(in OrcaSlicer's CLI startup). The GUI sets it during app startup.
 
-**Fix.** `slic3r_ffi.cpp:267` — call `Slic3r::set_temporary_dir(
+**Fix.** In `slic3r_init` — call `Slic3r::set_temporary_dir(
 std::filesystem::temp_directory_path().string())` in `slic3r_init`.
 C++17's filesystem equivalent gives us the same default
 (`$TMPDIR`/`/tmp`/etc.) without depending on wx.
@@ -45,12 +46,12 @@ C++17's filesystem equivalent gives us the same default
 
 **Symptom.** 3MF files appear to load (no error from libslic3r), but
 the resulting `Model` has zero objects. Slicing then hits the
-"couldn't be read because it's empty" message at `Model.cpp:355`.
+"couldn't be read because it's empty" message in `Model::read_from_file`.
 
 **Root cause.** `Model::read_from_file`'s default options parameter is
 `LoadStrategy::AddDefaultInstances` — which does *not* include
 `LoadStrategy::LoadModel`. Without `LoadModel`, the BBS 3MF importer's
-`_handle_end_object` (`bbs_3mf.cpp:3611`) deletes each parsed object
+`_BBS_3MF_Importer::_handle_end_object` deletes each parsed object
 instead of attaching it:
 
 ```cpp
@@ -64,10 +65,10 @@ bool _BBS_3MF_Importer::_handle_end_object() {
 }
 ```
 
-The flag also gates the "build/restore model state" branch
-(`bbs_3mf.cpp:1374`). STL/OBJ/STEP loaders ignore it harmlessly.
+The flag also gates the "build/restore model state" branch (via the
+importer's `m_load_model` flag). STL/OBJ/STEP loaders ignore it harmlessly.
 
-**Fix.** `slic3r_ffi.cpp:405` — pass
+**Fix.** In `do_load` — pass
 `LoadStrategy::LoadModel | LoadStrategy::LoadConfig |
 LoadStrategy::AddDefaultInstances` to `Model::read_from_file`
 unconditionally. `LoadConfig` is also needed to pull in the 3MF's
@@ -82,7 +83,7 @@ with "Relative extruder addressing requires resetting the extruder
 position at each layer to prevent loss of floating point accuracy.
 Add `G92 E0` to layer_gcode."
 
-**Root cause.** `Print::m_isBBLPrinter` is declared at `Print.hpp:1143`
+**Root cause.** `Print::m_isBBLPrinter` is declared in `Print.hpp`
 *without an initializer*:
 
 ```cpp
@@ -91,15 +92,15 @@ bool m_isBBLPrinter;
 
 So its initial value is whatever uninitialized stack memory contains
 (typically `false`, but undefined). The flag is exposed via
-`is_BBL_printer()` (`Print.hpp:1070`) and consulted by validators that
-need to allow Bambu's relative-extrusion + no-G92-per-layer convention
-(`Print.cpp:1679`).
+`is_BBL_printer()` and consulted by `Print::validate`'s
+relative-extrusion / per-layer-G92 check, which allows Bambu's
+relative-extrusion + no-G92-per-layer convention.
 
 Upstream's CLI sets it explicitly after `apply()` by checking the
-`printer_model` prefix (`OrcaSlicer.cpp:5985`). The GUI sets it from
-the active preset bundle (`BackgroundSlicingProcess.cpp:199`).
+`printer_model` prefix. The GUI sets it from the active preset bundle
+(in `BackgroundSlicingProcess`).
 
-**Fix.** `slic3r_ffi.cpp:500` — after `print.apply(model, config)`,
+**Fix.** In `slic3r_slice` — after `print.apply(model, config)`,
 inspect the config's `printer_model` string and set:
 
 ```cpp
@@ -113,13 +114,13 @@ print.is_BBL_printer() = (printer_model.compare(0, 9, "Bambu Lab") == 0);
 **Symptom.** `Print::process()` segfaults deep in tool-ordering with a
 backtrace through `calc_filament_change_info_by_toolorder` or
 `check_filament_printable_after_group`
-(`ToolOrdering.cpp:67,1282`). The crash dereferences a sentinel
+(both in `ToolOrdering.cpp`). The crash dereferences a sentinel
 `(unsigned int)-1` (0xFFFFFFFF) that should never have been an
 extruder index.
 
 **Root cause.** Several config fields need to be sized to the
 printer's geometry *before* `Print::apply`. Upstream's CLI does this
-between loading and apply (`OrcaSlicer.cpp:5953-5964`):
+between loading and apply:
 
 - `filament_map` must have one entry per filament. For single-extruder
   printers, every entry should be `1` (1-based extruder index).
@@ -134,7 +135,7 @@ between loading and apply (`OrcaSlicer.cpp:5953-5964`):
   resolve it (no positive extruder found in any layer), and downstream
   consumers dereference what becomes the `(unsigned)-1` sentinel.
 
-**Fix.** `slic3r_ffi.cpp:445-475` — apply the normalization on a
+**Fix.** In `slic3r_slice`'s pre-`apply` normalization — apply it on a
 temporary copy of the caller's config before `Print::apply`:
 
 ```cpp
@@ -180,7 +181,7 @@ support-extruder routing, blowing up the tool-change count:
   objects disagree.
 - **Per-OBJECT support selectors** (`support_filament`,
   `support_interface_filament`): LEAVE at 0 (dontcare). The
-  per-layer routing at `GCode.cpp:4794-4820` picks
+  per-layer routing in `GCode.cpp` picks
   `first_extruder_id = layer_tools.extruders.front()` for each
   layer — for the fourcolor stacked case, only one band is
   active per layer, so supports inherit that band's body
@@ -204,8 +205,8 @@ tool-change rationale so neither side can be quietly undone.
 **Symptom.** During `DefCache::build`, calling
 `d.default_value->serialize()` for any `coEnums` (vector-of-enums)
 option segfaults with a backtrace through
-`ConfigOptionEnumsGenericTempl::serialize_single_value` at
-`Config.hpp:2190`, dereferencing a null `keys_map`.
+`ConfigOptionEnumsGenericTempl::serialize_single_value`
+(`Config.hpp`), dereferencing a null `keys_map`.
 
 **Root cause.** The serializer reads `this->keys_map` — a member of
 the option object itself, not the def:
@@ -230,9 +231,8 @@ just doesn't consult it.
 `nozzle_volume_type`, `default_nozzle_volume_type`,
 `filament_z_hop_types`, `filament_retract_lift_enforce`.
 
-**Fix.** `slic3r_ffi.cpp:90` — `serialize_coenums_default(d)` mirrors
-the standard serializer but pulls the reverse-lookup map from the def
-instead of the option:
+**Fix.** `serialize_coenums_default(d)` mirrors the standard serializer
+but pulls the reverse-lookup map from the def instead of the option:
 
 ```cpp
 std::string serialize_coenums_default(const ConfigOptionDef& d) {
@@ -252,8 +252,8 @@ std::string serialize_coenums_default(const ConfigOptionDef& d) {
 }
 ```
 
-`DefCache::build` (line 173) dispatches to this for `coEnums` and to
-the standard `d.default_value->serialize()` for everything else.
+`DefCache::build` dispatches to this for `coEnums` and to the standard
+`d.default_value->serialize()` for everything else.
 
 ---
 
@@ -262,13 +262,13 @@ the standard `d.default_value->serialize()` for everything else.
 **Symptom.** A multi-material slice (≥2 filaments, so the clearance check
 has a non-trivial exclusion polygon to test) fails *validation* — before
 any slicing — with ClipperLib's "Coordinate outside allowed range",
-thrown from `Print::validate()` → `layered_print_cleareance_valid`
-(`Print.cpp:959`). It's **heap/binary-dependent**: an unrelated change to
+thrown from `Print::validate()` → `layered_print_cleareance_valid`.
+It's **heap/binary-dependent**: an unrelated change to
 the shim can flip a previously-passing fixture (e.g. `fourcolor.3mf`)
 into failure, because the bad value is uninitialized memory.
 
-**Root cause.** `Print::m_origin` (the per-plate origin) is declared at
-`Print.hpp:1173` *without an initializer*:
+**Root cause.** `Print::m_origin` (the per-plate origin) is declared in
+`Print.hpp` *without an initializer*:
 
 ```cpp
 Vec3d   m_origin;
@@ -278,12 +278,12 @@ Eigen's default constructor leaves it uninitialized, so it holds garbage
 (observed: denormal doubles like `{2e-320, 6.9e-310, …}`). The clearance
 check reads it via `get_plate_origin()` and translates the bed-exclusion
 polygon by `scale_(m_origin.x()), scale_(m_origin.y())`
-(`Print.cpp:937`). When the garbage is large, the translated polygon's
+(inside `layered_print_cleareance_valid`). When the garbage is large, the translated polygon's
 coordinates exceed ClipperLib's `hiRange` (`0x3FFFFFFFFFFFFFFF`) and the
 range check throws. The origin is normally set by the GUI's PartPlate
 (`set_plate_origin`); a headless slice never touches it.
 
-**Fix.** `slic3r_ffi.cpp` — after `print.apply(model, config)`, pin the
+**Fix.** In `slic3r_slice` — after `print.apply(model, config)`, pin the
 origin to zero (the plate sits at the bed origin in our single-plate
 headless model):
 
@@ -321,8 +321,8 @@ default `wipe_tower_cone_angle=30`). The chain:
 - BBL printers are forced onto the Type1 (old, rectangular) wipe tower
   (`Print::wipe_tower_type()` returns Type1 when `is_BBL_printer()`), and
   **only the Type2/rib branch ever assigns `m_wipe_tower_data.height`**
-  (`Print.cpp:3449`). The Type1 path leaves it as an uninitialized
-  `float height;`.
+  (in `Print::_make_wipe_tower`'s Type2 branch). The Type1 path leaves
+  it as an uninitialized `float height;`.
 - `cone_angle=30` × garbage `height` → an infinite cone radius → an
   `INT64_MIN` corner → the range check throws.
 
@@ -356,11 +356,11 @@ plate, not the printer.
 **Root cause.** Not UB, not heap-dependent — a plain null-pointer deref.
 `Print::validate(StringObjectException *warning = nullptr, …)` reports
 *non-fatal validation warnings* by writing through `warning`, and ~20 of
-those sites deref it **unconditionally** (Print.cpp:979–1891). The headless
+those sites in `Print::validate` deref it **unconditionally**. The headless
 entry called `print.validate()` with no args, so `warning` was `nullptr`;
 whenever a plate trips one of those warning conditions, `warning->string = …`
 writes through null and crashes. The condition that surfaced it was
-`!has_same_shrinkage_compensations()` (Print.cpp:1890) — fires when the
+`!has_same_shrinkage_compensations()` — fires when the
 filaments on a multi-material plate have mismatched shrinkage-compensation
 values, which is why it tracked the filament set rather than the printer.
 
@@ -369,7 +369,7 @@ to `validate()` to surface warnings to the user, so the writes have a valid
 target. This is the same class as §3/§6 — *invocation* setup the GUI does
 that the headless path skipped, not an engine defect we provoke.
 
-**Fix.** `slic3r_ffi.cpp` — pass a local `StringObjectException` sink to
+**Fix.** In `slic3r_slice` — pass a local `StringObjectException` sink to
 `validate()` (`print.validate(&validation_warning)`) and discard it (we have
 no warning UI). The *returned* `StringObjectException` remains the fatal
 error we gate on; the sink just absorbs the advisory writes. One sink covers
@@ -382,8 +382,8 @@ all ~20 sites — none can deref null. Mirrors the GUI exactly.
 **Symptom.** A multi-material slice whose `filament_colour` (or any other
 per-filament vector) carries *fewer* elements than the printer has filaments
 segfaults inside multi-material segmentation — `apply_mm_segmentation`
-(`PrintObjectSlice.cpp:874`) → `get_extents`, reached from
-`multi_material_segmentation_by_painting` (`MultiMaterialSegmentation.cpp:2198`).
+(`PrintObjectSlice.cpp`) → `get_extents`, reached from
+`multi_material_segmentation_by_painting` (`MultiMaterialSegmentation.cpp`).
 Surfaced first when a P1S project (2 filaments) was rebound onto the U1
 (4 toolheads) and its imported `filament_colour` override stayed length-2
 while the rest of the filament vectors fanned to 4.
@@ -439,8 +439,9 @@ Re-verify each workaround:
    the default changed, our explicit `LoadStrategy::LoadModel | ...`
    is still correct.
 
-3. Does `Print::m_isBBLPrinter` still lack an initializer? Check
-   `Print.hpp:1143`. If they fixed it (`bool m_isBBLPrinter = false;`),
+3. Does `Print::m_isBBLPrinter` still lack an initializer? Check the
+   `m_isBBLPrinter` declaration in `Print.hpp`. If they fixed it
+   (`bool m_isBBLPrinter = false;`),
    our explicit set is still needed because the flag's *semantics*
    depend on the printer profile.
 
@@ -487,8 +488,8 @@ time allows.
 ### GCode emission writes uninitialized bytes to disk
 
 **Symptom**: valgrind reports `Syscall param write(buf) points to
-uninitialised byte(s)` from `Slic3r::GCode::GCodeOutputStream::write`
-at `GCode.cpp:6181`, fired by `fwrite` inside the gcode export
+uninitialised byte(s)` from `Slic3r::GCode::GCodeOutputStream::write`,
+fired by `fwrite` inside the gcode export
 pipeline. Triggered during the bambi multi-color slice in
 `phase_s_smoke`; expected to fire on any slice that exercises the
 same gcode-writing path.

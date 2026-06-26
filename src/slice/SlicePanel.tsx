@@ -1,4 +1,4 @@
-// Slice / Cancel button for the topbar (PR-3-4, rewired in PR-6-3).
+// Slice / Cancel button for the topbar.
 // Post-slice stats (time / filament / layers) and the clear button
 // were dropped from the header — the slice result surfaces in Preview.
 // In-flight progress (and the Cancel control) moved out of the topbar
@@ -6,7 +6,7 @@
 // `.slicing-window`); this panel is now just the Slice button, which
 // disables while a slice runs rather than swapping to a Cancel button.
 //
-// Post-PR-6-3 the Slice button drives off live project state via
+// The Slice button drives off live project state via
 // `slice_active_plate` — no file picker, no model-path tracking.
 // The backend builds the SliceJobInput from the active plate's
 // scene + bindings + overrides and writes its own temp .3mf for

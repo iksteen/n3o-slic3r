@@ -1,4 +1,4 @@
-// Typed Tauri invoke wrappers for the driver layer (PR-7a-7).
+// Typed Tauri invoke wrappers for the driver layer.
 //
 // One named function per backend command; thin enough to mock in
 // tests with a single `vi.mock("./invokes")`. Argument names use
@@ -67,8 +67,7 @@ export function driverCommand(
 
 /** Send the plate's last-sliced raw G-code (at `gcodePath`) to
  * the driver as a `.gcode.3mf` bundle. Backend wraps the raw
- * gcode via PR-3-10's writer; PR-7c-7 will replace the stub
- * with full sync-on-send + AMS metadata. */
+ * gcode into the bundle. */
 export function driverSendPlate(
   id: DriverId,
   plateId: number,

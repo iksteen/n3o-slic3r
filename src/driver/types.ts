@@ -1,4 +1,4 @@
-// Wire-shape mirrors of the Rust driver types (PR-7a-7).
+// Wire-shape mirrors of the Rust driver types.
 //
 // Sources of truth:
 //   - `src-tauri/src/core/driver/status.rs`  → connection / job / temps / AMS
@@ -79,7 +79,7 @@ export interface AmsFilament {
   sub_brand: string | null;
   multi_colors: string[];
   /** Bambu's vendor SKU (e.g. "GFA00" for PLA Basic). Null when
-   *  the spool is untagged. PR-7c-2's sync resolver matches this
+   *  the spool is untagged. The sync resolver matches this
    *  against bundled `FilamentFragmentSummary.filament_id`. */
   filament_id: string | null;
 }
@@ -111,7 +111,7 @@ export interface BambuExtra {
   /** External (PTFE-tube) spool — Bambu pushes this via
    *  `print.vt_tray` in MQTT alongside the AMS state. Carries the
    *  user-entered material + color even though the slot has no
-   *  RFID. Sync (PR-7c-2) maps this to the trailing Direct slot. */
+   *  RFID. Sync maps this to the trailing Direct slot. */
   external_spool: AmsFilament | null;
 }
 

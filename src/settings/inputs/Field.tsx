@@ -1,12 +1,12 @@
-// Shared row wrapper for every settings input (PR-4-2).
+// Shared row wrapper for every settings input.
 //
-// Reserves the layout slots the rest of Phase 4 will fill:
+// Lays out the row's slots:
 //
 //   ┌─────────────────────────────────────────────────────────┐
-//   │ <label>                                            <reset>│   ← PR-4-9
+//   │ <label>                                            <reset>│
 //   │ <breadcrumb / rule / chips slot>          <input> <suffix>│
-//   │                                              [error msg] │   ← PR-4-11
-//   │ <badges slot — objects-overrides, hidden, scope>        │   ← PR-4-9, PR-4-5
+//   │                                              [error msg] │
+//   │ <badges slot — objects-overrides, hidden, scope>        │
 //   └─────────────────────────────────────────────────────────┘
 //
 // The actual input control (NumberInput etc.) renders into the
@@ -31,31 +31,30 @@ export interface FieldProps {
   /** Commit a new serialized value. The wrapper itself never
    *  invokes this; the child input does, on blur/Enter/change. */
   onChange: (next: string) => void;
-  /** Disables the input. Used by PR-4-9 to gray out project-scope
+  /** Disables the input. Used to gray out project-scope
    *  rows on the Object tab. */
   disabled?: boolean;
-  /** Validation error from PR-4-11 (`slicer_validate_option` round-
-   *  trip) or from a child input's own commit failure. Renders
-   *  below the input in `.set-error`. */
+  /** Validation error (`slicer_validate_option` round-trip) or from
+   *  a child input's own commit failure. Renders below the input
+   *  in `.set-error`. */
   error?: string | null;
-  /** Slots reserved for later tickets — wrapper renders them in
-   *  fixed positions so adding badges later doesn't reflow the
-   *  row. PR-4-2 ships the wrapper with these all empty. */
+  /** Badge slots — rendered in fixed positions so they don't
+   *  reflow the row when present. */
   leadingBadge?: ReactNode;
   trailingBadge?: ReactNode;
-  /** Right-aligned reset affordance (PR-4-9). Empty here. */
+  /** Right-aligned reset affordance. */
   resetButton?: ReactNode;
-  /** Winning cascade layer for this row (PR-4-7). Drives the
+  /** Winning cascade layer for this row. Drives the
    *  authored-tier background tint + `--row-hue` CSS variable for
    *  the hover rule. Defaults to `"cascade"` (neutral) when not
    *  provided. */
   winningLayer?: CascadeLayer;
-  /** Cascade ladder hover lifecycle (PR-4-8). Fired with the row's
+  /** Cascade ladder hover lifecycle. Fired with the row's
    *  DOM node when the cursor enters/leaves; the panel mounts a
    *  single CascadeLadder portal centrally based on which row is
    *  currently hovered. The ladder also carries the row's
-   *  description/tip now (PR-4-11's separate tooltip was folded
-   *  in), so the label-hover lifecycle was retired. */
+   *  description/tip (the separate tooltip is folded in), so there
+   *  is no separate label-hover lifecycle. */
   onRowEnter?: (el: HTMLElement) => void;
   onRowLeave?: () => void;
   /** The input control. */

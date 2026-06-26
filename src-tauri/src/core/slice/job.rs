@@ -187,13 +187,13 @@ impl JobRegistry {
         self.jobs.lock().ok()?.get(&id).cloned()
     }
 
-    /// Drop the handle. Called by the worker thread after it emits a
-    /// terminal event (finished / failed / cancelled) so the
-    /// registry doesn't accumulate completed jobs across a long
-    /// session. Tests + the UI can still read the terminal event
-    /// from the Tauri event channel; the snapshot read via
-    /// `slice_status` simply errors with "no such job" after
-    /// removal.
+    /// Drop the handle from the registry. Not currently wired into the
+    /// worker lifecycle: the registry is never pruned, so completed
+    /// handles accumulate for the lifetime of the process (pruning
+    /// after terminal events is a separate code task). The UI reads
+    /// terminal events from the Tauri event channel rather than
+    /// polling; once a handle is removed, the snapshot read via
+    /// `slice_status` errors with "no such job".
     pub fn remove(&self, id: JobId) {
         if let Ok(mut guard) = self.jobs.lock() {
             guard.remove(&id);

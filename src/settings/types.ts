@@ -1,12 +1,12 @@
-// Settings wire-format types (PR-4-1 + PR-4-2).
+// Settings wire-format types.
 //
 // Mirrors the Rust shapes in `src-tauri/src/core/cascade/mod.rs`:
 //
-//   - `OptionSummary`        (Phase 1 introspection + PR-4-1 fields)
-//   - `OptMode`              (PR-4-1, lowercase string enum)
-//   - `OptScopeFlags`        (PR-4-1, struct of bools)
-//   - `CapabilityPredicate`  (PR-4-1, tagged enum)
-//   - `PrinterAwareOptionSummary` (PR-4-1, summary + hidden bool)
+//   - `OptionSummary`        (introspection fields)
+//   - `OptMode`              (lowercase string enum)
+//   - `OptScopeFlags`        (struct of bools)
+//   - `CapabilityPredicate`  (tagged enum)
+//   - `PrinterAwareOptionSummary` (summary + hidden bool)
 //
 // Wire-shape drift between this file and the Rust serde output is
 // the most common cause of silent UI bugs (see the Phase 2 viewport
@@ -148,7 +148,7 @@ export type PrinterAwareOptionSummary = OptionSummary & {
 };
 
 /** Categorize the raw `ty` string the FFI ships into the shapes the
- *  form components branch on. Keeps PR-4-2's switch statements honest
+ *  form components branch on. Keeps the switch statements honest
  *  to a small fixed vocabulary. */
 export type OptionTypeKind =
   | "bool"
@@ -208,7 +208,7 @@ export function optionTypeKind(opt: OptionSummary): OptionTypeKind {
 
 /** True for any vector-shaped libslic3r option. Vector options need
  *  one entry per slot/extruder; the panel's slot-adaptive layout
- *  (PR-4-6) renders the active slot's index only. */
+ *  renders the active slot's index only. */
 export function isVectorKind(kind: OptionTypeKind): boolean {
   return kind.startsWith("vector-");
 }

@@ -1,6 +1,6 @@
 // Lets the axis legend snap the live viewport camera to an axis-aligned view
 // without prop-drilling a ref through App. Module-level singleton — the prepare
-// (wgpu) and preview (Three.js) viewports never mount at once, so whichever is
+// and preview viewports (both wgpu) never mount at once, so whichever is
 // live registers its handler; same pattern as thumbnailCapture.
 
 export type AxisView = "x" | "y" | "z";

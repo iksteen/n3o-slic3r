@@ -90,7 +90,7 @@ export function WgpuViewport({
   onFaceMatchStep?: (refSet: boolean) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  // Match the Three.js default framing: camera at (0, -260, 200) looking at the
+  // Default framing: camera at (0, -260, 200) looking at the
   // origin (cameraControls.ts). Zero X offset → screen-right is world +X, so the
   // bed's front edge (the X axis) is horizontal along the bottom and the origin
   // sits at the lower-left; az = -90°, el = the ~37° elevation.

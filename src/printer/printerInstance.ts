@@ -1,4 +1,4 @@
-// Mirror of the Rust `PrinterInstance` shape (PR-S-3 + PR-S-7).
+// Mirror of the Rust `PrinterInstance` shape.
 //
 // Used by the slot-binding panel to render the per-extruder,
 // per-slot topology of the active plate's bound printer. Writes

@@ -1,5 +1,5 @@
 // PreviewWorkspace — composes the renderer + slider + toggles +
-// hover tooltip + stats panels into one UI region (PR-6-15).
+// hover tooltip + stats panels into one UI region.
 //
 // Owns all preview-mode state: color/palette (persisted),
 // visibility toggles (persisted), layer window (per-load), the
@@ -51,7 +51,7 @@ export function PreviewWorkspace({
   const { state: colorState, onChange: setColorState } = useColorModePicker();
   const { value: visState, onChange: setVisState } = useVisibilityToggles();
 
-  // Drag-drop loader (PR-6-14). When a user drops a file, the
+  // Drag-drop loader. When a user drops a file, the
   // dropped preview overrides the plate's sliced preview until
   // the plate's slice prop changes (re-slice / plate switch).
   const [dropped, setDropped] = useState<DroppedPreview | null>(null);

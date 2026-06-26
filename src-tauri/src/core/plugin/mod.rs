@@ -1,7 +1,7 @@
 //! Lua plugin host.
 //!
-//! Embeds Lua 5.4 via mlua, sandboxed (no `io`, `os.execute`,
-//! `package`, or `debug` access). Will load plugin manifests,
+//! Embeds Lua 5.4 via mlua, sandboxed (no `io`, `package`, or `debug`;
+//! the `os` shim exposes only `os.time` / `os.clock`). Will load plugin manifests,
 //! dispatch pre-slice / post-slice / pre-send hooks, and expose
 //! read-only views of project / typed-gcode / filament state.
 //!

@@ -1,4 +1,4 @@
-// Color-mode picker for the preview (PR-6-13).
+// Color-mode picker for the preview.
 //
 // Radio group over the 5 color modes + a palette checkbox
 // (checked = slicer-classic, unchecked = CVD-safe default).

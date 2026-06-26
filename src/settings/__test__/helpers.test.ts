@@ -1,11 +1,11 @@
-// Form-component helper tests (PR-4-2).
+// Form-component helper tests.
 //
 // The project's vitest setup runs pure-logic tests only (no DOM,
 // no testing-library) — see src/slice/reducer.test.ts for the
 // same pattern. Each input component delegates its
 // parse/format/validate logic to helpers.ts; the React shell is
 // thin DOM event plumbing on top. These tests cover the helpers;
-// PR-4-13's exit smoke walks the rendered UI manually.
+// the rendered UI is walked manually in an exit smoke.
 
 import { describe, expect, it } from "vitest";
 import {

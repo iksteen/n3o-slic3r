@@ -1,9 +1,9 @@
-//! Snapmaker U1 LAN driver (PR-7b-*).
+//! Snapmaker U1 LAN driver.
 //!
 //! Built against the user's [`iksteen/bambu-overlay`] reference
 //! implementation's snapmaker module — every probe / WebSocket /
 //! status-decode pattern in this module mirrors the overlay's
-//! read-only side. Send + commands (PR-7b-4) talk to the same
+//! read-only side. Send + commands talk to the same
 //! Moonraker HTTP endpoints any Klipper-based slicer driver
 //! consumes (`/server/files/upload`, `/printer/print/start`,
 //! `/printer/print/{pause,resume,cancel}`).

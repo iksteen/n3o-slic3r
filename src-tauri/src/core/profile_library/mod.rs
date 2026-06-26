@@ -643,7 +643,7 @@ pub fn bundled_process_slugs_for_printer(printer_slug: &str) -> Vec<&'static str
 /// brand rail; `nozzle_temp` / `bed_temp` seed the per-product meta
 /// row in the filament picker. `filament_id` is the vendor SKU
 /// stamped into the fragment (e.g. "GFA00" for Bambu PLA Basic) —
-/// driver-side sync (PR-7c-2) matches AMS-reported `tray_info_idx`
+/// driver-side sync matches AMS-reported `tray_info_idx`
 /// against this to resolve a tray to a bundled fragment.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FilamentFragmentSummary {

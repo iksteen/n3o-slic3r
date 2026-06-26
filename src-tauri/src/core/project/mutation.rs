@@ -31,7 +31,7 @@ use crate::core::scene::transform::Transform;
 
 /// Upper bound on `Plate.name` byte length. Holds back
 /// pathological renames that would blow out the tab strip layout
-/// or balloon the project `.3mf` JSON skeleton; the actual UI
+/// or balloon the project's `.n3o` `project.json` skeleton; the actual UI
 /// budget is ~24 chars but we accept up to 200 to leave headroom
 /// for emoji / non-ASCII users.
 pub const PLATE_NAME_MAX: usize = 200;

@@ -1,4 +1,4 @@
-// Per-plate slot binding panel (PR-S-7 restoration of MaterialBindingPanel).
+// Per-plate slot binding panel (restored from MaterialBindingPanel).
 //
 // Two sections, both writing into the active plate's bound
 // PrinterInstance + the plate's `material_to_slot` map:
@@ -139,7 +139,7 @@ export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelP
   };
 
   // Manual sync — pulls the printer's current spool loadout into
-  // the instance via the live driver (PR-7c-2). The driverId
+  // the instance via the live driver. The driverId
   // prop is the reactive snapshot from `useDriverConnections`,
   // threaded through SettingsPanelHost. Rejects when no driver
   // is registered or when the backend command errors;

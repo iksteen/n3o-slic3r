@@ -1,8 +1,8 @@
-// Per-layer + full-job stats panels (PR-6-12).
+// Per-layer + full-job stats panels.
 //
 // Two cards stacked in the right-side panel column when the
 // preview mode is active. Both pure presentational over the
-// stats returned by PR-6-6 / PR-6-7.
+// stats returned by the preview commands.
 //
 // Feature-time bar uses CSS flex with width % rather than a
 // chart library — the breakdown is small (≤ 10 features) and
@@ -22,7 +22,7 @@ export interface FullJobStatsPanelProps {
   stats: FullJobStats;
   header: HeaderMetadata;
   /** Populated when the active preview came from a `.gcode.3mf`
-   * drop (PR-6-14). Surfaces multi-plate badge, plate-metadata
+   * drop. Surfaces multi-plate badge, plate-metadata
    * estimated time / AMS bindings, and an inline thumbnail. */
   sliced?: PreviewLoadGcode3mfResponse | null;
 }

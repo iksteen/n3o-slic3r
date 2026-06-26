@@ -1,4 +1,4 @@
-// Project-tier override invoke wrappers (PR-5-9).
+// Project-tier override invoke wrappers.
 //
 // Mirrors `overrideCommands.ts` one tier up: project overrides
 // apply to a whole plate (and through the cascade to every object

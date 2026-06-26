@@ -7,8 +7,8 @@
 //! transform math runs on the JS side.
 //!
 //! Serializes as a flat 16-element column-major `[f32; 16]` so the
-//! renderer (Three.js's `Matrix4.fromArray`) can ingest the row of
-//! the JSON payload without reshape work.
+//! wgpu viewport can ingest the JSON payload directly (column-major
+//! matches `glam::Mat4`) without reshape work.
 
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
@@ -26,9 +26,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Transform {
-    /// 16 floats, **column-major** to match `glam::Mat4` and
-    /// Three.js's `Matrix4`. Renderer side is one
-    /// `new THREE.Matrix4().fromArray(json)`.
+    /// 16 floats, **column-major** to match `glam::Mat4`. The wgpu
+    /// viewport uploads it to the GPU as-is — no reshape on the JS side.
     pub matrix: [f32; 16],
 }
 

@@ -1,8 +1,8 @@
-// React hook for the slice loop (PR-3-4, PR-6-3).
+// React hook for the slice loop.
 //
 // Owns the Tauri `slice:*` subscription, a reducer over the event
 // stream (see `reducer.ts`), and `start()` / `cancel()` actions that
-// wrap the backend commands. Post-PR-6-3 the slice is driven by
+// wrap the backend commands. The slice is driven by
 // live project state via `slice_active_plate` — no model path, no
 // output dir. The backend builds the SliceJobInput from the scene
 // and picks a temp output dir per job.

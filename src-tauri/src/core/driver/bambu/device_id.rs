@@ -84,7 +84,7 @@ mod tests {
         // parsing the PEM. Just sanity-check the parse path on a
         // small self-signed test cert generated inline if one is
         // present. For now we cover this via bambu-overlay's own
-        // tests + manual real-printer testing in PR-7a-8.
+        // tests + manual real-printer testing.
     }
 
     #[tokio::test]

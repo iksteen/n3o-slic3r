@@ -151,9 +151,7 @@ pub struct Plate {
     /// Sole carrier of binding state — the vendor profile identity
     /// (e.g. `"bambu-lab-a1-mini"`) is derived on demand via
     /// `lookup_instance(id).vendor_profile_ref` rather than stored
-    /// alongside. .3mf save persists a denormalized copy as a
-    /// cross-machine portability hedge (see
-    /// `ProjectFile.plate_printer_identities`).
+    /// alongside.
     ///
     /// **Private on purpose**: the binding and the derived `scene.bed` must
     /// stay in sync, so the only way to set it is [`Plate::set_printer`],
@@ -191,7 +189,7 @@ pub struct Plate {
 
     /// The plate's scene contents. Real type lives in
     /// `core::scene::state::PlateSceneState`; `Plate` composes it
-    /// so project `.3mf` save/load round-trips the full per-plate
+    /// so native `.n3o` save/load round-trips the full per-plate
     /// scene alongside the plate metadata.
     #[serde(default)]
     pub scene: PlateSceneState,

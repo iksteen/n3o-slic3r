@@ -1,4 +1,4 @@
-// TS mirrors of the Rust preview types (PR-6-7).
+// TS mirrors of the Rust preview types.
 //
 // Match the serde wire shapes from `core/preview/{ir,colors,stats,
 // registry,commands}.rs`. Keep narrow — only what the frontend
@@ -117,7 +117,7 @@ export type FeatureType =
   | { Other: string };
 
 /** Bambu's per-plate `plate_<N>.json` shape, surfaced by the
- *  `.gcode.3mf` drop-loader (PR-6-14). Mirror of Rust's
+ *  `.gcode.3mf` drop-loader. Mirror of Rust's
  *  `core::threemf::SlicedPlateMetadata`. */
 export interface SlicedPlateMetadata {
   plate_index: number;
@@ -151,7 +151,7 @@ export interface PreviewLoadGcode3mfResponse {
   thumbnail_png: number[] | null;
 }
 
-/** Layer-window state PR-6-9 owns + threads down to the renderer. */
+/** Layer-window state the slider owns + threads down to the renderer. */
 export type LayerWindow =
   | { mode: "single"; layer: number }
   | { mode: "up-to"; max: number }

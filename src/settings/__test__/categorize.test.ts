@@ -1,4 +1,4 @@
-// Category grouping + mode-filter helper tests (PR-4-3).
+// Category grouping + mode-filter helper tests.
 
 import { describe, expect, it } from "vitest";
 import {

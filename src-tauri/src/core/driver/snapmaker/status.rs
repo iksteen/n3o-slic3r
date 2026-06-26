@@ -32,7 +32,7 @@ use crate::core::driver::status::{
 /// status map. `connection` is passed in because the WS layer
 /// owns connection lifecycle — the decoder only knows about
 /// payload state.
-#[allow(dead_code)] // consumed by PR-7b-5's U1Driver worker
+#[allow(dead_code)] // consumed by the U1Driver worker
 pub(super) fn decode(status: &Map<String, Value>, connection: ConnectionState) -> PrinterStatus {
     PrinterStatus {
         connection,
@@ -215,7 +215,7 @@ fn decode_toolhead_filaments(status: &Map<String, Value>) -> Vec<Option<U1Filame
 
 /// Validate Snapmaker's RRGGBBAA hex string and return it uppercase
 /// without `#` (matches our `U1Filament.color` convention, which
-/// mirrors PR-7a's `AmsFilament.color`). Empty / fully-transparent
+/// mirrors the Bambu `AmsFilament.color`). Empty / fully-transparent
 /// slots (`#00000000`) return `None` so the caller treats them as
 /// unbound.
 fn normalize_rgba(value: &str) -> Option<String> {
@@ -672,7 +672,7 @@ mod tests {
     }
 
     /// Subscribe-reply `result.status` map — the initial full-snapshot
-    /// shape `MoonrakerSession::connect` decodes via PR-7b-3's pipeline.
+    /// shape `MoonrakerSession::connect` decodes via the status pipeline.
     fn subscribe_initial() -> Map<String, Value> {
         let fixture = load_fixture("subscribe_response.json");
         fixture["result"]["status"]

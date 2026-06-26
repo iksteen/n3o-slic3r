@@ -1,4 +1,4 @@
-// Wire-format types for the slice loop (PR-3-4).
+// Wire-format types for the slice loop.
 //
 // Mirrors the Rust shapes in `src-tauri/src/core/slice/`:
 //   - `events::SliceEvent` (`#[serde(tag="kind", content="data")]`)

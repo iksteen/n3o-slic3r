@@ -1,5 +1,4 @@
-// Per-plate "where did the most recent slice land" tracker
-// (PR-7a-7 wiring).
+// Per-plate "where did the most recent slice land" tracker.
 //
 // Listens to `slice:plate_finished` events and remembers the
 // `output_path` (a raw `.gcode` file on disk) for each plate

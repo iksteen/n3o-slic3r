@@ -1,4 +1,4 @@
-// Per-row filter logic for SettingsPanel (PR-4-4).
+// Per-row filter logic for SettingsPanel.
 
 import { describe, expect, it } from "vitest";
 import { filterRow } from "../SettingsPanel";
@@ -48,9 +48,9 @@ describe("filterRow", () => {
   });
 
   it("surfaces capability-hidden options when search is active", () => {
-    // Per PR-4-5 spec: hidden options are findable via search with
-    // a 'not applicable' badge. The filter says yes; the badge
-    // rendering is PR-4-5's responsibility.
+    // Hidden options are findable via search with a 'not
+    // applicable' badge. The filter says yes; the badge
+    // rendering happens at the row level.
     expect(filterRow(stub({ hidden: true }), "expert", "layer")).toBe(true);
   });
 

@@ -1,7 +1,7 @@
-// "Why this matters" annotations (PR-4-12).
+// "Why this matters" annotations.
 //
 // Authored text per high-impact libslic3r option, surfaced by
-// PR-4-11's SettingTooltip in the "💡 tip" section beneath
+// the SettingTooltip in the "💡 tip" section beneath
 // libslic3r's own tooltip text. Aim for 2-4 sentences: what the
 // setting controls in physical terms, the trade-off, and a quick
 // rule of thumb.

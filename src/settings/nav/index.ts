@@ -1,4 +1,4 @@
-// Category navigation + mode filter (PR-4-3).
+// Category navigation + mode filter.
 
 export {
   categorize,

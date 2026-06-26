@@ -21,8 +21,8 @@
 //!   smooth enough for visualization purposes and keeps the table
 //!   tiny.
 //!
-//! All RGB values are floats in `[0.0, 1.0]`, ready for Three.js
-//! buffer attribute binding without normalization.
+//! All RGB values are floats in `[0.0, 1.0]`, ready for GPU
+//! buffer-attribute binding without normalization.
 
 use serde::{Deserialize, Serialize};
 

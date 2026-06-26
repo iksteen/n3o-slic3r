@@ -1,4 +1,4 @@
-// PR-6-9 layerWindow transitions.
+// layerWindow transitions.
 //
 // The LayerSlider component is presentation; the interesting
 // behavior is the mode-switch + step + jump math. Tests pin

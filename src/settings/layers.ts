@@ -1,4 +1,4 @@
-// Cascade-layer winning-determination + visual styling (PR-4-7).
+// Cascade-layer winning-determination + visual styling.
 //
 // Maps a setting's resolved trace into the cascade layer that won,
 // then into the visual treatment (background tint + hue) the row
@@ -13,7 +13,7 @@
 //   project     hue 285   purple
 //   object      hue 340   rose
 //
-// PR-4-7 surfaces the **override-tier** layers (project / object)
+// The **override-tier** layers (project / object) surface
 // as persistent authored-tier tints — those are the two the user
 // directly authors through the UI. Cascade-tier layers (printer /
 // filament / plate / default) all share the "cascade" treatment

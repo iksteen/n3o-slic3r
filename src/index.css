@@ -885,7 +885,7 @@
   /* ─────────── Viewport overlay ─────────── */
   /* Axis colors + the lower-left gizmo hint, ported from the design's
    * `.gizmo-hint` block in docs/design/styles.css. Sits over the
-   * Three.js canvas inside the `relative` viewport container. */
+   * wgpu viewport canvas inside the `relative` viewport container. */
   .axis-x { color: oklch(0.62 0.21 25); }
   .axis-y { color: oklch(0.62 0.18 145); }
   .axis-z { color: oklch(0.62 0.18 235); }
@@ -1082,7 +1082,7 @@
     height: 100%;
   }
 
-  /* Config strip (PR-5-4) — sits above the panel header carrying
+  /* Config strip — sits above the panel header carrying
    * the printer / build-plate / filament chips. Per the design's
    * `.sp-config` block in styles.css. */
   .sp-config {
@@ -1252,7 +1252,7 @@
     50% { opacity: 0.35; }
   }
 
-  /* Printer picker popover (PR-5-4). Mirror of design's
+  /* Printer picker popover. Mirror of design's
    * `.printer-picker-menu` / `.ptpm-*`. */
   .printer-picker-menu {
     position: absolute;
@@ -1509,7 +1509,7 @@
     margin-top: 4px;
   }
 
-  /* ─────────── Slot binding panel (PR-S-7 UI) ─────────── */
+  /* ─────────── Slot binding panel ─────────── */
   /* Two sections in the config strip: Slots (per-instance,
    * slot → filament, via the SlotChipStrip) and Materials (per-plate,
    * model material → slot, via MaterialChips under a NOZZLES-style
@@ -1616,7 +1616,7 @@
     z-index: 50;
   }
 
-  /* ─────────── Autosave recovery dialog (PR-5-10 UI) ─────────── */
+  /* ─────────── Autosave recovery dialog ─────────── */
   .autosave-recovery-overlay {
     position: fixed;
     inset: 0;
@@ -2846,7 +2846,7 @@
     color: var(--text-muted);
   }
 
-  /* Drag-drop loader overlay (PR-6-14). Mounted inside
+  /* Drag-drop loader overlay. Mounted inside
      .preview-canvas-host (relative positioning context) and only
      rendered while a drag hovers — covers the canvas with a
      dashed-border invitation. */
@@ -4077,7 +4077,7 @@
   /* ───────────────────────────────────────────────────────────────
      Filament picker modal — three-pane drill (brand → product →
      color) with a Custom-color swatch terminating the color grid.
-     Ported from docs/design/styles.css (PR-7c-3a).
+     Ported from docs/design/styles.css.
      ─────────────────────────────────────────────────────────────── */
   .fp-modal-backdrop { z-index: 1100; }
   /* Filament editor is launched from the picker (z 1100) — stack it above. */

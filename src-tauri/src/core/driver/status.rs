@@ -61,7 +61,7 @@ pub enum ConnectionState {
 pub struct JobProgress {
     pub file_name: Option<String>,
     /// `None` when the printer doesn't natively expose it (the
-    /// U1 / standard Klipper case — see PR-7b-3's known gap).
+    /// U1 / standard Klipper case — a known gap on that path).
     pub current_layer: Option<u32>,
     pub total_layers: Option<u32>,
     pub percent: Option<f32>,
@@ -98,10 +98,8 @@ pub struct TempReading {
     pub target: f32,
 }
 
-/// Driver-specific status extras. One variant per driver.
-/// PR-7a-4 / PR-7b-3 populate the inner fields; this ticket
-/// (PR-7a-1) ships them as empty placeholders so the trait +
-/// registry compile against the public shape.
+/// Driver-specific status extras. One variant per driver, each
+/// populated from its driver's status report.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum DriverExtra {
@@ -112,32 +110,29 @@ pub enum DriverExtra {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BambuExtra {
     /// What plate type the printer reports having mounted. Feeds
-    /// the BuildPlate cascade layer (PR-7a-3 wires the cascade
-    /// re-resolution).
+    /// the BuildPlate cascade layer (drives cascade re-resolution).
     pub mounted_plate: Option<String>,
     /// Bambu firmware "current stage" code; surfaced for
-    /// diagnostics. Free-form string — PR-7a-3 maps known codes.
+    /// diagnostics. Free-form string.
     pub current_stage: Option<String>,
     pub print_error_code: Option<i32>,
     /// Last non-zero Bambu `err_code` from a rejected command (84033543
     /// = Developer Mode required); `None` once a command succeeds.
     pub command_error_code: Option<i32>,
     pub fan_speed: Option<f32>,
-    /// Populated by PR-7a-4. `None` until that ticket lands or
-    /// when the printer reports no AMS.
+    /// `None` when the printer reports no AMS.
     pub ams: Option<AmsState>,
     /// External spool (the rear PTFE-tube "virtual tray"). Bambu
     /// reports it in MQTT as `print.vt_tray`, alongside the AMS
     /// state. Carries the user-entered material + color even though
-    /// the slot itself has no RFID — sync (PR-7c-2) uses it to
-    /// keep the Ext slot in step with the printer's display.
+    /// the slot itself has no RFID — sync uses it to keep the Ext
+    /// slot in step with the printer's display.
     /// `None` until populated.
     pub external_spool: Option<AmsFilament>,
 }
 
-/// AMS state placeholder. Real shape lands in PR-7a-4 with all
-/// the per-tray / per-unit fields; here we keep it as an opaque
-/// container so the trait surface is stable now.
+/// AMS state: the per-unit / per-tray filament identity the
+/// printer reports, plus the currently-active slot.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AmsState {
     pub units: Vec<AmsUnit>,
@@ -165,7 +160,7 @@ pub struct AmsFilament {
     pub multi_colors: Vec<String>,
     /// Bambu's vendor SKU for the spool (e.g. "GFA00" for PLA
     /// Basic), reported as `tray_info_idx` in the MQTT push.
-    /// PR-7c-2's sync resolver matches this against bundled
+    /// The sync resolver matches this against bundled
     /// `FilamentFragmentSummary.filament_id` for an exact identity
     /// lookup. `None` for trays that don't report one (untagged
     /// spool, or older firmware).

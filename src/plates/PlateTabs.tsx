@@ -1,4 +1,4 @@
-// Horizontal plate tabs (PR-5-3).
+// Horizontal plate tabs.
 //
 // Strip layout: scrollable tab list + trailing "+" button. Each
 // tab carries plate icon, name (dblclick-rename), printer label,

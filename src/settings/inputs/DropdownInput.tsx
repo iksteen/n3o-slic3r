@@ -1,15 +1,11 @@
-// Native <select> for libslic3r `Enum` options (PR-4-2).
+// Native <select> for libslic3r `Enum` options.
 //
 // Matches the mockup's `.val-select` pattern (docs/dev/design/
 // SettingsPanel.jsx:229-234). Commits on change.
 //
-// `OptionSummary` (PR-4-1) doesn't surface the enum value list yet
-// — the FFI's `OptionDef::enum_values` is what we ultimately want.
-// PR-4-2 ships the `DropdownInput` taking the option list as a
-// prop so the panel can plumb it from an extended summary or from
-// a per-option lookup against the schema. PR-4-1 follow-up will
-// likely add `enum_values: Vec<[String; 2]>` to `OptionSummary`;
-// when that lands the prop becomes redundant.
+// Takes the `[key, label]` option list as a prop; the panel plumbs
+// it from `OptionSummary.enum_values` (sourced from the FFI's
+// `OptionDef::enum_values`).
 
 import { useEffect, useState } from "react";
 import { defaultScalarFor, type OptionSummary } from "../types";

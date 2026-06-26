@@ -1,9 +1,9 @@
-// PR-6-11 hover-tooltip helpers.
+// hover-tooltip helpers.
 //
 // featureLabel is the only pure piece worth pinning — the DOM
 // render path (positioning, edge flip) needs jsdom + a fake
 // viewport which is more setup than the math is worth here.
-// Edge-flip is exercised via Playwright in PR-6-16.
+// Edge-flip is exercised via Playwright.
 
 import { describe, expect, it } from "vitest";
 

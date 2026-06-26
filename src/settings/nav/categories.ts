@@ -1,6 +1,6 @@
-// Category grouping (PR-4-3) — FR-UI-1.
+// Category grouping — FR-UI-1.
 //
-// `slicer_options` (Phase 1 / PR-4-1) returns options in libslic3r
+// `slicer_options` returns options in libslic3r
 // declaration order. The Settings UI groups them by `category` for
 // navigation; within each group, declaration order carries through
 // (which is libslic3r's choice — Simple-mode options first, then
@@ -137,17 +137,16 @@ export function categorize<O extends OptionSummary>(
 }
 
 /** Count summary returned by `categoryOverrideCounts` so the rail
- *  can render `overrides/total` next to each entry (PR-4-7 fills
- *  this from the cascade trace; PR-4-3 ships the shape + total). */
+ *  can render `overrides/total` next to each entry. The override
+ *  count comes from the cascade trace's overridden-key set. */
 export type CategoryCounts = {
   total: number;
   overrides: number;
 };
 
 /** Pure helper: derive per-category total + override-count from
- *  the grouped list and a set of overridden keys. PR-4-7 populates
- *  the override set from the trace; for PR-4-3 alone, callers pass
- *  an empty set and only the `total` is meaningful. */
+ *  the grouped list and a set of overridden keys. Callers that
+ *  pass an empty set get a meaningful `total` only. */
 export function categoryCounts<O extends OptionSummary>(
   groups: readonly CategoryGroup<O>[],
   overriddenKeys: ReadonlySet<string>,

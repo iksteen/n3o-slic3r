@@ -1,4 +1,4 @@
-// Tauri invoke wrappers for the preview commands (PR-6-7).
+// Tauri invoke wrappers for the preview commands.
 //
 // Thin layer over `invoke()` so the panel + renderer don't need
 // to remember command names + arg keys. Binary buffers are
@@ -47,7 +47,7 @@ export function previewLoad(path: string): Promise<PreviewLoadResponse> {
   return invoke<PreviewLoadResponse>("preview_load", { path });
 }
 
-/** Drag-drop loader (PR-6-14) for Bambu `.gcode.3mf` containers.
+/** Drag-drop loader for Bambu `.gcode.3mf` containers.
  * Unwraps the container, loads plate 1's embedded gcode via the
  * same pipeline as `previewLoad`, and surfaces the pre-baked
  * plate metadata + optional thumbnail for the stats panel. */

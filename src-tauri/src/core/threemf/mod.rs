@@ -9,17 +9,17 @@
 //!   state.
 //! - **Project writer** (`writer::write_3mf`): the inverse,
 //!   producing an OrcaSlicer-compatible 3MF from a `Project3mf`.
-//!   Phase 5's project save format and the test oracle for the
-//!   reader.
+//!   Feeds slice geometry to libslic3r (`core::slice::input`) and is
+//!   the test oracle for the reader. (Native save uses `.n3o`, not
+//!   3MF — see `core::project::format`.)
 //! - **Sliced `.gcode.3mf` writer** (`sliced::write_sliced_3mf`):
 //!   the Bambu A1 mini send-format. Embeds G-code bodies + plate
 //!   metadata + thumbnails with BambuStudio-namespace metadata.
 //!   Consumed by the Phase 7a driver.
 //!
-//! Per PRD §8.2 this module lives at `core/threemf/` — Phase 2 (project
-//! import), Phase 5 (project save), Phase 6 (preview drag-drop of
-//! `.gcode.3mf`), and Phase 7a (Bambu driver) all take stable deps
-//! on this module.
+//! Per PRD §8.2 this module lives at `core/threemf/` — project import,
+//! the slice-geometry feed, the G-code preview's `.gcode.3mf`
+//! drag-drop, and the Bambu driver all take stable deps on it.
 //!
 //! The 3MF Core spec models geometry as a forest of `<object>`
 //! resources. Each object is either a leaf `<mesh>` or a tree of
@@ -572,7 +572,7 @@ mod tests {
             "4-color benchy ships 8 parts; got {}",
             project.objects.len()
         );
-        // Per PR-0.5-3 finding: extruders rotate 1,2,3,4,1,2,3,4.
+        // Extruders rotate 1,2,3,4,1,2,3,4.
         let extruders: Vec<Option<u8>> = project.objects.iter().map(|o| o.extruder_id).collect();
         assert_eq!(
             extruders,

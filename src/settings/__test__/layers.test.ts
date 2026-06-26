@@ -1,4 +1,4 @@
-// Winning-layer derivation tests (PR-4-7).
+// Winning-layer derivation tests.
 
 import { describe, expect, it } from "vitest";
 import {

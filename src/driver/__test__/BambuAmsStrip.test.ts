@@ -1,4 +1,4 @@
-// PR-7a-7 BambuAmsStrip projection tests.
+// BambuAmsStrip projection tests.
 //
 // Component-render lifecycle (jsdom + React) isn't set up in this
 // repo's vitest config; we test the pure projection helper that

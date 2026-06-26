@@ -1,5 +1,4 @@
-// Percent input for libslic3r `Percent` / `FloatOrPercent` options
-// (PR-4-2).
+// Percent input for libslic3r `Percent` / `FloatOrPercent` options.
 //
 // For pure `Percent`, this is a NumberInput-with-% kind of widget.
 // For `FloatOrPercent`, it adds a small absolute-vs-percent toggle

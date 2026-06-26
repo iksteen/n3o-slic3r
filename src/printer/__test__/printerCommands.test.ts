@@ -1,4 +1,4 @@
-// PR-5-4 printer command wrappers — wire-shape contract tests.
+// Printer command wrappers — wire-shape contract tests.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

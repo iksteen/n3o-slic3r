@@ -1,4 +1,4 @@
-// `useProjectSession` — App.tsx's top-level project state hook (PR-5-9).
+// `useProjectSession` — App.tsx's top-level project state hook.
 //
 // Owns the "current session" the SettingsPanel host needs: the current
 // `SceneSnapshot` plus the unsaved-edits `dirty` flag.
@@ -27,8 +27,8 @@ import { isEditEvent, isSavedEvent } from "./editEvents";
 export const SESSION_EVENT_NAMES = SCENE_SNAPSHOT_EVENTS;
 
 export interface ProjectSession {
-  /** Always `null` post-PR-S-5c. Kept on the interface so the SettingsPanel
-   * host can pass it through without conditionalizing its prop shape. */
+  /** Always `null` (the cascade handle was retired). Kept on the interface so
+   * the SettingsPanel host can pass it through without conditionalizing its prop shape. */
   cascadeHandle: number | null;
   snapshot: SceneSnapshot | null;
   /** True when the project has unsaved edits — set by any content edit,

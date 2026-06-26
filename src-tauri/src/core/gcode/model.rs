@@ -366,23 +366,22 @@ const CANONICAL_FEATURE_TOKENS: &[(&str, FeatureType)] = &[
 /// the canonical `;LAYER:<n>` comment so the round-trip preserves
 /// the boundary marker.
 ///
-/// Detection rules (parser-side, documented here so consumers know
-/// what they're getting):
-///   1. `; CHANGE_LAYER` / `;LAYER_CHANGE` / `;LAYER:<n>` comment.
-///   2. Z-axis advance on a `G0` / `G1` with no extrusion (lift).
-///   3. Heuristic retract → travel → lift sequence.
+/// Detection (parser-side, documented here so consumers know what
+/// they're getting): boundaries are recognized only from explicit
+/// comment markers — `; CHANGE_LAYER` / `;LAYER_CHANGE` / `;LAYER:<n>`.
+/// Marker-less geometric inference (Z-lift / retract→travel→lift) is
+/// not implemented; the parser always emits [`LayerSource::Marker`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LayerChange {
     /// 0-based layer index. The first printed layer is `0`; the
     /// parser starts counting from the first detected boundary.
     pub index: u32,
     /// World-space Z height the boundary marker reported. `None`
-    /// when the boundary was detected via the retract/travel/lift
-    /// heuristic and no `;Z:` value was present.
+    /// when the marker carried no `;Z:` value.
     pub z: Option<f32>,
-    /// Whether the boundary came from an explicit comment marker
-    /// or the heuristic. The serializer always emits the canonical
-    /// `;LAYER:<n>` form regardless.
+    /// How the boundary was identified. The parser only produces
+    /// [`LayerSource::Marker`] today. The serializer always emits the
+    /// canonical `;LAYER:<n>` form regardless.
     pub source: LayerSource,
     pub raw_offset: u64,
     pub line_ending: String,
@@ -392,7 +391,8 @@ pub struct LayerChange {
 pub enum LayerSource {
     /// A `;LAYER:` / `;CHANGE_LAYER` comment in the source.
     Marker,
-    /// Detected from G0/G1 Z motion patterns.
+    /// Detected from G0/G1 Z motion patterns. Not yet produced by the
+    /// parser (marker-less geometric inference is unimplemented).
     Heuristic,
 }
 

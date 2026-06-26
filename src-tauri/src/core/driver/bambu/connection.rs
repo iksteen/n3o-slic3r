@@ -7,7 +7,7 @@
 //!      loop. The task subscribes to `device/<id>/report`,
 //!      publishes a `pushall` request, then forwards every
 //!      incoming `Publish` payload to an `mpsc::Sender<Vec<u8>>`
-//!      for PR-7a-3's status parser.
+//!      for the status parser.
 //!   3. The task also pushes connection-state transitions into
 //!      a `watch::Sender<PrinterStatus>` the driver's
 //!      `subscribe_status` exposes.
@@ -62,17 +62,16 @@ pub struct BambuDriver {
     status_tx: watch::Sender<PrinterStatus>,
     status_rx: watch::Receiver<PrinterStatus>,
     /// Sink that the background task pushes raw report payloads
-    /// into. PR-7a-3's parser drains it. `None` until connected.
+    /// into. The status parser drains it. `None` until connected.
     raw_messages_rx: Option<Arc<Mutex<mpsc::Receiver<Vec<u8>>>>>,
     /// Handle to the spawned background tasks — held so `drop()`
     /// or `disconnect()` can abort them. Two tasks per driver:
-    /// the rumqttc event loop (PR-7a-2) and the status worker
-    /// (PR-7a-3).
+    /// the rumqttc event loop and the status worker.
     tasks: Vec<JoinHandle<()>>,
     /// Signals the event-loop task to stop cleanly.
     shutdown_tx: Option<oneshot::Sender<()>>,
-    /// Client handle for publishing — used by send-print
-    /// (PR-7a-5) and pause/resume/stop (PR-7a-6).
+    /// Client handle for publishing — used by send-print and
+    /// pause/resume/stop.
     client: Option<AsyncClient>,
     /// Monotonic sequence_id counter for outgoing MQTT commands.
     /// Bambu echoes the value back in status messages so we can
@@ -108,16 +107,16 @@ impl BambuDriver {
     }
 
     /// The serial-derived device id, available after a
-    /// successful `connect()`. Used by PR-7a-3 (status parser),
-    /// PR-7a-5 (send-print MQTT command), and PR-7a-6 (commands).
-    #[allow(dead_code)] // consumed by PR-7a-3..-6
+    /// successful `connect()`. Used by the status parser, the
+    /// send-print MQTT command, and the printer commands.
+    #[allow(dead_code)] // consumed by the status parser + command paths
     pub fn device_id(&self) -> Option<&str> {
         self.device_id.as_deref()
     }
 
-    /// Channel the parser drains. PR-7a-3 wires this into its
-    /// status worker on driver setup.
-    #[allow(dead_code)] // consumed by PR-7a-3
+    /// Channel the parser drains. The status worker wires this in
+    /// on driver setup.
+    #[allow(dead_code)] // consumed by the status worker
     pub fn raw_messages(&self) -> Option<Arc<Mutex<mpsc::Receiver<Vec<u8>>>>> {
         self.raw_messages_rx.clone()
     }
@@ -178,17 +177,17 @@ impl Driver for BambuDriver {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
 
-        // Status worker task (PR-7a-3). We keep no handle to its
-        // mpsc receiver because the worker owns it; the
-        // raw_messages_rx field is left None until a future
-        // ticket needs out-of-band access to raw payloads.
+        // Status worker task. We keep no handle to its mpsc
+        // receiver because the worker owns it; the raw_messages_rx
+        // field is left None unless something needs out-of-band
+        // access to raw payloads.
         let _ = &self.raw_messages_rx;
 
         let status_tx_for_worker = self.status_tx.clone();
         let worker_task = tokio::spawn(super::status::run_worker(raw_rx, status_tx_for_worker));
         self.tasks.push(worker_task);
 
-        // rumqttc event loop task (PR-7a-2).
+        // rumqttc event loop task.
         let status_tx = self.status_tx.clone();
         let device_id_owned = device_id.clone();
         let client_for_task = client.clone();
@@ -517,8 +516,8 @@ struct PushAllCommand<'a> {
 }
 
 /// `pause` / `resume` / `stop` MQTT command — shape from
-/// OpenBambuAPI `mqtt.md`. PR-7a-6 publishes these at QoS 1 per
-/// the doc's "higher priority" annotation.
+/// OpenBambuAPI `mqtt.md`. Published at QoS 1 per the doc's
+/// "higher priority" annotation.
 #[derive(Serialize)]
 struct CommandRequest<'a> {
     print: CommandBody<'a>,

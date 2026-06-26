@@ -1,4 +1,4 @@
-// Numeric input for libslic3r `Float` / `Int` options (PR-4-2).
+// Numeric input for libslic3r `Float` / `Int` options.
 //
 // Matches the mockup's `.val-wrap` + `.val-input` + `.val-unit`
 // pattern (docs/dev/design/SettingsPanel.jsx:236-249). Commits on blur
@@ -16,14 +16,12 @@ export interface NumberInputProps {
   value: string | null;
   onChange: (next: string) => void;
   disabled?: boolean;
-  /** Optional sidetext suffix (mm, °C, %, etc.). Falls back to a
-   *  schema-derived hint when not provided; PR-4-1's
-   *  `OptionSummary` doesn't carry sidetext yet, so the panel
-   *  passes it explicitly until that lands. */
+  /** Optional sidetext suffix (mm, °C, %, etc.). The panel passes
+   *  `OptionSummary.sidetext`; falls back to a schema-derived hint
+   *  when not provided. */
   unit?: string | null;
-  /** Numeric bounds — passed through from `OptionSummary.min/max`
-   *  once those fields surface; PR-4-2 ships the prop but the
-   *  current schema layer doesn't propagate them. */
+  /** Numeric bounds for clamping. The prop exists, but the current
+   *  schema layer doesn't propagate `min`/`max` from `OptionSummary`. */
   min?: number;
   max?: number;
   step?: number;

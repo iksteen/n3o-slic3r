@@ -2,7 +2,7 @@
 //! G-code file.
 //!
 //! Designed so the frontend (`GcodePreview`) can pack the
-//! payload into Three.js `BufferGeometry` attributes with minimal
+//! payload into GPU vertex-buffer attributes with minimal
 //! transformation:
 //!
 //! - `positions` → `position` attribute (3 floats per vertex,

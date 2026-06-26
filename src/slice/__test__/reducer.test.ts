@@ -1,4 +1,4 @@
-// Reducer unit tests (PR-3-4).
+// Reducer unit tests.
 //
 // The hook layers Tauri subscriptions + invoke()s on top, but the
 // state machine that drives the panel is the pure `reduce` function

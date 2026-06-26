@@ -1,4 +1,4 @@
-//! Driver-report → SlotBinding sync resolver (PR-7c-2).
+//! Driver-report → SlotBinding sync resolver.
 //!
 //! The sync button on the slot chip strip pulls the printer's
 //! current spool loadout into the PrinterInstance. The driver layer
@@ -487,7 +487,7 @@ mod tests {
             },
             // Specialty PLA variants placed *before* generic-pla so
             // the test catches the "first vendor+base_type match
-            // wins" bug (PR-7c-2: U1 sync resolved PLA → silk).
+            // wins" bug (U1 sync resolved PLA → silk).
             FilamentFragmentSummary {
                 identity: "generic-pla-silk".into(),
                 display_name: "Generic PLA Silk".into(),

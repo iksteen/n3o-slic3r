@@ -1,4 +1,4 @@
-// PR-5-9 — build a `ContextJson` from project + active-plate state.
+// Build a `ContextJson` from project + active-plate state.
 //
 // The frontend owns the project snapshot; the backend cascade
 // resolver expects a fully self-describing `ContextJson` on every
@@ -9,7 +9,7 @@
 // serialize the in-memory `Record<string, string>` maps into a
 // single synthetic spec per tier (labels: `user-overrides` /
 // `project-overrides`). Object-tier overrides stay as a flat
-// `Record<string, string>` per the wire shape PR-5-7 introduced.
+// `Record<string, string>` per the wire shape the resolver expects.
 //
 // Profiles for `printer`, `plate`, and `filaments`:
 // - `printer` comes from `scene_load_default_printer` — App.tsx
@@ -21,7 +21,7 @@
 //   profile (vs. the synthesized identity-only form here) is the
 //   plate-profile-registry work still deferred.
 // - `filaments` defaults to one Generic PLA slot. Per-slot
-//   filament bindings live on the PrinterInstance (PR-S-5c) — the
+//   filament bindings live on the PrinterInstance — the
 //   single-slot fallback resolves the same way the slice path does
 //   when no slot is bound.
 
@@ -35,7 +35,7 @@ import type {
 
 /** Default A1 mini build plate. Matches
  * `core::slice::default_a1mini::canonical_plate` on the Rust side.
- * The PR-4-5 selector edits the binding identity; reading a full
+ * The build-plate selector edits the binding identity; reading a full
  * profile out of a registry is a future-phase concern. */
 export const DEFAULT_BUILD_PLATE: BuildPlateJson = {
   identity: "Textured PEI",

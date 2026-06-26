@@ -5,9 +5,9 @@
 //! exclusion-zone data per the active plate's printer. (Transform mode
 //! is renderer-local; camera and gizmo-pivot scene state were removed
 //! as dormant view-state — see PRD §9.2.)
-//! The frontend renderer (Three.js for MVP, possibly wgpu later) is a
-//! read-only consumer that reflects state changes via Tauri events;
-//! all mutations enter through commands defined here.
+//! The frontend renderer (wgpu, for both the edit viewport and the
+//! G-code preview) is a read-only consumer that reflects state changes
+//! via Tauri events; all mutations enter through commands defined here.
 //!
 //! This module exists so the renderer is swappable without rewriting
 //! state management — see PRD FR-3D-7 and AD-8. The renderer-vs-state

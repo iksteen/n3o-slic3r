@@ -1,4 +1,4 @@
-// Tauri invoke wrappers for the plate-tab strip (PR-5-3).
+// Tauri invoke wrappers for the plate-tab strip.
 //
 // Mirrors the per-command `src/settings/overrideCommands.ts`
 // pattern: thin, named wrappers so callers don't have to remember

@@ -1,4 +1,4 @@
-// PR-S-7 — NozzlePicker layout routing.
+// NozzlePicker layout routing.
 //
 // The picker chips render in two shapes:
 //

@@ -18,9 +18,11 @@
 //!   inserts a [`JobHandle`] into the registry, spawns the worker,
 //!   and returns the id immediately.
 //! - The worker owns the slicing thread for the job's lifetime.
-//!   It reads the cancel flag between plates and after each
-//!   progress tick (libslic3r doesn't expose a mid-process cancel
-//!   hook today; we cooperate at boundaries).
+//!   It reads the cancel flag only between plates — at the top of
+//!   each plate iteration (libslic3r doesn't expose a mid-process
+//!   cancel hook today; the progress callback never checks the flag,
+//!   so an in-flight plate runs to completion and we cooperate at
+//!   plate boundaries).
 //! - Progress events are throttled: at most one per 50 ms per
 //!   plate, plus an immediate event on every stage transition.
 //!   Libslic3r emits hundreds of ticks per second on large plates

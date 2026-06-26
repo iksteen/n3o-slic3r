@@ -1,4 +1,4 @@
-// PR-5-3 plate command wrappers — wire-shape contract.
+// Plate command wrappers — wire-shape contract.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

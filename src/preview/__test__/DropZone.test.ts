@@ -1,8 +1,8 @@
-// PR-6-14 DropZone routing logic.
+// DropZone routing logic.
 //
 // The React subscription bookkeeping (Tauri webview listener,
 // drag-over visual) needs jsdom + a fake Tauri runtime — covered
-// by the Playwright smoke in PR-6-16. Here we pin the pure routing:
+// by the Playwright smoke. Here we pin the pure routing:
 // extension → command, error path, error formatting.
 
 import { afterEach, describe, expect, it, vi } from "vitest";

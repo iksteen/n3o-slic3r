@@ -1,4 +1,4 @@
-// Tauri invoke wrappers for the printer picker (PR-5-4).
+// Tauri invoke wrappers for the printer picker.
 //
 // Same pattern as `plateCommands.ts` / `overrideCommands.ts`:
 // thin, named wrappers so callers don't have to repeat the

@@ -22,7 +22,7 @@ This framing exists because the actual calendar will stretch unpredictably: hard
 
 A hard constraint shapes the plan: the MVP must be fully independent of OrcaSlicer or any other slicer at runtime. This affects three things specifically: (a) G-code preview is a first-class feature with its own phase, not a polish item; (b) the G-code parser is built early so it can serve both preview and plugins; (c) milestone demos cannot use OrcaSlicer's viewer as a verification oracle — the app verifies itself, or an alternative independent G-code analyzer is used during development only.
 
-A second hard constraint: the MVP must produce output that the targeted printers actually accept. This is a printer-compatibility constraint, not a format constraint. For the A1 mini, that happens to mean wrapping G-code as .gcode.3mf with Bambu metadata extensions (the printer rejects raw G-code). For the U1, it means sending plain .gcode (the printer is Klipper-based and expects raw G-code over HTTP). 3MF is therefore a tool used by some printer drivers, not a universal output format — adding a future printer means writing its driver, not extending shared format code. Separately, .3mf is also the project file format the app uses (and reads from other slicers as a migration path); this is unrelated to the send-format question.
+A second hard constraint: the MVP must produce output that the targeted printers actually accept. This is a printer-compatibility constraint, not a format constraint. For the A1 mini, that happens to mean wrapping G-code as .gcode.3mf with Bambu metadata extensions (the printer rejects raw G-code). For the U1, it means sending plain .gcode (the printer is Klipper-based and expects raw G-code over HTTP). 3MF is therefore a tool used by some printer drivers, not a universal output format — adding a future printer means writing its driver, not extending shared format code. Separately, the app's own native project format is .n3o (a zip of project.json + per-mesh geometry blobs); .3mf is import-only (read from other slicers as a migration path). Both are unrelated to the send-format question.
 
 The configuration model is documented separately in the profiles strategy document (docs/dev/profiles.md). It defines a rule cascade with selector-based overrides and CSS-like specificity, plus a translation adapter that emits libslic3r's flat DynamicPrintConfig. This plan's Phase 1 implements that design; the PRD §6.1 captures the requirements that follow from it.
 
@@ -164,7 +164,7 @@ Goal: functional 3D scene with model load, transform operations, and bed visuali
 
 - **Renderer-agnostic scene state in Rust (FR-3D-7 / AD-8).** Build this before the renderer layer — it's the foundation the renderer sits on. Scope: typed scene model (mesh registry, per-object transforms and metadata, hierarchy, selection, exclusion-zone data); Tauri command surface for mutations (`scene_select`, `set_object_transform`, etc.); Tauri event surface for state diffs the renderer applies. Lives in `core/scene/` per PRD §8.2. Unit tests cover the command/event contract without any renderer present. (Transform *mode* is renderer-local and the renderer owns its own camera — see PRD §9.2; the scene model gains pivot/camera state when a pivot-setting UI or persisted-view feature lands.)
 
-- Edit-viewport renderer with orbit controls, perspective + ortho toggle, gizmo for move/rotate/scale. The renderer is a *view*: it emits user-intent through the command surface and does not hold authoritative state. *(The prepare-tab edit viewport now ships as a Rust-side wgpu renderer — Strategy A: wgpu renders offscreen in Rust and the finished frame is blitted into an opaque webview `<canvas>`, so mesh geometry never crosses the IPC bridge. The Three.js viewport this phase originally built has been retired; the AD-8 separation made the swap a renderer-layer change. The Phase 6 G-code preview is still Three.js — its own wgpu rewrite is a separate, later effort.)*
+- Edit-viewport renderer with orbit controls, perspective + ortho toggle, gizmo for move/rotate/scale. The renderer is a *view*: it emits user-intent through the command surface and does not hold authoritative state. *(The prepare-tab edit viewport now ships as a Rust-side wgpu renderer — Strategy A: wgpu renders offscreen in Rust and the finished frame is blitted into an opaque webview `<canvas>`, so mesh geometry never crosses the IPC bridge. The Three.js viewport this phase originally built has been retired; the AD-8 separation made the swap a renderer-layer change. The Phase 6 G-code preview was subsequently migrated to wgpu too (`toolpath_render.rs`); no Three.js remains.)*
 
 - Load STL, OBJ, and .3mf (project format): geometry, object positions, and as much project metadata as the file carries. Loader runs in Rust, populates the scene state directly; the renderer learns of new meshes via the standard event flow. Bambu Studio, OrcaSlicer, and Snapmaker Orca all save projects as .3mf — this is the migration path for users.
 
@@ -220,7 +220,7 @@ Goal: load model → slice → produce G-code → parse it into the typed model.
 
 - Header metadata parser: extracts estimated time, filament use, layer count, settings from G-code comment blocks.
 
-- **3MF reader/writer utility.** Read and write .3mf (project) and .gcode.3mf (sliced project with embedded G-code, thumbnails, metadata). This is a shared utility — not all consumers need it. Used by: Phase 2 (project import from other slicers), Phase 5 (our own project save format), Phase 6 (preview drag-drop of sliced files), Phase 7a (A1 mini driver wraps slice output here), Phase 8 (compose hook produces sliced 3MF for platecycler). Not used by: Phase 7b (U1 driver sends raw G-code, no 3MF involvement).
+- **3MF reader/writer utility.** Read and write .3mf (project) and .gcode.3mf (sliced project with embedded G-code, thumbnails, metadata). This is a shared utility — not all consumers need it. Used by: Phase 2 (project import from other slicers), Phase 5 (foreign .3mf project import — native save uses the separate .n3o format, not this module), Phase 6 (preview drag-drop of sliced files), Phase 7a (A1 mini driver wraps slice output here), Phase 8 (compose hook produces sliced 3MF for platecycler). Not used by: Phase 7b (U1 driver sends raw G-code, no 3MF involvement).
 
 ### Exit criteria
 
@@ -316,7 +316,7 @@ Runs partly in parallel with Phase 4. Goal: multi-plate, multi-printer projects 
 
 - Model material → slot binding model (FR-MP-8 foundations): bindings are first-class project state, validated at cascade resolution. Printer-state-driven availability check stubbed (real polling lands in Phase 7c).
 
-- Project save/load uses .3mf via the 3MF I/O module from Phase 3. Project metadata includes plate-printer bindings, plate-level metadata (cycle counts, composition order), model→slot bindings, and per-plate cascade overrides. The format extends the standard 3MF metadata namespace; files round-trip with Bambu Studio for shared geometry but our extensions are ignored by other slicers.
+- Project save/load uses the native .n3o format (a zip of project.json + per-mesh geometry blobs; see `core/project/format.rs`). Project metadata includes plate-printer bindings, plate-level metadata (cycle counts, composition order), model→slot bindings, and per-plate cascade overrides. .3mf is import-only (a migration path from Bambu Studio / OrcaSlicer / Snapmaker Orca), not the save format.
 
 - Bed visualization updates per plate based on assigned printer.
 
@@ -536,7 +536,7 @@ Goal: Linux flatpak build, basic onboarding, release-readiness. Windows and macO
 
 - First-run onboarding: pick your printers from a list including A1 mini and U1, prompt for printer access info.
 
-- Project file format: .3mf extension finalized (per FR-MP-4).
+- Project file format: native .n3o finalized (per FR-MP-4); .3mf is import-only.
 
 - OrcaSlicer `.3mf` **project** import (one-time, not a runtime dependency): open a Bambu Studio / OrcaSlicer project and reconstruct an n3o project — geometry + plate layout + the project's settings. Optional for users; extends the existing 3MF reader. *(The MVP import item is project import, not the user-facing **profile/preset** importer — the latter is post-MVP, §16.)*
 
@@ -667,7 +667,7 @@ Out of scope for this plan, but worth listing so MVP decisions don't paint into 
 
 - WASM plugin runtime alongside Lua.
 
-- ~~Wgpu native viewport if webview perf is insufficient at production scale.~~ **Done** (ahead of need): the prepare-tab edit viewport now renders via wgpu in Rust (Strategy A — offscreen render blitted into an opaque webview canvas). The Phase 6 G-code preview remains Three.js; its wgpu rewrite is a separate later effort.
+- ~~Wgpu native viewport if webview perf is insufficient at production scale.~~ **Done** (ahead of need): the prepare-tab edit viewport now renders via wgpu in Rust (Strategy A — offscreen render blitted into an opaque webview canvas). The Phase 6 G-code preview was migrated to wgpu too (`toolpath_render.rs`); no Three.js remains.
 
 - Print farm / fleet management UI.
 

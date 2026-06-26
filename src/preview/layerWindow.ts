@@ -1,4 +1,4 @@
-// Pure LayerWindow transitions (PR-6-9).
+// Pure LayerWindow transitions.
 //
 // Mode switches preserve the user's current "visible layer"
 // intent so the renderer doesn't snap when the user toggles

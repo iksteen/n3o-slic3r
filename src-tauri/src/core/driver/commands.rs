@@ -1,16 +1,14 @@
-//! Tauri command surface for the driver layer (PR-7a-1).
+//! Tauri command surface for the driver layer.
 //!
 //! Eight commands cover the registry + per-driver lifecycle.
 //! `driver_register` is the only driver-kind-aware one — it
 //! takes a [`DriverConfig`] variant and instantiates the right
-//! `Driver` impl. Until PR-7a-2 / PR-7b-2 land concrete impls,
-//! `driver_register` returns `DriverError::Other` — the trait +
-//! registry are usable, just empty.
+//! `Driver` impl (Bambu or U1).
 //!
 //! Status updates emit on `driver:status_update` as a Tauri
 //! event with payload `{ driver_id, status }`. Driver workers
-//! (PR-7a-3 / PR-7b-3) hook the event emission into their
-//! rate-limited `watch::Sender<PrinterStatus>` pipelines.
+//! hook the event emission into their rate-limited
+//! `watch::Sender<PrinterStatus>` pipelines.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -127,8 +125,8 @@ fn upload_progress_emitter(
 /// the driver's lifetime — the watch channel closes when the
 /// driver is dropped (driver_unregister + registry remove),
 /// which ends the task naturally. Per-driver rate-limiting
-/// happens in the driver's own worker (PR-7a-3); this bridge
-/// just forwards every change without filtering.
+/// happens in the driver's own worker; this bridge just forwards
+/// every change without filtering.
 fn spawn_status_bridge(
     app: AppHandle,
     driver_id: DriverId,
@@ -171,8 +169,6 @@ fn spawn_status_bridge(
 /// driver's `subscribe_status` channel onto the
 /// `driver:status_update` Tauri event so the frontend's
 /// `useDriverStatus` hook can react without polling.
-///
-/// U1 path stubbed — PR-7b-2 lands it.
 /// Construct the concrete driver for a [`DriverConfig`] variant.
 /// Shared by [`driver_register`] (which inserts it into the registry +
 /// spawns the status bridge) and [`driver_test_connection`] (which
@@ -348,10 +344,9 @@ pub async fn driver_status(
 }
 
 /// Wrap a raw G-code file on disk into a Bambu-flavored
-/// `.gcode.3mf` bundle byte buffer. Minimum-viable packaging — the
-/// bytes are well-formed enough for the printer to accept, but
-/// per-AMS bindings and project-metadata enrichment are pending
-/// the sync-on-send work (Phase 7c).
+/// `.gcode.3mf` bundle byte buffer. The bundle carries the raw
+/// G-code, the human-readable `Title` metadata, the per-plate AMS
+/// slot map, and the plate thumbnail (see the enrichment below).
 ///
 /// Runs on `spawn_blocking` because the writer is sync-IO + does
 /// per-entry MD5 work; calling it from an async command without
@@ -514,11 +509,8 @@ pub async fn driver_export_plate(
 /// Payload shape depends on the driver kind:
 /// - **Bambu** — wrap as `.gcode.3mf` via [`wrap_gcode_as_3mf`] and
 ///   ship as [`SendPayload::Gcode3mf`] with the plate's AMS routing.
-///   Bundling is a stub: it uses [`fixture_input`] to produce a
-///   minimal valid `.gcode.3mf` shell around the raw G-code. The
-///   real sync-on-send pipeline (PR-7c-7) will embed per-AMS slot
-///   bindings + project metadata; this command keeps the printer's
-///   firmware happy in the meantime.
+///   The bundle embeds the raw G-code, the project/plate `Title`
+///   metadata, the per-AMS slot bindings, and the plate thumbnail.
 /// - **U1** — ship the raw G-code body as [`SendPayload::Gcode`].
 ///   Moonraker stores it under the supplied file name and starts
 ///   the print in the same multipart upload (see

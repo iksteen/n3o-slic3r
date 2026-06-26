@@ -1,5 +1,5 @@
 // Bridges the live viewport renderer to the send path: the ViewportCanvas
-// registers a capture closure (it owns the Three.js scene); the rest of the
+// registers a capture closure (it owns the rendered scene); the rest of the
 // app calls `captureThumbnail()` without prop-drilling a ref through the tree.
 // Module-level singleton — there's exactly one viewport at a time.
 //
@@ -9,7 +9,7 @@
 // is called at slice start — while the edit scene is still mounted — and
 // send/export read the cache when the live closure is gone.
 
-// The capture may be sync (Three.js renders to a canvas inline) or async (the
+// The capture may be sync (a renderer returns a canvas inline) or async (the
 // wgpu viewport renders offscreen in Rust via IPC, then encodes the PNG).
 export type ThumbnailCapture = (size?: number) => string | null | Promise<string | null>;
 
@@ -23,7 +23,7 @@ export function registerThumbnailCapture(fn: ThumbnailCapture | null): void {
 }
 
 /** Last cached capture, or a fresh *synchronous* one if the live viewport gives
- *  it inline (Three.js). An async (wgpu) capture can't render here — it relies on
+ *  it inline. An async (wgpu) capture can't render here — it relies on
  *  `refreshThumbnailCache` having primed the cache at slice start. Returns base64
  *  PNG or `null`; never throws. */
 export function captureThumbnail(size = 512): string | null {

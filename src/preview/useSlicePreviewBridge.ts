@@ -1,5 +1,4 @@
-// Bridges the slice-job event channel to the preview pipeline
-// (PR-6-15).
+// Bridges the slice-job event channel to the preview pipeline.
 //
 // Per-plate handle cache so plate-switching while in preview
 // mode flips to the cached preview instead of re-loading. Also

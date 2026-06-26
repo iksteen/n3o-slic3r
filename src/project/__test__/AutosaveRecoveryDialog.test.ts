@@ -1,4 +1,4 @@
-// PR-5-10 UI — formatter tests.
+// Autosave-recovery dialog — formatter tests.
 //
 // The full dialog renders DOM (modal, action buttons, async
 // invoke flow) which our vitest setup doesn't have a DOM for.

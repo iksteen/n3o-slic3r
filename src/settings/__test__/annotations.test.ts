@@ -1,4 +1,4 @@
-// Annotation catalog + support-toggle commit-shape tests (PR-4-12).
+// Annotation catalog + support-toggle commit-shape tests.
 
 import { describe, expect, it } from "vitest";
 import { ANNOTATIONS } from "../annotations/data";

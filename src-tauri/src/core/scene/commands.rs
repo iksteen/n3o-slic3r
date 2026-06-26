@@ -52,9 +52,9 @@ pub struct SceneSnapshot {
     /// File-level 3MF metadata (Title, Designer, License, …)
     /// preserved across save/load.
     pub file_metadata: std::collections::BTreeMap<String, String>,
-    /// Scene-wide mesh registry. Headers only; the frontend
-    /// follows up per-mesh with `scene_mesh_buffers(id)` for
-    /// the binary vertex / normal / index data.
+    /// Scene-wide mesh registry. Headers only; the binary vertex /
+    /// normal / index data stays Rust-side and is uploaded straight
+    /// to the GPU, never crossing IPC.
     pub meshes: Vec<MeshHeader>,
     /// All plates in declaration order. Renderer routes per-plate
     /// events to the matching entry by `plate_id`.
@@ -113,8 +113,8 @@ pub struct PlateSnapshot {
 
 /// Snapshot of the scene state. Frontend calls this on startup /
 /// reconnect to rebuild its local mirror from scratch. Heavy mesh
-/// buffers are *not* included here — the renderer follows up with
-/// `scene_mesh_buffers(mesh_id)` per mesh to fetch the binary data.
+/// buffers are *not* included here — geometry stays Rust-side and
+/// the wgpu renderer uploads it straight to the GPU.
 #[tauri::command]
 #[tracing::instrument(skip(state))]
 pub fn scene_snapshot(state: State<Arc<Mutex<Project>>>) -> Result<SceneSnapshot, String> {

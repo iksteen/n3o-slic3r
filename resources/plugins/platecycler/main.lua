@@ -9,8 +9,8 @@
 -- (github.com/iksteen/platecycler, platecycler.py). It moves the
 -- toolhead through a hardware-specific ejection path — VERIFY IT
 -- MATCHES YOUR platecycler.py / your machine before running on real
--- hardware; a wrong coordinate can crash the toolhead. It becomes a
--- plugin-declared setting once plugin settings are wired.
+-- hardware; a wrong coordinate can crash the toolhead. It is a literal
+-- constant in this plugin.
 --
 -- Self-guards on the printer model as defense-in-depth: the host now
 -- enforces `printer_compatibility` (a plugin scoped to another model is

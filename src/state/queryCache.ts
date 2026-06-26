@@ -11,13 +11,13 @@
 // the same key reads the same entry — so two hooks backed by `scene_snapshot`
 // share one fetch and one invalidation, instead of each running their own.
 //
-// What this spike deliberately leaves out (a production version would add):
-//   - Ref-counted teardown / GC of idle cache entries (here entries live for
-//     the app's lifetime — fine for our handful of app-global queries).
-//   - Selector subscriptions (re-render only when a projected slice changes).
-//     Without it, a consumer that only needs a projection still re-renders on
-//     every invalidation of the underlying query; pair with memoized selectors
-//     before converting projection-only hooks like usePlateTabs.
+// Selector subscriptions are implemented (`useQuerySelector`): a consumer that
+// only needs a projected slice re-renders only when that slice changes, not on
+// every invalidation of the underlying query.
+//
+// What this still leaves out: ref-counted teardown / GC of idle cache entries.
+// Here entries live for the app's lifetime — fine for our handful of
+// app-global queries.
 
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { Event as TauriEvent } from "@tauri-apps/api/event";

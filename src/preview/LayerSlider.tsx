@@ -1,4 +1,4 @@
-// Layer slider for the preview (PR-6-9).
+// Layer slider for the preview.
 //
 // Owns the LayerWindow state's mode picker + the slider thumb(s).
 // Renders three layouts:
@@ -14,7 +14,7 @@
 //   1 / 2 / 3            switch to single / up-to / range
 //
 // State persistence is the parent's job — this component is
-// pure-controlled. PR-6-15's App mode toggle re-initializes via
+// pure-controlled. App's mode toggle re-initializes via
 // `defaultWindow(layerCount)` on each preview load.
 
 import { useEffect } from "react";

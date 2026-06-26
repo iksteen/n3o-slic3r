@@ -1,4 +1,4 @@
-// Startup autosave-recovery dialog (PR-5-10 UI).
+// Startup autosave-recovery dialog.
 //
 // Mounts at the App root, gates the rest of the UI until the
 // user has decided what to do with each recoverable autosave.

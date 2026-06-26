@@ -1,23 +1,20 @@
-// Phase 4 settings panel scaffold (PR-4-4) — the critical-path
-// bottleneck. Subsequent tickets (4-5 .. 4-12) mount inside this.
+// Settings panel — the cascade-resolved settings surface.
 //
-// MVP responsibilities:
-//   - Mount category nav (PR-4-3) + mode filter + search.
+// Responsibilities:
+//   - Mount category nav + mode filter + search.
 //   - Wire the cascade_resolve + slicer_options_for_printer loop.
-//   - Render Field rows (PR-4-2) with the appropriate input
+//   - Render Field rows with the appropriate input
 //     component per OptionTypeKind.
 //   - Project / Object editing-context tabs (FR-UI-9). Object tab
 //     disabled when no object is selected; auto-fall-back to
 //     Project when the selected object goes away.
-//   - The per-object override storage that the Object tab writes
-//     into is a stub — PR-4-9 wires the real backend.
+//   - Per-object override storage backed by the scene-object override
+//     backend (writes routed through the host's callbacks).
 //
 // Per the design reference in phase-4.md, the breadcrumb chip
 // strip is the `accountability === "breadcrumb"` tweak from the
-// mockup and is NOT shipped. PR-4-7 lifts the canonical "rule"
-// surface (left-edge inset rule + authored-tier background tint)
-// into the row CSS; PR-4-4 ships the row markup ready to carry
-// those modifier classes once PR-4-7 lands.
+// mockup and is NOT shipped. The canonical "rule" surface (left-edge
+// inset rule + authored-tier background tint) lives in the row CSS.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -85,31 +82,28 @@ export interface SettingsPanelProps {
   resolved: ResolvedMap;
   /** Currently selected scene object — drives the Object tab.
    *  `null` disables the Object tab. */
-  selectedObject: SelectedObjectStub | null;
-  /** Stubbed per-object override storage. PR-4-9 replaces with the
-   *  real `scene_object_override_set/clear` plumbing. */
+  selectedObject: SelectedObject | null;
+  /** Per-object override storage, backed by the `scene_object_override`
+   *  set/clear plumbing through the host's callbacks below. */
   objectOverrides: Record<string, string>;
   onSetObjectOverride: (key: string, value: string) => void;
   onClearObjectOverride: (key: string) => void;
-  /** Stubbed project-tier override map (extends `ContextJson`
-   *  before resolve). Real storage lands with Phase 5's project
-   *  model; PR-4-4 keeps it inline so the editing-context flow is
-   *  exercisable today. */
+  /** Project-tier override map (extends `ContextJson` before resolve),
+   *  backed by the project model's stored overrides. */
   projectOverrides: Record<string, string>;
   onSetProjectOverride: (key: string, value: string) => void;
   onClearProjectOverride: (key: string) => void;
   /** All objects on the plate, each with its own override map.
    *  Used to render the FR-CAS-7b "N objects override" badge on
-   *  Project-tab rows. Empty by default — PR-5's project model
-   *  populates. */
-  allObjects?: ReadonlyArray<PlateObjectStub>;
+   *  Project-tab rows. */
+  allObjects?: ReadonlyArray<PlateObject>;
   /** Plate-level plugin surface (the right-aligned Plugins tab). When
    *  omitted the tab isn't shown. */
   pluginSurface?: PluginPlateSurface | null;
 }
 
 /** Per-object override info for the objects-overriding badge. */
-export type PlateObjectStub = {
+export type PlateObject = {
   id: number;
   name: string;
   /** Filament color for the badge swatch. */
@@ -119,7 +113,7 @@ export type PlateObjectStub = {
 
 /** Minimal selected-object shape the Object tab needs. Scene state
  *  carries more; the panel only reads name + id. */
-export type SelectedObjectStub = {
+export type SelectedObject = {
   id: number;
   name: string;
 };
@@ -273,7 +267,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
     [groups, overriddenKeys],
   );
 
-  // Cascade ladder hover state (PR-4-8). One ladder portal per
+  // Cascade ladder hover state. One ladder portal per
   // panel; tracks which row triggered it so the per-row data the
   // ladder reads stays addressable on hover.
   const ladder = useLadderHover();
@@ -283,7 +277,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
     [visibleOptions, hoveredKey],
   );
 
-  // PR-4-11's separate `SettingTooltip` popover was folded into the
+  // The separate `SettingTooltip` popover is folded into the
   // cascade ladder so a single row hover surfaces both the
   // description and the layer breakdown.
 
@@ -625,20 +619,20 @@ interface SettingRowProps {
   onSetObjectOverride: (key: string, value: string) => void;
   onClearObjectOverride: (key: string) => void;
   /** True when this option is capability-hidden but surfaced via
-   *  search; renders the "not applicable" badge inline (PR-4-5). */
+   *  search; renders the "not applicable" badge inline. */
   notApplicable?: boolean;
   /** True when this option's tier is above the active mode — it's shown only
    *  because it's been modified. Renders an ADV/EXP tier-tag. */
   outOfMode?: boolean;
-  /** Cascade ladder hover hooks (PR-4-8). The panel owns the
+  /** Cascade ladder hover hooks. The panel owns the
    *  open/close lifecycle centrally; SettingRow just forwards the
    *  row's DOM node + leave. The label hover hooks retired with
    *  the SettingTooltip merge — description lives in the ladder. */
   onRowEnter?: (el: HTMLElement) => void;
   onRowLeave?: () => void;
-  /** All objects on the plate (PR-4-9) — drives the objects-
-   *  overriding badge on Project-tab rows. Empty by default. */
-  allObjects: ReadonlyArray<PlateObjectStub>;
+  /** All objects on the plate — drives the objects-overriding
+   *  badge on Project-tab rows. Empty by default. */
+  allObjects: ReadonlyArray<PlateObject>;
 }
 
 function SettingRow({
@@ -675,8 +669,8 @@ function SettingRow({
   // slice-time gate (`object_overrides_for_slice`). Anything else (a
   // project/print-scope setting, or a dangling no-scope option like
   // `ironing_expansion`) is disabled, so the user can't author an
-  // override the slicer would silently drop. PR-4-9 surfaces the
-  // "project-scope setting" badge; this just enforces disabled-input.
+  // override the slicer would silently drop. The "project-scope
+  // setting" badge surfaces the reason; this enforces disabled-input.
   const disabled =
     notApplicable ||
     (contextLayer === "object" && !isObjectOverridable(schema.scope));
@@ -717,7 +711,7 @@ function SettingRow({
       </>
     ) : null;
 
-  // Objects-overriding badge (PR-4-9, FR-CAS-7b): on the Project
+  // Objects-overriding badge (FR-CAS-7b): on the Project
   // tab, surface the objects that override this setting via small
   // filament-color dots + a count.
   const overridingObjects =
@@ -745,7 +739,7 @@ function SettingRow({
     </span>
   ) : null;
 
-  // Reset button (PR-4-9). Renders when the active tier has a
+  // Reset button. Renders when the active tier has a
   // value for this setting; clicking drops the override and the
   // row falls back to the cascade resolution underneath.
   const hasValueAtActiveTier =
@@ -829,8 +823,8 @@ function SettingRow({
         // doesn't have an editor for those yet. Show read-only text
         // so the user can see the value without a path to corrupt
         // it. Per-extruder editing surfaces (filament/printer
-        // buckets) live elsewhere; the slot picker that used to
-        // mount here retired with PR-S-2's Process-only filter.
+        // buckets) live elsewhere; the panel's Process-only filter
+        // means no slot picker mounts here.
         <input
           className="val-input val-input-fallback"
           type="text"
@@ -942,9 +936,8 @@ export function filterRow(
 ): boolean {
   if (opt.hidden) {
     // Match the mockup behavior: when search is active, hidden
-    // options are shown with a "not applicable" badge. PR-4-5
-    // controls the rendering; PR-4-4's filter excludes them in
-    // the no-search default view.
+    // options are shown with a "not applicable" badge. This
+    // filter excludes them in the no-search default view.
     if (search.trim() === "") return false;
   }
   if (!passesMode(opt, mode) && !modified) return false;

@@ -1,4 +1,4 @@
-//! OrcaSlicer / Bambu Studio `.3mf` **project** import (PR-9-6).
+//! OrcaSlicer / Bambu Studio `.3mf` **project** import.
 //!
 //! Reconstructs an n3o project from a foreign project file. Geometry and
 //! per-object/plate structure come from the existing 3MF reader +

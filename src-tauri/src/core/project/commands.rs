@@ -390,7 +390,7 @@ pub fn project_set_plate_quality_profile(
 
 // ---- Save / load ------------------------------------------
 
-/// Save the in-memory project to `path` as an n3o-slic3r `.3mf`.
+/// Save the in-memory project to `path` as an n3o-slic3r `.n3o` file.
 /// Overwrites the file if it exists. The project's `source_path`
 /// is **not** updated; use [`project_save_as`] when the user
 /// chooses a new path via Save As.

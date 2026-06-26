@@ -1,4 +1,4 @@
-// PR-6-10 visibility-toggle persistence contract.
+// visibility-toggle persistence contract.
 //
 // Vitest's default env is node — no `window` or `localStorage`.
 // Stub them per the pattern in

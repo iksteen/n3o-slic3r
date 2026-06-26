@@ -1,6 +1,5 @@
 //! [`U1Driver`] — the [`Driver`] trait impl that stitches together
-//! the WebSocket session (PR-7b-2), status decoder (PR-7b-3), and
-//! HTTP control plane (PR-7b-4).
+//! the WebSocket session, status decoder, and HTTP control plane.
 //!
 //! Architecture:
 //!

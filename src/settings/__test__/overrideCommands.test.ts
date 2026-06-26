@@ -1,4 +1,4 @@
-// Per-object override invoke-wrapper tests (PR-5-7 frontend).
+// Per-object override invoke-wrapper tests.
 //
 // We're not validating the backend storage here (that's covered by
 // the Rust scene_object_override_* tests). What this exercises is

@@ -1,4 +1,4 @@
-// PR-5-9 — host projection + visibility-toggle persistence tests.
+// Host projection + visibility-toggle persistence tests.
 //
 // The host renders SettingsPanel; the full render path needs a DOM
 // (we don't have one set up). What's testable in pure form is the

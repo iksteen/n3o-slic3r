@@ -37,7 +37,8 @@ Read these before reasoning about scope, design, or behavior:
   flatpak + self-hosted signed-repo distribution, first-run onboarding,
   OrcaSlicer `.3mf` project import, user docs, and Linux CI. The app is
   standalone at runtime (no host slicer/libslic3r needed), and the
-  `.3mf`/`n3o_project.json` format is finalized for MVP. Post-MVP
+  native `.n3o` format (own zip: `project.json` + per-mesh geometry
+  blobs) is finalized for MVP — `.3mf` is import-only. Post-MVP
   deferrals (plugin compose hook, hot reload, Orca preset importer) live
   in plan §16.
 - **`docs/dev/profiles.md`** — Rule-cascade design of record. Two-phase
@@ -73,12 +74,17 @@ later costs more than it had to.
   transparent webview over GPU content smears on WebKitGTK; see
   `docs/dev/wgpu-renderer.md`). Mesh geometry never crosses the IPC bridge
   — it's uploaded straight to the GPU Rust-side. The **G-code preview**
-  still renders with Three.js (`src/preview/`), pending its own wgpu
-  rewrite. See PRD FR-3D-7 and AD-8. Two boundaries that follow:
-  - *Transforms* — `set_object_transform` (full-matrix) is the only
-    object-transform mutation. The active transform *mode*
-    (translate/rotate/scale) is renderer-local UI state owned by `App`;
-    `core/scene` holds no gizmo or pivot state.
+  also renders with wgpu (`src-tauri/src/toolpath_render.rs` +
+  `src/preview/GcodePreview.tsx`, instanced tubes, same Strategy-A blit);
+  there is no Three.js left in the app. See PRD FR-3D-7 and AD-8. Two
+  boundaries that follow:
+  - *Transforms* — the renderer mutates object transforms only through
+    commands, with `set_object_transform` (full-matrix) as the
+    renderer-facing path. The scene layer itself has several transform
+    ops (orient, align, lay-flat), some routed through the seated-bounds
+    check. The active transform *mode* (translate/rotate/scale) is
+    renderer-local UI state owned by `App`; `core/scene` holds no gizmo
+    or pivot state.
   - *Camera* — the renderer owns its camera; the wgpu viewport holds
     `{az, el, dist, center}` frontend-side and frames the plate footprint
     from the bed (a view-aware corner fit). The scene model holds no
@@ -117,6 +123,12 @@ Non-obvious facts about the hardware and architecture worth having up front.
 - **Bambu A1 mini uses AMS lite filament-swap** at a single hotend.
   Not a toolchanger. AMS lite reports per-slot filament identity
   (type, color, brand if reported) over MQTT.
+- **Live camera + the Snapmaker control plane are shipped and in-scope.**
+  Per-instance camera streaming (`core/driver/camera.rs`,
+  `camera_start`/`camera_stop`, `src/driver/useCameraStream.ts`) works for
+  both vendors, and the U1 pair/mTLS/MQTT "monitor mode" control plane
+  (`core/driver/snapmaker/{pairing,mtls,camera,snap_token}.rs`) is wired.
+  The PRD's earlier "out of MVP scope" framing for these is superseded.
 - **Purging and priming are independent capabilities.** A1 mini
   purges (single hotend reuse) and uses a large priming tower that
   doubles as a purge structure. U1 does *not* purge (per-toolhead

@@ -1,4 +1,4 @@
-//! Printer-driver abstraction (PR-7a-1).
+//! Printer-driver abstraction.
 //!
 //! The two MVP drivers (Bambu A1 mini over LAN MQTT, Snapmaker
 //! U1 over Moonraker WebSocket) share zero protocol but the

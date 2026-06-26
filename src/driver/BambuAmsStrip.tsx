@@ -1,4 +1,4 @@
-// AMS slot strip — colored chips per loaded spool (PR-7a-7).
+// AMS slot strip — colored chips per loaded spool.
 //
 // One row per AMS unit (the A1 mini ships with one 4-tray AMS lite;
 // X1C / P1S can have up to four). Each tray renders as a small
@@ -7,7 +7,7 @@
 //
 // Color values arrive as `RRGGBBAA` hex without `#` (Bambu's wire
 // shape); we prepend `#` for CSS consumption. Sentinel "empty
-// spool" identity (per PR-7a-4) shows up as `identity == null`.
+// spool" identity shows up as `identity == null`.
 
 import { cssColorFromHex } from "./colorUtils";
 import type { AmsState, AmsTray, AmsUnit } from "./types";

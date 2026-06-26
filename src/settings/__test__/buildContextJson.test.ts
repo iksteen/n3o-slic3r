@@ -1,4 +1,4 @@
-// PR-5-9 — context-builder + override-TOML escaping tests.
+// Context-builder + override-TOML escaping tests.
 
 import { describe, expect, it } from "vitest";
 import {

@@ -1,4 +1,4 @@
-// PR-5-10 UI autosave invoke wrappers — wire-shape contract.
+// Autosave invoke wrappers — wire-shape contract.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

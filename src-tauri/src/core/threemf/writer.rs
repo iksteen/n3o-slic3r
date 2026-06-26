@@ -534,11 +534,11 @@ fn model_settings_xml(project: &Project3mf) -> String {
 }
 
 fn n3o_settings_xml() -> String {
-    // Placeholder for Phase 5 cascade overrides + plate-printer
-    // bindings + project-wide metadata. The reader doesn't
-    // consume this yet; Phase 5 will. Schema documented in
-    // `docs/dev/3mf-format-notes.md` so the round-trip stays stable
-    // across writer revisions.
+    // n3o-namespaced settings block (cascade overrides, plate-printer
+    // bindings, project-wide metadata). Native project save uses the
+    // .n3o format, not 3MF, so this block exists only for 3MF round-trip
+    // stability; the reader does not consume it. Schema documented in
+    // `docs/dev/3mf-format-notes.md`.
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <n3o_project version=\"1\" writer=\"n3o-slic3r-{N3O_VERSION}\">\n\

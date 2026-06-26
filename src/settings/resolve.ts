@@ -1,4 +1,4 @@
-// Tauri bridge for the Phase 4 settings panel (PR-4-4).
+// Tauri bridge for the settings panel.
 //
 // Wraps `cascade_resolve` + `slicer_options_for_printer` with the
 // `invoke()` plumbing the panel needs at the React boundary. The
@@ -12,7 +12,7 @@ import type { PrinterAwareOptionSummary } from "./types";
 /** Mirror of `core::cascade::commands::ContextJson` on the wire.
  *  Same shape the slice flow already builds.
  *
- *  PR-5-7: `object_overrides` is the per-object cascade-tier map.
+ *  `object_overrides` is the per-object cascade-tier map.
  *  When the panel's Object tab is active, the host passes the
  *  selected object's authored overrides here; otherwise the map
  *  is empty. The resolver applies them as the highest-priority

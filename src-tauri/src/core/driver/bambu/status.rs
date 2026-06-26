@@ -1,10 +1,9 @@
-//! Bambu MQTT report payload → typed [`PrinterStatus`] (PR-7a-3).
+//! Bambu MQTT report payload → typed [`PrinterStatus`].
 //!
 //! Field shape and merge semantics are a faithful port of
 //! `bambu-overlay/src/bambu/models.rs`. Extensions (chamber temp,
 //! mounted plate, current stage, print error) are added because
-//! the PR-7a-3 ticket calls for them and our slicing-cascade
-//! ties to `bed_type`.
+//! our slicing-cascade ties to `bed_type`.
 //!
 //! Bambu's API has a quirk where some fields arrive as JSON
 //! numbers and others as JSON strings ("50" vs 50). The
@@ -146,8 +145,8 @@ pub struct BambuReport {
         deserialize_with = "de::optional_f64"
     )]
     pub bed_target_temper: Option<f64>,
-    /// Not in bambu-overlay's model; added because PR-7a-3 calls
-    /// it out + enclosed printers will surface it.
+    /// Not in bambu-overlay's model; added because enclosed
+    /// printers surface it.
     #[serde(
         default,
         rename = "chamber_temper",
@@ -161,8 +160,8 @@ pub struct BambuReport {
     /// BuildPlate cascade layer.
     #[serde(default, rename = "bed_type", deserialize_with = "de::optional_string")]
     pub bed_type: Option<String>,
-    /// Bambu firmware "current stage" code. Free-form; PR-7a-3
-    /// surfaces as-is for diagnostics.
+    /// Bambu firmware "current stage" code. Free-form; surfaced
+    /// as-is for diagnostics.
     #[serde(default, rename = "stg_cur", deserialize_with = "de::optional_i64")]
     pub current_stage: Option<i64>,
     #[serde(default, rename = "print_error", deserialize_with = "de::optional_i64")]
@@ -178,14 +177,14 @@ pub struct BambuReport {
     )]
     pub fan_speed: Option<f64>,
 
-    // --- AMS (PR-7a-4) ---
+    // --- AMS ---
     #[serde(default)]
     pub ams: Option<RawAmsState>,
     /// Virtual tray = external spool (the rear PTFE-tube feed).
     /// Same shape as an AMS tray; the printer holds the
     /// user-entered material + color even though the slot itself
-    /// has no RFID. Driver sync (PR-7c-2) consumes it for the
-    /// trailing Direct slot.
+    /// has no RFID. Driver sync consumes it for the trailing
+    /// Direct slot.
     #[serde(default)]
     pub vt_tray: Option<RawAmsTray>,
 }
@@ -255,8 +254,8 @@ pub struct RawAmsTray {
     /// Bambu's vendor SKU for the spool (e.g. "GFA00" for PLA
     /// Basic), or a `P`-prefixed local/custom preset id. Untagged
     /// spools still report a real value (a generic SKU or preset),
-    /// not an empty string. PR-7c-2's sync resolver uses this to
-    /// look up the bundled fragment exactly.
+    /// not an empty string. The sync resolver uses this to look up
+    /// the bundled fragment exactly.
     #[serde(
         default,
         rename = "tray_info_idx",

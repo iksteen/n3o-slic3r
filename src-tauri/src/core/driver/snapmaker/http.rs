@@ -41,7 +41,7 @@ fn client() -> Result<reqwest::Client, DriverError> {
 /// Returns a [`SendHandle`] whose `id` is the printer-visible
 /// filename so subsequent status snapshots (`print_stats.filename`)
 /// correlate cleanly.
-#[allow(dead_code)] // consumed by PR-7b-5's U1Driver
+#[allow(dead_code)] // consumed by the U1Driver
 pub(super) async fn upload_and_start(
     host: &str,
     port: u16,
@@ -101,7 +101,7 @@ pub(super) async fn upload_and_start(
 /// `error_for_status()` lifts that into `DriverError::Protocol` so
 /// the caller can show "no active print to pause" without contacting
 /// the driver again.
-#[allow(dead_code)] // consumed by PR-7b-5's U1Driver
+#[allow(dead_code)] // consumed by the U1Driver
 pub(super) async fn send_command(
     host: &str,
     port: u16,

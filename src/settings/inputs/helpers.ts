@@ -1,5 +1,5 @@
-// Pure parse / format / validate helpers for the form components
-// (PR-4-2). Extracted from the component bodies so they can be
+// Pure parse / format / validate helpers for the form components.
+// Extracted from the component bodies so they can be
 // tested without a DOM or React renderer — the project's existing
 // vitest pattern is pure-logic-only (see src/slice/reducer.ts +
 // __test__/reducer.test.ts), and the components stay thin wrappers
@@ -8,8 +8,7 @@
 /** Numeric bounds + step pulled from `OptionSummary` for clamping
  *  and per-keystroke nudging. All optional — undefined = no
  *  constraint. The FFI's `min` / `max` defaults are `f64::MAX` /
- *  `-f64::MAX` for "unset", which we don't surface yet; PR-4-1 may
- *  follow up to filter those out at the boundary. */
+ *  `-f64::MAX` for "unset", which we don't surface as constraints. */
 export type NumericBounds = {
   min?: number;
   max?: number;

@@ -194,7 +194,7 @@ Presentation vs mechanism. The UI presents the cascade as values-by-source-file 
 
 - **FR-MP-3.** Changing a plate's printer recomputes the cascade and re-validates settings; incompatible values surface as warnings, not silent corrections.
 
-- **FR-MP-4.** Project file format is .3mf (extended). The app reads .3mf files authored by Bambu Studio, OrcaSlicer, and Snapmaker Orca (geometry, plate layout, available settings) as the migration path. The app writes .3mf with project extensions in our own namespace covering per-plate printer binding, plate-level metadata (cycle counts, composition order), model→slot bindings, and cascade overrides. Files round-trip with foreign slicers for shared content; our extensions are ignored by them, which is acceptable.
+- **FR-MP-4.** Native project file format is .n3o — the app's own zip container (project.json + per-mesh geometry blobs keyed by MeshId; see `core/project/format.rs`), covering per-plate printer binding, plate-level metadata (cycle counts, composition order), model→slot bindings, and cascade overrides. .3mf is **import-only**: the app reads .3mf files authored by Bambu Studio, OrcaSlicer, and Snapmaker Orca (geometry, plate layout, available settings) as the migration path, but does not save to .3mf. (Per-driver *send* formats — A1 mini .gcode.3mf, U1 raw .gcode — are a separate concern, FR-MP-4b.)
 
 - **FR-MP-4b.** The app produces sliced output in whatever format the assigned printer's driver requires. Send-format selection is per-driver responsibility (see core/printer/<driver> in §8.2): the driver may wrap, transform, or pass through G-code as needed. For the MVP, the A1 mini driver wraps as .gcode.3mf with Bambu metadata extensions, and the U1 driver sends raw .gcode over HTTP. Future printer drivers add their own send paths without touching shared code; 3MF wrapping is a tool used where printers require it, not a universal output format.
 
@@ -242,7 +242,7 @@ Presentation vs mechanism. The UI presents the cascade as values-by-source-file 
 
 - **FR-3D-6.** Basic supports: auto-generate, on/off toggle per object. Paint-on supports are out of MVP scope.
 
-- **FR-3D-7.** Scene state lives in Rust in a renderer-agnostic structure (objects, transforms, mesh data, selections). The renderer — wgpu for the prepare-tab edit viewport, Three.js for the G-code preview — is a read-only consumer that reflects state changes pushed via Tauri events. All scene mutations go through Tauri commands; the renderer never owns authoritative state. This rule exists so switching renderers does not require touching the state model. See AD-8 for the design rationale and consequences.
+- **FR-3D-7.** Scene state lives in Rust in a renderer-agnostic structure (objects, transforms, mesh data, selections). The renderer — wgpu for both the prepare-tab edit viewport and the G-code preview — is a read-only consumer that reflects state changes pushed via Tauri events. All scene mutations go through Tauri commands; the renderer never owns authoritative state. This rule exists so switching renderers does not require touching the state model. See AD-8 for the design rationale and consequences.
 
 ## 6.5 Slicing pipeline
 
@@ -298,7 +298,7 @@ G-code preview is a hard MVP requirement, not a polish item. The app must be ful
 
 - **FR-BL-6.** Read currently-mounted build plate where the printer reports it (A1 mini reports plate type in current firmware). The reported plate is the default; user can override per-project-plate. Feeds the build_plate cascade layer (FR-CAS-9).
 
-- **FR-BL-5.** Send commands: pause, resume, stop. Camera stream is out of MVP scope.
+- **FR-BL-5.** Send commands: pause, resume, stop. Live camera streaming is implemented (`core/driver/camera.rs`; `camera_start` / `camera_stop`).
 
 ### Snapmaker U1
 
@@ -411,13 +411,13 @@ Model materials are abstract extruder indices (1..N) assigned to objects, paint 
 
 - **Shell.** Tauri 2.x. Rust core, web frontend via system webview.
 
-- **Frontend.** TypeScript + React + Tailwind. wgpu for the prepare-tab edit viewport (Strategy A: wgpu renders offscreen in Rust and the finished frame is blitted into an opaque webview `<canvas>`; mesh geometry never crosses the IPC bridge). Three.js for the G-code preview.
+- **Frontend.** TypeScript + React + Tailwind. wgpu for both the prepare-tab edit viewport and the G-code preview (Strategy A: wgpu renders offscreen in Rust and the finished frame is blitted into an opaque webview `<canvas>`; mesh geometry never crosses the IPC bridge). No Three.js.
 
 - **Slicing engine.** orca-slicer-ffi (this project's existing FFI) wrapping libslic3r. Linked as a Rust crate in the Tauri core.
 
 - **Plugin runtime.** mlua (Lua 5.4) embedded in the Rust core.
 
-- **Storage.** TOML for profile layers, 3MF for project files, JSON for app state.
+- **Storage.** TOML for profile layers, the native .n3o zip for project files (.3mf is import-only), JSON for app state.
 
 - **Printer comms.** rumqttc for Bambu MQTT; reqwest + tokio-tungstenite (both on native-tls, sharing the Bambu stack) for the U1's Moonraker HTTP/WS endpoints.
 
@@ -429,21 +429,31 @@ Model materials are abstract extruder indices (1..N) assigned to objects, paint 
 
 - **core/project.** Project model, plate/printer binding, plate metadata (cycle counts), material bindings, persistence.
 
-- **core/scene.** Renderer-agnostic 3D scene state per AD-8 / FR-3D-7. Owns mesh registry, per-object transforms and metadata, selection, exclusion-zone data. Exposes Tauri commands for mutations and emits typed events for view sync. The frontend renderer (wgpu for the edit viewport, Three.js for the G-code preview) consumes events; it does not hold authoritative state. Transform *mode* is renderer-local and the renderer owns its own camera (see §9.2); the scene model gains a pivot or camera field when a pivot-setting UI or persisted-view feature is built.
+- **core/scene.** Renderer-agnostic 3D scene state per AD-8 / FR-3D-7. Owns mesh registry, per-object transforms and metadata, selection, exclusion-zone data. Exposes Tauri commands for mutations and emits typed events for view sync. The frontend renderer (wgpu for both the edit viewport and the G-code preview) consumes events; it does not hold authoritative state. Transform *mode* is renderer-local and the renderer owns its own camera (see §9.2); the scene model gains a pivot or camera field when a pivot-setting UI or persisted-view feature is built.
 
 - **core/slice.** FFI wrapper, slice orchestration, progress events.
 
 - **core/gcode.** Typed G-code model, parser, serializer. Shared by preview and plugins.
 
-- **core/threemf.** 3MF reader and writer utility. Used by parts of the system that need it: project save/load (our own .3mf format extends standard 3MF), project import from other slicers (Bambu Studio, OrcaSlicer, Snapmaker Orca all save .3mf), preview drag-drop of sliced files (.gcode.3mf), and the A1 mini driver (which wraps slice output as .gcode.3mf for Bambu's required send format). The U1 driver does not depend on this module — it sends raw G-code. Future drivers depend on this module only if their printer requires 3MF input.
+- **core/threemf.** 3MF reader and writer utility. Used by parts of the system that need it: project **import** from other slicers (Bambu Studio, OrcaSlicer, Snapmaker Orca all save .3mf), preview drag-drop of sliced files (.gcode.3mf), and the A1 mini driver (which wraps slice output as .gcode.3mf for Bambu's required send format). Native project save/load does **not** use this module — it uses the .n3o format (`core/project/format.rs`). The U1 driver does not depend on this module — it sends raw G-code. Future drivers depend on this module only if their printer requires 3MF input.
 
 - **core/filament.** Filament profile library, printer-state-to-profile resolution, slot-load/availability validation, sync-on-send metadata emission.
 
 - **core/plugin.** Lua host, manifest loader, hook dispatch (pre-slice / post-slice / pre-send / compose), sandboxing. Read-only views into project, gcode, and filament state for plugins.
 
-- **core/printer/bambu.** Bambu MQTT protocol.
+- **core/printer/bambu.** Bambu A1 / A1 mini cascade-side profile marker (bed identities, fragment slug). Driver-side comms live under `core/driver/bambu/` (MQTT + FTPS).
 
 - **core/printer/snapmaker.** Snapmaker U1 printer-profile adapter (cascade layer). Driver-side comms live under `core/driver/snapmaker/` (Moonraker HTTP+WS).
+
+- **core/driver.** Printer comms layer: the object-safe `Driver` trait + per-vendor implementations (`core/driver/bambu` — MQTT/FTPS/camera; `core/driver/snapmaker` — Moonraker HTTP+WS + the pair/mTLS/MQTT control plane), the driver registry, the send pipeline, and camera streaming. Distinct from `core/printer` (the cascade/profile side).
+
+- **core/preview.** G-code preview model + registry (parsed toolpaths, per-layer stats) feeding the wgpu preview renderer (`toolpath_render.rs`).
+
+- **core/profile_library.** Bundled vendor profile/fragment library + the cascade composer.
+
+- **core/schema.** libslic3r option introspection (scalar-vs-vector, scope, bucket) surfaced from the FFI, plus the capability predicate for printer-aware visibility.
+
+- **core/orca_import.** OrcaSlicer / Bambu Studio `.3mf` *project* importer (geometry + flat preset overlay).
 
 - **ui/.** React app. Communicates with core via Tauri commands and events only.
 
@@ -498,7 +508,7 @@ The capabilities below are modeled per-printer in the printer profile. The casca
 | Build plates supported | Cool Plate, Textured PEI, Smooth PEI, Engineering Plate, SuperTack (Bambu's plate range for A1 mini) | U1 ship-standard plate set (to be enumerated from Snapmaker Orca profile) |
 | Build plate live reporting | Yes (current firmware) | Verify per firmware; user-selectable fallback |
 | Live filament identity reporting | AMS lite contents over MQTT | Per-toolhead loaded filament over HTTP |
-| Camera (MVP) | Out of scope | Out of scope |
+| Camera (MVP) | Live stream | Live stream |
 | Pause / resume / stop | Yes | Yes |
 
 ## 9.2 Architecture decisions
@@ -551,7 +561,7 @@ Decision: plate count is not constrained per-printer or globally. A1 mini and U1
 
 ### AD-7: Klipper-based U1 — Snapmaker-targeted Moonraker driver, not general-purpose
 
-Decision (acknowledged limitation): the U1 driver speaks vanilla Moonraker over plain HTTP+WS on port 80 — that's what the U1 firmware exposes — but treats the U1's Snapmaker-specific status objects (e.g. `print_task_config.{filament_color_rgba, filament_type}` for per-toolhead filament identity) as load-bearing. A future generic Klipper/Moonraker driver targeting non-Snapmaker hardware is a separate driver, not a generalization of the U1 driver. The Snapmaker-specific pair / mTLS / MQTT control plane (used for the webcam in their ecosystem) is out of MVP scope.
+Decision (acknowledged limitation): the U1 driver speaks vanilla Moonraker over plain HTTP+WS on port 80 — that's what the U1 firmware exposes — but treats the U1's Snapmaker-specific status objects (e.g. `print_task_config.{filament_color_rgba, filament_type}` for per-toolhead filament identity) as load-bearing. A future generic Klipper/Moonraker driver targeting non-Snapmaker hardware is a separate driver, not a generalization of the U1 driver. The Snapmaker-specific pair / mTLS / MQTT control plane (used for the webcam in their ecosystem) is implemented (`core/driver/snapmaker/{pairing,mtls,camera,snap_token}.rs`) and drives the U1 camera; a future generic Klipper/Moonraker driver would not carry it.
 
 - **Resolves:** U1 firmware updates that change Snapmaker's vendor objects are tracked; upstream Klipper / Moonraker changes affect us only via the standard endpoints (`printer.objects.subscribe`, `/server/files/upload`, `/printer/print/*`) which are stable. A future Voron/RatRig user gets a Moonraker driver, not a 'U1-compatible' driver.
 
@@ -559,9 +569,9 @@ Decision (acknowledged limitation): the U1 driver speaks vanilla Moonraker over 
 
 ### AD-8: 3D scene state lives in Rust, not in the renderer
 
-Decision: the authoritative 3D scene model (objects with mesh handles, transforms, hierarchy, selection state, gizmo state, camera state, exclusion-zone data) lives in Rust as a renderer-agnostic data structure. The frontend renderer is a read-only view that reflects state into pixels. State mutations flow renderer → Tauri command → Rust state update → Tauri event → renderer re-render. The renderer never holds authoritative state and never mutates state directly.
+Decision: the authoritative 3D scene model (objects with mesh handles, transforms, hierarchy, selection state, exclusion-zone data) lives in Rust as a renderer-agnostic data structure (transform *mode*, gizmo pivot, and camera are renderer-local — see §9.2). The frontend renderer is a read-only view that reflects state into pixels. State mutations flow renderer → Tauri command → Rust state update → Tauri event → renderer re-render. The renderer never holds authoritative state and never mutates state directly.
 
-- **Why now, not when we hit the wall.** Phase 2 carries an explicit risk (PRD §10) that webview 3D performance is insufficient for our target scene sizes, with the documented mitigation "switch to wgpu." That mitigation is only cheap if the renderer is a swappable view; if the renderer owned scene state, switching it out would mean rewriting state management at the same time — a much harder cut. The separation cost is small upfront (a clean API boundary) and dwarfs the cost of unwinding it later. This has since been exercised cleanly: the prepare-tab edit viewport was swapped from Three.js to a wgpu renderer (Strategy A: offscreen wgpu → opaque webview canvas) without touching the state model, realizing this decision. (The G-code preview is still Three.js; its own wgpu rewrite is a separate, later effort.)
+- **Why now, not when we hit the wall.** Phase 2 carries an explicit risk (PRD §10) that webview 3D performance is insufficient for our target scene sizes, with the documented mitigation "switch to wgpu." That mitigation is only cheap if the renderer is a swappable view; if the renderer owned scene state, switching it out would mean rewriting state management at the same time — a much harder cut. The separation cost is small upfront (a clean API boundary) and dwarfs the cost of unwinding it later. This has since been exercised cleanly: the prepare-tab edit viewport was swapped from Three.js to a wgpu renderer (Strategy A: offscreen wgpu → opaque webview canvas) without touching the state model, realizing this decision. (The G-code preview was subsequently migrated to wgpu too — `toolpath_render.rs`; no Three.js remains.)
 
 - **What the state model contains:**
   - Scene graph: per-plate object list with parent/child relationships (modifier meshes, paint volumes nested under their parent object).
@@ -579,7 +589,7 @@ Decision: the authoritative 3D scene model (objects with mesh handles, transform
 
 - **Performance contract:** the Rust state model must support ≥1000 objects in a scene without state operations exceeding 5ms p99 (selection, transform application, scene-diff computation). The renderer's frame budget (FR-3D-5: 30fps on 20M-tri scene) is a *renderer* concern; state-side budget is separate.
 
-- **What this is *not*:** it is not a ban on the renderer caching derived data. Three.js's scene graph, GPU buffers, BVH for picking — all fine as renderer-internal caches keyed off the authoritative state. The rule is about *ownership of the truth*, not about avoiding caches. The line is *observable, persisted scene truth* vs. *ephemeral view UI*. Concretely: the active transform *mode* (translate/rotate/scale) is renderer-local — it never affects geometry, slice output, or the saved project, so it lives in the viewport (`App`), not `core/scene`. There is no gizmo *pivot* override in the scene model; a `core/scene` pivot field + setter command is added when a pivot-setting UI is built. (The transform primitive still accepts an optional explicit-pivot argument.) **Camera state** is likewise renderer-owned: the wgpu edit viewport owns its camera ({az, el, dist, center}, frontend-side) and frames the plate from the bed. To ship "restore per-plate view on reopen," add a camera field + a `scene_camera_set` the renderer commits on orbit-end and reads back on load.
+- **What this is *not*:** it is not a ban on the renderer caching derived data. The renderer's GPU buffers and any picking acceleration structure — all fine as renderer-internal caches keyed off the authoritative state. The rule is about *ownership of the truth*, not about avoiding caches. The line is *observable, persisted scene truth* vs. *ephemeral view UI*. Concretely: the active transform *mode* (translate/rotate/scale) is renderer-local — it never affects geometry, slice output, or the saved project, so it lives in the viewport (`App`), not `core/scene`. There is no gizmo *pivot* override in the scene model; a `core/scene` pivot field + setter command is added when a pivot-setting UI is built. (The transform primitive still accepts an optional explicit-pivot argument.) **Camera state** is likewise renderer-owned: the wgpu edit viewport owns its camera ({az, el, dist, center}, frontend-side) and frames the plate from the bed. To ship "restore per-plate view on reopen," add a camera field + a `scene_camera_set` the renderer commits on orbit-end and reads back on load.
 
 - **Out-of-scope for MVP but architecturally enabled:** scriptable scene operations (Lua plugins inspecting/mutating scene state via the same command surface the renderer uses), headless rendering for thumbnails, alternate renderers (a side-by-side wgpu viewport, an SVG top-down view for plate previews) — all become tractable when state is renderer-agnostic.
 
@@ -589,7 +599,7 @@ Decision: the authoritative 3D scene model (objects with mesh handles, transform
 
 - **Time-estimate accuracy.** Per-printer print-time estimates rely on libslic3r's estimator with per-printer profile tuning. We do not validate estimator accuracy against real prints in the MVP beyond order-of-magnitude sanity.
 
-- **Camera integration.** Both printers have cameras. Out of MVP scope; data model and driver trait do not preclude adding camera streams post-MVP.
+- **Camera integration.** Both printers have cameras. Live camera streaming is implemented (`core/driver/camera.rs`) for both — per-instance workers stream frames to the frontend (`src/driver/useCameraStream.ts`).
 
 - **Filament inventory across printers.** If a user has the same spool 'loaded' in two printers' UI (e.g. moved between them and the app didn't see the unload), there is no detection. Post-MVP.
 
@@ -613,7 +623,7 @@ These are listed to confirm the architecture generalizes, not as commitments to 
 
 | **Risk** | **Likelihood** | **Impact** | **Mitigation** |
 | --- | --- | --- | --- |
-| Webview 3D performance ceiling exceeded by large meshes | Medium | High | Realized and mitigated: the prepare-tab edit viewport moved off Three.js to a wgpu renderer (Strategy A: wgpu renders offscreen in Rust, the finished frame is blitted into an opaque webview canvas; mesh geometry never crosses the IPC bridge). The swap was cheap because scene state lives in Rust independent of the renderer (AD-8 / FR-3D-7); only the rendering layer changed. (The G-code preview remains Three.js; its own wgpu rewrite is a separate, later effort.) |
+| Webview 3D performance ceiling exceeded by large meshes | Medium | High | Realized and mitigated: the prepare-tab edit viewport moved off Three.js to a wgpu renderer (Strategy A: wgpu renders offscreen in Rust, the finished frame is blitted into an opaque webview canvas; mesh geometry never crosses the IPC bridge). The swap was cheap because scene state lives in Rust independent of the renderer (AD-8 / FR-3D-7); only the rendering layer changed. (The G-code preview was migrated to wgpu too; no Three.js remains.) |
 | Snapmaker U1 toolchange G-code edge cases | High | Medium | Build U1 profile from Snapmaker Orca's published profile as starting point. libslic3r already supports toolchanger-style multi-material G-code (Prusa XL pattern). Print test models early. |
 | Bambu MQTT protocol changes | Low | Medium | Use community libraries as reference, pin protocol version, document fallbacks. |
 | OrcaSlicer submodule churn breaks FFI on bump | Medium | Low | Pin submodule, bump deliberately, not on every upstream commit. |
@@ -670,7 +680,7 @@ A CLAUDE.md at the project root captures the durable context Claude Code needs e
 
 # 12. Open questions
 
-- Project file format: RESOLVED — extend .3mf in our own metadata namespace. Decision driver: existing Bambu/Orca/Snapmaker users need a frictionless migration path, and Bambu's printer-send format requires 3MF anyway. See FR-MP-4.
+- Project file format: RESOLVED — native .n3o (own zip: project.json + per-mesh geometry blobs); .3mf is import-only as the migration path for existing Bambu/Orca/Snapmaker users. (An earlier plan to extend .3mf as the save format was dropped — a native container is simpler and avoids fighting foreign-slicer namespace expectations.) See FR-MP-4.
 
 - Configuration format: RESOLVED — rule cascade in TOML, with [[rule]] full form and section shorthand. Designed in the profiles strategy document. See FR-CAS-1 through FR-CAS-17.
 

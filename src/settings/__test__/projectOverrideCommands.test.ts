@@ -1,4 +1,4 @@
-// PR-5-9 project-tier override invoke wrappers — wire-shape +
+// Project-tier override invoke wrappers — wire-shape +
 // bound-callback contract.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";

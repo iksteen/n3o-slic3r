@@ -472,7 +472,7 @@ fn plate_json(plate: &SlicedPlate) -> String {
 ///
 /// MD5 lives here because it's a Bambu-firmware-side checksum
 /// format; the rest of the project doesn't need it.
-/// Re-exported as `core::threemf::md5_hex` for PR-7a-5's
+/// Re-exported as `core::threemf::md5_hex` for the Bambu
 /// FTPS upload (Bambu's MQTT `project_file` command has an
 /// `md5` integrity field).
 pub fn md5_hex(bytes: &[u8]) -> String {

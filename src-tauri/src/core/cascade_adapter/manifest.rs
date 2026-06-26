@@ -15,19 +15,19 @@
 //!   resolves the cascade against each plate type and writes the
 //!   per-plate value.
 //! - **Drop** entries silently discard keys that are OrcaSlicer-only
-//!   metadata (no libslic3r equivalent). Sourced from PR-0.5-1
-//!   (67 keys discovered on the Bambu cascade) and PR-0.5-2 (13 keys
-//!   on the Prusa cascade), with five Orca-side typos remapped to
+//!   metadata (no libslic3r equivalent). Sourced from the
+//!   Bambu cascade-import findings (67 keys) and the Prusa
+//!   cascade-import findings (13 keys), with five Orca-side typos remapped to
 //!   their correct spellings rather than dropped.
 
 use std::collections::HashSet;
 
 /// Curated list of OrcaSlicer-only keys we drop silently at adapt
-/// time. Sourced from the PR-0.5-1 / PR-0.5-2 finding docs. Keys
+/// time. Sourced from the Bambu/Prusa cascade-import findings. Keys
 /// here never make it into the `slic3r_ffi::Config`; the adapter
 /// doesn't log a warning on each occurrence (these are expected).
 pub const DROP_LIST: &[&str] = &[
-    // PR-0.5-1 (Bambu A1 mini cascade) — Bambu firmware tuning
+    // Bambu A1 mini cascade — Bambu firmware tuning
     "hotend_cooling_rate",
     "hotend_heating_rate",
     "machine_prepare_compensation_time",
@@ -94,7 +94,7 @@ pub const DROP_LIST: &[&str] = &[
     "filament_id",
     "smooth_plate_temp",
     "smooth_plate_temp_initial_layer",
-    // PR-0.5-2 (Prusa XL cascade) extras
+    // Prusa XL cascade extras
     "bed_type",
     "filament_load_time",
     "filament_unload_time",
@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn drop_list_contains_expected_entries() {
         let m = Manifest::build();
-        // Spot-check a handful from each PR-0.5 finding category.
+        // Spot-check a handful from each cascade-import finding category.
         assert!(m.is_dropped("hotend_cooling_rate"), "Bambu firmware tuning");
         assert!(m.is_dropped("filament_scarf_height"), "AMS extension");
         assert!(m.is_dropped("counter_coef_1"), "circle compensation");

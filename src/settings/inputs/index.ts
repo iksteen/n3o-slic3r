@@ -1,7 +1,7 @@
 // Form component library — five scalar input flavors covering the
 // libslic3r option type universe, plus the shared `Field` wrapper.
-// The MultiSelectInput per-extruder wrapper retired with PR-S-2's
-// Process-only filter (no per-extruder options surface in the panel).
+// There is no MultiSelectInput per-extruder wrapper: the panel's
+// Process-only filter means no per-extruder options surface here.
 
 export { Field, type FieldProps } from "./Field";
 export { BoolInput, type BoolInputProps } from "./BoolInput";

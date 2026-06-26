@@ -1,4 +1,4 @@
-// PR-7b-8 U1ToolheadStrip projection tests.
+// U1ToolheadStrip projection tests.
 //
 // Mirrors BambuAmsStrip.test's approach: component DOM-render
 // isn't set up in this repo's vitest config; we exercise the pure

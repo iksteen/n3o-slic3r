@@ -7,16 +7,17 @@
 //!
 //! Three transformation steps:
 //!
-//! 1. **Typo remap.** Orca-side typos (PR-0.5-2 finding) silently
-//!    rewritten to their canonical spelling.
-//! 2. **Drop list.** OrcaSlicer-only keys (PR-0.5-1 + PR-0.5-2
-//!    findings) silently discarded — they have no libslic3r meaning.
+//! 1. **Typo remap.** Orca-side typos (Prusa cascade-import finding)
+//!    silently rewritten to their canonical spelling.
+//! 2. **Drop list.** OrcaSlicer-only keys (Bambu + Prusa
+//!    cascade-import findings) silently discarded — they have no
+//!    libslic3r meaning.
 //! 3. **Dimensional expansion.** Logical `bed_temp` writes the same
 //!    value into all 12 per-plate-type keys; `curr_bed_type` is set
 //!    from the active context's plate. This is the simplified
-//!    expansion from PR-0.5-1; the production "resolve per
-//!    hypothetical plate context" form is a forward task documented
-//!    in `docs/dev/profiles.md` and known limitations.
+//!    expansion; the "resolve per hypothetical plate context" form is
+//!    a forward task documented in `docs/dev/profiles.md` and known
+//!    limitations.
 //!
 //! Unknown-but-not-dropped keys (typos the manifest doesn't know
 //! about) surface as `AdaptDropEntry::UnknownKey` so the caller can

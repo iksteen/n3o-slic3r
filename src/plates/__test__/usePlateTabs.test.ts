@@ -1,4 +1,4 @@
-// PR-5-3 plate-tab view-model projection tests.
+// Plate-tab view-model projection tests.
 //
 // The full hook lifecycle (Tauri `listen` + `invoke`) needs a
 // browser-ish env we don't have set up in vitest. The interesting
@@ -107,7 +107,7 @@ describe("projectSnapshot", () => {
     expect(result.activePlateId).toBe(3);
   });
 
-  it("renders a non-default plate name verbatim (PR-5-3 rename)", () => {
+  it("renders a non-default plate name verbatim (rename)", () => {
     const result = projectSnapshot(
       snap([plateSnap({ id: 1, name: "Calibration tower" })], 1),
     );

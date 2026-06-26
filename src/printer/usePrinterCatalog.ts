@@ -1,4 +1,4 @@
-// `usePrinterCatalog` — the bundled printer catalog (PR-5-4).
+// `usePrinterCatalog` — the bundled printer catalog.
 //
 // State-layer: a query with no invalidation event — the catalog is static
 // bundled data, so it fetches once and the query cache returns the cached list

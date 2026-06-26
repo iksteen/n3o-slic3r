@@ -102,7 +102,7 @@ endsolid triangle
     }
 
     // Note: NewMesh has no `id` field; loaders return NewMesh and
-    // the SceneState allocates the id at register time.
+    // the Project allocates the id at register time.
 
     #[test]
     fn binary_stl_loads_one_triangle() {

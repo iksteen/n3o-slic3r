@@ -1,6 +1,6 @@
 //! Shared `native-tls` connector for Bambu device-local
-//! services. Memoized in a `OnceLock` so the FTPS path (PR-7a-5)
-//! and the MQTT path (here) build it once.
+//! services. Memoized in a `OnceLock` so the FTPS path and the
+//! MQTT path (here) build it once.
 //!
 //! Faithful port of `bambu-overlay/src/device_tls.rs`. The
 //! choice of `native-tls` over `rustls` is load-bearing: BBL

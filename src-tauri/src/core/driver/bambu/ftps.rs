@@ -1,4 +1,4 @@
-//! FTPS upload to Bambu's local file system (PR-7a-5).
+//! FTPS upload to Bambu's local file system.
 //!
 //! Implicit TLS on port 990, login `bblp` + LAN access code,
 //! passive mode + NAT workaround, binary transfer type.

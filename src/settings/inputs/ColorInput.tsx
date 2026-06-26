@@ -1,5 +1,5 @@
 // Color picker for libslic3r String options that hold `#RRGGBB`
-// hex values (`filament_colour`, etc.) (PR-4-2).
+// hex values (`filament_colour`, etc.).
 //
 // Native HTML5 color picker + a hex text field side by side. Either
 // can drive the commit; both reflect each other.

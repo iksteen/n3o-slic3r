@@ -1,4 +1,4 @@
-// Drag-drop loader for `.gcode` and `.gcode.3mf` files (PR-6-14).
+// Drag-drop loader for `.gcode` and `.gcode.3mf` files.
 //
 // Subscribes to Tauri's webview-level drag-drop events. The
 // browser's HTML5 dragenter/drop API doesn't expose the OS file
@@ -12,7 +12,7 @@
 //
 // Scope: PreviewWorkspace mounts this only in preview mode. The
 // 3D viewport's drag-drop flow (mesh import) is unrelated and
-// still uses the file-open dialog from PR-2-3.
+// still uses the file-open dialog.
 
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";

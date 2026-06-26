@@ -1,4 +1,4 @@
-// Simple / Advanced / Expert mode filter (PR-4-3) — FR-UI-2.
+// Simple / Advanced / Expert mode filter — FR-UI-2.
 //
 // Horizontal segmented pill control mirroring the editing-context-
 // tab idiom (`.sp-tabs` + `.sp-tab`, docs/dev/design/SettingsPanel.jsx

@@ -1,4 +1,4 @@
-// Per-object support toggle (PR-4-12) — FR-3D-6.
+// Per-object support toggle — FR-3D-6.
 //
 // Single on/off switch on the selected object. Maps to libslic3r's
 // `enable_support` bool, stored as an Object-tier override.

@@ -11,8 +11,8 @@
 //! table-driven so adding a new pattern is one line.
 //!
 //! The pattern catalog is sourced from `external/OrcaSlicer/src/
-//! libslic3r/PrintConfig.cpp` + observed errors from PR-0.5-* spike
-//! runs. When a new error shape shows up in practice, add a row.
+//! libslic3r/PrintConfig.cpp` + observed errors from spike runs. When
+//! a new error shape shows up in practice, add a row.
 
 use serde::{Deserialize, Serialize};
 
@@ -112,7 +112,7 @@ impl std::error::Error for SliceError {}
 /// - `external/OrcaSlicer/src/libslic3r/Print.cpp` — pre-slice
 ///   geometry + plate validation.
 /// - `examples/spike{1,2,3}/` — observed error strings from the
-///   PR-0.5 spike runs.
+///   spike runs.
 pub fn classify_libslic3r_error(raw: &str) -> SliceError {
     let lower = raw.to_lowercase();
 

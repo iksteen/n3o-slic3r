@@ -1,6 +1,6 @@
 //! Resolve a plugin's effective config — activation **and** settings —
 //! across the cascade levels, enforcing the activation-gated settings
-//! rule (PR-8-9 "Settings-cascade model").
+//! rule (the "Settings-cascade model" design).
 //!
 //! Levels: `global` (binary on/off), then `printer-instance`, then
 //! `project`, then `plate` (the last three tri-state inherit/on/off —

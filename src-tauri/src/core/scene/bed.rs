@@ -205,7 +205,7 @@ mod tests {
 
     fn unit_cube_at(translation: glam::Vec3) -> (SceneObject, Mesh) {
         // Manual SceneObject construction is fine — these tests
-        // call object_out_of_bounds directly, not the SceneState
+        // call object_out_of_bounds directly, not the Project
         // mutation API.
         let mesh = Mesh {
             id: MeshId(1),

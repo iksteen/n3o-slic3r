@@ -1,7 +1,7 @@
-//! Minimal Moonraker JSON-RPC over WebSocket client (PR-7b-2).
+//! Minimal Moonraker JSON-RPC over WebSocket client.
 //!
 //! On connect, sends `printer.objects.subscribe` for the printer
-//! objects we consume in [`super::status`] (PR-7b-3). The subscribe
+//! objects we consume in [`super::status`]. The subscribe
 //! response is decoded as the initial status; subsequent
 //! `notify_status_update` messages merge into a cached status map
 //! and yield a fresh snapshot to the caller.
@@ -17,8 +17,9 @@
 //!   [`crate::core::driver::traits::DriverConfig::U1`].
 //!
 //! The status decoder helpers (`get_string`, `get_f64`, `extruders`,
-//! `get_print_info_i64`) ship alongside the session so PR-7b-3 can
-//! consume them without spreading per-field lookups across modules.
+//! `get_print_info_i64`) ship alongside the session so the status
+//! decoder can consume them without spreading per-field lookups
+//! across modules.
 
 use std::collections::HashMap;
 
@@ -35,7 +36,7 @@ use tracing::debug;
 use crate::core::driver::DriverError;
 
 /// Printer objects we subscribe to. Every field [`super::status`]
-/// reads (PR-7b-3) comes from one of these objects. Adding a new
+/// reads comes from one of these objects. Adding a new
 /// object here without a corresponding decoder is harmless — it
 /// just sits in the merged status map unused.
 const SUBSCRIBE_OBJECTS: &[&str] = &[
@@ -92,9 +93,9 @@ impl MoonrakerSession {
         Ok(session)
     }
 
-    /// Current merged status map. Cloned because the eventual
-    /// status-decode caller (PR-7b-3) wants an owned snapshot it
-    /// can pass around to per-field helpers.
+    /// Current merged status map. Cloned because the status-decode
+    /// caller wants an owned snapshot it can pass around to
+    /// per-field helpers.
     pub(super) fn status(&self) -> Map<String, Value> {
         self.status.clone()
     }
@@ -223,12 +224,12 @@ impl MoonrakerSession {
     }
 }
 
-// ---- Status-map readers (consumed by PR-7b-3) ----
+// ---- Status-map readers (consumed by the status decoder) ----
 
 /// Pull a string field from a nested object in the merged status
 /// map. Returns `None` when either the object or the field is
 /// absent, or when the value isn't a JSON string.
-#[allow(dead_code)] // PR-7b-3 consumes
+#[allow(dead_code)] // status decoder consumes
 pub(super) fn get_string<'a>(
     status: &'a Map<String, Value>,
     object: &str,
@@ -239,14 +240,14 @@ pub(super) fn get_string<'a>(
 
 /// Pull an `f64` from a nested object. Returns `None` for absent
 /// fields or non-numeric values.
-#[allow(dead_code)] // PR-7b-3 consumes
+#[allow(dead_code)] // status decoder consumes
 pub(super) fn get_f64(status: &Map<String, Value>, object: &str, field: &str) -> Option<f64> {
     status.get(object)?.get(field)?.as_f64()
 }
 
 /// Pull an `i64` from `print_stats.info.<field>` — the sub-object
 /// Moonraker uses for layer counts on klipper >= 0.12.
-#[allow(dead_code)] // PR-7b-3 consumes
+#[allow(dead_code)] // status decoder consumes
 pub(super) fn get_print_info_i64(status: &Map<String, Value>, field: &str) -> Option<i64> {
     status.get("print_stats")?.get("info")?.get(field)?.as_i64()
 }
@@ -254,7 +255,7 @@ pub(super) fn get_print_info_i64(status: &Map<String, Value>, field: &str) -> Op
 /// Collect every `extruder`, `extruder1`, …, `extruderN` object
 /// in the status map, keyed by zero-based index. The U1 reports
 /// one entry per docked toolhead.
-#[allow(dead_code)] // PR-7b-3 consumes
+#[allow(dead_code)] // status decoder consumes
 pub(super) fn extruders(status: &Map<String, Value>) -> HashMap<usize, &Value> {
     let mut extruders = HashMap::new();
     for (key, value) in status {
@@ -404,7 +405,7 @@ mod tests {
     fn get_print_info_i64_returns_none_without_info_subobject() {
         // Klipper < 0.12 reports total_layer at the top level of
         // print_stats rather than under .info. The helper returns
-        // None there; PR-7b-3 falls back to the top-level field.
+        // None there; the decoder falls back to the top-level field.
         let status: Map<String, Value> = json!({
             "print_stats": { "total_layer": 278 }
         })
