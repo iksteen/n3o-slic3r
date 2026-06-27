@@ -285,8 +285,9 @@ you don't relocate doomed code.
 - [x] **R-14 — `slice_active_plate` burns a throwaway `JobId` to name the output dir**
   `core/slice/commands.rs:93-101`. Reserve the id once and thread it through, or name the dir with a timestamp/uuid so the registry isn't double-incremented.
 
-- [ ] **R-15 — Break the clearest module cycle**
+- [~] **R-15 — Break the clearest module cycle** *(DEFERRED — deeper than a composer move; documented debt)*
   `core/profile_library/composer.rs`: it needs both `PrinterInstance` and profile fragments, so move it to a layer *above* both, or take `PrinterInstance` data as a plain input rather than importing the type — makes `profile_library` a true leaf. Treat the other cycles as documented debt unless one blocks a test.
+  **Deferred with rationale.** The R-2/R-4 work already removed the real edges in this neighborhood: `schema` is now an FFI leaf (R-4) and `cascade` no longer imports `printer` (R-2). The remaining `printer ↔ profile_library` cycle is *not* a composer artifact: `profile_library/mod.rs` **parses `PrinterProfile` from `model.toml`** (the `PrinterProfileEnvelope` loader + `printer_catalog`), and `printer/registry` is a thin facade over that catalog — so `profile_library → printer` exists via the profile *type* it reads off disk, independent of the composer. Moving the composer out (to a new top layer) would not make `profile_library` a leaf; fully breaking the cycle means relocating the `PrinterProfile` type itself to a shared lower module — a type-ownership refactor with churn across both modules and **no functional benefit** (the cycle is legal in Rust and blocks no test). Per this item's own "treat the other cycles as documented debt unless one blocks a test," left as documented debt.
 
 ---
 
