@@ -652,8 +652,13 @@ export function WgpuViewport({
     // live geometry), then push to the renderer. Driven by scene / material /
     // active-plate / slice changes — not per frame (the geometry needs a cascade
     // resolve, too costly to run every frame).
-    async function refreshTower() {
-      const id = activePlateIdRef.current;
+    // `id` defaults to the live active plate, but callers reacting to
+    // `active_plate_changed` MUST pass the event's plate id: React updates
+    // `activePlateIdRef` on the next render — after the synchronous event
+    // handler — so on a switch the ref still holds the *previous* plate, and
+    // refreshing against it resolves the wrong plate's tower (then the
+    // post-await guard clears it once the ref catches up).
+    async function refreshTower(id: number | null = activePlateIdRef.current) {
       let tower: Record<string, unknown> | null = null;
       towerGeom = null;
       towerFp = null;
@@ -747,11 +752,14 @@ export function WgpuViewport({
         void render();
       },
     );
-    const offReframe = onEvents(
+    const offReframe = onEvents<{ data?: { plate_id?: number | null } }>(
       ["scene:bed_changed", "scene:active_plate_changed"],
-      () => {
+      (e) => {
         void reframe();
-        void refreshTower(); // active plate may have changed → re-push its mesh
+        // `active_plate_changed` carries the new plate id; use it (the ref lags
+        // — see refreshTower). `bed_changed` carries none → fall back to the ref
+        // (the active plate is unchanged there).
+        void refreshTower(e.payload?.data?.plate_id ?? activePlateIdRef.current);
       },
     );
     // A committed tower drag (or any project override) re-resolves the tower so
