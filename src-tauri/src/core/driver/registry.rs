@@ -3,21 +3,21 @@
 //! Owned by the Tauri runtime as `State<Arc<DriverRegistry>>`.
 //! Concurrency model: the registry itself uses an internal
 //! `Mutex` over the id-allocator + the map. Each driver is
-//! stored as `Arc<Mutex<Box<dyn Driver>>>` so command handlers
-//! can `get()` an owned handle, lock it for the duration of one
-//! command, then release.
+//! stored as `Arc<RwLock<Box<dyn Driver>>>` so command handlers
+//! can `get()` an owned handle and lock it for one command.
 //!
-//! The driver's async methods are awaited while holding the
-//! driver's own mutex (not the registry's). This means two
-//! concurrent commands targeting different drivers don't block
-//! each other; two commands targeting the same driver serialize,
-//! which matches the trait's `&mut self` receiver contract.
+//! The `&self` trait methods (`status`, `send`, `command`,
+//! `set_ams_filament`) take a **read** lock, so they run concurrently —
+//! a long upload no longer blocks a status poll or a pause/stop on the
+//! same driver. Only the `&mut self` lifecycle methods (`connect` /
+//! `disconnect`) take the **write** lock, serializing against everything
+//! (rare). Different drivers never block each other (separate locks).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::RwLock;
 
 use super::status::ConnectionState;
 use super::traits::{Driver, DriverId, DriverKind};
@@ -34,7 +34,7 @@ struct Inner {
 
 struct Entry {
     kind: DriverKind,
-    driver: Arc<AsyncMutex<Box<dyn Driver>>>,
+    driver: Arc<RwLock<Box<dyn Driver>>>,
 }
 
 impl Default for DriverRegistry {
@@ -79,7 +79,7 @@ impl DriverRegistry {
             id,
             Entry {
                 kind,
-                driver: Arc::new(AsyncMutex::new(driver)),
+                driver: Arc::new(RwLock::new(driver)),
             },
         );
         id
@@ -94,24 +94,24 @@ impl DriverRegistry {
         inner.drivers.remove(&id).is_some()
     }
 
-    /// Grab an `Arc` handle to the driver. The caller `lock()`s
-    /// the inner `AsyncMutex` to access the trait methods.
-    pub fn get(&self, id: DriverId) -> Option<Arc<AsyncMutex<Box<dyn Driver>>>> {
+    /// Grab an `Arc` handle to the driver. The caller `read()`s the inner
+    /// `RwLock` for the `&self` methods, `write()`s it for connect/disconnect.
+    pub fn get(&self, id: DriverId) -> Option<Arc<RwLock<Box<dyn Driver>>>> {
         let inner = self.inner.lock().expect("registry mutex");
         inner.drivers.get(&id).map(|e| e.driver.clone())
     }
 
     /// Summarize every registered driver — id, kind, connection
-    /// state. Cheap; takes the registry lock briefly + each
-    /// driver's lock briefly (try-lock so we never block on a
-    /// driver in the middle of a long send).
+    /// state. Cheap; takes the registry lock briefly + each driver's
+    /// read lock briefly (try-read, which succeeds during a concurrent
+    /// send/status and only fails mid-connect/disconnect).
     pub fn list(&self) -> Vec<DriverSummary> {
         let inner = self.inner.lock().expect("registry mutex");
         let mut out = Vec::with_capacity(inner.drivers.len());
         for (id, entry) in &inner.drivers {
-            // try_lock — if a driver is mid-send we report a
-            // placeholder rather than wait. Caller can re-query.
-            let connection = match entry.driver.try_lock() {
+            // try_read — fails only while a connect/disconnect holds the
+            // write lock; report a placeholder then. Caller can re-query.
+            let connection = match entry.driver.try_read() {
                 Ok(d) => d.status().connection,
                 Err(_) => ConnectionState::Disconnected {
                     reason: "(busy)".into(),
@@ -203,13 +203,13 @@ mod tests {
             self.receiver.clone()
         }
         async fn send(
-            &mut self,
+            &self,
             _: SendPayload,
             _on_progress: UploadProgressFn,
         ) -> Result<SendHandle, DriverError> {
             Err(DriverError::NotConnected)
         }
-        async fn command(&mut self, _: PrinterCommand) -> Result<(), DriverError> {
+        async fn command(&self, _: PrinterCommand) -> Result<(), DriverError> {
             Err(DriverError::NotConnected)
         }
     }

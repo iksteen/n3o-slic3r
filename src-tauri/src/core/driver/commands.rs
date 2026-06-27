@@ -281,7 +281,7 @@ pub async fn driver_unregister(
     registry: State<'_, Arc<DriverRegistry>>,
 ) -> Result<(), String> {
     if let Some(handle) = registry.get(id) {
-        let mut d = handle.lock().await;
+        let mut d = handle.write().await;
         // Best-effort disconnect; we remove regardless of result.
         let _ = d.disconnect().await;
     }
@@ -309,7 +309,7 @@ pub async fn driver_connect(
     let handle = registry
         .get(id)
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
-    let mut d = handle.lock().await;
+    let mut d = handle.write().await;
     d.connect().await.map_err(|e| e.to_string())
 }
 
@@ -323,7 +323,7 @@ pub async fn driver_disconnect(
     let handle = registry
         .get(id)
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
-    let mut d = handle.lock().await;
+    let mut d = handle.write().await;
     d.disconnect().await.map_err(|e| e.to_string())
 }
 
@@ -339,7 +339,7 @@ pub async fn driver_status(
     let handle = registry
         .get(id)
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
-    let d = handle.lock().await;
+    let d = handle.read().await;
     Ok(d.status())
 }
 
@@ -535,7 +535,7 @@ pub async fn driver_send_plate(
     let handle = registry
         .get(id)
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
-    let kind = handle.lock().await.kind();
+    let kind = handle.read().await.kind();
     // Decode once; a malformed base64 is a soft failure — log and send
     // without a thumbnail rather than failing the print.
     let thumbnail_png: Option<Vec<u8>> = thumbnail_png_base64.and_then(|b64| {
@@ -592,7 +592,7 @@ pub async fn driver_send_plate(
     // select! then drops the in-flight `send` future, which aborts the upload
     // (every driver's `send` is fully async — Bambu's FTPS too).
     let cancel = sends.arm(id);
-    let mut d = handle.lock().await;
+    let d = handle.read().await;
     tokio::select! {
         r = d.send(payload, on_progress) => r.map_err(|e| e.to_string()),
         _ = cancel.cancelled() => Err(super::traits::DriverError::Cancelled.to_string()),
@@ -718,7 +718,7 @@ pub async fn driver_command(
     let handle = registry
         .get(id)
         .ok_or_else(|| format!("unknown driver id {}", id.0))?;
-    let mut d = handle.lock().await;
+    let d = handle.read().await;
     d.command(cmd).await.map_err(|e| e.to_string())
 }
 
@@ -805,7 +805,7 @@ pub async fn driver_ams_set_filament(
     let handle = registry
         .get(driver_id)
         .ok_or_else(|| format!("unknown driver id {}", driver_id.0))?;
-    let mut d = handle.lock().await;
+    let d = handle.read().await;
     // The printer rejects an AMS filament change while it's mid-print
     // (err 0x05024001 on the loaded tray). Don't send a doomed command —
     // the local binding already persisted; it'll push on the next edit

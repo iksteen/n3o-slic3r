@@ -229,7 +229,7 @@ impl Driver for BambuDriver {
     }
 
     async fn send(
-        &mut self,
+        &self,
         payload: SendPayload,
         on_progress: UploadProgressFn,
     ) -> Result<SendHandle, DriverError> {
@@ -331,7 +331,7 @@ impl Driver for BambuDriver {
         })
     }
 
-    async fn command(&mut self, cmd: PrinterCommand) -> Result<(), DriverError> {
+    async fn command(&self, cmd: PrinterCommand) -> Result<(), DriverError> {
         let client = self.client.clone().ok_or(DriverError::NotConnected)?;
         let device_id = self.device_id.clone().ok_or(DriverError::NotConnected)?;
 
@@ -426,7 +426,7 @@ impl Driver for BambuDriver {
     }
 
     async fn set_ams_filament(
-        &mut self,
+        &self,
         setting: crate::core::driver::traits::AmsFilamentSetting,
     ) -> Result<(), DriverError> {
         let client = self.client.clone().ok_or(DriverError::NotConnected)?;

@@ -211,7 +211,7 @@ The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
 - [ ] **C-12 — `JobRegistry` never pruned (memory grows per slice)**
   `core/slice/job.rs:191-201`, `orchestrator.rs:520-784 run_worker`. Pass an `Arc<JobRegistry>` into `run_worker` and `remove(job_id)` after the terminal event (short grace period so `slice_status` reconnect still works). (Pairs with D-11.)
 
-- [ ] **C-13 — Driver `&mut self` over-serializes uploads vs control/status**
+- [x] **C-13 — Driver `&mut self` over-serializes uploads vs control/status**
   `core/driver/traits.rs:189-208,172`, `bambu/connection.rs:242-276`, `registry.rs:30-38,99-102`. Change `send`/`command`/`set_ams_filament`/`status` to `&self` (impls already clone what they touch); narrow the registry `AsyncMutex` to `connect`/`disconnect` (or store the handle in an `Arc`). Then a long upload no longer blocks `status()`.
 
 - [ ] **C-14 — `DriverId` ↔ `instance_id` correspondence lives only in the frontend**

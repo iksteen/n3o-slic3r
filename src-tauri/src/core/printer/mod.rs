@@ -502,7 +502,7 @@ pub async fn printer_instance_sync_from_driver(
     let handle = registry
         .get(driver_id)
         .ok_or_else(|| format!("unknown driver id {}", driver_id.0))?;
-    let status = { handle.lock().await.status() };
+    let status = { handle.read().await.status() };
     let library = list_filament_fragments();
 
     // Reconcile AMS-unit count + per-slot loadout in one atomic

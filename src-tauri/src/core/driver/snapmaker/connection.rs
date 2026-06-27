@@ -143,7 +143,7 @@ impl Driver for U1Driver {
     }
 
     async fn send(
-        &mut self,
+        &self,
         payload: SendPayload,
         on_progress: UploadProgressFn,
     ) -> Result<SendHandle, DriverError> {
@@ -164,7 +164,7 @@ impl Driver for U1Driver {
         }
     }
 
-    async fn command(&mut self, cmd: PrinterCommand) -> Result<(), DriverError> {
+    async fn command(&self, cmd: PrinterCommand) -> Result<(), DriverError> {
         http::send_command(&self.config.host, self.config.port, cmd).await
     }
 }
@@ -484,7 +484,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_rejects_gcode3mf_payload_with_clear_message() {
-        let mut driver = U1Driver::new(
+        let driver = U1Driver::new(
             DriverId(102),
             U1Config {
                 host: "127.0.0.1".into(),

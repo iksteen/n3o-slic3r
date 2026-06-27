@@ -186,8 +186,11 @@ pub trait Driver: Send + Sync {
     /// Cancellation is the caller's job: every driver's `send` is fully async,
     /// so the command layer aborts an in-flight upload by dropping this future
     /// (raced against a cancel signal in `tokio::select!`).
+    /// Takes `&self` (not `&mut self`): the impls clone the handles they need
+    /// (client, status sender) and don't mutate driver state, so a long upload
+    /// can run under a shared lock while `status`/`command` proceed.
     async fn send(
-        &mut self,
+        &self,
         payload: SendPayload,
         on_progress: UploadProgressFn,
     ) -> Result<SendHandle, DriverError>;
@@ -196,7 +199,7 @@ pub trait Driver: Send + Sync {
     /// inside the impl block return `DriverError::Other` for
     /// invalid transitions (pause from IDLE, resume from
     /// RUNNING, etc.) without contacting the printer.
-    async fn command(&mut self, cmd: PrinterCommand) -> Result<(), DriverError>;
+    async fn command(&self, cmd: PrinterCommand) -> Result<(), DriverError>;
 
     /// Write a filament identity back to an AMS tray. Only printers
     /// with a writable AMS (Bambu AMS lite) implement this; the
@@ -205,7 +208,7 @@ pub trait Driver: Send + Sync {
     /// printer — RFID-detected slots are gated out upstream (a write
     /// would be stomped on the next read).
     async fn set_ams_filament(
-        &mut self,
+        &self,
         _setting: AmsFilamentSetting,
     ) -> Result<(), DriverError> {
         Err(DriverError::Other(
