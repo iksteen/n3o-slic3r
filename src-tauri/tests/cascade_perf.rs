@@ -15,8 +15,8 @@
 //! regression gate; statistical-quality bench numbers can come back
 //! later if Phase 4's UI shows the resolver hot path.
 
-use n3o_slic3r_lib::core::cascade::{resolve_with_overrides, Cascade, OverrideTiers};
-use n3o_slic3r_lib::core::cascade_adapter::adapt_with_overrides;
+use n3o_slic3r_lib::core::cascade::{resolve_with_overrides, to_resolved, Cascade, OverrideTiers};
+use n3o_slic3r_lib::core::cascade_adapter::adapt;
 use n3o_slic3r_lib::core::filament::FilamentProfile;
 use n3o_slic3r_lib::core::printer::lookup_instance;
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
@@ -24,7 +24,6 @@ use n3o_slic3r_lib::core::profile_library::compose_cascade;
 use n3o_slic3r_lib::core::project::SlicingContext;
 use n3o_slic3r_lib::core::scene::build_plate::BuildPlate;
 use slic3r_ffi::init;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Once;
 use std::time::{Duration, Instant};
@@ -65,7 +64,7 @@ fn load_reference_cascade() -> Cascade {
     // Shape is identical from the resolver's perspective; just sourced
     // from the per-bucket vendor fragments + composer.
     let bambi = lookup_instance("bambi").expect("bambi bundled");
-    compose_cascade(&bambi, &[], &BTreeMap::new()).expect("compose bambi cascade")
+    compose_cascade(&bambi, &[]).expect("compose bambi cascade")
 }
 
 fn a1_mini_pla_pei_context() -> SlicingContext {
@@ -209,7 +208,7 @@ fn perf_resolve_and_adapt_a1_mini_pla_pei() {
 
     let (mean, peak) = measure(|| {
         let resolved = resolve_with_overrides(&cascade, &overrides, &ctx);
-        let _ = adapt_with_overrides(&resolved, &ctx).expect("adapt");
+        let _ = adapt(&to_resolved(&resolved), &ctx).expect("adapt");
     });
 
     eprintln!("perf_resolve_and_adapt_a1_mini_pla_pei: mean={mean:?} peak={peak:?}");

@@ -2,20 +2,22 @@
 //!
 //! Composes a slice-time cascade from the hierarchical vendor fragment
 //! layout (per-printer model.toml + per-nozzle scalar nozzle.toml +
-//! per-bed bed.toml + filament + process), plus the plate-level
-//! process overrides.
+//! per-bed bed.toml + filament + process).
 //!
 //! Composition order. Authored layers 1–5 are lowest-precedence first and
-//! win among themselves by the resolver's source-order tie-break; layer 6
-//! is the `!important` override tier, which wins over any authored rule
-//! regardless of specificity:
+//! win among themselves by the resolver's source-order tie-break; layer 5b
+//! (the instance's saved machine overrides) is `!important` so it wins over
+//! the printer fragment's machine globals:
 //!
 //!   1. Printer fragment      (machine globals only; no per-extruder)
 //!   2. Bed fragment          (bed identity + curr_bed_type)
 //!   3. Per-extruder nozzle fragments, scalar-to-vector assembled
 //!   4. Filament fragment     (single-slot MVP)
 //!   5. Process fragment
-//!   6. Plate process overrides (override tier — `Rule::important`)
+//!   5b. Machine overrides    (per-instance saved config — `Rule::important`)
+//!
+//! The user/project/object override tiers are applied as a second phase by
+//! `cascade::resolve_with_overrides`, not baked here.
 //!
 //! The per-extruder vector assembly step zips each nozzle fragment's
 //! scalars into vectors keyed at the extruder dimension. For an A1
@@ -188,7 +190,6 @@ pub fn with_quality_profile<'a>(
 pub fn compose_cascade(
     instance: &PrinterInstance,
     material_layout: &[Option<SlotRef>],
-    plate_overrides: &BTreeMap<String, String>,
 ) -> Result<Cascade, ComposeError> {
     if instance.extruders.is_empty() {
         return Err(ComposeError::NoExtruders(instance.id.clone()));
@@ -402,22 +403,11 @@ pub fn compose_cascade(
         });
     }
 
-    // 6. Plate overrides — the `!important` override tier: they win over
-    //    every authored rule regardless of specificity (a profile option set
-    //    under a `when` predicate must still lose to an explicit override).
-    //    Virtual source so the trace UI can name them.
-    if !plate_overrides.is_empty() {
-        rules.push(Rule {
-            when: Predicate::default(),
-            set: plate_overrides.clone(),
-            source: SourceLocation {
-                path: PathBuf::from("<plate-overrides>"),
-                line: 1,
-            },
-            important: true,
-        });
-    }
-
+    // The user/project/object override tiers are NOT baked here — they're
+    // applied as the second phase by `cascade::resolve_with_overrides`, so
+    // the trace can attribute each value to its winning tier and the panel
+    // can offer "reset to cascade". Machine overrides (5b) stay baked: they
+    // are the instance's own saved config, part of its authored cascade.
     Ok(Cascade { rules })
 }
 
@@ -962,7 +952,7 @@ mod tests {
     fn compose_bambi_yields_printer_nozzle_bed_filament_process_layers() {
         let _registry = RegistryGuard::acquire();
         let bambi = lookup_instance("bambi").expect("bambi present");
-        let cascade = compose_cascade(&bambi, &[], &BTreeMap::new()).expect("compose");
+        let cascade = compose_cascade(&bambi, &[]).expect("compose");
 
         // Each layer contributes at least one rule. With 5 layers + nozzle
         // assembly + no plate overrides → ≥ 6 rules (printer, nozzle,
@@ -1010,7 +1000,7 @@ mod tests {
         let mut bambi = lookup_instance("bambi").expect("bambi present");
         bambi.extruders[0].slots[0].filament_identity = Some("generic-pla-silk".into());
         bambi.extruders[0].slots[1].filament_identity = Some("generic-pla".into());
-        let cascade = compose_cascade(&bambi, &[], &BTreeMap::new()).expect("compose");
+        let cascade = compose_cascade(&bambi, &[]).expect("compose");
         let vec_rule = cascade
             .rules
             .iter()
@@ -1075,7 +1065,7 @@ mod tests {
 
         let mut bambi = lookup_instance("bambi").expect("bambi present");
         bambi.extruders[0].slots[0].filament_identity = Some("generic-pla".into());
-        let cascade = compose_cascade(&bambi, &[], &BTreeMap::new()).expect("compose");
+        let cascade = compose_cascade(&bambi, &[]).expect("compose");
         let fil = cascade
             .rules
             .iter()
@@ -1101,7 +1091,7 @@ mod tests {
         // ConfigOptionVector deserialize splits on ','.
         let _registry = RegistryGuard::acquire();
         let snappy = lookup_instance("snappy").expect("snappy present");
-        let cascade = compose_cascade(&snappy, &[], &BTreeMap::new()).expect("compose");
+        let cascade = compose_cascade(&snappy, &[]).expect("compose");
 
         // Find the synthesized extruder-vector rule.
         let vector_rule = cascade
@@ -1140,7 +1130,7 @@ mod tests {
             }
         }
 
-        let cascade = compose_cascade(&snappy, &[], &BTreeMap::new()).expect("compose");
+        let cascade = compose_cascade(&snappy, &[]).expect("compose");
         let fil = cascade
             .rules
             .iter()
@@ -1170,7 +1160,7 @@ mod tests {
     fn nozzle_vector_assembly_yields_single_value_for_a1_mini() {
         let _registry = RegistryGuard::acquire();
         let bambi = lookup_instance("bambi").expect("bambi present");
-        let cascade = compose_cascade(&bambi, &[], &BTreeMap::new()).expect("compose");
+        let cascade = compose_cascade(&bambi, &[]).expect("compose");
         let vector_rule = cascade
             .rules
             .iter()
@@ -1184,19 +1174,72 @@ mod tests {
         assert_eq!(diameter, "0.4");
     }
 
+    /// Parity guard for C-1: applying overrides as the two-phase *project
+    /// tier* (`resolve_with_overrides`) must yield byte-identical resolved
+    /// values to baking them into the cascade as the Layer-6 `!important`
+    /// rule (the pre-C-1 mechanism). This is the invariant that makes the
+    /// live-path swap a behavioral no-op for existing project overrides —
+    /// the new user/object tiers are then purely additive.
     #[test]
-    fn plate_overrides_appended_as_last_rule() {
+    fn project_tier_matches_baked_important_rule() {
+        use crate::core::cascade::{resolve_with_overrides, FlatOverrides, OverrideTiers};
         let _registry = RegistryGuard::acquire();
         let bambi = lookup_instance("bambi").expect("bambi present");
+
         let mut overrides = BTreeMap::new();
         overrides.insert("layer_height".to_owned(), "0.12".to_owned());
-        let cascade = compose_cascade(&bambi, &[], &overrides).expect("compose");
-        let last = cascade.rules.last().expect("rules");
-        assert_eq!(
-            last.set.get("layer_height").map(String::as_str),
-            Some("0.12")
-        );
-        assert_eq!(last.source.path.to_string_lossy(), "<plate-overrides>");
+        overrides.insert("bed_temp".to_owned(), "48".to_owned());
+        overrides.insert("sparse_infill_density".to_owned(), "42%".to_owned());
+        // An override-only key the fragments never set — exercises the
+        // tier path's "add a key the cascade didn't have" branch.
+        overrides.insert("brim_width".to_owned(), "3".to_owned());
+
+        let ctx = slot_filament_context("generic-pla", "Bambu Lab A1 mini", "Textured PEI Plate");
+
+        let authored = compose_cascade(&bambi, &[]).expect("compose authored");
+
+        // OLD mechanism: overrides baked into the cascade as a trailing
+        // `!important` rule (the pre-C-1 Layer 6 the composer no longer emits).
+        let mut baked = authored.clone();
+        baked.rules.push(Rule {
+            when: Predicate::default(),
+            set: overrides.clone(),
+            source: SourceLocation {
+                path: PathBuf::from("<plate-overrides>"),
+                line: 1,
+            },
+            important: true,
+        });
+        let old = resolve(&baked, &ctx);
+
+        // NEW path: authored cascade + overrides applied as the project tier.
+        let tiers = OverrideTiers {
+            user: vec![],
+            project: vec![FlatOverrides {
+                source: SourceLocation {
+                    path: PathBuf::from("<project-overrides>"),
+                    line: 1,
+                },
+                entries: overrides.clone(),
+            }],
+            object: None,
+        };
+        let new = resolve_with_overrides(&authored, &tiers, &ctx);
+
+        let old_keys: std::collections::BTreeSet<&String> = old.keys().collect();
+        let new_keys: std::collections::BTreeSet<&String> = new.keys().collect();
+        assert_eq!(old_keys, new_keys, "resolved key sets diverge");
+
+        for (k, ov) in &old {
+            assert_eq!(
+                &new[k].value, &ov.value,
+                "resolved value for `{k}` diverges (baked={}, tier={})",
+                ov.value, new[k].value,
+            );
+        }
+        // Sanity: the overrides actually won in the tier path.
+        assert_eq!(new["layer_height"].value, "0.12");
+        assert_eq!(new["brim_width"].value, "3");
     }
 
     #[test]
@@ -1204,7 +1247,7 @@ mod tests {
         let _registry = RegistryGuard::acquire();
         let mut bambi = lookup_instance("bambi").expect("bambi present");
         bambi.extruders[0].installed_nozzle.diameter = "0.9".to_string(); // not bundled
-        let err = compose_cascade(&bambi, &[], &BTreeMap::new()).unwrap_err();
+        let err = compose_cascade(&bambi, &[]).unwrap_err();
         assert!(
             matches!(&err, ComposeError::UnknownNozzleFragment { sku, .. } if sku == "0.9"),
             "got {err:?}",
@@ -1316,7 +1359,7 @@ set.fan_speed = 30
         let _registry = RegistryGuard::acquire();
         let mut bambi = lookup_instance("bambi").expect("bambi present");
         bambi.printer_fragment_slug = "ghost".into();
-        let err = compose_cascade(&bambi, &[], &BTreeMap::new()).unwrap_err();
+        let err = compose_cascade(&bambi, &[]).unwrap_err();
         assert_eq!(err, ComposeError::UnknownPrinterFragment("ghost".into()));
     }
 }

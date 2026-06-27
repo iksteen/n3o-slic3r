@@ -215,6 +215,10 @@ pub struct ResolvedJob {
     pub output_dir: PathBuf,
     pub plate_ids: Vec<u32>,
     pub cascade: crate::core::cascade::Cascade,
+    /// The user/project/object override tiers, parsed from the slice
+    /// context's override specs at job prep. Applied on top of `cascade`
+    /// per plate by `cascade::resolve_with_overrides` (the second phase).
+    pub override_tiers: crate::core::cascade::OverrideTiers,
     pub context: crate::core::project::SlicingContext,
     /// Bound filament loadout (slice-time material→slot mapping),
     /// snapshotted from the PrinterInstance at job prep and handed to

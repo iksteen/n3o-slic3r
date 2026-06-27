@@ -240,6 +240,7 @@ pub fn run() {
             core::printer::printer_instance_sync_from_driver,
             core::project::commands::project_set_plate_quality_profile,
             core::project::commands::plate_cascade_resolve,
+            core::project::commands::plate_cascade_trace,
             core::project::commands::plate_tower_geometry,
             core::project::commands::project_set_material_slot,
             core::project::commands::project_clear_material_slot,

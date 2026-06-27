@@ -20,7 +20,6 @@
 //!   `docs/dev/profiles.md` and known limitations.
 
 use crate::core::cascade::resolver::{Context, Resolved};
-use crate::core::cascade::ResolvedOverrides;
 use crate::core::profile_library::split_for_key;
 use crate::core::schema::{schema_by_key, BED_TEMP_KEYS};
 use serde::Serialize;
@@ -175,33 +174,6 @@ pub fn adapt(
     }
 
     Ok(AdaptResult { config, events })
-}
-
-/// Convenience wrapper for the override-aware resolved map. Drops the
-/// override-tier metadata and reuses the cascade branch — adapting
-/// doesn't distinguish "cascade winner" from "override winner", only
-/// the effective value matters.
-pub fn adapt_with_overrides(
-    resolved: &ResolvedOverrides,
-    ctx: &dyn Context,
-) -> Result<AdaptResult, AdaptError> {
-    // Translate to the simpler Resolved shape by copying the effective
-    // value as-if it came from the cascade.
-    let cascade_view: Resolved = resolved
-        .iter()
-        .map(|(k, v)| {
-            (
-                k.clone(),
-                crate::core::cascade::ResolvedValue {
-                    value: v.value.clone(),
-                    winning_rule: v.winning_rule.clone(),
-                    winning_specificity: v.winning_specificity,
-                    matching_rules: v.matching_rules.clone(),
-                },
-            )
-        })
-        .collect();
-    adapt(&cascade_view, ctx)
 }
 
 /// libslic3r's effective extruder count for the filament dimension is

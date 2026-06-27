@@ -198,6 +198,29 @@ pub fn resolve_with_overrides(
     out
 }
 
+/// Flatten a tier-resolved map to the plain [`super::Resolved`] view, taking
+/// each key's effective (post-override) value. The override provenance
+/// (`override_source`, `cascade_fallback`) is dropped — the slice adapter,
+/// the plugin pre-slice hook, and the safety gate consume only the effective
+/// value. Callers that need the provenance (the trace command) keep the
+/// `ResolvedOverrides` and call [`super::trace`] instead.
+pub fn to_resolved(resolved: &ResolvedOverrides) -> super::Resolved {
+    resolved
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                ResolvedValue {
+                    value: v.value.clone(),
+                    winning_rule: v.winning_rule.clone(),
+                    winning_specificity: v.winning_specificity,
+                    matching_rules: v.matching_rules.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
 fn base_entry_to_with_trace(v: ResolvedValue) -> ResolvedWithTrace {
     ResolvedWithTrace {
         value: v.value,

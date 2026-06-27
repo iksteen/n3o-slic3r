@@ -148,21 +148,33 @@ Non-obvious facts about the hardware and architecture worth having up front.
   plugin using the **post-slice** hook — a macro append that
   auto-ejects the finished plate at print end. The originally-scoped
   compose hook (FR-PL-5) is deferred post-MVP.
-- **The cascade resolver is built.** The rule-cascade resolver lives
-  in `src-tauri/src/core/cascade/` (`resolver`, `loader`, `overrides`,
-  `trace`, `validate`) and the libslic3r translation in
-  `src-tauri/src/core/cascade_adapter/` (`adapter` does the
-  `bed_temp` → per-plate-type dimensional expansion + `curr_bed_type`
-  set). `tests/reference_profiles.rs` exercises it end-to-end. The live
-  *slice* path routes through the resolver + adapter, not the input's
-  embedded config: `core/slice/orchestrator.rs::resolve_cascade`
-  composes a fresh cascade from the bound `PrinterInstance`,
-  `cascade::resolve` + `cascade_adapter::adapt` build the
-  `DynamicPrintConfig`, and the `.3mf`/STL is loaded for **geometry
-  only** (verified end-to-end in
-  `tests/slice_orchestrator.rs::resolved_bed_temp_reaches_the_engine_for_both_printers`,
-  where the two MVP printers resolve to different bed temps from their
-  own fragments). Design of record is `docs/dev/profiles.md`.
+- **The cascade resolver is built, and resolution is two-phase.** The
+  rule-cascade resolver lives in `src-tauri/src/core/cascade/`
+  (`resolver`, `loader`, `overrides`, `trace`, `validate`) and the
+  libslic3r translation in `src-tauri/src/core/cascade_adapter/`
+  (`adapter` does the `bed_temp` → per-plate-type dimensional expansion +
+  `curr_bed_type` set). `tests/reference_profiles.rs` exercises it
+  end-to-end. The live *slice* path routes through the resolver + adapter,
+  not the input's embedded config: `core/slice/orchestrator.rs::resolve_cascade`
+  composes a fresh **authored** cascade from the bound `PrinterInstance`
+  (`profile_library::compose_cascade` — fragments + the instance's own
+  machine overrides baked as `!important`; it does **not** bake the
+  user/project/object override tiers). The worker then runs the second
+  phase: `cascade::resolve_with_overrides(cascade, OverrideTiers, ctx)`
+  (user = `Project.user_overrides`, project = `Plate.project_overrides`,
+  object deferred/empty) → `cascade::to_resolved` flattens to the
+  effective value the plugin hook + safety gate + `cascade_adapter::adapt`
+  consume → `DynamicPrintConfig`. The `.3mf`/STL is loaded for **geometry
+  only**. Verified end-to-end in `tests/slice_orchestrator.rs`
+  (`resolved_bed_temp_reaches_the_engine_for_both_printers` — per-printer
+  fragment differentiation; `user_tier_override_reaches_the_engine` — the
+  user tier reaches the engine). The panel resolves the same way
+  (`project::commands::resolve_instance_cascade`), so what the panel shows
+  matches what slices; `plate_cascade_trace(plate_id, key)` returns the
+  per-key `cascade::Trace` (winning tier + cascade fallback) for the "why
+  is X=Y" UX. Parity of tier-vs-baked is guarded by
+  `composer::tests::project_tier_matches_baked_important_rule`. Design of
+  record is `docs/dev/profiles.md`.
 
 ## Project shape and build
 

@@ -544,7 +544,7 @@ fn resolve_baseline(
     };
     let effective = crate::core::profile_library::with_quality_profile(instance, quality_profile);
     let Ok(cascade) =
-        crate::core::profile_library::compose_cascade(&effective, &[], &BTreeMap::new())
+        crate::core::profile_library::compose_cascade(&effective, &[])
     else {
         return BTreeMap::new();
     };

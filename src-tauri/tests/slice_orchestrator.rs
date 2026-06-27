@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Once};
 
-use n3o_slic3r_lib::core::cascade::commands::ContextJson;
+use n3o_slic3r_lib::core::cascade::commands::{ContextJson, OverrideFileSpec};
 use n3o_slic3r_lib::core::filament::FilamentProfile;
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
 use n3o_slic3r_lib::core::scene::build_plate::BuildPlate;
@@ -351,6 +351,42 @@ fn resolved_bed_temp_reaches_the_engine_for_both_printers() {
     );
 }
 
+/// C-1 — the project-wide *user* override tier (`Project.user_overrides`)
+/// must reach the engine. Before C-1 the slice path dropped it entirely
+/// (only the per-plate project tier was folded), so a user override never
+/// sliced. This sets `bed_temp` in the user tier to a distinctive value and
+/// proves it both wins over the bambi fragment default (65) and is baked
+/// into the body's bed-heat command — i.e. the second-phase tier resolution
+/// runs at slice time.
+#[test]
+fn user_tier_override_reaches_the_engine() {
+    ensure_ffi_init();
+    let stl = test_stl().display().to_string();
+    let out = std::env::temp_dir()
+        .join(format!("n3o-c1-user-tier-{}", std::process::id()))
+        .display()
+        .to_string();
+
+    let mut input = bambi_input(stl, out, vec![1]);
+    // `bed_temp` is the logical key the adapter broadcasts to every
+    // plate-type temp; 53 is distinct from the bambu-pla fragment's 65.
+    input.context.user_overrides = vec![OverrideFileSpec {
+        label: "user-overrides.toml".into(),
+        content: "bed_temp = \"53\"\n".into(),
+    }];
+
+    let gcode = slice_to_gcode("user-tier", input);
+    assert_eq!(
+        config_value(&gcode, "textured_plate_temp"),
+        "53",
+        "user-tier bed_temp override should win over the fragment default",
+    );
+    assert!(
+        gcode.contains("M140 S53"),
+        "user-tier override should reach the engine's bed-heat command",
+    );
+}
+
 #[test]
 fn snappy_slice_emits_started_progress_finished_with_summary() {
     // Sibling of the Bambi slice smoke. Exercises the 4-extruder
@@ -415,13 +451,12 @@ fn snappy_slice_emits_started_progress_finished_with_summary() {
 fn snappy_orchestrator_compose_succeeds() {
     use n3o_slic3r_lib::core::printer::lookup_instance;
     use n3o_slic3r_lib::core::profile_library::compose_cascade;
-    use std::collections::BTreeMap;
     // FFI init is required so the schema cache is populated; the composer
     // dispatches separator choice on OptType (`;` for coStrings).
     ensure_ffi_init();
     let instance = lookup_instance("snappy").expect("snappy in instance library");
     let cascade =
-        compose_cascade(&instance, &[], &BTreeMap::new()).expect("snappy cascade composes");
+        compose_cascade(&instance, &[]).expect("snappy cascade composes");
     assert!(!cascade.rules.is_empty(), "snappy cascade is empty");
     // Spot-check a per-extruder vector landed length-4 (one entry per
     // U1 toolhead): the composer assembles `nozzle_diameter` from each

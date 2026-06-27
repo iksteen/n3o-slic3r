@@ -53,9 +53,10 @@ use super::errors::{classify_libslic3r_error, SliceError};
 use super::events::SliceEvent;
 use super::job::{JobHandle, JobId, JobRegistry, JobStatus, ResolvedJob, SliceJobInput};
 use super::summary::build_summary;
-use crate::core::cascade::commands::OverrideFileSpec;
+use crate::core::cascade::commands::{ContextJson, OverrideFileSpec};
 use crate::core::cascade::{
-    self, parse_override_str, types::Cascade, Resolved, ResolvedValue, SourceLocation,
+    parse_override_str, resolve_with_overrides, to_resolved, types::Cascade, FlatOverrides,
+    OverrideTiers, Resolved, ResolvedValue, SourceLocation,
 };
 use crate::core::cascade_adapter::adapt;
 use crate::core::gcode::{parse_str, to_string};
@@ -120,13 +121,13 @@ pub type EventSink = Box<dyn Fn(SliceEvent) + Send + Sync + 'static>;
 /// Resolve the [`Cascade`] this job slices against.
 ///
 /// Looks the named PrinterInstance up in the bundled library and
-/// composes a fresh cascade from its per-bucket vendor fragments +
-/// the plate's process overrides. Composition happens per job, not
-/// against a shared registry; there's no caching.
+/// composes a fresh authored cascade from its per-bucket vendor fragments
+/// (plus the instance's own machine overrides). Composition happens per
+/// job, not against a shared registry; there's no caching.
 ///
-/// Plate process overrides flow in via `input.context.project_overrides`
-/// (`build_slice_input` attaches them). The composer treats them as
-/// the highest-precedence layer.
+/// The user / project / object override tiers are NOT folded here — the
+/// worker applies them as the second phase via
+/// [`override_tiers_from_context`] + `cascade::resolve_with_overrides`.
 fn resolve_cascade(input: &SliceJobInput) -> Result<Cascade, SliceStartError> {
     let instance = lookup_instance(&input.printer_instance_id).ok_or_else(|| {
         SliceStartError::PrinterInstanceCompose(format!(
@@ -134,30 +135,61 @@ fn resolve_cascade(input: &SliceJobInput) -> Result<Cascade, SliceStartError> {
             input.printer_instance_id,
         ))
     })?;
-    // Pull plate overrides off the spec list. The composer wants them
-    // as a flat BTreeMap; the spec list carries them as a TOML body
-    // so the regular cascade override-tier loader works. Re-parse
-    // back to a map — cheap, spec lists are tiny.
-    let mut plate_overrides: BTreeMap<String, String> = BTreeMap::new();
-    for spec in &input.context.project_overrides {
-        if let Ok(table) = spec.content.parse::<toml::Value>() {
-            if let Some(t) = table.as_table() {
-                for (k, v) in t {
-                    if let Some(s) = v.as_str() {
-                        plate_overrides.insert(k.clone(), s.to_owned());
-                    } else {
-                        plate_overrides.insert(k.clone(), v.to_string());
-                    }
-                }
-            }
-        }
-    }
     // The plate's process/quality profile overrides the instance's
     // (per-plate binding); `with_quality_profile` swaps it in only when
     // set, so the composer picks the plate's process fragment.
     let effective = with_quality_profile(&instance, input.quality_profile.as_deref());
-    compose_cascade(&effective, &input.material_layout, &plate_overrides)
+    compose_cascade(&effective, &input.material_layout)
         .map_err(|e| SliceStartError::PrinterInstanceCompose(e.to_string()))
+}
+
+/// Build the two-phase override tiers from the slice context. Each tier
+/// arrives as a list of TOML override specs (`user_overrides`,
+/// `project_overrides`) plus the per-object map; `cascade::resolve_with_
+/// overrides` applies them on top of the authored cascade in
+/// user → project → object precedence. `plugin.*` keys are dropped — they
+/// drive the plugin gate ([`plugin_overrides_for_tier`]), never the
+/// libslic3r adapter.
+fn override_tiers_from_context(ctx: &ContextJson) -> OverrideTiers {
+    OverrideTiers {
+        user: flat_overrides_from_specs(&ctx.user_overrides),
+        project: flat_overrides_from_specs(&ctx.project_overrides),
+        object: {
+            let entries: BTreeMap<String, String> = ctx
+                .object_overrides
+                .iter()
+                .filter(|(k, _)| !k.starts_with("plugin."))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            (!entries.is_empty()).then(|| FlatOverrides {
+                source: SourceLocation {
+                    path: PathBuf::from("<object-overrides>"),
+                    line: 1,
+                },
+                entries,
+            })
+        },
+    }
+}
+
+/// Parse each override spec into a `FlatOverrides`, dropping `plugin.*`
+/// keys and any spec that fails to parse or carries no slicer keys.
+fn flat_overrides_from_specs(specs: &[OverrideFileSpec]) -> Vec<FlatOverrides> {
+    specs
+        .iter()
+        .filter_map(|spec| {
+            let flat = parse_override_str(&spec.content, Path::new(&spec.label)).ok()?;
+            let entries: BTreeMap<String, String> = flat
+                .entries
+                .into_iter()
+                .filter(|(k, _)| !k.starts_with("plugin."))
+                .collect();
+            (!entries.is_empty()).then(|| FlatOverrides {
+                source: flat.source,
+                entries,
+            })
+        })
+        .collect()
 }
 
 /// Shared pre-flight: validate, resolve the cascade + context,
@@ -225,12 +257,14 @@ fn prepare_job(
         .unwrap_or_default();
     let plugin_project = plugin_overrides_for_tier(&input.context.user_overrides);
     let plugin_plate = plugin_overrides_for_tier(&input.context.project_overrides);
+    let override_tiers = override_tiers_from_context(&input.context);
 
     let resolved = ResolvedJob {
         model_path: PathBuf::from(&input.model_path),
         output_dir,
         plate_ids: input.plate_ids,
         cascade,
+        override_tiers,
         context,
         filament,
         plugin_instance,
@@ -531,8 +565,15 @@ fn run_worker(
 
         // Resolve + adapt fresh per plate. Multi-plate projects
         // (Phase 5) may want per-plate cascade overrides; today the
-        // context is the same per plate.
-        let mut resolved_cascade = cascade::resolve(&job.cascade, &job.context);
+        // context is the same per plate. Two-phase resolution: the authored
+        // cascade, then the user/project/object override tiers on top
+        // (`to_resolved` flattens to the effective value the hook + safety
+        // gate + adapter consume; trace keeps the un-flattened map).
+        let mut resolved_cascade = to_resolved(&resolve_with_overrides(
+            &job.cascade,
+            &job.override_tiers,
+            &job.context,
+        ));
 
         // Pre-slice plugin hook: let plugins read/modify the resolved
         // settings before the adapter + safety gate see them. Guarded
