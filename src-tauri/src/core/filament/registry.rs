@@ -29,10 +29,7 @@ fn build_profile(summary: profile_library::FilamentFragmentSummary) -> FilamentP
 /// synthesized stand-in (slice context still needs *some* filament;
 /// the cascade uses `base_type` to pick PLA-flavor rules).
 pub fn lookup(identity: &str) -> Option<FilamentProfile> {
-    profile_library::list_filament_fragments()
-        .into_iter()
-        .find(|s| s.identity == identity)
-        .map(build_profile)
+    profile_library::filament_fragment_summary(identity).map(build_profile)
 }
 
 /// Full bundled catalog in declaration order.

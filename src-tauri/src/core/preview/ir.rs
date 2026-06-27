@@ -66,6 +66,10 @@ pub struct SegmentSet {
     /// Volumetric flow, mm³/s. Computed from `ΔE × filament
     /// cross-section / segment duration`. For travels this is 0.
     pub flow: Vec<f32>,
+    /// Filament off the spool (`ΔE`), mm, per segment; 0 for travels.
+    /// Stored directly so filament-used stats are exact and don't have to
+    /// reconstruct it from `flow` (re-dividing by the cross-section).
+    pub extrusion_mm: Vec<f32>,
     /// 0-based tool index (`T0` → `0`). Tracks the most recent
     /// `ToolChange` line. 0 when no tool change has happened.
     pub tool: Vec<u8>,
@@ -109,6 +113,7 @@ impl SegmentSet {
         self.feature.push(seg.feature);
         self.speed.push(seg.speed);
         self.flow.push(seg.flow);
+        self.extrusion_mm.push(seg.extrusion_mm);
         self.tool.push(seg.tool);
         self.source_line.push(seg.source_line);
         self.width.push(seg.width);
@@ -126,6 +131,8 @@ pub(crate) struct Segment {
     pub feature: FeatureType,
     pub speed: f32,
     pub flow: f32,
+    /// Filament off the spool (`ΔE`), mm. 0 for travels.
+    pub extrusion_mm: f32,
     pub tool: u8,
     pub source_line: u32,
     pub width: f32,

@@ -187,6 +187,7 @@ pub fn build_preview(lines: &[Line]) -> PreviewGeometry {
                             feature: state.feature.clone(),
                             speed: speed_mm_s,
                             flow: flow_mm3_s,
+                            extrusion_mm: de,
                             tool: state.tool,
                             source_line: line_idx,
                             width,
@@ -220,6 +221,7 @@ pub fn build_preview(lines: &[Line]) -> PreviewGeometry {
                             feature: FeatureType::Travel,
                             speed: speed_mm_s,
                             flow: 0.0,
+                            extrusion_mm: 0.0,
                             tool: state.tool,
                             source_line: line_idx,
                             // Travels render as a fixed thin tube; w/h unused.

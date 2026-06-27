@@ -810,6 +810,7 @@ mod tests {
                 feature: crate::core::gcode::FeatureType::Perimeter,
                 speed: 50.0,
                 flow: 5.0,
+                extrusion_mm: 0.0,
                 tool: 0,
                 source_line: 0,
                 width: 0.45,

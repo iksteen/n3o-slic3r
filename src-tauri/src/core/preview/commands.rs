@@ -234,15 +234,7 @@ pub fn preview_segment_detail(
                 .get(source_line)
                 .map(line_raw_text)
                 .unwrap_or_default();
-            let length = euclidean(start, end);
-            let extrusion_mm = if segs.speed[i] > 1e-6 {
-                let duration = length / segs.speed[i];
-                let vol_mm3 = segs.flow[i] * duration;
-                const CROSS_SECTION: f32 = std::f32::consts::PI * (1.75 * 0.5) * (1.75 * 0.5);
-                vol_mm3 / CROSS_SECTION
-            } else {
-                0.0
-            };
+            let extrusion_mm = segs.extrusion_mm[i];
             Ok(SegmentDetail {
                 source_line_text,
                 start,
@@ -311,14 +303,6 @@ fn line_raw_text(line: &Line) -> String {
         Line::Other(o) => o.raw.clone(),
     }
 }
-
-fn euclidean(a: [f32; 3], b: [f32; 3]) -> f32 {
-    let dx = b[0] - a[0];
-    let dy = b[1] - a[1];
-    let dz = b[2] - a[2];
-    (dx * dx + dy * dy + dz * dz).sqrt()
-}
-
 
 #[cfg(test)]
 mod tests {

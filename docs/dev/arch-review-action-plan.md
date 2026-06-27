@@ -177,17 +177,17 @@ The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
   Steps: (1) route the slice + panel resolution through `adapt_with_overrides` with `OverrideTiers` built from user/project/object; (2) this closes the user-tier→engine gap for free (the tier model already models precedence correctly); (3) add a Tauri command exposing `trace.rs` per-key source attribution for the "why is X=55" UX (`profiles.md` design of record); (4) remove the superseded composer override path once parity holds.
   *Verify:* **parity guard first** — assert the new resolver produces byte-identical `DynamicPrintConfig` to the composer output across `tests/reference_profiles.rs` for both printers *before* deleting the old path; then a test that a user-tier engine key reaches the resolved config, and that the trace returns the winning layer/source per key.
 
-- [ ] **C-2 — `build.rs` only warns when a submodule patch fails to apply**
+- [x] **C-2 — `build.rs` only warns when a submodule patch fails to apply**
   `crates/slic3r-ffi/build.rs:323-361`. Make a failed apply a hard panic (the idempotent reverse-check already distinguishes "already applied" from "failed"), so the wave-overhang carry can't silently drop and ship a broken binary.
 
 - [ ] **C-3 — Typed errors for the few UI-branching commands**
   `core/slice/orchestrator.rs:93-108` (`SliceStartError::SliceBlocked` collapses its issue list to a count in `Display`), `core/slice/commands.rs`, driver `commands.rs:317,605-607`, `src/driver/SendControls.tsx:158` (`/cancel/i.test(msg)` regex)
   For slice-start, instance-mutation, connection-validation, and driver send/command: return the already-`Serialize`-derived typed error so the frontend branches on `error.kind` (esp. `Cancelled`/`SliceBlocked` issue list). Leave the string path for the rest; this also retires the X-7 serde-derive deletion's counterpart. *(If you keep strings, at minimum give `Cancelled` a stable sentinel.)*
 
-- [ ] **C-4 — FFI callback trampolines have no panic guard**
+- [x] **C-4 — FFI callback trampolines have no panic guard**
   `crates/slic3r-ffi/src/lib.rs:725-747,980-999`. Wrap each closure in `catch_unwind`; a panicking progress/log callback should drop a tick, not unwind across the C ABI.
 
-- [ ] **C-5 — `slic3r_slice` mutates the caller's `Model` through a `&Model`**
+- [x] **C-5 — `slic3r_slice` mutates the caller's `Model` through a `&Model`**
   `ffi/slic3r_ffi.cpp:780-810` (writes `obj->config`) vs `:659` (cfg is copied); `src/lib.rs:885-896`. Apply the same temp-copy discipline to the per-object selectors, or change the signature to `&mut Model` and document it. At minimum, comment the deliberate write-through.
 
 - [x] **C-6 — Non-deterministic default process for a new instance**
@@ -217,10 +217,10 @@ The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
 - [ ] **C-14 — `DriverId` ↔ `instance_id` correspondence lives only in the frontend**
   `core/driver/commands.rs:301,527`, `camera.rs:301`, `snapmaker/commands.rs:41`, `printer/mod.rs:489`. Store the owning `instance_id` on the `DriverRegistry` entry (created from a per-instance `ConnectionInfo`); sync/camera/AMS commands then take one id and the backend owns the mapping.
 
-- [ ] **C-15 — Filament lookup rebuilds the full 201-fragment summary per slot at compose time**
+- [x] **C-15 — Filament lookup rebuilds the full 201-fragment summary per slot at compose time**
   `core/filament/registry.rs:31-36`, `library.rs:97-101`, driven from `composer.rs:657-676`. Add a keyed single-fragment summary lookup (`filament_fragments.get(slug)`); route `lookup`/`is_bundled` through it; leave `list_*` for genuine enumerate-all callers.
 
-- [ ] **C-16 — Store extrusion ΔE directly instead of discard-then-reconstruct**
+- [x] **C-16 — Store extrusion ΔE directly instead of discard-then-reconstruct**
   `core/preview/build.rs:38-40,177-179` (forward), `stats.rs:245-256` + `commands.rs:238-244` (inverse). Store `extrusion_mm` on `Segment`/`SegmentSet`; delete both inverse computations and 2 of the 3 duplicated cross-section constants.
 
 ---

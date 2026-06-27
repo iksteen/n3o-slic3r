@@ -238,22 +238,11 @@ fn segment_length(positions: &[f32], seg: usize) -> f32 {
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
-/// `ΔE` in mm of filament for an extrusion segment. The IR
-/// doesn't store `delta_e` directly — recover it from
-/// `flow × duration / cross_section`. For travels (flow=0) returns
-/// 0, which is what filament-used aggregates want.
+/// `ΔE` in mm of filament for a segment — stored directly on the IR by
+/// the builder (0 for travels), so the filament-used aggregates read it
+/// rather than reconstructing it from `flow × duration / cross-section`.
 fn extrusion_amount_mm(segments: &super::ir::SegmentSet, seg: usize) -> f32 {
-    let length = segment_length(&segments.positions, seg);
-    let speed = segments.speed[seg];
-    if speed <= 1e-6 {
-        return 0.0;
-    }
-    let duration = length / speed;
-    let flow = segments.flow[seg];
-    let vol_mm3 = flow * duration;
-    // Inverse of build.rs's flow formula: ΔE = vol / cross-section.
-    const CROSS_SECTION: f32 = std::f32::consts::PI * (1.75 * 0.5) * (1.75 * 0.5);
-    vol_mm3 / CROSS_SECTION
+    segments.extrusion_mm[seg]
 }
 
 #[cfg(test)]

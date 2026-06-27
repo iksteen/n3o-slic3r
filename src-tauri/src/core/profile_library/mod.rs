@@ -669,79 +669,85 @@ pub struct FilamentFragmentSummary {
 /// `filament_settings_id` + `filament_type` + `filament_vendor` +
 /// temperature fields out of each fragment (stamped by the vendor
 /// converter, stable across regens).
+/// Build the picker summary for one filament fragment from its cascade.
+/// `None` for a fragment that carries no rules (a metadata-only file).
+fn filament_summary_from(slug: &str, cascade: &CascadeAsset) -> Option<FilamentFragmentSummary> {
+    // The cascade.rules vec carries one unconditional rule for converter
+    // output; read the surfaced fields out of its set.
+    let set = match cascade.cascade.rules.first() {
+        Some(r) => &r.set,
+        None => {
+            tracing::warn!(slug = %slug, "filament fragment carries no rules; skipping");
+            return None;
+        }
+    };
+    let display_name = set
+        .get("filament_settings_id")
+        .cloned()
+        .unwrap_or_else(|| slug.to_owned());
+    let base_type = set
+        .get("filament_type")
+        .cloned()
+        .unwrap_or_else(|| "PLA".to_owned());
+    let vendor = set
+        .get("filament_vendor")
+        .cloned()
+        .unwrap_or_else(|| "Generic".to_owned());
+    let nozzle_temp = set
+        .get("nozzle_temperature")
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(210);
+    // BBS fragments expose per-bed-type temps (hot_plate_temp,
+    // textured_plate_temp, etc.) but no single "bed_temp" field. The picker
+    // only wants a representative value, so prefer the generic
+    // `hot_plate_temp` (PEI / smooth) and fall back through the rest.
+    let bed_temp = [
+        "hot_plate_temp",
+        "textured_plate_temp",
+        "cool_plate_temp",
+        "supertack_plate_temp",
+    ]
+    .iter()
+    .find_map(|k| set.get(*k).and_then(|s| s.parse::<u32>().ok()))
+    .unwrap_or(60);
+    // Vendor SKU — stamped by the converter for fragments that have one
+    // (Bambu / Generic carry it; bespoke user-imported profiles may not).
+    // Empty strings are treated as absent.
+    let filament_id = set
+        .get("filament_id")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_owned());
+    Some(FilamentFragmentSummary {
+        identity: slug.to_owned(),
+        display_name,
+        base_type,
+        vendor,
+        nozzle_temp,
+        bed_temp,
+        filament_id,
+        edited: false,
+    })
+}
+
+/// Summary for one bundled filament fragment by slug — an O(1) keyed lookup.
+/// For callers resolving a single identity (e.g. per-slot compose, the
+/// registry's `lookup`/`is_bundled`) without rebuilding the whole list.
+pub fn filament_fragment_summary(slug: &str) -> Option<FilamentFragmentSummary> {
+    let lib = library();
+    filament_summary_from(slug, lib.filament_fragments.get(slug)?)
+}
+
 pub fn list_filament_fragments() -> Vec<FilamentFragmentSummary> {
-    library()
-        .filament_order
+    let lib = library();
+    lib.filament_order
         .iter()
         .filter_map(|slug| {
-            let cascade = library()
+            let cascade = lib
                 .filament_fragments
                 .get(slug)
                 .expect("filament_order index always present in fragments map");
-            // The cascade.rules vec carries one unconditional rule
-            // for converter output; read the surfaced fields out of
-            // its set. A fragment with no rules (e.g. metadata-only
-            // file that all the picker scalars happened to skip) is
-            // skipped here rather than panicking the picker IPC.
-            let set = match cascade.cascade.rules.first() {
-                Some(r) => &r.set,
-                None => {
-                    tracing::warn!(
-                        slug = %slug,
-                        "filament fragment carries no rules; skipping in picker list",
-                    );
-                    return None;
-                }
-            };
-            let display_name = set
-                .get("filament_settings_id")
-                .cloned()
-                .unwrap_or_else(|| slug.clone());
-            let base_type = set
-                .get("filament_type")
-                .cloned()
-                .unwrap_or_else(|| "PLA".to_owned());
-            let vendor = set
-                .get("filament_vendor")
-                .cloned()
-                .unwrap_or_else(|| "Generic".to_owned());
-            let nozzle_temp = set
-                .get("nozzle_temperature")
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(210);
-            // BBS fragments expose per-bed-type temps (hot_plate_temp,
-            // textured_plate_temp, etc.) but no single "bed_temp"
-            // field. The picker only wants a representative value, so
-            // prefer the generic `hot_plate_temp` (PEI / smooth) and
-            // fall back through textured / cool / supertack.
-            let bed_temp = [
-                "hot_plate_temp",
-                "textured_plate_temp",
-                "cool_plate_temp",
-                "supertack_plate_temp",
-            ]
-            .iter()
-            .find_map(|k| set.get(*k).and_then(|s| s.parse::<u32>().ok()))
-            .unwrap_or(60);
-            // Vendor SKU — stamped by the converter for fragments
-            // that have one (Bambu / Generic carry it; bespoke
-            // user-imported profiles may not). Empty strings are
-            // treated as absent.
-            let filament_id = set
-                .get("filament_id")
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_owned());
-            Some(FilamentFragmentSummary {
-                identity: slug.clone(),
-                display_name,
-                base_type,
-                vendor,
-                nozzle_temp,
-                bed_temp,
-                filament_id,
-                edited: false,
-            })
+            filament_summary_from(slug, cascade)
         })
         .collect()
 }

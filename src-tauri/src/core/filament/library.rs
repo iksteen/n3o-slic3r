@@ -95,9 +95,7 @@ pub fn lookup(base: &str) -> Option<UserFilament> {
 }
 
 fn is_bundled(base: &str) -> bool {
-    profile_library::list_filament_fragments()
-        .iter()
-        .any(|s| s.identity == base)
+    profile_library::filament_fragment_summary(base).is_some()
 }
 
 /// Set (or clear, with `None`) one override on `base`'s profile. Creates
