@@ -56,9 +56,9 @@ pub struct SliceObject {
     pub overrides: Vec<(String, String)>,
     /// Multi-volume group identity (see
     /// [`SceneObject::group`](crate::core::scene::state::SceneObject::group)).
-    /// Buffer-load can't represent groups (one mesh per `add_object`), so a
-    /// plate with any grouped object routes through the temp-`.3mf` fallback
-    /// — see [`SliceJobInput::force_temp_3mf`](super::job::SliceJobInput::force_temp_3mf).
+    /// Objects sharing a `GroupId` are collapsed into one ModelObject in-memory
+    /// (`add_group` + one `add_volume` per member) by the slice worker — no
+    /// temp `.3mf` needed.
     pub group: Option<GroupId>,
 }
 
@@ -290,12 +290,10 @@ pub fn build_slice_input(
     // `extruder`.
     let objects = build_plate_objects(project, plate_id, &instance);
 
-    // A multi-volume group can't ride the single-mesh `add_object` FFI
-    // (one mesh per call); slicing each volume as a freestanding object
-    // makes libslic3r flag the non-bed-touching ones as "floating
-    // regions". Route such plates through the temp-`.3mf` writer, which
-    // collapses each group into one ModelObject with N volumes.
-    let force_temp_3mf = objects.iter().any(|o| o.group.is_some());
+    // Geometry travels in-memory for every plate, groups included: the worker
+    // collapses a multi-volume group into one ModelObject via `add_group` +
+    // `add_volume`. The temp-`.3mf` route survives only as a test/parity knob.
+    let force_temp_3mf = false;
 
     // ── MMU paint remap (toolchangers only) ───────────────────
     // build_plate_objects rewrites each object's `extruder` to its flat-
@@ -719,14 +717,11 @@ mod tests {
     }
 
     #[test]
-    fn grouped_plate_routes_through_temp_3mf_fallback() {
-        // Multi-volume groups (the cube-halves shape) can't ride the
-        // single-mesh `add_object` FFI; slicing each volume as a
-        // freestanding object makes libslic3r flag the non-bed-touching
-        // ones as "floating regions". build_slice_input flags such a
-        // plate for the temp-`.3mf` writer (which collapses the group
-        // into one ModelObject with N volumes). The objects still carry
-        // their group identity so the writer can do that collapse.
+    fn grouped_plate_uses_in_memory_group_path() {
+        // Multi-volume groups (the cube-halves shape) slice in-memory like
+        // everything else: the worker collapses the group into one ModelObject
+        // via `add_group` + `add_volume`, so `force_temp_3mf` stays false. The
+        // objects carry their group identity so the worker can do that collapse.
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         project.plates[0].set_printer(Some("bambi".into()), None);
@@ -755,13 +750,13 @@ mod tests {
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert!(
-            input.force_temp_3mf,
-            "a grouped plate must route through the temp-.3mf fallback",
+            !input.force_temp_3mf,
+            "a grouped plate slices in-memory (add_group + add_volume), no temp .3mf",
         );
         assert_eq!(input.objects.len(), 2);
         assert!(
             input.objects.iter().all(|o| o.group == Some(g)),
-            "both objects keep their group identity for the writer to collapse",
+            "both objects keep their group identity for the worker to collapse",
         );
     }
 

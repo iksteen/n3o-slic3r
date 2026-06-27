@@ -265,6 +265,33 @@ slic3r_status slic3r_model_add_object(
     const char* const* ovr_keys, const char* const* ovr_vals, size_t ovr_count,
     char** out_err);
 
+/* Create an empty multi-volume group object (one ModelObject + identity
+ * instance) and append it to *model; *out_index (nullable) receives its index
+ * for the slic3r_model_add_volume calls that follow. Use this + add_volume to
+ * build a grouped object in-memory instead of round-tripping a .3mf — each
+ * volume carries its own world transform (the group instance stays identity),
+ * matching the .3mf writer's components shape. out_err may be NULL. */
+slic3r_status slic3r_model_add_group(
+    slic3r_model_t* m, const char* name, size_t* out_index, char** out_err);
+
+/* Append one ModelVolume (from raw buffers) to model->objects[object_index]
+ * (created by slic3r_model_add_group). Buffers/paint/overrides as in
+ * slic3r_model_add_object, except:
+ *   transform: 4x4 volume->world, COLUMN-MAJOR — composed onto add_volume's
+ *     centering compensation exactly as the .3mf loader's component path, so
+ *     the world placement matches a round-tripped .3mf.
+ *   extruder + overrides: set on the *volume* config (each group member prints
+ *     with its own filament), not the object config.
+ * SLIC3R_ERR_INVALID_ARG if object_index is out of range. out_err may be NULL. */
+slic3r_status slic3r_model_add_volume(
+    slic3r_model_t* m, size_t object_index, const char* name,
+    const float* verts, size_t vcount,
+    const uint32_t* indices, size_t tcount,
+    const double transform[16], int extruder,
+    const char* const* paint_hex, size_t paint_count,
+    const char* const* ovr_keys, const char* const* ovr_vals, size_t ovr_count,
+    char** out_err);
+
 /* ---- Slicing ---- */
 
 /* Slice progress callback.

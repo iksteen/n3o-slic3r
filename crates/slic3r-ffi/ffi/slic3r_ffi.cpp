@@ -574,6 +574,61 @@ static void pin_bbl_quirks(Print& print, DynamicPrintConfig& cfg, bool is_bbl) {
     print.is_BBL_printer() = is_bbl;
 }
 
+// ---- Shared in-memory volume construction (add_object / add_group / add_volume) ----
+// Outside extern "C" — these are C++ (one is a template) and only ever called
+// from the construction shims below.
+
+// Rebuild an indexed_triangle_set from the flat object-local buffers — the same
+// ingest as slic3r_orient_mesh.
+static indexed_triangle_set its_from_buffers(const float* verts, size_t vcount,
+                                             const uint32_t* indices, size_t tcount) {
+    indexed_triangle_set its;
+    its.vertices.reserve(vcount);
+    for (size_t i = 0; i < vcount; ++i)
+        its.vertices.emplace_back(verts[i * 3 + 0], verts[i * 3 + 1],
+                                  verts[i * 3 + 2]);
+    its.indices.reserve(tcount);
+    for (size_t i = 0; i < tcount; ++i)
+        its.indices.emplace_back(static_cast<int32_t>(indices[i * 3 + 0]),
+                                 static_cast<int32_t>(indices[i * 3 + 1]),
+                                 static_cast<int32_t>(indices[i * 3 + 2]));
+    return its;
+}
+
+// MMU color-painting: the hex strings are already in the BBS format
+// FacetsAnnotation::set_triangle_from_string expects — pass through.
+static void apply_paint(ModelVolume* vol, const char* const* paint_hex, size_t paint_count) {
+    if (paint_count == 0) return;
+    vol->mmu_segmentation_facets.reserve(paint_count);
+    for (size_t i = 0; i < paint_count; ++i)
+        if (paint_hex[i] && paint_hex[i][0] != '\0')
+            vol->mmu_segmentation_facets.set_triangle_from_string(
+                static_cast<int>(i), paint_hex[i]);
+    vol->mmu_segmentation_facets.shrink_to_fit();
+}
+
+// Per-object/-volume config overrides. Mirrors the 3MF loader's metadata path
+// (set_deserialize routes the string through the schema deserializer so it
+// parses to the right option type). Unknown keys are skipped so one bad key
+// doesn't fail the whole object; silent forward-compat substitution matches
+// the loader.
+static void apply_overrides(ModelConfigObject& config, const char* const* keys,
+                            const char* const* vals, size_t count) {
+    if (count == 0) return;
+    ConfigSubstitutionContext ctx(ForwardCompatibilitySubstitutionRule::EnableSilent);
+    for (size_t i = 0; i < count; ++i) {
+        const char* key = keys[i];
+        const char* val = vals[i];
+        if (!key || !val || !print_config_def.has(key))
+            continue;
+        try {
+            config.set_deserialize(key, val, ctx);
+        } catch (const std::exception&) {
+            // Skip a value the deserializer rejects rather than aborting.
+        }
+    }
+}
+
 } // namespace
 
 extern "C" {
@@ -851,19 +906,11 @@ slic3r_status slic3r_model_add_object(
     if (ovr_count != 0 && (!ovr_keys || !ovr_vals))
         return SLIC3R_ERR_INVALID_ARG;
     try {
-        // Rebuild an indexed_triangle_set from the raw arrays (object-local
-        // coords) — same ingest as slic3r_orient_mesh.
-        indexed_triangle_set its;
-        its.vertices.reserve(vcount);
-        for (size_t i = 0; i < vcount; ++i)
-            its.vertices.emplace_back(verts[i * 3 + 0], verts[i * 3 + 1],
-                                      verts[i * 3 + 2]);
-        its.indices.reserve(tcount);
-        for (size_t i = 0; i < tcount; ++i)
-            its.indices.emplace_back(static_cast<int32_t>(indices[i * 3 + 0]),
-                                     static_cast<int32_t>(indices[i * 3 + 1]),
-                                     static_cast<int32_t>(indices[i * 3 + 2]));
-        TriangleMesh mesh(its);
+        TriangleMesh mesh(its_from_buffers(verts, vcount, indices, tcount));
+        // Match the .3mf loader (bbs_3mf.cpp): a negative signed volume means
+        // inverted winding — flip so the in-memory build slices identically.
+        if (mesh.volume() < 0.0)
+            mesh.flip_triangles();
 
         ModelObject* obj = m->model.add_object();
         obj->name = name ? name : "";
@@ -873,7 +920,9 @@ slic3r_status slic3r_model_add_object(
         obj->config.set_key_value("extruder", new ConfigOptionInt(extruder));
 
         // Object->world transform: 16 column-major doubles map straight onto
-        // Eigen's (column-major) Matrix4d, which is what Transform3d wraps.
+        // Eigen's (column-major) Matrix4d, which is what Transform3d wraps. For
+        // a solo object the world placement rides the instance (a single volume
+        // stays centered) — the .3mf loader's non-component path does the same.
         Eigen::Map<const Eigen::Matrix4d> mat(transform);
         Transform3d t(mat);
         // ModelInstance only exposes the Geometry::Transformation overload
@@ -881,40 +930,8 @@ slic3r_status slic3r_model_add_object(
         ModelInstance* inst = obj->add_instance();
         inst->set_transformation(Geometry::Transformation(t));
 
-        // MMU color-painting: the hex strings are already in the BBS format
-        // FacetsAnnotation::set_triangle_from_string expects — pass through.
-        if (paint_count > 0) {
-            vol->mmu_segmentation_facets.reserve(paint_count);
-            for (size_t i = 0; i < paint_count; ++i) {
-                if (paint_hex[i] && paint_hex[i][0] != '\0')
-                    vol->mmu_segmentation_facets.set_triangle_from_string(
-                        static_cast<int>(i), paint_hex[i]);
-            }
-            vol->mmu_segmentation_facets.shrink_to_fit();
-        }
-
-        // Per-object config overrides. Mirrors the 3MF loader's per-object
-        // metadata path (bbs_3mf.cpp: model_object->config.set_deserialize),
-        // which routes the string value through the schema deserializer so it
-        // parses to the right option type. Unknown keys are skipped so one bad
-        // key doesn't fail the whole object; silent forward-compat
-        // substitution matches the loader.
-        if (ovr_count > 0) {
-            ConfigSubstitutionContext ctx(
-                ForwardCompatibilitySubstitutionRule::EnableSilent);
-            for (size_t i = 0; i < ovr_count; ++i) {
-                const char* key = ovr_keys[i];
-                const char* val = ovr_vals[i];
-                if (!key || !val || !print_config_def.has(key))
-                    continue;
-                try {
-                    obj->config.set_deserialize(key, val, ctx);
-                } catch (const std::exception&) {
-                    // Skip a value the deserializer rejects rather than
-                    // aborting the whole object.
-                }
-            }
-        }
+        apply_paint(vol, paint_hex, paint_count);
+        apply_overrides(obj->config, ovr_keys, ovr_vals, ovr_count);
 
         return SLIC3R_OK;
     } catch (const std::exception& e) {
@@ -922,6 +939,86 @@ slic3r_status slic3r_model_add_object(
         return SLIC3R_ERR_INTERNAL;
     } catch (...) {
         set_err(out_err, "unknown error in slic3r_model_add_object");
+        return SLIC3R_ERR_INTERNAL;
+    }
+}
+
+slic3r_status slic3r_model_add_group(
+    slic3r_model_t* m, const char* name, size_t* out_index, char** out_err) {
+    if (out_err) *out_err = nullptr;
+    if (!m) return SLIC3R_ERR_INVALID_ARG;
+    try {
+        ModelObject* obj = m->model.add_object();
+        obj->name = name ? name : "";
+        // A multi-volume group is one ModelObject with an identity instance;
+        // each volume carries its own world placement (added via
+        // slic3r_model_add_volume). This mirrors the .3mf writer's
+        // components-with-identity-build-item shape and the loader's
+        // component path (bbs_3mf.cpp), so buffer-load and temp-.3mf agree.
+        ModelInstance* inst = obj->add_instance();
+        inst->set_transformation(Geometry::Transformation(Transform3d::Identity()));
+        if (out_index) *out_index = m->model.objects.size() - 1;
+        return SLIC3R_OK;
+    } catch (const std::exception& e) {
+        set_err(out_err, e.what());
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
+        set_err(out_err, "unknown error in slic3r_model_add_group");
+        return SLIC3R_ERR_INTERNAL;
+    }
+}
+
+slic3r_status slic3r_model_add_volume(
+    slic3r_model_t* m, size_t object_index, const char* name,
+    const float* verts, size_t vcount,
+    const uint32_t* indices, size_t tcount,
+    const double transform[16], int extruder,
+    const char* const* paint_hex, size_t paint_count,
+    const char* const* ovr_keys, const char* const* ovr_vals, size_t ovr_count,
+    char** out_err) {
+    if (out_err) *out_err = nullptr;
+    if (!m || !verts || !indices || !transform || vcount == 0 || tcount == 0)
+        return SLIC3R_ERR_INVALID_ARG;
+    if (paint_count != 0 && !paint_hex)
+        return SLIC3R_ERR_INVALID_ARG;
+    if (ovr_count != 0 && (!ovr_keys || !ovr_vals))
+        return SLIC3R_ERR_INVALID_ARG;
+    if (object_index >= m->model.objects.size())
+        return SLIC3R_ERR_INVALID_ARG;
+    try {
+        TriangleMesh mesh(its_from_buffers(verts, vcount, indices, tcount));
+        // Match the .3mf loader (bbs_3mf.cpp): a negative signed volume means
+        // inverted winding — flip so the in-memory build slices identically.
+        if (mesh.volume() < 0.0)
+            mesh.flip_triangles();
+
+        ModelObject* obj = m->model.objects[object_index];
+        ModelVolume* vol = obj->add_volume(std::move(mesh));
+        vol->name = name ? name : "";
+
+        // Per-volume extruder (1-based filament index) — group members each
+        // print with their own filament, so the hint lives on the volume.
+        vol->config.set_key_value("extruder", new ConfigOptionInt(extruder));
+
+        // Volume->world transform. `add_volume` (modify_to_center_geometry
+        // defaults true) centers the mesh and bakes a compensating translation
+        // into the volume transform; compose the world placement onto that,
+        // exactly as the loader's component path does
+        // (bbs_3mf.cpp: set_transformation(comp * volume->get_transformation())).
+        Eigen::Map<const Eigen::Matrix4d> mat(transform);
+        Transform3d world_mat(mat);
+        Geometry::Transformation world(world_mat);
+        vol->set_transformation(world * vol->get_transformation());
+
+        apply_paint(vol, paint_hex, paint_count);
+        apply_overrides(vol->config, ovr_keys, ovr_vals, ovr_count);
+
+        return SLIC3R_OK;
+    } catch (const std::exception& e) {
+        set_err(out_err, e.what());
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
+        set_err(out_err, "unknown error in slic3r_model_add_volume");
         return SLIC3R_ERR_INTERNAL;
     }
 }

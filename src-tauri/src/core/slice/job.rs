@@ -42,12 +42,10 @@ pub struct SliceJobInput {
     #[serde(skip)]
     pub objects: Vec<super::input::SliceObject>,
     /// Test/parity only: round-trip the geometry through a temp `.3mf`
-    /// (`write_3mf` → `Model::load`) instead of building the `Model`
-    /// in-memory via `Model::add_object`. Default `false` = buffer-load.
-    /// `build_slice_input` also sets this `true` for plates carrying
-    /// multi-volume groups, which the single-mesh `add_object` FFI can't
-    /// represent — the temp-`.3mf` writer collapses each group into one
-    /// `ModelObject` with N volumes (the floating-regions fix).
+    /// (`write_3mf` → `Model::load`) instead of building the `Model` in-memory
+    /// (solos via `add_object`, groups via `add_group` + `add_volume`). Default
+    /// `false` = in-memory build. `build_slice_input` always leaves this
+    /// `false`; only the parity gate flips it to prove the two routes agree.
     #[serde(default)]
     pub force_temp_3mf: bool,
     /// Directory to write G-code into. Output files land at

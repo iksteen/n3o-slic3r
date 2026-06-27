@@ -738,38 +738,16 @@ impl Model {
         paint_hex: &[String],
         overrides: &[(String, String)],
     ) -> Result<()> {
-        let cname = CString::new(name).map_err(|_| Error {
-            kind: ErrorKind::InvalidArg,
-            message: Some("name has NUL".into()),
-        })?;
+        let cname = cstring(name, "name")?;
+        validate_indices(verts, indices)?;
 
-        // Own the CStrings for the lifetime of the call; collect raw pointers
-        // into parallel arrays the C side reads but does not retain.
-        let paint_c: Vec<CString> = paint_hex
-            .iter()
-            .map(|s| {
-                CString::new(s.as_str()).map_err(|_| Error {
-                    kind: ErrorKind::InvalidArg,
-                    message: Some("paint hex has NUL".into()),
-                })
-            })
-            .collect::<Result<_>>()?;
-        let paint_ptrs: Vec<*const c_char> = paint_c.iter().map(|c| c.as_ptr()).collect();
-
-        let mut key_c: Vec<CString> = Vec::with_capacity(overrides.len());
-        let mut val_c: Vec<CString> = Vec::with_capacity(overrides.len());
-        for (k, v) in overrides {
-            key_c.push(CString::new(k.as_str()).map_err(|_| Error {
-                kind: ErrorKind::InvalidArg,
-                message: Some("override key has NUL".into()),
-            })?);
-            val_c.push(CString::new(v.as_str()).map_err(|_| Error {
-                kind: ErrorKind::InvalidArg,
-                message: Some("override value has NUL".into()),
-            })?);
-        }
-        let key_ptrs: Vec<*const c_char> = key_c.iter().map(|c| c.as_ptr()).collect();
-        let val_ptrs: Vec<*const c_char> = val_c.iter().map(|c| c.as_ptr()).collect();
+        // Own the CStrings for the lifetime of the call; the C side reads the
+        // derived pointer arrays but does not retain them. An empty Vec's
+        // `as_ptr()` is valid and the C side never derefs it when the count is 0.
+        let strs = ObjectStrings::marshal(paint_hex, overrides)?;
+        let paint_ptrs = strs.paint_ptrs();
+        let key_ptrs = strs.key_ptrs();
+        let val_ptrs = strs.val_ptrs();
 
         let mut err: *mut c_char = ptr::null_mut();
         // SAFETY: self.raw is a live model handle; verts/indices point to
@@ -786,33 +764,151 @@ impl Model {
                 indices.len() / 3,
                 transform.as_ptr(),
                 extruder,
-                if paint_ptrs.is_empty() {
-                    ptr::null()
-                } else {
-                    paint_ptrs.as_ptr()
-                },
+                paint_ptrs.as_ptr(),
                 paint_ptrs.len(),
-                if key_ptrs.is_empty() {
-                    ptr::null()
-                } else {
-                    key_ptrs.as_ptr()
-                },
-                if val_ptrs.is_empty() {
-                    ptr::null()
-                } else {
-                    val_ptrs.as_ptr()
-                },
+                key_ptrs.as_ptr(),
+                val_ptrs.as_ptr(),
                 key_ptrs.len(),
                 &mut err,
             )
         };
         let result = unsafe { check_with_err(status, err) };
         // Keep the owning CStrings alive until after the FFI call returns.
-        drop(paint_c);
-        drop(key_c);
-        drop(val_c);
+        drop(strs);
         result
     }
+
+    /// Create an empty multi-volume group object (one `ModelObject` + identity
+    /// instance) and return its index for the [`Model::add_volume`] calls that
+    /// follow. Build a grouped object in-memory with `add_group` + one
+    /// `add_volume` per member, instead of round-tripping a `.3mf`.
+    pub fn add_group(&mut self, name: &str) -> Result<usize> {
+        let cname = cstring(name, "name")?;
+        let mut index: usize = 0;
+        let mut err: *mut c_char = ptr::null_mut();
+        // SAFETY: self.raw is a live model handle; cname lives through the call;
+        // index + err are out-params we own on return.
+        let status =
+            unsafe { sys::slic3r_model_add_group(self.raw, cname.as_ptr(), &mut index, &mut err) };
+        unsafe { check_with_err(status, err) }?;
+        Ok(index)
+    }
+
+    /// Append one `ModelVolume` (from raw buffers) to the group object at
+    /// `object_index` (from [`Model::add_group`]). Buffers / paint / overrides
+    /// match [`Model::add_object`], except `transform` is the volume->world
+    /// placement (composed onto the volume's centering compensation, matching a
+    /// `.3mf` round-trip) and `extruder` + `overrides` are set on the *volume*
+    /// config — each group member prints with its own filament.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_volume(
+        &mut self,
+        object_index: usize,
+        name: &str,
+        verts: &[f32],
+        indices: &[u32],
+        transform: &[f64; 16],
+        extruder: i32,
+        paint_hex: &[String],
+        overrides: &[(String, String)],
+    ) -> Result<()> {
+        let cname = cstring(name, "name")?;
+        validate_indices(verts, indices)?;
+        let strs = ObjectStrings::marshal(paint_hex, overrides)?;
+        let paint_ptrs = strs.paint_ptrs();
+        let key_ptrs = strs.key_ptrs();
+        let val_ptrs = strs.val_ptrs();
+
+        let mut err: *mut c_char = ptr::null_mut();
+        // SAFETY: self.raw is a live model handle; verts/indices point to
+        // vcount*3 / tcount*3 valid elements; transform points to 16 doubles;
+        // the CStrings + their pointer vecs outlive the call (the C side does
+        // not retain them, and an empty Vec's `as_ptr()` is fine — count is 0);
+        // err is an out-param we own on non-null return.
+        let status = unsafe {
+            sys::slic3r_model_add_volume(
+                self.raw,
+                object_index,
+                cname.as_ptr(),
+                verts.as_ptr(),
+                verts.len() / 3,
+                indices.as_ptr(),
+                indices.len() / 3,
+                transform.as_ptr(),
+                extruder,
+                paint_ptrs.as_ptr(),
+                paint_ptrs.len(),
+                key_ptrs.as_ptr(),
+                val_ptrs.as_ptr(),
+                key_ptrs.len(),
+                &mut err,
+            )
+        };
+        let result = unsafe { check_with_err(status, err) };
+        drop(strs);
+        result
+    }
+}
+
+/// Owned `CString`s for one `add_object` / `add_volume` call. The C side reads
+/// the derived `*const c_char` arrays but does not retain them, so the owners
+/// must outlive the FFI call — keep this on the stack across it.
+struct ObjectStrings {
+    paint: Vec<CString>,
+    keys: Vec<CString>,
+    vals: Vec<CString>,
+}
+
+impl ObjectStrings {
+    fn marshal(paint_hex: &[String], overrides: &[(String, String)]) -> Result<Self> {
+        let paint = paint_hex
+            .iter()
+            .map(|s| cstring(s, "paint hex"))
+            .collect::<Result<_>>()?;
+        let mut keys = Vec::with_capacity(overrides.len());
+        let mut vals = Vec::with_capacity(overrides.len());
+        for (k, v) in overrides {
+            keys.push(cstring(k, "override key")?);
+            vals.push(cstring(v, "override value")?);
+        }
+        Ok(Self { paint, keys, vals })
+    }
+
+    fn paint_ptrs(&self) -> Vec<*const c_char> {
+        self.paint.iter().map(|c| c.as_ptr()).collect()
+    }
+    fn key_ptrs(&self) -> Vec<*const c_char> {
+        self.keys.iter().map(|c| c.as_ptr()).collect()
+    }
+    fn val_ptrs(&self) -> Vec<*const c_char> {
+        self.vals.iter().map(|c| c.as_ptr()).collect()
+    }
+}
+
+/// `CString::new` with an `InvalidArg` error naming the offending field.
+fn cstring(s: &str, what: &str) -> Result<CString> {
+    CString::new(s).map_err(|_| Error {
+        kind: ErrorKind::InvalidArg,
+        message: Some(format!("{what} has NUL")),
+    })
+}
+
+/// Bounds-check triangle indices before they reach libslic3r — it indexes the
+/// vertex array unchecked (convex-hull / face-normal passes), so an out-of-range
+/// index is an out-of-bounds read inside the engine. Same guard as `orient_mesh`.
+fn validate_indices(verts: &[f32], indices: &[u32]) -> Result<()> {
+    let vertex_count = verts.len() / 3;
+    if let Some(&max_index) = indices.iter().max() {
+        if max_index as usize >= vertex_count {
+            return Err(Error {
+                kind: ErrorKind::InvalidArg,
+                message: Some(format!(
+                    "triangle index {max_index} out of range for {vertex_count} vertices"
+                )),
+            });
+        }
+    }
+    Ok(())
 }
 
 impl Drop for Model {
@@ -1187,5 +1283,37 @@ mod tests {
         model
             .add_object("tri", &verts, &indices, &identity, 1, &[], &[])
             .expect("add_object should succeed");
+    }
+
+    #[test]
+    fn add_group_then_volumes_builds_a_multivolume_object() {
+        // No slic3r_init needed: these only construct Model data.
+        let mut model = Model::new().expect("model new");
+        let identity: [f64; 16] = [
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ];
+        let verts: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let indices: [u32; 3] = [0, 1, 2];
+
+        let idx = model.add_group("grp").expect("add_group should succeed");
+        assert_eq!(idx, 0, "first object created → index 0");
+        // Two volumes appended to the same group object, each its own extruder.
+        model
+            .add_volume(idx, "lower", &verts, &indices, &identity, 1, &[], &[])
+            .expect("add_volume 1 should succeed");
+        model
+            .add_volume(idx, "upper", &verts, &indices, &identity, 2, &[], &[])
+            .expect("add_volume 2 should succeed");
+
+        // Out-of-range object index is rejected, not a crash.
+        assert!(
+            model
+                .add_volume(99, "oops", &verts, &indices, &identity, 1, &[], &[])
+                .is_err(),
+            "add_volume past the last object must error",
+        );
     }
 }

@@ -402,6 +402,55 @@ fn two_objects_buffer_load_matches_temp_3mf() {
     assert_parity("two-objects", objects, 1);
 }
 
+/// Grouped (multi-volume) parity: two volumes sharing one group — the
+/// in-memory `add_group` + `add_volume` path vs the temp-`.3mf` `<components>`
+/// round-trip. Proves the volume-transform composition matches the loader's
+/// component path (which composes the component transform onto `add_volume`'s
+/// centering compensation), and that the per-volume extruder hint lands.
+#[test]
+fn grouped_object_buffer_load_matches_temp_3mf() {
+    ensure_ffi_init();
+    let m = load_stl_mesh();
+    let verts = Arc::new(m.vertices);
+    let idx = Arc::new(m.indices);
+    let g = n3o_slic3r_lib::core::scene::state::GroupId::fresh();
+    // Second volume: rotate 30° about Z + lift +20mm in Z. A rotation (unlike a
+    // pure translation) does NOT commute with `add_volume`'s centering
+    // compensation, so this fixture actually distinguishes `world * centering`
+    // from a flipped order — and the box's off-origin centroid (0..20) makes the
+    // centering term non-trivial. Column-major: cols are the basis vectors.
+    let (c, s) = (30.0_f64.to_radians().cos(), 30.0_f64.to_radians().sin());
+    let mut placed = IDENTITY16;
+    placed[0] = c;
+    placed[1] = s;
+    placed[4] = -s;
+    placed[5] = c;
+    placed[14] = 20.0;
+    let objects = vec![
+        SliceObject {
+            name: "lower".into(),
+            vertices: Arc::clone(&verts),
+            indices: Arc::clone(&idx),
+            paint: None,
+            transform: IDENTITY16,
+            extruder: 1,
+            overrides: vec![],
+            group: Some(g),
+        },
+        SliceObject {
+            name: "upper".into(),
+            vertices: verts,
+            indices: idx,
+            paint: None,
+            transform: placed,
+            extruder: 2,
+            overrides: vec![],
+            group: Some(g),
+        },
+    ];
+    assert_parity("grouped", objects, 2);
+}
+
 /// Painted (MMU) parity: every triangle painted to a non-base filament
 /// state. Proves the per-triangle paint hex hand-off (`add_object`'s
 /// `set_triangle_from_string`) matches libslic3r's own 3MF paint reader.

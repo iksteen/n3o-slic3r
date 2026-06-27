@@ -436,12 +436,83 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Add the plate's [`SliceObject`]s to `model` in-memory (the default,
+/// no-temp-file path). A solo object rides [`Model::add_object`] (world
+/// transform on the instance); a multi-volume group (members sharing a
+/// `GroupId`) becomes one [`Model::add_group`] + one [`Model::add_volume`] per
+/// member (world transform on each volume). Build units emit in first-
+/// appearance order, and a one-member group is a solo — mirroring the `.3mf`
+/// writer's `Layout` so this path stays byte-identical to a `.3mf` round-trip.
+fn build_model_objects(
+    model: &mut Model,
+    objects: &[super::input::SliceObject],
+) -> std::result::Result<(), String> {
+    use crate::core::scene::state::GroupId;
+    use std::collections::BTreeMap;
+
+    // Borrow the per-triangle paint straight from the object's `Arc` — no clone.
+    fn paint(o: &super::input::SliceObject) -> &[String] {
+        o.paint.as_deref().map(|p| p.as_slice()).unwrap_or(&[])
+    }
+
+    // Bucket into build units, preserving first-appearance order: a solo per
+    // ungrouped object, one unit per group (members in encounter order).
+    let mut units: Vec<Vec<&super::input::SliceObject>> = Vec::new();
+    let mut group_pos: BTreeMap<GroupId, usize> = BTreeMap::new();
+    for o in objects {
+        match o.group {
+            Some(g) => match group_pos.get(&g) {
+                Some(&pos) => units[pos].push(o),
+                None => {
+                    group_pos.insert(g, units.len());
+                    units.push(vec![o]);
+                }
+            },
+            None => units.push(vec![o]),
+        }
+    }
+
+    for unit in &units {
+        // A one-member group is a solo (matches the writer's Layout).
+        if let [o] = unit[..] {
+            model
+                .add_object(
+                    &o.name,
+                    &o.vertices,
+                    &o.indices,
+                    &o.transform,
+                    o.extruder,
+                    &paint(o),
+                    &o.overrides,
+                )
+                .map_err(|e| format!("add_object({}) failed: {e}", o.name))?;
+        } else {
+            let obj_idx = model
+                .add_group(&unit[0].name)
+                .map_err(|e| format!("add_group({}) failed: {e}", unit[0].name))?;
+            for o in unit {
+                model
+                    .add_volume(
+                        obj_idx,
+                        &o.name,
+                        &o.vertices,
+                        &o.indices,
+                        &o.transform,
+                        o.extruder,
+                        &paint(o),
+                        &o.overrides,
+                    )
+                    .map_err(|e| format!("add_volume({}) failed: {e}", o.name))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Serialize the plate's [`SliceObject`]s to a temp `.3mf` for the
-/// `force_temp_3mf` path: the parity gate (proving buffer-load matches
-/// the `write_3mf` → `Model::load` route byte-for-byte) and the
-/// grouped-plate fallback (the writer collapses a multi-volume group
-/// into one ModelObject with N volumes — the single-mesh `add_object`
-/// can't). Caller `Model::load`s the returned path, then deletes it.
+/// `force_temp_3mf` path — test/parity only (proving the in-memory build
+/// matches the `write_3mf` → `Model::load` route byte-for-byte). Caller
+/// `Model::load`s the returned path, then deletes it.
 fn objects_to_temp_3mf(objects: &[super::input::SliceObject]) -> PathBuf {
     use crate::core::scene::loaders::compute_bounding_box;
     use crate::core::scene::state::{MeshProvenance, NewMesh};
@@ -677,12 +748,11 @@ fn run_worker(
         };
 
         // Build the libslic3r model from the plate's in-memory geometry.
-        // Default path: hand each object's mesh buffers straight to
-        // `Model::add_object` (no temp file, no XML round-trip). Parity /
-        // grouped-plate fallback (`force_temp_3mf`): serialize the same
-        // objects to a temp `.3mf`, `Model::load` it, then delete it —
-        // the only path that can collapse a multi-volume group into one
-        // ModelObject (the single-mesh `add_object` can't).
+        // Default path: `build_model_objects` hands each object's mesh buffers
+        // straight to libslic3r (solos via `add_object`, multi-volume groups via
+        // `add_group` + `add_volume`) — no temp file, no XML round-trip. The
+        // `force_temp_3mf` path (test/parity only) serializes the same objects
+        // to a temp `.3mf`, `Model::load`s it, then deletes it.
         let mut model = match Model::new() {
             Ok(m) => m,
             Err(e) => {
@@ -702,32 +772,15 @@ fn run_worker(
                 fail(&handle, &sink, job_id, plate_id, err);
                 return;
             }
-        } else {
-            let mut add_err = None;
-            for o in &job.objects {
-                if let Err(e) = model.add_object(
-                    &o.name,
-                    &o.vertices,
-                    &o.indices,
-                    &o.transform,
-                    o.extruder,
-                    o.paint.as_deref().map(|v| v.as_slice()).unwrap_or(&[]),
-                    &o.overrides,
-                ) {
-                    add_err = Some(format!("add_object({}) failed: {e}", o.name));
-                    break;
-                }
-            }
-            if let Some(raw_message) = add_err {
-                fail(
-                    &handle,
-                    &sink,
-                    job_id,
-                    plate_id,
-                    SliceError::Unknown { raw_message },
-                );
-                return;
-            }
+        } else if let Err(raw_message) = build_model_objects(&mut model, &job.objects) {
+            fail(
+                &handle,
+                &sink,
+                job_id,
+                plate_id,
+                SliceError::Unknown { raw_message },
+            );
+            return;
         }
         // Toolchanger MMU paint routing: remap each painted filament
         // state to the libslic3r filament index its base material binds

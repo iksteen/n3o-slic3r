@@ -179,12 +179,11 @@ fn slice_fourcolor(
     ));
 
     let objects = objects_from_3mf(&fourcolor_3mf());
-    // Multi-volume groups can't ride buffer-load's single-mesh add_object;
-    // fall back to the temp-.3mf path for them (mirrors build_slice_input).
-    let force_temp_3mf = objects.iter().any(|o| o.group.is_some());
+    // Everything slices in-memory, groups included (add_group + add_volume) —
+    // exercise the shipping path, not the parity-only temp-.3mf route.
     let input = SliceJobInput {
         objects,
-        force_temp_3mf,
+        force_temp_3mf: false,
         output_dir: temp_dir.display().to_string(),
         context: ContextJson {
             printer,
