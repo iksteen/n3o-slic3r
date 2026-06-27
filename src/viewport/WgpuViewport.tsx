@@ -757,15 +757,11 @@ export function WgpuViewport({
     // A committed tower drag (or any project override) re-resolves the tower so
     // the authoritative, clamped placement settles in.
     const offOverrides = onEvents(["scene:project_overrides_changed"], () => void refreshTower());
-    // A new project reuses MeshIds from 1, so the renderer's GPU mesh cache must
-    // be dropped or it would draw the previous project's geometry. Reset, then
-    // reframe (which renders) for the fresh scene.
-    const offLoaded = onEvents(["project:loaded"], async () => {
-      try {
-        await invoke("viewport_reset");
-      } catch (e) {
-        console.error("viewport_reset failed", e);
-      }
+    // A new project replaced the scene: reframe (which renders) for the fresh
+    // geometry. The renderer's GPU mesh cache was already dropped Rust-side by
+    // the replace command (see `project_io`) before this event fired, so the
+    // render uploads the new project's meshes rather than reusing stale ones.
+    const offLoaded = onEvents(["project:loaded"], () => {
       void reframe();
       void refreshTower(); // drop any tower mesh from the previous project
     });

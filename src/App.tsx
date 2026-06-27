@@ -214,6 +214,8 @@ function App() {
   // by their caches. If we were *in* preview when that happened, leave preview
   // explicitly rather than leaning on `showPreview`'s `&& canPreview` mask —
   // the freshly-loaded project has nothing sliced. Devices view is left alone.
+  // (The renderer's GPU mesh cache is dropped Rust-side by the replace command
+  // itself — see `project_io` — so there's nothing to invalidate here.)
   useEffect(() => {
     return onEvents(PROJECT_REPLACED_EVENTS, () => {
       setMode((current) => (current === "preview" ? "scene" : current));

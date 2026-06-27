@@ -8,6 +8,7 @@
 
 pub mod core;
 mod dialog;
+mod project_io;
 mod toolpath_render;
 mod viewport_gizmo;
 mod viewport_gpu;
@@ -175,7 +176,6 @@ pub fn run() {
             viewport_render::viewport_grab,
             viewport_render::viewport_gizmo_commit,
             viewport_render::viewport_ray_plane,
-            viewport_render::viewport_reset,
             viewport_render::viewport_set_tower,
             viewport_render::viewport_move_tower,
             viewport_render::viewport_thumbnail,
@@ -247,8 +247,8 @@ pub fn run() {
             core::project::commands::project_clear_material_slot,
             core::project::commands::project_save,
             core::project::commands::project_save_as,
-            core::project::commands::project_load,
-            core::project::commands::project_new,
+            project_io::project_load,
+            project_io::project_new,
             core::project::commands::project_autosave_enable,
             core::project::commands::project_autosave_disable,
             core::project::commands::project_autosave_list,

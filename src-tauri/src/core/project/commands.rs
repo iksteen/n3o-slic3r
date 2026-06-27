@@ -24,7 +24,7 @@ use crate::core::scene::events::SceneEvent;
 
 /// Emit each event on the given window. Errors are dropped — a
 /// dropped frontend connection shouldn't fail a command.
-fn emit_all(window: &Window, events: &[SceneEvent]) {
+pub(crate) fn emit_all(window: &Window, events: &[SceneEvent]) {
     for event in events {
         if let Err(e) = window.emit(event.name(), event) {
             tracing::warn!(
@@ -202,77 +202,38 @@ pub fn project_save_as(
     Ok(())
 }
 
-/// Load a project file from `path`, **replacing** the in-memory
-/// project wholesale. Emits `project:loaded { path }` so the
-/// frontend mirror can throw out its cached scene state and
-/// re-sync via `scene_snapshot`.
-///
-/// Returns the loaded project so the caller doesn't have to chain
-/// a separate read; the frontend can render immediately from the
-/// return value while the mirror catches up via the event.
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn project_load(
-    path: String,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<Project, String> {
-    let path_ref = std::path::Path::new(&path);
-    // Open project transparently imports a foreign OrcaSlicer / Bambu
-    // Studio project (no n3o_project.json) instead of erroring.
-    let (loaded, import_report) = match format::read_project(path_ref) {
-        Ok(p) => (p, None),
+/// Load a project file from `path`, transparently importing a foreign
+/// OrcaSlicer / Bambu Studio project (no `n3o_project.json`) instead of
+/// erroring — then `Some(report)` carries the import summary. Pure: builds the
+/// `Project` but does **not** swap it into state or emit; the app-shell
+/// `project_io::project_load` command does the wholesale replace (which also
+/// drops the renderer's GPU mesh cache — a thing `core` deliberately can't do,
+/// per AD-8).
+pub fn load_or_import(
+    path: &std::path::Path,
+) -> Result<(Project, Option<crate::core::orca_import::ImportReport>), String> {
+    match format::read_project(path) {
+        Ok(p) => Ok((p, None)),
         Err(format::ProjectIoError::ForeignProject { .. }) => {
             let (mut project, report) =
-                crate::core::orca_import::import(path_ref).map_err(|e| format!("import: {e}"))?;
+                crate::core::orca_import::import(path).map_err(|e| format!("import: {e}"))?;
             // A foreign .3mf import becomes a *native* project — point its save
             // target at the matching `.n3o` name so the app reflects that (the
             // user saves a native project, never back to the foreign 3mf).
-            project.source_path = Some(path_ref.with_extension("n3o"));
-            (project, Some(report))
+            project.source_path = Some(path.with_extension("n3o"));
+            Ok((project, Some(report)))
         }
-        Err(e) => return Err(e.to_string()),
-    };
-    let returned = loaded.clone();
-    {
-        let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-        *p = loaded;
+        Err(e) => Err(e.to_string()),
     }
-    // ProjectLoaded first (scene re-syncs), then the import report.
-    let mut events = vec![SceneEvent::ProjectLoaded { path: path.clone() }];
-    if let Some(report) = import_report {
-        events.push(SceneEvent::ProjectImported {
-            path: path.clone(),
-            report,
-        });
-    }
-    emit_all(&window, &events);
-    Ok(returned)
 }
 
-/// Reset the in-memory project to a fresh, empty default, **replacing**
-/// the current one wholesale. Emits `project:loaded` (with an empty
-/// path — there's no file yet) so the frontend mirror throws out its
-/// cached scene and re-syncs via `scene_snapshot`, the same path as
-/// loading a file. The new project has `source_path = None`, so the UI
-/// shows it as "Untitled". The previous project's autosave file is
-/// keyed by its own uuid and survives, so this stays recoverable.
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn project_new(window: Window, state: State<Arc<Mutex<Project>>>) -> Result<(), String> {
-    {
-        let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-        // Bind the user's last-selected printer to the new project's plate.
-        let preferred = crate::core::config::load().defaults.printer_instance;
-        *p = Project::with_preferred_printer(preferred.as_deref());
-    }
-    emit_all(
-        &window,
-        &[SceneEvent::ProjectLoaded {
-            path: String::new(),
-        }],
-    );
-    Ok(())
+/// A fresh, empty default project bound to the user's last-selected printer.
+/// Pure: the app-shell `project_io::project_new` command swaps it into state +
+/// emits. The new project has `source_path = None` ("Untitled"); the previous
+/// project's autosave file is keyed by its own uuid and survives.
+pub fn fresh_project() -> Project {
+    let preferred = crate::core::config::load().defaults.printer_instance;
+    Project::with_preferred_printer(preferred.as_deref())
 }
 
 // ---- Autosave --------------------------------------------

@@ -1007,6 +1007,15 @@ impl ViewportRenderer {
         self.bind = make_bind(&self.device, &self.bgl, &self.ubuf);
     }
 
+    /// Drop the cached GPU meshes. `MeshId`s restart at 1 in each project, so a
+    /// stale entry would draw the previous project's geometry under a reused id.
+    /// Called by the app-shell project-replace commands (`project_io`) under the
+    /// ViewportState + Project locks, so the clear + project swap are atomic
+    /// against a concurrent `frame`.
+    pub fn clear_meshes(&mut self) {
+        self.meshes.clear();
+    }
+
     /// Render the live scene and read it back as tight RGBA8, top row first.
     pub fn frame(&mut self, req: &FrameRequest, project: &Arc<Mutex<Project>>) -> Vec<u8> {
         let (w, h) = (req.width.max(1), req.height.max(1));
@@ -1547,16 +1556,6 @@ pub fn viewport_frame(
     let mut guard = state.0.lock().unwrap();
     let r = guard.get_or_insert_with(ViewportRenderer::new);
     tauri::ipc::Response::new(r.frame(&req, project.inner()))
-}
-
-/// Drop the cached GPU meshes. `MeshId`s restart at 1 in a freshly loaded
-/// project, so without this the renderer would serve the previous project's
-/// geometry under the reused ids. Called by the frontend on `project:loaded`.
-#[tauri::command]
-pub fn viewport_reset(state: tauri::State<'_, ViewportState>) {
-    if let Some(r) = state.0.lock().unwrap().as_mut() {
-        r.meshes.clear();
-    }
 }
 
 #[derive(serde::Deserialize)]
