@@ -714,6 +714,105 @@ impl Model {
             unsafe { sys::slic3r_model_remap_paint_filaments(self.raw, perm.as_ptr(), perm.len()) };
         check(status)
     }
+
+    /// Build one `ModelObject` in memory from raw buffers and append it to the
+    /// model — the file-less equivalent of loading a single object from a
+    /// `.3mf`. Lets the slice path hand geometry straight to libslic3r without
+    /// writing/parsing a temp file.
+    ///
+    /// - `verts`: flat object-local XYZ (3 floats per vertex).
+    /// - `indices`: flat triangle triples (3 indices per triangle).
+    /// - `transform`: 4x4 object->world matrix, column-major (glam/Eigen order).
+    /// - `extruder`: 1-based base filament index, set on the object config.
+    /// - `paint_hex`: per-triangle BBS paint hex strings. Pass an empty slice
+    ///   for no painting; otherwise one entry per triangle (`""` = unpainted).
+    /// - `overrides`: per-object config overrides as `(key, value)` pairs,
+    ///   applied through libslic3r's schema deserializer (unknown keys skipped).
+    pub fn add_object(
+        &mut self,
+        name: &str,
+        verts: &[f32],
+        indices: &[u32],
+        transform: &[f64; 16],
+        extruder: i32,
+        paint_hex: &[String],
+        overrides: &[(String, String)],
+    ) -> Result<()> {
+        let cname = CString::new(name).map_err(|_| Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("name has NUL".into()),
+        })?;
+
+        // Own the CStrings for the lifetime of the call; collect raw pointers
+        // into parallel arrays the C side reads but does not retain.
+        let paint_c: Vec<CString> = paint_hex
+            .iter()
+            .map(|s| {
+                CString::new(s.as_str()).map_err(|_| Error {
+                    kind: ErrorKind::InvalidArg,
+                    message: Some("paint hex has NUL".into()),
+                })
+            })
+            .collect::<Result<_>>()?;
+        let paint_ptrs: Vec<*const c_char> = paint_c.iter().map(|c| c.as_ptr()).collect();
+
+        let mut key_c: Vec<CString> = Vec::with_capacity(overrides.len());
+        let mut val_c: Vec<CString> = Vec::with_capacity(overrides.len());
+        for (k, v) in overrides {
+            key_c.push(CString::new(k.as_str()).map_err(|_| Error {
+                kind: ErrorKind::InvalidArg,
+                message: Some("override key has NUL".into()),
+            })?);
+            val_c.push(CString::new(v.as_str()).map_err(|_| Error {
+                kind: ErrorKind::InvalidArg,
+                message: Some("override value has NUL".into()),
+            })?);
+        }
+        let key_ptrs: Vec<*const c_char> = key_c.iter().map(|c| c.as_ptr()).collect();
+        let val_ptrs: Vec<*const c_char> = val_c.iter().map(|c| c.as_ptr()).collect();
+
+        let mut err: *mut c_char = ptr::null_mut();
+        // SAFETY: self.raw is a live model handle; verts/indices point to
+        // vcount*3 / tcount*3 valid elements; transform points to 16 doubles;
+        // the CStrings and their pointer vecs outlive the call (the C side does
+        // not retain them); err is an out-param we own on non-null return.
+        let status = unsafe {
+            sys::slic3r_model_add_object(
+                self.raw,
+                cname.as_ptr(),
+                verts.as_ptr(),
+                verts.len() / 3,
+                indices.as_ptr(),
+                indices.len() / 3,
+                transform.as_ptr(),
+                extruder,
+                if paint_ptrs.is_empty() {
+                    ptr::null()
+                } else {
+                    paint_ptrs.as_ptr()
+                },
+                paint_ptrs.len(),
+                if key_ptrs.is_empty() {
+                    ptr::null()
+                } else {
+                    key_ptrs.as_ptr()
+                },
+                if val_ptrs.is_empty() {
+                    ptr::null()
+                } else {
+                    val_ptrs.as_ptr()
+                },
+                key_ptrs.len(),
+                &mut err,
+            )
+        };
+        let result = unsafe { check_with_err(status, err) };
+        // Keep the owning CStrings alive until after the FFI call returns.
+        drop(paint_c);
+        drop(key_c);
+        drop(val_c);
+        result
+    }
 }
 
 impl Drop for Model {
@@ -1066,4 +1165,27 @@ pub fn clear_log_sink() {
     }
     let mut guard = LOG_CALLBACK.lock().expect("log callback mutex");
     *guard = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_object_builds_a_single_triangle_in_memory() {
+        // No slic3r_init needed: add_object only constructs Model data.
+        let mut model = Model::new().expect("model new");
+        // Identity object->world transform (column-major; identity is symmetric).
+        let identity: [f64; 16] = [
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ];
+        let verts: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let indices: [u32; 3] = [0, 1, 2];
+        model
+            .add_object("tri", &verts, &indices, &identity, 1, &[], &[])
+            .expect("add_object should succeed");
+    }
 }

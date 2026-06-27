@@ -833,6 +833,99 @@ slic3r_status slic3r_model_remap_paint_filaments(slic3r_model_t* m,
     }
 }
 
+// ---- In-memory model construction ----
+
+slic3r_status slic3r_model_add_object(
+    slic3r_model_t* m, const char* name,
+    const float* verts, size_t vcount,
+    const uint32_t* indices, size_t tcount,
+    const double transform[16], int extruder,
+    const char* const* paint_hex, size_t paint_count,
+    const char* const* ovr_keys, const char* const* ovr_vals, size_t ovr_count,
+    char** out_err) {
+    if (out_err) *out_err = nullptr;
+    if (!m || !verts || !indices || !transform || vcount == 0 || tcount == 0)
+        return SLIC3R_ERR_INVALID_ARG;
+    if (paint_count != 0 && !paint_hex)
+        return SLIC3R_ERR_INVALID_ARG;
+    if (ovr_count != 0 && (!ovr_keys || !ovr_vals))
+        return SLIC3R_ERR_INVALID_ARG;
+    try {
+        // Rebuild an indexed_triangle_set from the raw arrays (object-local
+        // coords) — same ingest as slic3r_orient_mesh.
+        indexed_triangle_set its;
+        its.vertices.reserve(vcount);
+        for (size_t i = 0; i < vcount; ++i)
+            its.vertices.emplace_back(verts[i * 3 + 0], verts[i * 3 + 1],
+                                      verts[i * 3 + 2]);
+        its.indices.reserve(tcount);
+        for (size_t i = 0; i < tcount; ++i)
+            its.indices.emplace_back(static_cast<int32_t>(indices[i * 3 + 0]),
+                                     static_cast<int32_t>(indices[i * 3 + 1]),
+                                     static_cast<int32_t>(indices[i * 3 + 2]));
+        TriangleMesh mesh(its);
+
+        ModelObject* obj = m->model.add_object();
+        obj->name = name ? name : "";
+        ModelVolume* vol = obj->add_volume(std::move(mesh));
+
+        // Per-object base extruder (1-based filament index).
+        obj->config.set_key_value("extruder", new ConfigOptionInt(extruder));
+
+        // Object->world transform: 16 column-major doubles map straight onto
+        // Eigen's (column-major) Matrix4d, which is what Transform3d wraps.
+        Eigen::Map<const Eigen::Matrix4d> mat(transform);
+        Transform3d t(mat);
+        // ModelInstance only exposes the Geometry::Transformation overload
+        // (unlike ModelVolume, which also takes a raw Transform3d), so wrap.
+        ModelInstance* inst = obj->add_instance();
+        inst->set_transformation(Geometry::Transformation(t));
+
+        // MMU color-painting: the hex strings are already in the BBS format
+        // FacetsAnnotation::set_triangle_from_string expects — pass through.
+        if (paint_count > 0) {
+            vol->mmu_segmentation_facets.reserve(paint_count);
+            for (size_t i = 0; i < paint_count; ++i) {
+                if (paint_hex[i] && paint_hex[i][0] != '\0')
+                    vol->mmu_segmentation_facets.set_triangle_from_string(
+                        static_cast<int>(i), paint_hex[i]);
+            }
+            vol->mmu_segmentation_facets.shrink_to_fit();
+        }
+
+        // Per-object config overrides. Mirrors the 3MF loader's per-object
+        // metadata path (bbs_3mf.cpp: model_object->config.set_deserialize),
+        // which routes the string value through the schema deserializer so it
+        // parses to the right option type. Unknown keys are skipped so one bad
+        // key doesn't fail the whole object; silent forward-compat
+        // substitution matches the loader.
+        if (ovr_count > 0) {
+            ConfigSubstitutionContext ctx(
+                ForwardCompatibilitySubstitutionRule::EnableSilent);
+            for (size_t i = 0; i < ovr_count; ++i) {
+                const char* key = ovr_keys[i];
+                const char* val = ovr_vals[i];
+                if (!key || !val || !print_config_def.has(key))
+                    continue;
+                try {
+                    obj->config.set_deserialize(key, val, ctx);
+                } catch (const std::exception&) {
+                    // Skip a value the deserializer rejects rather than
+                    // aborting the whole object.
+                }
+            }
+        }
+
+        return SLIC3R_OK;
+    } catch (const std::exception& e) {
+        set_err(out_err, e.what());
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
+        set_err(out_err, "unknown error in slic3r_model_add_object");
+        return SLIC3R_ERR_INTERNAL;
+    }
+}
+
 // ---- Slicing ----
 
 slic3r_status slic3r_slice(slic3r_model_t* model,

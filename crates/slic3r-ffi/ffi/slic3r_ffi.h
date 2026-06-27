@@ -244,6 +244,27 @@ slic3r_status slic3r_model_remap_paint_filaments(slic3r_model_t* model,
                                                  const int32_t* perm,
                                                  size_t perm_len);
 
+/* Build one ModelObject in-memory from raw buffers and append it to *model.
+ * Mirrors what loading a .3mf object does, without the file round-trip.
+ *   verts: flat object-local XYZ (vcount = number of vertices)
+ *   indices: flat triangle triples (tcount = number of triangles)
+ *   transform: 4x4 object->world, COLUMN-MAJOR (glam/Eigen native order)
+ *   extruder: 1-based; sets ModelObject config["extruder"]
+ *   paint_hex / paint_count: per-triangle BBS paint hex strings (paint_count
+ *     == tcount when present, else 0); entries may be "" for unpainted faces.
+ *   ovr_keys / ovr_vals / ovr_count: per-object config overrides as
+ *     key/value strings, applied to the ModelObject config via the schema
+ *     (set_deserialize) so they parse to the right option type.
+ * out_err may be NULL. */
+slic3r_status slic3r_model_add_object(
+    slic3r_model_t* m, const char* name,
+    const float* verts, size_t vcount,
+    const uint32_t* indices, size_t tcount,
+    const double transform[16], int extruder,
+    const char* const* paint_hex, size_t paint_count,
+    const char* const* ovr_keys, const char* const* ovr_vals, size_t ovr_count,
+    char** out_err);
+
 /* ---- Slicing ---- */
 
 /* Slice progress callback.
