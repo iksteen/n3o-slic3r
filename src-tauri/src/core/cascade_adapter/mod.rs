@@ -12,13 +12,12 @@
 //! See `docs/dev/libslic3r-workarounds.md` for the current set of quirks the
 //! shim already compensates for; this module inherits the contract.
 //!
-//! Submodules:
-//! - **`manifest`** — drop list + typo remap from Phase 0.5 findings.
+//! Submodule:
 //! - **`adapter`** — `adapt()` / `adapt_with_overrides()` that build a
-//!   `slic3r_ffi::Config` from a `Resolved` (or `ResolvedOverrides`).
+//!   `slic3r_ffi::Config` from a `Resolved` (or `ResolvedOverrides`). A key
+//!   libslic3r's schema doesn't carry (an OrcaSlicer-fork extra, or a typo) is
+//!   skipped — typos are normalized at import, not here.
 
 pub mod adapter;
-pub mod manifest;
 
 pub use adapter::{adapt, adapt_with_overrides, AdaptError, AdaptEvent, AdaptResult};
-pub use manifest::Manifest;

@@ -1,29 +1,24 @@
 //! `adapt()`: resolved logical config → `slic3r_ffi::Config`.
 //!
 //! Consumes the resolver's `Resolved` (or `ResolvedOverrides`) plus a
-//! `Context` plus a `Manifest`, writes every applicable key into a
-//! fresh `slic3r_ffi::Config`. Returns the config + a list of dropped
-//! / remapped keys for diagnostic reporting.
+//! `Context`, writes every applicable key into a fresh
+//! `slic3r_ffi::Config`. Returns the config + a list of per-key events
+//! (skipped / expanded / parse-error) for diagnostic reporting.
 //!
-//! Three transformation steps:
+//! Transformations:
 //!
-//! 1. **Typo remap.** Orca-side typos (Prusa cascade-import finding)
-//!    silently rewritten to their canonical spelling.
-//! 2. **Drop list.** OrcaSlicer-only keys (Bambu + Prusa
-//!    cascade-import findings) silently discarded — they have no
-//!    libslic3r meaning.
-//! 3. **Dimensional expansion.** Logical `bed_temp` writes the same
-//!    value into all 12 per-plate-type keys; `curr_bed_type` is set
-//!    from the active context's plate. This is the simplified
-//!    expansion; the "resolve per hypothetical plate context" form is
-//!    a forward task documented in `docs/dev/profiles.md` and known
-//!    limitations.
-//!
-//! Unknown-but-not-dropped keys (typos the manifest doesn't know
-//! about) surface as `AdaptDropEntry::UnknownKey` so the caller can
-//! decide whether to fail or warn.
+//! - **Schema lookup.** Each key is set on the Config iff libslic3r's schema
+//!   carries it. A key it doesn't carry is skipped (debug-logged, recorded as
+//!   `AdaptEvent::UnknownKey`) — these are OrcaSlicer-fork extras the bundled
+//!   cascades carry, or typos. Typos are normalized at *import*, not here
+//!   (see `scripts/import_*.py`); the runtime adapter has no drop list or
+//!   typo remap.
+//! - **Dimensional expansion.** Logical `bed_temp` writes the same value into
+//!   all 12 per-plate-type keys; `curr_bed_type` is set from the active
+//!   context's plate. This is the simplified expansion; the "resolve per
+//!   hypothetical plate context" form is a forward task documented in
+//!   `docs/dev/profiles.md` and known limitations.
 
-use super::manifest::Manifest;
 use crate::core::cascade::resolver::{Context, Resolved};
 use crate::core::cascade::ResolvedOverrides;
 use crate::core::profile_library::split_for_key;
@@ -32,24 +27,23 @@ use serde::Serialize;
 use slic3r_ffi::{Config, ErrorKind, OptBucket};
 
 /// Outcome of `adapt`. The Config itself is `Send`-but-not-trivially-
-/// serializable; the manifest of dropped/remapped/skipped entries
-/// flows up for the trace + Tauri command response.
+/// serializable; the list of skipped/expanded entries flows up for the
+/// trace + Tauri command response.
 pub struct AdaptResult {
     pub config: Config,
     pub events: Vec<AdaptEvent>,
 }
 
-/// Diagnostic events emitted during `adapt`. Surfaces remaps,
-/// drops, unknowns, and Config::set errors so the caller can render
-/// a "X of Y resolved keys made it into libslic3r" summary.
+/// Diagnostic events emitted during `adapt`. Surfaces skipped (unknown)
+/// keys, dimensional expansions, and Config::set errors so the caller can
+/// render a "X of Y resolved keys made it into libslic3r" summary.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind")]
 pub enum AdaptEvent {
-    /// OrcaSlicer-only key dropped per the manifest.
-    Dropped { key: String },
-    /// Key isn't in the libslic3r schema *and* isn't in the manifest
-    /// drop list. An unrecognized or typo'd key (typos are folded at
-    /// import; anything still unknown here is dropped, as libslic3r does).
+    /// Key isn't in the libslic3r schema, so it's skipped. Either an expected
+    /// OrcaSlicer-fork extra (Bambu/Prusa firmware knobs the bundled cascades
+    /// carry) or a typo (typos are folded at import; anything still unknown
+    /// here is skipped, as libslic3r itself does).
     UnknownKey { key: String },
     /// `Config::set` rejected the value (parse error). The value
     /// itself is captured in the event for trace + UI.
@@ -122,7 +116,6 @@ impl std::error::Error for AdaptError {}
 pub fn adapt(
     resolved: &Resolved,
     ctx: &dyn Context,
-    manifest: &Manifest,
 ) -> Result<AdaptResult, AdaptError> {
     // Invariant guard: every per-filament vector must carry exactly
     // `filament_diameter.size()` (= num_extruders) elements, or libslic3r's
@@ -135,8 +128,8 @@ pub fn adapt(
     let mut config = Config::new().map_err(AdaptError::ConfigAlloc)?;
     let mut events: Vec<AdaptEvent> = Vec::new();
 
-    // Phase 1: typo remap + drop list + identity push, while
-    // intercepting `bed_temp` for the dimensional expansion below.
+    // Phase 1: identity push (skipping keys not in the libslic3r schema),
+    // while intercepting `bed_temp` for the dimensional expansion below.
     let mut bed_temp_value: Option<String> = None;
     for (key, rv) in resolved {
         if key == "bed_temp" {
@@ -144,7 +137,7 @@ pub fn adapt(
             bed_temp_value = Some(rv.value.clone());
             continue;
         }
-        push_key(&mut config, key, &rv.value, manifest, &mut events);
+        push_key(&mut config, key, &rv.value, &mut events);
     }
 
     // Phase 2: dimensional expansion of bed_temp + curr_bed_type.
@@ -191,7 +184,6 @@ pub fn adapt(
 pub fn adapt_with_overrides(
     resolved: &ResolvedOverrides,
     ctx: &dyn Context,
-    manifest: &Manifest,
 ) -> Result<AdaptResult, AdaptError> {
     // Translate to the simpler Resolved shape by copying the effective
     // value as-if it came from the cascade.
@@ -209,7 +201,7 @@ pub fn adapt_with_overrides(
             )
         })
         .collect();
-    adapt(&cascade_view, ctx, manifest)
+    adapt(&cascade_view, ctx)
 }
 
 /// libslic3r's effective extruder count for the filament dimension is
@@ -280,13 +272,13 @@ fn check_filament_vector_lengths(resolved: &Resolved) -> Result<(), AdaptError> 
     }
 }
 
-/// Push one key into the Config, applying typo-remap + drop-list +
-/// schema lookup + Config::set. Logs events for every transformation.
+/// Push one key into the Config: schema lookup + `Config::set`. A key the
+/// schema doesn't carry is skipped — it isn't a libslic3r option. Records an
+/// event for every transformation.
 fn push_key(
     config: &mut Config,
     key: &str,
     value: &str,
-    manifest: &Manifest,
     events: &mut Vec<AdaptEvent>,
 ) {
     // Typo keys are folded to their canonical spelling at *import* time
@@ -300,12 +292,12 @@ fn push_key(
     // one). Normalizing at import makes that structurally impossible.
     let effective_key = key.to_string();
 
-    if manifest.is_dropped(&effective_key) {
-        events.push(AdaptEvent::Dropped { key: effective_key });
-        return;
-    }
-
+    // A key libslic3r's schema doesn't carry can't be set — it's either an
+    // expected OrcaSlicer-fork extra (the Bambu/Prusa firmware knobs the
+    // bundled cascades carry) or a genuine typo. We don't distinguish the two
+    // (nothing consumes the distinction): log at debug for diagnosis and skip.
     if schema_by_key(&effective_key).is_none() {
+        tracing::debug!(key = %effective_key, "adapter: key not in libslic3r schema; skipping");
         events.push(AdaptEvent::UnknownKey { key: effective_key });
         return;
     }
@@ -392,8 +384,7 @@ mod tests {
     fn identity_keys_make_it_into_config() {
         ensure_ffi();
         let resolved = resolved_from([("layer_height", "0.2"), ("wall_loops", "2")]);
-        let manifest = Manifest::build();
-        let result = adapt(&resolved, &ctx_pei(), &manifest).unwrap();
+        let result = adapt(&resolved, &ctx_pei()).unwrap();
         assert_eq!(result.config.get("layer_height").unwrap_or_default(), "0.2");
         assert_eq!(result.config.get("wall_loops").unwrap_or_default(), "2");
         // No unexpected events for these clean identity entries.
@@ -408,26 +399,34 @@ mod tests {
     }
 
     #[test]
-    fn drop_list_keys_are_silently_filtered() {
+    fn fork_only_keys_are_skipped_as_unknown() {
         ensure_ffi();
+        // OrcaSlicer-fork keys with no libslic3r equivalent are skipped (they
+        // surface as UnknownKey events, discarded by the slice path) — they
+        // never reach the engine config. Real keys pass through.
         let resolved = resolved_from([
             ("layer_height", "0.2"),
-            ("hotend_cooling_rate", "2"),     // dropped
-            ("filament_scarf_height", "0.1"), // dropped
+            ("hotend_cooling_rate", "2"),     // fork-only, not in schema
+            ("filament_scarf_height", "0.1"), // fork-only, not in schema
         ]);
-        let manifest = Manifest::build();
-        let result = adapt(&resolved, &ctx_pei(), &manifest).unwrap();
-        let dropped: Vec<&str> = result
+        let result = adapt(&resolved, &ctx_pei()).unwrap();
+        let unknown: Vec<&str> = result
             .events
             .iter()
             .filter_map(|e| match e {
-                AdaptEvent::Dropped { key } => Some(key.as_str()),
+                AdaptEvent::UnknownKey { key } => Some(key.as_str()),
                 _ => None,
             })
             .collect();
-        assert!(dropped.contains(&"hotend_cooling_rate"));
-        assert!(dropped.contains(&"filament_scarf_height"));
-        // layer_height not in drop list — should have made it through.
+        assert!(unknown.contains(&"hotend_cooling_rate"));
+        assert!(unknown.contains(&"filament_scarf_height"));
+        // Neither fork key reached the engine config.
+        assert!(result
+            .config
+            .get("hotend_cooling_rate")
+            .unwrap_or_default()
+            .is_empty());
+        // A real key passes through.
         assert_eq!(result.config.get("layer_height").unwrap_or_default(), "0.2");
     }
 
@@ -439,8 +438,7 @@ mod tests {
         // canonical key), matching libslic3r's own unknown-key handling.
         ensure_ffi();
         let resolved = resolved_from([("inital_layer_height", "0.3")]);
-        let manifest = Manifest::build();
-        let result = adapt(&resolved, &ctx_pei(), &manifest).unwrap();
+        let result = adapt(&resolved, &ctx_pei()).unwrap();
         assert_ne!(
             result
                 .config
@@ -462,8 +460,7 @@ mod tests {
     fn bed_temp_expands_across_plate_keys() {
         ensure_ffi();
         let resolved = resolved_from([("bed_temp", "65")]);
-        let manifest = Manifest::build();
-        let result = adapt(&resolved, &ctx_pei(), &manifest).unwrap();
+        let result = adapt(&resolved, &ctx_pei()).unwrap();
         for plate_key in BED_TEMP_KEYS {
             assert_eq!(
                 result.config.get(plate_key).unwrap_or_default(),
@@ -482,8 +479,7 @@ mod tests {
     fn curr_bed_type_set_from_context() {
         ensure_ffi();
         let resolved = resolved_from([("layer_height", "0.2")]);
-        let manifest = Manifest::build();
-        let result = adapt(&resolved, &ctx_pei(), &manifest).unwrap();
+        let result = adapt(&resolved, &ctx_pei()).unwrap();
         assert_eq!(
             result.config.get("curr_bed_type").unwrap_or_default(),
             "Textured PEI Plate"
@@ -500,8 +496,7 @@ mod tests {
     fn unknown_key_surfaces_as_event() {
         ensure_ffi();
         let resolved = resolved_from([("totally_made_up_key", "x")]);
-        let manifest = Manifest::build();
-        let result = adapt(&resolved, &ctx_pei(), &manifest).unwrap();
+        let result = adapt(&resolved, &ctx_pei()).unwrap();
         let unknown: Vec<&str> = result
             .events
             .iter()
@@ -524,8 +519,7 @@ mod tests {
             ("filament_diameter", "1.75,1.75,1.75,1.75"),
             ("filament_colour", "#FFFFFF;#DE4343"),
         ]);
-        let manifest = Manifest::build();
-        let err = match adapt(&resolved, &ctx_pei(), &manifest) {
+        let err = match adapt(&resolved, &ctx_pei()) {
             Err(e) => e,
             Ok(_) => panic!("a short filament vector must fail the adapt"),
         };
@@ -554,8 +548,7 @@ mod tests {
             ("filament_diameter", "1.75,1.75"),
             ("filament_colour", "#AAAAAA;#BBBBBB;#CCCCCC;#DDDDDD"),
         ]);
-        let manifest = Manifest::build();
-        let result = adapt(&resolved, &ctx_pei(), &manifest).expect("longer is allowed");
+        let result = adapt(&resolved, &ctx_pei()).expect("longer is allowed");
         assert_eq!(
             result.config.get("filament_colour").unwrap_or_default(),
             "#AAAAAA;#BBBBBB;#CCCCCC;#DDDDDD",
@@ -569,8 +562,7 @@ mod tests {
             ("filament_diameter", "1.75,1.75"),
             ("filament_colour", "#FFFFFF;#DE4343"),
         ]);
-        let manifest = Manifest::build();
-        let result = adapt(&resolved, &ctx_pei(), &manifest).expect("matching lengths adapt");
+        let result = adapt(&resolved, &ctx_pei()).expect("matching lengths adapt");
         assert_eq!(
             result.config.get("filament_colour").unwrap_or_default(),
             "#FFFFFF;#DE4343",

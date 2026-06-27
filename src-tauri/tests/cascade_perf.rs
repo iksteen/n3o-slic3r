@@ -16,7 +16,7 @@
 //! later if Phase 4's UI shows the resolver hot path.
 
 use n3o_slic3r_lib::core::cascade::{resolve_with_overrides, Cascade, OverrideTiers};
-use n3o_slic3r_lib::core::cascade_adapter::{adapt_with_overrides, Manifest};
+use n3o_slic3r_lib::core::cascade_adapter::adapt_with_overrides;
 use n3o_slic3r_lib::core::filament::FilamentProfile;
 use n3o_slic3r_lib::core::printer::lookup_instance;
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
@@ -206,11 +206,10 @@ fn perf_resolve_and_adapt_a1_mini_pla_pei() {
     let cascade = load_reference_cascade();
     let ctx = a1_mini_pla_pei_context();
     let overrides = OverrideTiers::empty();
-    let manifest = Manifest::build();
 
     let (mean, peak) = measure(|| {
         let resolved = resolve_with_overrides(&cascade, &overrides, &ctx);
-        let _ = adapt_with_overrides(&resolved, &ctx, &manifest).expect("adapt");
+        let _ = adapt_with_overrides(&resolved, &ctx).expect("adapt");
     });
 
     eprintln!("perf_resolve_and_adapt_a1_mini_pla_pei: mean={mean:?} peak={peak:?}");

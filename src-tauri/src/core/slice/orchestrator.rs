@@ -57,7 +57,7 @@ use crate::core::cascade::commands::OverrideFileSpec;
 use crate::core::cascade::{
     self, parse_override_str, types::Cascade, Resolved, ResolvedValue, SourceLocation,
 };
-use crate::core::cascade_adapter::{adapt, Manifest};
+use crate::core::cascade_adapter::adapt;
 use crate::core::gcode::{parse_str, to_string};
 use crate::core::plugin::{
     DispatchGate, FilamentLoadout, HookKind, PlateMeta, PluginHost, PostSliceHook, PreSliceContext,
@@ -561,8 +561,7 @@ fn run_worker(
             return;
         }
 
-        let manifest = Manifest::build();
-        let adapt_result = match adapt(&resolved_cascade, &job.context, &manifest) {
+        let adapt_result = match adapt(&resolved_cascade, &job.context) {
             Ok(ar) => ar,
             Err(e) => {
                 let err = SliceError::Unknown {

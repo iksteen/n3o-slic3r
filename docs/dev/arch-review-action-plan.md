@@ -127,7 +127,7 @@ The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
 > predicate (the lone `filament_colour` exception is irreducible — libslic3r feeds
 > it from the model, not any preset, so no FFI signal captures it). Verified:
 > release compiles; `--features test-fixtures` → 943 passed (incl. FFI bucket
-> parity test); tsc + 275 vitest green. **Still pending: X-11 (DROP_LIST, low priority).**
+> parity test); tsc + 275 vitest green. **Phase 2 complete** (X-11: deleted the hand-curated DROP_LIST + Manifest — the Dropped/UnknownKey events it gated were unconsumed by the slice path; schema-misses now uniformly skip + debug-log).
 
 - [ ] **X-1 — _retired_ (DP-1 chose wire-in, not delete).** The two-phase cascade override modules are kept and made live — see **C-1** in Phase 3.
 
@@ -162,7 +162,7 @@ The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
 - [x] **X-10 — `RequiresChamberHeater` stub** *(`KnownDimensions` now stays — `validate.rs` is live per C-1)*
   `core/schema/capability.rs:75,105,159`. Drop `RequiresChamberHeater` until `PrinterProfile` carries the field. `core/cascade/validate.rs:64 KnownDimensions` is no longer a deletion candidate (validate.rs becomes live in C-1) — collapse it to the canonical dimension set if it's still loose, else leave. *(Reviewer tagged ACCEPT as an anticipated extension point — fine to defer.)*
 
-- [ ] **X-11 — Hand-curated `DROP_LIST`** *(low priority)*
+- [x] **X-11 — Hand-curated `DROP_LIST`** *(low priority)*
   `core/cascade_adapter/manifest.rs:29-133`. Either treat all schema-misses uniformly (log fork-only noise at debug) or generate the list rather than hand-maintaining 80 entries. Defer if it earns its keep.
 
 - [x] **X-12 — Gate test fixtures out of the production binary**
