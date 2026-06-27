@@ -134,43 +134,13 @@ export function WgpuViewport({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Priming-tower drag state: the last-resolved geometry + its on-bed footprint
-    // (the sliced mesh's bbox when shown, else the square box), and the bed
-    // extents — all kept current by refreshTower / reframe and read by the drag.
-    type Footprint = { minX: number; minY: number; maxX: number; maxY: number };
+    // Priming-tower drag state. `towerGeom` is the last-resolved placement
+    // (corner/width/brim); the on-bed footprint, clamp-to-bed, and press hit-test
+    // all live Rust-side (viewport_move_tower / viewport_tower_hit_test). `bedMin`
+    // is the bed-plane Z for the drag's ray-cast.
     let towerGeom: TowerGeometry | null = null;
-    let towerFp: Footprint | null = null;
     let bedMin: Vec3 = [0, 0, 0];
-    let bedMax: Vec3 = [0, 0, 0];
     const fmtCoord = (v: number): string => (Math.round(v * 10) / 10).toString();
-    // Corner range so the footprint (+brim) stays on the bed (ports
-    // clampTowerCorner; assumes no tower rotation, as both MVP printers default to 0).
-    const clampTowerCorner = (x: number, y: number): { x: number; y: number } => {
-      if (!towerGeom) return { x, y };
-      const b = towerGeom.brim;
-      const minLX = towerFp ? towerFp.minX : -b;
-      const maxLX = towerFp ? towerFp.maxX : towerGeom.width + b;
-      const minLY = towerFp ? towerFp.minY : -b;
-      const maxLY = towerFp ? towerFp.maxY : towerGeom.width + b;
-      const loX = bedMin[0] - minLX,
-        hiX = bedMax[0] - maxLX;
-      const loY = bedMin[1] - minLY,
-        hiY = bedMax[1] - maxLY;
-      return {
-        x: Math.min(Math.max(x, loX), Math.max(loX, hiX)),
-        y: Math.min(Math.max(y, loY), Math.max(loY, hiY)),
-      };
-    };
-    // Whether a bed-plane point lands on the tower's footprint (+brim).
-    const overTower = (bx: number, by: number): boolean => {
-      if (!towerGeom) return false;
-      const b = towerGeom.brim;
-      const x0 = towerGeom.x + (towerFp ? towerFp.minX : -b);
-      const x1 = towerGeom.x + (towerFp ? towerFp.maxX : towerGeom.width + b);
-      const y0 = towerGeom.y + (towerFp ? towerFp.minY : -b);
-      const y1 = towerGeom.y + (towerFp ? towerFp.maxY : towerGeom.width + b);
-      return bx >= x0 && bx <= x1 && by >= y0 && by <= y1;
-    };
 
     async function render() {
       if (inflight.current) {
@@ -490,9 +460,17 @@ export function WgpuViewport({
           press.mode = "inert"; // pressed the selected body in a gizmo mode
         } else if (r.kind === "empty") {
           // Empty space: drag the tower if the press landed on it, else orbit.
+          // The footprint hit-test is Rust-side (viewport_tower_hit_test).
           const bedHit = towerGeom ? await rayPlaneHit(sx, sy, [0, 0, 1], [0, 0, bedMin[2]]) : null;
           if (drag.current !== press) return;
-          if (bedHit && towerGeom && overTower(bedHit[0], bedHit[1])) {
+          const onTower =
+            bedHit != null &&
+            (await invoke<boolean>("viewport_tower_hit_test", {
+              bx: bedHit[0],
+              by: bedHit[1],
+            }).catch(() => false));
+          if (drag.current !== press) return;
+          if (bedHit && towerGeom && onTower) {
             press.mode = "tower";
             press.towerOffset = [bedHit[0] - towerGeom.x, bedHit[1] - towerGeom.y];
           } else {
@@ -579,13 +557,18 @@ export function WgpuViewport({
         const [sx, sy] = rel(e);
         const off = d.towerOffset;
         void rayPlaneHit(sx, sy, [0, 0, 1], [0, 0, bedMin[2]]).then((bedHit) => {
-          if (!bedHit || drag.current !== d || !towerGeom) return;
-          const c = clampTowerCorner(bedHit[0] - off[0], bedHit[1] - off[1]);
-          if (c.x !== towerGeom.x || c.y !== towerGeom.y) d.towerMoved = true;
-          towerGeom = { ...towerGeom, x: c.x, y: c.y };
-          // Move-only update (no mesh re-upload) for a smooth drag.
-          void invoke("viewport_move_tower", { x: c.x, y: c.y }).catch(() => {});
-          void render();
+          if (!bedHit || drag.current !== d) return;
+          // Rust clamps the corner to the bed and returns the clamped position
+          // (move-only, no mesh re-upload — smooth drag).
+          void invoke<[number, number] | null>("viewport_move_tower", {
+            x: bedHit[0] - off[0],
+            y: bedHit[1] - off[1],
+          }).then((c) => {
+            if (!c || drag.current !== d || !towerGeom) return;
+            if (c[0] !== towerGeom.x || c[1] !== towerGeom.y) d.towerMoved = true;
+            towerGeom = { ...towerGeom, x: c[0], y: c[1] };
+            void render();
+          });
         });
       } else if (d.mode === "gizmo") {
         // Preview-only: stash the latest cursor + Shift; the frame resolves the
@@ -615,7 +598,6 @@ export function WgpuViewport({
       try {
         const info = await invoke<{ min: Vec3; max: Vec3 }>("viewport_scene_info");
         bedMin = info.min;
-        bedMax = info.max;
         const [minX, minY, minZ] = info.min;
         const [maxX, maxY] = info.max;
         const center: Vec3 = [(minX + maxX) / 2, (minY + maxY) / 2, minZ];
@@ -661,7 +643,6 @@ export function WgpuViewport({
     async function refreshTower(id: number | null = activePlateIdRef.current) {
       let tower: Record<string, unknown> | null = null;
       towerGeom = null;
-      towerFp = null;
       try {
         if (id != null) {
           const geom = await invoke<TowerGeometry | null>("plate_tower_geometry", { plateId: id });
@@ -673,21 +654,8 @@ export function WgpuViewport({
               cached.printerInstanceId === geom.printer_instance_id;
             const mesh = valid ? cached.mesh : null;
             towerGeom = geom;
-            // The drag clamp uses the sliced mesh's true on-bed footprint when
-            // shown (it can be wider/asymmetric than the square box).
-            if (mesh) {
-              let nx = Infinity,
-                ny = Infinity,
-                xx = -Infinity,
-                xy = -Infinity;
-              for (let i = 0; i < mesh.vertices.length; i += 3) {
-                nx = Math.min(nx, mesh.vertices[i]);
-                xx = Math.max(xx, mesh.vertices[i]);
-                ny = Math.min(ny, mesh.vertices[i + 1]);
-                xy = Math.max(xy, mesh.vertices[i + 1]);
-              }
-              if (nx <= xx) towerFp = { minX: nx, minY: ny, maxX: xx, maxY: xy };
-            }
+            // Rust derives the on-bed footprint (for the drag clamp/hit-test)
+            // from this mesh in viewport_set_tower.
             tower = {
               x: geom.x,
               y: geom.y,

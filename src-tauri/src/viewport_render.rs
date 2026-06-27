@@ -229,6 +229,50 @@ struct MeshGroup {
 /// Priming tower the frontend pushes (a slice/overlay artifact, not part of the
 /// Rust scene). Placement is `x`/`y` corner + `width`/`brim`/`rotation` (bed mm);
 /// `mesh` is the exact sliced shape when one's valid (else the predicted box).
+/// The XY bounding box `[min_x, min_y, max_x, max_y]` of flat `xyz` vertex
+/// positions. `None` for an empty/degenerate vertex list.
+fn tower_footprint(verts: &[f32]) -> Option<[f32; 4]> {
+    let mut min = [f32::INFINITY; 2];
+    let mut max = [f32::NEG_INFINITY; 2];
+    for p in verts.chunks_exact(3) {
+        min[0] = min[0].min(p[0]);
+        min[1] = min[1].min(p[1]);
+        max[0] = max[0].max(p[0]);
+        max[1] = max[1].max(p[1]);
+    }
+    (min[0] <= max[0]).then_some([min[0], min[1], max[0], max[1]])
+}
+
+/// The tower's on-bed footprint (+brim) in tower-local coords: the sliced mesh's
+/// XY bbox when known, else the square box `-brim..width+brim` on both axes.
+fn tower_local_footprint(footprint: Option<[f32; 4]>, width: f32, brim: f32) -> [f32; 4] {
+    footprint.unwrap_or([-brim, -brim, width + brim, width + brim])
+}
+
+/// Clamp a requested corner so the footprint stays within `[bed_min, bed_max]`.
+/// `fp` is the resolved local footprint from [`tower_local_footprint`]. When the
+/// footprint is wider than the bed the low edge wins (matches the frontend's
+/// former `clampTowerCorner`).
+fn clamp_tower_corner(fp: [f32; 4], bed_min: [f32; 2], bed_max: [f32; 2], x: f32, y: f32) -> (f32, f32) {
+    let lo_x = bed_min[0] - fp[0];
+    let hi_x = bed_max[0] - fp[2];
+    let lo_y = bed_min[1] - fp[1];
+    let hi_y = bed_max[1] - fp[3];
+    (
+        x.max(lo_x).min(hi_x.max(lo_x)),
+        y.max(lo_y).min(hi_y.max(lo_y)),
+    )
+}
+
+/// Whether bed point `(bx, by)` lands on the tower's footprint at corner
+/// `(corner_x, corner_y)`. `fp` is the resolved local footprint.
+fn tower_corner_hit(fp: [f32; 4], corner_x: f32, corner_y: f32, bx: f32, by: f32) -> bool {
+    bx >= corner_x + fp[0]
+        && bx <= corner_x + fp[2]
+        && by >= corner_y + fp[1]
+        && by <= corner_y + fp[3]
+}
+
 struct TowerState {
     x: f32,
     y: f32,
@@ -236,6 +280,11 @@ struct TowerState {
     brim: f32,
     rotation: f32,
     mesh: Option<TowerGpu>,
+    /// The sliced mesh's on-bed XY footprint `[min_x, min_y, max_x, max_y]` in
+    /// tower-local coords (relative to the `x`/`y` corner) — wider/asymmetric
+    /// than the square box when a mesh is shown. `None` falls back to the box.
+    /// Drives the drag clamp + hit-test.
+    footprint: Option<[f32; 4]>,
 }
 
 struct TowerGpu {
@@ -933,6 +982,10 @@ impl ViewportRenderer {
     /// Mesh normals are recomputed smooth, like `upload_mesh`.
     fn set_tower(&mut self, t: Option<TowerArg>) {
         self.tower = t.map(|t| {
+            // The drag clamp/hit-test use the sliced mesh's true on-bed XY
+            // footprint when one's shown; compute it from the raw verts before
+            // the GPU upload (which keeps only buffers, no CPU positions).
+            let footprint = t.mesh.as_ref().and_then(|m| tower_footprint(&m.vertices));
             let mesh = t.mesh.map(|m| {
                 let verts = smooth_verts(&m.vertices, &m.indices);
                 TowerGpu {
@@ -956,6 +1009,7 @@ impl ViewportRenderer {
                 brim: t.brim,
                 rotation: t.rotation,
                 mesh,
+                footprint,
             }
         });
     }
@@ -1587,14 +1641,49 @@ pub fn viewport_set_tower(state: tauri::State<'_, ViewportState>, tower: Option<
     r.set_tower(tower);
 }
 
-/// Move the tower's placement corner without re-uploading its mesh, for a smooth
-/// bed-plane drag. No-op when no tower is set.
+/// Move the tower's placement corner (no mesh re-upload) for a smooth bed-plane
+/// drag. The requested corner is clamped so the footprint stays on the active
+/// plate's bed; returns the clamped corner so the frontend can track it (and
+/// gate the commit). `None` when there's no tower or no bound bed.
 #[tauri::command]
-pub fn viewport_move_tower(state: tauri::State<'_, ViewportState>, x: f32, y: f32) {
-    if let Some(t) = state.0.lock().unwrap().as_mut().and_then(|r| r.tower.as_mut()) {
-        t.x = x;
-        t.y = y;
-    }
+pub fn viewport_move_tower(
+    state: tauri::State<'_, ViewportState>,
+    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    x: f32,
+    y: f32,
+) -> Option<(f32, f32)> {
+    // Lock order: ViewportState before Project (matches `viewport_frame`).
+    let mut guard = state.0.lock().unwrap();
+    let t = guard.as_mut().and_then(|r| r.tower.as_mut())?;
+    let (bed_min, bed_max) = {
+        let p = project.lock().unwrap();
+        let bed = p.active_plate().scene.bed.as_ref()?;
+        (bed.extents.min, bed.extents.max)
+    };
+    let fp = tower_local_footprint(t.footprint, t.width, t.brim);
+    let (cx, cy) = clamp_tower_corner(
+        fp,
+        [bed_min[0] as f32, bed_min[1] as f32],
+        [bed_max[0] as f32, bed_max[1] as f32],
+        x,
+        y,
+    );
+    t.x = cx;
+    t.y = cy;
+    Some((cx, cy))
+}
+
+/// Whether a bed-plane point `(bx, by)` lands on the tower's footprint (+brim) —
+/// the press-time hit-test that decides tower-drag vs orbit. `false` when no
+/// tower is set.
+#[tauri::command]
+pub fn viewport_tower_hit_test(state: tauri::State<'_, ViewportState>, bx: f32, by: f32) -> bool {
+    let guard = state.0.lock().unwrap();
+    let Some(t) = guard.as_ref().and_then(|r| r.tower.as_ref()) else {
+        return false;
+    };
+    let fp = tower_local_footprint(t.footprint, t.width, t.brim);
+    tower_corner_hit(fp, t.x, t.y, bx, by)
 }
 
 /// Render a square iso print thumbnail (models only, transparent background) and
@@ -1875,3 +1964,59 @@ pub fn viewport_pick_face(
     })
 }
 
+
+#[cfg(test)]
+mod tower_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn footprint_is_the_xy_bbox_ignoring_z() {
+        // Two verts spanning X 1..4, Y 2..7; Z is irrelevant.
+        let verts = [1.0, 2.0, 9.0, 4.0, 7.0, -3.0];
+        assert_eq!(tower_footprint(&verts), Some([1.0, 2.0, 4.0, 7.0]));
+        assert_eq!(tower_footprint(&[]), None);
+    }
+
+    #[test]
+    fn local_footprint_falls_back_to_the_square_box() {
+        // No mesh → box of width 30 + brim 5 → -5..35 on both axes.
+        assert_eq!(
+            tower_local_footprint(None, 30.0, 5.0),
+            [-5.0, -5.0, 35.0, 35.0]
+        );
+        // Mesh footprint passes through verbatim.
+        let fp = [1.0, 2.0, 4.0, 7.0];
+        assert_eq!(tower_local_footprint(Some(fp), 30.0, 5.0), fp);
+    }
+
+    #[test]
+    fn clamp_keeps_the_footprint_on_the_bed() {
+        // Bed 0..100; footprint local 0..10. Corner range is 0..90.
+        let fp = [0.0, 0.0, 10.0, 10.0];
+        let bmin = [0.0, 0.0];
+        let bmax = [100.0, 100.0];
+        assert_eq!(clamp_tower_corner(fp, bmin, bmax, 50.0, 50.0), (50.0, 50.0));
+        assert_eq!(clamp_tower_corner(fp, bmin, bmax, -20.0, -5.0), (0.0, 0.0)); // low edge
+        assert_eq!(clamp_tower_corner(fp, bmin, bmax, 200.0, 95.0), (90.0, 90.0)); // high edge
+    }
+
+    #[test]
+    fn clamp_low_edge_wins_when_footprint_exceeds_the_bed() {
+        // Footprint 0..120 wider than the 0..100 bed → only the low edge (0) fits.
+        let fp = [0.0, 0.0, 120.0, 120.0];
+        assert_eq!(
+            clamp_tower_corner(fp, [0.0, 0.0], [100.0, 100.0], 50.0, 50.0),
+            (0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn hit_test_is_corner_plus_local_footprint() {
+        // Corner (10,20), local footprint 0..5 → world box X 10..15, Y 20..25.
+        let fp = [0.0, 0.0, 5.0, 5.0];
+        assert!(tower_corner_hit(fp, 10.0, 20.0, 12.0, 22.0));
+        assert!(tower_corner_hit(fp, 10.0, 20.0, 10.0, 25.0)); // on the edge
+        assert!(!tower_corner_hit(fp, 10.0, 20.0, 16.0, 22.0)); // past max X
+        assert!(!tower_corner_hit(fp, 10.0, 20.0, 12.0, 19.0)); // below min Y
+    }
+}

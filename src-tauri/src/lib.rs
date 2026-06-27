@@ -178,6 +178,7 @@ pub fn run() {
             viewport_render::viewport_ray_plane,
             viewport_render::viewport_set_tower,
             viewport_render::viewport_move_tower,
+            viewport_render::viewport_tower_hit_test,
             viewport_render::viewport_thumbnail,
             core::printer::options::slicer_options_for_printer,
             core::printer::options::slicer_machine_options_for_printer,
