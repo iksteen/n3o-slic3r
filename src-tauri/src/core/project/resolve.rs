@@ -337,7 +337,7 @@ pub fn tower_geometry_for_plate(
         resolved
             .get(key)
             .map(|v| v.value.clone())
-            .or_else(|| crate::core::cascade::engine_default_serialized(key))
+            .or_else(|| crate::core::printer::engine_default_serialized(key))
             .and_then(|s| s.trim().parse::<f64>().ok())
     };
 

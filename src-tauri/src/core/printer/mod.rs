@@ -19,12 +19,18 @@ pub mod instance;
 pub mod instance_library;
 pub mod instance_registry;
 pub mod instance_storage;
+pub mod options;
 pub mod profile;
 pub mod registry;
 pub mod snapmaker;
 pub mod sync;
 
 pub use capability::{capability_for_key, CapabilityPredicate};
+pub use options::{
+    engine_default_serialized, slicer_extruder_options_for_printer, slicer_filament_options,
+    slicer_machine_options_for_printer, slicer_options_for_printer, DefaultValue, OptMode,
+    OptScopeFlags, OptionSummary, PrinterAwareOptionSummary,
+};
 pub use instance::{
     BedRef, ConnectionInfo, ExtruderState, FeedKind, NozzleMaterial, NozzleSku, PrinterInstance,
     SlotBinding, SlotRef,
