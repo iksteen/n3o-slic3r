@@ -615,7 +615,7 @@ mod tests {
         // regression there (e.g. zip-order vs document-order
         // confusion) surfaces immediately. Companion regression
         // tests for the auto-bind that consumes these values live
-        // in `core::project::mutation::tests::auto_bind_*`.
+        // in `core::project::mutation::materials::tests::auto_bind_*`.
         let project = load_3mf(&two_cubes_fixture()).expect("load 2-cube fixture");
         assert_eq!(project.objects.len(), 2, "two build items");
         let extruders: Vec<Option<u8>> = project.objects.iter().map(|o| o.extruder_id).collect();
