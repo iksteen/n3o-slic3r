@@ -11,7 +11,7 @@ use std::fmt;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-pub use crate::core::slice::pre_slice_gate::AmsMappingV2;
+pub use super::ams::AmsMappingV2;
 use tokio::sync::watch;
 
 use super::status::PrinterStatus;

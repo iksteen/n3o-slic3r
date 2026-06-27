@@ -587,7 +587,7 @@ struct ProjectFileBody<'a> {
     /// falls back to the external spool when only one is set.
     /// `{255, 0}` = bound to the external spool, `{255, 255}` =
     /// unbound.
-    ams_mapping2: &'a [crate::core::slice::pre_slice_gate::AmsMappingV2],
+    ams_mapping2: &'a [crate::core::driver::ams::AmsMappingV2],
 }
 
 /// Background task: own the rumqttc event loop until shutdown.
@@ -781,7 +781,7 @@ mod tests {
 
     #[test]
     fn project_file_command_carries_expected_fields() {
-        use crate::core::slice::pre_slice_gate::AmsMappingV2;
+        use crate::core::driver::ams::AmsMappingV2;
         let mapping: Vec<i8> = vec![0, 1, 2, 3];
         let mapping2: Vec<AmsMappingV2> = vec![
             AmsMappingV2 {

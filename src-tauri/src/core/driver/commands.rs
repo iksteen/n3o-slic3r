@@ -21,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 use super::bambu::connection::{BambuConfig, BambuDriver};
 use super::registry::{DriverRegistry, DriverSummary};
 use super::snapmaker::{U1Config, U1Driver};
+use super::ams::{ams_bindings_for_plate, ams_mapping_for_plate};
 use super::status::PrinterStatus;
 use super::traits::{
     Driver, DriverConfig, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle,
@@ -30,7 +31,6 @@ use crate::core::plugin::commands::PluginHostState;
 use crate::core::plugin::{DispatchGate, HookKind, PayloadKind, PreSendHook, SendTarget};
 use crate::core::project::model::sanitize_basename;
 use crate::core::project::{PlateId, Project};
-use crate::core::slice::pre_slice_gate::{ams_bindings_for_plate, ams_mapping_for_plate};
 use crate::core::threemf::{fixture_input, write_sliced_3mf, AmsBinding};
 
 /// Wire-shape for the `driver:status_update` Tauri event the
@@ -456,7 +456,7 @@ fn collect_ams_mapping(
 ) -> (
     bool,
     Vec<i8>,
-    Vec<crate::core::slice::pre_slice_gate::AmsMappingV2>,
+    Vec<super::ams::AmsMappingV2>,
 ) {
     let default = (false, Vec::new(), Vec::new());
     let Ok(p) = project.lock() else {

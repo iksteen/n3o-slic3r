@@ -20,6 +20,7 @@
 //!   drivers become plugins, the trait shape stays the same; only
 //!   the implementation surface (in-process vs IPC) changes.
 
+pub mod ams;
 pub mod backoff;
 pub mod bambu;
 pub mod camera;
@@ -30,6 +31,7 @@ pub mod status;
 pub mod thumbnail;
 pub mod traits;
 
+pub use ams::AmsMappingV2;
 pub use registry::DriverRegistry;
 pub use status::{
     ConnectionState, DriverExtra, JobProgress, JobState, PrinterStatus, TempReading, Temps,

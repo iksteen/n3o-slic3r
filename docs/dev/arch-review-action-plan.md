@@ -247,7 +247,7 @@ you don't relocate doomed code.
 - [ ] **R-2 — Move settings-UI option surfacing out of `core/cascade`**
   `core/cascade/mod.rs:210-595` (the four `slicer_*_options` commands + `OptionSummary`/visibility helpers) → `core/schema` (e.g. `schema/options_ui.rs`), folding onto the cached `OptionSchema` so there's one introspection path (stop re-fetching `option_defs()` per command). Leaves `cascade/mod.rs` as just the resolver. *(Merges the "two parallel option-universe reps" finding.)*
 
-- [ ] **R-3 — Move `AmsMappingV2` + `ams_*_for_plate` to the driver layer** *(MEDIUM; inverted dependency)*
+- [x] **R-3 — Move `AmsMappingV2` + `ams_*_for_plate` to the driver layer** *(MEDIUM; inverted dependency)*
   `core/slice/pre_slice_gate.rs:165-289` → `core/driver` (`traits.rs` already re-exports the type — the tell). Leave only binding-coherence validation in the slice gate. `driver/bambu/connection.rs:601` and `pre_slice_gate` import from the new home.
 
 - [x] **R-4 — Move `schema::capability` out of `schema`**
