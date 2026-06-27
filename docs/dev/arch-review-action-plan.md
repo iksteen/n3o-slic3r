@@ -266,7 +266,7 @@ you don't relocate doomed code.
 - [x] **R-8 — Split the three ~1000-LOC frontend components + de-god App.tsx**
   `src/printer/PrinterSettingsModal.tsx` (1418), `src/settings/SettingsPanel.tsx` (958), `src/driver/DevicesView.tsx` (947): move already-named subcomponents + pure helpers into sibling files (seams already drawn; helpers shed test-only exports). `src/App.tsx`: extract `useViewportTools()` (owns the gizmo/tool/clone/faceMatch mutual-exclusion invariant), `useProjectFileMenu()`, and a `project/importReport.ts`.
 
-- [ ] **R-9 — FFI shim tidy-ups**
+- [x] **R-9 — FFI shim tidy-ups**
   `ffi/slic3r_ffi.cpp:646-810` extract `normalize_filament_map`/`resolve_region_filaments`/`pin_bbl_quirks` from the 330-line `slic3r_slice` (each keeps its workaround comment) · `:696,865` compute `is_bbl` once · `lib.rs:527,545` `std::mem::zeroed()` → `::default()` (bindgen derives it; removes 2 unsafe blocks) · `:376-378 slic3r_version()` embed the OrcaSlicer SHA via a cmake `-D` define.
 
 - [x] **R-10 — Consolidate duplicated helpers** *(2 of 3; cstyle deferred with rationale)*

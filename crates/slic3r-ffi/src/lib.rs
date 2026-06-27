@@ -552,7 +552,7 @@ pub fn option_defs() -> Vec<OptionDef> {
     // SAFETY: shim guarantees thread-safe read after init.
     let count = unsafe { sys::slic3r_option_def_count() };
     let mut out = Vec::with_capacity(count);
-    let mut raw: sys::slic3r_option_def_t = unsafe { std::mem::zeroed() };
+    let mut raw: sys::slic3r_option_def_t = Default::default();
     for i in 0..count {
         let status = unsafe { sys::slic3r_option_def_at(i, &mut raw) };
         if status == sys::SLIC3R_OK {
@@ -568,7 +568,7 @@ pub fn option_def(key: &str) -> Result<OptionDef> {
         kind: ErrorKind::InvalidArg,
         message: Some("key contains NUL".into()),
     })?;
-    let mut raw: sys::slic3r_option_def_t = unsafe { std::mem::zeroed() };
+    let mut raw: sys::slic3r_option_def_t = Default::default();
     // SAFETY: ckey lives through the call; raw is an out-param.
     let status = unsafe { sys::slic3r_option_def_lookup(ckey.as_ptr(), &mut raw) };
     check(status)?;

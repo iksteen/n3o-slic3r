@@ -391,12 +391,206 @@ void remap_paint_walk(const std::vector<bool>& in, size_t& c,
     }
 }
 
+// Several config fields must be normalized to the printer's geometry
+// before slicing — chiefly that filament_map has one entry per
+// filament, and that nozzle_volume_type has one entry per extruder.
+// Upstream's CLI does this between loading and apply()
+// (OrcaSlicer.cpp:5953-5964). Without it, ToolOrdering sees an
+// undersized filament_map, produces degenerate per-layer extruder
+// assignments (sentinel (unsigned)-1 entries), and process() crashes
+// in check_filament_printable_after_group / calc_filament_change_
+// info_by_toolorder when it dereferences those sentinels.
+//
+// Apply the same normalization to a temporary copy so we don't
+// mutate the caller's config.
+static void normalize_filament_map(DynamicPrintConfig& cfg) {
+    const size_t extruder_count = cfg.has("nozzle_diameter")
+        ? cfg.option<ConfigOptionFloats>("nozzle_diameter")->values.size()
+        : 1;
+    const size_t filament_count = cfg.has("filament_diameter")
+        ? cfg.option<ConfigOptionFloats>("filament_diameter")->values.size()
+        : 1;
+
+    auto& filament_map = cfg.option<ConfigOptionInts>("filament_map", true)->values;
+    if (filament_map.size() < filament_count)
+        filament_map.resize(filament_count, 1);
+    if (extruder_count == 1) {
+        // Force all filaments onto the single extruder. Matches
+        // OrcaSlicer.cpp:5957-5960.
+        for (size_t i = 0; i < filament_count; ++i)
+            filament_map[i] = 1;
+    }
+
+    if (!cfg.has("nozzle_volume_type"))
+        cfg.option<ConfigOptionEnumsGeneric>("nozzle_volume_type", true)
+            ->values.resize(extruder_count, nvtStandard);
+}
+
+// Per-region / per-object filament selectors carry "0 = use the
+// object/printer default" in 3MF configs. OrcaSlicer's GUI resolves
+// these via PartPlate state pre-apply, substituting the part's
+// default extruder. The headless slicing entry doesn't have
+// PartPlate state, so the 0 sentinels leak straight into
+// Print::process. Once there, `Print::process` invokes ToolOrdering
+// with first_extruder == -1; `handle_dontcare_extruder(-1)` is
+// supposed to promote zeros to a real extruder by scanning the
+// layer-tools list, but if everything is 0 it finds nothing to
+// promote, the sentinel persists into
+// `reorder_extruders_for_minimum_flush_volume` →
+// `check_filament_printable_after_group`, and the unchecked
+// `filament_maps[filament_id]` access in there SIGSEGVs. We can't
+// fix the `-1` at the call site without patching libslic3r
+// (`Print.cpp:2378-2379` hardcodes it), so we resolve the 0s
+// upstream — same role OrcaSlicer's GUI plays.
+//
+// Per-object resolution. `support_filament` and
+// `support_interface_filament` live in PrintObjectConfig. The BBS
+// 3MF importer lifts each object's `<metadata key="extruder">`
+// (object-level default extruder) into
+// `ModelObject::config["extruder"]`, so we re-use that hint per
+// object — supports inherit the part's body extruder by default,
+// matching what OrcaSlicer's GUI emits.
+//
+// Per-region resolution. `wall_filament`, `sparse_infill_filament`,
+// and `solid_infill_filament` live in PrintRegionConfig. Per-volume
+// `extruder` overrides on typed regions (4-color, 5T, etc.) win
+// during Print::apply's region merge — so the print-level cfg
+// value only matters for "untyped" regions with no per-volume
+// override (catch-all like skirt/brim/supports). For these we
+// fall back to filament 1 if every object's default extruder
+// disagrees; if all objects share one default, we use that.
+//
+// PR-3-11 history: commit 1bcf46d removed an earlier coerce-to-1
+// block on the rationale that it was "vestigial after filament_map
+// normalization." That was wrong — the api tests + spike1/spike2
+// don't exercise multi-color ToolOrdering and the removal regressed
+// the fourcolor slice into the SIGSEGV above. `git bisect` pinned
+// the regressor. This per-object resolution is the proper fix
+// (better than the original hardcoded 1, which would have been
+// wrong for any model whose default extruder isn't 1).
+// Per-REGION filament selectors (`wall_filament`,
+// `sparse_infill_filament`, `solid_infill_filament`) must not
+// leak 0 sentinels into ToolOrdering — `handle_dontcare_
+// extruder(-1)` (called inside `Print::process` because
+// `Print.cpp:2378` hardcodes -1) needs at least one non-zero
+// extruder somewhere in the layer-tools list to promote from,
+// and if the print-wide defaults are 0 every region with no
+// per-volume override goes 0 too. Resolve them per-object
+// using each object's `<metadata key="extruder">` hint
+// (lifted into `ModelObject::config["extruder"]` by the BBS
+// 3MF importer), then fall back to filament 1 at the print
+// level if every object's default is identical else
+// disagrees. Per-volume `extruder` overrides on typed regions
+// still dominate this during `Print::apply`'s region merge,
+// so this only affects the catch-all "untyped" region.
+//
+// Per-OBJECT support filament selectors (`support_filament`,
+// `support_interface_filament`) MUST stay at 0 (dontcare).
+// libslic3r's per-layer support-extruder resolution at
+// `GCode.cpp:4794-4820` picks `first_extruder_id =
+// layer_tools.extruders.front()` for the layer in question —
+// exactly what we want for the 4-color stacked case where
+// each layer has only one band active and supports should
+// inherit that band's body extruder. Coercing
+// support_filament to any non-zero value suppresses this
+// routing and pins all supports to one extruder, causing 76
+// mid-print tool changes on fourcolor.3mf vs Orca/BBS's 7.
+// Confirmed empirically: with support_filament left at
+// dontcare, spike3 produces 7 changes / 1h 6m / 14g
+// matching the BBS reference.
+//
+// History: commit 1bcf46d removed an even earlier coerce on
+// all five selectors thinking it was vestigial, regressing
+// the slice into SIGSEGV (bisected back to this commit
+// during PR-3-11). The intermediate "restore as
+// hardcoded 1" fix matched the segfault repair but kept the
+// 76-vs-7 disparity. The split below is the proper shape:
+// resolve the per-region zeros, leave the per-object support
+// zeros alone.
+static void resolve_region_filaments(Model& model, DynamicPrintConfig& cfg) {
+    int common_default = -1;  // -1 = unset, -2 = disagree
+    for (auto* obj : model.objects) {
+        if (!obj) continue;
+        int obj_default = 1;
+        if (auto* opt = dynamic_cast<const ConfigOptionInt*>(
+                obj->config.option("extruder"))) {
+            if (opt->value > 0) obj_default = opt->value;
+        }
+        for (const char* key : {"wall_filament",
+                                 "sparse_infill_filament",
+                                 "solid_infill_filament"}) {
+            const auto* opt = dynamic_cast<const ConfigOptionInt*>(
+                obj->config.option(key));
+            int current = opt ? opt->value : 0;
+            if (current == 0) {
+                // Deliberate write-through to the caller's model in
+                // place — unlike `cfg` (copied at the top of this fn).
+                // Copying the whole Model per slice would be wasteful
+                // and it's consumed once per slice; see slice_outcome's
+                // Rust doc, which documents the mutation.
+                obj->config.set_key_value(
+                    key, new ConfigOptionInt(obj_default));
+            }
+        }
+        if (common_default == -1) common_default = obj_default;
+        else if (common_default != obj_default) common_default = -2;
+    }
+    int print_fallback = (common_default > 0) ? common_default : 1;
+    for (const char* key : {"wall_filament",
+                             "sparse_infill_filament",
+                             "solid_infill_filament"}) {
+        if (auto* opt = cfg.option<ConfigOptionInt>(key); opt && opt->value == 0)
+            opt->value = print_fallback;
+    }
+}
+
+// Pin the Bambu-Lab-specific engine quirks. `is_bbl` is the printer_model
+// "Bambu Lab" prefix check, computed once by the caller.
+//
+// BBL printers are forced onto the Type1 (old, rectangular) wipe
+// tower (Print::wipe_tower_type() returns Type1 whenever
+// is_BBL_printer()). That tower has no stabilization cone — that's a
+// Type2/rib-tower feature — yet Print::first_layer_wipe_tower_corners()
+// unconditionally sizes one as `tan(cone_angle/2) *
+// m_wipe_tower_data.height`, and only the Type2 path ever assigns
+// `height`. So with the engine-default cone_angle=30 and an unset
+// (garbage) `height`, the skirt convex hull picks up an infinite
+// corner and ClipperLib throws "Coordinate outside allowed range" in
+// _make_skirt — heap-dependent, so it strikes intermittently. Pin the
+// cone angle to 0 for BBL printers (cone radius collapses to 0
+// regardless of the unset height); a cone is meaningless on a Type1
+// tower anyway. Non-BBL printers (e.g. the Snapmaker U1) use the Type2
+// tower, which sets `height` and wants a real cone, so leave their
+// value alone. See docs/libslic3r-workarounds.md §7.
+//
+// Print::is_BBL_printer() is a manually-set flag (Print.hpp:1143,
+// declared without an initializer). The GUI sets it from the active
+// preset bundle; the CLI checks the printer_model prefix. Without
+// it, validators that know Bambu printers don't follow Marlin's
+// relative-E + per-layer-G92 convention take the wrong branch.
+static void pin_bbl_quirks(Print& print, DynamicPrintConfig& cfg, bool is_bbl) {
+    if (is_bbl)
+        cfg.option<ConfigOptionFloat>("wipe_tower_cone_angle", true)->value = 0.;
+    print.is_BBL_printer() = is_bbl;
+}
+
 } // namespace
 
 extern "C" {
 
 const char* slic3r_version(void) {
+    // N3O_ORCA_SHA is the pinned OrcaSlicer submodule short SHA, injected by
+    // CMake (from build.rs) when building inside a git checkout. Stringify the
+    // bare token into the version literal; absent it, report just the base.
+#ifdef N3O_ORCA_SHA
+#define N3O_STRINGIFY_(x) #x
+#define N3O_STRINGIFY(x) N3O_STRINGIFY_(x)
+    return "OrcaSlicer libslic3r_ffi v0 (" N3O_STRINGIFY(N3O_ORCA_SHA) ")";
+#undef N3O_STRINGIFY
+#undef N3O_STRINGIFY_
+#else
     return "OrcaSlicer libslic3r_ffi v0";
+#endif
 }
 
 slic3r_status slic3r_init(const char* resources_dir, unsigned int log_level) {
@@ -666,177 +860,20 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         *out_tower_index_count = 0;
     }
     try {
-        // Several config fields must be normalized to the printer's geometry
-        // before slicing — chiefly that filament_map has one entry per
-        // filament, and that nozzle_volume_type has one entry per extruder.
-        // Upstream's CLI does this between loading and apply()
-        // (OrcaSlicer.cpp:5953-5964). Without it, ToolOrdering sees an
-        // undersized filament_map, produces degenerate per-layer extruder
-        // assignments (sentinel (unsigned)-1 entries), and process() crashes
-        // in check_filament_printable_after_group / calc_filament_change_
-        // info_by_toolorder when it dereferences those sentinels.
-        //
-        // Apply the same normalization to a temporary copy so we don't
-        // mutate the caller's config.
+        // Normalize filament_map / nozzle_volume_type to the printer's
+        // geometry on a temporary copy so we don't mutate the caller's config.
         DynamicPrintConfig cfg = config->cfg;
-        const size_t extruder_count = cfg.has("nozzle_diameter")
-            ? cfg.option<ConfigOptionFloats>("nozzle_diameter")->values.size()
-            : 1;
-        const size_t filament_count = cfg.has("filament_diameter")
-            ? cfg.option<ConfigOptionFloats>("filament_diameter")->values.size()
-            : 1;
+        normalize_filament_map(cfg);
 
-        auto& filament_map = cfg.option<ConfigOptionInts>("filament_map", true)->values;
-        if (filament_map.size() < filament_count)
-            filament_map.resize(filament_count, 1);
-        if (extruder_count == 1) {
-            // Force all filaments onto the single extruder. Matches
-            // OrcaSlicer.cpp:5957-5960.
-            for (size_t i = 0; i < filament_count; ++i)
-                filament_map[i] = 1;
-        }
+        // printer_model "Bambu Lab" prefix — the single source of truth for
+        // the BBL-specific engine quirks (wipe-tower cone + is_BBL flag).
+        const bool is_bbl =
+            cfg.opt_string("printer_model").compare(0, 9, "Bambu Lab") == 0;
 
-        if (!cfg.has("nozzle_volume_type"))
-            cfg.option<ConfigOptionEnumsGeneric>("nozzle_volume_type", true)
-                ->values.resize(extruder_count, nvtStandard);
-
-        // BBL printers are forced onto the Type1 (old, rectangular) wipe
-        // tower (Print::wipe_tower_type() returns Type1 whenever
-        // is_BBL_printer()). That tower has no stabilization cone — that's a
-        // Type2/rib-tower feature — yet Print::first_layer_wipe_tower_corners()
-        // unconditionally sizes one as `tan(cone_angle/2) *
-        // m_wipe_tower_data.height`, and only the Type2 path ever assigns
-        // `height`. So with the engine-default cone_angle=30 and an unset
-        // (garbage) `height`, the skirt convex hull picks up an infinite
-        // corner and ClipperLib throws "Coordinate outside allowed range" in
-        // _make_skirt — heap-dependent, so it strikes intermittently. Pin the
-        // cone angle to 0 for BBL printers (cone radius collapses to 0
-        // regardless of the unset height); a cone is meaningless on a Type1
-        // tower anyway. Non-BBL printers (e.g. the Snapmaker U1) use the Type2
-        // tower, which sets `height` and wants a real cone, so leave their
-        // value alone. See docs/libslic3r-workarounds.md §7.
-        if (cfg.opt_string("printer_model").compare(0, 9, "Bambu Lab") == 0)
-            cfg.option<ConfigOptionFloat>("wipe_tower_cone_angle", true)->value = 0.;
-
-        // Per-region / per-object filament selectors carry "0 = use the
-        // object/printer default" in 3MF configs. OrcaSlicer's GUI resolves
-        // these via PartPlate state pre-apply, substituting the part's
-        // default extruder. The headless slicing entry doesn't have
-        // PartPlate state, so the 0 sentinels leak straight into
-        // Print::process. Once there, `Print::process` invokes ToolOrdering
-        // with first_extruder == -1; `handle_dontcare_extruder(-1)` is
-        // supposed to promote zeros to a real extruder by scanning the
-        // layer-tools list, but if everything is 0 it finds nothing to
-        // promote, the sentinel persists into
-        // `reorder_extruders_for_minimum_flush_volume` →
-        // `check_filament_printable_after_group`, and the unchecked
-        // `filament_maps[filament_id]` access in there SIGSEGVs. We can't
-        // fix the `-1` at the call site without patching libslic3r
-        // (`Print.cpp:2378-2379` hardcodes it), so we resolve the 0s
-        // upstream — same role OrcaSlicer's GUI plays.
-        //
-        // Per-object resolution. `support_filament` and
-        // `support_interface_filament` live in PrintObjectConfig. The BBS
-        // 3MF importer lifts each object's `<metadata key="extruder">`
-        // (object-level default extruder) into
-        // `ModelObject::config["extruder"]`, so we re-use that hint per
-        // object — supports inherit the part's body extruder by default,
-        // matching what OrcaSlicer's GUI emits.
-        //
-        // Per-region resolution. `wall_filament`, `sparse_infill_filament`,
-        // and `solid_infill_filament` live in PrintRegionConfig. Per-volume
-        // `extruder` overrides on typed regions (4-color, 5T, etc.) win
-        // during Print::apply's region merge — so the print-level cfg
-        // value only matters for "untyped" regions with no per-volume
-        // override (catch-all like skirt/brim/supports). For these we
-        // fall back to filament 1 if every object's default extruder
-        // disagrees; if all objects share one default, we use that.
-        //
-        // PR-3-11 history: commit 1bcf46d removed an earlier coerce-to-1
-        // block on the rationale that it was "vestigial after filament_map
-        // normalization." That was wrong — the api tests + spike1/spike2
-        // don't exercise multi-color ToolOrdering and the removal regressed
-        // the fourcolor slice into the SIGSEGV above. `git bisect` pinned
-        // the regressor. This per-object resolution is the proper fix
-        // (better than the original hardcoded 1, which would have been
-        // wrong for any model whose default extruder isn't 1).
-        // Per-REGION filament selectors (`wall_filament`,
-        // `sparse_infill_filament`, `solid_infill_filament`) must not
-        // leak 0 sentinels into ToolOrdering — `handle_dontcare_
-        // extruder(-1)` (called inside `Print::process` because
-        // `Print.cpp:2378` hardcodes -1) needs at least one non-zero
-        // extruder somewhere in the layer-tools list to promote from,
-        // and if the print-wide defaults are 0 every region with no
-        // per-volume override goes 0 too. Resolve them per-object
-        // using each object's `<metadata key="extruder">` hint
-        // (lifted into `ModelObject::config["extruder"]` by the BBS
-        // 3MF importer), then fall back to filament 1 at the print
-        // level if every object's default is identical else
-        // disagrees. Per-volume `extruder` overrides on typed regions
-        // still dominate this during `Print::apply`'s region merge,
-        // so this only affects the catch-all "untyped" region.
-        //
-        // Per-OBJECT support filament selectors (`support_filament`,
-        // `support_interface_filament`) MUST stay at 0 (dontcare).
-        // libslic3r's per-layer support-extruder resolution at
-        // `GCode.cpp:4794-4820` picks `first_extruder_id =
-        // layer_tools.extruders.front()` for the layer in question —
-        // exactly what we want for the 4-color stacked case where
-        // each layer has only one band active and supports should
-        // inherit that band's body extruder. Coercing
-        // support_filament to any non-zero value suppresses this
-        // routing and pins all supports to one extruder, causing 76
-        // mid-print tool changes on fourcolor.3mf vs Orca/BBS's 7.
-        // Confirmed empirically: with support_filament left at
-        // dontcare, spike3 produces 7 changes / 1h 6m / 14g
-        // matching the BBS reference.
-        //
-        // History: commit 1bcf46d removed an even earlier coerce on
-        // all five selectors thinking it was vestigial, regressing
-        // the slice into SIGSEGV (bisected back to this commit
-        // during PR-3-11). The intermediate "restore as
-        // hardcoded 1" fix matched the segfault repair but kept the
-        // 76-vs-7 disparity. The split below is the proper shape:
-        // resolve the per-region zeros, leave the per-object support
-        // zeros alone.
-        {
-            int common_default = -1;  // -1 = unset, -2 = disagree
-            for (auto* obj : model->model.objects) {
-                if (!obj) continue;
-                int obj_default = 1;
-                if (auto* opt = dynamic_cast<const ConfigOptionInt*>(
-                        obj->config.option("extruder"))) {
-                    if (opt->value > 0) obj_default = opt->value;
-                }
-                for (const char* key : {"wall_filament",
-                                         "sparse_infill_filament",
-                                         "solid_infill_filament"}) {
-                    const auto* opt = dynamic_cast<const ConfigOptionInt*>(
-                        obj->config.option(key));
-                    int current = opt ? opt->value : 0;
-                    if (current == 0) {
-                        // Deliberate write-through to the caller's model in
-                        // place — unlike `cfg` (copied at the top of this fn).
-                        // Copying the whole Model per slice would be wasteful
-                        // and it's consumed once per slice; see slice_outcome's
-                        // Rust doc, which documents the mutation.
-                        obj->config.set_key_value(
-                            key, new ConfigOptionInt(obj_default));
-                    }
-                }
-                if (common_default == -1) common_default = obj_default;
-                else if (common_default != obj_default) common_default = -2;
-            }
-            int print_fallback = (common_default > 0) ? common_default : 1;
-            for (const char* key : {"wall_filament",
-                                     "sparse_infill_filament",
-                                     "solid_infill_filament"}) {
-                if (auto* opt = cfg.option<ConfigOptionInt>(key); opt && opt->value == 0)
-                    opt->value = print_fallback;
-            }
-        }
+        resolve_region_filaments(model->model, cfg);
 
         Print print;
+        pin_bbl_quirks(print, cfg, is_bbl);
         print.apply(model->model, cfg);
 
         // Print::m_origin (the plate origin) is declared without an
@@ -882,14 +919,6 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         } else {
             print.set_status_silent();
         }
-
-        // Print::is_BBL_printer() is a manually-set flag (Print.hpp:1143,
-        // declared without an initializer). The GUI sets it from the active
-        // preset bundle; the CLI checks the printer_model prefix. Without
-        // it, validators that know Bambu printers don't follow Marlin's
-        // relative-E + per-layer-G92 convention take the wrong branch.
-        const std::string printer_model = cfg.opt_string("printer_model");
-        print.is_BBL_printer() = (printer_model.compare(0, 9, "Bambu Lab") == 0);
 
         // Print::validate() reports non-fatal validation *warnings* through
         // its `warning` out-param (a StringObjectException*), and ~20 of those

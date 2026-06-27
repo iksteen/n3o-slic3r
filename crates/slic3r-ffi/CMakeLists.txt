@@ -76,6 +76,13 @@ set_target_properties(slic3r_ffi PROPERTIES
     VERSION      0.1.0
 )
 
+# build.rs passes the pinned OrcaSlicer submodule SHA so slic3r_version() can
+# report exactly which engine revision the shim links. Optional — omitted when
+# building outside a git checkout (the C++ guards on #ifdef N3O_ORCA_SHA).
+if (N3O_ORCA_SHA)
+    target_compile_definitions(slic3r_ffi PRIVATE N3O_ORCA_SHA=${N3O_ORCA_SHA})
+endif()
+
 # Linux→macOS osxcross cross only: supply __isPlatformVersionAtLeast (the
 # compiler-runtime helper @available lowers to) that Apple's clang_rt would
 # otherwise provide. See ffi/macos_availability_shim.mm. build.rs sets

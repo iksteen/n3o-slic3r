@@ -116,6 +116,23 @@ fn main() {
         .arg(&cmake_build_dir)
         .env("CMAKE_POLICY_VERSION_MINIMUM", "3.5");
 
+    // Embed the pinned OrcaSlicer submodule SHA in the shim's version string so
+    // a built binary reports exactly which engine revision it links. Best-effort
+    // — outside a git checkout (e.g. a source tarball) the command fails and the
+    // SHA is simply omitted rather than breaking the build.
+    if let Some(sha) = Command::new("git")
+        .arg("-C")
+        .arg(workspace_root.join("external/OrcaSlicer"))
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        configure.arg(format!("-DN3O_ORCA_SHA={sha}"));
+    }
+
     // Wave-overhang engine feature — carried as build-time patches on the
     // pinned OrcaSlicer submodule (crates/slic3r-ffi/patches/wave-overhangs/).
     // Apply on EVERY target, before cmake configure, so a clean build links
