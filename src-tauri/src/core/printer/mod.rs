@@ -9,6 +9,7 @@
 //! — live in `core/driver`, not here.
 
 pub mod bambu;
+pub mod capability;
 pub mod instance;
 /// Bundled A1 mini + U1 instance fixtures. Test-only — gated out of release
 /// builds (see the `test-fixtures` feature in Cargo.toml) so the shipped
@@ -23,6 +24,7 @@ pub mod registry;
 pub mod snapmaker;
 pub mod sync;
 
+pub use capability::{capability_for_key, CapabilityPredicate};
 pub use instance::{
     BedRef, ConnectionInfo, ExtruderState, FeedKind, NozzleMaterial, NozzleSku, PrinterInstance,
     SlotBinding, SlotRef,

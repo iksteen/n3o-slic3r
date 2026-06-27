@@ -10,18 +10,12 @@
 //! - **`cascade_adapter`** expands the logical `bed_temp` key into the
 //!   per-plate-type [`BED_TEMP_KEYS`] family (selected at slice time by
 //!   `curr_bed_type`); other keys map 1:1.
-//! - **`printer::profile`** cross-references schema keys when
-//!   declaring which options a printer profile fixes vs leaves cascade-set.
 //!
 //! Cache is built lazily on first access. `slic3r_ffi::init()` must be
 //! called before `load_schema()` — the Tauri app's `run()` does this in
 //! its setup step, so any command-handler use is safe.
 //!
 //! See PRD §6.1 (FR-CAS-1..13) and `docs/dev/profiles.md` for the design.
-
-pub mod capability;
-
-pub use capability::{capability_for_key, CapabilityPredicate};
 
 use slic3r_ffi::{option_defs, OptBucket, OptScope, OptType};
 use std::collections::HashMap;

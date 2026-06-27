@@ -46,7 +46,7 @@ use slic3r_ffi::{
 };
 
 use crate::core::printer::profile::PrinterProfile;
-use crate::core::schema::{capability_for_key, CapabilityPredicate};
+use crate::core::printer::{capability_for_key, CapabilityPredicate};
 
 /// Wire-format mode for the FR-UI-2 Simple / Advanced / Expert
 /// filter. Mirrors `slic3r_ffi::OptMode` but serializes as a stable

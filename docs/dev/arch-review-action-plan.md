@@ -250,7 +250,7 @@ you don't relocate doomed code.
 - [ ] **R-3 — Move `AmsMappingV2` + `ams_*_for_plate` to the driver layer** *(MEDIUM; inverted dependency)*
   `core/slice/pre_slice_gate.rs:165-289` → `core/driver` (`traits.rs` already re-exports the type — the tell). Leave only binding-coherence validation in the slice gate. `driver/bambu/connection.rs:601` and `pre_slice_gate` import from the new home.
 
-- [ ] **R-4 — Move `schema::capability` out of `schema`**
+- [x] **R-4 — Move `schema::capability` out of `schema`**
   `core/schema/capability.rs:32`, `mod.rs:13-14`. Relocate to `cascade` (its consumer) or `printer` (the type it needs) so `schema` is a true FFI leaf; fix the stale "printer::profile cross-references schema keys" line.
 
 - [ ] **R-5 — Move read-side cascade/tower logic out of the command-wiring file**
