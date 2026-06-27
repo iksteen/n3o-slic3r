@@ -626,11 +626,15 @@ pub fn load_process_fragment(printer_slug: &str, process_slug: &str) -> Option<C
 /// order. First entry is a reasonable default when seeding a
 /// fresh PrinterInstance.
 pub fn bundled_process_slugs_for_printer(printer_slug: &str) -> Vec<&'static str> {
+    // Use `process_order` (declaration-ordered) rather than the
+    // `process_fragments` HashMap keys, whose iteration order is
+    // non-deterministic — the first entry seeds a fresh instance's
+    // default process, which must be stable run-to-run.
     library()
-        .process_fragments
-        .keys()
-        .filter_map(|(p, slug)| (p == printer_slug).then_some(slug.as_str()))
-        .collect()
+        .process_order
+        .get(printer_slug)
+        .map(|order| order.iter().map(String::as_str).collect())
+        .unwrap_or_default()
 }
 
 /// One bundled vendor filament's identity + display label, surfaced

@@ -4,6 +4,15 @@
 //! This is the primitive the multi-plugin host will own one-per-
 //! plugin. It deliberately knows nothing about manifests, hooks, or
 //! host data — it just runs sandboxed Lua safely.
+//!
+//! **What the budget bounds.** The instruction budget caps Lua VM
+//! *instructions* (a periodic hook decrements it), so a runaway Lua loop
+//! aborts in a fraction of a second. It does NOT bound wall-clock time
+//! spent inside a single C/stdlib call (e.g. a huge `string.rep`) — the
+//! hook fires only between Lua instructions, so a long C call runs to
+//! completion. The memory limit is the backstop: an allocation-driven
+//! hang trips the 64 MiB cap. A non-allocating busy C call is not
+//! preemptible; the local-install plugin threat model accepts that.
 
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;

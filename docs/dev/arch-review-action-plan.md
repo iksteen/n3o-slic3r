@@ -190,22 +190,22 @@ The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
 - [ ] **C-5 — `slic3r_slice` mutates the caller's `Model` through a `&Model`**
   `ffi/slic3r_ffi.cpp:780-810` (writes `obj->config`) vs `:659` (cfg is copied); `src/lib.rs:885-896`. Apply the same temp-copy discipline to the per-object selectors, or change the signature to `&mut Model` and document it. At minimum, comment the deliberate write-through.
 
-- [ ] **C-6 — Non-deterministic default process for a new instance**
+- [x] **C-6 — Non-deterministic default process for a new instance**
   `core/profile_library/mod.rs:629-635` reads `HashMap` keys; consumed at `instance_registry.rs:610-624`. Read from the existing `process_order` `BTreeMap` (`mod.rs:160`) instead. One-line, deterministic source already present.
 
-- [ ] **C-7 — Plugin declared `scopes` not enforced at resolve time**
+- [x] **C-7 — Plugin declared `scopes` not enforced at resolve time**
   `core/plugin/manifest.rs:54-61,175 allows_scope` (dead), `host.rs:298-315`, `resolve.rs:86-123`. Either enforce (zero a tier's `PluginLevel` when `!allows_scope(tier)` in `resolve_plugin` — then `allows_scope` earns its keep) or delete `allows_scope` and rewrite the `PluginScope` doc to "advisory/UI-only". Don't leave a documented backend invariant unimplemented. **Recommend enforce** (small, matches the doc).
 
-- [ ] **C-8 — Plugin instruction budget doesn't bound time in C/stdlib calls**
+- [x] **C-8 — Plugin instruction budget doesn't bound time in C/stdlib calls**
   `core/plugin/runtime.rs:52,60-75`. Add a wall-clock deadline checked in the instruction hook, or document that the budget bounds Lua instructions only (memory limit bounds the rest). Either makes the "can't hang the app" guarantee honest.
 
-- [ ] **C-9 — `project_save` holds the Project mutex across the full zip-to-disk**
+- [x] **C-9 — `project_save` holds the Project mutex across the full zip-to-disk**
   `core/project/commands.rs:402-431`, `format.rs:112-141`. Mirror autosave: clone the skeleton under the lock (wrap mesh blobs in `Arc` so only the skeleton clones), drop the lock, then write off-lock.
 
 - [ ] **C-10 — Temp `.3mf` serialized + written under the global Project mutex**
   `core/slice/commands.rs:79-104`, `core/slice/input.rs:278-284`. Extract geometry+context under the lock, drop it, then serialize+write off-lock.
 
-- [ ] **C-11 — Autosave deep-clones all geometry every tick before the change check**
+- [x] **C-11 — Autosave deep-clones all geometry every tick before the change check**
   `core/project/autosave.rs:213-236`. Hash the skeleton (`serde_json::to_vec(&*p)` under the lock is cheap — serde skips mesh buffers), compare, clone only on change.
 
 - [ ] **C-12 — `JobRegistry` never pruned (memory grows per slice)**

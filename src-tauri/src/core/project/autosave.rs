@@ -215,22 +215,24 @@ fn write_one_tick(
     dir: &Path,
     last_hash: &mut Option<u64>,
 ) -> Result<WriteOutcome, Box<dyn std::error::Error + Send + Sync>> {
-    let snapshot = {
+    // Hash the JSON skeleton under the lock — mesh buffers are excluded via
+    // #[serde(skip)], so this is cheap. If nothing changed since the previous
+    // tick, return without cloning the (heavy) geometry at all; only clone
+    // when there's actually something to write.
+    let (hash, snapshot) = {
         let p = project.lock().expect("project poisoned");
-        p.clone()
+        let json = serde_json::to_vec(&*p)?;
+        let mut hasher = DefaultHasher::new();
+        json.hash(&mut hasher);
+        let hash = hasher.finish();
+        if Some(hash) == *last_hash {
+            return Ok(WriteOutcome::Unchanged);
+        }
+        (hash, p.clone())
     };
-    // Hash the JSON shape (mesh buffers excluded via
-    // #[serde(skip)]). If nothing changed since the previous
-    // tick, skip the disk write entirely.
-    let json = serde_json::to_vec(&snapshot)?;
-    let mut hasher = DefaultHasher::new();
-    json.hash(&mut hasher);
-    let hash = hasher.finish();
-    if Some(hash) == *last_hash {
-        return Ok(WriteOutcome::Unchanged);
-    }
     let path = autosave_path_for(dir, &snapshot);
     write_project(&snapshot, &path)?;
+    // Update only after a successful write, so a failed write retries next tick.
     *last_hash = Some(hash);
     Ok(WriteOutcome::Wrote(path))
 }

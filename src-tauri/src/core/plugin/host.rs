@@ -24,7 +24,7 @@ use serde::Serialize;
 use super::bindings::build_settings_table;
 use super::discovery::{discover, DiscoveredPlugin, MANIFEST_FILE};
 use super::error::PluginError;
-use super::manifest::{parse_manifest, HookKind, PluginManifest, PrinterCompat};
+use super::manifest::{parse_manifest, HookKind, PluginManifest, PluginScope, PrinterCompat};
 use super::resolve::{self, ResolvedPlugin};
 use super::runtime::PluginRuntime;
 
@@ -297,9 +297,23 @@ impl PluginHost {
     /// activation-gated settings overlay over the manifest defaults.
     fn resolve_plugin(&self, p: &LoadedPlugin, gate: &DispatchGate) -> ResolvedPlugin {
         let name = &p.manifest.name;
-        let printer_instance = resolve::level_for(name, &gate.printer_instance);
-        let project = resolve::level_for(name, &gate.project);
-        let plate = resolve::level_for(name, &gate.plate);
+        // Honor the manifest's declared `scopes`: an override at a scope the
+        // plugin doesn't declare is ignored at resolve (the PluginScope
+        // contract). Zero out any disallowed sub-global tier so it contributes
+        // neither activation nor settings.
+        let scoped = |scope, level: resolve::PluginLevel| {
+            if p.manifest.allows_scope(scope) {
+                level
+            } else {
+                resolve::PluginLevel::default()
+            }
+        };
+        let printer_instance = scoped(
+            PluginScope::PrinterInstance,
+            resolve::level_for(name, &gate.printer_instance),
+        );
+        let project = scoped(PluginScope::Project, resolve::level_for(name, &gate.project));
+        let plate = scoped(PluginScope::Plate, resolve::level_for(name, &gate.plate));
         let global_on = self.global_enabled.get(name).copied();
         let empty = BTreeMap::new();
         let global_settings = self.global_settings.get(name).unwrap_or(&empty);
@@ -787,6 +801,43 @@ mod tests {
         // Re-enabling globally runs it again under the permissive gate.
         host.set_global_enabled("p", true);
         assert_eq!(host.dispatch(&StubHook, "x".into()), "x-p");
+    }
+
+    #[test]
+    fn override_at_undeclared_scope_is_ignored() {
+        // A plugin declaring only the `global` scope must ignore a plate-tier
+        // activation override — the PluginScope contract (C-7). Contrast
+        // `global_disable_skips_plugin_and_override_re_enables`, where a
+        // default-scoped plugin's plate override DOES re-enable it.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("p");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(MANIFEST_FILE),
+            "name=\"p\"\nversion=\"1.0.0\"\nentry=\"main.lua\"\n\
+             hooks=[\"post_slice\"]\nenabled_by_default=true\nscopes=[\"global\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("main.lua"),
+            r#"function on_post_slice(s) return s .. "-p" end"#,
+        )
+        .unwrap();
+        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
+
+        host.set_global_enabled("p", false);
+        let plate_on = DispatchGate {
+            printer_model: None,
+            plate: [("plugin.p.enabled".to_string(), "true".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(
+            host.dispatch_gated(&StubHook, "x".into(), &plate_on),
+            "x",
+            "plate-tier override must be ignored for a global-only plugin"
+        );
     }
 
     #[test]

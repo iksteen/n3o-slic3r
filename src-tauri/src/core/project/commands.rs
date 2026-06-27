@@ -404,9 +404,13 @@ pub fn project_save(
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
-    let p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    format::write_project(&p, std::path::Path::new(&path)).map_err(|e| e.to_string())?;
-    drop(p);
+    // Clone under the lock, then write off-lock: the zip-to-disk is slow
+    // (geometry blobs) and must not block scene mutations. Mirrors autosave.
+    let snapshot = {
+        let p = state.lock().map_err(|e| format!("project lock: {e}"))?;
+        p.clone()
+    };
+    format::write_project(&snapshot, std::path::Path::new(&path)).map_err(|e| e.to_string())?;
     emit_all(&window, &[SceneEvent::ProjectSaved { path: path.clone() }]);
     Ok(())
 }
@@ -422,10 +426,14 @@ pub fn project_save_as(
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<(), String> {
-    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    format::write_project(&p, std::path::Path::new(&path)).map_err(|e| e.to_string())?;
-    p.source_path = Some(PathBuf::from(&path));
-    drop(p);
+    // Set source_path on the live project, clone under the lock, then write
+    // off-lock (see project_save — the zip-to-disk must not hold the mutex).
+    let snapshot = {
+        let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
+        p.source_path = Some(PathBuf::from(&path));
+        p.clone()
+    };
+    format::write_project(&snapshot, std::path::Path::new(&path)).map_err(|e| e.to_string())?;
     emit_all(&window, &[SceneEvent::ProjectSaved { path: path.clone() }]);
     Ok(())
 }
