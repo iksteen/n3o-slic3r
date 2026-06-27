@@ -261,7 +261,6 @@ fn prepare_job(
 
     let resolved = ResolvedJob {
         objects: input.objects,
-        force_temp_3mf: input.force_temp_3mf,
         output_dir,
         plate_ids: input.plate_ids,
         cascade,
@@ -447,34 +446,15 @@ fn build_model_objects(
     model: &mut Model,
     objects: &[super::input::SliceObject],
 ) -> std::result::Result<(), String> {
-    use crate::core::scene::state::GroupId;
-    use std::collections::BTreeMap;
-
     // Borrow the per-triangle paint straight from the object's `Arc` — no clone.
     fn paint(o: &super::input::SliceObject) -> &[String] {
         o.paint.as_deref().map(|p| p.as_slice()).unwrap_or(&[])
     }
 
-    // Bucket into build units, preserving first-appearance order: a solo per
-    // ungrouped object, one unit per group (members in encounter order).
-    let mut units: Vec<Vec<&super::input::SliceObject>> = Vec::new();
-    let mut group_pos: BTreeMap<GroupId, usize> = BTreeMap::new();
-    for o in objects {
-        match o.group {
-            Some(g) => match group_pos.get(&g) {
-                Some(&pos) => units[pos].push(o),
-                None => {
-                    group_pos.insert(g, units.len());
-                    units.push(vec![o]);
-                }
-            },
-            None => units.push(vec![o]),
-        }
-    }
-
-    for unit in &units {
+    for unit in build_units(objects) {
         // A one-member group is a solo (matches the writer's Layout).
-        if let [o] = unit[..] {
+        if let [i] = unit[..] {
+            let o = &objects[i];
             model
                 .add_object(
                     &o.name,
@@ -482,15 +462,16 @@ fn build_model_objects(
                     &o.indices,
                     &o.transform,
                     o.extruder,
-                    &paint(o),
+                    paint(o),
                     &o.overrides,
                 )
                 .map_err(|e| format!("add_object({}) failed: {e}", o.name))?;
         } else {
             let obj_idx = model
-                .add_group(&unit[0].name)
-                .map_err(|e| format!("add_group({}) failed: {e}", unit[0].name))?;
-            for o in unit {
+                .add_group(&objects[unit[0]].name)
+                .map_err(|e| format!("add_group({}) failed: {e}", objects[unit[0]].name))?;
+            for &i in &unit {
+                let o = &objects[i];
                 model
                     .add_volume(
                         obj_idx,
@@ -499,7 +480,7 @@ fn build_model_objects(
                         &o.indices,
                         &o.transform,
                         o.extruder,
-                        &paint(o),
+                        paint(o),
                         &o.overrides,
                     )
                     .map_err(|e| format!("add_volume({}) failed: {e}", o.name))?;
@@ -509,50 +490,29 @@ fn build_model_objects(
     Ok(())
 }
 
-/// Serialize the plate's [`SliceObject`]s to a temp `.3mf` for the
-/// `force_temp_3mf` path — test/parity only (proving the in-memory build
-/// matches the `write_3mf` → `Model::load` route byte-for-byte). Caller
-/// `Model::load`s the returned path, then deletes it.
-fn objects_to_temp_3mf(objects: &[super::input::SliceObject]) -> PathBuf {
-    use crate::core::scene::loaders::compute_bounding_box;
-    use crate::core::scene::state::{MeshProvenance, NewMesh};
-    use crate::core::scene::transform::Transform;
-    use crate::core::threemf::{project_from_objects, write_3mf, ProjectObject};
-    use std::sync::atomic::{AtomicU64, Ordering};
+/// Bucket object indices into build units, preserving first-appearance order: a
+/// solo unit per ungrouped object, one unit per `GroupId` (members in encounter
+/// order). Mirrors the `.3mf` writer's `Layout` — a one-member group is just a
+/// solo downstream. Pure over `o.group` so it's unit-testable without a `Model`.
+fn build_units(objects: &[super::input::SliceObject]) -> Vec<Vec<usize>> {
+    use crate::core::scene::state::GroupId;
+    use std::collections::BTreeMap;
 
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    let mut meshes = Vec::with_capacity(objects.len());
-    let mut project_objects = Vec::with_capacity(objects.len());
+    let mut units: Vec<Vec<usize>> = Vec::new();
+    let mut group_pos: BTreeMap<GroupId, usize> = BTreeMap::new();
     for (i, o) in objects.iter().enumerate() {
-        meshes.push(NewMesh {
-            vertices: (*o.vertices).clone(),
-            indices: (*o.indices).clone(),
-            paint_colors: o.paint.as_deref().map(|p| p.to_vec()),
-            bounding_box: compute_bounding_box(&o.vertices),
-            provenance: MeshProvenance::Primitive(o.name.clone()),
-        });
-        project_objects.push(ProjectObject {
-            mesh_idx: i,
-            transform: Transform {
-                matrix: o.transform.map(|x| x as f32),
+        match o.group {
+            Some(g) => match group_pos.get(&g) {
+                Some(&pos) => units[pos].push(i),
+                None => {
+                    group_pos.insert(g, units.len());
+                    units.push(vec![i]);
+                }
             },
-            name: o.name.clone(),
-            extruder_id: Some(o.extruder as u8),
-            plate_id: 1,
-            group: o.group,
-            overrides: o.overrides.iter().cloned().collect(),
-        });
+            None => units.push(vec![i]),
+        }
     }
-
-    let project = project_from_objects(meshes, project_objects, BTreeMap::new());
-    let path = std::env::temp_dir().join(format!(
-        "n3o-slice-parity-{}-{}.3mf",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed),
-    ));
-    write_3mf(&project, &path).expect("write temp .3mf for force_temp_3mf path");
-    path
+    units
 }
 
 /// Run the pre-slice plugin hook over the resolved cascade, applying
@@ -747,12 +707,10 @@ fn run_worker(
             }
         };
 
-        // Build the libslic3r model from the plate's in-memory geometry.
-        // Default path: `build_model_objects` hands each object's mesh buffers
-        // straight to libslic3r (solos via `add_object`, multi-volume groups via
-        // `add_group` + `add_volume`) — no temp file, no XML round-trip. The
-        // `force_temp_3mf` path (test/parity only) serializes the same objects
-        // to a temp `.3mf`, `Model::load`s it, then deletes it.
+        // Build the libslic3r model from the plate's in-memory geometry:
+        // `build_model_objects` hands each object's mesh buffers straight to
+        // libslic3r (solos via `add_object`, multi-volume groups via `add_group`
+        // + `add_volume`) — no temp file, no XML round-trip.
         let mut model = match Model::new() {
             Ok(m) => m,
             Err(e) => {
@@ -763,16 +721,7 @@ fn run_worker(
                 return;
             }
         };
-        if job.force_temp_3mf {
-            let temp = objects_to_temp_3mf(&job.objects);
-            let load_result = model.load(&temp);
-            let _ = std::fs::remove_file(&temp);
-            if let Err(e) = load_result {
-                let err = classify_libslic3r_error(&format!("{e}"));
-                fail(&handle, &sink, job_id, plate_id, err);
-                return;
-            }
-        } else if let Err(raw_message) = build_model_objects(&mut model, &job.objects) {
+        if let Err(raw_message) = build_model_objects(&mut model, &job.objects) {
             fail(
                 &handle,
                 &sink,
@@ -987,6 +936,49 @@ impl ProgressThrottle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A SliceObject with dummy geometry — `build_units` only reads `.group`.
+    fn so(
+        name: &str,
+        group: Option<crate::core::scene::state::GroupId>,
+    ) -> crate::core::slice::input::SliceObject {
+        use std::sync::Arc;
+        crate::core::slice::input::SliceObject {
+            name: name.into(),
+            vertices: Arc::new(vec![]),
+            indices: Arc::new(vec![]),
+            paint: None,
+            transform: [0.0; 16],
+            extruder: 1,
+            overrides: vec![],
+            group,
+        }
+    }
+
+    #[test]
+    fn build_units_buckets_groups_in_first_appearance_order() {
+        use crate::core::scene::state::GroupId;
+        let g1 = GroupId::fresh();
+        let g2 = GroupId::fresh();
+        // A(g1) B(solo) C(g1) D(g2) E(g2): g1 first appears before B, so its
+        // unit holds that slot; non-contiguous members fold into it.
+        let objs = vec![
+            so("A", Some(g1)),
+            so("B", None),
+            so("C", Some(g1)),
+            so("D", Some(g2)),
+            so("E", Some(g2)),
+        ];
+        assert_eq!(build_units(&objs), vec![vec![0, 2], vec![1], vec![3, 4]]);
+    }
+
+    #[test]
+    fn build_units_one_member_group_is_a_solo_unit() {
+        use crate::core::scene::state::GroupId;
+        let objs = vec![so("only", Some(GroupId::fresh()))];
+        // Single-index unit → build_model_objects dispatches it via add_object.
+        assert_eq!(build_units(&objs), vec![vec![0]]);
+    }
 
     #[test]
     fn throttle_emits_first_tick_immediately() {

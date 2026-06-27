@@ -41,13 +41,6 @@ pub struct SliceJobInput {
     /// state in `build_slice_input`).
     #[serde(skip)]
     pub objects: Vec<super::input::SliceObject>,
-    /// Test/parity only: round-trip the geometry through a temp `.3mf`
-    /// (`write_3mf` → `Model::load`) instead of building the `Model` in-memory
-    /// (solos via `add_object`, groups via `add_group` + `add_volume`). Default
-    /// `false` = in-memory build. `build_slice_input` always leaves this
-    /// `false`; only the parity gate flips it to prove the two routes agree.
-    #[serde(default)]
-    pub force_temp_3mf: bool,
     /// Directory to write G-code into. Output files land at
     /// `<output_dir>/plate_<N>.gcode`.
     pub output_dir: String,
@@ -223,8 +216,6 @@ impl Default for JobRegistry {
 pub struct ResolvedJob {
     /// Plate geometry fed to libslic3r — see [`SliceJobInput::objects`].
     pub objects: Vec<super::input::SliceObject>,
-    /// See [`SliceJobInput::force_temp_3mf`].
-    pub force_temp_3mf: bool,
     pub output_dir: PathBuf,
     pub plate_ids: Vec<u32>,
     pub cascade: crate::core::cascade::Cascade,

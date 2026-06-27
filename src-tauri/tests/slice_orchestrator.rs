@@ -117,7 +117,6 @@ fn collecting_sink() -> (EventSink, Arc<Mutex<Vec<SliceEvent>>>) {
 fn bambi_input(objects: Vec<SliceObject>, output_dir: String, plate_ids: Vec<u32>) -> SliceJobInput {
     SliceJobInput {
         objects,
-        force_temp_3mf: false,
         output_dir,
         context: ContextJson {
             printer: canonical_printer(),
@@ -162,7 +161,6 @@ fn snappy_input(objects: Vec<SliceObject>, output_dir: String, plate_ids: Vec<u3
     // the real filament identity off the bound PrinterInstance.
     SliceJobInput {
         objects,
-        force_temp_3mf: false,
         output_dir,
         context: ContextJson {
             printer: snappy_printer(),

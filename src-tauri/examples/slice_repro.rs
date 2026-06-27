@@ -142,11 +142,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 group: None,
             }]
         };
-    let force_temp_3mf = objects.iter().any(|o| o.group.is_some());
 
     let input = SliceJobInput {
         objects,
-        force_temp_3mf,
         output_dir: temp_dir.display().to_string(),
         context: ContextJson {
             printer,

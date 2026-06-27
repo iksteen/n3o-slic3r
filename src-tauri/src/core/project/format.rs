@@ -287,7 +287,6 @@ mod tests {
     use super::*;
     use crate::core::printer::profile::BoundingBox;
     use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject, ObjectId};
-    use crate::core::scene::transform::Transform;
 
     fn tmp() -> PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -491,27 +490,13 @@ mod tests {
 
     #[test]
     fn read_project_flags_a_foreign_3mf() {
-        use crate::core::threemf::write_3mf;
         // A plain 3MF (no project.json) → ForeignProject so the UI routes it to
-        // the importer.
-        let proj3mf = crate::core::threemf::project_from_objects(
-            vec![triangle()],
-            vec![crate::core::threemf::ProjectObject {
-                mesh_idx: 0,
-                transform: Transform::IDENTITY,
-                name: "x".into(),
-                extruder_id: None,
-                plate_id: 1,
-                group: None,
-                overrides: Default::default(),
-            }],
-            std::collections::BTreeMap::new(),
-        );
-        let path = tmp();
-        write_3mf(&proj3mf, &path).expect("write 3mf");
+        // the importer. Uses a committed fixture (3mf write lives only in tests
+        // now — the native save format is .n3o).
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/3mf/cube-plain.3mf");
         let err = read_project(&path).unwrap_err();
         assert!(matches!(err, ProjectIoError::ForeignProject { .. }), "got {err:?}");
-        std::fs::remove_file(&path).ok();
     }
 
     #[test]

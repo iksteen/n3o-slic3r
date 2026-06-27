@@ -2,9 +2,9 @@
 //! Phase 3 exit-criteria smoke.
 //!
 //! Chains every Phase 3 deliverable into one repeatable test so a
-//! future regression that breaks any link — slice, parse, serialize,
-//! 3MF read/write, sliced-3MF write — fails loudly with a step-named
-//! assertion rather than at the leaf module's own unit test.
+//! future regression that breaks any link — slice, parse, sliced-3MF
+//! write — fails loudly with a step-named assertion rather than at the
+//! leaf module's own unit test.
 //!
 //! The 50 MB / 3 s parser perf gate from PR-3-6 lives in
 //! `gcode_parser_perf.rs` and runs as part of the same
@@ -24,7 +24,7 @@ use n3o_slic3r_lib::core::slice::{
     orchestrator::{run_slice_job_blocking, EventSink},
     JobRegistry, SliceEvent, SliceJobInput,
 };
-use n3o_slic3r_lib::core::threemf::{fixture_input, load_3mf, write_3mf, write_sliced_3mf};
+use n3o_slic3r_lib::core::threemf::{fixture_input, write_sliced_3mf};
 use slic3r_ffi::init as ffi_init;
 
 /// The cube STL loaded into a single buffer-load [`SliceObject`].
@@ -61,10 +61,6 @@ fn workspace_root() -> PathBuf {
 
 fn cube_stl() -> PathBuf {
     workspace_root().join("external/OrcaSlicer/tests/data/test_stl/ASCII/20mmbox-LF.stl")
-}
-
-fn fourcolor_3mf() -> PathBuf {
-    workspace_root().join("examples/spike3/fourcolor.3mf")
 }
 
 fn canonical_printer() -> PrinterProfile {
@@ -123,7 +119,6 @@ fn slice_cube_to_gcode() -> (PathBuf, Vec<u8>) {
 
     let input = SliceJobInput {
         objects: cube_objects(),
-        force_temp_3mf: false,
         output_dir: temp_dir.display().to_string(),
         context: ContextJson {
             printer: canonical_printer(),
@@ -266,75 +261,3 @@ fn phase3_smoke_slice_parse_roundtrip_bundle() {
     let _ = std::fs::remove_file(&bundle_path);
 }
 
-/// Step 5: load fourcolor.3mf via PR-2-4's reader, write it back via
-/// PR-3-9's writer, reload the result, assert structural equivalence
-/// (mesh count, object count, plate assignments).
-#[test]
-fn phase3_smoke_3mf_roundtrip() {
-    let path = fourcolor_3mf();
-    if !path.exists() {
-        // Fixture isn't required for unrelated tests; skip with a
-        // clear message rather than fail the whole suite if someone
-        // checked out without examples/spike3/.
-        eprintln!(
-            "skipping 3MF round-trip: fixture missing at {}",
-            path.display()
-        );
-        return;
-    }
-    let original = load_3mf(&path).expect("load original");
-    assert!(
-        !original.meshes.is_empty(),
-        "fixture should have at least one mesh"
-    );
-    assert!(
-        !original.objects.is_empty(),
-        "fixture should have at least one object"
-    );
-
-    let written_path = std::env::temp_dir().join(format!(
-        "n3o-phase3-smoke-roundtrip-{}.3mf",
-        std::process::id(),
-    ));
-    write_3mf(&original, &written_path).expect("write_3mf");
-
-    let reloaded = load_3mf(&written_path).expect("load round-tripped");
-
-    assert_eq!(
-        reloaded.meshes.len(),
-        original.meshes.len(),
-        "mesh count drifted across round-trip",
-    );
-    assert_eq!(
-        reloaded.objects.len(),
-        original.objects.len(),
-        "object count drifted across round-trip",
-    );
-    assert_eq!(
-        reloaded.plate_assignments, original.plate_assignments,
-        "plate assignments drifted across round-trip",
-    );
-    // Mesh data: vertex + triangle counts per index. We don't compare
-    // floats exactly because the writer goes through string formatting,
-    // but identical counts + identical plate assignments are the
-    // structural-equivalence the exit criterion asks for.
-    for (i, (orig, back)) in original
-        .meshes
-        .iter()
-        .zip(reloaded.meshes.iter())
-        .enumerate()
-    {
-        assert_eq!(
-            back.vertices.len(),
-            orig.vertices.len(),
-            "mesh {i}: vertex count drift",
-        );
-        assert_eq!(
-            back.indices.len(),
-            orig.indices.len(),
-            "mesh {i}: index count drift",
-        );
-    }
-
-    let _ = std::fs::remove_file(&written_path);
-}

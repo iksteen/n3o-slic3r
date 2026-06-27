@@ -90,6 +90,14 @@ fn orca_cube_3mf() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/3mf/orca-cube-v2.3mf")
 }
 
+/// A single 20mm cube exported as two foreign 3MFs with identical geometry —
+/// one plain, one carrying an object-scoped `layer_height = 0.25` override (as a
+/// foreign Orca export stores it). Authored by
+/// `tests/fixtures/3mf/cube-override-pair.py`.
+fn cube_3mf(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/3mf/{name}"))
+}
+
 fn canonical_plate() -> BuildPlate {
     BuildPlate {
         identity: "Textured PEI".into(),
@@ -179,11 +187,9 @@ fn slice_fourcolor(
     ));
 
     let objects = objects_from_3mf(&fourcolor_3mf());
-    // Everything slices in-memory, groups included (add_group + add_volume) —
-    // exercise the shipping path, not the parity-only temp-.3mf route.
+    // Everything slices in-memory, groups included (add_group + add_volume).
     let input = SliceJobInput {
         objects,
-        force_temp_3mf: false,
         output_dir: temp_dir.display().to_string(),
         context: ContextJson {
             printer,
@@ -640,29 +646,19 @@ fn imported_object_override_reaches_the_engine_end_to_end() {
     use n3o_slic3r_lib::core::project::{PlateId, Project};
     use n3o_slic3r_lib::core::scene::state::NewSceneObject;
     use n3o_slic3r_lib::core::slice::input::build_slice_input;
-    use n3o_slic3r_lib::core::threemf::{load_3mf, write_3mf};
-    use std::collections::BTreeMap;
+    use n3o_slic3r_lib::core::threemf::load_3mf;
     use std::path::Path;
 
     ensure_ffi_init();
-    let cube_path = orca_cube_3mf();
     let tmp = std::env::temp_dir();
     let pid = std::process::id();
 
-    // Author two "foreign" 3MFs from the same geometry: one plain, one with
-    // a per-object layer_height override baked into model_settings.config
-    // (our writer emits it there — the same shape Orca reads/writes).
-    let base_3mf = tmp.join(format!("n3o-imp-base-{pid}.3mf"));
-    let ovr_3mf = tmp.join(format!("n3o-imp-ovr-{pid}.3mf"));
-    {
-        let plain = load_3mf(&cube_path).expect("load OrcaCube");
-        write_3mf(&plain, &base_3mf).expect("write base");
-        let mut withovr = load_3mf(&cube_path).expect("load OrcaCube");
-        for o in &mut withovr.objects {
-            o.overrides = BTreeMap::from([("layer_height".to_string(), "0.25".to_string())]);
-        }
-        write_3mf(&withovr, &ovr_3mf).expect("write ovr");
-    }
+    // Two foreign 3MFs with identical geometry: one plain, one carrying a
+    // per-object layer_height override at the <object> level of
+    // model_settings.config (how a foreign Orca export records it). Authored by
+    // tests/fixtures/3mf/cube-override-pair.py.
+    let base_3mf = cube_3mf("cube-plain.3mf");
+    let ovr_3mf = cube_3mf("cube-override.3mf");
 
     // Import a 3MF into a fresh bambi project exactly as scene_load_3mf does.
     let import = |path: &Path| -> Project {
@@ -751,9 +747,151 @@ fn imported_object_override_reaches_the_engine_end_to_end() {
         "imported per-object layer_height override didn't reach the engine: base={base_layers}, \
          override={ovr_layers}",
     );
+}
 
-    let _ = std::fs::remove_file(&base_3mf);
-    let _ = std::fs::remove_file(&ovr_3mf);
+/// Pins the group transform-composition ORDER. `add_volume` does
+/// `set_transformation(world * centering)` — matching the `.3mf` loader's
+/// component path — where `centering` is the compensation `add_volume` bakes
+/// when it re-centers the mesh. A member ROTATION does not commute with that
+/// centering, so a flipped composition relocates the rotated member. Layer count
+/// can't see it (same orientation either way); position can.
+///
+/// Oracle without a `.3mf` round-trip: slice the rotated member two ways — once
+/// via the volume transform, once with that transform baked into the mesh
+/// vertices and an identity transform. The baked path's identity transform
+/// commutes with centering, so it's order-insensitive (the oracle); only the
+/// via-transform path can move under a flipped composition. Same world geometry
+/// either way → identical brim/skirt/prime → the print bounding boxes must
+/// match. (Replaces the order coverage the deleted temp-`.3mf` parity test held.)
+#[test]
+fn grouped_member_rotation_composes_in_world_space() {
+    use n3o_slic3r_lib::core::project::{PlateId, Project};
+    use n3o_slic3r_lib::core::scene::primitives::{generate, PrimitiveKind, PrimitiveParams};
+    use n3o_slic3r_lib::core::scene::state::{GroupId, NewMesh, NewSceneObject};
+    use n3o_slic3r_lib::core::scene::transform::Transform;
+    use n3o_slic3r_lib::core::slice::input::build_slice_input;
+    use glam::Vec3;
+
+    ensure_ffi_init();
+
+    // A 30×10×10 cube shifted off-origin so its local centroid is NOT at the
+    // origin — that makes `add_volume`'s centering compensation non-trivial, so
+    // the composition order actually matters (a centered mesh would commute).
+    // (`bounding_box` stays at generate()'s value; the slice path reads only
+    // vertices/indices, and register_object doesn't re-seat here.)
+    let mut params = PrimitiveParams::defaults_for(PrimitiveKind::Cube);
+    params.width = 30.0;
+    params.depth = 10.0;
+    params.height = 10.0;
+    let mut mesh = generate(PrimitiveKind::Cube, params);
+    for c in mesh.vertices.chunks_exact_mut(3) {
+        c[0] += 15.0; // → local X 0..30
+        c[1] += 5.0; //  → local Y 0..10
+        c[2] += 5.0; //  → local Z 0..10 (sits on the bed)
+    }
+
+    // Anchor member (keeps it a 2-member group → the add_volume path, not the
+    // single-volume add_object collapse) + a rotated member.
+    let anchor = Transform::translation(Vec3::new(40.0, 80.0, 0.0));
+    let rotated = Transform::translation(Vec3::new(100.0, 50.0, 0.0))
+        .compose(Transform::rotation_around(Vec3::Z, std::f32::consts::FRAC_PI_2));
+
+    // Same rotation+placement baked straight into the vertices.
+    let mut baked = mesh.clone();
+    for c in baked.vertices.chunks_exact_mut(3) {
+        let p = rotated.apply_point(Vec3::new(c[0], c[1], c[2]));
+        c[0] = p.x;
+        c[1] = p.y;
+        c[2] = p.z;
+    }
+
+    // XY range of the G-code's extruding moves (the deposited footprint). The
+    // header `min_x`/`max_x` comments aren't emitted for this profile, so read
+    // the toolpath directly. Prime line + brim are identical between the two
+    // slices (same geometry), so they cancel in the comparison.
+    fn gcode_xy_bbox(path: &str) -> ([f32; 2], [f32; 2]) {
+        let text = std::fs::read_to_string(path).expect("read gcode");
+        let mut min = [f32::MAX; 2];
+        let mut max = [f32::MIN; 2];
+        for line in text.lines() {
+            if !line.starts_with("G1 ") || !line.contains(" E") {
+                continue; // extruding moves only (skip travels / retractions)
+            }
+            for tok in line.split_whitespace() {
+                let axis = match tok.as_bytes().first() {
+                    Some(b'X') => 0,
+                    Some(b'Y') => 1,
+                    _ => continue,
+                };
+                if let Ok(v) = tok[1..].parse::<f32>() {
+                    min[axis] = min[axis].min(v);
+                    max[axis] = max[axis].max(v);
+                }
+            }
+        }
+        assert!(min[0] <= max[0], "no extruding moves found in {path}");
+        (min, max)
+    }
+
+    // Slice a 2-member group (anchor + `b`) and return the extruded XY bbox.
+    let slice_bbox = |b_mesh: NewMesh, b_xform: Transform, tag: &str| -> ([f32; 2], [f32; 2]) {
+        let mut project = Project::default();
+        project.plates[0].set_printer(Some("bambi".into()), None);
+        let g = GroupId::fresh();
+        let m_anchor = project.register_mesh(mesh.clone());
+        let m_b = project.register_mesh(b_mesh);
+        let new = |m, t, name: &str| NewSceneObject {
+            mesh: m,
+            transform: t,
+            name: name.into(),
+            visible: true,
+            extruder_id: None,
+            group: Some(g),
+        };
+        project.register_object(new(m_anchor, anchor, "anchor"));
+        project.register_object(new(m_b, b_xform, "b"));
+
+        let out = std::env::temp_dir().join(format!("n3o-compose-{tag}-{}", std::process::id()));
+        let input = build_slice_input(&project, PlateId(1), out.display().to_string())
+            .expect("build_slice_input");
+        let registry = JobRegistry::new();
+        let (sink, events) = collecting_sink();
+        run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
+        let events = events.lock().unwrap();
+        if let Some(SliceEvent::JobFailed { error, .. }) =
+            events.iter().find(|e| matches!(e, SliceEvent::JobFailed { .. }))
+        {
+            panic!("[{tag}] slice failed: {error:?}");
+        }
+        let path = events
+            .iter()
+            .find_map(|e| match e {
+                SliceEvent::PlateFinished { output_path, .. } => Some(output_path.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("[{tag}] no PlateFinished"));
+        let bbox = gcode_xy_bbox(&path);
+        let _ = std::fs::remove_dir_all(&out);
+        bbox
+    };
+
+    let (via_min, via_max) = slice_bbox(mesh.clone(), rotated, "via-transform");
+    let (baked_min, baked_max) = slice_bbox(baked, Transform::IDENTITY, "baked");
+
+    // Same world geometry both ways → identical footprint (≤1mm slack).
+    // A flipped composition shifts the via-transform member by
+    // centroid − Rz90(centroid) = (20mm in X, 10mm in Y) — far above the slack.
+    for a in 0..2 {
+        assert!(
+            (via_min[a] - baked_min[a]).abs() < 1.0 && (via_max[a] - baked_max[a]).abs() < 1.0,
+            "group composition order is wrong on axis {a}: via-transform XY bbox \
+             [{:?},{:?}] != baked-geometry XY bbox [{:?},{:?}]",
+            via_min,
+            via_max,
+            baked_min,
+            baked_max,
+        );
+    }
 }
 
 /// MMU color-painting import → multi-material slice (Phase 1, AMS).

@@ -131,10 +131,8 @@ pub async fn slice_active_plate(
 }
 
 /// Compose a sink that emits each lifecycle event on the AppHandle's
-/// Tauri channel. Buffer-load leaves no temp `.3mf` on the slice path,
-/// so there's nothing to clean up on the terminal event (the
-/// `force_temp_3mf` path's temp file is created + deleted entirely
-/// inside the worker).
+/// Tauri channel. Geometry is built in-memory, so the slice path leaves no
+/// temp `.3mf` — nothing to clean up on the terminal event.
 fn emit_sink(app: AppHandle) -> EventSink {
     Box::new(move |event: SliceEvent| {
         let name = event.name();

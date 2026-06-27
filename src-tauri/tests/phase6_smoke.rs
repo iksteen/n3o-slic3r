@@ -141,7 +141,6 @@ fn slice_cube_to_gcode() -> (PathBuf, Vec<u8>) {
 
     let input = SliceJobInput {
         objects: cube_objects(),
-        force_temp_3mf: false,
         output_dir: temp_dir.display().to_string(),
         context: ContextJson {
             printer: canonical_printer(),

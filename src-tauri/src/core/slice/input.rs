@@ -290,11 +290,6 @@ pub fn build_slice_input(
     // `extruder`.
     let objects = build_plate_objects(project, plate_id, &instance);
 
-    // Geometry travels in-memory for every plate, groups included: the worker
-    // collapses a multi-volume group into one ModelObject via `add_group` +
-    // `add_volume`. The temp-`.3mf` route survives only as a test/parity knob.
-    let force_temp_3mf = false;
-
     // ── MMU paint remap (toolchangers only) ───────────────────
     // build_plate_objects rewrites each object's `extruder` to its flat-
     // slot index on toolchangers. The face paint encodes the *original* model
@@ -319,7 +314,6 @@ pub fn build_slice_input(
     // ── Assemble the SliceJobInput ────────────────────────────
     let input = SliceJobInput {
         objects,
-        force_temp_3mf,
         output_dir,
         context: ContextJson {
             printer: printer_profile,
@@ -547,12 +541,11 @@ mod tests {
             "Supertack Plate"
         );
         // Geometry travels in-memory as one SliceObject per scene object,
-        // with shared buffers — no temp file, buffer-load by default.
+        // with shared buffers — geometry travels in-memory, no temp file.
         assert_eq!(input.objects.len(), 1);
         assert_eq!(input.objects[0].name, "cube");
         assert!(!input.objects[0].vertices.is_empty());
         assert_eq!(input.objects[0].extruder, 1);
-        assert!(!input.force_temp_3mf, "ungrouped plate uses buffer-load");
 
         // One filament per *material* on the plate. This single-cube
         // happy path uses material 1 only → length 1, sourced from
@@ -720,8 +713,8 @@ mod tests {
     fn grouped_plate_uses_in_memory_group_path() {
         // Multi-volume groups (the cube-halves shape) slice in-memory like
         // everything else: the worker collapses the group into one ModelObject
-        // via `add_group` + `add_volume`, so `force_temp_3mf` stays false. The
-        // objects carry their group identity so the worker can do that collapse.
+        // via `add_group` + `add_volume`. The objects carry their group identity
+        // so the worker can do that collapse.
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         project.plates[0].set_printer(Some("bambi".into()), None);
@@ -749,14 +742,11 @@ mod tests {
         let input =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
-        assert!(
-            !input.force_temp_3mf,
-            "a grouped plate slices in-memory (add_group + add_volume), no temp .3mf",
-        );
         assert_eq!(input.objects.len(), 2);
         assert!(
             input.objects.iter().all(|o| o.group == Some(g)),
-            "both objects keep their group identity for the worker to collapse",
+            "both objects keep their group identity for the worker to collapse \
+             into one ModelObject (add_group + add_volume)",
         );
     }
 

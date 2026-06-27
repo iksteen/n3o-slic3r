@@ -118,7 +118,6 @@ fn slice_input(plate_ids: Vec<u32>) -> (SliceJobInput, JobRegistry, tempfile::Te
     let out = tempfile::tempdir().expect("temp dir");
     let input = SliceJobInput {
         objects: cube_objects(),
-        force_temp_3mf: false,
         output_dir: out.path().display().to_string(),
         context: ContextJson {
             printer: canonical_printer(),

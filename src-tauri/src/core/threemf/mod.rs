@@ -1,25 +1,20 @@
-//! `.3mf` reader + writer.
+//! `.3mf` reader + sliced-`.gcode.3mf` writer.
 //!
-//! Three roles in one module:
+//! Two roles in one module:
 //!
 //! - **Project reader** (this file's `load_3mf`): loads a
 //!   `.3mf` as a *project* — geometry, object placements, per-part
 //!   extruder assignments, plate metadata — into a [`Project3mf`]
 //!   that the `scene_load_3mf` Tauri command ingests into scene
 //!   state.
-//! - **Project writer** (`writer::write_3mf`): the inverse,
-//!   producing an OrcaSlicer-compatible 3MF from a `Project3mf`.
-//!   Feeds slice geometry to libslic3r (`core::slice::input`) and is
-//!   the test oracle for the reader. (Native save uses `.n3o`, not
-//!   3MF — see `core::project::format`.)
 //! - **Sliced `.gcode.3mf` writer** (`sliced::write_sliced_3mf`):
 //!   the Bambu A1 mini send-format. Embeds G-code bodies + plate
 //!   metadata + thumbnails with BambuStudio-namespace metadata.
 //!   Consumed by the Phase 7a driver.
 //!
 //! Per PRD §8.2 this module lives at `core/threemf/` — project import,
-//! the slice-geometry feed, the G-code preview's `.gcode.3mf`
-//! drag-drop, and the Bambu driver all take stable deps on it.
+//! the G-code preview's `.gcode.3mf` drag-drop, and the Bambu driver
+//! all take stable deps on it.
 //!
 //! The 3MF Core spec models geometry as a forest of `<object>`
 //! resources. Each object is either a leaf `<mesh>` or a tree of
@@ -50,14 +45,12 @@ mod core_spec;
 pub mod paint;
 mod slice_info;
 mod sliced;
-mod writer;
 
 pub use paint::{decode_dominant_states, referenced_states};
 pub use sliced::{
     fixture_input, md5_hex, read_sliced_3mf, write_sliced_3mf, AmsBinding, SlicedPlate,
     SlicedPlateMetadata, SlicedPlateRead, SlicedProjectInput, SlicedRead,
 };
-pub use writer::{project_from_objects, write_3mf};
 
 /// Open a `.3mf` and read a single named entry, returning `None`
 /// when the entry is absent — for peeking at custom metadata (e.g.
