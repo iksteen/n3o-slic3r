@@ -8,7 +8,7 @@
 //   - scalars → the matching scalar input via `renderScalarInput`.
 
 import { useState } from "react";
-import { renderScalarInput } from "../SettingsPanel";
+import { renderScalarInput } from "../renderScalarInput";
 import { isVectorKind, optionTypeKind, type OptionSummary } from "../types";
 import { ModalBackdrop, ModalCloseButton } from "../../ui/Modal";
 

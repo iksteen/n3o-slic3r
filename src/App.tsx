@@ -4,6 +4,7 @@ import { ViewportChrome } from "./viewport/ViewportChrome";
 import { ViewportToasts } from "./viewport/ViewportToasts";
 import { CloneDialog } from "./objects/CloneDialog";
 import { cloneObjects } from "./objects/objectCommands";
+import { useViewportTools } from "./viewport/useViewportTools";
 import { setupTowerMeshCache } from "./viewport/towerMeshCache";
 import { ErrorConsole } from "./logging/ErrorConsole";
 import { shouldIgnoreHotkey } from "./ui/hotkeyInhibit";
@@ -19,9 +20,8 @@ import {
   useAutosaveRecoveryGate,
 } from "./project/AutosaveRecoveryDialog";
 import { autosaveEnable } from "./project/autosaveCommands";
-import { projectNew, projectLoad, projectSave, projectSaveAs } from "./project/projectFile";
-import { message as messageDialog } from "@tauri-apps/plugin-dialog";
-import { openFile, saveFile } from "./ui/fileDialog";
+import { useProjectFileMenu } from "./project/useProjectFileMenu";
+import { useImportReportDialog } from "./project/importReport";
 import { onEvents } from "./state/eventRouter";
 import { PROJECT_REPLACED_EVENTS } from "./project/editEvents";
 import { SettingsPanelHost } from "./settings/SettingsPanelHost";
@@ -55,26 +55,6 @@ import {
 } from "./plugins/pluginCascade";
 import "./App.css";
 
-/** Summary emitted by the backend after importing a foreign
- * (OrcaSlicer / Bambu Studio) project via Open project. */
-interface ImportReport {
-  objects: number;
-  plates: number;
-  printer_instance: string | null;
-  printer_instance_name: string | null;
-  printer_model: string | null;
-  printer_fallback: boolean;
-  filaments_matched: number;
-  filaments_unmatched: number;
-  settings_applied: number;
-  settings_redundant: number;
-  settings_incompatible: number;
-  settings_machine_dropped: number;
-  settings_filament_dropped: number;
-  settings_unmapped: number;
-  settings_from_change_list: boolean;
-}
-
 function App() {
   const [mode, setMode] = useState<"scene" | "preview" | "devices">("scene");
   // Selected printer in the Devices view, owned here (App is always mounted) so
@@ -82,17 +62,9 @@ function App() {
   // pre-select the destination printer before the view mounts. `null` falls
   // back to the first printer.
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
-  // The wgpu viewport's gizmo mode.
-  const [wgpuGizmo, setWgpuGizmo] = useState<"none" | "move" | "rotate" | "scale">("none");
-  // wgpu viewport's armed placing tool (lay-flat / align). Mutually exclusive
-  // with the gizmo: arming a tool clears the gizmo and vice versa.
-  const [wgpuTool, setWgpuTool] = useState<
-    "none" | "layflat" | "alignX" | "alignY" | "facematch" | "clone"
-  >("none");
-  // wgpu clone dialog (open with a set of ids; null = closed).
-  const [wgpuClone, setWgpuClone] = useState<{ ids: number[]; expandGroups: boolean } | null>(null);
-  // Match-face two-click sub-state: true once the reference face is picked.
-  const [wgpuFaceMatchStep, setWgpuFaceMatchStep] = useState(false);
+  // Prepare-tab viewport tool state (gizmo + armed tools + clone dialog +
+  // match-face step), with the one-tool-active-at-a-time invariant.
+  const viewport = useViewportTools();
   // Object count frozen at the moment a slice is submitted — what the
   // backend actually snapshots and slices (build_slice_input). Held
   // here so the progress window's count stays put across tab switches
@@ -201,11 +173,6 @@ function App() {
       setMode((current) => (current === "devices" ? current : "preview"));
     });
   }, [bridge, activePlateId]);
-
-  // Reset the match-face step whenever the armed tool changes (arm/disarm/switch).
-  useEffect(() => {
-    setWgpuFaceMatchStep(false);
-  }, [wgpuTool]);
 
   // App-lifetime listener feeding the priming-tower mesh cache. Lives here
   // (App is always mounted) rather than in ViewportCanvas, which unmounts
@@ -365,104 +332,19 @@ function App() {
 
   // A foreign project imported via Open project → show what mapped and
   // what was dropped, so lossy mapping is never silent.
-  useEffect(() => {
-    return onEvents<{ data: { report: ImportReport } }>(
-      ["project:imported"],
-      (e) => {
-        const r = e.payload.data.report;
-        const lines = [
-          `${r.objects} object(s) across ${r.plates} plate(s).`,
-          `Printer: ${r.printer_model ?? "?"} → ${r.printer_instance_name ?? "(none)"}${
-            r.printer_fallback ? " — no exact match; bound a fallback, rebind if needed" : ""
-          }`,
-          `Filaments: ${r.filaments_matched} matched, ${r.filaments_unmatched} not found.`,
-          `Settings: ${r.settings_applied} applied${
-            r.settings_from_change_list
-              ? " (only the changes the project made to its preset)"
-              : ""
-          }${
-            r.settings_redundant ? `, ${r.settings_redundant} already at default` : ""
-          }${
-            r.settings_incompatible ? `, ${r.settings_incompatible} with values this engine doesn't recognize (reset to default)` : ""
-          }.`,
-          `Not imported: ${r.settings_machine_dropped} printer/machine settings (your printer's own), ${r.settings_filament_dropped} filament settings (taken from the slot each material binds to), ${r.settings_unmapped} settings this engine doesn't support (Bambu Studio extras).`,
-        ];
-        void messageDialog(lines.join("\n"), {
-          title: "Imported from OrcaSlicer / Bambu Studio",
-        });
-      },
-    );
-  }, []);
+  useImportReportDialog();
 
-  // ----- Project file menu (Open / Save / Save as) -----
+  // ----- Project file menu (New / Open / Save / Save as) -----
   // The backend's source_path is the project's on-disk origin; null
-  // until first save. The menu label shows its basename, or
-  // "Untitled.3mf" for an unsaved project.
+  // until first save.
   const sourcePath = session.snapshot?.source_path ?? null;
-  const projectName = sourcePath
-    ? sourcePath.split(/[\\/]/).pop() || "Untitled.n3o"
-    : "Untitled.n3o";
-  // Open accepts native .n3o projects AND foreign Bambu/Orca .3mf (imported);
-  // Save only writes the native .n3o container.
-  const openFilters = [
-    { name: "Project", extensions: ["n3o", "3mf"] },
-    { name: "n3o project", extensions: ["n3o"] },
-    { name: "Bambu / Orca 3MF", extensions: ["3mf"] },
-  ];
-  const saveFilters = [{ name: "n3o project", extensions: ["n3o"] }];
-
-  // Surface a project file-op failure to the user (a native dialog), not
-  // just the console — opening e.g. an OrcaSlicer .3mf via "Open project"
-  // otherwise looks like nothing happened.
-  const reportProjectError = (action: string, err: unknown): void => {
-    console.error(`[project] ${action} failed`, err);
-    void messageDialog(String(err), { title: `${action} failed`, kind: "error" });
-  };
-
-  const handleNewProject = async (): Promise<void> => {
-    try {
-      await projectNew(); // → project:loaded → session + scene resync
-    } catch (err) {
-      reportProjectError("New project", err);
-    }
-  };
-
-  const handleOpenProject = async (): Promise<void> => {
-    try {
-      const picked = await openFile({ filters: openFilters });
-      if (picked == null) return; // cancelled
-      await projectLoad(picked); // → project:loaded → session refetch
-    } catch (err) {
-      reportProjectError("Open project", err);
-    }
-  };
-
-  const handleSaveProjectAs = async (): Promise<void> => {
-    try {
-      const picked = await saveFile({
-        title: "Save project as",
-        defaultPath: projectName,
-        filters: saveFilters,
-      });
-      if (picked == null) return; // cancelled
-      await projectSaveAs(picked); // adopts the new source_path
-    } catch (err) {
-      reportProjectError("Save project as", err);
-    }
-  };
-
-  const handleSaveProject = async (): Promise<void> => {
-    // No source path yet (Untitled) → behave like Save As.
-    if (!sourcePath) {
-      await handleSaveProjectAs();
-      return;
-    }
-    try {
-      await projectSave(sourcePath);
-    } catch (err) {
-      reportProjectError("Save project", err);
-    }
-  };
+  const {
+    projectName,
+    handleNewProject,
+    handleOpenProject,
+    handleSaveProject,
+    handleSaveProjectAs,
+  } = useProjectFileMenu(sourcePath);
 
   // No printers + bootstrap completed → onboarding takes over.
   const noPrinters =
@@ -616,53 +498,34 @@ function App() {
               <WgpuViewport
                 selectedIds={activePlate?.selection ?? []}
                 activePlateId={activePlateId}
-                gizmoMode={wgpuGizmo}
-                tool={wgpuTool}
-                onToolDone={() => setWgpuTool("none")}
-                onClonePick={(id) => {
-                  setWgpuTool("none");
-                  setWgpuClone({ ids: [id], expandGroups: true });
-                }}
-                onFaceMatchStep={setWgpuFaceMatchStep}
+                gizmoMode={viewport.gizmoMode}
+                tool={viewport.tool}
+                onToolDone={viewport.clearTool}
+                onClonePick={viewport.pickClone}
+                onFaceMatchStep={viewport.setFaceMatchStep}
               />
               <ViewportChrome
                 leading={modeToggle}
                 objects={activePlate?.objects ?? []}
                 selectedIds={activePlate?.selection ?? []}
-                gizmoMode={wgpuGizmo}
-                onGizmoMode={(m) => {
-                  setWgpuTool("none");
-                  setWgpuGizmo((cur) => (cur === m ? "none" : m));
-                }}
-                tool={wgpuTool}
-                onTool={(t) => {
-                  setWgpuGizmo("none");
-                  setWgpuTool((cur) => (cur === t ? "none" : t));
-                }}
-                onClone={() => {
-                  // With a selection, open the dialog on it; otherwise arm
-                  // pick-to-clone (the next clicked object's group).
-                  const sel = activePlate?.selection ?? [];
-                  if (sel.length > 0) {
-                    setWgpuClone({ ids: sel, expandGroups: false });
-                  } else {
-                    setWgpuGizmo("none");
-                    setWgpuTool((cur) => (cur === "clone" ? "none" : "clone"));
-                  }
-                }}
-                faceMatchRefSet={wgpuFaceMatchStep}
+                gizmoMode={viewport.gizmoMode}
+                onGizmoMode={viewport.selectGizmo}
+                tool={viewport.tool}
+                onTool={viewport.selectTool}
+                onClone={() => viewport.armClone(activePlate?.selection ?? [])}
+                faceMatchRefSet={viewport.faceMatchStep}
               />
-              {wgpuClone && (
+              {viewport.clone && (
                 <CloneDialog
-                  count={wgpuClone.ids.length}
+                  count={viewport.clone.ids.length}
                   onConfirm={(copies) => {
-                    const dlg = wgpuClone;
-                    setWgpuClone(null);
+                    const dlg = viewport.clone!;
+                    viewport.closeClone();
                     void cloneObjects(dlg.ids, copies, dlg.expandGroups).catch((e) =>
                       console.error("clone failed", e),
                     );
                   }}
-                  onCancel={() => setWgpuClone(null)}
+                  onCancel={viewport.closeClone}
                 />
               )}
               {canvasOverlays}

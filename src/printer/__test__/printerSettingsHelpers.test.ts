@@ -13,9 +13,11 @@ import {
   computeChanged,
   computeSectionDirty,
   initialDraft,
+} from "../printerSettingsHelpers";
+import {
   validateBambuConnection,
   validateU1Connection,
-} from "../PrinterSettingsModal";
+} from "../connectionValidation";
 import type { ConnectionInfo, PrinterInstance } from "../printerInstance";
 
 // `driverKindFor` was removed in F9 — driver_kind is authored in

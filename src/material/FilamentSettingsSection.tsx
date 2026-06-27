@@ -11,7 +11,7 @@
 
 import { Field } from "../settings/inputs";
 import { MultilineEditor } from "../settings/inputs/SettingControl";
-import { renderScalarInput } from "../settings/SettingsPanel";
+import { renderScalarInput } from "../settings/renderScalarInput";
 import {
   defaultScalarFor,
   optionTypeKind,

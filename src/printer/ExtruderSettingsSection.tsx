@@ -10,7 +10,7 @@
 // clears the key entirely once every entry matches resolved again.
 
 import { Field } from "../settings/inputs";
-import { renderScalarInput } from "../settings/SettingsPanel";
+import { renderScalarInput } from "../settings/renderScalarInput";
 import {
   optionTypeKind,
   scalarElementKind,

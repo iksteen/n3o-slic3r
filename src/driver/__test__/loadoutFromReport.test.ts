@@ -6,7 +6,7 @@
 // projection; these exercise it without rendering DOM.
 
 import { describe, expect, it } from "vitest";
-import { loadoutFromReport } from "../DevicesView";
+import { loadoutFromReport } from "../DeviceLoadout";
 import type { DriverExtra, PrinterStatus } from "../types";
 
 function status(extra: DriverExtra): PrinterStatus {

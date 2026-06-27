@@ -1,7 +1,7 @@
 // Per-row filter logic for SettingsPanel.
 
 import { describe, expect, it } from "vitest";
-import { filterRow } from "../SettingsPanel";
+import { filterRow } from "../settingsPanelHelpers";
 import type { PrinterAwareOptionSummary } from "../types";
 
 function stub(over: Partial<PrinterAwareOptionSummary> = {}): PrinterAwareOptionSummary {

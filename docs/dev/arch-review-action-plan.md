@@ -260,10 +260,10 @@ you don't relocate doomed code.
 - [x] **R-6 — Extract a driver send-orchestration module**
   `core/driver/commands.rs:359-397,421-474,631-716,737-845` (`wrap_gcode_as_3mf`, `derive_send_names`, `collect_ams_*`, `plate_printer_model`, `apply_pre_send`, AMS-write resolution) → `core/driver/send.rs` (+ a small `ams` module). `#[tauri::command]` fns become thin adapters.
 
-- [ ] **R-7 — Split `project/mutation.rs` (4148 LOC) by topic**
+- [x] **R-7 — Split `project/mutation.rs` (4148 LOC) by topic**
   One `impl Project` across `mutation/{geometry,materials,plates,overrides}.rs` (Rust allows a split impl). Mechanical, no API change. **Do not move logic off `Project`** (the single impl is borrow-checker-forced and documented). *(Merges the scene/project "fractured subsystem" finding — also move `scene/commands.rs` into `project` since it operates only on `Project`, removing the `scene→project` cycle leg.)*
 
-- [ ] **R-8 — Split the three ~1000-LOC frontend components + de-god App.tsx**
+- [x] **R-8 — Split the three ~1000-LOC frontend components + de-god App.tsx**
   `src/printer/PrinterSettingsModal.tsx` (1418), `src/settings/SettingsPanel.tsx` (958), `src/driver/DevicesView.tsx` (947): move already-named subcomponents + pure helpers into sibling files (seams already drawn; helpers shed test-only exports). `src/App.tsx`: extract `useViewportTools()` (owns the gizmo/tool/clone/faceMatch mutual-exclusion invariant), `useProjectFileMenu()`, and a `project/importReport.ts`.
 
 - [ ] **R-9 — FFI shim tidy-ups**

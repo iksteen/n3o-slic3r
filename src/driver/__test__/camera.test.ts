@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { configSignature } from "../useCameraStream";
-import { cameraPlaceholder } from "../DevicesView";
+import { cameraPlaceholder } from "../DeviceCamera";
 import type { DriverConfig } from "../types";
 
 const bambu = (host: string, accessCode: string): DriverConfig => ({
