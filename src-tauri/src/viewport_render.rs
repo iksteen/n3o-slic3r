@@ -1687,10 +1687,14 @@ pub fn viewport_grab(
             return GrabResult::Gizmo { grab };
         }
         // Missed every handle: pressing the selected body is inert (handles drive
-        // transforms); pressing empty space orbits to navigate.
+        // transforms); pressing an unselected object orbits; pressing empty space
+        // returns `Empty` so the frontend can still drag the priming tower (the
+        // tower is an overlay, not a scene object — it must be draggable in any
+        // gizmo mode, same as with no gizmo).
         return match nearest_hit(&p, ro, rd) {
             Some((id, _, _)) if plate.scene.selection.contains(&id) => GrabResult::Inert,
-            _ => GrabResult::Orbit,
+            Some(_) => GrabResult::Orbit,
+            None => GrabResult::Empty,
         };
     }
 
