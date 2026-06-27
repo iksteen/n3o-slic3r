@@ -202,29 +202,33 @@ impl MoonrakerSession {
         ))
     }
 
-    /// Per-object shallow merge: a patch object on key `extruder`
-    /// merges field-wise into the existing `extruder` object so a
-    /// `{ temperature: 220.1 }` update doesn't wipe the
-    /// `target_temperature` we already had. Anything that isn't a
-    /// patch on an existing object is inserted verbatim.
     fn merge_status(&mut self, update: &Map<String, Value>) {
-        for (key, value) in update {
-            match (self.status.get_mut(key), value) {
-                (Some(existing), Value::Object(patch)) if existing.is_object() => {
-                    let existing = existing.as_object_mut().expect("checked is_object");
-                    for (subkey, subvalue) in patch {
-                        existing.insert(subkey.clone(), subvalue.clone());
-                    }
-                }
-                _ => {
-                    self.status.insert(key.clone(), value.clone());
-                }
-            }
-        }
+        merge_status_into(&mut self.status, update);
     }
 }
 
 // ---- Status-map readers (consumed by the status decoder) ----
+
+/// Per-object shallow merge of a Moonraker status patch into an accumulated
+/// status map: a patch object on an existing object key (e.g. `extruder`)
+/// merges field-wise, so a `{ temperature: 220.1 }` update doesn't wipe the
+/// `target_temperature` already there; anything that isn't a patch on an
+/// existing object is inserted verbatim.
+pub(super) fn merge_status_into(into: &mut Map<String, Value>, update: &Map<String, Value>) {
+    for (key, value) in update {
+        match (into.get_mut(key), value) {
+            (Some(existing), Value::Object(patch)) if existing.is_object() => {
+                let existing = existing.as_object_mut().expect("checked is_object");
+                for (subkey, subvalue) in patch {
+                    existing.insert(subkey.clone(), subvalue.clone());
+                }
+            }
+            _ => {
+                into.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
 
 /// Pull a string field from a nested object in the merged status
 /// map. Returns `None` when either the object or the field is
@@ -275,11 +279,8 @@ mod tests {
 
     // ---- merge_status (no I/O — pure logic) ----
 
-    /// `merge_status` is `&mut self` so we test it through a tiny
-    /// shim that owns the status map but doesn't need a socket.
-    /// The body inside mirrors `MoonrakerSession::merge_status`
-    /// byte-for-byte; if the production version drifts, this test
-    /// helper drifts in lockstep (intentional — both are tiny).
+    /// Exercises the production merge directly (`merge_status` just calls
+    /// `merge_status_into` on `self.status`).
     fn merge(initial: Value, patch: Value) -> Value {
         let mut status: Map<String, Value> = initial
             .as_object()
@@ -287,22 +288,7 @@ mod tests {
             .expect("initial must be an object");
         let patch_map: Map<String, Value> =
             patch.as_object().cloned().expect("patch must be an object");
-        // Inline copy of MoonrakerSession::merge_status — the
-        // function is private, this keeps the test honest by
-        // mirroring the production path byte-for-byte.
-        for (key, value) in &patch_map {
-            match (status.get_mut(key), value) {
-                (Some(existing), Value::Object(p)) if existing.is_object() => {
-                    let existing = existing.as_object_mut().unwrap();
-                    for (subkey, subvalue) in p {
-                        existing.insert(subkey.clone(), subvalue.clone());
-                    }
-                }
-                _ => {
-                    status.insert(key.clone(), value.clone());
-                }
-            }
-        }
+        merge_status_into(&mut status, &patch_map);
         Value::Object(status)
     }
 

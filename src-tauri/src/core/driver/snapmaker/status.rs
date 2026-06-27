@@ -23,6 +23,8 @@ use std::time::SystemTime;
 use serde_json::{Map, Value};
 
 use super::moonraker::{extruders, get_f64, get_print_info_i64, get_string};
+#[cfg(test)]
+use super::moonraker::merge_status_into;
 use crate::core::driver::status::{
     ConnectionState, DriverExtra, JobProgress, JobState, PrinterStatus, TempReading, Temps,
     U1Extra, U1Filament,
@@ -690,25 +692,6 @@ mod tests {
             .clone()
     }
 
-    /// Inline mirror of `MoonrakerSession::merge_status`. Pattern matches
-    /// `moonraker.rs::tests::merge` — both copies are tiny and keep the
-    /// tests honest by not depending on private production internals.
-    fn merge_status(into: &mut Map<String, Value>, update: &Map<String, Value>) {
-        for (key, value) in update {
-            match (into.get_mut(key), value) {
-                (Some(existing), Value::Object(patch)) if existing.is_object() => {
-                    let existing = existing.as_object_mut().expect("checked is_object");
-                    for (subkey, subvalue) in patch {
-                        existing.insert(subkey.clone(), subvalue.clone());
-                    }
-                }
-                _ => {
-                    into.insert(key.clone(), value.clone());
-                }
-            }
-        }
-    }
-
     #[test]
     fn fixture_subscribe_decodes_full_snapshot() {
         let snap = decode(&subscribe_initial(), ConnectionState::Connected);
@@ -745,7 +728,7 @@ mod tests {
         // as the production pipeline does over the WS.
         let mut baseline = subscribe_initial();
         let update = notify_update("notify_layer_advance.json");
-        merge_status(&mut baseline, &update);
+        merge_status_into(&mut baseline, &update);
         let snap = decode(&baseline, ConnectionState::Connected);
         let job = snap.job.expect("job present after merge");
         // Fixture was chosen mid-print (current_layer > 5); the
@@ -759,7 +742,7 @@ mod tests {
     fn fixture_toolchange_merge_surfaces_mounted_toolhead() {
         let mut baseline = subscribe_initial();
         let update = notify_update("notify_toolchange.json");
-        merge_status(&mut baseline, &update);
+        merge_status_into(&mut baseline, &update);
         let snap = decode(&baseline, ConnectionState::Connected);
         match snap.extra {
             DriverExtra::U1(extra) => {
@@ -782,7 +765,7 @@ mod tests {
         // extrapolates remaining from the real elapsed value:
         // 919.377 * (100/50 - 1) = 919.377 → rounds to 919.
         let mut baseline = subscribe_initial();
-        merge_status(
+        merge_status_into(
             &mut baseline,
             &status(json!({
                 "print_stats": { "state": "printing" },

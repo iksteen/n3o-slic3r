@@ -14,6 +14,20 @@ pub mod model;
 pub mod parser;
 pub mod serializer;
 
+/// Case-insensitive prefix strip. `s.get(..n)` returns `None` if the byte
+/// index lands inside a multi-byte UTF-8 character — a real risk in G-code
+/// comments emitted by some printers (e.g. Snapmaker U1's machine_start_gcode
+/// carries CJK annotations like `===== 床面异物检测 =====`), where a raw
+/// `&s[..n]` would panic. Shared by the header + body comment scanners.
+pub(crate) fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = s.get(..prefix.len())?;
+    if head.eq_ignore_ascii_case(prefix) {
+        Some(&s[prefix.len()..])
+    } else {
+        None
+    }
+}
+
 pub use header::{
     parse_all_metadata, parse_header, parse_header_str, FilamentUsage, HeaderMetadata, SlicerOrigin,
 };

@@ -28,6 +28,7 @@ use super::model::{
     ArcCenter, Comment, CommentStyle, FeatureType, LayerChange, LayerSource, Line, Move,
     MoveCommand, MoveParam, Other, Position, SemanticComment, ToolChange,
 };
+use super::strip_prefix_ci;
 
 /// Errors the streaming parser can surface per-line. Iterating
 /// callers can log + continue — emitting an `Err` does not abort
@@ -519,20 +520,6 @@ fn parse_semantic_comment(content: &str, last_seen_z: &mut Option<f32>) -> Optio
     }
 
     None
-}
-
-fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
-    // `s.get(..n)` returns `None` if the byte index lands inside a
-    // multi-byte UTF-8 character — a real risk in gcode comments
-    // emitted by some printers (e.g. Snapmaker U1's machine_start_gcode
-    // contains Chinese annotations like `===== 床面异物检测 ========`).
-    // A raw `&s[..n]` would panic there.
-    let head = s.get(..prefix.len())?;
-    if head.eq_ignore_ascii_case(prefix) {
-        Some(&s[prefix.len()..])
-    } else {
-        None
-    }
 }
 
 /// For `"<key> = <value>"` style comments. Matches `key` case-
