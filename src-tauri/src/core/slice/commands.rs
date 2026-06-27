@@ -14,7 +14,11 @@
 //! event. Replaces the path-based `slice_start_default_a1mini` flow.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+/// Process-local sequence for naming slice output dirs — see
+/// `slice_active_plate`. Avoids consuming a `JobId` just for a temp path.
+static OUTPUT_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -93,13 +97,13 @@ pub fn slice_active_plate(
         validate_pre_slice(&p, &[target_plate.0])
             .map_err(SliceStartError::SliceBlocked)
             .map_err(|e| e.to_string())?;
-        let job_id_preview = jobs.alloc_id();
-        // Re-allocate properly inside the orchestrator; this is just
-        // for the output_dir name. The actual JobId may differ if
-        // another command lands between the alloc and the spawn —
-        // that's harmless, the dir's just an opaque temp scope.
+        // Opaque unique temp scope for this slice's G-code output. Named
+        // from pid + a process-local sequence so it doesn't burn a real
+        // `JobId` (the orchestrator allocs that) and stays unique across
+        // concurrent slices and runs.
+        let seq = OUTPUT_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
         let output_dir = std::env::temp_dir()
-            .join(format!("n3o-slice-{}", job_id_preview.0))
+            .join(format!("n3o-slice-{}-{seq}", std::process::id()))
             .to_string_lossy()
             .into_owned();
         (p.clone(), target_plate, output_dir)

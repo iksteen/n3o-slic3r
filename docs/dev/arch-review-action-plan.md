@@ -241,7 +241,7 @@ The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
 Highest file churn, lowest risk, no behavior change. Do after deletions so
 you don't relocate doomed code.
 
-- [ ] **R-1 — Convert 5 hand-rolled error enums to `thiserror`** *(already a dependency, used 21×)*
+- [x] **R-1 — Convert 5 hand-rolled error enums to `thiserror`** *(already a dependency, used 21×)*
   `printer/instance_registry.rs:160-237`, `instance_storage.rs:60-81`, `filament/library.rs:47-55`, `profile_library/composer.rs:124-150`, `profile_library/mod.rs:81-105`. Message strings already exist verbatim. ~150 lines gone, no behavior change.
 
 - [ ] **R-2 — Move settings-UI option surfacing out of `core/cascade`**
@@ -277,10 +277,10 @@ you don't relocate doomed code.
 - [ ] **R-12 — Shared "seat + clamp + emit" transform helper**
   `core/project/mutation.rs:1365,1382,1431,1441,1453` (direct `obj.transform` writes) — factor the duplicated seat/clamp/emit tail into one private helper so the bounds policy lives in one place. (Pairs with D-5.)
 
-- [ ] **R-13 — `emit_instance_changed` helper**
+- [x] **R-13 — `emit_instance_changed` helper**
   `core/printer/mod.rs` (~10 `printer_instance_*` commands repeat emit boilerplate) → one helper, mirroring `filament/mod.rs::emit_changed`.
 
-- [ ] **R-14 — `slice_active_plate` burns a throwaway `JobId` to name the output dir**
+- [x] **R-14 — `slice_active_plate` burns a throwaway `JobId` to name the output dir**
   `core/slice/commands.rs:93-101`. Reserve the id once and thread it through, or name the dir with a timestamp/uuid so the registry isn't double-incremented.
 
 - [ ] **R-15 — Break the clearest module cycle**

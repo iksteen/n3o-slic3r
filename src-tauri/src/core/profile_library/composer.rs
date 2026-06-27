@@ -113,43 +113,21 @@ fn slot_layout(instance: &PrinterInstance) -> Vec<FilamentEntry<'_>> {
 }
 
 /// Errors from composing a slice-time cascade.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ComposeError {
+    #[error("no bundled printer fragment for slug `{0}`")]
     UnknownPrinterFragment(String),
+    #[error("no bundled nozzle fragment for printer `{printer_slug}` SKU `{sku}`")]
     UnknownNozzleFragment { printer_slug: String, sku: String },
+    #[error("no bundled bed fragment for slug `{0}`")]
     UnknownBedFragment(String),
+    #[error("no bundled filament fragment for slug `{0}`")]
     UnknownFilamentFragment(String),
+    #[error("no bundled process fragment for slug `{0}`")]
     UnknownProcessFragment(String),
+    #[error("PrinterInstance `{0}` has no extruders")]
     NoExtruders(String),
 }
-
-impl std::fmt::Display for ComposeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UnknownPrinterFragment(s) => {
-                write!(f, "no bundled printer fragment for slug `{s}`")
-            }
-            Self::UnknownNozzleFragment { printer_slug, sku } => {
-                write!(
-                    f,
-                    "no bundled nozzle fragment for printer `{printer_slug}` SKU `{sku}`"
-                )
-            }
-            Self::UnknownBedFragment(s) => write!(f, "no bundled bed fragment for slug `{s}`"),
-            Self::UnknownFilamentFragment(s) => {
-                write!(f, "no bundled filament fragment for slug `{s}`")
-            }
-            Self::UnknownProcessFragment(s) => {
-                write!(f, "no bundled process fragment for slug `{s}`")
-            }
-            Self::NoExtruders(id) => {
-                write!(f, "PrinterInstance `{id}` has no extruders")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ComposeError {}
 
 /// View an instance as if its process were `qp` — the per-plate
 /// quality-profile override. Returns the instance unchanged
@@ -184,9 +162,9 @@ pub fn with_quality_profile<'a>(
 /// filament per `PrinterInstance` slot" view used by non-slice
 /// callers (cascade trace UI, schema preview).
 ///
-/// `plate_overrides` becomes the highest-precedence layer: appended as an
-/// `important` (override-tier) rule, so the resolver ranks it above every
-/// authored rule regardless of specificity.
+/// Builds only the authored cascade (+ the instance's machine overrides,
+/// baked `!important`). The user/project/object override tiers are applied
+/// as a second phase by `cascade::resolve_with_overrides`, not here.
 pub fn compose_cascade(
     instance: &PrinterInstance,
     material_layout: &[Option<SlotRef>],

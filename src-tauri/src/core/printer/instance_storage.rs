@@ -51,22 +51,13 @@ pub fn root() -> Option<&'static Path> {
 /// a persist failure leaves the in-memory state intact, a load
 /// failure starts the registry empty (same as a clean first
 /// launch).
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum StorageError {
+    #[error("io: {0}")]
     Io(std::io::Error),
+    #[error("serialize: {0}")]
     Serialize(toml::ser::Error),
 }
-
-impl std::fmt::Display for StorageError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(e) => write!(f, "io: {e}"),
-            Self::Serialize(e) => write!(f, "serialize: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for StorageError {}
 
 impl From<std::io::Error> for StorageError {
     fn from(e: std::io::Error) -> Self {

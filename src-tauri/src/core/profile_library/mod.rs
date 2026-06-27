@@ -55,16 +55,22 @@ pub use composer::{
 /// panics on failure — a packaged binary without a parseable profile
 /// tree shouldn't have shipped — so the error type only needs to be
 /// clearly describable in a panic message.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum LibraryError {
+    #[error("profile root `{}` does not exist", .0.display())]
     MissingRoot(PathBuf),
+    #[error("io error reading `{}`: {1}", .0.display())]
     Io(PathBuf, std::io::Error),
+    #[error("parse error in `{}`: {1}", .0.display())]
     Toml(PathBuf, toml::de::Error),
+    #[error("cascade load error in `{}`: {1}", .0.display())]
     Cascade(PathBuf, CascadeLoadError),
     /// `machine.toml` exists for a printer but doesn't carry the
     /// `printer_model` scalar that drives every cascade
     /// `when.printer.model = …` predicate. Fail fast so a malformed
     /// import doesn't silently empty the process/filament filters.
+    #[error("`{}`: machine.toml does not declare a `printer_model` scalar — \
+             every cascade `when.printer.model = …` predicate keys off it", .printer_dir.display())]
     MissingPrinterModel {
         printer_dir: PathBuf,
     },
@@ -73,36 +79,13 @@ pub enum LibraryError {
     /// hydrates from. Fail fast so a malformed import doesn't
     /// silently fall back to the first supported plate as the
     /// instance default.
+    #[error("`{}`: machine.toml does not declare a `default_bed_type` scalar — \
+             `PrinterProfile.default_bed` hydrates from it; without it a new \
+             instance would silently default to the first supported plate", .printer_dir.display())]
     MissingDefaultBedType {
         printer_dir: PathBuf,
     },
 }
-
-impl std::fmt::Display for LibraryError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MissingRoot(p) => write!(f, "profile root `{}` does not exist", p.display()),
-            Self::Io(p, e) => write!(f, "io error reading `{}`: {e}", p.display()),
-            Self::Toml(p, e) => write!(f, "parse error in `{}`: {e}", p.display()),
-            Self::Cascade(p, e) => write!(f, "cascade load error in `{}`: {e}", p.display()),
-            Self::MissingPrinterModel { printer_dir } => write!(
-                f,
-                "`{}`: machine.toml does not declare a `printer_model` scalar — \
-                 every cascade `when.printer.model = …` predicate keys off it",
-                printer_dir.display(),
-            ),
-            Self::MissingDefaultBedType { printer_dir } => write!(
-                f,
-                "`{}`: machine.toml does not declare a `default_bed_type` scalar — \
-                 `PrinterProfile.default_bed` hydrates from it; without it a new \
-                 instance would silently default to the first supported plate",
-                printer_dir.display(),
-            ),
-        }
-    }
-}
-
-impl std::error::Error for LibraryError {}
 
 /// One parsed cascade fragment + the workspace-relative path the
 /// resolver embeds in `SourceLocation` for trace UI.

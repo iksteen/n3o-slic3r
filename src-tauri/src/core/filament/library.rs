@@ -39,20 +39,11 @@ pub struct UserFilament {
     pub overrides: BTreeMap<String, String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum LibraryError {
+    #[error("no bundled filament fragment `{0}` to edit")]
     UnknownBase(String),
 }
-
-impl std::fmt::Display for LibraryError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UnknownBase(s) => write!(f, "no bundled filament fragment `{s}` to edit"),
-        }
-    }
-}
-
-impl std::error::Error for LibraryError {}
 
 static REGISTRY: OnceLock<Mutex<Vec<UserFilament>>> = OnceLock::new();
 static ROOT: OnceLock<PathBuf> = OnceLock::new();

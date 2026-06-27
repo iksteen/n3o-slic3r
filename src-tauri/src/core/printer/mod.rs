@@ -46,6 +46,16 @@ use crate::core::profile_library::{
     list_filament_fragments, list_process_fragments, FilamentFragmentSummary,
     ProcessFragmentSummary,
 };
+use tauri::Emitter;
+
+/// Emit `printer:instance_changed` for `id`, logging (not failing) on a
+/// transport error. Mirrors `filament::emit_changed`; consumers re-fetch
+/// the affected instance on this event.
+fn emit_instance_changed(window: &tauri::Window, id: &str) {
+    if let Err(e) = window.emit("printer:instance_changed", id) {
+        tracing::warn!(error = %e, "printer:instance_changed emit failed");
+    }
+}
 
 /// Tauri command: list every printer instance the user has access
 /// to — i.e. whatever the user library on disk currently holds.
@@ -77,10 +87,7 @@ pub fn printer_instance_set_slot_filament(
 ) -> Result<PrinterInstance, String> {
     let updated = set_slot_filament(&id, extruder_idx, slot_idx, filament_identity)
         .map_err(|e| e.to_string())?;
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &updated.id);
     Ok(updated)
 }
 
@@ -99,10 +106,7 @@ pub fn printer_instance_set_plugin_override(
         return Err(format!("`{key}` is not a plugin override key"));
     }
     let updated = set_plugin_override(&id, key, value).map_err(|e| e.to_string())?;
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &updated.id);
     Ok(updated)
 }
 
@@ -123,10 +127,7 @@ pub fn printer_instance_set_config_override(
         return Err(format!("`{key}` is not a machine (printer-bucket) setting"));
     }
     let updated = set_config_override(&id, key, value).map_err(|e| e.to_string())?;
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &updated.id);
     Ok(updated)
 }
 
@@ -164,10 +165,7 @@ pub fn printer_instance_create(
 ) -> Result<PrinterInstance, String> {
     let inst =
         create_instance(&printer_identity, display_name, ams_units).map_err(|e| e.to_string())?;
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &inst.id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &inst.id);
     Ok(inst)
 }
 
@@ -180,10 +178,7 @@ pub fn printer_instance_create(
 #[tracing::instrument(skip(window))]
 pub fn printer_instance_delete(id: String, window: tauri::Window) -> Result<(), String> {
     delete_instance(&id).map_err(|e| e.to_string())?;
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &id);
     Ok(())
 }
 
@@ -247,10 +242,7 @@ pub fn printer_instance_delete_with_reassign(
     }
     delete_instance(&id).map_err(|e| e.to_string())?;
     crate::core::scene::commands::emit_all(&window, &all_events);
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &id);
     Ok(())
 }
 
@@ -265,10 +257,7 @@ pub fn printer_instance_set_display_name(
     window: tauri::Window,
 ) -> Result<PrinterInstance, String> {
     let updated = set_instance_display_name(&id, display_name).map_err(|e| e.to_string())?;
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &updated.id);
     Ok(updated)
 }
 
@@ -284,10 +273,7 @@ pub fn printer_instance_set_ams_units(
     window: tauri::Window,
 ) -> Result<PrinterInstance, String> {
     let updated = set_instance_ams_units(&id, ams_units).map_err(|e| e.to_string())?;
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &updated.id);
     Ok(updated)
 }
 
@@ -305,10 +291,7 @@ pub fn printer_instance_update(
     window: tauri::Window,
 ) -> Result<PrinterInstance, String> {
     let updated = update_instance(&id, patch).map_err(|e| e.to_string())?;
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &updated.id);
     Ok(updated)
 }
 
@@ -326,10 +309,7 @@ pub fn printer_instance_set_connection(
     window: tauri::Window,
 ) -> Result<PrinterInstance, String> {
     let updated = set_instance_connection(&id, connection).map_err(|e| e.to_string())?;
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &updated.id);
     Ok(updated)
 }
 
@@ -347,10 +327,7 @@ pub fn printer_instance_set_extruder_nozzle_diameter(
 ) -> Result<PrinterInstance, String> {
     let updated =
         set_extruder_nozzle_diameter(&id, extruder_idx, diameter).map_err(|e| e.to_string())?;
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &updated.id);
     Ok(updated)
 }
 
@@ -368,10 +345,7 @@ pub fn printer_instance_set_bed(
     window: tauri::Window,
 ) -> Result<PrinterInstance, String> {
     let updated = set_instance_bed(&id, bed_identity).map_err(|e| e.to_string())?;
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &updated.id);
     Ok(updated)
 }
 
@@ -388,10 +362,7 @@ pub fn printer_instance_set_slot_color(
     window: tauri::Window,
 ) -> Result<PrinterInstance, String> {
     let updated = set_slot_color(&id, extruder_idx, slot_idx, color).map_err(|e| e.to_string())?;
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &updated.id);
     Ok(updated)
 }
 
@@ -434,10 +405,7 @@ pub fn printer_instance_set_quality_profile(
     window: tauri::Window,
 ) -> Result<PrinterInstance, String> {
     let updated = set_instance_quality_profile(&id, quality_profile).map_err(|e| e.to_string())?;
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &updated.id);
     Ok(updated)
 }
 
@@ -513,9 +481,6 @@ pub async fn printer_instance_sync_from_driver(
         crate::core::printer::sync::apply_from_driver(&instance_id, &status.extra, &library)
             .map_err(|e| e.to_string())?;
 
-    use tauri::Emitter;
-    if let Err(e) = window.emit("printer:instance_changed", &updated.id) {
-        tracing::warn!(error = %e, "printer:instance_changed emit failed");
-    }
+    emit_instance_changed(&window, &updated.id);
     Ok(updated)
 }

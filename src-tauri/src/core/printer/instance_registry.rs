@@ -80,17 +80,20 @@ pub fn lookup_instance(id: &str) -> Option<PrinterInstance> {
 }
 
 /// Per-instance failure modes for the [`mutate_instance`] surface.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum InstanceMutError {
     /// `id` doesn't match any registered instance.
+    #[error("unknown printer instance `{id}`")]
     UnknownInstance { id: String },
     /// Extruder index out of range for the instance's topology.
+    #[error("instance `{instance_id}` has {extruders} extruder(s); index {extruder_idx} is out of range")]
     BadExtruder {
         instance_id: String,
         extruder_idx: usize,
         extruders: usize,
     },
     /// Slot index out of range for the chosen extruder.
+    #[error("instance `{instance_id}` extruder {extruder_idx} has {slots} slot(s); index {slot_idx} is out of range")]
     BadSlot {
         instance_id: String,
         extruder_idx: usize,
@@ -101,6 +104,7 @@ pub enum InstanceMutError {
     /// `supported_build_plates`. Surfaced by [`set_instance_bed`]; the
     /// picker UI recovers by re-rendering the selector against the
     /// fresh supported list.
+    #[error("instance `{instance_id}` printer `{printer_identity}` does not support build plate `{bed_identity}`")]
     UnsupportedBuildPlate {
         instance_id: String,
         printer_identity: String,
@@ -110,21 +114,25 @@ pub enum InstanceMutError {
     /// bundled printer catalog. Should be impossible for fixtures
     /// shipped in-tree, but a hand-edited on-disk instance file
     /// could trip this.
+    #[error("instance `{instance_id}` references printer `{printer_identity}`, which is not in the bundled catalog")]
     PrinterProfileNotFound {
         instance_id: String,
         printer_identity: String,
     },
     /// `create_instance` was called with a vendor profile id not in
     /// the bundled catalog.
+    #[error("no bundled printer with identity `{identity}`")]
     UnknownPrinterIdentity { identity: String },
     /// `create_instance`'s `ams_units` exceeds the printer profile's
     /// declared `ams_max`.
+    #[error("printer `{identity}` supports at most {max} AMS unit(s); {requested} requested")]
     AmsCountExceeded {
         identity: String,
         requested: u32,
         max: u32,
     },
     /// `create_instance` was called with an empty display name.
+    #[error("display name must not be empty")]
     EmptyDisplayName,
     /// Requested nozzle diameter isn't in the bound printer profile's
     /// `available_nozzle_diameters`. Surfaced by
@@ -132,6 +140,7 @@ pub enum InstanceMutError {
     /// diameters from that list so a typed error here means a hand-
     /// edited instance file or a future driver-side sync wrote
     /// something the catalog doesn't bundle.
+    #[error("instance `{instance_id}` printer `{printer_identity}` does not bundle nozzle diameter `{diameter}`")]
     UnsupportedNozzleDiameter {
         instance_id: String,
         printer_identity: String,
@@ -145,6 +154,7 @@ pub enum InstanceMutError {
     /// reconciler would drive with the wrong-kind driver. `expected`
     /// is the printer's declared driver kind (`"none"` when it ships
     /// no driver); `got` is the connection variant.
+    #[error("instance `{instance_id}` printer `{printer_identity}` expects a `{expected}` connection; got `{got}`")]
     ConnectionDriverMismatch {
         instance_id: String,
         printer_identity: String,
@@ -157,90 +167,12 @@ pub enum InstanceMutError {
     /// but the command boundary enforces them too so a hand-edited
     /// instance file or secondary caller can't persist a connection
     /// the reconciler would then drive into a doomed connect.
+    #[error("instance `{instance_id}` connection is invalid: {message}")]
     InvalidConnection {
         instance_id: String,
         message: String,
     },
 }
-
-impl std::fmt::Display for InstanceMutError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UnknownInstance { id } => write!(f, "unknown printer instance `{id}`"),
-            Self::BadExtruder {
-                instance_id,
-                extruder_idx,
-                extruders,
-            } => write!(
-                f,
-                "instance `{instance_id}` has {extruders} extruder(s); index {extruder_idx} is out of range",
-            ),
-            Self::BadSlot {
-                instance_id,
-                extruder_idx,
-                slot_idx,
-                slots,
-            } => write!(
-                f,
-                "instance `{instance_id}` extruder {extruder_idx} has {slots} slot(s); index {slot_idx} is out of range",
-            ),
-            Self::UnsupportedBuildPlate {
-                instance_id,
-                printer_identity,
-                bed_identity,
-            } => write!(
-                f,
-                "instance `{instance_id}` printer `{printer_identity}` does not support build plate `{bed_identity}`",
-            ),
-            Self::PrinterProfileNotFound {
-                instance_id,
-                printer_identity,
-            } => write!(
-                f,
-                "instance `{instance_id}` references printer `{printer_identity}`, which is not in the bundled catalog",
-            ),
-            Self::UnknownPrinterIdentity { identity } => write!(
-                f,
-                "no bundled printer with identity `{identity}`",
-            ),
-            Self::AmsCountExceeded {
-                identity,
-                requested,
-                max,
-            } => write!(
-                f,
-                "printer `{identity}` supports at most {max} AMS unit(s); {requested} requested",
-            ),
-            Self::EmptyDisplayName => write!(f, "display name must not be empty"),
-            Self::UnsupportedNozzleDiameter {
-                instance_id,
-                printer_identity,
-                diameter,
-            } => write!(
-                f,
-                "instance `{instance_id}` printer `{printer_identity}` does not bundle nozzle diameter `{diameter}`",
-            ),
-            Self::ConnectionDriverMismatch {
-                instance_id,
-                printer_identity,
-                expected,
-                got,
-            } => write!(
-                f,
-                "instance `{instance_id}` printer `{printer_identity}` expects a `{expected}` connection; got `{got}`",
-            ),
-            Self::InvalidConnection {
-                instance_id,
-                message,
-            } => write!(
-                f,
-                "instance `{instance_id}` connection is invalid: {message}",
-            ),
-        }
-    }
-}
-
-impl std::error::Error for InstanceMutError {}
 
 /// Apply `f` to the named instance under the registry lock. Returns
 /// the cloned post-mutation state so callers can emit it on a
