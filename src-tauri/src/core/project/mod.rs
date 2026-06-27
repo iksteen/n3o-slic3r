@@ -29,6 +29,7 @@ pub mod format;
 pub mod metadata;
 pub mod model;
 pub mod mutation;
+pub mod resolve;
 
 pub use crate::core::scene::state::PlateSceneState;
 pub use context::SlicingContext;

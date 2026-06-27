@@ -145,7 +145,7 @@ pub fn printer_instance_resolved_config(
 ) -> Result<std::collections::HashMap<String, String>, String> {
     let inst =
         lookup_instance(&id).ok_or_else(|| format!("unknown printer instance `{id}`"))?;
-    let resolved = crate::core::project::commands::resolve_instance_cascade(
+    let resolved = crate::core::project::resolve::resolve_instance_cascade(
         &inst,
         None,
         &std::collections::BTreeMap::new(),

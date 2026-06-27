@@ -143,7 +143,7 @@ pub fn plan_arrangement(state: &Project, bed: &BedMesh) -> ArrangeResult {
     // lower-left corner; pad by the brim.
     let plate_id = state.active_plate().id;
     if let Ok(Some(t)) =
-        crate::core::project::commands::tower_geometry_for_plate(state, plate_id)
+        crate::core::project::resolve::tower_geometry_for_plate(state, plate_id)
     {
         excludes.push([
             t.x - t.brim - bed_min.0,
@@ -505,7 +505,7 @@ mod tests {
 
     #[test]
     fn arrange_reserves_the_wipe_tower_footprint() {
-        use crate::core::project::commands::tower_geometry_for_plate;
+        use crate::core::project::resolve::tower_geometry_for_plate;
         let _ = slic3r_ffi::init(None, 3);
         // Project::default() binds a real library instance (A1 mini) so the
         // cascade resolves a tower position; two materials make it multi-material

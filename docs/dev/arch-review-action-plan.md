@@ -253,7 +253,7 @@ you don't relocate doomed code.
 - [x] **R-4 — Move `schema::capability` out of `schema`**
   `core/schema/capability.rs:32`, `mod.rs:13-14`. Relocate to `cascade` (its consumer) or `printer` (the type it needs) so `schema` is a true FFI leaf; fix the stale "printer::profile cross-references schema keys" line.
 
-- [ ] **R-5 — Move read-side cascade/tower logic out of the command-wiring file**
+- [x] **R-5 — Move read-side cascade/tower logic out of the command-wiring file**
   `core/project/commands.rs:90-368` (`layer_for_source`, `resolve_plate_cascade`, `resolve_plate`, `resolve_instance_cascade`, `tower_geometry_for_plate`) → a `core/project` domain module; leave `commands.rs` as thin Tauri wiring.
 
 - [ ] **R-6 — Extract a driver send-orchestration module**
