@@ -23,8 +23,8 @@ use super::registry::{DriverRegistry, DriverSummary};
 use super::snapmaker::{U1Config, U1Driver};
 use super::status::PrinterStatus;
 use super::traits::{
-    Driver, DriverConfig, DriverId, DriverKind, PrinterCommand, SendHandle, SendPayload,
-    UploadProgressFn,
+    Driver, DriverConfig, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle,
+    SendPayload, UploadProgressFn,
 };
 use crate::core::plugin::commands::PluginHostState;
 use crate::core::plugin::{DispatchGate, HookKind, PayloadKind, PreSendHook, SendTarget};
@@ -531,10 +531,10 @@ pub async fn driver_send_plate(
     project: State<'_, Arc<Mutex<Project>>>,
     plugin_host: State<'_, PluginHostState>,
     sends: State<'_, Arc<SendCancelRegistry>>,
-) -> Result<SendHandle, String> {
+) -> Result<SendHandle, DriverError> {
     let handle = registry
         .get(id)
-        .ok_or_else(|| format!("unknown driver id {}", id.0))?;
+        .ok_or_else(|| DriverError::Other(format!("unknown driver id {}", id.0)))?;
     let kind = handle.read().await.kind();
     // Decode once; a malformed base64 is a soft failure — log and send
     // without a thumbnail rather than failing the print.
@@ -552,7 +552,9 @@ pub async fn driver_send_plate(
         DriverKind::Bambu => {
             let ams = collect_ams_bindings(&project, plate_id);
             let (use_ams, ams_mapping, ams_mapping2) = collect_ams_mapping(&project, plate_id);
-            let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, title, ams, thumbnail_png).await?;
+            let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, title, ams, thumbnail_png)
+                .await
+                .map_err(DriverError::Other)?;
             SendPayload::Gcode3mf {
                 bytes,
                 plate_id,
@@ -563,7 +565,7 @@ pub async fn driver_send_plate(
             }
         }
         DriverKind::U1 => {
-            let bytes = read_gcode_bytes(gcode_path).await?;
+            let bytes = read_gcode_bytes(gcode_path).await.map_err(DriverError::Other)?;
             // Prepend the Klipper/Moonraker thumbnail block so Mainsail /
             // Fluidd show the preview; a bad PNG leaves the G-code untouched.
             let bytes = match &thumbnail_png {
@@ -594,8 +596,8 @@ pub async fn driver_send_plate(
     let cancel = sends.arm(id);
     let d = handle.read().await;
     tokio::select! {
-        r = d.send(payload, on_progress) => r.map_err(|e| e.to_string()),
-        _ = cancel.cancelled() => Err(super::traits::DriverError::Cancelled.to_string()),
+        r = d.send(payload, on_progress) => r,
+        _ = cancel.cancelled() => Err(DriverError::Cancelled),
     }
 }
 

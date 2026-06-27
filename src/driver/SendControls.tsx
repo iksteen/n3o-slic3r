@@ -10,7 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { saveFile } from "../ui/fileDialog";
-import { driverExportPlate, driverSendPlate } from "./invokes";
+import { driverErrorMessage, driverExportPlate, driverSendPlate } from "./invokes";
 import { captureThumbnail } from "../viewport/thumbnailCapture";
 import { pushLog } from "../logging/logStore";
 import { useDriverStatus } from "./useDriverStatus";
@@ -152,13 +152,14 @@ export function SendControls({
       // whether it's connected). Done after the latch so a throw above skips it.
       onSent?.();
     } catch (e) {
-      const msg = String(e);
-      // A user-initiated cancel (driver_send_cancel → DriverError::Cancelled)
-      // isn't a failure — log it quietly and don't latch / jump.
-      if (/cancel/i.test(msg)) {
+      // driver_send_plate rejects with a serialized DriverError: the unit
+      // variant Cancelled arrives as the string "Cancelled"; the rest as
+      // { Variant: "message" }. A user-initiated cancel isn't a failure —
+      // log it quietly and don't latch / jump.
+      if (e === "Cancelled") {
         pushLog("info", "Send cancelled");
       } else {
-        pushLog("error", `Send failed: ${msg}`);
+        pushLog("error", `Send failed: ${driverErrorMessage(e)}`);
       }
     } finally {
       setActionPending(false);

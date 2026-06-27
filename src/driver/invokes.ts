@@ -82,6 +82,19 @@ export function driverSendPlate(
   });
 }
 
+/** Human-readable message from a rejected DriverError. serde serializes the
+ *  enum externally-tagged: unit variants (e.g. "Cancelled") arrive as a bare
+ *  string, the rest as `{ Variant: "message" }`. Callers branch on the variant
+ *  before formatting (e.g. `e === "Cancelled"`); this is the display fallback. */
+export function driverErrorMessage(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e !== null && typeof e === "object") {
+    const v = Object.values(e as Record<string, unknown>)[0];
+    if (typeof v === "string") return v;
+  }
+  return String(e);
+}
+
 /** Cancel an in-flight send to `id`. No-op if nothing is uploading; the
  *  pending `driverSendPlate` rejects with a cancellation error (which the
  *  caller treats as a user action, not a failure). */

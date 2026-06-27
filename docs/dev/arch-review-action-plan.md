@@ -180,9 +180,10 @@ The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
 - [x] **C-2 — `build.rs` only warns when a submodule patch fails to apply**
   `crates/slic3r-ffi/build.rs:323-361`. Make a failed apply a hard panic (the idempotent reverse-check already distinguishes "already applied" from "failed"), so the wave-overhang carry can't silently drop and ship a broken binary.
 
-- [ ] **C-3 — Typed errors for the few UI-branching commands**
+- [x] **C-3 — Typed errors for the few UI-branching commands**
   `core/slice/orchestrator.rs:93-108` (`SliceStartError::SliceBlocked` collapses its issue list to a count in `Display`), `core/slice/commands.rs`, driver `commands.rs:317,605-607`, `src/driver/SendControls.tsx:158` (`/cancel/i.test(msg)` regex)
   For slice-start, instance-mutation, connection-validation, and driver send/command: return the already-`Serialize`-derived typed error so the frontend branches on `error.kind` (esp. `Cancelled`/`SliceBlocked` issue list). Leave the string path for the rest; this also retires the X-7 serde-derive deletion's counterpart. *(If you keep strings, at minimum give `Cancelled` a stable sentinel.)*
+  **Done — scoped to the one genuine consumer.** A frontend audit found exactly one error-*content* branch: `SendControls.tsx`'s `/cancel/i` regex. So `driver_send_plate` now returns `DriverError` (externally-tagged serde) and `SendControls` branches on `e === "Cancelled"`, with a `driverErrorMessage` helper for the display fallback. `SliceBlocked`'s issue list and the instance/connection errors have **no frontend consumer that inspects them** (they're only `String(err)`-displayed), so typing those would have been speculative — left as strings per "leave the string path for the rest." (Keeps the `DriverError` serde derives X-7 had flagged as conditionally-dead.)
 
 - [x] **C-4 — FFI callback trampolines have no panic guard**
   `crates/slic3r-ffi/src/lib.rs:725-747,980-999`. Wrap each closure in `catch_unwind`; a panicking progress/log callback should drop a tick, not unwind across the C ABI.
