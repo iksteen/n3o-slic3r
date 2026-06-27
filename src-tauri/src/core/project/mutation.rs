@@ -1360,9 +1360,24 @@ impl Project {
             obj.transform = rot_about_pivot.compose(obj.transform);
         }
 
-        // Seat the rotated selection: translate its true lowest vertex to z=0
-        // (exact contact, no bbox gap) and pull the footprint back onto the bed
-        // in X/Y if a reoriented edge overhangs.
+        // Seat the rotated selection flush on the plate (true lowest vertex to
+        // z=0, exact contact) + clamp its footprint back onto the bed if a
+        // reoriented edge overhangs.
+        self.seat_clamp_emit(active, plate_id, ids)
+    }
+
+    /// Seat a freshly-transformed selection flush on the plate (its true
+    /// lowest vertex to `z=0`, exact contact with no bbox gap) and clamp the
+    /// footprint back onto the bed in X/Y, then emit one `ObjectUpdated` per
+    /// object plus any post-seat out-of-bounds warnings. The shared tail of
+    /// every placement op (orient, align-face) so the seat/clamp/bounds policy
+    /// lives in one place.
+    fn seat_clamp_emit(
+        &mut self,
+        active: usize,
+        plate_id: PlateId,
+        ids: &[ObjectId],
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
         let min_z = self.combined_world_min_z(ids)?;
         let (lo, hi) = self.combined_bbox_aabb(ids)?;
         let mut shift = self.bed_xy_clamp_shift(lo, hi);
@@ -1437,24 +1452,7 @@ impl Project {
         }
 
         // Seat on the plate + clamp the footprint (same tail as orient_objects).
-        let min_z = self.combined_world_min_z(ids)?;
-        let (lo2, hi2) = self.combined_bbox_aabb(ids)?;
-        let mut shift = self.bed_xy_clamp_shift(lo2, hi2);
-        shift.z = if min_z.is_finite() { -min_z } else { 0.0 };
-        let settle = Transform::translation(shift);
-        let mut events = Vec::with_capacity(ids.len());
-        for &id in ids {
-            let obj = self.plates[active].scene.objects.get_mut(&id).unwrap();
-            obj.transform = settle.compose(obj.transform);
-            events.push(SceneEvent::ObjectUpdated {
-                plate_id,
-                object: obj.clone(),
-            });
-        }
-        for &id in ids {
-            events.extend(self.out_of_bounds_event_seated(id));
-        }
-        Ok(events)
+        self.seat_clamp_emit(active, plate_id, ids)
     }
 
     /// Replace an object's transform wholesale. Used by

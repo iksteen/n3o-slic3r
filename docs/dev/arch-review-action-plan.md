@@ -274,7 +274,7 @@ you don't relocate doomed code.
 - [ ] **R-11 — Shared wgpu device + extract the pure gizmo solver**
   `viewport_render.rs:1109-1120` and `toolpath_render.rs:237-248` each build their own `Instance`/adapter/device → one lazy `(device, queue)` in `viewport_gpu.rs`. Lift the pure solver (`ray_plane`/`compute_pre`/`pick_gizmo`/`selection_*` + `gizmo_tests`, `viewport_render.rs:699-1071`) into `viewport_gizmo.rs`. Don't split the GPU/pipeline code — it reads fine as one unit.
 
-- [ ] **R-12 — Shared "seat + clamp + emit" transform helper**
+- [x] **R-12 — Shared "seat + clamp + emit" transform helper**
   `core/project/mutation.rs:1365,1382,1431,1441,1453` (direct `obj.transform` writes) — factor the duplicated seat/clamp/emit tail into one private helper so the bounds policy lives in one place. (Pairs with D-5.)
 
 - [x] **R-13 — `emit_instance_changed` helper**
