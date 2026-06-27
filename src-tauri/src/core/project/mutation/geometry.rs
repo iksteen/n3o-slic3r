@@ -43,9 +43,9 @@ impl Project {
             id,
             Mesh {
                 id,
-                vertices: new_mesh.vertices,
-                indices: new_mesh.indices,
-                paint_colors: new_mesh.paint_colors,
+                vertices: std::sync::Arc::new(new_mesh.vertices),
+                indices: std::sync::Arc::new(new_mesh.indices),
+                paint_colors: new_mesh.paint_colors.map(std::sync::Arc::new),
                 bounding_box: new_mesh.bounding_box,
                 provenance: new_mesh.provenance,
             },

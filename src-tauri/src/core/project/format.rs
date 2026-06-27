@@ -203,9 +203,9 @@ pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
                 message: format!("geometry for mesh {}: {e}", id.0),
             })?;
         let mesh = project.meshes.get_mut(&id).expect("id from keys");
-        mesh.vertices = g.vertices;
-        mesh.indices = g.indices;
-        mesh.paint_colors = g.paint_colors;
+        mesh.vertices = std::sync::Arc::new(g.vertices);
+        mesh.indices = std::sync::Arc::new(g.indices);
+        mesh.paint_colors = g.paint_colors.map(std::sync::Arc::new);
     }
 
     // Re-derive the bed + exclusion zones we don't persist (pure function of the
@@ -264,7 +264,7 @@ fn read_zip_entry<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str) -> Option
 struct GeometryBlobRef<'a> {
     vertices: &'a [f32],
     indices: &'a [u32],
-    paint_colors: &'a Option<Vec<String>>,
+    paint_colors: Option<&'a Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -278,7 +278,7 @@ fn pack_geometry(m: &Mesh) -> Result<Vec<u8>, postcard::Error> {
     postcard::to_allocvec(&GeometryBlobRef {
         vertices: &m.vertices,
         indices: &m.indices,
-        paint_colors: &m.paint_colors,
+        paint_colors: m.paint_colors.as_deref(),
     })
 }
 
@@ -324,8 +324,8 @@ mod tests {
         let id = p.register_mesh(nm);
         let blob = pack_geometry(&p.meshes[&id]).expect("pack");
         let g: GeometryBlob = postcard::from_bytes(&blob).expect("unpack");
-        assert_eq!(g.vertices, p.meshes[&id].vertices);
-        assert_eq!(g.indices, p.meshes[&id].indices);
+        assert_eq!(g.vertices, *p.meshes[&id].vertices);
+        assert_eq!(g.indices, *p.meshes[&id].indices);
         assert_eq!(g.paint_colors, Some(vec!["".into(), "3".into(), "12".into()]));
         // truncated blob is a clean error, not a panic.
         assert!(postcard::from_bytes::<GeometryBlob>(&blob[..3]).is_err());
@@ -359,8 +359,8 @@ mod tests {
         assert!(parsed.plates[0].scene.objects.contains_key(&obj));
         let m = &parsed.meshes[&mesh_id];
         assert_eq!(m.vertices.len(), 9);
-        assert_eq!(m.indices, vec![0, 1, 2]);
-        assert_eq!(m.paint_colors, Some(vec!["4".into()]));
+        assert_eq!(*m.indices, vec![0, 1, 2]);
+        assert_eq!(m.paint_colors.as_deref(), Some(&vec!["4".into()]));
         std::fs::remove_file(&path).ok();
     }
 

@@ -85,10 +85,10 @@ pub struct Mesh {
     /// Flat `[x0, y0, z0, x1, y1, z1, ...]` packed vertices. Not
     /// serialized — uploaded GPU-side, never crosses IPC.
     #[serde(skip, default)]
-    pub vertices: Vec<f32>,
+    pub vertices: std::sync::Arc<Vec<f32>>,
     /// Triangle vertex indices (3 per triangle). Not serialized.
     #[serde(skip, default)]
-    pub indices: Vec<u32>,
+    pub indices: std::sync::Arc<Vec<u32>>,
     /// BBS per-triangle `paint_color` (MMU color-painting) strings, one
     /// per triangle in `indices`-triple order. `None` when the mesh has no
     /// painting; otherwise dense (`""` for unpainted faces). Opaque —
@@ -96,7 +96,7 @@ pub struct Mesh {
     /// `.3mf` so painted models slice multi-material. Not serialized (it
     /// travels with the mesh geometry in the 3MF, like the buffers above).
     #[serde(skip, default)]
-    pub paint_colors: Option<Vec<String>>,
+    pub paint_colors: Option<std::sync::Arc<Vec<String>>>,
     pub bounding_box: BoundingBox,
     /// File path or in-app catalog handle the mesh came from.
     pub provenance: MeshProvenance,

@@ -427,11 +427,11 @@ fn build_plate_geometry(
         .map(|id| {
             let m = &project.meshes[id];
             NewMesh {
-                vertices: m.vertices.clone(),
-                indices: m.indices.clone(),
+                vertices: m.vertices.to_vec(),
+                indices: m.indices.to_vec(),
                 // Carry MMU paint into the slice .3mf so libslic3r segments
                 // the painted faces to their filaments.
-                paint_colors: m.paint_colors.clone(),
+                paint_colors: m.paint_colors.as_deref().cloned(),
                 bounding_box: m.bounding_box,
                 provenance: m.provenance.clone(),
             }

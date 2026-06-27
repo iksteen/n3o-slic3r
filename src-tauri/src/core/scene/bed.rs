@@ -209,8 +209,8 @@ mod tests {
         // mutation API.
         let mesh = Mesh {
             id: MeshId(1),
-            vertices: vec![],
-            indices: vec![],
+            vertices: std::sync::Arc::new(vec![]),
+            indices: std::sync::Arc::new(vec![]),
             paint_colors: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],

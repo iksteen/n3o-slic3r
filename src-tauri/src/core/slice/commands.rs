@@ -71,45 +71,55 @@ pub fn slice_status(job_id: JobId, jobs: State<Arc<JobRegistry>>) -> Result<JobS
 /// events when it wants to preview / send the result.
 #[tauri::command]
 #[tracing::instrument(skip(app_handle, jobs, project))]
-pub fn slice_active_plate(
+pub async fn slice_active_plate(
     plate_id: Option<PlateId>,
     app_handle: AppHandle,
-    jobs: State<Arc<JobRegistry>>,
-    project: State<Arc<Mutex<Project>>>,
+    jobs: State<'_, Arc<JobRegistry>>,
+    project: State<'_, Arc<Mutex<Project>>>,
 ) -> Result<JobId, String> {
-    // Validate + resolve the plate + snapshot the project UNDER the lock, then
-    // build the SliceJobInput (which serializes the geometry and writes the
-    // temp .3mf to disk) OFF the lock — the disk write must not block scene
-    // mutations. Cloning the project under the lock mirrors project_save /
-    // autosave; the lock is then released before both the slow build and the
-    // worker spawn.
-    let (snapshot, target_plate, output_dir) = {
-        let p = project.lock().map_err(|e| format!("project lock: {e}"))?;
-        let target_plate = plate_id.unwrap_or_else(|| {
-            // Active plate; `Project::default()` invariant
-            // guarantees `plates[active_plate]` is valid.
-            p.plates[p.active_plate].id
-        });
-        // Pre-slice gate: refuse before any FS write if the
-        // plate's material→slot map + bound PrinterInstance aren't
-        // coherent. Returns the first failing plate's issue list as
-        // a serialized SliceStartError::SliceBlocked.
-        validate_pre_slice(&p, &[target_plate.0])
-            .map_err(SliceStartError::SliceBlocked)
-            .map_err(|e| e.to_string())?;
-        // Opaque unique temp scope for this slice's G-code output. Named
-        // from pid + a process-local sequence so it doesn't burn a real
-        // `JobId` (the orchestrator allocs that) and stays unique across
-        // concurrent slices and runs.
-        let seq = OUTPUT_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
-        let output_dir = std::env::temp_dir()
-            .join(format!("n3o-slice-{}-{seq}", std::process::id()))
-            .to_string_lossy()
-            .into_owned();
-        (p.clone(), target_plate, output_dir)
-    };
-    let (input, temp_path) = build_slice_input(&snapshot, target_plate, output_dir)
-        .map_err(|e: SliceInputError| e.to_string())?;
+    // This command is `async` + the heavy prep runs on the blocking pool
+    // ON PURPOSE: a *sync* Tauri command runs on the main (UI) thread, so the
+    // build_slice_input prep — serializing the plate geometry and writing the
+    // temp .3mf to disk, seconds for a large model — would freeze the whole UI
+    // for its duration. Off the main thread, the window stays responsive while
+    // it runs. The Arc-shared mesh buffers also keep the under-lock snapshot
+    // cheap so scene mutations aren't blocked either.
+    let project = Arc::clone(project.inner());
+    let jobs = Arc::clone(jobs.inner());
+    let (input, temp_path) = tauri::async_runtime::spawn_blocking(move || {
+        // Validate + resolve the plate + snapshot the project UNDER the lock,
+        // then build the SliceJobInput OFF the lock (the snapshot is a cheap
+        // Arc-bump of the geometry; the disk write must not hold the mutex).
+        let (snapshot, target_plate, output_dir) = {
+            let p = project.lock().map_err(|e| format!("project lock: {e}"))?;
+            let target_plate = plate_id.unwrap_or_else(|| {
+                // Active plate; `Project::default()` invariant
+                // guarantees `plates[active_plate]` is valid.
+                p.plates[p.active_plate].id
+            });
+            // Pre-slice gate: refuse before any FS write if the
+            // plate's material→slot map + bound PrinterInstance aren't
+            // coherent. Returns the first failing plate's issue list as
+            // a serialized SliceStartError::SliceBlocked.
+            validate_pre_slice(&p, &[target_plate.0])
+                .map_err(SliceStartError::SliceBlocked)
+                .map_err(|e| e.to_string())?;
+            // Opaque unique temp scope for this slice's G-code output. Named
+            // from pid + a process-local sequence so it doesn't burn a real
+            // `JobId` (the orchestrator allocs that) and stays unique across
+            // concurrent slices and runs.
+            let seq = OUTPUT_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+            let output_dir = std::env::temp_dir()
+                .join(format!("n3o-slice-{}-{seq}", std::process::id()))
+                .to_string_lossy()
+                .into_owned();
+            (p.clone(), target_plate, output_dir)
+        };
+        build_slice_input(&snapshot, target_plate, output_dir)
+            .map_err(|e: SliceInputError| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("slice prep task panicked: {e}"))??;
 
     // Sink wraps the standard AppHandle emit with a one-shot temp-
     // file cleanup that fires on the first terminal event. The
@@ -122,7 +132,7 @@ pub fn slice_active_plate(
         .try_state::<PluginHostState>()
         .map(|s| s.inner().clone());
     let sink = cleanup_sink(app_handle, temp_path.clone());
-    start_slice_job_with_sink_and_plugins(input, jobs.inner(), sink, host).map_err(
+    start_slice_job_with_sink_and_plugins(input, &jobs, sink, host).map_err(
         |e: SliceStartError| {
             // Spawn failed → no worker, no terminal event, so
             // cleanup never fires. Best-effort delete here too.

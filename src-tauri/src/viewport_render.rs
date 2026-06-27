@@ -300,6 +300,7 @@ fn upload_mesh(device: &wgpu::Device, m: &crate::core::scene::state::Mesh) -> Gp
     let states = m
         .paint_colors
         .as_deref()
+        .map(Vec::as_slice)
         .and_then(crate::core::threemf::decode_dominant_states)
         .filter(|s| s.len() == m.indices.len() / 3);
     let groups = match states {
