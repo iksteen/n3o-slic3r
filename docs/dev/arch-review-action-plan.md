@@ -170,7 +170,7 @@ The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
 
 ---
 
-## Phase 3 — Correctness & robustness fixes
+## Phase 3 — Correctness & robustness fixes  ✅ DONE (cargo test --workspace --features test-fixtures: 945; C-14 deliberate won't-do)
 
 - [x] **C-1 — Wire the two-phase override-tier path in as the live resolver** *(DP-1; the central cascade task)*
   Live modules to activate: `core/cascade/{overrides,trace,validate}.rs`, `loader.rs:90 load_cascade`, `cascade_adapter/adapter.rs:190 adapt_with_overrides`. Replaced: the composer's ad-hoc `important`-rule override synthesis + source attribution (`composer.rs:204-421` override portions) and `slice/orchestrator.rs:140`'s project-only fold (`input.rs:24,257,316`).
