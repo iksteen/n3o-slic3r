@@ -200,6 +200,19 @@ pub fn ams_mapping_for_plate(
     (any_ams, mapping, mapping2)
 }
 
+/// Convert a CSS `#rrggbb` color to Bambu's `RRGGBBAA` hex8 (opaque).
+/// Inverse of the sync path's `hex8_to_css`. A malformed/short value
+/// is passed through uppercased so the printer gets *something* rather
+/// than a panic. Used by `driver_ams_set_filament` to fill the AMS
+/// tray color when pushing a slot edit back to the printer.
+pub(super) fn css_to_hex8(css: &str) -> String {
+    let raw = css.trim().trim_start_matches('#');
+    // `get(..6)` (not `&raw[..6]`) so a short or non-ASCII value falls
+    // back to the whole string instead of panicking on a byte slice.
+    let rgb = raw.get(..6).unwrap_or(raw);
+    format!("{}FF", rgb.to_uppercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +245,14 @@ mod tests {
             extruder_id: Some(material),
             group: None,
         });
+    }
+
+    #[test]
+    fn css_to_hex8_appends_opaque_alpha_and_uppercases() {
+        assert_eq!(css_to_hex8("#ff8800"), "FF8800FF");
+        assert_eq!(css_to_hex8("ea580c"), "EA580CFF");
+        // Round-trips with the sync path's hex8_to_css for the RGB part.
+        assert_eq!(css_to_hex8("#111827"), "111827FF");
     }
 
     #[test]

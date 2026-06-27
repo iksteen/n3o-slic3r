@@ -256,7 +256,7 @@ you don't relocate doomed code.
 - [x] **R-5 — Move read-side cascade/tower logic out of the command-wiring file**
   `core/project/commands.rs:90-368` (`layer_for_source`, `resolve_plate_cascade`, `resolve_plate`, `resolve_instance_cascade`, `tower_geometry_for_plate`) → a `core/project` domain module; leave `commands.rs` as thin Tauri wiring.
 
-- [ ] **R-6 — Extract a driver send-orchestration module**
+- [x] **R-6 — Extract a driver send-orchestration module**
   `core/driver/commands.rs:359-397,421-474,631-716,737-845` (`wrap_gcode_as_3mf`, `derive_send_names`, `collect_ams_*`, `plate_printer_model`, `apply_pre_send`, AMS-write resolution) → `core/driver/send.rs` (+ a small `ams` module). `#[tauri::command]` fns become thin adapters.
 
 - [ ] **R-7 — Split `project/mutation.rs` (4148 LOC) by topic**
