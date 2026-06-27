@@ -173,6 +173,21 @@ describe("slice reducer", () => {
     expect(restarted.status).toBe("starting");
     expect(restarted.job_id).toBe(8);
   });
+
+  it("`start_pending` shows the window before a job id exists, and the first event binds it", () => {
+    // Clicking Slice flips to "starting" with no job_id yet (prep is in flight).
+    const pending = reduce(initialState, { type: "start_pending" });
+    expect(pending.status).toBe("starting");
+    expect(pending.job_id).toBeNull();
+    // The first PlateStarted (fires only after prep returns) binds the id —
+    // the null-job_id filter accepts it.
+    const started = reduce(pending, {
+      type: "event",
+      event: { kind: "PlateStarted", data: { job_id: 9, plate_id: 1 } },
+    });
+    expect(started.status).toBe("running");
+    expect(started.job_id).toBe(9);
+  });
 });
 
 describe("sliceErrorMessage", () => {

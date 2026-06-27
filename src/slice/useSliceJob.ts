@@ -81,20 +81,35 @@ export function useSliceJob() {
   }, []);
 
   const start = useCallback(async (): Promise<JobId> => {
-    // Capture the plate preview now, while the edit viewport is still
-    // mounted — slicing flips the app into preview mode (which unmounts
-    // it), and send/export then read this cached thumbnail. Awaited so an
-    // async (wgpu, offscreen+IPC) capture lands before we move on.
-    await refreshThumbnailCache();
-    // Backend uses the project's active plate when `plateId` is
-    // null. Future "slice plate N" affordances can pass a specific
-    // PlateId here.
-    const jobId = await invoke<JobId>("slice_active_plate", {
-      plateId: null,
-    });
-    writeStoredJobId(jobId);
-    dispatch({ type: "start", job_id: jobId });
-    return jobId;
+    // Show the progress window immediately. The backend prep
+    // (`slice_active_plate` — serialize the plate geometry + write the temp
+    // .3mf) can take seconds for a large model and only then returns the job
+    // id; without this the window wouldn't appear until prep finished. Safe to
+    // flip to "starting" here: the mode→preview switch is gated on the slice
+    // *finishing* (onPreviewReady), so the edit viewport stays mounted for the
+    // thumbnail capture below.
+    dispatch({ type: "start_pending" });
+    try {
+      // Capture the plate preview now, while the edit viewport is still
+      // mounted — slicing flips the app into preview mode (which unmounts
+      // it), and send/export then read this cached thumbnail. Awaited so an
+      // async (wgpu, offscreen+IPC) capture lands before we move on.
+      await refreshThumbnailCache();
+      // Backend uses the project's active plate when `plateId` is
+      // null. Future "slice plate N" affordances can pass a specific
+      // PlateId here.
+      const jobId = await invoke<JobId>("slice_active_plate", {
+        plateId: null,
+      });
+      writeStoredJobId(jobId);
+      dispatch({ type: "start", job_id: jobId });
+      return jobId;
+    } catch (err) {
+      // Prep failed (e.g. SliceBlocked, or a backend error) — hide the
+      // window we optimistically opened, then surface the error to the caller.
+      dispatch({ type: "reset" });
+      throw err;
+    }
   }, []);
 
   const cancel = useCallback(async () => {

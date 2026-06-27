@@ -25,6 +25,7 @@ export const initialState: SliceState = {
 };
 
 export type SliceAction =
+  | { type: "start_pending" }
   | { type: "start"; job_id: JobId }
   | { type: "event"; event: SliceEvent }
   | { type: "cancel_requested" }
@@ -35,6 +36,14 @@ export function reduce(state: SliceState, action: SliceAction): SliceState {
   switch (action.type) {
     case "reset":
       return initialState;
+
+    case "start_pending":
+      // Show the progress window the instant the user clicks Slice, before
+      // the backend prep (geometry serialize + temp .3mf write) returns the
+      // real job id — which can take seconds for a large model. `job_id` stays
+      // null until `start`; the event filter treats null as "accept" so the
+      // first PlateStarted (which only fires after prep) still binds the id.
+      return { ...initialState, status: "starting", job_id: null };
 
     case "start":
       // Always clears the residue of any prior run; the panel relies
