@@ -98,7 +98,7 @@ Pure doc/comment edits. Fixes the dominant defect class (CLAUDE.md says
 
 ---
 
-## Phase 2 — Delete dead & speculative code (release cleanup)
+## Phase 2 — Delete dead & speculative code (release cleanup)  ✅ DONE (X-1 retired by DP-1)
 
 The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
 
@@ -129,7 +129,7 @@ The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
 > release compiles; `--features test-fixtures` → 943 passed (incl. FFI bucket
 > parity test); tsc + 275 vitest green. **Phase 2 complete** (X-11: deleted the hand-curated DROP_LIST + Manifest — the Dropped/UnknownKey events it gated were unconsumed by the slice path; schema-misses now uniformly skip + debug-log).
 
-- [ ] **X-1 — _retired_ (DP-1 chose wire-in, not delete).** The two-phase cascade override modules are kept and made live — see **C-1** in Phase 3.
+- [x] **X-1 — _retired_ (DP-1 chose wire-in, not delete).** The two-phase cascade override modules are kept and made live — see **C-1** in Phase 3.
 
 - [x] **X-2 — `Mesh.normals` dead data (compute/store/persist/clone, zero consumers)** *(MEDIUM; cheaper before the format ships)*
   `core/scene/state.rs:92-94`, `loaders/mod.rs:91 compute_vertex_normals`, `core/project/format.rs:202,278`, `core/slice/input.rs:431`
