@@ -9,6 +9,7 @@
 pub mod core;
 mod dialog;
 mod toolpath_render;
+mod viewport_gizmo;
 mod viewport_gpu;
 mod viewport_render;
 

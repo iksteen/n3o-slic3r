@@ -6,6 +6,8 @@
 //! math, MSAA target allocation, and tight-RGBA readback are identical
 //! between them, so they live here once.
 
+use std::sync::{Arc, OnceLock};
+
 use glam::{Mat4, Vec3};
 
 /// Read-back color format. Plain RGBA8 so `putImageData` can consume it
@@ -14,6 +16,32 @@ pub const COLOR_FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// 4x MSAA — cheap edge anti-aliasing; the multisampled target resolves
 /// into the single-sample `color` that's read back.
 pub const SAMPLES: u32 = 4;
+
+/// Process-wide offscreen render device, created once on first use.
+static SHARED: OnceLock<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> = OnceLock::new();
+
+/// Lazily create (once) and return the process-wide offscreen render device.
+/// Both offscreen renderers share it — they use identical `DeviceDescriptor`s,
+/// and one device avoids allocating two GPU contexts.
+pub fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+    SHARED
+        .get_or_init(|| {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+            let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            }))
+            .expect("wgpu: no adapter");
+            let info = adapter.get_info();
+            tracing::info!("offscreen wgpu adapter: {} | {:?}", info.name, info.backend);
+            let (device, queue) =
+                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
+                    .expect("wgpu: request_device");
+            (Arc::new(device), Arc::new(queue))
+        })
+        .clone()
+}
 
 /// View-projection for the orbit camera (z up). Shared by render and
 /// pick so the click ray matches exactly what's drawn.

@@ -209,8 +209,8 @@ struct GpuToolpath {
 }
 
 pub struct ToolpathRenderer {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     pipe: wgpu::RenderPipeline,
     grid_pipe: wgpu::RenderPipeline,
     ubuf: wgpu::Buffer,
@@ -234,18 +234,7 @@ pub struct ToolpathRenderer {
 
 impl ToolpathRenderer {
     pub fn new() -> Self {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        }))
-        .expect("wgpu: no adapter");
-        let info = adapter.get_info();
-        tracing::info!("toolpath wgpu adapter: {} | {:?}", info.name, info.backend);
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
-                .expect("wgpu: request_device");
+        let (device, queue) = crate::viewport_gpu::shared_device();
 
         let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("toolpath.uniform"),
