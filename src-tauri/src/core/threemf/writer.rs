@@ -59,7 +59,12 @@ pub fn write_3mf(project: &Project3mf, output: &Path) -> Result<(), LoadError> {
         source: e,
     })?;
     let mut zip = ZipWriter::new(file);
-    let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    // Stored (no deflate): this writes the *transient* slice-input .3mf that
+    // libslic3r reads once and we delete immediately — compressing millions of
+    // vertex/triangle bytes only to inflate them again is wasted CPU on the
+    // prepare path. (The user-facing G-code bundle export uses a separate
+    // writer and stays compressed.)
+    let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
 
     write_entry(
         &mut zip,
@@ -345,17 +350,29 @@ fn model_xml(project: &Project3mf) -> String {
 }
 
 fn write_object_with_mesh(out: &mut String, object_id: u32, mesh: &NewMesh) {
-    out.push_str(&format!(
+    // `writeln!` appends straight into `out`. The old `push_str(&format!(...))`
+    // allocated a throwaway String *per vertex and per triangle* — millions of
+    // heap allocations for a dense mesh, the dominant cost of slice prep. Also
+    // reserve the buffer up front (~48 B/vertex, ~60 B/triangle) so it grows in
+    // one shot rather than reallocating as elements append.
+    use std::fmt::Write as _;
+    let vcount = mesh.vertices.len() / 3;
+    let tcount = mesh.indices.len() / 3;
+    out.reserve(vcount * 48 + tcount * 60 + 128);
+
+    let _ = write!(
+        out,
         "  <object id=\"{object_id}\" type=\"model\">\n   <mesh>\n    <vertices>\n"
-    ));
+    );
     for chunk in mesh.vertices.chunks_exact(3) {
-        // Emit at 6 decimals — sufficient for the project's
-        // float-precision floor. The reader parses as f32 so
-        // anything beyond 7 sig figs is round-trip noise.
-        out.push_str(&format!(
-            "     <vertex x=\"{:.6}\" y=\"{:.6}\" z=\"{:.6}\"/>\n",
+        // Emit at 6 decimals — sufficient for the project's float-precision
+        // floor. The reader parses as f32 so anything beyond 7 sig figs is
+        // round-trip noise.
+        let _ = writeln!(
+            out,
+            "     <vertex x=\"{:.6}\" y=\"{:.6}\" z=\"{:.6}\"/>",
             chunk[0], chunk[1], chunk[2]
-        ));
+        );
     }
     out.push_str("    </vertices>\n    <triangles>\n");
     for (i, tri) in mesh.indices.chunks_exact(3).enumerate() {
@@ -368,17 +385,19 @@ fn write_object_with_mesh(out: &mut String, object_id: u32, mesh: &NewMesh) {
             .and_then(|p| p.get(i))
             .filter(|s| !s.is_empty());
         match paint {
-            Some(p) => out.push_str(&format!(
-                "     <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\" paint_color=\"{}\"/>\n",
-                tri[0],
-                tri[1],
-                tri[2],
-                xml_escape_attr(p),
-            )),
-            None => out.push_str(&format!(
-                "     <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>\n",
-                tri[0], tri[1], tri[2]
-            )),
+            Some(p) => {
+                let _ = writeln!(
+                    out,
+                    "     <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\" paint_color=\"{}\"/>",
+                    tri[0],
+                    tri[1],
+                    tri[2],
+                    xml_escape_attr(p),
+                );
+            }
+            None => {
+                let _ = writeln!(out, "     <triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>", tri[0], tri[1], tri[2]);
+            }
         }
     }
     out.push_str("    </triangles>\n   </mesh>\n  </object>\n");
