@@ -35,7 +35,7 @@ use crate::core::project::{PlateId, Project};
 /// event once it acknowledges the request.
 #[tauri::command]
 #[tracing::instrument(skip(jobs))]
-pub fn slice_cancel(job_id: JobId, jobs: State<JobRegistry>) -> Result<(), String> {
+pub fn slice_cancel(job_id: JobId, jobs: State<Arc<JobRegistry>>) -> Result<(), String> {
     let handle = jobs
         .get(job_id)
         .ok_or_else(|| format!("unknown job id {}", job_id.0))?;
@@ -48,7 +48,7 @@ pub fn slice_cancel(job_id: JobId, jobs: State<JobRegistry>) -> Result<(), Strin
 /// for the next progress tick.
 #[tauri::command]
 #[tracing::instrument(skip(jobs))]
-pub fn slice_status(job_id: JobId, jobs: State<JobRegistry>) -> Result<JobStatus, String> {
+pub fn slice_status(job_id: JobId, jobs: State<Arc<JobRegistry>>) -> Result<JobStatus, String> {
     let handle = jobs
         .get(job_id)
         .ok_or_else(|| format!("unknown job id {}", job_id.0))?;
@@ -70,13 +70,16 @@ pub fn slice_status(job_id: JobId, jobs: State<JobRegistry>) -> Result<JobStatus
 pub fn slice_active_plate(
     plate_id: Option<PlateId>,
     app_handle: AppHandle,
-    jobs: State<JobRegistry>,
+    jobs: State<Arc<JobRegistry>>,
     project: State<Arc<Mutex<Project>>>,
 ) -> Result<JobId, String> {
-    // Build the SliceJobInput + temp-file path under the project
-    // mutex. We drop the lock before spawning the orchestrator so
-    // the worker thread doesn't contend with frontend updates.
-    let (input, temp_path) = {
+    // Validate + resolve the plate + snapshot the project UNDER the lock, then
+    // build the SliceJobInput (which serializes the geometry and writes the
+    // temp .3mf to disk) OFF the lock — the disk write must not block scene
+    // mutations. Cloning the project under the lock mirrors project_save /
+    // autosave; the lock is then released before both the slow build and the
+    // worker spawn.
+    let (snapshot, target_plate, output_dir) = {
         let p = project.lock().map_err(|e| format!("project lock: {e}"))?;
         let target_plate = plate_id.unwrap_or_else(|| {
             // Active plate; `Project::default()` invariant
@@ -99,9 +102,10 @@ pub fn slice_active_plate(
             .join(format!("n3o-slice-{}", job_id_preview.0))
             .to_string_lossy()
             .into_owned();
-        build_slice_input(&p, target_plate, output_dir)
-            .map_err(|e: SliceInputError| e.to_string())?
+        (p.clone(), target_plate, output_dir)
     };
+    let (input, temp_path) = build_slice_input(&snapshot, target_plate, output_dir)
+        .map_err(|e: SliceInputError| e.to_string())?;
 
     // Sink wraps the standard AppHandle emit with a one-shot temp-
     // file cleanup that fires on the first terminal event. The

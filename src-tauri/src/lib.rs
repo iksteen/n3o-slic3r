@@ -60,7 +60,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(core::slice::JobRegistry::new())
+        .manage(Arc::new(core::slice::JobRegistry::new()))
         .manage(Arc::new(core::preview::PreviewRegistry::new()))
         .manage(Arc::new(core::driver::DriverRegistry::new()))
         .manage(Arc::new(core::driver::camera::CameraManager::new()))

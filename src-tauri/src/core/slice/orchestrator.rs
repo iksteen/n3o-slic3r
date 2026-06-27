@@ -248,24 +248,38 @@ fn prepare_job(
 /// runtime.
 pub fn start_slice_job_with_sink_and_plugins(
     input: SliceJobInput,
-    registry: &JobRegistry,
+    registry: &Arc<JobRegistry>,
     sink: EventSink,
     host: Option<PluginHostRef>,
 ) -> Result<JobId, SliceStartError> {
     spawn_worker(input, registry, sink, host)
 }
 
+/// How long a finished job's handle lingers in the registry before the
+/// worker prunes it — long enough that a `slice_status` poll racing the
+/// terminal event still resolves, short enough that handles don't pile up
+/// across a long slicing session. The UI is event-driven, so this is
+/// belt-and-suspenders, not the primary completion signal.
+const JOB_RETENTION_AFTER_TERMINAL: Duration = Duration::from_secs(30);
+
 fn spawn_worker(
     input: SliceJobInput,
-    registry: &JobRegistry,
+    registry: &Arc<JobRegistry>,
     sink: EventSink,
     host: Option<PluginHostRef>,
 ) -> Result<JobId, SliceStartError> {
     let (job_id, resolved, handle) = prepare_job(input, registry)?;
     let sink = Arc::new(sink);
+    let registry = Arc::clone(registry);
     thread::Builder::new()
         .name(format!("n3o-slice-{}", job_id.0))
-        .spawn(move || run_worker(job_id, resolved, sink, handle, host))
+        .spawn(move || {
+            run_worker(job_id, resolved, sink, handle, host);
+            // Prune the completed handle so the registry doesn't grow one
+            // entry per slice for the process lifetime.
+            std::thread::sleep(JOB_RETENTION_AFTER_TERMINAL);
+            registry.remove(job_id);
+        })
         .expect("spawn slice worker");
     Ok(job_id)
 }

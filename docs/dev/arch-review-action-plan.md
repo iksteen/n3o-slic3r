@@ -202,20 +202,29 @@ The "squeaky-clean, remove-don't-keep-dormant" sweep. Do before refactors.
 - [x] **C-9 — `project_save` holds the Project mutex across the full zip-to-disk**
   `core/project/commands.rs:402-431`, `format.rs:112-141`. Mirror autosave: clone the skeleton under the lock (wrap mesh blobs in `Arc` so only the skeleton clones), drop the lock, then write off-lock.
 
-- [ ] **C-10 — Temp `.3mf` serialized + written under the global Project mutex**
+- [x] **C-10 — Temp `.3mf` serialized + written under the global Project mutex**
   `core/slice/commands.rs:79-104`, `core/slice/input.rs:278-284`. Extract geometry+context under the lock, drop it, then serialize+write off-lock.
 
 - [x] **C-11 — Autosave deep-clones all geometry every tick before the change check**
   `core/project/autosave.rs:213-236`. Hash the skeleton (`serde_json::to_vec(&*p)` under the lock is cheap — serde skips mesh buffers), compare, clone only on change.
 
-- [ ] **C-12 — `JobRegistry` never pruned (memory grows per slice)**
+- [x] **C-12 — `JobRegistry` never pruned (memory grows per slice)**
   `core/slice/job.rs:191-201`, `orchestrator.rs:520-784 run_worker`. Pass an `Arc<JobRegistry>` into `run_worker` and `remove(job_id)` after the terminal event (short grace period so `slice_status` reconnect still works). (Pairs with D-11.)
 
 - [x] **C-13 — Driver `&mut self` over-serializes uploads vs control/status**
   `core/driver/traits.rs:189-208,172`, `bambu/connection.rs:242-276`, `registry.rs:30-38,99-102`. Change `send`/`command`/`set_ams_filament`/`status` to `&self` (impls already clone what they touch); narrow the registry `AsyncMutex` to `connect`/`disconnect` (or store the handle in an `Arc`). Then a long upload no longer blocks `status()`.
 
-- [ ] **C-14 — `DriverId` ↔ `instance_id` correspondence lives only in the frontend**
-  `core/driver/commands.rs:301,527`, `camera.rs:301`, `snapmaker/commands.rs:41`, `printer/mod.rs:489`. Store the owning `instance_id` on the `DriverRegistry` entry (created from a per-instance `ConnectionInfo`); sync/camera/AMS commands then take one id and the backend owns the mapping.
+- [x] **C-14 — `DriverId` ↔ `instance_id` correspondence lives only in the frontend — _WON'T DO_**
+  Investigated and dropped (decision): the premise doesn't hold cleanly and the
+  payoff is marginal. `driver_register` takes a `DriverConfig`, not the
+  `instance_id`, so the registry has nothing to store — threading it in ripples
+  through the register command + its frontend caller. And the frontend keeps a
+  `driverId`↔`instance` map regardless (connect/disconnect/send/status all key
+  on `DriverId`), so moving only `ams_set`/`sync` to `instance_id` doesn't
+  remove that bookkeeping — it just swaps which id 2 commands take, changing 3
+  IPC signatures for an ergonomics nicety (not a bug). Camera is already
+  single-id (`instance_id`). Revisit only if a future multi-device dashboard
+  makes the backend the natural owner of the mapping.
 
 - [x] **C-15 — Filament lookup rebuilds the full 201-fragment summary per slot at compose time**
   `core/filament/registry.rs:31-36`, `library.rs:97-101`, driven from `composer.rs:657-676`. Add a keyed single-fragment summary lookup (`filament_fragments.get(slug)`); route `lookup`/`is_bundled` through it; leave `list_*` for genuine enumerate-all callers.
