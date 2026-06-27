@@ -74,9 +74,9 @@ pub enum SliceBlocker {
 /// plate; the slice command surfaces it as an error and the user
 /// fixes that plate's bindings before a second attempt.
 ///
-/// Plates absent from `project` are skipped — the orchestrator
-/// today builds its libslic3r model from `input.model_path` on
-/// disk, not from `Project`'s plate scene contents.
+/// Plates absent from `project` are skipped — the orchestrator builds
+/// its libslic3r model from the slice input's in-memory geometry
+/// buffers, snapshotted from `Project`'s plate scene at build time.
 pub fn validate_pre_slice(
     project: &Project,
     plate_ids: &[u32],

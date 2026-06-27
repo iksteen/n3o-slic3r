@@ -15,11 +15,30 @@ use n3o_slic3r_lib::core::gcode::{parse_str, to_string};
 use n3o_slic3r_lib::core::plugin::{FilamentLoadout, PlateMeta, PluginHost, PostSliceHook};
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
 use n3o_slic3r_lib::core::scene::build_plate::BuildPlate;
+use n3o_slic3r_lib::core::slice::input::SliceObject;
 use n3o_slic3r_lib::core::slice::{
     orchestrator::{run_slice_job_blocking, run_slice_job_blocking_with_plugins, EventSink},
     JobRegistry, SliceEvent, SliceJobInput,
 };
 use slic3r_ffi::init as ffi_init;
+
+/// The cube STL loaded into a single buffer-load [`SliceObject`].
+fn cube_objects() -> Vec<SliceObject> {
+    let m = n3o_slic3r_lib::core::scene::loaders::load_mesh_from_path(&cube_stl())
+        .expect("load cube STL");
+    vec![SliceObject {
+        name: "cube".into(),
+        vertices: Arc::new(m.vertices),
+        indices: Arc::new(m.indices),
+        paint: m.paint_colors.map(Arc::new),
+        transform: [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ],
+        extruder: 1,
+        overrides: vec![],
+        group: None,
+    }]
+}
 
 static FFI_INIT: Once = Once::new();
 fn ensure_ffi_init() {
@@ -98,7 +117,8 @@ fn collecting_sink() -> (EventSink, Arc<Mutex<Vec<SliceEvent>>>) {
 fn slice_input(plate_ids: Vec<u32>) -> (SliceJobInput, JobRegistry, tempfile::TempDir) {
     let out = tempfile::tempdir().expect("temp dir");
     let input = SliceJobInput {
-        model_path: cube_stl().display().to_string(),
+        objects: cube_objects(),
+        force_temp_3mf: false,
         output_dir: out.path().display().to_string(),
         context: ContextJson {
             printer: canonical_printer(),

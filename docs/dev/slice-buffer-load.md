@@ -98,18 +98,40 @@ This change only swaps the internal slice feed.
 3. **Empty paint** — a fully-unpainted volume must leave
    `mmu_segmentation_facets` empty (skip `set_triangle_from_string` for `""`).
 
-## Verification & rollout
+## Grouped (multi-volume) objects — the temp-3MF fallback stays
 
-1. **Parity gate first.** A test builds the same geometry two ways — (a)
-   `write_3mf` + `Model::load`, (b) `Model::add_object` — slices both with an
-   identical config, and asserts **byte-identical G-code**. Cover plain,
-   single-material, multi-material, and **painted** fixtures.
-2. Switch the production slice path to buffer-load.
-3. Once parity holds, delete the temp-`.3mf` write from the slice path. The
-   `write_3mf` writer stays only if a non-test caller remains (currently the
-   slice temp is its only production caller, so it can go with it).
+A scene **group** is one libslic3r `ModelObject` carrying **N `ModelVolume`s**
+(e.g. the two halves of a cut model must slice as one object, or the regions
+"float" — see `cube_halves_slices_as_one_multivolume_object_no_floating_warning`).
+`slic3r_model_add_object` builds one `ModelObject` with a *single* volume, so it
+cannot represent a group. Until an FFI `add_volume` (append a volume to an
+existing object) lands, **plates that contain a grouped object fall back to the
+temp-`.3mf` path**, which collapses each group into one multi-volume
+`ModelObject`. `build_slice_input` detects this and sets `force_temp_3mf`.
 
-## Status
+So the temp-`.3mf` path is **not deleted** — it remains the correctness path for
+grouped plates (and the parity comparator). `write_3mf` stays. The buffer-load
+fast path covers the common ungrouped case.
 
-Implemented per the stages above; the parity gate is
-`tests/slice_buffer_load_parity.rs`.
+## Verification & rollout — as implemented
+
+- **Buffer-load is the default**; `SliceObject` (Arc-shared buffers) flows from
+  `build_slice_input` → the worker's `Model::add_object` loop. No temp file, no
+  XML serialize/parse for ungrouped plates.
+- **Grouped plates** auto-route to the temp-`.3mf` fallback (`force_temp_3mf`).
+- **Parity gate:** `tests/slice_buffer_load_parity.rs` slices the same plate
+  both ways (single, two-object, painted/MMU) and asserts **byte-identical
+  G-code**. Caveat: libslic3r's seam/feedrate output is nondeterministic under
+  multithreading (two *identical* slices can differ ~1 run in 6), so the test
+  slices each path twice and only asserts `buffer == temp_3mf` on a run where
+  each path agrees with itself — it never false-fails and catches a real
+  divergence. Parity verified byte-identical 8/8 single-threaded
+  (`RAYON_NUM_THREADS=1 taskset -c 0`). The forward correctness guard for the
+  buffer-load path is the existing `slice_orchestrator` G-code-value tests
+  (`resolved_bed_temp_reaches_the_engine`, `user_tier_override_reaches_the_engine`),
+  which now run through buffer-load.
+
+## Future work
+
+An FFI `slic3r_model_add_volume(object, …)` would let groups buffer-load too,
+retiring the temp-`.3mf` fallback entirely.

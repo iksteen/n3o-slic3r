@@ -31,11 +31,37 @@ use n3o_slic3r_lib::core::cascade::commands::{ContextJson, OverrideFileSpec};
 use n3o_slic3r_lib::core::filament::FilamentProfile;
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
 use n3o_slic3r_lib::core::scene::build_plate::BuildPlate;
+use n3o_slic3r_lib::core::slice::input::SliceObject;
 use n3o_slic3r_lib::core::slice::{
     orchestrator::{run_slice_job_blocking, EventSink},
     JobRegistry, PlateSummary, SliceEvent, SliceJobInput,
 };
 use slic3r_ffi::init as ffi_init;
+
+/// Load every object of a `.3mf` into buffer-load [`SliceObject`]s for a
+/// hand-built `SliceJobInput`, preserving per-object transform, extruder,
+/// paint, overrides, and group. Mirrors what `build_slice_input` does for
+/// a project's scene (minus the printer-instance extruder remap, which the
+/// hand-built contexts don't apply).
+fn objects_from_3mf(path: &std::path::Path) -> Vec<SliceObject> {
+    let p = n3o_slic3r_lib::core::threemf::load_3mf(path).expect("load 3mf for slice objects");
+    p.objects
+        .iter()
+        .map(|o| {
+            let m = &p.meshes[o.mesh_idx];
+            SliceObject {
+                name: o.name.clone(),
+                vertices: Arc::new(m.vertices.clone()),
+                indices: Arc::new(m.indices.clone()),
+                paint: m.paint_colors.clone().map(Arc::new),
+                transform: o.transform.matrix.map(f64::from),
+                extruder: o.extruder_id.unwrap_or(1) as i32,
+                overrides: o.overrides.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                group: o.group,
+            }
+        })
+        .collect()
+}
 
 static FFI_INIT: Once = Once::new();
 fn ensure_ffi_init() {
@@ -152,8 +178,13 @@ fn slice_fourcolor(
         std::process::id(),
     ));
 
+    let objects = objects_from_3mf(&fourcolor_3mf());
+    // Multi-volume groups can't ride buffer-load's single-mesh add_object;
+    // fall back to the temp-.3mf path for them (mirrors build_slice_input).
+    let force_temp_3mf = objects.iter().any(|o| o.group.is_some());
     let input = SliceJobInput {
-        model_path: fourcolor_3mf().display().to_string(),
+        objects,
+        force_temp_3mf,
         output_dir: temp_dir.display().to_string(),
         context: ContextJson {
             printer,
@@ -359,22 +390,17 @@ fn snappy_binding_routes_single_material_to_bound_toolhead() {
     );
 
     let temp_dir = std::env::temp_dir().join(format!("n3o-snappy-binding-{}", std::process::id(),));
-    let (input, temp_3mf) = build_slice_input(&project, PlateId(1), temp_dir.display().to_string())
+    let input = build_slice_input(&project, PlateId(1), temp_dir.display().to_string())
         .expect("build_slice_input");
 
-    // The cube's recorded extruder in the temp .3mf must already be
-    // 2 (libslic3r 1-based filament index = bound flat slot 1 + 1
-    // on snappy). Pin it here so a regression is caught even if the
-    // slice itself fails for unrelated reasons.
-    let reloaded = load_3mf(&temp_3mf).expect("reload temp 3mf");
+    // The cube's SliceObject extruder must already be 2 (libslic3r
+    // 1-based filament index = bound flat slot 1 + 1 on snappy). Pin it
+    // here so a regression is caught even if the slice itself fails for
+    // unrelated reasons.
     assert!(
-        reloaded.objects.iter().any(|o| o.extruder_id == Some(2)),
-        "expected ≥1 object with remapped extruder_id=2, got {:?}",
-        reloaded
-            .objects
-            .iter()
-            .map(|o| o.extruder_id)
-            .collect::<Vec<_>>(),
+        input.objects.iter().any(|o| o.extruder == 2),
+        "expected ≥1 object with remapped extruder=2, got {:?}",
+        input.objects.iter().map(|o| o.extruder).collect::<Vec<_>>(),
     );
 
     let registry = JobRegistry::new();
@@ -405,7 +431,6 @@ fn snappy_binding_routes_single_material_to_bound_toolhead() {
     );
 
     let _ = std::fs::remove_dir_all(temp_dir);
-    let _ = std::fs::remove_file(temp_3mf);
 }
 
 /// Multi-volume groups round-trip through the slice pipeline as one
@@ -455,7 +480,7 @@ fn cube_halves_slices_as_one_multivolume_object_no_floating_warning() {
     }
 
     let temp_dir = std::env::temp_dir().join(format!("n3o-cube-halves-{}", std::process::id(),));
-    let (input, temp_3mf) = build_slice_input(&project, PlateId(1), temp_dir.display().to_string())
+    let input = build_slice_input(&project, PlateId(1), temp_dir.display().to_string())
         .expect("build_slice_input");
 
     let registry = JobRegistry::new();
@@ -502,7 +527,6 @@ fn cube_halves_slices_as_one_multivolume_object_no_floating_warning() {
     );
 
     let _ = std::fs::remove_dir_all(temp_dir);
-    let _ = std::fs::remove_file(temp_3mf);
 }
 
 /// Per-object setting overrides reach the engine. Slices OrcaCube on
@@ -553,7 +577,7 @@ fn object_layer_height_override_changes_sliced_layer_count() {
     let slice_layer_count = |project: &Project, tag: &str| -> u32 {
         let temp_dir =
             std::env::temp_dir().join(format!("n3o-objovr-{tag}-{}", std::process::id()));
-        let (input, temp_3mf) =
+        let input =
             build_slice_input(project, PlateId(1), temp_dir.display().to_string())
                 .expect("build_slice_input");
         let registry = JobRegistry::new();
@@ -574,7 +598,6 @@ fn object_layer_height_override_changes_sliced_layer_count() {
             })
             .unwrap_or_else(|| panic!("[{tag}] no PlateFinished"));
         let _ = std::fs::remove_dir_all(&temp_dir);
-        let _ = std::fs::remove_file(&temp_3mf);
         layers
     };
 
@@ -668,7 +691,7 @@ fn imported_object_override_reaches_the_engine_end_to_end() {
 
     let slice_layers = |project: &Project, tag: &str| -> u32 {
         let out = tmp.join(format!("n3o-imp-slice-{tag}-{pid}"));
-        let (input, temp_3mf) = build_slice_input(project, PlateId(1), out.display().to_string())
+        let input = build_slice_input(project, PlateId(1), out.display().to_string())
             .expect("build_slice_input");
         let registry = JobRegistry::new();
         let (sink, events) = collecting_sink();
@@ -688,7 +711,6 @@ fn imported_object_override_reaches_the_engine_end_to_end() {
             })
             .unwrap_or_else(|| panic!("[{tag}] no PlateFinished"));
         let _ = std::fs::remove_dir_all(&out);
-        let _ = std::fs::remove_file(&temp_3mf);
         layers
     };
 
@@ -767,7 +789,7 @@ fn imported_painted_model_slices_as_multi_material() {
     let (project, _report) = import(&fixture).expect("import painted project");
     let pid = project.plates[0].id;
     let temp_dir = std::env::temp_dir().join(format!("n3o-paint-mm-{}", std::process::id()));
-    let (input, temp_3mf) = build_slice_input(&project, pid, temp_dir.display().to_string())
+    let input = build_slice_input(&project, pid, temp_dir.display().to_string())
         .expect("build_slice_input");
 
     let registry = JobRegistry::new();
@@ -807,7 +829,6 @@ fn imported_painted_model_slices_as_multi_material() {
     );
 
     let _ = std::fs::remove_dir_all(&temp_dir);
-    let _ = std::fs::remove_file(&temp_3mf);
 }
 
 /// MMU color-painting on a toolchanger → painted faces route to the bound
@@ -870,7 +891,7 @@ fn imported_painted_model_routes_to_bound_toolhead_on_u1() {
 
     let pid = project.plates[0].id;
     let temp_dir = std::env::temp_dir().join(format!("n3o-paint-u1-{}", std::process::id()));
-    let (input, temp_3mf) = build_slice_input(&project, pid, temp_dir.display().to_string())
+    let input = build_slice_input(&project, pid, temp_dir.display().to_string())
         .expect("build_slice_input");
     // build_slice_input computes the toolchanger paint remap; for this binding
     // the painted state 2 must route to flat slot index 3.
@@ -920,7 +941,6 @@ fn imported_painted_model_routes_to_bound_toolhead_on_u1() {
     );
 
     let _ = std::fs::remove_dir_all(&temp_dir);
-    let _ = std::fs::remove_file(&temp_3mf);
 }
 
 /// Per-triangle paint decode against real data (viewport display).

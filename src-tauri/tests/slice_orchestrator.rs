@@ -14,11 +14,36 @@ use n3o_slic3r_lib::core::cascade::commands::{ContextJson, OverrideFileSpec};
 use n3o_slic3r_lib::core::filament::FilamentProfile;
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
 use n3o_slic3r_lib::core::scene::build_plate::BuildPlate;
+use n3o_slic3r_lib::core::slice::input::SliceObject;
 use n3o_slic3r_lib::core::slice::{
     orchestrator::{run_slice_job_blocking, EventSink},
     JobRegistry, SliceEvent, SliceJobInput,
 };
 use slic3r_ffi::init as ffi_init;
+
+/// Column-major identity object→world transform.
+const IDENTITY16: [f64; 16] = [
+    1.0, 0.0, 0.0, 0.0, //
+    0.0, 1.0, 0.0, 0.0, //
+    0.0, 0.0, 1.0, 0.0, //
+    0.0, 0.0, 0.0, 1.0,
+];
+
+/// The 20mm box STL loaded into a single buffer-load [`SliceObject`].
+fn stl_objects() -> Vec<SliceObject> {
+    let m = n3o_slic3r_lib::core::scene::loaders::load_mesh_from_path(&test_stl())
+        .expect("load test STL");
+    vec![SliceObject {
+        name: "20mmbox".into(),
+        vertices: Arc::new(m.vertices),
+        indices: Arc::new(m.indices),
+        paint: m.paint_colors.map(Arc::new),
+        transform: IDENTITY16,
+        extruder: 1,
+        overrides: vec![],
+        group: None,
+    }]
+}
 
 static FFI_INIT: Once = Once::new();
 fn ensure_ffi_init() {
@@ -89,9 +114,10 @@ fn collecting_sink() -> (EventSink, Arc<Mutex<Vec<SliceEvent>>>) {
     (sink, bucket)
 }
 
-fn bambi_input(model_path: String, output_dir: String, plate_ids: Vec<u32>) -> SliceJobInput {
+fn bambi_input(objects: Vec<SliceObject>, output_dir: String, plate_ids: Vec<u32>) -> SliceJobInput {
     SliceJobInput {
-        model_path,
+        objects,
+        force_temp_3mf: false,
         output_dir,
         context: ContextJson {
             printer: canonical_printer(),
@@ -130,12 +156,13 @@ fn snappy_printer() -> PrinterProfile {
     }
 }
 
-fn snappy_input(model_path: String, output_dir: String, plate_ids: Vec<u32>) -> SliceJobInput {
+fn snappy_input(objects: Vec<SliceObject>, output_dir: String, plate_ids: Vec<u32>) -> SliceJobInput {
     // 4 extruders × 1 slot — flat ContextJson.filaments is per-slot,
     // so populate four canonical PLAs even though the composer pulls
     // the real filament identity off the bound PrinterInstance.
     SliceJobInput {
-        model_path,
+        objects,
+        force_temp_3mf: false,
         output_dir,
         context: ContextJson {
             printer: snappy_printer(),
@@ -164,7 +191,7 @@ fn bambi_slice_emits_started_progress_finished_with_summary() {
         std::env::temp_dir().join(format!("n3o-slice-orch-test-{}", std::process::id(),));
 
     let input = bambi_input(
-        test_stl().display().to_string(),
+        stl_objects(),
         temp_dir.display().to_string(),
         vec![1],
     );
@@ -290,7 +317,7 @@ fn config_value<'a>(gcode: &'a str, key: &str) -> &'a str {
 #[test]
 fn resolved_bed_temp_reaches_the_engine_for_both_printers() {
     ensure_ffi_init();
-    let stl = test_stl().display().to_string();
+    let stl = stl_objects();
     let td = |name: &str| {
         std::env::temp_dir()
             .join(format!("n3o-9-1-{name}-{}", std::process::id()))
@@ -302,11 +329,11 @@ fn resolved_bed_temp_reaches_the_engine_for_both_printers() {
     for (label, mk) in [
         (
             "bambi",
-            bambi_input as fn(String, String, Vec<u32>) -> SliceJobInput,
+            bambi_input as fn(Vec<SliceObject>, String, Vec<u32>) -> SliceJobInput,
         ),
         (
             "snappy",
-            snappy_input as fn(String, String, Vec<u32>) -> SliceJobInput,
+            snappy_input as fn(Vec<SliceObject>, String, Vec<u32>) -> SliceJobInput,
         ),
     ] {
         let gcode = slice_to_gcode(label, mk(stl.clone(), td(label), vec![1]));
@@ -361,7 +388,7 @@ fn resolved_bed_temp_reaches_the_engine_for_both_printers() {
 #[test]
 fn user_tier_override_reaches_the_engine() {
     ensure_ffi_init();
-    let stl = test_stl().display().to_string();
+    let stl = stl_objects();
     let out = std::env::temp_dir()
         .join(format!("n3o-c1-user-tier-{}", std::process::id()))
         .display()
@@ -406,7 +433,7 @@ fn snappy_slice_emits_started_progress_finished_with_summary() {
         std::env::temp_dir().join(format!("n3o-slice-orch-snappy-{}", std::process::id(),));
 
     let input = snappy_input(
-        test_stl().display().to_string(),
+        stl_objects(),
         temp_dir.display().to_string(),
         vec![1],
     );
@@ -515,7 +542,7 @@ fn empty_plate_list_errors_synchronously() {
     let (sink, _events) = collecting_sink();
 
     let input = bambi_input(
-        test_stl().display().to_string(),
+        stl_objects(),
         std::env::temp_dir().display().to_string(),
         vec![],
     );
@@ -535,7 +562,7 @@ fn unknown_printer_instance_errors() {
     let (sink, _events) = collecting_sink();
 
     let mut input = bambi_input(
-        test_stl().display().to_string(),
+        stl_objects(),
         std::env::temp_dir().display().to_string(),
         vec![1],
     );

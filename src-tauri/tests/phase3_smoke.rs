@@ -19,12 +19,31 @@ use n3o_slic3r_lib::core::filament::FilamentProfile;
 use n3o_slic3r_lib::core::gcode::{parser, serializer};
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
 use n3o_slic3r_lib::core::scene::build_plate::BuildPlate;
+use n3o_slic3r_lib::core::slice::input::SliceObject;
 use n3o_slic3r_lib::core::slice::{
     orchestrator::{run_slice_job_blocking, EventSink},
     JobRegistry, SliceEvent, SliceJobInput,
 };
 use n3o_slic3r_lib::core::threemf::{fixture_input, load_3mf, write_3mf, write_sliced_3mf};
 use slic3r_ffi::init as ffi_init;
+
+/// The cube STL loaded into a single buffer-load [`SliceObject`].
+fn cube_objects() -> Vec<SliceObject> {
+    let m = n3o_slic3r_lib::core::scene::loaders::load_mesh_from_path(&cube_stl())
+        .expect("load cube STL");
+    vec![SliceObject {
+        name: "cube".into(),
+        vertices: Arc::new(m.vertices),
+        indices: Arc::new(m.indices),
+        paint: m.paint_colors.map(Arc::new),
+        transform: [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ],
+        extruder: 1,
+        overrides: vec![],
+        group: None,
+    }]
+}
 
 static FFI_INIT: Once = Once::new();
 fn ensure_ffi_init() {
@@ -103,7 +122,8 @@ fn slice_cube_to_gcode() -> (PathBuf, Vec<u8>) {
     let temp_dir = std::env::temp_dir().join(format!("n3o-phase3-smoke-{}", std::process::id(),));
 
     let input = SliceJobInput {
-        model_path: cube_stl().display().to_string(),
+        objects: cube_objects(),
+        force_temp_3mf: false,
         output_dir: temp_dir.display().to_string(),
         context: ContextJson {
             printer: canonical_printer(),

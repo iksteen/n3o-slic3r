@@ -8,11 +8,9 @@
 //! Output:
 //! - A populated [`SliceJobInput`] carrying the resolved cascade
 //!   context (printer + build plate + filaments + overrides), the
-//!   project's cascade handle, and the requested plate id.
-//! - The path to a freshly-written temp `.3mf` containing the
-//!   plate's geometry. The caller (`slice_active_plate`
-//!   Tauri command) is responsible for deleting it after the slice
-//!   job's terminal event.
+//!   project's cascade handle, the requested plate id, and the plate's
+//!   geometry as [`SliceObject`]s — `Arc`-shared mesh buffers fed
+//!   straight to libslic3r's `Model` in-memory (no temp `.3mf`).
 //!
 //! What's NOT here:
 //! - Per-object override propagation through ContextJson — the
@@ -24,7 +22,7 @@
 //!   user tier overrides still apply globally.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::core::cascade::commands::{ContextJson, OverrideFileSpec};
 use crate::core::filament;
@@ -32,10 +30,37 @@ use crate::core::filament::FilamentProfile;
 use crate::core::printer::{self, lookup_instance, PrinterInstance};
 use crate::core::project::{PlateId, Project};
 use crate::core::scene::build_plate::{self, BuildPlate};
-use crate::core::scene::state::NewMesh;
-use crate::core::threemf::{project_from_objects, write_3mf, ProjectObject};
+use crate::core::scene::state::GroupId;
 
 use super::job::SliceJobInput;
+
+/// One scene object's geometry, ready to hand to libslic3r's `Model`
+/// in-memory via `Model::add_object` (no temp `.3mf`). The mesh buffers
+/// are `Arc`-shared from the project's [`Mesh`](crate::core::scene::state::Mesh)
+/// — building this list is a cheap pointer-bump, not a geometry copy.
+#[derive(Debug, Clone)]
+pub struct SliceObject {
+    pub name: String,
+    /// Object-local, flat XYZ vertices, shared from the mesh.
+    pub vertices: Arc<Vec<f32>>,
+    /// Flat triangle vertex indices (3 per triangle), shared from the mesh.
+    pub indices: Arc<Vec<u32>>,
+    /// Per-triangle BBS `paint_color` hex (MMU painting), shared from the
+    /// mesh; `None` when the mesh is unpainted.
+    pub paint: Option<Arc<Vec<String>>>,
+    /// Object→world transform, column-major (from `Transform.matrix`).
+    pub transform: [f64; 16],
+    /// 1-based libslic3r filament index, post material→filament remap.
+    pub extruder: i32,
+    /// Per-object config overrides (scope-gated to object/region keys).
+    pub overrides: Vec<(String, String)>,
+    /// Multi-volume group identity (see
+    /// [`SceneObject::group`](crate::core::scene::state::SceneObject::group)).
+    /// Buffer-load can't represent groups (one mesh per `add_object`), so a
+    /// plate with any grouped object routes through the temp-`.3mf` fallback
+    /// — see [`SliceJobInput::force_temp_3mf`](super::job::SliceJobInput::force_temp_3mf).
+    pub group: Option<GroupId>,
+}
 
 /// Failure modes for [`build_slice_input`]. Caller (the Tauri
 /// command layer) maps each to a user-visible error string.
@@ -60,9 +85,6 @@ pub enum SliceInputError {
     /// the user's mistake — surface early rather than letting
     /// libslic3r emit "no geometry" two seconds in.
     EmptyScene { plate_id: PlateId },
-    /// Writing the temp `.3mf` failed. The included path is the
-    /// candidate the builder tried.
-    TempWrite { path: PathBuf, message: String },
 }
 
 impl std::fmt::Display for SliceInputError {
@@ -87,22 +109,15 @@ impl std::fmt::Display for SliceInputError {
                 "plate {} has no objects; add geometry before slicing",
                 plate_id.0,
             ),
-            Self::TempWrite { path, message } => {
-                write!(
-                    f,
-                    "couldn't write slice input at {}: {message}",
-                    path.display()
-                )
-            }
         }
     }
 }
 
 impl std::error::Error for SliceInputError {}
 
-/// Build a `SliceJobInput` for `plate_id`. The temp `.3mf` written
-/// to disk is returned alongside so the caller can delete it after
-/// the slice job terminates.
+/// Build a `SliceJobInput` for `plate_id`, carrying the plate's
+/// geometry as [`SliceObject`]s (`Arc`-shared mesh buffers) the worker
+/// hands to libslic3r in-memory — no temp `.3mf` on the default path.
 ///
 /// `output_dir` becomes `SliceJobInput.output_dir` verbatim — the
 /// caller decides where slice output (the `plate_<N>.gcode` files)
@@ -111,7 +126,7 @@ pub fn build_slice_input(
     project: &Project,
     plate_id: PlateId,
     output_dir: String,
-) -> Result<(SliceJobInput, PathBuf), SliceInputError> {
+) -> Result<SliceJobInput, SliceInputError> {
     // ── Plate lookup ──────────────────────────────────────────
     let plate = project
         .plates
@@ -258,33 +273,32 @@ pub fn build_slice_input(
     let project_overrides =
         encode_overrides_as_specs("project-overrides.toml", &plate.project_overrides);
 
-    // ── Temp 3MF write ────────────────────────────────────────
+    // ── Geometry ──────────────────────────────────────────────
     //
-    // Build the per-object extruder remap before writing the temp
-    // .3mf. libslic3r reads each object's `extruder` metadata as the
-    // 1-based *filament index* the object prints with; the per-print
-    // `filament_map` then translates filament-idx → physical extruder
-    // for toolchanger gcode + every `nozzle_temperature[i]`-style
-    // template substitution (Snapmaker U1's machine_start_gcode is
-    // `M104 T{initial_extruder} …` where `{initial_extruder}` is the
-    // filament index — *not* the post-`filament_map` physical
-    // extruder). To route "material N → T<m>" via the binding the
-    // object's recorded extruder must become the flat slot index
-    // corresponding to its bound slot; identity `filament_map` then
-    // routes filament-idx-i to physical extruder i. The remap is
-    // a project-side decision so it lives here, alongside the temp
-    // .3mf write that's the last point before libslic3r consumes
-    // the value.
-    let temp_path = temp_3mf_path(plate_id);
-    let project_3mf =
-        build_plate_geometry(project, plate_id, &instance).expect("plate existence checked above");
-    write_3mf(&project_3mf, &temp_path).map_err(|e| SliceInputError::TempWrite {
-        path: temp_path.clone(),
-        message: format!("{e}"),
-    })?;
+    // Build the per-object geometry + extruder remap. libslic3r reads
+    // each object's `extruder` as the 1-based *filament index* the
+    // object prints with; the per-print `filament_map` then translates
+    // filament-idx → physical extruder for toolchanger gcode + every
+    // `nozzle_temperature[i]`-style template substitution (Snapmaker
+    // U1's machine_start_gcode is `M104 T{initial_extruder} …` where
+    // `{initial_extruder}` is the filament index — *not* the
+    // post-`filament_map` physical extruder). To route "material N →
+    // T<m>" via the binding the object's recorded extruder must become
+    // the flat slot index corresponding to its bound slot; identity
+    // `filament_map` then routes filament-idx-i to physical extruder i.
+    // [`build_plate_objects`] applies that remap into each object's
+    // `extruder`.
+    let objects = build_plate_objects(project, plate_id, &instance);
+
+    // A multi-volume group can't ride the single-mesh `add_object` FFI
+    // (one mesh per call); slicing each volume as a freestanding object
+    // makes libslic3r flag the non-bed-touching ones as "floating
+    // regions". Route such plates through the temp-`.3mf` writer, which
+    // collapses each group into one ModelObject with N volumes.
+    let force_temp_3mf = objects.iter().any(|o| o.group.is_some());
 
     // ── MMU paint remap (toolchangers only) ───────────────────
-    // build_plate_geometry rewrites each object's `extruder_id` to its flat-
+    // build_plate_objects rewrites each object's `extruder` to its flat-
     // slot index on toolchangers. The face paint encodes the *original* model
     // material indices, so it needs the same remap or painted faces route to
     // the wrong toolhead. AMS printers remap identity, and an unpainted plate
@@ -306,7 +320,8 @@ pub fn build_slice_input(
 
     // ── Assemble the SliceJobInput ────────────────────────────
     let input = SliceJobInput {
-        model_path: temp_path.to_string_lossy().into_owned(),
+        objects,
+        force_temp_3mf,
         output_dir,
         context: ContextJson {
             printer: printer_profile,
@@ -328,7 +343,7 @@ pub fn build_slice_input(
         paint_filament_remap,
     };
 
-    Ok((input, temp_path))
+    Ok(input)
 }
 
 /// Map a model-material number to the 1-based libslic3r filament
@@ -371,8 +386,8 @@ fn material_to_filament_idx(
 /// The per-object overrides libslic3r can actually honor for `id`: the
 /// stored override map filtered (via the shared [`schema::gate_object_overrides`]
 /// gate) to object/region-scope keys, so only settings the engine applies
-/// per object reach the temp `.3mf`. Returned as a `BTreeMap` so the
-/// writer's metadata order is deterministic.
+/// per object reach libslic3r. Returned as a `BTreeMap` so the override
+/// order is deterministic.
 fn object_overrides_for_slice(
     object_overrides: &HashMap<crate::core::scene::state::ObjectId, HashMap<String, String>>,
     id: crate::core::scene::state::ObjectId,
@@ -383,111 +398,61 @@ fn object_overrides_for_slice(
     }
 }
 
-/// Filter `project.meshes` + the named plate's objects into a
-/// geometry-only `Project3mf` ready for `write_3mf`. Returns `None`
-/// if the plate id is unknown (caller checks this upstream).
+/// Turn the named plate's objects into [`SliceObject`]s the worker
+/// hands to libslic3r in-memory. Empty when the plate id is unknown
+/// (the caller checks this upstream).
 ///
-/// Mesh filtering: only meshes referenced by this plate's objects
-/// are included, so the temp file stays minimal even on
-/// many-mesh projects.
+/// The mesh buffers are `Arc`-cloned (pointer-bump, no geometry copy).
+/// Objects are emitted in the plate's authored order (ObjectList
+/// preserves it) — that order is what libslic3r sees, and where two
+/// objects of different materials overlap, the *last* one wins, so a
+/// stable order keeps the overlap region's filament stable between
+/// slices.
 ///
-/// `instance` is borrowed to remap per-object `extruder_id` on
-/// toolchanger printers (where the cascade is per-slot and the
-/// gcode emits the filament index directly). On AMS-style
-/// printers the remap is identity — the cascade is per-material
-/// and material number ⇔ filament index already.
-fn build_plate_geometry(
+/// `instance` is borrowed to remap each object's `extruder` on
+/// toolchanger printers (where the cascade is per-slot and the gcode
+/// emits the filament index directly). On AMS-style printers the remap
+/// is identity — the cascade is per-material and material number ⇔
+/// filament index already.
+pub fn build_plate_objects(
     project: &Project,
     plate_id: PlateId,
     instance: &PrinterInstance,
-) -> Option<crate::core::threemf::Project3mf> {
-    let plate = project.plates.iter().find(|p| p.id == plate_id)?;
+) -> Vec<SliceObject> {
+    let Some(plate) = project.plates.iter().find(|p| p.id == plate_id) else {
+        return Vec::new();
+    };
 
-    // Walk objects to determine which meshes are actually used; this
-    // keeps the temp file small even when the project carries
-    // meshes other plates use exclusively.
-    let mut used_mesh_ids: Vec<_> = plate
-        .scene
-        .objects
-        .values()
-        .map(|o| o.mesh)
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    used_mesh_ids.sort();
-
-    let mesh_id_to_idx: HashMap<_, _> = used_mesh_ids
-        .iter()
-        .enumerate()
-        .map(|(i, id)| (*id, i))
-        .collect();
-
-    let geometry_meshes: Vec<NewMesh> = used_mesh_ids
-        .iter()
-        .map(|id| {
-            let m = &project.meshes[id];
-            NewMesh {
-                vertices: m.vertices.to_vec(),
-                indices: m.indices.to_vec(),
-                // Carry MMU paint into the slice .3mf so libslic3r segments
-                // the painted faces to their filaments.
-                paint_colors: m.paint_colors.as_deref().cloned(),
-                bounding_box: m.bounding_box,
-                provenance: m.provenance.clone(),
-            }
-        })
-        .collect();
-
-    // Emit objects in the plate's authored order (ObjectList preserves it).
-    // That order is what libslic3r sees, and where two objects of different
-    // materials overlap, the *last* one wins — so a stable order keeps the
-    // overlap region's filament stable between slices.
-    let geometry_objects: Vec<ProjectObject> = plate
+    plate
         .scene
         .objects
         .values()
         .map(|obj| {
+            let mesh = &project.meshes[&obj.mesh];
             // Remap material → libslic3r filament index. For
-            // toolchangers this routes via the bound slot's
-            // flat-slot index (legacy behavior — the per-slot
-            // cascade puts each slot's filament settings at that
-            // position). For AMS-style printers this is identity
-            // (material N → filament N) because the per-material
-            // cascade already places M N's settings at filament
-            // index N - 1.
+            // toolchangers this routes via the bound slot's flat-slot
+            // index (the per-slot cascade puts each slot's filament
+            // settings at that position). For AMS-style printers this is
+            // identity (material N → filament N) because the per-material
+            // cascade already places M N's settings at filament index
+            // N - 1.
             let material = obj.extruder_id.unwrap_or(1);
-            let remapped = material_to_filament_idx(material, instance, &plate.material_to_slot);
-            ProjectObject {
-                mesh_idx: mesh_id_to_idx[&obj.mesh],
-                transform: obj.transform,
+            let extruder =
+                material_to_filament_idx(material, instance, &plate.material_to_slot) as i32;
+            SliceObject {
                 name: obj.name.clone(),
-                extruder_id: Some(remapped),
-                // Per-object setting overrides → libslic3r ModelObject/
-                // ModelVolume config via the temp .3mf (the writer emits
-                // them as object/part metadata). Scope-gated below so a
-                // print/global key set per object isn't silently dropped
-                // by libslic3r.
-                overrides: object_overrides_for_slice(&plate.scene.object_overrides, obj.id),
-                // Plate id collapses to 1 in the temp file — libslic3r
-                // only sees one plate per slice job; the multi-plate
-                // shape is project-level, not slice-input-level.
-                plate_id: 1,
-                // Preserve group identity into the temp .3mf so the
-                // writer collapses multi-volume groups (BBS-style
-                // single ModelObject with N ModelVolumes) instead of
-                // emitting each volume as a freestanding object —
-                // otherwise libslic3r flags non-bed-touching volumes
-                // as "floating regions" needing supports.
+                vertices: Arc::clone(&mesh.vertices),
+                indices: Arc::clone(&mesh.indices),
+                paint: mesh.paint_colors.clone(),
+                transform: obj.transform.matrix.map(f64::from),
+                extruder,
+                overrides: object_overrides_for_slice(&plate.scene.object_overrides, obj.id)
+                    .into_iter()
+                    .collect(),
                 group: obj.group,
             }
         })
-        .collect();
-
-    Some(project_from_objects(
-        geometry_meshes,
-        geometry_objects,
-        BTreeMap::new(), // file metadata is project-level, slicing doesn't need it
-    ))
+        .collect()
 }
 
 /// Encode a flat key-value override map as a TOML body the cascade's
@@ -513,22 +478,6 @@ fn encode_overrides_as_specs(label: &str, map: &HashMap<String, String>) -> Vec<
         label: label.into(),
         content,
     }]
-}
-
-/// Build a unique temp-file path scoped to the requesting plate +
-/// process + monotonic nanos. command deletes this file on
-/// the slice job's terminal event.
-fn temp_3mf_path(plate_id: PlateId) -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    std::env::temp_dir().join(format!(
-        "n3o-slice-plate{}-{}-{}.3mf",
-        plate_id.0,
-        std::process::id(),
-        nanos,
-    ))
 }
 
 #[cfg(test)]
@@ -584,10 +533,10 @@ mod tests {
     }
 
     #[test]
-    fn happy_path_builds_input_and_writes_temp_3mf() {
+    fn happy_path_builds_input_with_objects() {
         let _registry = RegistryGuard::acquire();
         let project = one_plate_project_with_cube();
-        let (input, temp_path) =
+        let input =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert_eq!(input.plate_ids, vec![1]);
@@ -599,8 +548,13 @@ mod tests {
             input.context.plate.libslic3r_curr_bed_type,
             "Supertack Plate"
         );
-        assert!(temp_path.exists(), "temp file written");
-        assert_eq!(input.model_path, temp_path.to_string_lossy());
+        // Geometry travels in-memory as one SliceObject per scene object,
+        // with shared buffers — no temp file, buffer-load by default.
+        assert_eq!(input.objects.len(), 1);
+        assert_eq!(input.objects[0].name, "cube");
+        assert!(!input.objects[0].vertices.is_empty());
+        assert_eq!(input.objects[0].extruder, 1);
+        assert!(!input.force_temp_3mf, "ungrouped plate uses buffer-load");
 
         // One filament per *material* on the plate. This single-cube
         // happy path uses material 1 only → length 1, sourced from
@@ -613,8 +567,6 @@ mod tests {
             input.material_layout[0].is_some(),
             "M1 auto-binds to an AMS slot"
         );
-
-        std::fs::remove_file(&temp_path).ok();
     }
 
     #[test]
@@ -636,7 +588,7 @@ mod tests {
         project.register_object(NewSceneObject::at_origin(mesh_b, "cube-b"));
 
         // Build for plate 2 explicitly.
-        let (input, temp_path) =
+        let input =
             build_slice_input(&project, id2, "/tmp/n3o-out".into()).expect("build plate 2");
         assert_eq!(input.plate_ids, vec![2]);
         assert_eq!(input.context.printer.model, "Snapmaker U1");
@@ -645,6 +597,9 @@ mod tests {
             input.context.plate.libslic3r_curr_bed_type,
             "Textured PEI Plate"
         );
+        // Plate 2's single object only — plate 1's geometry isn't here.
+        assert_eq!(input.objects.len(), 1);
+        assert_eq!(input.objects[0].name, "cube-b");
         // Snappy is a toolchanger (>1 extruder) → legacy per-slot
         // cascade: 4 extruders × 1 slot = 4 filaments. AMS-style
         // printers (single extruder) would use one filament per
@@ -653,8 +608,6 @@ mod tests {
         for f in &input.context.filaments {
             assert_eq!(f.identity, "generic-pla");
         }
-
-        std::fs::remove_file(&temp_path).ok();
     }
 
     #[test]
@@ -662,7 +615,7 @@ mod tests {
         // Per-material cascade (BBS convention): libslic3r filament
         // index ⇔ model material number. The object's authored
         // `extruder_id` (= material number) passes through verbatim
-        // to the temp `.3mf` so libslic3r emits `T<material - 1>`,
+        // to the SliceObject so libslic3r emits `T<material - 1>`,
         // and the per-material filament_settings_id / filament_map
         // entries the composer fans out at material's position carry
         // the bound slot's filament identity + extruder routing.
@@ -679,18 +632,15 @@ mod tests {
             group: None,
         });
 
-        let (input, temp_path) =
+        let input =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
-        let reloaded = crate::core::threemf::load_3mf(&temp_path).expect("reload temp 3MF");
-        assert_eq!(reloaded.objects.len(), 1);
-        assert_eq!(reloaded.objects[0].extruder_id, Some(3));
+        assert_eq!(input.objects.len(), 1);
+        assert_eq!(input.objects[0].extruder, 3);
         // material_layout has one entry per material; material 3 → 3
         // entries, and the third entry is the auto-bound AMS slot.
         assert_eq!(input.material_layout.len(), 3);
         assert!(input.material_layout[2].is_some());
-
-        std::fs::remove_file(&temp_path).ok();
     }
 
     #[test]
@@ -698,7 +648,7 @@ mod tests {
         // Snappy = toolchanger → legacy "one filament per slot"
         // cascade with the per-object remap reapplied. Bind M1 →
         // T1's solo slot (extruder=1, slot=0): flat slot index 1,
-        // libslic3r filament index 2 (1-based). The temp `.3mf`
+        // libslic3r filament index 2 (1-based). The SliceObject
         // carries the remapped value so libslic3r's template
         // substitution picks the right filament.
         use crate::core::printer::SlotRef;
@@ -723,18 +673,15 @@ mod tests {
             },
         );
 
-        let (input, temp_path) =
+        let input =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
-        let reloaded = crate::core::threemf::load_3mf(&temp_path).expect("reload temp 3MF");
-        assert_eq!(reloaded.objects.len(), 1);
-        assert_eq!(reloaded.objects[0].extruder_id, Some(2));
+        assert_eq!(input.objects.len(), 1);
+        assert_eq!(input.objects[0].extruder, 2);
         // Toolchangers fall back to the legacy slot-fanned cascade
         // — `material_layout` stays empty so `compose_cascade` uses
         // `slot_layout` (4 filaments for snappy).
         assert!(input.material_layout.is_empty());
-
-        std::fs::remove_file(&temp_path).ok();
     }
 
     #[test]
@@ -748,7 +695,7 @@ mod tests {
             .project_overrides
             .insert("layer_height".into(), "0.12".into());
 
-        let (input, temp_path) =
+        let input =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert_eq!(input.context.user_overrides.len(), 1);
@@ -759,28 +706,27 @@ mod tests {
         assert!(input.context.project_overrides[0]
             .content
             .contains("layer_height = \"0.12\""));
-
-        std::fs::remove_file(&temp_path).ok();
     }
 
     #[test]
     fn empty_override_maps_produce_empty_spec_lists() {
         let _registry = RegistryGuard::acquire();
         let project = one_plate_project_with_cube();
-        let (input, temp_path) =
+        let input =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
         assert!(input.context.user_overrides.is_empty());
         assert!(input.context.project_overrides.is_empty());
-        std::fs::remove_file(&temp_path).ok();
     }
 
     #[test]
-    fn grouped_objects_emit_as_one_modelobject_in_temp_3mf() {
-        // Multi-volume groups (the cube-halves shape) must round-trip
-        // through build_slice_input → temp .3mf as ONE outer object
-        // with N parts. Otherwise libslic3r flags non-bed-touching
-        // volumes as "floating regions" needing supports — exactly
-        // the bug we hit on the cube-halves external-spool fixture.
+    fn grouped_plate_routes_through_temp_3mf_fallback() {
+        // Multi-volume groups (the cube-halves shape) can't ride the
+        // single-mesh `add_object` FFI; slicing each volume as a
+        // freestanding object makes libslic3r flag the non-bed-touching
+        // ones as "floating regions". build_slice_input flags such a
+        // plate for the temp-`.3mf` writer (which collapses the group
+        // into one ModelObject with N volumes). The objects still carry
+        // their group identity so the writer can do that collapse.
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         project.plates[0].set_printer(Some("bambi".into()), None);
@@ -805,32 +751,18 @@ mod tests {
             group: Some(g),
         });
 
-        let (_input, temp_path) =
+        let input =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
-        // Inspect the written temp .3mf — one build item, one
-        // <components> wrapper with two <component>s, one outer
-        // model_settings object with two parts.
-        let mut zip = zip::ZipArchive::new(std::fs::File::open(&temp_path).unwrap()).unwrap();
-        let mut model_xml = String::new();
-        std::io::Read::read_to_string(
-            &mut zip.by_name("3D/3dmodel.model").unwrap(),
-            &mut model_xml,
-        )
-        .unwrap();
-        let mut settings_xml = String::new();
-        std::io::Read::read_to_string(
-            &mut zip.by_name("Metadata/model_settings.config").unwrap(),
-            &mut settings_xml,
-        )
-        .unwrap();
-        assert_eq!(model_xml.matches("<item ").count(), 1);
-        assert_eq!(model_xml.matches("<components>").count(), 1);
-        assert_eq!(model_xml.matches("<component ").count(), 2);
-        assert_eq!(settings_xml.matches("<object id=").count(), 1);
-        assert_eq!(settings_xml.matches("<part ").count(), 2);
-
-        std::fs::remove_file(&temp_path).ok();
+        assert!(
+            input.force_temp_3mf,
+            "a grouped plate must route through the temp-.3mf fallback",
+        );
+        assert_eq!(input.objects.len(), 2);
+        assert!(
+            input.objects.iter().all(|o| o.group == Some(g)),
+            "both objects keep their group identity for the writer to collapse",
+        );
     }
 
     #[test]
@@ -916,17 +848,16 @@ mod tests {
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
 
-        let (input, temp_path) =
+        let input =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
         assert_eq!(input.context.filaments.len(), 4);
         for f in &input.context.filaments {
             assert_eq!(f.identity, "generic-pla");
         }
-        std::fs::remove_file(&temp_path).ok();
     }
 
     #[test]
-    fn temp_3mf_omits_unused_meshes_from_other_plates() {
+    fn plate_objects_exclude_other_plates_objects() {
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         project.plates[0].set_printer(Some("bambi".into()), None);
@@ -942,23 +873,19 @@ mod tests {
         let mesh_b = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_b, "b"));
 
-        // Build for plate 1; the temp file should carry only mesh_a.
-        let (_, temp_path) =
+        // Build for plate 1; only plate 1's object is carried.
+        let input =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
-        let reloaded = crate::core::threemf::load_3mf(&temp_path).expect("reload");
-        assert_eq!(reloaded.meshes.len(), 1, "plate 2's mesh excluded");
-        assert_eq!(reloaded.objects.len(), 1);
-        assert_eq!(reloaded.objects[0].name, "a");
-
-        std::fs::remove_file(&temp_path).ok();
+        assert_eq!(input.objects.len(), 1);
+        assert_eq!(input.objects[0].name, "a");
     }
 
     #[test]
     fn objects_emit_in_stable_id_order() {
-        // The temp .3mf's object order is what libslic3r sees — and for
+        // The SliceObject order is what libslic3r sees — and for
         // overlapping objects of different materials the last one wins. The
-        // slice path emits in the plate's authored (ObjectList) order; this pins
-        // that the order survives to the temp file (here: creation order).
+        // slice path emits in the plate's authored (ObjectList) order; this
+        // pins that the order survives (here: creation order).
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         project.plates[0].set_printer(Some("bambi".into()), None);
@@ -967,16 +894,13 @@ mod tests {
             project.register_object(NewSceneObject::at_origin(mesh, format!("obj-{i}")));
         }
 
-        let (_, temp_path) =
+        let input =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
-        let reloaded = crate::core::threemf::load_3mf(&temp_path).expect("reload");
-        let names: Vec<&str> = reloaded.objects.iter().map(|o| o.name.as_str()).collect();
+        let names: Vec<&str> = input.objects.iter().map(|o| o.name.as_str()).collect();
         assert_eq!(
             names,
             ["obj-0", "obj-1", "obj-2", "obj-3", "obj-4", "obj-5", "obj-6", "obj-7"],
             "objects must slice in ascending-id (creation) order",
         );
-
-        std::fs::remove_file(&temp_path).ok();
     }
 }

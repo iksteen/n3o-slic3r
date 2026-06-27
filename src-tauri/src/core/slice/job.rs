@@ -31,13 +31,25 @@ pub struct JobId(pub u64);
 /// `context` is the serialized cascade context ([`ContextJson`]).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SliceJobInput {
-    /// Filesystem path of the model to slice. The UI's `scene_load_*`
-    /// commands are the scene→file bridge on the way in; the
-    /// orchestrator now also dumps the live scene to a temp 3MF
-    /// via the writer for in-app slices so the user's plate-
-    /// arranged scene reaches libslic3r without a manual disk
-    /// round-trip.
-    pub model_path: String,
+    /// The plate's geometry, one entry per scene object, fed to
+    /// libslic3r's `Model` straight from the in-memory mesh buffers
+    /// (no temp `.3mf` round-trip). Built by
+    /// [`super::input::build_plate_objects`]. `#[serde(skip)]` because
+    /// the buffers are `Arc`-shared, backend-only data that never crosses
+    /// the IPC bridge — a frontend-posted `SliceJobInput` deserializes to
+    /// an empty object list (the backend always rebuilds it from project
+    /// state in `build_slice_input`).
+    #[serde(skip)]
+    pub objects: Vec<super::input::SliceObject>,
+    /// Test/parity only: round-trip the geometry through a temp `.3mf`
+    /// (`write_3mf` → `Model::load`) instead of building the `Model`
+    /// in-memory via `Model::add_object`. Default `false` = buffer-load.
+    /// `build_slice_input` also sets this `true` for plates carrying
+    /// multi-volume groups, which the single-mesh `add_object` FFI can't
+    /// represent — the temp-`.3mf` writer collapses each group into one
+    /// `ModelObject` with N volumes (the floating-regions fix).
+    #[serde(default)]
+    pub force_temp_3mf: bool,
     /// Directory to write G-code into. Output files land at
     /// `<output_dir>/plate_<N>.gcode`.
     pub output_dir: String,
@@ -56,10 +68,10 @@ pub struct SliceJobInput {
     /// position `i`). `None` for materials with no slot binding
     /// yet. The composer fans the libslic3r filament dimension
     /// (filament_diameter, filament_colour, filament_map, …) out
-    /// to this length, and the per-object `extruder_id` in the
-    /// temp `.3mf` carries the 1-based material number verbatim
-    /// so the gcode emits `T<material - 1>` for each cube. The
-    /// driver's `ams_mapping` array uses the same indexing.
+    /// to this length, and each [`SliceObject::extruder`] carries the
+    /// 1-based material number (post material→filament remap) so the
+    /// gcode emits `T<material - 1>` for each cube. The driver's
+    /// `ams_mapping` array uses the same indexing.
     ///
     /// Empty when the plate has no materials (an empty plate's
     /// slice job fails earlier, but the field is included for
@@ -79,7 +91,7 @@ pub struct SliceJobInput {
     /// route to — the same `material → flat-slot` remap the per-object
     /// `extruder_id` gets, so painted faces follow the base material onto the
     /// right toolhead. The orchestrator applies it via
-    /// `Model::remap_paint_filaments` after loading the temp `.3mf`.
+    /// `Model::remap_paint_filaments` after building the model.
     #[serde(default)]
     pub paint_filament_remap: Option<Vec<i32>>,
 }
@@ -211,7 +223,10 @@ impl Default for JobRegistry {
 /// [`SliceJobInput`] by the orchestrator entry so the worker
 /// doesn't share lock-held cascade refs with the command thread.
 pub struct ResolvedJob {
-    pub model_path: PathBuf,
+    /// Plate geometry fed to libslic3r — see [`SliceJobInput::objects`].
+    pub objects: Vec<super::input::SliceObject>,
+    /// See [`SliceJobInput::force_temp_3mf`].
+    pub force_temp_3mf: bool,
     pub output_dir: PathBuf,
     pub plate_ids: Vec<u32>,
     pub cascade: crate::core::cascade::Cascade,

@@ -100,8 +100,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&temp_dir)?;
     eprintln!("output dir: {}", temp_dir.display());
 
+    // Build the in-memory geometry the orchestrator now consumes
+    // (buffer-load via Model::add_object). A grouped .3mf falls back to
+    // the temp-.3mf path, which the single-mesh add_object can't do.
+    use n3o_slic3r_lib::core::slice::input::SliceObject;
+    let objects: Vec<SliceObject> =
+        if model_abs.extension().and_then(|e| e.to_str()) == Some("3mf") {
+            let p = n3o_slic3r_lib::core::threemf::load_3mf(&model_abs)?;
+            p.objects
+                .iter()
+                .map(|o| {
+                    let m = &p.meshes[o.mesh_idx];
+                    SliceObject {
+                        name: o.name.clone(),
+                        vertices: Arc::new(m.vertices.clone()),
+                        indices: Arc::new(m.indices.clone()),
+                        paint: m.paint_colors.clone().map(Arc::new),
+                        transform: o.transform.matrix.map(f64::from),
+                        extruder: o.extruder_id.unwrap_or(1) as i32,
+                        overrides: o
+                            .overrides
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
+                        group: o.group,
+                    }
+                })
+                .collect()
+        } else {
+            let m = n3o_slic3r_lib::core::scene::loaders::load_mesh_from_path(&model_abs)?;
+            vec![SliceObject {
+                name: "model".into(),
+                vertices: Arc::new(m.vertices),
+                indices: Arc::new(m.indices),
+                paint: m.paint_colors.map(Arc::new),
+                transform: [
+                    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+                ],
+                extruder: 1,
+                overrides: vec![],
+                group: None,
+            }]
+        };
+    let force_temp_3mf = objects.iter().any(|o| o.group.is_some());
+
     let input = SliceJobInput {
-        model_path: model_abs.display().to_string(),
+        objects,
+        force_temp_3mf,
         output_dir: temp_dir.display().to_string(),
         context: ContextJson {
             printer,

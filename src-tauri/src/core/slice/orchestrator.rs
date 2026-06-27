@@ -260,7 +260,8 @@ fn prepare_job(
     let override_tiers = override_tiers_from_context(&input.context);
 
     let resolved = ResolvedJob {
-        model_path: PathBuf::from(&input.model_path),
+        objects: input.objects,
+        force_temp_3mf: input.force_temp_3mf,
         output_dir,
         plate_ids: input.plate_ids,
         cascade,
@@ -433,6 +434,54 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         return Err(e);
     }
     Ok(())
+}
+
+/// Serialize the plate's [`SliceObject`]s to a temp `.3mf` for the
+/// `force_temp_3mf` path: the parity gate (proving buffer-load matches
+/// the `write_3mf` → `Model::load` route byte-for-byte) and the
+/// grouped-plate fallback (the writer collapses a multi-volume group
+/// into one ModelObject with N volumes — the single-mesh `add_object`
+/// can't). Caller `Model::load`s the returned path, then deletes it.
+fn objects_to_temp_3mf(objects: &[super::input::SliceObject]) -> PathBuf {
+    use crate::core::scene::loaders::compute_bounding_box;
+    use crate::core::scene::state::{MeshProvenance, NewMesh};
+    use crate::core::scene::transform::Transform;
+    use crate::core::threemf::{project_from_objects, write_3mf, ProjectObject};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let mut meshes = Vec::with_capacity(objects.len());
+    let mut project_objects = Vec::with_capacity(objects.len());
+    for (i, o) in objects.iter().enumerate() {
+        meshes.push(NewMesh {
+            vertices: (*o.vertices).clone(),
+            indices: (*o.indices).clone(),
+            paint_colors: o.paint.as_deref().map(|p| p.to_vec()),
+            bounding_box: compute_bounding_box(&o.vertices),
+            provenance: MeshProvenance::Primitive(o.name.clone()),
+        });
+        project_objects.push(ProjectObject {
+            mesh_idx: i,
+            transform: Transform {
+                matrix: o.transform.map(|x| x as f32),
+            },
+            name: o.name.clone(),
+            extruder_id: Some(o.extruder as u8),
+            plate_id: 1,
+            group: o.group,
+            overrides: o.overrides.iter().cloned().collect(),
+        });
+    }
+
+    let project = project_from_objects(meshes, project_objects, BTreeMap::new());
+    let path = std::env::temp_dir().join(format!(
+        "n3o-slice-parity-{}-{}.3mf",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed),
+    ));
+    write_3mf(&project, &path).expect("write temp .3mf for force_temp_3mf path");
+    path
 }
 
 /// Run the pre-slice plugin hook over the resolved cascade, applying
@@ -627,9 +676,13 @@ fn run_worker(
             }
         };
 
-        // Load the model. project writer is the future
-        // path (scene → temp 3MF → load), but for MVP we slice
-        // whatever file the caller pointed us at.
+        // Build the libslic3r model from the plate's in-memory geometry.
+        // Default path: hand each object's mesh buffers straight to
+        // `Model::add_object` (no temp file, no XML round-trip). Parity /
+        // grouped-plate fallback (`force_temp_3mf`): serialize the same
+        // objects to a temp `.3mf`, `Model::load` it, then delete it —
+        // the only path that can collapse a multi-volume group into one
+        // ModelObject (the single-mesh `add_object` can't).
         let mut model = match Model::new() {
             Ok(m) => m,
             Err(e) => {
@@ -640,10 +693,41 @@ fn run_worker(
                 return;
             }
         };
-        if let Err(e) = model.load(&job.model_path) {
-            let err = classify_libslic3r_error(&format!("{e}"));
-            fail(&handle, &sink, job_id, plate_id, err);
-            return;
+        if job.force_temp_3mf {
+            let temp = objects_to_temp_3mf(&job.objects);
+            let load_result = model.load(&temp);
+            let _ = std::fs::remove_file(&temp);
+            if let Err(e) = load_result {
+                let err = classify_libslic3r_error(&format!("{e}"));
+                fail(&handle, &sink, job_id, plate_id, err);
+                return;
+            }
+        } else {
+            let mut add_err = None;
+            for o in &job.objects {
+                if let Err(e) = model.add_object(
+                    &o.name,
+                    &o.vertices,
+                    &o.indices,
+                    &o.transform,
+                    o.extruder,
+                    o.paint.as_deref().map(|v| v.as_slice()).unwrap_or(&[]),
+                    &o.overrides,
+                ) {
+                    add_err = Some(format!("add_object({}) failed: {e}", o.name));
+                    break;
+                }
+            }
+            if let Some(raw_message) = add_err {
+                fail(
+                    &handle,
+                    &sink,
+                    job_id,
+                    plate_id,
+                    SliceError::Unknown { raw_message },
+                );
+                return;
+            }
         }
         // Toolchanger MMU paint routing: remap each painted filament
         // state to the libslic3r filament index its base material binds
