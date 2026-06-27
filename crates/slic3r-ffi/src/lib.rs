@@ -769,7 +769,9 @@ extern "C" fn progress_trampoline(
     // for the lifetime of the slice call.
     let cb: &mut &mut dyn FnMut(i32, &str) =
         unsafe { &mut *(user_data as *mut &mut dyn FnMut(i32, &str)) };
-    cb(percent, stage_str);
+    // A panic must not unwind across the C ABI (UB). Swallow it — a buggy
+    // progress callback degrades to a missed tick, not a crashed slice.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cb(percent, stage_str)));
 }
 
 /// Process-wide serialization mutex for [`slice`]. libslic3r isn't
@@ -830,6 +832,14 @@ pub struct SliceOutcome {
 
 /// Slice, returning the advisory diagnostics alongside the result — see
 /// [`SliceOutcome`].
+///
+/// Note: although `model` is `&Model`, the slice **mutates the underlying
+/// C++ `Slic3r::Model` in place** — it normalizes each object's per-region
+/// extruder selectors (`wall_filament` etc.) before building the `Print`
+/// (see `slic3r_slice` in the shim). `Model` is a handle to external C++
+/// state, so this isn't Rust UB, but re-slicing the same `Model` sees the
+/// normalized config from the prior call. Pass a fresh `Model` if that
+/// matters.
 pub fn slice_outcome<P, F>(
     model: &Model,
     config: &Config,
@@ -1019,7 +1029,9 @@ extern "C" fn log_trampoline(
     let level = LogLevel::from_raw(severity);
     if let Ok(mut guard) = LOG_CALLBACK.lock() {
         if let Some(cb) = guard.as_mut() {
-            cb(level, msg_str);
+            // A panic must not unwind across the C ABI (UB). Catching it inside
+            // the lock scope also avoids poisoning LOG_CALLBACK.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cb(level, msg_str)));
         }
     }
 }

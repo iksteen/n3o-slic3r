@@ -815,6 +815,11 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
                         obj->config.option(key));
                     int current = opt ? opt->value : 0;
                     if (current == 0) {
+                        // Deliberate write-through to the caller's model in
+                        // place — unlike `cfg` (copied at the top of this fn).
+                        // Copying the whole Model per slice would be wasteful
+                        // and it's consumed once per slice; see slice_outcome's
+                        // Rust doc, which documents the mutation.
                         obj->config.set_key_value(
                             key, new ConfigOptionInt(obj_default));
                     }

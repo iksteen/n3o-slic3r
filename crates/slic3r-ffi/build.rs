@@ -352,8 +352,13 @@ fn apply_submodule_patches(workspace_root: &Path, base: &Path) {
             .map(|s| s.success())
             .unwrap_or(false);
         if !ok {
-            println!(
-                "cargo:warning=could not apply {} to the OrcaSlicer submodule",
+            // The reverse-check above already proved the patch isn't applied,
+            // so a failed forward-apply is unambiguous — fail the build rather
+            // than silently shipping an engine missing the wave-overhang (or
+            // cross-build) carry. Check the submodule is at its pinned commit.
+            panic!(
+                "failed to apply {} to the OrcaSlicer submodule (tree not at the \
+                 pinned commit, or the patch no longer applies)",
                 p.display()
             );
         }
