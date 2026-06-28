@@ -102,6 +102,12 @@ pub struct ProjectObject {
     pub mesh_idx: usize,
     pub transform: Transform,
     pub name: String,
+    /// The outer `<build><item objectid>` this leaf flattened from —
+    /// the same id BBS `model_settings.config` keys its `<object id>`
+    /// on. `apply_bbs_metadata` correlates by this rather than by
+    /// position, because BBS lists objects in a different order than
+    /// `<build>` does (so a positional walk mis-assigns names).
+    pub source_object_id: u32,
     /// Per-part extruder assignment from BBS/Orca metadata.
     /// `None` = default extruder (slicer-side decision).
     pub extruder_id: Option<u8>,
@@ -267,6 +273,7 @@ fn flatten_build_item(
     expand(
         &part_key,
         item.objectid,
+        item.objectid,
         item_xform,
         docs,
         meshes,
@@ -280,6 +287,11 @@ fn flatten_build_item(
 fn expand(
     part_key: &str,
     objectid: u32,
+    // The outer build-item objectid, held constant through recursion so
+    // every leaf carries the id BBS metadata keys on (see
+    // `ProjectObject::source_object_id`). `objectid` itself changes as we
+    // descend into components; this does not.
+    outer_id: u32,
     accumulated: glam::Mat4,
     docs: &HashMap<String, core_spec::ModelDoc>,
     meshes: &mut Vec<NewMesh>,
@@ -337,6 +349,7 @@ fn expand(
             objects.push(ProjectObject {
                 mesh_idx,
                 transform: Transform::from_mat4(accumulated),
+                source_object_id: outer_id,
                 // Names are filled in by apply_bbs_metadata when
                 // model_settings is present; a stable fallback name
                 // for OrcaCube-style 3MFs without that metadata
@@ -365,6 +378,7 @@ fn expand(
                 expand(
                     &next_key,
                     c.objectid,
+                    outer_id,
                     next,
                     docs,
                     meshes,
@@ -380,16 +394,19 @@ fn expand(
 }
 
 fn apply_bbs_metadata(settings: &bbs_meta::ModelSettings, objects: &mut [ProjectObject]) {
-    // One walk over the outer objects in document order. Each outer
-    // `<object>` owns `parts.len().max(1)` consecutive flattened
-    // ProjectObjects — `max(1)` because a *part-less* `<object>` (the
-    // single-volume foreign shape, e.g. OrcaCube) still owns one. For each
-    // owned ProjectObject we apply its identity (name/extruder) + per-object
-    // config overrides + plate id + group id in the same pass, so the
-    // metadata and the plate/group assignment can never desync (an earlier
-    // version flattened only `<part>` entries for metadata, which silently
-    // dropped a part-less object's object-level config and misaligned every
-    // later object's metadata once any object lacked parts).
+    // Correlate metadata to geometry by **object id**, not position: BBS
+    // writes `model_settings.config` objects in a different order than
+    // `<build>` lists items, so a positional walk mis-assigns names (e.g.
+    // mechanical_dice's build order 2,4,6,8,… vs metadata order 2,6,8,4,…).
+    // Each flattened leaf carries its outer build objectid in
+    // `source_object_id`, matching the metadata's `<object id>`.
+    //
+    // An outer `<object>` owns the flattened leaves sharing its id, in
+    // flatten order — `parts.len().max(1)` of them, `max(1)` because a
+    // *part-less* `<object>` (the single-volume foreign shape, e.g.
+    // OrcaCube) still owns one leaf and its object-level config. For each
+    // owned leaf we apply identity (name/extruder) + per-object config +
+    // plate id + group id together, so they can never desync.
     //
     // Identity + config precedence: a part supplies its own name/extruder
     // and `ModelVolume::config`; a part-less object falls back to the outer
@@ -404,9 +421,20 @@ fn apply_bbs_metadata(settings: &bbs_meta::ModelSettings, objects: &mut [Project
     // libslic3r treats each volume as freestanding and flags non-bed-touching
     // ones as "floating regions").
     let has_plate_info = !settings.plates.is_empty();
-    let mut cursor = 0usize;
+
+    // Outer object id → its flattened leaf indices, in flatten order.
+    let mut leaves_by_id: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (idx, obj) in objects.iter().enumerate() {
+        leaves_by_id
+            .entry(obj.source_object_id)
+            .or_default()
+            .push(idx);
+    }
+
     for outer in &settings.objects {
-        let part_count = outer.parts.len().max(1);
+        let Some(leaves) = leaves_by_id.get(&outer.id) else {
+            continue;
+        };
         let plate = if has_plate_info {
             settings
                 .plates
@@ -422,11 +450,7 @@ fn apply_bbs_metadata(settings: &bbs_meta::ModelSettings, objects: &mut [Project
         } else {
             None
         };
-        for offset in 0..part_count {
-            let idx = cursor + offset;
-            if idx >= objects.len() {
-                break;
-            }
+        for (offset, &idx) in leaves.iter().enumerate() {
             let obj = &mut objects[idx];
             // `None` for a part-less object → fall back to the outer object.
             let part = outer.parts.get(offset);
@@ -456,7 +480,6 @@ fn apply_bbs_metadata(settings: &bbs_meta::ModelSettings, objects: &mut [Project
             }
             obj.group = group;
         }
-        cursor += part_count;
     }
 }
 
@@ -476,10 +499,11 @@ mod tests {
         p
     }
 
-    fn proj_obj(mesh_idx: usize) -> ProjectObject {
+    fn proj_obj(mesh_idx: usize, source_object_id: u32) -> ProjectObject {
         ProjectObject {
             mesh_idx,
             transform: Transform::IDENTITY,
+            source_object_id,
             name: format!("placeholder_{mesh_idx}"),
             extruder_id: None,
             plate_id: 1,
@@ -525,7 +549,8 @@ mod tests {
             ],
             plates: vec![],
         };
-        let mut objects = vec![proj_obj(0), proj_obj(1)];
+        // Leaves carry their outer build objectid (A=1, B=2).
+        let mut objects = vec![proj_obj(0, 1), proj_obj(1, 2)];
         apply_bbs_metadata(&settings, &mut objects);
 
         // A keeps its own object-level identity + override — not dropped.
@@ -547,6 +572,38 @@ mod tests {
             !objects[0].overrides.contains_key("wall_loops"),
             "B's override must not bleed onto A",
         );
+    }
+
+    #[test]
+    fn names_track_object_id_when_metadata_order_differs_from_build_order() {
+        use bbs_meta::{ModelSettings, ObjectSettings};
+        use std::collections::BTreeMap;
+
+        // mechanical_dice.3mf: <build> lists objectids 2,4,6 but
+        // model_settings.config lists them 2,6,4. A positional walk would
+        // give the geometry leaf for id 4 the name authored for id 6.
+        let obj = |id: u32, name: &str| ObjectSettings {
+            id,
+            name: Some(name.into()),
+            default_extruder: None,
+            config: BTreeMap::new(),
+            parts: vec![],
+        };
+        let settings = ModelSettings {
+            objects: vec![
+                obj(2, "top_frame"),
+                obj(6, "wheel"),
+                obj(4, "bottom_frame"),
+            ],
+            plates: vec![],
+        };
+        // Geometry in build order: 2, 4, 6.
+        let mut objects = vec![proj_obj(0, 2), proj_obj(1, 4), proj_obj(2, 6)];
+        apply_bbs_metadata(&settings, &mut objects);
+
+        assert_eq!(objects[0].name, "top_frame");
+        assert_eq!(objects[1].name, "bottom_frame");
+        assert_eq!(objects[2].name, "wheel");
     }
 
     #[test]
