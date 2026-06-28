@@ -105,14 +105,18 @@ pub fn parse_model(bytes: &[u8], source: &std::path::Path) -> Result<ModelDoc, L
                         path: source.into(),
                         message: format!("metadata: {err}"),
                     })?;
-                    // quick-xml 0.36's `read_text` returns the raw
-                    // escaped form; decode `&amp;` / `&lt;` / etc.
-                    // so callers see the original text. Lossy
-                    // fallback on a malformed entity preserves the
-                    // raw bytes rather than erroring.
-                    let value = quick_xml::escape::unescape(&raw)
+                    // quick-xml's `read_text` returns the raw escaped text;
+                    // `decode()` handles the byte encoding (not entities), then
+                    // unescape `&amp;` / `&lt;` / etc. so callers see the
+                    // original. Lossy fallback on a malformed entity preserves
+                    // the raw text rather than erroring.
+                    let decoded = raw.decode().map_err(|err| LoadError::Parse {
+                        path: source.into(),
+                        message: format!("metadata: {err}"),
+                    })?;
+                    let value = quick_xml::escape::unescape(&decoded)
                         .map(|c| c.into_owned())
-                        .unwrap_or_else(|_| raw.into_owned());
+                        .unwrap_or_else(|_| decoded.into_owned());
                     metadata.push((name, value));
                 }
                 b"object" => {
