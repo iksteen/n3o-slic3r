@@ -159,7 +159,7 @@ impl MoonrakerSession {
             "id": id,
         });
         self.socket
-            .send(Message::Text(request.to_string()))
+            .send(Message::Text(request.to_string().into()))
             .await
             .map_err(|e| DriverError::Network(format!("send subscribe request: {e}")))?;
 

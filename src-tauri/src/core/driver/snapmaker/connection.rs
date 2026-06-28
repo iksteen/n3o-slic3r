@@ -368,14 +368,14 @@ mod tests {
                         "id": req_id,
                         "result": { "status": initial_status },
                     });
-                    let _ = ws.send(Message::Text(response.to_string())).await;
+                    let _ = ws.send(Message::Text(response.to_string().into())).await;
                     if let Some(update) = notify {
                         let notify = json!({
                             "jsonrpc": "2.0",
                             "method": "notify_status_update",
                             "params": [update, 0.0],
                         });
-                        let _ = ws.send(Message::Text(notify.to_string())).await;
+                        let _ = ws.send(Message::Text(notify.to_string().into())).await;
                     }
                     // Keep the connection open until the driver
                     // disconnects (otherwise the worker would race

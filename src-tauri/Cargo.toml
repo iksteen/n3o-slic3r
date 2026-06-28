@@ -102,7 +102,7 @@ tempfile = "3"
 # in for the Bambu MQTT driver — keeps the binary single-TLS-stack
 # and avoids two trust-store paths.
 reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "multipart", "stream"] }
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "native-tls"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake", "native-tls"] }
 futures-util = "0.3"
 # Lua plugin host (Phase 8, PR-8-1). `vendored` builds Lua 5.4 from
 # source so we don't depend on a system Lua — keeps the standalone-at-
