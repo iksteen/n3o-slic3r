@@ -39,6 +39,7 @@ use crate::core::project::context::SlicingContext;
 use crate::core::project::model::Project;
 use crate::core::scene::build_plate::{self, BuildPlate};
 use crate::core::scene::state::{MeshId, NewSceneObject};
+use crate::core::scene::transform::Transform;
 use crate::core::threemf::{load_3mf, ProjectObject};
 
 /// The parsed `project_settings.config`: every key as-authored, plus
@@ -587,10 +588,75 @@ fn resolve_baseline(
     baseline
 }
 
-fn register_obj(project: &mut Project, mesh_ids: &[MeshId], obj: &ProjectObject) {
+/// OrcaSlicer's plate-grid column count for `plate_count` plates —
+/// `compute_colum_count` from upstream `PartPlate.hpp`.
+fn plate_columns(plate_count: usize) -> usize {
+    let value = (plate_count as f64).sqrt();
+    let rounded = value.round();
+    if value > rounded {
+        rounded as usize + 1
+    } else {
+        rounded as usize
+    }
+}
+
+/// World-space origin of plate `index` (0-based) in OrcaSlicer's plate
+/// grid: `(col·width·1.2, −row·depth·1.2)` with `LOGICAL_PART_PLATE_GAP
+/// = 1/5` (upstream `PartPlateList::compute_shape_position`). Build-item
+/// transforms are authored in this multi-plate world frame, so
+/// subtracting the plate's origin recovers the plate-local position n3o
+/// renders per plate.
+fn plate_origin(index: usize, cols: usize, width: f64, depth: f64) -> (f64, f64) {
+    const GAP: f64 = 1.0 / 5.0;
+    let row = index / cols;
+    let col = index % cols;
+    (
+        col as f64 * width * (1.0 + GAP),
+        -(row as f64) * depth * (1.0 + GAP),
+    )
+}
+
+/// Source bed `(width, depth)` from the project's `printable_area`
+/// polygon (`"0x0"`, `"180x0"`, …). `None` when absent/unparsable — the
+/// caller then skips the plate-origin de-offset (objects keep world
+/// coords, which only matters for multi-plate projects).
+fn source_bed_size(settings: &OrcaProjectSettings) -> Option<(f64, f64)> {
+    let pts = settings.list("printable_area")?;
+    let (mut xs, mut ys) = (Vec::new(), Vec::new());
+    for p in pts {
+        let (x, y) = p.split_once('x')?;
+        xs.push(x.trim().parse::<f64>().ok()?);
+        ys.push(y.trim().parse::<f64>().ok()?);
+    }
+    if xs.is_empty() {
+        return None;
+    }
+    let span = |v: &[f64]| v.iter().cloned().fold(f64::MIN, f64::max) - v.iter().cloned().fold(f64::MAX, f64::min);
+    let (w, d) = (span(&xs), span(&ys));
+    (w > 0.0 && d > 0.0).then_some((w, d))
+}
+
+fn register_obj(
+    project: &mut Project,
+    mesh_ids: &[MeshId],
+    obj: &ProjectObject,
+    plate_origin: (f64, f64),
+) {
+    // Shift the object out of OrcaSlicer's multi-plate world frame into
+    // its plate-local frame (no-op for plate 0, whose origin is (0,0)).
+    let transform = if plate_origin == (0.0, 0.0) {
+        obj.transform
+    } else {
+        Transform::translation(glam::Vec3::new(
+            -plate_origin.0 as f32,
+            -plate_origin.1 as f32,
+            0.0,
+        ))
+        .compose(obj.transform)
+    };
     let id = project.register_object(NewSceneObject {
         mesh: mesh_ids[obj.mesh_idx],
-        transform: obj.transform,
+        transform,
         name: obj.name.clone(),
         visible: true,
         extruder_id: obj.extruder_id,
@@ -683,10 +749,15 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
         .collect();
 
     // Objects → their plate (set_active_plate steers register_object).
+    // Build-item transforms are in OrcaSlicer's multi-plate world frame;
+    // de-offset each plate's objects to plate-local using the source bed
+    // size + OrcaSlicer's plate-grid layout.
+    let bed = source_bed_size(&settings);
+    let cols = plate_columns(foreign_plate_ids.len().max(1));
     let mut object_count = 0usize;
     if foreign_plate_ids.is_empty() {
         for obj in &objects {
-            register_obj(&mut project, &mesh_ids, obj);
+            register_obj(&mut project, &mesh_ids, obj, (0.0, 0.0));
             object_count += 1;
         }
     } else {
@@ -694,8 +765,12 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
             project
                 .set_active_plate(plate_map[fid])
                 .map_err(|e| format!("set active plate: {e:?}"))?;
+            // Plate index is the 1-based foreign id minus one.
+            let origin = bed
+                .map(|(w, d)| plate_origin((*fid as usize).saturating_sub(1), cols, w, d))
+                .unwrap_or((0.0, 0.0));
             for &idx in &plate_assignments[fid] {
-                register_obj(&mut project, &mesh_ids, &objects[idx]);
+                register_obj(&mut project, &mesh_ids, &objects[idx], origin);
                 object_count += 1;
             }
         }
@@ -1242,6 +1317,44 @@ mod tests {
             "an explicitly-changed key must survive even when it equals the baseline",
         );
         assert!(intent.redundant.is_empty());
+    }
+
+    #[test]
+    fn plate_grid_matches_orcaslicer_layout() {
+        // compute_colum_count: round(sqrt), +1 when sqrt exceeds the round.
+        assert_eq!(plate_columns(1), 1);
+        assert_eq!(plate_columns(2), 2); // sqrt 1.41 > round 1 → 2
+        assert_eq!(plate_columns(4), 2);
+        assert_eq!(plate_columns(5), 3); // sqrt 2.24 > round 2 → 3
+        assert_eq!(plate_columns(9), 3);
+
+        // 180mm bed → stride 180·1.2 = 216. Plate 0 at the origin; plate 1
+        // (col 1) shifts +216 in x; a second-row plate shifts −216 in y.
+        let near = |a: (f64, f64), b: (f64, f64)| {
+            assert!((a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6, "{a:?} vs {b:?}");
+        };
+        near(plate_origin(0, 2, 180.0, 180.0), (0.0, 0.0));
+        near(plate_origin(1, 2, 180.0, 180.0), (216.0, 0.0));
+        near(plate_origin(3, 3, 180.0, 180.0), (0.0, -216.0));
+    }
+
+    #[test]
+    fn source_bed_size_from_printable_area() {
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "printable_area".to_string(),
+            serde_json::json!(["0x0", "180x0", "180x180", "0x180"]),
+        );
+        let s = OrcaProjectSettings { settings };
+        assert_eq!(source_bed_size(&s), Some((180.0, 180.0)));
+
+        // Missing key → None (caller skips the de-offset).
+        assert_eq!(
+            source_bed_size(&OrcaProjectSettings {
+                settings: BTreeMap::new()
+            }),
+            None
+        );
     }
 
     #[test]
