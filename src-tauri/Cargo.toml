@@ -56,7 +56,7 @@ slic3r-ffi = { path = "../crates/slic3r-ffi" }
 stl_io = "0.11"
 tobj = "4"
 toml = "1"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 # Decode the frontend-rendered thumbnail PNG (passed as base64 over the
 # IPC) back to bytes for the Bambu `.gcode.3mf`; the U1 G-code block
 # reuses the base64 directly.
