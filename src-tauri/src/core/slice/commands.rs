@@ -133,8 +133,44 @@ pub async fn slice_active_plate(
 /// Compose a sink that emits each lifecycle event on the AppHandle's
 /// Tauri channel. Geometry is built in-memory, so the slice path leaves no
 /// temp `.3mf` — nothing to clean up on the terminal event.
+///
+/// On `PlateFinished` the sink also stashes the sliced tower mesh straight into
+/// the renderer (keyed by plate) *before* notifying the frontend, so the
+/// frontend's re-render picks it up — the mesh never round-trips through TS.
 fn emit_sink(app: AppHandle) -> EventSink {
     Box::new(move |event: SliceEvent| {
+        if let SliceEvent::PlateFinished {
+            plate_id,
+            tower_mesh,
+            ..
+        } = &event
+        {
+            let pid = crate::core::project::PlateId(*plate_id);
+            // The material count + printer the tower sliced at — the renderer
+            // keeps the mesh only while these still match the resolved geometry.
+            // Resolved under the project lock alone (released before the renderer
+            // lock — no nested hold, so no lock-order coupling).
+            let (material_count, printer) = {
+                let project = app.state::<Arc<Mutex<crate::core::project::Project>>>();
+                let p = project.lock().unwrap();
+                crate::core::project::resolve::tower_geometry_for_plate(&p, pid)
+                    .ok()
+                    .flatten()
+                    .map(|g| (g.material_count, g.printer_instance_id))
+                    .unwrap_or((0, None))
+            };
+            let vp = app.state::<crate::viewport_render::ViewportState>();
+            let mesh = tower_mesh
+                .as_ref()
+                .map(|m| (m.vertices.as_slice(), m.indices.as_slice()));
+            crate::viewport_render::store_plate_tower_mesh(
+                vp.inner(),
+                pid,
+                mesh,
+                material_count,
+                printer,
+            );
+        }
         let name = event.name();
         if let Err(e) = app.emit(name, &event) {
             tracing::warn!(event = name, error = %e, "slice event emit failed");

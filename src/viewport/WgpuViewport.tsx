@@ -2,10 +2,8 @@ import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { onEvents } from "../state/eventRouter";
 import { shouldIgnoreHotkey } from "../ui/hotkeyInhibit";
-import { getCachedTowerMesh, onTowerMeshCacheChange } from "./towerMeshCache";
 import { registerThumbnailCapture } from "./thumbnailCapture";
 import { registerAxisView, type AxisView } from "./cameraControl";
-import type { TowerGeometry } from "./types";
 
 type Vec3 = [number, number, number];
 type GizmoMode = "none" | "move" | "rotate" | "scale";
@@ -36,9 +34,12 @@ type DragState = {
   sx?: number;
   sy?: number;
   shift?: boolean;
-  // Tower drag: bed-point → tower-corner offset at grab; `towerMoved` gates the
-  // commit so a click without a drag doesn't pin a wipe_tower override.
+  // Tower drag: `towerOffset` is the grab offset (bed point − corner) from
+  // viewport_tower_grab; `towerClamped` is the latest Rust-clamped corner (for
+  // the commit); `towerMoved` gates the commit so a click without a drag doesn't
+  // pin a wipe_tower override.
   towerOffset?: [number, number];
+  towerClamped?: [number, number];
   towerMoved?: boolean;
 };
 
@@ -134,11 +135,11 @@ export function WgpuViewport({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Priming-tower drag state. `towerGeom` is the last-resolved placement
-    // (corner/width/brim); the on-bed footprint, clamp-to-bed, and press hit-test
-    // all live Rust-side (viewport_move_tower / viewport_tower_hit_test). `bedMin`
-    // is the bed-plane Z for the drag's ray-cast.
-    let towerGeom: TowerGeometry | null = null;
+    // The whole priming tower lives Rust-side now: the renderer resolves its
+    // placement per plate (drawn from `frame`, following the active plate), the
+    // sliced mesh is fed by the slice sink, and the grab/clamp/footprint are in
+    // viewport_tower_grab / viewport_move_tower. The frontend only forwards
+    // pointer input. `bedMin` is the bed-plane Z for the drag's ray-cast.
     let bedMin: Vec3 = [0, 0, 0];
     const fmtCoord = (v: number): string => (Math.round(v * 10) / 10).toString();
 
@@ -459,20 +460,21 @@ export function WgpuViewport({
         } else if (r.kind === "inert") {
           press.mode = "inert"; // pressed the selected body in a gizmo mode
         } else if (r.kind === "empty") {
-          // Empty space: drag the tower if the press landed on it, else orbit.
-          // The footprint hit-test is Rust-side (viewport_tower_hit_test).
-          const bedHit = towerGeom ? await rayPlaneHit(sx, sy, [0, 0, 1], [0, 0, bedMin[2]]) : null;
+          // Empty space: drag the tower if the press hit it, else orbit. The
+          // grab + footprint hit-test are Rust-side (viewport_tower_grab returns
+          // the grab offset, or null when the press missed / there's no tower).
+          const bedHit = await rayPlaneHit(sx, sy, [0, 0, 1], [0, 0, bedMin[2]]);
           if (drag.current !== press) return;
-          const onTower =
-            bedHit != null &&
-            (await invoke<boolean>("viewport_tower_hit_test", {
-              bx: bedHit[0],
-              by: bedHit[1],
-            }).catch(() => false));
+          const offset = bedHit
+            ? await invoke<[number, number] | null>("viewport_tower_grab", {
+                bx: bedHit[0],
+                by: bedHit[1],
+              }).catch(() => null)
+            : null;
           if (drag.current !== press) return;
-          if (bedHit && towerGeom && onTower) {
+          if (offset) {
             press.mode = "tower";
-            press.towerOffset = [bedHit[0] - towerGeom.x, bedHit[1] - towerGeom.y];
+            press.towerOffset = offset;
           } else {
             press.mode = "orbit";
           }
@@ -500,20 +502,21 @@ export function WgpuViewport({
         return;
       }
       if (d.mode === "tower") {
-        // Commit the dragged position as project overrides; the resolved
-        // (clamped) box settles back in via project_overrides_changed →
-        // refreshTower. A click without a drag doesn't pin an override.
-        if (d.towerMoved && towerGeom && activePlateIdRef.current != null) {
+        // Commit the Rust-clamped corner as project overrides; the renderer
+        // re-resolves to it via project_overrides_changed → invalidate. A click
+        // without a drag doesn't pin an override.
+        if (d.towerMoved && d.towerClamped && activePlateIdRef.current != null) {
           const plateId = activePlateIdRef.current;
+          const [cx, cy] = d.towerClamped;
           void invoke("scene_project_override_set", {
             plateId,
             key: "wipe_tower_x",
-            value: fmtCoord(towerGeom.x),
+            value: fmtCoord(cx),
           }).catch((err) => console.error("override set failed", err));
           void invoke("scene_project_override_set", {
             plateId,
             key: "wipe_tower_y",
-            value: fmtCoord(towerGeom.y),
+            value: fmtCoord(cy),
           }).catch((err) => console.error("override set failed", err));
         }
         return;
@@ -553,20 +556,20 @@ export function WgpuViewport({
         c.az -= dx * 0.01;
         c.el = Math.min(EL_LIMIT, Math.max(-EL_LIMIT, c.el + dy * 0.01));
         void render();
-      } else if (d.mode === "tower" && d.towerOffset && towerGeom) {
+      } else if (d.mode === "tower" && d.towerOffset) {
         const [sx, sy] = rel(e);
         const off = d.towerOffset;
         void rayPlaneHit(sx, sy, [0, 0, 1], [0, 0, bedMin[2]]).then((bedHit) => {
           if (!bedHit || drag.current !== d) return;
-          // Rust clamps the corner to the bed and returns the clamped position
-          // (move-only, no mesh re-upload — smooth drag).
+          // Rust clamps the corner to the bed, stores it as the live drag
+          // position, and returns it (move-only, no mesh re-upload — smooth drag).
           void invoke<[number, number] | null>("viewport_move_tower", {
             x: bedHit[0] - off[0],
             y: bedHit[1] - off[1],
           }).then((c) => {
-            if (!c || drag.current !== d || !towerGeom) return;
-            if (c[0] !== towerGeom.x || c[1] !== towerGeom.y) d.towerMoved = true;
-            towerGeom = { ...towerGeom, x: c[0], y: c[1] };
+            if (!c || drag.current !== d) return;
+            d.towerMoved = true;
+            d.towerClamped = c;
             void render();
           });
         });
@@ -629,49 +632,14 @@ export function WgpuViewport({
       void render();
     }
 
-    // Resolve the active plate's tower placement + decide box-vs-mesh (the
-    // cached sliced mesh is valid while its material count + printer match the
-    // live geometry), then push to the renderer. Driven by scene / material /
-    // active-plate / slice changes — not per frame (the geometry needs a cascade
-    // resolve, too costly to run every frame).
-    // `id` defaults to the live active plate, but callers reacting to
-    // `active_plate_changed` MUST pass the event's plate id: React updates
-    // `activePlateIdRef` on the next render — after the synchronous event
-    // handler — so on a switch the ref still holds the *previous* plate, and
-    // refreshing against it resolves the wrong plate's tower (then the
-    // post-await guard clears it once the ref catches up).
-    async function refreshTower(id: number | null = activePlateIdRef.current) {
-      let tower: Record<string, unknown> | null = null;
-      towerGeom = null;
-      try {
-        if (id != null) {
-          const geom = await invoke<TowerGeometry | null>("plate_tower_geometry", { plateId: id });
-          if (id === activePlateIdRef.current && geom) {
-            const cached = getCachedTowerMesh(id);
-            const valid =
-              cached &&
-              cached.materialCount === geom.material_count &&
-              cached.printerInstanceId === geom.printer_instance_id;
-            const mesh = valid ? cached.mesh : null;
-            towerGeom = geom;
-            // Rust derives the on-bed footprint (for the drag clamp/hit-test)
-            // from this mesh in viewport_set_tower.
-            tower = {
-              x: geom.x,
-              y: geom.y,
-              width: geom.width,
-              brim: geom.brim,
-              rotation: geom.rotation,
-              mesh: mesh ? { vertices: mesh.vertices, indices: mesh.indices } : null,
-            };
-          }
-        }
-        await invoke("viewport_set_tower", { tower });
-      } catch (e) {
-        console.error("viewport_set_tower failed", e);
-      }
-      void render();
-    }
+    // A tower-affecting edit (overrides, materials, printer, bed, project load)
+    // landed: drop the renderer's cached resolved placement so the next frame
+    // re-resolves. A plain plate switch does NOT call this — the cache is keyed
+    // per plate and `frame` reads the active plate from the project, so the tower
+    // draws in the same frame as the objects (instant).
+    const invalidateTower = () => {
+      void invoke("viewport_invalidate_tower").then(() => void render());
+    };
 
     // Delete / Backspace removes the current selection (off while a modal or
     // text field has focus, so editing a field doesn't delete objects).
@@ -706,46 +674,50 @@ export function WgpuViewport({
     window.addEventListener("keydown", onKeyDown);
     ro.observe(canvas);
 
+    // Object / material edits change whether (and how big) the tower is →
+    // invalidate its resolved placement, then render.
     const offRender = onEvents(
       [
         "scene:mesh_loaded",
         "scene:object_added",
         "scene:object_updated",
         "scene:object_removed",
-        "scene:selection_changed",
         "scene:material_slot_changed",
+        // Quality profile carries enable_prime_tower / prime_tower_width /
+        // wipe_tower_x/y — switching it resizes, moves, or toggles the tower.
+        "scene:plate_metadata_changed",
       ],
       () => {
-        void refreshTower(); // materials/positions affect the tower geometry
-        void render();
+        invalidateTower();
       },
     );
-    const offReframe = onEvents<{ data?: { plate_id?: number | null } }>(
-      ["scene:bed_changed", "scene:active_plate_changed"],
-      (e) => {
-        void reframe();
-        // `active_plate_changed` carries the new plate id; use it (the ref lags
-        // — see refreshTower). `bed_changed` carries none → fall back to the ref
-        // (the active plate is unchanged there).
-        void refreshTower(e.payload?.data?.plate_id ?? activePlateIdRef.current);
-      },
-    );
-    // A committed tower drag (or any project override) re-resolves the tower so
-    // the authoritative, clamped placement settles in.
-    const offOverrides = onEvents(["scene:project_overrides_changed"], () => void refreshTower());
-    // A new project replaced the scene: reframe (which renders) for the fresh
-    // geometry. The renderer's GPU mesh cache was already dropped Rust-side by
-    // the replace command (see `project_io`) before this event fired, so the
-    // render uploads the new project's meshes rather than reusing stale ones.
-    const offLoaded = onEvents(["project:loaded"], () => {
+    // Selection doesn't affect the tower → just redraw (no re-resolve).
+    const offSelection = onEvents(["scene:selection_changed"], () => void render());
+    // A plate switch just renders — `frame` resolves the new plate's tower (the
+    // cache is per plate) so it draws in the same frame as the objects. A bed
+    // change can alter the cascade-resolved placement → invalidate. (No more
+    // lagging-ref problem: the active plate comes from the project, Rust-side.)
+    const offActivePlate = onEvents(["scene:active_plate_changed"], () => void reframe());
+    const offBed = onEvents(["scene:bed_changed"], () => {
+      invalidateTower();
       void reframe();
-      void refreshTower(); // drop any tower mesh from the previous project
     });
-    // The sliced tower mesh lands asynchronously after a slice; re-push when the
-    // cache changes for the active plate.
-    const offTower = onTowerMeshCacheChange((plateId) => {
-      if (plateId === activePlateIdRef.current) void refreshTower();
-    });
+    // A committed tower drag (or any project override) changes the resolved
+    // placement → invalidate so it re-resolves to the clamped position.
+    const offOverrides = onEvents(["scene:project_overrides_changed"], () => invalidateTower());
+    // A new project replaced the scene: the renderer's caches (meshes + tower)
+    // were dropped Rust-side by the replace command (see `project_io`); reframe
+    // for the fresh geometry (which renders → resolves the new active tower).
+    const offLoaded = onEvents(["project:loaded"], () => void reframe());
+    // A slice stores the active plate's tower mesh Rust-side (the slice event
+    // sink) before this event arrives; just render so the box flips to the mesh
+    // (placement is unchanged by slicing).
+    const offTower = onEvents<{ data?: { plate_id?: number } }>(
+      ["slice:plate_finished"],
+      (e) => {
+        if (e.payload?.data?.plate_id === activePlateIdRef.current) void render();
+      },
+    );
 
     // Print thumbnail for the send/export path: Rust renders an iso view of the
     // models only (transparent bg) to RGBA; encode it to a PNG via a canvas.
@@ -785,13 +757,14 @@ export function WgpuViewport({
     });
 
     renderRef.current = render;
-    void reframe();
-    void refreshTower();
+    void reframe(); // renders → resolves the active plate's tower in-frame
 
     return () => {
       renderRef.current = null;
       offRender();
-      offReframe();
+      offSelection();
+      offActivePlate();
+      offBed();
       offOverrides();
       offLoaded();
       offTower();

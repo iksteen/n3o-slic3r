@@ -5,7 +5,6 @@ import { ViewportToasts } from "./viewport/ViewportToasts";
 import { CloneDialog } from "./objects/CloneDialog";
 import { cloneObjects } from "./objects/objectCommands";
 import { useViewportTools } from "./viewport/useViewportTools";
-import { setupTowerMeshCache } from "./viewport/towerMeshCache";
 import { ErrorConsole } from "./logging/ErrorConsole";
 import { shouldIgnoreHotkey } from "./ui/hotkeyInhibit";
 import { setupLogSinks } from "./logging/logStore";
@@ -173,27 +172,6 @@ function App() {
       setMode((current) => (current === "devices" ? current : "preview"));
     });
   }, [bridge, activePlateId]);
-
-  // App-lifetime listener feeding the priming-tower mesh cache. Lives here
-  // (App is always mounted) rather than in ViewportCanvas, which unmounts
-  // on the auto-switch to preview that fires the instant a slice finishes —
-  // a viewport-local listener would miss the slice's tower mesh.
-  useEffect(() => {
-    // listen() returns a Promise<UnlistenFn>; the cleanup may run before it
-    // resolves (StrictMode mounts→unmounts→remounts the effect synchronously),
-    // so capture the promise and unlisten once it settles — a `cancelled` flag
-    // tears down even if the cleanup fired first. Storing into a local `un`
-    // and calling it in cleanup would no-op (still null) and leak the listener.
-    let cancelled = false;
-    const pending = setupTowerMeshCache().then((un) => {
-      if (cancelled) un();
-      return un;
-    });
-    return () => {
-      cancelled = true;
-      void pending.then((un) => un());
-    };
-  }, []);
 
   // App-lifetime routing of slice failures + libslic3r validation warnings
   // into the error-console log store (same cancel-safe pattern as above).

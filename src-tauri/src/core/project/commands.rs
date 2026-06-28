@@ -113,24 +113,6 @@ pub fn plate_cascade_trace(
     }
 }
 
-/// The active plate's priming-tower geometry for the viewport overlay,
-/// or `None` when the plate is unbound or has no tower
-/// (`enable_prime_tower` off). Visibility keys on `enable_prime_tower`,
-/// not the purge-tower capability: both MVP printers run a tower (the
-/// A1 mini purges through it, the U1 uses it for toolhead re-entry), and
-/// only the purge-*volume* options are toolchanger-gated. The plate's
-/// project overrides are folded in, so the box tracks exactly where the
-/// tower slices — including a position the user has dragged it to.
-#[tauri::command]
-#[tracing::instrument(skip(state))]
-pub fn plate_tower_geometry(
-    plate_id: PlateId,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<Option<super::resolve::TowerGeometry>, String> {
-    let p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    super::resolve::tower_geometry_for_plate(&p, plate_id)
-}
-
 /// Set (or clear, with `None`) a plate's process/quality profile —
 /// the bundled process-fragment slug this plate resolves + slices
 /// against, overriding the bound instance's default. Validated against

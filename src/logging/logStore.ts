@@ -3,7 +3,7 @@
 // Logs originate in many subsystems (the slice loop, the scene viewport's
 // transient toasts, drivers), and the console that shows them lives in App
 // while the producers mount/unmount independently. So the store sits at
-// module scope — the same pattern as `towerMeshCache` / `useDriverStatus` —
+// module scope — the same pattern as `useDriverStatus` —
 // and `useLogs()` surfaces it to React via `useSyncExternalStore`. Non-React
 // code (Tauri event listeners) pushes through the plain `pushLog` function.
 

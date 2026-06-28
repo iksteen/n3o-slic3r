@@ -15,7 +15,8 @@ use glam::{Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
 
 use crate::core::printer::{instance_registry, PrinterInstance, SlotRef};
-use crate::core::project::Project;
+use crate::core::project::resolve::{tower_geometry_for_plate, TowerGeometry};
+use crate::core::project::{PlateId, Project};
 use crate::core::scene::state::{mesh_bb_corners, MeshId, ObjectId};
 use crate::viewport_gizmo::{
     compute_pre, pick_gizmo, ray_plane, selection_basis, selection_gizmo, selection_world_aabb,
@@ -273,24 +274,24 @@ fn tower_corner_hit(fp: [f32; 4], corner_x: f32, corner_y: f32, bx: f32, by: f32
         && by <= corner_y + fp[3]
 }
 
-struct TowerState {
-    x: f32,
-    y: f32,
-    width: f32,
-    brim: f32,
-    rotation: f32,
-    mesh: Option<TowerGpu>,
-    /// The sliced mesh's on-bed XY footprint `[min_x, min_y, max_x, max_y]` in
-    /// tower-local coords (relative to the `x`/`y` corner) — wider/asymmetric
-    /// than the square box when a mesh is shown. `None` falls back to the box.
-    /// Drives the drag clamp + hit-test.
-    footprint: Option<[f32; 4]>,
-}
-
 struct TowerGpu {
     vb: wgpu::Buffer,
     ib: wgpu::Buffer,
     n_indices: u32,
+}
+
+/// A plate's sliced tower mesh on the GPU plus its on-bed XY footprint
+/// `[min_x, min_y, max_x, max_y]` (tower-local, relative to the placement
+/// corner) for the drag clamp + hit-test. Fed by the slice event sink, keyed by
+/// plate, so switching plates never re-uploads the mesh.
+struct TowerMeshEntry {
+    gpu: TowerGpu,
+    footprint: Option<[f32; 4]>,
+    /// The material count + bound printer this was sliced at. The tower reshapes
+    /// on either, so the mesh is shown only while these still match the resolved
+    /// geometry — else it's stale and `frame` falls back to the predicted box.
+    material_count: usize,
+    printer_instance_id: Option<String>,
 }
 
 struct GpuMesh {
@@ -736,7 +737,20 @@ pub struct ViewportRenderer {
     tower_pipe: wgpu::RenderPipeline,
     vb_cube: wgpu::Buffer,
     vb_cube_edges: wgpu::Buffer,
-    tower: Option<TowerState>,
+    /// Per-plate sliced tower meshes, keyed by plate. The slice event sink
+    /// stores each plate's mesh here directly (no frontend round-trip); `frame`
+    /// draws the active plate's. Cleared with the object meshes on project replace.
+    tower_meshes: HashMap<PlateId, TowerMeshEntry>,
+    /// Per-plate resolved tower placement, computed lazily in `frame` (a cascade
+    /// resolve, too costly per-frame, so cached here — like the settings panel
+    /// resolves once on open). `Some(None)` = resolved, no tower. Invalidated on
+    /// tower-affecting edits; the active plate is read from the Project so a
+    /// switch needs no re-resolve → the tower draws in the same frame as objects.
+    tower_geom: HashMap<PlateId, Option<TowerGeometry>>,
+    /// Live drag corner during a tower drag: `(plate, (x, y))`. Scoped to the
+    /// plate so it never bleeds onto another plate's tower (a no-op commit emits
+    /// no event to clear it). Overrides the resolved placement for a smooth drag.
+    tower_drag: Option<(PlateId, (f32, f32))>,
     // size-dependent targets
     size: (u32, u32),
     color: wgpu::Texture,
@@ -963,12 +977,14 @@ impl ViewportRenderer {
             slot,
             slots_cap,
             meshes: HashMap::new(),
+            tower_meshes: HashMap::new(),
+            tower_geom: HashMap::new(),
+            tower_drag: None,
             vb_grid,
             vb_axes,
             tower_pipe,
             vb_cube,
             vb_cube_edges,
-            tower: None,
             size: (0, 0),
             color,
             msaa_view,
@@ -978,40 +994,111 @@ impl ViewportRenderer {
         }
     }
 
-    /// Set (or clear) the priming tower: placement + an optional exact mesh.
-    /// Mesh normals are recomputed smooth, like `upload_mesh`.
-    fn set_tower(&mut self, t: Option<TowerArg>) {
-        self.tower = t.map(|t| {
-            // The drag clamp/hit-test use the sliced mesh's true on-bed XY
-            // footprint when one's shown; compute it from the raw verts before
-            // the GPU upload (which keeps only buffers, no CPU positions).
-            let footprint = t.mesh.as_ref().and_then(|m| tower_footprint(&m.vertices));
-            let mesh = t.mesh.map(|m| {
-                let verts = smooth_verts(&m.vertices, &m.indices);
-                TowerGpu {
-                    vb: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("viewport.tower.mesh.vb"),
-                        contents: bytemuck::cast_slice(&verts),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    }),
-                    ib: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("viewport.tower.mesh.ib"),
-                        contents: bytemuck::cast_slice(&m.indices),
-                        usage: wgpu::BufferUsages::INDEX,
-                    }),
-                    n_indices: m.indices.len() as u32,
-                }
-            });
-            TowerState {
-                x: t.x,
-                y: t.y,
-                width: t.width,
-                brim: t.brim,
-                rotation: t.rotation,
-                mesh,
+    /// The active plate's resolved tower placement, cached. Resolved lazily (a
+    /// cascade resolve — too costly per-frame) the first time a plate is drawn,
+    /// then reused so switching plates draws the tower in-frame with the objects.
+    /// `None` = no tower (single-material / disabled).
+    fn resolved_tower(&mut self, p: &Project, plate_id: PlateId) -> Option<TowerGeometry> {
+        if let Some(cached) = self.tower_geom.get(&plate_id) {
+            return cached.clone();
+        }
+        let geom = tower_geometry_for_plate(p, plate_id).ok().flatten();
+        self.tower_geom.insert(plate_id, geom.clone());
+        geom
+    }
+
+    /// Drop the resolved-placement cache + any live drag. Called when a
+    /// tower-affecting edit (overrides, materials, printer, bed) lands, so the
+    /// next frame re-resolves. (Switching plates does NOT invalidate — the cache
+    /// is keyed per plate and the active plate is read from the Project.)
+    fn invalidate_tower(&mut self) {
+        self.tower_geom.clear();
+        self.tower_drag = None;
+    }
+
+    /// Store a plate's sliced tower mesh (GPU upload + footprint + the
+    /// material-count/printer it sliced at, for staleness). Replaces any previous
+    /// mesh for that plate; switching to it later re-uploads nothing. Mesh
+    /// normals are recomputed smooth, like `upload_mesh`.
+    fn store_tower_mesh(
+        &mut self,
+        plate_id: PlateId,
+        vertices: &[f32],
+        indices: &[u32],
+        material_count: usize,
+        printer_instance_id: Option<String>,
+    ) {
+        let footprint = tower_footprint(vertices);
+        let verts = smooth_verts(vertices, indices);
+        let gpu = TowerGpu {
+            vb: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("viewport.tower.mesh.vb"),
+                contents: bytemuck::cast_slice(&verts),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+            ib: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("viewport.tower.mesh.ib"),
+                contents: bytemuck::cast_slice(indices),
+                usage: wgpu::BufferUsages::INDEX,
+            }),
+            n_indices: indices.len() as u32,
+        };
+        self.tower_meshes.insert(
+            plate_id,
+            TowerMeshEntry {
+                gpu,
                 footprint,
-            }
-        });
+                material_count,
+                printer_instance_id,
+            },
+        );
+    }
+
+    /// The tower's effective on-bed corner for `plate_id`: the live drag position
+    /// if this plate is being dragged, else the resolved placement clamped to the
+    /// bed. `frame` (what's drawn) and `viewport_tower_grab` (the press hit-test)
+    /// MUST agree on this — otherwise the drawn tower and the grabbable area
+    /// diverge (a clamped, OOB-origin tower would be visible but un-grabbable).
+    fn effective_tower_corner(
+        &self,
+        plate_id: PlateId,
+        geom: &TowerGeometry,
+        fp: [f32; 4],
+        bed_min: [f32; 2],
+        bed_max: [f32; 2],
+    ) -> (f32, f32) {
+        match self.tower_drag {
+            Some((pid, corner)) if pid == plate_id => corner,
+            _ => clamp_tower_corner(fp, bed_min, bed_max, geom.x as f32, geom.y as f32),
+        }
+    }
+
+    /// The plate's stored tower mesh, but only if it isn't stale — its sliced-at
+    /// material count + printer must still match the resolved geometry (the tower
+    /// reshapes on either, and moving it doesn't re-slice). Stale → `None`, so
+    /// `frame` shows the predicted box instead.
+    fn valid_tower_mesh(&self, plate_id: PlateId, geom: &TowerGeometry) -> Option<&TowerMeshEntry> {
+        self.tower_meshes.get(&plate_id).filter(|e| {
+            e.material_count == geom.material_count
+                && e.printer_instance_id == geom.printer_instance_id
+        })
+    }
+
+    /// Shared prelude for the drag commands: the active plate's id, resolved
+    /// tower geometry, bed extents, and on-bed footprint (mesh bbox when valid,
+    /// else the box). `None` when there's no tower or no bed.
+    fn tower_drag_ctx(
+        &mut self,
+        p: &Project,
+    ) -> Option<(PlateId, TowerGeometry, [f64; 3], [f64; 3], [f32; 4])> {
+        let plate = p.active_plate();
+        let bed = plate.scene.bed.as_ref()?;
+        let (bed_min, bed_max) = (bed.extents.min, bed.extents.max);
+        let id = plate.id;
+        let geom = self.resolved_tower(p, id)?;
+        let footprint = self.valid_tower_mesh(id, &geom).and_then(|e| e.footprint);
+        let fp = tower_local_footprint(footprint, geom.width as f32, geom.brim as f32);
+        Some((id, geom, bed_min, bed_max, fp))
     }
 
     fn resize(&mut self, w: u32, h: u32) {
@@ -1068,6 +1155,11 @@ impl ViewportRenderer {
     /// against a concurrent `frame`.
     pub fn clear_meshes(&mut self) {
         self.meshes.clear();
+        // Per-plate tower meshes + resolved placements are scoped to the current
+        // project; drop them so a reused PlateId can't draw the previous
+        // project's tower.
+        self.tower_meshes.clear();
+        self.invalidate_tower();
     }
 
     /// Render the live scene and read it back as tight RGBA8, top row first.
@@ -1076,9 +1168,10 @@ impl ViewportRenderer {
         self.resize(w, h);
 
         // --- gather under the project lock (cheap): bed + per-object models ---
-        let (bmin, bmax, draws, boxes, gizmo, basis, drag_pre) = {
+        let (bmin, bmax, draws, boxes, gizmo, basis, drag_pre, active_plate_id, tower_geom) = {
             let p = project.lock().unwrap();
             let plate = p.active_plate();
+            let active_plate_id = plate.id;
             let (bmin, bmax) = plate
                 .scene
                 .bed
@@ -1173,7 +1266,12 @@ impl ViewportRenderer {
             // The gizmo is sized + placed from the *resting* selection (no drag
             // preview) so it holds a fixed size through a drag.
             let gizmo = selection_gizmo(&p);
-            (bmin, bmax, draws, boxes, gizmo, basis, drag_pre)
+            // Resolve the active plate's tower placement here (cached) so it's
+            // drawn this frame — no async frontend round-trip.
+            let tower_geom = self.resolved_tower(&p, active_plate_id);
+            (
+                bmin, bmax, draws, boxes, gizmo, basis, drag_pre, active_plate_id, tower_geom,
+            )
         };
         let bmin = bmin.map(|v| v as f32);
         let bmax = bmax.map(|v| v as f32);
@@ -1199,20 +1297,36 @@ impl ViewportRenderer {
         let tower_slot = axis_slot + 3;
         let total_slots = tower_slot + 2;
 
-        // Priming tower: the frontend pushed an exact sliced mesh (mesh mode) or
-        // just the placement (box mode). (mesh?, vp*model, alpha, brim verts)
+        // Priming tower: draw the active plate's stored sliced mesh (mesh mode)
+        // when there is one, else the placement box. Placement is the resolved
+        // corner unless a live drag overrides it. (mesh?, vp*model, alpha, brim)
         let bed_z = bmin[2];
-        let tower = self.tower.as_ref().map(|g| {
-            let rot = Mat4::from_rotation_z(g.rotation.to_radians());
-            if g.mesh.is_some() {
-                let model = Mat4::from_translation(Vec3::new(g.x, g.y, bed_z)) * rot;
+        let tower_mesh =
+            tower_geom.as_ref().and_then(|g| self.valid_tower_mesh(active_plate_id, g));
+        let tower = tower_geom.as_ref().map(|geom| {
+            let (width, brim) = (geom.width as f32, geom.brim as f32);
+            // Effective (drag-or-clamped) corner — must match viewport_tower_grab
+            // so the drawn tower is grabbable. The clamp keeps a persisted
+            // wipe_tower override (e.g. from a prior, larger-bed printer) or an
+            // off-bed default on the current bed after a printer switch / recover.
+            let fp = tower_local_footprint(tower_mesh.and_then(|m| m.footprint), width, brim);
+            let (gx, gy) = self.effective_tower_corner(
+                active_plate_id,
+                geom,
+                fp,
+                [bmin[0], bmin[1]],
+                [bmax[0], bmax[1]],
+            );
+            let rot = Mat4::from_rotation_z((geom.rotation as f32).to_radians());
+            if tower_mesh.is_some() {
+                let model = Mat4::from_translation(Vec3::new(gx, gy, bed_z)) * rot;
                 (true, vp * model, 0.45f32, None)
             } else {
-                let w = g.width.max(0.1);
-                let c = Vec3::new(g.x + w * 0.5, g.y + w * 0.5, bed_z + TOWER_BOX_H * 0.5);
+                let w = width.max(0.1);
+                let c = Vec3::new(gx + w * 0.5, gy + w * 0.5, bed_z + TOWER_BOX_H * 0.5);
                 let model = Mat4::from_translation(c) * rot * Mat4::from_scale(Vec3::new(w, w, TOWER_BOX_H));
-                let (x0, y0) = (g.x - g.brim, g.y - g.brim);
-                let (x1, y1) = (g.x + g.width + g.brim, g.y + g.width + g.brim);
+                let (x0, y0) = (gx - brim, gy - brim);
+                let (x1, y1) = (gx + width + brim, gy + width + brim);
                 let z = bed_z + 0.05;
                 let v = |x, y| Vertex { pos: [x, y, z], nrm: [0.0; 3] };
                 let brim = vec![
@@ -1365,7 +1479,7 @@ impl ViewportRenderer {
             if let Some((is_mesh, _, _, _)) = &tower {
                 let mslot = &[(tower_slot as u32) * self.slot];
                 if *is_mesh {
-                    let m = self.tower.as_ref().and_then(|t| t.mesh.as_ref()).unwrap();
+                    let m = &self.tower_meshes[&active_plate_id].gpu;
                     rp.set_pipeline(&self.tower_pipe);
                     rp.set_bind_group(0, &self.bind, mslot);
                     rp.set_vertex_buffer(0, m.vb.slice(..));
@@ -1612,39 +1726,34 @@ pub fn viewport_frame(
     tauri::ipc::Response::new(r.frame(&req, project.inner()))
 }
 
-#[derive(serde::Deserialize)]
-pub struct TowerMeshArg {
-    pub vertices: Vec<f32>,
-    pub indices: Vec<u32>,
-}
-
-/// The active plate's priming tower: placement (bed mm) + an optional exact
-/// sliced mesh (a slice/overlay artifact the frontend resolves; not part of the
-/// Rust scene). The frontend decides box-vs-mesh (staleness) and pushes the mesh
-/// only when valid; `None` clears the tower.
-#[derive(serde::Deserialize)]
-pub struct TowerArg {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub brim: f32,
-    pub rotation: f32,
-    pub mesh: Option<TowerMeshArg>,
-}
-
-/// Set (or clear) the active plate's priming tower. Pushed by the frontend on
-/// scene / material / active-plate / slice changes — not per frame.
-#[tauri::command]
-pub fn viewport_set_tower(state: tauri::State<'_, ViewportState>, tower: Option<TowerArg>) {
+/// Store (or drop, when `mesh` is `None`) a plate's sliced tower mesh in the
+/// renderer, keyed by plate. The app-shell seam the slice event sink calls so
+/// the mesh reaches the GPU without a frontend round-trip; the frontend reacts
+/// to the same `plate_finished` event to re-render.
+pub fn store_plate_tower_mesh(
+    state: &ViewportState,
+    plate_id: PlateId,
+    mesh: Option<(&[f32], &[u32])>,
+    material_count: usize,
+    printer_instance_id: Option<String>,
+) {
     let mut guard = state.0.lock().unwrap();
     let r = guard.get_or_insert_with(ViewportRenderer::new);
-    r.set_tower(tower);
+    match mesh {
+        Some((vertices, indices)) => {
+            r.store_tower_mesh(plate_id, vertices, indices, material_count, printer_instance_id)
+        }
+        // Sliced single-material → no tower; drop any stale mesh for this plate.
+        None => {
+            r.tower_meshes.remove(&plate_id);
+        }
+    }
 }
 
-/// Move the tower's placement corner (no mesh re-upload) for a smooth bed-plane
-/// drag. The requested corner is clamped so the footprint stays on the active
-/// plate's bed; returns the clamped corner so the frontend can track it (and
-/// gate the commit). `None` when there's no tower or no bound bed.
+/// Move the active plate's tower to a requested corner (no mesh re-upload) for a
+/// smooth bed-plane drag. The corner is clamped so the footprint stays on the
+/// bed; the clamped corner is stored as the live drag override and returned so
+/// the frontend can gate + commit it. `None` when there's no tower or bed.
 #[tauri::command]
 pub fn viewport_move_tower(
     state: tauri::State<'_, ViewportState>,
@@ -1654,13 +1763,11 @@ pub fn viewport_move_tower(
 ) -> Option<(f32, f32)> {
     // Lock order: ViewportState before Project (matches `viewport_frame`).
     let mut guard = state.0.lock().unwrap();
-    let t = guard.as_mut().and_then(|r| r.tower.as_mut())?;
-    let (bed_min, bed_max) = {
+    let r = guard.as_mut()?;
+    let (id, _geom, bed_min, bed_max, fp) = {
         let p = project.lock().unwrap();
-        let bed = p.active_plate().scene.bed.as_ref()?;
-        (bed.extents.min, bed.extents.max)
+        r.tower_drag_ctx(&p)? // no tower / no bed → nothing to move
     };
-    let fp = tower_local_footprint(t.footprint, t.width, t.brim);
     let (cx, cy) = clamp_tower_corner(
         fp,
         [bed_min[0] as f32, bed_min[1] as f32],
@@ -1668,22 +1775,48 @@ pub fn viewport_move_tower(
         x,
         y,
     );
-    t.x = cx;
-    t.y = cy;
+    r.tower_drag = Some((id, (cx, cy)));
     Some((cx, cy))
 }
 
-/// Whether a bed-plane point `(bx, by)` lands on the tower's footprint (+brim) —
-/// the press-time hit-test that decides tower-drag vs orbit. `false` when no
-/// tower is set.
+/// Press-time tower grab: if `(bx, by)` (a bed-plane point) lands on the active
+/// plate's tower footprint (+brim), return the grab offset `(bx-corner)` so the
+/// frontend can drive the drag (corner = bed point − offset → `viewport_move_tower`).
+/// `None` = the press missed the tower (frontend orbits instead).
 #[tauri::command]
-pub fn viewport_tower_hit_test(state: tauri::State<'_, ViewportState>, bx: f32, by: f32) -> bool {
-    let guard = state.0.lock().unwrap();
-    let Some(t) = guard.as_ref().and_then(|r| r.tower.as_ref()) else {
-        return false;
+pub fn viewport_tower_grab(
+    state: tauri::State<'_, ViewportState>,
+    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    bx: f32,
+    by: f32,
+) -> Option<(f32, f32)> {
+    // Lock order: ViewportState before Project (matches `viewport_frame`).
+    let mut guard = state.0.lock().unwrap();
+    let r = guard.as_mut()?;
+    let (id, geom, bed_min, bed_max, fp) = {
+        let p = project.lock().unwrap();
+        r.tower_drag_ctx(&p)?
     };
-    let fp = tower_local_footprint(t.footprint, t.width, t.brim);
-    tower_corner_hit(fp, t.x, t.y, bx, by)
+    // The same effective (drag-or-clamped) corner `frame` draws, so a click on
+    // the visible tower hits even when its resolved origin is off-bed.
+    let (cx, cy) = r.effective_tower_corner(
+        id,
+        &geom,
+        fp,
+        [bed_min[0] as f32, bed_min[1] as f32],
+        [bed_max[0] as f32, bed_max[1] as f32],
+    );
+    tower_corner_hit(fp, cx, cy, bx, by).then_some((bx - cx, by - cy))
+}
+
+/// Drop the resolved-placement cache + any live drag so the next frame
+/// re-resolves. The frontend calls this on tower-affecting edits (overrides,
+/// materials, printer, bed, project load) — NOT on a plain plate switch.
+#[tauri::command]
+pub fn viewport_invalidate_tower(state: tauri::State<'_, ViewportState>) {
+    if let Some(r) = state.0.lock().unwrap().as_mut() {
+        r.invalidate_tower();
+    }
 }
 
 /// Render a square iso print thumbnail (models only, transparent background) and
