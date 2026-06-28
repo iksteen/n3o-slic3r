@@ -11,6 +11,7 @@ use std::sync::Once;
 use n3o_slic3r_lib::core::printer::{slicer_options_for_printer, OptMode};
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
 use n3o_slic3r_lib::core::printer::CapabilityPredicate;
+use n3o_slic3r_lib::core::printer::options::PrinterAwareOptionSummary;
 use slic3r_ffi::init as ffi_init;
 
 static FFI_INIT: Once = Once::new();
@@ -108,34 +109,38 @@ fn slicer_options_carries_phase4_introspection() {
 /// applies. The purge-tower family stays in Process bucket and exercises the
 /// same hide/show logic.
 #[test]
-fn a1_mini_hides_toolchange_keys_u1_hides_purge_tower_keys() {
+fn priming_tower_shows_on_both_purge_amounts_hide_on_toolchanger() {
     ensure_ffi();
     let a1 = slicer_options_for_printer(a1_mini(), None);
     let u1 = slicer_options_for_printer(snapmaker_u1(), None);
-
-    // U1 (toolchanger) hides purge tower process keys.
-    let purge_keys = ["enable_prime_tower", "prime_tower_width"];
-    for key in purge_keys {
-        let u1_row = u1
-            .iter()
+    fn row<'a>(
+        rows: &'a [PrinterAwareOptionSummary],
+        key: &str,
+    ) -> &'a PrinterAwareOptionSummary {
+        rows.iter()
             .find(|o| o.summary.key == key)
-            .unwrap_or_else(|| panic!("{key} should be in process-bucket catalog"));
-        assert!(u1_row.hidden, "U1 should hide purge-tower key {key:?}");
+            .unwrap_or_else(|| panic!("{key} should be in process-bucket catalog"))
+    }
+
+    // The priming tower is a multi-material feature, not a purge one: BOTH the
+    // A1 mini (AMS purge tower) and the U1 (toolchanger, re-entry priming tower)
+    // run one, so its keys show on both — gated on multi-slot, not purging.
+    for key in ["enable_prime_tower", "prime_tower_width"] {
+        assert!(!row(&a1, key).hidden, "A1 mini should show priming key {key:?}");
+        assert!(!row(&u1, key).hidden, "U1 should show priming key {key:?}");
         assert_eq!(
-            u1_row.summary.capability,
-            Some(CapabilityPredicate::RequiresPurgeTower),
+            row(&u1, key).summary.capability,
+            Some(CapabilityPredicate::RequiresMultiSlot),
         );
     }
 
-    // Cross-check: A1 mini SHOWS purge-tower keys (it's AMS-style).
-    for key in purge_keys {
-        let a1_row = a1
-            .iter()
-            .find(|o| o.summary.key == key)
-            .unwrap_or_else(|| panic!("{key} should be in process-bucket catalog"));
-        assert!(
-            !a1_row.hidden,
-            "A1 mini should show purge-tower key {key:?} (it's AMS-style)",
+    // Purge/flush *amounts* are AMS-only — the U1 swaps heads, nothing to flush.
+    for key in ["flush_into_infill", "flush_into_objects"] {
+        assert!(!row(&a1, key).hidden, "A1 mini should show purge key {key:?}");
+        assert!(row(&u1, key).hidden, "U1 (toolchanger) should hide purge key {key:?}");
+        assert_eq!(
+            row(&u1, key).summary.capability,
+            Some(CapabilityPredicate::RequiresPurgeTower),
         );
     }
 }

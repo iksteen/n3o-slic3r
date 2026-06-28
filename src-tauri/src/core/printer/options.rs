@@ -804,37 +804,41 @@ mod tests {
     }
 
     #[test]
-    fn a1_mini_shows_purge_tower_keys_via_printer_aware_view() {
+    fn a1_mini_shows_prime_tower_keys_via_printer_aware_view() {
         ensure_ffi();
-        // The panel filter narrows to the Process bucket — printer-
-        // bucket toolchanger geometry isn't in scope here. The
-        // remaining capability-gated process-bucket keys are the
-        // purge-tower / prime-tower family, which AMS-style
-        // printers DO use.
+        // The priming tower is a multi-material feature (RequiresMultiSlot), not
+        // a purge one; the A1 mini is AMS-style multi-material → shown.
         let opts = slicer_options_for_printer(a1_mini(), None);
-        let purge = opts
+        let prime = opts
             .iter()
             .find(|o| o.summary.key == "enable_prime_tower")
             .expect("enable_prime_tower present");
         assert_eq!(
-            purge.summary.capability,
-            Some(CapabilityPredicate::RequiresPurgeTower),
+            prime.summary.capability,
+            Some(CapabilityPredicate::RequiresMultiSlot),
         );
-        assert!(
-            !purge.hidden,
-            "purge-tower key should be visible on AMS-style A1 mini",
-        );
+        assert!(!prime.hidden, "priming-tower key should show on the A1 mini");
     }
 
     #[test]
-    fn synthetic_toolchanger_hides_purge_tower_keys() {
+    fn toolchanger_shows_prime_tower_but_hides_purge_amounts() {
         ensure_ffi();
         let opts = slicer_options_for_printer(synthetic_toolchanger(), None);
-        let purge = opts
-            .iter()
-            .find(|o| o.summary.key == "enable_prime_tower")
-            .expect("enable_prime_tower present");
-        assert!(purge.hidden, "purge-tower key should hide on toolchanger");
+        let find = |k: &str| {
+            opts.iter()
+                .find(|o| o.summary.key == k)
+                .unwrap_or_else(|| panic!("{k} present"))
+        };
+        // A toolchanger still runs a (re-entry) priming tower → shown.
+        assert!(
+            !find("enable_prime_tower").hidden,
+            "priming-tower key should show on a toolchanger",
+        );
+        // …but it swaps heads, so there's nothing to flush → purge amounts hide.
+        assert!(
+            find("flush_into_infill").hidden,
+            "purge-amount key should hide on a toolchanger",
+        );
     }
 
     #[test]

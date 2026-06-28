@@ -43,9 +43,11 @@ use crate::core::printer::profile::PrinterProfile;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum CapabilityPredicate {
-    /// Filament-map / multi-material options. Hidden when the
-    /// printer is a single-material rig. Bambu A1 mini (4 AMS slots,
-    /// 1 toolhead) satisfies this; a single-slot Voron does not.
+    /// Multi-material options: filament map + the **priming-tower**
+    /// geometry. Both the A1 mini (AMS purge tower) and the U1
+    /// (toolchanger, small re-entry priming tower) run a priming tower,
+    /// so this gates on "more than one slot", not on purging. Hidden
+    /// only on a single-material rig (a single-slot Voron).
     RequiresMultiSlot,
 
     /// Toolchanger-only options — e.g. extruder clearance geometry,
@@ -54,10 +56,12 @@ pub enum CapabilityPredicate {
     /// slots.
     RequiresToolchanger,
 
-    /// Prime/purge tower geometry options. Toolchangers (U1, XL)
-    /// physically swap the head and don't purge between filaments;
-    /// AMS-style printers do, and need the prime tower. Hidden on
-    /// toolchangers.
+    /// Purge/flush *amount* options (flush volumes, purge matrix,
+    /// flush-into-*). Toolchangers (U1, XL) swap the head and don't
+    /// purge between filaments, so there's nothing to flush; AMS-style
+    /// printers flush each color through the single hotend. Hidden on
+    /// toolchangers. (The priming tower *itself* is `RequiresMultiSlot`
+    /// — the U1 still uses one; only the purge amounts are AMS-only.)
     RequiresPurgeTower,
 
     /// Bambu-vendor-only options — BBS-namespaced metadata,
@@ -103,22 +107,25 @@ impl CapabilityPredicate {
 /// audit; extend as new options surface that the UI should gate.
 pub fn capability_for_key(key: &str) -> Option<CapabilityPredicate> {
     match key {
-        // Multi-material filament mapping. Meaningful only when more
-        // than one filament slot exists.
-        "filament_map" | "filament_map_mode" | "filament_maps" => {
-            Some(CapabilityPredicate::RequiresMultiSlot)
-        }
-
-        // Purge-tower geometry + flush volumes. AMS-style only —
-        // toolchangers don't purge.
-        "enable_prime_tower"
+        // Multi-material filament mapping + the priming-tower geometry.
+        // Both MVP printers run a priming tower (A1 mini purges through
+        // it; U1 uses it for toolhead re-entry), so these are meaningful
+        // whenever there's more than one slot — NOT only when purging.
+        "filament_map"
+        | "filament_map_mode"
+        | "filament_maps"
+        | "enable_prime_tower"
         | "prime_tower_enable_framework"
         | "prime_tower_width"
         | "prime_tower_brim_width"
         | "wipe_tower_x"
         | "wipe_tower_y"
-        | "wipe_tower_rotation_angle"
-        | "flush_volumes_matrix"
+        | "wipe_tower_rotation_angle" => Some(CapabilityPredicate::RequiresMultiSlot),
+
+        // Purge/flush *amounts*. AMS-style only — toolchangers swap
+        // heads and don't purge between filaments, so there's nothing
+        // to flush (the priming tower above still applies to them).
+        "flush_volumes_matrix"
         | "flush_volumes_vector"
         | "purge_volumes_matrix"
         | "flush_into_infill"
