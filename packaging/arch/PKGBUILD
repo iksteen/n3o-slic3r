@@ -143,9 +143,10 @@ build() {
     # package() so the Tauri-generated .desktop + icons + bundled
     # resource layout come along for free.
     #
-    # `Release` instead of the build.rs default `RelWithDebInfo` —
-    # makepkg's strip pass would drop the debug info anyway, and the
-    # smaller .so saves a fakeroot-time roundtrip.
+    # Force `Release` explicitly: a `--release` build already picks it
+    # (build.rs follows the cargo profile), but pinning it keeps the
+    # packaged .so optimized regardless — makepkg's strip pass drops the
+    # debug info anyway, and the smaller .so saves a fakeroot-time roundtrip.
     export NODE_ENV=production
     export N3O_SLIC3R_FFI_CMAKE_CONFIG=Release
     npx --no-install tauri build --bundles deb

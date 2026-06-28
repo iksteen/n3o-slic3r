@@ -64,17 +64,26 @@ fn main() {
         "slic3r-ffi".to_string()
     });
 
-    // Default to RelWithDebInfo for local development (backtraces through
-    // libslic3r are essential when a slice misbehaves). CI overrides to Release
-    // because RelWithDebInfo's debug-symbol output pushed the GitHub Actions
-    // runner past its disk ceiling mid-build. The cross build defaults to
-    // Release (smaller, and the cross-deps were built /MD-Release).
+    // Follow the cargo profile: a **release** build gets an optimized engine
+    // (Release, -O3); a **debug** build keeps RelWithDebInfo for libslic3r
+    // backtraces when a slice misbehaves. This matters most on macOS, where
+    // OrcaSlicer deliberately strips RelWithDebInfo to -O0 under Clang (a
+    // GUI-debugging choice — see its CMakeLists ~L542); a release build must
+    // not inherit that, or slicing crawls. `N3O_SLIC3R_FFI_CMAKE_CONFIG`
+    // overrides either way (CI forces Release; set RelWithDebInfo to debug the
+    // engine itself in an otherwise-release build). Windows cross is always
+    // Release. The bundle configs (tauri.macos.conf.json, the macos-cross
+    // bundle script) embed the `Release/` subdir — `tauri build` is always a
+    // release build, so the dylib lands there.
     println!("cargo:rerun-if-env-changed=N3O_SLIC3R_FFI_CMAKE_CONFIG");
-    // Cross from Linux keeps RelWithDebInfo (same as a native macOS build) so the
-    // bundle config's hardcoded build/slic3r-ffi-current/RelWithDebInfo/ dylib
-    // path resolves; only Windows defaults to Release.
-    let cmake_config = env::var("N3O_SLIC3R_FFI_CMAKE_CONFIG")
-        .unwrap_or_else(|_| if windows { "Release".into() } else { "RelWithDebInfo".into() });
+    let is_release = env::var("PROFILE").as_deref() == Ok("release");
+    let cmake_config = env::var("N3O_SLIC3R_FFI_CMAKE_CONFIG").unwrap_or_else(|_| {
+        if windows || is_release {
+            "Release".into()
+        } else {
+            "RelWithDebInfo".into()
+        }
+    });
     let cmake_config = cmake_config.as_str();
 
     // ---- Sanity check: deps must be built ----
@@ -234,11 +243,12 @@ fn main() {
 
     // macOS: keep a stable `build/slic3r-ffi-current` symlink pointing at the
     // arch-specific build dir we just produced. tauri.macos.conf.json embeds
-    // `build/slic3r-ffi-current/<config>/libslic3r_ffi.0.dylib`, so this lets a
-    // native `tauri build` and a cross `tauri build --target x86_64-apple-darwin`
-    // each bundle the matching-arch dylib through one static config path — the
-    // cargo build (which runs this script for the target arch) always repoints
-    // the link just before tauri bundles.
+    // `build/slic3r-ffi-current/Release/libslic3r_ffi.0.dylib` (bundling is
+    // always a release build, so the dylib is in the Release subdir), so this
+    // lets a native `tauri build` and a cross `tauri build --target
+    // x86_64-apple-darwin` each bundle the matching-arch dylib through one
+    // static config path — the cargo build (which runs this script for the
+    // target arch) always repoints the link just before tauri bundles.
     if macos {
         let link = workspace_root.join("build").join("slic3r-ffi-current");
         if let Err(e) = update_symlink(&link, &format!("slic3r-ffi-{mac_arch}")) {

@@ -9,8 +9,8 @@
 #   - the app binary is cross-built:
 #       ./env.sh <arch> cargo build -p n3o-slic3r --target <triple> --release
 #     (or `./build.sh <arch>`, which does deps + frontend + cross build + this)
-#   - the shim dylib exists at build/slic3r-ffi-<arch>/RelWithDebInfo/ (the cargo
-#     build above produces it)
+#   - the shim dylib exists at build/slic3r-ffi-<arch>/Release/ (the cargo
+#     --release build above produces it; build.rs picks Release for release)
 #   - rcodesign on PATH  (cargo install apple-codesign)
 #   - for --dmg: genisoimage (cdrkit) + git/cmake/make/cc — libdmg-hfsplus's
 #     `dmg` tool is built in-tree on first use (see the --dmg block below).
@@ -36,7 +36,7 @@ VERSION="$(grep -m1 '^version' src-tauri/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1
 DEPLOY=11.3
 
 BIN="target/$TRIPLE/release/$APP_NAME"
-DYLIB="build/slic3r-ffi-$ARCH/RelWithDebInfo/libslic3r_ffi.0.1.0.dylib"
+DYLIB="build/slic3r-ffi-$ARCH/Release/libslic3r_ffi.0.1.0.dylib"
 [ -f "$BIN" ]   || { echo "error: app binary not found: $BIN — cross-build it first" >&2; exit 1; }
 [ -f "$DYLIB" ] || { echo "error: shim dylib not found: $DYLIB" >&2; exit 1; }
 # rcodesign (apple-codesign). `cargo install` puts it in ~/.cargo/bin, which

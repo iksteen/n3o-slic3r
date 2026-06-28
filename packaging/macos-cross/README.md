@@ -70,7 +70,7 @@ embedded frontend — a white screen. `npm run tauri build` enables it
 automatically; a plain `cargo build` does not.
 
 Output:
-- `build/slic3r-ffi-arm64/RelWithDebInfo/libslic3r_ffi.0.1.0.dylib` — arm64
+- `build/slic3r-ffi-arm64/Release/libslic3r_ffi.0.1.0.dylib` — arm64
   Mach-O shim (install_name `@rpath/libslic3r_ffi.0.dylib`). `build.rs` also
   repoints the static `build/slic3r-ffi-current` symlink at the arch it built,
   the same as the native macOS path.

@@ -117,8 +117,9 @@ modules:
         CXXFLAGS: -fpermissive
         # slic3r-ffi's bindgen needs libclang from the llvm21 extension.
         LIBCLANG_PATH: /usr/lib/sdk/llvm21/lib
-        # Build the FFI in Release (smaller .so, no debug symbols) for the
-        # shipped artifact; build.rs defaults to RelWithDebInfo for dev.
+        # Pin the FFI to Release (smaller .so, no debug symbols) for the
+        # shipped artifact. A --release build already picks it (build.rs
+        # follows the cargo profile); explicit here for clarity + safety.
         N3O_SLIC3R_FFI_CMAKE_CONFIG: Release
     build-commands:
       - bash packaging/flatpak/build-in-sandbox.sh
