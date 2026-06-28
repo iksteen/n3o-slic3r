@@ -284,7 +284,7 @@ function SlotChip({
   // stomped on the next read) — render read-only, no picker.
   const rfid = isRfidDetected(option.tag_uid);
   const tooltip = rfid
-    ? `${option.label} — ${filamentLabel ?? option.filament_identity}\nAuto-detected via RFID — managed by the printer`
+    ? `${option.label} — ${filamentLabel ?? option.filament_identity}\nAuto-detected via RFID — identity managed by the printer.\nClick to view and edit filament settings.`
     : empty
       ? `${option.label} — click to assign filament`
       : `${option.label} — ${filamentLabel ?? option.filament_identity}\nClick to change`;
@@ -294,10 +294,9 @@ function SlotChip({
       <button
         className={`slot-pill${empty ? " empty" : ""}${rfid ? " rfid" : ""}`}
         onClick={() => setOpen(true)}
-        disabled={rfid}
         title={tooltip}
-        aria-haspopup={rfid ? undefined : "dialog"}
-        aria-expanded={rfid ? undefined : open}
+        aria-haspopup="dialog"
+        aria-expanded={open}
       >
         <span
           className="slot-pill-swatch"
@@ -330,12 +329,13 @@ function SlotChip({
           </span>
         )}
       </button>
-      {open && !rfid && (
+      {open && (
         <FilamentPickerModal
           slotId={option.label}
           filaments={filaments}
           currentIdentity={option.filament_identity}
           currentColor={option.color}
+          locked={rfid}
           onPick={(pick) => {
             setOpen(false);
             onApplyPick(pick);

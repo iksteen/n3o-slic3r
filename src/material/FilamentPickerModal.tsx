@@ -41,6 +41,12 @@ export interface FilamentPickerModalProps {
   currentColor: string | null;
   onPick: (pick: FilamentPickerPick) => void;
   onClose: () => void;
+  /** Identity-locked mode (RFID/NFC-detected slots): the printer owns
+   *  the spool's brand/type/color, so browsing + selection + Assign are
+   *  disabled and the modal shows the loaded filament read-only. The
+   *  per-filament settings editor (`onEdit`) stays active — that's the
+   *  whole point of opening it. */
+  locked?: boolean;
   /** Open the settings editor for a filament (edited in place). Omit to
    *  hide the edit affordance. */
   onEdit?: (identity: string) => void;
@@ -97,6 +103,7 @@ export function FilamentPickerModal({
   currentColor,
   onPick,
   onClose,
+  locked = false,
   onEdit,
   onRevert,
 }: FilamentPickerModalProps): React.JSX.Element {
@@ -242,7 +249,15 @@ export function FilamentPickerModal({
         <header className="fp-modal-head">
           <div>
             <div className="fp-modal-eyebrow">Slot · {slotId}</div>
-            <h2 className="fp-modal-title">Assign filament</h2>
+            <h2 className="fp-modal-title">
+              {locked ? "Filament settings" : "Assign filament"}
+            </h2>
+            {locked && (
+              <div className="fp-modal-note">
+                Identity is managed by the printer (RFID) — settings remain
+                editable.
+              </div>
+            )}
           </div>
           <button
             type="button"
@@ -284,6 +299,7 @@ export function FilamentPickerModal({
               placeholder="Search brand, product, material…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              disabled={locked}
             />
             {query && (
               <button
@@ -301,6 +317,7 @@ export function FilamentPickerModal({
               type="button"
               className={`fp-mat-chip${!materialFilter ? " active" : ""}`}
               onClick={() => setMaterialFilter(null)}
+              disabled={locked}
             >
               All
             </button>
@@ -312,6 +329,7 @@ export function FilamentPickerModal({
                 onClick={() =>
                   setMaterialFilter(materialFilter === m ? null : m)
                 }
+                disabled={locked}
               >
                 {m}
               </button>
@@ -326,11 +344,16 @@ export function FilamentPickerModal({
               <li
                 key={b.brand}
                 ref={b._origIdx === brandIdx ? activeBrandRef : undefined}
-                className={`fp-brand-row${b._origIdx === brandIdx ? " active" : ""}`}
-                onClick={() => {
-                  setBrandIdx(b._origIdx);
-                  setProductIdx(0);
-                }}
+                className={`fp-brand-row${b._origIdx === brandIdx ? " active" : ""}${locked ? " locked" : ""}`}
+                aria-disabled={locked || undefined}
+                onClick={
+                  locked
+                    ? undefined
+                    : () => {
+                        setBrandIdx(b._origIdx);
+                        setProductIdx(0);
+                      }
+                }
               >
                 <span className="fp-brand-short">{b.short}</span>
                 <span className="fp-brand-name-wrap">
@@ -353,8 +376,9 @@ export function FilamentPickerModal({
               <li
                 key={p.identity}
                 ref={i === productIdx ? activeProductRef : undefined}
-                className={`fp-product-row${i === productIdx ? " active" : ""}${p.edited ? " is-edited" : ""}`}
-                onClick={() => setProductIdx(i)}
+                className={`fp-product-row${i === productIdx ? " active" : ""}${p.edited ? " is-edited" : ""}${locked ? " locked" : ""}`}
+                aria-disabled={locked || undefined}
+                onClick={locked ? undefined : () => setProductIdx(i)}
               >
                 <span className="fp-product-main">
                   <span className="fp-product-name">
@@ -441,6 +465,7 @@ export function FilamentPickerModal({
                         setCustomColor(null);
                         setTimeout(handleUse, 0);
                       }}
+                      disabled={locked}
                       title={c.name}
                     >
                       <span
@@ -459,6 +484,7 @@ export function FilamentPickerModal({
                     type="button"
                     className={`fp-color-swatch fp-color-swatch-custom${customColor ? " active" : ""}`}
                     onClick={() => customInputRef.current?.click()}
+                    disabled={locked}
                     title={
                       customColor
                         ? `Custom ${customColor.toUpperCase()} — click to change`
@@ -534,16 +560,18 @@ export function FilamentPickerModal({
           </div>
           <div className="fp-modal-actions">
             <button type="button" className="apm-btn" onClick={onClose}>
-              Cancel
+              {locked ? "Close" : "Cancel"}
             </button>
-            <button
-              type="button"
-              className="apm-btn primary"
-              onClick={handleUse}
-              disabled={!currentProduct || !effectiveColor}
-            >
-              Assign to {slotId}
-            </button>
+            {!locked && (
+              <button
+                type="button"
+                className="apm-btn primary"
+                onClick={handleUse}
+                disabled={!currentProduct || !effectiveColor}
+              >
+                Assign to {slotId}
+              </button>
+            )}
           </div>
         </footer>
       </div>

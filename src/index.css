@@ -1404,13 +1404,6 @@
   }
   /* RFID-detected slots are managed by the printer — read-only. No
    * hover affordance; a small "RFID" tag marks them. */
-  .slot-pill.rfid {
-    cursor: not-allowed;
-  }
-  .slot-pill.rfid:hover {
-    background: var(--surface);
-    border-color: var(--border);
-  }
   .slot-pill-rfid {
     display: inline-flex;
     align-items: center;
@@ -4114,6 +4107,28 @@
     font-size: 16px;
     font-weight: 600;
     color: var(--text);
+  }
+  .fp-modal-note {
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--text-dim);
+    max-width: 46ch;
+  }
+  /* Identity-locked picker (RFID/NFC slots): rows read-only, the
+     per-filament settings (✎) affordance stays reachable. */
+  .fp-brand-row.locked,
+  .fp-product-row.locked {
+    cursor: default;
+  }
+  .fp-brand-row.locked:hover {
+    background: transparent;
+  }
+  .fp-search input:disabled,
+  .fp-mat-chip:disabled,
+  .fp-color-swatch:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
   .fp-modal-close {
     width: 26px; height: 26px;
