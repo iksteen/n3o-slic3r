@@ -32,6 +32,7 @@ pub(crate) fn emit_all(window: &Window, events: &[SceneEvent]) {
         }
     }
     crate::core::project::dirty::track(window, events);
+    crate::core::project::history::track(window, events);
 }
 
 /// JSON-friendly snapshot of the entire project. The frontend

@@ -608,6 +608,17 @@
     font-weight: 500;
   }
   .tb-btn:disabled { opacity: 0.45; }
+  .tb-undo-redo {
+    display: inline-flex;
+    gap: 4px;
+  }
+  /* Icon-only undo/redo glyphs — tighter than the text buttons. */
+  .tb-undo-redo .tb-btn {
+    padding: 0 9px;
+    font-size: 15px;
+    line-height: 1;
+  }
+  .tb-undo-redo .tb-btn:disabled { cursor: default; }
 
   /* ─────────── Brand / project dropdown menus ─────────── */
   .brand-menu-wrap {

@@ -26,6 +26,7 @@ pub mod autosave;
 pub mod commands;
 pub mod context;
 pub mod dirty;
+pub mod history;
 pub mod format;
 pub mod metadata;
 pub mod model;

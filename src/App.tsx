@@ -14,6 +14,7 @@ import { useSliceJob } from "./slice/useSliceJob";
 import { useLastSliceOutput } from "./slice/useLastSliceOutput";
 import { PlateTabs } from "./plates/PlateTabs";
 import { useProjectSession } from "./project/useProjectSession";
+import { useUndoRedo } from "./project/useUndoRedo";
 import {
   AutosaveRecoveryDialog,
   useAutosaveRecoveryGate,
@@ -72,6 +73,7 @@ function App() {
   // which bypasses the submit path — handled by the lookup fallback).
   const [sliceObjectCount, setSliceObjectCount] = useState<number | null>(null);
   const session = useProjectSession();
+  const undoRedo = useUndoRedo();
   const recovery = useAutosaveRecoveryGate();
   const printers = usePrinterInstances();
   const printerCatalog = usePrinterCatalog();
@@ -387,6 +389,30 @@ function App() {
             onOpenProjectPlugins={() => setShowProjectPlugins(true)}
             projectPluginCount={projectPluginCount}
           />
+        )}
+        {session.snapshot && (
+          <div className="tb-undo-redo">
+            <button
+              type="button"
+              className="tb-btn"
+              title={`Undo (${undoRedo.undoHint})`}
+              aria-label="Undo"
+              disabled={!undoRedo.canUndo}
+              onClick={undoRedo.undo}
+            >
+              ↶
+            </button>
+            <button
+              type="button"
+              className="tb-btn"
+              title={`Redo (${undoRedo.redoHint})`}
+              aria-label="Redo"
+              disabled={!undoRedo.canRedo}
+              onClick={undoRedo.redo}
+            >
+              ↷
+            </button>
+          </div>
         )}
         <span className="tb-spacer" />
         {!showDevices && (

@@ -35,6 +35,7 @@ pub(crate) fn emit_all(window: &Window, events: &[SceneEvent]) {
         }
     }
     super::dirty::track(window, events);
+    super::history::track(window, events);
 }
 
 /// Set (upsert) a `material → slot` mapping on a plate.
@@ -262,6 +263,49 @@ pub fn project_autosave_enable(
 #[tauri::command]
 pub fn project_is_dirty(dirty: State<Arc<super::dirty::DirtyTracker>>) -> bool {
     dirty.is_dirty()
+}
+
+// ---- Undo / redo -----------------------------------------
+
+/// Current can-undo / can-redo state for the menu + button enablement.
+/// The frontend reads this on mount, then tracks `project:history_changed`.
+#[derive(serde::Serialize)]
+pub struct HistoryState {
+    pub can_undo: bool,
+    pub can_redo: bool,
+}
+
+#[tauri::command]
+pub fn project_history_state(
+    history: State<Arc<Mutex<super::history::UndoHistory>>>,
+) -> HistoryState {
+    let h = history.lock().expect("history poisoned");
+    HistoryState {
+        can_undo: h.can_undo(),
+        can_redo: h.can_redo(),
+    }
+}
+
+/// Undo the last edit. No-op (returns `false`) when there's nothing to
+/// undo. Restores the prior snapshot, resyncs the renderer
+/// (`project:restored`), and re-dirties the project.
+#[tauri::command]
+pub fn project_undo(
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+    history: State<Arc<Mutex<super::history::UndoHistory>>>,
+) -> bool {
+    super::history::apply_step(&window, &state, &history, false)
+}
+
+/// Redo the last undone edit. No-op (`false`) when the redo branch is empty.
+#[tauri::command]
+pub fn project_redo(
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+    history: State<Arc<Mutex<super::history::UndoHistory>>>,
+) -> bool {
+    super::history::apply_step(&window, &state, &history, true)
 }
 
 /// Stop the autosave worker. Idempotent — calling when the

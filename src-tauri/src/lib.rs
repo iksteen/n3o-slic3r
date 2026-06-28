@@ -140,9 +140,11 @@ pub fn run() {
             // user's last-selected printer (config `[defaults]`),
             // falling back to the first registered instance.
             let preferred = core::config::load().defaults.printer_instance;
-            let project: Arc<Mutex<core::project::Project>> = Arc::new(Mutex::new(
-                core::project::Project::with_preferred_printer(preferred.as_deref()),
-            ));
+            let initial = core::project::Project::with_preferred_printer(preferred.as_deref());
+            app.manage(Arc::new(Mutex::new(core::project::history::UndoHistory::new(
+                initial.clone(),
+            ))));
+            let project: Arc<Mutex<core::project::Project>> = Arc::new(Mutex::new(initial));
             app.manage(project);
             app.manage(Arc::new(core::project::dirty::DirtyTracker::new()));
             app.manage(core::project::autosave::AutosaveHandle::new());
@@ -252,6 +254,9 @@ pub fn run() {
             project_io::project_new,
             core::project::commands::project_autosave_enable,
             core::project::commands::project_is_dirty,
+            core::project::commands::project_undo,
+            core::project::commands::project_redo,
+            core::project::commands::project_history_state,
             core::project::commands::project_autosave_disable,
             core::project::commands::project_autosave_list,
             core::project::commands::project_autosave_drop,

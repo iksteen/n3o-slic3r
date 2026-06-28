@@ -686,6 +686,10 @@ export function WgpuViewport({
         // Quality profile carries enable_prime_tower / prime_tower_width /
         // wipe_tower_x/y — switching it resizes, moves, or toggles the tower.
         "scene:plate_metadata_changed",
+        // Undo/redo swaps the live project: redraw from the restored state and
+        // re-resolve the tower, but in place — keep the user's camera (unlike
+        // project:loaded, which reframes for fresh geometry).
+        "project:restored",
       ],
       () => {
         invalidateTower();

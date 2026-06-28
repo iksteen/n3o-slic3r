@@ -136,6 +136,10 @@ pub enum SceneEvent {
         path: String,
         report: crate::core::orca_import::ImportReport,
     },
+    /// The in-memory project was replaced by an undo/redo step — the
+    /// frontend resyncs wholesale (same as `ProjectLoaded`) but the
+    /// history isn't reset and the project becomes dirty again.
+    ProjectRestored,
 }
 
 impl SceneEvent {
@@ -163,6 +167,7 @@ impl SceneEvent {
             Self::ProjectSaved { .. } => "project:saved",
             Self::ProjectLoaded { .. } => "project:loaded",
             Self::ProjectImported { .. } => "project:imported",
+            Self::ProjectRestored => "project:restored",
         }
     }
 
@@ -182,7 +187,11 @@ impl SceneEvent {
             | Self::ProjectOverridesChanged { .. }
             | Self::UserOverridesChanged
             | Self::PlateMetadataChanged { .. }
-            | Self::MaterialSlotChanged { .. } => DirtyEffect::Dirties,
+            | Self::MaterialSlotChanged { .. }
+            // Restoring an undo/redo step changes the live state → dirty,
+            // but `history::track` excludes it from recording (it's a
+            // navigation, not a new edit).
+            | Self::ProjectRestored => DirtyEffect::Dirties,
 
             Self::ProjectSaved { .. }
             | Self::ProjectLoaded { .. }

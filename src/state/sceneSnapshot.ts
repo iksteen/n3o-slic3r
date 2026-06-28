@@ -39,6 +39,8 @@ export const SCENE_SNAPSHOT_EVENTS = [
   "project:saved",
   // Importing a foreign project replaces the whole session.
   "project:imported",
+  // Undo/redo swaps the live project wholesale — resync like a load.
+  "project:restored",
 ] as const;
 
 export const sceneSnapshotQuery = defineQuery<SceneSnapshot>({

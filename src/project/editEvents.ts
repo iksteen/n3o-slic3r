@@ -43,6 +43,9 @@ export const PROJECT_WIDE_EDIT_EVENT = "scene:user_overrides_changed";
 export const PROJECT_REPLACED_EVENTS = [
   "project:loaded",
   "project:imported",
+  // Undo/redo swaps the live project, so every per-plate slice artifact
+  // (output, preview, tower) is stale — same as a load.
+  "project:restored",
 ] as const;
 
 interface EditPayload {
