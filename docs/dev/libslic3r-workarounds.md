@@ -1,7 +1,8 @@
 # libslic3r workarounds applied by the FFI shim
 
-> Status: as of OrcaSlicer submodule pin `6bb7903b97`. Re-verify before
-> bumping the submodule; some of these may have been fixed upstream.
+> Status: as of OrcaSlicer submodule pin `v2.4.0` (`6d9eb1792f`). Re-verify
+> before bumping the submodule; some of these may have been fixed upstream.
+> (All still apply at v2.4.0 — verified by the build + slice-to-gcode tests.)
 
 OrcaSlicer's `libslic3r` was designed to be driven by its GUI (and to
 a lesser extent its CLI). Driving it headlessly through our FFI surfaces
