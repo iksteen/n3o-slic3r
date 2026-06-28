@@ -144,6 +144,7 @@ pub fn run() {
                 core::project::Project::with_preferred_printer(preferred.as_deref()),
             ));
             app.manage(project);
+            app.manage(Arc::new(core::project::dirty::DirtyTracker::new()));
             app.manage(core::project::autosave::AutosaveHandle::new());
 
             // Plugin host. Two roots, bundled first then user, so a
@@ -250,6 +251,7 @@ pub fn run() {
             project_io::project_load,
             project_io::project_new,
             core::project::commands::project_autosave_enable,
+            core::project::commands::project_is_dirty,
             core::project::commands::project_autosave_disable,
             core::project::commands::project_autosave_list,
             core::project::commands::project_autosave_drop,
@@ -290,6 +292,21 @@ pub fn run() {
             dialog::dialog_open_file,
             dialog::dialog_save_file,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Flush autosave on exit: the worker writes a final recovery
+            // snapshot when stopped, so a graceful quit between timer ticks
+            // doesn't drop the latest edits (the 30 s interval otherwise
+            // would). `stop()` is idempotent — the handle's Drop also calls
+            // it as a backstop. `try_state` so we never panic at shutdown.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                use tauri::Manager;
+                if let Some(handle) =
+                    app_handle.try_state::<core::project::autosave::AutosaveHandle>()
+                {
+                    handle.stop();
+                }
+            }
+        });
 }

@@ -15,11 +15,11 @@
 // active plate's `printer_identity` against the printer catalog.
 
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { SceneSnapshot } from "../viewport/types";
 import { useQuery } from "../state/queryCache";
 import { onEvents } from "../state/eventRouter";
 import { sceneSnapshotQuery, SCENE_SNAPSHOT_EVENTS } from "../state/sceneSnapshot";
-import { isEditEvent, isSavedEvent } from "./editEvents";
 
 /** Back-compat re-export: the event set the session refetches on now lives
  *  with the `scene_snapshot` query. Kept under the old name so existing
@@ -31,8 +31,9 @@ export interface ProjectSession {
    * the SettingsPanel host can pass it through without conditionalizing its prop shape. */
   cascadeHandle: number | null;
   snapshot: SceneSnapshot | null;
-  /** True when the project has unsaved edits — set by any content edit,
-   * cleared on save / load / import. Drives the title-bar unsaved marker. */
+  /** True when the project has unsaved edits. Backend-authoritative
+   * (`DirtyTracker`): set by any content edit, cleared on save / load /
+   * import. Drives the title-bar unsaved marker. */
   dirty: boolean;
   /** True until the first snapshot lands. */
   loading: boolean;
@@ -45,16 +46,24 @@ export function useProjectSession(): ProjectSession {
   const { data: snapshot, loading, error } = useQuery(sceneSnapshotQuery);
   const [dirty, setDirty] = useState(false);
 
-  // Dirty tracking rides the shared router: a content edit dirties the
-  // project; save/load/import returns it to a clean baseline. (Selection +
-  // navigation aren't edits — see editEvents.) Same event names as the query,
-  // so this reuses the router's per-name Tauri subscriptions.
+  // Dirty state is owned by the backend `DirtyTracker` (the same edit
+  // classification that gates autosave). Read it once on mount, then track
+  // `project:dirty_changed` — emitted only when the flag flips.
   useEffect(() => {
-    return onEvents(SCENE_SNAPSHOT_EVENTS, (event) => {
-      const name = event.event;
-      if (isSavedEvent(name)) setDirty(false);
-      else if (isEditEvent(name)) setDirty(true);
-    });
+    let active = true;
+    invoke<boolean>("project_is_dirty")
+      .then((d) => {
+        if (active) setDirty(d);
+      })
+      .catch(() => {});
+    const off = onEvents<{ dirty: boolean }>(
+      ["project:dirty_changed"],
+      (event) => setDirty(event.payload.dirty),
+    );
+    return () => {
+      active = false;
+      off();
+    };
   }, []);
 
   return { cascadeHandle: null, snapshot, dirty, loading, error };

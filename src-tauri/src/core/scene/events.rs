@@ -165,6 +165,102 @@ impl SceneEvent {
             Self::ProjectImported { .. } => "project:imported",
         }
     }
+
+    /// How this event moves the project's dirty (unsaved-edits) state.
+    /// Mirrors the frontend's `editEvents.ts` classification: content
+    /// edits dirty the project; save/load/import return it to a clean
+    /// baseline; selection, navigation, empty-plate structure, and
+    /// warnings are neutral. The single source of truth for "is this an
+    /// edit" — `DirtyTracker` consumes it in `emit_all`.
+    pub fn dirty_effect(&self) -> DirtyEffect {
+        match self {
+            Self::ObjectAdded { .. }
+            | Self::ObjectUpdated { .. }
+            | Self::ObjectRemoved { .. }
+            | Self::BedChanged { .. }
+            | Self::ObjectOverridesChanged { .. }
+            | Self::ProjectOverridesChanged { .. }
+            | Self::UserOverridesChanged
+            | Self::PlateMetadataChanged { .. }
+            | Self::MaterialSlotChanged { .. } => DirtyEffect::Dirties,
+
+            Self::ProjectSaved { .. }
+            | Self::ProjectLoaded { .. }
+            | Self::ProjectImported { .. } => DirtyEffect::Cleans,
+
+            Self::MeshLoaded { .. }
+            | Self::SelectionChanged { .. }
+            | Self::ObjectOutOfBounds { .. }
+            | Self::AutoArrangeOverflow { .. }
+            | Self::PlateAdded { .. }
+            | Self::PlateRemoved { .. }
+            | Self::ActivePlateChanged { .. } => DirtyEffect::Neutral,
+        }
+    }
+}
+
+/// What an emitted [`SceneEvent`] does to the project's dirty state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirtyEffect {
+    /// A content edit — the project now has unsaved changes.
+    Dirties,
+    /// Save / load / import — the project matches its on-disk form.
+    Cleans,
+    /// Selection, navigation, warnings — no effect on dirtiness.
+    Neutral,
+}
+
+#[cfg(test)]
+mod dirty_effect_tests {
+    use super::*;
+    use crate::core::project::model::PlateId;
+
+    const P: PlateId = PlateId(1);
+
+    #[test]
+    fn content_edits_dirty_the_project() {
+        for e in [
+            SceneEvent::UserOverridesChanged,
+            SceneEvent::ProjectOverridesChanged { plate_id: P },
+            SceneEvent::MaterialSlotChanged { plate_id: P },
+            SceneEvent::PlateMetadataChanged { plate_id: P },
+            SceneEvent::BedChanged {
+                plate_id: P,
+                bed: None,
+            },
+        ] {
+            assert_eq!(e.dirty_effect(), DirtyEffect::Dirties, "{e:?}");
+        }
+    }
+
+    #[test]
+    fn save_load_import_clean_the_project() {
+        for e in [
+            SceneEvent::ProjectSaved { path: String::new() },
+            SceneEvent::ProjectLoaded { path: String::new() },
+        ] {
+            assert_eq!(e.dirty_effect(), DirtyEffect::Cleans, "{e:?}");
+        }
+    }
+
+    #[test]
+    fn selection_navigation_and_warnings_are_neutral() {
+        for e in [
+            SceneEvent::SelectionChanged {
+                plate_id: P,
+                selected: vec![],
+            },
+            SceneEvent::ActivePlateChanged { plate_id: P },
+            SceneEvent::PlateAdded { plate_id: P },
+            SceneEvent::PlateRemoved { plate_id: P },
+            SceneEvent::AutoArrangeOverflow {
+                plate_id: P,
+                un_placed: vec![],
+            },
+        ] {
+            assert_eq!(e.dirty_effect(), DirtyEffect::Neutral, "{e:?}");
+        }
+    }
 }
 
 /// How a selection command merges with the existing selection.

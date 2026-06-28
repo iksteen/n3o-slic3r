@@ -34,6 +34,7 @@ pub(crate) fn emit_all(window: &Window, events: &[SceneEvent]) {
             );
         }
     }
+    super::dirty::track(window, events);
 }
 
 /// Set (upsert) a `material → slot` mapping on a plate.
@@ -157,8 +158,21 @@ pub fn project_save(
         p.clone()
     };
     format::write_project(&snapshot, std::path::Path::new(&path)).map_err(|e| e.to_string())?;
+    // Emit (clears the dirty flag, gating the autosave worker off) before
+    // dropping the now-redundant recovery file.
     emit_all(&window, &[SceneEvent::ProjectSaved { path: path.clone() }]);
+    drop_recovery_after_save(&snapshot.uuid.to_string());
     Ok(())
+}
+
+/// Best-effort: remove the project's autosave recovery file once it has
+/// been saved — the on-disk save is now canonical, so the crash snapshot
+/// is stale. Logged, never fatal to the save.
+fn drop_recovery_after_save(uuid: &str) {
+    let dir = autosave::default_autosave_dir();
+    if let Err(e) = autosave::drop_autosave(&dir, uuid) {
+        tracing::warn!(error = %e, uuid, "failed to drop autosave recovery after save");
+    }
 }
 
 /// Save the in-memory project to `path` AND update its
@@ -181,6 +195,7 @@ pub fn project_save_as(
     };
     format::write_project(&snapshot, std::path::Path::new(&path)).map_err(|e| e.to_string())?;
     emit_all(&window, &[SceneEvent::ProjectSaved { path: path.clone() }]);
+    drop_recovery_after_save(&snapshot.uuid.to_string());
     Ok(())
 }
 
@@ -226,15 +241,27 @@ pub fn fresh_project() -> Project {
 /// tick rate. Failures to create the autosave directory surface
 /// as an Err.
 #[tauri::command]
-#[tracing::instrument(skip(state, handle))]
+#[tracing::instrument(skip(state, dirty, handle))]
 pub fn project_autosave_enable(
     state: State<Arc<Mutex<Project>>>,
+    dirty: State<Arc<super::dirty::DirtyTracker>>,
     handle: State<AutosaveHandle>,
 ) -> Result<(), String> {
     let dir = autosave::default_autosave_dir();
     let config = AutosaveConfig::new(dir);
     let project = (*state).clone();
-    handle.start(project, config).map_err(|e| e.to_string())
+    handle
+        .start(project, (*dirty).clone(), config)
+        .map_err(|e| e.to_string())
+}
+
+/// Whether the project has unsaved edits — the backend-authoritative
+/// dirty flag. The frontend reads this once on mount, then tracks
+/// `project:dirty_changed` events. Source of truth for the title-bar
+/// unsaved marker.
+#[tauri::command]
+pub fn project_is_dirty(dirty: State<Arc<super::dirty::DirtyTracker>>) -> bool {
+    dirty.is_dirty()
 }
 
 /// Stop the autosave worker. Idempotent — calling when the

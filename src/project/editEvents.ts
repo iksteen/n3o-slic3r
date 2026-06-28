@@ -1,10 +1,12 @@
 // Which scene events count as an EDIT — i.e. change a plate's slicable
-// content. One classification, used by three consumers:
-//   - dirty tracking (any edit → project unsaved; useProjectSession)
+// content. Used to invalidate per-plate slice artifacts:
 //   - slice-output invalidation (edit → drop the plate's last slice so Send
 //     can't push a stale gcode; useLastSliceOutput)
 //   - preview invalidation (edit → blank the plate's preview;
 //     useSlicePreviewBridge)
+//
+// Dirty/unsaved tracking is NOT here — that's backend-authoritative now
+// (`DirtyTracker` + `project:dirty_changed`; useProjectSession reads it).
 //
 // Deliberately EXCLUDES non-edits: selection (`scene:selection_changed`),
 // navigation (`scene:active_plate_changed`), structural add/remove of empty
@@ -30,13 +32,6 @@ export const PLATE_EDIT_EVENTS = [
  *  it invalidates ALL plates. */
 export const PROJECT_WIDE_EDIT_EVENT = "scene:user_overrides_changed";
 
-/** Lifecycle events that return the project to a saved/clean baseline. */
-export const SAVED_EVENTS = [
-  "project:saved",
-  "project:loaded",
-  "project:imported",
-] as const;
-
 /** Wholesale project replacement — Open project (native load or transparent
  *  foreign import). Not an *edit* (the in-memory project is swapped out, not
  *  mutated), but every per-plate slice artifact keyed by plate id — last-slice
@@ -49,22 +44,6 @@ export const PROJECT_REPLACED_EVENTS = [
   "project:loaded",
   "project:imported",
 ] as const;
-
-const EDIT_SET: ReadonlySet<string> = new Set([
-  ...PLATE_EDIT_EVENTS,
-  PROJECT_WIDE_EDIT_EVENT,
-]);
-const SAVED_SET: ReadonlySet<string> = new Set(SAVED_EVENTS);
-
-/** Does this event name dirty the project? */
-export function isEditEvent(name: string): boolean {
-  return EDIT_SET.has(name);
-}
-
-/** Does this event name return the project to a clean baseline? */
-export function isSavedEvent(name: string): boolean {
-  return SAVED_SET.has(name);
-}
 
 interface EditPayload {
   data?: { plate_id?: number };
