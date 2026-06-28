@@ -18,7 +18,10 @@
 //! message boxes are in-process on every platform, so the portal problem
 //! doesn't touch them.
 
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+// `Manager::webview_windows()` is used only on the Linux dialog-parent path.
+#[cfg(target_os = "linux")]
+use tauri::Manager;
 
 /// A named set of extensions, matching the plugin-dialog filter shape the
 /// frontend already builds (`{ name, extensions }`).
