@@ -63,7 +63,7 @@ Usage:
         --profiles-root profiles
 
 The scope of supported printers and their on-disk locations comes
-from walking `<profiles-root>/vendor/*/printer/*/machine.toml` and
+from walking `<profiles-root>/*/printer/*/machine.toml` and
 reading the `printer_model` field. Each consolidated fragment is
 written to every compatible printer's `processes/` dir.
 
@@ -486,8 +486,8 @@ def main() -> None:
     ap.add_argument("--root", type=Path, required=True,
                     help="profiles tree root (e.g. external/OrcaSlicer/resources/profiles)")
     ap.add_argument("--profiles-root", type=Path, required=True,
-                    help="our profiles tree root (e.g. profiles/). The "
-                         "consolidator walks `<profiles-root>/vendor/*/printer/*/"
+                    help="our profiles tree root (e.g. resources/profiles). The "
+                         "consolidator walks `<profiles-root>/*/printer/*/"
                          "machine.toml` to discover printer.model → printer-dir "
                          "mappings; each consolidated fragment is written into "
                          "every compatible printer's `processes/` dir.")
@@ -503,7 +503,7 @@ def main() -> None:
     # Discover printer.model → printer-dir map by walking machine.toml
     # files. Authoritative — no convention parsing.
     printer_dir_by_model: dict[str, Path] = {}
-    for machine_path in (profiles_root / "vendor").glob("*/printer/*/machine.toml"):
+    for machine_path in profiles_root.glob("*/printer/*/machine.toml"):
         for line in machine_path.read_text().splitlines():
             if line.startswith("printer_model"):
                 # `printer_model = "Bambu Lab A1 mini"` — split on `=`
@@ -515,7 +515,7 @@ def main() -> None:
                 break
     if not printer_dir_by_model:
         sys.exit(f"error: no machine.toml files found under "
-                 f"{profiles_root}/vendor/*/printer/*/")
+                 f"{profiles_root}/*/printer/*/")
     supported_printers = set(printer_dir_by_model)
     print(f"discovered {len(supported_printers)} printer profile(s): "
           f"{sorted(supported_printers)}")
