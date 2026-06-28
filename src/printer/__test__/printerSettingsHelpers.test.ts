@@ -51,28 +51,22 @@ function fixture(overrides: Partial<PrinterInstance> = {}): PrinterInstance {
     ],
     bed: { identity: "Textured PEI Plate" },
     config_overrides: {},
+    // Backend-computed view fields (PrinterInstanceView). `slots` is
+    // unused by these pure helpers; `ams_units` is what initialDraft reads.
+    slots: [],
+    ams_units: 1,
     ...overrides,
   };
 }
 
 describe("initialDraft", () => {
-  it("extracts AMS-units count from the AMS slot topology", () => {
-    // 4 AMS slots + 1 direct = ams_units 1.
+  it("carries the backend AMS-units count into the draft", () => {
     const d = initialDraft(fixture());
     expect(d.amsUnits).toBe(1);
   });
 
   it("returns 0 when the printer is direct-feed only", () => {
-    const d = initialDraft(
-      fixture({
-        extruders: [
-          {
-            installed_nozzle: { diameter: "0.4", material: "stainless" },
-            slots: [{ feed: "direct", filament_identity: null, color: null, tag_uid: null }],
-          },
-        ],
-      }),
-    );
+    const d = initialDraft(fixture({ ams_units: 0 }));
     expect(d.amsUnits).toBe(0);
   });
 

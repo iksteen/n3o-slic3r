@@ -126,6 +126,367 @@ impl PrinterInstance {
     }
 }
 
+/// Display label for an extruder, given its 0-based position and the
+/// total extruder count. Multi-extruder printers (toolchangers) get
+/// 1-based `T1..TN`; single-extruder printers get an empty label — the
+/// slot label carries identity there.
+fn extruder_label(ext_idx: usize, total_extruders: usize) -> String {
+    if total_extruders <= 1 {
+        String::new()
+    } else {
+        format!("T{}", ext_idx + 1)
+    }
+}
+
+/// Where a slot sits within an AMS-style extruder. AMS-feed slots are
+/// numbered 1-based across the extruder, grouped into units of
+/// `AMS_SLOTS_PER_UNIT` once there is more than one unit's worth
+/// (multi-unit topology); the trailing Direct-feed slot is the
+/// external spool.
+enum SlotPosition {
+    Ams {
+        unit_idx: usize,
+        idx_in_unit: usize,
+        multi_unit: bool,
+    },
+    Direct,
+    None,
+}
+
+fn ams_slot_position(slot_idx: usize, slots: &[SlotBinding]) -> SlotPosition {
+    let multi_unit = slots
+        .iter()
+        .filter(|s| matches!(s.feed, FeedKind::Ams))
+        .count()
+        > AMS_SLOTS_PER_UNIT;
+    let mut idx_in_unit = 0;
+    let mut unit_idx = 0;
+    for (i, slot) in slots.iter().enumerate() {
+        if matches!(slot.feed, FeedKind::Ams) {
+            if idx_in_unit == AMS_SLOTS_PER_UNIT {
+                idx_in_unit = 0;
+                unit_idx += 1;
+            }
+            idx_in_unit += 1;
+            if i == slot_idx {
+                return SlotPosition::Ams {
+                    unit_idx,
+                    idx_in_unit,
+                    multi_unit,
+                };
+            }
+        } else if i == slot_idx {
+            return SlotPosition::Direct;
+        }
+    }
+    SlotPosition::None
+}
+
+/// AMS-unit letter for a 0-based unit index (`0 -> 'A'`).
+fn unit_letter(unit_idx: usize) -> char {
+    (b'A' + unit_idx as u8) as char
+}
+
+/// Long-form slot label (tooltips + picker dropdown), slot-scope only —
+/// [`flatten_slots`] joins it with the extruder label. Single-slot
+/// extruders surface identity through the extruder label (multi-extruder
+/// printers) or a `Direct`/`AMS:1` feed-kind label (single-extruder).
+/// Multi-slot extruders are AMS-style (`AMS:1`, or `AMS A:1` once
+/// multi-unit, trailing `Ext`).
+fn slot_label(slot_idx: usize, slots: &[SlotBinding], total_extruders: usize) -> String {
+    if slots.len() == 1 {
+        if total_extruders > 1 {
+            return String::new();
+        }
+        return match slots[0].feed {
+            FeedKind::Direct => "Direct".into(),
+            FeedKind::Ams => "AMS:1".into(),
+        };
+    }
+    match ams_slot_position(slot_idx, slots) {
+        SlotPosition::Ams {
+            unit_idx,
+            idx_in_unit,
+            multi_unit,
+        } => {
+            if multi_unit {
+                format!("AMS {}:{}", unit_letter(unit_idx), idx_in_unit)
+            } else {
+                format!("AMS:{idx_in_unit}")
+            }
+        }
+        SlotPosition::Direct => "Ext".into(),
+        SlotPosition::None => String::new(),
+    }
+}
+
+/// Compact slot label for a chip face. The extruder prefix (`T1`…)
+/// appears only on multi-extruder printers; the per-slot part is dropped
+/// when the extruder has a single slot (a toolchanger toolhead — the
+/// extruder label *is* its identity, e.g. `T1`). Otherwise the slot part
+/// is `Ext`/`1` (single-slot single-extruder), or AMS digits / `A:1`
+/// (multi-unit) / `Ext`. Multi-slot multi-extruder printers (Bambu H2D:
+/// AMS + external spool per extruder) get both — `T1·A:1`, `T1·Ext`.
+fn slot_short_label(
+    ext_idx: usize,
+    total_extruders: usize,
+    slot_idx: usize,
+    slots: &[SlotBinding],
+) -> String {
+    let ext_part = if total_extruders > 1 {
+        format!("T{}", ext_idx + 1)
+    } else {
+        String::new()
+    };
+
+    let slot_part = if slots.len() == 1 {
+        // A single slot under a multi-extruder printer is a toolchanger
+        // toolhead — the extruder label already identifies it.
+        if total_extruders > 1 {
+            String::new()
+        } else {
+            match slots[0].feed {
+                FeedKind::Direct => "Ext".into(),
+                FeedKind::Ams => "1".into(),
+            }
+        }
+    } else {
+        match ams_slot_position(slot_idx, slots) {
+            SlotPosition::Ams {
+                unit_idx,
+                idx_in_unit,
+                multi_unit,
+            } => {
+                if multi_unit {
+                    format!("{}:{}", unit_letter(unit_idx), idx_in_unit)
+                } else {
+                    format!("{idx_in_unit}")
+                }
+            }
+            SlotPosition::Direct => "Ext".into(),
+            SlotPosition::None => String::new(),
+        }
+    };
+
+    match (ext_part.is_empty(), slot_part.is_empty()) {
+        (false, false) => format!("{ext_part}·{slot_part}"),
+        (false, true) => ext_part,
+        (true, false) => slot_part,
+        (true, true) => format!("{}", slot_idx + 1),
+    }
+}
+
+/// Flattened, pre-labeled slot for the frontend. Carries the labels
+/// Rust derives from topology (extruder count + per-slot `feed`)
+/// alongside the slot's binding state; the renderer reads these fields
+/// directly instead of re-deriving labels from the slot grid. `ref`
+/// locates the slot for write-back commands.
+#[derive(Debug, Clone, Serialize)]
+pub struct SlotView {
+    #[serde(rename = "ref")]
+    pub slot_ref: SlotRef,
+    /// Long label — extruder + slot joined (`"T1 — AMS A:1"`, `"AMS:1"`,
+    /// `"Ext"`), falling back to `"Slot N"` when both parts are empty.
+    pub label: String,
+    /// Compact chip label (`"A:1"`, `"1"`, `"Ext"`, `"T1"`).
+    pub short_label: String,
+    pub feed: FeedKind,
+    pub filament_identity: Option<String>,
+    pub color: Option<String>,
+    pub tag_uid: Option<String>,
+}
+
+/// Flatten an instance's extruder × slot grid into pre-labeled slot
+/// views — one per `(extruder, slot)`, in slice order. The single
+/// source of truth for slot labels: the frontend renders these, it
+/// does not re-derive them.
+pub fn flatten_slots(instance: &PrinterInstance) -> Vec<SlotView> {
+    let total_ext = instance.extruders.len();
+    let mut out = Vec::new();
+    for (e_idx, ext) in instance.extruders.iter().enumerate() {
+        let ext_label = extruder_label(e_idx, total_ext);
+        for (s_idx, slot) in ext.slots.iter().enumerate() {
+            let s_label = slot_label(s_idx, &ext.slots, total_ext);
+            let label = match (ext_label.is_empty(), s_label.is_empty()) {
+                (false, false) => format!("{ext_label} — {s_label}"),
+                (false, true) => ext_label.clone(),
+                (true, false) => s_label,
+                (true, true) => format!("Slot {}", s_idx + 1),
+            };
+            out.push(SlotView {
+                slot_ref: SlotRef {
+                    extruder: e_idx as u8,
+                    slot: s_idx as u8,
+                },
+                label,
+                short_label: slot_short_label(e_idx, total_ext, s_idx, &ext.slots),
+                feed: slot.feed,
+                filament_identity: slot.filament_identity.clone(),
+                color: slot.color.clone(),
+                tag_uid: slot.tag_uid.clone(),
+            });
+        }
+    }
+    out
+}
+
+/// Frontend-facing instance snapshot: the persisted [`PrinterInstance`]
+/// plus the Rust-computed slot views and AMS-unit count the renderer
+/// would otherwise re-derive. Serialize-only and never persisted — the
+/// on-disk library writes the inner `PrinterInstance`, so the derived
+/// labels can't go stale on disk.
+#[derive(Debug, Clone, Serialize)]
+pub struct PrinterInstanceView {
+    #[serde(flatten)]
+    pub instance: PrinterInstance,
+    pub slots: Vec<SlotView>,
+    pub ams_units: u32,
+}
+
+impl PrinterInstanceView {
+    pub fn of(instance: PrinterInstance) -> Self {
+        let slots = flatten_slots(&instance);
+        let ams_units = instance.ams_units();
+        Self {
+            instance,
+            slots,
+            ams_units,
+        }
+    }
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::*;
+
+    fn binding(feed: FeedKind) -> SlotBinding {
+        SlotBinding {
+            feed,
+            filament_identity: None,
+            color: None,
+            tag_uid: None,
+        }
+    }
+
+    /// Build an instance from a per-extruder feed layout — the only
+    /// thing `flatten_slots` reads.
+    fn instance(extruders: Vec<Vec<FeedKind>>) -> PrinterInstance {
+        PrinterInstance {
+            id: "t".into(),
+            display_name: "T".into(),
+            vendor_profile_ref: "x".into(),
+            printer_fragment_slug: "x".into(),
+            default_filament_fragment_slug: "x".into(),
+            quality_profile: "x".into(),
+            connection: None,
+            extruders: extruders
+                .into_iter()
+                .map(|feeds| ExtruderState {
+                    installed_nozzle: NozzleSku {
+                        diameter: "0.4".into(),
+                        material: NozzleMaterial::Stainless,
+                    },
+                    slots: feeds.into_iter().map(binding).collect(),
+                })
+                .collect(),
+            bed: BedRef {
+                identity: "b".into(),
+            },
+            config_overrides: Default::default(),
+        }
+    }
+
+    use FeedKind::{Ams, Direct};
+
+    fn labels(inst: &PrinterInstance) -> Vec<String> {
+        flatten_slots(inst).into_iter().map(|s| s.label).collect()
+    }
+
+    #[test]
+    fn single_direct_slot_is_direct() {
+        let slots = flatten_slots(&instance(vec![vec![Direct]]));
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].label, "Direct");
+        assert_eq!(slots[0].short_label, "Ext");
+        assert_eq!(slots[0].slot_ref, SlotRef { extruder: 0, slot: 0 });
+    }
+
+    #[test]
+    fn toolchanger_labels_by_extruder() {
+        let inst = instance(vec![vec![Direct]; 4]);
+        assert_eq!(labels(&inst), ["T1", "T2", "T3", "T4"]);
+        let shorts: Vec<_> = flatten_slots(&inst)
+            .into_iter()
+            .map(|s| s.short_label)
+            .collect();
+        assert_eq!(shorts, ["T1", "T2", "T3", "T4"]);
+    }
+
+    #[test]
+    fn single_ams_unit_labels() {
+        let inst = instance(vec![vec![Ams, Ams, Ams, Ams, Direct]]);
+        assert_eq!(labels(&inst), ["AMS:1", "AMS:2", "AMS:3", "AMS:4", "Ext"]);
+        let shorts: Vec<_> = flatten_slots(&inst)
+            .into_iter()
+            .map(|s| s.short_label)
+            .collect();
+        assert_eq!(shorts, ["1", "2", "3", "4", "Ext"]);
+    }
+
+    #[test]
+    fn h2d_shape_two_extruders_each_with_ams_plus_external() {
+        // Bambu H2D: 2 independently-fed extruders, each [AMS×4, Ext].
+        // The extruder prefix disambiguates slots that would otherwise
+        // collide across extruders — long labels compose, chips carry
+        // both extruder + slot.
+        let ext = || vec![Ams, Ams, Ams, Ams, Direct];
+        let inst = instance(vec![ext(), ext()]);
+        assert_eq!(
+            labels(&inst),
+            [
+                "T1 — AMS:1", "T1 — AMS:2", "T1 — AMS:3", "T1 — AMS:4", "T1 — Ext", "T2 — AMS:1",
+                "T2 — AMS:2", "T2 — AMS:3", "T2 — AMS:4", "T2 — Ext",
+            ]
+        );
+        let shorts: Vec<_> = flatten_slots(&inst)
+            .into_iter()
+            .map(|s| s.short_label)
+            .collect();
+        assert_eq!(
+            shorts,
+            [
+                "T1·1", "T1·2", "T1·3", "T1·4", "T1·Ext", "T2·1", "T2·2", "T2·3", "T2·4", "T2·Ext",
+            ]
+        );
+    }
+
+    #[test]
+    fn multi_ams_unit_letter_prefix() {
+        // 3 units = 12 AMS slots + 1 Ext → A:1..4, B:1..4, C:1..4, Ext.
+        let mut feeds = vec![Ams; 12];
+        feeds.push(Direct);
+        let inst = instance(vec![feeds]);
+        assert_eq!(
+            labels(&inst),
+            [
+                "AMS A:1", "AMS A:2", "AMS A:3", "AMS A:4", "AMS B:1", "AMS B:2", "AMS B:3",
+                "AMS B:4", "AMS C:1", "AMS C:2", "AMS C:3", "AMS C:4", "Ext",
+            ]
+        );
+        let shorts: Vec<_> = flatten_slots(&inst)
+            .into_iter()
+            .map(|s| s.short_label)
+            .collect();
+        assert_eq!(
+            shorts,
+            [
+                "A:1", "A:2", "A:3", "A:4", "B:1", "B:2", "B:3", "B:4", "C:1", "C:2", "C:3", "C:4",
+                "Ext",
+            ]
+        );
+    }
+}
+
 /// Per-extruder state — currently-installed nozzle plus the filament
 /// feeds (slots) that pull into this extruder.
 ///

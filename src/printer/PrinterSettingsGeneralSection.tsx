@@ -51,6 +51,7 @@ export function GeneralSection({
           <AmsPicker
             amsMax={profile.ams_max}
             amsType={profile.ams_type ?? "AMS"}
+            slotsPerUnit={profile.ams_slots_per_unit}
             value={draft.amsUnits}
             onChange={(n) => setDraft((d) => ({ ...d, amsUnits: n }))}
           />

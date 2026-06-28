@@ -3,7 +3,6 @@
 // orchestrator and these stay independently testable.
 
 import {
-  amsUnitsOf,
   type ConnectionInfo,
   type PrinterInstance,
 } from "./printerInstance";
@@ -104,7 +103,7 @@ export function initialDraft(instance: PrinterInstance): Draft {
   }
   return {
     displayName: instance.display_name,
-    amsUnits: amsUnitsOf(instance),
+    amsUnits: instance.ams_units,
     host,
     accessCode,
     port,

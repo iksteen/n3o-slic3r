@@ -32,8 +32,8 @@ pub use options::{
     OptScopeFlags, OptionSummary, PrinterAwareOptionSummary,
 };
 pub use instance::{
-    BedRef, ConnectionInfo, ExtruderState, FeedKind, NozzleMaterial, NozzleSku, PrinterInstance,
-    SlotBinding, SlotRef,
+    flatten_slots, BedRef, ConnectionInfo, ExtruderState, FeedKind, NozzleMaterial, NozzleSku,
+    PrinterInstance, PrinterInstanceView, SlotBinding, SlotRef, SlotView,
 };
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use instance_library::{
@@ -70,15 +70,18 @@ fn emit_instance_changed(window: &tauri::Window, id: &str) {
 /// Empty on first launch (the frontend renders the onboarding
 /// empty-state in that case). Drives the printer picker.
 #[tauri::command]
-pub fn printer_instance_list() -> Vec<PrinterInstance> {
+pub fn printer_instance_list() -> Vec<PrinterInstanceView> {
     list_instances()
+        .into_iter()
+        .map(PrinterInstanceView::of)
+        .collect()
 }
 
 /// Tauri command: snapshot a single instance by id. The slot-binding
 /// panel reads the chosen plate's instance through this.
 #[tauri::command]
-pub fn printer_instance_get(id: String) -> Option<PrinterInstance> {
-    lookup_instance(&id)
+pub fn printer_instance_get(id: String) -> Option<PrinterInstanceView> {
+    lookup_instance(&id).map(PrinterInstanceView::of)
 }
 
 /// Tauri command: bind (or clear) the filament loaded in one
@@ -92,11 +95,11 @@ pub fn printer_instance_set_slot_filament(
     slot_idx: usize,
     filament_identity: Option<String>,
     window: tauri::Window,
-) -> Result<PrinterInstance, String> {
+) -> Result<PrinterInstanceView, String> {
     let updated = set_slot_filament(&id, extruder_idx, slot_idx, filament_identity)
         .map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &updated.id);
-    Ok(updated)
+    Ok(PrinterInstanceView::of(updated))
 }
 
 /// Tauri command: set (or clear, with `value = None`) a `plugin.<name>.*`
@@ -109,13 +112,13 @@ pub fn printer_instance_set_plugin_override(
     key: String,
     value: Option<String>,
     window: tauri::Window,
-) -> Result<PrinterInstance, String> {
+) -> Result<PrinterInstanceView, String> {
     if !key.starts_with("plugin.") {
         return Err(format!("`{key}` is not a plugin override key"));
     }
     let updated = set_plugin_override(&id, key, value).map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &updated.id);
-    Ok(updated)
+    Ok(PrinterInstanceView::of(updated))
 }
 
 /// Tauri command: set (or clear, with `value = None`) a machine-settings
@@ -130,13 +133,13 @@ pub fn printer_instance_set_config_override(
     key: String,
     value: Option<String>,
     window: tauri::Window,
-) -> Result<PrinterInstance, String> {
+) -> Result<PrinterInstanceView, String> {
     if slic3r_ffi::bucket_of(&key) != Some(slic3r_ffi::OptBucket::Printer) {
         return Err(format!("`{key}` is not a machine (printer-bucket) setting"));
     }
     let updated = set_config_override(&id, key, value).map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &updated.id);
-    Ok(updated)
+    Ok(PrinterInstanceView::of(updated))
 }
 
 /// Tauri command: resolve a printer instance's cascade and return the
@@ -170,11 +173,11 @@ pub fn printer_instance_create(
     display_name: String,
     ams_units: u32,
     window: tauri::Window,
-) -> Result<PrinterInstance, String> {
+) -> Result<PrinterInstanceView, String> {
     let inst =
         create_instance(&printer_identity, display_name, ams_units).map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &inst.id);
-    Ok(inst)
+    Ok(PrinterInstanceView::of(inst))
 }
 
 /// Tauri command: remove a `PrinterInstance`. The caller (frontend)
@@ -263,10 +266,10 @@ pub fn printer_instance_set_display_name(
     id: String,
     display_name: String,
     window: tauri::Window,
-) -> Result<PrinterInstance, String> {
+) -> Result<PrinterInstanceView, String> {
     let updated = set_instance_display_name(&id, display_name).map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &updated.id);
-    Ok(updated)
+    Ok(PrinterInstanceView::of(updated))
 }
 
 /// Tauri command: change the AMS-unit count on an AMS-style printer.
@@ -279,10 +282,10 @@ pub fn printer_instance_set_ams_units(
     id: String,
     ams_units: u32,
     window: tauri::Window,
-) -> Result<PrinterInstance, String> {
+) -> Result<PrinterInstanceView, String> {
     let updated = set_instance_ams_units(&id, ams_units).map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &updated.id);
-    Ok(updated)
+    Ok(PrinterInstanceView::of(updated))
 }
 
 /// Tauri command: atomic multi-field update. Applies the patch
@@ -297,10 +300,10 @@ pub fn printer_instance_update(
     id: String,
     patch: InstancePatch,
     window: tauri::Window,
-) -> Result<PrinterInstance, String> {
+) -> Result<PrinterInstanceView, String> {
     let updated = update_instance(&id, patch).map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &updated.id);
-    Ok(updated)
+    Ok(PrinterInstanceView::of(updated))
 }
 
 /// Tauri command: write (or clear) the instance's network connection
@@ -315,10 +318,10 @@ pub fn printer_instance_set_connection(
     id: String,
     connection: Option<ConnectionInfo>,
     window: tauri::Window,
-) -> Result<PrinterInstance, String> {
+) -> Result<PrinterInstanceView, String> {
     let updated = set_instance_connection(&id, connection).map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &updated.id);
-    Ok(updated)
+    Ok(PrinterInstanceView::of(updated))
 }
 
 /// Tauri command: change the diameter of the nozzle currently
@@ -332,11 +335,11 @@ pub fn printer_instance_set_extruder_nozzle_diameter(
     extruder_idx: usize,
     diameter: String,
     window: tauri::Window,
-) -> Result<PrinterInstance, String> {
+) -> Result<PrinterInstanceView, String> {
     let updated =
         set_extruder_nozzle_diameter(&id, extruder_idx, diameter).map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &updated.id);
-    Ok(updated)
+    Ok(PrinterInstanceView::of(updated))
 }
 
 /// Tauri command: change the bed currently loaded on one instance.
@@ -351,10 +354,10 @@ pub fn printer_instance_set_bed(
     id: String,
     bed_identity: String,
     window: tauri::Window,
-) -> Result<PrinterInstance, String> {
+) -> Result<PrinterInstanceView, String> {
     let updated = set_instance_bed(&id, bed_identity).map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &updated.id);
-    Ok(updated)
+    Ok(PrinterInstanceView::of(updated))
 }
 
 /// Tauri command: set (or clear) the user-assigned spool color on one
@@ -368,10 +371,10 @@ pub fn printer_instance_set_slot_color(
     slot_idx: usize,
     color: Option<String>,
     window: tauri::Window,
-) -> Result<PrinterInstance, String> {
+) -> Result<PrinterInstanceView, String> {
     let updated = set_slot_color(&id, extruder_idx, slot_idx, color).map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &updated.id);
-    Ok(updated)
+    Ok(PrinterInstanceView::of(updated))
 }
 
 /// Tauri command: bundled vendor filament fragments
@@ -411,10 +414,10 @@ pub fn printer_instance_set_quality_profile(
     id: String,
     quality_profile: String,
     window: tauri::Window,
-) -> Result<PrinterInstance, String> {
+) -> Result<PrinterInstanceView, String> {
     let updated = set_instance_quality_profile(&id, quality_profile).map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &updated.id);
-    Ok(updated)
+    Ok(PrinterInstanceView::of(updated))
 }
 
 /// Tauri command: enumerate process fragments available for the
@@ -474,7 +477,7 @@ pub async fn printer_instance_sync_from_driver(
     driver_id: crate::core::driver::traits::DriverId,
     registry: tauri::State<'_, std::sync::Arc<crate::core::driver::registry::DriverRegistry>>,
     window: tauri::Window,
-) -> Result<PrinterInstance, String> {
+) -> Result<PrinterInstanceView, String> {
     let handle = registry
         .get(driver_id)
         .ok_or_else(|| format!("unknown driver id {}", driver_id.0))?;
@@ -490,5 +493,5 @@ pub async fn printer_instance_sync_from_driver(
             .map_err(|e| e.to_string())?;
 
     emit_instance_changed(&window, &updated.id);
-    Ok(updated)
+    Ok(PrinterInstanceView::of(updated))
 }

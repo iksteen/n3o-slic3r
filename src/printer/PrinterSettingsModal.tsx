@@ -718,8 +718,12 @@ export function PrinterSettingsModal({
               <strong>{draft.amsUnits}</strong> AMS units. This will
               drop{" "}
               <strong>
-                {(initial.amsUnits - draft.amsUnits) * 4} filament
-                binding{(initial.amsUnits - draft.amsUnits) * 4 === 1
+                {(initial.amsUnits - draft.amsUnits) *
+                  (profile?.ams_slots_per_unit ?? 0)}{" "}
+                filament binding
+                {(initial.amsUnits - draft.amsUnits) *
+                  (profile?.ams_slots_per_unit ?? 0) ===
+                1
                   ? ""
                   : "s"}
               </strong>{" "}

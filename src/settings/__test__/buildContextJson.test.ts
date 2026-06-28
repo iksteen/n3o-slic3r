@@ -15,6 +15,7 @@ const PRINTER: PrinterProfileJson = {
   brand_short: "B",
   ams_max: 1,
   ams_type: "AMS Lite",
+  ams_slots_per_unit: 4,
   default_bed: "Textured PEI",
   supported_build_plates: ["Textured PEI", "Cool"],
   available_nozzle_diameters: ["0.4"],

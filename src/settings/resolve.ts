@@ -41,6 +41,9 @@ export type PrinterProfileJson = {
   /** User-visible AMS family name ("AMS Lite", "AMS 2 Pro").
    * `null` when ams_max is 0. */
   ams_type: string | null;
+  /** Filament slots one AMS unit holds (4 for AMS Lite / AMS). The
+   * AMS picker previews slot counts off this instead of hardcoding. */
+  ams_slots_per_unit: number;
   supported_build_plates: string[];
   /** Nozzle diameters the printer ships per-nozzle fragments for
    *  (e.g. `["0.2", "0.4", "0.6", "0.8"]` for the A1 mini).

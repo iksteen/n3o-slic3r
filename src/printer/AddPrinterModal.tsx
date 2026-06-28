@@ -289,6 +289,7 @@ export function AddPrinterModal({
                   <AmsPicker
                     amsMax={selected.profile.ams_max}
                     amsType={selected.profile.ams_type ?? "AMS"}
+                    slotsPerUnit={selected.profile.ams_slots_per_unit}
                     value={amsUnits}
                     onChange={setAmsUnits}
                   />

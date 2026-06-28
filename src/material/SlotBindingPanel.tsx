@@ -16,7 +16,6 @@ import { useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { PlateId, PlateSnapshot } from "../viewport/types";
 import {
-  flattenSlots,
   setSlotColor,
   setSlotFilament,
   type FlatSlotOption,
@@ -69,10 +68,7 @@ export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelP
   const { list: filaments, byIdentity: filamentByIdentity } =
     useFilamentCatalog();
 
-  const slots = useMemo<FlatSlotOption[]>(
-    () => (instance ? flattenSlots(instance) : []),
-    [instance],
-  );
+  const slots: FlatSlotOption[] = instance?.slots ?? [];
 
   const materials = useMemo(() => boundMaterials(plate), [plate]);
 
@@ -203,8 +199,6 @@ export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelP
                 material={mat}
                 current={slotFor(mat)}
                 slots={slots}
-                totalExtruders={instance.extruders.length}
-                extruderSlots={instance.extruders.map((e) => e.slots)}
                 filamentByIdentity={filamentByIdentity}
                 useCount={useCountByMaterial.get(mat) ?? 0}
                 onPickSlot={(slot) => onPickMaterialSlot(mat, slot)}

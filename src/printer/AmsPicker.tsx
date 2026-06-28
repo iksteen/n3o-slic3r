@@ -17,13 +17,22 @@ export interface AmsPickerProps {
    *  `"AMS Lite"`, `"AMS 2 Pro"`. Drives the counter copy and the
    *  per-tile label. */
   amsType: string;
+  /** Filament slots one AMS unit holds — from the printer profile
+   *  (`ams_slots_per_unit`). Drives the previewed slot counts. */
+  slotsPerUnit: number;
   /** Currently-selected AMS unit count. `0` means no AMS — slots
    *  collapse to a single direct-feed Ext spool. */
   value: number;
   onChange: (units: number) => void;
 }
 
-export function AmsPicker({ amsMax, amsType, value, onChange }: AmsPickerProps) {
+export function AmsPicker({
+  amsMax,
+  amsType,
+  slotsPerUnit,
+  value,
+  onChange,
+}: AmsPickerProps) {
   // A stored `value` can exceed `amsMax` if the printer profile's
   // AMS ceiling was lowered after this instance was created at a
   // higher count. Render tiles up to the larger of the two so the
@@ -33,13 +42,13 @@ export function AmsPicker({ amsMax, amsType, value, onChange }: AmsPickerProps) 
   const overRange = value > amsMax;
   const isToggle = amsMax === 1 && !overRange;
   const maxTile = Math.max(amsMax, value);
-  const totalSlots = value * 4 + 1;
+  const totalSlots = value * slotsPerUnit + 1;
   const counterText =
     value === 0
       ? "No AMS"
       : value === 1
-        ? `1 × ${amsType} · 4 slots`
-        : `${value} × ${amsType} · ${value * 4} slots`;
+        ? `1 × ${amsType} · ${slotsPerUnit} slots`
+        : `${value} × ${amsType} · ${value * slotsPerUnit} slots`;
   return (
     <div className="apm-ams">
       <div className="apm-ams-head">
@@ -72,7 +81,7 @@ export function AmsPicker({ amsMax, amsType, value, onChange }: AmsPickerProps) 
             <span className="apm-ams-tile-num">1</span>
             <span className="apm-ams-tile-label">With {amsType}</span>
             <span className="apm-ams-tile-dots">
-              {[0, 1, 2, 3].map((i) => (
+              {Array.from({ length: slotsPerUnit }, (_, i) => (
                 <span key={i} className="apm-ams-tile-dot" />
               ))}
             </span>
@@ -99,7 +108,7 @@ export function AmsPicker({ amsMax, amsType, value, onChange }: AmsPickerProps) 
                     ? `${i} × ${amsType} — exceeds this printer's current maximum of ${amsMax}`
                     : i === 0
                       ? `No ${amsType} installed`
-                      : `${i} × ${amsType} (${i * 4} slots)`
+                      : `${i} × ${amsType} (${i * slotsPerUnit} slots)`
                 }
               >
                 <span className="apm-ams-tile-num">{i}</span>
@@ -121,7 +130,7 @@ export function AmsPicker({ amsMax, amsType, value, onChange }: AmsPickerProps) 
       <div className="apm-name-hint">
         {value === 0
           ? "Filaments load directly into the extruder via an external spool. You can attach an AMS later from the printer's settings."
-          : `Each ${amsType} holds 4 spools and feeds them to the toolhead automatically. You'll route project materials to slots once a plate exists.`}
+          : `Each ${amsType} holds ${slotsPerUnit} spools and feeds them to the toolhead automatically. You'll route project materials to slots once a plate exists.`}
       </div>
       {overRange && (
         <div className="apm-name-hint error">

@@ -9,6 +9,10 @@
 
 use serde::{Deserialize, Serialize};
 
+fn default_ams_slots_per_unit() -> u32 {
+    super::instance::AMS_SLOTS_PER_UNIT as u32
+}
+
 /// Declarative description of a physical printer.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrinterProfile {
@@ -51,6 +55,14 @@ pub struct PrinterProfile {
     /// `"<ams_type> configuration"`.
     #[serde(default)]
     pub ams_type: Option<String>,
+
+    /// Filament slots one AMS unit of this printer holds (the A1 mini's
+    /// AMS Lite and the A1's AMS are both 4). The create/settings AMS
+    /// picker reads this to preview slot counts instead of hardcoding a
+    /// constant; the slot topology itself is built backend-side. `4`
+    /// when a profile omits it.
+    #[serde(default = "default_ams_slots_per_unit")]
+    pub ams_slots_per_unit: u32,
 
     /// Build-plate identities this printer can target. Derived from
     /// the bed fragments bundled at
@@ -169,6 +181,7 @@ mod tests {
             brand_short: "B".into(),
             ams_max: 1,
             ams_type: Some("AMS Lite".into()),
+            ams_slots_per_unit: 4,
             default_bed: Some("Textured PEI Plate".into()),
             supported_build_plates: vec![
                 "Cool Plate".into(),

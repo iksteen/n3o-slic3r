@@ -19,7 +19,6 @@ import type {
   PlateId,
 } from "../viewport/types";
 import {
-  flattenSlots,
   type FlatSlotOption,
   type PrinterInstance,
 } from "../printer/printerInstance";
@@ -87,10 +86,7 @@ export function ObjectsPanel({
   const { byIdentity: filamentByIdentity } = useFilamentCatalog();
   const { plates } = usePlateTabs();
 
-  const slots = useMemo<FlatSlotOption[]>(
-    () => (instance ? flattenSlots(instance) : []),
-    [instance],
-  );
+  const slots: FlatSlotOption[] = instance?.slots ?? [];
   const materials = useMemo(() => referencedMaterials(plate), [plate]);
   const nextMaterial = firstAvailableMaterial(materials);
   const materialToSlot = plate?.material_to_slot ?? {};

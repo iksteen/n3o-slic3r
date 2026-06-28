@@ -12,9 +12,7 @@
 import { useRef, useState } from "react";
 import { usePopoverDismiss } from "../ui/usePopoverDismiss";
 import {
-  deriveSlotShortLabel,
   type FlatSlotOption,
-  type SlotBinding,
   type SlotRef,
 } from "../printer/printerInstance";
 import type { FilamentSummary } from "./filamentSummary";
@@ -47,10 +45,6 @@ export interface MaterialChipProps {
   current: FlatSlotOption | null;
   /** Every slot on the bound printer (target choices for the popover). */
   slots: readonly FlatSlotOption[];
-  /** Total extruders on the instance — needed for `deriveSlotShortLabel`. */
-  totalExtruders: number;
-  /** Per-extruder slot vectors — needed for `deriveSlotShortLabel`. */
-  extruderSlots: readonly (readonly SlotBinding[])[];
   /** Resolved filament details for each slot, keyed by identity. */
   filamentByIdentity: Map<string, FilamentSummary>;
   /** Object count on the plate that references this material. */
@@ -59,27 +53,10 @@ export interface MaterialChipProps {
   onClear: () => void;
 }
 
-function shortLabelFor(
-  slot: FlatSlotOption,
-  totalExtruders: number,
-  extruderSlots: readonly (readonly SlotBinding[])[],
-): string {
-  const ext = extruderSlots[slot.ref.extruder];
-  if (!ext) return slot.label;
-  return deriveSlotShortLabel(
-    slot.ref.extruder,
-    totalExtruders,
-    slot.ref.slot,
-    ext,
-  );
-}
-
 export function MaterialChip({
   material,
   current,
   slots,
-  totalExtruders,
-  extruderSlots,
   filamentByIdentity,
   useCount,
   onPickSlot,
@@ -97,9 +74,7 @@ export function MaterialChip({
     : current?.filament_identity
       ? current.filament_identity
       : "unmapped";
-  const currentShort = current
-    ? shortLabelFor(current, totalExtruders, extruderSlots)
-    : "—";
+  const currentShort = current ? current.short_label : "—";
   const swatch = current?.color ?? UNASSIGNED_SWATCH;
 
   const id = `M${material}`;

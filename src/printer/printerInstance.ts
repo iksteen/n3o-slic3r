@@ -77,23 +77,17 @@ export interface PrinterInstance {
   extruders: ExtruderState[];
   bed: BedRef;
   config_overrides: Record<string, string>;
+  /** Pre-labeled, flattened slots — the single source of truth for slot
+   *  display, computed Rust-side from topology (`PrinterInstanceView`).
+   *  Renderers read these; they don't re-derive labels. */
+  slots: FlatSlotOption[];
+  /** Installed AMS-unit count, derived backend-side from slot topology. */
+  ams_units: number;
 }
 
 /** Bundled (and future user-library) instances the picker offers. */
 export async function listPrinterInstances(): Promise<PrinterInstance[]> {
   return invoke<PrinterInstance[]>("printer_instance_list");
-}
-
-/** Derive the AMS-unit count from an instance's slot topology.
- *  Counts AMS-feed slots on the first extruder and divides by 4
- *  (every AMS unit ships exactly 4 slots; the trailing slot is
- *  always direct-fed). Matches the backend's `create_instance` /
- *  `set_instance_ams_units` formula: `ams_units * 4 + 1` total
- *  slots, AMS-first ordering. */
-export function amsUnitsOf(instance: PrinterInstance): number {
-  const slots = instance.extruders[0]?.slots ?? [];
-  const amsSlots = slots.filter((s) => s.feed === "ams").length;
-  return Math.floor(amsSlots / 4);
 }
 
 /** Snapshot a single instance by id. Returns `null` when the id
@@ -308,15 +302,15 @@ export async function updateInstance(
   });
 }
 
-/** Compose a flat list of slot picker options across the instance's
- *  extruder × slot grid. Labels are derived from structure (extruder
- *  count, slot count, per-slot `feed`); they're not stored on the
- *  instance so a runtime topology change (user attaches a second
- *  AMS unit, swaps a nozzle) doesn't risk stale labels lingering
- *  in memory. Includes the SlotRef so the picker can write back. */
+/** A flattened, pre-labeled slot — mirrors Rust's `SlotView`. Both the
+ *  long `label` and the compact `short_label` are computed backend-side
+ *  from topology (extruder count, per-slot `feed`); the renderer reads
+ *  them rather than re-deriving. `ref` locates the slot for write-back. */
 export interface FlatSlotOption {
   ref: SlotRef;
   label: string;
+  /** Compact chip label ("A:1", "1", "Ext", "T1"). */
+  short_label: string;
   feed: FeedKind;
   filament_identity: string | null;
   color: string | null;
@@ -324,141 +318,3 @@ export interface FlatSlotOption {
    *  Drives the read-only gate on RFID-auto-detected slots. */
   tag_uid: string | null;
 }
-
-/** Display label for an extruder, given its 0-based position and the
- *  total number of extruders on the printer. Multi-extruder
- *  printers (toolchangers) get 1-based `T1..TN`; single-extruder
- *  printers get an empty label (the slot label carries identity). */
-export function deriveExtruderLabel(
-  extIdx: number,
-  totalExtruders: number,
-): string {
-  if (totalExtruders <= 1) return "";
-  return `T${extIdx + 1}`;
-}
-
-/** Position of a slot within an AMS-style multi-slot extruder, shared
- *  by the two slot-label formatters. Ams-feed slots are numbered
- *  1-based across the extruder, grouped into AMS-unit letters of 4 once
- *  there are >4 (multi-AMS-unit topology); the trailing Direct-feed slot
- *  is the external spool. */
-type SlotPosition =
-  | { kind: "ams"; unitIdx: number; idxInUnit: number; multiUnit: boolean }
-  | { kind: "direct" }
-  | { kind: "none" };
-
-function amsSlotPosition(
-  slotIdx: number,
-  slots: readonly SlotBinding[],
-): SlotPosition {
-  const multiUnit = slots.filter((s) => s.feed === "ams").length > 4;
-  let idxInUnit = 0;
-  let unitIdx = 0;
-  for (let i = 0; i < slots.length; i++) {
-    if (slots[i].feed === "ams") {
-      if (idxInUnit === 4) {
-        idxInUnit = 0;
-        unitIdx += 1;
-      }
-      idxInUnit += 1;
-      if (i === slotIdx) return { kind: "ams", unitIdx, idxInUnit, multiUnit };
-    } else if (i === slotIdx) {
-      return { kind: "direct" };
-    }
-  }
-  return { kind: "none" };
-}
-
-/** Long-form label for a slot, used in tooltips + the picker
- *  dropdown. Slot-scope only (doesn't include the extruder label) —
- *  `flattenSlots` combines this with the extruder label via " — ".
- *
- *  Single-slot extruders: surface identity through the extruder
- *  label on multi-extruder printers, through a `Direct` / `AMS:1`
- *  feed-kind label on single-extruder printers.
- *  Multi-slot extruders are AMS-style (`AMS A:1..AMS B:4`, trailing
- *  `Ext`) — see [`amsSlotPosition`]. */
-function deriveSlotLabel(
-  slotIdx: number,
-  slots: readonly SlotBinding[],
-  totalExtruders: number,
-): string {
-  if (slots.length === 1) {
-    if (totalExtruders > 1) return "";
-    return slots[0].feed === "direct" ? "Direct" : "AMS:1";
-  }
-  const pos = amsSlotPosition(slotIdx, slots);
-  if (pos.kind === "ams") {
-    return pos.multiUnit
-      ? `AMS ${String.fromCharCode(65 + pos.unitIdx)}:${pos.idxInUnit}`
-      : `AMS:${pos.idxInUnit}`;
-  }
-  return pos.kind === "direct" ? "Ext" : "";
-}
-
-/** Compact label for a slot pill — fits inside a 22px chip alongside
- *  a swatch + material tag. The row containing the chip already
- *  carries the noun ("Slots"), so each chip just needs its own
- *  position identifier.
- *
- *  Rules — slightly different from [`deriveSlotLabel`]'s long form:
- *  * Multi-extruder toolchanger (e.g. U1, XL): chip shows the
- *    extruder label (`T1`, `T2`, …). Each extruder has one Direct
- *    slot, so the extruder label is the slot identity.
- *  * Single-extruder + 1 slot (bambi without AMS): chip shows
- *    `Ext` (Direct) or `1` (AMS).
- *  * Single-extruder + multi-slot AMS:
- *    - One AMS unit: AMS slots are bare digits `1`, `2`, `3`, `4`.
- *      Trailing Direct slot is `Ext`.
- *    - Multiple AMS units: AMS slots get letter-prefixed `A:1`,
- *      `B:3` (no space, with colon). Trailing Direct slot is `Ext`.
- */
-export function deriveSlotShortLabel(
-  extIdx: number,
-  totalExtruders: number,
-  slotIdx: number,
-  slots: readonly SlotBinding[],
-): string {
-  // Toolchanger: each extruder is one slot, the chip shows the
-  // extruder identity (`T1`, `T2`, …).
-  if (totalExtruders > 1) {
-    return `T${extIdx + 1}`;
-  }
-  // Single-extruder + single slot — degenerate AMS-less printer.
-  if (slots.length === 1) {
-    return slots[0].feed === "direct" ? "Ext" : "1";
-  }
-  // Single-extruder + multi-slot AMS layout.
-  const pos = amsSlotPosition(slotIdx, slots);
-  if (pos.kind === "ams") {
-    return pos.multiUnit
-      ? `${String.fromCharCode(65 + pos.unitIdx)}:${pos.idxInUnit}`
-      : `${pos.idxInUnit}`;
-  }
-  return pos.kind === "direct" ? "Ext" : "";
-}
-
-export function flattenSlots(instance: PrinterInstance): FlatSlotOption[] {
-  const out: FlatSlotOption[] = [];
-  const totalExt = instance.extruders.length;
-  instance.extruders.forEach((ext, eIdx) => {
-    const extLabel = deriveExtruderLabel(eIdx, totalExt);
-    ext.slots.forEach((slot, sIdx) => {
-      const slotLabel = deriveSlotLabel(sIdx, ext.slots, totalExt);
-      const parts: string[] = [];
-      if (extLabel) parts.push(extLabel);
-      if (slotLabel) parts.push(slotLabel);
-      const label = parts.length > 0 ? parts.join(" — ") : `Slot ${sIdx + 1}`;
-      out.push({
-        ref: { extruder: eIdx, slot: sIdx },
-        label,
-        feed: slot.feed,
-        filament_identity: slot.filament_identity,
-        color: slot.color,
-        tag_uid: slot.tag_uid,
-      });
-    });
-  });
-  return out;
-}
-

@@ -19,7 +19,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  deriveSlotShortLabel,
   type FlatSlotOption,
   type PrinterInstance,
   type SlotRef,
@@ -67,8 +66,6 @@ export function SlotChipStrip({
   const filamentByIdentity = new Map(
     filaments.map((f) => [f.identity, f] as const),
   );
-  const totalExtruders = instance.extruders.length;
-
   return (
     <div className="sp-config-row sp-config-slots">
       <SyncSlotsLabel
@@ -81,15 +78,7 @@ export function SlotChipStrip({
         </span>
       ) : (
         slots.map((s) => {
-          const ext = instance.extruders[s.ref.extruder];
-          const shortLabel = ext
-            ? deriveSlotShortLabel(
-                s.ref.extruder,
-                totalExtruders,
-                s.ref.slot,
-                ext.slots,
-              )
-            : "";
+          const shortLabel = s.short_label;
           const filEntry = s.filament_identity
             ? filamentByIdentity.get(s.filament_identity) ?? null
             : null;
