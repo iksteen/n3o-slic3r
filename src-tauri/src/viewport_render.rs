@@ -11,6 +11,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
+use glam::camera::rh::{proj::directx::perspective as perspective_rh, view::look_at_mat4 as look_at_rh};
 use glam::{Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
 
@@ -1620,8 +1621,8 @@ impl ViewportRenderer {
         let dist = radius / (fov * 0.5).sin() * 1.15;
         let eye = center + dir * dist;
         let far = dist + radius * 2.0 + 100.0;
-        let vp = Mat4::perspective_rh(fov, 1.0, (dist * 0.01).max(0.1), far)
-            * Mat4::look_at_rh(eye, center, Vec3::Z);
+        let vp = perspective_rh(fov, 1.0, (dist * 0.01).max(0.1), far)
+            * look_at_rh(eye, center, Vec3::Z);
 
         let (color, msaa_view, depth_view, readback, padded_bpr) =
             make_targets(&self.device, size, size);

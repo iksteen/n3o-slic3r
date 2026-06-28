@@ -8,6 +8,7 @@
 
 use std::sync::{Arc, OnceLock};
 
+use glam::camera::rh::{proj::directx::perspective as perspective_rh, view::look_at_mat4 as look_at_rh};
 use glam::{Mat4, Vec3};
 
 /// Read-back color format. Plain RGBA8 so `putImageData` can consume it
@@ -48,10 +49,10 @@ pub fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
 pub fn view_proj(w: f32, h: f32, az: f32, el: f32, dist: f32, center: Vec3) -> Mat4 {
     let eye = cam_eye(az, el, dist, center);
     let far = (dist * 10.0).max(1000.0);
-    let proj = Mat4::perspective_rh(45f32.to_radians(), w / h, 0.1, far);
+    let proj = perspective_rh(45f32.to_radians(), w / h, 0.1, far);
     // The frontend clamps `el` just shy of ±90° (EL_LIMIT), so the eye
     // never sits exactly over the center and world-Z up stays defined.
-    proj * Mat4::look_at_rh(eye, center, Vec3::Z)
+    proj * look_at_rh(eye, center, Vec3::Z)
 }
 
 /// Eye position for the orbit camera (matches `view_proj`).
