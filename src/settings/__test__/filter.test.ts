@@ -13,6 +13,7 @@ function stub(over: Partial<PrinterAwareOptionSummary> = {}): PrinterAwareOption
     group: null,
     default_value: { kind: "scalar", value: "0.2" },
     multiline: false,
+    is_color: false,
     enum_values: [],
     tooltip: null,
     sidetext: null,

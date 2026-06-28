@@ -22,6 +22,7 @@ function stub(
     group: null,
     default_value: { kind: "scalar", value: "0" },
     multiline: false,
+    is_color: false,
     enum_values: [],
     tooltip: null,
     sidetext: null,

@@ -197,6 +197,10 @@ pub struct OptionSummary {
     /// as textareas with `\n`-joined display of the vector default
     /// instead of an index-by-slot picker.
     pub multiline: bool,
+    /// True when libslic3r's `gui_type` marks this a color picker
+    /// (`filament_colour`, `extruder_colour`, …). The frontend renders a
+    /// color input off this rather than a hand-curated key list.
+    pub is_color: bool,
     /// Enum value/label pairs in libslic3r declaration order. Empty
     /// for non-enum types. The frontend's DropdownInput consumes
     /// this directly — no per-key lookup needed at render time.
@@ -250,6 +254,7 @@ fn summary_from_def(d: slic3r_ffi::OptionDef) -> OptionSummary {
         category: d.category,
         default_value,
         multiline: d.multiline,
+        is_color: d.is_color,
         enum_values,
         tooltip: d.tooltip,
         sidetext: d.sidetext,
@@ -801,6 +806,23 @@ mod tests {
             .find(|o| o.key == "outer_wall_filament_id")
             .expect("outer_wall_filament_id present");
         assert!(wf.scope.region, "outer_wall_filament_id is a region-scope option");
+    }
+
+    #[test]
+    fn is_color_flag_tracks_libslic3r_gui_type() {
+        ensure_ffi();
+        let defs = option_defs();
+        let by_key = |k: &str| {
+            defs.iter()
+                .find(|d| d.key == k)
+                .unwrap_or_else(|| panic!("{k} present in schema"))
+        };
+        // gui_type::color in PrintConfig.cpp — including extruder_colour,
+        // which the retired hand-curated COLOR_KEYS list omitted.
+        assert!(by_key("filament_colour").is_color, "filament_colour is a color");
+        assert!(by_key("extruder_colour").is_color, "extruder_colour is a color");
+        // A plain numeric option is not a color.
+        assert!(!by_key("layer_height").is_color, "layer_height is not a color");
     }
 
     #[test]

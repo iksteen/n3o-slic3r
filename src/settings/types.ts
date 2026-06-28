@@ -77,6 +77,10 @@ export type OptionSummary = {
    *  compensation model). The panel renders these as a `\n`-joined
    *  textarea via [`defaultMultilineText`]. */
   multiline: boolean;
+  /** True when libslic3r's `gui_type` marks this a color picker
+   *  (`filament_colour`, `extruder_colour`, …). Drives the color input —
+   *  the authoritative classification, not a hand-curated key list. */
+  is_color: boolean;
   /** `[value, label]` pairs in libslic3r declaration order for Enum
    *  options. Empty for non-enum types. DropdownInput consumes these
    *  directly — no per-key lookup at render time. */
@@ -190,18 +194,10 @@ const TYPE_KIND_MAP: Record<string, OptionTypeKind> = {
   Point3: "point3",
 };
 
-/** A few libslic3r `String` options are conventionally color hex
- *  strings (filament_colour, etc.). Detect by key suffix so we can
- *  route them to ColorInput rather than the generic text input. */
-const COLOR_KEYS = new Set([
-  "filament_colour",
-  "filament_color",
-  "bed_custom_color",
-  "wipe_tower_color",
-]);
-
 export function optionTypeKind(opt: OptionSummary): OptionTypeKind {
-  if (COLOR_KEYS.has(opt.key)) return "color";
+  // Color-ness is libslic3r's `gui_type` (carried as `is_color`), not the
+  // ConfigOptionType — route those to ColorInput regardless of `ty`.
+  if (opt.is_color) return "color";
   return TYPE_KIND_MAP[opt.ty] ?? "unknown";
 }
 

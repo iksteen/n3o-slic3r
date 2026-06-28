@@ -487,6 +487,10 @@ pub struct OptionDef {
     pub mode: OptMode,
     pub readonly: bool,
     pub multiline: bool,
+    /// True when libslic3r's `gui_type` marks this option a color picker
+    /// (`filament_colour`, `extruder_colour`, …) — the authoritative
+    /// color classification, replacing any hand-curated key list.
+    pub is_color: bool,
     pub enum_values: Vec<String>,
     pub enum_labels: Vec<String>,
     pub min: f64,
@@ -536,6 +540,7 @@ impl OptionDef {
                 mode: OptMode::from_raw(raw.mode),
                 readonly: raw.readonly != 0,
                 multiline: raw.multiline != 0,
+                is_color: raw.is_color != 0,
                 enum_values,
                 enum_labels,
                 min: raw.min,

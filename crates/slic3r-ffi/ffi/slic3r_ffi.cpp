@@ -208,6 +208,7 @@ struct DefCache {
         slic3r_opt_mode mode;
         int readonly;
         int multiline;
+        int is_color;
         double min;
         double max;
         unsigned int scope;
@@ -274,6 +275,7 @@ struct DefCache {
             e->mode               = map_mode(d.mode);
             e->readonly           = d.readonly  ? 1 : 0;
             e->multiline          = d.multiline ? 1 : 0;
+            e->is_color           = (d.gui_type == ConfigOptionDef::GUIType::color) ? 1 : 0;
             e->min                = d.min;
             e->max                = d.max;
             for (const auto& s : e->enum_values) e->enum_value_ptrs.push_back(s.c_str());
@@ -313,6 +315,7 @@ struct DefCache {
         out->mode               = e.mode;
         out->readonly           = e.readonly;
         out->multiline          = e.multiline;
+        out->is_color           = e.is_color;
         out->enum_values        = e.enum_value_ptrs.empty() ? nullptr : e.enum_value_ptrs.data();
         out->enum_labels        = e.enum_label_ptrs.empty() ? nullptr : e.enum_label_ptrs.data();
         out->enum_value_count   = e.enum_value_ptrs.size();

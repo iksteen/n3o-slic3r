@@ -117,6 +117,9 @@ typedef struct {
     slic3r_opt_mode     mode;
     int                 readonly;     /* 0/1 */
     int                 multiline;    /* 0/1 */
+    /* 1 when the option's gui_type is a color picker (e.g. filament_colour,
+     * extruder_colour) — libslic3r's authoritative color classification. */
+    int                 is_color;     /* 0/1 */
     /* For ENUM/ENUMS: parallel arrays of internal keys and display labels.
      * Both NULL/0 for non-enum types. */
     const char* const*  enum_values;
