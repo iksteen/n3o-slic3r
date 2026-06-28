@@ -360,6 +360,12 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
                             char** out_err,
                             char** out_warning);
 
+/* Request cancellation of the in-flight slic3r_slice (if any) from another
+ * thread: flips the running Print's cancel flag, so process() aborts at its next
+ * throw_if_canceled() checkpoint and slic3r_slice returns SLIC3R_ERR_SLICE.
+ * No-op when no slice is running. Always SLIC3R_OK. */
+slic3r_status slic3r_cancel(void);
+
 /* Free the buffers returned in slic3r_slice's out_tower_* params. Safe to
  * call with NULL pointers (no-op). */
 void slic3r_tower_mesh_free(float* vertices, uint32_t* indices);

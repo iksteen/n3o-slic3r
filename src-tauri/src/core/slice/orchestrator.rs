@@ -17,12 +17,12 @@
 //!   builds a [`ResolvedJob`] (cascade lookup + context conversion),
 //!   inserts a [`JobHandle`] into the registry, spawns the worker,
 //!   and returns the id immediately.
-//! - The worker owns the slicing thread for the job's lifetime.
-//!   It reads the cancel flag only between plates — at the top of
-//!   each plate iteration (libslic3r doesn't expose a mid-process
-//!   cancel hook today; the progress callback never checks the flag,
-//!   so an in-flight plate runs to completion and we cooperate at
-//!   plate boundaries).
+//! - The worker owns the slicing thread for the job's lifetime. It
+//!   checks the cancel flag between plates, and `slice_cancel` also
+//!   aborts the plate currently slicing mid-`process()` via
+//!   `slic3r_ffi::cancel_active_slice` (libslic3r's `throw_if_canceled`):
+//!   that surfaces as an `Err`, which the worker reports as
+//!   `slice:cancelled` (not a failure) because the flag is set.
 //! - Progress events are throttled: at most one per 50 ms per
 //!   plate, plus an immediate event on every stage transition.
 //!   Libslic3r emits hundreds of ticks per second on large plates
@@ -784,6 +784,18 @@ fn run_worker(
             });
         };
 
+        // Cancel requested during prepare (cascade resolve + Model build — all
+        // before process() exists to abort): skip the slice rather than run it
+        // to completion. Without this, a cancel in this window is swallowed (the
+        // mid-process abort only catches cancels once process() is running).
+        if handle.is_cancelled() {
+            sink(SliceEvent::Cancelled {
+                job_id,
+                plate_id_in_progress: Some(plate_id),
+            });
+            return;
+        }
+
         let output_path = job.output_dir.join(format!("plate_{plate_id}.gcode"));
         let outcome = slice_outcome(&model, &adapt_result.config, &output_path, progress_cb);
 
@@ -803,6 +815,17 @@ fn run_worker(
 
         match outcome.result {
             Ok(tower_mesh) => {
+                // A cancel raced the slice to completion (requested after the
+                // pre-slice check, but process() finished before aborting, or it
+                // landed during the quick G-code export). Honor it — report
+                // cancelled and drop the finished plate.
+                if handle.is_cancelled() {
+                    sink(SliceEvent::Cancelled {
+                        job_id,
+                        plate_id_in_progress: Some(plate_id),
+                    });
+                    return;
+                }
                 // Post-slice plugin hook: let plugins read/modify the
                 // plate's G-code before the summary + preview see it.
                 // No-op (and near-zero cost) when no host is wired or
@@ -854,6 +877,17 @@ fn run_worker(
                 });
             }
             Err(e) => {
+                // A cancel landed mid-slice: the cancel command flipped the flag
+                // and aborted process() (slic3r_cancel → throw_if_canceled), so
+                // the engine returned an error. Report it as cancelled, not a
+                // failure.
+                if handle.is_cancelled() {
+                    sink(SliceEvent::Cancelled {
+                        job_id,
+                        plate_id_in_progress: Some(plate_id),
+                    });
+                    return;
+                }
                 let raw = format!("{e}");
                 let mut err = classify_libslic3r_error(&raw);
                 // The FFI surface returns an opaque "Slice: Errors"

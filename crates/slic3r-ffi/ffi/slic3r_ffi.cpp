@@ -629,6 +629,27 @@ static void apply_overrides(ModelConfigObject& config, const char* const* keys,
     }
 }
 
+// The Print currently running in slic3r_slice (serialized by SLICE_LOCK, so at
+// most one). `slic3r_cancel` flips its cancel flag from another thread; process()
+// then aborts at its next throw_if_canceled() checkpoint. The mutex makes the
+// cancel and the slice's set/clear mutually exclusive, so cancel never touches a
+// Print that's being torn down.
+static std::mutex g_active_print_mtx;
+static Print* g_active_print = nullptr;
+
+// Registers `print` as the active slice for its scope; clears it on exit (incl.
+// stack unwind), so a cancel after the slice ends is a no-op rather than a UAF.
+struct ActivePrintGuard {
+    explicit ActivePrintGuard(Print& p) {
+        std::lock_guard<std::mutex> lk(g_active_print_mtx);
+        g_active_print = &p;
+    }
+    ~ActivePrintGuard() {
+        std::lock_guard<std::mutex> lk(g_active_print_mtx);
+        g_active_print = nullptr;
+    }
+};
+
 } // namespace
 
 extern "C" {
@@ -1132,7 +1153,14 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         if (out_warning && !validation_warning.string.empty())
             set_err(out_warning, validation_warning.string);
 
-        print.process();
+        // Publish the Print for the duration of process() so slic3r_cancel can
+        // abort it (process() throws CanceledException at its next checkpoint;
+        // that's a std::exception, caught below and surfaced as SLIC3R_ERR_SLICE
+        // — the caller distinguishes a user cancel by its own flag).
+        {
+            ActivePrintGuard active(print);
+            print.process();
+        }
 
         // Capture the prime/wipe tower's exact mesh, built by process() via
         // WipeTowerData::construct_mesh: a box for AMS purge towers, the
@@ -1218,6 +1246,12 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         set_err(out_err, e.what());
         return SLIC3R_ERR_SLICE;
     }
+}
+
+slic3r_status slic3r_cancel(void) {
+    std::lock_guard<std::mutex> lk(g_active_print_mtx);
+    if (g_active_print) g_active_print->cancel();
+    return SLIC3R_OK;
 }
 
 void slic3r_set_log_sink(slic3r_log_fn_t cb, void* user_data) {

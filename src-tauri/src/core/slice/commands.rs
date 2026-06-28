@@ -32,10 +32,11 @@ use super::pre_slice_gate::validate_pre_slice;
 use crate::core::plugin::commands::PluginHostState;
 use crate::core::project::{PlateId, Project};
 
-/// Flip the cancel flag on a running job. The worker thread reads
-/// it between plates (and, when the FFI's mid-process cancel hook
-/// lands, between progress ticks) and emits a `slice:cancelled`
-/// event once it acknowledges the request.
+/// Flip the cancel flag on a running job AND abort the in-flight libslic3r
+/// `process()` (the long step) mid-flight. The flag covers between-plate
+/// boundaries; `cancel_active_slice` aborts the plate currently slicing, so the
+/// worker stops promptly instead of running the plate to completion. Either way
+/// the worker emits `slice:cancelled` once it acknowledges.
 #[tauri::command]
 #[tracing::instrument(skip(jobs))]
 pub fn slice_cancel(job_id: JobId, jobs: State<Arc<JobRegistry>>) -> Result<(), String> {
@@ -43,6 +44,8 @@ pub fn slice_cancel(job_id: JobId, jobs: State<Arc<JobRegistry>>) -> Result<(), 
         .get(job_id)
         .ok_or_else(|| format!("unknown job id {}", job_id.0))?;
     handle.cancel();
+    // Abort the plate currently in process() (no-op if between plates / idle).
+    slic3r_ffi::cancel_active_slice();
     Ok(())
 }
 

@@ -1126,6 +1126,16 @@ where
     slice_outcome(model, config, out_gcode_path, progress).result
 }
 
+/// Request cancellation of the in-flight slice (if any) from another thread.
+/// The running `process()` aborts at its next checkpoint and the in-flight
+/// [`slice_outcome`] returns an `Err`; the caller tells a user cancel from a
+/// real failure by its own flag. No-op when no slice is running.
+pub fn cancel_active_slice() {
+    // SAFETY: slic3r_cancel only flips a process-global cancel flag guarded by
+    // an internal mutex — safe to call any time, from any thread.
+    unsafe { sys::slic3r_cancel() };
+}
+
 /// Copy a heap-allocated C string out-param into an owned `String` and free
 /// it with `slic3r_string_free`. `None` for a null pointer.
 ///
