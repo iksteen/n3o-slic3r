@@ -103,8 +103,10 @@ pub fn load_cascade(paths: &[&Path]) -> Result<Cascade, CascadeLoadError> {
 /// Parse a single cascade file's contents into a list of `Rule`s.
 /// Exposed for tests + future UI live-editing.
 pub fn parse_cascade_str(src: &str, path: &Path) -> Result<Vec<Rule>, CascadeLoadError> {
+    // toml 1.x: `str::parse::<Value>()` parses a value *expression*, not a
+    // document — use `from_str` for the whole-document parse.
     let parsed: toml::Value =
-        src.parse::<toml::Value>()
+        toml::from_str::<toml::Value>(src)
             .map_err(|e| CascadeLoadError::TomlParse {
                 path: path.into(),
                 message: e.to_string(),

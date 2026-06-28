@@ -59,11 +59,11 @@ pub use composer::{
 pub enum LibraryError {
     #[error("profile root `{}` does not exist", .0.display())]
     MissingRoot(PathBuf),
-    #[error("io error reading `{}`: {1}", .0.display())]
+    #[error("io error reading `{}`: {}", .0.display(), .1)]
     Io(PathBuf, std::io::Error),
-    #[error("parse error in `{}`: {1}", .0.display())]
+    #[error("parse error in `{}`: {}", .0.display(), .1)]
     Toml(PathBuf, toml::de::Error),
-    #[error("cascade load error in `{}`: {1}", .0.display())]
+    #[error("cascade load error in `{}`: {}", .0.display(), .1)]
     Cascade(PathBuf, CascadeLoadError),
     /// `machine.toml` exists for a printer but doesn't carry the
     /// `printer_model` scalar that drives every cascade

@@ -121,8 +121,9 @@ pub fn load_override_file(path: &Path) -> Result<FlatOverrides, CascadeLoadError
 }
 
 pub fn parse_override_str(src: &str, path: &Path) -> Result<FlatOverrides, CascadeLoadError> {
+    // toml 1.x: parse the whole document, not a value expression (see loader.rs).
     let parsed: toml::Value =
-        src.parse::<toml::Value>()
+        toml::from_str::<toml::Value>(src)
             .map_err(|e| CascadeLoadError::TomlParse {
                 path: path.into(),
                 message: e.to_string(),

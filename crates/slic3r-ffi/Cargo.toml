@@ -13,7 +13,7 @@ name = "slic3r_ffi"
 path = "src/lib.rs"
 
 [build-dependencies]
-bindgen = "0.69"
+bindgen = "0.72"
 
 [[example]]
 name = "introspect"
