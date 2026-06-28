@@ -45,7 +45,31 @@ glam = { version = "0.33", features = ["serde"] }
 # into an opaque <canvas>. WebKitGTK can't composite a transparent webview over
 # GPU content (it smears dynamic DOM) — see docs/dev/wgpu-renderer.md — so the
 # render lives in the webview as an opaque canvas fed by these frames.
-wgpu = "29"
+# default-features=false is a `windows`-crate version pin in disguise — DO NOT
+# restore default features (or add the "dx12" feature) without reading this.
+#
+# wgpu-hal's dx12 backend depends on gpu-allocator, which uses the `windows`
+# crate. wgpu-hal 29 is on windows 0.62; tauri 2.11.3's webview stack (tao, wry,
+# webview2-com, tauri-runtime-wry) pins windows ^0.61. No single windows version
+# satisfies both, so two nodes must coexist — and cargo parks gpu-allocator on
+# tauri's 0.61 node while wgpu-hal compiles against 0.62, so the dx12 suballocator
+# mixes 0.61/0.62 D3D12 types and fails to cross-compile (windows-msvc). It can't
+# be pinned away. Dropping dx12 sidesteps it; we render offscreen, so Vulkan/GL
+# cover Windows fine. The feature list below is wgpu's `default` minus "dx12".
+#
+# If a Windows build breaks at a dependency-of-a-dependency with "multiple
+# different versions of crate `windows`/`windows-core`", this is the pattern:
+# some transitive crate's `windows` collides with tauri's pinned ^0.61. Re-enable
+# dx12 (and drop default-features=false) once tauri's stack moves to windows 0.62.
+wgpu = { version = "29", default-features = false, features = [
+    "std",
+    "parking_lot",
+    "metal",
+    "gles",
+    "vulkan",
+    "wgsl",
+    "webgpu",
+] }
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "0.4"
 # Compact binary serde codec for the .n3o project's per-mesh geometry blobs.
