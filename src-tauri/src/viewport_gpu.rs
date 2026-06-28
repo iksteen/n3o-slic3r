@@ -27,7 +27,7 @@ static SHARED: OnceLock<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> = OnceLock::new()
 pub fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
     SHARED
         .get_or_init(|| {
-            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
             let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
@@ -37,7 +37,7 @@ pub fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
             let info = adapter.get_info();
             tracing::info!("offscreen wgpu adapter: {} | {:?}", info.name, info.backend);
             let (device, queue) =
-                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
+                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
                     .expect("wgpu: request_device");
             (Arc::new(device), Arc::new(queue))
         })
@@ -89,7 +89,7 @@ pub fn ray_seg_dist(ro: Vec3, rd: Vec3, a: Vec3, b: Vec3) -> (f32, f32) {
 pub fn read_rgba(device: &wgpu::Device, readback: &wgpu::Buffer, padded_bpr: u32, w: u32, h: u32) -> Vec<u8> {
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |_| {});
-    device.poll(wgpu::Maintain::Wait);
+    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     let mapped = slice.get_mapped_range();
     let row = (w * 4) as usize;
     let mut out = vec![0u8; row * h as usize];
@@ -162,3 +162,4 @@ pub fn make_targets(
         padded_bpr,
     )
 }
+

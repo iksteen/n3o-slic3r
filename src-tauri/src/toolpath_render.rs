@@ -270,15 +270,15 @@ impl ToolpathRenderer {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&bgl],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
         });
         let pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("toolpath.pipe"),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs",
+                entry_point: Some("vs"),
                 compilation_options: Default::default(),
                 buffers: &[
                     // 0: template (per-vertex)
@@ -303,7 +303,7 @@ impl ToolpathRenderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs",
+                entry_point: Some("fs"),
                 compilation_options: Default::default(),
                 targets: &[Some(COLOR_FMT.into())],
             }),
@@ -315,8 +315,8 @@ impl ToolpathRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -324,7 +324,8 @@ impl ToolpathRenderer {
                 count: SAMPLES,
                 ..Default::default()
             },
-            multiview: None,
+            multiview_mask: None,
+            cache: None,
         });
 
         let grid_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -336,7 +337,7 @@ impl ToolpathRenderer {
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &grid_shader,
-                entry_point: "vs",
+                entry_point: Some("vs"),
                 compilation_options: Default::default(),
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: (3 * std::mem::size_of::<f32>()) as u64,
@@ -346,7 +347,7 @@ impl ToolpathRenderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &grid_shader,
-                entry_point: "fs",
+                entry_point: Some("fs"),
                 compilation_options: Default::default(),
                 targets: &[Some(COLOR_FMT.into())],
             }),
@@ -356,8 +357,8 @@ impl ToolpathRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -365,7 +366,8 @@ impl ToolpathRenderer {
                 count: SAMPLES,
                 ..Default::default()
             },
-            multiview: None,
+            multiview_mask: None,
+            cache: None,
         });
 
         let (tverts, tidx) = tube_template();
@@ -580,6 +582,7 @@ impl ToolpathRenderer {
                 label: Some("toolpath.pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.msaa_view,
+                    depth_slice: None,
                     resolve_target: Some(&color_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -601,6 +604,7 @@ impl ToolpathRenderer {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             // Bed grid first (floor), so the toolpath draws over it.
             if draw_grid {
@@ -641,15 +645,15 @@ impl ToolpathRenderer {
             }
         }
         enc.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &self.color,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &self.readback,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(self.padded_bpr),
                     rows_per_image: Some(h),

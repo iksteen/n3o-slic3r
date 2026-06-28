@@ -798,8 +798,8 @@ impl ViewportRenderer {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&bgl],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
         });
         let vbl = wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as u64,
@@ -812,13 +812,13 @@ impl ViewportRenderer {
                 layout: Some(&layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
-                    entry_point: "vs",
+                    entry_point: Some("vs"),
                     compilation_options: Default::default(),
                     buffers: std::slice::from_ref(&vbl),
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: "fs",
+                    entry_point: Some("fs"),
                     compilation_options: Default::default(),
                     targets: &[Some(COLOR_FMT.into())],
                 }),
@@ -829,8 +829,9 @@ impl ViewportRenderer {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled,
-                    depth_compare,
+                    // wgpu 29: both are Option now; closure args stay concrete.
+                    depth_write_enabled: Some(depth_write_enabled),
+                    depth_compare: Some(depth_compare),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -838,7 +839,8 @@ impl ViewportRenderer {
                     count: SAMPLES,
                     ..Default::default()
                 },
-                multiview: None,
+                multiview_mask: None,
+                cache: None,
             })
         };
         use wgpu::CompareFunction::{Always, Less};
@@ -864,7 +866,7 @@ impl ViewportRenderer {
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &gizmo_shader,
-                entry_point: "vs",
+                entry_point: Some("vs"),
                 compilation_options: Default::default(),
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<GizmoVertex>() as u64,
@@ -874,7 +876,7 @@ impl ViewportRenderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &gizmo_shader,
-                entry_point: "fs",
+                entry_point: Some("fs"),
                 compilation_options: Default::default(),
                 targets: &[Some(COLOR_FMT.into())],
             }),
@@ -884,8 +886,8 @@ impl ViewportRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -893,7 +895,8 @@ impl ViewportRenderer {
                 count: SAMPLES,
                 ..Default::default()
             },
-            multiview: None,
+            multiview_mask: None,
+            cache: None,
         });
 
         // Priming tower: lit translucent triangles, alpha-blended, no depth write.
@@ -906,13 +909,13 @@ impl ViewportRenderer {
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: &tower_shader,
-                entry_point: "vs",
+                entry_point: Some("vs"),
                 compilation_options: Default::default(),
                 buffers: std::slice::from_ref(&vbl),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &tower_shader,
-                entry_point: "fs",
+                entry_point: Some("fs"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: COLOR_FMT,
@@ -926,8 +929,8 @@ impl ViewportRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false, // translucent — test but don't occlude
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: Some(false), // translucent — test but don't occlude
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -935,7 +938,8 @@ impl ViewportRenderer {
                 count: SAMPLES,
                 ..Default::default()
             },
-            multiview: None,
+            multiview_mask: None,
+            cache: None,
         });
         let vb_cube = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("viewport.tower.cube"),
@@ -1422,6 +1426,7 @@ impl ViewportRenderer {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.msaa_view,
+                    depth_slice: None,
                     resolve_target: Some(&color_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -1443,6 +1448,7 @@ impl ViewportRenderer {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             // grid
             rp.set_pipeline(&self.line_pipe);
@@ -1518,6 +1524,7 @@ impl ViewportRenderer {
                 label: Some("viewport.gizmo"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.msaa_view,
+                    depth_slice: None,
                     resolve_target: Some(&color_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
@@ -1534,6 +1541,7 @@ impl ViewportRenderer {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             rp.set_pipeline(&self.gizmo_pipe);
             rp.set_bind_group(0, &self.bind, &[0]);
@@ -1541,15 +1549,15 @@ impl ViewportRenderer {
             rp.draw(0..verts.len() as u32, 0..1);
         }
         enc.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &self.color,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &self.readback,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(self.padded_bpr),
                     rows_per_image: Some(h),
@@ -1643,6 +1651,7 @@ impl ViewportRenderer {
                 label: Some("viewport.thumbnail"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &msaa_view,
+                    depth_slice: None,
                     resolve_target: Some(&color_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -1659,6 +1668,7 @@ impl ViewportRenderer {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             rp.set_pipeline(&self.mesh_pipe);
             for (i, (mesh_id, gi, _, _)) in draws.iter().enumerate() {
@@ -1671,15 +1681,15 @@ impl ViewportRenderer {
             }
         }
         enc.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &color,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &readback,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bpr),
                     rows_per_image: Some(size),

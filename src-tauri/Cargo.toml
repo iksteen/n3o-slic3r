@@ -45,7 +45,7 @@ glam = { version = "0.33", features = ["serde"] }
 # into an opaque <canvas>. WebKitGTK can't composite a transparent webview over
 # GPU content (it smears dynamic DOM) — see docs/dev/wgpu-renderer.md — so the
 # render lives in the webview as an opaque canvas fed by these frames.
-wgpu = "0.20"
+wgpu = "29"
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "0.4"
 # Compact binary serde codec for the .n3o project's per-mesh geometry blobs.
