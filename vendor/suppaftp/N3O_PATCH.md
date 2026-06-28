@@ -1,8 +1,8 @@
-# Vendored suppaftp 8.0.3 — Windows-portability patch
+# Vendored suppaftp 9.0.0 — Windows-portability patch
 
-This is an unmodified copy of [`suppaftp`](https://crates.io/crates/suppaftp)
-8.0.3 with a **single** change, wired in via `[patch.crates.io]` in the
-workspace root `Cargo.toml`.
+This is a copy of [`suppaftp`](https://crates.io/crates/suppaftp) 9.0.0,
+verbatim except for a **single** change, wired in via `[patch.crates-io]` in
+the workspace root `Cargo.toml`.
 
 ## Why
 
@@ -11,8 +11,7 @@ n3o's Bambu driver uploads over FTPS on suppaftp's **tokio**
 the future. But upstream's `AsyncNativeTlsStream::tcp_stream()` uses
 `std::os::fd::{AsFd, ...}` unconditionally, and `std::os::fd` doesn't exist on
 Windows — so the crate fails to compile for `x86_64-pc-windows-msvc` (a hard
-`E0432`/`E0599`), breaking the Windows cross-build. The bug is unchanged in
-8.0.4.
+`E0432`/`E0599`), breaking the Windows cross-build. Still unfixed in 9.0.0.
 
 ## The change
 
@@ -23,5 +22,8 @@ handle that `std::net::TcpStream` accepts, so the rest of the method is
 unchanged. This mirrors what the sync path already does cross-platform.
 
 Diff against upstream is limited to that one method. To refresh on a suppaftp
-bump: re-copy the crate and re-apply this `#[cfg(unix)] / #[cfg(windows)]`
+bump: re-copy the crate and re-apply this `#[cfg(windows)] / #[cfg(not(windows))]`
 split (or drop the vendoring entirely once upstream guards it).
+
+The change is upstreamable as-is — a PR-ready diff (no n3o-specific wording)
+is generated alongside each refresh.

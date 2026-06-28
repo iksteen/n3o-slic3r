@@ -13,7 +13,7 @@
 edition = "2024"
 rust-version = "1.85.1"
 name = "suppaftp"
-version = "8.0.3"
+version = "9.0.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 build = false
 include = [
@@ -51,10 +51,10 @@ resolver = "2"
 features = [
     "native-tls",
     "rustls-aws-lc-rs",
-    "async-std",
+    "smol",
     "tokio",
     "tokio-async-native-tls",
-    "async-std-rustls-aws-lc-rs",
+    "smol-rustls-aws-lc-rs",
     "tokio-rustls-aws-lc-rs",
 ]
 rustdoc-args = [
@@ -64,36 +64,6 @@ rustdoc-args = [
 
 [features]
 async-secure = []
-async-std = [
-    "dep:async-std",
-    "dep:async-trait",
-    "dep:pin-project",
-]
-async-std-async-native-tls = [
-    "async-std",
-    "dep:async-native-tls-crate",
-    "async-native-tls-crate/runtime-async-std",
-    "async-native-tls-crate/futures-util",
-    "async-secure",
-]
-async-std-async-native-tls-vendored = [
-    "async-std-async-native-tls",
-    "async-native-tls-crate/vendored",
-]
-async-std-rustls-aws-lc-rs = [
-    "dep:futures-rustls",
-    "futures-rustls/aws-lc-rs",
-    "dep:rustls-pki-types",
-    "async-secure",
-    "async-std",
-]
-async-std-rustls-ring = [
-    "dep:futures-rustls",
-    "futures-rustls/ring",
-    "dep:rustls-pki-types",
-    "async-secure",
-    "async-std",
-]
 default = []
 deprecated = []
 native-tls = [
@@ -116,6 +86,36 @@ rustls-ring = [
     "secure",
 ]
 secure = []
+smol = [
+    "dep:async-trait",
+    "dep:pin-project",
+    "dep:smol",
+]
+smol-async-native-tls = [
+    "async-native-tls-crate/futures-util",
+    "async-native-tls-crate/runtime-smol",
+    "async-secure",
+    "dep:async-native-tls-crate",
+    "smol",
+]
+smol-async-native-tls-vendored = [
+    "async-native-tls-crate/vendored",
+    "smol-async-native-tls",
+]
+smol-rustls-aws-lc-rs = [
+    "async-secure",
+    "dep:futures-rustls",
+    "dep:rustls-pki-types",
+    "futures-rustls/aws-lc-rs",
+    "smol",
+]
+smol-rustls-ring = [
+    "async-secure",
+    "dep:futures-rustls",
+    "dep:rustls-pki-types",
+    "futures-rustls/ring",
+    "smol",
+]
 tokio = [
     "dep:tokio",
     "dep:async-trait",
@@ -156,14 +156,10 @@ path = "examples/rustls.rs"
 required-features = ["rustls-aws-lc-rs"]
 
 [dependencies.async-native-tls-crate]
-version = "^0.5"
+version = "0.6"
 optional = true
 default-features = false
 package = "async-native-tls"
-
-[dependencies.async-std]
-version = "1"
-optional = true
 
 [dependencies.async-trait]
 version = "0.1"
@@ -173,9 +169,6 @@ optional = true
 version = "0.4"
 features = ["clock"]
 default-features = false
-
-[dependencies.futures-lite]
-version = "2"
 
 [dependencies.futures-rustls]
 version = "0.26"
@@ -217,6 +210,10 @@ version = "1"
 features = ["alloc"]
 optional = true
 
+[dependencies.smol]
+version = "2"
+optional = true
+
 [dependencies.thiserror]
 version = "2"
 
@@ -240,20 +237,17 @@ optional = true
 default-features = false
 package = "tokio-rustls"
 
-[dev-dependencies.async-attributes]
-version = "1"
-
 [dev-dependencies.env_logger]
-version = "^0.11"
+version = "0.11"
 
 [dev-dependencies.pretty_assertions]
 version = "1"
 
 [dev-dependencies.rand]
-version = "^0.9"
+version = "0.10"
 
 [dev-dependencies.testcontainers]
-version = "0.26"
+version = "0.27"
 features = ["blocking"]
 
 [dev-dependencies.webpki-roots]

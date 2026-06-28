@@ -1,6 +1,6 @@
 //! # Async
 //!
-//! This module contains the definition for async-std async implementation of suppaftp
+//! This module contains the definition for tokio async implementation of suppaftp
 
 mod data_stream;
 mod tls;
@@ -13,23 +13,18 @@ use std::pin::Pin;
 use std::string::String;
 use std::time::Duration;
 
-use async_std::io::prelude::BufReadExt;
-use async_std::io::{BufReader, Read, Write, copy};
-use async_std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 // export
 pub use data_stream::DataStream;
-use futures_lite::AsyncWriteExt;
 #[cfg(feature = "async-secure")]
 pub use tls::AsyncTlsConnector;
-#[cfg(feature = "async-std-async-native-tls")]
+#[cfg(feature = "tokio-async-native-tls")]
 pub use tls::{AsyncNativeTlsConnector, AsyncNativeTlsStream};
-pub use tls::{AsyncNoTlsStream, AsyncStdTlsStream};
-#[cfg(any(
-    feature = "async-std-rustls-aws-lc-rs",
-    feature = "async-std-rustls-ring"
-))]
+pub use tls::{AsyncNoTlsStream, TokioTlsStream};
+#[cfg(any(feature = "tokio-rustls-aws-lc-rs", feature = "tokio-rustls-ring"))]
 pub use tls::{AsyncRustlsConnector, AsyncRustlsStream};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader, copy};
+use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 
 use super::super::Status;
 use super::super::regex::{EPSV_PORT_RE, MDTM_RE, SIZE_RE};
@@ -43,21 +38,21 @@ use crate::types::Features;
 /// A function that creates a new stream for the data connection in passive mode.
 ///
 /// It takes a [`SocketAddr`] and returns a [`TcpStream`].
-pub type AsyncStdPassiveStreamBuilder = dyn Fn(SocketAddr) -> Pin<Box<dyn Future<Output = FtpResult<TcpStream>> + Send + Sync>>
+pub type TokioPassiveStreamBuilder = dyn Fn(SocketAddr) -> Pin<Box<dyn Future<Output = FtpResult<TcpStream>> + Send + Sync>>
     + Send
     + Sync;
 
 /// Stream to interface with the FTP server. This interface is only for the command stream.
 pub struct ImplAsyncFtpStream<T>
 where
-    T: AsyncStdTlsStream + Send,
+    T: TokioTlsStream + Send,
 {
     reader: BufReader<DataStream<T>>,
     mode: Mode,
     nat_workaround: bool,
     welcome_msg: Option<String>,
     active_timeout: Duration,
-    passive_stream_builder: Box<AsyncStdPassiveStreamBuilder>,
+    passive_stream_builder: Box<TokioPassiveStreamBuilder>,
     /// flags whether a data connection is currently open
     ///
     /// Since it isn't possible to have multiple data connections at the same time,
@@ -73,7 +68,7 @@ where
 
 impl<T> ImplAsyncFtpStream<T>
 where
-    T: AsyncStdTlsStream + Send,
+    T: TokioTlsStream + Send,
 {
     pub async fn connect<A: ToSocketAddrs>(addr: A) -> FtpResult<Self> {
         debug!("Connecting to server");
@@ -87,8 +82,10 @@ where
     /// Try to connect to the remote server but with the specified timeout
     pub async fn connect_timeout(addr: SocketAddr, timeout: Duration) -> FtpResult<Self> {
         debug!("Connecting to server {addr}");
-        let stream = async_std::io::timeout(timeout, async move { TcpStream::connect(addr).await })
+        let stream = tokio::time::timeout(timeout, async move { TcpStream::connect(addr).await })
             .await
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::TimedOut, e.to_string()))
+            .map_err(FtpError::ConnectionError)?
             .map_err(FtpError::ConnectionError)?;
 
         Self::connect_with_stream(stream).await
@@ -102,8 +99,8 @@ where
             #[cfg(not(feature = "async-secure"))]
             marker: PhantomData {},
             mode: Mode::Passive,
-            data_connection_open: false,
             nat_workaround: false,
+            data_connection_open: false,
             passive_stream_builder: Self::default_passive_stream_builder(),
             welcome_msg: None,
             #[cfg(feature = "async-secure")]
@@ -153,18 +150,15 @@ where
         self.read_response(Status::AuthOk).await?;
         debug!("TLS OK; initializing ssl stream");
         let stream = tls_connector
-            .connect(
-                domain,
-                self.reader.into_inner().into_tcp_stream().to_owned(),
-            )
+            .connect(domain, self.reader.into_inner().into_tcp_stream())
             .await
             .map_err(|e| FtpError::SecureError(format!("{e}")))?;
         let mut secured_ftp_tream = ImplAsyncFtpStream {
             reader: BufReader::new(DataStream::Ssl(Box::new(stream))),
             mode: self.mode,
-            data_connection_open: self.data_connection_open,
             nat_workaround: self.nat_workaround,
             passive_stream_builder: self.passive_stream_builder,
+            data_connection_open: self.data_connection_open,
             tls_ctx: Some(Box::new(tls_connector)),
             domain: Some(String::from(domain)),
             welcome_msg: self.welcome_msg,
@@ -217,9 +211,9 @@ where
                 Self {
                     reader: BufReader::new(DataStream::Tcp(stream)),
                     mode: Mode::Passive,
-                    data_connection_open: false,
                     nat_workaround: false,
                     welcome_msg: None,
+                    data_connection_open: false,
                     passive_stream_builder: Self::default_passive_stream_builder(),
                     tls_ctx: None,
                     domain: None,
@@ -264,7 +258,7 @@ where
         self
     }
 
-    /// Set a custom [`AsyncStdPassiveStreamBuilder`] for passive mode.
+    /// Set a custom [`TokioPassiveStreamBuilder`] for passive mode.
     ///
     /// The stream builder is a function that takes a `SocketAddr` and returns a `TcpStream` and it's used
     /// to create the [`TcpStream`] for the data connection in passive mode.
@@ -389,7 +383,10 @@ where
         debug!("Creating directory at {}", pathname.as_ref());
         self.perform(Command::Mkd(pathname.as_ref().to_string()))
             .await?;
-        self.read_response(Status::PathCreated).await.map(|_| ())
+        // Some non-compliant servers (e.g. bftpd) reply with 200 instead of 257.
+        self.read_response_in(&[Status::PathCreated, Status::CommandOk])
+            .await
+            .map(|_| ())
     }
 
     /// Sets the type of file to be transferred. That is the implementation
@@ -419,7 +416,8 @@ where
         self.read_response(Status::RequestFilePending).await?;
         self.perform(Command::RenameTo(to_name.as_ref().to_string()))
             .await?;
-        self.read_response(Status::RequestedFileActionOk)
+        // Some non-compliant servers (e.g. bftpd) reply with 200 instead of 250.
+        self.read_response_in(&[Status::RequestedFileActionOk, Status::CommandOk])
             .await
             .map(|_| ())
     }
@@ -462,16 +460,17 @@ where
         file_name: S,
     ) -> FtpResult<DataStream<T>> {
         debug!("Retrieving '{}'", file_name.as_ref());
-        let data_stream = self
-            .data_command(Command::Retr(file_name.as_ref().to_string()))
-            .await?;
-        self.read_response_in(&[Status::AboutToSend, Status::AlreadyOpen])
+        let (_, data_stream) = self
+            .data_command_with_response(
+                Command::Retr(file_name.as_ref().to_string()),
+                &[Status::AboutToSend, Status::AlreadyOpen],
+            )
             .await?;
         Ok(data_stream)
     }
 
     /// Finalize retr stream; must be called once the requested file, got previously with `retr_as_stream()` has been read
-    pub async fn finalize_retr_stream(&mut self, stream: impl Read) -> FtpResult<()> {
+    pub async fn finalize_retr_stream(&mut self, stream: impl AsyncRead) -> FtpResult<()> {
         debug!("Finalizing retr stream");
         // Drop stream NOTE: must be done first, otherwise server won't return any response
         drop(stream);
@@ -488,7 +487,8 @@ where
         debug!("Removing directory {}", pathname.as_ref());
         self.perform(Command::Rmd(pathname.as_ref().to_string()))
             .await?;
-        self.read_response(Status::RequestedFileActionOk)
+        // Some non-compliant servers (e.g. bftpd) reply with 200 instead of 250.
+        self.read_response_in(&[Status::RequestedFileActionOk, Status::CommandOk])
             .await
             .map(|_| ())
     }
@@ -498,7 +498,8 @@ where
         debug!("Removing file {}", filename.as_ref());
         self.perform(Command::Dele(filename.as_ref().to_string()))
             .await?;
-        self.read_response(Status::RequestedFileActionOk)
+        // Some non-compliant servers (e.g. bftpd) reply with 200 instead of 250.
+        self.read_response_in(&[Status::RequestedFileActionOk, Status::CommandOk])
             .await
             .map(|_| ())
     }
@@ -507,7 +508,7 @@ where
     /// r argument must be any struct which implemenents the Read trait
     pub async fn put_file<S, R>(&mut self, filename: S, r: &mut R) -> FtpResult<u64>
     where
-        R: Read + std::marker::Unpin,
+        R: AsyncRead + std::marker::Unpin,
         S: AsRef<str>,
     {
         // Get stream
@@ -528,10 +529,11 @@ where
         filename: S,
     ) -> FtpResult<DataStream<T>> {
         debug!("Put file {}", filename.as_ref());
-        let stream = self
-            .data_command(Command::Store(filename.as_ref().to_string()))
-            .await?;
-        self.read_response_in(&[Status::AlreadyOpen, Status::AboutToSend])
+        let (_, stream) = self
+            .data_command_with_response(
+                Command::Store(filename.as_ref().to_string()),
+                &[Status::AlreadyOpen, Status::AboutToSend],
+            )
             .await?;
         Ok(stream)
     }
@@ -539,10 +541,13 @@ where
     /// Finalize put when using stream
     /// This method must be called once the file has been written and
     /// `put_with_stream` has been used to write the file
-    pub async fn finalize_put_stream(&mut self, mut stream: impl Write + Unpin) -> FtpResult<()> {
+    pub async fn finalize_put_stream(
+        &mut self,
+        mut stream: impl AsyncWriteExt + Unpin,
+    ) -> FtpResult<()> {
         debug!("Finalizing put stream");
         // Drop stream NOTE: must be done first, otherwise server won't return any response
-        stream.close().await.map_err(FtpError::ConnectionError)?;
+        stream.shutdown().await.map_err(FtpError::ConnectionError)?;
         drop(stream);
         self.data_connection_open = false;
         trace!("Stream dropped");
@@ -559,10 +564,11 @@ where
         filename: S,
     ) -> FtpResult<DataStream<T>> {
         debug!("Appending to file {}", filename.as_ref());
-        let stream = self
-            .data_command(Command::Appe(filename.as_ref().to_string()))
-            .await?;
-        self.read_response_in(&[Status::AlreadyOpen, Status::AboutToSend])
+        let (_, stream) = self
+            .data_command_with_response(
+                Command::Appe(filename.as_ref().to_string()),
+                &[Status::AlreadyOpen, Status::AboutToSend],
+            )
             .await?;
         Ok(stream)
     }
@@ -570,7 +576,7 @@ where
     /// Append data from reader to file at `filename`
     pub async fn append_file<R>(&mut self, filename: &str, r: &mut R) -> FtpResult<u64>
     where
-        R: Read + std::marker::Unpin,
+        R: AsyncRead + std::marker::Unpin,
     {
         // Get stream
         let mut data_stream = self.append_with_stream(filename).await?;
@@ -584,7 +590,7 @@ where
     /// abort the previous FTP service command
     pub async fn abort<R>(&mut self, data_stream: R) -> FtpResult<()>
     where
-        R: Read + std::marker::Unpin + 'static,
+        R: AsyncRead + std::marker::Unpin + 'static,
     {
         debug!("Aborting active file transfer");
         self.perform(Command::Abor).await?;
@@ -799,7 +805,7 @@ where
     /// Perform a custom command using the data connection.
     /// It returns both the [`Response`] and the [`DataStream`].
     ///
-    /// The [`DataStream`] implements both [`Write`] and [`Read`] and so it can be written or read to interact with the
+    /// The [`DataStream`] implements both [`tokio::io::AsyncWrite`] and [`AsyncRead`] and so it can be written or read to interact with the
     /// data channel.
     ///
     /// If you want you can easily parse lines from the [`DataStream`] using [`Self::get_lines_from_stream`].
@@ -812,8 +818,9 @@ where
     ) -> FtpResult<(Response, DataStream<T>)> {
         let command = command.to_string();
         debug!("Sending custom data command: {}", command);
-        let data_stream = self.data_command(Command::Custom(command)).await?;
-        let response = self.read_response_in(expected_code).await?;
+        let (response, data_stream) = self
+            .data_command_with_response(Command::Custom(command), expected_code)
+            .await?;
         Ok((response, data_stream))
     }
 
@@ -823,9 +830,9 @@ where
     ///
     /// # Warning
     ///
-    /// Passing any other [`Read`] which is not the [`DataStream`]
+    /// Passing any other [`AsyncRead`] which is not the [`DataStream`]
     /// obtained with [`Self::custom_data_command`] may lead to undefined behavior.
-    pub async fn close_data_connection(&mut self, stream: impl Read) -> FtpResult<()> {
+    pub async fn close_data_connection(&mut self, stream: impl AsyncRead) -> FtpResult<()> {
         debug!("closing data connection");
         // Drop stream NOTE: must be done first, otherwise server won't return any response
         drop(stream);
@@ -883,7 +890,7 @@ where
                 let listener = self.active().await?;
                 self.perform(cmd).await?;
 
-                match async_std::future::timeout(self.active_timeout, listener.accept()).await {
+                match tokio::time::timeout(self.active_timeout, listener.accept()).await {
                     Ok(Ok((stream, addr))) => {
                         debug!("Connection received from {}", addr);
                         stream
@@ -926,6 +933,29 @@ where
             self.data_connection_open = true;
         }
         result
+    }
+
+    /// Open a data connection for `cmd` and read the preliminary response confirming the transfer.
+    ///
+    /// If the server rejects the command (the response is not one of `expected_code`), the data
+    /// connection is dropped and `data_connection_open` is reset to `false`. This guarantees that a
+    /// failed command never leaves the client believing a data connection is still open, which would
+    /// otherwise make every subsequent data command fail with [`FtpError::DataConnectionAlreadyOpen`].
+    async fn data_command_with_response(
+        &mut self,
+        cmd: Command,
+        expected_code: &[Status],
+    ) -> FtpResult<(Response, DataStream<T>)> {
+        let data_stream = self.data_command(cmd).await?;
+        match self.read_response_in(expected_code).await {
+            Ok(response) => Ok((response, data_stream)),
+            Err(err) => {
+                // server rejected the command: drop the data stream and reset the open flag
+                drop(data_stream);
+                self.data_connection_open = false;
+                Err(err)
+            }
+        }
     }
 
     /// Runs the EPSV to enter Extended passive mode.
@@ -1100,15 +1130,16 @@ where
 
     /// Execute a command which returns list of strings in a separate stream
     async fn stream_lines(&mut self, cmd: Command, open_code: Status) -> FtpResult<Vec<String>> {
-        let mut data_stream = BufReader::new(self.data_command(cmd).await?);
-        self.read_response_in(&[open_code, Status::AlreadyOpen])
+        let (_, stream) = self
+            .data_command_with_response(cmd, &[open_code, Status::AlreadyOpen])
             .await?;
+        let mut data_stream = BufReader::new(stream);
         let lines = Self::get_lines_from_stream(&mut data_stream).await;
         self.finalize_retr_stream(data_stream).await?;
         lines
     }
 
-    fn default_passive_stream_builder() -> Box<AsyncStdPassiveStreamBuilder> {
+    fn default_passive_stream_builder() -> Box<TokioPassiveStreamBuilder> {
         Box::new(|address| {
             Box::pin(async move {
                 TcpStream::connect(address)
@@ -1133,43 +1164,42 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::io::Cursor;
     use std::str::FromStr as _;
     use std::sync::Arc;
 
-    use async_std::io::ReadExt;
-    #[cfg(feature = "async-secure")]
     use pretty_assertions::assert_eq;
     use rand::distr::Alphanumeric;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
+    use tokio::io::AsyncReadExt;
 
-    use super::super::async_std::AsyncFtpStream;
+    use super::super::tokio::AsyncFtpStream;
     use super::*;
-    use crate::test_container::SyncPureFtpRunner;
+    use crate::test_container::AsyncPureFtpRunner;
     use crate::types::FormatControl;
-    use crate::{FtpError, Status};
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn connect() {
         crate::log_init();
         let (stream, _container) = setup_stream().await;
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn should_change_mode() {
         crate::log_init();
-        let (mut stream, _container) = setup_stream().await;
 
+        let (mut stream, _container) = setup_stream().await;
         assert_eq!(stream.mode, Mode::Passive);
         stream.set_mode(Mode::Active);
         assert_eq!(stream.mode, Mode::Active);
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn should_connect_with_timeout() {
         crate::log_init();
-        let container = SyncPureFtpRunner::start();
-        let port = container.get_ftp_port();
+        let container = AsyncPureFtpRunner::start().await;
+        let port = container.get_ftp_port().await;
         let url = format!("127.0.0.1:{port}");
         let addr: SocketAddr = url.parse().expect("invalid hostname");
 
@@ -1180,7 +1210,7 @@ mod test {
         assert!(stream.get_welcome_msg().unwrap().contains("220 "));
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn welcome_message() {
         crate::log_init();
         let (stream, _container) = setup_stream().await;
@@ -1188,7 +1218,7 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn should_set_passive_nat_workaround() {
         crate::log_init();
         let (mut stream, _container) = setup_stream().await;
@@ -1197,14 +1227,14 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn get_ref() {
         let (stream, _container) = setup_stream().await;
         assert!(stream.get_ref().set_ttl(255).is_ok());
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn change_wrkdir() {
         let (mut stream, _container) = setup_stream().await;
         let wrkdir: String = stream.pwd().await.unwrap();
@@ -1214,7 +1244,7 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn cd_up() {
         let (mut stream, _container) = setup_stream().await;
         let wrkdir: String = stream.pwd().await.unwrap();
@@ -1224,14 +1254,14 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn noop() {
         let (mut stream, _container) = setup_stream().await;
         assert!(stream.noop().await.is_ok());
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn make_and_remove_dir() {
         let (mut stream, _container) = setup_stream().await;
         // Make directory
@@ -1248,7 +1278,7 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn should_get_feat_and_set_opts() {
         let (mut stream, _container) = setup_stream().await;
         let features = stream.feat().await.expect("failed to get features");
@@ -1258,7 +1288,7 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn set_transfer_type() {
         let (mut stream, _container) = setup_stream().await;
         assert!(stream.transfer_type(FileType::Binary).await.is_ok());
@@ -1271,9 +1301,9 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_should_use_retr() {
-        use async_std::io::Cursor;
+        use std::io::Cursor;
 
         let (mut stream, _container) = setup_stream().await;
         // Set transfer type to Binary
@@ -1296,9 +1326,9 @@ mod test {
         assert_eq!(reader, "test data\n".as_bytes());
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn transfer_file() {
-        use async_std::io::Cursor;
+        use std::io::Cursor;
 
         let (mut stream, _container) = setup_stream().await;
         // Set transfer type to Binary
@@ -1314,7 +1344,7 @@ mod test {
         let mut reader = stream.retr_as_stream("test.txt").await.unwrap();
         let mut buffer = Vec::new();
         assert!(
-            async_std::io::ReadExt::read_to_end(&mut reader, &mut buffer)
+            tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut buffer)
                 .await
                 .is_ok()
         );
@@ -1346,8 +1376,9 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn should_resume_transfer() {
+        let handle = tokio::runtime::Handle::current();
         let (mut stream, container) = setup_stream().await;
         // Set transfer type to Binary
         assert!(stream.transfer_type(FileType::Binary).await.is_ok());
@@ -1366,7 +1397,7 @@ mod test {
         drop(stream);
         drop(transfer_stream);
         // Re-connect to server
-        let port = container.get_ftp_port();
+        let port = container.get_ftp_port().await;
         let url = format!("localhost:{port}");
 
         let mut stream = AsyncFtpStream::connect(url).await.unwrap();
@@ -1381,10 +1412,22 @@ mod test {
 
         let mut stream = stream.passive_stream_builder(move |addr| {
             let container_t = container_t.clone();
+            let handle = handle.clone();
             Box::pin(async move {
                 let mut addr = addr.clone();
                 let port = addr.port();
-                let mapped = container_t.get_mapped_port(port);
+
+                let mapped = tokio::task::spawn_blocking(move || {
+                    handle.block_on(container_t.get_mapped_port(port))
+                })
+                .await
+                .map_err(|e| {
+                    FtpError::ConnectionError(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("spawn_blocking failed: {e}"),
+                    ))
+                })
+                .expect("failed to join");
 
                 addr.set_port(mapped);
 
@@ -1421,10 +1464,9 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_should_transfer_file_with_extended_passive_mode() {
         crate::log_init();
-        use async_std::io::Cursor;
 
         let (mut stream, _container) = setup_stream().await;
         // Set transfer type to Binary
@@ -1439,7 +1481,7 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_should_list_files_with_non_utf8_names() {
         let (mut stream, container) = setup_stream().await;
         let files = stream
@@ -1461,37 +1503,38 @@ mod test {
         drop(container);
     }
 
-    #[async_attributes::test]
-    async fn test_should_perform_custom_command() {
+    #[tokio::test]
+    async fn should_reset_data_connection_after_failed_data_command() {
         let (mut stream, _container) = setup_stream().await;
+        assert!(stream.transfer_type(FileType::Binary).await.is_ok());
 
-        let command = "PWD";
-        assert!(
-            stream
-                .custom_command(command, &[Status::PathCreated])
-                .await
-                .is_ok()
-        );
+        // A failed data command must leave the data connection free, otherwise the next data
+        // command would wrongly fail with `DataConnectionAlreadyOpen` instead of the real error.
+        for _ in 0..3 {
+            assert!(stream.retr_as_stream("non-existing.txt").await.is_err());
+            assert!(
+                stream
+                    .custom_data_command("RETR non-existing.txt", &[Status::AboutToSend])
+                    .await
+                    .is_err()
+            );
+        }
+
+        // After the failures every kind of data command must still be usable.
+        let mut reader = Cursor::new("test data\n".as_bytes());
+        assert!(stream.put_file("test.txt", &mut reader).await.is_ok());
+        let mut reader = Cursor::new("test data\n".as_bytes());
+        assert!(stream.append_file("test.txt", &mut reader).await.is_ok());
+        let data_stream = stream.retr_as_stream("test.txt").await.unwrap();
+        assert!(stream.finalize_retr_stream(data_stream).await.is_ok());
+        assert!(stream.list(None).await.is_ok());
+        assert!(stream.nlst(None).await.is_ok());
+
+        assert!(stream.rm("test.txt").await.is_ok());
+        finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
-    async fn test_should_perform_custom_data_command() {
-        let (mut stream, _container) = setup_stream().await;
-        let command = "LIST";
-        let (response, data_stream) = stream
-            .custom_data_command(command, &[Status::AboutToSend])
-            .await
-            .expect("Failed to perform custom data command");
-        assert_eq!(response.status, Status::AboutToSend);
-        let mut reader = async_std::io::BufReader::new(data_stream);
-        AsyncFtpStream::get_lines_from_stream(&mut reader)
-            .await
-            .expect("Failed to get lines from stream");
-        // finalize
-        assert!(stream.close_data_connection(reader).await.is_ok());
-    }
-
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_should_prevent_multiple_data_connections() {
         let (mut stream, _container) = setup_stream().await;
         let command = "LIST";
@@ -1526,7 +1569,7 @@ mod test {
         }
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_should_free_data_connection_after_close() {
         let (mut stream, _container) = setup_stream().await;
         let command = "LIST";
@@ -1536,7 +1579,7 @@ mod test {
             .await
             .expect("Failed to perform custom data command");
         assert_eq!(response.status, Status::AboutToSend);
-        let mut reader = async_std::io::BufReader::new(data_stream);
+        let mut reader = BufReader::new(data_stream);
         AsyncFtpStream::get_lines_from_stream(&mut reader)
             .await
             .expect("Failed to get lines from stream");
@@ -1549,7 +1592,7 @@ mod test {
             .await
             .expect("Failed to perform custom data command");
         assert_eq!(response.status, Status::AboutToSend);
-        let mut reader = async_std::io::BufReader::new(data_stream);
+        let mut reader = BufReader::new(data_stream);
         AsyncFtpStream::get_lines_from_stream(&mut reader)
             .await
             .expect("Failed to get lines from stream");
@@ -1557,14 +1600,14 @@ mod test {
         assert!(stream.close_data_connection(reader).await.is_ok());
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_abort_transfer() {
         crate::log_init();
         let (mut stream, _container) = setup_stream().await;
 
         assert!(stream.transfer_type(FileType::Binary).await.is_ok());
         let file_data = "test data for abort\n";
-        let mut reader = async_std::io::Cursor::new(file_data.as_bytes());
+        let mut reader = Cursor::new(file_data.as_bytes());
         assert!(stream.put_file("abort_test.txt", &mut reader).await.is_ok());
         // Open a retr stream
         let data_stream = stream.retr_as_stream("abort_test.txt").await.unwrap();
@@ -1575,12 +1618,12 @@ mod test {
         drop(stream);
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_append_with_stream() {
         let (mut stream, _container) = setup_stream().await;
         assert!(stream.transfer_type(FileType::Binary).await.is_ok());
         // Create file
-        let mut reader = async_std::io::Cursor::new("part1".as_bytes());
+        let mut reader = Cursor::new("part1".as_bytes());
         assert!(
             stream
                 .put_file("append_stream.txt", &mut reader)
@@ -1592,14 +1635,12 @@ mod test {
             .append_with_stream("append_stream.txt")
             .await
             .unwrap();
-        async_std::io::WriteExt::write_all(&mut data_stream, b"part2")
-            .await
-            .unwrap();
+        data_stream.write_all(b"part2").await.unwrap();
         stream.finalize_put_stream(data_stream).await.unwrap();
         // Verify content
         let mut reader = stream.retr_as_stream("append_stream.txt").await.unwrap();
         let mut buffer = Vec::new();
-        async_std::io::ReadExt::read_to_end(&mut reader, &mut buffer)
+        tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut buffer)
             .await
             .unwrap();
         stream.finalize_retr_stream(reader).await.unwrap();
@@ -1608,7 +1649,7 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_active_mode_builder() {
         crate::log_init();
         let stream = AsyncFtpStream::connect("test.rebex.net:21").await.unwrap();
@@ -1617,7 +1658,7 @@ mod test {
         assert_eq!(stream.active_timeout, Duration::from_secs(30));
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_passive_stream_builder() {
         crate::log_init();
         let stream = AsyncFtpStream::connect("test.rebex.net:21").await.unwrap();
@@ -1631,7 +1672,7 @@ mod test {
         assert_eq!(stream.mode, Mode::Passive);
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_site_command() {
         let (mut stream, _container) = setup_stream().await;
         let result = stream.site("HELP").await;
@@ -1645,14 +1686,14 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_eprt_command() {
         let (mut stream, _container) = setup_stream().await;
         let addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
         let _ = stream.eprt(addr).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_transfer_type_variants() {
         let (mut stream, _container) = setup_stream().await;
         assert!(
@@ -1666,7 +1707,7 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_cwd_error() {
         let (mut stream, _container) = setup_stream().await;
         match stream.cwd("/nonexistent/directory/path").await {
@@ -1678,7 +1719,7 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_rm_nonexistent_file() {
         let (mut stream, _container) = setup_stream().await;
         match stream.rm("nonexistent_file.txt").await {
@@ -1688,7 +1729,7 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_rmdir_nonexistent() {
         let (mut stream, _container) = setup_stream().await;
         match stream.rmdir("nonexistent_dir").await {
@@ -1698,7 +1739,7 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_rename_nonexistent() {
         let (mut stream, _container) = setup_stream().await;
         match stream.rename("nonexistent.txt", "new_name.txt").await {
@@ -1708,7 +1749,7 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_retr_nonexistent_file() {
         let (mut stream, _container) = setup_stream().await;
         match stream.retr_as_stream("nonexistent_file.txt").await {
@@ -1718,16 +1759,16 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_list_nonexistent_path() {
         let (mut stream, _container) = setup_stream().await;
         let _ = stream.list(Some("/nonexistent/path")).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_nlst_with_path() {
         let (mut stream, _container) = setup_stream().await;
-        let mut reader = async_std::io::Cursor::new("data".as_bytes());
+        let mut reader = Cursor::new("data".as_bytes());
         assert!(stream.put_file("nlst_test.txt", &mut reader).await.is_ok());
         let files = stream.nlst(None).await.unwrap();
         assert!(files.contains(&"nlst_test.txt".to_string()));
@@ -1735,10 +1776,10 @@ mod test {
         finalize_stream(stream).await;
     }
 
-    #[async_attributes::test]
+    #[tokio::test]
     async fn test_list_with_explicit_current_dir() {
         let (mut stream, _container) = setup_stream().await;
-        let mut reader = async_std::io::Cursor::new("data".as_bytes());
+        let mut reader = Cursor::new("data".as_bytes());
         assert!(stream.put_file("list_test.txt", &mut reader).await.is_ok());
         let files = stream.list(Some(".")).await.unwrap();
         assert!(!files.is_empty());
@@ -1749,7 +1790,37 @@ mod test {
     /// Test if the stream is Send
     fn is_send<T: Send>(_send: T) {}
 
-    #[async_attributes::test]
+    #[tokio::test]
+    async fn test_should_perform_custom_command() {
+        let (mut stream, _container) = setup_stream().await;
+
+        let command = "PWD";
+        assert!(
+            stream
+                .custom_command(command, &[Status::PathCreated])
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_should_perform_custom_data_command() {
+        let (mut stream, _container) = setup_stream().await;
+        let command = "LIST";
+        let (response, data_stream) = stream
+            .custom_data_command(command, &[Status::AboutToSend])
+            .await
+            .expect("Failed to perform custom data command");
+        assert_eq!(response.status, Status::AboutToSend);
+        let mut reader = BufReader::new(data_stream);
+        AsyncFtpStream::get_lines_from_stream(&mut reader)
+            .await
+            .expect("Failed to get lines from stream");
+        // finalize
+        assert!(stream.close_data_connection(reader).await.is_ok());
+    }
+
+    #[tokio::test]
     #[ignore = "just needs to compile"]
     async fn test_ftp_stream_should_be_send() {
         crate::log_init();
@@ -1771,7 +1842,7 @@ mod test {
     /// Test if the stream is Sync
     fn is_sync<T: Sync>(_send: T) {}
 
-    #[async_attributes::test]
+    #[tokio::test]
     #[ignore = "just needs to compile"]
     async fn test_ftp_stream_should_be_sync() {
         crate::log_init();
@@ -1792,11 +1863,12 @@ mod test {
 
     // -- test utils
 
-    async fn setup_stream() -> (AsyncFtpStream, Arc<SyncPureFtpRunner>) {
+    async fn setup_stream() -> (AsyncFtpStream, Arc<AsyncPureFtpRunner>) {
         crate::log_init();
-        let container = Arc::new(SyncPureFtpRunner::start());
+        let handle = tokio::runtime::Handle::current();
+        let container = Arc::new(AsyncPureFtpRunner::start().await);
 
-        let port = container.get_ftp_port();
+        let port = container.get_ftp_port().await;
         let url = format!("localhost:{port}");
 
         let mut ftp_stream = ImplAsyncFtpStream::connect(url).await.unwrap();
@@ -1808,13 +1880,24 @@ mod test {
         assert!(ftp_stream.cwd(tempdir.as_str()).await.is_ok());
 
         let container_t = container.clone();
-
         let ftp_stream = ftp_stream.passive_stream_builder(move |addr| {
             let container_t = container_t.clone();
+            let handle = handle.clone();
             Box::pin(async move {
                 let mut addr = addr.clone();
                 let port = addr.port();
-                let mapped = container_t.get_mapped_port(port);
+
+                let mapped = tokio::task::spawn_blocking(move || {
+                    handle.block_on(container_t.get_mapped_port(port))
+                })
+                .await
+                .map_err(|e| {
+                    FtpError::ConnectionError(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("spawn_blocking failed: {e}"),
+                    ))
+                })
+                .expect("failed to join");
 
                 addr.set_port(mapped);
 
@@ -1842,5 +1925,58 @@ mod test {
             .take(5)
             .collect();
         format!("temp_{}", name)
+    }
+
+    #[tokio::test]
+    async fn should_accept_200_for_file_operations() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as TokioBufReader};
+
+        crate::log_init();
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("failed to bind");
+        let port = listener.local_addr().unwrap().port();
+
+        // Fake FTP server that replies with 200 instead of the spec-mandated
+        // 250/257 to file operations, mimicking non-compliant servers such as bftpd.
+        let handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("no incoming connection");
+            let (read_half, mut writer) = stream.into_split();
+            let mut reader = TokioBufReader::new(read_half);
+
+            writer.write_all(b"220 Welcome\r\n").await.unwrap();
+
+            let mut line = String::new();
+            while reader.read_line(&mut line).await.unwrap() > 0 {
+                let reply: &[u8] = match line.split_whitespace().next() {
+                    // RNFR must be acknowledged with 350 before RNTO is sent.
+                    Some("RNFR") => b"350 ready for destination name\r\n",
+                    Some("QUIT") => b"221 goodbye\r\n",
+                    // Everything else is answered with the non-compliant 200.
+                    _ => b"200 ok\r\n",
+                };
+                writer.write_all(reply).await.unwrap();
+                if line.starts_with("QUIT") {
+                    break;
+                }
+                line.clear();
+            }
+        });
+
+        let tcp = TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("failed to connect");
+        let mut stream = AsyncFtpStream::connect_with_stream(tcp)
+            .await
+            .expect("failed handshake");
+
+        assert!(stream.mkdir("dir").await.is_ok());
+        assert!(stream.rename("a", "b").await.is_ok());
+        assert!(stream.rmdir("dir").await.is_ok());
+        assert!(stream.rm("file").await.is_ok());
+
+        assert!(stream.quit().await.is_ok());
+        handle.await.expect("server task panicked");
     }
 }

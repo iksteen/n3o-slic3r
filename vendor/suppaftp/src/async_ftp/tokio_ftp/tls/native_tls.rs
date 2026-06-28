@@ -97,11 +97,10 @@ impl TokioTlsStream for AsyncNativeTlsStream {
     }
 
     fn tcp_stream(self) -> TcpStream {
-        // N3O patch: upstream uses `std::os::fd` unconditionally, which doesn't
-        // exist on Windows — duplicate the underlying handle through the
-        // platform-appropriate owned-handle API (the std socket type accepts
-        // either). `windows` / `not(windows)` so the binding is exhaustive.
-        // See vendor/suppaftp/N3O_PATCH.md.
+        // `std::os::fd` doesn't exist on Windows — duplicate the underlying
+        // handle through the platform-appropriate owned-handle API (the std
+        // socket type accepts either), so the tokio TLS path builds on Windows
+        // too. `windows` / `not(windows)` keeps the binding exhaustive.
         #[cfg(windows)]
         let std_stream = {
             use std::os::windows::io::AsSocket;
