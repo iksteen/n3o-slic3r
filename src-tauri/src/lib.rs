@@ -130,6 +130,16 @@ pub fn run() {
             core::filament::library::init_root(filaments_root);
             tracing::info!("user filament library initialized");
 
+            // User process (quality) profile overrides — same writable-root
+            // pattern as filaments; per-printer subdirectories under it.
+            let processes_root = app
+                .path()
+                .config_dir()
+                .expect("config_dir")
+                .join("n3o-slic3r/processes");
+            core::process::library::init_root(processes_root);
+            tracing::info!("user process library initialized");
+
             // Project state is constructed AFTER the storage roots
             // are wired so the bootstrap plate's printer lookup sees
             // the real on-disk library, not a registry pinned to
@@ -193,6 +203,7 @@ pub fn run() {
             core::filament::user_filament_clone,
             core::filament::user_filament_set_override,
             core::filament::user_filament_resolved_config,
+            core::process::user_process_get,
             core::scene::commands::scene_snapshot,
             core::scene::commands::scene_select,
             core::scene::commands::scene_deselect,
@@ -246,6 +257,10 @@ pub fn run() {
             core::printer::printer_instance_update,
             core::printer::printer_instance_sync_from_driver,
             core::project::commands::project_set_plate_quality_profile,
+            core::project::commands::user_process_stamp,
+            core::project::commands::user_process_duplicate,
+            core::project::commands::user_process_revert,
+            core::project::commands::user_process_delete,
             core::project::commands::plate_cascade_resolve,
             core::project::commands::plate_cascade_trace,
             core::project::commands::project_set_material_slot,

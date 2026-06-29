@@ -345,15 +345,35 @@ pub fn compose_cascade(
     }
 
     // 5. Process fragment — printer-bound, looked up by
-    //    `(printer_fragment_slug, quality_profile)`.
-    let process = load_process_fragment(&instance.printer_fragment_slug, &instance.quality_profile)
+    //    `(printer_fragment_slug, quality_profile)`. The selected
+    //    `quality_profile` resolves to the bundled fragment slug to load plus
+    //    any stamped user overrides to fold on top (in-place: same slug).
+    let (process_slug, process_overrides) =
+        resolve_process_ref(&instance.printer_fragment_slug, &instance.quality_profile);
+    let process = load_process_fragment(&instance.printer_fragment_slug, &process_slug)
         .ok_or_else(|| {
             ComposeError::UnknownProcessFragment(format!(
                 "{}/{}",
-                instance.printer_fragment_slug, instance.quality_profile,
+                instance.printer_fragment_slug, process_slug,
             ))
         })?;
     rules.extend(process.rules);
+
+    // 5a. Stamped process (quality) overrides — the per-user diff saved onto
+    //     the selected profile. `!important` so they win over the fragment's
+    //     own defaults, mirroring 5b's machine overrides. Still below the
+    //     project/object override tiers, which apply in phase two.
+    if !process_overrides.is_empty() {
+        rules.push(Rule {
+            when: Predicate::default(),
+            set: process_overrides,
+            source: SourceLocation {
+                path: PathBuf::from("<process-overrides>"),
+                line: 1,
+            },
+            important: true,
+        });
+    }
 
     // 5b. Machine-setting overrides — the per-printer-instance tier for
     //     Printer-bucket keys, set from the printer panel and stored in the
@@ -652,6 +672,18 @@ fn resolve_filament_ref(identity: &str) -> (String, BTreeMap<String, String>) {
     match filament::library::lookup(identity) {
         Some(uf) => (uf.base, uf.overrides),
         None => (identity.to_owned(), BTreeMap::new()),
+    }
+}
+
+/// Resolve a printer's selected `quality_profile` into the bundled process
+/// fragment slug to load plus the stamped user overrides to fold on top. The
+/// profile may be a bundled slug (no overrides) or a stamped-in-place one
+/// (overrides, base == slug); a future named clone would resolve to its
+/// `base` fragment + overrides, mirroring `resolve_filament_ref`.
+fn resolve_process_ref(printer: &str, quality_profile: &str) -> (String, BTreeMap<String, String>) {
+    match crate::core::process::library::lookup(printer, quality_profile) {
+        Some(up) => (up.base, up.overrides),
+        None => (quality_profile.to_owned(), BTreeMap::new()),
     }
 }
 
@@ -969,6 +1001,32 @@ mod tests {
             all_keys.contains(&"layer_height".to_owned()),
             "process-bucket key missing"
         );
+    }
+
+    #[test]
+    fn stamped_process_override_is_folded_into_compose() {
+        let _registry = RegistryGuard::acquire();
+        let bambi = lookup_instance("bambi").expect("bambi present");
+        let printer = bambi.printer_fragment_slug.clone();
+        let base = bambi.quality_profile.clone();
+        // Stamp a benign process override onto the selected profile.
+        let mut add = BTreeMap::new();
+        add.insert("top_shell_layers".to_owned(), Some("9".to_owned()));
+        crate::core::process::library::stamp(&printer, &base, add);
+
+        let cascade = compose_cascade(&bambi, &[]).expect("compose");
+        let rule = cascade
+            .rules
+            .iter()
+            .find(|r| r.source.path.to_string_lossy() == "<process-overrides>")
+            .expect("stamped process overrides folded into the authored cascade");
+        assert!(rule.important, "stamped overrides win over the fragment");
+        assert_eq!(
+            rule.set.get("top_shell_layers").map(String::as_str),
+            Some("9"),
+        );
+
+        crate::core::process::library::remove(&printer, &base);
     }
 
     #[test]

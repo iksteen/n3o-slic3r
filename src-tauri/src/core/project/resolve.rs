@@ -15,17 +15,22 @@ use super::Project;
 /// Map a winning rule's source path to the cascade *layer* the settings
 /// panel ladder renders it under. The fragment paths `compose_cascade`
 /// stamps are deterministic per step, so this is an exact classification
-/// (not a heuristic): process fragment → the `"user"` row (labeled
-/// "Profile" — the selected quality/process profile), nozzle fragment +
-/// extruder-vector assembly → `"nozzle"`, bed → `"build_plate"`, filament →
-/// `"filament"`, and `machine.toml` + synthesized machine-topology rules →
-/// `"printer"`. Returns the frontend `CascadeLayer` id, or `None` for
-/// `<plate-overrides>` (the panel draws override tiers itself) / anything
-/// unrecognized.
+/// (not a heuristic): the process fragment and its stamped user overrides
+/// (`<process-overrides>`) → the `"user"` row (labeled "Profile" — the
+/// selected quality/process profile), nozzle fragment + extruder-vector
+/// assembly → `"nozzle"`, bed → `"build_plate"`, filament → `"filament"`, and
+/// `machine.toml` + synthesized machine-topology rules + the instance's
+/// `<machine-overrides>` → `"printer"`. Returns the frontend `CascadeLayer`
+/// id, or `None` for `<plate-overrides>` (the panel draws override tiers
+/// itself) / anything unrecognized.
 fn layer_for_source(path: &std::path::Path) -> Option<&'static str> {
     let s = path.to_string_lossy();
-    if s.contains("/processes/") {
-        Some("user") // the "Profile" row = quality/process profile
+    // The Profile row = the quality/process profile *and* the per-user
+    // overrides stamped onto it (`<process-overrides>`), so a saved quality
+    // setting attributes to Profile, not — via the frontend's null fallback —
+    // to Printer.
+    if s.contains("/processes/") || s == "<process-overrides>" {
+        Some("user")
     } else if s.contains("/beds/") {
         Some("build_plate")
     } else if s.contains("/filament/")
@@ -38,6 +43,7 @@ fn layer_for_source(path: &std::path::Path) -> Option<&'static str> {
     } else if s.contains("machine.toml")
         || s.contains("<flush-defaults>")
         || s.contains("<filament-topology>")
+        || s == "<machine-overrides>"
     {
         Some("printer")
     } else {
@@ -382,6 +388,15 @@ mod tests {
         );
         assert_eq!(p("<extruder-vector-assembly>"), Some("nozzle"));
         assert_eq!(p("<plate-overrides>"), None);
+        // Synthesized override rules attribute to their tier's row — a stamped
+        // quality override to Profile ("user"), the instance machine config to
+        // Printer — not to the frontend's null→Printer fallback.
+        assert_eq!(
+            p("<process-overrides>"),
+            Some("user"),
+            "stamped process override → Profile row",
+        );
+        assert_eq!(p("<machine-overrides>"), Some("printer"));
     }
 
     #[test]

@@ -456,11 +456,39 @@ pub fn process_fragment_list(
     printer_model: String,
     installed_nozzle_diameters: Vec<String>,
 ) -> Vec<ProcessFragmentSummary> {
-    list_process_fragments(
+    let user = crate::core::process::library::list();
+    // Stamp-in-place edits (id == base): the bundled profile gets an `edited`
+    // flag (the picker bolds it + offers Revert).
+    let edited: std::collections::HashSet<&str> = user
+        .iter()
+        .filter(|p| p.printer == printer_fragment_slug && p.id == p.base)
+        .map(|p| p.base.as_str())
+        .collect();
+    let mut out: Vec<ProcessFragmentSummary> = list_process_fragments(
         &printer_fragment_slug,
         &printer_model,
         &installed_nozzle_diameters,
     )
+    .into_iter()
+    .map(|mut s| {
+        s.edited = edited.contains(s.slug.as_str());
+        s
+    })
+    .collect();
+    // Named custom profiles (id != base) aren't bundled fragments — append a
+    // synthesized summary for each available for this (printer, nozzle).
+    out.extend(
+        user.iter()
+            .filter(|p| p.printer == printer_fragment_slug && p.id != p.base)
+            .filter_map(|p| {
+                crate::core::profile_library::custom_process_summary(
+                    p,
+                    &printer_model,
+                    &installed_nozzle_diameters,
+                )
+            }),
+    );
+    out
 }
 
 /// Tauri command: pull the named printer's current spool loadout

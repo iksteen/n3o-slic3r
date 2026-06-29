@@ -39,9 +39,95 @@ import { chunkExtruders, nozzlesInline } from "./nozzleLayout";
 import {
   listProcessFragments,
   setPlateQualityProfile,
+  stampUserProcess,
+  revertUserProcess,
+  duplicateUserProcess,
+  deleteUserProcess,
+  STAMP_EXCLUDED_KEYS,
   type ProcessFragmentSummary,
 } from "./processFragment";
+import { QualityProfileNameDialog } from "./QualityProfileNameDialog";
 import type { PlateSnapshot } from "../viewport/types";
+
+/** Floppy-disk "save" glyph for the Quality Save button. */
+function SaveIcon(): React.JSX.Element {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M3 2.5h7l3 3V13a.5.5 0 0 1-.5.5h-10A.5.5 0 0 1 2 13V3.5A1 1 0 0 1 3 2.5Z"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M5 2.5v3.5h5V2.5M5.5 13v-3.5h5V13"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Counterclockwise "undo" arrow for the Quality Revert button. */
+function RevertIcon(): React.JSX.Element {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M4 7h5a3.5 3.5 0 1 1 0 7H5.5"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+      <path
+        d="M6 4.5 3.5 7 6 9.5"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Two overlapping squares — "duplicate / save as" for the Quality Duplicate
+ *  button. */
+function DuplicateIcon(): React.JSX.Element {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <rect
+        x="5.5"
+        y="5.5"
+        width="8"
+        height="8"
+        rx="1.3"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+      <path
+        d="M10.5 5.5V3.8A1.3 1.3 0 0 0 9.2 2.5H3.8A1.3 1.3 0 0 0 2.5 3.8v5.4a1.3 1.3 0 0 0 1.3 1.3h1.7"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+    </svg>
+  );
+}
+
+/** Trash can — "delete" for the Quality button when a custom profile is
+ *  selected. */
+function DeleteIcon(): React.JSX.Element {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M3 4.5h10M6.5 4.5V3.2A.7.7 0 0 1 7.2 2.5h1.6a.7.7 0 0 1 .7.7v1.3M4.2 4.5l.6 8a1 1 0 0 0 1 .9h4.4a1 1 0 0 0 1-.9l.6-8"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 /** Locate the active plate in a session snapshot, or `null`
  * when bootstrap hasn't completed. Exported for tests. */
@@ -107,6 +193,17 @@ export function SettingsPanelHost({
   const plate = useMemo(() => activePlate(session), [session]);
   const selected = useMemo(() => selectedObject(plate), [plate]);
   const catalog = usePrinterCatalog();
+
+  // Bumped after a stamp/revert/duplicate/delete so the Quality option list
+  // (its `edited`/`custom` flags) and the cascade resolve both refresh — the
+  // effective values move between the project tier and the baked profile.
+  const [processGen, setProcessGen] = useState(0);
+  // The Duplicate name dialog: `null` closed, else carries the ⌘/Ctrl-click
+  // `clear` modifier captured at click time + the source profile's name.
+  const [nameDialog, setNameDialog] = useState<{
+    clear: boolean;
+    sourceName: string;
+  } | null>(null);
 
   const projectOverrides = plate?.project_overrides ?? {};
   const userOverrides = session.snapshot?.user_overrides ?? {};
@@ -175,7 +272,7 @@ export function SettingsPanelHost({
   // rebound — those are the backend inputs.
   const { resolved } = usePlateCascadeResolve(
     plate?.plate_id ?? null,
-    `${plate?.quality_profile ?? ""}|${plate?.printer_instance_id ?? ""}`,
+    `${plate?.quality_profile ?? ""}|${plate?.printer_instance_id ?? ""}|${processGen}`,
   );
 
   const objectCbs = useMemo(
@@ -254,7 +351,7 @@ export function SettingsPanelHost({
     return () => {
       cancelled = true;
     };
-  }, [printerFragmentSlug, printerModel, installedNozzleKey]);
+  }, [printerFragmentSlug, printerModel, installedNozzleKey, processGen]);
 
   const extruderCount = instance?.extruders.length ?? 0;
   const inlineNozzles = nozzlesInline(extruderCount);
@@ -336,6 +433,7 @@ export function SettingsPanelHost({
           </div>
         ))}
         {instance && instanceId && plate && (
+          <>
           <div className="sp-quality">
             <span className="config-row-label sp-quality-label">Quality</span>
             <div className="sp-quality-wrap">
@@ -357,8 +455,153 @@ export function SettingsPanelHost({
                   );
                 }}
               />
+              {(() => {
+                const selectedSlug =
+                  plate.quality_profile ?? instance.quality_profile;
+                const selectedOption = processOptions.find(
+                  (o) => o.slug === selectedSlug,
+                );
+                const selectedEdited = !!selectedOption?.edited;
+                const selectedCustom = !!selectedOption?.custom;
+                const selectedName =
+                  selectedOption?.display_name ?? selectedSlug;
+                // Something to stamp = the plate carries a stampable quality
+                // edit — a Process-bucket project override that isn't a
+                // viewport-managed placement key (a dragged tower must never
+                // enable Save).
+                const hasEdits = Object.keys(projectOverrides).some(
+                  (k) => !STAMP_EXCLUDED_KEYS.includes(k),
+                );
+                return (
+                  <>
+                    <button
+                      type="button"
+                      className="sp-quality-action"
+                      disabled={!hasEdits}
+                      aria-label="Save quality settings to this profile"
+                      title={
+                        hasEdits
+                          ? "Save these quality settings onto this profile.\n⌘/Ctrl-click: save, then clear them from the plate (save then clear)."
+                          : "No unsaved quality changes to save."
+                      }
+                      onClick={(e) => {
+                        const clear = e.ctrlKey || e.metaKey;
+                        void stampUserProcess(plate.plate_id, clear)
+                          .then(() => setProcessGen((g) => g + 1))
+                          .catch((err) =>
+                            console.error(
+                              "[settings] stampUserProcess failed",
+                              err,
+                            ),
+                          );
+                      }}
+                    >
+                      <SaveIcon />
+                    </button>
+                    <button
+                      type="button"
+                      className="sp-quality-action"
+                      aria-label="Save as a new custom quality profile"
+                      title={
+                        "Save these quality settings as a new named profile.\n⌘/Ctrl-click: save, then clear them from the plate (save then clear)."
+                      }
+                      onClick={(e) =>
+                        setNameDialog({
+                          clear: e.ctrlKey || e.metaKey,
+                          sourceName: selectedName,
+                        })
+                      }
+                    >
+                      <DuplicateIcon />
+                    </button>
+                    {selectedCustom ? (
+                      <button
+                        type="button"
+                        className="sp-quality-action danger"
+                        aria-label="Delete this custom profile"
+                        title={
+                          "Delete this custom profile and switch back to the default.\n⌘/Ctrl-click: delete, but keep its settings as project overrides."
+                        }
+                        onClick={(e) => {
+                          const apply = e.ctrlKey || e.metaKey;
+                          if (
+                            !apply &&
+                            !window.confirm(
+                              `Delete the custom profile “${selectedName}”?`,
+                            )
+                          ) {
+                            return;
+                          }
+                          void deleteUserProcess(plate.plate_id, apply)
+                            .then(() => setProcessGen((g) => g + 1))
+                            .catch((err) =>
+                              console.error(
+                                "[settings] deleteUserProcess failed",
+                                err,
+                              ),
+                            );
+                        }}
+                      >
+                        <DeleteIcon />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="sp-quality-action danger"
+                        disabled={!selectedEdited}
+                        aria-label="Revert this profile to bundled defaults"
+                        title={
+                          selectedEdited
+                            ? "Revert this profile to its bundled defaults.\n⌘/Ctrl-click: revert, but keep its settings as project overrides."
+                            : "This profile has no saved overrides to revert."
+                        }
+                        onClick={(e) => {
+                          const apply = e.ctrlKey || e.metaKey;
+                          if (
+                            !apply &&
+                            !window.confirm(
+                              "Revert this quality profile to its bundled defaults?",
+                            )
+                          ) {
+                            return;
+                          }
+                          void revertUserProcess(plate.plate_id, apply)
+                            .then(() => setProcessGen((g) => g + 1))
+                            .catch((err) =>
+                              console.error(
+                                "[settings] revertUserProcess failed",
+                                err,
+                              ),
+                            );
+                        }}
+                      >
+                        <RevertIcon />
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           </div>
+          {nameDialog && (
+            <QualityProfileNameDialog
+              sourceName={nameDialog.sourceName}
+              onClose={() => setNameDialog(null)}
+              onCreate={(name) => {
+                const { clear } = nameDialog;
+                setNameDialog(null);
+                void duplicateUserProcess(plate.plate_id, name, clear)
+                  .then(() => setProcessGen((g) => g + 1))
+                  .catch((err) =>
+                    console.error(
+                      "[settings] duplicateUserProcess failed",
+                      err,
+                    ),
+                  );
+              }}
+            />
+          )}
+          </>
         )}
         <SlotBindingPanel
           plateId={plate?.plate_id ?? null}

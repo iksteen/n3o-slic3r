@@ -1772,10 +1772,42 @@
     position: relative;
     flex: 1;
     min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
   .sp-quality-chip-wrap {
     position: relative;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
+  }
+  /* Save / Revert icon buttons beside the Quality chip. */
+  .sp-quality-action {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text-dim, var(--text));
+    cursor: pointer;
+  }
+  .sp-quality-action:hover:not(:disabled) {
+    background: var(--surface-2);
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+  .sp-quality-action:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .sp-quality-action.danger:hover:not(:disabled) {
+    color: var(--danger, #e5484d);
+    border-color: var(--danger, #e5484d);
   }
   .sp-quality-chip {
     display: flex;
@@ -1812,6 +1844,11 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* A profile carrying user overrides reads bolder than a pristine one. */
+  .sp-quality-chip-name.edited,
+  .sp-quality-item-name.edited {
+    font-weight: 800;
   }
   .sp-quality-chip-h {
     font-family: var(--font-mono);

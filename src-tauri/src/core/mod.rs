@@ -18,6 +18,7 @@ pub mod paths;
 pub mod plugin;
 pub mod preview;
 pub mod printer;
+pub mod process;
 pub mod profile_library;
 pub mod project;
 pub mod scene;

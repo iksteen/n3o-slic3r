@@ -83,7 +83,12 @@ export function QualityPicker({
         aria-expanded={open}
       >
         <span className="sp-quality-chip-main">
-          <span className="sp-quality-chip-name">{chipName}</span>
+          <span
+            className={`sp-quality-chip-name${current?.edited ? " edited" : ""}`}
+            title={current?.edited ? "Has user overrides" : undefined}
+          >
+            {chipName}
+          </span>
           {chipSub && <span className="sp-quality-chip-h">{chipSub}</span>}
         </span>
         <span className="chev" aria-hidden>
@@ -103,7 +108,9 @@ export function QualityPicker({
                 className={`sp-quality-item${isActive ? " active" : ""}`}
                 onClick={() => pick(o.slug)}
               >
-                <span className="sp-quality-item-name">
+                <span
+                  className={`sp-quality-item-name${o.edited ? " edited" : ""}`}
+                >
                   {stripLayerHeightPrefix(o.display_name)}
                 </span>
                 {o.layer_height_mm != null && (

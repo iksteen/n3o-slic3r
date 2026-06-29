@@ -136,6 +136,280 @@ pub fn project_set_plate_quality_profile(
     Ok(())
 }
 
+/// Viewport-managed per-plate placement keys: the wipe/prime-tower position
+/// the user drags in the 3D view writes these into `project_overrides`
+/// (see `viewport/WgpuViewport.tsx`). They're Process-bucket, but they're a
+/// per-plate placement, not a reusable quality setting — so the stamp
+/// excludes them (dragging the tower must never bake into the shared
+/// quality profile).
+const STAMP_EXCLUDED_KEYS: &[&str] = &["wipe_tower_x", "wipe_tower_y"];
+
+/// The stampable subset of a plate's `project_overrides`: Process-bucket keys
+/// that aren't viewport-managed placement ([`STAMP_EXCLUDED_KEYS`]). Each is
+/// returned as `Some(value)` (the stamp form). A dragged tower
+/// (`wipe_tower_x/y`) and any non-process key (filament/printer/metadata) are
+/// dropped, so they never bake into the shared quality profile.
+fn stampable_process_overrides(
+    overrides: &std::collections::HashMap<String, String>,
+) -> std::collections::BTreeMap<String, Option<String>> {
+    overrides
+        .iter()
+        .filter(|(k, _)| {
+            slic3r_ffi::bucket_of(k) == Some(slic3r_ffi::OptBucket::Process)
+                && !STAMP_EXCLUDED_KEYS.contains(&k.as_str())
+        })
+        .map(|(k, v)| (k.clone(), Some(v.clone())))
+        .collect()
+}
+
+/// Stamp the active plate's current quality edits onto its selected process
+/// profile as a per-user override — the "Save" beside the Quality picker.
+///
+/// Takes the stampable Process-bucket keys in the plate's `project_overrides`
+/// (the tier the panel writes quality edits to — minus the viewport-managed
+/// placement keys in [`STAMP_EXCLUDED_KEYS`]) and merges them onto the
+/// selected profile's stamped override (keyed by the printer + the bundled
+/// process slug). With `clear`, those keys are then also removed from the
+/// plate tier, so the diff lives *only* on the reusable profile (save then
+/// clear); otherwise they stay on the plate too (a plain save that copies
+/// them onto the profile). Effective values are unchanged either way; `clear`
+/// only decides whether the transient per-plate edits are tidied up.
+/// Non-process and excluded keys are always left on the plate.
+///
+/// A no-op (still `Ok`) when the plate is unbound or carries no stampable
+/// edits. The selected profile is the plate's `quality_profile` when set,
+/// else the bound instance's default.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn user_process_stamp(
+    plate_id: PlateId,
+    clear: bool,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
+    let plate = p
+        .plate(plate_id)
+        .ok_or_else(|| format!("unknown plate id {plate_id:?}"))?;
+    let Some(instance_id) = plate.printer_instance_id() else {
+        return Ok(()); // unbound — nothing to stamp
+    };
+    let instance = crate::core::printer::lookup_instance(instance_id)
+        .ok_or_else(|| format!("unknown printer instance `{instance_id}`"))?;
+    let printer = instance.printer_fragment_slug.clone();
+    // The selected process: the plate's own when set, else the instance default.
+    let base = plate
+        .quality_profile
+        .clone()
+        .unwrap_or_else(|| instance.quality_profile.clone());
+
+    // The stampable process-bucket subset of the plate's project-tier
+    // overrides — the current quality diff to stamp (excluding the
+    // viewport-managed tower-placement keys).
+    let stamped = stampable_process_overrides(&plate.project_overrides);
+    if stamped.is_empty() {
+        return Ok(()); // no quality edits to save
+    }
+
+    crate::core::process::library::stamp(&printer, &base, stamped.clone());
+
+    // With `clear` (the ⌘/Ctrl modifier), tidy the stamped keys off the plate
+    // tier — they now live solely on the profile. A plain save leaves them.
+    let mut events = Vec::new();
+    if clear {
+        for key in stamped.keys() {
+            events.extend(
+                p.project_override_clear(plate_id, key)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
+    }
+    drop(p);
+    emit_all(&window, &events);
+    crate::core::process::emit_changed(&window);
+    Ok(())
+}
+
+/// Save the active plate's current quality settings as a new **named** custom
+/// profile — the "Duplicate" beside the Quality picker. The custom profile
+/// inherits the selected profile's base fragment + its overrides, with the
+/// plate's current stampable quality edits merged on top, under `name`. The
+/// plate is then switched onto the new profile. With `clear` (the ⌘/Ctrl
+/// modifier), the merged edits are also removed from the plate tier (save
+/// then clear); otherwise they stay. Returns the new profile's id.
+///
+/// Errors on an unbound plate or a blank name.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn user_process_duplicate(
+    plate_id: PlateId,
+    name: String,
+    clear: bool,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<String, String> {
+    let name = name.trim().to_owned();
+    if name.is_empty() {
+        return Err("a profile name is required".into());
+    }
+    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
+    let plate = p
+        .plate(plate_id)
+        .ok_or_else(|| format!("unknown plate id {plate_id:?}"))?;
+    let instance_id = plate
+        .printer_instance_id()
+        .ok_or("plate is not bound to a printer")?;
+    let instance = crate::core::printer::lookup_instance(instance_id)
+        .ok_or_else(|| format!("unknown printer instance `{instance_id}`"))?;
+    let printer = instance.printer_fragment_slug.clone();
+    let selected = plate
+        .quality_profile
+        .clone()
+        .unwrap_or_else(|| instance.quality_profile.clone());
+
+    // Inherit the selected profile's base fragment + overrides (a bundled
+    // slug inherits itself with no overrides; a stamped/custom one its base +
+    // saved overrides), then merge the plate's current quality edits.
+    let (base, mut overrides) = match crate::core::process::library::lookup(&printer, &selected) {
+        Some(up) => (up.base, up.overrides),
+        None => (selected, std::collections::BTreeMap::new()),
+    };
+    let edits = stampable_process_overrides(&plate.project_overrides);
+    for (k, v) in &edits {
+        if let Some(v) = v {
+            overrides.insert(k.clone(), v.clone());
+        }
+    }
+
+    let created = crate::core::process::library::create_custom(&printer, &base, name, overrides);
+
+    // Switch the plate onto the new profile.
+    let mut events = p
+        .set_plate_quality_profile(plate_id, Some(created.id.clone()))
+        .map_err(|e| e.to_string())?;
+    if clear {
+        for key in edits.keys() {
+            events.extend(
+                p.project_override_clear(plate_id, key)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
+    }
+    drop(p);
+    emit_all(&window, &events);
+    crate::core::process::emit_changed(&window);
+    Ok(created.id)
+}
+
+/// Write a removed profile's `overrides` onto the plate's project (plate)
+/// tier, so reverting/deleting can *keep* the settings as project overrides
+/// rather than discarding them. Returns the emitted events.
+fn apply_overrides_to_plate(
+    p: &mut Project,
+    plate_id: PlateId,
+    overrides: std::collections::BTreeMap<String, String>,
+) -> Result<Vec<SceneEvent>, String> {
+    let mut events = Vec::new();
+    for (k, v) in overrides {
+        events.extend(
+            p.project_override_set(plate_id, k, v)
+                .map_err(|e| e.to_string())?,
+        );
+    }
+    Ok(events)
+}
+
+/// Resolve the bound printer slug + the plate's selected process slug (its own
+/// `quality_profile`, else the instance default), or `Ok(None)` when the plate
+/// is unbound.
+fn plate_printer_and_process(
+    p: &Project,
+    plate_id: PlateId,
+) -> Result<Option<(String, String)>, String> {
+    let plate = p
+        .plate(plate_id)
+        .ok_or_else(|| format!("unknown plate id {plate_id:?}"))?;
+    let Some(instance_id) = plate.printer_instance_id() else {
+        return Ok(None);
+    };
+    let instance = crate::core::printer::lookup_instance(instance_id)
+        .ok_or_else(|| format!("unknown printer instance `{instance_id}`"))?;
+    let printer = instance.printer_fragment_slug.clone();
+    let process = plate
+        .quality_profile
+        .clone()
+        .unwrap_or_else(|| instance.quality_profile.clone());
+    Ok(Some((printer, process)))
+}
+
+/// Discard a stamp-in-place profile's user overrides — back to pristine
+/// bundled — for the plate's selected profile. The "Revert" beside the
+/// Quality picker. With `apply`, the profile's settings are first written onto
+/// the plate's project tier (so they live on as project overrides instead of
+/// being lost). No-op when the plate is unbound or its profile is pristine.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn user_process_revert(
+    plate_id: PlateId,
+    apply: bool,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
+    let Some((printer, selected)) = plate_printer_and_process(&p, plate_id)? else {
+        return Ok(());
+    };
+    let Some(profile) = crate::core::process::library::lookup(&printer, &selected) else {
+        return Ok(()); // pristine — nothing to revert
+    };
+    crate::core::process::library::remove(&printer, &selected);
+    let mut events = Vec::new();
+    if apply {
+        events = apply_overrides_to_plate(&mut p, plate_id, profile.overrides)?;
+    }
+    drop(p);
+    emit_all(&window, &events);
+    crate::core::process::emit_changed(&window);
+    Ok(())
+}
+
+/// Delete the active plate's selected **named custom** quality profile and
+/// switch the plate back to its default (the bound instance's profile) — the
+/// "Delete" the Revert button becomes when a custom profile is selected. With
+/// `apply`, the custom profile's settings are first written onto the plate's
+/// project tier (so they live on as project overrides over the default
+/// profile, instead of being lost). A no-op (still `Ok`) when the plate is
+/// unbound or its selected profile isn't a custom one.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn user_process_delete(
+    plate_id: PlateId,
+    apply: bool,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<(), String> {
+    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
+    let Some((printer, selected)) = plate_printer_and_process(&p, plate_id)? else {
+        return Ok(());
+    };
+    let profile = match crate::core::process::library::lookup(&printer, &selected) {
+        Some(up) if up.id != up.base => up,
+        _ => return Ok(()), // not a custom profile — nothing to delete
+    };
+    crate::core::process::library::remove(&printer, &selected);
+    // Back to the default profile (inherit the instance's).
+    let mut events = p
+        .set_plate_quality_profile(plate_id, None)
+        .map_err(|e| e.to_string())?;
+    if apply {
+        events.extend(apply_overrides_to_plate(&mut p, plate_id, profile.overrides)?);
+    }
+    drop(p);
+    emit_all(&window, &events);
+    crate::core::process::emit_changed(&window);
+    Ok(())
+}
+
 // ---- Save / load ------------------------------------------
 
 /// Save the in-memory project to `path` as an n3o-slic3r `.n3o` file.
@@ -335,4 +609,50 @@ pub fn project_autosave_list() -> Result<Vec<AutosaveEntry>, String> {
 pub fn project_autosave_drop(uuid: String) -> Result<(), String> {
     let dir = autosave::default_autosave_dir();
     autosave::drop_autosave(&dir, &uuid).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn stamp_excludes_tower_placement_and_nonprocess_keys() {
+        let _ = slic3r_ffi::init(None, 3); // bucket_of needs the schema
+        let mut o = HashMap::new();
+        o.insert("layer_height".to_owned(), "0.28".to_owned()); // process — kept
+        o.insert("sparse_infill_density".to_owned(), "25%".to_owned()); // process — kept
+        o.insert("wipe_tower_x".to_owned(), "42".to_owned()); // placement — excluded
+        o.insert("wipe_tower_y".to_owned(), "130".to_owned()); // placement — excluded
+        o.insert("nozzle_diameter".to_owned(), "0.4".to_owned()); // printer bucket — excluded
+        let s = stampable_process_overrides(&o);
+        assert!(s.contains_key("layer_height"));
+        assert!(s.contains_key("sparse_infill_density"));
+        assert!(!s.contains_key("wipe_tower_x"), "dragged tower must not stamp");
+        assert!(!s.contains_key("wipe_tower_y"), "dragged tower must not stamp");
+        assert!(!s.contains_key("nozzle_diameter"), "non-process key must not stamp");
+    }
+
+    #[test]
+    fn apply_overrides_writes_them_to_the_plate_project_tier() {
+        // The ⌘/Ctrl path of revert/delete preserves a removed profile's
+        // settings by writing them onto the plate's project tier.
+        let mut project = Project::default();
+        let plate_id = project.plates[0].id;
+        let mut ov = std::collections::BTreeMap::new();
+        ov.insert("layer_height".to_owned(), "0.28".to_owned());
+        ov.insert("outer_wall_speed".to_owned(), "60".to_owned());
+        let events =
+            apply_overrides_to_plate(&mut project, plate_id, ov).expect("apply succeeds");
+        assert!(!events.is_empty(), "emits a ProjectOverridesChanged");
+        let plate = project.plate(plate_id).expect("plate");
+        assert_eq!(
+            plate.project_overrides.get("layer_height").map(String::as_str),
+            Some("0.28"),
+        );
+        assert_eq!(
+            plate.project_overrides.get("outer_wall_speed").map(String::as_str),
+            Some("60"),
+        );
+    }
 }

@@ -166,12 +166,12 @@ impl Project {
     }
 
     /// Set (or clear, with `None`) this plate's process/quality profile.
-    /// `Some(slug)` is validated to be a bundled process fragment for the
-    /// plate's bound printer; an unknown slug rejects with
-    /// `InvalidPlateMetadata`. `None` clears the override so the plate
-    /// inherits the bound instance's profile again. No-op (no event) when
-    /// unchanged. Emits `PlateMetadataChanged` — the same channel the
-    /// frontend already re-fetches plate metadata on.
+    /// `Some(slug)` is validated to be a bundled process fragment **or** a
+    /// stamped custom user-process profile for the plate's bound printer; an
+    /// unknown slug rejects with `InvalidPlateMetadata`. `None` clears the
+    /// override so the plate inherits the bound instance's profile again.
+    /// No-op (no event) when unchanged. Emits `PlateMetadataChanged` — the
+    /// same channel the frontend already re-fetches plate metadata on.
     pub fn set_plate_quality_profile(
         &mut self,
         plate_id: PlateId,
@@ -191,7 +191,13 @@ impl Project {
                         &instance.printer_fragment_slug,
                     )
                     .iter()
-                    .any(|s| *s == slug);
+                    .any(|s| *s == slug)
+                        // A stamped custom profile (id != base) is also valid.
+                        || crate::core::process::library::lookup(
+                            &instance.printer_fragment_slug,
+                            slug,
+                        )
+                        .is_some();
                     if !known {
                         return Err(SceneOpError::InvalidPlateMetadata {
                             plate_id,

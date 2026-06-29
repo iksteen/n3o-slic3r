@@ -838,6 +838,17 @@ pub struct ProcessFragmentSummary {
     pub display_name: String,
     pub layer_height_mm: Option<f32>,
     pub available_for: Vec<ProcessAvailability>,
+    /// True when the user has stamped overrides onto this profile (a
+    /// `UserProcess` exists for this printer + slug). The Quality picker
+    /// bolds edited profiles and shows a Revert affordance. Filled in by
+    /// `process_fragment_list` (this layer doesn't see the user library).
+    #[serde(default)]
+    pub edited: bool,
+    /// True for a named custom profile (a "save as…" clone with its own
+    /// identity). The picker shows a Delete affordance (instead of Revert)
+    /// for these. Bundled + stamp-in-place profiles are `false`.
+    #[serde(default)]
+    pub custom: bool,
 }
 
 /// Enumerate process fragments available for the active
@@ -896,9 +907,59 @@ pub fn list_process_fragments(
                 display_name,
                 layer_height_mm,
                 available_for,
+                edited: false,
+                custom: false,
             })
         })
         .collect()
+}
+
+/// Build the picker summary for a named custom user-process profile: it
+/// reuses the base fragment's availability + layer height (the latter
+/// overridden if the clone stamped one), under the clone's own slug + name.
+/// `None` when the base fragment is unknown or isn't available for this
+/// `(printer_model, installed nozzle set)` — a custom profile surfaces under
+/// exactly the same conditions its base does.
+pub fn custom_process_summary(
+    up: &crate::core::process::UserProcess,
+    printer_model: &str,
+    installed_nozzle_diameters: &[String],
+) -> Option<ProcessFragmentSummary> {
+    let lib = library();
+    let asset = lib
+        .process_fragments
+        .get(&(up.printer.clone(), up.base.clone()))?;
+    let available_for = derive_process_availability(&asset.cascade);
+    let installed: std::collections::HashSet<&str> = installed_nozzle_diameters
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let matches = available_for
+        .iter()
+        .any(|a| a.printer == printer_model && a.nozzle.split('+').any(|n| installed.contains(n)));
+    if !matches {
+        return None;
+    }
+    let base_lh = asset
+        .cascade
+        .rules
+        .iter()
+        .find(|r| r.is_default())
+        .and_then(|r| r.set.get("layer_height"))
+        .and_then(|s| s.parse::<f32>().ok());
+    let layer_height_mm = up
+        .overrides
+        .get("layer_height")
+        .and_then(|s| s.parse::<f32>().ok())
+        .or(base_lh);
+    Some(ProcessFragmentSummary {
+        slug: up.id.clone(),
+        display_name: up.name.clone().unwrap_or_else(|| up.base.clone()),
+        layer_height_mm,
+        available_for,
+        edited: true,
+        custom: true,
+    })
 }
 
 /// Walk a process fragment's `[[rule]]` blocks and collect every

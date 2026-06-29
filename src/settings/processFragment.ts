@@ -31,6 +31,12 @@ export interface ProcessFragmentSummary {
    *  the active pair, but the full list lets a future UI surface
    *  "also fits …" hints. */
   available_for: ProcessAvailability[];
+  /** True when the user has stamped overrides onto this profile. The
+   *  picker bolds it and offers Revert. */
+  edited?: boolean;
+  /** True for a named custom profile (a "save as…" clone). The picker
+   *  offers Delete (instead of Revert) for these. */
+  custom?: boolean;
 }
 
 /** Enumerate process fragments available for the active
@@ -83,4 +89,79 @@ export async function setPlateQualityProfile(
     plateId,
     qualityProfile,
   });
+}
+
+/** A stamped user override profile over one bundled process, scoped to a
+ *  printer. Mirror of `core::process::UserProcess`. */
+export interface UserProcess {
+  id: string;
+  printer: string;
+  base: string;
+  /** Display name for a named custom clone; null for a stamp-in-place edit. */
+  name: string | null;
+  overrides: Record<string, string>;
+}
+
+/** The stamped override profile for a printer's process, or `null` if
+ *  pristine. Drives the picker's bold name + Revert affordance. */
+export async function getUserProcess(
+  printer: string,
+  base: string,
+): Promise<UserProcess | null> {
+  return invoke<UserProcess | null>("user_process_get", { printer, base });
+}
+
+/** Per-plate placement keys the viewport drag writes into project overrides
+ *  (the wipe/prime-tower position). Stamping excludes them — a dragged tower
+ *  must never bake into the shared quality profile. Mirrors the backend
+ *  `STAMP_EXCLUDED_KEYS` in `core::project::commands`. */
+export const STAMP_EXCLUDED_KEYS: readonly string[] = [
+  "wipe_tower_x",
+  "wipe_tower_y",
+];
+
+/** Stamp the active plate's current quality edits (its Process-bucket
+ *  project-tier overrides, minus placement keys) onto the selected profile
+ *  as a per-user diff. With `clear`, the edits are then removed from the
+ *  plate too (save then clear); otherwise they stay on the plate as well.
+ *  No-op when there's nothing to save. */
+export async function stampUserProcess(
+  plateId: PlateId,
+  clear: boolean,
+): Promise<void> {
+  await invoke("user_process_stamp", { plateId, clear });
+}
+
+/** Discard the plate's selected stamp-in-place profile's overrides — back to
+ *  pristine bundled. With `apply`, the profile's settings are first written
+ *  onto the plate's project tier (kept as project overrides) instead of being
+ *  lost. */
+export async function revertUserProcess(
+  plateId: PlateId,
+  apply: boolean,
+): Promise<void> {
+  await invoke("user_process_revert", { plateId, apply });
+}
+
+/** Save the plate's current quality settings as a new named custom profile
+ *  (inheriting the selected profile's base + overrides) and switch the plate
+ *  onto it. With `clear`, the merged edits are also removed from the plate.
+ *  Returns the new profile's id. */
+export async function duplicateUserProcess(
+  plateId: PlateId,
+  name: string,
+  clear: boolean,
+): Promise<string> {
+  return invoke<string>("user_process_duplicate", { plateId, name, clear });
+}
+
+/** Delete the plate's selected named custom profile and switch the plate back
+ *  to its default profile. With `apply`, the custom profile's settings are
+ *  first written onto the plate's project tier (kept as project overrides)
+ *  instead of being lost. No-op unless a custom profile is selected. */
+export async function deleteUserProcess(
+  plateId: PlateId,
+  apply: boolean,
+): Promise<void> {
+  await invoke("user_process_delete", { plateId, apply });
 }
