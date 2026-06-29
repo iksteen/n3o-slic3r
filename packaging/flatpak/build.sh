@@ -82,6 +82,13 @@ flatpak-builder \
   "${builddir}" \
   "${gen}/${appid}.yml"
 
+# Regenerate the repo summary + appstream branch. flatpak-builder --repo writes
+# the app commit but not the appstream/appstream2 refs, so without this a
+# `flatpak update` against a local remote pointing here fails with
+# "No such ref 'appstream2/<arch>'". publish.sh runs this too, with static
+# deltas + prune on top.
+flatpak build-update-repo "${sign[@]}" "${repodir}"
+
 if [[ "${1:-}" == "--run" ]]; then
   flatpak-builder --run "${builddir}" "${gen}/${appid}.yml" "${appid}" || \
     flatpak run "${appid}"
