@@ -18,4 +18,8 @@ export interface FilamentSummary {
    *  profile exists for its slug). The picker shows a Revert affordance for
    *  edited filaments; every filament is editable regardless. */
   edited?: boolean;
+  /** True for a user-created custom filament (a clone of a bundled fragment
+   *  relabeled with a new brand/type). The picker shows a CUSTOM tag + a
+   *  Delete affordance instead of edited/Revert. */
+  custom?: boolean;
 }

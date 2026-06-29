@@ -388,20 +388,29 @@ pub fn printer_instance_set_slot_color(
 /// user actually picks from when binding a slot.
 #[tauri::command]
 pub fn filament_profile_list() -> Vec<FilamentFragmentSummary> {
-    // Bundled filaments are edited in place: each keeps its identity, and
-    // carries an `edited` flag when the user has an override profile for it
-    // (which the picker surfaces as a Revert affordance).
-    let edited: std::collections::HashSet<String> = crate::core::filament::library::list()
-        .into_iter()
-        .map(|f| f.base)
+    let user = crate::core::filament::library::list();
+    // Edit-in-place overrides (id == base): the bundled fragment keeps its
+    // identity and gets an `edited` flag (the picker shows Revert).
+    let edited: std::collections::HashSet<&str> = user
+        .iter()
+        .filter(|f| f.id == f.base)
+        .map(|f| f.base.as_str())
         .collect();
-    list_filament_fragments()
+    let mut out: Vec<FilamentFragmentSummary> = list_filament_fragments()
         .into_iter()
         .map(|mut s| {
-            s.edited = edited.contains(&s.identity);
+            s.edited = edited.contains(s.identity.as_str());
             s
         })
-        .collect()
+        .collect();
+    // Custom clones (id != base) aren't bundled fragments — append a
+    // synthesized summary for each (CUSTOM tag + Delete affordance).
+    out.extend(
+        user.iter()
+            .filter(|f| f.id != f.base)
+            .filter_map(crate::core::profile_library::custom_filament_summary),
+    );
+    out
 }
 
 /// Tauri command: change the process fragment ("Quality" picker)

@@ -189,6 +189,8 @@ pub fn run() {
             core::printer::options::slicer_filament_options,
             core::filament::user_filament_get,
             core::filament::user_filament_revert,
+            core::filament::user_filament_delete,
+            core::filament::user_filament_clone,
             core::filament::user_filament_set_override,
             core::filament::user_filament_resolved_config,
             core::scene::commands::scene_snapshot,

@@ -4302,6 +4302,7 @@
   .fp-product-row:hover .fp-product-actions,
   .fp-product-row.active .fp-product-actions,
   .fp-product-row.is-edited .fp-product-actions,
+  .fp-product-row.is-custom .fp-product-actions,
   .fp-product-actions:focus-within { opacity: 1; }
   /* "edited" marker next to an edited filament's name. */
   .fp-edited-tag {
@@ -4315,6 +4316,49 @@
     color: var(--accent);
     background: var(--accent-soft, color-mix(in oklch, var(--accent) 16%, transparent));
     vertical-align: middle;
+  }
+  /* "custom" marker — a distinct hue from "edited" so cloned filaments read
+     apart from in-place edits. */
+  .fp-custom-tag {
+    color: var(--success, #2e9e5b);
+    background: color-mix(in oklch, var(--success, #2e9e5b) 16%, transparent);
+  }
+
+  /* Copy-filament dialog (opens over the picker, z 1100). */
+  .cfd-backdrop { z-index: 1200; }
+  .cfd-card {
+    width: min(420px, 92vw);
+    background: var(--surface-1, var(--surface-2));
+    border: 1px solid var(--border, var(--surface-3));
+    border-radius: 12px;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+  }
+  .cfd-body {
+    display: flex; flex-direction: column; gap: 14px;
+    padding: 18px 20px;
+  }
+  .cfd-field { display: flex; flex-direction: column; gap: 5px; }
+  .cfd-field > span {
+    font-size: 12px; font-weight: 600;
+    color: var(--text-dim, var(--text));
+  }
+  .cfd-field input {
+    padding: 8px 10px;
+    border: 1px solid var(--border, var(--surface-3));
+    border-radius: 7px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 13px;
+  }
+  .cfd-field input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .cfd-foot {
+    display: flex; justify-content: flex-end; gap: 8px;
+    padding: 14px 20px;
+    border-top: 1px solid var(--border, var(--surface-3));
   }
   .fp-product-action {
     border: none; background: transparent; cursor: pointer;

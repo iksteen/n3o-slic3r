@@ -646,6 +646,12 @@ pub struct FilamentFragmentSummary {
     /// (this layer can't see the user library); `false` here.
     #[serde(default)]
     pub edited: bool,
+    /// True for a user-created custom filament (a clone of a bundled
+    /// fragment relabeled with a new brand/type). The picker shows a Delete
+    /// affordance + a CUSTOM tag instead of Revert/edited. `false` for
+    /// bundled fragments.
+    #[serde(default)]
+    pub custom: bool,
 }
 
 /// Enumerate every bundled vendor filament fragment. Parses the
@@ -710,7 +716,36 @@ fn filament_summary_from(slug: &str, cascade: &CascadeAsset) -> Option<FilamentF
         bed_temp,
         filament_id,
         edited: false,
+        custom: false,
     })
+}
+
+/// Catalog summary for a custom user filament: its base fragment's summary
+/// with the clone's relabeling (brand/type) and identity applied on top.
+/// `None` if the base fragment is unknown.
+pub fn custom_filament_summary(
+    uf: &crate::core::filament::UserFilament,
+) -> Option<FilamentFragmentSummary> {
+    let mut s = filament_fragment_summary(&uf.base)?;
+    s.identity = uf.id.clone();
+    s.custom = true;
+    // Custom filaments carry no vendor SKU (they aren't an AMS-resolvable
+    // product); driver sync never maps to them.
+    s.filament_id = None;
+    if let Some(v) = uf.overrides.get("filament_type") {
+        s.base_type = v.clone();
+    }
+    if let Some(v) = uf.overrides.get("filament_vendor") {
+        s.vendor = v.clone();
+    }
+    if let Some(t) = uf.overrides.get("nozzle_temperature").and_then(|x| x.parse().ok()) {
+        s.nozzle_temp = t;
+    }
+    // The display name is *derived* from brand + type, not stored — so
+    // editing either in the settings editor keeps the name in sync (no
+    // separate `filament_settings_id` override to drift out of date).
+    s.display_name = format!("{} {}", s.vendor, s.base_type).trim().to_owned();
+    Some(s)
 }
 
 /// Summary for one bundled filament fragment by slug — an O(1) keyed lookup.

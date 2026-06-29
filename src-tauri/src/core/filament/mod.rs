@@ -20,6 +20,7 @@ pub use library::UserFilament;
 pub use profile::FilamentProfile;
 pub use registry::{bundled_catalog, lookup};
 
+use crate::core::profile_library::FilamentFragmentSummary;
 use std::collections::HashMap;
 use tauri::Emitter;
 
@@ -42,13 +43,42 @@ pub fn user_filament_get(base: String) -> Option<UserFilament> {
 }
 
 /// Discard a filament's user overrides — back to pristine bundled. Drives
-/// the picker's Revert affordance.
+/// the picker's Revert affordance (edited-in-place filaments).
 #[tauri::command]
 #[tracing::instrument(skip(window))]
 pub fn user_filament_revert(base: String, window: tauri::Window) -> Result<(), String> {
-    library::revert(&base);
+    library::remove(&base);
     emit_changed(&window);
     Ok(())
+}
+
+/// Delete a custom (cloned) filament outright. Drives the picker's Delete
+/// affordance. Same mechanics as revert — kept distinct so the intent reads
+/// clearly at the call sites.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn user_filament_delete(id: String, window: tauri::Window) -> Result<(), String> {
+    library::remove(&id);
+    emit_changed(&window);
+    Ok(())
+}
+
+/// Clone a filament (bundled or user) into a new custom filament with its
+/// own identity, relabeled by `vendor` and/or `filament_type` (each blank
+/// keeps the source's value). Returns the new filament's catalog summary;
+/// the frontend opens its settings editor next.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn user_filament_clone(
+    base: String,
+    vendor: Option<String>,
+    filament_type: Option<String>,
+    window: tauri::Window,
+) -> Result<FilamentFragmentSummary, String> {
+    let summary =
+        library::clone_custom(&base, vendor, filament_type).map_err(|e| e.to_string())?;
+    emit_changed(&window);
+    Ok(summary)
 }
 
 /// Set (or clear, with `value = None`) one filament-bucket override on a

@@ -1,10 +1,10 @@
 // Filament settings editor — the per-filament analogue of the printer
-// panel's Machine tab. Opens on a bundled filament (by slug + name): the
-// filament is edited in place, so it keeps its name ("Generic PLA"). Lists
-// the Filament-bucket options grouped by libslic3r category in a left nav,
-// and persists each edit live to the filament's override profile
+// panel's Machine tab. Opens on a filament identity (`base`): a bundled
+// slug (edited in place, keeps its name) or a custom clone's id. Lists the
+// Filament-bucket options grouped by libslic3r category in a left nav, and
+// persists each edit live to the filament's override profile
 // (`user_filament_set_override`), which is created transparently on the
-// first edit.
+// first edit of a bundled filament.
 //
 // Overrides are read from the (possibly absent) override profile and kept
 // current from each mutation's return value; the base (pre-override) values
@@ -22,9 +22,9 @@ import {
 } from "./userFilament";
 
 export interface FilamentSettingsModalProps {
-  /** Bundled filament slug to edit (also its identity). */
+  /** Filament identity to edit — a bundled slug or a custom clone's id. */
   base: string;
-  /** Display name shown in the header (the bundled name; editing is in place). */
+  /** Display name shown in the header. */
   name: string;
   onClose: () => void;
 }

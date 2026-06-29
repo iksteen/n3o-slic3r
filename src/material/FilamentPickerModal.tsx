@@ -50,9 +50,15 @@ export interface FilamentPickerModalProps {
   /** Open the settings editor for a filament (edited in place). Omit to
    *  hide the edit affordance. */
   onEdit?: (identity: string) => void;
-  /** Discard a filament's user overrides — shown only for edited filaments
-   *  (`summary.edited`). */
+  /** Copy a filament into a new custom one (new brand/type). Omit to hide
+   *  the copy affordance. */
+  onCopy?: (identity: string) => void;
+  /** Discard a filament's user overrides — shown only for edited bundled
+   *  filaments (`summary.edited`). */
   onRevert?: (identity: string) => void;
+  /** Delete a custom (cloned) filament — shown only for custom filaments
+   *  (`summary.custom`). */
+  onDelete?: (identity: string) => void;
 }
 
 // One brand row in the rail. `short` is a 2-3 letter tag for the
@@ -105,7 +111,9 @@ export function FilamentPickerModal({
   onClose,
   locked = false,
   onEdit,
+  onCopy,
   onRevert,
+  onDelete,
 }: FilamentPickerModalProps): React.JSX.Element {
   const catalog = useMemo(() => groupByBrand(filaments), [filaments]);
   const materials = useMemo(() => {
@@ -376,14 +384,18 @@ export function FilamentPickerModal({
               <li
                 key={p.identity}
                 ref={i === productIdx ? activeProductRef : undefined}
-                className={`fp-product-row${i === productIdx ? " active" : ""}${p.edited ? " is-edited" : ""}${locked ? " locked" : ""}`}
+                className={`fp-product-row${i === productIdx ? " active" : ""}${p.edited ? " is-edited" : ""}${p.custom ? " is-custom" : ""}${locked ? " locked" : ""}`}
                 aria-disabled={locked || undefined}
                 onClick={locked ? undefined : () => setProductIdx(i)}
               >
                 <span className="fp-product-main">
                   <span className="fp-product-name">
                     {p.display_name}
-                    {p.edited && <span className="fp-edited-tag">edited</span>}
+                    {p.custom ? (
+                      <span className="fp-edited-tag fp-custom-tag">custom</span>
+                    ) : (
+                      p.edited && <span className="fp-edited-tag">edited</span>
+                    )}
                   </span>
                   <span className="fp-product-meta">
                     <span className="fp-mat-tag">{p.base_type}</span>
@@ -392,22 +404,53 @@ export function FilamentPickerModal({
                     </span>
                   </span>
                 </span>
-                {/* Manager affordances. Every filament is editable in
-                    place; edited ones also offer Revert. stopPropagation so
-                    the click doesn't also re-select the product row. */}
+                {/* Manager affordances. Every filament is editable and
+                    copyable; a custom clone offers Delete, an edited bundled
+                    one offers Revert. stopPropagation so the click doesn't
+                    also re-select the product row. */}
                 <span className="fp-product-actions">
-                  {p.edited && onRevert && (
+                  {p.custom
+                    ? onDelete && (
+                        <button
+                          type="button"
+                          className="fp-product-action danger"
+                          title="Delete this custom filament"
+                          aria-label={`Delete ${p.display_name}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDelete(p.identity);
+                          }}
+                        >
+                          🗑
+                        </button>
+                      )
+                    : p.edited &&
+                      onRevert && (
+                        <button
+                          type="button"
+                          className="fp-product-action danger"
+                          title="Revert to bundled defaults"
+                          aria-label={`Revert ${p.display_name}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRevert(p.identity);
+                          }}
+                        >
+                          ↺
+                        </button>
+                      )}
+                  {onCopy && (
                     <button
                       type="button"
-                      className="fp-product-action danger"
-                      title="Revert to bundled defaults"
-                      aria-label={`Revert ${p.display_name}`}
+                      className="fp-product-action"
+                      title="Copy as a new brand / type"
+                      aria-label={`Copy ${p.display_name}`}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onRevert(p.identity);
+                        onCopy(p.identity);
                       }}
                     >
-                      ↺
+                      ⧉
                     </button>
                   )}
                   {onEdit && (

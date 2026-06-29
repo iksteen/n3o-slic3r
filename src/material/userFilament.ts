@@ -6,10 +6,14 @@
 // query so the picker's Revert affordance + the open editor refetch.
 
 import { invoke } from "@tauri-apps/api/core";
+import type { FilamentSummary } from "./filamentSummary";
 
 /** Frontend mirror of `core::filament::UserFilament`. */
 export interface UserFilament {
-  /** Bundled fragment slug this overrides (and is identified by). */
+  /** This filament's own slug (its wire identity). Equals `base` for an
+   *  edit-in-place override; distinct for a custom clone. */
+  id: string;
+  /** Bundled fragment slug the cascade composes from. */
   base: string;
   /** Filament-bucket scalar overrides, key → serialized value. */
   overrides: Record<string, string>;
@@ -25,6 +29,26 @@ export async function getUserFilament(
 /** Discard all of a filament's user overrides — back to pristine bundled. */
 export async function revertUserFilament(base: string): Promise<void> {
   await invoke("user_filament_revert", { base });
+}
+
+/** Delete a custom (cloned) filament outright. */
+export async function deleteUserFilament(id: string): Promise<void> {
+  await invoke("user_filament_delete", { id });
+}
+
+/** Clone a filament into a new custom one with a new brand and/or type
+ *  (each blank keeps the source's value). Returns the new filament's
+ *  catalog summary — open its settings editor next. */
+export async function cloneUserFilament(
+  base: string,
+  vendor: string | null,
+  filamentType: string | null,
+): Promise<FilamentSummary> {
+  return invoke<FilamentSummary>("user_filament_clone", {
+    base,
+    vendor,
+    filamentType,
+  });
 }
 
 /** Set (or clear, with `value = null`) one filament-bucket override. Creates

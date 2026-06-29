@@ -28,7 +28,12 @@ import {
   type FilamentPickerPick,
 } from "./FilamentPickerModal";
 import { FilamentSettingsModal } from "./FilamentSettingsModal";
-import { revertUserFilament } from "./userFilament";
+import { CloneFilamentDialog } from "./CloneFilamentDialog";
+import {
+  revertUserFilament,
+  deleteUserFilament,
+  cloneUserFilament,
+} from "./userFilament";
 import { isRfidDetected } from "./materials";
 import type { FilamentSummary } from "./filamentSummary";
 
@@ -277,6 +282,8 @@ function SlotChip({
   const [open, setOpen] = useState(false);
   // Which filament's settings editor is open (over the picker), by slug.
   const [editing, setEditing] = useState<string | null>(null);
+  // Which filament is being copied (the clone dialog's source), if any.
+  const [copying, setCopying] = useState<FilamentSummary | null>(null);
 
   const empty = !option.filament_identity;
   const swatch = option.color ?? UNASSIGNED_SWATCH;
@@ -342,6 +349,10 @@ function SlotChip({
           }}
           onClose={() => setOpen(false)}
           onEdit={(identity) => setEditing(identity)}
+          onCopy={(identity) => {
+            const src = filaments.find((f) => f.identity === identity);
+            if (src) setCopying(src);
+          }}
           onRevert={(identity) => {
             if (
               !window.confirm("Revert this filament to its bundled defaults?")
@@ -351,6 +362,29 @@ function SlotChip({
             revertUserFilament(identity).catch((e) =>
               console.error("[filament] revert failed", e),
             );
+          }}
+          onDelete={(identity) => {
+            if (!window.confirm("Delete this custom filament?")) return;
+            deleteUserFilament(identity).catch((e) =>
+              console.error("[filament] delete failed", e),
+            );
+          }}
+        />
+      )}
+      {copying && (
+        <CloneFilamentDialog
+          source={copying}
+          materials={Array.from(new Set(filaments.map((f) => f.base_type)))}
+          onClose={() => setCopying(null)}
+          onClone={(vendor, filamentType) => {
+            cloneUserFilament(copying.identity, vendor, filamentType)
+              .then((created) => {
+                setCopying(null);
+                // Show the new clone's settings editor (the request: after
+                // saving, open the cloned filament's editor).
+                setEditing(created.identity);
+              })
+              .catch((e) => console.error("[filament] clone failed", e));
           }}
         />
       )}

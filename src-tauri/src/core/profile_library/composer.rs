@@ -643,15 +643,16 @@ fn slot_filament_context(slug: &str, printer_model: &str, plate_type: &str) -> M
     ctx
 }
 
-/// Resolve a slot's `filament_identity` (always a bundled slug) into the
-/// fragment slug to load plus the user overrides to fold on top. When the
-/// user has edited this filament in place, their override profile (keyed by
-/// the same slug) supplies the overrides; otherwise there are none.
+/// Resolve a slot's `filament_identity` into the bundled fragment slug to
+/// load plus the user overrides to fold on top. The identity may be a
+/// bundled slug (no overrides), an edited-in-place bundled slug (overrides,
+/// base == identity), or a custom clone (overrides, base is the fragment it
+/// was cloned from).
 fn resolve_filament_ref(identity: &str) -> (String, BTreeMap<String, String>) {
-    let overrides = filament::library::lookup(identity)
-        .map(|uf| uf.overrides)
-        .unwrap_or_default();
-    (identity.to_owned(), overrides)
+    match filament::library::lookup(identity) {
+        Some(uf) => (uf.base, uf.overrides),
+        None => (identity.to_owned(), BTreeMap::new()),
+    }
 }
 
 /// Resolve a bundled filament fragment's scalar values with no
@@ -661,10 +662,15 @@ fn resolve_filament_ref(identity: &str) -> (String, BTreeMap<String, String>) {
 /// the unconditional + filament-typed base, which is what a per-filament
 /// override is authored against.
 pub fn resolve_base_scalars(slug: &str) -> BTreeMap<String, String> {
-    let Some(cascade) = load_filament_fragment(slug) else {
+    // A custom filament composes from its base fragment; a bundled (or
+    // edited-in-place) slug is its own base.
+    let base = filament::library::lookup(slug)
+        .map(|uf| uf.base)
+        .unwrap_or_else(|| slug.to_owned());
+    let Some(cascade) = load_filament_fragment(&base) else {
         return BTreeMap::new();
     };
-    let ctx = slot_filament_context(slug, "", "");
+    let ctx = slot_filament_context(&base, "", "");
     resolve(&cascade, &ctx)
         .into_iter()
         .map(|(k, v)| (k, v.value))
@@ -1059,7 +1065,7 @@ mod tests {
             "slot 0's edited-filament override must win, got vector {joined:?}",
         );
 
-        filament::library::revert("generic-pla");
+        filament::library::remove("generic-pla");
     }
 
     #[test]
