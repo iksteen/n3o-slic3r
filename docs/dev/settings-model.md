@@ -101,7 +101,7 @@ profiles/
     └── <vendor>/<preset>.toml        ← e.g. bbl/0.20mm-standard.toml
 ```
 
-Each file is a cascade fragment scoped to its bucket. The converter (`convert_bbs_profile.py`) emits these from OrcaSlicer's per-bucket JSON tree (`external/OrcaSlicer/resources/profiles/<vendor>/{machine,filament,process}/`).
+Each file is a cascade fragment scoped to its bucket. The converter (`convert_orca_profile.py`) emits these from OrcaSlicer's per-bucket JSON tree (`external/OrcaSlicer/resources/profiles/<vendor>/{machine,filament,process}/`).
 
 ### User library (mutable, in user config)
 
@@ -328,7 +328,7 @@ All selector writes route to the `PrinterInstance` and re-render every plate pan
 What stays:
 
 - **Cascade core** (`core/cascade/`) — schema, resolver, ladder, trace, all unchanged.
-- **Converter** (`scripts/spikes/convert_bbs_profile.py`) — kept, but emits per-bucket fragments instead of one monolithic file.
+- **Converter** (`scripts/spikes/convert_orca_profile.py`) — kept, but emits per-bucket fragments instead of one monolithic file.
 - **MaterialBindingPanel + auto-bind** — keep shape, change storage target from `Plate.material_bindings` to `PrinterInstance.extruders[T].slots[S]`.
 - **PrinterPicker** — keep, drives PrinterInstance selection.
 - **BuildPlateSelector** — keep the component, relocate to top selectors row.
@@ -396,7 +396,7 @@ To be resolved during ticket drafting, not before:
 1. Review this doc.
 2. Draft tickets — likely shape:
    - **PR-S-1**: OptBucket enum + scrape + FFI surface.
-   - **PR-S-2**: Per-bucket vendor fragment converter (`convert_bbs_profile.py` re-shape).
+   - **PR-S-2**: Per-bucket vendor fragment converter (`convert_orca_profile.py` re-shape).
    - **PR-S-3**: `PrinterInstance` type + user library + load/save.
    - **PR-S-4**: Filament/process override storage + copy storage.
    - **PR-S-5**: `build_slice_input` cascade composer + per-slot vector-key assembly.
