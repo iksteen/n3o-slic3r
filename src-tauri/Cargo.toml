@@ -114,7 +114,7 @@ rsa = "0.9"
 # feature set bambu-overlay uses for downloads; `deprecated` brings
 # in the explicit `connect_secure_implicit` constructor we need
 # (port 990 implicit-TLS rather than the AUTH-TLS handshake).
-suppaftp = { version = "9.0.0", default-features = false, features = ["tokio-async-native-tls", "deprecated"] }
+suppaftp = { version = "10.0.0", default-features = false, features = ["tokio-async-native-tls", "deprecated"] }
 # Scratch-file allocator used by the driver's send pipeline to wrap
 # the raw .gcode into a Bambu .gcode.3mf bundle before upload. Was
 # dev-only until PR-7a-7 made it part of the runtime path.

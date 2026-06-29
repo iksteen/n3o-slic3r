@@ -4,10 +4,3 @@ members = [
     "crates/slic3r-ffi",
     "src-tauri",
 ]
-
-# Vendored suppaftp with a one-method Windows-portability patch — upstream's
-# tokio FTP path is Unix-only (uses `std::os::fd`), which breaks the Windows
-# cross-build. The driver's FTPS upload (Bambu) runs on this async path. See
-# vendor/suppaftp/N3O_PATCH.md.
-[patch.crates-io]
-suppaftp = { path = "vendor/suppaftp" }
