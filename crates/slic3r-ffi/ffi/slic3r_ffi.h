@@ -463,6 +463,43 @@ slic3r_status slic3r_cut_mesh_connectors(
     size_t* out_dowel_count,
     char** out_err);
 
+/* Cut a mesh by a plane and return its connectors as separate volume meshes
+ * instead of baking them with 3D booleans — for the slice path to apply as
+ * libslic3r MODEL_PART (peg) / NEGATIVE_VOLUME (hole) volumes, subtracted
+ * per-layer in 2D (Orca's model; no per-cut CGAL boolean). Inputs as
+ * slic3r_cut_mesh_connectors. Outputs: the two plane-cut halves + their paint
+ * (exact-identity, free with slic3r_cut_connectors_free_paint); the connector
+ * volumes as an array of `*out_mod_count` meshes (parallel vertex/index buffers
+ * + counts) with `out_mod_half[i]` (0 = pos half, 1 = neg half) and
+ * `out_mod_type[i]` (0 = MODEL_PART/peg, 1 = NEGATIVE_VOLUME/hole), all in the
+ * input frame — free with slic3r_cut_connectors_free_mods; and dowel pins as
+ * slic3r_cut_mesh_connectors. Pure; no slic3r_init(). */
+slic3r_status slic3r_cut_mesh_deferred(
+    const float* vertices, size_t vertex_count,
+    const uint32_t* indices, size_t triangle_count,
+    const char* const* in_paint,
+    const float plane_origin[3], const float plane_normal[3],
+    const float* connector_floats, const int32_t* connector_ints, size_t connector_count,
+    float** out_pos_vertices, size_t* out_pos_vertex_count,
+    uint32_t** out_pos_indices, size_t* out_pos_triangle_count,
+    char*** out_pos_paint,
+    float** out_neg_vertices, size_t* out_neg_vertex_count,
+    uint32_t** out_neg_indices, size_t* out_neg_triangle_count,
+    char*** out_neg_paint,
+    float*** out_mod_vertices, size_t** out_mod_vertex_counts,
+    uint32_t*** out_mod_indices, size_t** out_mod_triangle_counts,
+    int** out_mod_half, int** out_mod_type, size_t* out_mod_count,
+    float*** out_dowel_vertices, size_t** out_dowel_vertex_counts,
+    uint32_t*** out_dowel_indices, size_t** out_dowel_triangle_counts,
+    size_t* out_dowel_count,
+    char** out_err);
+
+/* Free the connector-volume array-of-arrays from slic3r_cut_mesh_deferred (every
+ * inner buffer + all six outer arrays). Safe with NULL/0 (no-op). */
+void slic3r_cut_connectors_free_mods(
+    float** mod_vertices, uint32_t** mod_indices, size_t* mod_vertex_counts,
+    size_t* mod_triangle_counts, int* mod_half, int* mod_type, size_t mod_count);
+
 /* Free a per-triangle paint string array from slic3r_cut_mesh_connectors (every
  * string + the outer array). Safe with NULL/0 (no-op). */
 void slic3r_cut_connectors_free_paint(char** paint, size_t count);

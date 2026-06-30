@@ -5,7 +5,8 @@
 // would make the geometric assertions fail.
 
 use slic3r_ffi::{
-    cut_mesh, cut_mesh_connectors, Connector, ConnectorShape, ConnectorStyle, ConnectorType,
+    cut_mesh, cut_mesh_connectors, cut_mesh_deferred, Connector, ConnectorShape, ConnectorStyle,
+    ConnectorType,
 };
 
 /// Axis-aligned unit cube [0,1]^3 — 8 vertices, 12 triangles, outward winding.
@@ -156,6 +157,51 @@ fn paint_survives_a_diagonal_cut() {
         let p = half.paint.as_ref().expect("kept half carries paint");
         assert!(p.iter().any(|s| s == "4"), "kept faces stay painted through a rotated cut");
         assert!(p.iter().any(|s| s.is_empty()), "the cut cap stays unpainted");
+    }
+}
+
+#[test]
+fn deferred_cut_emits_connector_volumes_not_baked_geometry() {
+    let (v, i) = unit_cube();
+    let (base_pos, base_neg) = cut_mesh(&v, &i, ORIGIN, NORMAL).expect("plain cut");
+    let dowel = Connector {
+        pos: [0.3, 0.3, 0.5],
+        radius: 0.12,
+        height: 0.5,
+        r_tol: 0.0,
+        h_tol: 0.0,
+        z_angle: 0.0,
+        ty: ConnectorType::Dowel,
+        style: ConnectorStyle::Prism,
+        shape: ConnectorShape::Circle,
+    };
+    let conns = [connector(ConnectorType::Plug, ConnectorStyle::Prism, ConnectorShape::Circle), dowel];
+    let r = cut_mesh_deferred(&v, &i, ORIGIN, NORMAL, &conns, None).expect("deferred cut");
+
+    // Halves are the plain plane cut — nothing baked in, so tri counts match.
+    assert_eq!(r.pos.indices.len(), base_pos.indices.len(), "pos half left unbaked");
+    assert_eq!(r.neg.indices.len(), base_neg.indices.len(), "neg half left unbaked");
+    // Plug → peg(neg, part) + hole(pos, neg); Dowel → hole(pos) + hole(neg) + pin.
+    assert_eq!(r.modifiers.len(), 4, "two connectors → four connector volumes");
+    assert_eq!(r.dowels.len(), 1, "one dowel pin");
+    assert_eq!(r.modifiers.iter().filter(|m| !m.negative).count(), 1, "one peg");
+    assert_eq!(r.modifiers.iter().filter(|m| m.negative).count(), 3, "three holes");
+    assert!(
+        r.modifiers.iter().any(|m| !m.negative && m.half == 1),
+        "the peg is a solid volume on the neg half",
+    );
+    assert!(r.modifiers.iter().all(|m| !m.vertices.is_empty()), "every volume has geometry");
+}
+
+#[test]
+fn deferred_cut_preserves_paint_on_the_halves() {
+    let (v, i) = unit_cube();
+    let paint = vec!["4".to_string(); i.len() / 3];
+    let r = cut_mesh_deferred(&v, &i, ORIGIN, NORMAL, &[], Some(&paint)).expect("deferred cut");
+    for half in [&r.pos, &r.neg] {
+        let p = half.paint.as_ref().expect("kept half carries paint");
+        assert!(p.iter().any(|s| s == "4"), "surface stays painted");
+        assert!(p.iter().any(|s| s.is_empty()), "cut cap unpainted");
     }
 }
 

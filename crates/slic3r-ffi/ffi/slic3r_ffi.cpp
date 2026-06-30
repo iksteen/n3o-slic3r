@@ -1807,6 +1807,196 @@ void slic3r_cut_connectors_free_dowels(
     std::free(dowel_triangle_counts);
 }
 
+slic3r_status slic3r_cut_mesh_deferred(
+    const float* vertices, size_t vertex_count,
+    const uint32_t* indices, size_t triangle_count,
+    const char* const* in_paint,
+    const float plane_origin[3], const float plane_normal[3],
+    const float* connector_floats, const int32_t* connector_ints, size_t connector_count,
+    float** out_pos_vertices, size_t* out_pos_vertex_count,
+    uint32_t** out_pos_indices, size_t* out_pos_triangle_count,
+    char*** out_pos_paint,
+    float** out_neg_vertices, size_t* out_neg_vertex_count,
+    uint32_t** out_neg_indices, size_t* out_neg_triangle_count,
+    char*** out_neg_paint,
+    float*** out_mod_vertices, size_t** out_mod_vertex_counts,
+    uint32_t*** out_mod_indices, size_t** out_mod_triangle_counts,
+    int** out_mod_half, int** out_mod_type, size_t* out_mod_count,
+    float*** out_dowel_vertices, size_t** out_dowel_vertex_counts,
+    uint32_t*** out_dowel_indices, size_t** out_dowel_triangle_counts,
+    size_t* out_dowel_count,
+    char** out_err) {
+    if (out_err) *out_err = nullptr;
+    for (auto p : {out_pos_vertices, out_neg_vertices}) if (p) *p = nullptr;
+    for (auto p : {out_pos_vertex_count, out_pos_triangle_count, out_neg_vertex_count,
+                   out_neg_triangle_count, out_mod_count, out_dowel_count})
+        if (p) *p = 0;
+    for (auto p : {out_pos_indices, out_neg_indices}) if (p) *p = nullptr;
+    for (auto p : {out_pos_paint, out_neg_paint}) if (p) *p = nullptr;
+    if (out_mod_vertices) *out_mod_vertices = nullptr;
+    if (out_mod_vertex_counts) *out_mod_vertex_counts = nullptr;
+    if (out_mod_indices) *out_mod_indices = nullptr;
+    if (out_mod_triangle_counts) *out_mod_triangle_counts = nullptr;
+    if (out_mod_half) *out_mod_half = nullptr;
+    if (out_mod_type) *out_mod_type = nullptr;
+    if (out_dowel_vertices) *out_dowel_vertices = nullptr;
+    if (out_dowel_vertex_counts) *out_dowel_vertex_counts = nullptr;
+    if (out_dowel_indices) *out_dowel_indices = nullptr;
+    if (out_dowel_triangle_counts) *out_dowel_triangle_counts = nullptr;
+    if (!vertices || !indices || !plane_origin || !plane_normal || !out_pos_vertices ||
+        !out_neg_vertices || vertex_count == 0 || triangle_count == 0)
+        return SLIC3R_ERR_INVALID_ARG;
+    if (connector_count > 0 && (!connector_floats || !connector_ints))
+        return SLIC3R_ERR_INVALID_ARG;
+    try {
+        Eigen::Vector3d n(plane_normal[0], plane_normal[1], plane_normal[2]);
+        if (n.norm() < 1e-9)
+            return SLIC3R_ERR_INVALID_ARG;
+        n.normalize();
+        const Eigen::Vector3d o(plane_origin[0], plane_origin[1], plane_origin[2]);
+        const Eigen::Quaterniond q = Eigen::Quaterniond::FromTwoVectors(n, Eigen::Vector3d::UnitZ());
+        const Eigen::Quaterniond qi = q.conjugate();
+
+        indexed_triangle_set its = its_from_buffers(vertices, vertex_count, indices, triangle_count);
+        for (auto& v : its.vertices) {
+            const Eigen::Vector3d t = q * (Eigen::Vector3d(v.x(), v.y(), v.z()) - o);
+            v = Vec3f(static_cast<float>(t.x()), static_cast<float>(t.y()), static_cast<float>(t.z()));
+        }
+        const PaintMap paint_map = conn_paint_map(its, in_paint, triangle_count);
+
+        indexed_triangle_set upper, lower;
+        cut_mesh(its, 0.0f, &upper, &lower, /*triangulate_caps=*/true);
+
+        // One connector volume mesh, tagged with the half it belongs to and its
+        // role. half: 0 = pos (upper), 1 = neg (lower). type: 0 = MODEL_PART
+        // (peg), 1 = NEGATIVE_VOLUME (hole).
+        struct Mod { indexed_triangle_set its; int half; int type; };
+        std::vector<Mod> mods;
+        std::vector<indexed_triangle_set> dowels;
+        for (size_t ci = 0; ci < connector_count; ++ci) {
+            const float* cf = connector_floats + ci * 8;
+            const int32_t* cn = connector_ints + ci * 3;
+            const int type = cn[0], style = cn[1], shape = cn[2];
+            const double radius = cf[3], height = cf[4];
+            const double r_tol = cf[5], h_tol = cf[6], z_angle = cf[7];
+            if (radius <= 1e-6 || height <= 1e-6)
+                continue;
+            const int sectors = conn_shape_sectors(shape);
+            const Eigen::Vector3d pa = q * (Eigen::Vector3d(cf[0], cf[1], cf[2]) - o);
+            const Transform3d peg_T =
+                Geometry::translation_transform(pa) *
+                Geometry::rotation_transform(Eigen::Vector3d(0, 0, -z_angle)) *
+                Geometry::scale_transform(Eigen::Vector3d(radius, radius, height));
+            const Transform3d hole_T =
+                Geometry::translation_transform(pa + Eigen::Vector3d(0, 0, 0.5 * h_tol)) *
+                Geometry::rotation_transform(Eigen::Vector3d(0, 0, -z_angle)) *
+                Geometry::scale_transform(
+                    Eigen::Vector3d(radius + r_tol, radius + r_tol, height + h_tol));
+            indexed_triangle_set peg =
+                conn_place(conn_unit_mesh(type, style, sectors, false), peg_T);
+            indexed_triangle_set hole = conn_place(
+                conn_unit_mesh(type, style, type == SLIC3R_CONN_SNAP ? 60 : sectors,
+                               type == SLIC3R_CONN_SNAP),
+                hole_T);
+            if (type == SLIC3R_CONN_DOWEL) {
+                mods.push_back({hole, 0, 1});             // hole in pos half
+                mods.push_back({std::move(hole), 1, 1});  // hole in neg half
+                dowels.push_back(std::move(peg));
+            } else {
+                mods.push_back({std::move(peg), 1, 0});   // peg → neg half (solid)
+                mods.push_back({std::move(hole), 0, 1});  // hole → pos half
+            }
+        }
+
+        if (!conn_marshal(upper, qi, o, out_pos_vertices, out_pos_vertex_count, out_pos_indices,
+                          out_pos_triangle_count) ||
+            !conn_marshal(lower, qi, o, out_neg_vertices, out_neg_vertex_count, out_neg_indices,
+                          out_neg_triangle_count)) {
+            set_err(out_err, "out of memory marshalling cut halves");
+            return SLIC3R_ERR_INTERNAL;
+        }
+        if (!paint_map.empty()) {
+            std::vector<std::string> pos_paint, neg_paint;
+            conn_lookup_paint(upper, paint_map, pos_paint);
+            conn_lookup_paint(lower, paint_map, neg_paint);
+            if (out_pos_paint) *out_pos_paint = conn_marshal_paint(pos_paint);
+            if (out_neg_paint) *out_neg_paint = conn_marshal_paint(neg_paint);
+        }
+
+        if (!mods.empty()) {
+            const size_t nm = mods.size();
+            float** mv = static_cast<float**>(std::malloc(nm * sizeof(float*)));
+            uint32_t** mi = static_cast<uint32_t**>(std::malloc(nm * sizeof(uint32_t*)));
+            size_t* mvc = static_cast<size_t*>(std::malloc(nm * sizeof(size_t)));
+            size_t* mtc = static_cast<size_t*>(std::malloc(nm * sizeof(size_t)));
+            int* mh = static_cast<int*>(std::malloc(nm * sizeof(int)));
+            int* mt = static_cast<int*>(std::malloc(nm * sizeof(int)));
+            if (mv && mi && mvc && mtc && mh && mt) {
+                for (size_t k = 0; k < nm; ++k) {
+                    conn_marshal(mods[k].its, qi, o, &mv[k], &mvc[k], &mi[k], &mtc[k]);
+                    mh[k] = mods[k].half;
+                    mt[k] = mods[k].type;
+                }
+                if (out_mod_vertices) *out_mod_vertices = mv;
+                if (out_mod_indices) *out_mod_indices = mi;
+                if (out_mod_vertex_counts) *out_mod_vertex_counts = mvc;
+                if (out_mod_triangle_counts) *out_mod_triangle_counts = mtc;
+                if (out_mod_half) *out_mod_half = mh;
+                if (out_mod_type) *out_mod_type = mt;
+                if (out_mod_count) *out_mod_count = nm;
+            } else {
+                std::free(mv); std::free(mi); std::free(mvc); std::free(mtc);
+                std::free(mh); std::free(mt);
+            }
+        }
+
+        if (!dowels.empty()) {
+            const size_t nd = dowels.size();
+            float** dv = static_cast<float**>(std::malloc(nd * sizeof(float*)));
+            uint32_t** di = static_cast<uint32_t**>(std::malloc(nd * sizeof(uint32_t*)));
+            size_t* dvc = static_cast<size_t*>(std::malloc(nd * sizeof(size_t)));
+            size_t* dtc = static_cast<size_t*>(std::malloc(nd * sizeof(size_t)));
+            if (dv && di && dvc && dtc) {
+                for (size_t k = 0; k < nd; ++k)
+                    conn_marshal(dowels[k], qi, o, &dv[k], &dvc[k], &di[k], &dtc[k]);
+                if (out_dowel_vertices) *out_dowel_vertices = dv;
+                if (out_dowel_indices) *out_dowel_indices = di;
+                if (out_dowel_vertex_counts) *out_dowel_vertex_counts = dvc;
+                if (out_dowel_triangle_counts) *out_dowel_triangle_counts = dtc;
+                if (out_dowel_count) *out_dowel_count = nd;
+            } else {
+                std::free(dv); std::free(di); std::free(dvc); std::free(dtc);
+            }
+        }
+        return SLIC3R_OK;
+    } catch (const std::exception& e) {
+        set_err(out_err, e.what());
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
+        set_err(out_err, "unknown error in slic3r_cut_mesh_deferred");
+        return SLIC3R_ERR_INTERNAL;
+    }
+}
+
+void slic3r_cut_connectors_free_mods(
+    float** mod_vertices, uint32_t** mod_indices, size_t* mod_vertex_counts,
+    size_t* mod_triangle_counts, int* mod_half, int* mod_type, size_t mod_count) {
+    if (mod_vertices) {
+        for (size_t k = 0; k < mod_count; ++k)
+            std::free(mod_vertices[k]);
+        std::free(mod_vertices);
+    }
+    if (mod_indices) {
+        for (size_t k = 0; k < mod_count; ++k)
+            std::free(mod_indices[k]);
+        std::free(mod_indices);
+    }
+    std::free(mod_vertex_counts);
+    std::free(mod_triangle_counts);
+    std::free(mod_half);
+    std::free(mod_type);
+}
+
 void slic3r_cut_connectors_free_paint(char** paint, size_t count) {
     if (!paint)
         return;

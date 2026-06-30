@@ -556,6 +556,172 @@ unsafe fn take_dowels(
     out
 }
 
+/// One connector volume from [`cut_mesh_deferred`] — a peg or hole mesh in the
+/// input frame, plus which half it attaches to and whether it's subtracted.
+#[derive(Debug, Clone)]
+pub struct CutModifier {
+    pub vertices: Vec<f32>,
+    pub indices: Vec<u32>,
+    /// 0 = pos (upper) half, 1 = neg (lower) half.
+    pub half: u8,
+    /// `true` = NEGATIVE_VOLUME (hole), `false` = MODEL_PART (peg).
+    pub negative: bool,
+}
+
+/// A deferred connector cut: the two plane-cut halves (paint preserved) plus the
+/// connector geometry as separate [`CutModifier`] volumes (applied at slice time
+/// as negative/positive volumes — no baked booleans) and the free dowel pins.
+#[derive(Debug, Clone, Default)]
+pub struct CutDeferred {
+    pub pos: CutHalf,
+    pub neg: CutHalf,
+    pub modifiers: Vec<CutModifier>,
+    pub dowels: Vec<CutHalf>,
+}
+
+/// Like [`cut_mesh_connectors`] but returns the connectors as separate volume
+/// meshes instead of baking them — the fast (Orca-parity) path: the slice layer
+/// subtracts hole volumes per-layer in 2D, so the cut does no 3D boolean.
+pub fn cut_mesh_deferred(
+    vertices: &[f32],
+    indices: &[u32],
+    plane_origin: [f32; 3],
+    plane_normal: [f32; 3],
+    connectors: &[Connector],
+    paint: Option<&[String]>,
+) -> Result<CutDeferred> {
+    validate_indices(vertices, indices)?;
+    let mut cf: Vec<f32> = Vec::with_capacity(connectors.len() * 8);
+    let mut cn: Vec<i32> = Vec::with_capacity(connectors.len() * 3);
+    for c in connectors {
+        cf.extend_from_slice(&[
+            c.pos[0], c.pos[1], c.pos[2], c.radius, c.height, c.r_tol, c.h_tol, c.z_angle,
+        ]);
+        cn.extend_from_slice(&[c.ty.code(), c.style.code(), c.shape.code()]);
+    }
+    let (cf_ptr, cn_ptr) = if connectors.is_empty() {
+        (ptr::null(), ptr::null())
+    } else {
+        (cf.as_ptr(), cn.as_ptr())
+    };
+    let triangle_count = indices.len() / 3;
+    let paint_cstrings: Option<Vec<CString>> = paint
+        .filter(|p| p.len() == triangle_count)
+        .map(|p| p.iter().map(|s| CString::new(s.as_str()).unwrap_or_default()).collect());
+    let paint_ptrs: Option<Vec<*const c_char>> =
+        paint_cstrings.as_ref().map(|v| v.iter().map(|c| c.as_ptr()).collect());
+    let paint_ptr = paint_ptrs.as_ref().map_or(ptr::null(), |v| v.as_ptr());
+
+    let mut pos_v = ptr::null_mut();
+    let mut pos_vc = 0;
+    let mut pos_i = ptr::null_mut();
+    let mut pos_tc = 0;
+    let mut pos_p: *mut *mut c_char = ptr::null_mut();
+    let mut neg_v = ptr::null_mut();
+    let mut neg_vc = 0;
+    let mut neg_i = ptr::null_mut();
+    let mut neg_tc = 0;
+    let mut neg_p: *mut *mut c_char = ptr::null_mut();
+    let mut mv: *mut *mut f32 = ptr::null_mut();
+    let mut mvc: *mut usize = ptr::null_mut();
+    let mut mi: *mut *mut u32 = ptr::null_mut();
+    let mut mtc: *mut usize = ptr::null_mut();
+    let mut mh: *mut i32 = ptr::null_mut();
+    let mut mt: *mut i32 = ptr::null_mut();
+    let mut mn: usize = 0;
+    let mut dv: *mut *mut f32 = ptr::null_mut();
+    let mut dvc: *mut usize = ptr::null_mut();
+    let mut di: *mut *mut u32 = ptr::null_mut();
+    let mut dtc: *mut usize = ptr::null_mut();
+    let mut dn: usize = 0;
+    let mut err: *mut c_char = ptr::null_mut();
+
+    // SAFETY: inputs validated; connector streams are connector_count*{8,3} (or
+    // null); every out pointer is a valid local we own on return.
+    let status = unsafe {
+        sys::slic3r_cut_mesh_deferred(
+            vertices.as_ptr(),
+            vertices.len() / 3,
+            indices.as_ptr(),
+            triangle_count,
+            paint_ptr,
+            plane_origin.as_ptr(),
+            plane_normal.as_ptr(),
+            cf_ptr,
+            cn_ptr,
+            connectors.len(),
+            &mut pos_v,
+            &mut pos_vc,
+            &mut pos_i,
+            &mut pos_tc,
+            &mut pos_p,
+            &mut neg_v,
+            &mut neg_vc,
+            &mut neg_i,
+            &mut neg_tc,
+            &mut neg_p,
+            &mut mv,
+            &mut mvc,
+            &mut mi,
+            &mut mtc,
+            &mut mh,
+            &mut mt,
+            &mut mn,
+            &mut dv,
+            &mut dvc,
+            &mut di,
+            &mut dtc,
+            &mut dn,
+            &mut err,
+        )
+    };
+    unsafe { check_with_err(status, err) }?;
+
+    let mut pos = unsafe { take_cut_half(pos_v, pos_vc, pos_i, pos_tc) };
+    let mut neg = unsafe { take_cut_half(neg_v, neg_vc, neg_i, neg_tc) };
+    pos.paint = unsafe { take_paint(pos_p, pos_tc) };
+    neg.paint = unsafe { take_paint(neg_p, neg_tc) };
+    let modifiers = unsafe { take_mods(mv, mvc, mi, mtc, mh, mt, mn) };
+    let dowels = unsafe { take_dowels(dv, dvc, di, dtc, dn) };
+    Ok(CutDeferred { pos, neg, modifiers, dowels })
+}
+
+/// Copy the connector-volume array-of-arrays (+ half/type tags) out, then free.
+unsafe fn take_mods(
+    mv: *mut *mut f32,
+    mvc: *mut usize,
+    mi: *mut *mut u32,
+    mtc: *mut usize,
+    mh: *mut i32,
+    mt: *mut i32,
+    n: usize,
+) -> Vec<CutModifier> {
+    if mv.is_null() || mi.is_null() || mvc.is_null() || mtc.is_null() || mh.is_null()
+        || mt.is_null()
+        || n == 0
+    {
+        sys::slic3r_cut_connectors_free_mods(mv, mi, mvc, mtc, mh, mt, n);
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(n);
+    for k in 0..n {
+        let v = *mv.add(k);
+        let vc = *mvc.add(k);
+        let i = *mi.add(k);
+        let tc = *mtc.add(k);
+        if !v.is_null() && !i.is_null() && vc > 0 && tc > 0 {
+            out.push(CutModifier {
+                vertices: std::slice::from_raw_parts(v, vc * 3).to_vec(),
+                indices: std::slice::from_raw_parts(i, tc * 3).to_vec(),
+                half: *mh.add(k) as u8,
+                negative: *mt.add(k) == 1,
+            });
+        }
+    }
+    sys::slic3r_cut_connectors_free_mods(mv, mi, mvc, mtc, mh, mt, n);
+    out
+}
+
 /// Where the nester placed one item (see [`arrange`]). `translation` (mm) and
 /// `rotation` (radians) are applied to the item's footprint; `bed_idx` is the
 /// logical bed it landed on: `0` = the given bed, `> 0` = spilled onto an extra
