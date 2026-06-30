@@ -117,8 +117,6 @@ export function WgpuViewport({
   split?: SplitProps;
   onToolDone?: () => void;
   onClonePick?: (id: number) => void;
-  /** Pick-to-split click landed: the object's group was selected; start the
-   *  split session on it. */
   onSplitPick?: (id: number) => void;
   /** Match-face: reference face clicked (true) → waiting on the target. */
   onFaceMatchStep?: (refSet: boolean) => void;
@@ -307,8 +305,8 @@ export function WgpuViewport({
         return true;
       }
       if (toolNow === "split") {
-        // Pick an object → select its whole group (the cut needs a real
-        // selection: plane center + apply read it), then start the split session.
+        // applySelect (not just passing the id up): the cut reads the live
+        // selection for the plane center + apply, so it must be real first.
         const id = await castPick(sx, sy);
         if (id == null) return false;
         await applySelect(id, false);
