@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { WgpuViewport } from "./viewport/WgpuViewport";
 import { ViewportChrome } from "./viewport/ViewportChrome";
 import { ViewportToasts } from "./viewport/ViewportToasts";
 import { CloneDialog } from "./objects/CloneDialog";
 import { cloneObjects } from "./objects/objectCommands";
 import { useViewportTools } from "./viewport/useViewportTools";
+import { useSplitSession } from "./viewport/useSplitSession";
+import { SplitPanel } from "./viewport/SplitPanel";
 import { ErrorConsole } from "./logging/ErrorConsole";
 import { shouldIgnoreHotkey } from "./ui/hotkeyInhibit";
 import { setupLogSinks } from "./logging/logStore";
@@ -65,6 +68,9 @@ function App() {
   // Prepare-tab viewport tool state (gizmo + armed tools + clone dialog +
   // match-face step), with the one-tool-active-at-a-time invariant.
   const viewport = useViewportTools();
+  // Split (cut-by-plane) tool — a transient cutting-plane session, mutually
+  // exclusive with the transform gizmo (coordinated below).
+  const split = useSplitSession();
   // Object count frozen at the moment a slice is submitted — what the
   // backend actually snapshots and slices (build_slice_input). Held
   // here so the progress window's count stays put across tab switches
@@ -92,6 +98,14 @@ function App() {
       (p) => p.plate_id === session.snapshot?.active_plate_id,
     ) ?? null;
   const activePlateId = activePlate?.plate_id ?? null;
+  const selection = activePlate?.selection ?? [];
+  // While the split tool is active, re-center the cutting plane when the
+  // selection changes (e.g. clicking a different object in split mode).
+  const selectionKey = selection.join(",");
+  useEffect(() => {
+    if (split.active) split.recenter(selectionKey ? selectionKey.split(",").map(Number) : []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectionKey]);
   const bedExtents = activePlate?.bed
     ? {
         min: activePlate.bed.extents.min,
@@ -502,10 +516,19 @@ function App() {
                   frames. The 3D scene state is authoritative in Rust; this is a
                   read-only consumer. */}
               <WgpuViewport
-                selectedIds={activePlate?.selection ?? []}
+                selectedIds={selection}
                 activePlateId={activePlateId}
                 gizmoMode={viewport.gizmoMode}
                 tool={viewport.tool}
+                split={{
+                  active: split.active,
+                  origin: split.origin,
+                  normal: split.normal,
+                  keepPos: split.keepPos,
+                  keepNeg: split.keepNeg,
+                  radius: split.radius,
+                  setOrigin: split.setOrigin,
+                }}
                 onToolDone={viewport.clearTool}
                 onClonePick={viewport.pickClone}
                 onFaceMatchStep={viewport.setFaceMatchStep}
@@ -513,14 +536,55 @@ function App() {
               <ViewportChrome
                 leading={modeToggle}
                 objects={activePlate?.objects ?? []}
-                selectedIds={activePlate?.selection ?? []}
+                selectedIds={selection}
                 gizmoMode={viewport.gizmoMode}
-                onGizmoMode={viewport.selectGizmo}
+                // Arming the gizmo/clone exits the split tool (one tool at a time).
+                onGizmoMode={(m) => {
+                  split.exit();
+                  viewport.selectGizmo(m);
+                }}
                 tool={viewport.tool}
-                onTool={viewport.selectTool}
-                onClone={() => viewport.armClone(activePlate?.selection ?? [])}
+                onTool={(t) => {
+                  split.exit();
+                  viewport.selectTool(t);
+                }}
+                onClone={() => {
+                  split.exit();
+                  viewport.armClone(selection);
+                }}
+                onSplit={() => {
+                  if (split.active) {
+                    split.exit();
+                  } else {
+                    viewport.selectGizmo("none");
+                    split.enter(selection);
+                  }
+                }}
+                splitActive={split.active}
                 faceMatchRefSet={viewport.faceMatchStep}
               />
+              {split.active && (
+                <SplitPanel
+                  rot={split.rot}
+                  keepPos={split.keepPos}
+                  keepNeg={split.keepNeg}
+                  onRot={split.setRot}
+                  onToggleKeep={split.toggleKeep}
+                  onCancel={split.exit}
+                  onApply={() => {
+                    if (selection.length === 0) return;
+                    void invoke("scene_cut_apply", {
+                      ids: selection,
+                      planeOrigin: split.origin,
+                      planeNormal: split.normal,
+                      keepPositive: split.keepPos,
+                      keepNegative: split.keepNeg,
+                    })
+                      .then(() => split.exit())
+                      .catch((e: unknown) => console.error("split failed", e));
+                  }}
+                />
+              )}
               {viewport.clone && (
                 <CloneDialog
                   count={viewport.clone.ids.length}

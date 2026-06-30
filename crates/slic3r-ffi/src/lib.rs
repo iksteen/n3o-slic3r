@@ -177,6 +177,120 @@ pub fn orient_mesh(vertices: &[f32], indices: &[u32], overhang_angle: Option<f32
     Ok(quat)
 }
 
+/// One side of a [`cut_mesh`] result: an indexed mesh (flattened xyz vertices +
+/// triangle index triples). Empty (both vecs cleared) when the input lay
+/// entirely on the other side of the plane.
+#[derive(Debug, Clone, Default)]
+pub struct CutHalf {
+    pub vertices: Vec<f32>,
+    pub indices: Vec<u32>,
+}
+
+impl CutHalf {
+    /// True when this side carried no geometry (the mesh was wholly on the
+    /// other side of the plane).
+    pub fn is_empty(&self) -> bool {
+        self.vertices.is_empty() || self.indices.is_empty()
+    }
+}
+
+/// Cut a triangle mesh by an arbitrary plane — the engine behind OrcaSlicer's
+/// "Cut" tool, with caps triangulated so both halves come back watertight.
+///
+/// `vertices`/`indices` are flattened xyz / triangle-index triples (each a
+/// non-zero multiple of 3). `plane_origin` is a point on the plane and
+/// `plane_normal` its normal — BOTH in the same coordinate frame as `vertices`
+/// (transform a world plane into the mesh's local frame first). Returns
+/// `(positive, negative)`: the side the normal points toward, then the other.
+/// Either half may be [`CutHalf::is_empty`] when the mesh lies wholly on one
+/// side.
+///
+/// Pure computation — no init or model handle required. Run it off any UI lock.
+pub fn cut_mesh(
+    vertices: &[f32],
+    indices: &[u32],
+    plane_origin: [f32; 3],
+    plane_normal: [f32; 3],
+) -> Result<(CutHalf, CutHalf)> {
+    if vertices.is_empty() || vertices.len() % 3 != 0 {
+        return Err(Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("vertices must be a non-empty multiple of 3".into()),
+        });
+    }
+    if indices.is_empty() || indices.len() % 3 != 0 {
+        return Err(Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("indices must be a non-empty multiple of 3".into()),
+        });
+    }
+    // Bounds-check indices before they reach libslic3r (it indexes unchecked).
+    let vertex_count = vertices.len() / 3;
+    if let Some(&max_index) = indices.iter().max() {
+        if max_index as usize >= vertex_count {
+            return Err(Error {
+                kind: ErrorKind::InvalidArg,
+                message: Some(format!(
+                    "triangle index {max_index} out of range for {vertex_count} vertices"
+                )),
+            });
+        }
+    }
+
+    let mut pos_v: *mut f32 = ptr::null_mut();
+    let mut pos_vc: usize = 0;
+    let mut pos_i: *mut u32 = ptr::null_mut();
+    let mut pos_tc: usize = 0;
+    let mut neg_v: *mut f32 = ptr::null_mut();
+    let mut neg_vc: usize = 0;
+    let mut neg_i: *mut u32 = ptr::null_mut();
+    let mut neg_tc: usize = 0;
+    let mut err: *mut c_char = ptr::null_mut();
+
+    // SAFETY: input slices are length-validated above; the out pointers are all
+    // valid locals the shim writes (heap arrays it allocates, or null/0).
+    let status = unsafe {
+        sys::slic3r_cut_mesh(
+            vertices.as_ptr(),
+            vertex_count,
+            indices.as_ptr(),
+            indices.len() / 3,
+            plane_origin.as_ptr(),
+            plane_normal.as_ptr(),
+            &mut pos_v,
+            &mut pos_vc,
+            &mut pos_i,
+            &mut pos_tc,
+            &mut neg_v,
+            &mut neg_vc,
+            &mut neg_i,
+            &mut neg_tc,
+            &mut err,
+        )
+    };
+    // SAFETY: err is either null or a shim-owned message pointer.
+    unsafe { check_with_err(status, err) }?;
+
+    // SAFETY: each half is either (non-null ptr, matching count) the shim
+    // malloc'd, or (null, 0). Copy out, then hand the shim's buffers back.
+    let pos = unsafe { take_cut_half(pos_v, pos_vc, pos_i, pos_tc) };
+    let neg = unsafe { take_cut_half(neg_v, neg_vc, neg_i, neg_tc) };
+    Ok((pos, neg))
+}
+
+/// Copy one cut half out of shim-owned heap arrays into a [`CutHalf`], then free
+/// the shim buffers. A null/zero half yields an empty `CutHalf`.
+unsafe fn take_cut_half(verts: *mut f32, vcount: usize, idx: *mut u32, icount: usize) -> CutHalf {
+    if verts.is_null() || idx.is_null() || vcount == 0 || icount == 0 {
+        sys::slic3r_cut_mesh_free(verts, idx); // free whichever (if any) is non-null
+        return CutHalf::default();
+    }
+    let vertices = std::slice::from_raw_parts(verts, vcount * 3).to_vec();
+    let indices = std::slice::from_raw_parts(idx, icount * 3).to_vec();
+    sys::slic3r_cut_mesh_free(verts, idx);
+    CutHalf { vertices, indices }
+}
+
 /// Where the nester placed one item (see [`arrange`]). `translation` (mm) and
 /// `rotation` (radians) are applied to the item's footprint; `bed_idx` is the
 /// logical bed it landed on: `0` = the given bed, `> 0` = spilled onto an extra

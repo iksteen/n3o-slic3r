@@ -20,8 +20,8 @@ use crate::core::project::resolve::{tower_geometry_for_plate, TowerGeometry};
 use crate::core::project::{PlateId, Project};
 use crate::core::scene::state::{mesh_bb_corners, MeshId, ObjectId};
 use crate::viewport_gizmo::{
-    compute_pre, pick_gizmo, ray_plane, selection_basis, selection_gizmo, selection_world_aabb,
-    GizmoGrab, GizmoMode, GrabKind, GIZMO_SCREEN_K,
+    compute_pre, pick_gizmo, pick_move_at, ray_plane, selection_basis, selection_gizmo,
+    selection_world_aabb, GizmoGrab, GizmoMode, GrabKind, GIZMO_SCREEN_K,
 };
 use crate::viewport_gpu::{
     cam_eye, cursor_ray, make_targets, read_rgba, view_proj, COLOR_FMT, SAMPLES,
@@ -35,11 +35,18 @@ struct Vertex {
 }
 
 const SHADER: &str = r#"
-struct U { mvp: mat4x4<f32>, color: vec4<f32> };
+struct U {
+  mvp: mat4x4<f32>,
+  color: vec4<f32>,
+  model: mat4x4<f32>,     // world matrix, for the split tool's per-side tint
+  plane_o: vec4<f32>,     // xyz = cut-plane origin, w = cut active (0/1)
+  plane_n: vec4<f32>,     // xyz = cut-plane normal, w = keep code (bit0 pos, bit1 neg)
+};
 @group(0) @binding(0) var<uniform> u: U;
-struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
+struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32>, @location(1) wpos: vec3<f32> };
 @vertex fn vs(@location(0) pos: vec3<f32>, @location(1) nrm: vec3<f32>) -> VO {
-  var o: VO; o.p = u.mvp * vec4<f32>(pos, 1.0); o.n = nrm; return o;
+  var o: VO; o.p = u.mvp * vec4<f32>(pos, 1.0); o.n = nrm;
+  o.wpos = (u.model * vec4<f32>(pos, 1.0)).xyz; return o;
 }
 @fragment fn fs(i: VO) -> @location(0) vec4<f32> {
   if (dot(i.n, i.n) < 0.01) { return vec4<f32>(u.color.rgb, 1.0); } // unlit line (grid / bbox bracket)
@@ -53,7 +60,19 @@ struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32> };
   let d = 0.55 + abs(dot(n, key)) * 0.4 + abs(dot(n, fill)) * 0.1;
   // color = the face group's resolved color (object base / per-filament paint,
   // already selection-tinted CPU-side).
-  return vec4<f32>(u.color.rgb * min(d, 1.0), 1.0);
+  var rgb = u.color.rgb;
+  // Split-tool preview: tint this fragment red or blue by which side of the cut
+  // plane it falls on, and dim the side the user is discarding. Only set for
+  // selected objects while the split tool is active (plane_o.w == 1).
+  if (u.plane_o.w > 0.5) {
+    let pos_side = dot(i.wpos - u.plane_o.xyz, u.plane_n.xyz) >= 0.0;
+    let tint = select(vec3<f32>(0.85, 0.25, 0.25), vec3<f32>(0.25, 0.45, 0.95), pos_side); // RED neg / BLUE pos
+    rgb = mix(rgb, tint, 0.6);
+    let keep = u32(u.plane_n.w + 0.5);
+    let kept = select((keep & 2u) != 0u, (keep & 1u) != 0u, pos_side);
+    if (!kept) { rgb = rgb * 0.4; } // ghost the discard side
+  }
+  return vec4<f32>(rgb * min(d, 1.0), 1.0);
 }
 "#;
 
@@ -103,8 +122,12 @@ const TOWER_BOX_H: f32 = 50.0; // indicative box height (the real tower is as ta
 const GIZMO_ROD_R: f32 = 0.012; // rod radius (also the rotate ring tube)
 const GIZMO_TIP: f32 = 0.12; // endpoint size: move cone base Ø == scale cube width
 const GIZMO_CONE_H: f32 = 0.2; // move arrowhead length, beyond the full-length rod
-/// Per-object uniform: `mat4 mvp` (64) + `vec4 tint` (16).
-const UNIFORM_BYTES: u64 = 80;
+/// Per-object uniform: `mat4 mvp` (64) + `vec4 color` (16) + `mat4 model` (64)
+/// + `vec4 plane_o` (16, xyz origin + w = cut-active flag) + `vec4 plane_n`
+/// (16, xyz normal + w = keep code). The trailing 96 bytes drive the split
+/// tool's per-side red/blue tint; they're zero (inert) for every normal frame
+/// and for the gizmo/tower/line shaders, whose smaller `U` ignores the tail.
+const UNIFORM_BYTES: u64 = 176;
 // Bed extents are f64 (BoundingBox); converted to f32 for the GPU.
 const DEFAULT_BED: ([f64; 3], [f64; 3]) = ([-110.0, -110.0, 0.0], [110.0, 110.0, 200.0]);
 const SELECTED_RGB: [f32; 3] = [0.231, 0.510, 0.965]; // tailwind blue-500 (#3b82f6)
@@ -202,6 +225,31 @@ pub struct FrameRequest {
     /// XY/YZ/XZ plane; for Rotate 0/1/2 = X/Y/Z ring; -1 = none.
     #[serde(default = "neg_one")]
     pub gizmo_hover: i32,
+    /// Active split-tool cutting plane. When present the renderer draws the
+    /// translucent plane quad, tints the selected mesh red/blue per side, and
+    /// puts the move gizmo on the plane instead of the selection.
+    #[serde(default)]
+    pub cut: Option<CutPreview>,
+}
+
+/// The split tool's cutting plane for one frame (world space). `keep_pos` /
+/// `keep_neg` choose which sides stay solid vs. ghosted in the preview.
+#[derive(serde::Deserialize, Clone, Copy)]
+pub struct CutPreview {
+    pub origin: [f32; 3],
+    pub normal: [f32; 3],
+    #[serde(default)]
+    pub keep_pos: bool,
+    #[serde(default)]
+    pub keep_neg: bool,
+}
+
+impl CutPreview {
+    /// `plane_n.w` keep code consumed by the mesh shader (bit0 = keep positive
+    /// side, bit1 = keep negative side).
+    fn keep_code(&self) -> f32 {
+        (self.keep_pos as u32 | ((self.keep_neg as u32) << 1)) as f32
+    }
 }
 
 /// A live handle drag: the handle captured at grab time plus the current cursor
@@ -765,10 +813,11 @@ impl ViewportRenderer {
     pub fn new() -> Self {
         let (device, queue) = crate::viewport_gpu::shared_device();
 
-        let slot = device
-            .limits()
-            .min_uniform_buffer_offset_alignment
-            .max(64);
+        // Each slot must be ≥ UNIFORM_BYTES *and* a multiple of the offset
+        // alignment (slots are bound by dynamic offset). Round the uniform size
+        // up to the alignment — on the common 256-byte-aligned GPU this is 256.
+        let align = device.limits().min_uniform_buffer_offset_alignment.max(64) as u64;
+        let slot = (UNIFORM_BYTES.div_ceil(align) * align) as u32;
         let slots_cap = 64u32;
         let ubuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewport.mvp"),
@@ -1190,7 +1239,9 @@ impl ViewportRenderer {
                 .and_then(instance_registry::lookup_instance);
             // One draw item per (object, paint-state group): (mesh, group index,
             // model, resolved color).
-            let mut draws: Vec<(MeshId, usize, Mat4, [f32; 3])> = Vec::new();
+            // (mesh, paint-group, world matrix, color, selected) — `selected`
+            // gates the split-tool per-side tint.
+            let mut draws: Vec<(MeshId, usize, Mat4, [f32; 3], bool)> = Vec::new();
             // Scale-gizmo basis follows the object's orientation (world for multi).
             let basis = selection_basis(&p);
             // Local drag preview: the active grab + cursor resolve (Rust-side) to a
@@ -1256,14 +1307,14 @@ impl ViewportRenderer {
                     } else {
                         base
                     };
-                    draws.push((obj.mesh, gi, model, color));
+                    draws.push((obj.mesh, gi, model, color, selected));
                 }
             }
             // One outer AABB enclosing the whole selection (world space) → a single
             // set of corner brackets, not one box per group member. Brackets hug
             // the live (drag-previewed) bounds. They're the affordance for the
             // no-tool XY-plane move, so they're hidden once a gizmo is active.
-            let boxes = (req.gizmo == GizmoMode::None)
+            let boxes = (req.gizmo == GizmoMode::None && req.cut.is_none())
                 .then(|| selection_world_aabb(&p, &drag_ids, drag_pre))
                 .flatten()
                 .map(|(mn, mx)| vec![(Mat4::IDENTITY, mn.to_array(), mx.to_array())])
@@ -1300,7 +1351,9 @@ impl ViewportRenderer {
         let axis_slot = bracket_slot + bracket_vb.is_some() as usize;
         // Two tower slots: the box/mesh model (solid + box edges) + the brim.
         let tower_slot = axis_slot + 3;
-        let total_slots = tower_slot + 2;
+        // One more slot for the split-tool cutting-plane quad.
+        let plane_slot = tower_slot + 2;
+        let total_slots = plane_slot + 1;
 
         // Priming tower: draw the active plate's stored sliced mesh (mesh mode)
         // when there is one, else the placement box. Placement is the resolved
@@ -1362,20 +1415,61 @@ impl ViewportRenderer {
         // also follows the dragged object (drag_pre is a translation). Rotate is
         // sized to the object (ring radius `r`) and stays put.
         let screen_l = |c: Vec3| GIZMO_SCREEN_K * (eye - c).length();
-        let gizmo_verts = gizmo
-            .map(|(c, r)| match req.gizmo {
-                GizmoMode::Move => {
-                    let c = drag_pre.transform_point3(c);
-                    gizmo_geometry(c, screen_l(c), r, req.gizmo_hover)
-                }
-                GizmoMode::Rotate => gizmo_rotate_geometry(c, r, screen_l(c) * 0.012, req.gizmo_hover),
-                GizmoMode::Scale => gizmo_scale_geometry(c, screen_l(c), r, basis_axes, req.gizmo_hover, guide),
-                GizmoMode::None => Vec::new(),
-            })
-            .filter(|v| !v.is_empty());
+        let gizmo_verts = if let Some(cut) = &req.cut {
+            // Split tool: the move gizmo sits on the cut plane (rotation is via
+            // the panel sliders, so only the translate gizmo is shown). Arm
+            // length tracks the selection size.
+            let c = Vec3::from(cut.origin);
+            let r = gizmo.map(|(_, r)| r).unwrap_or(10.0);
+            Some(gizmo_geometry(c, screen_l(c), r, req.gizmo_hover)).filter(|v| !v.is_empty())
+        } else {
+            gizmo
+                .map(|(c, r)| match req.gizmo {
+                    GizmoMode::Move => {
+                        let c = drag_pre.transform_point3(c);
+                        gizmo_geometry(c, screen_l(c), r, req.gizmo_hover)
+                    }
+                    GizmoMode::Rotate => {
+                        gizmo_rotate_geometry(c, r, screen_l(c) * 0.012, req.gizmo_hover)
+                    }
+                    GizmoMode::Scale => {
+                        gizmo_scale_geometry(c, screen_l(c), r, basis_axes, req.gizmo_hover, guide)
+                    }
+                    GizmoMode::None => Vec::new(),
+                })
+                .filter(|v| !v.is_empty())
+        };
         let gizmo_vb = gizmo_verts.as_ref().map(|verts| {
             self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("viewport.gizmo"),
+                contents: bytemuck::cast_slice(verts),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        });
+
+        // Split-tool cutting plane: a translucent two-sided quad at the cut
+        // origin, sized to the selection and oriented by the plane normal. The
+        // red/blue lives on the mesh tint, so the quad itself is neutral.
+        let plane_quad = req.cut.as_ref().map(|cut| {
+            let n = Vec3::from(cut.normal).normalize_or_zero();
+            let up = if n.x.abs() > 0.9 { Vec3::Y } else { Vec3::X };
+            let e1 = n.cross(up).normalize();
+            let e2 = n.cross(e1).normalize();
+            let half = gizmo.map(|(_, r)| r).unwrap_or(20.0) * 1.2;
+            let o = Vec3::from(cut.origin);
+            let v = |p: Vec3| Vertex { pos: p.to_array(), nrm: n.to_array() };
+            vec![
+                v(o - e1 * half - e2 * half),
+                v(o + e1 * half - e2 * half),
+                v(o + e1 * half + e2 * half),
+                v(o - e1 * half - e2 * half),
+                v(o + e1 * half + e2 * half),
+                v(o - e1 * half + e2 * half),
+            ]
+        });
+        let plane_vb = plane_quad.as_ref().map(|verts| {
+            self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("viewport.cut.plane"),
                 contents: bytemuck::cast_slice(verts),
                 usage: wgpu::BufferUsages::VERTEX,
             })
@@ -1388,12 +1482,22 @@ impl ViewportRenderer {
         let mut bytes = vec![0u8; self.slot as usize * total_slots];
         bytes[0..64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
         bytes[64..80].copy_from_slice(bytemuck::cast_slice(&GRID_LINE));
-        for (i, (_, _, model, color)) in draws.iter().enumerate() {
+        for (i, (_, _, model, color, selected)) in draws.iter().enumerate() {
             let off = (i + 1) * self.slot as usize;
             bytes[off..off + 64]
                 .copy_from_slice(bytemuck::cast_slice(&(vp * *model).to_cols_array()));
             let rgba = [color[0], color[1], color[2], 1.0f32];
             bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
+            // model matrix (for the split tool's world-space per-side tint).
+            bytes[off + 80..off + 144].copy_from_slice(bytemuck::cast_slice(&model.to_cols_array()));
+            // Split preview: tint this object only when it's selected and the
+            // tool is active; otherwise the trailing planes stay zero (inert).
+            if let (Some(cut), true) = (&req.cut, *selected) {
+                let plane_o = [cut.origin[0], cut.origin[1], cut.origin[2], 1.0f32];
+                let plane_n = [cut.normal[0], cut.normal[1], cut.normal[2], cut.keep_code()];
+                bytes[off + 144..off + 160].copy_from_slice(bytemuck::cast_slice(&plane_o));
+                bytes[off + 160..off + 176].copy_from_slice(bytemuck::cast_slice(&plane_n));
+            }
         }
         if bracket_vb.is_some() {
             let off = bracket_slot * self.slot as usize;
@@ -1416,6 +1520,13 @@ impl ViewportRenderer {
             bytes[boff..boff + 64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
             let brgba = [TOWER_RGB[0], TOWER_RGB[1], TOWER_RGB[2], 1.0f32];
             bytes[boff + 64..boff + 80].copy_from_slice(bytemuck::cast_slice(&brgba));
+        }
+        if plane_vb.is_some() {
+            // Split-tool plane quad: world verts (vp), neutral translucent fill.
+            let off = plane_slot * self.slot as usize;
+            bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
+            let rgba = [0.80f32, 0.80, 0.85, 0.22];
+            bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
         }
         self.queue.write_buffer(&self.ubuf, 0, &bytes);
 
@@ -1466,7 +1577,7 @@ impl ViewportRenderer {
             }
             // meshes
             rp.set_pipeline(&self.mesh_pipe);
-            for (i, (mesh_id, gi, _, _)) in draws.iter().enumerate() {
+            for (i, (mesh_id, gi, _, _, _)) in draws.iter().enumerate() {
                 let off = ((i + 1) as u32) * self.slot;
                 let gm = &self.meshes[mesh_id];
                 let g = &gm.groups[*gi];
@@ -1508,6 +1619,14 @@ impl ViewportRenderer {
                         rp.draw(0..8, 0..1);
                     }
                 }
+            }
+            // Split-tool cutting plane (translucent, two-sided — tower_pipe has
+            // no backface cull). Drawn last so it blends over everything.
+            if let (Some(vb), Some(verts)) = (&plane_vb, &plane_quad) {
+                rp.set_pipeline(&self.tower_pipe);
+                rp.set_bind_group(0, &self.bind, &[(plane_slot as u32) * self.slot]);
+                rp.set_vertex_buffer(0, vb.slice(..));
+                rp.draw(0..verts.len() as u32, 0..1);
             }
         }
         // Gizmo: second pass, color preserved, always self-occluding (depth Less +
@@ -2034,6 +2153,74 @@ pub fn viewport_ray_plane(req: RayPlaneRequest) -> Option<[f32; 3]> {
     let (w, h) = (req.width.max(1) as f32, req.height.max(1) as f32);
     let (ro, rd) = cursor_ray(w, h, req.x, req.y, req.az, req.el, req.dist, Vec3::from(req.center));
     ray_plane(ro, rd, Vec3::from(req.plane_n), Vec3::from(req.plane_p)).map(|v| v.to_array())
+}
+
+/// Camera + cursor + the split tool's cutting-plane center/size, for a press
+/// hit-test on the plane's Move handles.
+#[derive(serde::Deserialize)]
+pub struct CutGrabRequest {
+    pub width: u32,
+    pub height: u32,
+    pub x: f32,
+    pub y: f32,
+    pub az: f32,
+    pub el: f32,
+    pub dist: f32,
+    pub center: [f32; 3],
+    /// The cutting plane's current origin (the gizmo sits here).
+    pub origin: [f32; 3],
+    /// Handle arm length (the selection's bounding-sphere radius).
+    pub arm: f32,
+}
+
+/// Hit-test the cutting plane's move handles for a press. Returns the opaque
+/// `GizmoGrab` (frontend passes it back to `viewport_cut_drag`), or `None` when
+/// the press missed every handle (frontend orbits / re-centers instead). Pure.
+#[tauri::command]
+pub fn viewport_cut_grab(req: CutGrabRequest) -> Option<GizmoGrab> {
+    let (w, h) = (req.width.max(1) as f32, req.height.max(1) as f32);
+    let cam_center = Vec3::from(req.center);
+    let (ro, rd) = cursor_ray(w, h, req.x, req.y, req.az, req.el, req.dist, cam_center);
+    let eye = cam_eye(req.az, req.el, req.dist, cam_center);
+    pick_move_at(Vec3::from(req.origin), req.arm, ro, rd, eye)
+}
+
+/// Camera + cursor + the grabbed handle + the plane's current origin, for a
+/// cutting-plane drag. Returns the new plane origin (the move pre-multiply
+/// applied to the old origin). Pure — the plane pose lives frontend-side until
+/// the cut is applied.
+#[derive(serde::Deserialize)]
+pub struct CutDragRequest {
+    pub width: u32,
+    pub height: u32,
+    pub sx: f32,
+    pub sy: f32,
+    pub az: f32,
+    pub el: f32,
+    pub dist: f32,
+    pub center: [f32; 3],
+    pub grab: GizmoGrab,
+    pub origin: [f32; 3],
+    #[serde(default)]
+    pub shift: bool,
+}
+
+#[tauri::command]
+pub fn viewport_cut_drag(req: CutDragRequest) -> [f32; 3] {
+    let cam_center = Vec3::from(req.center);
+    let (ro, rd) = cursor_ray(
+        req.width.max(1) as f32,
+        req.height.max(1) as f32,
+        req.sx,
+        req.sy,
+        req.az,
+        req.el,
+        req.dist,
+        cam_center,
+    );
+    let eye = cam_eye(req.az, req.el, req.dist, cam_center);
+    let pre = compute_pre(&req.grab, ro, rd, eye, cam_center, req.shift);
+    pre.transform_point3(Vec3::from(req.origin)).to_array()
 }
 
 /// Möller–Trumbore, two-sided. Returns the ray parameter `t` (>0) at the hit.

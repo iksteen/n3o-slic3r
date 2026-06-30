@@ -21,11 +21,23 @@ type GrabResult =
 // assume Z up); close enough to read as fully overhead / underneath.
 const EL_LIMIT = Math.PI / 2 - 0.001;
 
+/** Split tool state the viewport reads to draw the cutting plane + tint, and
+ *  writes back to when the plane is dragged. Owned by `useSplitSession`. */
+export type SplitProps = {
+  active: boolean;
+  origin: Vec3;
+  normal: Vec3;
+  keepPos: boolean;
+  keepNeg: boolean;
+  radius: number;
+  setOrigin: (o: Vec3) => void;
+};
+
 type DragState = {
   x: number;
   y: number;
   button: number;
-  mode: "pending" | "orbit" | "gizmo" | "pan" | "inert" | "tower";
+  mode: "pending" | "orbit" | "gizmo" | "pan" | "inert" | "tower" | "cut";
   // Gizmo drag (move/rotate/scale, and the no-tool free-move): the opaque grab
   // captured on press + the latest cursor (canvas px) + Shift. The renderer turns
   // these into the preview transform Rust-side (`gizmo_drag`); the same call on
@@ -41,6 +53,9 @@ type DragState = {
   towerOffset?: [number, number];
   towerClamped?: [number, number];
   towerMoved?: boolean;
+  // Cut-plane drag: the live dragged plane origin (committed to the split
+  // session on release; read by `render` so the frame tracks the drag).
+  cutOrigin?: Vec3;
 };
 
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -77,6 +92,7 @@ export function WgpuViewport({
   activePlateId = null,
   gizmoMode = "none",
   tool = "none",
+  split,
   onToolDone,
   onClonePick,
   onFaceMatchStep,
@@ -85,6 +101,8 @@ export function WgpuViewport({
   activePlateId?: number | null;
   gizmoMode?: GizmoMode;
   tool?: Tool;
+  /** Split tool session (cutting plane). `null`/inactive = tool off. */
+  split?: SplitProps;
   onToolDone?: () => void;
   onClonePick?: (id: number) => void;
   /** Match-face: reference face clicked (true) → waiting on the target. */
@@ -116,6 +134,8 @@ export function WgpuViewport({
   onFaceMatchStepRef.current = onFaceMatchStep;
   const activePlateIdRef = useRef(activePlateId);
   activePlateIdRef.current = activePlateId;
+  const splitRef = useRef(split);
+  splitRef.current = split;
   // Face-match is a two-click pick: the first click stashes the reference face's
   // world normal + point here; the second matches the target face to it.
   const faceMatchRef = useRef<{ normal: Vec3; point: Vec3 } | null>(null);
@@ -164,6 +184,18 @@ export function WgpuViewport({
           d && d.mode === "gizmo" && d.grab
             ? { grab: d.grab, sx: d.sx ?? 0, sy: d.sy ?? 0, shift: d.shift ?? false }
             : null;
+        // Split tool: hand the renderer the cutting plane (tracking a live drag
+        // via the drag state) so it draws the plane + tints the selection.
+        const s = splitRef.current;
+        const cut =
+          s && s.active
+            ? {
+                origin: d?.mode === "cut" && d.cutOrigin ? d.cutOrigin : s.origin,
+                normal: s.normal,
+                keep_pos: s.keepPos,
+                keep_neg: s.keepNeg,
+              }
+            : null;
         const buf = await invoke<ArrayBuffer>("viewport_frame", {
           req: {
             width: w,
@@ -175,6 +207,7 @@ export function WgpuViewport({
             gizmo: gizmoModeRef.current,
             gizmo_drag: gizmoDrag,
             gizmo_hover: hoverHandle.current,
+            cut,
           },
         });
         ctx?.putImageData(new ImageData(new Uint8ClampedArray(buf), w, h), 0, 0);
@@ -446,6 +479,33 @@ export function WgpuViewport({
         return;
       }
 
+      // Split tool active: a press on the cutting plane's move handles drags the
+      // plane; a miss orbits (a click still selects + re-centers, in onUp).
+      const sp = splitRef.current;
+      if (sp && sp.active) {
+        void invoke<GizmoGrab | null>("viewport_cut_grab", {
+          req: { ...camArgs(), x: sx, y: sy, origin: sp.origin, arm: sp.radius },
+        })
+          .then((grab) => {
+            if (drag.current !== press) return;
+            if (grab) {
+              press.mode = "cut";
+              press.grab = grab;
+              press.sx = sx;
+              press.sy = sy;
+              press.cutOrigin = sp.origin;
+              hoverHandle.current = grab.idx;
+            } else {
+              press.mode = "orbit";
+            }
+          })
+          .catch((err) => {
+            console.error("viewport_cut_grab failed", err);
+            press.mode = "orbit";
+          });
+        return;
+      }
+
       void grabAt(sx, sy).then(async (r) => {
         if (drag.current !== press || !r) return;
         if (r.kind === "gizmo") {
@@ -521,6 +581,12 @@ export function WgpuViewport({
         }
         return;
       }
+      if (d.mode === "cut") {
+        // Commit the dragged plane origin to the session (the panel + apply read
+        // it from there). A click without a drag leaves the plane put.
+        if (d.cutOrigin) splitRef.current?.setOrigin(d.cutOrigin);
+        return;
+      }
       if (moved) return;
       const [sx, sy] = rel(e);
       // A placing tool is armed: the click runs it (and disarms on success);
@@ -581,6 +647,19 @@ export function WgpuViewport({
         d.sy = sy;
         d.shift = e.shiftKey;
         void render();
+      } else if (d.mode === "cut" && d.grab) {
+        // Drag the cutting plane: Rust resolves the move and returns the new
+        // plane origin; stash it live (committed to the session on release).
+        const s = splitRef.current;
+        if (!s) return;
+        const [sx, sy] = rel(e);
+        void invoke<Vec3>("viewport_cut_drag", {
+          req: { ...camArgs(), sx, sy, grab: d.grab, origin: s.origin, shift: e.shiftKey },
+        }).then((o) => {
+          if (drag.current !== d) return;
+          d.cutOrigin = o;
+          void render();
+        });
       }
       // mode === "pending": waiting on the grab — next move acts.
     };
@@ -796,6 +875,18 @@ export function WgpuViewport({
   useEffect(() => {
     if (tool !== "facematch") faceMatchRef.current = null;
   }, [tool]);
+
+  // Split tool changes (enter/exit, slider rotation, drag, keep toggles) →
+  // redraw the plane + per-side tint.
+  useEffect(() => {
+    renderRef.current?.();
+  }, [
+    split?.active,
+    split?.origin,
+    split?.normal,
+    split?.keepPos,
+    split?.keepNeg,
+  ]);
 
   return <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />;
 }

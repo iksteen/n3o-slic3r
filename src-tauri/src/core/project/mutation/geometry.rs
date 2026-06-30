@@ -18,6 +18,55 @@ use crate::core::scene::state::{
 };
 use crate::core::scene::transform::Transform;
 
+/// Which side of the cut plane a half came from (the side the plane normal
+/// points toward = positive).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CutSide {
+    Pos,
+    Neg,
+}
+
+impl CutSide {
+    /// Object/group name suffix for a half from this side when both sides are
+    /// kept.
+    fn suffix(self) -> &'static str {
+        match self {
+            CutSide::Pos => " (A)",
+            CutSide::Neg => " (B)",
+        }
+    }
+}
+
+/// One source object's data, read off the scene lock so the FFI cut can run
+/// unlocked. See [`Project::cut_targets`].
+pub struct CutTarget {
+    pub object_id: ObjectId,
+    pub vertices: std::sync::Arc<Vec<f32>>,
+    pub indices: std::sync::Arc<Vec<u32>>,
+    pub transform: Transform,
+    pub name: String,
+    pub extruder_id: Option<u8>,
+    pub group: Option<GroupId>,
+}
+
+/// One kept half of a cut (the FFI output for a side the user is keeping).
+pub struct CutHalfOut {
+    pub side: CutSide,
+    pub vertices: Vec<f32>,
+    pub indices: Vec<u32>,
+}
+
+/// The kept halves of one cut source, ready to register. See
+/// [`Project::apply_cut`].
+pub struct CutResult {
+    pub source_id: ObjectId,
+    pub transform: Transform,
+    pub base_name: String,
+    pub extruder_id: Option<u8>,
+    pub source_group: Option<GroupId>,
+    pub halves: Vec<CutHalfOut>,
+}
+
 impl Project {
     // ---- ID allocators (scene-wide) -------------------------------
 
@@ -569,6 +618,122 @@ impl Project {
             indices.extend(mesh.indices.iter().map(|&i| i + base));
         }
         Ok((vertices, indices))
+    }
+
+    /// Read out the per-object data the split tool needs to cut each selected
+    /// object off the scene lock: its local mesh (Arc-cloned — no copy), world
+    /// transform, name, material, and group. Skips invisible objects. Errors on
+    /// an unknown object/mesh. The plane is applied per object in its own local
+    /// frame by the caller, so the halves can reuse the same `transform`.
+    pub fn cut_targets(&self, ids: &[ObjectId]) -> Result<Vec<CutTarget>, SceneOpError> {
+        let active = self.active_plate;
+        let mut out = Vec::new();
+        for &id in ids {
+            let obj = self.plates[active]
+                .scene
+                .objects
+                .get(&id)
+                .ok_or(SceneOpError::UnknownObject(id))?;
+            if !obj.visible {
+                continue;
+            }
+            let mesh = self
+                .meshes
+                .get(&obj.mesh)
+                .ok_or(SceneOpError::UnknownMesh(obj.mesh))?;
+            out.push(CutTarget {
+                object_id: id,
+                vertices: mesh.vertices.clone(),
+                indices: mesh.indices.clone(),
+                transform: obj.transform,
+                name: obj.name.clone(),
+                extruder_id: obj.extruder_id,
+                group: obj.group,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Register each kept cut half as a new mesh + object on the active plate,
+    /// remove the source objects, and select the results. Grouping is preserved
+    /// per side: halves descending from one source group are re-grouped (one
+    /// fresh group per (source group, side)), so a group split in two yields two
+    /// coherent groups; halves of an ungrouped source stay ungrouped. Per-side
+    /// groups left with a single member dissolve. `paint_colors` are dropped (a
+    /// cut renumbers triangles, invalidating the per-triangle paint map).
+    pub fn apply_cut(&mut self, results: Vec<CutResult>) -> (Vec<ObjectId>, Vec<SceneEvent>) {
+        let active = self.active_plate;
+        let plate_id = self.plates[active].id;
+        let mut events = Vec::new();
+        let mut new_ids = Vec::new();
+        // (source group, side) → fresh group for that side's halves.
+        let mut group_remap: HashMap<(GroupId, CutSide), GroupId> = HashMap::new();
+
+        let source_ids: Vec<ObjectId> = results.iter().map(|r| r.source_id).collect();
+        for res in results {
+            let both = res.halves.len() > 1; // both sides kept → " (A)"/" (B)"
+            for half in res.halves {
+                let group = res
+                    .source_group
+                    .map(|g| *group_remap.entry((g, half.side)).or_insert_with(GroupId::fresh));
+                let suffix = if both { half.side.suffix() } else { " (cut)" };
+                let bbox = crate::core::scene::loaders::compute_bounding_box(&half.vertices);
+                let mesh = self.register_mesh(NewMesh {
+                    vertices: half.vertices,
+                    indices: half.indices,
+                    paint_colors: None,
+                    bounding_box: bbox,
+                    provenance: MeshProvenance::Primitive(format!("{} (cut)", res.base_name)),
+                });
+                let header = self.meshes.get(&mesh).expect("just registered").header();
+                events.push(SceneEvent::MeshLoaded { mesh: header });
+                let obj_id = self.register_object(NewSceneObject {
+                    mesh,
+                    transform: res.transform,
+                    name: format!("{}{}", res.base_name, suffix),
+                    visible: true,
+                    extruder_id: res.extruder_id,
+                    group,
+                });
+                let object = self.plates[active]
+                    .scene
+                    .objects
+                    .get(&obj_id)
+                    .expect("just registered")
+                    .clone();
+                events.push(SceneEvent::ObjectAdded { plate_id, object });
+                new_ids.push(obj_id);
+            }
+        }
+        // Name each per-side group after its source group.
+        for ((src_g, side), new_g) in &group_remap {
+            let base = self.plates[active]
+                .scene
+                .groups
+                .get(src_g)
+                .map(|g| g.name.clone())
+                .unwrap_or_default();
+            self.plates[active]
+                .scene
+                .groups
+                .insert(*new_g, Group { name: format!("{base}{}", side.suffix()) });
+        }
+        // Remove the originals (prunes orphan meshes/material bindings + emits
+        // ObjectRemoved/SelectionChanged).
+        events.extend(self.delete_objects(&source_ids));
+        // A per-side group that ended with a single member isn't a group.
+        events.extend(self.dissolve_orphan_groups_on_active());
+        // Drop now-memberless group entries (the fully-consumed source groups).
+        let live: HashSet<GroupId> = self.plates[active]
+            .scene
+            .objects
+            .values()
+            .filter_map(|o| o.group)
+            .collect();
+        self.plates[active].scene.groups.retain(|g, _| live.contains(g));
+        // Select the freshly-created halves.
+        events.extend(self.select(&new_ids, SelectMode::Replace));
+        (new_ids, events)
     }
 
     /// Combined world-space AABB of a selection from each object's local
@@ -1168,6 +1333,111 @@ mod tests {
         assert!(!plate.scene.groups.contains_key(&g1));
         let gbc = plate.scene.objects[&b].group.expect("b grouped");
         assert_eq!(plate.scene.objects[&c].group, Some(gbc));
+    }
+
+    /// Synthetic kept half (no FFI) — geometry is irrelevant to the
+    /// register/remove/group bookkeeping under test.
+    fn half(side: CutSide) -> CutHalfOut {
+        CutHalfOut { side, vertices: vec![0.0; 9], indices: vec![0, 1, 2] }
+    }
+
+    #[test]
+    fn apply_cut_single_object_both_sides_makes_two_ungrouped() {
+        let mut p = Project::default();
+        let (mesh, a) = add_cube(&mut p);
+        let tf = p.active_plate().scene.objects[&a].transform;
+        let res = CutResult {
+            source_id: a,
+            transform: tf,
+            base_name: "cube".into(),
+            extruder_id: Some(1),
+            source_group: None,
+            halves: vec![half(CutSide::Pos), half(CutSide::Neg)],
+        };
+        let (new_ids, _events) = p.apply_cut(vec![res]);
+        assert_eq!(new_ids.len(), 2, "both sides → two objects");
+        assert!(p.active_plate().scene.objects.get(&a).is_none(), "source removed");
+        assert!(p.meshes.get(&mesh).is_none(), "orphan source mesh pruned");
+        let plate = p.active_plate();
+        let names: Vec<&str> =
+            new_ids.iter().map(|id| plate.scene.objects[id].name.as_str()).collect();
+        assert!(names.contains(&"cube (A)") && names.contains(&"cube (B)"));
+        for id in &new_ids {
+            let o = &plate.scene.objects[id];
+            assert_eq!(o.group, None, "ungroduped source → ungrouped halves");
+            assert!(p.meshes[&o.mesh].paint_colors.is_none(), "paint dropped on cut");
+        }
+        assert_eq!(
+            plate.scene.selection.iter().copied().collect::<HashSet<_>>(),
+            new_ids.iter().copied().collect::<HashSet<_>>(),
+            "halves selected",
+        );
+    }
+
+    #[test]
+    fn apply_cut_single_kept_side_names_it_cut() {
+        let mut p = Project::default();
+        let (_, a) = add_cube(&mut p);
+        let tf = p.active_plate().scene.objects[&a].transform;
+        let res = CutResult {
+            source_id: a,
+            transform: tf,
+            base_name: "cube".into(),
+            extruder_id: None,
+            source_group: None,
+            halves: vec![half(CutSide::Pos)],
+        };
+        let (new_ids, _) = p.apply_cut(vec![res]);
+        assert_eq!(new_ids.len(), 1);
+        assert_eq!(p.active_plate().scene.objects[&new_ids[0]].name, "cube (cut)");
+    }
+
+    #[test]
+    fn apply_cut_group_both_sides_makes_two_per_side_groups() {
+        let mut p = Project::default();
+        let (_, a) = add_cube(&mut p);
+        let (_, b) = add_cube(&mut p);
+        p.group_objects(&[a, b], "Bracket".into()).unwrap();
+        let g = p.active_plate().scene.objects[&a].group.unwrap();
+        let (ta, tb) = {
+            let plate = p.active_plate();
+            (plate.scene.objects[&a].transform, plate.scene.objects[&b].transform)
+        };
+        let results = vec![
+            CutResult {
+                source_id: a,
+                transform: ta,
+                base_name: "a".into(),
+                extruder_id: None,
+                source_group: Some(g),
+                halves: vec![half(CutSide::Pos), half(CutSide::Neg)],
+            },
+            CutResult {
+                source_id: b,
+                transform: tb,
+                base_name: "b".into(),
+                extruder_id: None,
+                source_group: Some(g),
+                halves: vec![half(CutSide::Pos), half(CutSide::Neg)],
+            },
+        ];
+        let (new_ids, _) = p.apply_cut(results);
+        assert_eq!(new_ids.len(), 4);
+        let plate = p.active_plate();
+        let mut by_group: HashMap<GroupId, usize> = HashMap::new();
+        for id in &new_ids {
+            let g = plate.scene.objects[id].group.expect("half is grouped");
+            *by_group.entry(g).or_insert(0) += 1;
+        }
+        assert_eq!(by_group.len(), 2, "one fresh group per side");
+        assert!(by_group.values().all(|&c| c == 2), "each side keeps both members");
+        assert!(!plate.scene.groups.contains_key(&g), "consumed source group dropped");
+        // Per-side groups named after the source.
+        let names: HashSet<&str> = by_group
+            .keys()
+            .map(|g| plate.scene.groups[g].name.as_str())
+            .collect();
+        assert!(names.contains("Bracket (A)") && names.contains("Bracket (B)"));
     }
 
     #[test]

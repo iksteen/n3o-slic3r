@@ -758,6 +758,91 @@ pub fn scene_object_auto_orient(
     Ok(())
 }
 
+/// Split tool: cut the selection by a world-space plane and keep/discard each
+/// side. Mirrors auto-orient's three phases (read targets under lock → cut via
+/// the FFI unlocked → register under lock). The selection is group-expanded so
+/// a whole group is cut; each object is cut in its own local frame (the world
+/// plane is transformed into local coords), so the halves reuse the source
+/// transform. Kept, non-empty halves become new objects; sources are removed.
+/// Returns the new object ids (selected). `keep_positive`/`negative` choose the
+/// side(s) the plane normal points toward / away from.
+#[tauri::command]
+#[tracing::instrument(skip(state, window))]
+pub fn scene_cut_apply(
+    ids: Vec<ObjectId>,
+    plane_origin: [f32; 3],
+    plane_normal: [f32; 3],
+    keep_positive: bool,
+    keep_negative: bool,
+    window: Window,
+    state: State<Arc<Mutex<Project>>>,
+) -> Result<Vec<u64>, String> {
+    use crate::core::project::mutation::{CutHalfOut, CutResult, CutSide};
+    if !keep_positive && !keep_negative {
+        return Err("split: at least one side must be kept".into());
+    }
+    let normal = glam::Vec3::from(plane_normal);
+    if normal.length() < 1e-6 {
+        return Err("split: degenerate plane normal".into());
+    }
+    let origin = glam::Vec3::from(plane_origin);
+
+    // Phase 1: read the group-expanded targets, then release the lock.
+    let targets = {
+        let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+        let ids = s.group_expanded_ids(&ids).to_vec();
+        s.cut_targets(&ids).map_err(op_err_to_string)?
+    };
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Phase 2: cut each target in its own local frame (FFI, unlocked). A source
+    // is recorded even when fully discarded (no kept half) so it gets removed.
+    let mut results: Vec<CutResult> = Vec::new();
+    for t in &targets {
+        let m = t.transform.to_mat4();
+        let inv = m.inverse();
+        let o_l = inv.transform_point3(origin);
+        // World→local normal uses the transpose of the linear part.
+        let n_l = (glam::Mat3::from_mat4(m).transpose() * normal).normalize();
+        let (pos, neg) =
+            slic3r_ffi::cut_mesh(&t.vertices, &t.indices, o_l.to_array(), n_l.to_array())
+                .map_err(|e| format!("split: cut failed: {e}"))?;
+        let mut halves = Vec::new();
+        if keep_positive && !pos.is_empty() {
+            halves.push(CutHalfOut {
+                side: CutSide::Pos,
+                vertices: pos.vertices,
+                indices: pos.indices,
+            });
+        }
+        if keep_negative && !neg.is_empty() {
+            halves.push(CutHalfOut {
+                side: CutSide::Neg,
+                vertices: neg.vertices,
+                indices: neg.indices,
+            });
+        }
+        results.push(CutResult {
+            source_id: t.object_id,
+            transform: t.transform,
+            base_name: t.name.clone(),
+            extruder_id: t.extruder_id,
+            source_group: t.group,
+            halves,
+        });
+    }
+
+    // Phase 3: register the halves + remove the sources, under lock.
+    let (new_ids, events) = {
+        let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+        s.apply_cut(results)
+    };
+    emit_all(&window, &events);
+    Ok(new_ids.into_iter().map(|id| id.0).collect())
+}
+
 /// "Align to axis": rotate the selection about Z so its dominant horizontal
 /// line direction (the length-weighted most common edge direction) becomes
 /// parallel to the X or Y axis. Unlike auto-orient this is a pure yaw — it

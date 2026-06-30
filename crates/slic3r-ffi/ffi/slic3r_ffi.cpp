@@ -11,6 +11,7 @@
 #include <libslic3r/PrintBase.hpp>
 #include <libslic3r/Exception.hpp>
 #include <libslic3r/TriangleMesh.hpp>
+#include <libslic3r/TriangleMeshSlicer.hpp>
 #include <libslic3r/TriangleSelector.hpp>
 #include <libslic3r/Orient.hpp>
 #include <libslic3r/Arrange.hpp>
@@ -1323,6 +1324,102 @@ slic3r_status slic3r_orient_mesh(const float* vertices, size_t vertex_count,
         set_err(out_err, "unknown error in slic3r_orient_mesh");
         return SLIC3R_ERR_INTERNAL;
     }
+}
+
+slic3r_status slic3r_cut_mesh(const float* vertices, size_t vertex_count,
+                              const uint32_t* indices, size_t triangle_count,
+                              const float plane_origin[3], const float plane_normal[3],
+                              float** out_pos_vertices, size_t* out_pos_vertex_count,
+                              uint32_t** out_pos_indices, size_t* out_pos_triangle_count,
+                              float** out_neg_vertices, size_t* out_neg_vertex_count,
+                              uint32_t** out_neg_indices, size_t* out_neg_triangle_count,
+                              char** out_err) {
+    if (out_err) *out_err = nullptr;
+    // Default every output to "empty half" so a missing side is unambiguous.
+    if (out_pos_vertices) *out_pos_vertices = nullptr;
+    if (out_pos_vertex_count) *out_pos_vertex_count = 0;
+    if (out_pos_indices) *out_pos_indices = nullptr;
+    if (out_pos_triangle_count) *out_pos_triangle_count = 0;
+    if (out_neg_vertices) *out_neg_vertices = nullptr;
+    if (out_neg_vertex_count) *out_neg_vertex_count = 0;
+    if (out_neg_indices) *out_neg_indices = nullptr;
+    if (out_neg_triangle_count) *out_neg_triangle_count = 0;
+    if (!vertices || !indices || !plane_origin || !plane_normal ||
+        !out_pos_vertices || !out_pos_vertex_count || !out_pos_indices ||
+        !out_pos_triangle_count || !out_neg_vertices || !out_neg_vertex_count ||
+        !out_neg_indices || !out_neg_triangle_count ||
+        vertex_count == 0 || triangle_count == 0)
+        return SLIC3R_ERR_INVALID_ARG;
+    try {
+        Eigen::Vector3d n(plane_normal[0], plane_normal[1], plane_normal[2]);
+        if (n.norm() < 1e-9)
+            return SLIC3R_ERR_INVALID_ARG;
+        n.normalize();
+        Eigen::Vector3d o(plane_origin[0], plane_origin[1], plane_origin[2]);
+
+        // cut_mesh only cuts the horizontal z=0 plane, so rotate the mesh so the
+        // plane normal lands on +Z (then a point on the plane has z=0). q maps
+        // normal→+Z; the inverse maps the cut halves back to the input frame.
+        Eigen::Quaterniond q = Eigen::Quaterniond::FromTwoVectors(n, Eigen::Vector3d::UnitZ());
+        Eigen::Quaterniond qi = q.conjugate();
+
+        indexed_triangle_set its = its_from_buffers(vertices, vertex_count, indices, triangle_count);
+        for (auto& v : its.vertices) {
+            Eigen::Vector3d t = q * (Eigen::Vector3d(v.x(), v.y(), v.z()) - o);
+            v = Vec3f(static_cast<float>(t.x()), static_cast<float>(t.y()),
+                      static_cast<float>(t.z()));
+        }
+
+        // upper = z>0 = the side the normal points toward (positive); lower = neg.
+        indexed_triangle_set upper, lower;
+        cut_mesh(its, 0.0f, &upper, &lower, /*triangulate_caps=*/true);
+
+        // Marshal a half to heap arrays, transforming each vertex back to the
+        // input frame. Empty half → leave the (already-nulled) outputs.
+        auto marshal = [&](const indexed_triangle_set& half, float** ov, size_t* ovc,
+                           uint32_t** oi, size_t* oic) {
+            if (half.vertices.empty() || half.indices.empty())
+                return;
+            float* verts = static_cast<float*>(std::malloc(half.vertices.size() * 3 * sizeof(float)));
+            uint32_t* idx = static_cast<uint32_t*>(std::malloc(half.indices.size() * 3 * sizeof(uint32_t)));
+            if (!verts || !idx) {
+                std::free(verts);
+                std::free(idx);
+                return;
+            }
+            for (size_t i = 0; i < half.vertices.size(); ++i) {
+                Eigen::Vector3d p =
+                    qi * Eigen::Vector3d(half.vertices[i].x(), half.vertices[i].y(),
+                                         half.vertices[i].z()) + o;
+                verts[i * 3 + 0] = static_cast<float>(p.x());
+                verts[i * 3 + 1] = static_cast<float>(p.y());
+                verts[i * 3 + 2] = static_cast<float>(p.z());
+            }
+            for (size_t i = 0; i < half.indices.size(); ++i) {
+                idx[i * 3 + 0] = static_cast<uint32_t>(half.indices[i][0]);
+                idx[i * 3 + 1] = static_cast<uint32_t>(half.indices[i][1]);
+                idx[i * 3 + 2] = static_cast<uint32_t>(half.indices[i][2]);
+            }
+            *ov = verts;
+            *ovc = half.vertices.size();
+            *oi = idx;
+            *oic = half.indices.size();
+        };
+        marshal(upper, out_pos_vertices, out_pos_vertex_count, out_pos_indices, out_pos_triangle_count);
+        marshal(lower, out_neg_vertices, out_neg_vertex_count, out_neg_indices, out_neg_triangle_count);
+        return SLIC3R_OK;
+    } catch (const std::exception& e) {
+        set_err(out_err, e.what());
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
+        set_err(out_err, "unknown error in slic3r_cut_mesh");
+        return SLIC3R_ERR_INTERNAL;
+    }
+}
+
+void slic3r_cut_mesh_free(float* vertices, uint32_t* indices) {
+    std::free(vertices);
+    std::free(indices);
 }
 
 slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengths,

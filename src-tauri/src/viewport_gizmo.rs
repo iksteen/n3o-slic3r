@@ -213,6 +213,58 @@ fn selection_extent(p: &Project, basis: Quat) -> Vec3 {
     if any { mx - mn } else { Vec3::ZERO }
 }
 
+/// Hit-test the Move gizmo's handles placed at an arbitrary `center` with arm
+/// length `arm` — independent of the selection. The split tool drags its
+/// cutting plane with this; `pick_gizmo`'s Move arm also delegates here. The
+/// returned grab carries an identity basis / zero extent (Move never reads
+/// them — only Scale does), so `compute_pre` yields a pure translation.
+pub(crate) fn pick_move_at(center: Vec3, arm: f32, ro: Vec3, rd: Vec3, eye: Vec3) -> Option<GizmoGrab> {
+    let thick = GIZMO_SCREEN_K * (eye - center).length();
+    let mk = |idx: i32, plane_n: Vec3, axis_dir: Option<[f32; 3]>| -> GizmoGrab {
+        GizmoGrab {
+            idx,
+            kind: GrabKind::Move,
+            plane_n: plane_n.to_array(),
+            plane_p: center.to_array(),
+            axis_dir,
+            rot_axis: None,
+            scale_mask: None,
+            uniform: false,
+            pivot: center.to_array(),
+            start_hit: ray_plane(ro, rd, plane_n, center).unwrap_or(center).to_array(),
+            basis: Quat::IDENTITY.to_array(),
+            scale_extent: Vec3::ZERO.to_array(),
+        }
+    };
+    let mut best: Option<(f32, GizmoGrab)> = None;
+    let pick_r = thick * 0.14;
+    let axes = [Vec3::X, Vec3::Y, Vec3::Z];
+    for (i, dir) in axes.iter().enumerate() {
+        let (dist, t) = ray_seg_dist(ro, rd, center, center + *dir * arm);
+        if dist < pick_r && best.as_ref().map_or(true, |(bt, _)| t < *bt) {
+            let mut n = rd - *dir * rd.dot(*dir);
+            if n.length() < 1e-4 {
+                n = axes[(i + 1) % 3];
+            }
+            best = Some((t, mk(i as i32, n.normalize(), Some(dir.to_array()))));
+        }
+    }
+    let (o, s) = (thick * 0.28, thick * 0.24);
+    let planes = [(Vec3::Z, Vec3::X, Vec3::Y), (Vec3::X, Vec3::Y, Vec3::Z), (Vec3::Y, Vec3::X, Vec3::Z)];
+    for (i, (n, a, b)) in planes.iter().enumerate() {
+        if let Some(hit) = ray_plane(ro, rd, *n, center) {
+            let (da, db) = ((hit - center).dot(*a), (hit - center).dot(*b));
+            if da >= o && da <= o + s && db >= o && db <= o + s {
+                let t = (hit - ro).dot(rd);
+                if best.as_ref().map_or(true, |(bt, _)| t < *bt) {
+                    best = Some((t, mk(3 + i as i32, *n, None)));
+                }
+            }
+        }
+    }
+    best.map(|(_, g)| g)
+}
+
 /// Hit-test the active gizmo's handles for the cursor ray; nearest handle → grab.
 pub(crate) fn pick_gizmo(p: &Project, ro: Vec3, rd: Vec3, eye: Vec3, mode: GizmoMode) -> Option<GizmoGrab> {
     let (center, arm) = selection_gizmo(p)?;
@@ -245,35 +297,9 @@ pub(crate) fn pick_gizmo(p: &Project, ro: Vec3, rd: Vec3, eye: Vec3, mode: Gizmo
         }
     };
     match mode {
-        GizmoMode::Move => {
-            let mut best: Option<(f32, GizmoGrab)> = None;
-            let pick_r = thick * 0.14;
-            let axes = [Vec3::X, Vec3::Y, Vec3::Z];
-            for (i, dir) in axes.iter().enumerate() {
-                let (dist, t) = ray_seg_dist(ro, rd, center, center + *dir * arm);
-                if dist < pick_r && best.as_ref().map_or(true, |(bt, _)| t < *bt) {
-                    let mut n = rd - *dir * rd.dot(*dir);
-                    if n.length() < 1e-4 {
-                        n = axes[(i + 1) % 3];
-                    }
-                    best = Some((t, mk(i as i32, GrabKind::Move, n.normalize(), center, Some(dir.to_array()), None, None, false)));
-                }
-            }
-            let (o, s) = (thick * 0.28, thick * 0.24);
-            let planes = [(Vec3::Z, Vec3::X, Vec3::Y), (Vec3::X, Vec3::Y, Vec3::Z), (Vec3::Y, Vec3::X, Vec3::Z)];
-            for (i, (n, a, b)) in planes.iter().enumerate() {
-                if let Some(hit) = ray_plane(ro, rd, *n, center) {
-                    let (da, db) = ((hit - center).dot(*a), (hit - center).dot(*b));
-                    if da >= o && da <= o + s && db >= o && db <= o + s {
-                        let t = (hit - ro).dot(rd);
-                        if best.as_ref().map_or(true, |(bt, _)| t < *bt) {
-                            best = Some((t, mk(3 + i as i32, GrabKind::Move, *n, center, None, None, None, false)));
-                        }
-                    }
-                }
-            }
-            best.map(|(_, g)| g)
-        }
+        // Move handles don't depend on the selection basis/extent, so the
+        // standalone hit-test (shared with the split tool) covers it.
+        GizmoMode::Move => pick_move_at(center, arm, ro, rd, eye),
         GizmoMode::Rotate => {
             let mut best: Option<(f32, GizmoGrab)> = None;
             let tol = arm * 0.12;

@@ -21,6 +21,8 @@ export function ViewportChrome({
   tool,
   onTool,
   onClone,
+  onSplit,
+  splitActive = false,
   faceMatchRefSet = false,
 }: {
   leading: ReactNode;
@@ -31,6 +33,10 @@ export function ViewportChrome({
   tool: Tool;
   onTool: (tool: Tool) => void;
   onClone: () => void;
+  /** Toggle the split (cut-by-plane) tool on the current selection. */
+  onSplit: () => void;
+  /** Whether the split tool is currently active. */
+  splitActive?: boolean;
   /** Match-face: the reference face has been clicked (awaiting the target). */
   faceMatchRefSet?: boolean;
 }) {
@@ -253,6 +259,22 @@ export function ViewportChrome({
               {/* two overlapping rounded rects — the copy/duplicate glyph */}
               <rect x="5" y="5" width="7" height="7" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
               <path d="M9 5V3.2A1.2 1.2 0 0 0 7.8 2H3.2A1.2 1.2 0 0 0 2 3.2v4.6A1.2 1.2 0 0 0 3.2 9H5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            disabled={selectedIds.length === 0}
+            className={btn(selectedIds.length > 0, splitActive)}
+            onClick={() => selectedIds.length > 0 && onSplit()}
+            title="Split — cut the selection with a plane"
+            aria-label="Split objects by a plane"
+            aria-pressed={splitActive}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              {/* scissors: two blades + a dashed cut line */}
+              <circle cx="3" cy="10.5" r="1.6" stroke="currentColor" strokeWidth="1.2" />
+              <circle cx="3" cy="3.5" r="1.6" stroke="currentColor" strokeWidth="1.2" />
+              <path d="M4.3 4.4 12 11M4.3 9.6 12 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
             </svg>
           </button>
         </div>

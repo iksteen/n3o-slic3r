@@ -34,6 +34,9 @@ mod materials;
 mod overrides;
 mod plates;
 
+/// Split-tool cut types (used by `core::scene::commands::scene_cut_apply`).
+pub use geometry::{CutHalfOut, CutResult, CutSide, CutTarget};
+
 /// Upper bound on `Plate.name` byte length. Holds back
 /// pathological renames that would blow out the tab strip layout
 /// or balloon the project's `.n3o` `project.json` skeleton; the actual UI
