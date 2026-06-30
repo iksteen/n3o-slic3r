@@ -819,7 +819,7 @@ fn map_connector(c: &CutConnectorInput, pos: [f32; 3]) -> slic3r_ffi::Connector 
 
 #[tauri::command]
 #[tracing::instrument(skip(state, window, connectors))]
-pub fn scene_cut_apply(
+pub async fn scene_cut_apply(
     ids: Vec<ObjectId>,
     plane_origin: [f32; 3],
     plane_normal: [f32; 3],
@@ -827,7 +827,7 @@ pub fn scene_cut_apply(
     keep_negative: bool,
     connectors: Vec<CutConnectorInput>,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<'_, Arc<Mutex<Project>>>,
 ) -> Result<Vec<u64>, String> {
     use crate::core::project::mutation::{CutHalfOut, CutResult, CutSide};
     if !keep_positive && !keep_negative {
@@ -850,65 +850,78 @@ pub fn scene_cut_apply(
         .collect();
     let keep_dowels = keep_positive && keep_negative;
 
-    // Phase 1: read the group-expanded targets, then release the lock.
-    let targets = {
-        let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-        let ids = s.group_expanded_ids(&ids).to_vec();
-        s.cut_targets(&ids).map_err(op_err_to_string)?
-    };
-    if targets.is_empty() {
+    // The cut (FFI mesh booleans) runs on the blocking pool, not the main/UI
+    // thread — a large mesh would otherwise freeze the window for its duration.
+    let project = Arc::clone(state.inner());
+    let results: Vec<CutResult> = tauri::async_runtime::spawn_blocking(move || {
+        // Phase 1: read the group-expanded targets under the lock, then release.
+        let targets = {
+            let s = project.lock().map_err(|e| format!("scene lock: {e}"))?;
+            let ids = s.group_expanded_ids(&ids).to_vec();
+            s.cut_targets(&ids).map_err(op_err_to_string)?
+        };
+        // Phase 2: cut each target in its own local frame (FFI, unlocked). A
+        // source is recorded even when fully discarded (no kept half) so it gets
+        // removed.
+        let mut results: Vec<CutResult> = Vec::new();
+        for t in &targets {
+            let m = t.transform.to_mat4();
+            let inv = m.inverse();
+            let o_l = inv.transform_point3(origin);
+            // World→local normal uses the transpose of the linear part.
+            let n_l = (glam::Mat3::from_mat4(m).transpose() * normal).normalize();
+            // Each connector's world point → this object's local frame.
+            let conns: Vec<slic3r_ffi::Connector> = connectors
+                .iter()
+                .zip(&conn_world)
+                .map(|(c, w)| map_connector(c, inv.transform_point3(*w).to_array()))
+                .collect();
+            let res = slic3r_ffi::cut_mesh_connectors(
+                &t.vertices,
+                &t.indices,
+                o_l.to_array(),
+                n_l.to_array(),
+                &conns,
+            )
+            .map_err(|e| format!("split: cut failed: {e}"))?;
+            let mut halves = Vec::new();
+            if keep_positive && !res.pos.is_empty() {
+                halves.push(CutHalfOut {
+                    side: CutSide::Pos,
+                    vertices: res.pos.vertices,
+                    indices: res.pos.indices,
+                });
+            }
+            if keep_negative && !res.neg.is_empty() {
+                halves.push(CutHalfOut {
+                    side: CutSide::Neg,
+                    vertices: res.neg.vertices,
+                    indices: res.neg.indices,
+                });
+            }
+            let dowels = if keep_dowels {
+                res.dowels.into_iter().map(|d| (d.vertices, d.indices)).collect()
+            } else {
+                Vec::new()
+            };
+            results.push(CutResult {
+                source_id: t.object_id,
+                transform: t.transform,
+                base_name: t.name.clone(),
+                extruder_id: t.extruder_id,
+                source_group: t.group,
+                halves,
+                dowels,
+            });
+        }
+        Ok::<_, String>(results)
+    })
+    .await
+    .map_err(|e| format!("split: cut task panicked: {e}"))??;
+
+    if results.is_empty() {
         return Ok(Vec::new());
     }
-
-    // Phase 2: cut each target in its own local frame (FFI, unlocked). A source
-    // is recorded even when fully discarded (no kept half) so it gets removed.
-    let mut results: Vec<CutResult> = Vec::new();
-    for t in &targets {
-        let m = t.transform.to_mat4();
-        let inv = m.inverse();
-        let o_l = inv.transform_point3(origin);
-        // World→local normal uses the transpose of the linear part.
-        let n_l = (glam::Mat3::from_mat4(m).transpose() * normal).normalize();
-        // Each connector's world point → this object's local frame.
-        let conns: Vec<slic3r_ffi::Connector> = connectors
-            .iter()
-            .zip(&conn_world)
-            .map(|(c, w)| map_connector(c, inv.transform_point3(*w).to_array()))
-            .collect();
-        let res =
-            slic3r_ffi::cut_mesh_connectors(&t.vertices, &t.indices, o_l.to_array(), n_l.to_array(), &conns)
-                .map_err(|e| format!("split: cut failed: {e}"))?;
-        let mut halves = Vec::new();
-        if keep_positive && !res.pos.is_empty() {
-            halves.push(CutHalfOut {
-                side: CutSide::Pos,
-                vertices: res.pos.vertices,
-                indices: res.pos.indices,
-            });
-        }
-        if keep_negative && !res.neg.is_empty() {
-            halves.push(CutHalfOut {
-                side: CutSide::Neg,
-                vertices: res.neg.vertices,
-                indices: res.neg.indices,
-            });
-        }
-        let dowels = if keep_dowels {
-            res.dowels.into_iter().map(|d| (d.vertices, d.indices)).collect()
-        } else {
-            Vec::new()
-        };
-        results.push(CutResult {
-            source_id: t.object_id,
-            transform: t.transform,
-            base_name: t.name.clone(),
-            extruder_id: t.extruder_id,
-            source_group: t.group,
-            halves,
-            dowels,
-        });
-    }
-
     // Phase 3: register the halves + remove the sources, under lock.
     let (new_ids, events) = {
         let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
