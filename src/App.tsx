@@ -578,8 +578,6 @@ function App() {
                     viewport.selectGizmo("none");
                     split.enter(selection);
                   } else {
-                    // Nothing selected: arm pick-to-split (next clicked object's
-                    // group becomes the cut target), like the other tools.
                     viewport.selectTool("split");
                   }
                 }}
