@@ -1283,7 +1283,7 @@ impl ViewportRenderer {
         self.resize(w, h);
 
         // --- gather under the project lock (cheap): bed + per-object models ---
-        let (bmin, bmax, draws, hole_models, boxes, gizmo, basis, drag_pre, active_plate_id, tower_geom) = {
+        let (bmin, bmax, draws, boxes, gizmo, basis, drag_pre, active_plate_id, tower_geom) = {
             let p = project.lock().unwrap();
             let plate = p.active_plate();
             let active_plate_id = plate.id;
@@ -1303,9 +1303,6 @@ impl ViewportRenderer {
             // (mesh, paint-group, world matrix, color, selected) — `selected`
             // gates the split-tool per-side tint.
             let mut draws: Vec<(MeshId, usize, Mat4, [f32; 3], bool)> = Vec::new();
-            // Cut-connector hole volumes (mesh + object model matrix) → translucent
-            // overlay pass below.
-            let mut hole_models: Vec<(MeshId, Mat4)> = Vec::new();
             // Scale-gizmo basis follows the object's orientation (world for multi).
             let basis = selection_basis(&p);
             // Local drag preview: the active grab + cursor resolve (Rust-side) to a
@@ -1373,12 +1370,14 @@ impl ViewportRenderer {
                     };
                     draws.push((obj.mesh, gi, model, color, selected));
                 }
-                // Cut-connector volumes ride the object. Pegs are solid positive
-                // volumes, drawn in the object's base color so they read as part
-                // of the print. Holes aren't carved into the prepare mesh (they're
-                // negative volumes resolved at slice time) — draw them as a
-                // translucent overlay marking where they sit.
+                // Cut-connector pegs ride the object: solid positive volumes,
+                // drawn in the object's base color so they read as part of the
+                // print. (Holes are negative volumes — shown in the G-code
+                // preview, not carved into the prepare mesh.)
                 for m in plate.scene.object_modifiers.get(id).into_iter().flatten() {
+                    if m.kind != ModifierKind::Peg {
+                        continue;
+                    }
                     if !self.meshes.contains_key(&m.mesh) {
                         if let Some(mesh) = p.meshes.get(&m.mesh) {
                             self.meshes.insert(m.mesh, upload_mesh(&self.device, mesh));
@@ -1387,18 +1386,13 @@ impl ViewportRenderer {
                     if !self.meshes.contains_key(&m.mesh) {
                         continue;
                     }
-                    match m.kind {
-                        ModifierKind::Peg => {
-                            let base = spool_color(
-                                &plate.material_to_slot,
-                                instance.as_ref(),
-                                Some(obj.extruder_id.unwrap_or(1)),
-                            );
-                            let color = if selected { SELECTED_RGB } else { base };
-                            draws.push((m.mesh, 0, model, color, selected));
-                        }
-                        ModifierKind::Hole => hole_models.push((m.mesh, model)),
-                    }
+                    let base = spool_color(
+                        &plate.material_to_slot,
+                        instance.as_ref(),
+                        Some(obj.extruder_id.unwrap_or(1)),
+                    );
+                    let color = if selected { SELECTED_RGB } else { base };
+                    draws.push((m.mesh, 0, model, color, selected));
                 }
             }
             // One outer AABB enclosing the whole selection (world space) → a single
@@ -1417,8 +1411,7 @@ impl ViewportRenderer {
             // drawn this frame — no async frontend round-trip.
             let tower_geom = self.resolved_tower(&p, active_plate_id);
             (
-                bmin, bmax, draws, hole_models, boxes, gizmo, basis, drag_pre, active_plate_id,
-                tower_geom,
+                bmin, bmax, draws, boxes, gizmo, basis, drag_pre, active_plate_id, tower_geom,
             )
         };
         let bmin = bmin.map(|v| v as f32);
@@ -1448,9 +1441,7 @@ impl ViewportRenderer {
         let plane_slot = tower_slot + 2;
         let connector_slot = plane_slot + 1;
         let n_conn = req.cut.as_ref().map_or(0, |c| c.connectors.len());
-        // One slot per committed-cut hole overlay, after the split-tool previews.
-        let hole_slot = connector_slot + n_conn;
-        let total_slots = hole_slot + hole_models.len();
+        let total_slots = connector_slot + n_conn;
 
         // Priming tower: draw the active plate's stored sliced mesh (mesh mode)
         // when there is one, else the placement box. Placement is the resolved
@@ -1657,13 +1648,6 @@ impl ViewportRenderer {
             };
             bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
         }
-        for (k, (_, model)) in hole_models.iter().enumerate() {
-            let off = (hole_slot + k) * self.slot as usize;
-            bytes[off..off + 64]
-                .copy_from_slice(bytemuck::cast_slice(&(vp * *model).to_cols_array()));
-            let rgba = [0.85f32, 0.25, 0.25, 0.45]; // translucent red — hole marker
-            bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
-        }
         self.queue.write_buffer(&self.ubuf, 0, &bytes);
 
         let color_view = self.color.create_view(&Default::default());
@@ -1797,43 +1781,6 @@ impl ViewportRenderer {
             for k in 0..connector_models.len() {
                 rp.set_bind_group(0, &self.bind, &[(connector_slot as u32 + k as u32) * self.slot]);
                 rp.draw(0..self.n_cylinder, 0..1);
-            }
-        }
-        // Committed-cut hole overlays: the hole isn't carved into the half mesh,
-        // so draw the negative-volume mesh translucent + depth-cleared (visible
-        // through the part) to mark where it sits.
-        if !hole_models.is_empty() {
-            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("viewport.cut.holes"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.msaa_view,
-                    depth_slice: None,
-                    resolve_target: Some(&color_view),
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            rp.set_pipeline(&self.tower_pipe);
-            for (k, (mesh_id, _)) in hole_models.iter().enumerate() {
-                let gm = &self.meshes[mesh_id];
-                let g = &gm.groups[0];
-                rp.set_bind_group(0, &self.bind, &[(hole_slot + k) as u32 * self.slot]);
-                rp.set_vertex_buffer(0, gm.vb.slice(..));
-                rp.set_index_buffer(g.ib.slice(..), wgpu::IndexFormat::Uint32);
-                rp.draw_indexed(0..g.n_indices, 0, 0..1);
             }
         }
         // Gizmo: second pass, color preserved, always self-occluding (depth Less +
