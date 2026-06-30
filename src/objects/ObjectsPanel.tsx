@@ -40,7 +40,7 @@ import { SendToPlatePicker } from "./SendToPlatePicker";
 import { useFilamentCatalog } from "../material/useFilamentCatalog";
 import {
   materialOf,
-  referencedMaterials,
+  boundMaterials,
   slotColor,
   slotForMaterial,
   swatchStyle,
@@ -87,7 +87,9 @@ export function ObjectsPanel({
   const { plates } = usePlateTabs();
 
   const slots: FlatSlotOption[] = instance?.slots ?? [];
-  const materials = useMemo(() => referencedMaterials(plate), [plate]);
+  // boundMaterials, not referencedMaterials: include materials bound only via
+  // MMU face-paint (no object carries their extruder_id) so they're pickable.
+  const materials = useMemo(() => boundMaterials(plate), [plate]);
   const nextMaterial = firstAvailableMaterial(materials);
   const materialToSlot = plate?.material_to_slot ?? {};
   const groups = plate?.groups ?? {};

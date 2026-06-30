@@ -14,15 +14,6 @@ export function materialOf(obj: SceneObject): number {
   return obj.extruder_id ?? 1;
 }
 
-/** The 1-based material indices referenced by objects on the plate,
- *  sorted ascending. */
-export function referencedMaterials(plate: PlateSnapshot | null): number[] {
-  if (!plate) return [];
-  const seen = new Set<number>();
-  for (const obj of plate.objects) seen.add(materialOf(obj));
-  return Array.from(seen).sort((a, b) => a - b);
-}
-
 /** Every material the plate actually uses: those referenced by objects
  *  PLUS those bound in `material_to_slot` without a corresponding object.
  *  A filament applied only via MMU face-painting is the latter case — the
