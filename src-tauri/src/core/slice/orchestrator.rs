@@ -452,39 +452,65 @@ fn build_model_objects(
     }
 
     for unit in build_units(objects) {
-        // A one-member group is a solo (matches the writer's Layout).
+        // A solo object with no connector volumes is one single-volume object
+        // (matches the writer's Layout). A group, or a solo carrying cut
+        // connectors, becomes one multi-volume ModelObject: the part(s) plus a
+        // peg (MODEL_PART) / hole (NEGATIVE_VOLUME) volume per connector, which
+        // libslic3r subtracts/fuses per-layer in 2D — no baked boolean.
         if let [i] = unit[..] {
-            let o = &objects[i];
-            model
-                .add_object(
-                    &o.name,
-                    &o.vertices,
-                    &o.indices,
-                    &o.transform,
-                    o.extruder,
-                    paint(o),
-                    &o.overrides,
-                )
-                .map_err(|e| format!("add_object({}) failed: {e}", o.name))?;
-        } else {
-            let obj_idx = model
-                .add_group(&objects[unit[0]].name)
-                .map_err(|e| format!("add_group({}) failed: {e}", objects[unit[0]].name))?;
-            for &i in &unit {
+            if objects[i].modifiers.is_empty() {
                 let o = &objects[i];
                 model
-                    .add_volume(
-                        obj_idx,
+                    .add_object(
                         &o.name,
                         &o.vertices,
                         &o.indices,
                         &o.transform,
                         o.extruder,
-                        slic3r_ffi::VolumeType::Part,
                         paint(o),
                         &o.overrides,
                     )
-                    .map_err(|e| format!("add_volume({}) failed: {e}", o.name))?;
+                    .map_err(|e| format!("add_object({}) failed: {e}", o.name))?;
+                continue;
+            }
+        }
+        let obj_idx = model
+            .add_group(&objects[unit[0]].name)
+            .map_err(|e| format!("add_group({}) failed: {e}", objects[unit[0]].name))?;
+        for &i in &unit {
+            let o = &objects[i];
+            model
+                .add_volume(
+                    obj_idx,
+                    &o.name,
+                    &o.vertices,
+                    &o.indices,
+                    &o.transform,
+                    o.extruder,
+                    slic3r_ffi::VolumeType::Part,
+                    paint(o),
+                    &o.overrides,
+                )
+                .map_err(|e| format!("add_volume({}) failed: {e}", o.name))?;
+            for m in &o.modifiers {
+                let vt = if m.negative {
+                    slic3r_ffi::VolumeType::Negative
+                } else {
+                    slic3r_ffi::VolumeType::Part
+                };
+                model
+                    .add_volume(
+                        obj_idx,
+                        &format!("{} connector", o.name),
+                        &m.vertices,
+                        &m.indices,
+                        &o.transform,
+                        o.extruder,
+                        vt,
+                        &[],
+                        &[],
+                    )
+                    .map_err(|e| format!("add_volume(connector of {}) failed: {e}", o.name))?;
             }
         }
     }
@@ -987,6 +1013,7 @@ mod tests {
             extruder: 1,
             overrides: vec![],
             group,
+            modifiers: vec![],
         }
     }
 

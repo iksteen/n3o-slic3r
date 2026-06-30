@@ -58,6 +58,7 @@ fn objects_from_3mf(path: &std::path::Path) -> Vec<SliceObject> {
                 extruder: o.extruder_id.unwrap_or(1) as i32,
                 overrides: o.overrides.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
                 group: o.group,
+                modifiers: vec![],
             }
         })
         .collect()

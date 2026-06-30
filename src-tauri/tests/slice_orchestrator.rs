@@ -42,6 +42,7 @@ fn stl_objects() -> Vec<SliceObject> {
         extruder: 1,
         overrides: vec![],
         group: None,
+        modifiers: vec![],
     }]
 }
 

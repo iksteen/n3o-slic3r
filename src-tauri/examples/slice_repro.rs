@@ -124,6 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .map(|(k, v)| (k.clone(), v.clone()))
                             .collect(),
                         group: o.group,
+                        modifiers: vec![],
                     }
                 })
                 .collect()
@@ -140,6 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 extruder: 1,
                 overrides: vec![],
                 group: None,
+                modifiers: vec![],
             }]
         };
 

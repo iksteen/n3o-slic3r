@@ -165,6 +165,26 @@ pub struct SceneObject {
     pub group: Option<GroupId>,
 }
 
+/// A reassembly-connector volume attached to an object (keyed in
+/// [`PlateSceneState::object_modifiers`]): a cut peg (printed solid) or hole
+/// (subtracted). Kept out of the object's main mesh so the cut needs no 3D
+/// boolean — the slice path applies it as a libslic3r MODEL_PART /
+/// NEGATIVE_VOLUME volume, subtracted per-layer in 2D. The geometry lives in the
+/// mesh pool keyed by `mesh`, posed in the object's local frame.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Modifier {
+    pub mesh: MeshId,
+    pub kind: ModifierKind,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ModifierKind {
+    /// Positive volume — a peg, printed as part of the object.
+    Peg,
+    /// Negative volume — a hole, subtracted from the object.
+    Hole,
+}
+
 /// Caller-builds-this shape for inserting a fresh mesh. No `id`
 /// field — `Project::register_mesh` allocates it. Use for loaders + the
 /// procedural-primitive path.
@@ -476,6 +496,11 @@ pub struct PlateSceneState {
     /// an explicit name (the UI shows a default).
     #[serde(default)]
     pub groups: HashMap<GroupId, Group>,
+    /// Per-object connector volumes (cut pegs/holes) keyed by object. Resolved
+    /// at slice time as positive/negative volumes rather than baked into the
+    /// object mesh (see [`Modifier`]). Empty for objects without connectors.
+    #[serde(default)]
+    pub object_modifiers: HashMap<ObjectId, Vec<Modifier>>,
 }
 
 /// 8 corners of a mesh's axis-aligned bounding box, as world-space

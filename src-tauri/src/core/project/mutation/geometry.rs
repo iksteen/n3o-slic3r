@@ -13,8 +13,8 @@ use crate::core::scene::bed;
 use crate::core::scene::events::{SceneEvent, SceneOpError, SelectMode};
 use crate::core::scene::primitives::{self, PrimitiveKind, PrimitiveParams};
 use crate::core::scene::state::{
-    mesh_bb_corners, Group, GroupId, Mesh, MeshId, MeshProvenance, NewMesh, NewSceneObject,
-    ObjectId, OrderedIds, SceneObject,
+    mesh_bb_corners, Group, GroupId, Mesh, MeshId, MeshProvenance, Modifier, ModifierKind, NewMesh,
+    NewSceneObject, ObjectId, OrderedIds, SceneObject,
 };
 use crate::core::scene::transform::Transform;
 
@@ -59,6 +59,10 @@ pub struct CutHalfOut {
     /// Per-triangle MMU paint re-projected onto this half, or `None` when the
     /// source was unpainted.
     pub paint: Option<Vec<String>>,
+    /// Connector volumes for this half (local frame): peg/hole mesh + kind.
+    /// Registered as the half object's [`SceneObject`] modifiers, resolved at
+    /// slice time rather than baked in.
+    pub modifiers: Vec<(Vec<f32>, Vec<u32>, ModifierKind)>,
 }
 
 /// The kept halves of one cut source, ready to register. See
@@ -712,6 +716,28 @@ impl Project {
                     .expect("just registered")
                     .clone();
                 events.push(SceneEvent::ObjectAdded { plate_id, object });
+                // Register this half's connector volumes as object modifiers
+                // (mesh pool + the per-object sidecar), resolved at slice time.
+                if !half.modifiers.is_empty() {
+                    let mut mods = Vec::with_capacity(half.modifiers.len());
+                    for (verts, idx, kind) in half.modifiers {
+                        let bbox = crate::core::scene::loaders::compute_bounding_box(&verts);
+                        let mmesh = self.register_mesh(NewMesh {
+                            vertices: verts,
+                            indices: idx,
+                            paint_colors: None,
+                            bounding_box: bbox,
+                            provenance: MeshProvenance::Primitive(format!(
+                                "{} connector",
+                                res.base_name
+                            )),
+                        });
+                        let header = self.meshes.get(&mmesh).expect("just registered").header();
+                        events.push(SceneEvent::MeshLoaded { mesh: header });
+                        mods.push(Modifier { mesh: mmesh, kind });
+                    }
+                    self.plates[active].scene.object_modifiers.insert(obj_id, mods);
+                }
                 new_ids.push(obj_id);
             }
             // Free dowel pins → standalone ungrouped objects (same transform as
@@ -1063,6 +1089,10 @@ impl Project {
                 if let Some(obj) = plate.objects.remove(id) {
                     removed_materials.insert(obj.extruder_id.unwrap_or(1));
                     removed_meshes.insert(obj.mesh);
+                    // Drop the object's connector volumes too (sidecar + meshes).
+                    if let Some(mods) = plate.object_modifiers.remove(id) {
+                        removed_meshes.extend(mods.iter().map(|m| m.mesh));
+                    }
                     events.push(SceneEvent::ObjectRemoved {
                         plate_id,
                         object_id: *id,
@@ -1105,12 +1135,19 @@ impl Project {
         if candidates.is_empty() {
             return;
         }
-        let referenced: HashSet<MeshId> = self
+        let mut referenced: HashSet<MeshId> = self
             .plates
             .iter()
             .flat_map(|p| p.scene.objects.values())
             .map(|o| o.mesh)
             .collect();
+        // Connector volumes are referenced only via the modifier sidecar, not
+        // any object's `mesh` — count them or they'd be pruned right after a cut.
+        for p in &self.plates {
+            for mods in p.scene.object_modifiers.values() {
+                referenced.extend(mods.iter().map(|m| m.mesh));
+            }
+        }
         for id in candidates {
             if !referenced.contains(id) {
                 self.meshes.remove(id);
@@ -1381,7 +1418,7 @@ mod tests {
     /// Synthetic kept half (no FFI) — geometry is irrelevant to the
     /// register/remove/group bookkeeping under test.
     fn half(side: CutSide) -> CutHalfOut {
-        CutHalfOut { side, vertices: vec![0.0; 9], indices: vec![0, 1, 2], paint: None }
+        CutHalfOut { side, vertices: vec![0.0; 9], indices: vec![0, 1, 2], paint: None, modifiers: vec![] }
     }
 
     #[test]
@@ -1447,6 +1484,7 @@ mod tests {
             vertices: vec![0.0; 9],
             indices: vec![0, 1, 2],
             paint: Some(vec!["4".into()]),
+            modifiers: vec![],
         };
         let res = CutResult {
             source_id: a,

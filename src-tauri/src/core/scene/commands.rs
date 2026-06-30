@@ -829,6 +829,7 @@ pub async fn scene_cut_apply(
     window: Window,
     state: State<'_, Arc<Mutex<Project>>>,
 ) -> Result<Vec<u64>, String> {
+    use super::state::ModifierKind;
     use crate::core::project::mutation::{CutHalfOut, CutResult, CutSide};
     if !keep_positive && !keep_negative {
         return Err("split: at least one side must be kept".into());
@@ -876,7 +877,9 @@ pub async fn scene_cut_apply(
                 .zip(&conn_world)
                 .map(|(c, w)| map_connector(c, inv.transform_point3(*w).to_array()))
                 .collect();
-            let res = slic3r_ffi::cut_mesh_connectors(
+            // Deferred cut: connectors come back as separate volumes (peg/hole)
+            // instead of baked booleans — the slice path subtracts holes in 2D.
+            let res = slic3r_ffi::cut_mesh_deferred(
                 &t.vertices,
                 &t.indices,
                 o_l.to_array(),
@@ -885,6 +888,17 @@ pub async fn scene_cut_apply(
                 t.paint.as_deref().map(Vec::as_slice),
             )
             .map_err(|e| format!("split: cut failed: {e}"))?;
+            // Route each connector volume to its half (0 = pos, 1 = neg).
+            let (mut pos_mods, mut neg_mods) = (Vec::new(), Vec::new());
+            for mv in res.modifiers {
+                let kind = if mv.negative { ModifierKind::Hole } else { ModifierKind::Peg };
+                let entry = (mv.vertices, mv.indices, kind);
+                if mv.half == 0 {
+                    pos_mods.push(entry);
+                } else {
+                    neg_mods.push(entry);
+                }
+            }
             let mut halves = Vec::new();
             if keep_positive && !res.pos.is_empty() {
                 halves.push(CutHalfOut {
@@ -892,6 +906,7 @@ pub async fn scene_cut_apply(
                     vertices: res.pos.vertices,
                     indices: res.pos.indices,
                     paint: res.pos.paint,
+                    modifiers: pos_mods,
                 });
             }
             if keep_negative && !res.neg.is_empty() {
@@ -900,6 +915,7 @@ pub async fn scene_cut_apply(
                     vertices: res.neg.vertices,
                     indices: res.neg.indices,
                     paint: res.neg.paint,
+                    modifiers: neg_mods,
                 });
             }
             let dowels = if keep_dowels {

@@ -30,7 +30,7 @@ use crate::core::filament::FilamentProfile;
 use crate::core::printer::{self, lookup_instance, PrinterInstance};
 use crate::core::project::{PlateId, Project};
 use crate::core::scene::build_plate::{self, BuildPlate};
-use crate::core::scene::state::GroupId;
+use crate::core::scene::state::{GroupId, ModifierKind};
 
 use super::job::SliceJobInput;
 
@@ -60,6 +60,20 @@ pub struct SliceObject {
     /// (`add_group` + one `add_volume` per member) by the slice worker — no
     /// temp `.3mf` needed.
     pub group: Option<GroupId>,
+    /// Cut-connector volumes (pegs/holes) on this object, in the same local
+    /// frame as the part. Applied as extra libslic3r volumes (peg = MODEL_PART,
+    /// hole = NEGATIVE_VOLUME) so an object with any becomes one multi-volume
+    /// ModelObject. Empty for ordinary objects.
+    pub modifiers: Vec<SliceModifier>,
+}
+
+/// A cut connector carried into the slice: peg or hole geometry + its role.
+#[derive(Debug, Clone)]
+pub struct SliceModifier {
+    pub vertices: Arc<Vec<f32>>,
+    pub indices: Arc<Vec<u32>>,
+    /// `true` = NEGATIVE_VOLUME (hole, subtracted); `false` = MODEL_PART (peg).
+    pub negative: bool,
 }
 
 /// Failure modes for [`build_slice_input`]. Caller (the Tauri
@@ -442,6 +456,21 @@ pub fn build_plate_objects(
                     .into_iter()
                     .collect(),
                 group: obj.group,
+                modifiers: plate
+                    .scene
+                    .object_modifiers
+                    .get(&obj.id)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|m| {
+                        let mesh = project.meshes.get(&m.mesh)?;
+                        Some(SliceModifier {
+                            vertices: Arc::clone(&mesh.vertices),
+                            indices: Arc::clone(&mesh.indices),
+                            negative: matches!(m.kind, ModifierKind::Hole),
+                        })
+                    })
+                    .collect(),
             }
         })
         .collect()
