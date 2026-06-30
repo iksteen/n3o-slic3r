@@ -18,7 +18,7 @@ use wgpu::util::DeviceExt;
 use crate::core::printer::{instance_registry, PrinterInstance, SlotRef};
 use crate::core::project::resolve::{tower_geometry_for_plate, TowerGeometry};
 use crate::core::project::{PlateId, Project};
-use crate::core::scene::state::{mesh_bb_corners, MeshId, ObjectId};
+use crate::core::scene::state::{mesh_bb_corners, MeshId, ModifierKind, ObjectId};
 use crate::viewport_gizmo::{
     compute_pre, pick_gizmo, pick_move_at, ray_plane, selection_basis, selection_gizmo,
     selection_world_aabb, GizmoGrab, GizmoMode, GrabKind, GIZMO_SCREEN_K,
@@ -1369,6 +1369,30 @@ impl ViewportRenderer {
                         base
                     };
                     draws.push((obj.mesh, gi, model, color, selected));
+                }
+                // Cut-connector pegs ride the object: solid positive volumes,
+                // drawn in the object's base color so they read as part of the
+                // print. (Holes are negative volumes — shown in the G-code
+                // preview, not carved into the prepare mesh.)
+                for m in plate.scene.object_modifiers.get(id).into_iter().flatten() {
+                    if m.kind != ModifierKind::Peg {
+                        continue;
+                    }
+                    if !self.meshes.contains_key(&m.mesh) {
+                        if let Some(mesh) = p.meshes.get(&m.mesh) {
+                            self.meshes.insert(m.mesh, upload_mesh(&self.device, mesh));
+                        }
+                    }
+                    if !self.meshes.contains_key(&m.mesh) {
+                        continue;
+                    }
+                    let base = spool_color(
+                        &plate.material_to_slot,
+                        instance.as_ref(),
+                        Some(obj.extruder_id.unwrap_or(1)),
+                    );
+                    let color = if selected { SELECTED_RGB } else { base };
+                    draws.push((m.mesh, 0, model, color, selected));
                 }
             }
             // One outer AABB enclosing the whole selection (world space) → a single
