@@ -285,12 +285,15 @@ slic3r_status slic3r_model_add_group(
  *     the world placement matches a round-tripped .3mf.
  *   extruder + overrides: set on the *volume* config (each group member prints
  *     with its own filament), not the object config.
+ *   volume_type: ModelVolumeType — 0 = MODEL_PART, 1 = NEGATIVE_VOLUME (subtracted
+ *     per-layer in 2D at slice time, e.g. a deferred cut-connector hole). A peg
+ *     is a positive MODEL_PART volume of the same object.
  * SLIC3R_ERR_INVALID_ARG if object_index is out of range. out_err may be NULL. */
 slic3r_status slic3r_model_add_volume(
     slic3r_model_t* m, size_t object_index, const char* name,
     const float* verts, size_t vcount,
     const uint32_t* indices, size_t tcount,
-    const double transform[16], int extruder,
+    const double transform[16], int extruder, int volume_type,
     const char* const* paint_hex, size_t paint_count,
     const char* const* ovr_keys, const char* const* ovr_vals, size_t ovr_count,
     char** out_err);

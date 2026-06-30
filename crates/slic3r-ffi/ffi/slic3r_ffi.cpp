@@ -1001,7 +1001,7 @@ slic3r_status slic3r_model_add_volume(
     slic3r_model_t* m, size_t object_index, const char* name,
     const float* verts, size_t vcount,
     const uint32_t* indices, size_t tcount,
-    const double transform[16], int extruder,
+    const double transform[16], int extruder, int volume_type,
     const char* const* paint_hex, size_t paint_count,
     const char* const* ovr_keys, const char* const* ovr_vals, size_t ovr_count,
     char** out_err) {
@@ -1022,7 +1022,9 @@ slic3r_status slic3r_model_add_volume(
             mesh.flip_triangles();
 
         ModelObject* obj = m->model.objects[object_index];
-        ModelVolume* vol = obj->add_volume(std::move(mesh));
+        const ModelVolumeType vtype =
+            volume_type == 1 ? ModelVolumeType::NEGATIVE_VOLUME : ModelVolumeType::MODEL_PART;
+        ModelVolume* vol = obj->add_volume(std::move(mesh), vtype);
         vol->name = name ? name : "";
 
         // Per-volume extruder (1-based filament index) — group members each

@@ -1193,6 +1193,7 @@ impl Model {
         indices: &[u32],
         transform: &[f64; 16],
         extruder: i32,
+        volume_type: VolumeType,
         paint_hex: &[String],
         overrides: &[(String, String)],
     ) -> Result<()> {
@@ -1220,6 +1221,7 @@ impl Model {
                 indices.len() / 3,
                 transform.as_ptr(),
                 extruder,
+                volume_type as i32,
                 paint_ptrs.as_ptr(),
                 paint_ptrs.len(),
                 key_ptrs.as_ptr(),
@@ -1232,6 +1234,15 @@ impl Model {
         drop(strs);
         result
     }
+}
+
+/// A volume's role in its object — matches libslic3r `ModelVolumeType`. A
+/// `Negative` volume is subtracted per-layer in 2D at slice time (a deferred
+/// cut-connector hole); a peg is a `Part` volume of the same object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VolumeType {
+    Part = 0,
+    Negative = 1,
 }
 
 /// Owned `CString`s for one `add_object` / `add_volume` call. The C side reads
@@ -1696,16 +1707,16 @@ mod tests {
         assert_eq!(idx, 0, "first object created → index 0");
         // Two volumes appended to the same group object, each its own extruder.
         model
-            .add_volume(idx, "lower", &verts, &indices, &identity, 1, &[], &[])
+            .add_volume(idx, "lower", &verts, &indices, &identity, 1, VolumeType::Part, &[], &[])
             .expect("add_volume 1 should succeed");
         model
-            .add_volume(idx, "upper", &verts, &indices, &identity, 2, &[], &[])
+            .add_volume(idx, "upper", &verts, &indices, &identity, 2, VolumeType::Part, &[], &[])
             .expect("add_volume 2 should succeed");
 
         // Out-of-range object index is rejected, not a crash.
         assert!(
             model
-                .add_volume(99, "oops", &verts, &indices, &identity, 1, &[], &[])
+                .add_volume(99, "oops", &verts, &indices, &identity, 1, VolumeType::Part, &[], &[])
                 .is_err(),
             "add_volume past the last object must error",
         );

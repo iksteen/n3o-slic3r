@@ -480,6 +480,7 @@ fn build_model_objects(
                         &o.indices,
                         &o.transform,
                         o.extruder,
+                        slic3r_ffi::VolumeType::Part,
                         paint(o),
                         &o.overrides,
                     )
