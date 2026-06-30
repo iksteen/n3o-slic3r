@@ -132,10 +132,10 @@ export function SplitPanel({
       <select
         value={value}
         onChange={(e) => on(e.target.value)}
-        className="bg-neutral-900 rounded px-1 py-0.5 capitalize"
+        className="bg-neutral-900 text-neutral-100 rounded px-1 py-0.5 capitalize"
       >
         {opts.map((o) => (
-          <option key={o} value={o}>
+          <option key={o} value={o} className="bg-neutral-800 text-neutral-100">
             {o}
           </option>
         ))}
@@ -191,8 +191,9 @@ export function SplitPanel({
               }`}
               onClick={() => connectors.setPlacing(!connectors.placing)}
               title="Click the cut plane to place a connector"
+              aria-pressed={connectors.placing}
             >
-              {connectors.placing ? "Placing…" : "Add"}
+              Add
             </button>
             <button
               type="button"
