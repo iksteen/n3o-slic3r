@@ -9,7 +9,8 @@
 use super::bed::BedMesh;
 use super::events::{SceneEvent, SceneOpError, SelectMode};
 use super::state::{
-    ActivePlate, ExclusionZone, Group, GroupId, MeshHeader, MeshId, ObjectId, SceneObject,
+    ActivePlate, ExclusionZone, Group, GroupId, MeshHeader, MeshId, ModifierKind, ObjectId,
+    SceneObject,
 };
 use super::transform::Transform;
 use crate::core::printer::profile::PrinterProfile;
@@ -817,6 +818,51 @@ fn map_connector(c: &CutConnectorInput, pos: [f32; 3]) -> slic3r_ffi::Connector 
     }
 }
 
+/// A flat, double-sided dark-disc marker for a hole opening, in the cut object's
+/// local frame: a triangle fan of `shape`'s silhouette at `center`, in the plane
+/// with normal `normal`, nudged `face_sign * EPS` along the normal so it sits a
+/// hair proud of the cut face (toward the open side) without z-fighting the cap.
+/// Display-only — see [`ModifierKind::HoleMarker`].
+fn hole_marker_disc(
+    center: glam::Vec3,
+    normal: glam::Vec3,
+    radius: f32,
+    shape: slic3r_ffi::ConnectorShape,
+    face_sign: f32,
+) -> (Vec<f32>, Vec<u32>, ModifierKind) {
+    use slic3r_ffi::ConnectorShape;
+    const EPS: f32 = 0.08;
+    let segs = match shape {
+        ConnectorShape::Triangle => 3,
+        ConnectorShape::Square => 4,
+        ConnectorShape::Hexagon => 6,
+        ConnectorShape::Circle => 28,
+    };
+    let n = normal.normalize_or_zero();
+    let up = if n.x.abs() > 0.9 { glam::Vec3::Y } else { glam::Vec3::X };
+    let e1 = n.cross(up).normalize();
+    let e2 = n.cross(e1).normalize();
+    let c = center + n * (face_sign * EPS);
+    let mut verts = vec![c.x, c.y, c.z];
+    for k in 0..segs {
+        let a = std::f32::consts::TAU * k as f32 / segs as f32;
+        let p = c + e1 * (radius * a.cos()) + e2 * (radius * a.sin());
+        verts.extend_from_slice(&[p.x, p.y, p.z]);
+    }
+    // Single-sided, wound to face the open side (so its smooth normal is a clean
+    // ±n — a double-sided disc would average to a zero normal and break lighting).
+    let mut idx = Vec::with_capacity(segs as usize * 3);
+    for k in 0..segs {
+        let (a, b) = (1 + k, 1 + (k + 1) % segs);
+        if face_sign >= 0.0 {
+            idx.extend_from_slice(&[0, a, b]);
+        } else {
+            idx.extend_from_slice(&[0, b, a]);
+        }
+    }
+    (verts, idx, ModifierKind::HoleMarker)
+}
+
 #[tauri::command]
 #[tracing::instrument(skip(state, window, connectors))]
 pub async fn scene_cut_apply(
@@ -829,7 +875,6 @@ pub async fn scene_cut_apply(
     window: Window,
     state: State<'_, Arc<Mutex<Project>>>,
 ) -> Result<Vec<u64>, String> {
-    use super::state::ModifierKind;
     use crate::core::project::mutation::{CutHalfOut, CutResult, CutSide};
     if !keep_positive && !keep_negative {
         return Err("split: at least one side must be kept".into());
@@ -897,6 +942,19 @@ pub async fn scene_cut_apply(
                     pos_mods.push(entry);
                 } else {
                     neg_mods.push(entry);
+                }
+            }
+            // Display-only marker: a flat dark disc on the cut face where each
+            // hole opens (the hole volume itself isn't baked into the half mesh).
+            // Every connector opens a hole on the pos face (plug/snap hole; dowel
+            // hole); a dowel opens one on the neg face too. The sign offsets the
+            // disc a hair toward the open side so it sits on the cut surface.
+            for c in &conns {
+                let center = glam::Vec3::from(c.pos);
+                let r = c.radius + c.r_tol;
+                pos_mods.push(hole_marker_disc(center, n_l, r, c.shape, -1.0));
+                if matches!(c.ty, slic3r_ffi::ConnectorType::Dowel) {
+                    neg_mods.push(hole_marker_disc(center, n_l, r, c.shape, 1.0));
                 }
             }
             let mut halves = Vec::new();

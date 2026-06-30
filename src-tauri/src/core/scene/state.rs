@@ -181,8 +181,12 @@ pub struct Modifier {
 pub enum ModifierKind {
     /// Positive volume — a peg, printed as part of the object.
     Peg,
-    /// Negative volume — a hole, subtracted from the object.
+    /// Negative volume — a hole, subtracted from the object at slice time.
     Hole,
+    /// Display-only: a flat dark disc on the cut face marking a hole's opening.
+    /// Not sliced (the [`Hole`](Self::Hole) volume does the subtraction); it just
+    /// reads as a carved spot in the prepare view, since the hole isn't baked in.
+    HoleMarker,
 }
 
 /// Caller-builds-this shape for inserting a fresh mesh. No `id`

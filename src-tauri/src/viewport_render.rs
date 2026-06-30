@@ -1370,14 +1370,28 @@ impl ViewportRenderer {
                     };
                     draws.push((obj.mesh, gi, model, color, selected));
                 }
-                // Cut-connector pegs ride the object: solid positive volumes,
-                // drawn in the object's base color so they read as part of the
-                // print. (Holes are negative volumes — shown in the G-code
-                // preview, not carved into the prepare mesh.)
+                // Cut-connector visuals ride the object. A peg is a solid
+                // positive volume, drawn in the object's base color so it reads
+                // as part of the print. A hole-marker is a flat dark disc on the
+                // cut face standing in for the (un-baked) hole opening. The hole
+                // volume itself isn't drawn — it has no surface to show.
                 for m in plate.scene.object_modifiers.get(id).into_iter().flatten() {
-                    if m.kind != ModifierKind::Peg {
-                        continue;
-                    }
+                    let color = match m.kind {
+                        ModifierKind::Peg => {
+                            let base = spool_color(
+                                &plate.material_to_slot,
+                                instance.as_ref(),
+                                Some(obj.extruder_id.unwrap_or(1)),
+                            );
+                            if selected {
+                                SELECTED_RGB
+                            } else {
+                                base
+                            }
+                        }
+                        ModifierKind::HoleMarker => [0.12, 0.12, 0.14],
+                        ModifierKind::Hole => continue,
+                    };
                     if !self.meshes.contains_key(&m.mesh) {
                         if let Some(mesh) = p.meshes.get(&m.mesh) {
                             self.meshes.insert(m.mesh, upload_mesh(&self.device, mesh));
@@ -1386,12 +1400,6 @@ impl ViewportRenderer {
                     if !self.meshes.contains_key(&m.mesh) {
                         continue;
                     }
-                    let base = spool_color(
-                        &plate.material_to_slot,
-                        instance.as_ref(),
-                        Some(obj.extruder_id.unwrap_or(1)),
-                    );
-                    let color = if selected { SELECTED_RGB } else { base };
                     draws.push((m.mesh, 0, model, color, selected));
                 }
             }

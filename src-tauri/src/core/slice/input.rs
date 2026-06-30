@@ -463,11 +463,17 @@ pub fn build_plate_objects(
                     .into_iter()
                     .flatten()
                     .filter_map(|m| {
+                        // HoleMarker is a prepare-view-only disc — never sliced.
+                        let negative = match m.kind {
+                            ModifierKind::Hole => true,
+                            ModifierKind::Peg => false,
+                            ModifierKind::HoleMarker => return None,
+                        };
                         let mesh = project.meshes.get(&m.mesh)?;
                         Some(SliceModifier {
                             vertices: Arc::clone(&mesh.vertices),
                             indices: Arc::clone(&mesh.indices),
-                            negative: matches!(m.kind, ModifierKind::Hole),
+                            negative,
                         })
                     })
                     .collect(),
