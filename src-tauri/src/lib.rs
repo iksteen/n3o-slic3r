@@ -191,6 +191,7 @@ pub fn run() {
             viewport_render::viewport_ray_plane,
             viewport_render::viewport_cut_grab,
             viewport_render::viewport_cut_drag,
+            viewport_render::viewport_cut_place,
             viewport_render::viewport_move_tower,
             viewport_render::viewport_tower_grab,
             viewport_render::viewport_invalidate_tower,

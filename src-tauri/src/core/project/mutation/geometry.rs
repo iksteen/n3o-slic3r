@@ -65,6 +65,9 @@ pub struct CutResult {
     pub extruder_id: Option<u8>,
     pub source_group: Option<GroupId>,
     pub halves: Vec<CutHalfOut>,
+    /// Free dowel-pin meshes (local frame), one per Dowel connector — each
+    /// registered as a separate printable object.
+    pub dowels: Vec<(Vec<f32>, Vec<u32>)>,
 }
 
 impl Project {
@@ -694,6 +697,39 @@ impl Project {
                     visible: true,
                     extruder_id: res.extruder_id,
                     group,
+                });
+                let object = self.plates[active]
+                    .scene
+                    .objects
+                    .get(&obj_id)
+                    .expect("just registered")
+                    .clone();
+                events.push(SceneEvent::ObjectAdded { plate_id, object });
+                new_ids.push(obj_id);
+            }
+            // Free dowel pins → standalone ungrouped objects (same transform as
+            // the source; the user arranges them).
+            for (di, (verts, idx)) in res.dowels.into_iter().enumerate() {
+                if verts.is_empty() || idx.is_empty() {
+                    continue;
+                }
+                let bbox = crate::core::scene::loaders::compute_bounding_box(&verts);
+                let mesh = self.register_mesh(NewMesh {
+                    vertices: verts,
+                    indices: idx,
+                    paint_colors: None,
+                    bounding_box: bbox,
+                    provenance: MeshProvenance::Primitive(format!("{} pin", res.base_name)),
+                });
+                let header = self.meshes.get(&mesh).expect("just registered").header();
+                events.push(SceneEvent::MeshLoaded { mesh: header });
+                let obj_id = self.register_object(NewSceneObject {
+                    mesh,
+                    transform: res.transform,
+                    name: format!("{} pin {}", res.base_name, di + 1),
+                    visible: true,
+                    extruder_id: res.extruder_id,
+                    group: None,
                 });
                 let object = self.plates[active]
                     .scene
@@ -1353,6 +1389,7 @@ mod tests {
             extruder_id: Some(1),
             source_group: None,
             halves: vec![half(CutSide::Pos), half(CutSide::Neg)],
+            dowels: vec![],
         };
         let (new_ids, _events) = p.apply_cut(vec![res]);
         assert_eq!(new_ids.len(), 2, "both sides → two objects");
@@ -1386,10 +1423,34 @@ mod tests {
             extruder_id: None,
             source_group: None,
             halves: vec![half(CutSide::Pos)],
+            dowels: vec![],
         };
         let (new_ids, _) = p.apply_cut(vec![res]);
         assert_eq!(new_ids.len(), 1);
         assert_eq!(p.active_plate().scene.objects[&new_ids[0]].name, "cube (cut)");
+    }
+
+    #[test]
+    fn apply_cut_registers_dowel_pins_as_objects() {
+        let mut p = Project::default();
+        let (_, a) = add_cube(&mut p);
+        let tf = p.active_plate().scene.objects[&a].transform;
+        let res = CutResult {
+            source_id: a,
+            transform: tf,
+            base_name: "cube".into(),
+            extruder_id: None,
+            source_group: None,
+            halves: vec![half(CutSide::Pos), half(CutSide::Neg)],
+            dowels: vec![(vec![0.0; 9], vec![0, 1, 2])],
+        };
+        let (new_ids, _) = p.apply_cut(vec![res]);
+        assert_eq!(new_ids.len(), 3, "two halves + one pin");
+        let plate = p.active_plate();
+        assert!(
+            new_ids.iter().any(|id| plate.scene.objects[id].name == "cube pin 1"),
+            "the dowel pin is registered as its own object",
+        );
     }
 
     #[test]
@@ -1411,6 +1472,7 @@ mod tests {
                 extruder_id: None,
                 source_group: Some(g),
                 halves: vec![half(CutSide::Pos), half(CutSide::Neg)],
+                dowels: vec![],
             },
             CutResult {
                 source_id: b,
@@ -1419,6 +1481,7 @@ mod tests {
                 extruder_id: None,
                 source_group: Some(g),
                 halves: vec![half(CutSide::Pos), half(CutSide::Neg)],
+                dowels: vec![],
             },
         ];
         let (new_ids, _) = p.apply_cut(results);

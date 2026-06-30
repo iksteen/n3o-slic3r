@@ -528,6 +528,18 @@ function App() {
                   keepNeg: split.keepNeg,
                   radius: split.radius,
                   setOrigin: split.setOrigin,
+                  connectors: split.connectors.map((c) => ({
+                    u: c.u,
+                    v: c.v,
+                    radius: c.params.radius,
+                    height: c.params.height,
+                  })),
+                  selectedConnector: split.selectedConnector,
+                  placing: split.placing,
+                  addConnector: split.addConnector,
+                  moveConnector: split.moveConnector,
+                  selectConnector: split.selectConnector,
+                  removeConnector: split.removeConnector,
                 }}
                 onToolDone={viewport.clearTool}
                 onClonePick={viewport.pickClone}
@@ -570,6 +582,18 @@ function App() {
                   keepNeg={split.keepNeg}
                   onRot={split.setRot}
                   onToggleKeep={split.toggleKeep}
+                  connectors={{
+                    count: split.connectors.length,
+                    selected: split.selectedConnector,
+                    placing: split.placing,
+                    params: split.editParams,
+                    setPlacing: split.setPlacing,
+                    removeSelected: () => {
+                      if (split.selectedConnector != null)
+                        split.removeConnector(split.selectedConnector);
+                    },
+                    setParams: split.setParams,
+                  }}
                   onCancel={split.exit}
                   onApply={() => {
                     if (selection.length === 0) return;
@@ -579,6 +603,7 @@ function App() {
                       planeNormal: split.normal,
                       keepPositive: split.keepPos,
                       keepNegative: split.keepNeg,
+                      connectors: split.connectorsForApply(),
                     })
                       .then(() => split.exit())
                       .catch((e: unknown) => console.error("split failed", e));

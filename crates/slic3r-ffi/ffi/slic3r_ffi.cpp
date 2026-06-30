@@ -13,6 +13,8 @@
 #include <libslic3r/TriangleMesh.hpp>
 #include <libslic3r/TriangleMeshSlicer.hpp>
 #include <libslic3r/TriangleSelector.hpp>
+#include <libslic3r/MeshBoolean.hpp>
+#include <libslic3r/Geometry.hpp>
 #include <libslic3r/Orient.hpp>
 #include <libslic3r/Arrange.hpp>
 #include <libslic3r/Utils.hpp>
@@ -1420,6 +1422,240 @@ slic3r_status slic3r_cut_mesh(const float* vertices, size_t vertex_count,
 void slic3r_cut_mesh_free(float* vertices, uint32_t* indices) {
     std::free(vertices);
     std::free(indices);
+}
+
+// ---- Cut connectors (joints) -------------------------------------------
+
+// Cross-section segment count per shape (Orca's get_connector_mesh).
+static int conn_shape_sectors(int shape) {
+    switch (shape) {
+        case SLIC3R_CONN_TRIANGLE: return 3;
+        case SLIC3R_CONN_SQUARE:   return 4;
+        case SLIC3R_CONN_HEXAGON:  return 6;
+        default:                   return 60; // Circle
+    }
+}
+
+// One unit connector mesh (r=1, h=1), recentered so it straddles z=0 — so after
+// scaling by height the peg sits half into each side of the cut plane. Mirrors
+// Orca's get_connector_mesh decision tree; `force_cylinder` forces a plain
+// cylinder (the hole shape for a Snap connector).
+static indexed_triangle_set conn_unit_mesh(int type, int style, int sectors, bool force_cylinder) {
+    indexed_triangle_set its;
+    const double fa = 2.0 * PI / sectors;
+    if (force_cylinder)                      its = its_make_cylinder(1.0, 1.0, fa);
+    else if (type == SLIC3R_CONN_SNAP)       its = its_make_snap(1.0, 1.0);
+    else if (style == SLIC3R_CONN_PRISM)     its = its_make_cylinder(1.0, 1.0, fa);
+    else if (type == SLIC3R_CONN_PLUG)       its = its_make_frustum(1.0, 1.0, fa);
+    else /* Dowel + Frustum */               its = its_make_frustum_dowel(1.0, 1.0, sectors);
+    if (its.vertices.empty())
+        return its;
+    Vec3f lo = its.vertices[0], hi = its.vertices[0];
+    for (const auto& v : its.vertices) { lo = lo.cwiseMin(v); hi = hi.cwiseMax(v); }
+    const Vec3f c = 0.5f * (lo + hi);
+    for (auto& v : its.vertices) v -= c;
+    return its;
+}
+
+// Copy `its` and apply the affine `T` to every vertex.
+static indexed_triangle_set conn_place(indexed_triangle_set its, const Transform3d& T) {
+    for (auto& v : its.vertices) {
+        const Eigen::Vector3d p = T * Eigen::Vector3d(v.x(), v.y(), v.z());
+        v = Vec3f(static_cast<float>(p.x()), static_cast<float>(p.y()), static_cast<float>(p.z()));
+    }
+    return its;
+}
+
+// Marshal one half to heap arrays, inverse-rotating each vertex back to the
+// input frame (qi, +o). Empty half → null/0. Returns false only on malloc fail.
+static bool conn_marshal(const indexed_triangle_set& half, const Eigen::Quaterniond& qi,
+                         const Eigen::Vector3d& o, float** ov, size_t* ovc, uint32_t** oi,
+                         size_t* oic) {
+    *ov = nullptr; *ovc = 0; *oi = nullptr; *oic = 0;
+    if (half.vertices.empty() || half.indices.empty())
+        return true;
+    float* verts = static_cast<float*>(std::malloc(half.vertices.size() * 3 * sizeof(float)));
+    uint32_t* idx = static_cast<uint32_t*>(std::malloc(half.indices.size() * 3 * sizeof(uint32_t)));
+    if (!verts || !idx) { std::free(verts); std::free(idx); return false; }
+    for (size_t i = 0; i < half.vertices.size(); ++i) {
+        const Eigen::Vector3d p =
+            qi * Eigen::Vector3d(half.vertices[i].x(), half.vertices[i].y(), half.vertices[i].z()) + o;
+        verts[i * 3 + 0] = static_cast<float>(p.x());
+        verts[i * 3 + 1] = static_cast<float>(p.y());
+        verts[i * 3 + 2] = static_cast<float>(p.z());
+    }
+    for (size_t i = 0; i < half.indices.size(); ++i) {
+        idx[i * 3 + 0] = static_cast<uint32_t>(half.indices[i][0]);
+        idx[i * 3 + 1] = static_cast<uint32_t>(half.indices[i][1]);
+        idx[i * 3 + 2] = static_cast<uint32_t>(half.indices[i][2]);
+    }
+    *ov = verts; *ovc = half.vertices.size(); *oi = idx; *oic = half.indices.size();
+    return true;
+}
+
+slic3r_status slic3r_cut_mesh_connectors(
+    const float* vertices, size_t vertex_count,
+    const uint32_t* indices, size_t triangle_count,
+    const float plane_origin[3], const float plane_normal[3],
+    const float* connector_floats, const int32_t* connector_ints, size_t connector_count,
+    int flip_peg_side,
+    float** out_pos_vertices, size_t* out_pos_vertex_count,
+    uint32_t** out_pos_indices, size_t* out_pos_triangle_count,
+    float** out_neg_vertices, size_t* out_neg_vertex_count,
+    uint32_t** out_neg_indices, size_t* out_neg_triangle_count,
+    float*** out_dowel_vertices, size_t** out_dowel_vertex_counts,
+    uint32_t*** out_dowel_indices, size_t** out_dowel_triangle_counts,
+    size_t* out_dowel_count,
+    char** out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_pos_vertices) *out_pos_vertices = nullptr;
+    if (out_pos_vertex_count) *out_pos_vertex_count = 0;
+    if (out_pos_indices) *out_pos_indices = nullptr;
+    if (out_pos_triangle_count) *out_pos_triangle_count = 0;
+    if (out_neg_vertices) *out_neg_vertices = nullptr;
+    if (out_neg_vertex_count) *out_neg_vertex_count = 0;
+    if (out_neg_indices) *out_neg_indices = nullptr;
+    if (out_neg_triangle_count) *out_neg_triangle_count = 0;
+    if (out_dowel_vertices) *out_dowel_vertices = nullptr;
+    if (out_dowel_vertex_counts) *out_dowel_vertex_counts = nullptr;
+    if (out_dowel_indices) *out_dowel_indices = nullptr;
+    if (out_dowel_triangle_counts) *out_dowel_triangle_counts = nullptr;
+    if (out_dowel_count) *out_dowel_count = 0;
+    if (!vertices || !indices || !plane_origin || !plane_normal || !out_pos_vertices ||
+        !out_neg_vertices || !out_dowel_count || vertex_count == 0 || triangle_count == 0)
+        return SLIC3R_ERR_INVALID_ARG;
+    if (connector_count > 0 && (!connector_floats || !connector_ints))
+        return SLIC3R_ERR_INVALID_ARG;
+    try {
+        Eigen::Vector3d n(plane_normal[0], plane_normal[1], plane_normal[2]);
+        if (n.norm() < 1e-9)
+            return SLIC3R_ERR_INVALID_ARG;
+        n.normalize();
+        const Eigen::Vector3d o(plane_origin[0], plane_origin[1], plane_origin[2]);
+        const Eigen::Quaterniond q = Eigen::Quaterniond::FromTwoVectors(n, Eigen::Vector3d::UnitZ());
+        const Eigen::Quaterniond qi = q.conjugate();
+
+        indexed_triangle_set its = its_from_buffers(vertices, vertex_count, indices, triangle_count);
+        for (auto& v : its.vertices) {
+            const Eigen::Vector3d t = q * (Eigen::Vector3d(v.x(), v.y(), v.z()) - o);
+            v = Vec3f(static_cast<float>(t.x()), static_cast<float>(t.y()), static_cast<float>(t.z()));
+        }
+
+        // upper = z>0 = positive side; lower = negative side. (aligned frame)
+        indexed_triangle_set upper, lower;
+        cut_mesh(its, 0.0f, &upper, &lower, /*triangulate_caps=*/true);
+
+        std::vector<indexed_triangle_set> dowels;
+        for (size_t ci = 0; ci < connector_count; ++ci) {
+            const float* cf = connector_floats + ci * 8;
+            const int32_t* cn = connector_ints + ci * 3;
+            const int type = cn[0], style = cn[1], shape = cn[2];
+            const double radius = cf[3], height = cf[4];
+            const double r_tol = cf[5], h_tol = cf[6], z_angle = cf[7];
+            if (radius <= 1e-6 || height <= 1e-6)
+                continue; // degenerate → skip
+            const int sectors = conn_shape_sectors(shape);
+            const Eigen::Vector3d pa = q * (Eigen::Vector3d(cf[0], cf[1], cf[2]) - o);
+
+            const Transform3d peg_T =
+                Geometry::translation_transform(pa) *
+                Geometry::rotation_transform(Eigen::Vector3d(0, 0, -z_angle)) *
+                Geometry::scale_transform(Eigen::Vector3d(radius, radius, height));
+            // The hole is the peg widened by tolerance, shifted along the axis by
+            // half the depth tolerance (so the extra depth is on the open side).
+            const Transform3d hole_T =
+                Geometry::translation_transform(pa + Eigen::Vector3d(0, 0, 0.5 * h_tol)) *
+                Geometry::rotation_transform(Eigen::Vector3d(0, 0, -z_angle)) *
+                Geometry::scale_transform(
+                    Eigen::Vector3d(radius + r_tol, radius + r_tol, height + h_tol));
+
+            const indexed_triangle_set peg =
+                conn_place(conn_unit_mesh(type, style, sectors, false), peg_T);
+            const indexed_triangle_set hole = conn_place(
+                conn_unit_mesh(type, style, type == SLIC3R_CONN_SNAP ? 60 : sectors,
+                               type == SLIC3R_CONN_SNAP),
+                hole_T);
+
+            try {
+                if (type == SLIC3R_CONN_DOWEL) {
+                    // Hole in BOTH halves; the pin is printed separately.
+                    indexed_triangle_set u = upper, l = lower;
+                    MeshBoolean::cgal::minus(u, hole);
+                    MeshBoolean::cgal::minus(l, hole);
+                    upper = std::move(u);
+                    lower = std::move(l);
+                    dowels.push_back(peg);
+                } else {
+                    // Plug / Snap: solid peg in one half, matching hole in the other.
+                    const bool peg_in_neg = (flip_peg_side == 0);
+                    indexed_triangle_set& peg_half = peg_in_neg ? lower : upper;
+                    indexed_triangle_set& hole_half = peg_in_neg ? upper : lower;
+                    indexed_triangle_set ph = peg_half, hh = hole_half;
+                    MeshBoolean::cgal::plus(ph, peg);
+                    MeshBoolean::cgal::minus(hh, hole);
+                    peg_half = std::move(ph);
+                    hole_half = std::move(hh);
+                }
+            } catch (const std::exception& e) {
+                BOOST_LOG_TRIVIAL(warning)
+                    << "slic3r_cut_mesh_connectors: connector " << ci << " skipped: " << e.what();
+            } catch (...) {
+                BOOST_LOG_TRIVIAL(warning)
+                    << "slic3r_cut_mesh_connectors: connector " << ci << " skipped (unknown)";
+            }
+        }
+
+        if (!conn_marshal(upper, qi, o, out_pos_vertices, out_pos_vertex_count, out_pos_indices,
+                          out_pos_triangle_count) ||
+            !conn_marshal(lower, qi, o, out_neg_vertices, out_neg_vertex_count, out_neg_indices,
+                          out_neg_triangle_count)) {
+            set_err(out_err, "out of memory marshalling cut halves");
+            return SLIC3R_ERR_INTERNAL;
+        }
+
+        if (!dowels.empty()) {
+            const size_t nd = dowels.size();
+            float** dv = static_cast<float**>(std::malloc(nd * sizeof(float*)));
+            uint32_t** di = static_cast<uint32_t**>(std::malloc(nd * sizeof(uint32_t*)));
+            size_t* dvc = static_cast<size_t*>(std::malloc(nd * sizeof(size_t)));
+            size_t* dtc = static_cast<size_t*>(std::malloc(nd * sizeof(size_t)));
+            if (dv && di && dvc && dtc) {
+                for (size_t k = 0; k < nd; ++k)
+                    conn_marshal(dowels[k], qi, o, &dv[k], &dvc[k], &di[k], &dtc[k]);
+                if (out_dowel_vertices) *out_dowel_vertices = dv;
+                if (out_dowel_indices) *out_dowel_indices = di;
+                if (out_dowel_vertex_counts) *out_dowel_vertex_counts = dvc;
+                if (out_dowel_triangle_counts) *out_dowel_triangle_counts = dtc;
+                if (out_dowel_count) *out_dowel_count = nd;
+            } else {
+                std::free(dv); std::free(di); std::free(dvc); std::free(dtc);
+            }
+        }
+        return SLIC3R_OK;
+    } catch (const std::exception& e) {
+        set_err(out_err, e.what());
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
+        set_err(out_err, "unknown error in slic3r_cut_mesh_connectors");
+        return SLIC3R_ERR_INTERNAL;
+    }
+}
+
+void slic3r_cut_connectors_free_dowels(
+    float** dowel_vertices, uint32_t** dowel_indices,
+    size_t* dowel_vertex_counts, size_t* dowel_triangle_counts, size_t dowel_count) {
+    if (dowel_vertices) {
+        for (size_t k = 0; k < dowel_count; ++k)
+            std::free(dowel_vertices[k]);
+        std::free(dowel_vertices);
+    }
+    if (dowel_indices) {
+        for (size_t k = 0; k < dowel_count; ++k)
+            std::free(dowel_indices[k]);
+        std::free(dowel_indices);
+    }
+    std::free(dowel_vertex_counts);
+    std::free(dowel_triangle_counts);
 }
 
 slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengths,

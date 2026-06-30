@@ -404,6 +404,57 @@ slic3r_status slic3r_cut_mesh(const float* vertices, size_t vertex_count,
 /* Free one half's buffers returned by slic3r_cut_mesh. Safe with NULL (no-op). */
 void slic3r_cut_mesh_free(float* vertices, uint32_t* indices);
 
+/* Connector (joint) enums for slic3r_cut_mesh_connectors — match OrcaSlicer's
+ * CutConnectorType / Style / Shape. */
+typedef enum { SLIC3R_CONN_PLUG = 0, SLIC3R_CONN_DOWEL = 1, SLIC3R_CONN_SNAP = 2 } slic3r_connector_type;
+typedef enum { SLIC3R_CONN_PRISM = 0, SLIC3R_CONN_FRUSTUM = 1 } slic3r_connector_style;
+typedef enum { SLIC3R_CONN_TRIANGLE = 0, SLIC3R_CONN_SQUARE = 1,
+               SLIC3R_CONN_HEXAGON = 2, SLIC3R_CONN_CIRCLE = 3 } slic3r_connector_shape;
+
+/* Cut a mesh by a plane AND bake reassembly connectors (joints) into the
+ * halves — the engine behind OrcaSlicer's "Cut" connectors, applied here via
+ * mesh booleans so the result is plain printable meshes.
+ *
+ * Cut args are identical to slic3r_cut_mesh. Connectors are passed as flat
+ * parallel arrays (the codebase's convention), `connector_count` entries:
+ *   connector_floats: 8 per connector — pos[0],pos[1],pos[2] (a point on the
+ *     LOCAL cut plane, same frame as plane_origin), radius, height,
+ *     r_tolerance, h_tolerance (mm, widen the HOLE), z_angle (radians, the
+ *     cross-section's rotation about the plane normal).
+ *   connector_ints: 3 per connector — type, style, shape (enums above).
+ * Pass NULL/0 for no connectors (then this == slic3r_cut_mesh).
+ *
+ * Per connector: a Plug/Snap adds a solid peg to one half (the `neg` side by
+ * default, or `pos` when flip_peg_side != 0) and a matching hole to the other;
+ * a Dowel cuts a hole in BOTH halves and emits a free pin mesh. A connector
+ * whose boolean fails is skipped (logged) — the plain cut still succeeds.
+ *
+ * Outputs: pos/neg halves exactly as slic3r_cut_mesh (free with
+ * slic3r_cut_mesh_free). Dowel pins come back as an array of `*out_dowel_count`
+ * meshes (parallel arrays of vertex/index buffers + their counts); free the
+ * whole group with slic3r_cut_connectors_free_dowels. On error writes *out_err
+ * and returns non-OK. Pure computation; no slic3r_init(). */
+slic3r_status slic3r_cut_mesh_connectors(
+    const float* vertices, size_t vertex_count,
+    const uint32_t* indices, size_t triangle_count,
+    const float plane_origin[3], const float plane_normal[3],
+    const float* connector_floats, const int32_t* connector_ints, size_t connector_count,
+    int flip_peg_side,
+    float** out_pos_vertices, size_t* out_pos_vertex_count,
+    uint32_t** out_pos_indices, size_t* out_pos_triangle_count,
+    float** out_neg_vertices, size_t* out_neg_vertex_count,
+    uint32_t** out_neg_indices, size_t* out_neg_triangle_count,
+    float*** out_dowel_vertices, size_t** out_dowel_vertex_counts,
+    uint32_t*** out_dowel_indices, size_t** out_dowel_triangle_counts,
+    size_t* out_dowel_count,
+    char** out_err);
+
+/* Free the dowel array-of-arrays from slic3r_cut_mesh_connectors (every inner
+ * buffer + the four outer arrays). Safe with NULL/0 (no-op). */
+void slic3r_cut_connectors_free_dowels(
+    float** dowel_vertices, uint32_t** dowel_indices,
+    size_t* dowel_vertex_counts, size_t* dowel_triangle_counts, size_t dowel_count);
+
 /* Log sink callback.
  *
  * Replaces libslic3r's stderr-only boost::log default with a

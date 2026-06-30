@@ -766,14 +766,66 @@ pub fn scene_object_auto_orient(
 /// transform. Kept, non-empty halves become new objects; sources are removed.
 /// Returns the new object ids (selected). `keep_positive`/`negative` choose the
 /// side(s) the plane normal points toward / away from.
+/// One reassembly connector, in WORLD plane-space: `(u, v)` in the plane's
+/// in-plane basis, params as lowercase strings (`type`: plug/dowel/snap,
+/// `style`: prism/frustum, `shape`: triangle/square/hexagon/circle).
+#[derive(serde::Deserialize, Clone)]
+pub struct CutConnectorInput {
+    pub u: f32,
+    pub v: f32,
+    #[serde(default)]
+    pub z_angle: f32,
+    pub radius: f32,
+    pub height: f32,
+    #[serde(default)]
+    pub r_tol: f32,
+    #[serde(default)]
+    pub h_tol: f32,
+    #[serde(rename = "type")]
+    pub ty: String,
+    pub style: String,
+    pub shape: String,
+}
+
+fn map_connector(c: &CutConnectorInput, pos: [f32; 3]) -> slic3r_ffi::Connector {
+    use slic3r_ffi::{ConnectorShape, ConnectorStyle, ConnectorType};
+    let ty = match c.ty.as_str() {
+        "dowel" => ConnectorType::Dowel,
+        "snap" => ConnectorType::Snap,
+        _ => ConnectorType::Plug,
+    };
+    let style = match c.style.as_str() {
+        "frustum" => ConnectorStyle::Frustum,
+        _ => ConnectorStyle::Prism,
+    };
+    let shape = match c.shape.as_str() {
+        "triangle" => ConnectorShape::Triangle,
+        "square" => ConnectorShape::Square,
+        "hexagon" => ConnectorShape::Hexagon,
+        _ => ConnectorShape::Circle,
+    };
+    slic3r_ffi::Connector {
+        pos,
+        radius: c.radius,
+        height: c.height,
+        r_tol: c.r_tol,
+        h_tol: c.h_tol,
+        z_angle: c.z_angle,
+        ty,
+        style,
+        shape,
+    }
+}
+
 #[tauri::command]
-#[tracing::instrument(skip(state, window))]
+#[tracing::instrument(skip(state, window, connectors))]
 pub fn scene_cut_apply(
     ids: Vec<ObjectId>,
     plane_origin: [f32; 3],
     plane_normal: [f32; 3],
     keep_positive: bool,
     keep_negative: bool,
+    connectors: Vec<CutConnectorInput>,
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<Vec<u64>, String> {
@@ -786,6 +838,17 @@ pub fn scene_cut_apply(
         return Err("split: degenerate plane normal".into());
     }
     let origin = glam::Vec3::from(plane_origin);
+    // In-plane basis (mirrors the renderer's up-pick) → each connector's WORLD
+    // position from its plane-space (u, v). Dowel pins only make sense when both
+    // halves are kept; otherwise drop them.
+    let up = if normal.x.abs() > 0.9 { glam::Vec3::Y } else { glam::Vec3::X };
+    let e1 = normal.cross(up).normalize();
+    let e2 = normal.cross(e1).normalize();
+    let conn_world: Vec<glam::Vec3> = connectors
+        .iter()
+        .map(|c| origin + e1 * c.u + e2 * c.v)
+        .collect();
+    let keep_dowels = keep_positive && keep_negative;
 
     // Phase 1: read the group-expanded targets, then release the lock.
     let targets = {
@@ -806,24 +869,35 @@ pub fn scene_cut_apply(
         let o_l = inv.transform_point3(origin);
         // World→local normal uses the transpose of the linear part.
         let n_l = (glam::Mat3::from_mat4(m).transpose() * normal).normalize();
-        let (pos, neg) =
-            slic3r_ffi::cut_mesh(&t.vertices, &t.indices, o_l.to_array(), n_l.to_array())
+        // Each connector's world point → this object's local frame.
+        let conns: Vec<slic3r_ffi::Connector> = connectors
+            .iter()
+            .zip(&conn_world)
+            .map(|(c, w)| map_connector(c, inv.transform_point3(*w).to_array()))
+            .collect();
+        let res =
+            slic3r_ffi::cut_mesh_connectors(&t.vertices, &t.indices, o_l.to_array(), n_l.to_array(), &conns)
                 .map_err(|e| format!("split: cut failed: {e}"))?;
         let mut halves = Vec::new();
-        if keep_positive && !pos.is_empty() {
+        if keep_positive && !res.pos.is_empty() {
             halves.push(CutHalfOut {
                 side: CutSide::Pos,
-                vertices: pos.vertices,
-                indices: pos.indices,
+                vertices: res.pos.vertices,
+                indices: res.pos.indices,
             });
         }
-        if keep_negative && !neg.is_empty() {
+        if keep_negative && !res.neg.is_empty() {
             halves.push(CutHalfOut {
                 side: CutSide::Neg,
-                vertices: neg.vertices,
-                indices: neg.indices,
+                vertices: res.neg.vertices,
+                indices: res.neg.indices,
             });
         }
+        let dowels = if keep_dowels {
+            res.dowels.into_iter().map(|d| (d.vertices, d.indices)).collect()
+        } else {
+            Vec::new()
+        };
         results.push(CutResult {
             source_id: t.object_id,
             transform: t.transform,
@@ -831,6 +905,7 @@ pub fn scene_cut_apply(
             extruder_id: t.extruder_id,
             source_group: t.group,
             halves,
+            dowels,
         });
     }
 

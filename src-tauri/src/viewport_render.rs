@@ -233,8 +233,9 @@ pub struct FrameRequest {
 }
 
 /// The split tool's cutting plane for one frame (world space). `keep_pos` /
-/// `keep_neg` choose which sides stay solid vs. ghosted in the preview.
-#[derive(serde::Deserialize, Clone, Copy)]
+/// `keep_neg` choose which sides stay solid vs. ghosted in the preview;
+/// `connectors` are drawn as translucent peg previews on the plane.
+#[derive(serde::Deserialize, Clone)]
 pub struct CutPreview {
     pub origin: [f32; 3],
     pub normal: [f32; 3],
@@ -242,6 +243,19 @@ pub struct CutPreview {
     pub keep_pos: bool,
     #[serde(default)]
     pub keep_neg: bool,
+    #[serde(default)]
+    pub connectors: Vec<CutConnectorPreview>,
+}
+
+/// One connector's peg preview (world position on the plane + size). The peg
+/// axis is the plane normal; `selected` brightens it.
+#[derive(serde::Deserialize, Clone, Copy)]
+pub struct CutConnectorPreview {
+    pub pos: [f32; 3],
+    pub radius: f32,
+    pub height: f32,
+    #[serde(default)]
+    pub selected: bool,
 }
 
 impl CutPreview {
@@ -451,6 +465,41 @@ fn unit_cube_verts() -> Vec<Vertex> {
         for &i in &[0usize, 1, 2, 0, 2, 3] {
             v.push(Vertex { pos: q[i], nrm: n });
         }
+    }
+    v
+}
+
+/// A unit cylinder along Z: radius 1, height 1 centered at z=0 (z ∈ [-0.5, 0.5]),
+/// as a triangle list (side + both caps). Used for the split tool's connector
+/// peg previews (scaled + oriented to the plane normal per connector).
+const CYL_SEG: usize = 20;
+fn unit_cylinder_verts() -> Vec<Vertex> {
+    let mut v = Vec::new();
+    let ring = |i: usize| -> (f32, f32) {
+        let t = i as f32 / CYL_SEG as f32 * std::f32::consts::TAU;
+        (t.cos(), t.sin())
+    };
+    for i in 0..CYL_SEG {
+        let (c0, s0) = ring(i);
+        let (c1, s1) = ring(i + 1);
+        let (n0, n1) = ([c0, s0, 0.0], [c1, s1, 0.0]);
+        let (b0, t0) = ([c0, s0, -0.5], [c0, s0, 0.5]);
+        let (b1, t1) = ([c1, s1, -0.5], [c1, s1, 0.5]);
+        // side
+        v.push(Vertex { pos: b0, nrm: n0 });
+        v.push(Vertex { pos: b1, nrm: n1 });
+        v.push(Vertex { pos: t1, nrm: n1 });
+        v.push(Vertex { pos: b0, nrm: n0 });
+        v.push(Vertex { pos: t1, nrm: n1 });
+        v.push(Vertex { pos: t0, nrm: n0 });
+        // top cap (+Z)
+        v.push(Vertex { pos: [0.0, 0.0, 0.5], nrm: [0.0, 0.0, 1.0] });
+        v.push(Vertex { pos: t0, nrm: [0.0, 0.0, 1.0] });
+        v.push(Vertex { pos: t1, nrm: [0.0, 0.0, 1.0] });
+        // bottom cap (-Z)
+        v.push(Vertex { pos: [0.0, 0.0, -0.5], nrm: [0.0, 0.0, -1.0] });
+        v.push(Vertex { pos: b1, nrm: [0.0, 0.0, -1.0] });
+        v.push(Vertex { pos: b0, nrm: [0.0, 0.0, -1.0] });
     }
     v
 }
@@ -786,6 +835,9 @@ pub struct ViewportRenderer {
     tower_pipe: wgpu::RenderPipeline,
     vb_cube: wgpu::Buffer,
     vb_cube_edges: wgpu::Buffer,
+    /// Unit cylinder for the split tool's connector peg previews.
+    vb_cylinder: wgpu::Buffer,
+    n_cylinder: u32,
     /// Per-plate sliced tower meshes, keyed by plate. The slice event sink
     /// stores each plate's mesh here directly (no frontend round-trip); `frame`
     /// draws the active plate's. Cleared with the object meshes on project replace.
@@ -1000,6 +1052,13 @@ impl ViewportRenderer {
             contents: bytemuck::cast_slice(&unit_cube_edges()),
             usage: wgpu::BufferUsages::VERTEX,
         });
+        let cyl_verts = unit_cylinder_verts();
+        let n_cylinder = cyl_verts.len() as u32;
+        let vb_cylinder = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("viewport.cut.cylinder"),
+            contents: bytemuck::cast_slice(&cyl_verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
 
         let gmin = DEFAULT_BED.0.map(|v| v as f32);
         let gmax = DEFAULT_BED.1.map(|v| v as f32);
@@ -1039,6 +1098,8 @@ impl ViewportRenderer {
             tower_pipe,
             vb_cube,
             vb_cube_edges,
+            vb_cylinder,
+            n_cylinder,
             size: (0, 0),
             color,
             msaa_view,
@@ -1351,9 +1412,12 @@ impl ViewportRenderer {
         let axis_slot = bracket_slot + bracket_vb.is_some() as usize;
         // Two tower slots: the box/mesh model (solid + box edges) + the brim.
         let tower_slot = axis_slot + 3;
-        // One more slot for the split-tool cutting-plane quad.
+        // One slot for the split-tool cutting-plane quad, then one per connector
+        // peg preview.
         let plane_slot = tower_slot + 2;
-        let total_slots = plane_slot + 1;
+        let connector_slot = plane_slot + 1;
+        let n_conn = req.cut.as_ref().map_or(0, |c| c.connectors.len());
+        let total_slots = connector_slot + n_conn;
 
         // Priming tower: draw the active plate's stored sliced mesh (mesh mode)
         // when there is one, else the placement box. Placement is the resolved
@@ -1475,6 +1539,29 @@ impl ViewportRenderer {
             })
         });
 
+        // Connector peg previews: a unit cylinder per connector, oriented to the
+        // plane normal at the connector's world position, sized to its radius +
+        // height. (model matrix, selected) per connector.
+        let connector_models: Vec<(Mat4, bool)> = req
+            .cut
+            .as_ref()
+            .map(|cut| {
+                let n = Vec3::from(cut.normal).normalize_or_zero();
+                let rot = Quat::from_rotation_arc(Vec3::Z, n);
+                cut.connectors
+                    .iter()
+                    .map(|c| {
+                        let m = Mat4::from_scale_rotation_translation(
+                            Vec3::new(c.radius, c.radius, c.height),
+                            rot,
+                            Vec3::from(c.pos),
+                        );
+                        (m, c.selected)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // Pack uniforms per slot: [mat4 mvp][vec4 color]. Slot 0 = grid (vp + grid
         // line color), slots 1.. = each object's vp*model + base color, final slot
         // (when there's a selection) = brackets (vp + bracket color).
@@ -1526,6 +1613,17 @@ impl ViewportRenderer {
             let off = plane_slot * self.slot as usize;
             bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
             let rgba = [0.80f32, 0.80, 0.85, 0.22];
+            bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
+        }
+        for (k, (model, selected)) in connector_models.iter().enumerate() {
+            let off = (connector_slot + k) * self.slot as usize;
+            bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&(vp * *model).to_cols_array()));
+            // Selected peg reads brighter/more opaque.
+            let rgba = if *selected {
+                [1.0f32, 0.85, 0.30, 0.95]
+            } else {
+                [0.40f32, 0.70, 1.0, 0.80]
+            };
             bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
         }
         self.queue.write_buffer(&self.ubuf, 0, &bytes);
@@ -1627,6 +1725,40 @@ impl ViewportRenderer {
                 rp.set_bind_group(0, &self.bind, &[(plane_slot as u32) * self.slot]);
                 rp.set_vertex_buffer(0, vb.slice(..));
                 rp.draw(0..verts.len() as u32, 0..1);
+            }
+        }
+        // Connector peg previews: their own pass with depth cleared so the pegs
+        // show through the opaque mesh (they sit inside the part — depth-tested
+        // they'd be invisible). Color preserved so they blend over the scene.
+        if !connector_models.is_empty() {
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("viewport.connectors"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.msaa_view,
+                    depth_slice: None,
+                    resolve_target: Some(&color_view),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            rp.set_pipeline(&self.tower_pipe);
+            rp.set_vertex_buffer(0, self.vb_cylinder.slice(..));
+            for k in 0..connector_models.len() {
+                rp.set_bind_group(0, &self.bind, &[(connector_slot as u32 + k as u32) * self.slot]);
+                rp.draw(0..self.n_cylinder, 0..1);
             }
         }
         // Gizmo: second pass, color preserved, always self-occluding (depth Less +
@@ -2223,6 +2355,94 @@ pub fn viewport_cut_drag(req: CutDragRequest) -> [f32; 3] {
     pre.transform_point3(Vec3::from(req.origin)).to_array()
 }
 
+/// Camera + cursor + the cut plane + the objects being cut, for placing a
+/// connector. Returns the cursor's hit on the plane, but only when that point
+/// lies *inside* the model (so connectors can't be dropped in empty space).
+#[derive(serde::Deserialize)]
+pub struct CutPlaceRequest {
+    pub width: u32,
+    pub height: u32,
+    pub x: f32,
+    pub y: f32,
+    pub az: f32,
+    pub el: f32,
+    pub dist: f32,
+    pub center: [f32; 3],
+    pub plane_n: [f32; 3],
+    pub plane_p: [f32; 3],
+    pub ids: Vec<u64>,
+}
+
+#[tauri::command]
+pub fn viewport_cut_place(
+    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    req: CutPlaceRequest,
+) -> Option<[f32; 3]> {
+    let p = project.lock().ok()?;
+    let (w, h) = (req.width.max(1) as f32, req.height.max(1) as f32);
+    let cam_center = Vec3::from(req.center);
+    let (ro, rd) = cursor_ray(w, h, req.x, req.y, req.az, req.el, req.dist, cam_center);
+    let n = Vec3::from(req.plane_n);
+    let pp = Vec3::from(req.plane_p);
+    let denom = n.dot(rd);
+    if denom.abs() < 1e-9 {
+        return None; // looking along the plane
+    }
+    let hit = ro + rd * (n.dot(pp - ro) / denom); // cursor's point on the cut plane
+    // Place only when that point is inside the solid of one of the objects being
+    // cut — a true point-in-mesh test, so clicks over a hollow / notch / gap in
+    // the cross-section don't place. The cut expands groups; match that target set.
+    let want: Vec<ObjectId> = req.ids.iter().map(|i| ObjectId(*i)).collect();
+    let ids: std::collections::HashSet<u64> =
+        p.group_expanded_ids(&want).iter().map(|i| i.0).collect();
+    let plate = p.active_plate();
+    for (id, obj) in plate.scene.objects.iter() {
+        if !obj.visible || !ids.contains(&id.0) {
+            continue;
+        }
+        let Some(m) = p.meshes.get(&obj.mesh) else { continue };
+        let model = obj.transform.to_mat4();
+        let vert = |vi: u32| {
+            let i = vi as usize * 3;
+            model.transform_point3(Vec3::new(m.vertices[i], m.vertices[i + 1], m.vertices[i + 2]))
+        };
+        if point_in_mesh(hit, &m.indices, vert) {
+            return Some(hit.to_array());
+        }
+    }
+    None
+}
+
+/// Inside-test for a solid: from `p`, cast several rays and count surface
+/// crossings — odd means inside. A majority vote across spread directions
+/// shrugs off the odd ray that grazes a shared edge/vertex (which would mis-count
+/// on a single probe). `vert` maps an index to its world position.
+fn point_in_mesh(p: Vec3, indices: &[u32], vert: impl Fn(u32) -> Vec3) -> bool {
+    let dirs = [
+        Vec3::new(0.1357, 0.5731, 0.8079),
+        Vec3::new(-0.7071, 0.4999, 0.5001),
+        Vec3::new(0.3001, -0.8003, 0.5197),
+        Vec3::new(-0.4003, -0.5998, 0.6911),
+        Vec3::new(0.9001, 0.2003, -0.3869),
+    ];
+    let mut inside = 0u32;
+    for d in dirs {
+        let d = d.normalize();
+        let mut crossings = 0u32;
+        for t3 in indices.chunks_exact(3) {
+            if let Some(t) = ray_tri(p, d, vert(t3[0]), vert(t3[1]), vert(t3[2])) {
+                if t > 1e-5 {
+                    crossings += 1;
+                }
+            }
+        }
+        if crossings % 2 == 1 {
+            inside += 1;
+        }
+    }
+    inside * 2 > dirs.len() as u32
+}
+
 /// Möller–Trumbore, two-sided. Returns the ray parameter `t` (>0) at the hit.
 fn ray_tri(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
     let (e1, e2) = (b - a, c - a);
@@ -2349,5 +2569,31 @@ mod tower_geometry_tests {
         assert!(tower_corner_hit(fp, 10.0, 20.0, 10.0, 25.0)); // on the edge
         assert!(!tower_corner_hit(fp, 10.0, 20.0, 16.0, 22.0)); // past max X
         assert!(!tower_corner_hit(fp, 10.0, 20.0, 12.0, 19.0)); // below min Y
+    }
+
+    #[test]
+    fn point_in_mesh_separates_solid_from_empty() {
+        // Unit cube [-1,1]^3 as a triangle soup (12 tris).
+        let v = [
+            [-1.0, -1.0, -1.0], [1.0, -1.0, -1.0], [1.0, 1.0, -1.0], [-1.0, 1.0, -1.0],
+            [-1.0, -1.0, 1.0], [1.0, -1.0, 1.0], [1.0, 1.0, 1.0], [-1.0, 1.0, 1.0],
+        ];
+        let faces: [[u32; 3]; 12] = [
+            [0, 1, 2], [0, 2, 3], // -z
+            [4, 6, 5], [4, 7, 6], // +z
+            [0, 4, 5], [0, 5, 1], // -y
+            [3, 2, 6], [3, 6, 7], // +y
+            [0, 3, 7], [0, 7, 4], // -x
+            [1, 5, 6], [1, 6, 2], // +x
+        ];
+        let idx: Vec<u32> = faces.iter().flatten().copied().collect();
+        let vert = |i: u32| Vec3::from(v[i as usize]);
+        assert!(point_in_mesh(Vec3::ZERO, &idx, vert)); // center
+        assert!(point_in_mesh(Vec3::new(0.9, -0.5, 0.3), &idx, vert)); // near a wall, inside
+        assert!(!point_in_mesh(Vec3::new(2.0, 0.0, 0.0), &idx, vert)); // outside +x
+        assert!(!point_in_mesh(Vec3::new(0.0, 0.0, 5.0), &idx, vert)); // outside +z
+        // A point coplanar with the cut but outside the silhouette — the case the
+        // user hit: on the plane, no material there.
+        assert!(!point_in_mesh(Vec3::new(3.0, 0.0, 0.0), &idx, vert));
     }
 }

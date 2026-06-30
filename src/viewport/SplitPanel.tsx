@@ -1,4 +1,10 @@
 import { useEffect, useState } from "react";
+import type {
+  ConnectorParams,
+  ConnectorShape,
+  ConnectorStyle,
+  ConnectorType,
+} from "./useSplitSession";
 
 // Floating controls for the split (cut-by-plane) tool — rotation sliders for
 // the cutting plane, keep/discard per side, and Apply/Cancel. A floating
@@ -39,6 +45,16 @@ function AngleInput({
   );
 }
 
+export interface SplitConnectorControls {
+  count: number;
+  selected: number | null;
+  placing: boolean;
+  params: ConnectorParams;
+  setPlacing: (on: boolean) => void;
+  removeSelected: () => void;
+  setParams: (patch: Partial<ConnectorParams>) => void;
+}
+
 export function SplitPanel({
   rot,
   keepPos,
@@ -47,6 +63,7 @@ export function SplitPanel({
   onToggleKeep,
   onApply,
   onCancel,
+  connectors,
 }: {
   rot: Vec3;
   keepPos: boolean;
@@ -55,6 +72,7 @@ export function SplitPanel({
   onToggleKeep: (side: "pos" | "neg") => void;
   onApply: () => void;
   onCancel: () => void;
+  connectors: SplitConnectorControls;
 }) {
   // Esc cancels the tool (matches the placing tools).
   useEffect(() => {
@@ -100,6 +118,44 @@ export function SplitPanel({
     </label>
   );
 
+  const sel = (
+    label: string,
+    value: string,
+    opts: readonly string[],
+    on: (v: string) => void,
+  ) => (
+    <label className="flex flex-col gap-0.5">
+      <span className="text-neutral-500">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => on(e.target.value)}
+        className="bg-neutral-900 rounded px-1 py-0.5 capitalize"
+      >
+        {opts.map((o) => (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+  const num = (label: string, value: number, on: (n: number) => void) => (
+    <label className="flex flex-col gap-0.5">
+      <span className="text-neutral-500">{label}</span>
+      <input
+        type="number"
+        step={0.5}
+        value={value}
+        onChange={(e) => {
+          const n = parseFloat(e.target.value);
+          if (Number.isFinite(n)) on(n);
+        }}
+        className="bg-neutral-900 rounded px-1 py-0.5 w-full"
+      />
+    </label>
+  );
+  const cp = connectors.params;
+
   return (
     <div
       className="absolute top-2 right-2 bg-neutral-800/90 text-neutral-100 text-xs rounded shadow pointer-events-auto"
@@ -117,6 +173,48 @@ export function SplitPanel({
       <div className="px-3 py-2 flex flex-col gap-1.5 border-t border-neutral-700">
         {keepRow("pos", keepPos, "#4073f2", "Blue side")}
         {keepRow("neg", keepNeg, "#d94040", "Red side")}
+      </div>
+      <div className="px-3 py-2 flex flex-col gap-2 border-t border-neutral-700">
+        <div className="flex items-center justify-between">
+          <span className="text-neutral-500">
+            Connectors ({connectors.count})
+            {connectors.selected != null ? ` · #${connectors.selected + 1}` : ""}
+          </span>
+          <div className="flex gap-1">
+            <button
+              type="button"
+              className={`px-2 py-0.5 rounded ${
+                connectors.placing ? "bg-blue-600" : "bg-neutral-700 hover:bg-neutral-600"
+              }`}
+              onClick={() => connectors.setPlacing(!connectors.placing)}
+              title="Click the cut plane to place a connector"
+            >
+              {connectors.placing ? "Placing…" : "Add"}
+            </button>
+            <button
+              type="button"
+              disabled={connectors.selected == null}
+              className="px-2 py-0.5 rounded bg-neutral-700 hover:bg-neutral-600 disabled:opacity-40 disabled:cursor-not-allowed"
+              onClick={connectors.removeSelected}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-1.5">
+          {sel("Type", cp.type, ["plug", "dowel", "snap"], (v) =>
+            connectors.setParams({ type: v as ConnectorType }),
+          )}
+          {sel("Shape", cp.shape, ["circle", "square", "hexagon", "triangle"], (v) =>
+            connectors.setParams({ shape: v as ConnectorShape }),
+          )}
+          {sel("Style", cp.style, ["prism", "frustum"], (v) =>
+            connectors.setParams({ style: v as ConnectorStyle }),
+          )}
+          {num("Radius", cp.radius, (n) => connectors.setParams({ radius: n }))}
+          {num("Height", cp.height, (n) => connectors.setParams({ height: n }))}
+          {num("Fit tol", cp.rTol, (n) => connectors.setParams({ rTol: n, hTol: n }))}
+        </div>
       </div>
       <div className="px-3 py-2 flex gap-2 justify-end border-t border-neutral-700">
         <button

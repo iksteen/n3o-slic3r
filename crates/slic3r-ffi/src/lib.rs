@@ -291,6 +291,228 @@ unsafe fn take_cut_half(verts: *mut f32, vcount: usize, idx: *mut u32, icount: u
     CutHalf { vertices, indices }
 }
 
+/// Connector (joint) type — matches OrcaSlicer's `CutConnectorType`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectorType {
+    /// A solid peg integral to one half + a matching hole in the other.
+    Plug,
+    /// A free pin printed separately + a hole in each half.
+    Dowel,
+    /// Like Plug, with a click-fit bulge.
+    Snap,
+}
+
+/// Connector profile along its axis — `CutConnectorStyle`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectorStyle {
+    /// Straight (constant cross-section).
+    Prism,
+    /// Tapered.
+    Frustum,
+}
+
+/// Connector cross-section — `CutConnectorShape`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectorShape {
+    Triangle,
+    Square,
+    Hexagon,
+    Circle,
+}
+
+// The enum codes match the C `slic3r_connector_*` values (0-based, contiguous).
+impl ConnectorType {
+    fn code(self) -> i32 {
+        match self {
+            ConnectorType::Plug => 0,
+            ConnectorType::Dowel => 1,
+            ConnectorType::Snap => 2,
+        }
+    }
+}
+impl ConnectorStyle {
+    fn code(self) -> i32 {
+        match self {
+            ConnectorStyle::Prism => 0,
+            ConnectorStyle::Frustum => 1,
+        }
+    }
+}
+impl ConnectorShape {
+    fn code(self) -> i32 {
+        match self {
+            ConnectorShape::Triangle => 0,
+            ConnectorShape::Square => 1,
+            ConnectorShape::Hexagon => 2,
+            ConnectorShape::Circle => 3,
+        }
+    }
+}
+
+/// One reassembly connector to bake into a cut. `pos` is a point on the cut
+/// plane in the mesh's local frame; `radius`/`height` size it; `r_tol`/`h_tol`
+/// widen the *hole* (mm); `z_angle` rotates the cross-section about the plane
+/// normal (radians).
+#[derive(Debug, Clone, Copy)]
+pub struct Connector {
+    pub pos: [f32; 3],
+    pub radius: f32,
+    pub height: f32,
+    pub r_tol: f32,
+    pub h_tol: f32,
+    pub z_angle: f32,
+    pub ty: ConnectorType,
+    pub style: ConnectorStyle,
+    pub shape: ConnectorShape,
+}
+
+/// A connector-cut result: the two halves (with pegs/holes baked in) plus any
+/// free dowel pin meshes (one per Dowel connector that succeeded).
+#[derive(Debug, Clone, Default)]
+pub struct CutWithConnectors {
+    pub pos: CutHalf,
+    pub neg: CutHalf,
+    pub dowels: Vec<CutHalf>,
+}
+
+/// Cut a mesh by a plane and bake reassembly connectors into the halves — the
+/// engine behind OrcaSlicer's "Cut" connectors, applied via mesh booleans so
+/// the result is plain printable meshes. With no connectors this equals
+/// [`cut_mesh`]. A connector whose boolean fails is skipped (the plain cut still
+/// succeeds). `plane_origin`/`plane_normal` and each `Connector.pos` are in the
+/// mesh's local frame.
+pub fn cut_mesh_connectors(
+    vertices: &[f32],
+    indices: &[u32],
+    plane_origin: [f32; 3],
+    plane_normal: [f32; 3],
+    connectors: &[Connector],
+) -> Result<CutWithConnectors> {
+    if vertices.is_empty() || vertices.len() % 3 != 0 {
+        return Err(Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("vertices must be a non-empty multiple of 3".into()),
+        });
+    }
+    if indices.is_empty() || indices.len() % 3 != 0 {
+        return Err(Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("indices must be a non-empty multiple of 3".into()),
+        });
+    }
+    let vertex_count = vertices.len() / 3;
+    if let Some(&max_index) = indices.iter().max() {
+        if max_index as usize >= vertex_count {
+            return Err(Error {
+                kind: ErrorKind::InvalidArg,
+                message: Some(format!(
+                    "triangle index {max_index} out of range for {vertex_count} vertices"
+                )),
+            });
+        }
+    }
+
+    // Flatten connectors into the float/int parallel streams the C ABI takes.
+    let mut cf: Vec<f32> = Vec::with_capacity(connectors.len() * 8);
+    let mut cn: Vec<i32> = Vec::with_capacity(connectors.len() * 3);
+    for c in connectors {
+        cf.extend_from_slice(&[
+            c.pos[0], c.pos[1], c.pos[2], c.radius, c.height, c.r_tol, c.h_tol, c.z_angle,
+        ]);
+        cn.extend_from_slice(&[c.ty.code(), c.style.code(), c.shape.code()]);
+    }
+    let (cf_ptr, cn_ptr) = if connectors.is_empty() {
+        (ptr::null(), ptr::null())
+    } else {
+        (cf.as_ptr(), cn.as_ptr())
+    };
+
+    let mut pos_v: *mut f32 = ptr::null_mut();
+    let mut pos_vc: usize = 0;
+    let mut pos_i: *mut u32 = ptr::null_mut();
+    let mut pos_tc: usize = 0;
+    let mut neg_v: *mut f32 = ptr::null_mut();
+    let mut neg_vc: usize = 0;
+    let mut neg_i: *mut u32 = ptr::null_mut();
+    let mut neg_tc: usize = 0;
+    let mut dv: *mut *mut f32 = ptr::null_mut();
+    let mut dvc: *mut usize = ptr::null_mut();
+    let mut di: *mut *mut u32 = ptr::null_mut();
+    let mut dtc: *mut usize = ptr::null_mut();
+    let mut dn: usize = 0;
+    let mut err: *mut c_char = ptr::null_mut();
+
+    // SAFETY: input slices validated; the connector streams are length
+    // connector_count*{8,3} (or null when empty); all out pointers are valid.
+    let status = unsafe {
+        sys::slic3r_cut_mesh_connectors(
+            vertices.as_ptr(),
+            vertex_count,
+            indices.as_ptr(),
+            indices.len() / 3,
+            plane_origin.as_ptr(),
+            plane_normal.as_ptr(),
+            cf_ptr,
+            cn_ptr,
+            connectors.len(),
+            0, // flip_peg_side: peg on the negative side
+            &mut pos_v,
+            &mut pos_vc,
+            &mut pos_i,
+            &mut pos_tc,
+            &mut neg_v,
+            &mut neg_vc,
+            &mut neg_i,
+            &mut neg_tc,
+            &mut dv,
+            &mut dvc,
+            &mut di,
+            &mut dtc,
+            &mut dn,
+            &mut err,
+        )
+    };
+    unsafe { check_with_err(status, err) }?;
+
+    // SAFETY: each pos/neg half is (ptr,count) or (null,0); copy out + free.
+    let pos = unsafe { take_cut_half(pos_v, pos_vc, pos_i, pos_tc) };
+    let neg = unsafe { take_cut_half(neg_v, neg_vc, neg_i, neg_tc) };
+    let dowels = unsafe { take_dowels(dv, dvc, di, dtc, dn) };
+    Ok(CutWithConnectors { pos, neg, dowels })
+}
+
+/// Copy each dowel pin out of the shim-owned array-of-arrays into a `CutHalf`,
+/// then free the whole group. Empty/absent → empty Vec.
+unsafe fn take_dowels(
+    dv: *mut *mut f32,
+    dvc: *mut usize,
+    di: *mut *mut u32,
+    dtc: *mut usize,
+    n: usize,
+) -> Vec<CutHalf> {
+    if dv.is_null() || di.is_null() || dvc.is_null() || dtc.is_null() || n == 0 {
+        sys::slic3r_cut_connectors_free_dowels(dv, di, dvc, dtc, n);
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(n);
+    for k in 0..n {
+        let v = *dv.add(k);
+        let vc = *dvc.add(k);
+        let i = *di.add(k);
+        let tc = *dtc.add(k);
+        if !v.is_null() && !i.is_null() && vc > 0 && tc > 0 {
+            out.push(CutHalf {
+                vertices: std::slice::from_raw_parts(v, vc * 3).to_vec(),
+                indices: std::slice::from_raw_parts(i, tc * 3).to_vec(),
+            });
+        } else {
+            out.push(CutHalf::default());
+        }
+    }
+    sys::slic3r_cut_connectors_free_dowels(dv, di, dvc, dtc, n);
+    out
+}
+
 /// Where the nester placed one item (see [`arrange`]). `translation` (mm) and
 /// `rotation` (radians) are applied to the item's footprint; `bed_idx` is the
 /// logical bed it landed on: `0` = the given bed, `> 0` = spilled onto an extra

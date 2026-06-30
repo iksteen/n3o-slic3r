@@ -4,6 +4,7 @@ import { onEvents } from "../state/eventRouter";
 import { shouldIgnoreHotkey } from "../ui/hotkeyInhibit";
 import { registerThumbnailCapture } from "./thumbnailCapture";
 import { registerAxisView, type AxisView } from "./cameraControl";
+import { planeBasis, worldOf } from "./useSplitSession";
 
 type Vec3 = [number, number, number];
 type GizmoMode = "none" | "move" | "rotate" | "scale";
@@ -31,13 +32,21 @@ export type SplitProps = {
   keepNeg: boolean;
   radius: number;
   setOrigin: (o: Vec3) => void;
+  // connectors (plane-space u,v + size for hit-test/preview)
+  connectors: { u: number; v: number; radius: number; height: number }[];
+  selectedConnector: number | null;
+  placing: boolean;
+  addConnector: (u: number, v: number) => void;
+  moveConnector: (i: number, u: number, v: number) => void;
+  selectConnector: (i: number | null) => void;
+  removeConnector: (i: number) => void;
 };
 
 type DragState = {
   x: number;
   y: number;
   button: number;
-  mode: "pending" | "orbit" | "gizmo" | "pan" | "inert" | "tower" | "cut";
+  mode: "pending" | "orbit" | "gizmo" | "pan" | "inert" | "tower" | "cut" | "connector";
   // Gizmo drag (move/rotate/scale, and the no-tool free-move): the opaque grab
   // captured on press + the latest cursor (canvas px) + Shift. The renderer turns
   // these into the preview transform Rust-side (`gizmo_drag`); the same call on
@@ -56,6 +65,8 @@ type DragState = {
   // Cut-plane drag: the live dragged plane origin (committed to the split
   // session on release; read by `render` so the frame tracks the drag).
   cutOrigin?: Vec3;
+  // Connector drag: which connector index is being moved.
+  connectorIndex?: number;
 };
 
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -189,12 +200,24 @@ export function WgpuViewport({
         const s = splitRef.current;
         const cut =
           s && s.active
-            ? {
-                origin: d?.mode === "cut" && d.cutOrigin ? d.cutOrigin : s.origin,
-                normal: s.normal,
-                keep_pos: s.keepPos,
-                keep_neg: s.keepNeg,
-              }
+            ? (() => {
+                const origin =
+                  d?.mode === "cut" && d.cutOrigin ? d.cutOrigin : s.origin;
+                const basis = planeBasis(s.normal);
+                const connectors = s.connectors.map((c, i) => ({
+                  pos: worldOf(c.u, c.v, origin, basis),
+                  radius: c.radius,
+                  height: c.height,
+                  selected: i === s.selectedConnector,
+                }));
+                return {
+                  origin,
+                  normal: s.normal,
+                  keep_pos: s.keepPos,
+                  keep_neg: s.keepNeg,
+                  connectors,
+                };
+              })()
             : null;
         const buf = await invoke<ArrayBuffer>("viewport_frame", {
           req: {
@@ -479,30 +502,86 @@ export function WgpuViewport({
         return;
       }
 
-      // Split tool active: a press on the cutting plane's move handles drags the
-      // plane; a miss orbits (a click still selects + re-centers, in onUp).
+      // Split tool active. Placing → a plane click drops a connector. Else:
+      // grab a connector marker (select + drag), else the plane move-gizmo,
+      // else orbit. A plane click off everything deselects.
       const sp = splitRef.current;
       if (sp && sp.active) {
-        void invoke<GizmoGrab | null>("viewport_cut_grab", {
-          req: { ...camArgs(), x: sx, y: sy, origin: sp.origin, arm: sp.radius },
-        })
-          .then((grab) => {
-            if (drag.current !== press) return;
-            if (grab) {
-              press.mode = "cut";
-              press.grab = grab;
-              press.sx = sx;
-              press.sy = sy;
-              press.cutOrigin = sp.origin;
-              hoverHandle.current = grab.idx;
-            } else {
-              press.mode = "orbit";
-            }
+        const basis = planeBasis(sp.normal);
+        const hitUV = async (): Promise<[number, number] | null> => {
+          const hit = await rayPlaneHit(sx, sy, sp.normal, sp.origin);
+          if (!hit) return null;
+          const dvec = sub(hit, sp.origin);
+          return [dot(dvec, basis.e1), dot(dvec, basis.e2)];
+        };
+        if (sp.placing) {
+          press.mode = "inert";
+          // Constrain placement to the model: the backend returns the plane hit
+          // only when it lies inside the selected mesh (no dropping pegs in
+          // empty space). A miss simply places nothing.
+          void invoke<Vec3 | null>("viewport_cut_place", {
+            req: {
+              ...camArgs(),
+              x: sx,
+              y: sy,
+              plane_n: sp.normal,
+              plane_p: sp.origin,
+              ids: selRef.current,
+            },
           })
-          .catch((err) => {
-            console.error("viewport_cut_grab failed", err);
-            press.mode = "orbit";
-          });
+            .then((hit) => {
+              // Place even if the click already released (drag.current === null);
+              // only bail if a *new* press superseded this one. Gating on
+              // `=== press` would lose the race on a fast click.
+              if (!hit || (drag.current && drag.current !== press)) return;
+              const dvec = sub(hit, sp.origin);
+              sp.addConnector(dot(dvec, basis.e1), dot(dvec, basis.e2));
+            })
+            .catch(() => {});
+          return;
+        }
+        void hitUV().then((uv) => {
+          if (drag.current !== press) return;
+          if (uv) {
+            // Nearest connector whose footprint covers the hit → select + drag.
+            let best = -1;
+            let bestD = Infinity;
+            sp.connectors.forEach((c, i) => {
+              const dd = Math.hypot(c.u - uv[0], c.v - uv[1]);
+              if (dd < c.radius && dd < bestD) {
+                bestD = dd;
+                best = i;
+              }
+            });
+            if (best >= 0) {
+              sp.selectConnector(best);
+              press.mode = "connector";
+              press.connectorIndex = best;
+              return;
+            }
+          }
+          // No connector → try the plane move gizmo, else deselect + orbit.
+          void invoke<GizmoGrab | null>("viewport_cut_grab", {
+            req: { ...camArgs(), x: sx, y: sy, origin: sp.origin, arm: sp.radius },
+          })
+            .then((grab) => {
+              if (drag.current !== press) return;
+              if (grab) {
+                press.mode = "cut";
+                press.grab = grab;
+                press.sx = sx;
+                press.sy = sy;
+                press.cutOrigin = sp.origin;
+                hoverHandle.current = grab.idx;
+              } else {
+                sp.selectConnector(null);
+                press.mode = "orbit";
+              }
+            })
+            .catch(() => {
+              press.mode = "orbit";
+            });
+        });
         return;
       }
 
@@ -587,6 +666,10 @@ export function WgpuViewport({
         if (d.cutOrigin) splitRef.current?.setOrigin(d.cutOrigin);
         return;
       }
+      if (d.mode === "connector") {
+        return; // moveConnector already committed each step; selection set on press
+      }
+      if (d.mode === "inert") return; // placing click / gizmo body press: no selection change
       if (moved) return;
       const [sx, sy] = rel(e);
       // A placing tool is armed: the click runs it (and disarms on success);
@@ -660,6 +743,18 @@ export function WgpuViewport({
           d.cutOrigin = o;
           void render();
         });
+      } else if (d.mode === "connector" && d.connectorIndex != null) {
+        // Drag a connector across the plane (its (u,v) updates live).
+        const s = splitRef.current;
+        if (!s) return;
+        const basis = planeBasis(s.normal);
+        const [sx, sy] = rel(e);
+        const idx = d.connectorIndex;
+        void rayPlaneHit(sx, sy, s.normal, s.origin).then((hit) => {
+          if (!hit || drag.current !== d) return;
+          const dvec = sub(hit, s.origin);
+          s.moveConnector(idx, dot(dvec, basis.e1), dot(dvec, basis.e2));
+        });
       }
       // mode === "pending": waiting on the grab — next move acts.
     };
@@ -728,10 +823,19 @@ export function WgpuViewport({
         onToolDoneRef.current?.(); // cancel the armed placing tool
         return;
       }
-      if ((e.key === "Delete" || e.key === "Backspace") && selRef.current.length > 0) {
-        void invoke("scene_object_delete", { ids: selRef.current }).catch((err) =>
-          console.error("delete failed", err),
-        );
+      if (e.key === "Delete" || e.key === "Backspace") {
+        // In split mode with a connector selected, Delete removes that connector
+        // (not scene objects).
+        const sp = splitRef.current;
+        if (sp && sp.active && sp.selectedConnector != null) {
+          sp.removeConnector(sp.selectedConnector);
+          return;
+        }
+        if (selRef.current.length > 0) {
+          void invoke("scene_object_delete", { ids: selRef.current }).catch((err) =>
+            console.error("delete failed", err),
+          );
+        }
       }
     };
 
@@ -886,6 +990,9 @@ export function WgpuViewport({
     split?.normal,
     split?.keepPos,
     split?.keepNeg,
+    split?.connectors,
+    split?.selectedConnector,
+    split?.placing,
   ]);
 
   return <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />;
