@@ -96,7 +96,7 @@ const norm = (a: Vec3): Vec3 => {
  * drags — the axis/plane handles (move) or axis rings (rotate) drive constrained
  * transforms instead. Frames render on-demand and coalesce (one in flight).
  */
-type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch" | "clone";
+type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch" | "clone" | "split";
 
 export function WgpuViewport({
   selectedIds,
@@ -106,6 +106,7 @@ export function WgpuViewport({
   split,
   onToolDone,
   onClonePick,
+  onSplitPick,
   onFaceMatchStep,
 }: {
   selectedIds: number[];
@@ -116,6 +117,9 @@ export function WgpuViewport({
   split?: SplitProps;
   onToolDone?: () => void;
   onClonePick?: (id: number) => void;
+  /** Pick-to-split click landed: the object's group was selected; start the
+   *  split session on it. */
+  onSplitPick?: (id: number) => void;
   /** Match-face: reference face clicked (true) → waiting on the target. */
   onFaceMatchStep?: (refSet: boolean) => void;
 }) {
@@ -141,6 +145,8 @@ export function WgpuViewport({
   onToolDoneRef.current = onToolDone;
   const onClonePickRef = useRef(onClonePick);
   onClonePickRef.current = onClonePick;
+  const onSplitPickRef = useRef(onSplitPick);
+  onSplitPickRef.current = onSplitPick;
   const onFaceMatchStepRef = useRef(onFaceMatchStep);
   onFaceMatchStepRef.current = onFaceMatchStep;
   const activePlateIdRef = useRef(activePlateId);
@@ -298,6 +304,15 @@ export function WgpuViewport({
         const id = await castPick(sx, sy);
         if (id == null) return false;
         onClonePickRef.current?.(id);
+        return true;
+      }
+      if (toolNow === "split") {
+        // Pick an object → select its whole group (the cut needs a real
+        // selection: plane center + apply read it), then start the split session.
+        const id = await castPick(sx, sy);
+        if (id == null) return false;
+        await applySelect(id, false);
+        onSplitPickRef.current?.(id);
         return true;
       }
       if (toolNow === "alignX" || toolNow === "alignY") {

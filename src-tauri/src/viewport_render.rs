@@ -1539,9 +1539,8 @@ impl ViewportRenderer {
             })
         });
 
-        // Connector peg previews: a unit cylinder per connector, oriented to the
-        // plane normal at the connector's world position, sized to its radius +
-        // height. (model matrix, selected) per connector.
+        // Each connector's peg: a unit cylinder scaled to radius/height and
+        // oriented from +Z to the plane normal.
         let connector_models: Vec<(Mat4, bool)> = req
             .cut
             .as_ref()
@@ -1618,7 +1617,6 @@ impl ViewportRenderer {
         for (k, (model, selected)) in connector_models.iter().enumerate() {
             let off = (connector_slot + k) * self.slot as usize;
             bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&(vp * *model).to_cols_array()));
-            // Selected peg reads brighter/more opaque.
             let rgba = if *selected {
                 [1.0f32, 0.85, 0.30, 0.95]
             } else {
@@ -2388,7 +2386,7 @@ pub fn viewport_cut_place(
     if denom.abs() < 1e-9 {
         return None; // looking along the plane
     }
-    let hit = ro + rd * (n.dot(pp - ro) / denom); // cursor's point on the cut plane
+    let hit = ro + rd * (n.dot(pp - ro) / denom);
     // Place only when that point is inside the solid of one of the objects being
     // cut — a true point-in-mesh test, so clicks over a hollow / notch / gap in
     // the cross-section don't place. The cut expands groups; match that target set.

@@ -546,6 +546,10 @@ function App() {
                 }}
                 onToolDone={viewport.clearTool}
                 onClonePick={viewport.pickClone}
+                onSplitPick={(id) => {
+                  viewport.selectGizmo("none");
+                  split.enter([id]);
+                }}
                 onFaceMatchStep={viewport.setFaceMatchStep}
               />
               <ViewportChrome
@@ -570,9 +574,13 @@ function App() {
                 onSplit={() => {
                   if (split.active) {
                     split.exit();
-                  } else {
+                  } else if (selection.length > 0) {
                     viewport.selectGizmo("none");
                     split.enter(selection);
+                  } else {
+                    // Nothing selected: arm pick-to-split (next clicked object's
+                    // group becomes the cut target), like the other tools.
+                    viewport.selectTool("split");
                   }
                 }}
                 splitActive={split.active}

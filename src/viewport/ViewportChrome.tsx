@@ -10,7 +10,7 @@ import type { SceneObject } from "./types";
  * the axis/input legend.
  */
 type GizmoMode = "none" | "move" | "rotate" | "scale";
-type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch" | "clone";
+type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch" | "clone" | "split";
 
 export function ViewportChrome({
   leading,
@@ -263,12 +263,16 @@ export function ViewportChrome({
           </button>
           <button
             type="button"
-            disabled={selectedIds.length === 0}
-            className={btn(selectedIds.length > 0, splitActive)}
-            onClick={() => selectedIds.length > 0 && onSplit()}
-            title="Split — cut the selection with a plane"
+            disabled={!hasObjects}
+            className={btn(hasObjects, splitActive || tool === "split")}
+            onClick={() => hasObjects && onSplit()}
+            title={
+              selectedIds.length
+                ? "Split — cut the selection with a plane"
+                : "Split — click an object to cut it with a plane"
+            }
             aria-label="Split objects by a plane"
-            aria-pressed={splitActive}
+            aria-pressed={splitActive || tool === "split"}
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
               {/* scissors: two blades + a dashed cut line */}
@@ -298,6 +302,8 @@ function toolHint(tool: Tool, faceMatchRefSet: boolean): string {
         : "Select the reference face · Esc to cancel";
     case "clone":
       return "Click an object to clone · Esc to cancel";
+    case "split":
+      return "Click an object to split · Esc to cancel";
     default:
       return "LMB rotate · RMB pan · scroll zoom";
   }
