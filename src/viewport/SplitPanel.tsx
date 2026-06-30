@@ -216,7 +216,7 @@ export function SplitPanel({
           )}
           {num("Radius", cp.radius, (n) => connectors.setParams({ radius: n }))}
           {num("Height", cp.height, (n) => connectors.setParams({ height: n }))}
-          {num("Fit tol", cp.rTol, (n) => connectors.setParams({ rTol: n, hTol: n }))}
+          {num("Fit tol", cp.tol, (n) => connectors.setParams({ tol: n }))}
         </div>
       </div>
       <div className="px-3 py-2 flex gap-2 justify-end border-t border-neutral-700">

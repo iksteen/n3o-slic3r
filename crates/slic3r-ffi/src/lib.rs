@@ -493,7 +493,6 @@ pub fn cut_mesh_connectors(
             cf_ptr,
             cn_ptr,
             connectors.len(),
-            0, // flip_peg_side: peg on the negative side
             &mut pos_v,
             &mut pos_vc,
             &mut pos_i,

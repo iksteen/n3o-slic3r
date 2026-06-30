@@ -424,10 +424,10 @@ typedef enum { SLIC3R_CONN_TRIANGLE = 0, SLIC3R_CONN_SQUARE = 1,
  *   connector_ints: 3 per connector — type, style, shape (enums above).
  * Pass NULL/0 for no connectors (then this == slic3r_cut_mesh).
  *
- * Per connector: a Plug/Snap adds a solid peg to one half (the `neg` side by
- * default, or `pos` when flip_peg_side != 0) and a matching hole to the other;
- * a Dowel cuts a hole in BOTH halves and emits a free pin mesh. A connector
- * whose boolean fails is skipped (logged) — the plain cut still succeeds.
+ * Per connector: a Plug/Snap adds a solid peg to the `neg` half and a matching
+ * hole to the `pos` half; a Dowel cuts a hole in BOTH halves and emits a free
+ * pin mesh. A connector whose boolean fails is skipped (logged) — the plain cut
+ * still succeeds.
  *
  * MMU color paint: pass `in_paint` as `triangle_count` C strings (libslic3r
  * FacetsAnnotation per-triangle encoding; "" = unpainted), or NULL for an
@@ -449,7 +449,6 @@ slic3r_status slic3r_cut_mesh_connectors(
     const char* const* in_paint,
     const float plane_origin[3], const float plane_normal[3],
     const float* connector_floats, const int32_t* connector_ints, size_t connector_count,
-    int flip_peg_side,
     float** out_pos_vertices, size_t* out_pos_vertex_count,
     uint32_t** out_pos_indices, size_t* out_pos_triangle_count,
     char*** out_pos_paint,

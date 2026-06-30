@@ -1562,7 +1562,6 @@ slic3r_status slic3r_cut_mesh_connectors(
     const char* const* in_paint,
     const float plane_origin[3], const float plane_normal[3],
     const float* connector_floats, const int32_t* connector_ints, size_t connector_count,
-    int flip_peg_side,
     float** out_pos_vertices, size_t* out_pos_vertex_count,
     uint32_t** out_pos_indices, size_t* out_pos_triangle_count,
     char*** out_pos_paint,
@@ -1657,15 +1656,12 @@ slic3r_status slic3r_cut_mesh_connectors(
                     lower = std::move(l);
                     dowels.push_back(peg);
                 } else {
-                    // Plug / Snap: solid peg in one half, matching hole in the other.
-                    const bool peg_in_neg = (flip_peg_side == 0);
-                    indexed_triangle_set& peg_half = peg_in_neg ? lower : upper;
-                    indexed_triangle_set& hole_half = peg_in_neg ? upper : lower;
-                    indexed_triangle_set ph = peg_half, hh = hole_half;
+                    // Plug / Snap: solid peg in the neg half, matching hole in pos.
+                    indexed_triangle_set ph = lower, hh = upper;
                     MeshBoolean::cgal::plus(ph, peg);
                     MeshBoolean::cgal::minus(hh, hole);
-                    peg_half = std::move(ph);
-                    hole_half = std::move(hh);
+                    lower = std::move(ph);
+                    upper = std::move(hh);
                 }
             } catch (const std::exception& e) {
                 BOOST_LOG_TRIVIAL(warning)

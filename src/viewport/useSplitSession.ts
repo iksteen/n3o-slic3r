@@ -18,23 +18,22 @@ export type ConnectorStyle = "prism" | "frustum";
 export type ConnectorShape = "triangle" | "square" | "hexagon" | "circle";
 
 /** Reassembly-connector params (shared shape for the default + each placed
- *  connector). Sizes/tolerances in mm. */
+ *  connector). Sizes/tolerance in mm. `tol` widens the hole (radius + depth) for
+ *  the fit. */
 export interface ConnectorParams {
   type: ConnectorType;
   style: ConnectorStyle;
   shape: ConnectorShape;
   radius: number;
   height: number;
-  rTol: number;
-  hTol: number;
+  tol: number;
 }
 
 /** A connector placed on the cut plane: `(u, v)` in the plane's in-plane basis
- *  (mm), an in-plane rotation, and its own params. */
+ *  (mm) and its own params. */
 export interface PlacedConnector {
   u: number;
   v: number;
-  zAngle: number; // radians
   params: ConnectorParams;
 }
 
@@ -44,8 +43,7 @@ const DEFAULT_PARAMS: ConnectorParams = {
   shape: "circle",
   radius: 2.5,
   height: 8,
-  rTol: 0.1,
-  hTol: 0.1,
+  tol: 0.1,
 };
 
 const cross3 = (a: Vec3, b: Vec3): Vec3 => [
@@ -193,7 +191,7 @@ export function useSplitSession(): SplitSession {
   // ---- connectors ----
   const addConnector = (u: number, v: number): void => {
     setConnectors((cs) => {
-      const next = [...cs, { u, v, zAngle: 0, params: { ...defaultParams } }];
+      const next = [...cs, { u, v, params: { ...defaultParams } }];
       setSelectedConnector(next.length - 1);
       return next;
     });
@@ -225,11 +223,10 @@ export function useSplitSession(): SplitSession {
     connectors.map((c) => ({
       u: c.u,
       v: c.v,
-      z_angle: c.zAngle,
       radius: c.params.radius,
       height: c.params.height,
-      r_tol: c.params.rTol,
-      h_tol: c.params.hTol,
+      r_tol: c.params.tol,
+      h_tol: c.params.tol,
       type: c.params.type,
       style: c.params.style,
       shape: c.params.shape,
