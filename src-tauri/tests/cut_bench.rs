@@ -44,11 +44,28 @@ fn bench_cut() {
     ];
     let normal = [0.0f32, 0.0, 1.0]; // horizontal cut through the middle
 
-    let run = |label: &str, paint: Option<&[String]>| {
+    let dowel = |dx: f32, dy: f32| slic3r_ffi::Connector {
+        pos: [origin[0] + dx, origin[1] + dy, origin[2]],
+        radius: 3.0,
+        height: 6.0,
+        r_tol: 0.1,
+        h_tol: 0.1,
+        z_angle: 0.0,
+        ty: slic3r_ffi::ConnectorType::Dowel,
+        style: slic3r_ffi::ConnectorStyle::Prism,
+        shape: slic3r_ffi::ConnectorShape::Circle,
+    };
+    let run = |label: &str, paint: Option<&[String]>, conns: &[slic3r_ffi::Connector]| {
         let t = Instant::now();
-        let r =
-            slic3r_ffi::cut_mesh_connectors(&mesh.vertices, &mesh.indices, origin, normal, &[], paint)
-                .expect("cut");
+        let r = slic3r_ffi::cut_mesh_connectors(
+            &mesh.vertices,
+            &mesh.indices,
+            origin,
+            normal,
+            conns,
+            paint,
+        )
+        .expect("cut");
         let painted = |h: &slic3r_ffi::CutHalf| {
             h.paint.as_ref().map_or(0, |p| p.iter().filter(|s| !s.is_empty()).count())
         };
@@ -62,8 +79,9 @@ fn bench_cut() {
         );
     };
 
-    run("no-paint", None);
-    if mesh.paint_colors.is_some() {
-        run("with-paint", mesh.paint_colors.as_deref().map(Vec::as_slice));
-    }
+    let paint = mesh.paint_colors.as_deref().map(Vec::as_slice);
+    run("no-paint, no-conn", None, &[]);
+    run("paint, no-conn", paint, &[]);
+    let dowels = [dowel(0.0, 0.0), dowel(10.0, 0.0), dowel(-10.0, 0.0)];
+    run("paint, 3 dowels", paint, &dowels);
 }
