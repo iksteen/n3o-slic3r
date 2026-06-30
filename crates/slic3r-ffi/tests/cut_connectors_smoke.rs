@@ -117,6 +117,32 @@ fn degenerate_connector_is_skipped_plain_cut_survives() {
 }
 
 #[test]
+fn many_dowels_batch_into_one_cut() {
+    // Three disjoint dowels across the cross-section → all three pins, both
+    // halves holed. Exercises the batched (merge-then-one-boolean) path that
+    // replaced the per-connector loop.
+    let (v, i) = unit_cube();
+    let (base_pos, base_neg) = cut_mesh(&v, &i, ORIGIN, NORMAL).expect("plain cut");
+    let dowel = |x: f32, y: f32| Connector {
+        pos: [x, y, 0.5],
+        radius: 0.1,
+        height: 0.5,
+        r_tol: 0.0,
+        h_tol: 0.0,
+        z_angle: 0.0,
+        ty: ConnectorType::Dowel,
+        style: ConnectorStyle::Prism,
+        shape: ConnectorShape::Circle,
+    };
+    let conns = [dowel(0.3, 0.3), dowel(0.7, 0.3), dowel(0.5, 0.7)];
+    let r = cut_mesh_connectors(&v, &i, ORIGIN, NORMAL, &conns, None).expect("connector cut");
+    assert_eq!(r.dowels.len(), 3, "one pin per dowel");
+    assert!(r.dowels.iter().all(|d| !d.is_empty()), "every pin has geometry");
+    assert!(r.pos.indices.len() > base_pos.indices.len(), "pos got holes");
+    assert!(r.neg.indices.len() > base_neg.indices.len(), "neg got holes");
+}
+
+#[test]
 fn no_connectors_equals_a_plain_cut() {
     let (v, i) = unit_cube();
     let r = cut_mesh_connectors(&v, &i, ORIGIN, NORMAL, &[], None).expect("connector cut");

@@ -1615,7 +1615,16 @@ slic3r_status slic3r_cut_mesh_connectors(
         indexed_triangle_set upper, lower;
         cut_mesh(its, 0.0f, &upper, &lower, /*triangulate_caps=*/true);
 
+        // Connector cutters are disjoint, so we bake them with one CGAL boolean
+        // per category over the whole half — NOT one per connector. A full-mesh
+        // corefinement scales with the half's triangle count, so N connectors
+        // must never mean 2N of them (the gap vs Orca, which doesn't bake at all
+        // — it carries connectors as negative volumes and subtracts them in 2D
+        // per layer at slice time).
         std::vector<indexed_triangle_set> dowels;
+        std::vector<indexed_triangle_set> lower_plus;  // Plug/Snap pegs → neg half
+        std::vector<indexed_triangle_set> upper_minus; // every hole → pos half
+        std::vector<indexed_triangle_set> lower_minus; // Dowel holes → neg half
         for (size_t ci = 0; ci < connector_count; ++ci) {
             const float* cf = connector_floats + ci * 8;
             const int32_t* cn = connector_ints + ci * 3;
@@ -1639,38 +1648,67 @@ slic3r_status slic3r_cut_mesh_connectors(
                 Geometry::scale_transform(
                     Eigen::Vector3d(radius + r_tol, radius + r_tol, height + h_tol));
 
-            const indexed_triangle_set peg =
+            indexed_triangle_set peg =
                 conn_place(conn_unit_mesh(type, style, sectors, false), peg_T);
-            const indexed_triangle_set hole = conn_place(
+            indexed_triangle_set hole = conn_place(
                 conn_unit_mesh(type, style, type == SLIC3R_CONN_SNAP ? 60 : sectors,
                                type == SLIC3R_CONN_SNAP),
                 hole_T);
 
-            try {
-                if (type == SLIC3R_CONN_DOWEL) {
-                    // Hole in BOTH halves; the pin is printed separately.
-                    indexed_triangle_set u = upper, l = lower;
-                    MeshBoolean::cgal::minus(u, hole);
-                    MeshBoolean::cgal::minus(l, hole);
-                    upper = std::move(u);
-                    lower = std::move(l);
-                    dowels.push_back(peg);
-                } else {
-                    // Plug / Snap: solid peg in the neg half, matching hole in pos.
-                    indexed_triangle_set ph = lower, hh = upper;
-                    MeshBoolean::cgal::plus(ph, peg);
-                    MeshBoolean::cgal::minus(hh, hole);
-                    lower = std::move(ph);
-                    upper = std::move(hh);
-                }
-            } catch (const std::exception& e) {
-                BOOST_LOG_TRIVIAL(warning)
-                    << "slic3r_cut_mesh_connectors: connector " << ci << " skipped: " << e.what();
-            } catch (...) {
-                BOOST_LOG_TRIVIAL(warning)
-                    << "slic3r_cut_mesh_connectors: connector " << ci << " skipped (unknown)";
+            if (type == SLIC3R_CONN_DOWEL) {
+                // Hole in BOTH halves; the pin is printed separately.
+                upper_minus.push_back(hole);
+                lower_minus.push_back(std::move(hole));
+                dowels.push_back(std::move(peg));
+            } else {
+                // Plug / Snap: solid peg in the neg half, matching hole in pos.
+                lower_plus.push_back(std::move(peg));
+                upper_minus.push_back(std::move(hole));
             }
         }
+
+        // Merge a category's disjoint cutters and apply one boolean. On failure
+        // (e.g. overlapping connectors making a bad merged cutter), fall back to
+        // one-at-a-time so a single bad connector can't drop the rest.
+        auto apply_cutters =
+            [](indexed_triangle_set& target, std::vector<indexed_triangle_set>& cutters, bool add) {
+                if (cutters.empty())
+                    return;
+                indexed_triangle_set merged;
+                for (const auto& c : cutters)
+                    its_merge(merged, c);
+                try {
+                    indexed_triangle_set t = target;
+                    if (add)
+                        MeshBoolean::cgal::plus(t, merged);
+                    else
+                        MeshBoolean::cgal::minus(t, merged);
+                    target = std::move(t);
+                    return;
+                } catch (...) {
+                    BOOST_LOG_TRIVIAL(warning) << "slic3r_cut_mesh_connectors: batched connector "
+                                                  "boolean failed, retrying per-connector";
+                }
+                for (const auto& c : cutters) {
+                    try {
+                        indexed_triangle_set t = target;
+                        if (add)
+                            MeshBoolean::cgal::plus(t, c);
+                        else
+                            MeshBoolean::cgal::minus(t, c);
+                        target = std::move(t);
+                    } catch (const std::exception& e) {
+                        BOOST_LOG_TRIVIAL(warning)
+                            << "slic3r_cut_mesh_connectors: connector skipped: " << e.what();
+                    } catch (...) {
+                        BOOST_LOG_TRIVIAL(warning)
+                            << "slic3r_cut_mesh_connectors: connector skipped (unknown)";
+                    }
+                }
+            };
+        apply_cutters(lower, lower_plus, /*add=*/true);
+        apply_cutters(upper, upper_minus, /*add=*/false);
+        apply_cutters(lower, lower_minus, /*add=*/false);
 
         if (!conn_marshal(upper, qi, o, out_pos_vertices, out_pos_vertex_count, out_pos_indices,
                           out_pos_triangle_count) ||
