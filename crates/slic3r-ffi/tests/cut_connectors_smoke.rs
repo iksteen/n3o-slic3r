@@ -143,6 +143,23 @@ fn many_dowels_batch_into_one_cut() {
 }
 
 #[test]
+fn paint_survives_a_diagonal_cut() {
+    // Exact-identity paint mapping happens in the cut-aligned frame; a non-axis
+    // normal forces a real rotation, so this guards the frame round-trip the
+    // +Z-normal test above can't.
+    let (v, i) = unit_cube();
+    let paint = vec!["4".to_string(); i.len() / 3];
+    let s = (1.0f32 / 3.0).sqrt();
+    let r = cut_mesh_connectors(&v, &i, [0.5, 0.5, 0.5], [s, s, s], &[], Some(&paint))
+        .expect("diagonal painted cut");
+    for half in [&r.pos, &r.neg] {
+        let p = half.paint.as_ref().expect("kept half carries paint");
+        assert!(p.iter().any(|s| s == "4"), "kept faces stay painted through a rotated cut");
+        assert!(p.iter().any(|s| s.is_empty()), "the cut cap stays unpainted");
+    }
+}
+
+#[test]
 fn no_connectors_equals_a_plain_cut() {
     let (v, i) = unit_cube();
     let r = cut_mesh_connectors(&v, &i, ORIGIN, NORMAL, &[], None).expect("connector cut");

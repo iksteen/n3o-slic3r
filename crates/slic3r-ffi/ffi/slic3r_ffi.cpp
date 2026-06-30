@@ -31,6 +31,8 @@
 #include <boost/shared_ptr.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -1457,53 +1459,67 @@ static indexed_triangle_set conn_unit_mesh(int type, int style, int sectors, boo
     return its;
 }
 
-// Capture MMU color paint off the (un-rotated, local-frame) input mesh as a
-// libslic3r SavedPainting, so it can be re-projected onto the cut halves.
-// `nullopt` when no paint was supplied or nothing is painted (the common case,
-// so we never build a Model for an unpainted cut). `modify_to_center_geometry =
-// false` keeps the volume mesh in the input frame (init_shift 0) — both this and
-// the restore target share that frame, so the remap is a pure spatial overlap.
-static std::optional<TriangleSelector::SavedPainting>
-conn_save_paint(const indexed_triangle_set& its, const char* const* in_paint, size_t tri_count) {
+// Paint is carried by exact triangle identity, NOT libslic3r's spatial remap
+// (restore_painting), which does a per-painted-face AABB/overlap query — ~2
+// minutes on a 600k-painted-face model. The plane cut copies every un-split
+// triangle verbatim, and CGAL leaves triangles away from a connector untouched,
+// so a kept triangle has the SAME three vertices as its source. We hash painted
+// source triangles by their (winding-independent) vertex bits and look each kept
+// triangle up. New geometry — cut caps, connector walls, the thin re-triangulated
+// ring around a connector — doesn't match, so it comes back unpainted.
+struct TriKey {
+    uint32_t v[9];
+    bool operator==(const TriKey& o) const { return std::memcmp(v, o.v, sizeof v) == 0; }
+};
+struct TriKeyHash {
+    size_t operator()(const TriKey& k) const {
+        size_t h = 1469598103934665603ull; // FNV-1a
+        for (uint32_t x : k.v) {
+            h ^= x;
+            h *= 1099511628211ull;
+        }
+        return h;
+    }
+};
+
+// The three vertices of triangle `ti` as sorted bit patterns (sorted so winding
+// doesn't matter). `m` and the lookups must share one coordinate frame.
+static TriKey tri_key(const indexed_triangle_set& m, size_t ti) {
+    std::array<std::array<uint32_t, 3>, 3> vs;
+    for (int j = 0; j < 3; ++j) {
+        const Vec3f& p = m.vertices[m.indices[ti][j]];
+        std::memcpy(vs[j].data(), &p, 3 * sizeof(uint32_t));
+    }
+    std::sort(vs.begin(), vs.end());
+    TriKey key;
+    for (int j = 0; j < 3; ++j)
+        for (int c = 0; c < 3; ++c)
+            key.v[j * 3 + c] = vs[j][c];
+    return key;
+}
+
+using PaintMap = std::unordered_map<TriKey, const char*, TriKeyHash>;
+
+// Map painted source triangles → their paint string. Empty when nothing painted.
+static PaintMap conn_paint_map(const indexed_triangle_set& src, const char* const* in_paint,
+                               size_t tri_count) {
+    PaintMap map;
     if (!in_paint)
-        return std::nullopt;
-    bool any = false;
-    for (size_t i = 0; i < tri_count; ++i)
-        if (in_paint[i] && in_paint[i][0]) { any = true; break; }
-    if (!any)
-        return std::nullopt;
-    Model model;
-    ModelObject* obj = model.add_object();
-    ModelVolume* vol = obj->add_volume(TriangleMesh(its), false);
+        return map;
     for (size_t i = 0; i < tri_count; ++i)
         if (in_paint[i] && in_paint[i][0])
-            vol->mmu_segmentation_facets.set_triangle_from_string(static_cast<int>(i), in_paint[i]);
-    return vol->save_painting();
+            map.emplace(tri_key(src, i), in_paint[i]);
+    return map;
 }
 
-// Re-project the saved paint onto a cut half (same local frame), reading back
-// one FacetsAnnotation string per triangle. Cut faces + connector walls are new
-// interior geometry with no matching source surface, so they remap to "".
-static void conn_restore_paint(const indexed_triangle_set& half,
-                               const std::optional<TriangleSelector::SavedPainting>& saved,
-                               std::vector<std::string>& out) {
+// One paint string per triangle of `half`, looked up by exact identity.
+static void conn_lookup_paint(const indexed_triangle_set& half, const PaintMap& map,
+                              std::vector<std::string>& out) {
     out.assign(half.indices.size(), std::string());
-    if (!saved)
-        return;
-    Model model;
-    ModelObject* obj = model.add_object();
-    ModelVolume* vol = obj->add_volume(TriangleMesh(half), false);
-    vol->restore_painting(saved);
-    for (size_t i = 0; i < half.indices.size(); ++i)
-        out[i] = vol->mmu_segmentation_facets.get_triangle_as_string(static_cast<int>(i));
-}
-
-// Inverse-rotate `its` from the cut-aligned frame back to the input frame.
-static void conn_unalign(indexed_triangle_set& its, const Eigen::Quaterniond& qi,
-                         const Eigen::Vector3d& o) {
-    for (auto& v : its.vertices) {
-        const Eigen::Vector3d p = qi * Eigen::Vector3d(v.x(), v.y(), v.z()) + o;
-        v = Vec3f(static_cast<float>(p.x()), static_cast<float>(p.y()), static_cast<float>(p.z()));
+    for (size_t i = 0; i < half.indices.size(); ++i) {
+        const auto it = map.find(tri_key(half, i));
+        if (it != map.end())
+            out[i] = it->second;
     }
 }
 
@@ -1593,6 +1609,17 @@ slic3r_status slic3r_cut_mesh_connectors(
         return SLIC3R_ERR_INVALID_ARG;
     if (connector_count > 0 && (!connector_floats || !connector_ints))
         return SLIC3R_ERR_INVALID_ARG;
+    // Opt-in phase timing (N3O_CUT_TIMING=1) for profiling the cut on big models.
+    const bool timing = std::getenv("N3O_CUT_TIMING") != nullptr;
+    auto now = [] { return std::chrono::steady_clock::now(); };
+    auto t_prev = now();
+    auto lap = [&](const char* name) {
+        if (!timing) return;
+        const auto t = now();
+        const double ms = std::chrono::duration<double, std::milli>(t - t_prev).count();
+        std::fprintf(stderr, "[cut] %-14s %8.1f ms\n", name, ms);
+        t_prev = t;
+    };
     try {
         Eigen::Vector3d n(plane_normal[0], plane_normal[1], plane_normal[2]);
         if (n.norm() < 1e-9)
@@ -1603,17 +1630,19 @@ slic3r_status slic3r_cut_mesh_connectors(
         const Eigen::Quaterniond qi = q.conjugate();
 
         indexed_triangle_set its = its_from_buffers(vertices, vertex_count, indices, triangle_count);
-        // Capture paint off the original (un-rotated, local-frame) mesh first.
-        const std::optional<TriangleSelector::SavedPainting> saved =
-            conn_save_paint(its, in_paint, triangle_count);
         for (auto& v : its.vertices) {
             const Eigen::Vector3d t = q * (Eigen::Vector3d(v.x(), v.y(), v.z()) - o);
             v = Vec3f(static_cast<float>(t.x()), static_cast<float>(t.y()), static_cast<float>(t.z()));
         }
+        // Paint map keyed in this aligned frame — the halves are looked up here
+        // too, so identity matches survive the rotation.
+        const PaintMap paint_map = conn_paint_map(its, in_paint, triangle_count);
+        lap("paint_map");
 
         // upper = z>0 = positive side; lower = negative side. (aligned frame)
         indexed_triangle_set upper, lower;
         cut_mesh(its, 0.0f, &upper, &lower, /*triangulate_caps=*/true);
+        lap("cut_mesh");
 
         // Connector cutters are disjoint, so we bake them with one CGAL boolean
         // per category over the whole half — NOT one per connector. A full-mesh
@@ -1709,6 +1738,7 @@ slic3r_status slic3r_cut_mesh_connectors(
         apply_cutters(lower, lower_plus, /*add=*/true);
         apply_cutters(upper, upper_minus, /*add=*/false);
         apply_cutters(lower, lower_minus, /*add=*/false);
+        lap("booleans");
 
         if (!conn_marshal(upper, qi, o, out_pos_vertices, out_pos_vertex_count, out_pos_indices,
                           out_pos_triangle_count) ||
@@ -1717,19 +1747,17 @@ slic3r_status slic3r_cut_mesh_connectors(
             set_err(out_err, "out of memory marshalling cut halves");
             return SLIC3R_ERR_INTERNAL;
         }
+        lap("marshal");
 
-        // Re-project paint onto each half. Restore needs the halves in the input
-        // frame (where `saved` lives), so un-rotate copies — the marshaled
-        // geometry above is unchanged.
-        if (saved) {
-            indexed_triangle_set up_o = upper, lo_o = lower;
-            conn_unalign(up_o, qi, o);
-            conn_unalign(lo_o, qi, o);
+        // Carry paint onto each half by exact triangle identity (aligned frame,
+        // same as the marshaled triangle order). Cheap vs a spatial remap.
+        if (!paint_map.empty()) {
             std::vector<std::string> pos_paint, neg_paint;
-            conn_restore_paint(up_o, saved, pos_paint);
-            conn_restore_paint(lo_o, saved, neg_paint);
+            conn_lookup_paint(upper, paint_map, pos_paint);
+            conn_lookup_paint(lower, paint_map, neg_paint);
             if (out_pos_paint) *out_pos_paint = conn_marshal_paint(pos_paint);
             if (out_neg_paint) *out_neg_paint = conn_marshal_paint(neg_paint);
+            lap("paint_lookup");
         }
 
         if (!dowels.empty()) {
