@@ -429,6 +429,15 @@ typedef enum { SLIC3R_CONN_TRIANGLE = 0, SLIC3R_CONN_SQUARE = 1,
  * a Dowel cuts a hole in BOTH halves and emits a free pin mesh. A connector
  * whose boolean fails is skipped (logged) — the plain cut still succeeds.
  *
+ * MMU color paint: pass `in_paint` as `triangle_count` C strings (libslic3r
+ * FacetsAnnotation per-triangle encoding; "" = unpainted), or NULL for an
+ * unpainted mesh. When supplied, the paint is re-projected onto each kept half
+ * (libslic3r's save/restore_painting spatial remap, which tolerates the cut +
+ * connector booleans) and returned as `*out_pos_triangle_count` /
+ * `*out_neg_triangle_count` strings via *out_pos_paint / *out_neg_paint — free
+ * each with slic3r_cut_connectors_free_paint. NULL out when in_paint was NULL.
+ * Dowel pins are fresh geometry and carry no paint.
+ *
  * Outputs: pos/neg halves exactly as slic3r_cut_mesh (free with
  * slic3r_cut_mesh_free). Dowel pins come back as an array of `*out_dowel_count`
  * meshes (parallel arrays of vertex/index buffers + their counts); free the
@@ -437,17 +446,24 @@ typedef enum { SLIC3R_CONN_TRIANGLE = 0, SLIC3R_CONN_SQUARE = 1,
 slic3r_status slic3r_cut_mesh_connectors(
     const float* vertices, size_t vertex_count,
     const uint32_t* indices, size_t triangle_count,
+    const char* const* in_paint,
     const float plane_origin[3], const float plane_normal[3],
     const float* connector_floats, const int32_t* connector_ints, size_t connector_count,
     int flip_peg_side,
     float** out_pos_vertices, size_t* out_pos_vertex_count,
     uint32_t** out_pos_indices, size_t* out_pos_triangle_count,
+    char*** out_pos_paint,
     float** out_neg_vertices, size_t* out_neg_vertex_count,
     uint32_t** out_neg_indices, size_t* out_neg_triangle_count,
+    char*** out_neg_paint,
     float*** out_dowel_vertices, size_t** out_dowel_vertex_counts,
     uint32_t*** out_dowel_indices, size_t** out_dowel_triangle_counts,
     size_t* out_dowel_count,
     char** out_err);
+
+/* Free a per-triangle paint string array from slic3r_cut_mesh_connectors (every
+ * string + the outer array). Safe with NULL/0 (no-op). */
+void slic3r_cut_connectors_free_paint(char** paint, size_t count);
 
 /* Free the dowel array-of-arrays from slic3r_cut_mesh_connectors (every inner
  * buffer + the four outer arrays). Safe with NULL/0 (no-op). */

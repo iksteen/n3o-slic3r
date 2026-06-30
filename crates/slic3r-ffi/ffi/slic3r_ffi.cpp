@@ -1457,6 +1457,69 @@ static indexed_triangle_set conn_unit_mesh(int type, int style, int sectors, boo
     return its;
 }
 
+// Capture MMU color paint off the (un-rotated, local-frame) input mesh as a
+// libslic3r SavedPainting, so it can be re-projected onto the cut halves.
+// `nullopt` when no paint was supplied or nothing is painted (the common case,
+// so we never build a Model for an unpainted cut). `modify_to_center_geometry =
+// false` keeps the volume mesh in the input frame (init_shift 0) — both this and
+// the restore target share that frame, so the remap is a pure spatial overlap.
+static std::optional<TriangleSelector::SavedPainting>
+conn_save_paint(const indexed_triangle_set& its, const char* const* in_paint, size_t tri_count) {
+    if (!in_paint)
+        return std::nullopt;
+    bool any = false;
+    for (size_t i = 0; i < tri_count; ++i)
+        if (in_paint[i] && in_paint[i][0]) { any = true; break; }
+    if (!any)
+        return std::nullopt;
+    Model model;
+    ModelObject* obj = model.add_object();
+    ModelVolume* vol = obj->add_volume(TriangleMesh(its), false);
+    for (size_t i = 0; i < tri_count; ++i)
+        if (in_paint[i] && in_paint[i][0])
+            vol->mmu_segmentation_facets.set_triangle_from_string(static_cast<int>(i), in_paint[i]);
+    return vol->save_painting();
+}
+
+// Re-project the saved paint onto a cut half (same local frame), reading back
+// one FacetsAnnotation string per triangle. Cut faces + connector walls are new
+// interior geometry with no matching source surface, so they remap to "".
+static void conn_restore_paint(const indexed_triangle_set& half,
+                               const std::optional<TriangleSelector::SavedPainting>& saved,
+                               std::vector<std::string>& out) {
+    out.assign(half.indices.size(), std::string());
+    if (!saved)
+        return;
+    Model model;
+    ModelObject* obj = model.add_object();
+    ModelVolume* vol = obj->add_volume(TriangleMesh(half), false);
+    vol->restore_painting(saved);
+    for (size_t i = 0; i < half.indices.size(); ++i)
+        out[i] = vol->mmu_segmentation_facets.get_triangle_as_string(static_cast<int>(i));
+}
+
+// Inverse-rotate `its` from the cut-aligned frame back to the input frame.
+static void conn_unalign(indexed_triangle_set& its, const Eigen::Quaterniond& qi,
+                         const Eigen::Vector3d& o) {
+    for (auto& v : its.vertices) {
+        const Eigen::Vector3d p = qi * Eigen::Vector3d(v.x(), v.y(), v.z()) + o;
+        v = Vec3f(static_cast<float>(p.x()), static_cast<float>(p.y()), static_cast<float>(p.z()));
+    }
+}
+
+// Heap-copy per-triangle paint strings into a char* array (one malloc'd string
+// each). Empty input → null. Caller frees with slic3r_cut_connectors_free_paint.
+static char** conn_marshal_paint(const std::vector<std::string>& strs) {
+    if (strs.empty())
+        return nullptr;
+    char** arr = static_cast<char**>(std::malloc(strs.size() * sizeof(char*)));
+    if (!arr)
+        return nullptr;
+    for (size_t i = 0; i < strs.size(); ++i)
+        arr[i] = dup_c(strs[i]);
+    return arr;
+}
+
 // Copy `its` and apply the affine `T` to every vertex.
 static indexed_triangle_set conn_place(indexed_triangle_set its, const Transform3d& T) {
     for (auto& v : its.vertices) {
@@ -1496,13 +1559,16 @@ static bool conn_marshal(const indexed_triangle_set& half, const Eigen::Quaterni
 slic3r_status slic3r_cut_mesh_connectors(
     const float* vertices, size_t vertex_count,
     const uint32_t* indices, size_t triangle_count,
+    const char* const* in_paint,
     const float plane_origin[3], const float plane_normal[3],
     const float* connector_floats, const int32_t* connector_ints, size_t connector_count,
     int flip_peg_side,
     float** out_pos_vertices, size_t* out_pos_vertex_count,
     uint32_t** out_pos_indices, size_t* out_pos_triangle_count,
+    char*** out_pos_paint,
     float** out_neg_vertices, size_t* out_neg_vertex_count,
     uint32_t** out_neg_indices, size_t* out_neg_triangle_count,
+    char*** out_neg_paint,
     float*** out_dowel_vertices, size_t** out_dowel_vertex_counts,
     uint32_t*** out_dowel_indices, size_t** out_dowel_triangle_counts,
     size_t* out_dowel_count,
@@ -1512,10 +1578,12 @@ slic3r_status slic3r_cut_mesh_connectors(
     if (out_pos_vertex_count) *out_pos_vertex_count = 0;
     if (out_pos_indices) *out_pos_indices = nullptr;
     if (out_pos_triangle_count) *out_pos_triangle_count = 0;
+    if (out_pos_paint) *out_pos_paint = nullptr;
     if (out_neg_vertices) *out_neg_vertices = nullptr;
     if (out_neg_vertex_count) *out_neg_vertex_count = 0;
     if (out_neg_indices) *out_neg_indices = nullptr;
     if (out_neg_triangle_count) *out_neg_triangle_count = 0;
+    if (out_neg_paint) *out_neg_paint = nullptr;
     if (out_dowel_vertices) *out_dowel_vertices = nullptr;
     if (out_dowel_vertex_counts) *out_dowel_vertex_counts = nullptr;
     if (out_dowel_indices) *out_dowel_indices = nullptr;
@@ -1536,6 +1604,9 @@ slic3r_status slic3r_cut_mesh_connectors(
         const Eigen::Quaterniond qi = q.conjugate();
 
         indexed_triangle_set its = its_from_buffers(vertices, vertex_count, indices, triangle_count);
+        // Capture paint off the original (un-rotated, local-frame) mesh first.
+        const std::optional<TriangleSelector::SavedPainting> saved =
+            conn_save_paint(its, in_paint, triangle_count);
         for (auto& v : its.vertices) {
             const Eigen::Vector3d t = q * (Eigen::Vector3d(v.x(), v.y(), v.z()) - o);
             v = Vec3f(static_cast<float>(t.x()), static_cast<float>(t.y()), static_cast<float>(t.z()));
@@ -1613,6 +1684,20 @@ slic3r_status slic3r_cut_mesh_connectors(
             return SLIC3R_ERR_INTERNAL;
         }
 
+        // Re-project paint onto each half. Restore needs the halves in the input
+        // frame (where `saved` lives), so un-rotate copies — the marshaled
+        // geometry above is unchanged.
+        if (saved) {
+            indexed_triangle_set up_o = upper, lo_o = lower;
+            conn_unalign(up_o, qi, o);
+            conn_unalign(lo_o, qi, o);
+            std::vector<std::string> pos_paint, neg_paint;
+            conn_restore_paint(up_o, saved, pos_paint);
+            conn_restore_paint(lo_o, saved, neg_paint);
+            if (out_pos_paint) *out_pos_paint = conn_marshal_paint(pos_paint);
+            if (out_neg_paint) *out_neg_paint = conn_marshal_paint(neg_paint);
+        }
+
         if (!dowels.empty()) {
             const size_t nd = dowels.size();
             float** dv = static_cast<float**>(std::malloc(nd * sizeof(float*)));
@@ -1656,6 +1741,14 @@ void slic3r_cut_connectors_free_dowels(
     }
     std::free(dowel_vertex_counts);
     std::free(dowel_triangle_counts);
+}
+
+void slic3r_cut_connectors_free_paint(char** paint, size_t count) {
+    if (!paint)
+        return;
+    for (size_t i = 0; i < count; ++i)
+        std::free(paint[i]);
+    std::free(paint);
 }
 
 slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengths,

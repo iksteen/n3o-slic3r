@@ -43,6 +43,8 @@ pub struct CutTarget {
     pub object_id: ObjectId,
     pub vertices: std::sync::Arc<Vec<f32>>,
     pub indices: std::sync::Arc<Vec<u32>>,
+    /// Per-triangle MMU paint, passed through the cut so painted faces survive.
+    pub paint: Option<std::sync::Arc<Vec<String>>>,
     pub transform: Transform,
     pub name: String,
     pub extruder_id: Option<u8>,
@@ -54,6 +56,9 @@ pub struct CutHalfOut {
     pub side: CutSide,
     pub vertices: Vec<f32>,
     pub indices: Vec<u32>,
+    /// Per-triangle MMU paint re-projected onto this half, or `None` when the
+    /// source was unpainted.
+    pub paint: Option<Vec<String>>,
 }
 
 /// The kept halves of one cut source, ready to register. See
@@ -648,6 +653,7 @@ impl Project {
                 object_id: id,
                 vertices: mesh.vertices.clone(),
                 indices: mesh.indices.clone(),
+                paint: mesh.paint_colors.clone(),
                 transform: obj.transform,
                 name: obj.name.clone(),
                 extruder_id: obj.extruder_id,
@@ -662,8 +668,9 @@ impl Project {
     /// per side: halves descending from one source group are re-grouped (one
     /// fresh group per (source group, side)), so a group split in two yields two
     /// coherent groups; halves of an ungrouped source stay ungrouped. Per-side
-    /// groups left with a single member dissolve. `paint_colors` are dropped (a
-    /// cut renumbers triangles, invalidating the per-triangle paint map).
+    /// groups left with a single member dissolve. MMU paint rides along per half
+    /// (`CutHalfOut::paint`, re-projected by the FFI); dowel pins are fresh
+    /// geometry and stay unpainted.
     pub fn apply_cut(&mut self, results: Vec<CutResult>) -> (Vec<ObjectId>, Vec<SceneEvent>) {
         let active = self.active_plate;
         let plate_id = self.plates[active].id;
@@ -684,7 +691,7 @@ impl Project {
                 let mesh = self.register_mesh(NewMesh {
                     vertices: half.vertices,
                     indices: half.indices,
-                    paint_colors: None,
+                    paint_colors: half.paint,
                     bounding_box: bbox,
                     provenance: MeshProvenance::Primitive(format!("{} (cut)", res.base_name)),
                 });
@@ -1374,7 +1381,7 @@ mod tests {
     /// Synthetic kept half (no FFI) — geometry is irrelevant to the
     /// register/remove/group bookkeeping under test.
     fn half(side: CutSide) -> CutHalfOut {
-        CutHalfOut { side, vertices: vec![0.0; 9], indices: vec![0, 1, 2] }
+        CutHalfOut { side, vertices: vec![0.0; 9], indices: vec![0, 1, 2], paint: None }
     }
 
     #[test]
@@ -1402,7 +1409,7 @@ mod tests {
         for id in &new_ids {
             let o = &plate.scene.objects[id];
             assert_eq!(o.group, None, "ungroduped source → ungrouped halves");
-            assert!(p.meshes[&o.mesh].paint_colors.is_none(), "paint dropped on cut");
+            assert!(p.meshes[&o.mesh].paint_colors.is_none(), "unpainted source → unpainted halves");
         }
         assert_eq!(
             plate.scene.selection.iter().copied().collect::<HashSet<_>>(),
@@ -1428,6 +1435,35 @@ mod tests {
         let (new_ids, _) = p.apply_cut(vec![res]);
         assert_eq!(new_ids.len(), 1);
         assert_eq!(p.active_plate().scene.objects[&new_ids[0]].name, "cube (cut)");
+    }
+
+    #[test]
+    fn apply_cut_carries_paint_onto_the_half_mesh() {
+        let mut p = Project::default();
+        let (_, a) = add_cube(&mut p);
+        let tf = p.active_plate().scene.objects[&a].transform;
+        let painted = CutHalfOut {
+            side: CutSide::Pos,
+            vertices: vec![0.0; 9],
+            indices: vec![0, 1, 2],
+            paint: Some(vec!["4".into()]),
+        };
+        let res = CutResult {
+            source_id: a,
+            transform: tf,
+            base_name: "cube".into(),
+            extruder_id: None,
+            source_group: None,
+            halves: vec![painted],
+            dowels: vec![],
+        };
+        let (new_ids, _) = p.apply_cut(vec![res]);
+        let mesh = p.active_plate().scene.objects[&new_ids[0]].mesh;
+        assert_eq!(
+            p.meshes[&mesh].paint_colors.as_deref(),
+            Some(&vec!["4".to_string()]),
+            "the half's paint reaches the registered mesh",
+        );
     }
 
     #[test]

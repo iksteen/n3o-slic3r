@@ -882,6 +882,7 @@ pub async fn scene_cut_apply(
                 o_l.to_array(),
                 n_l.to_array(),
                 &conns,
+                t.paint.as_deref().map(Vec::as_slice),
             )
             .map_err(|e| format!("split: cut failed: {e}"))?;
             let mut halves = Vec::new();
@@ -890,6 +891,7 @@ pub async fn scene_cut_apply(
                     side: CutSide::Pos,
                     vertices: res.pos.vertices,
                     indices: res.pos.indices,
+                    paint: res.pos.paint,
                 });
             }
             if keep_negative && !res.neg.is_empty() {
@@ -897,6 +899,7 @@ pub async fn scene_cut_apply(
                     side: CutSide::Neg,
                     vertices: res.neg.vertices,
                     indices: res.neg.indices,
+                    paint: res.neg.paint,
                 });
             }
             let dowels = if keep_dowels {

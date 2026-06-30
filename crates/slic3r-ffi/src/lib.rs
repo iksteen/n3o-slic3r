@@ -184,6 +184,10 @@ pub fn orient_mesh(vertices: &[f32], indices: &[u32], overhang_angle: Option<f32
 pub struct CutHalf {
     pub vertices: Vec<f32>,
     pub indices: Vec<u32>,
+    /// One MMU paint string per triangle (libslic3r `FacetsAnnotation`
+    /// encoding), re-projected from the source mesh by [`cut_mesh_connectors`].
+    /// `None` when the source carried no paint. Always absent from [`cut_mesh`].
+    pub paint: Option<Vec<String>>,
 }
 
 impl CutHalf {
@@ -288,7 +292,27 @@ unsafe fn take_cut_half(verts: *mut f32, vcount: usize, idx: *mut u32, icount: u
     let vertices = std::slice::from_raw_parts(verts, vcount * 3).to_vec();
     let indices = std::slice::from_raw_parts(idx, icount * 3).to_vec();
     sys::slic3r_cut_mesh_free(verts, idx);
-    CutHalf { vertices, indices }
+    CutHalf { vertices, indices, paint: None }
+}
+
+/// Copy a per-triangle paint string array (`n` = the half's triangle count) out
+/// of the shim, then free it. `None` when the shim returned no paint.
+unsafe fn take_paint(arr: *mut *mut c_char, n: usize) -> Option<Vec<String>> {
+    if arr.is_null() {
+        return None;
+    }
+    let out = (0..n)
+        .map(|k| {
+            let s = *arr.add(k);
+            if s.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(s).to_string_lossy().into_owned()
+            }
+        })
+        .collect();
+    sys::slic3r_cut_connectors_free_paint(arr, n);
+    Some(out)
 }
 
 /// Connector (joint) type — matches OrcaSlicer's `CutConnectorType`.
@@ -387,6 +411,7 @@ pub fn cut_mesh_connectors(
     plane_origin: [f32; 3],
     plane_normal: [f32; 3],
     connectors: &[Connector],
+    paint: Option<&[String]>,
 ) -> Result<CutWithConnectors> {
     if vertices.is_empty() || vertices.len() % 3 != 0 {
         return Err(Error {
@@ -427,14 +452,26 @@ pub fn cut_mesh_connectors(
         (cf.as_ptr(), cn.as_ptr())
     };
 
+    // Per-triangle MMU paint → null-terminated C strings the shim re-projects.
+    // Length must match the triangle count, else drop it (treat as unpainted).
+    let triangle_count = indices.len() / 3;
+    let paint_cstrings: Option<Vec<CString>> = paint
+        .filter(|p| p.len() == triangle_count)
+        .map(|p| p.iter().map(|s| CString::new(s.as_str()).unwrap_or_default()).collect());
+    let paint_ptrs: Option<Vec<*const c_char>> =
+        paint_cstrings.as_ref().map(|v| v.iter().map(|c| c.as_ptr()).collect());
+    let paint_ptr = paint_ptrs.as_ref().map_or(ptr::null(), |v| v.as_ptr());
+
     let mut pos_v: *mut f32 = ptr::null_mut();
     let mut pos_vc: usize = 0;
     let mut pos_i: *mut u32 = ptr::null_mut();
     let mut pos_tc: usize = 0;
+    let mut pos_p: *mut *mut c_char = ptr::null_mut();
     let mut neg_v: *mut f32 = ptr::null_mut();
     let mut neg_vc: usize = 0;
     let mut neg_i: *mut u32 = ptr::null_mut();
     let mut neg_tc: usize = 0;
+    let mut neg_p: *mut *mut c_char = ptr::null_mut();
     let mut dv: *mut *mut f32 = ptr::null_mut();
     let mut dvc: *mut usize = ptr::null_mut();
     let mut di: *mut *mut u32 = ptr::null_mut();
@@ -450,6 +487,7 @@ pub fn cut_mesh_connectors(
             vertex_count,
             indices.as_ptr(),
             indices.len() / 3,
+            paint_ptr,
             plane_origin.as_ptr(),
             plane_normal.as_ptr(),
             cf_ptr,
@@ -460,10 +498,12 @@ pub fn cut_mesh_connectors(
             &mut pos_vc,
             &mut pos_i,
             &mut pos_tc,
+            &mut pos_p,
             &mut neg_v,
             &mut neg_vc,
             &mut neg_i,
             &mut neg_tc,
+            &mut neg_p,
             &mut dv,
             &mut dvc,
             &mut di,
@@ -475,8 +515,11 @@ pub fn cut_mesh_connectors(
     unsafe { check_with_err(status, err) }?;
 
     // SAFETY: each pos/neg half is (ptr,count) or (null,0); copy out + free.
-    let pos = unsafe { take_cut_half(pos_v, pos_vc, pos_i, pos_tc) };
-    let neg = unsafe { take_cut_half(neg_v, neg_vc, neg_i, neg_tc) };
+    // Paint (if any) is a parallel char* array sized to the half's triangle count.
+    let mut pos = unsafe { take_cut_half(pos_v, pos_vc, pos_i, pos_tc) };
+    let mut neg = unsafe { take_cut_half(neg_v, neg_vc, neg_i, neg_tc) };
+    pos.paint = unsafe { take_paint(pos_p, pos_tc) };
+    neg.paint = unsafe { take_paint(neg_p, neg_tc) };
     let dowels = unsafe { take_dowels(dv, dvc, di, dtc, dn) };
     Ok(CutWithConnectors { pos, neg, dowels })
 }
@@ -504,6 +547,7 @@ unsafe fn take_dowels(
             out.push(CutHalf {
                 vertices: std::slice::from_raw_parts(v, vc * 3).to_vec(),
                 indices: std::slice::from_raw_parts(i, tc * 3).to_vec(),
+                paint: None,
             });
         } else {
             out.push(CutHalf::default());
