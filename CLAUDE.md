@@ -110,6 +110,13 @@ later costs more than it had to.
 - **Standalone at runtime.** The app must complete every workflow
   with no other slicer installed. UX principle from PRD §5.
 
+- **Comments earn their place.** A comment states *why* — a non-obvious
+  constraint, rationale, or gotcha. Never restate what the next line
+  plainly does (`// Nothing selected:` on an `else`, `// cursor's point
+  on the plane` on the ray-plane formula), and never editorialize about
+  a design's virtue ("renderer-agnostic X"). If it just narrates the
+  code, delete it.
+
 ## Domain facts
 
 Non-obvious facts about the hardware and architecture worth having up front.
