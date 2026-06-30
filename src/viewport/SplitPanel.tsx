@@ -64,6 +64,7 @@ export function SplitPanel({
   onApply,
   onCancel,
   connectors,
+  splitting,
 }: {
   rot: Vec3;
   keepPos: boolean;
@@ -73,15 +74,17 @@ export function SplitPanel({
   onApply: () => void;
   onCancel: () => void;
   connectors: SplitConnectorControls;
+  /** The cut is running (async, off-thread) — lock the actions + show progress. */
+  splitting: boolean;
 }) {
   // Esc cancels the tool (matches the placing tools).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
+      if (e.key === "Escape" && !splitting) onCancel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
+  }, [onCancel, splitting]);
 
   const canApply = keepPos || keepNeg;
 
@@ -219,23 +222,24 @@ export function SplitPanel({
       <div className="px-3 py-2 flex gap-2 justify-end border-t border-neutral-700">
         <button
           type="button"
-          className="px-2 py-1 rounded hover:bg-neutral-700/60"
+          disabled={splitting}
+          className="px-2 py-1 rounded hover:bg-neutral-700/60 disabled:opacity-40 disabled:cursor-not-allowed"
           onClick={onCancel}
         >
           Cancel
         </button>
         <button
           type="button"
-          disabled={!canApply}
+          disabled={!canApply || splitting}
           className={`px-2.5 py-1 rounded ${
-            canApply
+            canApply && !splitting
               ? "bg-blue-600 hover:bg-blue-500"
               : "bg-neutral-700 opacity-40 cursor-not-allowed"
           }`}
           onClick={onApply}
           title={canApply ? "Cut along the plane" : "Keep at least one side"}
         >
-          Split
+          {splitting ? "Splitting…" : "Split"}
         </button>
       </div>
     </div>

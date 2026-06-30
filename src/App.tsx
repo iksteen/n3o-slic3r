@@ -71,6 +71,9 @@ function App() {
   // Split (cut-by-plane) tool — a transient cutting-plane session, mutually
   // exclusive with the transform gizmo (coordinated below).
   const split = useSplitSession();
+  // True while the (async, off-thread) cut runs — gates the Split button and
+  // shows progress so a large cut doesn't read as a frozen/dead panel.
+  const [splitting, setSplitting] = useState(false);
   // Object count frozen at the moment a slice is submitted — what the
   // backend actually snapshots and slices (build_slice_input). Held
   // here so the progress window's count stays put across tab switches
@@ -595,8 +598,10 @@ function App() {
                     setParams: split.setParams,
                   }}
                   onCancel={split.exit}
+                  splitting={splitting}
                   onApply={() => {
-                    if (selection.length === 0) return;
+                    if (selection.length === 0 || splitting) return;
+                    setSplitting(true);
                     void invoke("scene_cut_apply", {
                       ids: selection,
                       planeOrigin: split.origin,
@@ -606,7 +611,8 @@ function App() {
                       connectors: split.connectorsForApply(),
                     })
                       .then(() => split.exit())
-                      .catch((e: unknown) => console.error("split failed", e));
+                      .catch((e: unknown) => console.error("split failed", e))
+                      .finally(() => setSplitting(false));
                   }}
                 />
               )}
