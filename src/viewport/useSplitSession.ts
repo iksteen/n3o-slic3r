@@ -9,9 +9,11 @@ import { invoke } from "@tauri-apps/api/core";
 
 type Vec3 = [number, number, number];
 
-// Default plane orientation: normal along +X (the YZ plane) — splits the
-// selection left/right. The 3 sliders rotate from here.
-const DEFAULT_NORMAL: Vec3 = [1, 0, 0];
+// Default plane orientation: normal along -X (the YZ plane) — splits the
+// selection left/right. Normal toward -X puts the positive (blue) half on the
+// left and the negative (red) half on the right, matching the panel's
+// blue-then-red list. The 3 sliders rotate from here.
+const DEFAULT_NORMAL: Vec3 = [-1, 0, 0];
 
 export type ConnectorType = "plug" | "dowel" | "snap";
 export type ConnectorStyle = "prism" | "frustum";
