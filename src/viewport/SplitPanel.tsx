@@ -129,17 +129,25 @@ export function SplitPanel({
   ) => (
     <label className="flex flex-col gap-0.5">
       <span className="text-neutral-500">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => on(e.target.value)}
-        className="bg-neutral-900 text-neutral-100 rounded px-1 py-0.5 capitalize"
-      >
-        {opts.map((o) => (
-          <option key={o} value={o} className="bg-neutral-800 text-neutral-100">
-            {o}
-          </option>
-        ))}
-      </select>
+      <div className="relative">
+        {/* appearance-none: WebKitGTK renders a native select face with its own
+            (illegible-on-dark) text color; strip it so our CSS colors apply.
+            The caret is drawn ourselves since that also removes the arrow. */}
+        <select
+          value={value}
+          onChange={(e) => on(e.target.value)}
+          className="w-full appearance-none bg-neutral-900 text-neutral-100 rounded px-1 pr-4 py-0.5 capitalize"
+        >
+          {opts.map((o) => (
+            <option key={o} value={o} className="bg-neutral-800 text-neutral-100">
+              {o}
+            </option>
+          ))}
+        </select>
+        <span className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 text-neutral-400">
+          ▾
+        </span>
+      </div>
     </label>
   );
   const num = (label: string, value: number, on: (n: number) => void) => (
