@@ -41,12 +41,14 @@ struct U {
   model: mat4x4<f32>,     // world matrix, for the split tool's per-side tint
   plane_o: vec4<f32>,     // xyz = cut-plane origin, w = cut active (0/1)
   plane_n: vec4<f32>,     // xyz = cut-plane normal, w = keep code (bit0 pos, bit1 neg)
+  hole_hdr: vec4<f32>,    // x = number of cut-hole decals for this object
+  holes: array<vec4<f32>, 48>, // per hole (object-local): [center,radius][normal,segs][u_axis,_]
 };
 @group(0) @binding(0) var<uniform> u: U;
-struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32>, @location(1) wpos: vec3<f32> };
+struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32>, @location(1) wpos: vec3<f32>, @location(2) lpos: vec3<f32> };
 @vertex fn vs(@location(0) pos: vec3<f32>, @location(1) nrm: vec3<f32>) -> VO {
   var o: VO; o.p = u.mvp * vec4<f32>(pos, 1.0); o.n = nrm;
-  o.wpos = (u.model * vec4<f32>(pos, 1.0)).xyz; return o;
+  o.wpos = (u.model * vec4<f32>(pos, 1.0)).xyz; o.lpos = pos; return o;
 }
 @fragment fn fs(i: VO) -> @location(0) vec4<f32> {
   if (dot(i.n, i.n) < 0.01) { return vec4<f32>(u.color.rgb, 1.0); } // unlit line (grid / bbox bracket)
@@ -74,6 +76,41 @@ struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32>, @locatio
     rgb = mix(rgb, tint, 0.6);
     let kept = select((keep & 2u) != 0u, (keep & 1u) != 0u, pos_side);
     if (!kept) { rgb = rgb * 0.4; } // ghost the discard side
+  }
+  // Cut-hole decal: darken cap fragments that fall inside a hole silhouette.
+  // Tested in object-local space (i.lpos) so it's exact under non-uniform scale.
+  // The cap is the object's own opaque surface, so this never adds geometry —
+  // no z-fight, no peeking below the bed.
+  if (u.hole_hdr.x > 0.5) {
+    let count = i32(u.hole_hdr.x + 0.5);
+    for (var h = 0; h < count; h = h + 1) {
+      let cr = u.holes[3 * h];
+      let ns = u.holes[3 * h + 1];
+      let hn = normalize(ns.xyz);
+      let dv = i.lpos - cr.xyz;
+      if (abs(dot(dv, hn)) > 0.05) { continue; } // not on this hole's cap plane
+      // Basis from the stored vertex-0 direction (orthonormalized against the
+      // normal), so the polygon's corners match the real connector.
+      let e1 = normalize(u.holes[3 * h + 2].xyz - hn * dot(hn, u.holes[3 * h + 2].xyz));
+      let e2 = cross(hn, e1);
+      let uu = dot(dv, e1);
+      let vv = dot(dv, e2);
+      let r = length(vec2<f32>(uu, vv));
+      var inside = r <= cr.w;
+      if (ns.w < 27.0) { // regular polygon (circle uses 28 segments); vertex at e1
+        let half = 3.14159265 / ns.w;
+        let sector = 2.0 * half;
+        let ang = atan2(vv, uu);
+        let m = ang - half - floor((ang - half) / sector + 0.5) * sector; // to nearest edge
+        inside = r <= cr.w * cos(half) / cos(m);
+      }
+      if (inside) {
+        // Recess that reads on any surface: darken bright colors, lift dark ones
+        // (a pure-black surface can't be darkened, so shift toward grey instead).
+        let luma = dot(rgb, vec3<f32>(0.299, 0.587, 0.114));
+        rgb = select(rgb + (vec3<f32>(1.0) - rgb) * 0.45, rgb * 0.35, luma > 0.35);
+      }
+    }
   }
   return vec4<f32>(rgb * min(d, 1.0), 1.0);
 }
@@ -125,12 +162,16 @@ const TOWER_BOX_H: f32 = 50.0; // indicative box height (the real tower is as ta
 const GIZMO_ROD_R: f32 = 0.012; // rod radius (also the rotate ring tube)
 const GIZMO_TIP: f32 = 0.12; // endpoint size: move cone base Ø == scale cube width
 const GIZMO_CONE_H: f32 = 0.2; // move arrowhead length, beyond the full-length rod
+/// Max cut-hole decals shaded onto one object's cap.
+// ponytail: 16-hole cap per object; move `holes` to an SSBO if a cut exceeds it.
+const MAX_HOLES: usize = 16;
 /// Per-object uniform: `mat4 mvp` (64) + `vec4 color` (16) + `mat4 model` (64)
 /// + `vec4 plane_o` (16, xyz origin + w = cut-active flag) + `vec4 plane_n`
-/// (16, xyz normal + w = keep code). The trailing 96 bytes drive the split
-/// tool's per-side red/blue tint; they're zero (inert) for every normal frame
-/// and for the gizmo/tower/line shaders, whose smaller `U` ignores the tail.
-const UNIFORM_BYTES: u64 = 176;
+/// (16, xyz normal + w = keep code) + `vec4 hole_hdr` (16, x = hole count) +
+/// `vec4 holes[3*MAX_HOLES]` (per hole: center+radius, normal+segs, u_axis+pad).
+/// The split-tool + hole tail is zero (inert) for gizmo/tower/line shaders,
+/// whose smaller `U` ignores it.
+const UNIFORM_BYTES: u64 = 176 + 16 + (MAX_HOLES as u64) * 48;
 // Bed extents are f64 (BoundingBox); converted to f32 for the GPU.
 const DEFAULT_BED: ([f64; 3], [f64; 3]) = ([-110.0, -110.0, 0.0], [110.0, 110.0, 200.0]);
 const SELECTED_RGB: [f32; 3] = [0.231, 0.510, 0.965]; // tailwind blue-500 (#3b82f6)
@@ -828,7 +869,6 @@ pub struct ViewportRenderer {
     queue: Arc<wgpu::Queue>,
     bgl: wgpu::BindGroupLayout,
     mesh_pipe: wgpu::RenderPipeline,
-    marker_pipe: wgpu::RenderPipeline,
     line_pipe: wgpu::RenderPipeline,
     axis_pipe: wgpu::RenderPipeline,
     gizmo_pipe: wgpu::RenderPipeline,
@@ -957,7 +997,7 @@ impl ViewportRenderer {
                 cache: None,
             })
         };
-        use wgpu::CompareFunction::{Always, Less, LessEqual};
+        use wgpu::CompareFunction::{Always, Less};
         use wgpu::PrimitiveTopology::{LineList, TriangleList};
         let no_bias = wgpu::DepthBiasState::default();
         // No back-face culling: imported meshes (STL etc.) have no winding
@@ -969,17 +1009,6 @@ impl ViewportRenderer {
         // lines, so they z-fight with it. Draw them always-on-top of the grid
         // (Always, no depth write) — still before the meshes, so objects occlude.
         let axis_pipe = make_pipe(LineList, None, Always, false, no_bias);
-        // Cut hole-markers are decals coplanar with the cut cap (and, on a fresh
-        // cut, the coincident opposite half's cap). A depth bias toward the camera
-        // makes them win that tie deterministically instead of z-fighting;
-        // LessEqual + no depth write keeps them from disturbing the depth buffer.
-        let marker_pipe = make_pipe(
-            TriangleList,
-            None,
-            LessEqual,
-            false,
-            wgpu::DepthBiasState { constant: -16, slope_scale: -1.0, clamp: 0.0 },
-        );
 
         // Gizmo: solid lit triangles, drawn in its own depth-cleared pass so it
         // sits on top of the scene yet self-occludes (near rod hides far rod).
@@ -1107,7 +1136,6 @@ impl ViewportRenderer {
             queue,
             bgl,
             mesh_pipe,
-            marker_pipe,
             line_pipe,
             axis_pipe,
             gizmo_pipe,
@@ -1309,7 +1337,7 @@ impl ViewportRenderer {
         self.resize(w, h);
 
         // --- gather under the project lock (cheap): bed + per-object models ---
-        let (bmin, bmax, draws, marker_draws, boxes, gizmo, basis, drag_pre, active_plate_id, tower_geom) = {
+        let (bmin, bmax, draws, boxes, gizmo, basis, drag_pre, active_plate_id, tower_geom) = {
             let p = project.lock().unwrap();
             let plate = p.active_plate();
             let active_plate_id = plate.id;
@@ -1324,14 +1352,12 @@ impl ViewportRenderer {
             let instance = plate
                 .printer_instance_id()
                 .and_then(instance_registry::lookup_instance);
-            // One draw item per (object, paint-state group): (mesh, group index,
-            // model, resolved color).
-            // (mesh, paint-group, world matrix, color, selected) — `selected`
-            // gates the split-tool per-side tint.
-            let mut draws: Vec<(MeshId, usize, Mat4, [f32; 3], bool)> = Vec::new();
-            // Cut hole-marker decals (mesh + object model matrix), drawn depth-
-            // biased so they don't z-fight the cut cap.
-            let mut marker_draws: Vec<(MeshId, Mat4)> = Vec::new();
+            // One draw item per (object, paint-state group): mesh, paint-group,
+            // world matrix, color, `selected` (gates the split-tool per-side
+            // tint), and the object's cut-hole decals (object-local, packed
+            // [center.xyz, radius][normal.xyz, segs]) the shader shades onto the
+            // cap. Holes ride the object's mesh draws only, not its pegs.
+            let mut draws: Vec<(MeshId, usize, Mat4, [f32; 3], bool, Vec<[f32; 12]>)> = Vec::new();
             // Scale-gizmo basis follows the object's orientation (world for multi).
             let basis = selection_basis(&p);
             // Local drag preview: the active grab + cursor resolve (Rust-side) to a
@@ -1379,6 +1405,32 @@ impl ViewportRenderer {
                     model = drag_pre * model;
                 }
                 let selected = plate.scene.selection.contains(id);
+                // Cut-hole decals for this object's cap (object-local), packed for
+                // the shader. Capped at MAX_HOLES; a fuller cut logs the overflow.
+                let markers = plate.scene.object_hole_markers.get(id);
+                if let Some(hs) = markers {
+                    if hs.len() > MAX_HOLES {
+                        tracing::warn!(
+                            object = id.0,
+                            holes = hs.len(),
+                            "cut has more hole markers than the {MAX_HOLES}-slot cap; extras not shown"
+                        );
+                    }
+                }
+                let holes: Vec<[f32; 12]> = markers
+                    .into_iter()
+                    .flatten()
+                    .take(MAX_HOLES)
+                    .map(|hm| {
+                        let n = Vec3::from(hm.normal).normalize_or_zero();
+                        let u = Vec3::from(hm.u_axis);
+                        [
+                            hm.center[0], hm.center[1], hm.center[2], hm.radius,
+                            n.x, n.y, n.z, hm.shape.segments() as f32,
+                            u.x, u.y, u.z, 0.0,
+                        ]
+                    })
+                    .collect();
                 for (gi, g) in gm.groups.iter().enumerate() {
                     // state 0 → object's base material; state N → filament N. Both
                     // via the spool-color chain; selection tints toward blue.
@@ -1397,16 +1449,13 @@ impl ViewportRenderer {
                     } else {
                         base
                     };
-                    draws.push((obj.mesh, gi, model, color, selected));
+                    draws.push((obj.mesh, gi, model, color, selected, holes.clone()));
                 }
-                // Cut-connector visuals ride the object. A peg is a solid
-                // positive volume, drawn in the object's base color so it reads
-                // as part of the print. A hole-marker is a flat dark disc decal on
-                // the cut face standing in for the (un-baked) hole opening — drawn
-                // depth-biased (marker_pipe) so it doesn't fight the coplanar cap.
-                // The hole volume itself isn't drawn — it has no surface to show.
+                // A peg is a solid positive volume, drawn in the object's base
+                // color so it reads as part of the print. The hole volume isn't
+                // drawn (no surface to show — its opening is the cap decal above).
                 for m in plate.scene.object_modifiers.get(id).into_iter().flatten() {
-                    if m.kind == ModifierKind::Hole {
+                    if m.kind != ModifierKind::Peg {
                         continue;
                     }
                     if !self.meshes.contains_key(&m.mesh) {
@@ -1417,19 +1466,13 @@ impl ViewportRenderer {
                     if !self.meshes.contains_key(&m.mesh) {
                         continue;
                     }
-                    match m.kind {
-                        ModifierKind::Peg => {
-                            let base = spool_color(
-                                &plate.material_to_slot,
-                                instance.as_ref(),
-                                Some(obj.extruder_id.unwrap_or(1)),
-                            );
-                            let color = if selected { SELECTED_RGB } else { base };
-                            draws.push((m.mesh, 0, model, color, selected));
-                        }
-                        ModifierKind::HoleMarker => marker_draws.push((m.mesh, model)),
-                        ModifierKind::Hole => {}
-                    }
+                    let base = spool_color(
+                        &plate.material_to_slot,
+                        instance.as_ref(),
+                        Some(obj.extruder_id.unwrap_or(1)),
+                    );
+                    let color = if selected { SELECTED_RGB } else { base };
+                    draws.push((m.mesh, 0, model, color, selected, Vec::new()));
                 }
             }
             // One outer AABB enclosing the whole selection (world space) → a single
@@ -1448,7 +1491,7 @@ impl ViewportRenderer {
             // drawn this frame — no async frontend round-trip.
             let tower_geom = self.resolved_tower(&p, active_plate_id);
             (
-                bmin, bmax, draws, marker_draws, boxes, gizmo, basis, drag_pre, active_plate_id,
+                bmin, bmax, draws, boxes, gizmo, basis, drag_pre, active_plate_id,
                 tower_geom,
             )
         };
@@ -1479,9 +1522,7 @@ impl ViewportRenderer {
         let plane_slot = tower_slot + 2;
         let connector_slot = plane_slot + 1;
         let n_conn = req.cut.as_ref().map_or(0, |c| c.connectors.len());
-        // One slot per cut hole-marker decal, after the split-tool previews.
-        let marker_slot = connector_slot + n_conn;
-        let total_slots = marker_slot + marker_draws.len();
+        let total_slots = connector_slot + n_conn;
 
         // Priming tower: draw the active plate's stored sliced mesh (mesh mode)
         // when there is one, else the placement box. Placement is the resolved
@@ -1632,7 +1673,7 @@ impl ViewportRenderer {
         let mut bytes = vec![0u8; self.slot as usize * total_slots];
         bytes[0..64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
         bytes[64..80].copy_from_slice(bytemuck::cast_slice(&GRID_LINE));
-        for (i, (_, _, model, color, selected)) in draws.iter().enumerate() {
+        for (i, (_, _, model, color, selected, holes)) in draws.iter().enumerate() {
             let off = (i + 1) * self.slot as usize;
             bytes[off..off + 64]
                 .copy_from_slice(bytemuck::cast_slice(&(vp * *model).to_cols_array()));
@@ -1647,6 +1688,16 @@ impl ViewportRenderer {
                 let plane_n = [cut.normal[0], cut.normal[1], cut.normal[2], cut.keep_code()];
                 bytes[off + 144..off + 160].copy_from_slice(bytemuck::cast_slice(&plane_o));
                 bytes[off + 160..off + 176].copy_from_slice(bytemuck::cast_slice(&plane_n));
+            }
+            // Cut-hole decals (object-local): count at 176, then packed triples
+            // from 192 (each hole = 3 vec4 = 48 bytes). Zero count → shader skips.
+            if !holes.is_empty() {
+                bytes[off + 176..off + 180]
+                    .copy_from_slice(bytemuck::cast_slice(&[holes.len() as f32]));
+                for (h, hole) in holes.iter().enumerate() {
+                    let ho = off + 192 + h * 48;
+                    bytes[ho..ho + 48].copy_from_slice(bytemuck::cast_slice(hole));
+                }
             }
         }
         if bracket_vb.is_some() {
@@ -1686,13 +1737,6 @@ impl ViewportRenderer {
             } else {
                 [0.40f32, 0.70, 1.0, 0.80]
             };
-            bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
-        }
-        for (k, (_, model)) in marker_draws.iter().enumerate() {
-            let off = (marker_slot + k) * self.slot as usize;
-            bytes[off..off + 64]
-                .copy_from_slice(bytemuck::cast_slice(&(vp * *model).to_cols_array()));
-            let rgba = [0.10f32, 0.10, 0.12, 1.0]; // dark hole-marker decal
             bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
         }
         self.queue.write_buffer(&self.ubuf, 0, &bytes);
@@ -1744,7 +1788,7 @@ impl ViewportRenderer {
             }
             // meshes
             rp.set_pipeline(&self.mesh_pipe);
-            for (i, (mesh_id, gi, _, _, _)) in draws.iter().enumerate() {
+            for (i, (mesh_id, gi, _, _, _, _)) in draws.iter().enumerate() {
                 let off = ((i + 1) as u32) * self.slot;
                 let gm = &self.meshes[mesh_id];
                 let g = &gm.groups[*gi];
@@ -1752,19 +1796,6 @@ impl ViewportRenderer {
                 rp.set_vertex_buffer(0, gm.vb.slice(..));
                 rp.set_index_buffer(g.ib.slice(..), wgpu::IndexFormat::Uint32);
                 rp.draw_indexed(0..g.n_indices, 0, 0..1);
-            }
-            // cut hole-marker decals — depth-biased, after the meshes, so they sit
-            // on the cut cap without z-fighting it.
-            if !marker_draws.is_empty() {
-                rp.set_pipeline(&self.marker_pipe);
-                for (k, (mesh_id, _)) in marker_draws.iter().enumerate() {
-                    let gm = &self.meshes[mesh_id];
-                    let g = &gm.groups[0];
-                    rp.set_bind_group(0, &self.bind, &[(marker_slot + k) as u32 * self.slot]);
-                    rp.set_vertex_buffer(0, gm.vb.slice(..));
-                    rp.set_index_buffer(g.ib.slice(..), wgpu::IndexFormat::Uint32);
-                    rp.draw_indexed(0..g.n_indices, 0, 0..1);
-                }
             }
             // selection bbox corner brackets
             if let Some(vb) = &bracket_vb {

@@ -183,10 +183,58 @@ pub enum ModifierKind {
     Peg,
     /// Negative volume — a hole, subtracted from the object at slice time.
     Hole,
-    /// Display-only: a flat dark disc on the cut face marking a hole's opening.
-    /// Not sliced (the [`Hole`](Self::Hole) volume does the subtraction); it just
-    /// reads as a carved spot in the prepare view, since the hole isn't baked in.
-    HoleMarker,
+}
+
+/// Silhouette of a hole marker — mirrors `slic3r_ffi::ConnectorShape` with serde
+/// so it can persist in the project file (the FFI enum has no serde derives).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum HoleMarkerShape {
+    Triangle,
+    Square,
+    Hexagon,
+    Circle,
+}
+
+impl From<slic3r_ffi::ConnectorShape> for HoleMarkerShape {
+    fn from(s: slic3r_ffi::ConnectorShape) -> Self {
+        use slic3r_ffi::ConnectorShape as C;
+        match s {
+            C::Triangle => Self::Triangle,
+            C::Square => Self::Square,
+            C::Hexagon => Self::Hexagon,
+            C::Circle => Self::Circle,
+        }
+    }
+}
+
+impl HoleMarkerShape {
+    /// Ring-vertex count the viewport uses to draw the silhouette.
+    pub fn segments(self) -> u32 {
+        match self {
+            Self::Triangle => 3,
+            Self::Square => 4,
+            Self::Hexagon => 6,
+            Self::Circle => 28,
+        }
+    }
+}
+
+/// Display-only mark of a hole's opening on a cut cross-section, keyed in
+/// [`PlateSceneState::object_hole_markers`]. Not geometry: the viewport shades
+/// the cap's own fragments within this silhouette (the [`ModifierKind::Hole`]
+/// volume does the actual subtraction). Stored in the object's local frame.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct HoleMarker {
+    pub shape: HoleMarkerShape,
+    /// Opening radius, tolerance included (matches the subtracted hole).
+    pub radius: f32,
+    pub center: [f32; 3],
+    /// Cut-plane normal the opening lies in.
+    pub normal: [f32; 3],
+    /// In-plane direction of the silhouette's first vertex (object-local),
+    /// captured from the connector's actual orientation so the drawn polygon's
+    /// corners line up with the peg/hole geometry. Unused for circles.
+    pub u_axis: [f32; 3],
 }
 
 /// Caller-builds-this shape for inserting a fresh mesh. No `id`
@@ -505,6 +553,11 @@ pub struct PlateSceneState {
     /// object mesh (see [`Modifier`]). Empty for objects without connectors.
     #[serde(default)]
     pub object_modifiers: HashMap<ObjectId, Vec<Modifier>>,
+    /// Per-object hole-opening markers (cut cross-section decals) keyed by
+    /// object. Display-only — the viewport shades them onto the cap; never
+    /// sliced. Empty for objects without cut holes.
+    #[serde(default)]
+    pub object_hole_markers: HashMap<ObjectId, Vec<HoleMarker>>,
 }
 
 /// 8 corners of a mesh's axis-aligned bounding box, as world-space

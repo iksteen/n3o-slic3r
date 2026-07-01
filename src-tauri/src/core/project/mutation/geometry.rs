@@ -13,8 +13,8 @@ use crate::core::scene::bed;
 use crate::core::scene::events::{SceneEvent, SceneOpError, SelectMode};
 use crate::core::scene::primitives::{self, PrimitiveKind, PrimitiveParams};
 use crate::core::scene::state::{
-    mesh_bb_corners, Group, GroupId, Mesh, MeshId, MeshProvenance, Modifier, ModifierKind, NewMesh,
-    NewSceneObject, ObjectId, OrderedIds, SceneObject,
+    mesh_bb_corners, Group, GroupId, HoleMarker, Mesh, MeshId, MeshProvenance, Modifier,
+    ModifierKind, NewMesh, NewSceneObject, ObjectId, OrderedIds, SceneObject,
 };
 use crate::core::scene::transform::Transform;
 
@@ -49,6 +49,13 @@ pub struct CutTarget {
     pub name: String,
     pub extruder_id: Option<u8>,
     pub group: Option<GroupId>,
+    /// The source object's existing connector volumes (local frame): peg/hole
+    /// geometry + kind. Cutting a previously-cut object carries these onto the
+    /// halves (routed by side) so a re-cut adds to the connectors instead of
+    /// dropping them with the deleted source.
+    pub modifiers: Vec<(Vec<f32>, Vec<u32>, ModifierKind)>,
+    /// The source object's existing hole markers (local frame), carried likewise.
+    pub hole_markers: Vec<HoleMarker>,
 }
 
 /// One kept half of a cut (the FFI output for a side the user is keeping).
@@ -63,6 +70,9 @@ pub struct CutHalfOut {
     /// Registered as the half object's [`SceneObject`] modifiers, resolved at
     /// slice time rather than baked in.
     pub modifiers: Vec<(Vec<f32>, Vec<u32>, ModifierKind)>,
+    /// Hole-opening markers for this half (local frame). Display-only decals the
+    /// viewport shades onto the cut cap; stored, never sliced.
+    pub hole_markers: Vec<HoleMarker>,
 }
 
 /// The kept halves of one cut source, ready to register. See
@@ -656,6 +666,25 @@ impl Project {
                 .meshes
                 .get(&obj.mesh)
                 .ok_or(SceneOpError::UnknownMesh(obj.mesh))?;
+            // Existing connector volumes → raw geometry (re-registered per half in
+            // apply_cut), so a re-cut carries them onto the resulting halves.
+            let modifiers = self.plates[active]
+                .scene
+                .object_modifiers
+                .get(&id)
+                .into_iter()
+                .flatten()
+                .filter_map(|m| {
+                    let mm = self.meshes.get(&m.mesh)?;
+                    Some((mm.vertices.as_ref().clone(), mm.indices.as_ref().clone(), m.kind))
+                })
+                .collect();
+            let hole_markers = self.plates[active]
+                .scene
+                .object_hole_markers
+                .get(&id)
+                .cloned()
+                .unwrap_or_default();
             out.push(CutTarget {
                 object_id: id,
                 vertices: mesh.vertices.clone(),
@@ -665,6 +694,8 @@ impl Project {
                 name: obj.name.clone(),
                 extruder_id: obj.extruder_id,
                 group: obj.group,
+                modifiers,
+                hole_markers,
             });
         }
         Ok(out)
@@ -740,6 +771,12 @@ impl Project {
                         mods.push(Modifier { mesh: mmesh, kind });
                     }
                     self.plates[active].scene.object_modifiers.insert(obj_id, mods);
+                }
+                if !half.hole_markers.is_empty() {
+                    self.plates[active]
+                        .scene
+                        .object_hole_markers
+                        .insert(obj_id, half.hole_markers);
                 }
                 new_ids.push(obj_id);
             }
@@ -1442,7 +1479,7 @@ mod tests {
     /// Synthetic kept half (no FFI) — geometry is irrelevant to the
     /// register/remove/group bookkeeping under test.
     fn half(side: CutSide) -> CutHalfOut {
-        CutHalfOut { side, vertices: vec![0.0; 9], indices: vec![0, 1, 2], paint: None, modifiers: vec![] }
+        CutHalfOut { side, vertices: vec![0.0; 9], indices: vec![0, 1, 2], paint: None, modifiers: vec![], hole_markers: vec![] }
     }
 
     #[test]
@@ -1509,6 +1546,7 @@ mod tests {
             indices: vec![0, 1, 2],
             paint: Some(vec!["4".into()]),
             modifiers: vec![],
+            hole_markers: vec![],
         };
         let res = CutResult {
             source_id: a,
@@ -1526,6 +1564,39 @@ mod tests {
             Some(&vec!["4".to_string()]),
             "the half's paint reaches the registered mesh",
         );
+    }
+
+    #[test]
+    fn cut_targets_carry_existing_connectors_for_recut() {
+        // Re-cutting a previously-cut object must carry its pegs/holes/markers so
+        // they reach the new halves rather than being dropped with the source.
+        let mut p = Project::default();
+        let (_, a) = add_cube(&mut p);
+        let active = p.active_plate;
+        let peg = p.register_mesh(NewMesh {
+            vertices: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            indices: vec![0, 1, 2],
+            paint_colors: None,
+            bounding_box: BoundingBox { min: [0.0; 3], max: [1.0, 1.0, 0.0] },
+            provenance: MeshProvenance::Primitive("peg".into()),
+        });
+        p.plates[active]
+            .scene
+            .object_modifiers
+            .insert(a, vec![Modifier { mesh: peg, kind: ModifierKind::Peg }]);
+        p.plates[active].scene.object_hole_markers.insert(
+            a,
+            vec![crate::core::scene::state::HoleMarker {
+                shape: crate::core::scene::state::HoleMarkerShape::Circle,
+                radius: 1.0,
+                center: [0.0, 0.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                u_axis: [1.0, 0.0, 0.0],
+            }],
+        );
+        let targets = p.cut_targets(&[a]).unwrap();
+        assert_eq!(targets[0].modifiers.len(), 1, "peg modifier carried into the cut target");
+        assert_eq!(targets[0].hole_markers.len(), 1, "hole marker carried into the cut target");
     }
 
     #[test]
@@ -2064,9 +2135,9 @@ mod tests {
     }
 
     #[test]
-    fn placement_seats_pegs_but_ignores_holes_and_markers() {
+    fn placement_seats_pegs_but_ignores_holes() {
         // A cut half's protruding peg must be seated + bounded with the object;
-        // hole (cavity) and hole-marker (flat decal) volumes must not.
+        // hole (cavity) volumes must not.
         let mut p = Project::default();
         let tri = |p: &mut Project, name: &str, z: f32| -> MeshId {
             p.register_mesh(NewMesh {
@@ -2084,17 +2155,15 @@ mod tests {
         let obj = p.register_object(NewSceneObject::at_origin(main, "half"));
         let peg = tri(&mut p, "peg", -0.5); // protrudes below the main mesh
         let hole = tri(&mut p, "hole", -0.9); // cavity — must be ignored
-        let marker = tri(&mut p, "marker", -0.8); // decal — must be ignored
         let active = p.active_plate;
         p.plates[active].scene.object_modifiers.insert(
             obj,
             vec![
                 Modifier { mesh: peg, kind: ModifierKind::Peg },
                 Modifier { mesh: hole, kind: ModifierKind::Hole },
-                Modifier { mesh: marker, kind: ModifierKind::HoleMarker },
             ],
         );
-        // Seat point folds in the peg (-0.5), not the hole/marker below it.
+        // Seat point folds in the peg (-0.5), not the hole below it.
         let min_z = p.combined_world_min_z(&[obj]).unwrap();
         assert!((min_z + 0.5).abs() < 1e-6, "seat should use the peg's lowest, got {min_z}");
         // Bounds fold in the peg too.

@@ -9,8 +9,8 @@
 use super::bed::BedMesh;
 use super::events::{SceneEvent, SceneOpError, SelectMode};
 use super::state::{
-    ActivePlate, ExclusionZone, Group, GroupId, MeshHeader, MeshId, ModifierKind, ObjectId,
-    SceneObject,
+    ActivePlate, ExclusionZone, Group, GroupId, HoleMarker, MeshHeader, MeshId, ModifierKind,
+    ObjectId, SceneObject,
 };
 use super::transform::Transform;
 use crate::core::printer::profile::PrinterProfile;
@@ -818,50 +818,6 @@ fn map_connector(c: &CutConnectorInput, pos: [f32; 3]) -> slic3r_ffi::Connector 
     }
 }
 
-/// A flat, double-sided dark-disc marker for a hole opening, in the cut object's
-/// local frame: a triangle fan of `shape`'s silhouette at `center`, in the plane
-/// with normal `normal`, nudged `face_sign * EPS` along the normal so it sits a
-/// hair proud of the cut face (toward the open side) without z-fighting the cap.
-/// Display-only — see [`ModifierKind::HoleMarker`].
-fn hole_marker_disc(
-    center: glam::Vec3,
-    normal: glam::Vec3,
-    radius: f32,
-    shape: slic3r_ffi::ConnectorShape,
-    face_sign: f32,
-) -> (Vec<f32>, Vec<u32>, ModifierKind) {
-    use slic3r_ffi::ConnectorShape;
-    const EPS: f32 = 0.08;
-    let segs = match shape {
-        ConnectorShape::Triangle => 3,
-        ConnectorShape::Square => 4,
-        ConnectorShape::Hexagon => 6,
-        ConnectorShape::Circle => 28,
-    };
-    let n = normal.normalize_or_zero();
-    let up = if n.x.abs() > 0.9 { glam::Vec3::Y } else { glam::Vec3::X };
-    let e1 = n.cross(up).normalize();
-    let e2 = n.cross(e1).normalize();
-    let c = center + n * (face_sign * EPS);
-    let mut verts = vec![c.x, c.y, c.z];
-    for k in 0..segs {
-        let a = std::f32::consts::TAU * k as f32 / segs as f32;
-        let p = c + e1 * (radius * a.cos()) + e2 * (radius * a.sin());
-        verts.extend_from_slice(&[p.x, p.y, p.z]);
-    }
-    // Single-sided, wound to face the open side (so its smooth normal is a clean
-    // ±n — a double-sided disc would average to a zero normal and break lighting).
-    let mut idx = Vec::with_capacity(segs as usize * 3);
-    for k in 0..segs {
-        let (a, b) = (1 + k, 1 + (k + 1) % segs);
-        if face_sign >= 0.0 {
-            idx.extend_from_slice(&[0, a, b]);
-        } else {
-            idx.extend_from_slice(&[0, b, a]);
-        }
-    }
-    (verts, idx, ModifierKind::HoleMarker)
-}
 
 #[tauri::command]
 #[tracing::instrument(skip(state, window, connectors))]
@@ -944,17 +900,57 @@ pub async fn scene_cut_apply(
                     neg_mods.push(entry);
                 }
             }
-            // Display-only marker: a flat dark disc on the cut face where each
-            // hole opens (the hole volume itself isn't baked into the half mesh).
-            // Every connector opens a hole on the pos face (plug/snap hole; dowel
-            // hole); a dowel opens one on the neg face too. The sign offsets the
-            // disc a hair toward the open side so it sits on the cut surface.
+            // Display-only marker: where each hole opens on the cut face (the
+            // hole volume isn't baked into the half mesh). Every connector opens
+            // a hole on the pos face (plug/snap hole; dowel hole); a dowel opens
+            // one on the neg face too. The viewport shades these onto the cap.
+            // Vertex-0 direction of the connector cross-section, object-local, so
+            // the decal's corners align with the real peg/hole. Mirrors the FFI:
+            // align the normal to +Z (shortest arc), place vertex 0 at +Y, spin by
+            // -z_angle, rotate back. (shortest-arc rotation is unique, so glam
+            // reproduces the shim's `FromTwoVectors` exactly for non-antiparallel
+            // normals.)
+            let q = glam::Quat::from_rotation_arc(n_l, glam::Vec3::Z);
+            let (mut pos_markers, mut neg_markers) = (Vec::new(), Vec::new());
             for c in &conns {
-                let center = glam::Vec3::from(c.pos);
-                let r = c.radius + c.r_tol;
-                pos_mods.push(hole_marker_disc(center, n_l, r, c.shape, -1.0));
+                let dir_plane = glam::Vec3::new(c.z_angle.sin(), c.z_angle.cos(), 0.0);
+                let u_axis = (q.inverse() * dir_plane).normalize_or_zero();
+                let marker = HoleMarker {
+                    shape: c.shape.into(),
+                    radius: c.radius + c.r_tol,
+                    center: c.pos,
+                    normal: n_l.to_array(),
+                    u_axis: u_axis.to_array(),
+                };
+                pos_markers.push(marker);
                 if matches!(c.ty, slic3r_ffi::ConnectorType::Dowel) {
-                    neg_mods.push(hole_marker_disc(center, n_l, r, c.shape, 1.0));
+                    neg_markers.push(marker);
+                }
+            }
+            // Carry the source object's existing connectors/markers (from a prior
+            // cut) onto whichever half they land on — by centroid side of the new
+            // plane. A modifier straddling the plane goes to its centroid's side.
+            let side_pos = |p: glam::Vec3| (p - o_l).dot(n_l) >= 0.0;
+            for (verts, idx, kind) in &t.modifiers {
+                let n = verts.len() / 3;
+                if n == 0 {
+                    continue;
+                }
+                let c = (0..n).fold(glam::Vec3::ZERO, |acc, k| {
+                    acc + glam::Vec3::new(verts[3 * k], verts[3 * k + 1], verts[3 * k + 2])
+                }) / n as f32;
+                let entry = (verts.clone(), idx.clone(), *kind);
+                if side_pos(c) {
+                    pos_mods.push(entry);
+                } else {
+                    neg_mods.push(entry);
+                }
+            }
+            for hm in &t.hole_markers {
+                if side_pos(glam::Vec3::from(hm.center)) {
+                    pos_markers.push(*hm);
+                } else {
+                    neg_markers.push(*hm);
                 }
             }
             let mut halves = Vec::new();
@@ -965,6 +961,7 @@ pub async fn scene_cut_apply(
                     indices: res.pos.indices,
                     paint: res.pos.paint,
                     modifiers: pos_mods,
+                    hole_markers: pos_markers,
                 });
             }
             if keep_negative && !res.neg.is_empty() {
@@ -974,6 +971,7 @@ pub async fn scene_cut_apply(
                     indices: res.neg.indices,
                     paint: res.neg.paint,
                     modifiers: neg_mods,
+                    hole_markers: neg_markers,
                 });
             }
             let dowels = if keep_dowels {
