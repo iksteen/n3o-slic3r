@@ -622,12 +622,15 @@ impl Project {
                 .meshes
                 .get(&obj.mesh)
                 .ok_or(SceneOpError::UnknownMesh(obj.mesh))?;
-            let base = (vertices.len() / 3) as u32;
-            for v in mesh.vertices.chunks_exact(3) {
-                let w = obj.transform.apply_point(Vec3::new(v[0], v[1], v[2]));
-                vertices.extend_from_slice(&[w.x, w.y, w.z]);
+            // Main mesh + solid pegs (each keeps its own index base offset).
+            for mesh in std::iter::once(mesh).chain(self.peg_meshes(id)) {
+                let base = (vertices.len() / 3) as u32;
+                for v in mesh.vertices.chunks_exact(3) {
+                    let w = obj.transform.apply_point(Vec3::new(v[0], v[1], v[2]));
+                    vertices.extend_from_slice(&[w.x, w.y, w.z]);
+                }
+                indices.extend(mesh.indices.iter().map(|&i| i + base));
             }
-            indices.extend(mesh.indices.iter().map(|&i| i + base));
         }
         Ok((vertices, indices))
     }
@@ -808,6 +811,22 @@ impl Project {
     /// Combined world-space AABB of a selection from each object's local
     /// bounding-box corners — the conservative bbox used for bounds + clamping
     /// (matches `bed::object_out_of_bounds`).
+    /// Solid peg modifier meshes attached to `id` (local frame, so they ride the
+    /// object's transform like its main mesh). Placement ops fold these in so a
+    /// cut half's protruding peg is seated/bounded with the object. Holes are
+    /// cavities and hole-markers flat decals — neither extends the outer hull, so
+    /// both are excluded.
+    fn peg_meshes(&self, id: ObjectId) -> impl Iterator<Item = &Mesh> {
+        self.plates[self.active_plate]
+            .scene
+            .object_modifiers
+            .get(&id)
+            .into_iter()
+            .flatten()
+            .filter(|m| m.kind == ModifierKind::Peg)
+            .filter_map(move |m| self.meshes.get(&m.mesh))
+    }
+
     fn combined_bbox_aabb(&self, ids: &[ObjectId]) -> Result<(Vec3, Vec3), SceneOpError> {
         let active = self.active_plate;
         let mut lo = Vec3::splat(f32::INFINITY);
@@ -823,10 +842,13 @@ impl Project {
                 .get(&obj.mesh)
                 .ok_or(SceneOpError::UnknownMesh(obj.mesh))?
                 .bounding_box;
-            for corner in mesh_bb_corners(&bb) {
-                let w = obj.transform.apply_point(corner);
-                lo = lo.min(w);
-                hi = hi.max(w);
+            let peg_bbs = self.peg_meshes(id).map(|m| m.bounding_box);
+            for bb in std::iter::once(bb).chain(peg_bbs) {
+                for corner in mesh_bb_corners(&bb) {
+                    let w = obj.transform.apply_point(corner);
+                    lo = lo.min(w);
+                    hi = hi.max(w);
+                }
             }
         }
         Ok((lo, hi))
@@ -882,9 +904,11 @@ impl Project {
                 .meshes
                 .get(&obj.mesh)
                 .ok_or(SceneOpError::UnknownMesh(obj.mesh))?;
-            for v in mesh.vertices.chunks_exact(3) {
-                let w = obj.transform.apply_point(Vec3::new(v[0], v[1], v[2]));
-                min_z = min_z.min(w.z);
+            for mesh in std::iter::once(mesh).chain(self.peg_meshes(id)) {
+                for v in mesh.vertices.chunks_exact(3) {
+                    let w = obj.transform.apply_point(Vec3::new(v[0], v[1], v[2]));
+                    min_z = min_z.min(w.z);
+                }
             }
         }
         Ok(min_z)
@@ -2037,6 +2061,48 @@ mod tests {
                 .any(|r| matches!(r, OutOfBoundsReason::BelowBuildPlate)),
             "a seated object is not below-plate, got {reasons:?}"
         );
+    }
+
+    #[test]
+    fn placement_seats_pegs_but_ignores_holes_and_markers() {
+        // A cut half's protruding peg must be seated + bounded with the object;
+        // hole (cavity) and hole-marker (flat decal) volumes must not.
+        let mut p = Project::default();
+        let tri = |p: &mut Project, name: &str, z: f32| -> MeshId {
+            p.register_mesh(NewMesh {
+                vertices: vec![0.0, 0.0, z, 1.0, 0.0, z, 0.0, 1.0, z],
+                indices: vec![0, 1, 2],
+                paint_colors: None,
+                bounding_box: BoundingBox {
+                    min: [0.0, 0.0, z as f64],
+                    max: [1.0, 1.0, z as f64],
+                },
+                provenance: MeshProvenance::Primitive(name.into()),
+            })
+        };
+        let main = tri(&mut p, "main", 0.0);
+        let obj = p.register_object(NewSceneObject::at_origin(main, "half"));
+        let peg = tri(&mut p, "peg", -0.5); // protrudes below the main mesh
+        let hole = tri(&mut p, "hole", -0.9); // cavity — must be ignored
+        let marker = tri(&mut p, "marker", -0.8); // decal — must be ignored
+        let active = p.active_plate;
+        p.plates[active].scene.object_modifiers.insert(
+            obj,
+            vec![
+                Modifier { mesh: peg, kind: ModifierKind::Peg },
+                Modifier { mesh: hole, kind: ModifierKind::Hole },
+                Modifier { mesh: marker, kind: ModifierKind::HoleMarker },
+            ],
+        );
+        // Seat point folds in the peg (-0.5), not the hole/marker below it.
+        let min_z = p.combined_world_min_z(&[obj]).unwrap();
+        assert!((min_z + 0.5).abs() < 1e-6, "seat should use the peg's lowest, got {min_z}");
+        // Bounds fold in the peg too.
+        let (lo, _) = p.combined_bbox_aabb(&[obj]).unwrap();
+        assert!((lo.z + 0.5).abs() < 1e-6, "bbox should include the peg, got {}", lo.z);
+        // World mesh = main (3) + peg (3); hole/marker excluded.
+        let (verts, _) = p.objects_world_mesh(&[obj]).unwrap();
+        assert_eq!(verts.len() / 3, 6, "world mesh is main + peg only");
     }
 
     #[test]
