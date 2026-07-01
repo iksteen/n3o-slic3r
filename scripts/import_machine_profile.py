@@ -335,6 +335,7 @@ def render_conflict_report(conflicts: list[tuple[str, dict[str, Any]]]) -> str:
 def build_base_machine(
     flat: dict[str, dict],
     leaf: dict[str, dict],
+    default_sku: str | None = None,
 ) -> dict:
     """Construct the base machine config from per-variant flattened
     dicts + their leaf declarations. Caller has already run the
@@ -356,9 +357,18 @@ def build_base_machine(
             seen.add(k)
 
     for k in seen:
-        declared = [decls[k] for decls in leaf.values() if k in decls]
+        declared = {sku: decls[k] for sku, decls in leaf.items() if k in decls}
         if declared:
-            machine[k] = declared[0]
+            # Non-picked keys are identical across leaves (conflict check
+            # passed), so any leaf works. For --pick'd keys that legitimately
+            # disagree, prefer the default nozzle's value: Bambu's smallest-SKU
+            # leaves sometimes carry copy-paste content from a sibling printer
+            # (the P1P 0.2 machine_start_gcode is verbatim P1S), whereas the
+            # 0.4 default is correct.
+            if default_sku is not None and default_sku in declared:
+                machine[k] = declared[default_sku]
+            else:
+                machine[k] = next(iter(declared.values()))
             continue
         for d in flat.values():
             if k in d:
@@ -593,6 +603,11 @@ def main() -> None:
     ap.add_argument("--skip", default="",
                     help="comma-separated SKUs to ignore (e.g. mixed-nozzle 0.4+0.6 leaves "
                          "are typically not real machine variants)")
+    ap.add_argument("--pick", default="",
+                    help="comma-separated machine-side keys whose cross-SKU disagreement is "
+                         "cosmetic (e.g. machine_start_gcode headers that only differ by an "
+                         "embedded nozzle-SKU comment): waive the conflict check and ship the "
+                         "canonical leaf's value, rather than dropping the key")
     args = ap.parse_args()
 
     machine_dir = args.root / args.vendor / "machine"
@@ -608,6 +623,9 @@ def main() -> None:
         k.strip() for k in args.drop.split(",") if k.strip()
     )
     skip_skus = {s.strip() for s in args.skip.split(",") if s.strip()}
+    pick_keys = frozenset(
+        k.strip() for k in args.pick.split(",") if k.strip()
+    )
 
     variants = discover_variants(machine_dir, args.model)
     variants = [(sku, p) for sku, p in variants if sku not in skip_skus]
@@ -628,14 +646,26 @@ def main() -> None:
         }
         leaf[sku] = leaf_declarations(path, drop_keys)
 
-    # Conflict check against the leaf-declaration set.
-    conflicts = detect_machine_conflicts(leaf)
+    # Conflict check against the leaf-declaration set. `--pick` keys are
+    # waived here (their disagreement is cosmetic); build_base_machine still
+    # ships them, picking the canonical leaf's value.
+    conflicts = [c for c in detect_machine_conflicts(leaf) if c[0] not in pick_keys]
     if conflicts:
         print(render_conflict_report(conflicts), file=sys.stderr)
         sys.exit(2)
 
-    # Build outputs.
-    base_machine = build_base_machine(flat, leaf)
+    # Build outputs. The model JSON's `nozzle_diameter` lists the default
+    # nozzle first (e.g. "0.4;0.2;0.6;0.8"); that SKU is canonical for any
+    # --pick'd key whose leaves disagree.
+    model_json = machine_dir / f"{args.model}.json"
+    default_sku: str | None = None
+    if pick_keys and model_json.exists():
+        try:
+            nd = load_json(model_json).get("nozzle_diameter", "")
+        except json.JSONDecodeError:
+            nd = ""
+        default_sku = nd.split(";")[0].strip() or None
+    base_machine = build_base_machine(flat, leaf, default_sku)
 
     # The model JSON's `default_bed_type` is the canonical picker-side
     # declaration; some leaves redundantly carry it too, others don't.
@@ -646,7 +676,6 @@ def main() -> None:
     # scalar at load time. Other model-JSON keys (`bed_model`,
     # `bed_texture`, `family`, `machine_tech`, …) are picker-UX hints
     # we don't consume — never read.
-    model_json = machine_dir / f"{args.model}.json"
     if model_json.exists():
         try:
             mdoc = load_json(model_json)

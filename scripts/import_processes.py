@@ -279,18 +279,17 @@ def consolidate_bucket(
     display_name: str,
     leaves: list[Path],
     supported_printers: set[str],
+    nozzles_by_printer: dict[str, set[str]],
     index: dict[str, list[Path]],
-) -> tuple[dict[str, Any],
-           dict[tuple[str, str], dict[str, Any]],
+) -> tuple[dict[tuple[str, str], dict[str, Any]],
            list[tuple[str, str]],
            list[str]] | None:
-    """Returns (baseline_scalars, per_pn_deltas, available_for,
-    conflict_log) where per_pn_deltas[(printer.model, nozzle.diameter)]
-    is a dict of key→value deltas vs baseline, and available_for is
-    the full set of (printer, nozzle) tuples this process applies to
-    — including those whose values match baseline entirely (no
-    rule). The picker uses available_for; the resolver uses the
-    rules."""
+    """Returns (per_pn, available_for, conflict_log) where per_pn maps
+    each (printer.model, nozzle.diameter) tuple to its full resolved
+    key→value dict, and available_for is the sorted list of those
+    tuples. The baseline/delta split is deferred to
+    `baseline_and_deltas` at write time so each printer's fragment can
+    be scoped to its own nozzles (no foreign-printer rules)."""
     # Per-(printer, nozzle) → {key: value} matrix.
     per_pn: dict[tuple[str, str], dict[str, Any]] = {}
     conflicts: list[str] = []
@@ -320,6 +319,8 @@ def consolidate_bucket(
             printer, nozzle = parsed
             if printer not in supported_printers:
                 continue
+            if nozzle not in nozzles_by_printer.get(printer, set()):
+                continue  # no nozzle.toml (e.g. skipped composite "0.4+0.6")
             slot = per_pn.setdefault((printer, nozzle), {})
             for key, value in merged.items():
                 if key in ENVELOPE_KEYS or key in DENY_KEYS:
@@ -339,7 +340,19 @@ def consolidate_bucket(
     if not per_pn:
         return None
 
-    # Most-common-value baseline across every (printer, nozzle) entry.
+    available_for = sorted(per_pn.keys())
+    return per_pn, available_for, conflicts
+
+
+def baseline_and_deltas(
+    per_pn: dict[tuple[str, str], dict[str, Any]],
+) -> tuple[dict[str, Any], dict[tuple[str, str], dict[str, Any]]]:
+    """Most-common-value baseline across the given (printer, nozzle)
+    matrix, plus per-cell deltas vs that baseline. Called per printer
+    at write time, so the baseline reflects only that printer's own
+    nozzles. The resolved value for any cell is baseline + its delta =
+    the original matrix cell, regardless of which population the
+    baseline was computed over — so scoping is behaviour-preserving."""
     by_key: dict[str, Counter] = defaultdict(Counter)
     for values in per_pn.values():
         for key, value in values.items():
@@ -349,14 +362,12 @@ def consolidate_bucket(
         most_common, _ = counter.most_common(1)[0]
         baseline[key] = _unhash(most_common)
 
-    # Per-(printer, nozzle) deltas.
     per_pn_deltas: dict[tuple[str, str], dict[str, Any]] = {}
     for pn, values in per_pn.items():
         deltas = {k: v for k, v in values.items() if baseline.get(k) != v}
         if deltas:
             per_pn_deltas[pn] = deltas
-    available_for = sorted(per_pn.keys())
-    return baseline, per_pn_deltas, available_for, conflicts
+    return baseline, per_pn_deltas
 
 
 def emit_fragment(
@@ -517,6 +528,15 @@ def main() -> None:
         sys.exit(f"error: no machine.toml files found under "
                  f"{profiles_root}/*/printer/*/")
     supported_printers = set(printer_dir_by_model)
+
+    # A process rule may only reference a nozzle the printer actually has
+    # a profile for. The machine importer's --skip drops non-variant SKUs
+    # (e.g. the U1's composite "0.4+0.6"); without this gate the process
+    # consolidator would still emit a rule for it that can never fire.
+    nozzles_by_printer: dict[str, set[str]] = {
+        model: {p.stem for p in (pdir / "nozzles").glob("*.toml")}
+        for model, pdir in printer_dir_by_model.items()
+    }
     print(f"discovered {len(supported_printers)} printer profile(s): "
           f"{sorted(supported_printers)}")
 
@@ -585,13 +605,13 @@ def main() -> None:
             logical_process_name(p.stem) for p in leaves
         })[0]
         result = consolidate_bucket(
-            display_name, leaves, supported_printers, index,
+            display_name, leaves, supported_printers, nozzles_by_printer, index,
         )
         if result is None:
             print(f"  SKIP {slug}: no matching (printer, nozzle) entries",
                   file=sys.stderr)
             continue
-        baseline, per_pn_deltas, available_for, conflicts = result
+        per_pn, available_for, conflicts = result
         # Track this fragment as the Standard for each (printer,
         # single-nozzle) combo it covers. If two Standards target
         # the same combo, that's a curation-needs-attention case
@@ -610,19 +630,22 @@ def main() -> None:
                     )
                 else:
                     standard_default_for[key] = slug
-        # Write a copy into every applicable printer's processes/ dir.
-        # Same content per copy — the cascade resolver narrows to the
-        # active (printer, nozzle) via the `when.printer.model` /
-        # `when.nozzle.diameter` predicates inside the file.
+        # Write each applicable printer a fragment scoped to its OWN
+        # nozzles only: baseline recomputed over that printer's cells,
+        # rules covering just its (printer, nozzle) pairs. No foreign-
+        # printer rules leak into the file — the resolver only ever
+        # narrows within the printer whose dir it lives in.
         target_printers = sorted({p for (p, _) in available_for})
         for printer in target_printers:
             printer_dir = printer_dir_by_model.get(printer)
             if printer_dir is None:
                 continue
+            scoped = {pn: v for pn, v in per_pn.items() if pn[0] == printer}
+            baseline, per_pn_deltas = baseline_and_deltas(scoped)
             out_path = printer_dir / "processes" / f"{slug}.toml"
             emit_fragment(
                 out_path, display_name, baseline, per_pn_deltas,
-                available_for, len(leaves),
+                sorted(scoped.keys()), len(leaves),
             )
             written_files += 1
         nozzles_count = len({n for (_, n) in available_for})

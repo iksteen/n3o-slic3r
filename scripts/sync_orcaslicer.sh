@@ -56,16 +56,21 @@ python3 scripts/scrape_option_printer_pages.py
 # --- Machines: one base-machine + per-nozzle family per printer. Add a printer
 #     by adding a line: vendor model slug toml-out [skip-SKUs]. `skip` drops
 #     mixed-nozzle leaves (e.g. the U1's "0.4+0.6") that aren't real variants. ---
-machine() { # vendor model slug toml-out [skip]
+machine() { # vendor model slug toml-out [skip] [pick]
   local extra=()
-  [[ -n "${5:-}" ]] && extra=(--skip "$5")
+  [[ -n "${5:-}" ]] && extra+=(--skip "$5")
+  [[ -n "${6:-}" ]] && extra+=(--pick "$6")
   python3 scripts/import_machine_profile.py \
     --root "$ORCA_PROFILES" --vendor "$1" --model "$2" --slug "$3" \
     --toml-out "$4" "${extra[@]}"
 }
 echo "==> Importing machines"
+# P1S/P1P embed the nozzle SKU in the machine_start_gcode header comment, so
+# it disagrees across nozzle variants — cosmetic, so --pick it (ship canonical).
 machine BBL       "Bambu Lab A1 mini" bambu-lab-a1-mini resources/profiles/bbl/printer
 machine BBL       "Bambu Lab A1"      bambu-lab-a1      resources/profiles/bbl/printer
+machine BBL       "Bambu Lab P1S"     bambu-lab-p1s     resources/profiles/bbl/printer "" machine_start_gcode
+machine BBL       "Bambu Lab P1P"     bambu-lab-p1p     resources/profiles/bbl/printer "" machine_start_gcode
 machine Snapmaker "Snapmaker U1"      snapmaker-u1      resources/profiles/snapmaker/printer "0.4+0.6"
 
 # --- Processes: auto-discovers the printers above from their machine.toml and

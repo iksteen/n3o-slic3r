@@ -1,0 +1,14 @@
+brand = "Bambu Lab"
+brand_short = "B"
+driver_kind = "bambu"
+# Not hardware-validated — hidden in the add-printer picker unless "Include
+# experimental" is enabled. Shares the Bambu driver with the A1 family.
+experimental = true
+# P1P ships with the full AMS unit (4 spools) and chains up to 4 units = 16
+# slots, per Bambu's spec.
+ams_max = 4
+ams_type = "AMS"
+
+[[toolheads]]
+default_nozzle_diameter = "0.4"
+max_temp = 300.0
