@@ -104,6 +104,7 @@ struct CascadeAsset {
 pub struct PrinterCatalogEntry {
     pub identity: String,
     pub profile: PrinterProfile,
+    pub experimental: bool,
     /// Fragment slug = directory name. Equal to identity when no
     /// `identity` override is declared in `model.toml`.
     pub fragment_slug: String,
@@ -183,6 +184,10 @@ struct PrinterProfileEnvelope {
     /// Catalog identity. Defaults to the directory name if omitted.
     #[serde(default)]
     identity: Option<String>,
+    /// Picker-only, so it rides the envelope rather than `PrinterProfile`
+    /// (which feeds the cascade resolver).
+    #[serde(default)]
+    experimental: bool,
     #[serde(flatten)]
     profile: PrinterProfile,
 }
@@ -301,6 +306,7 @@ impl ProfileLibrary {
                 let identity = envelope.identity.unwrap_or_else(|| slug.clone());
                 self.catalog.push(PrinterCatalogEntry {
                     identity,
+                    experimental: envelope.experimental,
                     profile: envelope.profile,
                     fragment_slug: slug.clone(),
                 });

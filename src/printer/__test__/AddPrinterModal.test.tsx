@@ -8,7 +8,21 @@
 // `printerInstance.test.ts::flattenSlots`.
 
 import { describe, expect, it } from "vitest";
-import { makeUniqueName } from "../AddPrinterModal";
+import { makeUniqueName, matchesPickerFilter } from "../AddPrinterModal";
+import type { PrinterCatalogEntry } from "../printerCommands";
+
+const entry = (
+  model: string,
+  opts: { brand?: string; experimental?: boolean } = {},
+): PrinterCatalogEntry =>
+  ({
+    identity: model.toLowerCase().replace(/\s+/g, "-"),
+    experimental: opts.experimental,
+    profile: {
+      model,
+      brand: opts.brand ?? "Bambu Lab",
+    },
+  }) as PrinterCatalogEntry;
 
 describe("makeUniqueName", () => {
   it("returns the base when nothing collides", () => {
@@ -31,6 +45,33 @@ describe("makeUniqueName", () => {
   it("returns empty for empty input regardless of collisions", () => {
     expect(makeUniqueName("", [])).toBe("");
     expect(makeUniqueName("", ["anything"])).toBe("");
+  });
+});
+
+describe("matchesPickerFilter", () => {
+  const a1 = entry("A1", { experimental: true });
+  const mini = entry("A1 mini");
+
+  it("hides experimental profiles unless the toggle is on", () => {
+    expect(matchesPickerFilter(a1, "", false)).toBe(false);
+    expect(matchesPickerFilter(a1, "", true)).toBe(true);
+  });
+
+  it("always shows non-experimental profiles", () => {
+    expect(matchesPickerFilter(mini, "", false)).toBe(true);
+  });
+
+  it("applies the case-insensitive brand+model query", () => {
+    expect(matchesPickerFilter(mini, "bambu", false)).toBe(true);
+    expect(matchesPickerFilter(mini, "MINI", false)).toBe(true);
+    expect(matchesPickerFilter(mini, "snapmaker", false)).toBe(false);
+  });
+
+  it("gates experimental first, then the query", () => {
+    // Matches the query, but still hidden while the toggle is off.
+    expect(matchesPickerFilter(a1, "a1", false)).toBe(false);
+    expect(matchesPickerFilter(a1, "a1", true)).toBe(true);
+    expect(matchesPickerFilter(a1, "zzz", true)).toBe(false);
   });
 });
 

@@ -34,6 +34,20 @@ export function makeUniqueName(base: string, existing: readonly string[]): strin
   return `${base} (${n})`;
 }
 
+/** Picker visibility predicate: experimental profiles are hidden unless
+ * `includeExperimental` is on, then a case-insensitive brand+model query
+ * filter. Exported for unit tests; the component maps it over the catalog. */
+export function matchesPickerFilter(
+  entry: PrinterCatalogEntry,
+  query: string,
+  includeExperimental: boolean,
+): boolean {
+  if (entry.experimental && !includeExperimental) return false;
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return `${entry.profile.brand} ${entry.profile.model}`.toLowerCase().includes(q);
+}
+
 export interface AddPrinterModalProps {
   catalog: PrinterCatalogEntry[];
   /** Display names already taken by registered instances —
@@ -53,8 +67,12 @@ export function AddPrinterModal({
   onClose,
 }: AddPrinterModalProps) {
   const [selectedId, setSelectedId] = useState<string | null>(
-    initialIdentity ?? catalog[0]?.identity ?? null,
+    initialIdentity ??
+      catalog.find((e) => !e.experimental)?.identity ??
+      catalog[0]?.identity ??
+      null,
   );
+  const [includeExperimental, setIncludeExperimental] = useState(false);
   const [query, setQuery] = useState("");
   const [name, setName] = useState("");
   const [touched, setTouched] = useState(false);
@@ -84,13 +102,18 @@ export function AddPrinterModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return catalog;
-    return catalog.filter((e) =>
-      `${e.profile.brand} ${e.profile.model}`.toLowerCase().includes(q),
-    );
-  }, [query, catalog]);
+  const filtered = useMemo(
+    () => catalog.filter((e) => matchesPickerFilter(e, query, includeExperimental)),
+    [query, catalog, includeExperimental],
+  );
+
+  // Turning off "Include experimental" while an experimental profile is
+  // selected drops the selection back to the first non-experimental one —
+  // otherwise the detail pane keeps showing a printer no longer in the list.
+  useEffect(() => {
+    if (includeExperimental || !selected?.experimental) return;
+    setSelectedId(catalog.find((e) => !e.experimental)?.identity ?? null);
+  }, [includeExperimental, selected, catalog]);
 
   const grouped = useMemo(() => {
     const order: string[] = [];
@@ -173,6 +196,15 @@ export function AddPrinterModal({
               )}
             </div>
 
+            <label className="apm-experimental">
+              <input
+                type="checkbox"
+                checked={includeExperimental}
+                onChange={(e) => setIncludeExperimental(e.target.checked)}
+              />
+              Include experimental printers
+            </label>
+
             <div className="apm-list-scroll">
               {grouped.length === 0 ? (
                 <div className="apm-no-results">
@@ -201,6 +233,11 @@ export function AddPrinterModal({
                             <div className="apm-card-info">
                               <div className="apm-card-model">
                                 {entry.profile.model}
+                                {entry.experimental && (
+                                  <span className="apm-badge-exp">
+                                    experimental
+                                  </span>
+                                )}
                               </div>
                               <div className="apm-card-dims">
                                 {entry.profile.build_volume.max[0]} ×{" "}
@@ -256,6 +293,9 @@ export function AddPrinterModal({
                     </div>
                     <div className="apm-preview-model">
                       {selected.profile.model}
+                      {selected.experimental && (
+                        <span className="apm-badge-exp">experimental</span>
+                      )}
                     </div>
                   </div>
                 </div>

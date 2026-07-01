@@ -17,6 +17,7 @@ import type { PrinterProfileJson } from "../settings/resolve";
 export interface PrinterCatalogEntry {
   identity: string;
   profile: PrinterProfileJson;
+  experimental?: boolean;
 }
 
 /** Mirror of `PrinterChangeReport`. */

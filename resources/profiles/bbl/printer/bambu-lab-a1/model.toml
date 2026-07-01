@@ -1,6 +1,9 @@
 brand = "Bambu Lab"
 brand_short = "B"
 driver_kind = "bambu"
+# Not hardware-validated (unlike the A1 mini) — hidden in the add-printer
+# picker unless "Include experimental" is enabled. Same Bambu driver.
+experimental = true
 # A1 ships with the full AMS unit (4 spools per unit) and can chain
 # up to 4 units = 16 slots, per Bambu's published spec. Mini ships
 # with AMS Lite (1 unit, 4 slots, no chaining).

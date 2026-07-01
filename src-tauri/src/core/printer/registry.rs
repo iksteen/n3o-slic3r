@@ -29,6 +29,8 @@ use crate::core::profile_library;
 pub struct CatalogEntry {
     pub identity: String,
     pub profile: PrinterProfile,
+    #[serde(default)]
+    pub experimental: bool,
 }
 
 /// Picker-side view of every bundled profile, in declaration order.
@@ -41,6 +43,7 @@ pub fn bundled_catalog() -> Vec<CatalogEntry> {
         .map(|e| CatalogEntry {
             identity: e.identity.clone(),
             profile: hydrate_profile(&e.profile, &e.fragment_slug),
+            experimental: e.experimental,
         })
         .collect()
 }
