@@ -297,13 +297,16 @@ pub struct CutPreview {
 
 /// One connector's peg preview (world position on the plane + size). The peg
 /// axis is the plane normal; `selected` brightens it.
-#[derive(serde::Deserialize, Clone, Copy)]
+#[derive(serde::Deserialize, Clone)]
 pub struct CutConnectorPreview {
     pub pos: [f32; 3],
     pub radius: f32,
     pub height: f32,
     #[serde(default)]
     pub selected: bool,
+    /// Cross-section shape (triangle/square/hexagon/circle); empty = circle.
+    #[serde(default)]
+    pub shape: String,
 }
 
 impl CutPreview {
@@ -526,25 +529,35 @@ fn unit_cube_verts() -> Vec<Vertex> {
 /// as a triangle list (side + both caps). Used for the split tool's connector
 /// peg previews (scaled + oriented to the plane normal per connector).
 const CYL_SEG: usize = 20;
-fn unit_cylinder_verts() -> Vec<Vertex> {
+/// A unit prism (r=1, h=1, centered on z=0) with `sides` facets — the connector
+/// preview shape. Vertex 0 sits at +Y and winds CCW, matching the FFI's
+/// `its_make_cylinder` so the preview lines up with the peg the cut produces.
+/// A high `sides` count reads as a circle.
+fn unit_prism_verts(sides: usize) -> Vec<Vertex> {
     let mut v = Vec::new();
     let ring = |i: usize| -> (f32, f32) {
-        let t = i as f32 / CYL_SEG as f32 * std::f32::consts::TAU;
-        (t.cos(), t.sin())
+        let t = i as f32 / sides as f32 * std::f32::consts::TAU;
+        (-t.sin(), t.cos())
     };
-    for i in 0..CYL_SEG {
+    for i in 0..sides {
         let (c0, s0) = ring(i);
         let (c1, s1) = ring(i + 1);
-        let (n0, n1) = ([c0, s0, 0.0], [c1, s1, 0.0]);
+        // Flat facet: one outward normal (the edge-midpoint direction) for the
+        // whole side, so low-poly prisms read as crisp faces, not a rounded tube.
+        let fnrm = {
+            let (fx, fy) = (c0 + c1, s0 + s1);
+            let l = (fx * fx + fy * fy).sqrt().max(1e-6);
+            [fx / l, fy / l, 0.0]
+        };
         let (b0, t0) = ([c0, s0, -0.5], [c0, s0, 0.5]);
         let (b1, t1) = ([c1, s1, -0.5], [c1, s1, 0.5]);
         // side
-        v.push(Vertex { pos: b0, nrm: n0 });
-        v.push(Vertex { pos: b1, nrm: n1 });
-        v.push(Vertex { pos: t1, nrm: n1 });
-        v.push(Vertex { pos: b0, nrm: n0 });
-        v.push(Vertex { pos: t1, nrm: n1 });
-        v.push(Vertex { pos: t0, nrm: n0 });
+        v.push(Vertex { pos: b0, nrm: fnrm });
+        v.push(Vertex { pos: b1, nrm: fnrm });
+        v.push(Vertex { pos: t1, nrm: fnrm });
+        v.push(Vertex { pos: b0, nrm: fnrm });
+        v.push(Vertex { pos: t1, nrm: fnrm });
+        v.push(Vertex { pos: t0, nrm: fnrm });
         // top cap (+Z)
         v.push(Vertex { pos: [0.0, 0.0, 0.5], nrm: [0.0, 0.0, 1.0] });
         v.push(Vertex { pos: t0, nrm: [0.0, 0.0, 1.0] });
@@ -889,8 +902,9 @@ pub struct ViewportRenderer {
     vb_cube: wgpu::Buffer,
     vb_cube_edges: wgpu::Buffer,
     /// Unit cylinder for the split tool's connector peg previews.
-    vb_cylinder: wgpu::Buffer,
-    n_cylinder: u32,
+    /// Connector-preview prisms by shape index (0=triangle, 1=square,
+    /// 2=hexagon, 3=circle): (vertex buffer, vertex count).
+    conn_prisms: [(wgpu::Buffer, u32); 4],
     /// Per-plate sliced tower meshes, keyed by plate. The slice event sink
     /// stores each plate's mesh here directly (no frontend round-trip); `frame`
     /// draws the active plate's. Cleared with the object meshes on project replace.
@@ -1106,12 +1120,16 @@ impl ViewportRenderer {
             contents: bytemuck::cast_slice(&unit_cube_edges()),
             usage: wgpu::BufferUsages::VERTEX,
         });
-        let cyl_verts = unit_cylinder_verts();
-        let n_cylinder = cyl_verts.len() as u32;
-        let vb_cylinder = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("viewport.cut.cylinder"),
-            contents: bytemuck::cast_slice(&cyl_verts),
-            usage: wgpu::BufferUsages::VERTEX,
+        // Connector-preview prisms, one per shape (circle = CYL_SEG-gon).
+        let conn_prisms = [3usize, 4, 6, CYL_SEG].map(|sides| {
+            let verts = unit_prism_verts(sides);
+            let n = verts.len() as u32;
+            let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("viewport.connector.prism"),
+                contents: bytemuck::cast_slice(&verts),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            (buf, n)
         });
 
         let gmin = DEFAULT_BED.0.map(|v| v as f32);
@@ -1152,8 +1170,7 @@ impl ViewportRenderer {
             tower_pipe,
             vb_cube,
             vb_cube_edges,
-            vb_cylinder,
-            n_cylinder,
+            conn_prisms,
             size: (0, 0),
             color,
             msaa_view,
@@ -1644,9 +1661,9 @@ impl ViewportRenderer {
             })
         });
 
-        // Each connector's peg: a unit cylinder scaled to radius/height and
-        // oriented from +Z to the plane normal.
-        let connector_models: Vec<(Mat4, bool)> = req
+        // Each connector's peg: a unit prism (shape-matched) scaled to
+        // radius/height and oriented from +Z to the plane normal.
+        let connector_models: Vec<(Mat4, bool, usize)> = req
             .cut
             .as_ref()
             .map(|cut| {
@@ -1660,7 +1677,13 @@ impl ViewportRenderer {
                             rot,
                             Vec3::from(c.pos),
                         );
-                        (m, c.selected)
+                        let shape = match c.shape.as_str() {
+                            "triangle" => 0,
+                            "square" => 1,
+                            "hexagon" => 2,
+                            _ => 3, // circle
+                        };
+                        (m, c.selected, shape)
                     })
                     .collect()
             })
@@ -1729,7 +1752,7 @@ impl ViewportRenderer {
             let rgba = [0.80f32, 0.80, 0.85, 0.22];
             bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
         }
-        for (k, (model, selected)) in connector_models.iter().enumerate() {
+        for (k, (model, selected, _)) in connector_models.iter().enumerate() {
             let off = (connector_slot + k) * self.slot as usize;
             bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&(vp * *model).to_cols_array()));
             let rgba = if *selected {
@@ -1868,10 +1891,11 @@ impl ViewportRenderer {
                 multiview_mask: None,
             });
             rp.set_pipeline(&self.tower_pipe);
-            rp.set_vertex_buffer(0, self.vb_cylinder.slice(..));
-            for k in 0..connector_models.len() {
+            for (k, (_, _, shape)) in connector_models.iter().enumerate() {
+                let (vb, n) = &self.conn_prisms[*shape];
                 rp.set_bind_group(0, &self.bind, &[(connector_slot as u32 + k as u32) * self.slot]);
-                rp.draw(0..self.n_cylinder, 0..1);
+                rp.set_vertex_buffer(0, vb.slice(..));
+                rp.draw(0..*n, 0..1);
             }
         }
         // Gizmo: second pass, color preserved, always self-occluding (depth Less +

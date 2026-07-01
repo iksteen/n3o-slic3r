@@ -33,7 +33,7 @@ export type SplitProps = {
   radius: number;
   setOrigin: (o: Vec3) => void;
   // connectors (plane-space u,v + size for hit-test/preview)
-  connectors: { u: number; v: number; radius: number; height: number }[];
+  connectors: { u: number; v: number; radius: number; height: number; shape: string }[];
   selectedConnector: number | null;
   placing: boolean;
   addConnector: (u: number, v: number) => void;
@@ -213,6 +213,7 @@ export function WgpuViewport({
                   radius: c.radius,
                   height: c.height,
                   selected: i === s.selectedConnector,
+                  shape: c.shape,
                 }));
                 return {
                   origin,

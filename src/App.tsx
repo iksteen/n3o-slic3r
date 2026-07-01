@@ -536,6 +536,7 @@ function App() {
                     v: c.v,
                     radius: c.params.radius,
                     height: c.params.height,
+                    shape: c.params.shape,
                   })),
                   selectedConnector: split.selectedConnector,
                   placing: split.placing,
