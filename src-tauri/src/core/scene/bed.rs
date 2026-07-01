@@ -119,14 +119,18 @@ pub fn object_out_of_bounds(
         });
     }
     if world_bb.max[2] > extents.max[2] {
-        // Below the plate is its own dedicated reason — split it
-        // out so the UI message is specific ("object is below the
-        // plate" vs. "object is too tall").
         reasons.push(OutOfBoundsReason::OutOfBuildVolume {
             axis: BoundsAxis::Z,
         });
     }
-    if world_bb.min[2] < 0.0 {
+    // Below the plate is its own dedicated reason (distinct from too-tall)
+    // so the UI can say "below the plate" vs. "too tall". A flush-seated
+    // object's lowest vertex lands at z≈0, but the seat's float arithmetic
+    // can leave it a hair below (≈-1e-7); tolerate sub-micron noise so a
+    // freshly-seated object isn't false-flagged on the next non-seated
+    // recheck (e.g. after reload). A real below-plate is far deeper than this.
+    const BELOW_PLATE_EPS: f64 = 1e-3;
+    if world_bb.min[2] < -BELOW_PLATE_EPS {
         reasons.push(OutOfBoundsReason::BelowBuildPlate);
     }
     for zone in &bed.exclusion_zones {
@@ -272,6 +276,22 @@ mod tests {
         assert!(reasons
             .iter()
             .any(|r| matches!(r, OutOfBoundsReason::BelowBuildPlate)));
+    }
+
+    #[test]
+    fn sub_micron_seating_noise_is_not_below_plate() {
+        // A flush-seated object whose lowest vertex is a hair below z=0 from
+        // seat float noise must NOT be flagged below-plate (regression: the
+        // non-seated recheck false-positived after auto-orient + reload).
+        let bed = bed_for_printer(&a1_mini_with_ams_zone());
+        let (obj, mesh) = unit_cube_at(glam::Vec3::new(50.0, 50.0, -1e-6));
+        let reasons = object_out_of_bounds(&obj, &mesh, &bed);
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| matches!(r, OutOfBoundsReason::BelowBuildPlate)),
+            "sub-micron noise should not read as below-plate, got {reasons:?}"
+        );
     }
 
     #[test]
