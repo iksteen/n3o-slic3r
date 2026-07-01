@@ -1,12 +1,11 @@
-// Smoke test for connector (joint) cuts: a Plug bakes a protruding peg into one
-// half and a matching cavity into the other; a Dowel cuts a hole in both and
-// emits a free pin; degenerate/no connectors fall back to a plain cut. These
-// exercise the libslic3r mesh-boolean path, so a connector that silently failed
-// would make the geometric assertions fail.
+// Smoke test for connector (joint) cuts. The cut is deferred: a plane cut plus
+// each connector returned as a separate peg/hole *volume* (the slice path
+// subtracts holes per-layer in 2D) — so the halves stay the plain plane cut and
+// nothing is baked in. These check the volumes come back tagged correctly and
+// that MMU paint is carried onto the halves.
 
 use slic3r_ffi::{
-    cut_mesh, cut_mesh_connectors, cut_mesh_deferred, Connector, ConnectorShape, ConnectorStyle,
-    ConnectorType,
+    cut_mesh, cut_mesh_deferred, Connector, ConnectorShape, ConnectorStyle, ConnectorType,
 };
 
 /// Axis-aligned unit cube [0,1]^3 — 8 vertices, 12 triangles, outward winding.
@@ -22,10 +21,6 @@ fn unit_cube() -> (Vec<f32>, Vec<u32>) {
         1,2,6, 1,6,5,  2,3,7, 2,7,6,  3,0,4, 3,4,7,
     ];
     (verts, idx)
-}
-
-fn max_z(half: &slic3r_ffi::CutHalf) -> f32 {
-    half.vertices.chunks_exact(3).map(|c| c[2]).fold(f32::MIN, f32::max)
 }
 
 fn connector(ty: ConnectorType, style: ConnectorStyle, shape: ConnectorShape) -> Connector {
@@ -44,121 +39,6 @@ fn connector(ty: ConnectorType, style: ConnectorStyle, shape: ConnectorShape) ->
 
 const ORIGIN: [f32; 3] = [0.0, 0.0, 0.5];
 const NORMAL: [f32; 3] = [0.0, 0.0, 1.0];
-
-#[test]
-fn plug_connector_adds_a_protruding_peg_and_a_cavity() {
-    let (v, i) = unit_cube();
-    let (base_pos, _base_neg) = cut_mesh(&v, &i, ORIGIN, NORMAL).expect("plain cut");
-    let r = cut_mesh_connectors(
-        &v,
-        &i,
-        ORIGIN,
-        NORMAL,
-        &[connector(ConnectorType::Plug, ConnectorStyle::Prism, ConnectorShape::Circle)],
-        None,
-    )
-    .expect("connector cut");
-
-    assert!(!r.pos.is_empty() && !r.neg.is_empty(), "both halves present");
-    assert!(r.dowels.is_empty(), "a plug emits no free pin");
-    // Peg side (neg, z<0.5 by default) gains a peg that pokes above the cut
-    // plane — its max Z climbs past 0.5 (peg straddles, half sticks out to 0.75).
-    assert!(max_z(&r.neg) > 0.6, "peg should protrude above the cut, got {}", max_z(&r.neg));
-    // Hole side (pos) gains an internal cavity → more triangles than the plain cut.
-    assert!(
-        r.pos.indices.len() > base_pos.indices.len(),
-        "hole side should gain cavity geometry",
-    );
-}
-
-#[test]
-fn dowel_connector_emits_a_pin_and_holes_both_halves() {
-    let (v, i) = unit_cube();
-    let (base_pos, base_neg) = cut_mesh(&v, &i, ORIGIN, NORMAL).expect("plain cut");
-    let r = cut_mesh_connectors(
-        &v,
-        &i,
-        ORIGIN,
-        NORMAL,
-        &[connector(ConnectorType::Dowel, ConnectorStyle::Prism, ConnectorShape::Circle)],
-        None,
-    )
-    .expect("connector cut");
-
-    assert_eq!(r.dowels.len(), 1, "one free dowel pin");
-    assert!(!r.dowels[0].is_empty(), "the pin has geometry");
-    assert!(r.pos.indices.len() > base_pos.indices.len(), "pos got a hole");
-    assert!(r.neg.indices.len() > base_neg.indices.len(), "neg got a hole");
-}
-
-#[test]
-fn snap_and_square_shapes_cut_without_error() {
-    let (v, i) = unit_cube();
-    for (ty, style, shape) in [
-        (ConnectorType::Snap, ConnectorStyle::Prism, ConnectorShape::Circle),
-        (ConnectorType::Plug, ConnectorStyle::Frustum, ConnectorShape::Square),
-        (ConnectorType::Plug, ConnectorStyle::Prism, ConnectorShape::Hexagon),
-    ] {
-        let r = cut_mesh_connectors(&v, &i, ORIGIN, NORMAL, &[connector(ty, style, shape)], None)
-            .expect("connector cut");
-        assert!(!r.pos.is_empty() && !r.neg.is_empty(), "{ty:?}/{style:?}/{shape:?}");
-    }
-}
-
-#[test]
-fn degenerate_connector_is_skipped_plain_cut_survives() {
-    let (v, i) = unit_cube();
-    let bad = Connector {
-        radius: 0.0, // degenerate → skipped
-        ..connector(ConnectorType::Plug, ConnectorStyle::Prism, ConnectorShape::Circle)
-    };
-    let r = cut_mesh_connectors(&v, &i, ORIGIN, NORMAL, &[bad], None).expect("connector cut");
-    assert!(!r.pos.is_empty() && !r.neg.is_empty(), "plain cut still returns");
-    assert!(r.dowels.is_empty());
-}
-
-#[test]
-fn many_dowels_batch_into_one_cut() {
-    // Three disjoint dowels across the cross-section → all three pins, both
-    // halves holed. Exercises the batched (merge-then-one-boolean) path that
-    // replaced the per-connector loop.
-    let (v, i) = unit_cube();
-    let (base_pos, base_neg) = cut_mesh(&v, &i, ORIGIN, NORMAL).expect("plain cut");
-    let dowel = |x: f32, y: f32| Connector {
-        pos: [x, y, 0.5],
-        radius: 0.1,
-        height: 0.5,
-        r_tol: 0.0,
-        h_tol: 0.0,
-        z_angle: 0.0,
-        ty: ConnectorType::Dowel,
-        style: ConnectorStyle::Prism,
-        shape: ConnectorShape::Circle,
-    };
-    let conns = [dowel(0.3, 0.3), dowel(0.7, 0.3), dowel(0.5, 0.7)];
-    let r = cut_mesh_connectors(&v, &i, ORIGIN, NORMAL, &conns, None).expect("connector cut");
-    assert_eq!(r.dowels.len(), 3, "one pin per dowel");
-    assert!(r.dowels.iter().all(|d| !d.is_empty()), "every pin has geometry");
-    assert!(r.pos.indices.len() > base_pos.indices.len(), "pos got holes");
-    assert!(r.neg.indices.len() > base_neg.indices.len(), "neg got holes");
-}
-
-#[test]
-fn paint_survives_a_diagonal_cut() {
-    // Exact-identity paint mapping happens in the cut-aligned frame; a non-axis
-    // normal forces a real rotation, so this guards the frame round-trip the
-    // +Z-normal test above can't.
-    let (v, i) = unit_cube();
-    let paint = vec!["4".to_string(); i.len() / 3];
-    let s = (1.0f32 / 3.0).sqrt();
-    let r = cut_mesh_connectors(&v, &i, [0.5, 0.5, 0.5], [s, s, s], &[], Some(&paint))
-        .expect("diagonal painted cut");
-    for half in [&r.pos, &r.neg] {
-        let p = half.paint.as_ref().expect("kept half carries paint");
-        assert!(p.iter().any(|s| s == "4"), "kept faces stay painted through a rotated cut");
-        assert!(p.iter().any(|s| s.is_empty()), "the cut cap stays unpainted");
-    }
-}
 
 #[test]
 fn deferred_cut_emits_connector_volumes_not_baked_geometry() {
@@ -194,50 +74,68 @@ fn deferred_cut_emits_connector_volumes_not_baked_geometry() {
 }
 
 #[test]
+fn every_type_shape_style_cuts_without_error() {
+    let (v, i) = unit_cube();
+    for (ty, style, shape) in [
+        (ConnectorType::Snap, ConnectorStyle::Prism, ConnectorShape::Circle),
+        (ConnectorType::Plug, ConnectorStyle::Frustum, ConnectorShape::Square),
+        (ConnectorType::Plug, ConnectorStyle::Prism, ConnectorShape::Hexagon),
+        (ConnectorType::Dowel, ConnectorStyle::Frustum, ConnectorShape::Triangle),
+    ] {
+        let r = cut_mesh_deferred(&v, &i, ORIGIN, NORMAL, &[connector(ty, style, shape)], None)
+            .expect("deferred cut");
+        assert!(!r.pos.is_empty() && !r.neg.is_empty(), "{ty:?}/{style:?}/{shape:?}");
+        assert!(!r.modifiers.is_empty(), "connector produced volumes: {ty:?}");
+    }
+}
+
+#[test]
+fn degenerate_connector_is_skipped_plain_cut_survives() {
+    let (v, i) = unit_cube();
+    let bad = Connector {
+        radius: 0.0, // degenerate → skipped
+        ..connector(ConnectorType::Plug, ConnectorStyle::Prism, ConnectorShape::Circle)
+    };
+    let r = cut_mesh_deferred(&v, &i, ORIGIN, NORMAL, &[bad], None).expect("deferred cut");
+    assert!(!r.pos.is_empty() && !r.neg.is_empty(), "plain cut still returns");
+    assert!(r.modifiers.is_empty() && r.dowels.is_empty(), "degenerate connector emits nothing");
+}
+
+#[test]
+fn no_connectors_equals_a_plain_cut() {
+    let (v, i) = unit_cube();
+    let r = cut_mesh_deferred(&v, &i, ORIGIN, NORMAL, &[], None).expect("deferred cut");
+    assert!(!r.pos.is_empty() && !r.neg.is_empty());
+    assert!(r.modifiers.is_empty() && r.dowels.is_empty());
+    assert!(r.pos.paint.is_none() && r.neg.paint.is_none(), "no paint in → no paint out");
+}
+
+#[test]
 fn deferred_cut_preserves_paint_on_the_halves() {
     let (v, i) = unit_cube();
     let paint = vec!["4".to_string(); i.len() / 3];
     let r = cut_mesh_deferred(&v, &i, ORIGIN, NORMAL, &[], Some(&paint)).expect("deferred cut");
     for half in [&r.pos, &r.neg] {
         let p = half.paint.as_ref().expect("kept half carries paint");
+        assert_eq!(p.len(), half.indices.len() / 3, "one paint string per triangle");
         assert!(p.iter().any(|s| s == "4"), "surface stays painted");
         assert!(p.iter().any(|s| s.is_empty()), "cut cap unpainted");
     }
 }
 
 #[test]
-fn no_connectors_equals_a_plain_cut() {
+fn paint_survives_a_diagonal_cut() {
+    // Exact-identity paint mapping happens in the cut-aligned frame; a non-axis
+    // normal forces a real rotation, so this guards the frame round-trip the
+    // +Z-normal test above can't.
     let (v, i) = unit_cube();
-    let r = cut_mesh_connectors(&v, &i, ORIGIN, NORMAL, &[], None).expect("connector cut");
-    assert!(!r.pos.is_empty() && !r.neg.is_empty());
-    assert!(r.dowels.is_empty());
-    assert!(r.pos.paint.is_none() && r.neg.paint.is_none(), "no paint in → no paint out");
-}
-
-#[test]
-fn paint_survives_the_cut_and_the_cap_stays_clean() {
-    let (v, i) = unit_cube();
-    let tri_count = i.len() / 3;
-    // Paint the whole cube filament 4 (per-triangle FacetsAnnotation = "4").
-    let paint: Vec<String> = vec!["4".to_string(); tri_count];
-    let r = cut_mesh_connectors(
-        &v,
-        &i,
-        ORIGIN,
-        NORMAL,
-        &[connector(ConnectorType::Plug, ConnectorStyle::Prism, ConnectorShape::Circle)],
-        Some(&paint),
-    )
-    .expect("painted connector cut");
-
+    let paint = vec!["4".to_string(); i.len() / 3];
+    let s = (1.0f32 / 3.0).sqrt();
+    let r = cut_mesh_deferred(&v, &i, [0.5, 0.5, 0.5], [s, s, s], &[], Some(&paint))
+        .expect("diagonal painted cut");
     for half in [&r.pos, &r.neg] {
         let p = half.paint.as_ref().expect("kept half carries paint");
-        assert_eq!(p.len(), half.indices.len() / 3, "one paint string per triangle");
-        // Original surface faces stay painted; the cut cap + connector walls are
-        // fresh interior geometry the remap leaves unpainted.
-        assert!(p.iter().any(|s| s == "4"), "original paint survived the cut");
-        assert!(p.iter().any(|s| s.is_empty()), "cut cap / connector faces stay unpainted");
+        assert!(p.iter().any(|s| s == "4"), "kept faces stay painted through a rotated cut");
+        assert!(p.iter().any(|s| s.is_empty()), "the cut cap stays unpainted");
     }
-    // Dowel-free plug → no pins, and pins never carry paint anyway.
-    assert!(r.dowels.is_empty());
 }

@@ -185,7 +185,7 @@ pub struct CutHalf {
     pub vertices: Vec<f32>,
     pub indices: Vec<u32>,
     /// One MMU paint string per triangle (libslic3r `FacetsAnnotation`
-    /// encoding), re-projected from the source mesh by [`cut_mesh_connectors`].
+    /// encoding), carried from the source mesh by [`cut_mesh_deferred`].
     /// `None` when the source carried no paint. Always absent from [`cut_mesh`].
     pub paint: Option<Vec<String>>,
 }
@@ -390,139 +390,6 @@ pub struct Connector {
     pub shape: ConnectorShape,
 }
 
-/// A connector-cut result: the two halves (with pegs/holes baked in) plus any
-/// free dowel pin meshes (one per Dowel connector that succeeded).
-#[derive(Debug, Clone, Default)]
-pub struct CutWithConnectors {
-    pub pos: CutHalf,
-    pub neg: CutHalf,
-    pub dowels: Vec<CutHalf>,
-}
-
-/// Cut a mesh by a plane and bake reassembly connectors into the halves — the
-/// engine behind OrcaSlicer's "Cut" connectors, applied via mesh booleans so
-/// the result is plain printable meshes. With no connectors this equals
-/// [`cut_mesh`]. A connector whose boolean fails is skipped (the plain cut still
-/// succeeds). `plane_origin`/`plane_normal` and each `Connector.pos` are in the
-/// mesh's local frame.
-pub fn cut_mesh_connectors(
-    vertices: &[f32],
-    indices: &[u32],
-    plane_origin: [f32; 3],
-    plane_normal: [f32; 3],
-    connectors: &[Connector],
-    paint: Option<&[String]>,
-) -> Result<CutWithConnectors> {
-    if vertices.is_empty() || vertices.len() % 3 != 0 {
-        return Err(Error {
-            kind: ErrorKind::InvalidArg,
-            message: Some("vertices must be a non-empty multiple of 3".into()),
-        });
-    }
-    if indices.is_empty() || indices.len() % 3 != 0 {
-        return Err(Error {
-            kind: ErrorKind::InvalidArg,
-            message: Some("indices must be a non-empty multiple of 3".into()),
-        });
-    }
-    let vertex_count = vertices.len() / 3;
-    if let Some(&max_index) = indices.iter().max() {
-        if max_index as usize >= vertex_count {
-            return Err(Error {
-                kind: ErrorKind::InvalidArg,
-                message: Some(format!(
-                    "triangle index {max_index} out of range for {vertex_count} vertices"
-                )),
-            });
-        }
-    }
-
-    // Flatten connectors into the float/int parallel streams the C ABI takes.
-    let mut cf: Vec<f32> = Vec::with_capacity(connectors.len() * 8);
-    let mut cn: Vec<i32> = Vec::with_capacity(connectors.len() * 3);
-    for c in connectors {
-        cf.extend_from_slice(&[
-            c.pos[0], c.pos[1], c.pos[2], c.radius, c.height, c.r_tol, c.h_tol, c.z_angle,
-        ]);
-        cn.extend_from_slice(&[c.ty.code(), c.style.code(), c.shape.code()]);
-    }
-    let (cf_ptr, cn_ptr) = if connectors.is_empty() {
-        (ptr::null(), ptr::null())
-    } else {
-        (cf.as_ptr(), cn.as_ptr())
-    };
-
-    // Per-triangle MMU paint → null-terminated C strings the shim re-projects.
-    // Length must match the triangle count, else drop it (treat as unpainted).
-    let triangle_count = indices.len() / 3;
-    let paint_cstrings: Option<Vec<CString>> = paint
-        .filter(|p| p.len() == triangle_count)
-        .map(|p| p.iter().map(|s| CString::new(s.as_str()).unwrap_or_default()).collect());
-    let paint_ptrs: Option<Vec<*const c_char>> =
-        paint_cstrings.as_ref().map(|v| v.iter().map(|c| c.as_ptr()).collect());
-    let paint_ptr = paint_ptrs.as_ref().map_or(ptr::null(), |v| v.as_ptr());
-
-    let mut pos_v: *mut f32 = ptr::null_mut();
-    let mut pos_vc: usize = 0;
-    let mut pos_i: *mut u32 = ptr::null_mut();
-    let mut pos_tc: usize = 0;
-    let mut pos_p: *mut *mut c_char = ptr::null_mut();
-    let mut neg_v: *mut f32 = ptr::null_mut();
-    let mut neg_vc: usize = 0;
-    let mut neg_i: *mut u32 = ptr::null_mut();
-    let mut neg_tc: usize = 0;
-    let mut neg_p: *mut *mut c_char = ptr::null_mut();
-    let mut dv: *mut *mut f32 = ptr::null_mut();
-    let mut dvc: *mut usize = ptr::null_mut();
-    let mut di: *mut *mut u32 = ptr::null_mut();
-    let mut dtc: *mut usize = ptr::null_mut();
-    let mut dn: usize = 0;
-    let mut err: *mut c_char = ptr::null_mut();
-
-    // SAFETY: input slices validated; the connector streams are length
-    // connector_count*{8,3} (or null when empty); all out pointers are valid.
-    let status = unsafe {
-        sys::slic3r_cut_mesh_connectors(
-            vertices.as_ptr(),
-            vertex_count,
-            indices.as_ptr(),
-            indices.len() / 3,
-            paint_ptr,
-            plane_origin.as_ptr(),
-            plane_normal.as_ptr(),
-            cf_ptr,
-            cn_ptr,
-            connectors.len(),
-            &mut pos_v,
-            &mut pos_vc,
-            &mut pos_i,
-            &mut pos_tc,
-            &mut pos_p,
-            &mut neg_v,
-            &mut neg_vc,
-            &mut neg_i,
-            &mut neg_tc,
-            &mut neg_p,
-            &mut dv,
-            &mut dvc,
-            &mut di,
-            &mut dtc,
-            &mut dn,
-            &mut err,
-        )
-    };
-    unsafe { check_with_err(status, err) }?;
-
-    // SAFETY: each pos/neg half is (ptr,count) or (null,0); copy out + free.
-    // Paint (if any) is a parallel char* array sized to the half's triangle count.
-    let mut pos = unsafe { take_cut_half(pos_v, pos_vc, pos_i, pos_tc) };
-    let mut neg = unsafe { take_cut_half(neg_v, neg_vc, neg_i, neg_tc) };
-    pos.paint = unsafe { take_paint(pos_p, pos_tc) };
-    neg.paint = unsafe { take_paint(neg_p, neg_tc) };
-    let dowels = unsafe { take_dowels(dv, dvc, di, dtc, dn) };
-    Ok(CutWithConnectors { pos, neg, dowels })
-}
-
 /// Copy each dowel pin out of the shim-owned array-of-arrays into a `CutHalf`,
 /// then free the whole group. Empty/absent → empty Vec.
 unsafe fn take_dowels(
@@ -579,9 +446,12 @@ pub struct CutDeferred {
     pub dowels: Vec<CutHalf>,
 }
 
-/// Like [`cut_mesh_connectors`] but returns the connectors as separate volume
-/// meshes instead of baking them — the fast (Orca-parity) path: the slice layer
-/// subtracts hole volumes per-layer in 2D, so the cut does no 3D boolean.
+/// Cut a mesh by a plane, returning reassembly connectors as separate volume
+/// meshes ([`CutModifier`]) instead of baking them — the Orca-parity path: the
+/// slice layer subtracts hole volumes per-layer in 2D, so the cut does no 3D
+/// boolean. With no connectors this equals [`cut_mesh`] (plus paint carry).
+/// `plane_origin`/`plane_normal` and each `Connector.pos` are in the mesh's
+/// local frame.
 pub fn cut_mesh_deferred(
     vertices: &[f32],
     indices: &[u32],

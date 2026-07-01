@@ -407,16 +407,17 @@ slic3r_status slic3r_cut_mesh(const float* vertices, size_t vertex_count,
 /* Free one half's buffers returned by slic3r_cut_mesh. Safe with NULL (no-op). */
 void slic3r_cut_mesh_free(float* vertices, uint32_t* indices);
 
-/* Connector (joint) enums for slic3r_cut_mesh_connectors — match OrcaSlicer's
+/* Connector (joint) enums for slic3r_cut_mesh_deferred — match OrcaSlicer's
  * CutConnectorType / Style / Shape. */
 typedef enum { SLIC3R_CONN_PLUG = 0, SLIC3R_CONN_DOWEL = 1, SLIC3R_CONN_SNAP = 2 } slic3r_connector_type;
 typedef enum { SLIC3R_CONN_PRISM = 0, SLIC3R_CONN_FRUSTUM = 1 } slic3r_connector_style;
 typedef enum { SLIC3R_CONN_TRIANGLE = 0, SLIC3R_CONN_SQUARE = 1,
                SLIC3R_CONN_HEXAGON = 2, SLIC3R_CONN_CIRCLE = 3 } slic3r_connector_shape;
 
-/* Cut a mesh by a plane AND bake reassembly connectors (joints) into the
- * halves — the engine behind OrcaSlicer's "Cut" connectors, applied here via
- * mesh booleans so the result is plain printable meshes.
+/* Cut a mesh by a plane and return its reassembly connectors (joints) as
+ * separate volume meshes instead of baking them with 3D booleans — for the
+ * slice path to apply as libslic3r MODEL_PART (peg) / NEGATIVE_VOLUME (hole)
+ * volumes, subtracted per-layer in 2D (Orca's model; no per-cut CGAL boolean).
  *
  * Cut args are identical to slic3r_cut_mesh. Connectors are passed as flat
  * parallel arrays (the codebase's convention), `connector_count` entries:
@@ -425,55 +426,21 @@ typedef enum { SLIC3R_CONN_TRIANGLE = 0, SLIC3R_CONN_SQUARE = 1,
  *     r_tolerance, h_tolerance (mm, widen the HOLE), z_angle (radians, the
  *     cross-section's rotation about the plane normal).
  *   connector_ints: 3 per connector — type, style, shape (enums above).
- * Pass NULL/0 for no connectors (then this == slic3r_cut_mesh).
- *
- * Per connector: a Plug/Snap adds a solid peg to the `neg` half and a matching
- * hole to the `pos` half; a Dowel cuts a hole in BOTH halves and emits a free
- * pin mesh. A connector whose boolean fails is skipped (logged) — the plain cut
- * still succeeds.
+ * Pass NULL/0 for no connectors (then this == slic3r_cut_mesh, plus paint).
  *
  * MMU color paint: pass `in_paint` as `triangle_count` C strings (libslic3r
- * FacetsAnnotation per-triangle encoding; "" = unpainted), or NULL for an
- * unpainted mesh. When supplied, the paint is re-projected onto each kept half
- * (libslic3r's save/restore_painting spatial remap, which tolerates the cut +
- * connector booleans) and returned as `*out_pos_triangle_count` /
- * `*out_neg_triangle_count` strings via *out_pos_paint / *out_neg_paint — free
- * each with slic3r_cut_connectors_free_paint. NULL out when in_paint was NULL.
- * Dowel pins are fresh geometry and carry no paint.
+ * FacetsAnnotation per-triangle encoding; "" = unpainted), or NULL. When
+ * supplied, paint is carried onto each kept half by exact triangle identity and
+ * returned via *out_pos_paint / *out_neg_paint (free with
+ * slic3r_cut_connectors_free_paint); NULL out when in_paint was NULL.
  *
- * Outputs: pos/neg halves exactly as slic3r_cut_mesh (free with
- * slic3r_cut_mesh_free). Dowel pins come back as an array of `*out_dowel_count`
- * meshes (parallel arrays of vertex/index buffers + their counts); free the
- * whole group with slic3r_cut_connectors_free_dowels. On error writes *out_err
- * and returns non-OK. Pure computation; no slic3r_init(). */
-slic3r_status slic3r_cut_mesh_connectors(
-    const float* vertices, size_t vertex_count,
-    const uint32_t* indices, size_t triangle_count,
-    const char* const* in_paint,
-    const float plane_origin[3], const float plane_normal[3],
-    const float* connector_floats, const int32_t* connector_ints, size_t connector_count,
-    float** out_pos_vertices, size_t* out_pos_vertex_count,
-    uint32_t** out_pos_indices, size_t* out_pos_triangle_count,
-    char*** out_pos_paint,
-    float** out_neg_vertices, size_t* out_neg_vertex_count,
-    uint32_t** out_neg_indices, size_t* out_neg_triangle_count,
-    char*** out_neg_paint,
-    float*** out_dowel_vertices, size_t** out_dowel_vertex_counts,
-    uint32_t*** out_dowel_indices, size_t** out_dowel_triangle_counts,
-    size_t* out_dowel_count,
-    char** out_err);
-
-/* Cut a mesh by a plane and return its connectors as separate volume meshes
- * instead of baking them with 3D booleans — for the slice path to apply as
- * libslic3r MODEL_PART (peg) / NEGATIVE_VOLUME (hole) volumes, subtracted
- * per-layer in 2D (Orca's model; no per-cut CGAL boolean). Inputs as
- * slic3r_cut_mesh_connectors. Outputs: the two plane-cut halves + their paint
- * (exact-identity, free with slic3r_cut_connectors_free_paint); the connector
- * volumes as an array of `*out_mod_count` meshes (parallel vertex/index buffers
- * + counts) with `out_mod_half[i]` (0 = pos half, 1 = neg half) and
- * `out_mod_type[i]` (0 = MODEL_PART/peg, 1 = NEGATIVE_VOLUME/hole), all in the
- * input frame — free with slic3r_cut_connectors_free_mods; and dowel pins as
- * slic3r_cut_mesh_connectors. Pure; no slic3r_init(). */
+ * Outputs: the two plane-cut halves + their paint; the connector volumes as an
+ * array of `*out_mod_count` meshes (parallel vertex/index buffers + counts) with
+ * `out_mod_half[i]` (0 = pos half, 1 = neg half) and `out_mod_type[i]`
+ * (0 = MODEL_PART/peg, 1 = NEGATIVE_VOLUME/hole), all in the input frame — free
+ * with slic3r_cut_connectors_free_mods; and dowel pins as an array of
+ * `*out_dowel_count` meshes freed with slic3r_cut_connectors_free_dowels. Pure;
+ * no slic3r_init(). */
 slic3r_status slic3r_cut_mesh_deferred(
     const float* vertices, size_t vertex_count,
     const uint32_t* indices, size_t triangle_count,
@@ -500,11 +467,11 @@ void slic3r_cut_connectors_free_mods(
     float** mod_vertices, uint32_t** mod_indices, size_t* mod_vertex_counts,
     size_t* mod_triangle_counts, int* mod_half, int* mod_type, size_t mod_count);
 
-/* Free a per-triangle paint string array from slic3r_cut_mesh_connectors (every
+/* Free a per-triangle paint string array from slic3r_cut_mesh_deferred (every
  * string + the outer array). Safe with NULL/0 (no-op). */
 void slic3r_cut_connectors_free_paint(char** paint, size_t count);
 
-/* Free the dowel array-of-arrays from slic3r_cut_mesh_connectors (every inner
+/* Free the dowel array-of-arrays from slic3r_cut_mesh_deferred (every inner
  * buffer + the four outer arrays). Safe with NULL/0 (no-op). */
 void slic3r_cut_connectors_free_dowels(
     float** dowel_vertices, uint32_t** dowel_indices,

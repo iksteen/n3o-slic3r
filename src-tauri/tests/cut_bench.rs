@@ -1,7 +1,7 @@
-//! Ad-hoc cut benchmark (ignored). Point N3O_BENCH_MODEL at a model and run
-//! with N3O_CUT_TIMING=1 for the FFI phase breakdown:
+//! Ad-hoc cut benchmark (ignored). Point N3O_BENCH_MODEL at a model to time the
+//! deferred cut (no-connector, painted, and dowel cases):
 //!
-//!   N3O_BENCH_MODEL=stormtrooper.3mf N3O_CUT_TIMING=1 \
+//!   N3O_BENCH_MODEL=stormtrooper.3mf \
 //!     cargo test -p n3o-slic3r --features test-fixtures --test cut_bench \
 //!       -- --ignored --nocapture
 
@@ -57,7 +57,7 @@ fn bench_cut() {
     };
     let run = |label: &str, paint: Option<&[String]>, conns: &[slic3r_ffi::Connector]| {
         let t = Instant::now();
-        let r = slic3r_ffi::cut_mesh_connectors(
+        let r = slic3r_ffi::cut_mesh_deferred(
             &mesh.vertices,
             &mesh.indices,
             origin,
