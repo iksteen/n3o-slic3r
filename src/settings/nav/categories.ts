@@ -95,6 +95,7 @@ export function passesMode(opt: OptionSummary, filter: ModeFilter): boolean {
  *  the grouping pass. */
 export function categorize<O extends OptionSummary>(
   options: readonly O[],
+  pinnedOrder: readonly string[] = CATEGORY_ORDER,
 ): CategoryGroup<O>[] {
   const byCategory = new Map<string, O[]>();
   for (const opt of options) {
@@ -104,12 +105,15 @@ export function categorize<O extends OptionSummary>(
     else byCategory.set(key, [opt]);
   }
 
-  // Walk the canonical order first, then any remaining categories
-  // sorted alphabetically (so unexpected upstream additions are
-  // visible without surprise reordering).
+  // Emit `pinnedOrder` categories first (the Process panel's curated
+  // libslic3r order), then any remaining categories in first-appearance
+  // order. Options arrive already sorted into OrcaSlicer's display order, so
+  // a category's first-appearance IS its Orca position. The printer/filament
+  // panels pass an empty `pinnedOrder` so their pages fall entirely to that
+  // path — matching Orca's Tab layout instead of a hardcoded/alphabetic one.
   const seen = new Set<string>();
   const out: CategoryGroup<O>[] = [];
-  for (const id of CATEGORY_ORDER) {
+  for (const id of pinnedOrder) {
     const settings = byCategory.get(id);
     if (!settings || settings.length === 0) continue;
     out.push({
@@ -120,9 +124,7 @@ export function categorize<O extends OptionSummary>(
     });
     seen.add(id);
   }
-  const trailing = [...byCategory.keys()]
-    .filter((k) => !seen.has(k))
-    .sort();
+  const trailing = [...byCategory.keys()].filter((k) => !seen.has(k));
   for (const id of trailing) {
     const settings = byCategory.get(id) ?? [];
     if (settings.length === 0) continue;

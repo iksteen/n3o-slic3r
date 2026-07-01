@@ -127,14 +127,17 @@ export function PrinterSettingsModal({
   // is a left-nav category; overrides persist live to `config_overrides`.
   const { options: machineOptions } = useMachineOptions(profile);
   const { options: extruderOptions } = useExtruderOptions(profile);
+  // Empty pinned order: printer pages carry their own Orca Tab order via
+  // display-order sort, so categorize by first-appearance (not CATEGORY_ORDER,
+  // which is the Process panel's list and would yank "Machine limits" first).
   const machineGroups = useMemo(
-    () => orderGroupsOtherLast(categorize(machineOptions)),
+    () => orderGroupsOtherLast(categorize(machineOptions, [])),
     [machineOptions],
   );
   // The per-extruder option set is identical across toolheads; only the
   // displayed vector index differs. Categorize once, share across tabs.
   const extruderGroups = useMemo(
-    () => orderGroupsOtherLast(categorize(extruderOptions)),
+    () => orderGroupsOtherLast(categorize(extruderOptions, [])),
     [extruderOptions],
   );
   const extruderCount = instance.extruders.length;

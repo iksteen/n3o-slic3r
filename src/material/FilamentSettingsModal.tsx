@@ -55,7 +55,10 @@ export function FilamentSettingsModal({
     };
   }, [base]);
 
-  const groups = useMemo(() => categorize(options), [options]);
+  // Empty pinned order: filament pages carry their own Orca Tab order via the
+  // display-order sort, so categorize by first-appearance (CATEGORY_ORDER is
+  // the Process panel's category list, irrelevant to filament pages).
+  const groups = useMemo(() => categorize(options, []), [options]);
   const navActive = groups.some((g) => g.id === active)
     ? active
     : (groups[0]?.id ?? "");

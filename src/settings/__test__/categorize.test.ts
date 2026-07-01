@@ -75,14 +75,33 @@ describe("categorize", () => {
     expect(ids).toEqual(["Quality"]);
   });
 
-  it("buckets unknown categories alphabetically at the end", () => {
+  it("orders unknown categories by first appearance (Orca display order), after the canonical ones", () => {
+    // Options arrive pre-sorted into Orca's display order, so a trailing
+    // category's first-appearance is its Orca position — Zoo before Future
+    // because its option comes first, not alphabetically.
     const opts = [
       stub("a", "Quality"),
       stub("b", "Zoo"),
       stub("c", "Future"),
     ];
     const ids = categorize(opts).map((g) => g.id);
-    expect(ids).toEqual(["Quality", "Future", "Zoo"]);
+    expect(ids).toEqual(["Quality", "Zoo", "Future"]);
+  });
+
+  it("with an empty pinned order, orders every category by first appearance", () => {
+    // The printer/filament panels pass []: their pages are already in Orca Tab
+    // order via display-order sort, so "Machine limits" (in CATEGORY_ORDER) must
+    // stay in place, not jump to the front.
+    const opts = [
+      stub("a", "Basic information"),
+      stub("b", "Machine limits"),
+      stub("c", "Retraction"),
+    ];
+    expect(categorize(opts, []).map((g) => g.id)).toEqual([
+      "Basic information",
+      "Machine limits",
+      "Retraction",
+    ]);
   });
 
   it("buckets null category as 'Other'", () => {
