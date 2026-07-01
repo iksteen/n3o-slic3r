@@ -12,20 +12,18 @@ which has accreted from the Slic3r → PrusaSlicer → Bambu Studio lineage.
 
 ## Status
 
-Early prototype. The Tauri renderer can call into the Rust backend, which
-calls into the C shim, which drives libslic3r:
+A complete, standalone multi-printer slicer. It runs the Bambu Lab A1 mini
+and Snapmaker U1 simultaneously (plus a bundled full-size A1 profile) with
+the full slice-and-send workflow: a Rust `wgpu` edit viewport and G-code
+preview, a rule-based settings cascade with per-key "why is X=Y" tracing,
+both printer drivers (Bambu MQTT + Snapmaker mTLS/MQTT) with filament sync
+and live camera, and a Lua plugin system for G-code post-processing. It
+needs no other slicer installed and produces builds for Linux (arch/flatpak),
+Windows, and macOS.
 
-- `slicer_info` — version banner + option count (737 options registered)
-- `slicer_options(filter)` — introspect ConfigOptionDefs (key, type, label,
-  category, default)
-- `slicer_slice(model_path, out_path)` — load STL/3MF/OBJ/STEP and emit G-code
-
-Bambu A1 mini 3MFs slice end to end and produce gcode safe to send to the
-printer (real Bambu start/end sequences — `M1002`, `G29 A1`, `M620` AMS
-load/unload, `M983`/`M984` extrusion calibration). Other printer profiles
-should work similarly; only A1 mini has been smoke-tested.
-
-No 3D viewer, no preset model, no calibration tools yet — that's the work.
+The native project format is `.n3o`; OrcaSlicer `.3mf` projects import
+(geometry + settings). The A1 mini + U1 are the hardware-validated pair.
+Deep context for contributors lives in `AGENTS.md` and `docs/dev/`.
 
 ## Architecture
 
@@ -36,7 +34,7 @@ No 3D viewer, no preset model, no calibration tools yet — that's the work.
                        │  Tauri IPC (JSON over local channel)
 ┌──────────────────────▼──────────────────────────────────┐
 │  Rust backend  (src-tauri/)                             │
-│  - Tauri commands  (slicer_info, slicer_options, …)     │
+│  - Tauri commands (scene, slice, cascade, drivers, …)   │
 └──────────────────────┬──────────────────────────────────┘
                        │  workspace dep
 ┌──────────────────────▼──────────────────────────────────┐
@@ -56,16 +54,16 @@ No 3D viewer, no preset model, no calibration tools yet — that's the work.
 └─────────────────────────────────────────────────────────┘
 ```
 
-The FFI is vendored as a workspace member (`crates/slic3r-ffi/`) rather
-than an external crate. We're patching it heavily and opinionatedly while
-figuring out what shape it wants to be; an external crate would be
-premature. Once the API stabilizes, the crate can move back to its own
-repo unchanged.
+The FFI is a first-party, in-house crate vendored as a workspace member
+(`crates/slic3r-ffi/`). It patches libslic3r's headless-mode quirks heavily
+and opinionatedly (see `docs/dev/libslic3r-workarounds.md`), so it lives in
+the tree rather than as an external dependency.
 
 ## Build
 
-Tested on Linux (Arch). macOS should work with minor CMake adjustments;
-Windows would need symbol-visibility annotations on the C API.
+Linux and macOS build natively; Windows and macOS also cross-compile from
+Linux. All four are validated — see `AGENTS.md` and `packaging/<target>/`
+for the per-platform specifics.
 
 ### 1. System prerequisites
 
@@ -102,7 +100,9 @@ Everything beyond this point is driven by `cargo build`. The `slic3r-ffi`
 crate's `build.rs` invokes cmake to build `libslic3r_ffi.so` (and
 libslic3r transitively) on first build; cmake's own caching keeps
 incrementals to a few seconds. Output lands at
-`build/slic3r-ffi/RelWithDebInfo/libslic3r_ffi.so`.
+`build/slic3r-ffi/<config>/libslic3r_ffi.so`. The default config is
+RelWithDebInfo, which OrcaSlicer forces to `-O0` (slow slicing) — set
+`N3O_SLIC3R_FFI_CMAKE_CONFIG=Release` for an optimized local engine.
 
 ### 4. Install JS deps + run the dev server
 
@@ -119,28 +119,23 @@ downstream consumers).
 
 ### 5. Smoke test
 
-In the running app:
-1. The header should show `OrcaSlicer libslic3r_ffi v0 · 737 options registered`.
-2. Type `perimeter` in the search box → table of perimeter-related options.
-3. Paste a path to a model file into the slicer panel and click Slice. For
-   a quick verify use the bundled test STL:
-   `external/OrcaSlicer/tests/data/test_stl/ASCII/20mmbox-LF.stl`.
+The app opens into the workspace (or onboarding, if no printers are
+configured). Add a model, pick a printer + filament, and slice — the G-code
+preview should render the toolpaths.
 
-For headless slicing without the UI:
+For a headless engine check without the UI:
 ```bash
 cargo run -p slic3r-ffi --release --example slice -- <model> /tmp/out.gcode
+# quick model: external/OrcaSlicer/tests/data/test_stl/ASCII/20mmbox-LF.stl
 ```
 
-## Production build
+## Production build & packaging
 
-```bash
-npm run tauri build
-```
-
-The produced binary dynamically links against `libslic3r_ffi.so.0` via rpath
-to the build tree (dev convenience). For distribution, bundle the `.so` next
-to the binary or install it to a system library path; the current `build.rs`
-rpath is not portable.
+`npm run tauri build` produces a native bundle. For distributable, signed
+artifacts use the per-target packaging under `packaging/<target>/` (arch,
+flatpak, windows-cross, macos-cross) — each exposes `build.sh` / `publish.sh`
+/ `clean.sh`, mirrored as npm `build:<t>` / `publish:<t>` / `clean:<t>` (plus
+`build:all` / `publish:all`). See `AGENTS.md` and each target's `README.md`.
 
 ## Development gotchas
 
@@ -191,20 +186,22 @@ A few traps that aren't obvious from the toolchain alone.
 
 ## Upgrading OrcaSlicer
 
+A pin bump is never just the submodule SHA — it also regenerates everything
+derived from upstream (the scraped option tables and every bundled printer/
+process/filament profile), and upstream option renames surface as test
+breakage. `scripts/sync_orcaslicer.sh` captures the whole dance in one place:
+
 ```bash
-cd external/OrcaSlicer
-git fetch
-git checkout <tag-or-commit>
-cd ..
-./scripts/build.sh build
-git add external/OrcaSlicer
-git commit -m "Bump OrcaSlicer to <ref>"
+./scripts/sync_orcaslicer.sh <tag-or-commit>   # omit the ref to regen at the current pin
 ```
 
-Bumps that touch the libslic3r tool-ordering or config setup may require
-matching changes in `ffi/slic3r_ffi.cpp` — see the comments there for the
-specific pre-`apply` normalization the shim does to work around upstream's
-GUI-side assumptions.
+It repins the submodule (dropping the regenerable carry patches), re-runs the
+scrapers, re-imports the machine/process/filament profiles, forces a real
+libslic3r rebuild, and runs the full test suite (`Release` FFI config). It
+leaves everything **staged for review** — eyeball the profile + scraper diffs
+and commit the submodule bump alongside them. Bumps that touch libslic3r's
+tool-ordering or config setup may also need matching pre-`apply` normalization
+in `ffi/slic3r_ffi.cpp`; read `docs/dev/libslic3r-workarounds.md` first.
 
 ## License
 
