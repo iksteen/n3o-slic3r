@@ -66,9 +66,12 @@ struct VO { @builtin(position) p: vec4<f32>, @location(0) n: vec3<f32>, @locatio
   // selected objects while the split tool is active (plane_o.w == 1).
   if (u.plane_o.w > 0.5) {
     let pos_side = dot(i.wpos - u.plane_o.xyz, u.plane_n.xyz) >= 0.0;
+    let keep = u32(u.plane_n.w + 0.5);
+    // Placing connectors (bit2): hide the red (neg) half entirely so the cut
+    // cross-section is clear to place on.
+    if ((keep & 4u) != 0u && !pos_side) { discard; }
     let tint = select(vec3<f32>(0.85, 0.25, 0.25), vec3<f32>(0.25, 0.45, 0.95), pos_side); // RED neg / BLUE pos
     rgb = mix(rgb, tint, 0.6);
-    let keep = u32(u.plane_n.w + 0.5);
     let kept = select((keep & 2u) != 0u, (keep & 1u) != 0u, pos_side);
     if (!kept) { rgb = rgb * 0.4; } // ghost the discard side
   }
@@ -243,6 +246,10 @@ pub struct CutPreview {
     pub keep_pos: bool,
     #[serde(default)]
     pub keep_neg: bool,
+    /// Placing connectors: hide the neg (red) half entirely so the cut face is
+    /// clear to place on.
+    #[serde(default)]
+    pub placing: bool,
     #[serde(default)]
     pub connectors: Vec<CutConnectorPreview>,
 }
@@ -260,9 +267,9 @@ pub struct CutConnectorPreview {
 
 impl CutPreview {
     /// `plane_n.w` keep code consumed by the mesh shader (bit0 = keep positive
-    /// side, bit1 = keep negative side).
+    /// side, bit1 = keep negative side, bit2 = placing → hide the neg side).
     fn keep_code(&self) -> f32 {
-        (self.keep_pos as u32 | ((self.keep_neg as u32) << 1)) as f32
+        (self.keep_pos as u32 | ((self.keep_neg as u32) << 1) | ((self.placing as u32) << 2)) as f32
     }
 }
 

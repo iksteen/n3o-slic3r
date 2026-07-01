@@ -219,6 +219,7 @@ export function WgpuViewport({
                   normal: s.normal,
                   keep_pos: s.keepPos,
                   keep_neg: s.keepNeg,
+                  placing: s.placing,
                   connectors,
                 };
               })()
