@@ -694,6 +694,10 @@ export function WgpuViewport({
         });
         return;
       }
+      // Selection is locked while the split tool is up — a click there places /
+      // drags connectors or the plane, and must never re-select or deselect the
+      // object being cut.
+      if (splitRef.current?.active) return;
       // A click (no drag) on empty space or an unselected object selects it; a
       // click on an already-selected object keeps the selection. Shift/ctrl/cmd
       // extends the selection instead of replacing it.
