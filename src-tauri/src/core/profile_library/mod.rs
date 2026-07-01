@@ -1203,12 +1203,28 @@ mod tests {
     }
 
     #[test]
-    fn nozzle_skus_for_returns_declaration_order() {
-        let bambu = nozzle_skus_for("bambu-lab-a1-mini");
-        assert_eq!(bambu, vec!["0.2", "0.4", "0.6", "0.8"]);
-        let u1 = nozzle_skus_for("snapmaker-u1");
-        assert_eq!(u1, vec!["0.4", "0.6"]);
-        assert!(nozzle_skus_for("ghost-printer").is_empty());
+    fn nozzle_skus_for_returns_a_sorted_deduped_sku_set() {
+        // Assert the contract, not a specific printer's nozzle list (which moves
+        // upstream): every bundled printer ships ≥1 nozzle, returned in the
+        // deterministic declaration order (`read_sorted_files`) with no dupes and
+        // each SKU a real diameter. Unknown printers get an empty list.
+        for entry in printer_catalog() {
+            let skus = nozzle_skus_for(&entry.fragment_slug);
+            let slug = &entry.fragment_slug;
+            assert!(!skus.is_empty(), "{slug} bundles no nozzle SKUs");
+            let mut sorted = skus.clone();
+            sorted.sort();
+            assert_eq!(skus, sorted, "{slug} nozzle SKUs not in declaration (sorted) order");
+            let unique: std::collections::HashSet<_> = skus.iter().collect();
+            assert_eq!(unique.len(), skus.len(), "{slug} has duplicate nozzle SKUs");
+            for sku in &skus {
+                assert!(
+                    sku.parse::<f32>().is_ok_and(|d| d > 0.0),
+                    "{slug} nozzle SKU {sku:?} is not a diameter",
+                );
+            }
+        }
+        assert!(nozzle_skus_for("ghost-printer").is_empty(), "unknown printer → empty");
     }
 
     #[test]
