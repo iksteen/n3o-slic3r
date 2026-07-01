@@ -32,7 +32,11 @@ const IS_MAC =
 const UNDO_HINT = IS_MAC ? "⌘Z" : "Ctrl+Z";
 const REDO_HINT = IS_MAC ? "⇧⌘Z" : "Ctrl+Shift+Z";
 
-export function useUndoRedo(): UndoRedo {
+/** `disabled` gates undo/redo off entirely (keyboard + reported can-undo/redo,
+ *  which disables the toolbar buttons) — used while a modal editing session like
+ *  the split tool is open, so a stray Ctrl+Z can't revert the scene underneath
+ *  it. The tool's own shortcuts (Esc, Delete-connector) stay live. */
+export function useUndoRedo(disabled = false): UndoRedo {
   const [state, setState] = useState<HistoryState>({
     can_undo: false,
     can_redo: false,
@@ -73,7 +77,7 @@ export function useUndoRedo(): UndoRedo {
       // (so a Mac's Ctrl+Z stays available for terminal/native semantics).
       const primary = IS_MAC ? e.metaKey : e.ctrlKey;
       if (!primary || e.altKey) return;
-      if (shouldIgnoreHotkey(e)) return;
+      if (disabled || shouldIgnoreHotkey(e)) return;
       const key = e.key.toLowerCase();
       // Cmd/Ctrl+Shift+Z, or Ctrl+Y (Windows) → redo; Cmd/Ctrl+Z → undo.
       if ((key === "z" && e.shiftKey) || (!IS_MAC && key === "y")) {
@@ -86,11 +90,11 @@ export function useUndoRedo(): UndoRedo {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo]);
+  }, [undo, redo, disabled]);
 
   return {
-    canUndo: state.can_undo,
-    canRedo: state.can_redo,
+    canUndo: state.can_undo && !disabled,
+    canRedo: state.can_redo && !disabled,
     undo,
     redo,
     undoHint: UNDO_HINT,

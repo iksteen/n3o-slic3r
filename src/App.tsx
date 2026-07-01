@@ -82,7 +82,7 @@ function App() {
   // which bypasses the submit path — handled by the lookup fallback).
   const [sliceObjectCount, setSliceObjectCount] = useState<number | null>(null);
   const session = useProjectSession();
-  const undoRedo = useUndoRedo();
+  const undoRedo = useUndoRedo(split.active);
   const recovery = useAutosaveRecoveryGate();
   const printers = usePrinterInstances();
   const printerCatalog = usePrinterCatalog();
