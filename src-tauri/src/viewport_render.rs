@@ -436,9 +436,14 @@ fn upload_mesh(device: &wgpu::Device, m: &crate::core::scene::state::Mesh) -> Gp
     GpuMesh { vb, groups }
 }
 
-/// Build-plate grid lines on the bed floor (`z = min.z`), ~10mm spacing.
+/// Build-plate grid lines on the bed floor, ~10mm spacing. Nudged a hair below
+/// the floor (`z = min.z - ε`) so a model resting on the bed (bottom at `min.z`)
+/// doesn't z-fight it: from below the grid is then the nearer surface and wins
+/// (the plate occludes the model, as it should); from above it's imperceptibly
+/// under the bed and stays hidden behind the model. wgpu forbids depth bias on
+/// line topology, so this world-space offset stands in for it.
 fn grid_verts(min: [f32; 3], max: [f32; 3]) -> Vec<Vertex> {
-    let z = min[2];
+    let z = min[2] - 0.1;
     let step = 10.0_f32;
     let mut v = Vec::new();
     let nx = ((max[0] - min[0]) / step).ceil() as i32;
