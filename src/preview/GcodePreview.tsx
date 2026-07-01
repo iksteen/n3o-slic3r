@@ -15,6 +15,7 @@ import { useEffect, useRef } from "react";
 
 import { ViewportLegend } from "../viewport/ViewportLegend";
 import { registerAxisView, setAxisView, type AxisView } from "../viewport/cameraControl";
+import { camFor, needsInitialFrame, markFramed, type OrbitCam } from "../viewport/orbitCamera";
 
 import { toolpathFrame, toolpathPick, previewSegmentDetail } from "./invokes";
 import { windowBounds } from "./layerWindow";
@@ -46,6 +47,8 @@ const norm = (a: Vec3): Vec3 => {
 export interface GcodePreviewProps {
   /** Loaded preview handle + counts. `null` renders an empty canvas. */
   preview: PreviewLoadResponse | null;
+  /** Active plate id — selects the per-plate camera shared with prepare. */
+  activePlateId: number | null;
   /** Bed extents — used to frame the view when the print bbox is absent. */
   bedExtents: BoundingBox | null;
   colorMode: ColorMode;
@@ -59,6 +62,7 @@ export interface GcodePreviewProps {
 
 export function GcodePreview({
   preview,
+  activePlateId,
   bedExtents,
   colorMode,
   palette,
@@ -68,14 +72,10 @@ export function GcodePreview({
   onSegmentHover,
 }: GcodePreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  // Default framing matches the prepare viewport: az = -90° (X axis along the
-  // bottom), ~37° elevation. reframe() refits to the print on load.
-  const cam = useRef({
-    az: -Math.PI / 2,
-    el: Math.atan2(200, 260),
-    dist: 350,
-    center: [0, 0, 0] as Vec3,
-  });
+  // Shared per-plate camera (same store as the prepare viewport) so the view
+  // carries across the prepare↔preview switch and is restored per plate.
+  const cam = useRef<OrbitCam>(camFor(activePlateId));
+  cam.current = camFor(activePlateId);
 
   // Kept fresh each render so the mount-once effect's handlers read live props.
   const previewRef = useRef(preview);
@@ -288,6 +288,12 @@ export function GcodePreview({
     // along the current view direction just far enough that every bbox corner
     // stays in frame. Ports WgpuViewport.reframe / cameraControls.frameBox.
     function reframe() {
+      // Camera is shared per-plate with the prepare viewport and retained across
+      // switches: only fit on this plate's first framing, else keep the view.
+      if (!needsInitialFrame(cam.current)) {
+        void render();
+        return;
+      }
       const p = previewRef.current;
       const bbox = p?.bounding_box ?? bedExtentsRef.current;
       if (!bbox) {
@@ -321,6 +327,7 @@ export function GcodePreview({
       }
       cam.current.center = center;
       cam.current.dist = dist;
+      markFramed(cam.current);
       void render();
     }
     reframeRef.current = reframe;

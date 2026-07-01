@@ -4,6 +4,7 @@ import { onEvents } from "../state/eventRouter";
 import { shouldIgnoreHotkey } from "../ui/hotkeyInhibit";
 import { registerThumbnailCapture } from "./thumbnailCapture";
 import { registerAxisView, type AxisView } from "./cameraControl";
+import { camFor, needsInitialFrame, markFramed, type OrbitCam } from "./orbitCamera";
 import { planeBasis, worldOf } from "./useSplitSession";
 
 type Vec3 = [number, number, number];
@@ -122,16 +123,11 @@ export function WgpuViewport({
   onFaceMatchStep?: (refSet: boolean) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  // Default framing: camera at (0, -260, 200) looking at the
-  // origin (cameraControls.ts). Zero X offset → screen-right is world +X, so the
-  // bed's front edge (the X axis) is horizontal along the bottom and the origin
-  // sits at the lower-left; az = -90°, el = the ~37° elevation.
-  const cam = useRef({
-    az: -Math.PI / 2,
-    el: Math.atan2(200, 260),
-    dist: 350,
-    center: [0, 0, 0] as [number, number, number],
-  });
+  // Camera comes from the shared per-plate store so the view carries across
+  // mode switches (prepare↔preview shares the plate's cam) and is restored
+  // per plate-tab. Kept pointed at the active plate's cam below.
+  const cam = useRef<OrbitCam>(camFor(activePlateId));
+  cam.current = camFor(activePlateId);
   // Kept fresh each render so the (mount-once) effect's handlers see live values.
   const selRef = useRef(selectedIds);
   selRef.current = selectedIds;
@@ -154,8 +150,9 @@ export function WgpuViewport({
   // Face-match is a two-click pick: the first click stashes the reference face's
   // world normal + point here; the second matches the target face to it.
   const faceMatchRef = useRef<{ normal: Vec3; point: Vec3 } | null>(null);
-  // Lets effects outside the mount-once effect trigger a redraw.
+  // Lets effects outside the mount-once effect trigger a redraw / reframe.
   const renderRef = useRef<(() => void) | null>(null);
+  const reframeRef = useRef<((force?: boolean) => void) | null>(null);
 
   const drag = useRef<DragState | null>(null);
   const inflight = useRef(false);
@@ -790,10 +787,17 @@ export function WgpuViewport({
     // pull the camera back along the current view direction just far enough that
     // every projected corner stays inside the frustum. Z is collapsed to the
     // plate plane so it frames the footprint, not the whole build volume.
-    async function reframe() {
+    // `force` refits even when the camera is already framed (a fresh project);
+    // otherwise the camera is only positioned on the first framing, so mode and
+    // plate-tab switches refresh bed/tower state but retain the view.
+    async function reframe(force = false) {
       try {
         const info = await invoke<{ min: Vec3; max: Vec3 }>("viewport_scene_info");
         bedMin = info.min;
+        if (!force && !needsInitialFrame(cam.current)) {
+          void render();
+          return;
+        }
         const [minX, minY, minZ] = info.min;
         const [maxX, maxY] = info.max;
         const center: Vec3 = [(minX + maxX) / 2, (minY + maxY) / 2, minZ];
@@ -819,6 +823,7 @@ export function WgpuViewport({
         }
         cam.current.center = center;
         cam.current.dist = dist;
+        markFramed(cam.current);
       } catch (e) {
         console.error("viewport_scene_info failed", e);
       }
@@ -899,11 +904,10 @@ export function WgpuViewport({
     );
     // Selection doesn't affect the tower → just redraw (no re-resolve).
     const offSelection = onEvents(["scene:selection_changed"], () => void render());
-    // A plate switch just renders — `frame` resolves the new plate's tower (the
-    // cache is per plate) so it draws in the same frame as the objects. A bed
-    // change can alter the cascade-resolved placement → invalidate. (No more
-    // lagging-ref problem: the active plate comes from the project, Rust-side.)
-    const offActivePlate = onEvents(["scene:active_plate_changed"], () => void reframe());
+    // A plate switch is handled by the `activePlateId`-prop effect below (it
+    // repoints the camera to the new plate's cam, then reframes), so the switch
+    // sees the correct per-plate camera. A bed change can alter the
+    // cascade-resolved tower placement → invalidate + reframe.
     const offBed = onEvents(["scene:bed_changed"], () => {
       invalidateTower();
       void reframe();
@@ -914,7 +918,7 @@ export function WgpuViewport({
     // A new project replaced the scene: the renderer's caches (meshes + tower)
     // were dropped Rust-side by the replace command (see `project_io`); reframe
     // for the fresh geometry (which renders → resolves the new active tower).
-    const offLoaded = onEvents(["project:loaded"], () => void reframe());
+    const offLoaded = onEvents(["project:loaded"], () => void reframe(true));
     // A slice stores the active plate's tower mesh Rust-side (the slice event
     // sink) before this event arrives; just render so the box flips to the mesh
     // (placement is unchanged by slicing).
@@ -963,13 +967,15 @@ export function WgpuViewport({
     });
 
     renderRef.current = render;
-    void reframe(); // renders → resolves the active plate's tower in-frame
+    reframeRef.current = reframe;
+    // Initial framing + every active-plate switch is driven by the
+    // `activePlateId`-prop effect below (runs on mount too).
 
     return () => {
       renderRef.current = null;
+      reframeRef.current = null;
       offRender();
       offSelection();
-      offActivePlate();
       offBed();
       offOverrides();
       offLoaded();
@@ -986,6 +992,13 @@ export function WgpuViewport({
       ro.disconnect();
     };
   }, []);
+
+  // Active plate (mount included): `cam` already points at the plate's cam (set
+  // in the render body). Reframe refreshes bed/tower state and frames this
+  // plate's cam if it hasn't been framed yet, else retains its view.
+  useEffect(() => {
+    reframeRef.current?.();
+  }, [activePlateId]);
 
   // Toggling gizmo mode: reset the hovered handle, redraw (the renderer draws the
   // gizmo for the new mode from the selection).

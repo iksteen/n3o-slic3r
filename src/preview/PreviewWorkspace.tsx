@@ -33,6 +33,8 @@ import type {
 
 export interface PreviewWorkspaceProps {
   preview: PreviewLoadResponse | null;
+  /** Active plate id — selects the per-plate camera shared with prepare. */
+  activePlateId: number | null;
   bedExtents: BoundingBox | null;
   /** Canvas toolbar content (the Prepare/Preview toggle), rendered top-left
    *  inside the canvas frame. */
@@ -44,6 +46,7 @@ export interface PreviewWorkspaceProps {
 
 export function PreviewWorkspace({
   preview,
+  activePlateId,
   bedExtents,
   toolbar,
   overlays,
@@ -134,6 +137,7 @@ export function PreviewWorkspace({
           <div className="preview-canvas-host">
             <GcodePreview
               preview={activePreview}
+              activePlateId={activePlateId}
               bedExtents={bedExtents}
               colorMode={colorState.mode}
               palette={colorState.palette}

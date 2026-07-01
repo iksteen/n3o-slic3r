@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { WgpuViewport } from "./viewport/WgpuViewport";
 import { ViewportChrome } from "./viewport/ViewportChrome";
@@ -60,6 +60,9 @@ import "./App.css";
 
 function App() {
   const [mode, setMode] = useState<"scene" | "preview" | "devices">("scene");
+  // Each plate's last prepare/preview choice, restored on tab switch. Devices is
+  // a global view, not per-plate, so it's never stored here.
+  const modeByPlate = useRef<Map<number, "scene" | "preview">>(new Map());
   // Selected printer in the Devices view, owned here (App is always mounted) so
   // it survives DevicesView's unmount on tab switches and so a Send can
   // pre-select the destination printer before the view mounts. `null` falls
@@ -101,6 +104,11 @@ function App() {
       (p) => p.plate_id === session.snapshot?.active_plate_id,
     ) ?? null;
   const activePlateId = activePlate?.plate_id ?? null;
+  // Set the workspace mode and remember it for the active plate.
+  const applyMode = (next: "scene" | "preview"): void => {
+    setMode(next);
+    if (activePlateId != null) modeByPlate.current.set(activePlateId, next);
+  };
   const selection = activePlate?.selection ?? [];
   // While the split tool is active, re-center the cutting plane when the
   // selection changes (e.g. clicking a different object in split mode).
@@ -188,7 +196,11 @@ function App() {
   useEffect(() => {
     bridge.onPreviewReady((plateId) => {
       if (plateId !== activePlateId) return;
-      setMode((current) => (current === "devices" ? current : "preview"));
+      setMode((current) => {
+        if (current === "devices") return current;
+        modeByPlate.current.set(plateId, "preview");
+        return "preview";
+      });
     });
   }, [bridge, activePlateId]);
 
@@ -215,16 +227,18 @@ function App() {
   // itself — see `project_io` — so there's nothing to invalidate here.)
   useEffect(() => {
     return onEvents(PROJECT_REPLACED_EVENTS, () => {
+      // Plate ids belong to the old project — drop the per-plate memory.
+      modeByPlate.current.clear();
       setMode((current) => (current === "preview" ? "scene" : current));
     });
   }, []);
 
   const goPrepare = (): void => {
-    setMode("scene");
+    applyMode("scene");
   };
   const goPreview = (): void => {
     if (!canPreview) return;
-    setMode("preview");
+    applyMode("preview");
   };
 
   // Keyboard shortcut: `P` toggles the G-code preview. From preview it
@@ -238,16 +252,21 @@ function App() {
       if (e.key !== "p" && e.key !== "P") return;
       if (shouldIgnoreHotkey(e)) return;
       setMode((current) => {
+        let next: "scene" | "preview";
         if (current === "preview") {
-          return "scene";
+          next = "scene";
+        } else if (!canPreview) {
+          return current;
+        } else {
+          next = "preview";
         }
-        if (!canPreview) return current;
-        return "preview";
+        if (activePlateId != null) modeByPlate.current.set(activePlateId, next);
+        return next;
       });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [canPreview]);
+  }, [canPreview, activePlateId]);
 
   // Prepare/Preview segmented toggle. Lives in the canvas toolbar:
   // rendered as the leading item of the viewport toolbar in prepare
@@ -477,7 +496,18 @@ function App() {
         devicesActive={showDevices}
         deviceCount={printers.instances.length}
         onSelectDevices={() => setMode("devices")}
-        onSelectPlate={() => setMode("scene")}
+        // Selecting a plate restores that plate's remembered prepare/preview
+        // mode (recording the outgoing plate's first). `showPreview`'s
+        // `&& canPreview` mask handles a plate without a slice — it falls back to
+        // prepare and restores preview when you return to a sliced plate.
+        onSelectPlate={(plateId) =>
+          setMode((m) => {
+            if (m !== "devices" && activePlateId != null) {
+              modeByPlate.current.set(activePlateId, m);
+            }
+            return modeByPlate.current.get(plateId) ?? "scene";
+          })
+        }
       />
 
       {session.error ? (
@@ -505,6 +535,7 @@ function App() {
             {objectsPanel}
             <PreviewWorkspace
               preview={bridge.activePreview}
+              activePlateId={activePlateId}
               bedExtents={bedExtents}
               toolbar={modeToggle}
               overlays={canvasOverlays}

@@ -32,8 +32,9 @@ export interface PlateTabsProps {
   deviceCount: number;
   /** Enter Devices mode (right-aligned tab click). */
   onSelectDevices: () => void;
-  /** Leave Devices mode when a plate is selected (back to Prepare). */
-  onSelectPlate: () => void;
+  /** A plate tab was chosen — restore that plate's prepare/preview mode (and
+   *  leave Devices). Called with the id of the plate being selected. */
+  onSelectPlate: (plateId: number) => void;
 }
 
 export function PlateTabs({
@@ -101,12 +102,12 @@ export function PlateTabs({
   }
 
   const handleAddPlate = (): void => {
-    onSelectPlate();
     void addPlate(null)
       .then((newId) => {
         // Auto-switch to the freshly-added plate so the user
         // lands on the workspace they just opened. Mirrors the
         // intuitive "tab opened in foreground" pattern.
+        onSelectPlate(newId);
         void setActivePlate(newId).catch((err) =>
           console.error("[plates] setActivePlate after addPlate failed", err),
         );
@@ -146,10 +147,10 @@ export function PlateTabs({
               className={`plate-tab${isActive ? " active" : ""}`}
               onClick={() => {
                 if (isEditing) return;
-                // Selecting a plate leaves Devices mode. Skip the
-                // setActivePlate IPC only when it's already active AND
-                // we weren't in Devices mode.
-                onSelectPlate();
+                // Selecting a plate restores that plate's prepare/preview mode
+                // (and leaves Devices). Skip the setActivePlate IPC only when
+                // it's already active.
+                onSelectPlate(plate.id);
                 if (plate.id !== activePlateId) {
                   void setActivePlate(plate.id);
                 }
