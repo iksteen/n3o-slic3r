@@ -823,6 +823,7 @@ pub struct ViewportRenderer {
     queue: Arc<wgpu::Queue>,
     bgl: wgpu::BindGroupLayout,
     mesh_pipe: wgpu::RenderPipeline,
+    marker_pipe: wgpu::RenderPipeline,
     line_pipe: wgpu::RenderPipeline,
     axis_pipe: wgpu::RenderPipeline,
     gizmo_pipe: wgpu::RenderPipeline,
@@ -914,7 +915,7 @@ impl ViewportRenderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
         };
-        let make_pipe = |topology, cull, depth_compare, depth_write_enabled| {
+        let make_pipe = |topology, cull, depth_compare, depth_write_enabled, bias| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: None,
                 layout: Some(&layout),
@@ -941,7 +942,7 @@ impl ViewportRenderer {
                     depth_write_enabled: Some(depth_write_enabled),
                     depth_compare: Some(depth_compare),
                     stencil: Default::default(),
-                    bias: Default::default(),
+                    bias,
                 }),
                 multisample: wgpu::MultisampleState {
                     count: SAMPLES,
@@ -951,17 +952,29 @@ impl ViewportRenderer {
                 cache: None,
             })
         };
-        use wgpu::CompareFunction::{Always, Less};
+        use wgpu::CompareFunction::{Always, Less, LessEqual};
         use wgpu::PrimitiveTopology::{LineList, TriangleList};
+        let no_bias = wgpu::DepthBiasState::default();
         // No back-face culling: imported meshes (STL etc.) have no winding
         // guarantee, and mixed winding would drop valid front faces (holes). The
         // depth test still resolves the nearest face correctly.
-        let mesh_pipe = make_pipe(TriangleList, None, Less, true);
-        let line_pipe = make_pipe(LineList, None, Less, true);
+        let mesh_pipe = make_pipe(TriangleList, None, Less, true, no_bias);
+        let line_pipe = make_pipe(LineList, None, Less, true, no_bias);
         // Origin axis markers lie in the bed plane on top of the grid's x=0/y=0
         // lines, so they z-fight with it. Draw them always-on-top of the grid
         // (Always, no depth write) — still before the meshes, so objects occlude.
-        let axis_pipe = make_pipe(LineList, None, Always, false);
+        let axis_pipe = make_pipe(LineList, None, Always, false, no_bias);
+        // Cut hole-markers are decals coplanar with the cut cap (and, on a fresh
+        // cut, the coincident opposite half's cap). A depth bias toward the camera
+        // makes them win that tie deterministically instead of z-fighting;
+        // LessEqual + no depth write keeps them from disturbing the depth buffer.
+        let marker_pipe = make_pipe(
+            TriangleList,
+            None,
+            LessEqual,
+            false,
+            wgpu::DepthBiasState { constant: -16, slope_scale: -1.0, clamp: 0.0 },
+        );
 
         // Gizmo: solid lit triangles, drawn in its own depth-cleared pass so it
         // sits on top of the scene yet self-occludes (near rod hides far rod).
@@ -1089,6 +1102,7 @@ impl ViewportRenderer {
             queue,
             bgl,
             mesh_pipe,
+            marker_pipe,
             line_pipe,
             axis_pipe,
             gizmo_pipe,
@@ -1290,7 +1304,7 @@ impl ViewportRenderer {
         self.resize(w, h);
 
         // --- gather under the project lock (cheap): bed + per-object models ---
-        let (bmin, bmax, draws, boxes, gizmo, basis, drag_pre, active_plate_id, tower_geom) = {
+        let (bmin, bmax, draws, marker_draws, boxes, gizmo, basis, drag_pre, active_plate_id, tower_geom) = {
             let p = project.lock().unwrap();
             let plate = p.active_plate();
             let active_plate_id = plate.id;
@@ -1310,6 +1324,9 @@ impl ViewportRenderer {
             // (mesh, paint-group, world matrix, color, selected) — `selected`
             // gates the split-tool per-side tint.
             let mut draws: Vec<(MeshId, usize, Mat4, [f32; 3], bool)> = Vec::new();
+            // Cut hole-marker decals (mesh + object model matrix), drawn depth-
+            // biased so they don't z-fight the cut cap.
+            let mut marker_draws: Vec<(MeshId, Mat4)> = Vec::new();
             // Scale-gizmo basis follows the object's orientation (world for multi).
             let basis = selection_basis(&p);
             // Local drag preview: the active grab + cursor resolve (Rust-side) to a
@@ -1379,26 +1396,14 @@ impl ViewportRenderer {
                 }
                 // Cut-connector visuals ride the object. A peg is a solid
                 // positive volume, drawn in the object's base color so it reads
-                // as part of the print. A hole-marker is a flat dark disc on the
-                // cut face standing in for the (un-baked) hole opening. The hole
-                // volume itself isn't drawn — it has no surface to show.
+                // as part of the print. A hole-marker is a flat dark disc decal on
+                // the cut face standing in for the (un-baked) hole opening — drawn
+                // depth-biased (marker_pipe) so it doesn't fight the coplanar cap.
+                // The hole volume itself isn't drawn — it has no surface to show.
                 for m in plate.scene.object_modifiers.get(id).into_iter().flatten() {
-                    let color = match m.kind {
-                        ModifierKind::Peg => {
-                            let base = spool_color(
-                                &plate.material_to_slot,
-                                instance.as_ref(),
-                                Some(obj.extruder_id.unwrap_or(1)),
-                            );
-                            if selected {
-                                SELECTED_RGB
-                            } else {
-                                base
-                            }
-                        }
-                        ModifierKind::HoleMarker => [0.12, 0.12, 0.14],
-                        ModifierKind::Hole => continue,
-                    };
+                    if m.kind == ModifierKind::Hole {
+                        continue;
+                    }
                     if !self.meshes.contains_key(&m.mesh) {
                         if let Some(mesh) = p.meshes.get(&m.mesh) {
                             self.meshes.insert(m.mesh, upload_mesh(&self.device, mesh));
@@ -1407,7 +1412,19 @@ impl ViewportRenderer {
                     if !self.meshes.contains_key(&m.mesh) {
                         continue;
                     }
-                    draws.push((m.mesh, 0, model, color, selected));
+                    match m.kind {
+                        ModifierKind::Peg => {
+                            let base = spool_color(
+                                &plate.material_to_slot,
+                                instance.as_ref(),
+                                Some(obj.extruder_id.unwrap_or(1)),
+                            );
+                            let color = if selected { SELECTED_RGB } else { base };
+                            draws.push((m.mesh, 0, model, color, selected));
+                        }
+                        ModifierKind::HoleMarker => marker_draws.push((m.mesh, model)),
+                        ModifierKind::Hole => {}
+                    }
                 }
             }
             // One outer AABB enclosing the whole selection (world space) → a single
@@ -1426,7 +1443,8 @@ impl ViewportRenderer {
             // drawn this frame — no async frontend round-trip.
             let tower_geom = self.resolved_tower(&p, active_plate_id);
             (
-                bmin, bmax, draws, boxes, gizmo, basis, drag_pre, active_plate_id, tower_geom,
+                bmin, bmax, draws, marker_draws, boxes, gizmo, basis, drag_pre, active_plate_id,
+                tower_geom,
             )
         };
         let bmin = bmin.map(|v| v as f32);
@@ -1456,7 +1474,9 @@ impl ViewportRenderer {
         let plane_slot = tower_slot + 2;
         let connector_slot = plane_slot + 1;
         let n_conn = req.cut.as_ref().map_or(0, |c| c.connectors.len());
-        let total_slots = connector_slot + n_conn;
+        // One slot per cut hole-marker decal, after the split-tool previews.
+        let marker_slot = connector_slot + n_conn;
+        let total_slots = marker_slot + marker_draws.len();
 
         // Priming tower: draw the active plate's stored sliced mesh (mesh mode)
         // when there is one, else the placement box. Placement is the resolved
@@ -1663,6 +1683,13 @@ impl ViewportRenderer {
             };
             bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
         }
+        for (k, (_, model)) in marker_draws.iter().enumerate() {
+            let off = (marker_slot + k) * self.slot as usize;
+            bytes[off..off + 64]
+                .copy_from_slice(bytemuck::cast_slice(&(vp * *model).to_cols_array()));
+            let rgba = [0.10f32, 0.10, 0.12, 1.0]; // dark hole-marker decal
+            bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
+        }
         self.queue.write_buffer(&self.ubuf, 0, &bytes);
 
         let color_view = self.color.create_view(&Default::default());
@@ -1720,6 +1747,19 @@ impl ViewportRenderer {
                 rp.set_vertex_buffer(0, gm.vb.slice(..));
                 rp.set_index_buffer(g.ib.slice(..), wgpu::IndexFormat::Uint32);
                 rp.draw_indexed(0..g.n_indices, 0, 0..1);
+            }
+            // cut hole-marker decals — depth-biased, after the meshes, so they sit
+            // on the cut cap without z-fighting it.
+            if !marker_draws.is_empty() {
+                rp.set_pipeline(&self.marker_pipe);
+                for (k, (mesh_id, _)) in marker_draws.iter().enumerate() {
+                    let gm = &self.meshes[mesh_id];
+                    let g = &gm.groups[0];
+                    rp.set_bind_group(0, &self.bind, &[(marker_slot + k) as u32 * self.slot]);
+                    rp.set_vertex_buffer(0, gm.vb.slice(..));
+                    rp.set_index_buffer(g.ib.slice(..), wgpu::IndexFormat::Uint32);
+                    rp.draw_indexed(0..g.n_indices, 0, 0..1);
+                }
             }
             // selection bbox corner brackets
             if let Some(vb) = &bracket_vb {
