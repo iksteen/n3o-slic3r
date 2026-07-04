@@ -14,12 +14,20 @@
 // The active printer profile is NOT held here. The host derives it from the
 // active plate's `printer_identity` against the printer catalog.
 
-import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { SceneSnapshot } from "../viewport/types";
-import { useQuery } from "../state/queryCache";
-import { onEvents } from "../state/eventRouter";
+import { defineQuery, useQuery } from "../state/queryCache";
 import { sceneSnapshotQuery, SCENE_SNAPSHOT_EVENTS } from "../state/sceneSnapshot";
+
+/** Unsaved-edits flag — backend-authoritative (`DirtyTracker`). Routed through
+ *  the shared query cache so the cache's in-flight/requeue coalescing makes the
+ *  last settle reflect the latest `project:dirty_changed`, with no bespoke
+ *  fetch-vs-event ordering race. */
+const dirtyQuery = defineQuery<boolean>({
+  key: "project_dirty",
+  fetch: () => invoke<boolean>("project_is_dirty"),
+  invalidateOn: ["project:dirty_changed"],
+});
 
 /** Back-compat re-export: the event set the session refetches on now lives
  *  with the `scene_snapshot` query. Kept under the old name so existing
@@ -44,27 +52,7 @@ export interface ProjectSession {
 
 export function useProjectSession(): ProjectSession {
   const { data: snapshot, loading, error } = useQuery(sceneSnapshotQuery);
-  const [dirty, setDirty] = useState(false);
+  const { data: dirty } = useQuery(dirtyQuery);
 
-  // Dirty state is owned by the backend `DirtyTracker` (the same edit
-  // classification that gates autosave). Read it once on mount, then track
-  // `project:dirty_changed` — emitted only when the flag flips.
-  useEffect(() => {
-    let active = true;
-    invoke<boolean>("project_is_dirty")
-      .then((d) => {
-        if (active) setDirty(d);
-      })
-      .catch(() => {});
-    const off = onEvents<{ dirty: boolean }>(
-      ["project:dirty_changed"],
-      (event) => setDirty(event.payload.dirty),
-    );
-    return () => {
-      active = false;
-      off();
-    };
-  }, []);
-
-  return { cascadeHandle: null, snapshot, dirty, loading, error };
+  return { cascadeHandle: null, snapshot, dirty: dirty ?? false, loading, error };
 }

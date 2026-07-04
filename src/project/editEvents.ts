@@ -56,12 +56,12 @@ interface EditPayload {
  *  fires for a plate-scoped edit; `onAll()` for a project-wide one — a
  *  project-wide override edit OR a wholesale project replacement (Open /
  *  import), both of which stale every plate. Returns a single unsubscribe.
- *  Async-returning for caller compatibility (the router registration itself is
- *  synchronous). */
-export async function listenPlateEdits(
+ *  Synchronous — the router registration is synchronous, so callers can use
+ *  it directly as an effect body. */
+export function listenPlateEdits(
   onPlate: (plateId: number) => void,
   onAll: () => void,
-): Promise<UnlistenFn> {
+): UnlistenFn {
   const offPlate = onEvents<EditPayload>(PLATE_EDIT_EVENTS, (e) => {
     const plateId = e.payload?.data?.plate_id;
     if (plateId != null) onPlate(plateId);

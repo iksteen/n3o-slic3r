@@ -266,15 +266,6 @@ export function SettingsPanelHost({
     projectOverrides,
   ]);
 
-  // The active plate's cascade resolution (fragments composed against
-  // its effective process, each value tagged with the layer it won from).
-  // Re-resolves when the plate switches, its process changes, or it's
-  // rebound — those are the backend inputs.
-  const { resolved } = usePlateCascadeResolve(
-    plate?.plate_id ?? null,
-    `${plate?.quality_profile ?? ""}|${plate?.printer_instance_id ?? ""}|${processGen}`,
-  );
-
   const objectCbs = useMemo(
     () => makeObjectOverrideCallbacks(plate?.plate_id ?? null, selected?.id ?? null),
     [plate?.plate_id, selected?.id],
@@ -325,6 +316,18 @@ export function SettingsPanelHost({
     }
     return [...set].sort().join(",");
   }, [instance]);
+
+  // The active plate's cascade resolution (fragments composed against its
+  // effective process, each value tagged with the layer it won from).
+  // Re-resolves on the backend inputs: plate switch, its process, its printer
+  // binding, and the bound instance's bed + installed-nozzle loadout (the
+  // backend composes the cascade off those, and a bed/nozzle pick emits only
+  // `printer:instance_changed` — outside the snapshot refetch set — so they
+  // must be in the key or the ladder shows the previous fragment's values).
+  const { resolved } = usePlateCascadeResolve(
+    plate?.plate_id ?? null,
+    `${plate?.quality_profile ?? ""}|${plate?.printer_instance_id ?? ""}|${instanceBed ?? ""}|${installedNozzleKey}|${processGen}`,
+  );
   const printerFragmentSlug = instance?.printer_fragment_slug ?? null;
   const printerModel = activeProfile?.model ?? null;
   const [processOptions, setProcessOptions] = useState<

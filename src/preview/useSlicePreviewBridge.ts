@@ -6,7 +6,6 @@
 // gcode and fire `onPreviewReady` so App can switch to preview.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import { onEvents } from "../state/eventRouter";
 
 import { previewDrop, previewLoad } from "./invokes";
@@ -89,7 +88,6 @@ export function useSlicePreviewBridge(
   // stale render can't be shown or sent). A project-wide edit (user
   // overrides) blanks every plate's preview.
   useEffect(() => {
-    let unlisten: UnlistenFn | null = null;
     const dropPlate = (plateId: number) => {
       const prior = cacheRef.current.get(plateId);
       if (prior) {
@@ -108,19 +106,17 @@ export function useSlicePreviewBridge(
         if (plateId) dropPlate(plateId);
       },
     );
-    void (async () => {
-      unlisten = await listenPlateEdits(dropPlate, () => {
-        if (cacheRef.current.size === 0) return;
-        for (const r of cacheRef.current.values()) {
-          void previewDrop(r.handle).catch(() => undefined);
-        }
-        cacheRef.current.clear();
-        setTick((t) => t + 1);
-      });
-    })();
+    const offEdits = listenPlateEdits(dropPlate, () => {
+      if (cacheRef.current.size === 0) return;
+      for (const r of cacheRef.current.values()) {
+        void previewDrop(r.handle).catch(() => undefined);
+      }
+      cacheRef.current.clear();
+      setTick((t) => t + 1);
+    });
     return () => {
       offStarted();
-      if (unlisten) unlisten();
+      offEdits();
     };
   }, []);
 

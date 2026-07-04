@@ -13,7 +13,6 @@
 // completion rates.
 
 import { useEffect, useState } from "react";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import { onEvents } from "../state/eventRouter";
 import type { SliceEvent } from "./types";
 import { listenPlateEdits } from "../project/editEvents";
@@ -56,10 +55,9 @@ export function useLastSliceOutput(): UseLastSliceOutputResult {
   // can't push a gcode that no longer matches the plate (sendGate reports
   // "Slice the plate first" once the path is gone). A project-wide edit
   // (user overrides) invalidates every plate's slice.
-  useEffect(() => {
-    let unlisten: UnlistenFn | null = null;
-    void (async () => {
-      unlisten = await listenPlateEdits(
+  useEffect(
+    () =>
+      listenPlateEdits(
         (plateId) =>
           setPaths((prev) => {
             if (!(plateId in prev)) return prev;
@@ -68,12 +66,9 @@ export function useLastSliceOutput(): UseLastSliceOutputResult {
             return next;
           }),
         () => setPaths((prev) => (Object.keys(prev).length ? {} : prev)),
-      );
-    })();
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, []);
+      ),
+    [],
+  );
 
   return {
     pathForPlate: (plateId) => paths[plateId] ?? null,

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { WgpuViewport } from "./viewport/WgpuViewport";
 import { ViewportChrome } from "./viewport/ViewportChrome";
@@ -74,6 +74,22 @@ function App() {
   // Split (cut-by-plane) tool — a transient cutting-plane session, mutually
   // exclusive with the transform gizmo (coordinated below).
   const split = useSplitSession();
+  // Stable identity for the viewport's connector list: `split.connectors` is
+  // stable useState, but mapping it inline in the prop below would mint a fresh
+  // array every render, re-firing WgpuViewport's split-redraw effect (a full
+  // `viewport_frame` GPU blit) on every unrelated App re-render (slice-progress
+  // ticks, driver heartbeats). Memoize so the redraw fires only on real change.
+  const splitConnectors = useMemo(
+    () =>
+      split.connectors.map((c) => ({
+        u: c.u,
+        v: c.v,
+        radius: c.params.radius,
+        height: c.params.height,
+        shape: c.params.shape,
+      })),
+    [split.connectors],
+  );
   // True while the (async, off-thread) cut runs — gates the Split button and
   // shows progress so a large cut doesn't read as a frozen/dead panel.
   const [splitting, setSplitting] = useState(false);
@@ -562,13 +578,7 @@ function App() {
                   keepNeg: split.keepNeg,
                   radius: split.radius,
                   setOrigin: split.setOrigin,
-                  connectors: split.connectors.map((c) => ({
-                    u: c.u,
-                    v: c.v,
-                    radius: c.params.radius,
-                    height: c.params.height,
-                    shape: c.params.shape,
-                  })),
+                  connectors: splitConnectors,
                   selectedConnector: split.selectedConnector,
                   placing: split.placing,
                   addConnector: split.addConnector,
