@@ -14,17 +14,10 @@
 //! inspection-only — they don't drive emission.
 //!
 //! `LayerChange` is the one variant the serializer drops on the
-//! floor:
-//!
-//! - Marker-detected `LayerChange` was synthesized adjacent to a
-//!   `Comment` (the `;LAYER:<n>` marker), and that comment carries
-//!   the source bytes for emission. Emitting the LayerChange too
-//!   would double-emit the marker.
-//! - Heuristic-detected `LayerChange` has no source bytes — it
-//!   exists for inspection only. Emitting it would *add* a marker
-//!   the source didn't have.
-//!
-//! Either way, skipping LayerChange is the correct behavior.
+//! floor: it was synthesized adjacent to a `Comment` (the
+//! `;LAYER:<n>` marker), and that comment carries the source bytes
+//! for emission. Emitting the LayerChange too would double-emit the
+//! marker, so skipping it is the correct behavior.
 //!
 //! Future-self note: when Phase 8 plugins mutate typed fields on a
 //! `Move`, the mutated line's `raw` is stale. Plugins are

@@ -71,8 +71,8 @@ export interface SettingsPanelProps {
   objectOverrides: Record<string, string>;
   onSetObjectOverride: (key: string, value: string) => void;
   onClearObjectOverride: (key: string) => void;
-  /** Project-tier override map (extends `ContextJson` before resolve),
-   *  backed by the project model's stored overrides. */
+  /** Project-tier override map (applied as a cascade override tier
+   *  before resolve), backed by the project model's stored overrides. */
   projectOverrides: Record<string, string>;
   onSetProjectOverride: (key: string, value: string) => void;
   onClearProjectOverride: (key: string) => void;

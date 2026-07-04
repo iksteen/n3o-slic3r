@@ -9,7 +9,6 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   DriverConfig,
   DriverId,
-  DriverSummary,
   PrinterCommand,
   PrinterStatus,
   SendHandle,
@@ -43,11 +42,6 @@ export function driverConnect(id: DriverId): Promise<void> {
 /** Close the driver's connection cleanly. */
 export function driverDisconnect(id: DriverId): Promise<void> {
   return invoke<void>("driver_disconnect", { id });
-}
-
-/** Cheap snapshot of every registered driver. */
-export function driverList(): Promise<DriverSummary[]> {
-  return invoke<DriverSummary[]>("driver_list");
 }
 
 /** Latest cached status snapshot — reads the driver's internal

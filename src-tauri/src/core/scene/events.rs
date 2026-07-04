@@ -110,11 +110,11 @@ pub enum SceneEvent {
     /// Project-scoped, so no plate id — the resolver re-reads
     /// `Project.user_overrides`. Drives the project-level plugin surface.
     UserOverridesChanged,
-    /// A plate's metadata changed — cycle count, composition order,
-    /// or name. The frontend re-reads the
-    /// plate's metadata via the project snapshot to refresh the tab
-    /// badge / inputs.
-    PlateMetadataChanged { plate_id: PlateId },
+    /// A plate-level attribute changed — its name, quality/process
+    /// profile, or printer-binding label. The frontend re-reads the
+    /// plate via the project snapshot to refresh the tab strip and the
+    /// settings panel's resolved cascade.
+    PlateChanged { plate_id: PlateId },
     /// A plate's material → slot routing changed. The
     /// frontend re-reads `plate.material_to_slot` via the snapshot
     /// to refresh the slot binding panel.
@@ -162,7 +162,7 @@ impl SceneEvent {
             Self::ObjectOverridesChanged { .. } => "scene:object_overrides_changed",
             Self::ProjectOverridesChanged { .. } => "scene:project_overrides_changed",
             Self::UserOverridesChanged => "scene:user_overrides_changed",
-            Self::PlateMetadataChanged { .. } => "scene:plate_metadata_changed",
+            Self::PlateChanged { .. } => "scene:plate_changed",
             Self::MaterialSlotChanged { .. } => "scene:material_slot_changed",
             Self::ProjectSaved { .. } => "project:saved",
             Self::ProjectLoaded { .. } => "project:loaded",
@@ -186,7 +186,7 @@ impl SceneEvent {
             | Self::ObjectOverridesChanged { .. }
             | Self::ProjectOverridesChanged { .. }
             | Self::UserOverridesChanged
-            | Self::PlateMetadataChanged { .. }
+            | Self::PlateChanged { .. }
             | Self::MaterialSlotChanged { .. }
             // Restoring an undo/redo step changes the live state → dirty,
             // but `history::track` excludes it from recording (it's a
@@ -232,7 +232,7 @@ mod dirty_effect_tests {
             SceneEvent::UserOverridesChanged,
             SceneEvent::ProjectOverridesChanged { plate_id: P },
             SceneEvent::MaterialSlotChanged { plate_id: P },
-            SceneEvent::PlateMetadataChanged { plate_id: P },
+            SceneEvent::PlateChanged { plate_id: P },
             SceneEvent::BedChanged {
                 plate_id: P,
                 bed: None,
@@ -299,7 +299,7 @@ pub enum SceneOpError {
     /// Plate metadata validation rejected the new value.
     /// `message` carries the validator's explanation suitable for
     /// surfacing as a toast.
-    InvalidPlateMetadata {
+    InvalidPlateAttribute {
         plate_id: PlateId,
         message: String,
     },
@@ -319,7 +319,7 @@ impl std::fmt::Display for SceneOpError {
                     id.0
                 )
             }
-            Self::InvalidPlateMetadata { plate_id, message } => {
+            Self::InvalidPlateAttribute { plate_id, message } => {
                 write!(f, "plate {}: {}", plate_id.0, message)
             }
         }

@@ -149,17 +149,16 @@ impl Hook for PreSliceHook {
 /// Which kind of send buffer a pre-send hook is looking at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PayloadKind {
-    /// Raw G-code body (U1) — editable text.
+    /// Raw G-code body (U1) — editable text. The only kind a pre-send hook
+    /// sees today; the `.gcode.3mf` bundle path early-returns before building
+    /// a hook. A second variant lands with a bundle-editing hook.
     Gcode,
-    /// A `.gcode.3mf` bundle (Bambu) — opaque bytes; most plugins no-op.
-    Gcode3mf,
 }
 
 impl PayloadKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::Gcode => "gcode",
-            Self::Gcode3mf => "gcode_3mf",
         }
     }
 }

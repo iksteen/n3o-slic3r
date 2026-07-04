@@ -122,7 +122,7 @@ impl Project {
     /// Upsert a `material → slot` mapping on `plate_id`. The slot
     /// reference is validated against the plate's bound
     /// PrinterInstance — out-of-range `extruder` or `slot` indices
-    /// reject with `SceneOpError::InvalidPlateMetadata`.
+    /// reject with `SceneOpError::InvalidPlateAttribute`.
     pub fn set_material_slot(
         &mut self,
         plate_id: PlateId,
@@ -130,7 +130,7 @@ impl Project {
         slot: crate::core::printer::SlotRef,
     ) -> Result<Vec<SceneEvent>, SceneOpError> {
         if model_material < 1 {
-            return Err(SceneOpError::InvalidPlateMetadata {
+            return Err(SceneOpError::InvalidPlateAttribute {
                 plate_id,
                 message: "model_material must be >= 1".into(),
             });
@@ -149,7 +149,7 @@ impl Project {
             if let Some(instance) = crate::core::printer::lookup_instance(&instance_id) {
                 let e_count = instance.extruders.len();
                 if (slot.extruder as usize) >= e_count {
-                    return Err(SceneOpError::InvalidPlateMetadata {
+                    return Err(SceneOpError::InvalidPlateAttribute {
                         plate_id,
                         message: format!(
                             "instance `{instance_id}` has {e_count} extruder(s); index {} is out of range",
@@ -159,7 +159,7 @@ impl Project {
                 }
                 let s_count = instance.extruders[slot.extruder as usize].slots.len();
                 if (slot.slot as usize) >= s_count {
-                    return Err(SceneOpError::InvalidPlateMetadata {
+                    return Err(SceneOpError::InvalidPlateAttribute {
                         plate_id,
                         message: format!(
                             "instance `{instance_id}` extruder {} has {s_count} slot(s); index {} is out of range",
@@ -555,7 +555,7 @@ mod tests {
                 },
             )
             .unwrap_err();
-        assert!(matches!(err, SceneOpError::InvalidPlateMetadata { .. }));
+        assert!(matches!(err, SceneOpError::InvalidPlateAttribute { .. }));
     }
 
     #[test]

@@ -138,6 +138,10 @@ typedef struct {
     /* Preset bucket (slic3r_opt_bucket value): which preset tab owns this
      * option. SLIC3R_BUCKET_NONE for metadata / non-FFF keys. */
     unsigned int        bucket;
+    /* 1 when the key is in libslic3r's m_extruder_option_keys — the
+     * authoritative per-extruder set (options sized to the extruder count,
+     * one editor per toolhead). Sourced from print_config_def, not a scrape. */
+    int                 per_extruder; /* 0/1 */
 } slic3r_option_def_t;
 
 /* ---- Library lifecycle ---- */
@@ -366,35 +370,8 @@ slic3r_status slic3r_cancel(void);
  * call with NULL pointers (no-op). */
 void slic3r_tower_mesh_free(float* vertices, uint32_t* indices);
 
-/* Cut an indexed mesh by an arbitrary plane (wraps libslic3r::cut_mesh — the
- * engine behind OrcaSlicer's "Cut" tool — with caps triangulated, so both
- * halves come back watertight/printable).
- *
- * `vertices` is `vertex_count` xyz triples (3 floats each), `indices` is
- * `triangle_count` vertex-index triples (3 uint32 each). `plane_origin` is a
- * point on the plane and `plane_normal` its normal (xyz; need not be unit) —
- * BOTH in the same coordinate frame as `vertices` (the caller pre-transforms a
- * world plane into the mesh's local frame).
- *
- * Writes two halves: "pos" is the side the normal points toward, "neg" the
- * other. Each is heap-allocated as xyz-triple verts + uint32-triple indices via
- * the four out-pointers; counts are vertex/triangle counts (not float/uint
- * counts). EITHER half may come back empty (all four out-* set to NULL/0) when
- * the mesh lies entirely on the other side of the plane. Free every non-NULL
- * pair with slic3r_cut_mesh_free.
- *
- * On error writes *out_err (caller frees with slic3r_string_free) and returns
- * non-OK. Pure computation: touches no slic3r_model_t/config, no slic3r_init(). */
-slic3r_status slic3r_cut_mesh(const float* vertices, size_t vertex_count,
-                              const uint32_t* indices, size_t triangle_count,
-                              const float plane_origin[3], const float plane_normal[3],
-                              float** out_pos_vertices, size_t* out_pos_vertex_count,
-                              uint32_t** out_pos_indices, size_t* out_pos_triangle_count,
-                              float** out_neg_vertices, size_t* out_neg_vertex_count,
-                              uint32_t** out_neg_indices, size_t* out_neg_triangle_count,
-                              char** out_err);
-
-/* Free one half's buffers returned by slic3r_cut_mesh. Safe with NULL (no-op). */
+/* Free one cut half's buffers returned by slic3r_cut_mesh_deferred (pos/neg
+ * verts+indices). Safe with NULL (no-op). */
 void slic3r_cut_mesh_free(float* vertices, uint32_t* indices);
 
 /* Connector (joint) enums for slic3r_cut_mesh_deferred — match OrcaSlicer's

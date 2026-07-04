@@ -85,26 +85,15 @@ export type OutOfBoundsReason =
   | { kind: "IntersectsExclusion"; data: { label: string } }
   | { kind: "BelowBuildPlate"; data: null };
 
-// ---- Project-level types -------------------------------------------
-
-/** Per-plate metadata the composition plugin host reads.
- * `cycle_count` was cut from MVP scope; only `composition_order`
- * survives on the wire. */
-export interface PlateMetadata {
-  composition_order: number;
-}
-
-
 // ---- Snapshot wire shape -------------------------------------------
 
-/** Per-plate slice of the snapshot. Plate identity + metadata +
- * bindings + scene contents — enough to render a plate tab and
- * its workspace. */
+/** Per-plate slice of the snapshot. Plate identity + bindings +
+ * scene contents — enough to render a plate tab and its
+ * workspace. */
 export interface PlateSnapshot {
-  // Plate identity / metadata
+  // Plate identity
   plate_id: PlateId;
   name: string;
-  metadata: PlateMetadata;
   /** Vendor printer identity derived from the bound
    *  `PrinterInstance.vendor_profile_ref`. Snapshot-only — the
    *  in-memory `Plate` only carries `printer_instance_id`. `null`
@@ -199,7 +188,7 @@ export type SceneEvent =
   | { kind: "PlateRemoved"; data: { plate_id: PlateId } }
   | { kind: "ActivePlateChanged"; data: { plate_id: PlateId } }
   // ---- Project-state changes ----
-  | { kind: "PlateMetadataChanged"; data: { plate_id: PlateId } }
+  | { kind: "PlateChanged"; data: { plate_id: PlateId } }
   | { kind: "MaterialSlotChanged"; data: { plate_id: PlateId } }
   | {
       kind: "ObjectOverridesChanged";

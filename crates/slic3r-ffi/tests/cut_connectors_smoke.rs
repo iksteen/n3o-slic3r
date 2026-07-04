@@ -5,7 +5,7 @@
 // that MMU paint is carried onto the halves.
 
 use slic3r_ffi::{
-    cut_mesh, cut_mesh_deferred, Connector, ConnectorShape, ConnectorStyle, ConnectorType,
+    cut_mesh_deferred, Connector, ConnectorShape, ConnectorStyle, ConnectorType,
 };
 
 /// Axis-aligned unit cube [0,1]^3 — 8 vertices, 12 triangles, outward winding.
@@ -43,7 +43,8 @@ const NORMAL: [f32; 3] = [0.0, 0.0, 1.0];
 #[test]
 fn deferred_cut_emits_connector_volumes_not_baked_geometry() {
     let (v, i) = unit_cube();
-    let (base_pos, base_neg) = cut_mesh(&v, &i, ORIGIN, NORMAL).expect("plain cut");
+    let base = cut_mesh_deferred(&v, &i, ORIGIN, NORMAL, &[], None).expect("plain cut");
+    let (base_pos, base_neg) = (base.pos, base.neg);
     let dowel = Connector {
         pos: [0.3, 0.3, 0.5],
         radius: 0.12,

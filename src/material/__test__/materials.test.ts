@@ -29,7 +29,6 @@ function plate(
   return {
     plate_id: 1,
     name: "Plate 1",
-    metadata: { composition_order: 1 },
     printer_identity: null,
     printer_instance_id: null,
     material_to_slot,

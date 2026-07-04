@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::ams::css_to_hex8;
 use super::bambu::connection::{BambuConfig, BambuDriver};
-use super::registry::{DriverRegistry, DriverSummary};
+use super::registry::DriverRegistry;
 use super::send::{
     apply_pre_send, collect_ams_bindings, collect_ams_mapping, derive_send_names,
     plate_printer_model, read_gcode_bytes, wrap_gcode_as_3mf,
@@ -288,15 +288,6 @@ pub async fn driver_unregister(
     }
     registry.remove(id);
     Ok(())
-}
-
-/// Cheap summary of every registered driver. Frontend uses this
-/// to populate "which printers are configured?" panes without
-/// triggering per-driver work.
-#[tauri::command]
-#[tracing::instrument(skip(registry))]
-pub fn driver_list(registry: State<'_, Arc<DriverRegistry>>) -> Vec<DriverSummary> {
-    registry.list()
 }
 
 /// Open the printer connection. Spawns the driver's background

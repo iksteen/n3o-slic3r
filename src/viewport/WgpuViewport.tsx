@@ -6,6 +6,7 @@ import { registerThumbnailCapture } from "./thumbnailCapture";
 import { registerAxisView, type AxisView } from "./cameraControl";
 import { camFor, needsInitialFrame, markFramed, type OrbitCam } from "./orbitCamera";
 import { planeBasis, worldOf } from "./useSplitSession";
+import { sub, scale, dot, cross, vlen, norm } from "./vec3";
 
 type Vec3 = [number, number, number];
 type GizmoMode = "none" | "move" | "rotate" | "scale";
@@ -68,20 +69,6 @@ type DragState = {
   cutOrigin?: Vec3;
   // Connector drag: which connector index is being moved.
   connectorIndex?: number;
-};
-
-const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const scale = (a: Vec3, k: number): Vec3 => [a[0] * k, a[1] * k, a[2] * k];
-const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const cross = (a: Vec3, b: Vec3): Vec3 => [
-  a[1] * b[2] - a[2] * b[1],
-  a[2] * b[0] - a[0] * b[2],
-  a[0] * b[1] - a[1] * b[0],
-];
-const vlen = (a: Vec3) => Math.hypot(a[0], a[1], a[2]);
-const norm = (a: Vec3): Vec3 => {
-  const l = vlen(a) || 1;
-  return [a[0] / l, a[1] / l, a[2] / l];
 };
 
 /**
@@ -892,7 +879,7 @@ export function WgpuViewport({
         "scene:material_slot_changed",
         // Quality profile carries enable_prime_tower / prime_tower_width /
         // wipe_tower_x/y — switching it resizes, moves, or toggles the tower.
-        "scene:plate_metadata_changed",
+        "scene:plate_changed",
         // Undo/redo swaps the live project: redraw from the restored state and
         // re-resolve the tower, but in place — keep the user's camera (unlike
         // project:loaded, which reframes for fresh geometry).

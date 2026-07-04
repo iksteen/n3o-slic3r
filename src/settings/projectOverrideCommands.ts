@@ -31,11 +31,6 @@ export function clearProjectOverride(
   return invoke("scene_project_override_clear", { plateId, key });
 }
 
-/** Wipe every project-tier override on a plate. */
-export function clearAllProjectOverrides(plateId: PlateId): Promise<void> {
-  return invoke("scene_project_override_clear_all", { plateId });
-}
-
 /** Build `{ onSetProjectOverride, onClearProjectOverride }` pre-bound
  * to a specific plate. `null` plateId returns silent no-ops so the
  * panel can mount before a plate is active. */

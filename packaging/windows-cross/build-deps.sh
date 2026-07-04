@@ -342,16 +342,26 @@ syscase() {
   ln -sf wsock32.lib "$um/WSOCK32.LIB"
 }
 
-# Apply the clang-cl source-conformance patch to the OrcaSlicer submodule. The
+# Apply the clang-cl source-conformance patches to the OrcaSlicer submodule. The
 # submodule tree stays pinned — this is in-place build prep; revert with
-# `git -C external/OrcaSlicer checkout -- src/libslic3r/AABBTreeLines.hpp`.
+# `git -C external/OrcaSlicer checkout -- src/libslic3r`.
+#
+# Idempotent, same three-branch logic as the wave-overhang carry
+# (crates/slic3r-ffi/patches/wave-overhangs/apply.sh): apply when it applies
+# cleanly, skip when already applied (detected via reverse-check), and HARD
+# ERROR when a patch no longer applies — that means the pin moved and the patch
+# needs re-validating, not silent skipping.
 patch_orca() {
   local p
   for p in "$here"/patches/*.patch; do
     if git -C "$ORCA/.." apply --check "$p" 2>/dev/null; then
       git -C "$ORCA/.." apply "$p"; echo ":: applied $(basename "$p")"
+    elif git -C "$ORCA/.." apply --reverse --check "$p" 2>/dev/null; then
+      echo ":: $(basename "$p") already applied"
     else
-      echo ":: $(basename "$p") already applied (or no longer needed)"
+      echo "!! $(basename "$p") does NOT apply cleanly to the current OrcaSlicer pin." >&2
+      echo "   The submodule moved; re-validate the patch." >&2
+      exit 1
     fi
   done
 }

@@ -34,21 +34,16 @@
 //! choose to relax validation for partial-cascade scenarios like UI
 //! live-editing.
 
-use super::types::{Cascade, Condition, ConditionValue, Predicate, Rule, SourceLocation};
+use super::types::{Condition, ConditionValue, Predicate, Rule, SourceLocation};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Error returned by `load_cascade` and `parse_cascade_str`. Each
-/// variant carries a `SourceLocation` so the rendered message can point
-/// at file:line; pretty-printer renders rustc-style annotations.
+/// Error returned by `parse_cascade_str`. Each variant carries a
+/// `SourceLocation` so the rendered message can point at file:line;
+/// pretty-printer renders rustc-style annotations.
 #[derive(Debug)]
 pub enum CascadeLoadError {
-    Io {
-        path: PathBuf,
-        source: std::io::Error,
-    },
     TomlParse {
         path: PathBuf,
         message: String,
@@ -62,9 +57,6 @@ pub enum CascadeLoadError {
 impl fmt::Display for CascadeLoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Io { path, source } => {
-                write!(f, "{}: {}", path.display(), source)
-            }
             Self::TomlParse { path, message } => {
                 write!(f, "{}: TOML parse error: {}", path.display(), message)
             }
@@ -75,30 +67,7 @@ impl fmt::Display for CascadeLoadError {
     }
 }
 
-impl std::error::Error for CascadeLoadError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io { source, .. } => Some(source),
-            _ => None,
-        }
-    }
-}
-
-/// Load one or more cascade files in argument order, merge into one
-/// `Cascade`. Rules retain their per-file source locations; the
-/// resolver uses source-order tie-breaks across the merged list.
-pub fn load_cascade(paths: &[&Path]) -> Result<Cascade, CascadeLoadError> {
-    let mut all_rules = Vec::new();
-    for path in paths {
-        let src = fs::read_to_string(path).map_err(|e| CascadeLoadError::Io {
-            path: (*path).into(),
-            source: e,
-        })?;
-        let rules = parse_cascade_str(&src, path)?;
-        all_rules.extend(rules);
-    }
-    Ok(Cascade { rules: all_rules })
-}
+impl std::error::Error for CascadeLoadError {}
 
 /// Parse a single cascade file's contents into a list of `Rule`s.
 /// Exposed for tests + future UI live-editing.

@@ -303,9 +303,9 @@ export function SettingsPanelHost({
   // nozzle (union rule, so composite profiles like `0.4+0.6` show
   // alongside single-nozzle ones whenever any of their nozzles is
   // present). Selection writes back via
-  // `printer_instance_set_quality_profile`; the backend
-  // emits the same `printer:instance_changed` event the bed +
-  // nozzle setters do.
+  // `setPlateQualityProfile` (`project_set_plate_quality_profile`);
+  // the backend emits `PlateChanged` so the session refetches
+  // the snapshot and the cascade ladder re-resolves.
   //
   // The installed-nozzle list is computed across every extruder
   // (deduped + sorted) and joined into a stable comma-string. We

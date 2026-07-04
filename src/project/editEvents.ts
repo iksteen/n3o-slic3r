@@ -24,7 +24,7 @@ export const PLATE_EDIT_EVENTS = [
   "scene:material_slot_changed",
   "scene:object_overrides_changed",
   "scene:project_overrides_changed",
-  "scene:plate_metadata_changed",
+  "scene:plate_changed",
   "scene:bed_changed",
 ] as const;
 

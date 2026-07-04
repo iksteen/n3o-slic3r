@@ -9,16 +9,15 @@
 //! Override files have a *flatter* shape than cascade files: every
 //! entry is an unconditional top-level `key = value`. No `[[rule]]`
 //! blocks, no `when.*` predicates, no section shorthand. The stricter
-//! loader [`load_override_file`] enforces this at parse time so a
-//! `[[rule]]` block in an override file fails fast with file:line
-//! rather than getting silently treated as the authored-cascade form.
+//! parser [`parse_override_str`] enforces this so a `[[rule]]` block
+//! in an override file fails fast with file:line rather than getting
+//! silently treated as the authored-cascade form.
 
 use super::loader::CascadeLoadError;
 use super::resolver::{resolve, Context, MatchingRule, ResolvedValue};
 use super::types::{Cascade, SourceLocation};
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 /// Stack of override files for the resolver to apply over the cascade.
@@ -107,18 +106,6 @@ pub struct OverrideTraceEntry {
 /// Flat per-key map. Same shape as the basic `Resolved` but each entry
 /// carries `ResolvedWithTrace`.
 pub type ResolvedOverrides = BTreeMap<String, ResolvedWithTrace>;
-
-/// Parse an override file with the stricter shape: only top-level
-/// `key = value` entries; no `[[rule]]`, no `[section.shorthand]`, no
-/// `when.*`. Rejection at parse time means UI typos surface as
-/// file:line errors immediately rather than at slice time.
-pub fn load_override_file(path: &Path) -> Result<FlatOverrides, CascadeLoadError> {
-    let src = fs::read_to_string(path).map_err(|e| CascadeLoadError::Io {
-        path: path.into(),
-        source: e,
-    })?;
-    parse_override_str(&src, path)
-}
 
 pub fn parse_override_str(src: &str, path: &Path) -> Result<FlatOverrides, CascadeLoadError> {
     // toml 1.x: parse the whole document, not a value expression (see loader.rs).

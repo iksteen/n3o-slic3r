@@ -215,6 +215,7 @@ struct DefCache {
         double max;
         unsigned int scope;
         unsigned int bucket;
+        int per_extruder;
     };
 
     std::vector<std::unique_ptr<Entry>> entries; // unique_ptr so c_str() pointers don't move on grow
@@ -247,6 +248,10 @@ struct DefCache {
         const auto bkt_process  = to_set(Preset::print_options());
         const auto bkt_filament = to_set(Preset::filament_options());
         const auto bkt_printer  = to_set(Preset::printer_options());
+
+        // Per-extruder set: libslic3r's authoritative m_extruder_option_keys
+        // (options sized to the extruder count — one editor per toolhead).
+        const auto keys_extruder = to_set(print_config_def.extruder_option_keys());
 
         entries.reserve(print_config_def.options.size());
         for (const auto& kv : print_config_def.options) {
@@ -299,6 +304,8 @@ struct DefCache {
             if (bkt_printer.count(kv.first))  { bucket_hits++; e->bucket = SLIC3R_BUCKET_PRINTER; }
             if (bucket_hits != 1) e->bucket = SLIC3R_BUCKET_NONE;
 
+            e->per_extruder = keys_extruder.count(kv.first) ? 1 : 0;
+
             by_key.emplace(e->key, entries.size());
             entries.push_back(std::move(e));
         }
@@ -325,6 +332,7 @@ struct DefCache {
         out->max                = e.max;
         out->scope              = e.scope;
         out->bucket             = e.bucket;
+        out->per_extruder       = e.per_extruder;
     }
 };
 
@@ -582,7 +590,7 @@ static void resolve_region_filaments(Model& model, DynamicPrintConfig& cfg) {
 // regardless of the unset height); a cone is meaningless on a Type1
 // tower anyway. Non-BBL printers (e.g. the Snapmaker U1) use the Type2
 // tower, which sets `height` and wants a real cone, so leave their
-// value alone. See docs/libslic3r-workarounds.md §7.
+// value alone. See docs/dev/libslic3r-workarounds.md §5.
 //
 // Print::is_BBL_printer() is a manually-set flag (Print.hpp:1143,
 // declared without an initializer). The GUI sets it from the active
@@ -1239,7 +1247,7 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         // process before process() even runs. Pass a sink to catch (and, since
         // we have no UI for them, discard) the warnings, exactly as the GUI
         // does. The *returned* StringObjectException is the fatal error; the
-        // sink is the advisory warning. See docs/libslic3r-workarounds.md.
+        // sink is the advisory warning. See docs/dev/libslic3r-workarounds.md §6.
         StringObjectException validation_warning;
         StringObjectException err = print.validate(&validation_warning);
         if (!err.string.empty()) {
@@ -1416,97 +1424,6 @@ slic3r_status slic3r_orient_mesh(const float* vertices, size_t vertex_count,
         return SLIC3R_ERR_INTERNAL;
     } catch (...) {
         set_err(out_err, "unknown error in slic3r_orient_mesh");
-        return SLIC3R_ERR_INTERNAL;
-    }
-}
-
-slic3r_status slic3r_cut_mesh(const float* vertices, size_t vertex_count,
-                              const uint32_t* indices, size_t triangle_count,
-                              const float plane_origin[3], const float plane_normal[3],
-                              float** out_pos_vertices, size_t* out_pos_vertex_count,
-                              uint32_t** out_pos_indices, size_t* out_pos_triangle_count,
-                              float** out_neg_vertices, size_t* out_neg_vertex_count,
-                              uint32_t** out_neg_indices, size_t* out_neg_triangle_count,
-                              char** out_err) {
-    if (out_err) *out_err = nullptr;
-    // Default every output to "empty half" so a missing side is unambiguous.
-    if (out_pos_vertices) *out_pos_vertices = nullptr;
-    if (out_pos_vertex_count) *out_pos_vertex_count = 0;
-    if (out_pos_indices) *out_pos_indices = nullptr;
-    if (out_pos_triangle_count) *out_pos_triangle_count = 0;
-    if (out_neg_vertices) *out_neg_vertices = nullptr;
-    if (out_neg_vertex_count) *out_neg_vertex_count = 0;
-    if (out_neg_indices) *out_neg_indices = nullptr;
-    if (out_neg_triangle_count) *out_neg_triangle_count = 0;
-    if (!vertices || !indices || !plane_origin || !plane_normal ||
-        !out_pos_vertices || !out_pos_vertex_count || !out_pos_indices ||
-        !out_pos_triangle_count || !out_neg_vertices || !out_neg_vertex_count ||
-        !out_neg_indices || !out_neg_triangle_count ||
-        vertex_count == 0 || triangle_count == 0)
-        return SLIC3R_ERR_INVALID_ARG;
-    try {
-        Eigen::Vector3d n(plane_normal[0], plane_normal[1], plane_normal[2]);
-        if (n.norm() < 1e-9)
-            return SLIC3R_ERR_INVALID_ARG;
-        n.normalize();
-        Eigen::Vector3d o(plane_origin[0], plane_origin[1], plane_origin[2]);
-
-        // cut_mesh only cuts the horizontal z=0 plane, so rotate the mesh so the
-        // plane normal lands on +Z (then a point on the plane has z=0). q maps
-        // normal→+Z; the inverse maps the cut halves back to the input frame.
-        Eigen::Quaterniond q = Eigen::Quaterniond::FromTwoVectors(n, Eigen::Vector3d::UnitZ());
-        Eigen::Quaterniond qi = q.conjugate();
-
-        indexed_triangle_set its = its_from_buffers(vertices, vertex_count, indices, triangle_count);
-        for (auto& v : its.vertices) {
-            Eigen::Vector3d t = q * (Eigen::Vector3d(v.x(), v.y(), v.z()) - o);
-            v = Vec3f(static_cast<float>(t.x()), static_cast<float>(t.y()),
-                      static_cast<float>(t.z()));
-        }
-
-        // upper = z>0 = the side the normal points toward (positive); lower = neg.
-        indexed_triangle_set upper, lower;
-        cut_mesh(its, 0.0f, &upper, &lower, /*triangulate_caps=*/true);
-
-        // Marshal a half to heap arrays, transforming each vertex back to the
-        // input frame. Empty half → leave the (already-nulled) outputs.
-        auto marshal = [&](const indexed_triangle_set& half, float** ov, size_t* ovc,
-                           uint32_t** oi, size_t* oic) {
-            if (half.vertices.empty() || half.indices.empty())
-                return;
-            float* verts = static_cast<float*>(std::malloc(half.vertices.size() * 3 * sizeof(float)));
-            uint32_t* idx = static_cast<uint32_t*>(std::malloc(half.indices.size() * 3 * sizeof(uint32_t)));
-            if (!verts || !idx) {
-                std::free(verts);
-                std::free(idx);
-                return;
-            }
-            for (size_t i = 0; i < half.vertices.size(); ++i) {
-                Eigen::Vector3d p =
-                    qi * Eigen::Vector3d(half.vertices[i].x(), half.vertices[i].y(),
-                                         half.vertices[i].z()) + o;
-                verts[i * 3 + 0] = static_cast<float>(p.x());
-                verts[i * 3 + 1] = static_cast<float>(p.y());
-                verts[i * 3 + 2] = static_cast<float>(p.z());
-            }
-            for (size_t i = 0; i < half.indices.size(); ++i) {
-                idx[i * 3 + 0] = static_cast<uint32_t>(half.indices[i][0]);
-                idx[i * 3 + 1] = static_cast<uint32_t>(half.indices[i][1]);
-                idx[i * 3 + 2] = static_cast<uint32_t>(half.indices[i][2]);
-            }
-            *ov = verts;
-            *ovc = half.vertices.size();
-            *oi = idx;
-            *oic = half.indices.size();
-        };
-        marshal(upper, out_pos_vertices, out_pos_vertex_count, out_pos_indices, out_pos_triangle_count);
-        marshal(lower, out_neg_vertices, out_neg_vertex_count, out_neg_indices, out_neg_triangle_count);
-        return SLIC3R_OK;
-    } catch (const std::exception& e) {
-        set_err(out_err, e.what());
-        return SLIC3R_ERR_INTERNAL;
-    } catch (...) {
-        set_err(out_err, "unknown error in slic3r_cut_mesh");
         return SLIC3R_ERR_INTERNAL;
     }
 }

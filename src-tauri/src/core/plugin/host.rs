@@ -431,26 +431,6 @@ impl PluginHost {
             .collect()
     }
 
-    /// Enable/disable a plugin by name. Enabling a plugin that failed
-    /// to load is rejected (reload it first).
-    pub fn set_enabled(&mut self, name: &str, enabled: bool) -> Result<(), PluginError> {
-        let plugin = self.find_mut(name)?;
-        if enabled && plugin.runtime.is_none() {
-            return Err(PluginError::Runtime(format!(
-                "plugin `{name}` failed to load and cannot be enabled (reload it): {}",
-                plugin.last_error.as_deref().unwrap_or("unknown error"),
-            )));
-        }
-        // Re-enabling a plugin that auto-disabled on a runtime error is
-        // a fresh chance — clear the stale error so the panel doesn't
-        // show an enabled plugin permanently flagged with a past failure.
-        if enabled {
-            plugin.last_error = None;
-        }
-        plugin.enabled = enabled;
-        Ok(())
-    }
-
     /// Re-read a plugin's manifest + entry from disk and swap in a
     /// fresh runtime. A reload that fails leaves the slot in an
     /// errored state (so the panel reflects it); only an unknown name
@@ -472,13 +452,6 @@ impl PluginHost {
         };
         self.plugins[idx] = replacement;
         Ok(())
-    }
-
-    fn find_mut(&mut self, name: &str) -> Result<&mut LoadedPlugin, PluginError> {
-        self.plugins
-            .iter_mut()
-            .find(|p| p.manifest.name == name)
-            .ok_or_else(|| PluginError::Runtime(format!("no plugin named `{name}`")))
     }
 }
 
@@ -632,28 +605,6 @@ mod tests {
     }
 
     #[test]
-    fn reenable_after_error_clears_last_error() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_plugin(
-            tmp.path(),
-            "kaboom",
-            r#"["post_slice"]"#,
-            r#"function on_post_slice(s) error("boom") end"#,
-        );
-        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
-        let _ = host.dispatch(&StubHook, "x".to_string());
-        assert!(host.list()[0].last_error.is_some());
-
-        host.set_enabled("kaboom", true).unwrap();
-        let summary = &host.list()[0];
-        assert!(summary.enabled);
-        assert!(
-            summary.last_error.is_none(),
-            "re-enabling should clear the stale error"
-        );
-    }
-
-    #[test]
     fn runaway_plugin_is_isolated() {
         let tmp = tempfile::tempdir().unwrap();
         write_plugin(
@@ -666,22 +617,6 @@ mod tests {
         let out = host.dispatch(&StubHook, "x".to_string());
         assert_eq!(out, "x"); // unchanged — runaway aborted + skipped
         assert!(!host.list()[0].enabled);
-    }
-
-    #[test]
-    fn set_enabled_toggles_dispatch() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_plugin(
-            tmp.path(),
-            "p",
-            r#"["post_slice"]"#,
-            r#"function on_post_slice(s) return s .. "-p" end"#,
-        );
-        let mut host = PluginHost::load(&[tmp.path().to_path_buf()]);
-        host.set_enabled("p", false).unwrap();
-        assert_eq!(host.dispatch(&StubHook, "a".into()), "a");
-        host.set_enabled("p", true).unwrap();
-        assert_eq!(host.dispatch(&StubHook, "a".into()), "a-p");
     }
 
     #[test]

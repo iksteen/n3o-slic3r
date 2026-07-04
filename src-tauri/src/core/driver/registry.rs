@@ -16,11 +16,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-use super::status::ConnectionState;
-use super::traits::{Driver, DriverId, DriverKind};
+use super::traits::{Driver, DriverId};
 
 /// Tauri-managed catalog. See module-level docs.
 pub struct DriverRegistry {
@@ -33,7 +31,6 @@ struct Inner {
 }
 
 struct Entry {
-    kind: DriverKind,
     driver: Arc<RwLock<Box<dyn Driver>>>,
 }
 
@@ -74,11 +71,9 @@ impl DriverRegistry {
         let id = DriverId(inner.next_id);
         inner.next_id += 1;
         let driver = builder(id);
-        let kind = driver.kind();
         inner.drivers.insert(
             id,
             Entry {
-                kind,
                 driver: Arc::new(RwLock::new(driver)),
             },
         );
@@ -101,49 +96,14 @@ impl DriverRegistry {
         inner.drivers.get(&id).map(|e| e.driver.clone())
     }
 
-    /// Summarize every registered driver — id, kind, connection
-    /// state. Cheap; takes the registry lock briefly + each driver's
-    /// read lock briefly (try-read, which succeeds during a concurrent
-    /// send/status and only fails mid-connect/disconnect).
-    pub fn list(&self) -> Vec<DriverSummary> {
-        let inner = self.inner.lock().expect("registry mutex");
-        let mut out = Vec::with_capacity(inner.drivers.len());
-        for (id, entry) in &inner.drivers {
-            // try_read — fails only while a connect/disconnect holds the
-            // write lock; report a placeholder then. Caller can re-query.
-            let connection = match entry.driver.try_read() {
-                Ok(d) => d.status().connection,
-                Err(_) => ConnectionState::Disconnected {
-                    reason: "(busy)".into(),
-                },
-            };
-            out.push(DriverSummary {
-                id: *id,
-                kind: entry.kind,
-                connection,
-            });
-        }
-        out.sort_by_key(|s| s.id.0);
-        out
-    }
-}
-
-/// Cheap snapshot for the frontend's "what drivers do I have?"
-/// query. Doesn't carry the full PrinterStatus — frontend
-/// re-queries via `driver_status` for the one(s) it cares about.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DriverSummary {
-    pub id: DriverId,
-    pub kind: DriverKind,
-    pub connection: ConnectionState,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::driver::status::{BambuExtra, DriverExtra, PrinterStatus};
+    use crate::core::driver::status::{BambuExtra, ConnectionState, DriverExtra, PrinterStatus};
     use crate::core::driver::traits::{
-        DriverError, PrinterCommand, SendHandle, SendPayload, UploadProgressFn,
+        DriverError, DriverKind, PrinterCommand, SendHandle, SendPayload, UploadProgressFn,
     };
     use async_trait::async_trait;
     use tokio::sync::watch;
@@ -237,18 +197,5 @@ mod tests {
         let id = reg.register(Box::new(StubDriver::new(DriverKind::Bambu)));
         assert!(reg.remove(id));
         assert!(!reg.remove(id));
-    }
-
-    #[test]
-    fn list_orders_by_id_ascending() {
-        let reg = DriverRegistry::new();
-        let a = reg.register(Box::new(StubDriver::new(DriverKind::U1)));
-        let b = reg.register(Box::new(StubDriver::new(DriverKind::Bambu)));
-        let summary = reg.list();
-        assert_eq!(summary.len(), 2);
-        assert_eq!(summary[0].id, a);
-        assert_eq!(summary[1].id, b);
-        assert_eq!(summary[0].kind, DriverKind::U1);
-        assert_eq!(summary[1].kind, DriverKind::Bambu);
     }
 }

@@ -70,10 +70,9 @@ impl Project {
     ///   - It's the only plate (FR-MP-1: a project must always have
     ///     at least one plate; there is no upper limit).
     ///
-    /// On success, repacks `composition_order` so the remaining
-    /// plates form a dense `[1..N]` sequence + adjusts
-    /// `active_plate` when the removed plate was the active one or
-    /// sat before it (emits `ActivePlateChanged` in those cases).
+    /// On success, adjusts `active_plate` when the removed plate was
+    /// the active one or sat before it (emits `ActivePlateChanged` in
+    /// those cases).
     pub fn remove_plate(&mut self, id: PlateId) -> Result<Vec<SceneEvent>, SceneOpError> {
         if self.plates.len() <= 1 {
             return Err(SceneOpError::LastPlate);
@@ -103,19 +102,6 @@ impl Project {
             });
         }
 
-        // Renumber composition_order so the remaining plates form
-        // [1..N] without gaps. Preserves relative ordering.
-        let mut order_pairs: Vec<(usize, u32)> = self
-            .plates
-            .iter()
-            .enumerate()
-            .map(|(i, p)| (i, p.metadata.composition_order))
-            .collect();
-        order_pairs.sort_by_key(|&(_, order)| order);
-        for (new_pos, (i, _)) in order_pairs.into_iter().enumerate() {
-            self.plates[i].metadata.composition_order = (new_pos + 1) as u32;
-        }
-
         Ok(events)
     }
 
@@ -134,9 +120,8 @@ impl Project {
     /// Trims surrounding whitespace, rejects an empty result and any
     /// name longer than [`PLATE_NAME_MAX`] bytes. No-op (no event)
     /// when the trimmed value matches the current name. Emits
-    /// `PlateMetadataChanged` on success — same channel as cycle
-    /// count / composition order so the frontend already re-fetches
-    /// plate metadata on it.
+    /// `PlateChanged` on success — the channel the frontend already
+    /// re-fetches the plate snapshot on.
     pub fn set_plate_name(
         &mut self,
         plate_id: PlateId,
@@ -144,13 +129,13 @@ impl Project {
     ) -> Result<Vec<SceneEvent>, SceneOpError> {
         let trimmed = name.trim();
         if trimmed.is_empty() {
-            return Err(SceneOpError::InvalidPlateMetadata {
+            return Err(SceneOpError::InvalidPlateAttribute {
                 plate_id,
                 message: "plate name must not be empty".into(),
             });
         }
         if trimmed.len() > PLATE_NAME_MAX {
-            return Err(SceneOpError::InvalidPlateMetadata {
+            return Err(SceneOpError::InvalidPlateAttribute {
                 plate_id,
                 message: format!("plate name must be at most {PLATE_NAME_MAX} bytes",),
             });
@@ -162,15 +147,15 @@ impl Project {
             return Ok(Vec::new());
         }
         self.plates[idx].name = trimmed.to_owned();
-        Ok(vec![SceneEvent::PlateMetadataChanged { plate_id }])
+        Ok(vec![SceneEvent::PlateChanged { plate_id }])
     }
 
     /// Set (or clear, with `None`) this plate's process/quality profile.
     /// `Some(slug)` is validated to be a bundled process fragment **or** a
     /// stamped custom user-process profile for the plate's bound printer; an
-    /// unknown slug rejects with `InvalidPlateMetadata`. `None` clears the
+    /// unknown slug rejects with `InvalidPlateAttribute`. `None` clears the
     /// override so the plate inherits the bound instance's profile again.
-    /// No-op (no event) when unchanged. Emits `PlateMetadataChanged` — the
+    /// No-op (no event) when unchanged. Emits `PlateChanged` — the
     /// same channel the frontend already re-fetches plate metadata on.
     pub fn set_plate_quality_profile(
         &mut self,
@@ -199,7 +184,7 @@ impl Project {
                         )
                         .is_some();
                     if !known {
-                        return Err(SceneOpError::InvalidPlateMetadata {
+                        return Err(SceneOpError::InvalidPlateAttribute {
                             plate_id,
                             message: format!(
                                 "`{slug}` is not a bundled process for `{}`",
@@ -214,7 +199,7 @@ impl Project {
             return Ok(Vec::new());
         }
         self.plates[idx].quality_profile = quality_profile;
-        Ok(vec![SceneEvent::PlateMetadataChanged { plate_id }])
+        Ok(vec![SceneEvent::PlateChanged { plate_id }])
     }
 
     /// Install the active plate's bed by passing through a resolved
@@ -249,7 +234,7 @@ impl Project {
     /// state) and recomputes the bed visualization. The bed itself
     /// lives on the `PrinterInstance` — change it via
     /// `printer_instance_set_bed`. Emits `BedChanged` +
-    /// `PlateMetadataChanged` so the tab strip's printer label
+    /// `PlateChanged` so the tab strip's printer label
     /// updates and the cascade re-resolves against the new context.
     pub fn rebind_plate_printer(
         &mut self,
@@ -293,7 +278,7 @@ impl Project {
         // don't survive a topology change. Wipe + re-auto-bind any
         // referenced material against the new printer so existing
         // objects keep a sensible color instead of going gray. The
-        // frontend refetches material_to_slot off `PlateMetadataChanged`
+        // frontend refetches material_to_slot off `PlateChanged`
         // (always emitted below), so no separate MaterialSlotChanged
         // event is needed.
         self.plates[idx].material_to_slot.clear();
@@ -333,7 +318,7 @@ impl Project {
                 plate_id,
                 bed: self.plates[idx].scene.bed.clone(),
             },
-            SceneEvent::PlateMetadataChanged { plate_id },
+            SceneEvent::PlateChanged { plate_id },
         ];
 
         let report = PrinterChangeReport {
@@ -369,7 +354,7 @@ impl Project {
                 plate_id,
                 bed: None,
             },
-            SceneEvent::PlateMetadataChanged { plate_id },
+            SceneEvent::PlateChanged { plate_id },
         ];
         Ok(events)
     }
@@ -534,16 +519,6 @@ mod tests {
     }
 
     #[test]
-    fn remove_plate_renumbers_composition_order() {
-        let mut p = Project::default();
-        p.add_plate(None);
-        p.add_plate(None);
-        p.remove_plate(PlateId(2)).unwrap();
-        assert_eq!(p.plates[0].metadata.composition_order, 1);
-        assert_eq!(p.plates[1].metadata.composition_order, 2);
-    }
-
-    #[test]
     fn set_active_printer_delegates_to_active_plate() {
         let mut p = Project::default();
         p.set_active_printer(Some(&a1_mini_for_test()));
@@ -574,7 +549,7 @@ mod tests {
         // carries on its `bed.identity` — the bambi fixture ships with
         // Supertack Plate as the default.
         assert_eq!(report.new_build_plate, "Supertack Plate");
-        // Events emitted: BedChanged + PlateMetadataChanged.
+        // Events emitted: BedChanged + PlateChanged.
         assert_eq!(events.len(), 2);
         assert!(matches!(
             &events[0],
@@ -585,7 +560,7 @@ mod tests {
         ));
         assert!(matches!(
             &events[1],
-            SceneEvent::PlateMetadataChanged {
+            SceneEvent::PlateChanged {
                 plate_id: PlateId(1)
             }
         ));
@@ -675,7 +650,7 @@ mod tests {
         assert_eq!(p.plates[0].name, "Bench");
         assert!(matches!(
             events.as_slice(),
-            [SceneEvent::PlateMetadataChanged {
+            [SceneEvent::PlateChanged {
                 plate_id: PlateId(1)
             }],
         ));
@@ -704,7 +679,7 @@ mod tests {
         let err = p.set_plate_name(PlateId(1), "   ".into()).unwrap_err();
         assert!(matches!(
             err,
-            SceneOpError::InvalidPlateMetadata {
+            SceneOpError::InvalidPlateAttribute {
                 plate_id: PlateId(1),
                 ..
             },
@@ -718,7 +693,7 @@ mod tests {
         let err = p.set_plate_name(PlateId(1), too_long).unwrap_err();
         assert!(matches!(
             err,
-            SceneOpError::InvalidPlateMetadata {
+            SceneOpError::InvalidPlateAttribute {
                 plate_id: PlateId(1),
                 ..
             },

@@ -6,7 +6,7 @@
 // fragment's `layer_height` in millimetres. Popover lists every
 // process the backend reports available for the active
 // (printer, nozzle); selection writes back via
-// `setInstanceQualityProfile`.
+// `setPlateQualityProfile`.
 
 import { useRef, useState } from "react";
 import { usePopoverDismiss } from "../ui/usePopoverDismiss";

@@ -3,7 +3,19 @@
 // non-empty, closed (Euler V-E+F==2) halves on the correct sides; a plane
 // that misses the cube must leave one side empty and the other whole.
 
-use slic3r_ffi::{cut_mesh, CutHalf};
+use slic3r_ffi::{cut_mesh_deferred, CutHalf};
+
+/// Plain plane cut (no connectors, no paint) via the deferred path — the only
+/// cut entry point. Returns `(positive, negative)` halves.
+fn plane_cut(
+    verts: &[f32],
+    idx: &[u32],
+    origin: [f32; 3],
+    normal: [f32; 3],
+) -> slic3r_ffi::Result<(CutHalf, CutHalf)> {
+    let r = cut_mesh_deferred(verts, idx, origin, normal, &[], None)?;
+    Ok((r.pos, r.neg))
+}
 
 /// Axis-aligned unit cube [0,1]^3 — 8 vertices, 12 triangles, outward winding.
 fn unit_cube() -> (Vec<f32>, Vec<u32>) {
@@ -42,8 +54,8 @@ fn euler(half: &CutHalf) -> i64 {
 #[test]
 fn cut_unit_cube_through_the_middle_yields_two_closed_halves() {
     let (verts, idx) = unit_cube();
-    let (pos, neg) = cut_mesh(&verts, &idx, [0.0, 0.0, 0.5], [0.0, 0.0, 1.0])
-        .expect("cut_mesh should succeed");
+    let (pos, neg) = plane_cut(&verts, &idx, [0.0, 0.0, 0.5], [0.0, 0.0, 1.0])
+        .expect("cut should succeed");
 
     assert!(!pos.is_empty(), "+normal side (z>0.5) must have geometry");
     assert!(!neg.is_empty(), "-normal side (z<0.5) must have geometry");
@@ -65,8 +77,8 @@ fn cut_unit_cube_through_the_middle_yields_two_closed_halves() {
 fn cut_plane_missing_the_mesh_leaves_one_side_empty() {
     let (verts, idx) = unit_cube();
     // Plane well above the cube, normal +Z: everything is on the -Z side.
-    let (pos, neg) = cut_mesh(&verts, &idx, [0.0, 0.0, 5.0], [0.0, 0.0, 1.0])
-        .expect("cut_mesh should succeed");
+    let (pos, neg) = plane_cut(&verts, &idx, [0.0, 0.0, 5.0], [0.0, 0.0, 1.0])
+        .expect("cut should succeed");
     assert!(pos.is_empty(), "nothing should be above a plane that misses");
     assert!(!neg.is_empty(), "the whole cube is below the plane");
     // The untouched side keeps the original 12 triangles (no cut, no cap).
@@ -77,11 +89,11 @@ fn cut_plane_missing_the_mesh_leaves_one_side_empty() {
 fn cut_rejects_out_of_range_index() {
     let verts = vec![0.0f32; 9];
     let bad = vec![0u32, 1, 5];
-    assert!(cut_mesh(&verts, &bad, [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]).is_err());
+    assert!(plane_cut(&verts, &bad, [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]).is_err());
 }
 
 #[test]
 fn cut_rejects_degenerate_normal() {
     let (verts, idx) = unit_cube();
-    assert!(cut_mesh(&verts, &idx, [0.0, 0.0, 0.5], [0.0, 0.0, 0.0]).is_err());
+    assert!(plane_cut(&verts, &idx, [0.0, 0.0, 0.5], [0.0, 0.0, 0.0]).is_err());
 }

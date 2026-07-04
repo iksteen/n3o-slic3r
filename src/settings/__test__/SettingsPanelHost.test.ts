@@ -41,7 +41,6 @@ function plate(opts: {
   return {
     plate_id: opts.id,
     name: `Plate ${opts.id}`,
-    metadata: { composition_order: opts.id },
     printer_identity: null,
     printer_instance_id: null,
     material_to_slot: {},
@@ -159,7 +158,7 @@ describe("SESSION_EVENT_NAMES", () => {
       "scene:plate_added",
       "scene:plate_removed",
       "scene:active_plate_changed",
-      "scene:plate_metadata_changed",
+      "scene:plate_changed",
       "scene:object_added",
       "scene:object_removed",
       "scene:object_updated",

@@ -58,15 +58,6 @@ export function unbindPlatePrinter(plateId: PlateId): Promise<void> {
   return invoke<void>("scene_unbind_plate_printer", { plateId });
 }
 
-/** Install a fully-resolved `PrinterProfile` on the active plate
- * (Phase 2 bootstrap path, kept for App.tsx's first-mount default).
- * The picker flow uses `rebindPlatePrinter` instead. */
-export function setActivePrinter(
-  printer: PrinterProfileJson | null,
-): Promise<void> {
-  return invoke("scene_set_active_printer", { printer });
-}
-
 /** Change the bed currently loaded on a `PrinterInstance`. The
  * backend validates the identity against the instance's bound
  * printer profile's `supported_build_plates` and emits

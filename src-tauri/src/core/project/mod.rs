@@ -14,9 +14,6 @@
 //!   active printer + plate + per-slot filaments. Built per slice
 //!   call from per-plate state; not stored.
 //!
-//! - **`metadata`**: `PlateMetadata` carrying cycle count +
-//!   composition order. PlateCycler-relevant.
-//!
 //! - **`model`**: root `Project` + `Plate` + `PlateId`. Each
 //!   `Plate` composes `core::scene::state::PlateSceneState` for
 //!   its scene contents. The serializable shape `.3mf` save/load
@@ -28,13 +25,11 @@ pub mod context;
 pub mod dirty;
 pub mod history;
 pub mod format;
-pub mod metadata;
 pub mod model;
 pub mod mutation;
 pub mod resolve;
 
 pub use crate::core::scene::state::PlateSceneState;
 pub use context::SlicingContext;
-pub use metadata::PlateMetadata;
 pub use model::{Plate, PlateId, Project};
 pub use mutation::PLATE_NAME_MAX;

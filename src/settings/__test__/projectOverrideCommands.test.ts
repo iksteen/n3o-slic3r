@@ -9,7 +9,6 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import {
-  clearAllProjectOverrides,
   clearProjectOverride,
   makeProjectOverrideCallbacks,
   setProjectOverride,
@@ -38,16 +37,6 @@ describe("clearProjectOverride", () => {
       plateId: 3,
       key: "wall_loops",
     });
-  });
-});
-
-describe("clearAllProjectOverrides", () => {
-  it("invokes scene_project_override_clear_all with plateId", async () => {
-    await clearAllProjectOverrides(7);
-    expect(invokeMock).toHaveBeenCalledWith(
-      "scene_project_override_clear_all",
-      { plateId: 7 },
-    );
   });
 });
 

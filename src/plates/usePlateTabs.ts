@@ -48,7 +48,7 @@ export const PLATE_TAB_EVENT_NAMES = [
   "scene:plate_added",
   "scene:plate_removed",
   "scene:active_plate_changed",
-  "scene:plate_metadata_changed",
+  "scene:plate_changed",
   "scene:object_added",
   "scene:object_removed",
   "scene:bed_changed",

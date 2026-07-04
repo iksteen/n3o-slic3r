@@ -16,8 +16,10 @@
 //   - loadout is the instance's synced slot bindings (flattenSlots),
 //     resolved to display via the filament catalog — the same data the
 //     slot chip strip shows. The driver-reported "currently engaged"
-//     slot highlight is not wired yet (cross-driver index mapping).
-//   - webcam is stubbed: a disabled-camera icon + "Not implemented".
+//     slot is highlighted (DeviceMonitor's activeSlot).
+//   - webcam streams live for backends with camera support (Bambu LAN
+//     today) via CameraPanel / useCameraStream; other backends show the
+//     disabled-camera state.
 //   - jump-to-originating-plate is omitted (no job→plate mapping yet).
 
 import { useMemo } from "react";

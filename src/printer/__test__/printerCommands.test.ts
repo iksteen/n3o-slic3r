@@ -11,7 +11,6 @@ import {
   printerCatalog,
   printerInstanceSetBed,
   rebindPlatePrinter,
-  setActivePrinter,
 } from "../printerCommands";
 
 beforeEach(() => {
@@ -78,30 +77,5 @@ describe("printerInstanceSetBed", () => {
     await expect(
       printerInstanceSetBed("bambi", "Magnetic"),
     ).rejects.toMatch(/does not support build plate/);
-  });
-});
-
-describe("setActivePrinter", () => {
-  it("passes through to scene_set_active_printer with the printer payload", async () => {
-    invokeMock.mockResolvedValueOnce(undefined);
-    const printer = {
-      model: "X",
-      supported_build_plates: [],
-      toolheads: [],
-      build_volume: { min: [0, 0, 0], max: [1, 1, 1] },
-      exclusion_zones: [],
-    } as never;
-    await setActivePrinter(printer);
-    expect(invokeMock).toHaveBeenCalledWith("scene_set_active_printer", {
-      printer,
-    });
-  });
-
-  it("passes null to clear the active printer", async () => {
-    invokeMock.mockResolvedValueOnce(undefined);
-    await setActivePrinter(null);
-    expect(invokeMock).toHaveBeenCalledWith("scene_set_active_printer", {
-      printer: null,
-    });
   });
 });

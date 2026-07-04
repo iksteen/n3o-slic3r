@@ -19,12 +19,7 @@
 
 import { useEffect } from "react";
 
-import {
-  defaultWindow,
-  jumpTo,
-  stepLayer,
-  switchMode,
-} from "./layerWindow";
+import { jumpTo, stepLayer, switchMode } from "./layerWindow";
 import type { LayerWindow } from "./types";
 import { shouldIgnoreHotkey } from "../ui/hotkeyInhibit";
 
@@ -227,7 +222,3 @@ function labelFor(value: LayerWindow, layerCount: number): string {
       return `Layers ${value.min + 1}..${value.max + 1} of ${layerCount}`;
   }
 }
-
-// Re-export defaultWindow so panel consumers don't have to
-// reach into layerWindow.ts.
-export { defaultWindow };

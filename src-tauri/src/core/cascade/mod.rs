@@ -27,9 +27,9 @@ pub mod types;
 pub mod validate;
 
 pub use commands::{ContextJson, OverrideFileSpec};
-pub use loader::{load_cascade, CascadeLoadError};
+pub use loader::CascadeLoadError;
 pub use overrides::{
-    load_override_file, parse_override_str, resolve_with_overrides, to_resolved, FlatOverrides,
+    parse_override_str, resolve_with_overrides, to_resolved, FlatOverrides,
     OverrideTier, OverrideTiers, OverrideTraceEntry, ResolvedOverrides, ResolvedWithTrace,
 };
 pub use resolver::{

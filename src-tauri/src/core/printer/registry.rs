@@ -96,19 +96,6 @@ fn hydrate_profile(base: &PrinterProfile, fragment_slug: &str) -> PrinterProfile
     profile
 }
 
-/// Identity of the first printer in the bundled vendor catalog
-/// (alphabetical by slug). Only test setups call this — production
-/// resolves the active plate's printer from the user library on
-/// disk via `instance_storage` instead. Returns `None` only if the
-/// vendor catalog itself is empty.
-pub fn default_printer_identity() -> Option<&'static str> {
-    DEFAULT_IDENTITY
-        .get_or_init(|| bundled_catalog().into_iter().next().map(|e| e.identity))
-        .as_deref()
-}
-
-static DEFAULT_IDENTITY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,19 +131,6 @@ mod tests {
     #[test]
     fn lookup_returns_none_for_unknown_identity() {
         assert!(lookup("totally-fake-printer").is_none());
-    }
-
-    #[test]
-    fn default_picks_first_printer() {
-        // Returns the first identity in catalog order (which the
-        // library iterates in sorted-on-disk vendor → slug order).
-        // The specific identity isn't the property under test —
-        // adding a new printer that sorts earlier shouldn't break
-        // this — only that *some* catalog entry comes back, and it
-        // matches whichever one bundled_catalog yields first.
-        let first = bundled_catalog().into_iter().next().map(|e| e.identity);
-        assert_eq!(default_printer_identity(), first.as_deref());
-        assert!(default_printer_identity().is_some());
     }
 
     #[test]

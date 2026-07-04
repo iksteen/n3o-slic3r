@@ -35,7 +35,6 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::metadata::PlateMetadata;
 use crate::core::scene::state::{Mesh, MeshId, PlateSceneState};
 
 /// Opaque 1-based plate id. Stable across the plate list —
@@ -184,8 +183,6 @@ pub struct Plate {
     /// process is `plate.quality_profile.unwrap_or(instance.quality_profile)`.
     #[serde(default)]
     pub quality_profile: Option<String>,
-
-    pub metadata: PlateMetadata,
 
     /// The plate's scene contents. Real type lives in
     /// `core::scene::state::PlateSceneState`; `Plate` composes it
@@ -392,7 +389,6 @@ impl Plate {
             printer_instance_id: None,
             material_to_slot: std::collections::BTreeMap::new(),
             quality_profile: None,
-            metadata: PlateMetadata::at_position(position),
             scene: PlateSceneState::default(),
         }
     }

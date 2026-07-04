@@ -9,7 +9,7 @@
 // header. Centralizes the SVG so a future icon swap doesn't
 // require multi-file edits.
 
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useHotkeyInhibit } from "./hotkeyInhibit";
 
 export interface ModalBackdropProps {
@@ -24,9 +24,7 @@ export interface ModalBackdropProps {
    *  z-index above another modal it was opened from. */
   backdropClassName?: string;
   ariaLabelledBy?: string;
-  ariaModal?: boolean;
   role?: "dialog" | "alertdialog";
-  cardStyle?: CSSProperties;
   children: ReactNode;
 }
 
@@ -35,9 +33,7 @@ export function ModalBackdrop({
   cardClassName,
   backdropClassName,
   ariaLabelledBy,
-  ariaModal = true,
   role = "dialog",
-  cardStyle,
   children,
 }: ModalBackdropProps): React.JSX.Element {
   // Mask app hotkeys while any modal is open (re-entrant — stacked modals each
@@ -53,9 +49,8 @@ export function ModalBackdrop({
         className={cardClassName}
         onClick={(e) => e.stopPropagation()}
         role={role}
-        aria-modal={ariaModal}
+        aria-modal={true}
         aria-labelledby={ariaLabelledBy}
-        style={cardStyle}
       >
         {children}
       </div>
@@ -65,21 +60,17 @@ export function ModalBackdrop({
 
 export interface ModalCloseButtonProps {
   onClick: () => void;
-  ariaLabel?: string;
-  title?: string;
 }
 
 export function ModalCloseButton({
   onClick,
-  ariaLabel = "Close",
-  title = "Close (Esc)",
 }: ModalCloseButtonProps): React.JSX.Element {
   return (
     <button
       className="apm-close"
       onClick={onClick}
-      aria-label={ariaLabel}
-      title={title}
+      aria-label="Close"
+      title="Close (Esc)"
       type="button"
     >
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none">

@@ -41,7 +41,7 @@ pub(crate) fn emit_all(window: &Window, events: &[SceneEvent]) {
 /// Set (upsert) a `material → slot` mapping on a plate.
 /// The slot reference is validated against the plate's bound
 /// PrinterInstance; out-of-range indices error with
-/// `InvalidPlateMetadata`.
+/// `InvalidPlateAttribute`.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn project_set_material_slot(
@@ -100,7 +100,7 @@ pub fn plate_cascade_resolve(
 /// Set (or clear, with `None`) a plate's process/quality profile —
 /// the bundled process-fragment slug this plate resolves + slices
 /// against, overriding the bound instance's default. Validated against
-/// the printer's bundled processes; emits `PlateMetadataChanged`.
+/// the printer's bundled processes; emits `PlateChanged`.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn project_set_plate_quality_profile(
@@ -208,7 +208,6 @@ pub fn user_process_stamp(
     }
     drop(p);
     emit_all(&window, &events);
-    crate::core::process::emit_changed(&window);
     Ok(())
 }
 
@@ -279,7 +278,6 @@ pub fn user_process_duplicate(
     }
     drop(p);
     emit_all(&window, &events);
-    crate::core::process::emit_changed(&window);
     Ok(created.id)
 }
 
@@ -351,7 +349,6 @@ pub fn user_process_revert(
     }
     drop(p);
     emit_all(&window, &events);
-    crate::core::process::emit_changed(&window);
     Ok(())
 }
 
@@ -388,7 +385,6 @@ pub fn user_process_delete(
     }
     drop(p);
     emit_all(&window, &events);
-    crate::core::process::emit_changed(&window);
     Ok(())
 }
 

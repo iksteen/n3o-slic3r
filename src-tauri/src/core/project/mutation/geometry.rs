@@ -547,7 +547,7 @@ impl Project {
             .groups
             .insert(group, Group { name });
         events.extend(self.dissolve_orphan_groups_on_active());
-        events.push(SceneEvent::PlateMetadataChanged { plate_id });
+        events.push(SceneEvent::PlateChanged { plate_id });
         Ok(events)
     }
 
@@ -574,7 +574,7 @@ impl Project {
             }
         }
         self.plates[active].scene.groups.remove(&group);
-        events.push(SceneEvent::PlateMetadataChanged { plate_id });
+        events.push(SceneEvent::PlateChanged { plate_id });
         events
     }
 
@@ -586,7 +586,7 @@ impl Project {
             .scene
             .groups
             .insert(group, Group { name });
-        vec![SceneEvent::PlateMetadataChanged { plate_id }]
+        vec![SceneEvent::PlateChanged { plate_id }]
     }
 
     /// Dissolve any group on the active plate left with fewer than two

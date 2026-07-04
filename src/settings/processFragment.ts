@@ -6,7 +6,6 @@
 // the active (printer, nozzle) pair.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { PrinterInstance } from "../printer/printerInstance";
 import type { PlateId } from "../viewport/types";
 
 export interface ProcessAvailability {
@@ -16,7 +15,7 @@ export interface ProcessAvailability {
 
 export interface ProcessFragmentSummary {
   /** Wire identity — what the picker writes back via
-   *  `setInstanceQualityProfile`. Matches the on-disk filename
+   *  `setPlateQualityProfile`. Matches the on-disk filename
    *  (e.g. `"0.20mm-standard"`). */
   slug: string;
   /** Picker-visible label, from `print_settings_id`
@@ -63,22 +62,9 @@ export async function listProcessFragments(
   });
 }
 
-/** Update the instance's selected process fragment. Emits the same
- *  `printer:instance_changed` event the bed and nozzle setters use,
- *  so the cascade preview re-resolves. */
-export async function setInstanceQualityProfile(
-  id: string,
-  qualityProfile: string,
-): Promise<PrinterInstance> {
-  return invoke<PrinterInstance>(
-    "printer_instance_set_quality_profile",
-    { id, qualityProfile },
-  );
-}
-
 /** Set a plate's process/quality profile (a bundled process slug),
  *  overriding the bound instance's default for that plate only. Emits
- *  `PlateMetadataChanged`, which the session listens on to refetch the
+ *  `PlateChanged`, which the session listens on to refetch the
  *  snapshot, so the picker + cascade ladder re-resolve. Pass `null` to
  *  clear the override and inherit the instance's profile again. */
 export async function setPlateQualityProfile(

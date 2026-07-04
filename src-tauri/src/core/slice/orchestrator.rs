@@ -67,7 +67,7 @@ use crate::core::plugin::{
 use crate::core::printer::lookup_instance;
 use crate::core::profile_library::{compose_cascade, with_quality_profile};
 use crate::core::project::SlicingContext;
-use slic3r_ffi::{slice_outcome, Model, Severity};
+use slic3r_ffi::{slice_outcome, Model};
 use std::collections::BTreeMap;
 
 /// Shared plugin host the worker dispatches the post-slice hook
@@ -826,18 +826,15 @@ fn run_worker(
         let output_path = job.output_dir.join(format!("plate_{plate_id}.gcode"));
         let outcome = slice_outcome(&model, &adapt_result.config, &output_path, progress_cb);
 
-        // Surface advisory diagnostics ahead of the terminal event — whether
+        // Surface advisory warnings ahead of the terminal event — whether
         // the slice then succeeds OR fails — so the error console shows them
-        // either way. (The match is exhaustive so a new severity forces a
-        // routing decision here rather than silently mapping to a warning.)
-        for (severity, message) in outcome.diagnostics {
-            match severity {
-                Severity::Warning => sink(SliceEvent::PlateWarning {
-                    job_id,
-                    plate_id,
-                    message,
-                }),
-            }
+        // either way.
+        for message in outcome.warnings {
+            sink(SliceEvent::PlateWarning {
+                job_id,
+                plate_id,
+                message,
+            });
         }
 
         match outcome.result {

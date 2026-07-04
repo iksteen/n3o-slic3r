@@ -13,7 +13,6 @@ use super::state::{
     ObjectId, SceneObject,
 };
 use super::transform::Transform;
-use crate::core::printer::profile::PrinterProfile;
 use crate::core::project::{PlateId, Project};
 use serde::Serialize;
 use std::collections::HashSet;
@@ -77,7 +76,6 @@ pub struct PlateSnapshot {
     // ---- Plate identity / metadata ----------------------------
     pub plate_id: crate::core::project::PlateId,
     pub name: String,
-    pub metadata: crate::core::project::PlateMetadata,
     /// Vendor printer identity derived from the bound
     /// `PrinterInstance.vendor_profile_ref`. Snapshot-only field
     /// for the frontend's chip + cascade context — the in-memory
@@ -150,7 +148,6 @@ fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
     PlateSnapshot {
         plate_id: plate.id,
         name: plate.name.clone(),
-        metadata: plate.metadata.clone(),
         printer_identity,
         printer_instance_id: plate.printer_instance_id().map(str::to_owned),
         material_to_slot: plate.material_to_slot.clone(),
@@ -164,22 +161,6 @@ fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
         object_overrides: plate.scene.object_overrides.clone(),
         groups: plate.scene.groups.clone(),
     }
-}
-
-/// Install the active printer's bed visualization + bounds. Pass
-/// `None` to clear (project closed / no printer selected).
-#[tauri::command]
-#[tracing::instrument(skip(state, window, printer))]
-pub fn scene_set_active_printer(
-    printer: Option<PrinterProfile>,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.set_active_printer(printer.as_ref());
-    drop(s);
-    emit_all(&window, &events);
-    Ok(())
 }
 
 /// Append a new plate. Active plate is unchanged. `printerIdentity`
@@ -402,24 +383,6 @@ pub fn scene_move_objects_to_plate(
     Ok(())
 }
 
-/// Wipe every cascade override on an object.
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn scene_object_override_clear_all(
-    plate_id: PlateId,
-    object_id: ObjectId,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s
-        .object_override_clear_all(plate_id, object_id)
-        .map_err(|e| e.to_string())?;
-    drop(s);
-    emit_all(&window, &events);
-    Ok(())
-}
-
 /// Upsert one project-tier cascade override on a plate. Mirrors
 /// `scene_object_override_set` one tier up. Silent backend no-op
 /// when the value is unchanged.
@@ -454,23 +417,6 @@ pub fn scene_project_override_clear(
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
         .project_override_clear(plate_id, &key)
-        .map_err(|e| e.to_string())?;
-    drop(s);
-    emit_all(&window, &events);
-    Ok(())
-}
-
-/// Wipe every project-tier override on a plate.
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn scene_project_override_clear_all(
-    plate_id: PlateId,
-    window: Window,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s
-        .project_override_clear_all(plate_id)
         .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);

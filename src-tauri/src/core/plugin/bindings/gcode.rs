@@ -282,7 +282,6 @@ fn line_to_table(lua: &Lua, line: &Line) -> LuaResult<Table> {
                 "source",
                 match l.source {
                     LayerSource::Marker => "marker",
-                    LayerSource::Heuristic => "heuristic",
                 },
             )?;
         }
@@ -307,8 +306,6 @@ fn semantic_name(s: &SemanticComment) -> &'static str {
         SemanticComment::FilamentUsed(_) => "filament_used",
         SemanticComment::LayerCount(_) => "layer_count",
         SemanticComment::PrinterModel(_) => "printer_model",
-        SemanticComment::ExtruderTemp(_) => "extruder_temp",
-        SemanticComment::BedTemp(_) => "bed_temp",
         SemanticComment::Width(_) => "width",
         SemanticComment::Height(_) => "height",
     }

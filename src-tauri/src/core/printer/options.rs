@@ -11,7 +11,7 @@
 
 use serde::Serialize;
 use slic3r_ffi::{
-    display_order_of, option_defs, OptMode as FfiOptMode, OptScope as FfiOptScope, OptType,
+    display_order_of, option_defs_cached, OptMode as FfiOptMode, OptScope as FfiOptScope, OptType,
 };
 
 use super::profile::PrinterProfile;
@@ -243,8 +243,9 @@ fn is_panel_visible(d: &slic3r_ffi::OptionDef) -> bool {
 /// flag.
 fn panel_option_summaries(filter: Option<String>) -> Vec<OptionSummary> {
     let needle = filter.unwrap_or_default().to_lowercase();
-    let mut out: Vec<OptionSummary> = option_defs()
-        .into_iter()
+    let mut out: Vec<OptionSummary> = option_defs_cached()
+        .iter()
+        .cloned()
         .filter(is_panel_visible)
         .filter(|d| matches_filter(d, &needle))
         .map(summary_from_def)
@@ -254,15 +255,14 @@ fn panel_option_summaries(filter: Option<String>) -> Vec<OptionSummary> {
 }
 
 /// The engine's compiled-in default for `key`, serialized exactly as
-/// libslic3r emits it (e.g. `wipe_tower_x` → `"15"`). Exact-key match
-/// over the raw FFI option table — unlike [`panel_option_summaries`] it applies
-/// no panel-visibility or capability filter, so capability-gated keys
-/// (the `wipe_tower_*` family) still return their default. `None` when
-/// libslic3r has no compile-time default for the key.
+/// libslic3r emits it (e.g. `wipe_tower_x` → `"15"`). Keyed lookup
+/// straight into the FFI option table — unlike [`panel_option_summaries`]
+/// it applies no panel-visibility or capability filter, so capability-gated
+/// keys (the `wipe_tower_*` family) still return their default. `None` when
+/// the key is unknown or libslic3r has no compile-time default for it.
 pub fn engine_default_serialized(key: &str) -> Option<String> {
-    option_defs()
-        .into_iter()
-        .find(|d| d.key == key)
+    slic3r_ffi::option_def(key)
+        .ok()
         .and_then(|d| d.default_serialized)
 }
 
@@ -355,15 +355,15 @@ fn is_machine_visible(d: &slic3r_ffi::OptionDef) -> bool {
 
 fn is_extruder_visible(d: &slic3r_ffi::OptionDef) -> bool {
     // Per-extruder settings: Printer-bucket keys in libslic3r's per-extruder
-    // set (`is_per_extruder`) that Orca *also* lays out an editor for
-    // (`printer_page_of` is Some). The membership test alone includes keys
-    // whose editor is commented out / handled elsewhere (extruder_colour,
+    // set (`d.per_extruder`) that Orca *also* lays out an editor for
+    // (`printer_page_of` is Some). The flag alone includes keys whose editor
+    // is commented out / handled elsewhere (extruder_colour,
     // default_filament_profile, nozzle_flush_dataset, …); like the machine
     // panel we only surface what's actually settable.
     d.bucket == Some(slic3r_ffi::OptBucket::Printer)
         && !d.readonly
         && !d.scope.is_sla()
-        && slic3r_ffi::is_per_extruder(&d.key)
+        && d.per_extruder
         && slic3r_ffi::printer_page_of(&d.key).is_some()
 }
 
@@ -377,8 +377,9 @@ fn printer_bucket_summaries(
     visible: fn(&slic3r_ffi::OptionDef) -> bool,
 ) -> Vec<OptionSummary> {
     let needle = filter.unwrap_or_default().to_lowercase();
-    let mut out: Vec<OptionSummary> = option_defs()
-        .into_iter()
+    let mut out: Vec<OptionSummary> = option_defs_cached()
+        .iter()
+        .cloned()
         .filter(|d| visible(d))
         .filter(|d| matches_filter(d, &needle))
         .map(summary_from_def)
@@ -469,8 +470,9 @@ fn is_filament_visible(d: &slic3r_ffi::OptionDef) -> bool {
 
 fn filament_option_summaries(filter: Option<String>) -> Vec<OptionSummary> {
     let needle = filter.unwrap_or_default().to_lowercase();
-    let mut out: Vec<OptionSummary> = option_defs()
-        .into_iter()
+    let mut out: Vec<OptionSummary> = option_defs_cached()
+        .iter()
+        .cloned()
         .filter(is_filament_visible)
         .filter(|d| matches_filter(d, &needle))
         .map(summary_from_def)
@@ -519,6 +521,7 @@ mod tests {
     use super::*;
     use crate::core::printer::profile::{BoundingBox, Toolhead};
     use slic3r_ffi::init as ffi_init;
+    use slic3r_ffi::option_defs;
     use std::sync::Once;
 
     static FFI: Once = Once::new();

@@ -102,23 +102,6 @@ impl Project {
         Ok(vec![SceneEvent::ProjectOverridesChanged { plate_id }])
     }
 
-    /// Wipe every project-tier override on a plate. Silent no-op
-    /// when the plate had none.
-    pub fn project_override_clear_all(
-        &mut self,
-        plate_id: PlateId,
-    ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        let idx = self
-            .plate_index(plate_id)
-            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
-        let plate = &mut self.plates[idx];
-        if plate.project_overrides.is_empty() {
-            return Ok(Vec::new());
-        }
-        plate.project_overrides.clear();
-        Ok(vec![SceneEvent::ProjectOverridesChanged { plate_id }])
-    }
-
     /// Upsert one **user-tier** (project-wide) override. This is
     /// `Project.user_overrides` — the least-specific override tier,
     /// above the authored cascade and below the plate/object tiers. The
@@ -176,28 +159,6 @@ impl Project {
         }])
     }
 
-    /// Wipe every override on a specific (plate, object). Silent
-    /// no-op when the object had no overrides.
-    pub fn object_override_clear_all(
-        &mut self,
-        plate_id: PlateId,
-        object_id: ObjectId,
-    ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        let idx = self
-            .plate_index(plate_id)
-            .ok_or(SceneOpError::UnknownPlate(plate_id))?;
-        let plate = &mut self.plates[idx].scene;
-        if !plate.objects.contains_key(&object_id) {
-            return Err(SceneOpError::UnknownObject(object_id));
-        }
-        if plate.object_overrides.remove(&object_id).is_none() {
-            return Ok(Vec::new());
-        }
-        Ok(vec![SceneEvent::ObjectOverridesChanged {
-            plate_id,
-            object_id,
-        }])
-    }
 }
 
 #[cfg(test)]
@@ -297,20 +258,6 @@ mod tests {
             .object_override_clear(active_id, obj, "never_set")
             .unwrap();
         assert!(events.is_empty());
-    }
-
-    #[test]
-    fn object_override_clear_all_drops_every_override() {
-        let mut p = Project::default();
-        let (_, obj) = add_cube(&mut p);
-        let active_id = p.active_plate().id;
-        p.object_override_set(active_id, obj, "k1".into(), "v1".into())
-            .unwrap();
-        p.object_override_set(active_id, obj, "k2".into(), "v2".into())
-            .unwrap();
-        let events = p.object_override_clear_all(active_id, obj).unwrap();
-        assert_eq!(events.len(), 1);
-        assert!(!p.plates[0].scene.object_overrides.contains_key(&obj));
     }
 
     #[test]
@@ -428,25 +375,6 @@ mod tests {
     fn project_override_clear_missing_key_is_silent_noop() {
         let mut p = Project::default();
         let events = p.project_override_clear(PlateId(1), "never_set").unwrap();
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn project_override_clear_all_wipes_every_key() {
-        let mut p = Project::default();
-        p.project_override_set(PlateId(1), "k1".into(), "v1".into())
-            .unwrap();
-        p.project_override_set(PlateId(1), "k2".into(), "v2".into())
-            .unwrap();
-        let events = p.project_override_clear_all(PlateId(1)).unwrap();
-        assert_eq!(events.len(), 1);
-        assert!(p.plates[0].project_overrides.is_empty());
-    }
-
-    #[test]
-    fn project_override_clear_all_on_empty_is_silent_noop() {
-        let mut p = Project::default();
-        let events = p.project_override_clear_all(PlateId(1)).unwrap();
         assert!(events.is_empty());
     }
 

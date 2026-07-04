@@ -177,16 +177,16 @@ pub fn orient_mesh(vertices: &[f32], indices: &[u32], overhang_angle: Option<f32
     Ok(quat)
 }
 
-/// One side of a [`cut_mesh`] result: an indexed mesh (flattened xyz vertices +
-/// triangle index triples). Empty (both vecs cleared) when the input lay
-/// entirely on the other side of the plane.
+/// One side of a [`cut_mesh_deferred`] result: an indexed mesh (flattened xyz
+/// vertices + triangle index triples). Empty (both vecs cleared) when the input
+/// lay entirely on the other side of the plane.
 #[derive(Debug, Clone, Default)]
 pub struct CutHalf {
     pub vertices: Vec<f32>,
     pub indices: Vec<u32>,
     /// One MMU paint string per triangle (libslic3r `FacetsAnnotation`
     /// encoding), carried from the source mesh by [`cut_mesh_deferred`].
-    /// `None` when the source carried no paint. Always absent from [`cut_mesh`].
+    /// `None` when the source carried no paint (or on connector/dowel halves).
     pub paint: Option<Vec<String>>,
 }
 
@@ -196,90 +196,6 @@ impl CutHalf {
     pub fn is_empty(&self) -> bool {
         self.vertices.is_empty() || self.indices.is_empty()
     }
-}
-
-/// Cut a triangle mesh by an arbitrary plane — the engine behind OrcaSlicer's
-/// "Cut" tool, with caps triangulated so both halves come back watertight.
-///
-/// `vertices`/`indices` are flattened xyz / triangle-index triples (each a
-/// non-zero multiple of 3). `plane_origin` is a point on the plane and
-/// `plane_normal` its normal — BOTH in the same coordinate frame as `vertices`
-/// (transform a world plane into the mesh's local frame first). Returns
-/// `(positive, negative)`: the side the normal points toward, then the other.
-/// Either half may be [`CutHalf::is_empty`] when the mesh lies wholly on one
-/// side.
-///
-/// Pure computation — no init or model handle required. Run it off any UI lock.
-pub fn cut_mesh(
-    vertices: &[f32],
-    indices: &[u32],
-    plane_origin: [f32; 3],
-    plane_normal: [f32; 3],
-) -> Result<(CutHalf, CutHalf)> {
-    if vertices.is_empty() || vertices.len() % 3 != 0 {
-        return Err(Error {
-            kind: ErrorKind::InvalidArg,
-            message: Some("vertices must be a non-empty multiple of 3".into()),
-        });
-    }
-    if indices.is_empty() || indices.len() % 3 != 0 {
-        return Err(Error {
-            kind: ErrorKind::InvalidArg,
-            message: Some("indices must be a non-empty multiple of 3".into()),
-        });
-    }
-    // Bounds-check indices before they reach libslic3r (it indexes unchecked).
-    let vertex_count = vertices.len() / 3;
-    if let Some(&max_index) = indices.iter().max() {
-        if max_index as usize >= vertex_count {
-            return Err(Error {
-                kind: ErrorKind::InvalidArg,
-                message: Some(format!(
-                    "triangle index {max_index} out of range for {vertex_count} vertices"
-                )),
-            });
-        }
-    }
-
-    let mut pos_v: *mut f32 = ptr::null_mut();
-    let mut pos_vc: usize = 0;
-    let mut pos_i: *mut u32 = ptr::null_mut();
-    let mut pos_tc: usize = 0;
-    let mut neg_v: *mut f32 = ptr::null_mut();
-    let mut neg_vc: usize = 0;
-    let mut neg_i: *mut u32 = ptr::null_mut();
-    let mut neg_tc: usize = 0;
-    let mut err: *mut c_char = ptr::null_mut();
-
-    // SAFETY: input slices are length-validated above; the out pointers are all
-    // valid locals the shim writes (heap arrays it allocates, or null/0).
-    let status = unsafe {
-        sys::slic3r_cut_mesh(
-            vertices.as_ptr(),
-            vertex_count,
-            indices.as_ptr(),
-            indices.len() / 3,
-            plane_origin.as_ptr(),
-            plane_normal.as_ptr(),
-            &mut pos_v,
-            &mut pos_vc,
-            &mut pos_i,
-            &mut pos_tc,
-            &mut neg_v,
-            &mut neg_vc,
-            &mut neg_i,
-            &mut neg_tc,
-            &mut err,
-        )
-    };
-    // SAFETY: err is either null or a shim-owned message pointer.
-    unsafe { check_with_err(status, err) }?;
-
-    // SAFETY: each half is either (non-null ptr, matching count) the shim
-    // malloc'd, or (null, 0). Copy out, then hand the shim's buffers back.
-    let pos = unsafe { take_cut_half(pos_v, pos_vc, pos_i, pos_tc) };
-    let neg = unsafe { take_cut_half(neg_v, neg_vc, neg_i, neg_tc) };
-    Ok((pos, neg))
 }
 
 /// Copy one cut half out of shim-owned heap arrays into a [`CutHalf`], then free
@@ -489,7 +405,8 @@ pub struct CutDeferred {
 /// Cut a mesh by a plane, returning reassembly connectors as separate volume
 /// meshes ([`CutModifier`]) instead of baking them — the Orca-parity path: the
 /// slice layer subtracts hole volumes per-layer in 2D, so the cut does no 3D
-/// boolean. With no connectors this equals [`cut_mesh`] (plus paint carry).
+/// boolean. With no connectors this is a plain plane cut (plus paint carry) —
+/// caps triangulated so both halves come back watertight.
 /// `plane_origin`/`plane_normal` and each `Connector.pos` are in the mesh's
 /// local frame.
 pub fn cut_mesh_deferred(
@@ -922,7 +839,7 @@ pub use option_display_order::display_order_of;
 
 mod option_printer_pages;
 pub use option_printer_pages::{
-    filament_line_of, filament_page_of, filament_subgroup_of, is_per_extruder, printer_page_of,
+    filament_line_of, filament_page_of, filament_subgroup_of, printer_page_of,
     printer_subgroup_of,
 };
 
@@ -955,6 +872,11 @@ pub struct OptionDef {
     /// keys that span all buckets (`compatible_printers`, `inherits`, …)
     /// or keys outside the FFF preset universe (SLA-only, internal scratch).
     pub bucket: Option<OptBucket>,
+    /// True when the key is in libslic3r's `m_extruder_option_keys` — the
+    /// authoritative per-extruder set (options sized to the extruder count,
+    /// one editor rendered per toolhead). Straight from `print_config_def`,
+    /// not a scraped list.
+    pub per_extruder: bool,
 }
 
 unsafe fn maybe_cstr(p: *const c_char) -> Option<String> {
@@ -1002,6 +924,7 @@ impl OptionDef {
                 max: raw.max,
                 scope: OptScope(raw.scope),
                 bucket: OptBucket::from_raw(raw.bucket),
+                per_extruder: raw.per_extruder != 0,
             }
         }
     }
@@ -1020,6 +943,26 @@ pub fn option_defs() -> Vec<OptionDef> {
         }
     }
     out
+}
+
+/// The full option table, marshalled from the shim once and cached for
+/// the process lifetime — the table is immutable after [`init`], and
+/// panel surfaces read it repeatedly, so this avoids re-marshalling the
+/// ~600 entries per call. Only a non-empty table is cached, so a
+/// pre-`init` call returns a transient empty slice without poisoning it.
+pub fn option_defs_cached() -> &'static [OptionDef] {
+    static CACHE: std::sync::OnceLock<Vec<OptionDef>> = std::sync::OnceLock::new();
+    if let Some(defs) = CACHE.get() {
+        return defs;
+    }
+    let defs = option_defs();
+    if defs.is_empty() {
+        return &[];
+    }
+    // A concurrent caller may win the race; either way we return the
+    // stored table.
+    let _ = CACHE.set(defs);
+    CACHE.get().map(Vec::as_slice).unwrap_or(&[])
 }
 
 /// Look up a single option by key.
@@ -1482,23 +1425,16 @@ pub struct TowerMesh {
     pub indices: Vec<u32>,
 }
 
-/// Severity of an advisory slice [diagnostic](SliceOutcome). Fatal errors
-/// abort the slice and come back as the `Err` of `SliceOutcome::result`
-/// instead of as a diagnostic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Severity {
-    Warning,
-}
-
-/// The outcome of a slice attempt: the advisory `diagnostics` libslic3r
-/// reported (zero or more `(severity, message)` pairs — e.g. a mismatched-
-/// filament-shrinkage warning), paired with the slice `result` (the tower
-/// mesh on success, or the error). Diagnostics are computed before
-/// `process()` runs, so they're reported whether the slice then **succeeds
-/// or fails** — letting the UI surface a warning even on a failed slice.
+/// The outcome of a slice attempt: the advisory `warnings` libslic3r
+/// reported (zero or more messages — e.g. a mismatched-filament-shrinkage
+/// warning), paired with the slice `result` (the tower mesh on success, or
+/// the error). Fatal errors abort the slice and come back as the `Err` of
+/// `result`, not as a warning. Warnings are computed before `process()`
+/// runs, so they're reported whether the slice then **succeeds or fails** —
+/// letting the UI surface a warning even on a failed slice.
 #[must_use]
 pub struct SliceOutcome {
-    pub diagnostics: Vec<(Severity, String)>,
+    pub warnings: Vec<String>,
     pub result: Result<Option<TowerMesh>>,
 }
 
@@ -1529,7 +1465,7 @@ where
         Ok(p) => p,
         Err(_) => {
             return SliceOutcome {
-                diagnostics: Vec::new(),
+                warnings: Vec::new(),
                 result: Err(Error {
                     kind: ErrorKind::InvalidArg,
                     message: Some("path has NUL".into()),
@@ -1577,14 +1513,8 @@ where
     // and keep it whether the slice succeeded or failed.
     let warning = unsafe { take_c_string(warning) };
     let result = unsafe { check_with_err(status, err) }.map(|()| tower);
-    let diagnostics = warning
-        .into_iter()
-        .map(|message| (Severity::Warning, message))
-        .collect();
-    SliceOutcome {
-        diagnostics,
-        result,
-    }
+    let warnings = warning.into_iter().collect();
+    SliceOutcome { warnings, result }
 }
 
 /// Slice and return just the tower mesh (or the error), discarding any

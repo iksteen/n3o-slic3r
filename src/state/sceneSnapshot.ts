@@ -23,7 +23,7 @@ export const SCENE_SNAPSHOT_EVENTS = [
   "scene:plate_added",
   "scene:plate_removed",
   "scene:active_plate_changed",
-  "scene:plate_metadata_changed",
+  "scene:plate_changed",
   "scene:material_slot_changed",
   "scene:object_added",
   "scene:object_removed",

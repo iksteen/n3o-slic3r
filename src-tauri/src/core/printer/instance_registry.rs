@@ -652,22 +652,6 @@ pub fn set_instance_bed(
     })
 }
 
-/// Set the instance's selected process fragment slug. No validation
-/// against the bundled process catalog here — the picker is the
-/// validating surface (it only offers fragments it found in the
-/// library for the active printer + nozzle). Writing through this
-/// path emits the same `printer:instance_changed` event the bed and
-/// nozzle setters do, so the cascade preview re-resolves.
-pub fn set_instance_quality_profile(
-    id: &str,
-    quality_profile: String,
-) -> Result<PrinterInstance, InstanceMutError> {
-    mutate_instance(id, |inst| {
-        inst.quality_profile = quality_profile;
-        Ok(())
-    })
-}
-
 /// Change the AMS-unit count on an AMS-style printer. Re-derives the
 /// topology of `extruders[0].slots` to `(ams_units * 4 + 1)` —
 /// matching `create_instance`'s layout — and preserves existing

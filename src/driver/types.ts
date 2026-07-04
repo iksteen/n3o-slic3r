@@ -141,12 +141,6 @@ export interface PrinterStatus {
   last_updated: number;
 }
 
-export interface DriverSummary {
-  id: DriverId;
-  kind: DriverKind;
-  connection: ConnectionState;
-}
-
 export interface SendHandle {
   id: string;
   file_name: string;

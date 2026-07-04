@@ -42,13 +42,13 @@ pub use instance_library::{
 pub use instance_registry::{
     create_instance, delete_instance, list_instances, lookup_instance, mutate_instance,
     set_extruder_nozzle_diameter, set_instance_ams_units, set_instance_bed,
-    set_instance_connection, set_instance_display_name, set_instance_quality_profile,
+    set_instance_connection, set_instance_display_name,
     set_config_override, set_plugin_override, set_slot_color, set_slot_filament, update_instance,
     InstanceMutError,
     InstancePatch,
 };
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
-pub use registry::{bundled_catalog, default_printer_identity, lookup, CatalogEntry};
+pub use registry::{bundled_catalog, lookup, CatalogEntry};
 
 use crate::core::profile_library::{
     list_filament_fragments, list_process_fragments, FilamentFragmentSummary,
@@ -411,22 +411,6 @@ pub fn filament_profile_list() -> Vec<FilamentFragmentSummary> {
             .filter_map(crate::core::profile_library::custom_filament_summary),
     );
     out
-}
-
-/// Tauri command: change the process fragment ("Quality" picker)
-/// selected for an instance. Drives the cascade re-resolve via the
-/// `printer:instance_changed` event the bed and nozzle setters
-/// already use.
-#[tauri::command]
-#[tracing::instrument(skip(window))]
-pub fn printer_instance_set_quality_profile(
-    id: String,
-    quality_profile: String,
-    window: tauri::Window,
-) -> Result<PrinterInstanceView, String> {
-    let updated = set_instance_quality_profile(&id, quality_profile).map_err(|e| e.to_string())?;
-    emit_instance_changed(&window, &updated.id);
-    Ok(PrinterInstanceView::of(updated))
 }
 
 /// Tauri command: enumerate process fragments available for the

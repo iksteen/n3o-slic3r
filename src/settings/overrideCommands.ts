@@ -49,19 +49,6 @@ export function clearObjectOverride(
   });
 }
 
-/** Wipe every cascade override on a specific (plate, object).
- * Wires the "reset all object overrides" button in the Object
- * tab. Silent no-op when the object had no overrides. */
-export function clearAllObjectOverrides(
-  plateId: PlateId,
-  objectId: ObjectId,
-): Promise<void> {
-  return invoke("scene_object_override_clear_all", {
-    plateId,
-    objectId,
-  });
-}
-
 /** Build a `{ onSetObjectOverride, onClearObjectOverride }` pair
  * pre-bound to a specific (plate, object). Lets the SettingsPanel
  * host hand the panel ready-to-call callbacks without

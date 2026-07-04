@@ -129,6 +129,20 @@ fn option_def_layer_height_shape() {
 }
 
 #[test]
+fn per_extruder_flag_matches_libslic3r_set() {
+    ensure_init();
+    // per_extruder comes straight off libslic3r's m_extruder_option_keys.
+    assert!(option_def("retraction_length").unwrap().per_extruder);
+    assert!(option_def("z_hop").unwrap().per_extruder);
+    assert!(option_def("nozzle_diameter").unwrap().per_extruder);
+    // In libslic3r's set even though Orca's extruder-page widget is commented out.
+    assert!(option_def("extruder_colour").unwrap().per_extruder);
+    // Machine-wide keys are not per-extruder.
+    assert!(!option_def("gcode_flavor").unwrap().per_extruder);
+    assert!(!option_def("machine_start_gcode").unwrap().per_extruder);
+}
+
+#[test]
 fn option_buckets_match_preset_partitioning() {
     ensure_init();
     // Buckets are computed C++-side from Preset::{print,filament,printer}_options().

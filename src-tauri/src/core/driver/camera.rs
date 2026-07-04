@@ -48,11 +48,8 @@ use tokio_util::sync::CancellationToken;
 use super::snapmaker::camera as u1_camera;
 use super::snapmaker::camera::SnapMonitorSession;
 use super::snapmaker::snap_token::{self, SnapToken};
+use super::backoff::reconnect_backoff_secs;
 use super::traits::{DriverConfig, DriverError};
-
-/// Reconnect backoff bounds — mirrors the driver/status reconnect feel.
-const RETRY_INITIAL_DELAY: Duration = Duration::from_secs(1);
-const RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
 
 /// Where a [`CameraSource`] hands decoded JPEG frames. Wraps the webview
 /// channel so sources never touch Tauri's IPC types directly.
@@ -265,7 +262,7 @@ async fn run_worker(
     }
     source.setup().await;
 
-    let mut delay = RETRY_INITIAL_DELAY;
+    let mut attempt: u32 = 0;
     loop {
         tokio::select! {
             biased;
@@ -279,12 +276,13 @@ async fn run_worker(
                         error = %error,
                         "camera stream disconnected; will retry"
                     );
+                    let delay = Duration::from_secs(reconnect_backoff_secs(attempt));
                     tokio::select! {
                         biased;
                         _ = cancel.cancelled() => break,
                         _ = tokio::time::sleep(delay) => {}
                     }
-                    delay = (delay + delay / 2).min(RETRY_MAX_DELAY);
+                    attempt = attempt.saturating_add(1);
                 }
             },
         }

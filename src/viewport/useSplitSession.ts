@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { cross, norm } from "./vec3";
 
 // Owns the split tool's cutting-plane session — a transient editing tool, like
 // the gizmo mode, so it lives frontend-side and never enters core/scene. The
@@ -48,23 +49,13 @@ const DEFAULT_PARAMS: ConnectorParams = {
   tol: 0.1,
 };
 
-const cross3 = (a: Vec3, b: Vec3): Vec3 => [
-  a[1] * b[2] - a[2] * b[1],
-  a[2] * b[0] - a[0] * b[2],
-  a[0] * b[1] - a[1] * b[0],
-];
-const normalize3 = (a: Vec3): Vec3 => {
-  const l = Math.hypot(a[0], a[1], a[2]) || 1;
-  return [a[0] / l, a[1] / l, a[2] / l];
-};
-
 /** The plane's in-plane orthonormal basis from its normal — MUST match the
  *  Rust renderer/command up-pick so placement (u,v) maps to the same world
  *  point the cut uses. */
 export function planeBasis(n: Vec3): { e1: Vec3; e2: Vec3 } {
   const up: Vec3 = Math.abs(n[0]) > 0.9 ? [0, 1, 0] : [1, 0, 0];
-  const e1 = normalize3(cross3(n, up));
-  const e2 = normalize3(cross3(n, e1));
+  const e1 = norm(cross(n, up));
+  const e2 = norm(cross(n, e1));
   return { e1, e2 };
 }
 

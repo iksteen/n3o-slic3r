@@ -248,12 +248,6 @@ pub enum SemanticComment {
     LayerCount(u32),
     /// `; printer_model = <name>`.
     PrinterModel(String),
-    /// `M104 S210` / `M109 S210` extruder temp via comment header
-    /// preview (the actual M-command lives in `Other` for now —
-    /// Phase 6 may upgrade this).
-    ExtruderTemp(f32),
-    /// `M140 S60` / `M190 S60` bed temp likewise.
-    BedTemp(f32),
     /// Per-extrusion line width (mm). `;WIDTH:<w>` (non-BBL flavor)
     /// or `; LINE_WIDTH: <w>` (BBL flavor). Sizes the preview tubes.
     Width(f32),
@@ -391,9 +385,6 @@ pub struct LayerChange {
 pub enum LayerSource {
     /// A `;LAYER:` / `;CHANGE_LAYER` comment in the source.
     Marker,
-    /// Detected from G0/G1 Z motion patterns. Not yet produced by the
-    /// parser (marker-less geometric inference is unimplemented).
-    Heuristic,
 }
 
 /// `T<n>` tool change command.
@@ -602,7 +593,7 @@ mod tests {
         let l = Line::LayerChange(LayerChange {
             index: 0,
             z: None,
-            source: LayerSource::Heuristic,
+            source: LayerSource::Marker,
             raw_offset: 3,
             line_ending: "\n".into(),
         });
