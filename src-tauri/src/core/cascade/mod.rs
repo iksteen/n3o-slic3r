@@ -12,18 +12,17 @@
 //!
 //! - **`types`**: the typed cascade IR — `Cascade`, `Rule`,
 //!   `Predicate`, `SourceLocation`. Sharable across resolver, adapter,
-//!   trace tooling, and the Tauri command surface.
+//!   and the Tauri command surface.
 //! - **`loader`**: TOML parser that desugars the three authoring
 //!   forms (top-level keys, `[section.shorthand]`, `[[rule]]`)
 //!   into the IR and load-validates against the libslic3r schema.
-//! - **`resolver`**, **`overrides`**, **`trace`**: per-key
-//!   resolution, override tiers, and inspection tooling.
+//! - **`resolver`**, **`overrides`**: per-key resolution and override
+//!   tiers, with per-key winner attribution carried on the resolved map.
 
 pub mod commands;
 pub mod loader;
 pub mod overrides;
 pub mod resolver;
-pub mod trace;
 pub mod types;
 pub mod validate;
 
@@ -36,6 +35,5 @@ pub use overrides::{
 pub use resolver::{
     format_when, resolve, Context, MapContext, MatchingRule, Resolved, ResolvedValue,
 };
-pub use trace::{trace, Trace, TraceRule, TraceSource};
 pub use types::{Cascade, Condition, ConditionValue, Predicate, Rule, SourceLocation};
 pub use validate::{default_known_dimensions, validate_cascade, KnownDimensions};

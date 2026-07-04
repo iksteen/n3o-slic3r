@@ -160,10 +160,6 @@ rfd = "0.16"
 wiremock = "0.6"
 
 [[example]]
-name = "slice_to_gcode_3mf"
-path = "examples/slice_to_gcode_3mf.rs"
-
-[[example]]
 name = "slice_repro"
 path = "examples/slice_repro.rs"
 

@@ -13,8 +13,8 @@
 //!
 //! Separately, the file-based `!important` user + project override tier
 //! (loaded from override `.toml`s) lives in `overrides.rs` and consumes
-//! this resolver's output. Trace tooling builds the structured "why is
-//! X = 55?" report from the matching-rules list this resolver retains.
+//! this resolver's output, carrying per-key winner attribution (winning
+//! rule, also-matching losers) on the resolved map via `ResolvedWithTrace`.
 
 use super::types::{Cascade, Condition, ConditionValue, Rule, SourceLocation};
 use std::collections::BTreeMap;

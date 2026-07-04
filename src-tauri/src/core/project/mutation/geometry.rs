@@ -327,12 +327,23 @@ impl Project {
         // is no way to pass an unordered selection here. Carry each source's
         // overrides alongside it.
         let plate = &self.plates[active].scene;
-        let sources: Vec<(SceneObject, Option<HashMap<String, String>>)> = ids
+        type Source = (
+            SceneObject,
+            Option<HashMap<String, String>>,
+            Option<Vec<Modifier>>,
+            Option<Vec<HoleMarker>>,
+        );
+        let sources: Vec<Source> = ids
             .iter()
             .filter_map(|id| {
                 let obj = plate.objects.get(id)?.clone();
                 let overrides = plate.object_overrides.get(id).cloned();
-                Some((obj, overrides))
+                // Reuse the source's connector MeshIds — meshes are immutable and
+                // prune counts every plate's modifier refs, so a cloned half keeps
+                // its pegs/holes without re-registering geometry.
+                let modifiers = plate.object_modifiers.get(id).cloned();
+                let hole_markers = plate.object_hole_markers.get(id).cloned();
+                Some((obj, overrides, modifiers, hole_markers))
             })
             .collect();
 
@@ -345,7 +356,7 @@ impl Project {
         for _ in 0..times {
             // One fresh group id per source group, shared within this copy.
             let mut group_remap: HashMap<GroupId, GroupId> = HashMap::new();
-            for (src, overrides) in &sources {
+            for (src, overrides, modifiers, hole_markers) in &sources {
                 let group = src
                     .group
                     .map(|g| *group_remap.entry(g).or_insert_with(GroupId::fresh));
@@ -362,6 +373,18 @@ impl Project {
                         .scene
                         .object_overrides
                         .insert(obj_id, ov.clone());
+                }
+                if let Some(mods) = modifiers {
+                    self.plates[active]
+                        .scene
+                        .object_modifiers
+                        .insert(obj_id, mods.clone());
+                }
+                if let Some(markers) = hole_markers {
+                    self.plates[active]
+                        .scene
+                        .object_hole_markers
+                        .insert(obj_id, markers.clone());
                 }
                 let plate_id = self.plates[active].id;
                 let object = self.plates[active]
@@ -1154,6 +1177,9 @@ impl Project {
                     if let Some(mods) = plate.object_modifiers.remove(id) {
                         removed_meshes.extend(mods.iter().map(|m| m.mesh));
                     }
+                    // Hole markers are display-only (no mesh) but leave a stale
+                    // sidecar that bloats the saved project if not removed.
+                    plate.object_hole_markers.remove(id);
                     events.push(SceneEvent::ObjectRemoved {
                         plate_id,
                         object_id: *id,
@@ -1268,12 +1294,24 @@ impl Project {
             }
             moved_materials.insert(obj.extruder_id.unwrap_or(1));
             let overrides = self.plates[from_idx].scene.object_overrides.remove(&id);
+            // Cut-connector sidecars move with the object (same ObjectId), or the
+            // target plate slices without pegs/holes and the source keeps stale
+            // entries — a leaked `object_modifiers` pins its connector meshes
+            // forever, a leaked `object_hole_markers` (meshless) bloats the save.
+            let modifiers = self.plates[from_idx].scene.object_modifiers.remove(&id);
+            let hole_markers = self.plates[from_idx].scene.object_hole_markers.remove(&id);
             if self.plates[from_idx].scene.selection.remove(&id) {
                 any_was_selected = true;
             }
             self.plates[to_idx].scene.objects.push(obj.clone());
             if let Some(map) = overrides {
                 self.plates[to_idx].scene.object_overrides.insert(id, map);
+            }
+            if let Some(mods) = modifiers {
+                self.plates[to_idx].scene.object_modifiers.insert(id, mods);
+            }
+            if let Some(markers) = hole_markers {
+                self.plates[to_idx].scene.object_hole_markers.insert(id, markers);
             }
             events.push(SceneEvent::ObjectRemoved {
                 plate_id: from_plate,
@@ -2600,6 +2638,24 @@ mod tests {
     }
 
     #[test]
+    fn clone_objects_carries_cut_connectors() {
+        let mut p = Project::default();
+        let (mesh_a, a) = add_cube(&mut p);
+        attach_connectors(&mut p, a);
+        let mesh_count = p.meshes.len();
+
+        let ids = p.active_plate().scene.objects.in_order(&[a]);
+        let (new_ids, _) = p.clone_objects(&ids, 1);
+        let c = new_ids[0];
+        let scene = &p.active_plate().scene;
+        assert_eq!(scene.object_modifiers[&c].len(), 1, "peg carried to the clone");
+        assert_eq!(scene.object_hole_markers[&c].len(), 1, "hole marker carried to the clone");
+        // Connector meshes are reused, not re-registered (like the main mesh).
+        assert_eq!(scene.objects[&c].mesh, mesh_a);
+        assert_eq!(p.meshes.len(), mesh_count, "no new meshes minted for the clone");
+    }
+
+    #[test]
     fn move_objects_to_plate_relocates_a_set_preserving_transforms() {
         let mut p = Project::default();
         let (id_b, _) = p.add_plate(None);
@@ -2704,5 +2760,51 @@ mod tests {
             p.move_objects_to_plate(PlateId(1), PlateId(99), &[a]),
             Err(SceneOpError::UnknownPlate(_))
         ));
+    }
+
+    #[test]
+    fn move_objects_to_plate_carries_cut_connectors() {
+        let mut p = Project::default();
+        let (id_b, _) = p.add_plate(None);
+        let (_, a) = add_cube(&mut p);
+        attach_connectors(&mut p, a);
+
+        p.move_objects_to_plate(PlateId(1), id_b, &[a]).unwrap();
+        // Sidecars moved with the object (same ObjectId) and the source is clean.
+        assert!(!p.plates[0].scene.object_modifiers.contains_key(&a));
+        assert!(!p.plates[0].scene.object_hole_markers.contains_key(&a));
+        assert_eq!(p.plates[1].scene.object_modifiers[&a].len(), 1, "peg followed the move");
+        assert_eq!(
+            p.plates[1].scene.object_hole_markers[&a].len(),
+            1,
+            "hole marker followed the move",
+        );
+    }
+
+    /// Attach one peg modifier + one hole marker to `id` on the active plate,
+    /// mirroring `apply_cut`'s sidecar shape (see the recut carry test).
+    fn attach_connectors(p: &mut Project, id: ObjectId) {
+        let active = p.active_plate;
+        let peg = p.register_mesh(NewMesh {
+            vertices: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            indices: vec![0, 1, 2],
+            paint_colors: None,
+            bounding_box: BoundingBox { min: [0.0; 3], max: [1.0, 1.0, 0.0] },
+            provenance: MeshProvenance::Primitive("peg".into()),
+        });
+        p.plates[active]
+            .scene
+            .object_modifiers
+            .insert(id, vec![Modifier { mesh: peg, kind: ModifierKind::Peg }]);
+        p.plates[active].scene.object_hole_markers.insert(
+            id,
+            vec![crate::core::scene::state::HoleMarker {
+                shape: crate::core::scene::state::HoleMarkerShape::Circle,
+                radius: 1.0,
+                center: [0.0, 0.0, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                u_axis: [1.0, 0.0, 0.0],
+            }],
+        );
     }
 }

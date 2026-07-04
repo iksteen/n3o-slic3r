@@ -315,6 +315,46 @@ unsafe fn take_paint(arr: *mut *mut c_char, n: usize) -> Option<Vec<String>> {
     Some(out)
 }
 
+/// Serialize a string vector the way libslic3r's `ConfigOptionStrings` does —
+/// `;`-joined with cstyle quoting — so profile composition round-trips
+/// `coStrings` vectors byte-identically to the engine (a lone empty element is
+/// quoted so it survives the round-trip). Empty input yields `""`.
+pub fn escape_strings_cstyle(strs: &[String]) -> Result<String> {
+    let cstrings = strs
+        .iter()
+        .map(|s| cstring(s, "cstyle string"))
+        .collect::<Result<Vec<_>>>()?;
+    let ptrs: Vec<*const c_char> = cstrings.iter().map(|c| c.as_ptr()).collect();
+    let mut out: *mut c_char = ptr::null_mut();
+    // SAFETY: ptrs/cstrings live through the call; out is an owned heap string on OK.
+    let status = unsafe { sys::slic3r_escape_strings_cstyle(ptrs.as_ptr(), ptrs.len(), &mut out) };
+    check(status)?;
+    // SAFETY: out is a non-null NUL-terminated heap string on OK; we own + free it.
+    let s = unsafe { CStr::from_ptr(out).to_string_lossy().into_owned() };
+    unsafe { sys::slic3r_string_free(out) };
+    Ok(s)
+}
+
+/// Inverse of [`escape_strings_cstyle`]. Errors (`ParseValue`) on malformed
+/// input (unterminated quote / trailing backslash) rather than truncating.
+pub fn unescape_strings_cstyle(s: &str) -> Result<Vec<String>> {
+    let cs = cstring(s, "cstyle input")?;
+    let mut arr: *mut *mut c_char = ptr::null_mut();
+    let mut count: usize = 0;
+    // SAFETY: cs lives through the call; arr/count are out-params owned on OK.
+    let status = unsafe { sys::slic3r_unescape_strings_cstyle(cs.as_ptr(), &mut arr, &mut count) };
+    check(status)?;
+    if arr.is_null() {
+        return Ok(Vec::new());
+    }
+    // SAFETY: arr points to `count` non-null NUL-terminated heap strings on OK.
+    let out = (0..count)
+        .map(|k| unsafe { CStr::from_ptr(*arr.add(k)).to_string_lossy().into_owned() })
+        .collect();
+    unsafe { sys::slic3r_free_string_array(arr, count) };
+    Ok(out)
+}
+
 /// Connector (joint) type — matches OrcaSlicer's `CutConnectorType`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectorType {
@@ -1089,38 +1129,6 @@ impl Model {
         Ok(Self { raw })
     }
 
-    /// Load a model file. Format detected from extension.
-    pub fn load<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
-        let p = CString::new(path.as_ref().to_string_lossy().as_bytes()).map_err(|_| Error {
-            kind: ErrorKind::InvalidArg,
-            message: Some("path has NUL".into()),
-        })?;
-        let mut err: *mut c_char = ptr::null_mut();
-        // SAFETY: p lives through the call; err is an out-param we own on non-null return.
-        let status = unsafe { sys::slic3r_model_load(self.raw, p.as_ptr(), &mut err) };
-        unsafe { check_with_err(status, err) }
-    }
-
-    /// Load a model file and fold any settings embedded in the file into
-    /// `config`. For 3MFs, picks up the printer/print/filament settings
-    /// stored in `Metadata/project_settings.config`. Pre-existing values in
-    /// `config` are preserved unless overridden by the file.
-    ///
-    /// For STL/OBJ/STEP files (which carry no embedded config) this is
-    /// equivalent to [`Model::load`] and leaves `config` untouched.
-    pub fn load_with_config<P: AsRef<Path>>(&mut self, path: P, config: &mut Config) -> Result<()> {
-        let p = CString::new(path.as_ref().to_string_lossy().as_bytes()).map_err(|_| Error {
-            kind: ErrorKind::InvalidArg,
-            message: Some("path has NUL".into()),
-        })?;
-        let mut err: *mut c_char = ptr::null_mut();
-        // SAFETY: handles are valid; p lives through the call; err is an out-param we own on non-null return.
-        let status = unsafe {
-            sys::slic3r_model_load_with_config(self.raw, config.raw, p.as_ptr(), &mut err)
-        };
-        unsafe { check_with_err(status, err) }
-    }
-
     /// Remap MMU color-painting (`paint_color`) filament states in place.
     ///
     /// Each painted face's filament state `s` is replaced with `perm[s]`
@@ -1160,6 +1168,7 @@ impl Model {
     ) -> Result<()> {
         let cname = cstring(name, "name")?;
         validate_indices(verts, indices)?;
+        validate_paint(indices, paint_hex)?;
 
         // Own the CStrings for the lifetime of the call; the C side reads the
         // derived pointer arrays but does not retain them. An empty Vec's
@@ -1235,6 +1244,7 @@ impl Model {
     ) -> Result<()> {
         let cname = cstring(name, "name")?;
         validate_indices(verts, indices)?;
+        validate_paint(indices, paint_hex)?;
         let strs = ObjectStrings::marshal(paint_hex, overrides)?;
         let paint_ptrs = strs.paint_ptrs();
         let key_ptrs = strs.key_ptrs();
@@ -1336,6 +1346,42 @@ fn validate_indices(verts: &[f32], indices: &[u32]) -> Result<()> {
                 message: Some(format!(
                     "triangle index {max_index} out of range for {vertex_count} vertices"
                 )),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Reject malformed MMU paint at the boundary — the same "libslic3r reads it
+/// unchecked" rationale as `validate_indices`. libslic3r's paint deserializer
+/// (`TriangleSelector::set_triangle_from_string`) only `debug`-asserts on a
+/// truncated bitstream, so a crafted string reads past its end in release. A
+/// well-formed paint array is either empty (no paint) or has exactly one hex
+/// string per triangle. The charset is UPPERCASE hex only: libslic3r decodes
+/// `0-9`/`A-F` and silently zeroes anything else in release (`Model.cpp`
+/// `set_triangle_from_string`), so accepting `a-f` here would validate a
+/// different bitstream than the one libslic3r builds — the exact OOB this
+/// guards. The shim's structural walk guards the split-tree; this catches the
+/// cheap cases up front.
+fn validate_paint(indices: &[u32], paint_hex: &[String]) -> Result<()> {
+    if paint_hex.is_empty() {
+        return Ok(());
+    }
+    let triangle_count = indices.len() / 3;
+    if paint_hex.len() != triangle_count {
+        return Err(Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some(format!(
+                "paint length {} != triangle count {triangle_count}",
+                paint_hex.len()
+            )),
+        });
+    }
+    for (i, s) in paint_hex.iter().enumerate() {
+        if let Some(c) = s.chars().find(|c| !matches!(c, '0'..='9' | 'A'..='F')) {
+            return Err(Error {
+                kind: ErrorKind::InvalidArg,
+                message: Some(format!("paint[{i}] has non-uppercase-hex char {c:?}")),
             });
         }
     }
@@ -1724,6 +1770,61 @@ mod tests {
         model
             .add_object("tri", &verts, &indices, &identity, 1, &[], &[])
             .expect("add_object should succeed");
+    }
+
+    #[test]
+    fn validate_paint_length_and_charset() {
+        let two_tris: [u32; 6] = [0, 1, 2, 0, 1, 2];
+        // Empty = unpainted; one hex string per triangle = fine.
+        assert!(validate_paint(&two_tris, &[]).is_ok());
+        assert!(validate_paint(&two_tris, &["8".into(), "4".into()]).is_ok());
+
+        let one_tri: [u32; 3] = [0, 1, 2];
+        // Length mismatch and non-hex are both rejected at the boundary.
+        assert_eq!(
+            validate_paint(&one_tri, &["8".into(), "4".into()])
+                .unwrap_err()
+                .kind,
+            ErrorKind::InvalidArg,
+        );
+        assert_eq!(
+            validate_paint(&one_tri, &["8g".into()]).unwrap_err().kind,
+            ErrorKind::InvalidArg,
+        );
+        // Lowercase hex is rejected: libslic3r zeroes it in release, so the
+        // validated tree would differ from the one it deserializes.
+        assert_eq!(
+            validate_paint(&one_tri, &["a".into()]).unwrap_err().kind,
+            ErrorKind::InvalidArg,
+        );
+    }
+
+    #[test]
+    fn add_object_paint_boundary_rejects_truncated_split() {
+        // No init needed — add_object only constructs Model data.
+        let mut model = Model::new().expect("model new");
+        let identity: [f64; 16] = [
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ];
+        let verts: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let indices: [u32; 3] = [0, 1, 2];
+
+        // "8" = 0b1000: a leaf with state 2. Valid, accepted.
+        model
+            .add_object("ok", &verts, &indices, &identity, 1, &["8".into()], &[])
+            .expect("valid single-leaf paint");
+
+        // "1" = 0b0001: declares a split (low 2 bits = 1) but supplies no child
+        // bits — hex and right length, so it clears the Rust gate; only the
+        // shim's bounds-checked walk catches it. Must be a clean InvalidArg,
+        // not an OOB read / crash.
+        let err = model
+            .add_object("bad", &verts, &indices, &identity, 1, &["1".into()], &[])
+            .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::InvalidArg);
     }
 
     #[test]

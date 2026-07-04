@@ -346,14 +346,25 @@ struct slic3r_model_t {
 
 namespace {
 
+// Real MMU subdivision trees are shallow; cap recursion so a crafted string
+// can't nest ~2 bits/level deep enough to overflow the stack.
+static constexpr int kMaxPaintDepth = 64;
+
 // Walk one triangle's MMU paint bitstream (mirrors TriangleSelector::serialize):
 // copy the split-tree structure verbatim and remap each leaf's filament state
 // through `perm` (state s -> perm[s], identity when s is out of range). `c`
 // advances past exactly one triangle's bits. Operates on the already-decoded
 // in-memory bitstream — no hex packing involved (that's only 3MF I/O).
-void remap_paint_walk(const std::vector<bool>& in, size_t& c,
+//
+// Every read is bounds-checked: the bitstream comes from a possibly-crafted
+// file, and an over-declared split tree would otherwise index `in` past its
+// end (release: heap OOB). Returns false on a truncated/over-nested stream so
+// the caller rejects the model instead of reading OOB.
+bool remap_paint_walk(const std::vector<bool>& in, size_t& c,
                       std::vector<bool>& out, const std::vector<int>& perm,
-                      std::vector<bool>& used_states) {
+                      std::vector<bool>& used_states, int depth) {
+    if (depth > kMaxPaintDepth) return false;
+    if (c + 2 > in.size()) return false;
     bool s0 = in[c], s1 = in[c + 1];
     c += 2;
     out.push_back(s0);
@@ -361,17 +372,21 @@ void remap_paint_walk(const std::vector<bool>& in, size_t& c,
     int split_sides = (s0 ? 1 : 0) | (s1 ? 2 : 0);
     if (split_sides != 0) {
         // special_side (2 bits) — structural, copied verbatim.
+        if (c + 2 > in.size()) return false;
         out.push_back(in[c]);
         out.push_back(in[c + 1]);
         c += 2;
         for (int i = 0; i <= split_sides; ++i) // split_sides + 1 children
-            remap_paint_walk(in, c, out, perm, used_states);
+            if (!remap_paint_walk(in, c, out, perm, used_states, depth + 1))
+                return false;
     } else {
         // Leaf: state is 2 bits, or "11" prefix + 4 bits for states >= 3.
+        if (c + 2 > in.size()) return false;
         bool p0 = in[c], p1 = in[c + 1];
         c += 2;
         int n;
         if (p0 && p1) {
+            if (c + 4 > in.size()) return false;
             n = 0;
             for (int i = 0; i < 4; ++i)
                 if (in[c + i]) n |= (1 << i);
@@ -394,6 +409,7 @@ void remap_paint_walk(const std::vector<bool>& in, size_t& c,
             out.push_back((nn & 2) != 0);
         }
     }
+    return true;
 }
 
 // Several config fields must be normalized to the printer's geometry
@@ -600,16 +616,76 @@ static indexed_triangle_set its_from_buffers(const float* verts, size_t vcount,
     return its;
 }
 
-// MMU color-painting: the hex strings are already in the BBS format
-// FacetsAnnotation::set_triangle_from_string expects — pass through.
-static void apply_paint(ModelVolume* vol, const char* const* paint_hex, size_t paint_count) {
-    if (paint_count == 0) return;
+// Bounds-checked walk of one triangle's paint bitstream, mirroring
+// TriangleSelector::deserialize's per-triangle loop. libslic3r's own
+// next_nibble reads `bitstream[ibit++]` unchecked, so a truncated or
+// over-declared split tree runs it past the vector end (release: heap OOB
+// read). Reject such a string before libslic3r ever deserializes it. The walk
+// is iterative (an explicit remaining-node count, not recursion) so a hostile
+// deeply-nested tree can't blow the stack either.
+static bool paint_string_well_formed(const char* s) {
+    // Hex → bits: reverse order, LSB-first, matching set_triangle_from_string.
+    // Charset is UPPERCASE only — libslic3r decodes 0-9/A-F and zeroes anything
+    // else in release (Model.cpp), so accepting a-f here would validate a
+    // different bitstream than it builds. (This mirrors the split-tree grammar
+    // in remap_paint_walk, which walks the already-decoded bit vector; keep the
+    // two in lockstep across an OrcaSlicer pin bump.)
+    const std::string str(s);
+    std::vector<bool> bits;
+    bits.reserve(str.size() * 4);
+    for (auto it = str.crbegin(); it != str.crend(); ++it) {
+        const char ch = *it;
+        int dec;
+        if (ch >= '0' && ch <= '9') dec = ch - '0';
+        else if (ch >= 'A' && ch <= 'F') dec = 10 + (ch - 'A');
+        else return false; // non-uppercase-hex (the Rust boundary guards this too)
+        for (int i = 0; i < 4; ++i) bits.push_back(bool(dec & (1 << i)));
+    }
+    size_t pos = 0;
+    auto next_nibble = [&](int& out) -> bool {
+        if (pos + 4 > bits.size()) return false;
+        int n = 0;
+        for (int i = 0; i < 4; ++i) { if (bits[pos]) n |= (1 << i); ++pos; }
+        out = n;
+        return true;
+    };
+    // Each triangle string is one split-tree; `remaining` counts nodes still
+    // owed. A split node (low 2 bits != 0) owes split_sides+1 children; a leaf
+    // may carry an escape nibble when the high pair is 0b11.
+    size_t remaining = 1;
+    while (remaining > 0) {
+        int code;
+        if (!next_nibble(code)) return false;
+        --remaining;
+        const int split_sides = code & 0b11;
+        if (split_sides == 0) {
+            if ((code & 0b1100) == 0b1100) {
+                int esc;
+                if (!next_nibble(esc)) return false;
+            }
+        } else {
+            remaining += static_cast<size_t>(split_sides) + 1;
+        }
+    }
+    return true;
+}
+
+// MMU color-painting: the hex strings are in the BBS format
+// FacetsAnnotation::set_triangle_from_string expects. Structurally validate
+// every string first (see paint_string_well_formed) — returning false, so the
+// caller reports SLIC3R_ERR_INVALID_ARG, before any mutation — then apply.
+static bool apply_paint(ModelVolume* vol, const char* const* paint_hex, size_t paint_count) {
+    if (paint_count == 0) return true;
+    for (size_t i = 0; i < paint_count; ++i)
+        if (paint_hex[i] && paint_hex[i][0] != '\0' && !paint_string_well_formed(paint_hex[i]))
+            return false;
     vol->mmu_segmentation_facets.reserve(paint_count);
     for (size_t i = 0; i < paint_count; ++i)
         if (paint_hex[i] && paint_hex[i][0] != '\0')
             vol->mmu_segmentation_facets.set_triangle_from_string(
                 static_cast<int>(i), paint_hex[i]);
     vol->mmu_segmentation_facets.shrink_to_fit();
+    return true;
 }
 
 // Per-object/-volume config overrides. Mirrors the 3MF loader's metadata path
@@ -697,14 +773,6 @@ slic3r_status slic3r_init(const char* resources_dir, unsigned int log_level) {
             Slic3r::set_var_dir(std::string(resources_dir) + "/images");
         }
 
-        // libslic3r writes a working-copy backup of every loaded 3MF into
-        // temporary_dir(); the unset default resolves to "/orcaslicer_model"
-        // (filesystem root), which is not writable for non-root users and
-        // causes 3MF loads to silently produce an empty Model. Upstream's
-        // CLI sets this via wxFileName::GetTempDir(); we use the C++17
-        // equivalent so the shim has no wx dependency.
-        Slic3r::set_temporary_dir(std::filesystem::temp_directory_path().string());
-
         // Disable libslic3r's BBS auto-backup scheduler. It's a
         // headless-irrelevant feature (GUI Plater opts into it via
         // Model::set_need_backup; we never do). The singleton's
@@ -726,6 +794,67 @@ slic3r_status slic3r_init(const char* resources_dir, unsigned int log_level) {
 
 void slic3r_string_free(char* s) {
     if (s) std::free(s);
+}
+
+// ---- cstyle string-vector escaping (libslic3r Config.cpp) ----
+// Exposed so the profile composer serializes/parses coStrings vectors with
+// libslic3r's own rules — `;`-joined with cstyle quoting (a lone empty element
+// quoted so it round-trips, whitespace skipped after separators, malformed
+// input rejected) — rather than a hand-port that drifts across bumps. Pure
+// functions; no handle or init required.
+
+slic3r_status slic3r_escape_strings_cstyle(const char* const* strs, size_t count,
+                                           char** out) {
+    if (!out || (count != 0 && !strs)) return SLIC3R_ERR_INVALID_ARG;
+    *out = nullptr;
+    try {
+        std::vector<std::string> v;
+        v.reserve(count);
+        for (size_t i = 0; i < count; ++i)
+            v.emplace_back(strs[i] ? strs[i] : "");
+        *out = dup_c(Slic3r::escape_strings_cstyle(v));
+        return *out ? SLIC3R_OK : SLIC3R_ERR_INTERNAL;
+    } catch (const std::exception&) {
+        return SLIC3R_ERR_INTERNAL;
+    }
+}
+
+slic3r_status slic3r_unescape_strings_cstyle(const char* s, char*** out,
+                                             size_t* out_count) {
+    if (!s || !out || !out_count) return SLIC3R_ERR_INVALID_ARG;
+    *out = nullptr;
+    *out_count = 0;
+    try {
+        std::vector<std::string> v;
+        // libslic3r returns false on malformed input (unterminated quote,
+        // trailing backslash) — surface it rather than silently truncating.
+        if (!Slic3r::unescape_strings_cstyle(s, v)) return SLIC3R_ERR_PARSE_VALUE;
+        if (v.empty()) return SLIC3R_OK; // out stays null / count 0
+        char** arr = static_cast<char**>(std::malloc(v.size() * sizeof(char*)));
+        if (!arr) return SLIC3R_ERR_INTERNAL;
+        for (size_t i = 0; i < v.size(); ++i) {
+            arr[i] = dup_c(v[i]);
+            if (!arr[i]) {
+                // dup_c OOM: free what we have and fail rather than hand back a
+                // null element the Rust wrapper would deref.
+                for (size_t j = 0; j < i; ++j) std::free(arr[j]);
+                std::free(arr);
+                return SLIC3R_ERR_INTERNAL;
+            }
+        }
+        *out = arr;
+        *out_count = v.size();
+        return SLIC3R_OK;
+    } catch (const std::exception&) {
+        return SLIC3R_ERR_INTERNAL;
+    }
+}
+
+void slic3r_free_string_array(char** arr, size_t count) {
+    if (!arr) return;
+    for (size_t i = 0; i < count; ++i)
+        std::free(arr[i]);
+    std::free(arr);
 }
 
 // ---- Option introspection ----
@@ -834,52 +963,6 @@ void slic3r_model_free(slic3r_model_t* model) {
     delete model;
 }
 
-namespace {
-
-// Shared body of slic3r_model_load and slic3r_model_load_with_config.
-// `cfg` may be null when the caller doesn't want the embedded config.
-slic3r_status do_load(slic3r_model_t* m,
-                      DynamicPrintConfig* cfg,
-                      const char* path,
-                      char** out_err) {
-    if (!m || !path) return SLIC3R_ERR_INVALID_ARG;
-    if (out_err) *out_err = nullptr;
-    try {
-        // LoadModel is required for the BBS 3MF importer to actually attach
-        // parsed objects to the model (otherwise it deletes them — see
-        // bbs_3mf.cpp:_handle_end_object). LoadConfig pulls plate / object
-        // config out of the 3MF's Metadata/ tree when present. STL/OBJ/STEP
-        // loaders ignore the flags but accept them harmlessly, so we always
-        // pass this set rather than branching on extension.
-        const auto opts = LoadStrategy::LoadModel
-                        | LoadStrategy::LoadConfig
-                        | LoadStrategy::AddDefaultInstances;
-        // Silent forward-compat: older 3MFs with renamed keys are accepted.
-        // Substitution warnings are dropped on the floor for v0; a future
-        // API could surface them.
-        ConfigSubstitutionContext ctx(ForwardCompatibilitySubstitutionRule::EnableSilent);
-        m->model = Model::read_from_file(path, cfg, &ctx, opts);
-        return SLIC3R_OK;
-    } catch (const std::exception& e) {
-        set_err(out_err, e.what());
-        return SLIC3R_ERR_IO;
-    }
-}
-
-} // namespace
-
-slic3r_status slic3r_model_load(slic3r_model_t* m, const char* path, char** out_err) {
-    return do_load(m, nullptr, path, out_err);
-}
-
-slic3r_status slic3r_model_load_with_config(slic3r_model_t* m,
-                                             slic3r_config_t* c,
-                                             const char* path,
-                                             char** out_err) {
-    if (!c) return SLIC3R_ERR_INVALID_ARG;
-    return do_load(m, &c->cfg, path, out_err);
-}
-
 // ---- MMU paint remap ----
 
 slic3r_status slic3r_model_remap_paint_filaments(slic3r_model_t* m,
@@ -903,7 +986,9 @@ slic3r_status slic3r_model_remap_paint_filaments(slic3r_model_t* m,
                     out.triangles_to_split.emplace_back(
                         mapping.triangle_idx, static_cast<int>(out.bitstream.size()));
                     size_t c = static_cast<size_t>(mapping.bitstream_start_idx);
-                    remap_paint_walk(in.bitstream, c, out.bitstream, p, out.used_states);
+                    if (!remap_paint_walk(in.bitstream, c, out.bitstream, p,
+                                          out.used_states, 0))
+                        return SLIC3R_ERR_INVALID_ARG;
                 }
                 vol->mmu_segmentation_facets.set_data(std::move(out));
             }
@@ -956,7 +1041,10 @@ slic3r_status slic3r_model_add_object(
         ModelInstance* inst = obj->add_instance();
         inst->set_transformation(Geometry::Transformation(t));
 
-        apply_paint(vol, paint_hex, paint_count);
+        if (!apply_paint(vol, paint_hex, paint_count)) {
+            set_err(out_err, "malformed MMU paint string");
+            return SLIC3R_ERR_INVALID_ARG;
+        }
         apply_overrides(obj->config, ovr_keys, ovr_vals, ovr_count);
 
         return SLIC3R_OK;
@@ -1038,7 +1126,10 @@ slic3r_status slic3r_model_add_volume(
         Geometry::Transformation world(world_mat);
         vol->set_transformation(world * vol->get_transformation());
 
-        apply_paint(vol, paint_hex, paint_count);
+        if (!apply_paint(vol, paint_hex, paint_count)) {
+            set_err(out_err, "malformed MMU paint string");
+            return SLIC3R_ERR_INVALID_ARG;
+        }
         apply_overrides(vol->config, ovr_keys, ovr_vals, ovr_count);
 
         return SLIC3R_OK;

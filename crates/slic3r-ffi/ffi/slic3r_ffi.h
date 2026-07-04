@@ -157,6 +157,24 @@ const char* slic3r_version(void);
  * Safe to pass NULL. */
 void slic3r_string_free(char* s);
 
+/* ---- cstyle string-vector escaping ---- */
+
+/* Serialize a string vector the way libslic3r's ConfigOptionStrings does:
+ * `;`-joined with cstyle quoting. On success *out is a heap string the caller
+ * frees with slic3r_string_free. count may be 0 (yields ""). */
+slic3r_status slic3r_escape_strings_cstyle(const char* const* strs, size_t count,
+                                           char** out);
+
+/* Inverse of slic3r_escape_strings_cstyle. On success *out is a heap array of
+ * *out_count heap strings (both freed with slic3r_free_string_array); *out is
+ * NULL / *out_count 0 for an empty input. Returns SLIC3R_ERR_PARSE_VALUE if the
+ * input is malformed (unterminated quote / trailing backslash). */
+slic3r_status slic3r_unescape_strings_cstyle(const char* s, char*** out,
+                                             size_t* out_count);
+
+/* Free an array returned by slic3r_unescape_strings_cstyle. Safe on NULL. */
+void slic3r_free_string_array(char** arr, size_t count);
+
 /* ---- Option introspection ---- */
 
 /* Number of options in the global print_config_def. */
@@ -205,34 +223,6 @@ typedef struct slic3r_model_t slic3r_model_t;
 
 slic3r_model_t* slic3r_model_new(void);
 void            slic3r_model_free(slic3r_model_t* model);
-
-/* Load a model file. Format auto-detected from extension (3MF / STL / OBJ /
- * STEP / AMF). Replaces any previous contents of *model.
- * Adds a default instance for each ModelObject (LoadStrategy::AddDefaultInstances).
- * out_err may be NULL. If non-NULL and the call fails, *out_err receives a
- * heap-allocated message; caller frees with slic3r_string_free. */
-slic3r_status slic3r_model_load(slic3r_model_t* model,
-                                 const char* path,
-                                 char** out_err);
-
-/* Like slic3r_model_load, but also folds any printer/print/filament settings
- * embedded in the file into `config`. Currently meaningful for .3mf (and
- * .amf): the project's `Metadata/project_settings.config` is parsed and
- * applied on top of `config`'s existing values. Settings the file doesn't
- * mention are left untouched, so seeding `config` with FullPrintConfig
- * defaults (via slic3r_config_new) and then calling this merges 3MF
- * overrides on top.
- *
- * STL/OBJ/STEP files have no embedded config; for them this is identical
- * to slic3r_model_load with respect to `config` (left unchanged).
- *
- * Forward-compatibility substitution is enabled silently — older 3MFs with
- * renamed/removed option keys are accepted, with substitutions applied
- * without throwing. */
-slic3r_status slic3r_model_load_with_config(slic3r_model_t* model,
-                                             slic3r_config_t* config,
-                                             const char* path,
-                                             char** out_err);
 
 /* Remap MMU color-painting (paint_color) filament states in place.
  *

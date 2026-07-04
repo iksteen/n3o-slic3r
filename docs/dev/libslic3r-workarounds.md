@@ -2,82 +2,25 @@
 
 > Status: as of OrcaSlicer submodule pin `v2.4.0` (`6d9eb1792f`). Re-verify
 > before bumping the submodule; some of these may have been fixed upstream.
-> (All still apply at v2.4.0 — verified by the build + slice-to-gcode tests.)
+> (All still apply at v2.4.0 — verified by the build + slice tests.)
 
 OrcaSlicer's `libslic3r` was designed to be driven by its GUI (and to
 a lesser extent its CLI). Driving it headlessly through our FFI surfaces
-five real quirks that the shim compensates for. Each was found
-empirically — symptoms ranged from silent empty models to
+seven real quirks that the shim compensates for. Each was found
+empirically — symptoms ranged from validation failures to
 segmentation faults. **Don't remove these workarounds without
 verifying upstream has fixed the root cause.** If a future OrcaSlicer
 bump silently changes the behavior they rely on, slicing breaks in
 non-obvious ways.
 
-All of these but §9 live in `crates/slic3r-ffi/ffi/slic3r_ffi.cpp`; §9 is
+All of these but §7 live in `crates/slic3r-ffi/ffi/slic3r_ffi.cpp`; §7 is
 a Rust-side adapter guard on what we *send* the engine rather than a patch
 to the engine's behavior. References below anchor to function/symbol names
 rather than line numbers, which drift across submodule bumps.
 
 ---
 
-## 1. `temporary_dir` defaults to filesystem root
-
-**Symptom.** Loading any 3MF returns "The supplied file couldn't be
-read because it's empty," even on a valid multi-megabyte 3MF.
-
-**Root cause.** `Slic3r::temporary_dir()` defaults to
-`/orcaslicer_model` when not set. The BBS 3MF importer writes a
-working-copy backup of every loaded 3MF into `temporary_dir()/<plate
-id>/...` *before* parsing geometry. On a non-root user this fails
-permission-denied. The loader catches the failure, bails out with no
-objects populated, and the "empty file" message fires later in
-`Model::read_from_file` as a catch-all.
-
-Upstream's CLI sets `temporary_dir` via `wxFileName::GetTempDir()`
-(in OrcaSlicer's CLI startup). The GUI sets it during app startup.
-
-**Fix.** In `slic3r_init` — call `Slic3r::set_temporary_dir(
-std::filesystem::temp_directory_path().string())` in `slic3r_init`.
-C++17's filesystem equivalent gives us the same default
-(`$TMPDIR`/`/tmp`/etc.) without depending on wx.
-
----
-
-## 2. `Model::read_from_file` discards 3MF objects without `LoadStrategy::LoadModel`
-
-**Symptom.** 3MF files appear to load (no error from libslic3r), but
-the resulting `Model` has zero objects. Slicing then hits the
-"couldn't be read because it's empty" message in `Model::read_from_file`.
-
-**Root cause.** `Model::read_from_file`'s default options parameter is
-`LoadStrategy::AddDefaultInstances` — which does *not* include
-`LoadStrategy::LoadModel`. Without `LoadModel`, the BBS 3MF importer's
-`_BBS_3MF_Importer::_handle_end_object` deletes each parsed object
-instead of attaching it:
-
-```cpp
-bool _BBS_3MF_Importer::_handle_end_object() {
-    if (!m_load_model) {
-        delete m_curr_object;
-        m_curr_object = nullptr;
-        return true;
-    }
-    ...
-}
-```
-
-The flag also gates the "build/restore model state" branch (via the
-importer's `m_load_model` flag). STL/OBJ/STEP loaders ignore it harmlessly.
-
-**Fix.** In `do_load` — pass
-`LoadStrategy::LoadModel | LoadStrategy::LoadConfig |
-LoadStrategy::AddDefaultInstances` to `Model::read_from_file`
-unconditionally. `LoadConfig` is also needed to pull in the 3MF's
-embedded `Metadata/project_settings.config`.
-
----
-
-## 3. `Print::is_BBL_printer()` is an uninitialized manual flag
+## 1. `Print::is_BBL_printer()` is an uninitialized manual flag
 
 **Symptom.** Slicing Bambu A1 mini / X1C / P1S 3MFs fails validation
 with "Relative extruder addressing requires resetting the extruder
@@ -110,7 +53,7 @@ print.is_BBL_printer() = (printer_model.compare(0, 9, "Bambu Lab") == 0);
 
 ---
 
-## 4. Pre-`apply` config normalization
+## 2. Pre-`apply` config normalization
 
 **Symptom.** `Print::process()` segfaults deep in tool-ordering with a
 backtrace through `calc_filament_change_info_by_toolorder` or
@@ -201,7 +144,7 @@ tool-change rationale so neither side can be quietly undone.
 
 ---
 
-## 5. `coEnums` defaults can't be serialized via the option's own `serialize()`
+## 3. `coEnums` defaults can't be serialized via the option's own `serialize()`
 
 **Symptom.** During `DefCache::build`, calling
 `d.default_value->serialize()` for any `coEnums` (vector-of-enums)
@@ -258,7 +201,7 @@ std::string serialize_coenums_default(const ConfigOptionDef& d) {
 
 ---
 
-## 6. `Print::m_origin` (plate origin) is uninitialized
+## 4. `Print::m_origin` (plate origin) is uninitialized
 
 **Symptom.** A multi-material slice (≥2 filaments, so the clearance check
 has a non-trivial exclusion polygon to test) fails *validation* — before
@@ -292,14 +235,14 @@ headless model):
 print.set_plate_origin(Vec3d(0.0, 0.0, 0.0));
 ```
 
-Same class of bug as workaround 3 (`is_BBL_printer()`): an uninitialized
+Same class of bug as workaround 1 (`is_BBL_printer()`): an uninitialized
 `Print` member the GUI would otherwise set. A second, distinct
 uninitialized-read on the skirt path (`WipeTowerData::height`) is
-workaround 7 below.
+workaround 5 below.
 
 ---
 
-## 7. `WipeTowerData::height` is read uninitialized on the BBL (Type1) tower path
+## 5. `WipeTowerData::height` is read uninitialized on the BBL (Type1) tower path
 
 **Symptom.** A BBL (Bambu) multi-material slice with a prime tower
 *intermittently* fails with ClipperLib "Coordinate outside allowed range"
@@ -346,7 +289,7 @@ per this doc's model.
 
 ---
 
-## 8. `Print::validate()` null-derefs its `warning` out-param
+## 6. `Print::validate()` null-derefs its `warning` out-param
 
 **Symptom.** A multi-material slice hard-crashes (SIGSEGV, no Rust panic,
 the whole app exits) *before* `process()` runs. Reproduces deterministically
@@ -367,7 +310,7 @@ values, which is why it tracked the filament set rather than the printer.
 
 The GUI never hits this: it always passes a real `StringObjectException*`
 to `validate()` to surface warnings to the user, so the writes have a valid
-target. This is the same class as §3/§6 — *invocation* setup the GUI does
+target. This is the same class as §1/§4 — *invocation* setup the GUI does
 that the headless path skipped, not an engine defect we provoke.
 
 **Fix.** In `slic3r_slice` — pass a local `StringObjectException` sink to
@@ -378,7 +321,7 @@ all ~20 sites — none can deref null. Mirrors the GUI exactly.
 
 ---
 
-## 9. Short per-filament vectors crash MMU segmentation (guarded Rust-side)
+## 7. Short per-filament vectors crash MMU segmentation (guarded Rust-side)
 
 **Symptom.** A multi-material slice whose `filament_colour` (or any other
 per-filament vector) carries *fewer* elements than the printer has filaments
@@ -399,7 +342,7 @@ guarantees this by construction); a short one is undefined behavior. Unlike
 the broadcast-on-`get_at` clamp libslic3r applies elsewhere, the segmentation
 path indexes raw, so the lengths must match exactly.
 
-**Fix (Rust-side, not the shim).** Unlike workarounds 1–8, this guard lives
+**Fix (Rust-side, not the shim).** Unlike workarounds 1–6, this guard lives
 in our adapter, not the FFI shim — it polices what we *send* libslic3r rather
 than patching libslic3r itself.
 `src-tauri/src/core/cascade_adapter/adapter.rs::check_filament_vector_lengths`
@@ -417,9 +360,9 @@ through. Element counting is cstyle-aware
 `;`-comments embedded in `filament_start_gcode` / `_end_gcode` string vectors
 aren't miscounted into a spurious failure.
 
-This complements workaround 4 (the shim-side `filament_map` /
-`nozzle_volume_type` sizing): §4 sizes vectors *up* inside the shim before
-`apply` for the dimensions the GUI would have sized; §9 *rejects* a
+This complements workaround 2 (the shim-side `filament_map` /
+`nozzle_volume_type` sizing): §2 sizes vectors *up* inside the shim before
+`apply` for the dimensions the GUI would have sized; §7 *rejects* a
 genuinely-inconsistent short filament vector before it ever reaches the
 engine, instead of guessing the missing values.
 
@@ -429,37 +372,26 @@ engine, instead of guessing the missing values.
 
 Re-verify each workaround:
 
-1. Does `temporary_dir()` still default to `/orcaslicer_model`? If
-   upstream fixed it (e.g. set a sensible default in
-   `libslic3r_static_initializer`), our `set_temporary_dir` becomes
-   redundant but harmless.
-
-2. Does `Model::read_from_file`'s default options still exclude
-   `LoadModel`? Check
-   `external/OrcaSlicer/src/libslic3r/Model.cpp:read_from_file`. If
-   the default changed, our explicit `LoadStrategy::LoadModel | ...`
-   is still correct.
-
-3. Does `Print::m_isBBLPrinter` still lack an initializer? Check the
+1. Does `Print::m_isBBLPrinter` still lack an initializer? Check the
    `m_isBBLPrinter` declaration in `Print.hpp`. If they fixed it
    (`bool m_isBBLPrinter = false;`),
    our explicit set is still needed because the flag's *semantics*
    depend on the printer profile.
 
-4. Did upstream add a "headless slice setup" API on `Print` that
+2. Did upstream add a "headless slice setup" API on `Print` that
    normalizes filament_map / nozzle_volume_type / wall_filament for
    us? Look for new public methods on `Print` near apply().
    `print->set_check_multi_filaments_compatibility(...)`,
    `set_filament_maps(...)`, etc. — if such a helper exists and is
    maintained for non-GUI use, prefer it over our manual normalization.
 
-5. Does the coEnums serializer still dereference a null `keys_map`?
+3. Does the coEnums serializer still dereference a null `keys_map`?
    The fix upstream would be to pass `enum_keys_map` through
    `set_default_value`. Check `ConfigOptionEnumsGeneric::set_default_value`
    if it exists, or the def's `set_default_value` overload.
 
-6. Does MMU segmentation still index per-filament vectors raw against
-   `filament_diameter.size()` (§9)? Check `apply_mm_segmentation`
+4. Does MMU segmentation still index per-filament vectors raw against
+   `filament_diameter.size()` (§7)? Check `apply_mm_segmentation`
    (`PrintObjectSlice.cpp`) and `multi_material_segmentation_by_painting`
    (`MultiMaterialSegmentation.cpp`). If upstream added a clamp/broadcast on
    the short-vector path, our adapter guard becomes belt-and-suspenders but

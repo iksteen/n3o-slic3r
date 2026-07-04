@@ -76,6 +76,22 @@ pub fn run() {
             // and 3MF load without it. Log level 3 = warning, matching
             // OrcaSlicer's CLI default.
             init(None, 3).expect("libslic3r init failed");
+            // Forward libslic3r's own log records into `tracing` — otherwise the
+            // shim's callback sink swallows them (it displaces boost.log's default
+            // console sink). Level must map to a static macro; `event!` can't take
+            // a runtime `Level`.
+            slic3r_ffi::set_log_sink(|level, msg| {
+                use slic3r_ffi::LogLevel;
+                match level {
+                    LogLevel::Trace => tracing::trace!(target: "libslic3r", "{msg}"),
+                    LogLevel::Debug => tracing::debug!(target: "libslic3r", "{msg}"),
+                    LogLevel::Info => tracing::info!(target: "libslic3r", "{msg}"),
+                    LogLevel::Warning => tracing::warn!(target: "libslic3r", "{msg}"),
+                    LogLevel::Error | LogLevel::Fatal => {
+                        tracing::error!(target: "libslic3r", "{msg}")
+                    }
+                }
+            });
             tracing::info!("libslic3r initialized");
 
             // Resolve the bundled-resources root once: the shipped trees
@@ -266,7 +282,6 @@ pub fn run() {
             core::project::commands::user_process_revert,
             core::project::commands::user_process_delete,
             core::project::commands::plate_cascade_resolve,
-            core::project::commands::plate_cascade_trace,
             core::project::commands::project_set_material_slot,
             core::project::commands::project_clear_material_slot,
             core::project::commands::project_save,

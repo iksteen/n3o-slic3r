@@ -18,7 +18,3 @@ bindgen = "0.72"
 [[example]]
 name = "introspect"
 path = "examples/introspect.rs"
-
-[[example]]
-name = "slice"
-path = "examples/slice.rs"

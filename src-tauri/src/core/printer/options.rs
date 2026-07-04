@@ -97,8 +97,8 @@ impl DefaultValue {
     /// shape based on the option's [`OptType`].
     ///
     /// Vector types go through type-specific deserialization:
-    ///   - `Strings` → `unescape_strings_cstyle` (`;`-split with
-    ///     quote handling), mirroring libslic3r's own deserializer.
+    ///   - `Strings` → libslic3r's own `unescape_strings_cstyle` over the
+    ///     FFI (`;`-split with quote handling), so it matches the engine.
     ///   - other vectors → simple comma split.
     pub fn from_serialized(ty: OptType, serialized: &str) -> Self {
         if !ty.is_vector() {
@@ -107,7 +107,14 @@ impl DefaultValue {
             };
         }
         let values = if matches!(ty, OptType::Strings) {
-            unescape_strings_cstyle(serialized)
+            slic3r_ffi::unescape_strings_cstyle(serialized).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "cstyle unescape failed; naive `;` split");
+                if serialized.is_empty() {
+                    Vec::new()
+                } else {
+                    serialized.split(';').map(str::to_owned).collect()
+                }
+            })
         } else if serialized.is_empty() {
             Vec::new()
         } else {
@@ -115,65 +122,6 @@ impl DefaultValue {
         };
         Self::Vector { values }
     }
-}
-
-/// Mirror of libslic3r's `unescape_strings_cstyle` (Config.cpp:146).
-///
-/// Splits a serialized `coStrings` value into its entries:
-/// `;`-separated, leading whitespace skipped per entry, quoted
-/// entries (`"..."`) c-style-unescape `\n`/`\r`/`\\`/`\"`.
-fn unescape_strings_cstyle(s: &str) -> Vec<String> {
-    let bytes = s.as_bytes();
-    let mut out: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        // Skip leading whitespace.
-        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-            i += 1;
-        }
-        if i >= bytes.len() {
-            break;
-        }
-        let mut buf: Vec<u8> = Vec::new();
-        if bytes[i] == b'"' {
-            i += 1;
-            while i < bytes.len() && bytes[i] != b'"' {
-                if bytes[i] == b'\\' && i + 1 < bytes.len() {
-                    i += 1;
-                    match bytes[i] {
-                        b'n' => buf.push(b'\n'),
-                        b'r' => buf.push(b'\r'),
-                        c => buf.push(c),
-                    }
-                    i += 1;
-                } else {
-                    buf.push(bytes[i]);
-                    i += 1;
-                }
-            }
-            if i < bytes.len() {
-                i += 1; // closing quote
-            }
-        } else {
-            while i < bytes.len() && bytes[i] != b';' {
-                buf.push(bytes[i]);
-                i += 1;
-            }
-        }
-        out.push(String::from_utf8_lossy(&buf).into_owned());
-        // Skip whitespace before the separator.
-        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-            i += 1;
-        }
-        if i < bytes.len() && bytes[i] == b';' {
-            i += 1;
-            if i == bytes.len() {
-                // Trailing `;` → one empty entry (matches libslic3r).
-                out.push(String::new());
-            }
-        }
-    }
-    out
 }
 
 #[derive(Serialize)]

@@ -97,24 +97,6 @@ pub fn plate_cascade_resolve(
     super::resolve::resolve_plate_cascade(&p, plate_id)
 }
 
-/// Trace why a resolved key holds its value on a plate: which tier (cascade /
-/// user / project) won, the cascade fallback if an override took over, and
-/// the matching authored rules. Powers the settings panel's "why is X = Y"
-/// affordance. `None` when the plate is unbound or the key isn't resolved.
-#[tauri::command]
-#[tracing::instrument(skip(state))]
-pub fn plate_cascade_trace(
-    plate_id: PlateId,
-    key: String,
-    state: State<Arc<Mutex<Project>>>,
-) -> Result<Option<crate::core::cascade::Trace>, String> {
-    let p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    match super::resolve::resolve_plate_with_tiers(&p, plate_id)? {
-        Some(resolved) => Ok(crate::core::cascade::trace(&resolved, &key)),
-        None => Ok(None),
-    }
-}
-
 /// Set (or clear, with `None`) a plate's process/quality profile —
 /// the bundled process-fragment slug this plate resolves + slices
 /// against, overriding the bound instance's default. Validated against

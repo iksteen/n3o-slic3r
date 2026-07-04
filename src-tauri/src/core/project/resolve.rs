@@ -208,40 +208,6 @@ fn compose_instance_cascade_and_ctx(
     Ok((cascade, ctx))
 }
 
-/// Resolve a plate's cascade with the project's full override tiers — the
-/// project-wide `Project.user_overrides` (user tier) and the plate's
-/// `Plate.project_overrides` (project tier) — keeping per-key provenance so
-/// [`plate_cascade_trace`](super::commands::plate_cascade_trace) can
-/// attribute each value to its winning tier. Object tier is deferred
-/// (slice-time per-object overrides aren't wired). `None` for an unbound
-/// plate. Mirrors the slice path's tier set.
-pub(crate) fn resolve_plate_with_tiers(
-    p: &Project,
-    plate_id: PlateId,
-) -> Result<Option<crate::core::cascade::ResolvedOverrides>, String> {
-    let plate = p
-        .plate(plate_id)
-        .ok_or_else(|| format!("unknown plate id {plate_id:?}"))?;
-    let Some(instance_id) = plate.printer_instance_id() else {
-        return Ok(None);
-    };
-    let instance = crate::core::printer::lookup_instance(instance_id)
-        .ok_or_else(|| format!("unknown printer instance `{instance_id}`"))?;
-    let (cascade, ctx) =
-        compose_instance_cascade_and_ctx(&instance, plate.quality_profile.as_deref())?;
-    let to_btree = |m: &std::collections::HashMap<String, String>| {
-        m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-    };
-    let tiers = crate::core::cascade::OverrideTiers {
-        user: tier("<user-overrides>", &to_btree(&p.user_overrides)),
-        project: tier("<project-overrides>", &to_btree(&plate.project_overrides)),
-        object: None,
-    };
-    Ok(Some(crate::core::cascade::resolve_with_overrides(
-        &cascade, &tiers, &ctx,
-    )))
-}
-
 /// Wrap a flat override map as a single-source override tier labeled
 /// `label`, or an empty tier when there's nothing to override.
 fn tier(
@@ -435,40 +401,6 @@ mod tests {
         let ow = resolved.entries.get("outer_wall_speed").expect("present");
         assert_eq!(ow.value, "60", "the plate's own process wins");
         assert_eq!(ow.source_layer.as_deref(), Some("user"));
-    }
-
-    /// C-1 — the trace resolves with the full override tiers and attributes
-    /// an overridden key to its winning tier (here: a plate `project_override`
-    /// → the project tier), with the cascade value preserved as the fallback.
-    #[test]
-    fn trace_attributes_a_project_override_to_the_project_tier() {
-        use crate::core::cascade::OverrideTier;
-        let _ = slic3r_ffi::init(None, 3);
-        let mut project = Project::default();
-        let plate_id = project.plates[0].id;
-        // The fragment-resolved layer_height (the cascade fallback).
-        let base = resolve_plate_cascade(&project, plate_id)
-            .expect("resolve")
-            .entries
-            .get("layer_height")
-            .expect("layer_height resolved")
-            .value
-            .clone();
-        // Override it at the plate (project) tier.
-        project.plates[0]
-            .project_overrides
-            .insert("layer_height".into(), "0.28".into());
-
-        let resolved = resolve_plate_with_tiers(&project, plate_id)
-            .expect("resolve")
-            .expect("plate is bound");
-        let t = crate::core::cascade::trace(&resolved, "layer_height").expect("traced");
-        assert_eq!(t.effective_value, "0.28");
-        assert_eq!(
-            t.override_source.as_ref().map(|o| o.tier),
-            Some(OverrideTier::Project),
-        );
-        assert_eq!(t.cascade_fallback.as_deref(), Some(base.as_str()));
     }
 
     /// Add a cube on the active plate assigned to `material` (its 1-based

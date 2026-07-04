@@ -1,18 +1,17 @@
 //! Integration tests for the slic3r-ffi public API.
 //!
 //! Smoke coverage for init, option introspection, Config set/get/validate,
-//! and Model loading. Slicing itself is exercised by examples/slice.rs and
-//! isn't repeated here — it's slow and the failure modes are easier to
-//! debug as an interactive example than as a test panic.
+//! and end-to-end slicing (progress callbacks, the log sink, and
+//! thread-serialized concurrent slices) driven off an in-memory cube added
+//! through the production `add_object` entry point.
 //!
 //! First run is slow because `cargo test` triggers the crate's build.rs
 //! and cmake builds libslic3r and the shim. Subsequent runs are fast.
 
 use slic3r_ffi::{
-    bucket_of, clear_log_sink, init, option_def, option_defs, set_log_sink, slice, version, Config,
-    ErrorKind, LogLevel, Model, OptBucket, OptType,
+    bucket_of, clear_log_sink, escape_strings_cstyle, init, option_def, option_defs, set_log_sink,
+    slice, unescape_strings_cstyle, version, Config, ErrorKind, LogLevel, Model, OptBucket, OptType,
 };
-use std::path::PathBuf;
 use std::sync::Once;
 
 // libslic3r's init has an internal Once guard, but we still gate via our
@@ -33,15 +32,36 @@ fn ensure_init() {
 // slice() per call.
 static LOG_SINK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn test_stl() -> PathBuf {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../external/OrcaSlicer/tests/data/test_stl/ASCII/20mmbox-LF.stl");
-    assert!(
-        p.exists(),
-        "test fixture {} missing — run `git submodule update --init --recursive`",
-        p.display()
-    );
-    p
+const IDENTITY: [f64; 16] = [
+    1.0, 0.0, 0.0, 0.0, //
+    0.0, 1.0, 0.0, 0.0, //
+    0.0, 0.0, 1.0, 0.0, //
+    0.0, 0.0, 0.0, 1.0,
+];
+
+/// A 20 mm cube added through the production `add_object` entry point — the
+/// geometry fixture for the slice/log tests. Replaces loading an STL through
+/// the engine, a path the shim no longer exposes.
+fn box_model() -> Model {
+    let mut m = Model::new().expect("Model::new");
+    #[rustfmt::skip]
+    let verts: [f32; 24] = [
+        0.0, 0.0, 0.0,   20.0, 0.0, 0.0,   20.0, 20.0, 0.0,   0.0, 20.0, 0.0,
+        0.0, 0.0, 20.0,  20.0, 0.0, 20.0,  20.0, 20.0, 20.0,  0.0, 20.0, 20.0,
+    ];
+    // Consistent outward winding, one quad (two tris) per face.
+    #[rustfmt::skip]
+    let indices: [u32; 36] = [
+        0, 2, 1,  0, 3, 2,   // -Z
+        4, 5, 6,  4, 6, 7,   // +Z
+        0, 1, 5,  0, 5, 4,   // -Y
+        2, 3, 7,  2, 7, 6,   // +Y
+        0, 4, 7,  0, 7, 3,   // -X
+        1, 2, 6,  1, 6, 5,   // +X
+    ];
+    m.add_object("box", &verts, &indices, &IDENTITY, 1, &[], &[])
+        .expect("add_object box");
+    m
 }
 
 #[test]
@@ -50,6 +70,31 @@ fn version_is_nonempty() {
     let v = version();
     assert!(!v.is_empty(), "version() returned empty string");
     assert!(v.contains("slic3r"), "unexpected version banner: {v:?}");
+}
+
+#[test]
+fn cstyle_round_trip_matches_libslic3r() {
+    // A lone empty element is quoted (`""`) so it round-trips to one element —
+    // the divergence the old Rust hand-port dropped to zero elements.
+    let one_empty = vec![String::new()];
+    let esc = escape_strings_cstyle(&one_empty).expect("escape");
+    assert_eq!(esc, "\"\"");
+    assert_eq!(unescape_strings_cstyle(&esc).expect("unescape"), one_empty);
+
+    // An embedded `;` and whitespace stay inside the quoted element.
+    let v = vec!["a; b".to_string(), "c".to_string()];
+    let esc2 = escape_strings_cstyle(&v).expect("escape");
+    assert_eq!(unescape_strings_cstyle(&esc2).expect("unescape"), v);
+
+    // Empty input ⇄ empty vec.
+    assert_eq!(escape_strings_cstyle(&[]).expect("escape"), "");
+    assert!(unescape_strings_cstyle("").expect("unescape").is_empty());
+
+    // Malformed input (unterminated quote) is reported, not silently truncated.
+    assert_eq!(
+        unescape_strings_cstyle("\"unterminated").unwrap_err().kind,
+        ErrorKind::ParseValue,
+    );
 }
 
 #[test]
@@ -271,37 +316,6 @@ fn config_validate_runs_cleanly() {
 }
 
 #[test]
-fn model_load_missing_file_is_io_error() {
-    ensure_init();
-    let mut m = Model::new().expect("Model::new");
-    let err = m
-        .load("/nonexistent/no_such_dir/no_such_file.stl")
-        .unwrap_err();
-    assert_eq!(err.kind, ErrorKind::Io);
-}
-
-#[test]
-fn model_load_test_stl() {
-    ensure_init();
-    let mut m = Model::new().expect("Model::new");
-    m.load(test_stl()).expect("load 20mmbox-LF.stl");
-}
-
-#[test]
-fn load_with_config_stl_keeps_defaults() {
-    ensure_init();
-    // STL files carry no embedded config. load_with_config should leave
-    // the caller's config untouched, per the API contract.
-    let mut cfg = Config::new().expect("Config::new");
-    let before = cfg.get("layer_height").expect("get before");
-    let mut m = Model::new().expect("Model::new");
-    m.load_with_config(test_stl(), &mut cfg)
-        .expect("load_with_config");
-    let after = cfg.get("layer_height").expect("get after");
-    assert_eq!(before, after, "STL load should not modify config");
-}
-
-#[test]
 fn slice_progress_callback_fires_with_monotonic_percent() {
     use std::cell::RefCell;
 
@@ -312,11 +326,8 @@ fn slice_progress_callback_fires_with_monotonic_percent() {
     // fires from the calling thread (slice() is synchronous).
     let ticks: RefCell<Vec<(i32, String)>> = RefCell::new(Vec::new());
 
-    let mut model = Model::new().expect("Model::new");
+    let model = box_model();
     let mut config = Config::new().expect("Config::new");
-    model
-        .load_with_config(test_stl(), &mut config)
-        .expect("load 20mmbox-LF.stl");
     // FullPrintConfig defaults set `use_relative_e_distances=true`,
     // which triggers a validate-time check for `G92 E0` in
     // `layer_gcode`. Flip to absolute so the default validation
@@ -385,11 +396,8 @@ fn log_sink_receives_records_emitted_during_slice() {
     // (info), the level the test fixture initializes with. The
     // exact count is fragile (depends on upstream verbosity), but
     // "at least one record" is stable.
-    let mut model = Model::new().expect("Model::new");
+    let model = box_model();
     let mut config = Config::new().expect("Config::new");
-    model
-        .load_with_config(test_stl(), &mut config)
-        .expect("load");
     config
         .set("use_relative_e_distances", "0")
         .expect("set use_relative_e_distances");
@@ -426,11 +434,8 @@ fn log_sink_can_be_unregistered() {
         *counter_for_cb.lock().unwrap() += 1;
     });
 
-    let mut model = Model::new().expect("Model::new");
+    let model = box_model();
     let mut config = Config::new().expect("Config::new");
-    model
-        .load_with_config(test_stl(), &mut config)
-        .expect("load");
     config
         .set("use_relative_e_distances", "0")
         .expect("set use_relative_e_distances");
@@ -463,11 +468,8 @@ fn slice_progress_callbacks_are_per_call_no_cross_contamination() {
 
     ensure_init();
 
-    let mut model = Model::new().expect("Model::new");
+    let model = box_model();
     let mut config = Config::new().expect("Config::new");
-    model
-        .load_with_config(test_stl(), &mut config)
-        .expect("load");
     config
         .set("use_relative_e_distances", "0")
         .expect("set use_relative_e_distances");
@@ -540,11 +542,8 @@ fn two_slices_in_separate_threads_serialize_cleanly() {
     let make_inputs = |layer_height: &'static str,
                        out_name: &'static str|
      -> (Model, Config, std::path::PathBuf) {
-        let mut model = Model::new().expect("Model::new");
+        let model = box_model();
         let mut config = Config::new().expect("Config::new");
-        model
-            .load_with_config(test_stl(), &mut config)
-            .expect("load 20mmbox-LF.stl");
         config
             .set("use_relative_e_distances", "0")
             .expect("set use_relative_e_distances");
