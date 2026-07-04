@@ -13,12 +13,16 @@ import {
   computeChanged,
   computeSectionDirty,
   initialDraft,
+  MACHINE_PAGE_ORDER,
+  orderGroupsOtherLast,
 } from "../printerSettingsHelpers";
 import {
   validateBambuConnection,
   validateU1Connection,
 } from "../connectionValidation";
 import type { ConnectionInfo, PrinterInstance } from "../printerInstance";
+import { categorize } from "../../settings/nav/categories";
+import type { OptionSummary } from "../../settings/types";
 
 // `driverKindFor` was removed in F9 — driver_kind is authored in
 // each printer's model.toml and carried through onto PrinterProfile
@@ -211,5 +215,48 @@ describe("validateU1Connection", () => {
   });
   it("rejects empty host", () => {
     expect(validateU1Connection("", 80)?.field).toBe("host");
+  });
+});
+
+describe("machine settings page order", () => {
+  const opt = (key: string, category: string): OptionSummary => ({
+    key,
+    ty: "Float",
+    label: key,
+    category,
+    group: null,
+    default_value: { kind: "scalar", value: "0" },
+    multiline: false,
+    is_color: false,
+    enum_values: [],
+    tooltip: null,
+    sidetext: null,
+    mode: "simple",
+    scope: { project: false, object: false, region: true },
+    capability: null,
+  });
+
+  it("keeps Notes last, ahead of the build_unregular_pages pages", () => {
+    // Options arrive display-order-sorted. `printer_notes` (Orca pos 497)
+    // precedes the Motion ability / Multimaterial keys (515/525) because those
+    // pages are coded in build_unregular_pages, after the Notes page — so naive
+    // first-appearance would render Notes first. The curated order overrides it.
+    const opts = [
+      opt("printable_area", "Basic information"),
+      opt("machine_start_gcode", "Machine G-code"),
+      opt("printer_notes", "Notes"),
+      opt("emit_machine_limits_to_gcode", "Motion ability"),
+      opt("single_extruder_multi_material", "Multimaterial"),
+    ];
+    const ids = orderGroupsOtherLast(
+      categorize(opts, MACHINE_PAGE_ORDER),
+    ).map((g) => g.id);
+    expect(ids).toEqual([
+      "Basic information",
+      "Machine G-code",
+      "Multimaterial",
+      "Motion ability",
+      "Notes",
+    ]);
   });
 });

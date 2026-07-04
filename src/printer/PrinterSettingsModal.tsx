@@ -38,6 +38,7 @@ import {
   driverKindFromProfile,
   draftToConnection,
   initialDraft,
+  MACHINE_PAGE_ORDER,
   orderGroupsOtherLast,
   validateDraftConnection,
   type Draft,
@@ -127,11 +128,12 @@ export function PrinterSettingsModal({
   // is a left-nav category; overrides persist live to `config_overrides`.
   const { options: machineOptions } = useMachineOptions(profile);
   const { options: extruderOptions } = useExtruderOptions(profile);
-  // Empty pinned order: printer pages carry their own Orca Tab order via
-  // display-order sort, so categorize by first-appearance (not CATEGORY_ORDER,
-  // which is the Process panel's list and would yank "Machine limits" first).
+  // Machine pages follow a curated Orca order (MACHINE_PAGE_ORDER): the
+  // display-order scrape can't place the `build_unregular_pages` pages (Motion
+  // ability, Multimaterial), which render before Notes despite being coded
+  // after it, so first-appearance would sort Notes ahead of them.
   const machineGroups = useMemo(
-    () => orderGroupsOtherLast(categorize(machineOptions, [])),
+    () => orderGroupsOtherLast(categorize(machineOptions, MACHINE_PAGE_ORDER)),
     [machineOptions],
   );
   // The per-extruder option set is identical across toolheads; only the

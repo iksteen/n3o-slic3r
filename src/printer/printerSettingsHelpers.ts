@@ -15,6 +15,20 @@ import {
  *  Default Moonraker port matches the existing PrinterCredentialsDialog. */
 export const DEFAULT_U1_PORT = 80;
 
+/** OrcaSlicer's machine-settings page order. NOT derivable from the
+ *  display-order scrape: Motion ability and Multimaterial are built in
+ *  `TabPrinter::build_unregular_pages` (which runs *after* the Notes page in
+ *  Tab.cpp) but `m_pages.insert`-ed to render *before* Notes — so a file-order
+ *  scrape can't place them, and Notes would otherwise sort ahead of them.
+ *  Extruder pages are omitted (n3o extracts them into their own tabs). */
+export const MACHINE_PAGE_ORDER = [
+  "Basic information",
+  "Machine G-code",
+  "Multimaterial",
+  "Motion ability",
+  "Notes",
+] as const;
+
 /** categorize() emits canonical categories (incl. the "Other" catch-all)
  *  before the scraped TabPrinter pages; push "Other"/"Others" last so the
  *  real pages lead in the printer-settings nav. */
