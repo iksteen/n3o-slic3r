@@ -19,6 +19,7 @@ import {
   type PrinterAwareOptionSummary,
 } from "../settings/types";
 import { elemOverridden, setVecElem, vecElem } from "./vectorOverride";
+import { firmwareHiddenKeys } from "./printerSettingsHelpers";
 
 export interface MachineSettingsSectionProps {
   settings: PrinterAwareOptionSummary[];
@@ -41,7 +42,13 @@ export function MachineSettingsSection({
   onSet,
   onClear,
 }: MachineSettingsSectionProps): React.JSX.Element {
-  const visible = settings.filter((s) => !s.hidden);
+  // Orca hides some Motion ability rows outright based on the printer's
+  // gcode flavor (junction deviation, input shaping, accel-travel). The
+  // effective flavor is the user override, else the resolved base.
+  const fwHidden = firmwareHiddenKeys(
+    overrides["gcode_flavor"] ?? resolved["gcode_flavor"],
+  );
+  const visible = settings.filter((s) => !s.hidden && !fwHidden.has(s.key));
 
   // Group rows by their optgroup sub-group (e.g. "Printable space" under
   // "Basic information"), preserving first-seen order. Ungrouped rows

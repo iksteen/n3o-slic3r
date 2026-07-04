@@ -40,6 +40,39 @@ export function orderGroupsOtherLast<T extends { id: string }>(groups: T[]): T[]
   ];
 }
 
+/** Motion ability rows OrcaSlicer hides entirely (its `toggle_line` calls in
+ *  `TabPrinter::toggle_lines`), keyed on the printer's resolved `gcode_flavor`.
+ *  These are firmware-specific: acceleration-travel isn't emitted by Marlin
+ *  legacy / Klipper; junction deviation is Marlin-firmware only; input shaping
+ *  is Marlin-firmware / RepRap-firmware only. Flavor strings are libslic3r's
+ *  serialized enum keys ("marlin" = Marlin legacy, "marlin2" = Marlin firmware).
+ *  `toggle_option` (grey-but-visible) is intentionally NOT mirrored — only the
+ *  rows Orca removes from the page. */
+const INPUT_SHAPING_KEYS = [
+  "input_shaping_emit",
+  "input_shaping_type",
+  "input_shaping_freq_x",
+  "input_shaping_freq_y",
+  "input_shaping_damp_x",
+  "input_shaping_damp_y",
+];
+
+export function firmwareHiddenKeys(
+  gcodeFlavor: string | undefined,
+): ReadonlySet<string> {
+  const isMarlinLegacy = gcodeFlavor === "marlin";
+  const isMarlinFirmware = gcodeFlavor === "marlin2";
+  const isKlipper = gcodeFlavor === "klipper";
+  const isReprapFirmware = gcodeFlavor === "reprapfirmware";
+  const hidden = new Set<string>();
+  if (isMarlinLegacy || isKlipper) hidden.add("machine_max_acceleration_travel");
+  if (!isMarlinFirmware) hidden.add("machine_max_junction_deviation");
+  if (!(isMarlinFirmware || isReprapFirmware)) {
+    for (const k of INPUT_SHAPING_KEYS) hidden.add(k);
+  }
+  return hidden;
+}
+
 /** Notes is OrcaSlicer's terminal printer page. Pin it last unconditionally so
  *  no un-pinned section (a page not in MACHINE_PAGE_ORDER) can render below it —
  *  the invariant the curated MACHINE_PAGE_ORDER alone couldn't guarantee. */

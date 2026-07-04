@@ -16,6 +16,7 @@ import {
   MACHINE_PAGE_ORDER,
   orderGroupsOtherLast,
   notesLast,
+  firmwareHiddenKeys,
 } from "../printerSettingsHelpers";
 import {
   validateBambuConnection,
@@ -216,6 +217,36 @@ describe("validateU1Connection", () => {
   });
   it("rejects empty host", () => {
     expect(validateU1Connection("", 80)?.field).toBe("host");
+  });
+});
+
+describe("firmwareHiddenKeys", () => {
+  it("hides junction deviation + input shaping + accel-travel for Marlin legacy", () => {
+    const h = firmwareHiddenKeys("marlin");
+    expect(h.has("machine_max_acceleration_travel")).toBe(true);
+    expect(h.has("machine_max_junction_deviation")).toBe(true);
+    expect(h.has("input_shaping_freq_x")).toBe(true);
+  });
+
+  it("shows all Motion ability rows for Marlin firmware", () => {
+    const h = firmwareHiddenKeys("marlin2");
+    expect(h.has("machine_max_acceleration_travel")).toBe(false);
+    expect(h.has("machine_max_junction_deviation")).toBe(false);
+    expect(h.has("input_shaping_damp_y")).toBe(false);
+  });
+
+  it("hides accel-travel + junction + input shaping for Klipper", () => {
+    const h = firmwareHiddenKeys("klipper");
+    expect(h.has("machine_max_acceleration_travel")).toBe(true);
+    expect(h.has("machine_max_junction_deviation")).toBe(true);
+    expect(h.has("input_shaping_type")).toBe(true);
+  });
+
+  it("keeps input shaping but hides junction deviation for RepRap firmware", () => {
+    const h = firmwareHiddenKeys("reprapfirmware");
+    expect(h.has("machine_max_acceleration_travel")).toBe(false);
+    expect(h.has("machine_max_junction_deviation")).toBe(true);
+    expect(h.has("input_shaping_emit")).toBe(false);
   });
 });
 

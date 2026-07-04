@@ -198,7 +198,10 @@ fn summary_from_def(d: slic3r_ffi::OptionDef) -> OptionSummary {
         group: slic3r_ffi::printer_subgroup_of(&d.key).map(str::to_owned),
         key: d.key,
         ty: format!("{:?}", d.ty),
-        label: d.label,
+        // The machine_max_* families set only `full_label` ("Maximum speed X"),
+        // no `label` — Orca renders those rows from full_label. Fall back to it
+        // so they don't surface the raw key.
+        label: d.label.filter(|l| !l.is_empty()).or(d.full_label),
         category: d.category,
         default_value,
         multiline: d.multiline,
@@ -652,14 +655,20 @@ mod tests {
                 .into_iter()
                 .map(|s| (s.key.clone(), s))
                 .collect();
-        for (key, group) in [
-            ("machine_max_speed_x", "Speed limitation"),
-            ("machine_max_acceleration_x", "Acceleration limitation"),
-            ("machine_max_jerk_x", "Jerk limitation"),
+        for (key, group, label) in [
+            ("machine_max_speed_x", "Speed limitation", "Maximum speed X"),
+            (
+                "machine_max_acceleration_x",
+                "Acceleration limitation",
+                "Maximum acceleration X",
+            ),
+            ("machine_max_jerk_x", "Jerk limitation", "Maximum jerk X"),
         ] {
             let s = by_key.get(key).unwrap_or_else(|| panic!("missing {key}"));
             assert_eq!(s.category.as_deref(), Some("Motion ability"), "{key}");
             assert_eq!(s.group.as_deref(), Some(group), "{key}");
+            // These defs set only full_label; the row must not show the raw key.
+            assert_eq!(s.label.as_deref(), Some(label), "{key}");
         }
         assert!(
             machine_option_summaries(None)
