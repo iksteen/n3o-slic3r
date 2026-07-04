@@ -163,15 +163,7 @@ pub fn save_to(cfg: &AppConfig, path: &Path) -> io::Result<()> {
     }
     let body =
         toml::to_string_pretty(cfg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, body)?;
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    Ok(())
+    crate::core::paths::atomic_write(path, body.as_bytes())
 }
 
 #[cfg(test)]

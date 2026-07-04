@@ -106,12 +106,9 @@ pub fn save_to(root: &Path, instance_id: &str, token: &SnapToken) -> std::io::Re
     let path = token_path(root, instance_id);
     let body = serde_json::to_vec_pretty(token)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    // Atomic-ish: write a temp sibling then rename, so a crash mid-write
-    // never leaves a half-written credential file.
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &body)?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
+    // Atomic: temp sibling then rename, so a crash mid-write never leaves a
+    // half-written credential file.
+    crate::core::paths::atomic_write(&path, &body)
 }
 
 pub fn delete_from(root: &Path, instance_id: &str) -> std::io::Result<()> {

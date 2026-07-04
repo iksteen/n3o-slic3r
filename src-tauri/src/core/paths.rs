@@ -1,6 +1,22 @@
 //! Shared filesystem locations for n3o-slic3r's per-user data.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Write `bytes` to `path` atomically: stage to a sibling temp file, then
+/// rename over `path` (atomic within a directory on POSIX). The original is
+/// untouched unless the rename succeeds; the temp is cleaned up on failure.
+/// Callers needing the parent directory should `create_dir_all` first.
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut tmp_os = path.as_os_str().to_owned();
+    tmp_os.push(".tmp");
+    let tmp = PathBuf::from(tmp_os);
+    std::fs::write(&tmp, bytes)?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
 
 /// Per-user data directory for `subdir` — e.g. `data_dir("plugins")` →
 /// `$XDG_DATA_HOME/n3o-slic3r/plugins`, or `~/.local/share/...`, or a

@@ -1356,6 +1356,13 @@ impl ViewportRenderer {
         // --- gather under the project lock (cheap): bed + per-object models ---
         let (bmin, bmax, draws, boxes, gizmo, basis, drag_pre, active_plate_id, tower_geom) = {
             let p = project.lock().unwrap();
+            // Reconcile the GPU mesh cache with the Project's live registry.
+            // Deleted objects, cut pieces, and re-cuts orphan their meshes (the
+            // Project GCs them via prune_orphan_meshes), but this cache only ever
+            // grew — leaking vertex+index buffers for the session. Every entry is
+            // uploaded from `p.meshes`, so the registry keyset is the exact live
+            // set; drop anything no longer in it. Once per frame, lock held.
+            self.meshes.retain(|id, _| p.meshes.contains_key(id));
             let plate = p.active_plate();
             let active_plate_id = plate.id;
             let (bmin, bmax) = plate

@@ -251,8 +251,12 @@ pub fn printer_instance_delete_with_reassign(
             all_events.extend(events);
         }
     }
-    delete_instance(&id).map_err(|e| e.to_string())?;
+    // Emit the rebinds before the delete's `?`: the plates are already mutated
+    // in the backing project, so the frontend mirror must reflect them even if
+    // `delete_instance` then fails (stale/duplicate id, concurrent delete) —
+    // otherwise it shows the old binding until the next snapshot.
     crate::core::scene::commands::emit_all(&window, &all_events);
+    delete_instance(&id).map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &id);
     Ok(())
 }

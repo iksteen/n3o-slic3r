@@ -87,11 +87,22 @@ pub fn ray_seg_dist(ro: Vec3, rd: Vec3, a: Vec3, b: Vec3) -> (f32, f32) {
 /// Map the offscreen readback buffer into tight RGBA8, top row first
 /// (strips the 256-byte row padding `make_targets` allocated).
 pub fn read_rgba(device: &wgpu::Device, readback: &wgpu::Buffer, padded_bpr: u32, w: u32, h: u32) -> Vec<u8> {
-    let slice = readback.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |_| {});
-    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-    let mapped = slice.get_mapped_range();
     let row = (w * 4) as usize;
+    let blank = vec![0u8; row * h as usize];
+    let slice = readback.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |res| {
+        let _ = tx.send(res);
+    });
+    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    // Degrade to a blank frame on map failure / device loss / GPU reset (TDR)
+    // instead of panicking in `get_mapped_range`: this runs on the synchronous
+    // IPC path with the `ViewportState` guard held, so a panic here poisons the
+    // managed Mutex and bricks every later frame/thumbnail/tower command.
+    if !matches!(rx.try_recv(), Ok(Ok(()))) {
+        return blank;
+    }
+    let mapped = slice.get_mapped_range();
     let mut out = vec![0u8; row * h as usize];
     for y in 0..h as usize {
         let src = y * padded_bpr as usize;

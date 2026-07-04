@@ -18,7 +18,7 @@ use tokio::sync::{mpsc, watch};
 #[cfg(test)]
 use crate::core::driver::status::BambuExtra;
 use crate::core::driver::status::{
-    ConnectionState, DriverExtra, JobProgress, JobState, PrinterStatus, TempReading,
+    DriverExtra, JobProgress, JobState, PrinterStatus, TempReading,
 };
 
 mod de {
@@ -703,13 +703,6 @@ pub async fn run_worker(
                         // idempotent); AMS is placeholder-gated.
                         acc.merge(msg.print);
                         merge_into(snapshot, acc.clone());
-                        // Connection state can't go backwards from
-                        // Connected; reset to Connected on first
-                        // successful merge in case backoff left a
-                        // stale Reconnecting state.
-                        if !matches!(snapshot.connection, ConnectionState::Connected) {
-                            snapshot.connection = ConnectionState::Connected;
-                        }
                         dirty = true;
                     }
                     Err(e) => tracing::warn!(error = %e, "bambu report parse failed"),
@@ -717,7 +710,13 @@ pub async fn run_worker(
             }
             _ = interval.tick() => {
                 if dirty {
-                    if let Some(s) = pending.clone() {
+                    if let Some(mut s) = pending.clone() {
+                        // Connection state is owned by the event loop (Connected
+                        // on ConnAck, Reconnecting on disconnect/backoff). Re-read
+                        // it into this report-derived snapshot before flushing, so
+                        // a tick landing mid-backoff can't resurrect a stale
+                        // Connected over the event loop's Reconnecting.
+                        s.connection = status_tx.borrow().connection.clone();
                         let _ = status_tx.send(s);
                     }
                     dirty = false;

@@ -56,26 +56,55 @@ struct UploadProgress {
 }
 
 /// Per-driver cancellation tokens for in-flight sends. `driver_send_plate`
-/// arms a fresh token per send; `driver_send_cancel` fires it, and the
+/// arms a token per send; `driver_send_cancel` fires it, and the
 /// `tokio::select!` in `driver_send_plate` then drops the in-flight `send`
-/// future to abort the upload. Keyed by driver id — at most one send is in
-/// flight per driver (the send holds the driver's lock), and `arm` overwrites
-/// the previous, settled token, so the map stays one-entry-per-driver.
+/// future to abort the upload. `send()` only takes a shared read lock, so this
+/// registry — not the lock — is what enforces one upload per driver: `arm`
+/// refuses a second concurrent send for the same id, and the returned
+/// [`SendGuard`] disarms the slot on drop (including panic unwind).
 /// Tauri-managed; `.manage(...)` it from `lib.rs`.
 #[derive(Default)]
 pub struct SendCancelRegistry {
     tokens: Mutex<HashMap<DriverId, CancellationToken>>,
 }
 
-impl SendCancelRegistry {
-    /// Register a fresh token for `id` and return a clone to race in `select!`.
-    fn arm(&self, id: DriverId) -> CancellationToken {
-        let token = CancellationToken::new();
-        self.tokens.lock().unwrap().insert(id, token.clone());
-        token
+/// RAII arm for one in-flight send. Removes the driver's token on drop, so a
+/// settled (or panicked) send frees the slot for the next one.
+pub struct SendGuard {
+    registry: Arc<SendCancelRegistry>,
+    id: DriverId,
+    token: CancellationToken,
+}
+
+impl SendGuard {
+    /// The send's cancel token, to race in `select!`.
+    fn token(&self) -> &CancellationToken {
+        &self.token
     }
-    /// Fire `id`'s token if a send is in flight; firing a settled token is a
-    /// harmless no-op (nothing awaits it).
+}
+
+impl Drop for SendGuard {
+    fn drop(&mut self) {
+        self.registry.tokens.lock().unwrap().remove(&self.id);
+    }
+}
+
+impl SendCancelRegistry {
+    /// Arm a cancel token for `id`, or `None` if a send is already in flight for
+    /// that driver. The returned guard disarms the slot on drop.
+    fn arm(self: Arc<Self>, id: DriverId) -> Option<SendGuard> {
+        let token = {
+            let mut tokens = self.tokens.lock().unwrap();
+            if tokens.contains_key(&id) {
+                return None;
+            }
+            let token = CancellationToken::new();
+            tokens.insert(id, token.clone());
+            token
+        };
+        Some(SendGuard { registry: self, id, token })
+    }
+    /// Fire `id`'s token if a send is in flight; a no-op otherwise.
     fn cancel(&self, id: DriverId) {
         if let Some(token) = self.tokens.lock().unwrap().get(&id) {
             token.cancel();
@@ -459,12 +488,21 @@ pub async fn driver_send_plate(
     let on_progress = upload_progress_emitter(app, id, file_name);
     // Arm a cancel token for this upload. `driver_send_cancel` fires it; the
     // select! then drops the in-flight `send` future, which aborts the upload
-    // (every driver's `send` is fully async — Bambu's FTPS too).
-    let cancel = sends.arm(id);
+    // (every driver's `send` is fully async — Bambu's FTPS too). Rejects a
+    // second concurrent send to the same driver — `send` takes only a shared
+    // read lock, so nothing else serializes them. The guard disarms on drop.
+    let cancel = match sends.inner().clone().arm(id) {
+        Some(g) => g,
+        None => {
+            return Err(DriverError::Other(
+                "a send is already in flight for this printer".into(),
+            ))
+        }
+    };
     let d = handle.read().await;
     tokio::select! {
         r = d.send(payload, on_progress) => r,
-        _ = cancel.cancelled() => Err(DriverError::Cancelled),
+        _ = cancel.token().cancelled() => Err(DriverError::Cancelled),
     }
 }
 

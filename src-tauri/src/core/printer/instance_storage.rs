@@ -107,7 +107,10 @@ pub fn persist(root: &Path, instance: &PrinterInstance) -> Result<(), StorageErr
     std::fs::create_dir_all(root)?;
     let body = toml::to_string_pretty(instance)?;
     let path = root.join(format!("{}.toml", instance.id));
-    std::fs::write(path, body)?;
+    // Atomic write so a crash mid-write can't truncate the file and drop the
+    // whole instance — slot bindings, installed nozzles, saved credentials — on
+    // next launch (the load path discards any file that fails to parse).
+    crate::core::paths::atomic_write(&path, body.as_bytes())?;
     Ok(())
 }
 

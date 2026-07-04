@@ -410,7 +410,7 @@ fn apply_post_slice(
         // partial write can't leave a truncated .gcode that the summary
         // and preview then read as if it were the finished slice. On
         // failure the original stays intact.
-        if let Err(e) = atomic_write(output_path, new_src.as_bytes()) {
+        if let Err(e) = crate::core::paths::atomic_write(output_path, new_src.as_bytes()) {
             tracing::warn!(
                 error = %e,
                 path = %output_path.display(),
@@ -418,21 +418,6 @@ fn apply_post_slice(
             );
         }
     }
-}
-
-/// Write `bytes` to `path` atomically: stage to a sibling temp file,
-/// then rename over `path` (atomic within a directory on POSIX). The
-/// original is untouched unless the rename succeeds.
-fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut tmp_os = path.as_os_str().to_owned();
-    tmp_os.push(".n3o-tmp");
-    let tmp = PathBuf::from(tmp_os);
-    std::fs::write(&tmp, bytes)?;
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    Ok(())
 }
 
 /// Add the plate's [`SliceObject`]s to `model` in-memory (the default,
