@@ -40,6 +40,7 @@ import {
   initialDraft,
   MACHINE_PAGE_ORDER,
   orderGroupsOtherLast,
+  notesLast,
   validateDraftConnection,
   type Draft,
 } from "./printerSettingsHelpers";
@@ -129,11 +130,14 @@ export function PrinterSettingsModal({
   const { options: machineOptions } = useMachineOptions(profile);
   const { options: extruderOptions } = useExtruderOptions(profile);
   // Machine pages follow a curated Orca order (MACHINE_PAGE_ORDER): the
-  // display-order scrape can't place the `build_unregular_pages` pages (Motion
-  // ability, Multimaterial), which render before Notes despite being coded
-  // after it, so first-appearance would sort Notes ahead of them.
+  // display-order scrape can't place the `build_unregular_pages` pages
+  // (Motion ability, Multimaterial), which render before Notes despite being
+  // coded after it, so first-appearance would sort Notes ahead of them.
+  // notesLast then guarantees Notes is terminal even if a page category isn't
+  // in the curated list.
   const machineGroups = useMemo(
-    () => orderGroupsOtherLast(categorize(machineOptions, MACHINE_PAGE_ORDER)),
+    () =>
+      notesLast(orderGroupsOtherLast(categorize(machineOptions, MACHINE_PAGE_ORDER))),
     [machineOptions],
   );
   // The per-extruder option set is identical across toolheads; only the

@@ -335,22 +335,22 @@ fn is_machine_visible(d: &slic3r_ffi::OptionDef) -> bool {
     if d.bucket != Some(slic3r_ffi::OptBucket::Printer) || d.readonly || d.scope.is_sla() {
         return false;
     }
-    // The machine-limits family (libslic3r category "Machine limits"):
-    // always shown, including the per-mode `machine_max_*` vectors (Orca
-    // builds these via `append_option_line` + string concatenation, so they
-    // carry no scraped editor — the category is their signal). Rendered
-    // Normal/Silent.
-    if d.category.as_deref() == Some("Machine limits") {
-        return true;
+    // Only keys Orca actually lays out an editor for (`printer_page_of` is
+    // Some). This drops capability flags (silent_mode, support_*), metadata
+    // (printer_model — BBL detection, printer_variant, default_*), and
+    // print-host/network keys (the Connection section owns those) that are
+    // Printer-bucket but not user-tunable here.
+    if slic3r_ffi::printer_page_of(&d.key).is_none() {
+        return false;
     }
-    // Everything else: only scalars/multiline that Orca actually lays out an
-    // editor for (`printer_page_of` is Some). This drops capability flags
-    // (silent_mode, support_*), metadata (printer_model — BBL detection,
-    // printer_variant, default_*), and print-host/network keys (the
-    // Connection section owns those) that are Printer-bucket but not
-    // user-tunable here. Non-machine-limits vectors are per-extruder
-    // (extruder tabs) or per-bed-type (no editor yet).
-    !d.ty.is_vector() && slic3r_ffi::printer_page_of(&d.key).is_some()
+    // Vectors get a row only for the per-mode machine-limits family
+    // (`machine_max_*`, rendered Normal/Silent — libslic3r category "Machine
+    // limits"). Other printer vectors — per-extruder (extruder tabs) or
+    // per-bed-type (no editor yet) — are dropped.
+    if d.ty.is_vector() {
+        return d.category.as_deref() == Some("Machine limits");
+    }
+    true
 }
 
 fn is_extruder_visible(d: &slic3r_ffi::OptionDef) -> bool {
@@ -384,13 +384,13 @@ fn printer_bucket_summaries(
         .filter(|d| matches_filter(d, &needle))
         .map(summary_from_def)
         .map(|mut s| {
-            // Keep the machine-limits family under libslic3r's "Machine
-            // limits" so the per-mode set groups together; everything else
-            // uses its scraped Orca page/optgroup.
-            if s.category.as_deref() != Some("Machine limits") {
-                if let Some(cat) = slic3r_ffi::printer_page_of(&s.key) {
-                    s.category = Some(cat.to_owned());
-                }
+            // Printer options carry no libslic3r `category`; use the scraped
+            // Orca page. The machine-limits family scrapes onto "Motion
+            // ability" (its optgroup — Speed/Acceleration/Jerk limitation —
+            // becomes the sub-group), so it renders inside that one page like
+            // Orca, not as a separate section.
+            if let Some(cat) = slic3r_ffi::printer_page_of(&s.key) {
+                s.category = Some(cat.to_owned());
             }
             s
         })
@@ -639,6 +639,34 @@ mod tests {
                 "machine panel must not surface non-setting `{hidden}`",
             );
         }
+    }
+
+    #[test]
+    fn machine_limits_family_merges_into_motion_ability() {
+        // Orca lays the `machine_max_*` families out as optgroups *inside* the
+        // single "Motion ability" page; they must categorize there (sub-grouped
+        // by optgroup), not split into a separate "Machine limits" section.
+        ensure_ffi();
+        let by_key: std::collections::HashMap<String, OptionSummary> =
+            machine_option_summaries(None)
+                .into_iter()
+                .map(|s| (s.key.clone(), s))
+                .collect();
+        for (key, group) in [
+            ("machine_max_speed_x", "Speed limitation"),
+            ("machine_max_acceleration_x", "Acceleration limitation"),
+            ("machine_max_jerk_x", "Jerk limitation"),
+        ] {
+            let s = by_key.get(key).unwrap_or_else(|| panic!("missing {key}"));
+            assert_eq!(s.category.as_deref(), Some("Motion ability"), "{key}");
+            assert_eq!(s.group.as_deref(), Some(group), "{key}");
+        }
+        assert!(
+            machine_option_summaries(None)
+                .iter()
+                .all(|s| s.category.as_deref() != Some("Machine limits")),
+            "no machine option should render under a separate `Machine limits` section",
+        );
     }
 
     #[test]

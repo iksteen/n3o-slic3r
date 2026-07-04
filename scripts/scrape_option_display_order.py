@@ -32,6 +32,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from _orca_tab_keys import make_append_tracker
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TAB_CPP = REPO_ROOT / "external/OrcaSlicer/src/slic3r/GUI/Tab.cpp"
 OUTPUT_PATH = REPO_ROOT / "crates/slic3r-ffi/src/option_display_order.rs"
@@ -52,9 +54,16 @@ KEY_FORMS = re.compile(
 def scrape(text: str) -> list[str]:
     """Return option keys in first-encounter order across Tab.cpp."""
     seen: dict[str, None] = {}
-    for match in KEY_FORMS.finditer(text):
-        key = match.group(1) or match.group(2) or match.group(3)
-        seen.setdefault(key, None)
+    # The machine_max_* families are laid out via append_option_line with
+    # loop-variable / string-concat keys (never string literals); resolve them
+    # in source order so they sort into the Motion ability page, not last.
+    append_keys = make_append_tracker()
+    for line in text.splitlines():
+        for match in KEY_FORMS.finditer(line):
+            key = match.group(1) or match.group(2) or match.group(3)
+            seen.setdefault(key, None)
+        for key in append_keys(line):
+            seen.setdefault(key, None)
     return list(seen.keys())
 
 

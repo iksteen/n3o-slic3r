@@ -12,9 +12,11 @@
 //! / `filament_page_of` being `Some` is also the "Orca lays out an editor
 //! for this key" signal the machine + filament panels gate visibility on.
 //!
-//! The per-extruder set (options sized to the extruder count, rendered one
-//! tab per toolhead) is NOT scraped here — it comes straight off libslic3r's
-//! `m_extruder_option_keys` as the `per_extruder` flag on each `OptionDef`.
+//! Per-extruder set (from `src/libslic3r/PrintConfig.cpp`
+//! `m_extruder_option_keys`): the authoritative list of options sized to
+//! the extruder count. Sourced from the data model, not the GUI, because
+//! Orca's extruder-page widgets omit some members (e.g. `extruder_colour`,
+//! whose widget is commented out). These render one tab per toolhead.
 
 const PRINTER_PAGES: &[(&str, &str)] = &[
     ("adaptive_bed_mesh_margin", "Basic information"),
@@ -59,6 +61,24 @@ const PRINTER_PAGES: &[(&str, &str)] = &[
     ("long_retractions_when_cut", "Retraction when switching material"),
     ("machine_end_gcode", "Machine G-code"),
     ("machine_load_filament_time", "Multimaterial"),
+    ("machine_max_acceleration_e", "Motion ability"),
+    ("machine_max_acceleration_extruding", "Motion ability"),
+    ("machine_max_acceleration_retracting", "Motion ability"),
+    ("machine_max_acceleration_travel", "Motion ability"),
+    ("machine_max_acceleration_x", "Motion ability"),
+    ("machine_max_acceleration_y", "Motion ability"),
+    ("machine_max_acceleration_z", "Motion ability"),
+    ("machine_max_jerk_e", "Motion ability"),
+    ("machine_max_jerk_x", "Motion ability"),
+    ("machine_max_jerk_y", "Motion ability"),
+    ("machine_max_jerk_z", "Motion ability"),
+    ("machine_max_junction_deviation", "Motion ability"),
+    ("machine_max_speed_e", "Motion ability"),
+    ("machine_max_speed_x", "Motion ability"),
+    ("machine_max_speed_y", "Motion ability"),
+    ("machine_max_speed_z", "Motion ability"),
+    ("machine_min_extruding_rate", "Motion ability"),
+    ("machine_min_travel_rate", "Motion ability"),
     ("machine_pause_gcode", "Machine G-code"),
     ("machine_start_gcode", "Machine G-code"),
     ("machine_tool_change_time", "Multimaterial"),
@@ -161,6 +181,24 @@ const PRINTER_SUBGROUPS: &[(&str, &str)] = &[
     ("layer_change_gcode", "Layer change G-code"),
     ("machine_end_gcode", "Machine end G-code"),
     ("machine_load_filament_time", "Advanced"),
+    ("machine_max_acceleration_e", "Acceleration limitation"),
+    ("machine_max_acceleration_extruding", "Acceleration limitation"),
+    ("machine_max_acceleration_retracting", "Acceleration limitation"),
+    ("machine_max_acceleration_travel", "Acceleration limitation"),
+    ("machine_max_acceleration_x", "Acceleration limitation"),
+    ("machine_max_acceleration_y", "Acceleration limitation"),
+    ("machine_max_acceleration_z", "Acceleration limitation"),
+    ("machine_max_jerk_e", "Jerk limitation"),
+    ("machine_max_jerk_x", "Jerk limitation"),
+    ("machine_max_jerk_y", "Jerk limitation"),
+    ("machine_max_jerk_z", "Jerk limitation"),
+    ("machine_max_junction_deviation", "Jerk limitation"),
+    ("machine_max_speed_e", "Speed limitation"),
+    ("machine_max_speed_x", "Speed limitation"),
+    ("machine_max_speed_y", "Speed limitation"),
+    ("machine_max_speed_z", "Speed limitation"),
+    ("machine_min_extruding_rate", "Minimum feedrates"),
+    ("machine_min_travel_rate", "Minimum feedrates"),
     ("machine_pause_gcode", "Pause G-code"),
     ("machine_start_gcode", "Machine start G-code"),
     ("machine_tool_change_time", "Advanced"),
@@ -434,6 +472,40 @@ const FILAMENT_LINES: &[(&str, &str)] = &[
     ("textured_plate_temp_initial_layer", "Textured PEI Plate"),
 ];
 
+const PER_EXTRUDER: &[&str] = &[
+    "default_filament_profile",
+    "default_nozzle_volume_type",
+    "deretraction_speed",
+    "extruder_colour",
+    "extruder_offset",
+    "extruder_printable_height",
+    "extruder_type",
+    "long_retractions_when_cut",
+    "max_layer_height",
+    "min_layer_height",
+    "nozzle_diameter",
+    "nozzle_flush_dataset",
+    "nozzle_type",
+    "nozzle_volume",
+    "retract_before_wipe",
+    "retract_length_toolchange",
+    "retract_lift_above",
+    "retract_lift_below",
+    "retract_lift_enforce",
+    "retract_restart_extra",
+    "retract_restart_extra_toolchange",
+    "retract_when_changing_layer",
+    "retraction_distances_when_cut",
+    "retraction_length",
+    "retraction_minimum_travel",
+    "retraction_speed",
+    "travel_slope",
+    "wipe",
+    "wipe_distance",
+    "z_hop",
+    "z_hop_types",
+];
+
 /// The printer-settings category the key appears under in Orca's `TabPrinter`
 /// (page for machine-wide keys, optgroup for per-extruder keys), or `None`.
 pub fn printer_page_of(key: &str) -> Option<&'static str> {
@@ -481,6 +553,12 @@ pub fn filament_line_of(key: &str) -> Option<&'static str> {
         .map(|i| FILAMENT_LINES[i].1)
 }
 
+/// True if the option is laid out per-extruder (one value per toolhead)
+/// in Orca's `TabPrinter` — the set the per-extruder UI tabs surface.
+pub fn is_per_extruder(key: &str) -> bool {
+    PER_EXTRUDER.binary_search(&key).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,6 +571,11 @@ mod tests {
                 assert!(*key > last, "table must be sorted; {key} <= {last}");
                 last = key;
             }
+        }
+        let mut last = "";
+        for key in PER_EXTRUDER {
+            assert!(*key > last, "PER_EXTRUDER must be sorted; {key} <= {last}");
+            last = key;
         }
     }
 
@@ -531,8 +614,22 @@ mod tests {
     }
 
     #[test]
+    fn per_extruder_flag_matches_libslic3r_set() {
+        assert!(is_per_extruder("retraction_length"));
+        assert!(is_per_extruder("z_hop"));
+        assert!(is_per_extruder("nozzle_diameter"));
+        // In libslic3r's set even though Orca's extruder-page widget for
+        // it is commented out.
+        assert!(is_per_extruder("extruder_colour"));
+        // Machine-wide keys are not per-extruder.
+        assert!(!is_per_extruder("gcode_flavor"));
+        assert!(!is_per_extruder("machine_start_gcode"));
+    }
+
+    #[test]
     fn unknown_key_returns_none() {
         assert!(printer_page_of("totally_made_up_option").is_none());
         assert!(filament_page_of("totally_made_up_option").is_none());
+        assert!(!is_per_extruder("totally_made_up_option"));
     }
 }

@@ -15,18 +15,18 @@ import {
  *  Default Moonraker port matches the existing PrinterCredentialsDialog. */
 export const DEFAULT_U1_PORT = 80;
 
-/** OrcaSlicer's machine-settings page order. NOT derivable from the
- *  display-order scrape: Motion ability and Multimaterial are built in
+/** OrcaSlicer's machine-settings page order for the front pages. NOT derivable
+ *  from the display-order scrape: Motion ability / Multimaterial are built in
  *  `TabPrinter::build_unregular_pages` (which runs *after* the Notes page in
  *  Tab.cpp) but `m_pages.insert`-ed to render *before* Notes — so a file-order
- *  scrape can't place them, and Notes would otherwise sort ahead of them.
- *  Extruder pages are omitted (n3o extracts them into their own tabs). */
+ *  scrape can't place them. Notes is not listed here — it's pinned last by
+ *  `notesLast` regardless of which sections exist. Extruder pages are omitted
+ *  (n3o extracts them into their own tabs). */
 export const MACHINE_PAGE_ORDER = [
   "Basic information",
   "Machine G-code",
   "Multimaterial",
   "Motion ability",
-  "Notes",
 ] as const;
 
 /** categorize() emits canonical categories (incl. the "Other" catch-all)
@@ -37,6 +37,17 @@ export function orderGroupsOtherLast<T extends { id: string }>(groups: T[]): T[]
   return [
     ...groups.filter((g) => !isOther(g.id)),
     ...groups.filter((g) => isOther(g.id)),
+  ];
+}
+
+/** Notes is OrcaSlicer's terminal printer page. Pin it last unconditionally so
+ *  no un-pinned section (a page not in MACHINE_PAGE_ORDER) can render below it —
+ *  the invariant the curated MACHINE_PAGE_ORDER alone couldn't guarantee. */
+export function notesLast<T extends { id: string }>(groups: T[]): T[] {
+  const isNotes = (id: string) => id === "Notes";
+  return [
+    ...groups.filter((g) => !isNotes(g.id)),
+    ...groups.filter((g) => isNotes(g.id)),
   ];
 }
 

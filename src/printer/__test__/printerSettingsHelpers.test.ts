@@ -15,6 +15,7 @@ import {
   initialDraft,
   MACHINE_PAGE_ORDER,
   orderGroupsOtherLast,
+  notesLast,
 } from "../printerSettingsHelpers";
 import {
   validateBambuConnection,
@@ -236,6 +237,11 @@ describe("machine settings page order", () => {
     capability: null,
   });
 
+  const arrange = (opts: OptionSummary[]) =>
+    notesLast(orderGroupsOtherLast(categorize(opts, MACHINE_PAGE_ORDER))).map(
+      (g) => g.id,
+    );
+
   it("keeps Notes last, ahead of the build_unregular_pages pages", () => {
     // Options arrive display-order-sorted. `printer_notes` (Orca pos 497)
     // precedes the Motion ability / Multimaterial keys (515/525) because those
@@ -248,14 +254,27 @@ describe("machine settings page order", () => {
       opt("emit_machine_limits_to_gcode", "Motion ability"),
       opt("single_extruder_multi_material", "Multimaterial"),
     ];
-    const ids = orderGroupsOtherLast(
-      categorize(opts, MACHINE_PAGE_ORDER),
-    ).map((g) => g.id);
-    expect(ids).toEqual([
+    expect(arrange(opts)).toEqual([
       "Basic information",
       "Machine G-code",
       "Multimaterial",
       "Motion ability",
+      "Notes",
+    ]);
+  });
+
+  it("keeps any un-pinned section above Notes", () => {
+    // notesLast guards the invariant directly: a section not in
+    // MACHINE_PAGE_ORDER (e.g. a page a future Orca adds) would otherwise sort
+    // after the pinned Notes. It must still land before it.
+    const opts = [
+      opt("printable_area", "Basic information"),
+      opt("printer_notes", "Notes"),
+      opt("some_new_key", "Future page"),
+    ];
+    expect(arrange(opts)).toEqual([
+      "Basic information",
+      "Future page",
       "Notes",
     ]);
   });

@@ -31,6 +31,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from _orca_tab_keys import make_append_tracker
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TAB_CPP = REPO_ROOT / "external/OrcaSlicer/src/slic3r/GUI/Tab.cpp"
 PRINT_CONFIG_CPP = REPO_ROOT / "external/OrcaSlicer/src/libslic3r/PrintConfig.cpp"
@@ -92,6 +94,18 @@ def scrape(
     current_page = ""
     current_group = ""
     current_line = ""
+    # Resolves the machine_max_* keys Orca builds via append_option_line +
+    # loop-variable / string concat (invisible to the literal KEY_FORMS).
+    append_keys = make_append_tracker()
+
+    def record(key: str, is_extruder: bool) -> None:
+        if key in category_of:
+            return
+        category_of[key] = current_group if is_extruder else current_page
+        if not is_extruder and current_group:
+            subgroup_of[key] = current_group
+        if not is_extruder and current_line:
+            line_of[key] = current_line
 
     for line in text.splitlines():
         m = FUNC_DEF.match(line)
@@ -119,16 +133,17 @@ def scrape(
         # Per-extruder keys group by optgroup; the rest by page (with the
         # optgroup as a sub-group within that page).
         category = current_group if is_extruder else current_page
+        # Fed every line so its vector-literal / loop-binding state stays
+        # continuous; keys only surface on the append_option_line calls.
+        append_line_keys = append_keys(line)
         if category:
             for form in KEY_FORMS:
                 for key in form.findall(line):
-                    if key in category_of:
-                        continue
-                    category_of[key] = category
-                    if not is_extruder and current_group:
-                        subgroup_of[key] = current_group
-                    if not is_extruder and current_line:
-                        line_of[key] = current_line
+                    record(key, is_extruder)
+            # append_option_line keys land in the current optgroup too — the
+            # Motion ability page's speed/acceleration/jerk limitation groups.
+            for key in append_line_keys:
+                record(key, is_extruder)
         # A labeled line closes here; following single-option lines carry
         # their own labels.
         if APPEND_LINE.search(line):
