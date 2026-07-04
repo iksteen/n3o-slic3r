@@ -38,7 +38,3 @@ unknown.
 `pacman -U`. It's written, `bash -n`-clean, and package-name resolution is
 confirmed — but the full `makepkg` build and the upload are untested. Run
 it on a real Arch box to confirm.
-
-### `docs/site/` → its own repository
-The landing page currently lives untracked under `docs/site/`; it's slated
-to move out to a dedicated repository.

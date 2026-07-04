@@ -45,9 +45,9 @@ key from the updated `.flatpakref`.
 ## One-time hosting setup
 
 The repo is served from **`https://n3o.thegraveyard.org/repo/`**. The
-marketing site (`docs/site/`) lives at the domain root and the ostree
-repo sits under `/repo/`, so a publish's `--delete` only ever prunes the
-repo and never touches the site. The ostree repo is just static files —
+marketing site (maintained in its own repository) lives at the domain root
+and the ostree repo sits under `/repo/`, so a publish's `--delete` only ever
+prunes the repo and never touches the site. The ostree repo is just static files —
 any web server (nginx, Caddy, object storage + CDN) works. No
 server-side software is needed.
 
