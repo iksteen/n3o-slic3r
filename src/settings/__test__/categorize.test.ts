@@ -20,6 +20,7 @@ function stub(
     label: key,
     category,
     group: null,
+    line: null,
     default_value: { kind: "scalar", value: "0" },
     multiline: false,
     is_color: false,

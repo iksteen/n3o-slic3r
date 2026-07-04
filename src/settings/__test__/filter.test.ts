@@ -11,6 +11,7 @@ function stub(over: Partial<PrinterAwareOptionSummary> = {}): PrinterAwareOption
     label: "Layer height",
     category: "Quality",
     group: null,
+    line: null,
     default_value: { kind: "scalar", value: "0.2" },
     multiline: false,
     is_color: false,

@@ -871,8 +871,8 @@ pub use option_display_order::display_order_of;
 
 mod option_printer_pages;
 pub use option_printer_pages::{
-    filament_line_of, filament_page_of, filament_subgroup_of, printer_page_of,
-    printer_subgroup_of,
+    filament_line_of, filament_page_of, filament_subgroup_of, printer_line_of,
+    printer_page_of, printer_subgroup_of,
 };
 
 /// An owned, allocated copy of a `slic3r_option_def_t` view, decoded into Rust types.

@@ -9,7 +9,7 @@
 // index 0 Normal, index 1 Silent/Stealth — so they render a Normal field,
 // plus a Silent field below it when the printer's `silent_mode` is on.
 
-import { Field } from "../settings/inputs";
+import { Field, NumberInput } from "../settings/inputs";
 import { SettingControl } from "../settings/inputs/SettingControl";
 import { renderScalarInput } from "../settings/renderScalarInput";
 import {
@@ -19,7 +19,10 @@ import {
   type PrinterAwareOptionSummary,
 } from "../settings/types";
 import { elemOverridden, setVecElem, vecElem } from "./vectorOverride";
-import { firmwareHiddenKeys } from "./printerSettingsHelpers";
+import {
+  firmwareHiddenKeys,
+  groupConsecutiveByLine,
+} from "./printerSettingsHelpers";
 
 export interface MachineSettingsSectionProps {
   settings: PrinterAwareOptionSummary[];
@@ -160,12 +163,80 @@ export function MachineSettingsSection({
         );
   };
 
+  // Rows Orca packs onto one multi-option line (a shared `.line` label, e.g.
+  // "Resonance Avoidance Speed" over its "Min"/"Max" pair) render as a single
+  // row: the line label names it, the members sit side by side — the same
+  // dual-input layout as a coPoint (`bed_mesh_min`). Their own labels ("Min"/
+  // "Max", "X"/"Y") are meaningless without the shared context.
+  // ponytail: every paired line in TabPrinter is coFloat, so NumberInput
+  // covers all members; revisit if a non-numeric pair ever appears.
+  const renderPairedLine = (
+    line: string,
+    members: PrinterAwareOptionSummary[],
+  ): React.JSX.Element => {
+    const anyOverridden = members.some((m) => m.key in overrides);
+    return (
+      <Field
+        key={`line:${line}`}
+        // Synthetic schema: the row's name is the shared line label.
+        schema={{ ...members[0], key: `line:${line}`, label: line }}
+        value={null}
+        onChange={() => {}}
+        resetButton={
+          anyOverridden ? (
+            <button
+              type="button"
+              className="reset-btn"
+              title="Reset to printer default"
+              aria-label={`Reset ${line}`}
+              onClick={() =>
+                members.forEach((m) => m.key in overrides && onClear(m.key))
+              }
+            >
+              ↺
+            </button>
+          ) : null
+        }
+        winningLayer={anyOverridden ? "user" : "cascade"}
+      >
+        <div className="point-input">
+          {members.map((m) => {
+            const overridden = m.key in overrides;
+            const value = overridden ? overrides[m.key] : (resolved[m.key] ?? null);
+            return (
+              <label className="point-axis" key={m.key}>
+                <span>{m.label ?? m.key}</span>
+                <NumberInput
+                  schema={m}
+                  value={value}
+                  onChange={(next) => onSet(m.key, next)}
+                />
+              </label>
+            );
+          })}
+          {members[0].sidetext && (
+            <span className="val-unit">{members[0].sidetext}</span>
+          )}
+        </div>
+      </Field>
+    );
+  };
+
+  const renderGroupRows = (
+    rows: PrinterAwareOptionSummary[],
+  ): React.JSX.Element[] =>
+    groupConsecutiveByLine(rows).map((block) =>
+      block.line
+        ? renderPairedLine(block.line, block.rows)
+        : renderRow(block.rows[0]),
+    );
+
   return (
     <div className="machine-settings">
       {groups.map((g) => (
         <div className="mc-group" key={g.name ?? "__ungrouped"}>
           {g.name && <h4 className="mc-group-header">{g.name}</h4>}
-          {g.rows.map(renderRow)}
+          {renderGroupRows(g.rows)}
         </div>
       ))}
     </div>

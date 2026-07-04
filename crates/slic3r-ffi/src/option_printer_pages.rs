@@ -241,6 +241,15 @@ const PRINTER_SUBGROUPS: &[(&str, &str)] = &[
     ("z_offset", "Printable space"),
 ];
 
+const PRINTER_LINES: &[(&str, &str)] = &[
+    ("input_shaping_damp_x", "Damping"),
+    ("input_shaping_damp_y", "Damping"),
+    ("input_shaping_freq_x", "Frequency"),
+    ("input_shaping_freq_y", "Frequency"),
+    ("max_resonance_avoidance_speed", "Resonance Avoidance Speed"),
+    ("min_resonance_avoidance_speed", "Resonance Avoidance Speed"),
+];
+
 const FILAMENT_PAGES: &[(&str, &str)] = &[
     ("activate_air_filtration", "Cooling"),
     ("activate_air_filtration_during_print", "Cooling"),
@@ -524,6 +533,16 @@ pub fn printer_subgroup_of(key: &str) -> Option<&'static str> {
         .map(|i| PRINTER_SUBGROUPS[i].1)
 }
 
+/// The label of the multi-option line a machine-wide key sits on ("Resonance Avoidance
+/// Speed", "Frequency", …), or `None`. Groups paired rows whose own labels
+/// are generic ("Min"/"Max", "X"/"Y") under one header.
+pub fn printer_line_of(key: &str) -> Option<&'static str> {
+    PRINTER_LINES
+        .binary_search_by_key(&key, |(k, _)| *k)
+        .ok()
+        .map(|i| PRINTER_LINES[i].1)
+}
+
 /// The filament-settings page the key appears under in Orca's `TabFilament`
 /// (Filament, Print temperature, Cooling, …), or `None` for keys not laid out
 /// there (metadata, internal). This is the filament editor's visibility signal.
@@ -565,7 +584,7 @@ mod tests {
 
     #[test]
     fn tables_are_sorted_for_binary_search() {
-        for table in [PRINTER_PAGES, PRINTER_SUBGROUPS, FILAMENT_PAGES, FILAMENT_SUBGROUPS, FILAMENT_LINES] {
+        for table in [PRINTER_PAGES, PRINTER_SUBGROUPS, PRINTER_LINES, FILAMENT_PAGES, FILAMENT_SUBGROUPS, FILAMENT_LINES] {
             let mut last = "";
             for (key, _) in table {
                 assert!(*key > last, "table must be sorted; {key} <= {last}");
@@ -587,6 +606,15 @@ mod tests {
         // Sub-group within a page: z_offset sits under "Printable space".
         assert_eq!(printer_subgroup_of("z_offset"), Some("Printable space"));
         assert_eq!(printer_subgroup_of("gcode_flavor"), Some("Advanced"));
+        // Paired rows carry the multi-option line label that gives their
+        // generic "Min"/"Max" own-labels meaning.
+        assert_eq!(
+            printer_line_of("min_resonance_avoidance_speed"),
+            Some("Resonance Avoidance Speed"),
+        );
+        assert_eq!(printer_line_of("input_shaping_freq_x"), Some("Frequency"));
+        // A self-labeled single-option line has no line label.
+        assert_eq!(printer_line_of("gcode_flavor"), None);
     }
 
     #[test]

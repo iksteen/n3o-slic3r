@@ -73,6 +73,22 @@ export function firmwareHiddenKeys(
   return hidden;
 }
 
+/** Collapse consecutive rows sharing a `.line` label into one block (Orca's
+ *  multi-option lines — "Resonance Avoidance Speed" over its Min/Max pair).
+ *  Rows with `line == null` each become their own single-row block. Only
+ *  *consecutive* same-line rows group, matching the display-order layout. */
+export function groupConsecutiveByLine<T extends { line: string | null }>(
+  rows: readonly T[],
+): { line: string | null; rows: T[] }[] {
+  const out: { line: string | null; rows: T[] }[] = [];
+  for (const row of rows) {
+    const last = out[out.length - 1];
+    if (row.line && last && last.line === row.line) last.rows.push(row);
+    else out.push({ line: row.line, rows: [row] });
+  }
+  return out;
+}
+
 /** Notes is OrcaSlicer's terminal printer page. Pin it last unconditionally so
  *  no un-pinned section (a page not in MACHINE_PAGE_ORDER) can render below it —
  *  the invariant the curated MACHINE_PAGE_ORDER alone couldn't guarantee. */

@@ -61,8 +61,12 @@ OPTGROUP = re.compile(r'new_optgroup\(\s*(?:L\()?\s*"([^"]+)"')
 # `line = { L("Cool Plate"), L("tooltip") };` — the label is the row
 # identifier (plate type, "Nozzle", …) for the options appended to it, which
 # otherwise share generic labels ("Other layers" / "First layer"). Reset at
-# `optgroup->append_line(line)`.
+# `optgroup->append_line(line)`. TabPrinter also declares freshly-typed line
+# vars (`Line resonance_line = { L("Resonance Avoidance Speed"), … };`) whose
+# members carry only generic labels ("Min"/"Max", "X"/"Y") — the line label is
+# the only thing that gives them meaning.
 LINE_START = re.compile(r'\bline\s*=\s*\{\s*L\("([^"]+)"')
+LINE_DECL = re.compile(r'\bLine\s+\w+\s*=\s*\{\s*L\("([^"]+)"')
 APPEND_LINE = re.compile(r"append_line\(")
 
 # Option-key references we trust to be real keys (not labels/icons).
@@ -126,7 +130,7 @@ def scrape(
         if g:
             current_group = g.group(1)
             current_line = ""
-        ls = LINE_START.search(line)
+        ls = LINE_START.search(line) or LINE_DECL.search(line)
         if ls:
             current_line = ls.group(1)
         is_extruder = extruder_aware and "extruder_idx" in line
@@ -181,6 +185,7 @@ pub fn {fn}(key: &str) -> Option<&'static str> {{
 def emit_rust(
     printer_pages: dict[str, str],
     printer_subgroups: dict[str, str],
+    printer_lines: dict[str, str],
     filament_pages: dict[str, str],
     filament_subgroups: dict[str, str],
     filament_lines: dict[str, str],
@@ -191,6 +196,7 @@ def emit_rust(
         [
             _table("PRINTER_PAGES", printer_pages),
             _table("PRINTER_SUBGROUPS", printer_subgroups),
+            _table("PRINTER_LINES", printer_lines),
             _table("FILAMENT_PAGES", filament_pages),
             _table("FILAMENT_SUBGROUPS", filament_subgroups),
             _table("FILAMENT_LINES", filament_lines),
@@ -211,6 +217,14 @@ def emit_rust(
                 "PRINTER_SUBGROUPS",
                 "The optgroup (sub-section within a page) a machine-wide option "
                 "appears under,\n/// or `None`.",
+            ),
+            _lookup_fn(
+                "printer_line_of",
+                "PRINTER_LINES",
+                "The label of the multi-option line a machine-wide key sits on "
+                "(\"Resonance Avoidance\n/// Speed\", \"Frequency\", …), or "
+                "`None`. Groups paired rows whose own labels\n/// are generic "
+                "(\"Min\"/\"Max\", \"X\"/\"Y\") under one header.",
             ),
             _lookup_fn(
                 "filament_page_of",
@@ -272,7 +286,7 @@ mod tests {{
 
     #[test]
     fn tables_are_sorted_for_binary_search() {{
-        for table in [PRINTER_PAGES, PRINTER_SUBGROUPS, FILAMENT_PAGES, FILAMENT_SUBGROUPS, FILAMENT_LINES] {{
+        for table in [PRINTER_PAGES, PRINTER_SUBGROUPS, PRINTER_LINES, FILAMENT_PAGES, FILAMENT_SUBGROUPS, FILAMENT_LINES] {{
             let mut last = "";
             for (key, _) in table {{
                 assert!(*key > last, "table must be sorted; {{key}} <= {{last}}");
@@ -294,6 +308,15 @@ mod tests {{
         // Sub-group within a page: z_offset sits under "Printable space".
         assert_eq!(printer_subgroup_of("z_offset"), Some("Printable space"));
         assert_eq!(printer_subgroup_of("gcode_flavor"), Some("Advanced"));
+        // Paired rows carry the multi-option line label that gives their
+        // generic "Min"/"Max" own-labels meaning.
+        assert_eq!(
+            printer_line_of("min_resonance_avoidance_speed"),
+            Some("Resonance Avoidance Speed"),
+        );
+        assert_eq!(printer_line_of("input_shaping_freq_x"), Some("Frequency"));
+        // A self-labeled single-option line has no line label.
+        assert_eq!(printer_line_of("gcode_flavor"), None);
     }}
 
     #[test]
@@ -345,7 +368,9 @@ mod tests {{
 
 def main() -> None:
     tab_text = TAB_CPP.read_text()
-    printer_pages, printer_subgroups, _ = scrape(tab_text, "Printer", extruder_aware=True)
+    printer_pages, printer_subgroups, printer_lines = scrape(
+        tab_text, "Printer", extruder_aware=True
+    )
     filament_pages, filament_subgroups, filament_lines = scrape(
         tab_text, "Filament", extruder_aware=False
     )
@@ -362,6 +387,7 @@ def main() -> None:
         emit_rust(
             printer_pages,
             printer_subgroups,
+            printer_lines,
             filament_pages,
             filament_subgroups,
             filament_lines,

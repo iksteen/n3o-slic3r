@@ -17,6 +17,7 @@ import {
   orderGroupsOtherLast,
   notesLast,
   firmwareHiddenKeys,
+  groupConsecutiveByLine,
 } from "../printerSettingsHelpers";
 import {
   validateBambuConnection,
@@ -250,6 +251,34 @@ describe("firmwareHiddenKeys", () => {
   });
 });
 
+describe("groupConsecutiveByLine", () => {
+  const row = (key: string, line: string | null) => ({ key, line });
+
+  it("collapses a consecutive same-line run into one block", () => {
+    const blocks = groupConsecutiveByLine([
+      row("resonance_avoidance", null),
+      row("min_resonance_avoidance_speed", "Resonance Avoidance Speed"),
+      row("max_resonance_avoidance_speed", "Resonance Avoidance Speed"),
+      row("input_shaping_type", null),
+    ]);
+    expect(blocks.map((b) => [b.line, b.rows.length])).toEqual([
+      [null, 1],
+      ["Resonance Avoidance Speed", 2],
+      [null, 1],
+    ]);
+  });
+
+  it("does not merge same-line rows that aren't adjacent", () => {
+    const blocks = groupConsecutiveByLine([
+      row("a", "L"),
+      row("b", null),
+      row("c", "L"),
+    ]);
+    // Two separate "L" blocks — grouping is positional, never a global merge.
+    expect(blocks.map((b) => b.line)).toEqual(["L", null, "L"]);
+  });
+});
+
 describe("machine settings page order", () => {
   const opt = (key: string, category: string): OptionSummary => ({
     key,
@@ -257,6 +286,7 @@ describe("machine settings page order", () => {
     label: key,
     category,
     group: null,
+    line: null,
     default_value: { kind: "scalar", value: "0" },
     multiline: false,
     is_color: false,

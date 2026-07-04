@@ -135,6 +135,11 @@ pub struct OptionSummary {
     /// sub-headers within a page. `None` for options with no sub-group
     /// (Process-panel options, per-extruder keys, unscraped keys).
     pub group: Option<String>,
+    /// Label of the multi-option line this key shares with a sibling —
+    /// "Resonance Avoidance Speed" over its "Min"/"Max" pair, "Frequency"
+    /// over the input-shaping X/Y pair. The machine panel renders it as a
+    /// sub-header above the indented members. `None` for standalone rows.
+    pub line: Option<String>,
     /// Typed default. `None` when libslic3r has no compile-time
     /// default for this option. See [`DefaultValue`] for the wire
     /// shape and why vectors are pre-split server-side.
@@ -196,6 +201,7 @@ fn summary_from_def(d: slic3r_ffi::OptionDef) -> OptionSummary {
     OptionSummary {
         capability: capability_for_key(&d.key),
         group: slic3r_ffi::printer_subgroup_of(&d.key).map(str::to_owned),
+        line: slic3r_ffi::printer_line_of(&d.key).map(str::to_owned),
         key: d.key,
         ty: format!("{:?}", d.ty),
         // The machine_max_* families set only `full_label` ("Maximum speed X"),
@@ -676,6 +682,12 @@ mod tests {
                 .all(|s| s.category.as_deref() != Some("Machine limits")),
             "no machine option should render under a separate `Machine limits` section",
         );
+        // Paired rows carry the shared multi-option line label so the panel can
+        // group them under a header ("Min"/"Max" alone are meaningless).
+        let resonance = by_key
+            .get("min_resonance_avoidance_speed")
+            .expect("min_resonance_avoidance_speed");
+        assert_eq!(resonance.line.as_deref(), Some("Resonance Avoidance Speed"));
     }
 
     #[test]

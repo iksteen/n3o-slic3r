@@ -71,6 +71,11 @@ export type OptionSummary = {
    *  "Basic information". The printer panel renders these as sub-headers.
    *  Null for options with no sub-group. */
   group: string | null;
+  /** Label of the multi-option line this key shares with a sibling —
+   *  "Resonance Avoidance Speed" over its "Min"/"Max" pair. The machine
+   *  panel renders it as a sub-header above the indented members. Null for
+   *  standalone rows. */
+  line: string | null;
   default_value: DefaultValue | null;
   /** True for libslic3r options flagged `multiline` — freeform
    *  textareas (start_gcode, end_gcode, the small-area infill flow
