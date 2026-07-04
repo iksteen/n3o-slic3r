@@ -36,20 +36,25 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TAB_CPP = REPO_ROOT / "external/OrcaSlicer/src/slic3r/GUI/Tab.cpp"
 OUTPUT_PATH = REPO_ROOT / "crates/slic3r-ffi/src/option_display_order.rs"
 
-# `append_single_option_line("KEY", ...)` — the canonical form.
-# Allow whitespace around the open paren and either `->` or `.`
-# before the call so we catch `optgroup->append_single_option_line(...)`
-# as well as the rare bare form.
-APPEND_LITERAL = re.compile(
-    r'append_single_option_line\s*\(\s*"([A-Za-z_][A-Za-z0-9_]*)"'
+# Orca lays option rows out three ways; catch all of them, or the most-edited
+# rows (temperatures, fans, all machine G-code) sort to the very end. Same three
+# forms `scrape_option_printer_pages.py` trusts:
+#   - `append_single_option_line("KEY", ...)`         — the single-row form
+#   - `line.append_option(get_option("KEY"))`          — multi-option lines
+#   - `create_line_with_widget(..., "KEY", ...)`       — rows with a side widget
+KEY_FORMS = re.compile(
+    r'append_single_option_line\s*\(\s*"([a-z][a-z0-9_]*)"'
+    r'|get_option\s*\(\s*"([a-z][a-z0-9_]*)"'
+    r'|create_line_with_widget\([^,]+,\s*"([a-z][a-z0-9_]*)"'
 )
 
 
 def scrape(text: str) -> list[str]:
     """Return option keys in first-encounter order across Tab.cpp."""
     seen: dict[str, None] = {}
-    for match in APPEND_LITERAL.finditer(text):
-        seen.setdefault(match.group(1), None)
+    for match in KEY_FORMS.finditer(text):
+        key = match.group(1) or match.group(2) or match.group(3)
+        seen.setdefault(key, None)
     return list(seen.keys())
 
 
@@ -110,6 +115,18 @@ mod tests {{
         assert!(pos("support_type") < pos("support_style"));
         assert!(pos("support_style") < pos("support_threshold_angle"));
         assert!(pos("support_threshold_angle") < pos("raft_layers"));
+    }}
+
+    #[test]
+    fn multi_option_line_keys_are_scraped() {{
+        // Temperature/cooling/machine-G-code rows sit on multi-option lines
+        // (`line.append_option(get_option("KEY"))`), not
+        // `append_single_option_line`. They must still get a position or the
+        // filament panel sorts the most-edited rows to the very end.
+        // `nozzle_temperature` is the canary: it's on the Temperature page,
+        // ahead of the Cooling page's fan rows.
+        let pos = |k: &str| display_order_of(k).expect(k);
+        assert!(pos("nozzle_temperature") < pos("fan_min_speed"));
     }}
 
     #[test]

@@ -14,7 +14,7 @@ use std::ffi::{c_char, CStr, CString};
 use std::fmt;
 use std::path::Path;
 use std::ptr;
-use std::sync::{Mutex, Once};
+use std::sync::Mutex;
 
 // ---- Errors ----
 
@@ -90,23 +90,24 @@ unsafe fn check_with_err(status: sys::slic3r_status, err_ptr: *mut c_char) -> Re
 
 // ---- Library init ----
 
-static INIT_GUARD: Once = Once::new();
-
-/// One-time process init. Multiple calls collapse into one (subsequent calls
-/// are silently ignored). `resources_dir` is optional and only required for
-/// STEP import and font embossing. `log_level` follows boost::log severity:
-/// 0=trace, 1=debug, 2=info, 3=warning, 4=error, 5=fatal.
+/// One-time process init. The shim is idempotent + mutex-guarded, so calling
+/// this more than once is safe and — unlike a `Once` — a failed init (e.g. a
+/// bad `TMPDIR`) stays retriable instead of caching the first outcome forever.
+/// `resources_dir` is optional and only required for STEP import and font
+/// embossing. `log_level` follows boost::log severity: 0=trace, 1=debug,
+/// 2=info, 3=warning, 4=error, 5=fatal.
 pub fn init(resources_dir: Option<&Path>, log_level: u32) -> Result<()> {
-    let mut result = Ok(());
-    INIT_GUARD.call_once(|| {
-        let cstr = resources_dir
-            .map(|p| CString::new(p.to_string_lossy().as_bytes()).expect("resources_dir has NUL"));
-        let raw = cstr.as_ref().map_or(ptr::null(), |c| c.as_ptr());
-        // SAFETY: pointer either null or valid for the duration of this call.
-        let status = unsafe { sys::slic3r_init(raw, log_level) };
-        result = check(status);
-    });
-    result
+    let cstr = match resources_dir {
+        Some(p) => Some(CString::new(p.to_string_lossy().as_bytes()).map_err(|_| Error {
+            kind: ErrorKind::InvalidArg,
+            message: Some("resources_dir has NUL".into()),
+        })?),
+        None => None,
+    };
+    let raw = cstr.as_ref().map_or(ptr::null(), |c| c.as_ptr());
+    // SAFETY: pointer either null or valid for the duration of this call.
+    let status = unsafe { sys::slic3r_init(raw, log_level) };
+    check(status)
 }
 
 /// Returns the FFI shim's version banner.
@@ -432,9 +433,33 @@ pub fn cut_mesh_deferred(
         (cf.as_ptr(), cn.as_ptr())
     };
     let triangle_count = indices.len() / 3;
-    let paint_cstrings: Option<Vec<CString>> = paint
-        .filter(|p| p.len() == triangle_count)
-        .map(|p| p.iter().map(|s| CString::new(s.as_str()).unwrap_or_default()).collect());
+    // Paint must be one string per triangle, NUL-free — reject a mismatch
+    // instead of silently dropping it (this param exists to carry stale paint
+    // across an edit, so a silent drop is exactly the bug it should prevent).
+    let paint_cstrings: Option<Vec<CString>> = match paint {
+        Some(p) => {
+            if p.len() != triangle_count {
+                return Err(Error {
+                    kind: ErrorKind::InvalidArg,
+                    message: Some(format!(
+                        "paint length {} != triangle count {triangle_count}",
+                        p.len()
+                    )),
+                });
+            }
+            Some(
+                p.iter()
+                    .map(|s| {
+                        CString::new(s.as_str()).map_err(|_| Error {
+                            kind: ErrorKind::InvalidArg,
+                            message: Some("paint string has interior NUL".into()),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        }
+        None => None,
+    };
     let paint_ptrs: Option<Vec<*const c_char>> =
         paint_cstrings.as_ref().map(|v| v.iter().map(|c| c.as_ptr()).collect());
     let paint_ptr = paint_ptrs.as_ref().map_or(ptr::null(), |v| v.as_ptr());
@@ -823,15 +848,22 @@ impl OptBucket {
 pub fn bucket_of(key: &str) -> Option<OptBucket> {
     static BUCKET_BY_KEY: std::sync::OnceLock<std::collections::HashMap<String, OptBucket>> =
         std::sync::OnceLock::new();
-    BUCKET_BY_KEY
-        .get_or_init(|| {
-            option_defs()
-                .into_iter()
-                .filter_map(|d| d.bucket.map(|b| (d.key, b)))
-                .collect()
-        })
-        .get(key)
-        .copied()
+    if let Some(map) = BUCKET_BY_KEY.get() {
+        return map.get(key).copied();
+    }
+    let defs = option_defs_cached();
+    if defs.is_empty() {
+        // Pre-init: the option table isn't populated. Return None transiently
+        // rather than caching an empty map, which would classify every key as
+        // bucketless for the process lifetime.
+        return None;
+    }
+    let map: std::collections::HashMap<String, OptBucket> = defs
+        .iter()
+        .filter_map(|d| d.bucket.map(|b| (d.key.clone(), b)))
+        .collect();
+    let _ = BUCKET_BY_KEY.set(map);
+    BUCKET_BY_KEY.get().and_then(|m| m.get(key).copied())
 }
 
 mod option_display_order;

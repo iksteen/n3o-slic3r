@@ -277,6 +277,37 @@ fn main() {
         "cargo:rerun-if-changed={}",
         manifest_dir.join("patches/wave-overhangs/patches").display()
     );
+    // Cross-build inputs: editing a toolchain file or a windows-cross patch must
+    // re-run the build (re-configure / re-apply) so a stale toolchain or patch
+    // can't silently ship in the DLL. All committed, so watch on every host.
+    let wc = workspace_root.join("packaging/windows-cross");
+    for p in [
+        wc.join("toolchain.cmake"),
+        wc.join("override.cmake"),
+        wc.join("rc-sdk-includes.cmake"),
+        wc.join("patches"),
+        workspace_root.join("packaging/macos-cross/toolchain.cmake"),
+        manifest_dir.join("ffi/macos_availability_shim.mm"),
+    ] {
+        println!("cargo:rerun-if-changed={}", p.display());
+    }
+    // Re-run if the OrcaSlicer submodule pin moves (or a libslic3r file is edited
+    // in place): watch the submodule's gitdir HEAD. Watching only the shim/patch
+    // files misses a plain `git checkout` of a new pin, so the build would
+    // otherwise skip and link the previous engine. Best-effort — outside a git
+    // checkout the rev-parse fails and the watch is simply omitted.
+    if let Some(gitdir) = Command::new("git")
+        .arg("-C")
+        .arg(workspace_root.join("external/OrcaSlicer"))
+        .args(["rev-parse", "--absolute-git-dir"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        println!("cargo:rerun-if-changed={gitdir}/HEAD");
+    }
 
     // The header is ABI-clean (only <stddef.h>/<stdint.h>, fixed-width types), so
     // host-target bindgen produces correct bindings for the windows-msvc target.
@@ -355,7 +386,10 @@ fn apply_submodule_patches(workspace_root: &Path, base: &Path) {
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.extension().map_or(false, |x| x == "patch"))
             .collect(),
-        Err(_) => return,
+        // The patches dir is committed and must exist. Silently returning here
+        // would ship an engine missing the carry while the scraped tables still
+        // advertise its options — fail loudly instead.
+        Err(e) => panic!("cannot read patch dir {}: {e}", patches_dir.display()),
     };
     patches.sort();
     for p in patches {
@@ -379,13 +413,26 @@ fn apply_submodule_patches(workspace_root: &Path, base: &Path) {
             .map(|s| s.success())
             .unwrap_or(false);
         if !ok {
-            // The reverse-check above already proved the patch isn't applied,
-            // so a failed forward-apply is unambiguous — fail the build rather
-            // than silently shipping an engine missing the wave-overhang (or
-            // cross-build) carry. Check the submodule is at its pinned commit.
+            // The reverse-check above proved the patch isn't already applied, so
+            // a failed forward-apply means the tree drifted. The common cause is
+            // iterating on a carried patch (the old version is still applied), so
+            // point at the fix instead of a bare "tree not at pinned commit".
+            let dirty = Command::new("git")
+                .args(["-C"])
+                .arg(&orca)
+                .args(["diff", "--quiet"])
+                .status()
+                .map(|s| !s.success())
+                .unwrap_or(false);
+            let hint = if dirty {
+                "the submodule tree is dirty — reset and rebuild:\n    \
+                 git -C external/OrcaSlicer checkout -- . && cargo build"
+            } else {
+                "the submodule is not at its pinned commit, or the patch no \
+                 longer applies — re-validate the carry (see README.md)"
+            };
             panic!(
-                "failed to apply {} to the OrcaSlicer submodule (tree not at the \
-                 pinned commit, or the patch no longer applies)",
+                "failed to apply {} to the OrcaSlicer submodule; {hint}",
                 p.display()
             );
         }

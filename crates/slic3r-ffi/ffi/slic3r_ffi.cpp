@@ -278,6 +278,14 @@ struct DefCache {
             }
             e->enum_values        = d.enum_values;
             e->enum_labels        = d.enum_labels;
+            // libslic3r doesn't guarantee equal-length values/labels, but the
+            // FFI exposes a single count (from values) and the Rust wrapper reads
+            // labels[0..count]. Clamp labels to values.size() (padding empties,
+            // which the value string backfills — the GUI's own fallback) so that
+            // read can't run past the label vector.
+            e->enum_labels.resize(e->enum_values.size());
+            for (size_t li = 0; li < e->enum_values.size(); ++li)
+                if (e->enum_labels[li].empty()) e->enum_labels[li] = e->enum_values[li];
             e->type               = map_type(d.type);
             e->mode               = map_mode(d.mode);
             e->readonly           = d.readonly  ? 1 : 0;
@@ -797,6 +805,8 @@ slic3r_status slic3r_init(const char* resources_dir, unsigned int log_level) {
         return SLIC3R_OK;
     } catch (const std::exception&) {
         return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
+        return SLIC3R_ERR_INTERNAL;
     }
 }
 
@@ -823,6 +833,8 @@ slic3r_status slic3r_escape_strings_cstyle(const char* const* strs, size_t count
         *out = dup_c(Slic3r::escape_strings_cstyle(v));
         return *out ? SLIC3R_OK : SLIC3R_ERR_INTERNAL;
     } catch (const std::exception&) {
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
         return SLIC3R_ERR_INTERNAL;
     }
 }
@@ -854,6 +866,8 @@ slic3r_status slic3r_unescape_strings_cstyle(const char* s, char*** out,
         *out_count = v.size();
         return SLIC3R_OK;
     } catch (const std::exception&) {
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
         return SLIC3R_ERR_INTERNAL;
     }
 }
@@ -903,6 +917,8 @@ slic3r_config_t* slic3r_config_new(void) {
         return c;
     } catch (const std::exception&) {
         return nullptr;
+    } catch (...) {
+        return nullptr;
     }
 }
 
@@ -920,6 +936,8 @@ slic3r_status slic3r_config_set(slic3r_config_t* cfg, const char* key, const cha
         return SLIC3R_OK;
     } catch (const std::exception&) {
         return SLIC3R_ERR_PARSE_VALUE;
+    } catch (...) {
+        return SLIC3R_ERR_PARSE_VALUE;
     }
 }
 
@@ -931,6 +949,8 @@ slic3r_status slic3r_config_get(slic3r_config_t* cfg, const char* key, char** ou
         *out_value = dup_c(cfg->cfg.opt_serialize(key));
         return *out_value ? SLIC3R_OK : SLIC3R_ERR_INTERNAL;
     } catch (const std::exception&) {
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
         return SLIC3R_ERR_INTERNAL;
     }
 }
@@ -954,6 +974,9 @@ slic3r_status slic3r_config_validate(slic3r_config_t* cfg, char** out_err) {
     } catch (const std::exception& e) {
         set_err(out_err, e.what());
         return SLIC3R_ERR_VALIDATE;
+    } catch (...) {
+        set_err(out_err, "unknown (non-std) exception during validate");
+        return SLIC3R_ERR_VALIDATE;
     }
 }
 
@@ -963,6 +986,8 @@ slic3r_model_t* slic3r_model_new(void) {
     try {
         return new slic3r_model_t();
     } catch (const std::exception&) {
+        return nullptr;
+    } catch (...) {
         return nullptr;
     }
 }
@@ -1003,6 +1028,8 @@ slic3r_status slic3r_model_remap_paint_filaments(slic3r_model_t* m,
         }
         return SLIC3R_OK;
     } catch (const std::exception&) {
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
         return SLIC3R_ERR_INTERNAL;
     }
 }
@@ -1350,6 +1377,9 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         return SLIC3R_ERR_SLICE;
     } catch (const std::exception& e) {
         set_err(out_err, e.what());
+        return SLIC3R_ERR_SLICE;
+    } catch (...) {
+        set_err(out_err, "unknown (non-std) exception during slice");
         return SLIC3R_ERR_SLICE;
     }
 }
@@ -1712,6 +1742,16 @@ slic3r_status slic3r_cut_mesh_deferred(
             if (out_neg_paint) *out_neg_paint = conn_marshal_paint(neg_paint);
         }
 
+        // On an OOM error return below, free the already-marshalled cut halves
+        // (the largest allocations) so the failure path doesn't leak them — the
+        // Rust wrapper early-returns on a non-OK status without freeing.
+        auto free_halves = [&]() {
+            std::free(*out_pos_vertices); std::free(*out_pos_indices);
+            std::free(*out_neg_vertices); std::free(*out_neg_indices);
+            *out_pos_vertices = nullptr; *out_pos_indices = nullptr;
+            *out_neg_vertices = nullptr; *out_neg_indices = nullptr;
+        };
+
         if (!mods.empty()) {
             const size_t nm = mods.size();
             float** mv = static_cast<float**>(std::malloc(nm * sizeof(float*)));
@@ -1720,23 +1760,34 @@ slic3r_status slic3r_cut_mesh_deferred(
             size_t* mtc = static_cast<size_t*>(std::malloc(nm * sizeof(size_t)));
             int* mh = static_cast<int*>(std::malloc(nm * sizeof(int)));
             int* mt = static_cast<int*>(std::malloc(nm * sizeof(int)));
-            if (mv && mi && mvc && mtc && mh && mt) {
-                for (size_t k = 0; k < nm; ++k) {
-                    conn_marshal(mods[k].its, qi, o, &mv[k], &mvc[k], &mi[k], &mtc[k]);
-                    mh[k] = mods[k].half;
-                    mt[k] = mods[k].type;
-                }
-                if (out_mod_vertices) *out_mod_vertices = mv;
-                if (out_mod_indices) *out_mod_indices = mi;
-                if (out_mod_vertex_counts) *out_mod_vertex_counts = mvc;
-                if (out_mod_triangle_counts) *out_mod_triangle_counts = mtc;
-                if (out_mod_half) *out_mod_half = mh;
-                if (out_mod_type) *out_mod_type = mt;
-                if (out_mod_count) *out_mod_count = nm;
-            } else {
+            if (!(mv && mi && mvc && mtc && mh && mt)) {
                 std::free(mv); std::free(mi); std::free(mvc); std::free(mtc);
                 std::free(mh); std::free(mt);
+                free_halves();
+                set_err(out_err, "out of memory marshalling cut connectors");
+                return SLIC3R_ERR_INTERNAL;
             }
+            for (size_t k = 0; k < nm; ++k) {
+                // A dropped connector volume would silently slice a half with a
+                // flat mating face — fail rather than return SLIC3R_OK short.
+                if (!conn_marshal(mods[k].its, qi, o, &mv[k], &mvc[k], &mi[k], &mtc[k])) {
+                    for (size_t j = 0; j < k; ++j) { std::free(mv[j]); std::free(mi[j]); }
+                    std::free(mv); std::free(mi); std::free(mvc); std::free(mtc);
+                    std::free(mh); std::free(mt);
+                    free_halves();
+                    set_err(out_err, "out of memory marshalling cut connectors");
+                    return SLIC3R_ERR_INTERNAL;
+                }
+                mh[k] = mods[k].half;
+                mt[k] = mods[k].type;
+            }
+            if (out_mod_vertices) *out_mod_vertices = mv;
+            if (out_mod_indices) *out_mod_indices = mi;
+            if (out_mod_vertex_counts) *out_mod_vertex_counts = mvc;
+            if (out_mod_triangle_counts) *out_mod_triangle_counts = mtc;
+            if (out_mod_half) *out_mod_half = mh;
+            if (out_mod_type) *out_mod_type = mt;
+            if (out_mod_count) *out_mod_count = nm;
         }
 
         if (!dowels.empty()) {
@@ -1745,17 +1796,26 @@ slic3r_status slic3r_cut_mesh_deferred(
             uint32_t** di = static_cast<uint32_t**>(std::malloc(nd * sizeof(uint32_t*)));
             size_t* dvc = static_cast<size_t*>(std::malloc(nd * sizeof(size_t)));
             size_t* dtc = static_cast<size_t*>(std::malloc(nd * sizeof(size_t)));
-            if (dv && di && dvc && dtc) {
-                for (size_t k = 0; k < nd; ++k)
-                    conn_marshal(dowels[k], qi, o, &dv[k], &dvc[k], &di[k], &dtc[k]);
-                if (out_dowel_vertices) *out_dowel_vertices = dv;
-                if (out_dowel_indices) *out_dowel_indices = di;
-                if (out_dowel_vertex_counts) *out_dowel_vertex_counts = dvc;
-                if (out_dowel_triangle_counts) *out_dowel_triangle_counts = dtc;
-                if (out_dowel_count) *out_dowel_count = nd;
-            } else {
+            if (!(dv && di && dvc && dtc)) {
                 std::free(dv); std::free(di); std::free(dvc); std::free(dtc);
+                free_halves();
+                set_err(out_err, "out of memory marshalling cut dowels");
+                return SLIC3R_ERR_INTERNAL;
             }
+            for (size_t k = 0; k < nd; ++k) {
+                if (!conn_marshal(dowels[k], qi, o, &dv[k], &dvc[k], &di[k], &dtc[k])) {
+                    for (size_t j = 0; j < k; ++j) { std::free(dv[j]); std::free(di[j]); }
+                    std::free(dv); std::free(di); std::free(dvc); std::free(dtc);
+                    free_halves();
+                    set_err(out_err, "out of memory marshalling cut dowels");
+                    return SLIC3R_ERR_INTERNAL;
+                }
+            }
+            if (out_dowel_vertices) *out_dowel_vertices = dv;
+            if (out_dowel_indices) *out_dowel_indices = di;
+            if (out_dowel_vertex_counts) *out_dowel_vertex_counts = dvc;
+            if (out_dowel_triangle_counts) *out_dowel_triangle_counts = dtc;
+            if (out_dowel_count) *out_dowel_count = nd;
         }
         return SLIC3R_OK;
     } catch (const std::exception& e) {
