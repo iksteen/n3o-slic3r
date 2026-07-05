@@ -3631,6 +3631,8 @@
     min-height: 0;
     overflow: hidden;
   }
+  /* Extruder tab has no left-nav — content spans the full width. */
+  .psm-body.single-col { grid-template-columns: 1fr; }
   .psm-nav {
     display: flex; flex-direction: column;
     gap: 1px;

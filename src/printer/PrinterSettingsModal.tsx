@@ -141,11 +141,9 @@ export function PrinterSettingsModal({
     [machineOptions],
   );
   // The per-extruder option set is identical across toolheads; only the
-  // displayed vector index differs. Categorize once, share across tabs.
-  const extruderGroups = useMemo(
-    () => orderGroupsOtherLast(categorize(extruderOptions, [])),
-    [extruderOptions],
-  );
+  // displayed vector index differs. Rendered as one page (ExtruderSettingsSection
+  // groups by optgroup internally), mirroring Orca's single Extruder page.
+  const hasExtruderOptions = extruderOptions.length > 0;
   const extruderCount = instance.extruders.length;
   const [resolved, setResolved] = useState<Record<string, string>>({});
   // Gates the Silent column on the machine-limits rows. libslic3r serializes
@@ -180,12 +178,9 @@ export function PrinterSettingsModal({
   // Per-tab left-nav groups for the non-"general" tabs.
   const isExtruderTab = topTab.startsWith("ext:");
   const extruderIndex = isExtruderTab ? Number(topTab.slice(4)) : 0;
-  const currentGroups =
-    topTab === "machine"
-      ? machineGroups
-      : isExtruderTab
-        ? extruderGroups
-        : [];
+  // The extruder tab is a single page (no sub-nav); only the machine tab
+  // has a left-nav of pages.
+  const currentGroups = topTab === "machine" ? machineGroups : [];
   // Categories load async; if `active` isn't (yet) one of the current tab's
   // groups, fall back to the first so the tab always shows content.
   const navActive = currentGroups.some((g) => g.id === active)
@@ -197,7 +192,7 @@ export function PrinterSettingsModal({
     setTopTab(tab);
     if (tab === "general") setActive("general");
     else if (tab === "machine") setActive(machineGroups[0]?.id ?? "");
-    else setActive(extruderGroups[0]?.id ?? "");
+    // Extruder tabs have no sub-nav; nothing to activate.
   };
 
   // Name validation: trim, reject empty, reject if matches another
@@ -410,7 +405,7 @@ export function PrinterSettingsModal({
           >
             Machine
           </button>
-          {extruderGroups.length > 0 &&
+          {hasExtruderOptions &&
             Array.from({ length: extruderCount }, (_, i) => {
               const id = `ext:${i}`;
               return (
@@ -428,7 +423,9 @@ export function PrinterSettingsModal({
             })}
         </div>
 
-        <div className="psm-body">
+        <div className={`psm-body${isExtruderTab ? " single-col" : ""}`}>
+          {/* Extruder tabs are a single page — no left-nav. */}
+          {!isExtruderTab && (
           <nav className="psm-nav" aria-label="Settings sections">
             {topTab === "general"
               ? sections.map((s) => (
@@ -461,6 +458,7 @@ export function PrinterSettingsModal({
                   </button>
                 ))}
           </nav>
+          )}
 
           <section className="psm-content">
             {topTab === "general" && active === "general" && profile && (
@@ -518,20 +516,16 @@ export function PrinterSettingsModal({
                 />
               ) : null,
             )}
-            {isExtruderTab &&
-              extruderGroups.map((g) =>
-                navActive === g.id ? (
-                  <ExtruderSettingsSection
-                    key={g.id}
-                    extruderIndex={extruderIndex}
-                    settings={g.settings}
-                    overrides={instance.config_overrides}
-                    resolved={resolved}
-                    onSet={onSetMachine}
-                    onClear={onClearMachine}
-                  />
-                ) : null,
-              )}
+            {isExtruderTab && (
+              <ExtruderSettingsSection
+                extruderIndex={extruderIndex}
+                settings={extruderOptions}
+                overrides={instance.config_overrides}
+                resolved={resolved}
+                onSet={onSetMachine}
+                onClear={onClearMachine}
+              />
+            )}
           </section>
         </div>
 
