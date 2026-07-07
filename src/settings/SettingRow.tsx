@@ -57,8 +57,12 @@ export function SettingRow({
   onRowLeave,
   allObjects,
 }: SettingRowProps) {
+  // Object tab folds the project override under the object one (object > project
+  // > cascade), so a value authored at the project tier shows through as the
+  // effective value here — `resolved` is fragment-only and carries no override
+  // tiers. The project tab shows only the project tier.
   const tierValue = contextLayer === "object"
-    ? objectOverrides[schema.key]
+    ? objectOverrides[schema.key] ?? projectOverrides[schema.key]
     : projectOverrides[schema.key];
   // Multiline coStrings (`start_gcode`, the small-area infill flow
   // compensation model, …) carry one entry per line of a single
