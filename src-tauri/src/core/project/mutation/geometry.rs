@@ -117,6 +117,7 @@ impl Project {
                 vertices: std::sync::Arc::new(new_mesh.vertices),
                 indices: std::sync::Arc::new(new_mesh.indices),
                 paint_colors: new_mesh.paint_colors.map(std::sync::Arc::new),
+                support_paint: new_mesh.support_paint.map(std::sync::Arc::new),
                 bounding_box: new_mesh.bounding_box,
                 provenance: new_mesh.provenance,
             },
@@ -753,6 +754,9 @@ impl Project {
                     vertices: half.vertices,
                     indices: half.indices,
                     paint_colors: half.paint,
+                    // ponytail: cut drops support paint in v1 (the deferred-cut
+                    // FFI only carries MMU paint); repaint after cutting.
+                    support_paint: None,
                     bounding_box: bbox,
                     provenance: MeshProvenance::Primitive(format!("{} (cut)", res.base_name)),
                 });
@@ -783,6 +787,7 @@ impl Project {
                             vertices: verts,
                             indices: idx,
                             paint_colors: None,
+                            support_paint: None,
                             bounding_box: bbox,
                             provenance: MeshProvenance::Primitive(format!(
                                 "{} connector",
@@ -814,6 +819,7 @@ impl Project {
                     vertices: verts,
                     indices: idx,
                     paint_colors: None,
+                    support_paint: None,
                     bounding_box: bbox,
                     provenance: MeshProvenance::Primitive(format!("{} pin", res.base_name)),
                 });
@@ -1615,6 +1621,7 @@ mod tests {
             vertices: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
             indices: vec![0, 1, 2],
             paint_colors: None,
+            support_paint: None,
             bounding_box: BoundingBox { min: [0.0; 3], max: [1.0, 1.0, 0.0] },
             provenance: MeshProvenance::Primitive("peg".into()),
         });
@@ -2182,6 +2189,7 @@ mod tests {
                 vertices: vec![0.0, 0.0, z, 1.0, 0.0, z, 0.0, 1.0, z],
                 indices: vec![0, 1, 2],
                 paint_colors: None,
+                support_paint: None,
                 bounding_box: BoundingBox {
                     min: [0.0, 0.0, z as f64],
                     max: [1.0, 1.0, z as f64],
@@ -2221,6 +2229,7 @@ mod tests {
             vertices: vec![],
             indices: vec![],
             paint_colors: None,
+            support_paint: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [0.0, 0.0, 0.0],
@@ -2384,6 +2393,7 @@ mod tests {
             vertices: vec![-5.0, -5.0, -3.0, 5.0, -5.0, -3.0, 0.0, 5.0, 3.0],
             indices: vec![0, 1, 2],
             paint_colors: None,
+            support_paint: None,
             bounding_box: BoundingBox {
                 min: [-5.0, -5.0, -3.0],
                 max: [5.0, 5.0, 3.0],
@@ -2410,6 +2420,7 @@ mod tests {
             vertices: vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 5.0],
             indices: vec![0, 1, 2],
             paint_colors: None,
+            support_paint: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [10.0, 10.0, 5.0],
@@ -2789,6 +2800,7 @@ mod tests {
             vertices: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
             indices: vec![0, 1, 2],
             paint_colors: None,
+            support_paint: None,
             bounding_box: BoundingBox { min: [0.0; 3], max: [1.0, 1.0, 0.0] },
             provenance: MeshProvenance::Primitive("peg".into()),
         });

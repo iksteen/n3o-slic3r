@@ -17,7 +17,8 @@ export type ViewportToolMode =
   | "alignY"
   | "facematch"
   | "clone"
-  | "split";
+  | "split"
+  | "paint";
 
 /** A pending clone-dialog request: the object ids to clone + whether to
  *  expand groups. `null` = no dialog open. */

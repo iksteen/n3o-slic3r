@@ -8,6 +8,7 @@
 
 pub mod core;
 mod dialog;
+mod paint_tool;
 mod project_io;
 mod toolpath_render;
 mod viewport_gizmo;
@@ -68,6 +69,7 @@ pub fn run() {
         .manage(Arc::new(core::driver::camera::CameraManager::new()))
         .manage(Arc::new(core::driver::commands::SendCancelRegistry::default()))
         .manage(viewport_render::ViewportState::default())
+        .manage(paint_tool::PaintToolState::default())
         .manage(toolpath_render::ToolpathState::default())
         .setup(|app| {
             use tauri::Manager;
@@ -212,6 +214,12 @@ pub fn run() {
             viewport_render::viewport_tower_grab,
             viewport_render::viewport_invalidate_tower,
             viewport_render::viewport_thumbnail,
+            paint_tool::paint_open,
+            paint_tool::paint_stroke,
+            paint_tool::paint_fill,
+            paint_tool::paint_undo,
+            paint_tool::paint_clear,
+            paint_tool::paint_close,
             core::printer::options::slicer_options_for_printer,
             core::printer::options::slicer_machine_options_for_printer,
             core::printer::options::slicer_extruder_options_for_printer,

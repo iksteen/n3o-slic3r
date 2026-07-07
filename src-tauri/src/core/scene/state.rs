@@ -97,6 +97,13 @@ pub struct Mesh {
     /// travels with the mesh geometry in the 3MF, like the buffers above).
     #[serde(skip, default)]
     pub paint_colors: Option<std::sync::Arc<Vec<String>>>,
+    /// BBS per-triangle support enforcer/blocker paint strings, same shape and
+    /// semantics as `paint_colors` (one per triangle, `None` when unpainted).
+    /// Drives manual tree/normal supports: painted enforcers are the only
+    /// regions supported under `support_type = tree(manual)`. Not serialized —
+    /// travels with the mesh geometry (in the 3MF / `.n3o` geometry blob).
+    #[serde(skip, default)]
+    pub support_paint: Option<std::sync::Arc<Vec<String>>>,
     pub bounding_box: BoundingBox,
     /// File path or in-app catalog handle the mesh came from.
     pub provenance: MeshProvenance,
@@ -247,6 +254,9 @@ pub struct NewMesh {
     /// Per-triangle `paint_color` strings (see [`Mesh::paint_colors`]).
     /// `None` for procedurally-generated / unpainted meshes.
     pub paint_colors: Option<Vec<String>>,
+    /// Per-triangle support enforcer/blocker strings (see
+    /// [`Mesh::support_paint`]). `None` for unpainted meshes.
+    pub support_paint: Option<Vec<String>>,
     pub bounding_box: BoundingBox,
     pub provenance: MeshProvenance,
 }

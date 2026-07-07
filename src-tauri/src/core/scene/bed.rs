@@ -216,6 +216,7 @@ mod tests {
             vertices: std::sync::Arc::new(vec![]),
             indices: std::sync::Arc::new(vec![]),
             paint_colors: None,
+            support_paint: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [1.0, 1.0, 1.0],

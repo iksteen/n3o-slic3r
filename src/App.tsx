@@ -8,6 +8,10 @@ import { cloneObjects } from "./objects/objectCommands";
 import { useViewportTools } from "./viewport/useViewportTools";
 import { useSplitSession } from "./viewport/useSplitSession";
 import { SplitPanel } from "./viewport/SplitPanel";
+import { usePaintSession } from "./viewport/usePaintSession";
+import { usePlateCascadeResolve } from "./settings/resolve";
+import { PaintPanel } from "./viewport/PaintPanel";
+import { setObjectOverride } from "./settings/overrideCommands";
 import { ErrorConsole } from "./logging/ErrorConsole";
 import { shouldIgnoreHotkey } from "./ui/hotkeyInhibit";
 import { setupLogSinks } from "./logging/logStore";
@@ -74,6 +78,9 @@ function App() {
   // Split (cut-by-plane) tool — a transient cutting-plane session, mutually
   // exclusive with the transform gizmo (coordinated below).
   const split = useSplitSession();
+  // Support-paint tool — a transient per-object painting session, mutually
+  // exclusive with the gizmo + split (coordinated below).
+  const paint = usePaintSession();
   // Stable identity for the viewport's connector list: `split.connectors` is
   // stable useState, but mapping it inline in the prop below would mint a fresh
   // array every render, re-firing WgpuViewport's split-redraw effect (a full
@@ -101,7 +108,7 @@ function App() {
   // which bypasses the submit path — handled by the lookup fallback).
   const [sliceObjectCount, setSliceObjectCount] = useState<number | null>(null);
   const session = useProjectSession();
-  const undoRedo = useUndoRedo(split.active);
+  const undoRedo = useUndoRedo(split.active || paint.active);
   const recovery = useAutosaveRecoveryGate();
   const printers = usePrinterInstances();
   const printerCatalog = usePrinterCatalog();
@@ -120,6 +127,26 @@ function App() {
       (p) => p.plate_id === session.snapshot?.active_plate_id,
     ) ?? null;
   const activePlateId = activePlate?.plate_id ?? null;
+
+  // Effective support settings for the paint panel's enable prompts. The paint
+  // tool is per-object, so the prompts write + read at object scope, resolving
+  // object override → plate override → cascade default (fragments/profile).
+  // Only resolved while the tool is open.
+  const { resolved: paintResolved } = usePlateCascadeResolve(
+    paint.active ? activePlateId : null,
+    `${activePlate?.quality_profile ?? ""}|${activePlate?.printer_instance_id ?? ""}`,
+  );
+  const paintObjectOverrides =
+    (paint.objectId != null
+      ? activePlate?.object_overrides[String(paint.objectId)]
+      : undefined) ?? {};
+  const resolveSupport = (key: string): string | undefined =>
+    paintObjectOverrides[key] ??
+    activePlate?.project_overrides[key] ??
+    paintResolved[key]?.value;
+  const paintSupportType = resolveSupport("support_type") ?? null;
+  const paintEnableSupport = (resolveSupport("enable_support") ?? "0") === "1";
+
   // Set the workspace mode and remember it for the active plate.
   const applyMode = (next: "scene" | "preview"): void => {
     setMode(next);
@@ -586,11 +613,25 @@ function App() {
                   selectConnector: split.selectConnector,
                   removeConnector: split.removeConnector,
                 }}
+                paint={{
+                  active: paint.active,
+                  radius: paint.radius,
+                  brush: paint.brush,
+                  angle: paint.angle,
+                  fill: paint.fill,
+                  epoch: paint.epoch,
+                  setRadius: paint.setRadius,
+                  onPainted: paint.notePainted,
+                }}
                 onToolDone={viewport.clearTool}
                 onClonePick={viewport.pickClone}
                 onSplitPick={(id) => {
                   viewport.selectGizmo("none");
                   split.enter([id]);
+                }}
+                onPaintPick={(id) => {
+                  viewport.selectGizmo("none");
+                  paint.enter(id);
                 }}
                 onFaceMatchStep={viewport.setFaceMatchStep}
               />
@@ -599,31 +640,51 @@ function App() {
                 objects={activePlate?.objects ?? []}
                 selectedIds={selection}
                 gizmoMode={viewport.gizmoMode}
-                // Arming the gizmo/clone exits the split tool (one tool at a time).
+                // Arming any other tool exits the modal split/paint sessions
+                // (one tool at a time).
                 onGizmoMode={(m) => {
                   split.exit();
+                  paint.exit();
                   viewport.selectGizmo(m);
                 }}
                 tool={viewport.tool}
                 onTool={(t) => {
                   split.exit();
+                  paint.exit();
                   viewport.selectTool(t);
                 }}
                 onClone={() => {
                   split.exit();
+                  paint.exit();
                   viewport.armClone(selection);
                 }}
                 onSplit={() => {
                   if (split.active) {
                     split.exit();
                   } else if (selection.length > 0) {
+                    paint.exit();
                     viewport.selectGizmo("none");
                     split.enter(selection);
                   } else {
+                    paint.exit();
                     viewport.selectTool("split");
                   }
                 }}
                 splitActive={split.active}
+                onPaint={() => {
+                  if (paint.active) {
+                    paint.exit();
+                  } else if (selection.length === 1) {
+                    split.exit();
+                    viewport.selectGizmo("none");
+                    paint.enter(selection[0]);
+                  } else {
+                    // 0 or 2+ selected → arm pick-to-paint (one object at a time).
+                    split.exit();
+                    viewport.selectTool("paint");
+                  }
+                }}
+                paintActive={paint.active}
                 faceMatchRefSet={viewport.faceMatchStep}
               />
               {split.active && (
@@ -662,6 +723,34 @@ function App() {
                       .catch((e: unknown) => console.error("split failed", e))
                       .finally(() => setSplitting(false));
                   }}
+                />
+              )}
+              {paint.active && (
+                <PaintPanel
+                  radius={paint.radius}
+                  onRadius={paint.setRadius}
+                  brush={paint.brush}
+                  onBrush={paint.setBrush}
+                  fill={paint.fill}
+                  onFill={paint.setFill}
+                  angle={paint.angle}
+                  onAngle={paint.setAngle}
+                  supportType={paintSupportType}
+                  enableSupport={paintEnableSupport}
+                  hasEnforce={paint.hasEnforce}
+                  hasBlock={paint.hasBlock}
+                  onEnableSupport={(type) => {
+                    if (activePlateId == null || paint.objectId == null) return;
+                    const obj = paint.objectId;
+                    void setObjectOverride(activePlateId, obj, "enable_support", "1").catch(
+                      (e: unknown) => console.error("enable_support failed", e),
+                    );
+                    void setObjectOverride(activePlateId, obj, "support_type", type).catch(
+                      (e: unknown) => console.error("support_type failed", e),
+                    );
+                  }}
+                  onErase={paint.clear}
+                  onClose={paint.exit}
                 />
               )}
               {viewport.clone && (

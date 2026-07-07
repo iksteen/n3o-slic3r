@@ -77,6 +77,7 @@ pub(crate) mod test_support {
                 1, 5, 3, 3, 5, 7, // right
             ],
             paint_colors: None,
+            support_paint: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [1.0, 1.0, 1.0],
@@ -118,6 +119,7 @@ pub(crate) mod test_support {
                 5, 2, 0, 5, 1, 2, 5, 3, 1, 5, 0, 3, // bottom fan
             ],
             paint_colors: None,
+            support_paint: None,
             bounding_box: BoundingBox {
                 min: [(-r) as f64, (-r) as f64, (-r) as f64],
                 max: [r as f64, r as f64, r as f64],
@@ -152,6 +154,7 @@ pub(crate) mod test_support {
             vertices: vec![0.0; 24],
             indices: vec![0, 1, 2],
             paint_colors: None,
+            support_paint: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [1.0, 1.0, 1.0],

@@ -1127,10 +1127,13 @@ impl Model {
     /// - `indices`: flat triangle triples (3 indices per triangle).
     /// - `transform`: 4x4 object->world matrix, column-major (glam/Eigen order).
     /// - `extruder`: 1-based base filament index, set on the object config.
-    /// - `paint_hex`: per-triangle BBS paint hex strings. Pass an empty slice
-    ///   for no painting; otherwise one entry per triangle (`""` = unpainted).
+    /// - `paint_hex`: per-triangle BBS MMU color paint hex strings. Pass an
+    ///   empty slice for none; otherwise one entry per triangle (`""` = none).
+    /// - `support_hex`: per-triangle BBS support enforcer/blocker paint hex
+    ///   strings, same shape as `paint_hex`. Empty slice for none.
     /// - `overrides`: per-object config overrides as `(key, value)` pairs,
     ///   applied through libslic3r's schema deserializer (unknown keys skipped).
+    #[allow(clippy::too_many_arguments)]
     pub fn add_object(
         &mut self,
         name: &str,
@@ -1139,17 +1142,20 @@ impl Model {
         transform: &[f64; 16],
         extruder: i32,
         paint_hex: &[String],
+        support_hex: &[String],
         overrides: &[(String, String)],
     ) -> Result<()> {
         let cname = cstring(name, "name")?;
         validate_indices(verts, indices)?;
         validate_paint(indices, paint_hex)?;
+        validate_paint(indices, support_hex)?;
 
         // Own the CStrings for the lifetime of the call; the C side reads the
         // derived pointer arrays but does not retain them. An empty Vec's
         // `as_ptr()` is valid and the C side never derefs it when the count is 0.
-        let strs = ObjectStrings::marshal(paint_hex, overrides)?;
+        let strs = ObjectStrings::marshal(paint_hex, support_hex, overrides)?;
         let paint_ptrs = strs.paint_ptrs();
+        let support_ptrs = strs.support_ptrs();
         let key_ptrs = strs.key_ptrs();
         let val_ptrs = strs.val_ptrs();
 
@@ -1170,6 +1176,8 @@ impl Model {
                 extruder,
                 paint_ptrs.as_ptr(),
                 paint_ptrs.len(),
+                support_ptrs.as_ptr(),
+                support_ptrs.len(),
                 key_ptrs.as_ptr(),
                 val_ptrs.as_ptr(),
                 key_ptrs.len(),
@@ -1215,13 +1223,16 @@ impl Model {
         extruder: i32,
         volume_type: VolumeType,
         paint_hex: &[String],
+        support_hex: &[String],
         overrides: &[(String, String)],
     ) -> Result<()> {
         let cname = cstring(name, "name")?;
         validate_indices(verts, indices)?;
         validate_paint(indices, paint_hex)?;
-        let strs = ObjectStrings::marshal(paint_hex, overrides)?;
+        validate_paint(indices, support_hex)?;
+        let strs = ObjectStrings::marshal(paint_hex, support_hex, overrides)?;
         let paint_ptrs = strs.paint_ptrs();
+        let support_ptrs = strs.support_ptrs();
         let key_ptrs = strs.key_ptrs();
         let val_ptrs = strs.val_ptrs();
 
@@ -1245,6 +1256,8 @@ impl Model {
                 volume_type as i32,
                 paint_ptrs.as_ptr(),
                 paint_ptrs.len(),
+                support_ptrs.as_ptr(),
+                support_ptrs.len(),
                 key_ptrs.as_ptr(),
                 val_ptrs.as_ptr(),
                 key_ptrs.len(),
@@ -1271,15 +1284,24 @@ pub enum VolumeType {
 /// must outlive the FFI call — keep this on the stack across it.
 struct ObjectStrings {
     paint: Vec<CString>,
+    support: Vec<CString>,
     keys: Vec<CString>,
     vals: Vec<CString>,
 }
 
 impl ObjectStrings {
-    fn marshal(paint_hex: &[String], overrides: &[(String, String)]) -> Result<Self> {
+    fn marshal(
+        paint_hex: &[String],
+        support_hex: &[String],
+        overrides: &[(String, String)],
+    ) -> Result<Self> {
         let paint = paint_hex
             .iter()
             .map(|s| cstring(s, "paint hex"))
+            .collect::<Result<_>>()?;
+        let support = support_hex
+            .iter()
+            .map(|s| cstring(s, "support hex"))
             .collect::<Result<_>>()?;
         let mut keys = Vec::with_capacity(overrides.len());
         let mut vals = Vec::with_capacity(overrides.len());
@@ -1287,11 +1309,19 @@ impl ObjectStrings {
             keys.push(cstring(k, "override key")?);
             vals.push(cstring(v, "override value")?);
         }
-        Ok(Self { paint, keys, vals })
+        Ok(Self {
+            paint,
+            support,
+            keys,
+            vals,
+        })
     }
 
     fn paint_ptrs(&self) -> Vec<*const c_char> {
         self.paint.iter().map(|c| c.as_ptr()).collect()
+    }
+    fn support_ptrs(&self) -> Vec<*const c_char> {
+        self.support.iter().map(|c| c.as_ptr()).collect()
     }
     fn key_ptrs(&self) -> Vec<*const c_char> {
         self.keys.iter().map(|c| c.as_ptr()).collect()
@@ -1367,6 +1397,229 @@ impl Drop for Model {
     fn drop(&mut self) {
         // SAFETY: raw was returned by slic3r_model_new and we have unique ownership.
         unsafe { sys::slic3r_model_free(self.raw) };
+    }
+}
+
+// ---- Support paint session ----
+
+/// Brush shape for [`PaintSession`] strokes — matches libslic3r's `CursorType`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrushKind {
+    /// Screen-projected circle: paints front-facing triangles under the cursor.
+    Circle = 0,
+    /// 3D sphere: paints every triangle within the radius, front and back.
+    Sphere = 1,
+}
+
+/// Support-paint state per triangle — matches libslic3r `EnforcerBlockerType`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaintState {
+    /// Erase back to unpainted.
+    None = 0,
+    /// Force support here.
+    Enforcer = 1,
+    /// Block support here.
+    Blocker = 2,
+}
+
+/// Stateful enforcer/blocker brush over one mesh, wrapping libslic3r's
+/// `TriangleSelector` (sub-triangle splitting, exact Orca semantics). Build with
+/// [`PaintSession::new`], mutate with [`stroke`](Self::stroke) /
+/// [`fill`](Self::fill) / [`undo`](Self::undo), then read back the per-triangle
+/// paint strings with [`serialize`](Self::serialize) or the tessellated overlay
+/// mesh with [`facets`](Self::facets).
+pub struct PaintSession {
+    raw: *mut sys::slic3r_paint_session_t,
+}
+
+// SAFETY: the handle owns no thread-affine state; the shim is single-threaded
+// per handle. Same contract as `Model` — callers don't share a `&mut` across
+// threads without external synchronization.
+unsafe impl Send for PaintSession {}
+
+/// Take ownership of a shim error message pointer (or null), freeing it.
+unsafe fn take_err(err: *mut c_char) -> Option<String> {
+    if err.is_null() {
+        return None;
+    }
+    let s = CStr::from_ptr(err).to_string_lossy().into_owned();
+    sys::slic3r_string_free(err);
+    Some(s)
+}
+
+impl PaintSession {
+    /// Open a session over one mesh (`vertices`: 3 floats/vertex, `indices`: 3
+    /// u32/triangle). `paint` seeds the existing support paint — pass an empty
+    /// slice for none, otherwise one hex string per triangle (`""` = unpainted).
+    pub fn new(vertices: &[f32], indices: &[u32], paint: &[String]) -> Result<Self> {
+        validate_indices(vertices, indices)?;
+        validate_paint(indices, paint)?;
+        let strs: Vec<CString> = paint
+            .iter()
+            .map(|s| cstring(s, "paint hex"))
+            .collect::<Result<_>>()?;
+        let ptrs: Vec<*const c_char> = strs.iter().map(|c| c.as_ptr()).collect();
+        let mut err: *mut c_char = ptr::null_mut();
+        // SAFETY: buffers are length-validated; the CStrings + ptr vec outlive
+        // the call; err is an out-param we own on a null return.
+        let raw = unsafe {
+            sys::slic3r_paint_session_new(
+                vertices.as_ptr(),
+                vertices.len() / 3,
+                indices.as_ptr(),
+                indices.len() / 3,
+                ptrs.as_ptr(),
+                ptrs.len(),
+                &mut err,
+            )
+        };
+        drop(strs);
+        if raw.is_null() {
+            return Err(Error {
+                kind: ErrorKind::InvalidArg,
+                message: unsafe { take_err(err) },
+            });
+        }
+        Ok(Self { raw })
+    }
+
+    /// Apply one brush stroke centered at mesh-local `hit` (the ray/mesh
+    /// intersection), camera at mesh-local `camera`, `trafo` the 4x4 column-major
+    /// mesh->world matrix; `radius` is world mm. `facet` is the unsplit triangle
+    /// the hit lies on. Set `push_undo` on the first sample of a drag so the
+    /// whole drag collapses to one undo step.
+    #[allow(clippy::too_many_arguments)]
+    pub fn stroke(
+        &mut self,
+        facet: i32,
+        hit: [f32; 3],
+        camera: [f32; 3],
+        trafo: &[f64; 16],
+        radius: f32,
+        brush: BrushKind,
+        state: PaintState,
+        push_undo: bool,
+    ) -> Result<()> {
+        let mut err: *mut c_char = ptr::null_mut();
+        // SAFETY: self.raw is live; hit/camera are 3 floats, trafo 16 doubles;
+        // err is an out-param we own on non-null return.
+        let status = unsafe {
+            sys::slic3r_paint_session_stroke(
+                self.raw,
+                facet,
+                hit.as_ptr(),
+                camera.as_ptr(),
+                trafo.as_ptr(),
+                radius,
+                brush as u32,
+                state as u32,
+                push_undo as i32,
+                &mut err,
+            )
+        };
+        unsafe { check_with_err(status, err) }
+    }
+
+    /// Smart fill from mesh-local `hit` on `facet`: flood the connected region
+    /// whose adjacent-facet angles stay within `angle_deg`, then paint it `state`.
+    pub fn fill(
+        &mut self,
+        facet: i32,
+        hit: [f32; 3],
+        trafo: &[f64; 16],
+        angle_deg: f32,
+        state: PaintState,
+        push_undo: bool,
+    ) -> Result<()> {
+        let mut err: *mut c_char = ptr::null_mut();
+        // SAFETY: as `stroke`.
+        let status = unsafe {
+            sys::slic3r_paint_session_fill(
+                self.raw,
+                facet,
+                hit.as_ptr(),
+                trafo.as_ptr(),
+                angle_deg,
+                state as u32,
+                push_undo as i32,
+                &mut err,
+            )
+        };
+        unsafe { check_with_err(status, err) }
+    }
+
+    /// Undo the last stroke/fill. Returns `true` if a snapshot was restored,
+    /// `false` when the in-session undo stack was empty.
+    pub fn undo(&mut self) -> bool {
+        // SAFETY: self.raw is a live handle.
+        unsafe { sys::slic3r_paint_session_undo(self.raw) != 0 }
+    }
+
+    /// Read the per-triangle support-paint hex strings (`""` = unpainted) — the
+    /// form persisted in the project and fed into slicing.
+    pub fn serialize(&self) -> Result<Vec<String>> {
+        let mut arr: *mut *mut c_char = ptr::null_mut();
+        let mut count: usize = 0;
+        let mut err: *mut c_char = ptr::null_mut();
+        // SAFETY: out-params we own on OK.
+        let status =
+            unsafe { sys::slic3r_paint_session_serialize(self.raw, &mut arr, &mut count, &mut err) };
+        unsafe { check_with_err(status, err) }?;
+        // SAFETY: on OK, arr is a shim-owned array of `count` C strings; own+free.
+        let out = (0..count)
+            .map(|k| unsafe {
+                let p = *arr.add(k);
+                if p.is_null() {
+                    String::new()
+                } else {
+                    CStr::from_ptr(p).to_string_lossy().into_owned()
+                }
+            })
+            .collect();
+        unsafe { sys::slic3r_free_string_array(arr, count) };
+        Ok(out)
+    }
+
+    /// Read the tessellated (split-triangle) facets currently in `state` as a
+    /// mesh-local indexed mesh `(vertices, indices)` for a viewport overlay.
+    /// Empty (both vecs cleared) when nothing is painted `state`.
+    pub fn facets(&self, state: PaintState) -> Result<(Vec<f32>, Vec<u32>)> {
+        let mut verts: *mut f32 = ptr::null_mut();
+        let mut vcount: usize = 0;
+        let mut idx: *mut u32 = ptr::null_mut();
+        let mut tcount: usize = 0;
+        let mut err: *mut c_char = ptr::null_mut();
+        // SAFETY: out-params we own on OK.
+        let status = unsafe {
+            sys::slic3r_paint_session_facets(
+                self.raw,
+                state as u32,
+                &mut verts,
+                &mut vcount,
+                &mut idx,
+                &mut tcount,
+                &mut err,
+            )
+        };
+        unsafe { check_with_err(status, err) }?;
+        if verts.is_null() || idx.is_null() || vcount == 0 || tcount == 0 {
+            // SAFETY: frees whichever (if any) is non-null.
+            unsafe { sys::slic3r_cut_mesh_free(verts, idx) };
+            return Ok((Vec::new(), Vec::new()));
+        }
+        // SAFETY: on OK with non-null, the buffers hold vcount*3 / tcount*3
+        // elements we own; copy then free.
+        let vertices = unsafe { std::slice::from_raw_parts(verts, vcount * 3).to_vec() };
+        let indices = unsafe { std::slice::from_raw_parts(idx, tcount * 3).to_vec() };
+        unsafe { sys::slic3r_cut_mesh_free(verts, idx) };
+        Ok((vertices, indices))
+    }
+}
+
+impl Drop for PaintSession {
+    fn drop(&mut self) {
+        // SAFETY: raw was returned by slic3r_paint_session_new; unique ownership.
+        unsafe { sys::slic3r_paint_session_free(self.raw) };
     }
 }
 
@@ -1730,7 +1983,7 @@ mod tests {
         let verts: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let indices: [u32; 3] = [0, 1, 2];
         model
-            .add_object("tri", &verts, &indices, &identity, 1, &[], &[])
+            .add_object("tri", &verts, &indices, &identity, 1, &[], &[], &[])
             .expect("add_object should succeed");
     }
 
@@ -1776,15 +2029,22 @@ mod tests {
 
         // "8" = 0b1000: a leaf with state 2. Valid, accepted.
         model
-            .add_object("ok", &verts, &indices, &identity, 1, &["8".into()], &[])
+            .add_object("ok", &verts, &indices, &identity, 1, &["8".into()], &[], &[])
             .expect("valid single-leaf paint");
+
+        // Support paint takes the same well-formedness gate: a truncated split
+        // in the support slot is an InvalidArg, not a crash.
+        let err = model
+            .add_object("bad_sup", &verts, &indices, &identity, 1, &[], &["1".into()], &[])
+            .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::InvalidArg);
 
         // "1" = 0b0001: declares a split (low 2 bits = 1) but supplies no child
         // bits — hex and right length, so it clears the Rust gate; only the
         // shim's bounds-checked walk catches it. Must be a clean InvalidArg,
         // not an OOB read / crash.
         let err = model
-            .add_object("bad", &verts, &indices, &identity, 1, &["1".into()], &[])
+            .add_object("bad", &verts, &indices, &identity, 1, &["1".into()], &[], &[])
             .unwrap_err();
         assert_eq!(err.kind, ErrorKind::InvalidArg);
     }
@@ -1806,16 +2066,16 @@ mod tests {
         assert_eq!(idx, 0, "first object created → index 0");
         // Two volumes appended to the same group object, each its own extruder.
         model
-            .add_volume(idx, "lower", &verts, &indices, &identity, 1, VolumeType::Part, &[], &[])
+            .add_volume(idx, "lower", &verts, &indices, &identity, 1, VolumeType::Part, &[], &[], &[])
             .expect("add_volume 1 should succeed");
         model
-            .add_volume(idx, "upper", &verts, &indices, &identity, 2, VolumeType::Part, &[], &[])
+            .add_volume(idx, "upper", &verts, &indices, &identity, 2, VolumeType::Part, &[], &[], &[])
             .expect("add_volume 2 should succeed");
 
         // Out-of-range object index is rejected, not a crash.
         assert!(
             model
-                .add_volume(99, "oops", &verts, &indices, &identity, 1, VolumeType::Part, &[], &[])
+                .add_volume(99, "oops", &verts, &indices, &identity, 1, VolumeType::Part, &[], &[], &[])
                 .is_err(),
             "add_volume past the last object must error",
         );

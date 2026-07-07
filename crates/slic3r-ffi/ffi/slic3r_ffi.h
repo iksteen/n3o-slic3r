@@ -247,8 +247,10 @@ slic3r_status slic3r_model_remap_paint_filaments(slic3r_model_t* model,
  *   indices: flat triangle triples (tcount = number of triangles)
  *   transform: 4x4 object->world, COLUMN-MAJOR (glam/Eigen native order)
  *   extruder: 1-based; sets ModelObject config["extruder"]
- *   paint_hex / paint_count: per-triangle BBS paint hex strings (paint_count
- *     == tcount when present, else 0); entries may be "" for unpainted faces.
+ *   paint_hex / paint_count: per-triangle BBS MMU color paint hex strings
+ *     (paint_count == tcount when present, else 0); "" for unpainted faces.
+ *   support_hex / support_count: per-triangle BBS support enforcer/blocker
+ *     paint hex strings (same format + shape as paint_hex; else 0).
  *   ovr_keys / ovr_vals / ovr_count: per-object config overrides as
  *     key/value strings, applied to the ModelObject config via the schema
  *     (set_deserialize) so they parse to the right option type.
@@ -259,6 +261,7 @@ slic3r_status slic3r_model_add_object(
     const uint32_t* indices, size_t tcount,
     const double transform[16], int extruder,
     const char* const* paint_hex, size_t paint_count,
+    const char* const* support_hex, size_t support_count,
     const char* const* ovr_keys, const char* const* ovr_vals, size_t ovr_count,
     char** out_err);
 
@@ -289,8 +292,78 @@ slic3r_status slic3r_model_add_volume(
     const uint32_t* indices, size_t tcount,
     const double transform[16], int extruder, int volume_type,
     const char* const* paint_hex, size_t paint_count,
+    const char* const* support_hex, size_t support_count,
     const char* const* ovr_keys, const char* const* ovr_vals, size_t ovr_count,
     char** out_err);
+
+/* ---- Support paint session ----
+ *
+ * Stateful brush over one mesh's support enforcer/blocker facets, wrapping
+ * libslic3r's TriangleSelector (sub-triangle splitting, exact Orca semantics).
+ * The session owns a private one-volume Model purely to host a FacetsAnnotation
+ * (its ctor is private) for converting selector state <-> the per-triangle hex
+ * strings the rest of the pipeline speaks — the annotation is mesh-independent
+ * (only the split-tree bitstream), so it needs no matching mesh.
+ *
+ * Coordinates: `hit` and `camera_pos` are MESH-LOCAL; `trafo` is the 4x4
+ * mesh->world matrix (column-major, 16 doubles); `radius` is world mm. The
+ * session applies the same volume<0 winding flip as slic3r_model_add_object,
+ * so `facet_start` and the serialized strings stay index-aligned with the
+ * caller's triangle order (the flip preserves triangle order).
+ *
+ * Single-threaded per handle. Pure — no slic3r_init() required. */
+typedef struct slic3r_paint_session_t slic3r_paint_session_t;
+
+/* Create a session over one mesh. paint_hex (paint_count == tcount, or 0) seeds
+ * the existing support paint; entries may be "" (unpainted). Each non-empty
+ * string is structurally validated (same grammar as MMU paint) before use; a
+ * malformed string fails with *out_err set and a NULL return. Returns NULL on
+ * any error. */
+slic3r_paint_session_t* slic3r_paint_session_new(
+    const float* verts, size_t vcount,
+    const uint32_t* indices, size_t tcount,
+    const char* const* paint_hex, size_t paint_count, char** out_err);
+
+void slic3r_paint_session_free(slic3r_paint_session_t* s);
+
+/* Apply one brush stroke. cursor_type: 0=CIRCLE, 1=SPHERE. new_state: 0=NONE
+ * (erase), 1=ENFORCER, 2=BLOCKER. facet_start is the unsplit triangle the hit
+ * lies on (0..tcount-1). push_undo != 0 snapshots the pre-stroke state — set it
+ * on the first sample of a drag so one drag collapses to one undo step.
+ * out_err may be NULL. */
+slic3r_status slic3r_paint_session_stroke(
+    slic3r_paint_session_t* s, int32_t facet_start,
+    const float hit[3], const float camera_pos[3], const double trafo[16],
+    float radius, uint32_t cursor_type, uint32_t new_state,
+    int32_t push_undo, char** out_err);
+
+/* Smart fill from `hit` on `facet_start`: select the connected region whose
+ * adjacent-facet angles stay within seed_fill_angle_deg, then paint it
+ * new_state. push_undo as in _stroke. out_err may be NULL. */
+slic3r_status slic3r_paint_session_fill(
+    slic3r_paint_session_t* s, int32_t facet_start,
+    const float hit[3], const double trafo[16], float seed_fill_angle_deg,
+    uint32_t new_state, int32_t push_undo, char** out_err);
+
+/* Pop one undo snapshot. Returns 1 if a snapshot was restored, 0 if the stack
+ * was empty (no-op). */
+int slic3r_paint_session_undo(slic3r_paint_session_t* s);
+
+/* Read the per-triangle support-paint hex strings (for persistence). On success
+ * *out_paint is an array of *out_count == tcount C strings ("" = unpainted),
+ * freed with slic3r_free_string_array. out_err may be NULL. */
+slic3r_status slic3r_paint_session_serialize(
+    slic3r_paint_session_t* s, char*** out_paint, size_t* out_count,
+    char** out_err);
+
+/* Read the tessellated (split-triangle) facets currently in `state`
+ * (1=ENFORCER, 2=BLOCKER) as a mesh-local indexed mesh, for a viewport overlay.
+ * An empty state yields *out_verts/out_indices = NULL and counts 0. Buffers are
+ * freed with slic3r_cut_mesh_free. out_err may be NULL. */
+slic3r_status slic3r_paint_session_facets(
+    slic3r_paint_session_t* s, uint32_t state,
+    float** out_verts, size_t* out_vcount,
+    uint32_t** out_indices, size_t* out_tcount, char** out_err);
 
 /* ---- Slicing ---- */
 

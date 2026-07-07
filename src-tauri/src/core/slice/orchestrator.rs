@@ -435,6 +435,12 @@ fn build_model_objects(
     fn paint(o: &super::input::SliceObject) -> &[String] {
         o.paint.as_deref().map(|p| p.as_slice()).unwrap_or(&[])
     }
+    fn support(o: &super::input::SliceObject) -> &[String] {
+        o.support_paint
+            .as_deref()
+            .map(|p| p.as_slice())
+            .unwrap_or(&[])
+    }
 
     for unit in build_units(objects) {
         // A solo object with no connector volumes is one single-volume object
@@ -453,6 +459,7 @@ fn build_model_objects(
                         &o.transform,
                         o.extruder,
                         paint(o),
+                        support(o),
                         &o.overrides,
                     )
                     .map_err(|e| format!("add_object({}) failed: {e}", o.name))?;
@@ -474,6 +481,7 @@ fn build_model_objects(
                     o.extruder,
                     slic3r_ffi::VolumeType::Part,
                     paint(o),
+                    support(o),
                     &o.overrides,
                 )
                 .map_err(|e| format!("add_volume({}) failed: {e}", o.name))?;
@@ -492,6 +500,7 @@ fn build_model_objects(
                         &o.transform,
                         o.extruder,
                         vt,
+                        &[],
                         &[],
                         &[],
                     )
@@ -991,6 +1000,7 @@ mod tests {
             vertices: Arc::new(vec![]),
             indices: Arc::new(vec![]),
             paint: None,
+            support_paint: None,
             transform: [0.0; 16],
             extruder: 1,
             overrides: vec![],

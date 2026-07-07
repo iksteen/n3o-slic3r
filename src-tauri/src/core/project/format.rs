@@ -34,14 +34,19 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 use super::model::Project;
 use crate::core::scene::state::{Mesh, MeshId};
 
-/// Schema version of the `.n3o` container. The reader rejects any other version
-/// with [`ProjectIoError::SchemaMismatch`]. Bump on incompatible changes.
+/// Schema version of the `.n3o` container written by this build. The reader
+/// accepts this plus the back-compatible older versions in [`READABLE_VERSIONS`];
+/// anything else fails with [`ProjectIoError::SchemaMismatch`].
 ///
-/// `"2"` dropped the per-vertex `normals` chunk that `"1"` geometry blobs
-/// carried — nothing consumes stored normals (the renderer and libslic3r
-/// recompute them). `"1"` files are not read; they fail with a clean version
-/// mismatch rather than being silently mis-deserialized.
-pub const FORMAT_VERSION: &str = "2";
+/// `"3"` added the per-triangle `support_paint` chunk to each geometry blob
+/// (manual support enforcers/blockers). `"2"` blobs lack it and decode via the
+/// legacy [`GeometryBlobV2`] shape (support_paint = None). `"2"` itself dropped
+/// the per-vertex `normals` chunk that `"1"` carried; `"1"` is not readable.
+pub const FORMAT_VERSION: &str = "3";
+
+/// Container versions this build can read. The geometry-blob decoder branches on
+/// which one a file declares (postcard blobs are positional, not self-describing).
+pub const READABLE_VERSIONS: &[&str] = &["2", "3"];
 
 /// The zip entry holding the serialized project skeleton.
 const PROJECT_ENTRY: &str = "project.json";
@@ -180,12 +185,13 @@ pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
         path: input.into(),
         message: format!("parse: {e}"),
     })?;
-    if file.format_version != FORMAT_VERSION {
+    if !READABLE_VERSIONS.contains(&file.format_version.as_str()) {
         return Err(ProjectIoError::SchemaMismatch {
             found: file.format_version,
             expected: FORMAT_VERSION.into(),
         });
     }
+    let has_support_paint = file.format_version == "3";
     let mut project = file.project;
 
     // Fill each mesh's buffers from its geometry blob.
@@ -197,15 +203,25 @@ pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
                 message: format!("missing geometry for mesh {}", id.0),
             }
         })?;
-        let g: GeometryBlob =
-            postcard::from_bytes(&blob).map_err(|e| ProjectIoError::Json {
-                path: input.into(),
-                message: format!("geometry for mesh {}: {e}", id.0),
-            })?;
         let mesh = project.meshes.get_mut(&id).expect("id from keys");
-        mesh.vertices = std::sync::Arc::new(g.vertices);
-        mesh.indices = std::sync::Arc::new(g.indices);
-        mesh.paint_colors = g.paint_colors.map(std::sync::Arc::new);
+        let decode_err = |e| ProjectIoError::Json {
+            path: input.into(),
+            message: format!("geometry for mesh {}: {e}", id.0),
+        };
+        if has_support_paint {
+            let g: GeometryBlob = postcard::from_bytes(&blob).map_err(decode_err)?;
+            mesh.vertices = std::sync::Arc::new(g.vertices);
+            mesh.indices = std::sync::Arc::new(g.indices);
+            mesh.paint_colors = g.paint_colors.map(std::sync::Arc::new);
+            mesh.support_paint = g.support_paint.map(std::sync::Arc::new);
+        } else {
+            // "2" blobs predate support_paint — decode the legacy positional
+            // shape (no trailing field) and leave support_paint unset.
+            let g: GeometryBlobV2 = postcard::from_bytes(&blob).map_err(decode_err)?;
+            mesh.vertices = std::sync::Arc::new(g.vertices);
+            mesh.indices = std::sync::Arc::new(g.indices);
+            mesh.paint_colors = g.paint_colors.map(std::sync::Arc::new);
+        }
     }
 
     // Re-derive the bed + exclusion zones we don't persist (pure function of the
@@ -265,10 +281,22 @@ struct GeometryBlobRef<'a> {
     vertices: &'a [f32],
     indices: &'a [u32],
     paint_colors: Option<&'a Vec<String>>,
+    support_paint: Option<&'a Vec<String>>,
 }
 
+/// Current ("3") blob shape.
 #[derive(Deserialize)]
 struct GeometryBlob {
+    vertices: Vec<f32>,
+    indices: Vec<u32>,
+    paint_colors: Option<Vec<String>>,
+    support_paint: Option<Vec<String>>,
+}
+
+/// Legacy ("2") blob shape — no `support_paint`. Postcard is positional, so a
+/// v2 blob can only be decoded against this exact field layout.
+#[derive(Deserialize)]
+struct GeometryBlobV2 {
     vertices: Vec<f32>,
     indices: Vec<u32>,
     paint_colors: Option<Vec<String>>,
@@ -279,6 +307,7 @@ fn pack_geometry(m: &Mesh) -> Result<Vec<u8>, postcard::Error> {
         vertices: &m.vertices,
         indices: &m.indices,
         paint_colors: m.paint_colors.as_deref(),
+        support_paint: m.support_paint.as_deref(),
     })
 }
 
@@ -301,6 +330,7 @@ mod tests {
             vertices: vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0],
             indices: vec![0, 1, 2],
             paint_colors: None,
+            support_paint: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [10.0, 10.0, 0.0],
@@ -361,6 +391,82 @@ mod tests {
         assert_eq!(*m.indices, vec![0, 1, 2]);
         assert_eq!(m.paint_colors.as_deref(), Some(&vec!["4".into()]));
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn round_trip_support_paint() {
+        let mut p = Project::default();
+        let mut nm = triangle();
+        nm.support_paint = Some(vec!["4".into()]); // enforcer leaf on the one tri
+        let mesh_id = p.register_mesh(nm);
+        p.register_object(NewSceneObject::at_origin(mesh_id, "tri"));
+
+        let path = tmp();
+        write_project(&p, &path).expect("write");
+        let parsed = read_project(&path).expect("read");
+        assert_eq!(
+            parsed.meshes[&mesh_id].support_paint.as_deref(),
+            Some(&vec!["4".into()]),
+            "support paint must survive the .n3o round-trip",
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn reads_legacy_v2_container_without_support_paint() {
+        // Hand-build a "2" container: project.json with format_version "2" and
+        // geometry blobs in the legacy (no support_paint) postcard shape. The
+        // reader must accept it and leave support_paint unset.
+        let mut p = Project::default();
+        let mut nm = triangle();
+        nm.paint_colors = Some(vec!["7".into()]);
+        let mesh_id = p.register_mesh(nm);
+        p.register_object(NewSceneObject::at_origin(mesh_id, "tri"));
+
+        let path = tmp();
+        {
+            let file = File::create(&path).expect("create");
+            let mut zip = ZipWriter::new(file);
+            let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            let json = serde_json::to_vec_pretty(&ProjectFileRef {
+                format_version: "2",
+                app_name: "test",
+                app_version: "0",
+                project: &p,
+            })
+            .expect("json");
+            zip_write(&mut zip, PROJECT_ENTRY, &json, opts, &path).expect("write project");
+            for (id, mesh) in &p.meshes {
+                let blob = postcard::to_allocvec(&GeometryBlobV2Ref {
+                    vertices: &mesh.vertices,
+                    indices: &mesh.indices,
+                    paint_colors: mesh.paint_colors.as_deref(),
+                })
+                .expect("pack v2");
+                zip_write(&mut zip, &format!("geometry/{}.bin", id.0), &blob, opts, &path)
+                    .expect("write geom");
+            }
+            zip.finish().expect("finish");
+        }
+
+        let parsed = read_project(&path).expect("read v2");
+        let m = &parsed.meshes[&mesh_id];
+        assert_eq!(*m.indices, vec![0, 1, 2], "geometry decodes");
+        assert_eq!(m.paint_colors.as_deref(), Some(&vec!["7".into()]));
+        assert!(
+            m.support_paint.is_none(),
+            "v2 blobs carry no support paint; it must default to None",
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Writer shape for the legacy "2" geometry blob (test-only — production only
+    /// reads v2, never writes it).
+    #[derive(Serialize)]
+    struct GeometryBlobV2Ref<'a> {
+        vertices: &'a [f32],
+        indices: &'a [u32],
+        paint_colors: Option<&'a Vec<String>>,
     }
 
     #[test]

@@ -48,6 +48,9 @@ pub struct SliceObject {
     /// Per-triangle BBS `paint_color` hex (MMU painting), shared from the
     /// mesh; `None` when the mesh is unpainted.
     pub paint: Option<Arc<Vec<String>>>,
+    /// Per-triangle BBS support enforcer/blocker hex (manual supports), shared
+    /// from the mesh; `None` when the mesh has no support paint.
+    pub support_paint: Option<Arc<Vec<String>>>,
     /// Object→world transform, column-major (from `Transform.matrix`).
     pub transform: [f64; 16],
     /// 1-based libslic3r filament index, post material→filament remap.
@@ -450,6 +453,7 @@ pub fn build_plate_objects(
                 vertices: Arc::clone(&mesh.vertices),
                 indices: Arc::clone(&mesh.indices),
                 paint: mesh.paint_colors.clone(),
+                support_paint: mesh.support_paint.clone(),
                 transform: obj.transform.matrix.map(f64::from),
                 extruder,
                 overrides: object_overrides_for_slice(&plate.scene.object_overrides, obj.id)
@@ -538,6 +542,7 @@ mod tests {
             vertices: vec![0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0],
             indices: vec![0, 1, 2],
             paint_colors: None,
+            support_paint: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [10.0, 10.0, 0.0],

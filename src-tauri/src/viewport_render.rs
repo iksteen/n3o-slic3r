@@ -276,6 +276,14 @@ pub struct FrameRequest {
     pub cut: Option<CutPreview>,
 }
 
+/// GPU buffers for the paint tool's world-space facet overlay (built off-frame
+/// by the paint commands). Each is a non-indexed `Vertex` (pos+nrm) triangle
+/// soup already in world space, so it draws with `mvp = vp` (no per-object model).
+struct PaintOverlay {
+    enforcer: Option<(wgpu::Buffer, u32)>,
+    blocker: Option<(wgpu::Buffer, u32)>,
+}
+
 /// The split tool's cutting plane for one frame (world space). `keep_pos` /
 /// `keep_neg` choose which sides stay solid vs. ghosted in the preview;
 /// `connectors` are drawn as translucent peg previews on the plane.
@@ -899,6 +907,8 @@ pub struct ViewportRenderer {
     // Priming tower: translucent pipeline + the box's static cube geometry, plus
     // the exact sliced mesh (pushed by the frontend; not part of the Rust scene).
     tower_pipe: wgpu::RenderPipeline,
+    /// tower_pipe + a depth bias for the coplanar paint-support overlay.
+    overlay_pipe: wgpu::RenderPipeline,
     vb_cube: wgpu::Buffer,
     vb_cube_edges: wgpu::Buffer,
     /// Unit cylinder for the split tool's connector peg previews.
@@ -919,6 +929,11 @@ pub struct ViewportRenderer {
     /// plate so it never bleeds onto another plate's tower (a no-op commit emits
     /// no event to clear it). Overrides the resolved placement for a smooth drag.
     tower_drag: Option<(PlateId, (f32, f32))>,
+    /// Support-paint tool overlay: world-space enforcer/blocker facet triangles
+    /// (`Vertex` = pos+nrm, non-indexed), rebuilt by the paint commands after
+    /// every stroke/fill/undo (not per-frame) and drawn tinted over the model.
+    /// `None` when the paint tool isn't open.
+    paint_overlay: Option<PaintOverlay>,
     // size-dependent targets
     size: (u32, u32),
     color: wgpu::Texture,
@@ -1073,43 +1088,57 @@ impl ViewportRenderer {
             label: None,
             source: wgpu::ShaderSource::Wgsl(TOWER_SHADER.into()),
         });
-        let tower_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("viewport.tower"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &tower_shader,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: std::slice::from_ref(&vbl),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &tower_shader,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: COLOR_FMT,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(false), // translucent — test but don't occlude
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: SAMPLES,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-        });
+        // Translucent, two-sided, depth-tested-but-not-occluding pipe shared by the
+        // tower box, cut plane and paint overlay. The overlay variant adds a depth
+        // bias: it's coplanar with the model, and a geometric normal-offset can't
+        // win reliably because imported meshes have no winding guarantee (its flat
+        // normal may point inward). Bias pulls it toward the camera regardless.
+        let make_tower_pipe = |label, bias| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &tower_shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: std::slice::from_ref(&vbl),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &tower_shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: COLOR_FMT,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(false), // translucent — test but don't occlude
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias,
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: SAMPLES,
+                    ..Default::default()
+                },
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let tower_pipe = make_tower_pipe("viewport.tower", wgpu::DepthBiasState::default());
+        // ponytail: decal bias — pull the coplanar overlay toward the camera so it
+        // wins the depth test. Tune if it z-fights or halos on other GPUs.
+        let overlay_pipe = make_tower_pipe(
+            "viewport.paint-overlay",
+            wgpu::DepthBiasState { constant: -4, slope_scale: -1.0, clamp: 0.0 },
+        );
         let vb_cube = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("viewport.tower.cube"),
             contents: bytemuck::cast_slice(&unit_cube_verts()),
@@ -1165,9 +1194,11 @@ impl ViewportRenderer {
             tower_meshes: HashMap::new(),
             tower_geom: HashMap::new(),
             tower_drag: None,
+            paint_overlay: None,
             vb_grid,
             vb_axes,
             tower_pipe,
+            overlay_pipe,
             vb_cube,
             vb_cube_edges,
             conn_prisms,
@@ -1546,7 +1577,11 @@ impl ViewportRenderer {
         let plane_slot = tower_slot + 2;
         let connector_slot = plane_slot + 1;
         let n_conn = req.cut.as_ref().map_or(0, |c| c.connectors.len());
-        let total_slots = connector_slot + n_conn;
+        // Paint tool: two overlay slots (enforcer + blocker facet soups). The
+        // brush itself is a CSS cursor on the frontend, not a rendered ring.
+        let paint_enf_slot = connector_slot + n_conn;
+        let paint_blk_slot = paint_enf_slot + 1;
+        let total_slots = paint_enf_slot + 2;
 
         // Priming tower: draw the active plate's stored sliced mesh (mesh mode)
         // when there is one, else the placement box. Placement is the resolved
@@ -1769,6 +1804,19 @@ impl ViewportRenderer {
             };
             bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
         }
+        // Paint overlay slots: world-space, so mvp = vp.
+        if self.paint_overlay.is_some() {
+            for (slot, rgba) in [
+                // Enforcer green (not blue — the painted object is selected, and
+                // the selection tint is blue; they'd be indistinguishable).
+                (paint_enf_slot, [0.15f32, 0.80, 0.35, 0.62]),
+                (paint_blk_slot, [0.92f32, 0.24, 0.24, 0.62]), // blocker = red
+            ] {
+                let off = slot * self.slot as usize;
+                bytes[off..off + 64].copy_from_slice(bytemuck::cast_slice(&vp.to_cols_array()));
+                bytes[off + 64..off + 80].copy_from_slice(bytemuck::cast_slice(&rgba));
+            }
+        }
         self.queue.write_buffer(&self.ubuf, 0, &bytes);
 
         let color_view = self.color.create_view(&Default::default());
@@ -1868,6 +1916,21 @@ impl ViewportRenderer {
                 rp.set_bind_group(0, &self.bind, &[(plane_slot as u32) * self.slot]);
                 rp.set_vertex_buffer(0, vb.slice(..));
                 rp.draw(0..verts.len() as u32, 0..1);
+            }
+            // Paint-tool facet overlay (translucent, two-sided; depth-biased so
+            // the coplanar facets win over the model), enforcer + blocker.
+            if let Some(ov) = &self.paint_overlay {
+                rp.set_pipeline(&self.overlay_pipe);
+                for (buf, slot) in [
+                    (&ov.enforcer, paint_enf_slot),
+                    (&ov.blocker, paint_blk_slot),
+                ] {
+                    if let Some((vb, n)) = buf {
+                        rp.set_bind_group(0, &self.bind, &[(slot as u32) * self.slot]);
+                        rp.set_vertex_buffer(0, vb.slice(..));
+                        rp.draw(0..*n, 0..1);
+                    }
+                }
             }
         }
         // Connector peg previews: their own pass with depth cleared so the pegs
@@ -2094,6 +2157,43 @@ impl ViewportRenderer {
         );
         self.queue.submit(Some(enc.finish()));
         read_rgba(&self.device, &readback, padded_bpr, size, size)
+    }
+
+    /// Replace the paint-tool facet overlay. `enforcer`/`blocker` are world-space
+    /// non-indexed triangle soups (6 floats per vertex: pos + nrm); an empty
+    /// slice clears that side. Called off-frame by the paint commands.
+    fn set_paint_overlay(&mut self, enforcer: &[f32], blocker: &[f32]) {
+        let mk = |data: &[f32]| -> Option<(wgpu::Buffer, u32)> {
+            if data.len() < 18 {
+                return None; // fewer than one triangle
+            }
+            let vb = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("paint-overlay"),
+                contents: bytemuck::cast_slice(data),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            Some((vb, (data.len() / 6) as u32))
+        };
+        self.paint_overlay = Some(PaintOverlay {
+            enforcer: mk(enforcer),
+            blocker: mk(blocker),
+        });
+    }
+}
+
+/// Push the paint-tool overlay (world-space enforcer/blocker facet soups) into
+/// the renderer. Lazily creates the renderer if the tool opens before the first
+/// frame.
+pub fn store_paint_overlay(state: &ViewportState, enforcer: &[f32], blocker: &[f32]) {
+    let mut guard = state.0.lock().unwrap();
+    let r = guard.get_or_insert_with(ViewportRenderer::new);
+    r.set_paint_overlay(enforcer, blocker);
+}
+
+/// Drop the paint-tool overlay (tool closed / applied / cancelled).
+pub fn clear_paint_overlay(state: &ViewportState) {
+    if let Some(r) = state.0.lock().unwrap().as_mut() {
+        r.paint_overlay = None;
     }
 }
 
@@ -2588,7 +2688,7 @@ fn point_in_mesh(p: Vec3, indices: &[u32], vert: impl Fn(u32) -> Vec3) -> bool {
 }
 
 /// Möller–Trumbore, two-sided. Returns the ray parameter `t` (>0) at the hit.
-fn ray_tri(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+pub(crate) fn ray_tri(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
     let (e1, e2) = (b - a, c - a);
     let pv = d.cross(e2);
     let det = e1.dot(pv);

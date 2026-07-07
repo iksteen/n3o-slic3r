@@ -56,6 +56,9 @@ pub enum ObjectBody {
         /// `""` for unpainted faces). Carried verbatim — libslic3r owns
         /// the encoding; we only round-trip it.
         paint_colors: Vec<String>,
+        /// BBS/Prusa per-triangle support enforcer/blocker paint strings,
+        /// same shape as `paint_colors`. Empty when nothing is painted.
+        support_paint: Vec<String>,
     },
     /// Tree of <component> references. Each component points to
     /// some `objectid` — possibly in a sibling .model file via the
@@ -172,11 +175,13 @@ fn parse_object(
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => match local_name(e.name()) {
                 b"mesh" => {
-                    let (vertices, indices, paint_colors) = parse_mesh(reader, source)?;
+                    let (vertices, indices, paint_colors, support_paint) =
+                        parse_mesh(reader, source)?;
                     body = Some(ObjectBody::Mesh {
                         vertices,
                         indices,
                         paint_colors,
+                        support_paint,
                     });
                 }
                 b"components" => {
@@ -216,7 +221,7 @@ fn parse_object(
 fn parse_mesh(
     reader: &mut Reader<&[u8]>,
     source: &std::path::Path,
-) -> Result<(Vec<f32>, Vec<u32>, Vec<String>), LoadError> {
+) -> Result<(Vec<f32>, Vec<u32>, Vec<String>, Vec<String>), LoadError> {
     let mut vertices: Vec<f32> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     // One entry per triangle, in document order. BBS only writes
@@ -225,6 +230,9 @@ fn parse_mesh(
     // nothing was painted.
     let mut paint_colors: Vec<String> = Vec::new();
     let mut any_paint = false;
+    // Support enforcer/blocker paint, same dense-per-triangle shape.
+    let mut support_paint: Vec<String> = Vec::new();
+    let mut any_support = false;
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
@@ -261,6 +269,13 @@ fn parse_mesh(
                         .unwrap_or_default();
                     any_paint |= !paint.is_empty();
                     paint_colors.push(paint);
+                    // Support enforcer/blocker paint: BBS `paint_supports`,
+                    // Prusa `slic3rpe:custom_supports`. Same opaque encoding.
+                    let support = attr_string(e, b"paint_supports")
+                        .or_else(|| attr_string(e, b"slic3rpe:custom_supports"))
+                        .unwrap_or_default();
+                    any_support |= !support.is_empty();
+                    support_paint.push(support);
                 }
                 _ => {}
             },
@@ -284,7 +299,10 @@ fn parse_mesh(
     if !any_paint {
         paint_colors.clear();
     }
-    Ok((vertices, indices, paint_colors))
+    if !any_support {
+        support_paint.clear();
+    }
+    Ok((vertices, indices, paint_colors, support_paint))
 }
 
 fn parse_components(
@@ -465,6 +483,45 @@ mod tests {
         assert_eq!(item.transform[12], 5.0);
         assert_eq!(item.transform[13], 6.0);
         assert_eq!(item.transform[14], 7.0);
+    }
+
+    const SUPPORT_PAINT_MODEL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+  <resources>
+    <object id="1" type="model">
+      <mesh>
+        <vertices>
+          <vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/>
+          <vertex x="1" y="1" z="0"/>
+        </vertices>
+        <triangles>
+          <triangle v1="0" v2="1" v3="2" paint_supports="4"/>
+          <triangle v1="1" v2="3" v3="2" slic3rpe:custom_supports="8"/>
+        </triangles>
+      </mesh>
+    </object>
+  </resources>
+  <build><item objectid="1"/></build>
+</model>
+"#;
+
+    #[test]
+    fn parses_support_paint_from_both_bbs_and_prusa_attrs() {
+        let doc =
+            parse_model(SUPPORT_PAINT_MODEL.as_bytes(), Path::new("s.model")).expect("parse");
+        match &doc.objects[&1].body {
+            ObjectBody::Mesh {
+                support_paint,
+                paint_colors,
+                ..
+            } => {
+                // BBS `paint_supports` + Prusa `slic3rpe:custom_supports`, dense
+                // per-triangle. No MMU color anywhere → paint_colors stays empty.
+                assert_eq!(support_paint, &vec!["4".to_string(), "8".to_string()]);
+                assert!(paint_colors.is_empty(), "no MMU paint in this fixture");
+            }
+            ObjectBody::Components(_) => panic!("expected mesh body"),
+        }
     }
 
     const COMPONENT_MODEL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>

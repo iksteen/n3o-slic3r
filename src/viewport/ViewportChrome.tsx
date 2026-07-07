@@ -10,7 +10,7 @@ import type { SceneObject } from "./types";
  * the axis/input legend.
  */
 type GizmoMode = "none" | "move" | "rotate" | "scale";
-type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch" | "clone" | "split";
+type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch" | "clone" | "split" | "paint";
 
 export function ViewportChrome({
   leading,
@@ -23,6 +23,8 @@ export function ViewportChrome({
   onClone,
   onSplit,
   splitActive = false,
+  onPaint,
+  paintActive = false,
   faceMatchRefSet = false,
 }: {
   leading: ReactNode;
@@ -37,6 +39,10 @@ export function ViewportChrome({
   onSplit: () => void;
   /** Whether the split tool is currently active. */
   splitActive?: boolean;
+  /** Toggle the support-paint tool on the current selection. */
+  onPaint: () => void;
+  /** Whether the paint tool is currently active. */
+  paintActive?: boolean;
   /** Match-face: the reference face has been clicked (awaiting the target). */
   faceMatchRefSet?: boolean;
 }) {
@@ -281,6 +287,25 @@ export function ViewportChrome({
               <path d="M4.3 4.4 12 11M4.3 9.6 12 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
             </svg>
           </button>
+          <button
+            type="button"
+            disabled={!hasObjects}
+            className={btn(hasObjects, paintActive || tool === "paint")}
+            onClick={() => hasObjects && onPaint()}
+            title={
+              selectedIds.length
+                ? "Paint supports — brush enforcers on the selection"
+                : "Paint supports — click an object to paint it"
+            }
+            aria-label="Paint manual supports"
+            aria-pressed={paintActive || tool === "paint"}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              {/* brush: handle + bristle tip */}
+              <path d="M12 2 7.5 6.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              <path d="M7.5 6.5 5 9c-1 1-2.2 1-3 1 .2-1 .2-2 1-3l2.5-2.5z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+            </svg>
+          </button>
         </div>
       </div>
       <ViewportLegend hints={toolHint(tool, faceMatchRefSet)} prompt={tool !== "none"} onAxis={setAxisView} />
@@ -304,6 +329,8 @@ function toolHint(tool: Tool, faceMatchRefSet: boolean): string {
       return "Click an object to clone · Esc to cancel";
     case "split":
       return "Click an object to split · Esc to cancel";
+    case "paint":
+      return "Click an object to paint supports · Esc to cancel";
     default:
       return "LMB rotate · RMB pan · scroll zoom";
   }

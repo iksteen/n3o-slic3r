@@ -686,21 +686,22 @@ static bool paint_string_well_formed(const char* s) {
     return true;
 }
 
-// MMU color-painting: the hex strings are in the BBS format
-// FacetsAnnotation::set_triangle_from_string expects. Structurally validate
-// every string first (see paint_string_well_formed) — returning false, so the
-// caller reports SLIC3R_ERR_INVALID_ARG, before any mutation — then apply.
-static bool apply_paint(ModelVolume* vol, const char* const* paint_hex, size_t paint_count) {
+// Facet painting: the hex strings are in the BBS format
+// FacetsAnnotation::set_triangle_from_string expects — same format for MMU
+// color (mmu_segmentation_facets) and support enforce/block (supported_facets),
+// so `target` selects which annotation to fill. Structurally validate every
+// string first (see paint_string_well_formed) — returning false, so the caller
+// reports SLIC3R_ERR_INVALID_ARG, before any mutation — then apply.
+static bool apply_paint(FacetsAnnotation& target, const char* const* paint_hex, size_t paint_count) {
     if (paint_count == 0) return true;
     for (size_t i = 0; i < paint_count; ++i)
         if (paint_hex[i] && paint_hex[i][0] != '\0' && !paint_string_well_formed(paint_hex[i]))
             return false;
-    vol->mmu_segmentation_facets.reserve(paint_count);
+    target.reserve(paint_count);
     for (size_t i = 0; i < paint_count; ++i)
         if (paint_hex[i] && paint_hex[i][0] != '\0')
-            vol->mmu_segmentation_facets.set_triangle_from_string(
-                static_cast<int>(i), paint_hex[i]);
-    vol->mmu_segmentation_facets.shrink_to_fit();
+            target.set_triangle_from_string(static_cast<int>(i), paint_hex[i]);
+    target.shrink_to_fit();
     return true;
 }
 
@@ -1042,12 +1043,15 @@ slic3r_status slic3r_model_add_object(
     const uint32_t* indices, size_t tcount,
     const double transform[16], int extruder,
     const char* const* paint_hex, size_t paint_count,
+    const char* const* support_hex, size_t support_count,
     const char* const* ovr_keys, const char* const* ovr_vals, size_t ovr_count,
     char** out_err) {
     if (out_err) *out_err = nullptr;
     if (!m || !verts || !indices || !transform || vcount == 0 || tcount == 0)
         return SLIC3R_ERR_INVALID_ARG;
     if (paint_count != 0 && !paint_hex)
+        return SLIC3R_ERR_INVALID_ARG;
+    if (support_count != 0 && !support_hex)
         return SLIC3R_ERR_INVALID_ARG;
     if (ovr_count != 0 && (!ovr_keys || !ovr_vals))
         return SLIC3R_ERR_INVALID_ARG;
@@ -1076,8 +1080,12 @@ slic3r_status slic3r_model_add_object(
         ModelInstance* inst = obj->add_instance();
         inst->set_transformation(Geometry::Transformation(t));
 
-        if (!apply_paint(vol, paint_hex, paint_count)) {
+        if (!apply_paint(vol->mmu_segmentation_facets, paint_hex, paint_count)) {
             set_err(out_err, "malformed MMU paint string");
+            return SLIC3R_ERR_INVALID_ARG;
+        }
+        if (!apply_paint(vol->supported_facets, support_hex, support_count)) {
+            set_err(out_err, "malformed support paint string");
             return SLIC3R_ERR_INVALID_ARG;
         }
         apply_overrides(obj->config, ovr_keys, ovr_vals, ovr_count);
@@ -1123,12 +1131,15 @@ slic3r_status slic3r_model_add_volume(
     const uint32_t* indices, size_t tcount,
     const double transform[16], int extruder, int volume_type,
     const char* const* paint_hex, size_t paint_count,
+    const char* const* support_hex, size_t support_count,
     const char* const* ovr_keys, const char* const* ovr_vals, size_t ovr_count,
     char** out_err) {
     if (out_err) *out_err = nullptr;
     if (!m || !verts || !indices || !transform || vcount == 0 || tcount == 0)
         return SLIC3R_ERR_INVALID_ARG;
     if (paint_count != 0 && !paint_hex)
+        return SLIC3R_ERR_INVALID_ARG;
+    if (support_count != 0 && !support_hex)
         return SLIC3R_ERR_INVALID_ARG;
     if (ovr_count != 0 && (!ovr_keys || !ovr_vals))
         return SLIC3R_ERR_INVALID_ARG;
@@ -1161,8 +1172,12 @@ slic3r_status slic3r_model_add_volume(
         Geometry::Transformation world(world_mat);
         vol->set_transformation(world * vol->get_transformation());
 
-        if (!apply_paint(vol, paint_hex, paint_count)) {
+        if (!apply_paint(vol->mmu_segmentation_facets, paint_hex, paint_count)) {
             set_err(out_err, "malformed MMU paint string");
+            return SLIC3R_ERR_INVALID_ARG;
+        }
+        if (!apply_paint(vol->supported_facets, support_hex, support_count)) {
+            set_err(out_err, "malformed support paint string");
             return SLIC3R_ERR_INVALID_ARG;
         }
         apply_overrides(vol->config, ovr_keys, ovr_vals, ovr_count);
@@ -1173,6 +1188,255 @@ slic3r_status slic3r_model_add_volume(
         return SLIC3R_ERR_INTERNAL;
     } catch (...) {
         set_err(out_err, "unknown error in slic3r_model_add_volume");
+        return SLIC3R_ERR_INTERNAL;
+    }
+}
+
+// ---- Support paint session ----
+//
+// Interactive enforcer/blocker painting via libslic3r's TriangleSelector. The
+// session owns a one-volume Model solely to host a FacetsAnnotation (private
+// ctor); the annotation only holds the split-tree bitstream (mesh-independent),
+// so we use it purely to convert selector state <-> per-triangle hex strings.
+// The volume mesh is NOT re-centered, so the caller's mesh-local hit points and
+// the serialized string indices share the caller's own triangle frame + order.
+
+struct slic3r_paint_session_t {
+    Model model;
+    ModelVolume* vol = nullptr;
+    std::unique_ptr<TriangleSelector> selector;
+    std::vector<TriangleSelector::TriangleSplittingData> undo_stack;
+    size_t tcount = 0;
+};
+
+namespace {
+
+// Bound the in-session undo depth; older snapshots drop off the bottom.
+constexpr size_t kMaxPaintUndo = 64;
+
+EnforcerBlockerType ebt_from_u32(uint32_t s) {
+    switch (s) {
+        case 1:  return EnforcerBlockerType::ENFORCER;
+        case 2:  return EnforcerBlockerType::BLOCKER;
+        default: return EnforcerBlockerType::NONE;
+    }
+}
+
+void paint_push_undo(slic3r_paint_session_t* s) {
+    s->undo_stack.push_back(s->selector->serialize());
+    if (s->undo_stack.size() > kMaxPaintUndo)
+        s->undo_stack.erase(s->undo_stack.begin());
+}
+
+// Marshal an indexed_triangle_set into freshly malloc'd float/uint32 buffers
+// (the slic3r_cut_mesh_free shape). Empty mesh -> null/0. false on malloc fail.
+bool its_marshal(const indexed_triangle_set& its, float** ov, size_t* ovc,
+                 uint32_t** oi, size_t* oic) {
+    *ov = nullptr; *ovc = 0; *oi = nullptr; *oic = 0;
+    if (its.vertices.empty() || its.indices.empty())
+        return true;
+    float* verts = static_cast<float*>(std::malloc(its.vertices.size() * 3 * sizeof(float)));
+    uint32_t* idx = static_cast<uint32_t*>(std::malloc(its.indices.size() * 3 * sizeof(uint32_t)));
+    if (!verts || !idx) { std::free(verts); std::free(idx); return false; }
+    for (size_t i = 0; i < its.vertices.size(); ++i) {
+        verts[i * 3 + 0] = its.vertices[i].x();
+        verts[i * 3 + 1] = its.vertices[i].y();
+        verts[i * 3 + 2] = its.vertices[i].z();
+    }
+    for (size_t i = 0; i < its.indices.size(); ++i) {
+        idx[i * 3 + 0] = static_cast<uint32_t>(its.indices[i][0]);
+        idx[i * 3 + 1] = static_cast<uint32_t>(its.indices[i][1]);
+        idx[i * 3 + 2] = static_cast<uint32_t>(its.indices[i][2]);
+    }
+    *ov = verts; *ovc = its.vertices.size(); *oi = idx; *oic = its.indices.size();
+    return true;
+}
+
+} // namespace
+
+slic3r_paint_session_t* slic3r_paint_session_new(
+    const float* verts, size_t vcount,
+    const uint32_t* indices, size_t tcount,
+    const char* const* paint_hex, size_t paint_count, char** out_err) {
+    if (out_err) *out_err = nullptr;
+    if (!verts || !indices || vcount == 0 || tcount == 0) {
+        set_err(out_err, "invalid mesh buffers");
+        return nullptr;
+    }
+    if (paint_count != 0 && (!paint_hex || paint_count != tcount)) {
+        set_err(out_err, "paint_count must be 0 or equal to tcount");
+        return nullptr;
+    }
+    try {
+        // Validate the seed strings before touching anything.
+        for (size_t i = 0; i < paint_count; ++i)
+            if (paint_hex[i] && paint_hex[i][0] != '\0' && !paint_string_well_formed(paint_hex[i])) {
+                set_err(out_err, "malformed support paint string");
+                return nullptr;
+            }
+        auto s = std::make_unique<slic3r_paint_session_t>();
+        s->tcount = tcount;
+        TriangleMesh mesh(its_from_buffers(verts, vcount, indices, tcount));
+        // Same winding flip as slic3r_model_add_object so string indices +
+        // facet_start line up with the slice-time model (flip keeps order).
+        if (mesh.volume() < 0.0)
+            mesh.flip_triangles();
+        ModelObject* obj = s->model.add_object();
+        // modify_to_center_geometry = false: keep the caller's vertex frame.
+        s->vol = obj->add_volume(std::move(mesh), ModelVolumeType::MODEL_PART, false);
+        // Seed existing paint into the volume's FacetsAnnotation.
+        if (paint_count == tcount) {
+            s->vol->supported_facets.reserve(static_cast<int>(tcount));
+            for (size_t i = 0; i < tcount; ++i)
+                if (paint_hex[i] && paint_hex[i][0] != '\0')
+                    s->vol->supported_facets.set_triangle_from_string(
+                        static_cast<int>(i), paint_hex[i]);
+            s->vol->supported_facets.shrink_to_fit();
+        }
+        s->selector = std::make_unique<TriangleSelector>(s->vol->mesh());
+        if (!s->vol->supported_facets.empty())
+            s->selector->deserialize(s->vol->supported_facets.get_data());
+        return s.release();
+    } catch (const std::exception& e) {
+        set_err(out_err, e.what());
+        return nullptr;
+    } catch (...) {
+        set_err(out_err, "unknown error in slic3r_paint_session_new");
+        return nullptr;
+    }
+}
+
+void slic3r_paint_session_free(slic3r_paint_session_t* s) {
+    delete s;
+}
+
+slic3r_status slic3r_paint_session_stroke(
+    slic3r_paint_session_t* s, int32_t facet_start,
+    const float hit[3], const float camera_pos[3], const double trafo[16],
+    float radius, uint32_t cursor_type, uint32_t new_state,
+    int32_t push_undo, char** out_err) {
+    if (out_err) *out_err = nullptr;
+    if (!s || !hit || !camera_pos || !trafo) return SLIC3R_ERR_INVALID_ARG;
+    if (facet_start < 0 || static_cast<size_t>(facet_start) >= s->tcount)
+        return SLIC3R_ERR_INVALID_ARG;
+    try {
+        Eigen::Map<const Eigen::Matrix4d> mat(trafo);
+        Transform3d t(mat);
+        Transform3d t_no_translate = t;
+        t_no_translate.translation() = Vec3d::Zero();
+        const Vec3f center(hit[0], hit[1], hit[2]);
+        const Vec3f cam(camera_pos[0], camera_pos[1], camera_pos[2]);
+        const TriangleSelector::CursorType ct =
+            cursor_type == 1 ? TriangleSelector::CursorType::SPHERE
+                             : TriangleSelector::CursorType::CIRCLE;
+        if (push_undo) paint_push_undo(s);
+        std::unique_ptr<TriangleSelector::Cursor> cursor =
+            TriangleSelector::SinglePointCursor::cursor_factory(
+                center, cam, radius, ct, t, TriangleSelector::ClippingPlane());
+        s->selector->select_patch(facet_start, std::move(cursor),
+                                  ebt_from_u32(new_state), t_no_translate,
+                                  /*triangle_splitting=*/true);
+        return SLIC3R_OK;
+    } catch (const std::exception& e) {
+        set_err(out_err, e.what());
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
+        set_err(out_err, "unknown error in slic3r_paint_session_stroke");
+        return SLIC3R_ERR_INTERNAL;
+    }
+}
+
+slic3r_status slic3r_paint_session_fill(
+    slic3r_paint_session_t* s, int32_t facet_start,
+    const float hit[3], const double trafo[16], float seed_fill_angle_deg,
+    uint32_t new_state, int32_t push_undo, char** out_err) {
+    if (out_err) *out_err = nullptr;
+    if (!s || !hit || !trafo) return SLIC3R_ERR_INVALID_ARG;
+    if (facet_start < 0 || static_cast<size_t>(facet_start) >= s->tcount)
+        return SLIC3R_ERR_INVALID_ARG;
+    try {
+        Eigen::Map<const Eigen::Matrix4d> mat(trafo);
+        Transform3d t(mat);
+        Transform3d t_no_translate = t;
+        t_no_translate.translation() = Vec3d::Zero();
+        const Vec3f h(hit[0], hit[1], hit[2]);
+        if (push_undo) paint_push_undo(s);
+        s->selector->seed_fill_select_triangles(
+            h, facet_start, t_no_translate, TriangleSelector::ClippingPlane(),
+            seed_fill_angle_deg, /*highlight_by_angle_deg=*/0.f,
+            /*force_reselection=*/true);
+        s->selector->seed_fill_apply_on_triangles(ebt_from_u32(new_state));
+        return SLIC3R_OK;
+    } catch (const std::exception& e) {
+        set_err(out_err, e.what());
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
+        set_err(out_err, "unknown error in slic3r_paint_session_fill");
+        return SLIC3R_ERR_INTERNAL;
+    }
+}
+
+int slic3r_paint_session_undo(slic3r_paint_session_t* s) {
+    if (!s || s->undo_stack.empty()) return 0;
+    try {
+        s->selector->deserialize(s->undo_stack.back());
+        s->undo_stack.pop_back();
+        return 1;
+    } catch (...) {
+        return 0;
+    }
+}
+
+slic3r_status slic3r_paint_session_serialize(
+    slic3r_paint_session_t* s, char*** out_paint, size_t* out_count,
+    char** out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_paint) *out_paint = nullptr;
+    if (out_count) *out_count = 0;
+    if (!s || !out_paint || !out_count) return SLIC3R_ERR_INVALID_ARG;
+    try {
+        // Copy selector state into the volume's FacetsAnnotation, then read out
+        // the per-triangle hex (the same format apply_paint consumes).
+        s->vol->supported_facets.set(*s->selector);
+        char** arr = static_cast<char**>(std::malloc(s->tcount * sizeof(char*)));
+        if (!arr) { set_err(out_err, "out of memory"); return SLIC3R_ERR_INTERNAL; }
+        for (size_t i = 0; i < s->tcount; ++i)
+            arr[i] = dup_c(s->vol->supported_facets.get_triangle_as_string(static_cast<int>(i)));
+        *out_paint = arr;
+        *out_count = s->tcount;
+        return SLIC3R_OK;
+    } catch (const std::exception& e) {
+        set_err(out_err, e.what());
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
+        set_err(out_err, "unknown error in slic3r_paint_session_serialize");
+        return SLIC3R_ERR_INTERNAL;
+    }
+}
+
+slic3r_status slic3r_paint_session_facets(
+    slic3r_paint_session_t* s, uint32_t state,
+    float** out_verts, size_t* out_vcount,
+    uint32_t** out_indices, size_t* out_tcount, char** out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_verts) *out_verts = nullptr;
+    if (out_vcount) *out_vcount = 0;
+    if (out_indices) *out_indices = nullptr;
+    if (out_tcount) *out_tcount = 0;
+    if (!s || !out_verts || !out_vcount || !out_indices || !out_tcount)
+        return SLIC3R_ERR_INVALID_ARG;
+    try {
+        const indexed_triangle_set its = s->selector->get_facets(ebt_from_u32(state));
+        if (!its_marshal(its, out_verts, out_vcount, out_indices, out_tcount)) {
+            set_err(out_err, "out of memory");
+            return SLIC3R_ERR_INTERNAL;
+        }
+        return SLIC3R_OK;
+    } catch (const std::exception& e) {
+        set_err(out_err, e.what());
+        return SLIC3R_ERR_INTERNAL;
+    } catch (...) {
+        set_err(out_err, "unknown error in slic3r_paint_session_facets");
         return SLIC3R_ERR_INTERNAL;
     }
 }

@@ -313,6 +313,7 @@ fn expand(
             vertices,
             indices,
             paint_colors,
+            support_paint,
         } => {
             let key = (part_key.to_owned(), objectid);
             let mesh_idx = match mesh_idx_by_source.get(&key) {
@@ -339,6 +340,7 @@ fn expand(
                         vertices: vertices.clone(),
                         indices: indices.clone(),
                         paint_colors: (!paint_colors.is_empty()).then(|| paint_colors.clone()),
+                        support_paint: (!support_paint.is_empty()).then(|| support_paint.clone()),
                         bounding_box,
                         provenance,
                     });

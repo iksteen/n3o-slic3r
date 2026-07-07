@@ -116,6 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         vertices: Arc::new(m.vertices.clone()),
                         indices: Arc::new(m.indices.clone()),
                         paint: m.paint_colors.clone().map(Arc::new),
+                        support_paint: None,
                         transform: o.transform.matrix.map(f64::from),
                         extruder: o.extruder_id.unwrap_or(1) as i32,
                         overrides: o
@@ -135,6 +136,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 vertices: Arc::new(m.vertices),
                 indices: Arc::new(m.indices),
                 paint: m.paint_colors.map(Arc::new),
+                support_paint: None,
                 transform: [
                     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
                 ],

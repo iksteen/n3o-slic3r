@@ -59,7 +59,7 @@ fn box_model() -> Model {
         0, 4, 7,  0, 7, 3,   // -X
         1, 2, 6,  1, 6, 5,   // +X
     ];
-    m.add_object("box", &verts, &indices, &IDENTITY, 1, &[], &[])
+    m.add_object("box", &verts, &indices, &IDENTITY, 1, &[], &[], &[])
         .expect("add_object box");
     m
 }

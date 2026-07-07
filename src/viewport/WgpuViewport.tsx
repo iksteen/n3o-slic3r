@@ -7,6 +7,7 @@ import { registerAxisView, type AxisView } from "./cameraControl";
 import { camFor, needsInitialFrame, markFramed, type OrbitCam } from "./orbitCamera";
 import { planeBasis, worldOf } from "./useSplitSession";
 import { sub, scale, dot, cross, vlen, norm } from "./vec3";
+import type { PaintFlags } from "./usePaintSession";
 
 type Vec3 = [number, number, number];
 type GizmoMode = "none" | "move" | "rotate" | "scale";
@@ -44,11 +45,35 @@ export type SplitProps = {
   removeConnector: (i: number) => void;
 };
 
+/** Support-paint tool state the viewport reads for the brush cursor + strokes.
+ *  Owned by `usePaintSession`; the strokes are invoked from here (they need the
+ *  live camera). */
+export type PaintProps = {
+  active: boolean;
+  /** Brush radius, world mm. */
+  radius: number;
+  /** 0 = circle, 1 = sphere. */
+  brush: number;
+  /** Smart-fill angle bound, degrees. */
+  angle: number;
+  /** Smart-fill mode (click floods a flat region). */
+  fill: boolean;
+  /** Bumped on an out-of-band overlay change (Erase all) → redraw. */
+  epoch: number;
+  setRadius: (r: number) => void;
+  /** Record the enforcer/blocker presence returned by a stroke/fill/undo. */
+  onPainted: (enforce: boolean, block: boolean) => void;
+};
+
+/** paint_stroke / paint_fill result: whether the cursor hit the mesh (false =
+ *  missed, so the drag drives the camera) plus the object's post-stroke flags. */
+type PaintOutcome = { hit: boolean; enforce: boolean; block: boolean };
+
 type DragState = {
   x: number;
   y: number;
   button: number;
-  mode: "pending" | "orbit" | "gizmo" | "pan" | "inert" | "tower" | "cut" | "connector";
+  mode: "pending" | "orbit" | "gizmo" | "pan" | "inert" | "tower" | "cut" | "connector" | "paint";
   // Gizmo drag (move/rotate/scale, and the no-tool free-move): the opaque grab
   // captured on press + the latest cursor (canvas px) + Shift. The renderer turns
   // these into the preview transform Rust-side (`gizmo_drag`); the same call on
@@ -84,7 +109,7 @@ type DragState = {
  * drags — the axis/plane handles (move) or axis rings (rotate) drive constrained
  * transforms instead. Frames render on-demand and coalesce (one in flight).
  */
-type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch" | "clone" | "split";
+type Tool = "none" | "layflat" | "alignX" | "alignY" | "facematch" | "clone" | "split" | "paint";
 
 export function WgpuViewport({
   selectedIds,
@@ -92,9 +117,11 @@ export function WgpuViewport({
   gizmoMode = "none",
   tool = "none",
   split,
+  paint,
   onToolDone,
   onClonePick,
   onSplitPick,
+  onPaintPick,
   onFaceMatchStep,
 }: {
   selectedIds: number[];
@@ -103,9 +130,12 @@ export function WgpuViewport({
   tool?: Tool;
   /** Split tool session (cutting plane). `null`/inactive = tool off. */
   split?: SplitProps;
+  /** Support-paint tool session. `null`/inactive = tool off. */
+  paint?: PaintProps;
   onToolDone?: () => void;
   onClonePick?: (id: number) => void;
   onSplitPick?: (id: number) => void;
+  onPaintPick?: (id: number) => void;
   /** Match-face: reference face clicked (true) → waiting on the target. */
   onFaceMatchStep?: (refSet: boolean) => void;
 }) {
@@ -128,12 +158,22 @@ export function WgpuViewport({
   onClonePickRef.current = onClonePick;
   const onSplitPickRef = useRef(onSplitPick);
   onSplitPickRef.current = onSplitPick;
+  const onPaintPickRef = useRef(onPaintPick);
+  onPaintPickRef.current = onPaintPick;
   const onFaceMatchStepRef = useRef(onFaceMatchStep);
   onFaceMatchStepRef.current = onFaceMatchStep;
   const activePlateIdRef = useRef(activePlateId);
   activePlateIdRef.current = activePlateId;
   const splitRef = useRef(split);
   splitRef.current = split;
+  const paintRef = useRef(paint);
+  paintRef.current = paint;
+  // One paint invoke in flight → coalesce stroke samples (O(mesh) each).
+  const paintInflight = useRef(false);
+  // Repaints the canvas CSS cursor to the brush circle (size + color track the
+  // camera and pending state). Set inside the setup effect, called from the
+  // paint-settings effect below.
+  const refreshCursorRef = useRef<(() => void) | null>(null);
   // Face-match is a two-click pick: the first click stashes the reference face's
   // world normal + point here; the second matches the target face to it.
   const faceMatchRef = useRef<{ normal: Vec3; point: Vec3 } | null>(null);
@@ -299,6 +339,14 @@ export function WgpuViewport({
         onSplitPickRef.current?.(id);
         return true;
       }
+      if (toolNow === "paint") {
+        // Pick the object to paint; App opens the paint session on it.
+        const id = await castPick(sx, sy);
+        if (id == null) return false;
+        await applySelect(id, false);
+        onPaintPickRef.current?.(id);
+        return true;
+      }
       if (toolNow === "alignX" || toolNow === "alignY") {
         const id = await castPick(sx, sy);
         if (id == null) return false;
@@ -389,6 +437,84 @@ export function WgpuViewport({
       const c = cam.current;
       const cv = canvasRef.current!;
       return { width: cv.width, height: cv.height, az: c.az, el: c.el, dist: c.dist, center: c.center };
+    };
+
+    // One brush sample. `newStroke` opens a fresh undo step (press) vs. extends
+    // the drag. Coalesced by an in-flight flag — the Rust side rebuilds the
+    // O(mesh) overlay per sample, so we send the next only after the previous
+    // resolves.
+    const paintSample = (
+      sx: number,
+      sy: number,
+      state: number,
+      newStroke: boolean,
+    ) => {
+      const pt = paintRef.current;
+      if (!pt || !pt.active) return;
+      if (paintInflight.current && !newStroke) return;
+      paintInflight.current = true;
+      void invoke<PaintOutcome>("paint_stroke", {
+        req: {
+          ...camArgs(),
+          x: sx,
+          y: sy,
+          radius: pt.radius,
+          brush: pt.brush,
+          state,
+          new_stroke: newStroke,
+        },
+      })
+        .then((res) => {
+          // A sample that slipped off the mesh reports no paint — don't let it
+          // clobber the real flags (the press path guards the same way).
+          if (res.hit) paintRef.current?.onPainted(res.enforce, res.block);
+          void render();
+        })
+        .catch((err) => console.error("paint_stroke failed", err))
+        .finally(() => {
+          paintInflight.current = false;
+        });
+    };
+
+    // What a paint sample applies, computed live from the held button + Shift:
+    // Shift = erase, else RMB = block, else LMB = enforce. Idle hover passes
+    // button 0, so the cursor shows what an LMB stroke would do.
+    const paintStateFor = (shift: boolean, button: number): number =>
+      shift ? 0 : button === 2 ? 2 : 1;
+
+    // The brush is its own cursor: an SVG circle sized to the brush's on-screen
+    // radius, tinted by the pending state (green enforce / red block / gray
+    // erase). Native so it's visible off-model too, where the old surface ring
+    // vanished. Fill mode has no radius → native crosshair.
+    let paintCursorState = 1;
+    const refreshPaintCursor = () => {
+      const pt = paintRef.current;
+      if (!pt?.active) {
+        canvas.style.cursor = "";
+        return;
+      }
+      if (pt.fill) {
+        canvas.style.cursor = "crosshair";
+        return;
+      }
+      const c = cam.current;
+      const k =
+        (2 * c.dist * Math.tan((45 * Math.PI) / 180 / 2)) /
+        Math.max(1, canvas.clientHeight);
+      // ponytail: browsers cap cursor images at ~128px; clamp so a zoomed-in
+      // huge brush still renders (shown at the cap) instead of falling back.
+      const r = Math.min(62, Math.max(3, pt.radius / k));
+      const col =
+        paintCursorState === 2 ? "#e64040" : paintCursorState === 0 ? "#bfbfc2" : "#22c55e";
+      const s = Math.ceil(r * 2 + 4);
+      const h = s / 2;
+      const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${s}' height='${s}'><circle cx='${h}' cy='${h}' r='${r.toFixed(1)}' fill='none' stroke='${col}' stroke-width='1.5'/></svg>`;
+      canvas.style.cursor = `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${h} ${h}, crosshair`;
+    };
+    refreshCursorRef.current = refreshPaintCursor;
+    const setPaintCursor = (state: number) => {
+      paintCursorState = state;
+      refreshPaintCursor();
     };
     const grabAt = async (sx: number, sy: number): Promise<GrabResult | null> => {
       if (!canvasRef.current) return null;
@@ -484,6 +610,55 @@ export function WgpuViewport({
     const onDown = (e: MouseEvent) => {
       if (e.button !== 0 && e.button !== 2) return;
       moved = false;
+      // Support-paint tool: the button paints where it hits the mesh, else drives
+      // the camera. LMB = enforce (Shift = erase) on mesh / orbit on the plate;
+      // RMB = block on mesh / pan on the plate. Selection is locked, like split.
+      const pt = paintRef.current;
+      if (pt && pt.active) {
+        e.preventDefault();
+        const [sx, sy] = rel(e);
+        const camMode: "orbit" | "pan" = e.button === 2 ? "pan" : "orbit";
+        const state = paintStateFor(e.shiftKey, e.button);
+        const d: DragState = { x: e.clientX, y: e.clientY, button: e.button, mode: "paint" };
+        drag.current = d;
+        if (!pt.fill) setPaintCursor(state);
+        // A press that missed the mesh (null hit) isn't paint — retarget the drag
+        // to the camera. The failed stroke/fill painted nothing, so this is free.
+        const onResult = (res: PaintOutcome) => {
+          if (!res.hit && drag.current === d) {
+            drag.current = { x: e.clientX, y: e.clientY, button: e.button, mode: camMode };
+          } else {
+            paintRef.current?.onPainted(res.enforce, res.block);
+            void render();
+          }
+        };
+        if (pt.fill) {
+          void invoke<PaintOutcome>("paint_fill", {
+            req: { ...camArgs(), x: sx, y: sy, angle: pt.angle, state },
+          })
+            .then(onResult)
+            .catch((err) => console.error("paint_fill failed", err));
+        } else {
+          paintInflight.current = true;
+          void invoke<PaintOutcome>("paint_stroke", {
+            req: {
+              ...camArgs(),
+              x: sx,
+              y: sy,
+              radius: pt.radius,
+              brush: pt.brush,
+              state,
+              new_stroke: true,
+            },
+          })
+            .then(onResult)
+            .catch((err) => console.error("paint_stroke failed", err))
+            .finally(() => {
+              paintInflight.current = false;
+            });
+        }
+        return;
+      }
       if (e.button === 2) {
         e.preventDefault();
         drag.current = { x: e.clientX, y: e.clientY, button: 2, mode: "pan" };
@@ -624,6 +799,10 @@ export function WgpuViewport({
     const onUp = (e: MouseEvent) => {
       const d = drag.current;
       drag.current = null;
+      // Button released → back to the idle (LMB) tint. Runs for RMB too, which
+      // returns just below.
+      const pt = paintRef.current;
+      if (pt?.active && !pt.fill) setPaintCursor(paintStateFor(e.shiftKey, 0));
       if (!d || d.button !== 0) return;
       if (d.mode === "gizmo" && d.grab) {
         // Commit the drag: Rust recomputes the final transform from the release
@@ -668,6 +847,9 @@ export function WgpuViewport({
       if (d.mode === "connector") {
         return; // moveConnector already committed each step; selection set on press
       }
+      if (d.mode === "paint") {
+        return; // each brush sample already applied to the session
+      }
       if (d.mode === "inert") return; // placing click / gizmo body press: no selection change
       if (moved) return;
       const [sx, sy] = rel(e);
@@ -684,6 +866,9 @@ export function WgpuViewport({
       // drags connectors or the plane, and must never re-select or deselect the
       // object being cut.
       if (splitRef.current?.active) return;
+      // Same for paint: a plate click (a stroke that missed the mesh) must never
+      // change the selection.
+      if (paintRef.current?.active) return;
       // A click (no drag) on empty space or an unselected object selects it; a
       // click on an already-selected object keeps the selection. Shift/ctrl/cmd
       // extends the selection instead of replacing it.
@@ -693,6 +878,9 @@ export function WgpuViewport({
     const onMove = (e: MouseEvent) => {
       const d = drag.current;
       if (!d) {
+        // Paint tool idle: the brush circle is a CSS cursor set on enter and
+        // recolored by onModifierKey, so a plain hover has nothing to do.
+        if (paintRef.current?.active) return;
         if (gizmoModeRef.current !== "none") updateHover(e); // idle handle highlight
         return;
       }
@@ -746,6 +934,14 @@ export function WgpuViewport({
           d.cutOrigin = o;
           void render();
         });
+      } else if (d.mode === "paint") {
+        // Continue the stroke. State is live off the held button + Shift, so a
+        // Shift tap mid-drag flips to erase (and back) without lifting.
+        if (paintRef.current?.fill) return; // fill is a single click, not a drag
+        const [sx, sy] = rel(e);
+        const state = paintStateFor(e.shiftKey, d.button);
+        setPaintCursor(state);
+        paintSample(sx, sy, state, false);
       } else if (d.mode === "connector" && d.connectorIndex != null) {
         // Drag a connector across the plane (its (u,v) updates live).
         const s = splitRef.current;
@@ -764,8 +960,17 @@ export function WgpuViewport({
     const onCtxMenu = (e: MouseEvent) => e.preventDefault(); // right-drag pans, no menu
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      // Paint tool: Ctrl/Cmd+wheel resizes the brush instead of zooming.
+      const pt = paintRef.current;
+      if (pt && pt.active && (e.ctrlKey || e.metaKey)) {
+        // setRadius clamps + triggers the radius-dep effect (which redraws +
+        // resizes the cursor), so no eager render here.
+        pt.setRadius(pt.radius * (1 - Math.sign(e.deltaY) * 0.1));
+        return;
+      }
       const c = cam.current;
       c.dist = Math.min(2000, Math.max(20, c.dist * (1 + Math.sign(e.deltaY) * 0.1)));
+      if (pt?.active) refreshPaintCursor(); // brush px size tracks zoom
       void render();
     };
 
@@ -830,6 +1035,23 @@ export function WgpuViewport({
     // text field has focus, so editing a field doesn't delete objects).
     const onKeyDown = (e: KeyboardEvent) => {
       if (shouldIgnoreHotkey(e)) return;
+      // Paint tool: Ctrl/Cmd+Z undoes the last brush stroke (its own undo stack,
+      // separate from the scene history — which is gated off while the tool is up).
+      if (
+        paintRef.current?.active &&
+        (e.ctrlKey || e.metaKey) &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === "z"
+      ) {
+        e.preventDefault();
+        void invoke<PaintFlags>("paint_undo")
+          .then((f) => {
+            paintRef.current?.onPainted(f.enforce, f.block);
+            void render();
+          })
+          .catch(() => {});
+        return;
+      }
       if (e.key === "Escape" && toolRef.current !== "none") {
         onToolDoneRef.current?.(); // cancel the armed placing tool
         return;
@@ -858,6 +1080,18 @@ export function WgpuViewport({
       }
     };
 
+    // Shift toggles erase without a mouse move, so recolor the brush cursor on
+    // Shift press/release. Read Shift from the event type, not e.shiftKey —
+    // WebKitGTK still reports it set on Shift's own keyup. The button in play is
+    // the held paint button (RMB → red base) or LMB while hovering.
+    const onModifierKey = (e: KeyboardEvent) => {
+      const pt = paintRef.current;
+      if (!pt?.active || pt.fill || e.key !== "Shift") return;
+      const shift = e.type === "keydown";
+      const button = drag.current?.mode === "paint" ? drag.current.button : 0;
+      setPaintCursor(paintStateFor(shift, button));
+    };
+
     const ro = new ResizeObserver(() => void render());
     canvas.addEventListener("mousedown", onDown);
     window.addEventListener("mouseup", onUp);
@@ -866,6 +1100,8 @@ export function WgpuViewport({
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("contextmenu", onCtxMenu);
     window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onModifierKey);
+    window.addEventListener("keyup", onModifierKey);
     ro.observe(canvas);
 
     // Object / material edits change whether (and how big) the tower is →
@@ -976,6 +1212,9 @@ export function WgpuViewport({
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("contextmenu", onCtxMenu);
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onModifierKey);
+      window.removeEventListener("keyup", onModifierKey);
+      refreshCursorRef.current = null;
       ro.disconnect();
     };
   }, []);
@@ -1014,5 +1253,17 @@ export function WgpuViewport({
     split?.placing,
   ]);
 
-  return <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />;
+  // Paint tool changes (enter/exit, radius/mode) → resize/recolor the brush
+  // cursor (radius/fill affect it) and redraw.
+  useEffect(() => {
+    refreshCursorRef.current?.();
+    renderRef.current?.();
+  }, [paint?.active, paint?.radius, paint?.brush, paint?.fill, paint?.epoch]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{ width: "100%", height: "100%", display: "block" }}
+    />
+  );
 }

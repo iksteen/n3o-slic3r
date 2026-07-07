@@ -227,6 +227,7 @@ mod tests {
             vertices: vec![0.0; 24],
             indices: vec![0, 1, 2],
             paint_colors: None,
+            support_paint: None,
             bounding_box: BoundingBox {
                 min: [0.0, 0.0, 0.0],
                 max: [1.0, 1.0, 1.0],

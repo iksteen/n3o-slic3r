@@ -54,6 +54,7 @@ fn objects_from_3mf(path: &std::path::Path) -> Vec<SliceObject> {
                 vertices: Arc::new(m.vertices.clone()),
                 indices: Arc::new(m.indices.clone()),
                 paint: m.paint_colors.clone().map(Arc::new),
+                support_paint: m.support_paint.clone().map(Arc::new),
                 transform: o.transform.matrix.map(f64::from),
                 extruder: o.extruder_id.unwrap_or(1) as i32,
                 overrides: o.overrides.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
@@ -1122,6 +1123,157 @@ fn decoded_paint_states_are_real_filaments_on_real_data() {
         assert!(states.contains(&2), "filament 2 painted faces present");
     }
     assert!(saw_painted_mesh, "expected at least one painted mesh");
+}
+
+/// Manual tree supports: painted enforcers reach the engine and grow support
+/// only where painted (the whole point of `support_type = tree(manual)`).
+///
+/// An L-shaped bracket (pillar on the bed + a horizontal arm cantilevered out
+/// at the top) is sliced twice on bambi under `enable_support = 1` +
+/// `support_type = tree(manual)`. The ONLY difference between the two runs is
+/// the mesh's `support_paint`:
+///   - painted: the arm's downward-facing underside is enforcer-painted, so
+///     tree support grows under it down to the bed;
+///   - unpainted: no enforcers → manual mode grows nothing.
+/// The painted run must consume strictly more filament (the support material) —
+/// a G-code-level proof that `SliceObject.support_paint` → the FFI's
+/// `supported_facets` → libslic3r's manual-support path actually fires. If the
+/// wiring were a no-op, both runs would report identical filament.
+#[test]
+fn painted_enforcer_grows_manual_tree_support() {
+    ensure_ffi_init();
+
+    // L-bracket: profile in XZ extruded along Y. Pillar x∈[0,4] z∈[0,20] sits on
+    // the bed; arm x∈[0,20] z∈[16,20] cantilevers out, its underside (z=16,
+    // x∈[4,20]) unsupported. 12 vertices (6-point profile × front/back), 20
+    // triangles (2 caps × 4 + 6 side quads × 2).
+    #[rustfmt::skip]
+    let verts: Vec<f32> = vec![
+        // front (y=0): P0..P5
+        0.0,0.0,0.0,  4.0,0.0,0.0,  4.0,0.0,16.0,  20.0,0.0,16.0,  20.0,0.0,20.0,  0.0,0.0,20.0,
+        // back (y=10): P0'..P5'
+        0.0,10.0,0.0, 4.0,10.0,0.0, 4.0,10.0,16.0, 20.0,10.0,16.0, 20.0,10.0,20.0, 0.0,10.0,20.0,
+    ];
+    #[rustfmt::skip]
+    let indices: Vec<u32> = vec![
+        // front cap (verts 0..5)
+        0,1,2,  0,2,5,  2,3,4,  2,4,5,
+        // back cap (verts 6..11)
+        6,7,8,  6,8,11, 8,9,10, 8,10,11,
+        // side walls: profile edges (a,b) → (a,b,b+6),(a,b+6,a+6)
+        0,1,7,  0,7,6,     // edge 0-1 (pillar base underside/front-bottom)
+        1,2,8,  1,8,7,     // edge 1-2 (pillar outer face)
+        2,3,9,  2,9,8,     // edge 2-3 (ARM UNDERSIDE, z=16 — the overhang)
+        3,4,10, 3,10,9,    // edge 3-4 (arm end)
+        4,5,11, 4,11,10,   // edge 4-5 (top)
+        5,0,6,  5,6,11,    // edge 5-0 (back/left face)
+    ];
+
+    // Enforcer-paint the arm underside: every triangle whose 3 vertices all sit
+    // at z=16 (the downward overhang quad). "4" is the FacetsAnnotation leaf for
+    // ENFORCER (state 1 << 2); "" leaves a facet unpainted. Position-based so
+    // it's winding-independent.
+    let support_hex: Vec<String> = indices
+        .chunks_exact(3)
+        .map(|t| {
+            let z = |v: u32| verts[(v as usize) * 3 + 2];
+            if t.iter().all(|&v| (z(v) - 16.0).abs() < 1e-3) {
+                "4".to_string()
+            } else {
+                String::new()
+            }
+        })
+        .collect();
+    assert_eq!(
+        support_hex.iter().filter(|s| !s.is_empty()).count(),
+        2,
+        "exactly the 2 arm-underside triangles should be enforcer-painted",
+    );
+
+    let verts = Arc::new(verts);
+    let indices = Arc::new(indices);
+
+    // Slice the bracket with the given support paint, returning total filament
+    // grams. Placed near the bed centre; identity orientation.
+    let slice_grams = |support_paint: Option<Arc<Vec<String>>>, tag: &str| -> f64 {
+        let mut transform = [0.0f64; 16];
+        transform[0] = 1.0;
+        transform[5] = 1.0;
+        transform[10] = 1.0;
+        transform[15] = 1.0;
+        transform[12] = 80.0; // x
+        transform[13] = 80.0; // y
+
+        let object = SliceObject {
+            name: "bracket".into(),
+            vertices: Arc::clone(&verts),
+            indices: Arc::clone(&indices),
+            paint: None,
+            support_paint,
+            transform,
+            extruder: 1,
+            overrides: vec![],
+            group: None,
+            modifiers: vec![],
+        };
+
+        let registry = JobRegistry::new();
+        let (sink, events) = collecting_sink();
+        let temp_dir =
+            std::env::temp_dir().join(format!("n3o-manual-support-{tag}-{}", std::process::id()));
+        let input = SliceJobInput {
+            objects: vec![object],
+            output_dir: temp_dir.display().to_string(),
+            context: ContextJson {
+                printer: bambi_printer(),
+                plate: canonical_plate(),
+                filaments: vec![canonical_filament()],
+                active_slot: 0,
+                user_overrides: vec![],
+                project_overrides: vec![OverrideFileSpec {
+                    label: "manual-support".into(),
+                    content: "enable_support = \"1\"\nsupport_type = \"tree(manual)\"\n".into(),
+                }],
+                object_overrides: std::collections::HashMap::new(),
+            },
+            plate_ids: vec![1],
+            printer_instance_id: "bambi".into(),
+            material_layout: vec![],
+            quality_profile: None,
+            paint_filament_remap: None,
+        };
+
+        run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
+        let events = events.lock().unwrap();
+        if let Some(SliceEvent::JobFailed { error, .. }) = events
+            .iter()
+            .find(|e| matches!(e, SliceEvent::JobFailed { .. }))
+        {
+            panic!("[{tag}] slice failed: {error:?}");
+        }
+        let summary = events
+            .iter()
+            .find_map(|e| match e {
+                SliceEvent::PlateFinished { summary, .. } => Some(summary.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("[{tag}] no PlateFinished"));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        summary.filament_used_grams.values().sum()
+    };
+
+    let unpainted = slice_grams(None, "unpainted");
+    let painted = slice_grams(Some(Arc::new(support_hex)), "painted");
+
+    assert!(
+        unpainted > 0.0 && painted > 0.0,
+        "both slices must consume filament (unpainted={unpainted}, painted={painted})",
+    );
+    assert!(
+        painted > unpainted * 1.05,
+        "manual enforcer paint must add support material: painted={painted}g should exceed \
+         unpainted={unpainted}g — the support-paint wiring is a no-op if they're equal",
+    );
 }
 
 /// Leg 3 (deferred): copy-vs-vendor binding.
