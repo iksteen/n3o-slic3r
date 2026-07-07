@@ -16,9 +16,7 @@ their grouping lives only in `src/slic3r/GUI/Tab.cpp`'s `TabPrinter` /
 This scraper walks each tab's member functions and maps every option key
 to the page (and optgroup) it first appears under, so the machine- and
 filament-settings panels reproduce Orca's tabs instead of the flat
-"everything in Other" the bare `category` field would give. It also reads
-libslic3r's `m_extruder_option_keys` for the per-extruder set (the keys
-the per-toolhead tabs surface).
+"everything in Other" the bare `category` field would give.
 
 Run after pulling upstream OrcaSlicer:
 
@@ -35,19 +33,7 @@ from _orca_tab_keys import make_append_tracker
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TAB_CPP = REPO_ROOT / "external/OrcaSlicer/src/slic3r/GUI/Tab.cpp"
-PRINT_CONFIG_CPP = REPO_ROOT / "external/OrcaSlicer/src/libslic3r/PrintConfig.cpp"
 OUTPUT_PATH = REPO_ROOT / "crates/slic3r-ffi/src/option_printer_pages.rs"
-
-# The authoritative per-extruder option set is libslic3r's own
-# `m_extruder_option_keys` (PrintConfig.cpp::init_extruder_option_keys) —
-# the keys whose vectors are sized to the extruder count. The GUI's
-# extruder-page loop is only a *view* of these (and omits some, e.g.
-# `extruder_colour`, whose widget is commented out), so we read the data
-# model, not Tab.cpp, for the membership.
-EXTRUDER_KEYS_BLOCK = re.compile(
-    r"m_extruder_option_keys\s*=\s*\{(.*?)\}", re.DOTALL
-)
-QUOTED_KEY = re.compile(r'"([a-z][a-z0-9_]*)"')
 
 # A C++ member-function definition at column 0, e.g.
 # `void TabPrinter::build_fff()` or `PageShp TabPrinter::build_kinematics_page()`.
@@ -155,18 +141,6 @@ def scrape(
     return category_of, subgroup_of, line_of
 
 
-def parse_extruder_keys(print_config_text: str) -> set[str]:
-    """The authoritative per-extruder key set from libslic3r's
-    `m_extruder_option_keys` initializer."""
-    m = EXTRUDER_KEYS_BLOCK.search(print_config_text)
-    if not m:
-        raise SystemExit(
-            "error: m_extruder_option_keys block not found in "
-            f"{PRINT_CONFIG_CPP.relative_to(REPO_ROOT)}"
-        )
-    return set(QUOTED_KEY.findall(m.group(1)))
-
-
 def _table(name: str, rows: dict[str, str]) -> str:
     body = "\n".join(f'    ("{k}", "{c}"),' for k, c in sorted(rows.items()))
     return f"const {name}: &[(&str, &str)] = &[\n{body}\n];"
@@ -189,9 +163,7 @@ def emit_rust(
     filament_pages: dict[str, str],
     filament_subgroups: dict[str, str],
     filament_lines: dict[str, str],
-    per_extruder: set[str],
 ) -> str:
-    ex_body = "\n".join(f'    "{k}",' for k in sorted(per_extruder))
     tables = "\n\n".join(
         [
             _table("PRINTER_PAGES", printer_pages),
@@ -200,7 +172,6 @@ def emit_rust(
             _table("FILAMENT_PAGES", filament_pages),
             _table("FILAMENT_SUBGROUPS", filament_subgroups),
             _table("FILAMENT_LINES", filament_lines),
-            f"const PER_EXTRUDER: &[&str] = &[\n{ex_body}\n];",
         ]
     )
     fns = "\n\n".join(
@@ -264,21 +235,13 @@ def emit_rust(
 //! / `filament_page_of` being `Some` is also the "Orca lays out an editor
 //! for this key" signal the machine + filament panels gate visibility on.
 //!
-//! Per-extruder set (from `src/libslic3r/PrintConfig.cpp`
-//! `m_extruder_option_keys`): the authoritative list of options sized to
-//! the extruder count. Sourced from the data model, not the GUI, because
-//! Orca's extruder-page widgets omit some members (e.g. `extruder_colour`,
-//! whose widget is commented out). These render one tab per toolhead.
+//! The per-extruder membership (options sized to the extruder count) is not
+//! scraped here — it comes off the FFI `OptionDef::per_extruder` field, read
+//! straight from libslic3r's `extruder_option_keys()`.
 
 {tables}
 
 {fns}
-
-/// True if the option is laid out per-extruder (one value per toolhead)
-/// in Orca's `TabPrinter` — the set the per-extruder UI tabs surface.
-pub fn is_per_extruder(key: &str) -> bool {{
-    PER_EXTRUDER.binary_search(&key).is_ok()
-}}
 
 #[cfg(test)]
 mod tests {{
@@ -292,11 +255,6 @@ mod tests {{
                 assert!(*key > last, "table must be sorted; {{key}} <= {{last}}");
                 last = key;
             }}
-        }}
-        let mut last = "";
-        for key in PER_EXTRUDER {{
-            assert!(*key > last, "PER_EXTRUDER must be sorted; {{key}} <= {{last}}");
-            last = key;
         }}
     }}
 
@@ -344,23 +302,9 @@ mod tests {{
     }}
 
     #[test]
-    fn per_extruder_flag_matches_libslic3r_set() {{
-        assert!(is_per_extruder("retraction_length"));
-        assert!(is_per_extruder("z_hop"));
-        assert!(is_per_extruder("nozzle_diameter"));
-        // In libslic3r's set even though Orca's extruder-page widget for
-        // it is commented out.
-        assert!(is_per_extruder("extruder_colour"));
-        // Machine-wide keys are not per-extruder.
-        assert!(!is_per_extruder("gcode_flavor"));
-        assert!(!is_per_extruder("machine_start_gcode"));
-    }}
-
-    #[test]
     fn unknown_key_returns_none() {{
         assert!(printer_page_of("totally_made_up_option").is_none());
         assert!(filament_page_of("totally_made_up_option").is_none());
-        assert!(!is_per_extruder("totally_made_up_option"));
     }}
 }}
 """
@@ -382,7 +326,6 @@ def main() -> None:
         raise SystemExit(
             f"error: no TabFilament option keys found in {TAB_CPP.relative_to(REPO_ROOT)}"
         )
-    per_extruder = parse_extruder_keys(PRINT_CONFIG_CPP.read_text())
     OUTPUT_PATH.write_text(
         emit_rust(
             printer_pages,
@@ -391,14 +334,12 @@ def main() -> None:
             filament_pages,
             filament_subgroups,
             filament_lines,
-            per_extruder,
         )
     )
     print(
         f"wrote {OUTPUT_PATH.relative_to(REPO_ROOT)}: "
         f"{len(printer_pages)} printer keys, {len(filament_pages)} filament keys "
-        f"({len(filament_lines)} with line labels), "
-        f"{len(per_extruder)} per-extruder keys"
+        f"({len(filament_lines)} with line labels)"
     )
 
 
