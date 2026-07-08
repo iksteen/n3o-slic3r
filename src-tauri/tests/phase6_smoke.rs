@@ -58,6 +58,7 @@ fn cube_objects() -> Vec<SliceObject> {
         vertices: Arc::new(m.vertices),
         indices: Arc::new(m.indices),
         paint: m.paint_colors.map(Arc::new),
+        support_paint: None,
         transform: [
             1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ],

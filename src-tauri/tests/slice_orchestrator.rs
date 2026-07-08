@@ -38,6 +38,7 @@ fn stl_objects() -> Vec<SliceObject> {
         vertices: Arc::new(m.vertices),
         indices: Arc::new(m.indices),
         paint: m.paint_colors.map(Arc::new),
+        support_paint: None,
         transform: IDENTITY16,
         extruder: 1,
         overrides: vec![],
