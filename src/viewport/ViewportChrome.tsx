@@ -20,6 +20,8 @@ export function ViewportChrome({
   onGizmoMode,
   tool,
   onTool,
+  onArrange,
+  arrangeActive = false,
   onClone,
   onSplit,
   splitActive = false,
@@ -34,6 +36,10 @@ export function ViewportChrome({
   onGizmoMode: (mode: GizmoMode) => void;
   tool: Tool;
   onTool: (tool: Tool) => void;
+  /** Toggle the arrange tool panel (options + the Arrange action). */
+  onArrange: () => void;
+  /** Whether the arrange panel is currently open. */
+  arrangeActive?: boolean;
   onClone: () => void;
   /** Toggle the split (cut-by-plane) tool on the current selection. */
   onSplit: () => void;
@@ -48,9 +54,6 @@ export function ViewportChrome({
 }) {
   const hasObjects = objects.length > 0;
 
-  const runArrange = () => {
-    void invoke("scene_auto_arrange").catch((e) => console.error("arrange failed", e));
-  };
   // Align X/Y: with a selection, rotate it about Z so its dominant line is
   // parallel to the axis immediately. With no selection, arm pick-to-align — the
   // next clicked object's group is aligned (handled in WgpuViewport).
@@ -171,10 +174,11 @@ export function ViewportChrome({
           <button
             type="button"
             disabled={!hasObjects}
-            className={btn(hasObjects)}
-            onClick={runArrange}
-            title="Arrange — auto-pack the plate"
+            className={btn(hasObjects, arrangeActive)}
+            onClick={() => hasObjects && onArrange()}
+            title="Arrange — auto-pack the plate (opens options)"
             aria-label="Auto-arrange the plate"
+            aria-pressed={arrangeActive}
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
               <rect x="1.5" y="1.5" width="4.5" height="4.5" rx="0.6" stroke="currentColor" strokeWidth="1.2" />

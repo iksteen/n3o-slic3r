@@ -591,7 +591,9 @@ pub struct ArrangePlacement {
 /// are axis-aligned no-go regions `[minx, miny, maxx, maxy]` (mm) the nester
 /// keeps clear (e.g. AMS feed zones, the wipe tower); `bed` is `[width, height]`
 /// (mm, origin at 0,0); `min_dist` is the minimum gap between items (mm);
-/// `allow_rotations` lets the nester try discrete rotations. The excludes are
+/// `allow_rotations` lets the nester try discrete rotations;
+/// `align_to_y_axis` biases placement so items' long sides align with Y
+/// (OrcaSlicer enables it for i3/bed-slinger structures). The excludes are
 /// per-plate obstacles present on every bed, so each is reserved on every bed
 /// the pack might spill onto — pass `bed_count` as the worst-case bed bound
 /// (e.g. the item count; clamped to >= 1). Returns a placement per item in the
@@ -604,6 +606,7 @@ pub fn arrange(
     bed: [f64; 2],
     min_dist: f64,
     allow_rotations: bool,
+    align_to_y_axis: bool,
 ) -> Result<Vec<ArrangePlacement>> {
     if contours.is_empty() {
         return Err(Error {
@@ -650,6 +653,7 @@ pub fn arrange(
             bed[1],
             min_dist,
             allow_rotations as i32,
+            align_to_y_axis as i32,
             out_dxdy.as_mut_ptr(),
             out_rot.as_mut_ptr(),
             out_bed.as_mut_ptr(),

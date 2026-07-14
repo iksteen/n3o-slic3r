@@ -461,19 +461,30 @@ pub fn scene_user_override_clear(
 /// with the same parameters reuses the existing MeshId.
 /// Greedy auto-arrange the current scene's visible objects onto
 /// the active plate. No-op (returns empty placed/un_placed) when
-/// no printer is active.
+/// no printer is active. `spacing_mm` (clamped to 0..=100 so a typo
+/// can't wedge the nester) and `allow_rotations` come straight from
+/// the arrange tool panel — UI state, not persisted anywhere.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_auto_arrange(
+    spacing_mm: f32,
+    allow_rotations: bool,
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<Vec<ObjectId>, String> {
+    if !spacing_mm.is_finite() {
+        return Err("spacing must be a number".into());
+    }
+    let opts = super::arrange::ArrangeOptions {
+        spacing_mm: spacing_mm.clamp(0.0, 100.0),
+        allow_rotations,
+    };
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let Some(bed) = s.active_plate().scene.bed.clone() else {
         return Ok(vec![]);
     };
     let plate_id = s.active_plate().id;
-    let plan = super::arrange::plan_arrangement(&s, &bed);
+    let plan = super::arrange::plan_arrangement(&s, &bed, opts);
     let (mut events, un_placed) = super::arrange::apply_arrangement(&mut s, plan);
     drop(s);
     if !un_placed.is_empty() {
@@ -507,6 +518,11 @@ pub fn scene_object_clone(
     ids: Vec<ObjectId>,
     copies: Option<u32>,
     expand_groups: Option<bool>,
+    // Fill-plate nester options from the clone panel (same knobs as
+    // auto-arrange). Ignored for `copies = Some(n)` (no packing there);
+    // absent → defaults.
+    spacing_mm: Option<f32>,
+    allow_rotations: Option<bool>,
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<Vec<ObjectId>, String> {
@@ -541,12 +557,20 @@ pub fn scene_object_clone(
             // this single plate. ponytail: hard cap so a tiny part on a huge bed
             // can't loop unbounded — 1000 copies is well past useful; warn if hit.
             const MAX_COPIES: u32 = 1000;
+            let defaults = super::arrange::ArrangeOptions::default();
+            let opts = super::arrange::ArrangeOptions {
+                spacing_mm: spacing_mm
+                    .filter(|v| v.is_finite())
+                    .map(|v| v.clamp(0.0, 100.0))
+                    .unwrap_or(defaults.spacing_mm),
+                allow_rotations: allow_rotations.unwrap_or(defaults.allow_rotations),
+            };
             let mut kept_ids = Vec::new();
             let mut last_plan = None;
             let mut hit_cap = true;
             for _ in 0..MAX_COPIES {
                 let (batch, evs) = s.clone_objects(&ids, 1);
-                let plan = super::arrange::plan_arrangement(&s, bed);
+                let plan = super::arrange::plan_arrangement(&s, bed, opts);
                 if plan.spilled.is_empty() && plan.un_placed.is_empty() {
                     events.extend(evs);
                     kept_ids.extend(batch);

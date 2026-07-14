@@ -5,9 +5,11 @@
 //! one convex footprint = the convex hull of its mesh vertices projected
 //! to the bed plane. Those hulls, the bed rectangle, and the printer's
 //! exclusion zones go to `slic3r_ffi::arrange`, which packs them with
-//! per-object spacing and returns a translation + logical bed index per
-//! unit. We apply the translation (XY only — authored rotation/scale are
-//! preserved; rotation is off for now) to every member of the unit.
+//! the caller's [`ArrangeOptions`] (spacing + allow-rotations — UI
+//! state from the arrange tool panel, passed per call) and returns a
+//! translation + rotation + logical bed index per unit, applied to
+//! every member of the unit. On i3-structure printers the pack also
+//! aligns long sides to Y (derived, like Orca).
 //!
 //! Phase 1 is single-plate: a unit the nester spills onto an extra bed
 //! (`bed_idx > 0`) is reported as `un_placed` so the UI flags it, exactly
@@ -27,9 +29,48 @@ use super::state::SceneObject;
 #[cfg(test)]
 use crate::core::printer::profile::BoundingBox;
 
-/// Spacing between adjacent placed objects, in millimeters. Matches
-/// OrcaSlicer's default skirt clearance so prints don't fuse.
-pub const PLACEMENT_SPACING: f32 = 5.0;
+/// Nester knobs the arrange tool panel exposes. Passed per call —
+/// the UI owns the values; nothing is persisted backend-side.
+/// `align_to_y_axis` is deliberately NOT here — it's derived from the
+/// bound printer's `printer_structure` (i3 → on), matching OrcaSlicer.
+#[derive(Debug, Clone, Copy)]
+pub struct ArrangeOptions {
+    pub spacing_mm: f32,
+    pub allow_rotations: bool,
+}
+
+impl Default for ArrangeOptions {
+    fn default() -> Self {
+        Self {
+            // Matches OrcaSlicer's default skirt clearance so prints
+            // don't fuse.
+            spacing_mm: 5.0,
+            allow_rotations: false,
+        }
+    }
+}
+
+/// Whether the plate's bound printer is an i3/bed-slinger structure —
+/// OrcaSlicer enables the nester's `align_to_y_axis` for those so long
+/// items line up with the moving bed's travel axis. Derived, not a
+/// user option (matching Orca, which sets it from `printer_structure`).
+fn plate_printer_is_i3(state: &Project) -> bool {
+    let Some(instance_id) = state.active_plate().printer_instance_id() else {
+        return false;
+    };
+    let Some(instance) = crate::core::printer::lookup_instance(instance_id) else {
+        return false;
+    };
+    crate::core::profile_library::load_printer_fragment(&instance.printer_fragment_slug)
+        .and_then(|cascade| {
+            cascade
+                .rules
+                .iter()
+                .find(|r| r.is_default())
+                .and_then(|r| r.set.get("printer_structure").cloned())
+        })
+        .is_some_and(|s| s == "i3")
+}
 
 /// Outcome of one auto-arrange pass.
 pub struct ArrangeResult {
@@ -57,7 +98,11 @@ pub struct SpilledObject {
 /// Compute a packing without mutating the scene. Pure function so the
 /// caller can decide whether to apply the result (e.g., test code
 /// vs. a user-facing "preview" flow).
-pub fn plan_arrangement(state: &Project, bed: &BedMesh) -> ArrangeResult {
+pub fn plan_arrangement(
+    state: &Project,
+    bed: &BedMesh,
+    opts: ArrangeOptions,
+) -> ArrangeResult {
     let plate = &state.active_plate().scene;
 
     // Group visible objects into arrange units: one per group (kept rigid),
@@ -160,8 +205,9 @@ pub fn plan_arrangement(state: &Project, bed: &BedMesh) -> ArrangeResult {
         // obstacles (exclusion zones + tower) on up to that many beds.
         arranged_units.len(),
         bed_size,
-        PLACEMENT_SPACING as f64,
-        false, // preserve authored rotation for now
+        opts.spacing_mm as f64,
+        opts.allow_rotations,
+        plate_printer_is_i3(state),
     ) {
         Ok(p) => p,
         Err(e) => {
@@ -178,13 +224,27 @@ pub fn plan_arrangement(state: &Project, bed: &BedMesh) -> ArrangeResult {
     };
 
     for (unit, placement) in arranged_units.iter().zip(&placements) {
-        // The packed pose: a pure-XY world translation, applied to every member
-        // so a group stays rigid. (Rotation is off, so there's no yaw.)
-        let delta = Transform::translation(Vec3::new(
+        // The packed pose, applied to every member so a group stays rigid.
+        // The nester's convention (ArrangePolygon::transformed_poly) is
+        // rotate-about-the-contour-origin THEN translate; our contours were
+        // fed in bed-local coords, so the rotation pivot is the bed-local
+        // origin = `bed_min` in world space:
+        //   world' = T(bed_min) ∘ T(t) ∘ Rz(rot) ∘ T(-bed_min) ∘ world
+        // With rotations disabled (rot = 0) this reduces to the plain
+        // translation delta.
+        let t = Vec3::new(
             placement.translation[0] as f32,
             placement.translation[1] as f32,
             0.0,
-        ));
+        );
+        let delta = if placement.rotation != 0.0 {
+            let pivot = Vec3::new(bed_min.0 as f32, bed_min.1 as f32, 0.0);
+            Transform::translation(pivot + t)
+                .compose(Transform::rotation_around(Vec3::Z, placement.rotation as f32))
+                .compose(Transform::translation(-pivot))
+        } else {
+            Transform::translation(t)
+        };
         match placement.bed_idx {
             0 => {
                 for &id in unit.iter() {
@@ -473,7 +533,7 @@ mod tests {
         s.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut s, 10, 20.0);
         let bed = s.active_plate().scene.bed.clone().unwrap();
-        let plan = plan_arrangement(&s, &bed);
+        let plan = plan_arrangement(&s, &bed, ArrangeOptions::default());
         assert_eq!(plan.placed.len(), 10);
         assert!(plan.un_placed.is_empty());
         assert!(
@@ -488,7 +548,7 @@ mod tests {
         s.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut s, 100, 30.0);
         let bed = s.active_plate().scene.bed.clone().unwrap();
-        let plan = plan_arrangement(&s, &bed);
+        let plan = plan_arrangement(&s, &bed, ArrangeOptions::default());
         assert!(!plan.placed.is_empty(), "some fit the first plate");
         assert!(!plan.spilled.is_empty(), "the rest spill to extra beds");
         // 30mm cubes all fit *some* bed, so nothing is truly un-placeable.
@@ -528,7 +588,7 @@ mod tests {
         };
         let bed = s.active_plate().scene.bed.clone().unwrap();
 
-        let plan = plan_arrangement(&s, &bed);
+        let plan = plan_arrangement(&s, &bed, ArrangeOptions::default());
         assert!(!plan.placed.is_empty(), "cubes should pack onto the plate");
         // Crowding this many cubes overflows the bed, so the pack should spill —
         // letting us prove the tower is reserved on the extra beds too, not just
@@ -571,7 +631,7 @@ mod tests {
         add_n_cubes(&mut s, 100, 30.0);
         assert_eq!(s.plates.len(), 1);
         let bed = s.active_plate().scene.bed.clone().unwrap();
-        let plan = plan_arrangement(&s, &bed);
+        let plan = plan_arrangement(&s, &bed, ArrangeOptions::default());
         assert!(!plan.spilled.is_empty());
         let (_events, un_placed) = apply_arrangement(&mut s, plan);
         assert!(un_placed.is_empty());
@@ -593,7 +653,7 @@ mod tests {
         s.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut s, 6, 25.0);
         let bed = s.active_plate().scene.bed.clone().unwrap();
-        let plan = plan_arrangement(&s, &bed);
+        let plan = plan_arrangement(&s, &bed, ArrangeOptions::default());
         let (events, un_placed) = apply_arrangement(&mut s, plan);
         assert!(un_placed.is_empty());
         // No OOB events should have fired.
@@ -615,7 +675,7 @@ mod tests {
         s.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut s, 4, 30.0);
         let bed = s.active_plate().scene.bed.clone().unwrap();
-        let plan1 = plan_arrangement(&s, &bed);
+        let plan1 = plan_arrangement(&s, &bed, ArrangeOptions::default());
         let _ = apply_arrangement(&mut s, plan1);
         // Snapshot the placed transforms.
         let after_first: Vec<(ObjectId, Transform)> = s
@@ -626,7 +686,7 @@ mod tests {
             .map(|(id, o)| (*id, o.transform))
             .collect();
 
-        let plan2 = plan_arrangement(&s, &bed);
+        let plan2 = plan_arrangement(&s, &bed, ArrangeOptions::default());
         let _ = apply_arrangement(&mut s, plan2);
         let after_second: Vec<(ObjectId, Transform)> = s
             .active_plate()
@@ -664,7 +724,7 @@ mod tests {
         s.set_active_printer(Some(&printer));
         add_n_cubes(&mut s, 3, 30.0);
         let bed = s.active_plate().scene.bed.clone().unwrap();
-        let plan = plan_arrangement(&s, &bed);
+        let plan = plan_arrangement(&s, &bed, ArrangeOptions::default());
         // Every placed cube's XY bbox should clear the zone.
         for (id, xform) in &plan.placed {
             let obj_clone = SceneObject {
@@ -725,7 +785,7 @@ mod tests {
         let rel_before = origin(&s, b) - origin(&s, a);
 
         let bed = s.active_plate().scene.bed.clone().unwrap();
-        let plan = plan_arrangement(&s, &bed);
+        let plan = plan_arrangement(&s, &bed, ArrangeOptions::default());
         let _ = apply_arrangement(&mut s, plan);
 
         let rel_after = origin(&s, b) - origin(&s, a);
@@ -748,7 +808,7 @@ mod tests {
         bed.extents.min = [-90.0, -90.0, 0.0];
         bed.extents.max = [90.0, 90.0, 180.0];
 
-        let plan = plan_arrangement(&s, &bed);
+        let plan = plan_arrangement(&s, &bed, ArrangeOptions::default());
         let placed_ids: Vec<ObjectId> = plan.placed.iter().map(|(id, _)| *id).collect();
         let _ = apply_arrangement(&mut s, plan);
         assert!(!placed_ids.is_empty(), "cubes should fit a centered 180mm bed");

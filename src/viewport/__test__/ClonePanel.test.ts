@@ -1,11 +1,11 @@
-// CloneDialog pure-helper test. Component rendering needs a jsdom + RTL
+// ClonePanel pure-helper test. Component rendering needs a jsdom + RTL
 // setup we don't have (same as AddPrinterModal.test.tsx), so we pin the
 // copies-field validation: only integers >= 1 are a usable count; anything
 // else (0, negative, blank, fractional, non-numeric) is rejected so the
 // Clone button stays disabled.
 
 import { describe, expect, it } from "vitest";
-import { parseCopies } from "../CloneDialog";
+import { parseCopies } from "../ClonePanel";
 
 describe("parseCopies", () => {
   it("accepts positive integers", () => {

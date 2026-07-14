@@ -213,7 +213,11 @@ fn step_6_auto_arrange_then_oob_clear_under_active_printer() {
         );
     }
     let bed = state.active_plate().scene.bed.clone().unwrap();
-    let plan = n3o_slic3r_lib::core::scene::arrange::plan_arrangement(&state, &bed);
+    let plan = n3o_slic3r_lib::core::scene::arrange::plan_arrangement(
+        &state,
+        &bed,
+        n3o_slic3r_lib::core::scene::arrange::ArrangeOptions::default(),
+    );
     assert!(plan.un_placed.is_empty(), "6 small cubes should fit");
     let (events, _) = n3o_slic3r_lib::core::scene::arrange::apply_arrangement(&mut state, plan);
     let oob = events

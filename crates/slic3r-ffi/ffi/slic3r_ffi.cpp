@@ -2122,8 +2122,9 @@ slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengt
                              size_t item_count, const double* exclude_rects,
                              size_t exclude_count, size_t bed_count, double bed_w,
                              double bed_h, double min_dist, int allow_rotations,
-                             double* out_dx_dy, double* out_rotation,
-                             int* out_bed_idx, char** out_err) {
+                             int align_to_y_axis, double* out_dx_dy,
+                             double* out_rotation, int* out_bed_idx,
+                             char** out_err) {
     if (out_err) *out_err = nullptr;
     if (!contours || !contour_lengths || !out_dx_dy || !out_rotation || !out_bed_idx
         || item_count == 0 || bed_w <= 0.0 || bed_h <= 0.0
@@ -2164,6 +2165,7 @@ slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengt
         arrangement::ArrangeParams params;
         params.min_obj_distance = scaled<coord_t>(min_dist);
         params.allow_rotations = allow_rotations != 0;
+        params.align_to_y_axis = align_to_y_axis != 0;
         // Silence the chatty default progress printer; supply the stop predicate
         // (its default is an empty std::function, which would throw if invoked).
         params.progressind = [](unsigned, std::string) {};

@@ -3009,7 +3009,6 @@
   /* Shared modal-card shell (in @layer components). The per-modal rules add
      only their own width / max-height / position. */
   .add-printer-modal,
-  .clone-dialog,
   .printer-settings-modal {
     background: var(--surface);
     border: 1px solid var(--border-strong);
@@ -3024,34 +3023,6 @@
   .add-printer-modal {
     width: min(880px, 100%);
     max-height: min(680px, calc(100vh - 48px));
-  }
-
-  /* Clone dialog — a compact card reusing the apm-* header/buttons. */
-  .clone-dialog { width: min(360px, 100%); }
-  .clone-dialog-body { padding: 16px 22px; }
-  .clone-dialog-row {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 12px;
-    font-size: 13px; color: var(--text);
-  }
-  .clone-dialog-row input {
-    width: 90px;
-    padding: 5px 8px;
-    border: 1px solid var(--border-strong);
-    border-radius: 7px;
-    background: var(--surface-2);
-    color: var(--text);
-    font-size: 13px;
-  }
-  .clone-dialog-hint {
-    margin: 10px 0 0;
-    font-size: 12px;
-    color: var(--text-muted);
-  }
-  .clone-dialog-actions {
-    padding: 14px 22px 18px;
-    justify-content: flex-end;
-    border-top: 1px solid var(--hairline);
   }
 
   .apm-header {

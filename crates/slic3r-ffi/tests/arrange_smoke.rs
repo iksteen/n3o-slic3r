@@ -24,7 +24,7 @@ fn arranges_a_few_rectangles_onto_one_bed() {
     let items = vec![rect(50.0, 50.0), rect(40.0, 60.0), rect(30.0, 30.0)];
     let bed = [180.0, 180.0];
     let placements =
-        slic3r_ffi::arrange(&items, &[], items.len(), bed, 2.0, false).expect("arrange should succeed");
+        slic3r_ffi::arrange(&items, &[], items.len(), bed, 2.0, false, false).expect("arrange should succeed");
     assert_eq!(placements.len(), 3);
 
     for p in &placements {
@@ -64,7 +64,7 @@ fn spills_overflow_onto_extra_beds() {
     // must spill the rest onto additional beds (bed_idx > 0) — the mechanism we
     // need for "auto-arrange, spilling to extra plates".
     let items: Vec<_> = (0..12).map(|_| rect(70.0, 70.0)).collect();
-    let placements = slic3r_ffi::arrange(&items, &[], items.len(), [180.0, 180.0], 2.0, false)
+    let placements = slic3r_ffi::arrange(&items, &[], items.len(), [180.0, 180.0], 2.0, false, false)
         .expect("arrange should succeed");
     assert_eq!(placements.len(), 12);
 
@@ -85,7 +85,7 @@ fn keeps_items_clear_of_an_exclusion_region() {
     // A back-left no-go region (e.g. an AMS feed zone). Items must avoid it.
     let items = vec![rect(40.0, 40.0), rect(40.0, 40.0)];
     let excl = [[0.0, 0.0, 60.0, 60.0]];
-    let placements = slic3r_ffi::arrange(&items, &excl, items.len(), [180.0, 180.0], 2.0, false)
+    let placements = slic3r_ffi::arrange(&items, &excl, items.len(), [180.0, 180.0], 2.0, false, false)
         .expect("arrange ok");
     for (it, p) in items.iter().zip(&placements) {
         assert_eq!(p.bed_idx, 0);
@@ -112,7 +112,7 @@ fn excludes_are_hard_obstacles_on_a_crowded_bed() {
     // bed, so the spilled surplus must dodge it too), and the surplus spills.
     let items: Vec<_> = (0..16).map(|_| rect(42.0, 42.0)).collect();
     let excl = [[0.0, 0.0, 90.0, 90.0]];
-    let placements = slic3r_ffi::arrange(&items, &excl, items.len(), [180.0, 180.0], 2.0, false)
+    let placements = slic3r_ffi::arrange(&items, &excl, items.len(), [180.0, 180.0], 2.0, false, false)
         .expect("arrange ok");
     assert_eq!(placements.len(), 16);
 
@@ -139,5 +139,5 @@ fn excludes_are_hard_obstacles_on_a_crowded_bed() {
 fn rejects_a_degenerate_contour() {
     let _ = slic3r_ffi::init(None, 3);
     let items = vec![vec![[0.0, 0.0], [10.0, 0.0]]]; // only 2 points
-    assert!(slic3r_ffi::arrange(&items, &[], 1, [180.0, 180.0], 0.0, false).is_err());
+    assert!(slic3r_ffi::arrange(&items, &[], 1, [180.0, 180.0], 0.0, false, false).is_err());
 }

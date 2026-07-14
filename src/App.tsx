@@ -3,11 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { WgpuViewport } from "./viewport/WgpuViewport";
 import { ViewportChrome } from "./viewport/ViewportChrome";
 import { ViewportToasts } from "./viewport/ViewportToasts";
-import { CloneDialog } from "./objects/CloneDialog";
+import { ClonePanel } from "./viewport/ClonePanel";
 import { cloneObjects } from "./objects/objectCommands";
 import { useViewportTools } from "./viewport/useViewportTools";
 import { useSplitSession } from "./viewport/useSplitSession";
 import { SplitPanel } from "./viewport/SplitPanel";
+import { ArrangePanel, type ArrangeOptions } from "./viewport/ArrangePanel";
 import { usePaintSession } from "./viewport/usePaintSession";
 import { usePlateCascadeResolve } from "./settings/resolve";
 import { PaintPanel } from "./viewport/PaintPanel";
@@ -101,6 +102,15 @@ function App() {
   // True while the (async, off-thread) cut runs — gates the Split button and
   // shows progress so a large cut doesn't read as a frozen/dead panel.
   const [splitting, setSplitting] = useState(false);
+  // Whether the arrange tool panel occupies the right column (its
+  // options + the Arrange action; see ArrangePanel). The options are
+  // session-scoped UI state passed to `scene_auto_arrange` per call —
+  // held here (not in the panel) so they survive close/reopen.
+  const [arrangeOpen, setArrangeOpen] = useState(false);
+  const [arrangeOptions, setArrangeOptions] = useState<ArrangeOptions>({
+    spacing_mm: 5,
+    allow_rotations: false,
+  });
   // Object count frozen at the moment a slice is submitted — what the
   // backend actually snapshots and slices (build_slice_input). Held
   // here so the progress window's count stays put across tab switches
@@ -652,14 +662,26 @@ function App() {
                 onTool={(t) => {
                   split.exit();
                   paint.exit();
+                  setArrangeOpen(false);
                   viewport.selectTool(t);
                 }}
+                onArrange={() => {
+                  // One tool session at a time, matching split/paint.
+                  split.exit();
+                  paint.exit();
+                  viewport.closeClone();
+                  setArrangeOpen((open) => !open);
+                }}
+                arrangeActive={arrangeOpen}
                 onClone={() => {
                   split.exit();
                   paint.exit();
+                  setArrangeOpen(false);
                   viewport.armClone(selection);
                 }}
                 onSplit={() => {
+                  setArrangeOpen(false);
+                  viewport.closeClone();
                   if (split.active) {
                     split.exit();
                   } else if (selection.length > 0) {
@@ -673,6 +695,8 @@ function App() {
                 }}
                 splitActive={split.active}
                 onPaint={() => {
+                  setArrangeOpen(false);
+                  viewport.closeClone();
                   if (paint.active) {
                     paint.exit();
                   } else if (selection.length === 1) {
@@ -688,19 +712,6 @@ function App() {
                 paintActive={paint.active}
                 faceMatchRefSet={viewport.faceMatchStep}
               />
-              {viewport.clone && (
-                <CloneDialog
-                  count={viewport.clone.ids.length}
-                  onConfirm={(copies) => {
-                    const dlg = viewport.clone!;
-                    viewport.closeClone();
-                    void cloneObjects(dlg.ids, copies, dlg.expandGroups).catch((e) =>
-                      console.error("clone failed", e),
-                    );
-                  }}
-                  onCancel={viewport.closeClone}
-                />
-              )}
               {canvasOverlays}
               {/* Scene warnings (OOB / overflow) for whichever viewport is mounted. */}
               <ViewportToasts />
@@ -712,7 +723,30 @@ function App() {
                 so its rail-collapsed class keeps sizing the column and
                 its state survives the session. */}
             <div className="panel-column">
-              {split.active ? (
+              {viewport.clone ? (
+                <ClonePanel
+                  count={viewport.clone.ids.length}
+                  arrangeOptions={arrangeOptions}
+                  onArrangeOptionsChange={setArrangeOptions}
+                  onConfirm={(copies) => {
+                    const dlg = viewport.clone!;
+                    viewport.closeClone();
+                    void cloneObjects(
+                      dlg.ids,
+                      copies,
+                      dlg.expandGroups,
+                      copies === null ? arrangeOptions : undefined,
+                    ).catch((e) => console.error("clone failed", e));
+                  }}
+                  onClose={viewport.closeClone}
+                />
+              ) : arrangeOpen ? (
+                <ArrangePanel
+                  options={arrangeOptions}
+                  onChange={setArrangeOptions}
+                  onClose={() => setArrangeOpen(false)}
+                />
+              ) : split.active ? (
                 <SplitPanel
                   rot={split.rot}
                   keepPos={split.keepPos}
@@ -779,7 +813,10 @@ function App() {
               ) : null}
               <div
                 className={
-                  split.active || paint.active
+                  viewport.clone != null ||
+                  arrangeOpen ||
+                  split.active ||
+                  paint.active
                     ? "panel-column-off"
                     : "panel-column-on"
                 }

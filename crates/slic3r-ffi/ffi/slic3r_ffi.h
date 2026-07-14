@@ -581,7 +581,9 @@ slic3r_status slic3r_orient_mesh(const float* vertices, size_t vertex_count,
  * zones, the wipe tower) present on *every* bed, so they are reserved as fixed
  * obstacles on each of the first `bed_count` beds (pass the item count as the
  * worst-case bed bound; clamped to >= 1). `min_dist` is the minimum gap between
- * items (mm); `allow_rotations` (0/1) lets the nester try discrete rotations.
+ * items (mm); `allow_rotations` (0/1) lets the nester try discrete rotations;
+ * `align_to_y_axis` (0/1) biases placement so items' long sides align with Y
+ * (OrcaSlicer enables it for i3/bed-slinger printer structures).
  *
  * Outputs are caller-allocated, indexed by the same item order:
  *   out_dx_dy:    2 doubles per item — the translation to apply (mm).
@@ -594,8 +596,9 @@ slic3r_status slic3r_arrange(const double* contours, const size_t* contour_lengt
                              size_t item_count, const double* exclude_rects,
                              size_t exclude_count, size_t bed_count, double bed_w,
                              double bed_h, double min_dist, int allow_rotations,
-                             double* out_dx_dy, double* out_rotation,
-                             int* out_bed_idx, char** out_err);
+                             int align_to_y_axis, double* out_dx_dy,
+                             double* out_rotation, int* out_bed_idx,
+                             char** out_err);
 
 #ifdef __cplusplus
 }
