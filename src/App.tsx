@@ -688,7 +688,31 @@ function App() {
                 paintActive={paint.active}
                 faceMatchRefSet={viewport.faceMatchStep}
               />
-              {split.active && (
+              {viewport.clone && (
+                <CloneDialog
+                  count={viewport.clone.ids.length}
+                  onConfirm={(copies) => {
+                    const dlg = viewport.clone!;
+                    viewport.closeClone();
+                    void cloneObjects(dlg.ids, copies, dlg.expandGroups).catch((e) =>
+                      console.error("clone failed", e),
+                    );
+                  }}
+                  onCancel={viewport.closeClone}
+                />
+              )}
+              {canvasOverlays}
+              {/* Scene warnings (OOB / overflow) for whichever viewport is mounted. */}
+              <ViewportToasts />
+              <ModelDropZone />
+            </div>
+            {/* Right column: the settings panel — or, while a modal tool
+                session is live, its tool panel at the column's exact
+                current width. The settings panel stays mounted (hidden)
+                so its rail-collapsed class keeps sizing the column and
+                its state survives the session. */}
+            <div className="panel-column">
+              {split.active ? (
                 <SplitPanel
                   rot={split.rot}
                   keepPos={split.keepPos}
@@ -725,8 +749,7 @@ function App() {
                       .finally(() => setSplitting(false));
                   }}
                 />
-              )}
-              {paint.active && (
+              ) : paint.active ? (
                 <PaintPanel
                   radius={paint.radius}
                   onRadius={paint.setRadius}
@@ -753,32 +776,23 @@ function App() {
                   onErase={paint.clear}
                   onClose={paint.exit}
                 />
-              )}
-              {viewport.clone && (
-                <CloneDialog
-                  count={viewport.clone.ids.length}
-                  onConfirm={(copies) => {
-                    const dlg = viewport.clone!;
-                    viewport.closeClone();
-                    void cloneObjects(dlg.ids, copies, dlg.expandGroups).catch((e) =>
-                      console.error("clone failed", e),
-                    );
-                  }}
-                  onCancel={viewport.closeClone}
+              ) : null}
+              <div
+                className={
+                  split.active || paint.active
+                    ? "panel-column-off"
+                    : "panel-column-on"
+                }
+              >
+                <SettingsPanelHost
+                  session={session}
+                  instances={printers.instances}
+                  connections={driverConnections}
+                  onAddPrinter={() => setShowAddPrinter(true)}
+                  onEditPrinter={(id) => setEditingPrinterId(id)}
                 />
-              )}
-              {canvasOverlays}
-              {/* Scene warnings (OOB / overflow) for whichever viewport is mounted. */}
-              <ViewportToasts />
-              <ModelDropZone />
+              </div>
             </div>
-            <SettingsPanelHost
-              session={session}
-              instances={printers.instances}
-              connections={driverConnections}
-              onAddPrinter={() => setShowAddPrinter(true)}
-              onEditPrinter={(id) => setEditingPrinterId(id)}
-            />
           </div>
         )
       )}

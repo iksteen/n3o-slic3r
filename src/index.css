@@ -161,6 +161,26 @@
       grid-template-columns: 220px 1fr 336px;
     }
   }
+  /* Right-column host: one grid cell holding the settings panel and,
+     during a split/paint session, the tool panel in its place. The
+     settings panel stays MOUNTED (hidden via .panel-column-off) while a
+     tool is live: its `.settings-panel.rail-collapsed` class keeps
+     driving the `:has()` column widths above — the tool panel gets the
+     column's true current width, collapsed or not — and the panel's
+     scroll/category state survives the session. `display: contents`
+     when visible keeps `.settings-panel` the effective grid item. */
+  .panel-column {
+    display: grid;
+    grid-template-rows: 1fr;
+    min-height: 0;
+    height: 100%;
+  }
+  .panel-column > .panel-column-off {
+    display: none;
+  }
+  .panel-column > .panel-column-on {
+    display: contents;
+  }
 
   /* ─────────── Objects panel (left column) ─────────── */
   .objects-panel {
@@ -1091,6 +1111,17 @@
     grid-template-rows: auto auto 1fr;
     min-height: 0;
     height: 100%;
+  }
+
+  /* Tool-session panel — split/paint take over the settings column
+     (third .layout-prepare track) while their tool is active: the
+     settings rows aren't usable mid-session anyway, and the canvas
+     stays unobstructed. Same surface as .settings-panel. */
+  .tool-panel {
+    background: var(--surface);
+    min-height: 0;
+    height: 100%;
+    overflow-y: auto;
   }
 
   /* Config strip — sits above the panel header carrying
