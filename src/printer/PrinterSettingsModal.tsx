@@ -44,6 +44,7 @@ import {
   validateDraftConnection,
   type Draft,
 } from "./printerSettingsHelpers";
+import { requestFullSyncOnConnect } from "../driver/useDriverConnections";
 import { ConfirmOverlay } from "./PrinterSettingsConfirmOverlay";
 import { GeneralSection } from "./PrinterSettingsGeneralSection";
 import { ConnectionSection } from "./PrinterSettingsConnectionSection";
@@ -284,15 +285,24 @@ export function PrinterSettingsModal({
       const patch: InstancePatch = {};
       if (changed.displayName) patch.displayName = trimmedName;
       if (changed.amsUnits) patch.amsUnits = draft.amsUnits;
+      let armFullSync = false;
       if (sectionDirty.connection) {
         if (forgetConnection) {
           patch.clearConnection = true;
         } else {
           const newConn = draftToConnection(driverKind, draft);
-          if (newConn != null) patch.connection = newConn;
+          if (newConn != null) {
+            patch.connection = newConn;
+            armFullSync = true;
+          }
         }
       }
       await updateInstance(instance.id, patch);
+      // Saved connection details changed → the reconciler will bring
+      // up a (new) driver; pull the printer's loadout into the
+      // instance once it reports, so a fresh connection starts from
+      // physical truth instead of the add-printer defaults.
+      if (armFullSync) requestFullSyncOnConnect(instance.id);
       setSaving(false);
       // Persist-and-close. The driver reconciler (useDriverConnections)
       // reacts to the resulting printer:instance_changed event and

@@ -13,17 +13,23 @@ vi.mock("../../printer/printerInstance", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   setInstanceAmsUnits: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn().mockResolvedValue(undefined),
+}));
 
+import { invoke } from "@tauri-apps/api/core";
 import {
   connectionSignature,
   configForConnection,
   isConnectionUsable,
   maybeSyncAmsCount,
   reportedAmsUnits,
+  requestFullSyncOnConnect,
   resetDriverConnectionsForTests,
   seedAmsCountForTests,
   seedReconcilerStateForTests,
   summaryForTests,
+  syncFromStatusReport,
 } from "../useDriverConnections";
 import type { ConnectionInfo } from "../../printer/printerInstance";
 import { setInstanceAmsUnits } from "../../printer/printerInstance";
@@ -210,6 +216,45 @@ describe("automatic AMS-count sync", () => {
     seedAmsCountForTests("a1", 1);
     maybeSyncAmsCount("a1", bambuStatus(null));
     expect(setInstanceAmsUnits).not.toHaveBeenCalled();
+  });
+});
+
+describe("initial full sync on saved connection change", () => {
+  beforeEach(() => {
+    resetDriverConnectionsForTests();
+    vi.mocked(invoke).mockClear();
+    vi.mocked(setInstanceAmsUnits).mockClear();
+  });
+
+  it("fires once on the first authoritative report, consuming the event", () => {
+    seedAmsCountForTests("p1p", 1);
+    requestFullSyncOnConnect("p1p");
+    syncFromStatusReport("p1p", 7, bambuStatus(0));
+    expect(invoke).toHaveBeenCalledExactlyOnceWith(
+      "printer_instance_sync_from_driver",
+      { instanceId: "p1p", driverId: 7 },
+    );
+    // The full sync reconciled the count — no count-only write, not
+    // even on the next report.
+    expect(setInstanceAmsUnits).not.toHaveBeenCalled();
+    syncFromStatusReport("p1p", 7, bambuStatus(0));
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(setInstanceAmsUnits).not.toHaveBeenCalled();
+  });
+
+  it("stays armed through non-authoritative reports", () => {
+    requestFullSyncOnConnect("a1");
+    syncFromStatusReport("a1", 3, bambuStatus(null));
+    expect(invoke).not.toHaveBeenCalled();
+    syncFromStatusReport("a1", 3, bambuStatus(1));
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls through to the count-only sync when not armed", () => {
+    seedAmsCountForTests("a1", 1);
+    syncFromStatusReport("a1", 3, bambuStatus(2));
+    expect(invoke).not.toHaveBeenCalled();
+    expect(setInstanceAmsUnits).toHaveBeenCalledWith("a1", 2);
   });
 });
 

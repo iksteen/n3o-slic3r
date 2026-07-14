@@ -16,6 +16,7 @@
 // hooks when the map mutates so consumers re-render.
 
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { onEvents } from "../state/eventRouter";
 import {
   driverConnect,
@@ -168,6 +169,62 @@ export function reportedAmsUnits(status: PrinterStatus): number | null {
   return ams == null ? null : ams.units.length;
 }
 
+// Identities armed for a one-shot FULL sync (AMS count + slot
+// materials) on their next authoritative report. Armed by the
+// settings modal when the user saves changed connection details: at
+// that moment the driver isn't connected yet — the reconciler is
+// still tearing down/rebuilding it — so the sync has to wait for the
+// (re)connected printer's first real loadout report.
+const PENDING_FULL_SYNC: Set<string> = new Set();
+
+/** Arm a one-shot full sync for the instance's next authoritative
+ *  status report. Not persisted: if the app quits before the printer
+ *  ever connects, the manual sync button still covers it. */
+export function requestFullSyncOnConnect(identity: string): void {
+  PENDING_FULL_SYNC.add(identity);
+}
+
+/** Per-status-event sync dispatch: a pending full sync consumes the
+ *  event (it reconciles the count itself); otherwise the count-only
+ *  auto-sync applies. Exported for unit-test access. */
+export function syncFromStatusReport(
+  identity: string,
+  driverId: DriverId,
+  status: PrinterStatus,
+): void {
+  if (maybeFullSync(identity, driverId, status)) return;
+  maybeSyncAmsCount(identity, status);
+}
+
+/** Fire the armed full sync if `status` is the first authoritative
+ *  report: Bambu needs a populated AMS state (`ams: null` is the
+ *  not-yet-reported placeholder), U1 a non-empty toolhead report.
+ *  Returns true when the event was consumed (sync dispatched). */
+function maybeFullSync(
+  identity: string,
+  driverId: DriverId,
+  status: PrinterStatus,
+): boolean {
+  if (!PENDING_FULL_SYNC.has(identity)) return false;
+  const reported = reportedAmsUnits(status);
+  const authoritative =
+    status.extra.kind === "Bambu"
+      ? reported != null
+      : status.extra.data.toolhead_filaments.length > 0;
+  if (!authoritative) return false;
+  PENDING_FULL_SYNC.delete(identity);
+  // The full sync reconciles the unit count too — record it so the
+  // count-only sync doesn't redundantly re-write on the next report.
+  if (reported != null) AMS_COUNT_SYNCED.set(identity, reported);
+  invoke("printer_instance_sync_from_driver", {
+    instanceId: identity,
+    driverId,
+  }).catch((e: unknown) => {
+    console.warn(`[driver-auto] initial full sync failed for ${identity}`, e);
+  });
+  return true;
+}
+
 /** Sync the instance's AMS-unit count to a status report, once per
  *  distinct reported count. Fire-and-forget: the backend rebuilds the
  *  slot topology (preserving overlapping bindings) and emits
@@ -202,7 +259,7 @@ function ensureGlobalStatusListener(): void {
       // transitions to `live`.
       const identity = DRIVER_TO_IDENTITY.get(e.payload.driver_id);
       if (identity == null) return;
-      maybeSyncAmsCount(identity, e.payload.status);
+      syncFromStatusReport(identity, e.payload.driver_id, e.payload.status);
       const entry = ENTRIES.get(identity);
       if (entry == null || entry.kind !== "live") return;
       // In-place mutation of the runtime field is OK: the entry object
@@ -234,6 +291,7 @@ if (import.meta.hot) {
     PENDING.clear();
     SUBSCRIBERS.clear();
     AMS_COUNT_SYNCED.clear();
+    PENDING_FULL_SYNC.clear();
   });
 }
 
@@ -587,6 +645,7 @@ export function useDriverConnections(
     for (const identity of ENTRIES.keys()) {
       if (!known.has(identity)) {
         AMS_COUNT_SYNCED.delete(identity);
+        PENDING_FULL_SYNC.delete(identity);
         void reconcileIdentity(identity, null);
       }
     }
@@ -607,6 +666,7 @@ export function resetDriverConnectionsForTests(): void {
   DRIVER_TO_IDENTITY.clear();
   PENDING.clear();
   AMS_COUNT_SYNCED.clear();
+  PENDING_FULL_SYNC.clear();
   SNAPSHOT_CACHE = null;
   STATE_VERSION = 0;
 }
