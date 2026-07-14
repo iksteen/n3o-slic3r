@@ -146,6 +146,102 @@ mod tests {
         assert_eq!(u1.driver_kind, Some(DriverKind::U1));
     }
 
+    fn machine_scalar(slug: &str, key: &str) -> Option<String> {
+        crate::core::profile_library::load_printer_fragment(slug)
+            .expect("machine cascade")
+            .rules
+            .iter()
+            .find(|r| r.is_default())
+            .and_then(|r| r.set.get(key))
+            .cloned()
+    }
+
+    #[test]
+    fn ender_3_s1_base_is_a_driverless_marlin_import() {
+        // The base S1 is the verbatim upstream import: Marlin flavor,
+        // no LAN driver (stock firmware has no control plane we speak).
+        let s1 = lookup("creality-ender-3-s1").expect("ender-3 s1 present");
+        assert_eq!(s1.model, "Creality Ender-3 S1");
+        assert_eq!(s1.driver_kind, None);
+        assert_eq!(s1.toolheads.len(), 1);
+        assert_eq!(s1.ams_max, 0);
+        assert_eq!(s1.build_volume.max[2], 270.0);
+        assert_eq!(s1.default_bed.as_deref(), Some("Textured PEI Plate"));
+        assert_eq!(
+            machine_scalar("creality-ender-3-s1", "gcode_flavor").as_deref(),
+            Some("marlin"),
+        );
+    }
+
+    #[test]
+    fn ender_3_s1_klipper_variant_derives_and_patches() {
+        // The Klipper conversion is DERIVED from the base by
+        // scripts/derive_printer_variant.py: own model name (picker +
+        // cascade key), klipper flavor, generic Moonraker driver. Its
+        // process fragments' `when.printer.model` predicates must
+        // follow the renamed model or quality profiles vanish.
+        use super::super::super::driver::traits::DriverKind;
+        let s1k = lookup("creality-ender-3-s1-klipper").expect("klipper variant present");
+        assert_eq!(s1k.model, "Creality Ender-3 S1 (Klipper)");
+        assert_eq!(s1k.driver_kind, Some(DriverKind::Moonraker));
+        assert_eq!(s1k.default_bed.as_deref(), Some("Textured PEI Plate"));
+        assert_eq!(
+            machine_scalar("creality-ender-3-s1-klipper", "gcode_flavor").as_deref(),
+            Some("klipper"),
+        );
+        let processes = crate::core::profile_library::list_process_fragments(
+            "creality-ender-3-s1-klipper",
+            "Creality Ender-3 S1 (Klipper)",
+            &["0.4".to_owned()],
+        );
+        assert!(
+            !processes.is_empty(),
+            "derived processes must fire under the variant's model name",
+        );
+    }
+
+    #[test]
+    fn creality_profiles_are_experimental() {
+        let entries = bundled_catalog();
+        for identity in [
+            "creality-ender-3-s1",
+            "creality-ender-3-s1-klipper",
+            "creality-ender-3-v3-ke",
+        ] {
+            let entry = entries
+                .iter()
+                .find(|e| e.identity == identity)
+                .unwrap_or_else(|| panic!("{identity} in catalog"));
+            assert!(entry.experimental, "{identity} must be experimental");
+        }
+    }
+
+    #[test]
+    fn ender_3_v3_ke_imports_verbatim_as_klipper_moonraker() {
+        // Natively-Klipper upstream profile — no derived variant, the
+        // plain import carries the flavor. Four nozzle SKUs.
+        use super::super::super::driver::traits::DriverKind;
+        let ke = lookup("creality-ender-3-v3-ke").expect("v3 ke present");
+        assert_eq!(ke.model, "Creality Ender-3 V3 KE");
+        assert_eq!(ke.driver_kind, Some(DriverKind::Moonraker));
+        assert_eq!(ke.toolheads.len(), 1);
+        assert_eq!(ke.build_volume.max, [220.0, 220.0, 245.0]);
+        assert_eq!(
+            ke.available_nozzle_diameters,
+            vec!["0.2", "0.4", "0.6", "0.8"],
+        );
+        assert_eq!(
+            machine_scalar("creality-ender-3-v3-ke", "gcode_flavor").as_deref(),
+            Some("klipper"),
+        );
+        let processes = crate::core::profile_library::list_process_fragments(
+            "creality-ender-3-v3-ke",
+            "Creality Ender-3 V3 KE",
+            &["0.4".to_owned()],
+        );
+        assert!(!processes.is_empty());
+    }
+
     #[test]
     fn catalog_entry_carries_full_profile_for_panel_resolve() {
         let entries = bundled_catalog();

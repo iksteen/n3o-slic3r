@@ -1,0 +1,3 @@
+# The common aftermarket sheet on Klipper-converted S1s.
+identity = "Textured PEI Plate"
+curr_bed_type = "Textured PEI Plate"

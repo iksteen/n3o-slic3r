@@ -1,0 +1,5 @@
+# Stock KE sheet: PC-coated spring steel. "Cool Plate" is
+# libslic3r's BedType for a PC surface, so filament bed temps keyed
+# by plate type resolve correctly.
+identity = "PC Spring Steel"
+curr_bed_type = "Cool Plate"

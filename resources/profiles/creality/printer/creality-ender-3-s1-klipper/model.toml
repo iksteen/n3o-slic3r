@@ -1,0 +1,17 @@
+# Klipper-converted Ender-3 S1 (stock board flashed with Klipper +
+# a Moonraker host, e.g. Mainsail OS on a Pi). The profile content is
+# DERIVED from `creality-ender-3-s1` by scripts/derive_printer_variant.py
+# (gcode_flavor patched to klipper); only this metadata file is
+# hand-curated.
+brand = "Creality"
+brand_short = "C"
+driver_kind = "moonraker"
+# Not hardware-validated — hidden in the add-printer picker unless
+# "Include experimental" is enabled.
+experimental = true
+ams_max = 0
+
+[[toolheads]]
+default_nozzle_diameter = "0.4"
+# Sprite extruder stock rating.
+max_temp = 260.0

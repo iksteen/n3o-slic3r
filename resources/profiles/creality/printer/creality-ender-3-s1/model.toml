@@ -1,0 +1,15 @@
+# Stock Ender-3 S1: Marlin firmware, no LAN control plane — no
+# driver_kind, so the settings modal ships no Connection tab. The
+# Klipper conversion is the separate derived profile
+# `creality-ender-3-s1-klipper` (see scripts/derive_printer_variant.py).
+brand = "Creality"
+brand_short = "C"
+# Not hardware-validated — hidden in the add-printer picker unless
+# "Include experimental" is enabled.
+experimental = true
+ams_max = 0
+
+[[toolheads]]
+default_nozzle_diameter = "0.4"
+# Sprite extruder stock rating.
+max_temp = 260.0

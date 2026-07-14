@@ -1,0 +1,16 @@
+# Ender-3 V3 KE: runs Creality's Klipper-based firmware natively —
+# the upstream Orca profile is already klipper-flavored, so unlike
+# the S1 no derived variant is needed. The stock start gcode assumes
+# Creality's macro set (PRINTER_PARAM); a KE reflashed to vanilla
+# Klipper needs those macros or an edited start gcode.
+brand = "Creality"
+brand_short = "C"
+driver_kind = "moonraker"
+# Not hardware-validated in n3o — hidden in the add-printer picker
+# unless "Include experimental" is enabled.
+experimental = true
+ams_max = 0
+
+[[toolheads]]
+default_nozzle_diameter = "0.4"
+max_temp = 300.0

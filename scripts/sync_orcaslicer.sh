@@ -72,11 +72,24 @@ machine BBL       "Bambu Lab A1"      bambu-lab-a1      resources/profiles/bbl/p
 machine BBL       "Bambu Lab P1S"     bambu-lab-p1s     resources/profiles/bbl/printer "" machine_start_gcode
 machine BBL       "Bambu Lab P1P"     bambu-lab-p1p     resources/profiles/bbl/printer "" machine_start_gcode
 machine Snapmaker "Snapmaker U1"      snapmaker-u1      resources/profiles/snapmaker/printer "0.4+0.6"
+machine Creality  "Creality Ender-3 S1" creality-ender-3-s1 resources/profiles/creality/printer
+machine Creality  "Creality Ender-3 V3 KE" creality-ender-3-v3-ke resources/profiles/creality/printer
 
 # --- Processes: auto-discovers the printers above from their machine.toml and
 #     folds every compatible upstream process leaf. Must run AFTER the machines. ---
 echo "==> Importing processes"
 python3 scripts/import_processes.py --root "$ORCA_PROFILES" --profiles-root resources/profiles
+
+# --- Derived variants: printers we ship that upstream doesn't (e.g. Klipper
+#     conversions of Marlin machines). Regenerated from the freshly-imported
+#     base profile with declared patches; each variant's model.toml stays
+#     hand-curated. Must run AFTER machines + processes (it copies both). ---
+echo "==> Deriving printer variants"
+python3 scripts/derive_printer_variant.py \
+  --base resources/profiles/creality/printer/creality-ender-3-s1 \
+  --slug creality-ender-3-s1-klipper \
+  --model-suffix " (Klipper)" \
+  --set gcode_flavor=klipper
 
 # --- Filaments: one branded (or cross-vendor Generic) consolidation per bucket.
 #     Add a bucket by adding a line: out-dir brand (the filament_vendor value). ---
