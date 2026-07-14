@@ -7,16 +7,27 @@
 // check that gates whether an instance gets a driver at all, and
 // the diff that turns desired vs current state into an action list.
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../printer/printerInstance", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  setInstanceAmsUnits: vi.fn().mockResolvedValue(undefined),
+}));
+
 import {
   connectionSignature,
   configForConnection,
   isConnectionUsable,
+  maybeSyncAmsCount,
+  reportedAmsUnits,
   resetDriverConnectionsForTests,
+  seedAmsCountForTests,
   seedReconcilerStateForTests,
   summaryForTests,
 } from "../useDriverConnections";
 import type { ConnectionInfo } from "../../printer/printerInstance";
+import { setInstanceAmsUnits } from "../../printer/printerInstance";
+import type { DriverExtra, PrinterStatus } from "../types";
 
 const bambu = (overrides: Partial<{
   host: string;
@@ -114,6 +125,91 @@ describe("configForConnection", () => {
         access_code: "87654321",
       },
     });
+  });
+});
+
+function statusWith(extra: DriverExtra): PrinterStatus {
+  return {
+    connection: { state: "Connected" },
+    job: null,
+    temps: { nozzles: [], bed: { current: 0, target: 0 }, chamber: null },
+    extra,
+    last_updated: 0,
+  };
+}
+
+function bambuStatus(units: number | null): PrinterStatus {
+  return statusWith({
+    kind: "Bambu",
+    data: {
+      mounted_plate: null,
+      current_stage: null,
+      print_error_code: null,
+      command_error_code: null,
+      fan_speed: null,
+      ams:
+        units == null
+          ? null
+          : {
+              units: Array.from({ length: units }, (_, i) => ({
+                id: i,
+                trays: [],
+              })),
+              active_slot: null,
+            },
+      external_spool: null,
+    },
+  });
+}
+
+describe("automatic AMS-count sync", () => {
+  beforeEach(() => {
+    resetDriverConnectionsForTests();
+    vi.mocked(setInstanceAmsUnits).mockClear();
+  });
+
+  it("reads the unit count only from an authoritative Bambu report", () => {
+    expect(reportedAmsUnits(bambuStatus(2))).toBe(2);
+    expect(reportedAmsUnits(bambuStatus(0))).toBe(0);
+    // Not-yet-populated AMS state must never read as "0 units".
+    expect(reportedAmsUnits(bambuStatus(null))).toBe(null);
+    expect(
+      reportedAmsUnits(
+        statusWith({
+          kind: "U1",
+          data: {
+            mounted_toolhead: null,
+            toolhead_filaments: [],
+            current_stage: null,
+            fan_speed: null,
+          },
+        }),
+      ),
+    ).toBe(null);
+  });
+
+  it("syncs when the reported count diverges from the seeded one", () => {
+    // The buddy-with-a-P1P case: instance configured with 1 AMS,
+    // printer reports none attached.
+    seedAmsCountForTests("p1p", 1);
+    maybeSyncAmsCount("p1p", bambuStatus(0));
+    expect(setInstanceAmsUnits).toHaveBeenCalledWith("p1p", 0);
+  });
+
+  it("stays silent when the report matches, and writes a distinct count once", () => {
+    seedAmsCountForTests("a1", 1);
+    maybeSyncAmsCount("a1", bambuStatus(1));
+    expect(setInstanceAmsUnits).not.toHaveBeenCalled();
+    maybeSyncAmsCount("a1", bambuStatus(2));
+    maybeSyncAmsCount("a1", bambuStatus(2));
+    expect(setInstanceAmsUnits).toHaveBeenCalledTimes(1);
+    expect(setInstanceAmsUnits).toHaveBeenCalledWith("a1", 2);
+  });
+
+  it("never syncs off a report without an AMS state", () => {
+    seedAmsCountForTests("a1", 1);
+    maybeSyncAmsCount("a1", bambuStatus(null));
+    expect(setInstanceAmsUnits).not.toHaveBeenCalled();
   });
 });
 

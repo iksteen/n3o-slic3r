@@ -27,12 +27,14 @@ import type {
   ConnectionState,
   DriverConfig,
   DriverId,
+  PrinterStatus,
   StatusUpdateEvent,
 } from "./types";
 import type {
   ConnectionInfo,
   PrinterInstance,
 } from "../printer/printerInstance";
+import { setInstanceAmsUnits } from "../printer/printerInstance";
 import { isConnectionUsable } from "../printer/connectionValidation";
 import { forgetDriver } from "./useDriverStatus";
 
@@ -140,6 +142,51 @@ function bumpAndNotify(): void {
   for (const fn of SUBSCRIBERS) fn();
 }
 
+// ── Automatic AMS-count sync ─────────────────────────────────────
+// The AMS-unit count chosen at add-printer time can diverge from the
+// physical loadout (no AMS attached, a unit added/removed later), and
+// a stale count routes prints at AMS slots that don't exist — a
+// no-AMS P1 wedges in PREPARE on that. The live report is
+// authoritative for the *topology*, so the unit count follows it
+// automatically. Per-slot materials do NOT — those stay behind the
+// explicit sync button (lossy round-trip, user-curated).
+//
+// `AMS_COUNT_SYNCED` holds the last count synced (or seeded from the
+// instance itself at reconcile time) per instance id, so each
+// reported count writes at most once: steady-state reports are
+// silent, and a user who deliberately sets a different count in
+// settings isn't fought until the printer actually reports a change.
+const AMS_COUNT_SYNCED: Map<string, number> = new Map();
+
+/** The AMS-unit count a status report carries, or `null` when it has
+ *  nothing authoritative: U1 topology is fixed, and a Bambu report
+ *  without an AMS state (`ams: null`) hasn't populated yet — never
+ *  treat that as "0 units". */
+export function reportedAmsUnits(status: PrinterStatus): number | null {
+  if (status.extra.kind !== "Bambu") return null;
+  const ams = status.extra.data.ams;
+  return ams == null ? null : ams.units.length;
+}
+
+/** Sync the instance's AMS-unit count to a status report, once per
+ *  distinct reported count. Fire-and-forget: the backend rebuilds the
+ *  slot topology (preserving overlapping bindings) and emits
+ *  `printer:instance_changed`, which refreshes the UI's instances. */
+export function maybeSyncAmsCount(
+  identity: string,
+  status: PrinterStatus,
+): void {
+  const reported = reportedAmsUnits(status);
+  if (reported == null || AMS_COUNT_SYNCED.get(identity) === reported) return;
+  AMS_COUNT_SYNCED.set(identity, reported);
+  setInstanceAmsUnits(identity, reported).catch((e: unknown) => {
+    // Rejected counts (over ams_max, toolchanger) stay recorded so a
+    // repeating report doesn't retry-spam; a genuine change in the
+    // report clears the block by differing.
+    console.warn(`[driver-auto] AMS-count sync failed for ${identity}`, e);
+  });
+}
+
 /** One-shot install of the global `driver:status_update` handler via the
  *  router (which shares the one Tauri subscription with useDriverStatus). Lazy
  *  because the event bus isn't available during unit tests; the handler stays
@@ -155,6 +202,7 @@ function ensureGlobalStatusListener(): void {
       // transitions to `live`.
       const identity = DRIVER_TO_IDENTITY.get(e.payload.driver_id);
       if (identity == null) return;
+      maybeSyncAmsCount(identity, e.payload.status);
       const entry = ENTRIES.get(identity);
       if (entry == null || entry.kind !== "live") return;
       // In-place mutation of the runtime field is OK: the entry object
@@ -185,6 +233,7 @@ if (import.meta.hot) {
     DRIVER_TO_IDENTITY.clear();
     PENDING.clear();
     SUBSCRIBERS.clear();
+    AMS_COUNT_SYNCED.clear();
   });
 }
 
@@ -523,6 +572,11 @@ export function useDriverConnections(
     const known = new Set<string>();
     for (const inst of instances) {
       known.add(inst.id);
+      // Seed the AMS-count sync with the instance's own count so the
+      // first status report only writes when it actually diverges.
+      if (!AMS_COUNT_SYNCED.has(inst.id)) {
+        AMS_COUNT_SYNCED.set(inst.id, inst.ams_units);
+      }
       const desired = isConnectionUsable(inst.connection)
         ? inst.connection!
         : null;
@@ -532,6 +586,7 @@ export function useDriverConnections(
     // (printer was deleted) get unregistered.
     for (const identity of ENTRIES.keys()) {
       if (!known.has(identity)) {
+        AMS_COUNT_SYNCED.delete(identity);
         void reconcileIdentity(identity, null);
       }
     }
@@ -551,8 +606,15 @@ export function resetDriverConnectionsForTests(): void {
   ENTRIES.clear();
   DRIVER_TO_IDENTITY.clear();
   PENDING.clear();
+  AMS_COUNT_SYNCED.clear();
   SNAPSHOT_CACHE = null;
   STATE_VERSION = 0;
+}
+
+/** Test helper — seed the AMS-count sync map (normally seeded from
+ *  the instance list inside the reconcile effect). */
+export function seedAmsCountForTests(identity: string, units: number): void {
+  AMS_COUNT_SYNCED.set(identity, units);
 }
 
 /** Test helper — seed reconciler-state maps so the summary
