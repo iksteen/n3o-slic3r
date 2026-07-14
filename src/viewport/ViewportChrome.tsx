@@ -93,9 +93,17 @@ export function ViewportChrome({
 
   return (
     <>
-      <div className="absolute top-2 left-2 flex gap-2 pointer-events-auto" style={{ zIndex: 10 }}>
+      {/* Bounded on the right + flex-wrap so the toolbar groups stack onto
+          extra rows when the canvas is narrow, instead of overflowing.
+          The container spans the full width, so IT stays pointer-
+          transparent (orbit/pan under the empty strip keeps working)
+          and each group opts back in. */}
+      <div
+        className="absolute top-2 left-2 right-2 flex flex-wrap gap-2 pointer-events-none"
+        style={{ zIndex: 10 }}
+      >
         {leading}
-        <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
+        <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden pointer-events-auto">
           <button
             type="button"
             className={`px-2 py-1.5 ${gizmoMode === "move" ? "bg-neutral-700" : "hover:bg-neutral-700/60"}`}
@@ -159,7 +167,7 @@ export function ViewportChrome({
             </svg>
           </button>
         </div>
-        <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
+        <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden pointer-events-auto">
           <button
             type="button"
             disabled={!hasObjects}
@@ -251,7 +259,7 @@ export function ViewportChrome({
             </svg>
           </button>
         </div>
-        <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden">
+        <div className="bg-neutral-800/90 text-neutral-100 text-xs rounded shadow flex overflow-hidden pointer-events-auto">
           <button
             type="button"
             disabled={!hasObjects}
