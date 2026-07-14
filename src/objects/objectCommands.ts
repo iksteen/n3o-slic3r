@@ -35,17 +35,12 @@ export async function addPrimitive(kind: PrimitiveKind): Promise<ObjectId> {
   return objId;
 }
 
-/** Pick a model file via the native dialog and load its geometry onto
- *  the active plate. Mirrors the viewport's load button: `.stl`/`.obj`
- *  load a single mesh; `.3mf` loads only the geometry (objects +
- *  transforms + per-part extruder hints) via `scene_load_3mf` — NOT the
- *  project settings (that's the separate "open project" import).
- *  Cancelling is a no-op. */
-export async function loadModelFromDialog(): Promise<void> {
-  const path = await openFile({
-    filters: [{ name: "Model", extensions: ["stl", "obj", "3mf"] }],
-  });
-  if (path == null) return; // cancelled
+/** Load a model file's geometry onto the active plate. `.stl`/`.obj`
+ *  load a single mesh (then select it); `.3mf` loads only the geometry
+ *  (objects + transforms + per-part extruder hints) via
+ *  `scene_load_3mf` — NOT the project settings (that's the separate
+ *  "open project" import). */
+export async function loadModelFromPath(path: string): Promise<void> {
   if (path.toLowerCase().endsWith(".3mf")) {
     // Geometry-only import — multiple objects, no single one to select.
     await invoke("scene_load_3mf", { path });
@@ -56,6 +51,16 @@ export async function loadModelFromDialog(): Promise<void> {
     { path },
   );
   await selectObject(objId);
+}
+
+/** Pick a model file via the native dialog and load it. Mirrors the
+ *  viewport's load button. Cancelling is a no-op. */
+export async function loadModelFromDialog(): Promise<void> {
+  const path = await openFile({
+    filters: [{ name: "Model", extensions: ["stl", "obj", "3mf"] }],
+  });
+  if (path == null) return; // cancelled
+  await loadModelFromPath(path);
 }
 
 /** Remove one object from the active plate. */

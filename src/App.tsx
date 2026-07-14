@@ -33,6 +33,7 @@ import { onEvents } from "./state/eventRouter";
 import { PROJECT_REPLACED_EVENTS } from "./project/editEvents";
 import { SettingsPanelHost } from "./settings/SettingsPanelHost";
 import { ObjectsPanel } from "./objects/ObjectsPanel";
+import { ModelDropZone } from "./objects/ModelDropZone";
 import { PreviewWorkspace } from "./preview/PreviewWorkspace";
 import { useSlicePreviewBridge } from "./preview/useSlicePreviewBridge";
 import { SendControls } from "./driver/SendControls";
@@ -769,6 +770,7 @@ function App() {
               {canvasOverlays}
               {/* Scene warnings (OOB / overflow) for whichever viewport is mounted. */}
               <ViewportToasts />
+              <ModelDropZone />
             </div>
             <SettingsPanelHost
               session={session}

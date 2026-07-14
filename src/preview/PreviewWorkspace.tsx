@@ -15,7 +15,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import { ColorModePicker, useColorModePicker } from "./ColorModePicker";
-import { DropZone, type DroppedPreview } from "./DropZone";
+import { DropZone, handleDrop, type DroppedPreview } from "./DropZone";
 import { GcodePreview } from "./GcodePreview";
 import { HoverTooltip } from "./HoverTooltip";
 import { LayerSlider } from "./LayerSlider";
@@ -147,11 +147,17 @@ export function PreviewWorkspace({
               onSegmentHover={setHoverDetail}
             />
             <DropZone
-              onLoaded={(result) => {
-                setDropError(null);
-                setDropped(result);
-              }}
-              onError={(msg) => setDropError(msg)}
+              prompt="Drop .gcode or .gcode.3mf here"
+              onDrop={(paths) =>
+                handleDrop(
+                  paths[0],
+                  (result) => {
+                    setDropError(null);
+                    setDropped(result);
+                  },
+                  (msg) => setDropError(msg),
+                )
+              }
             />
             {dropError && (
               <div className="preview-drop-error" role="alert">

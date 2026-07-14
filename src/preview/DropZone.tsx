@@ -1,18 +1,19 @@
-// Drag-drop loader for `.gcode` and `.gcode.3mf` files.
+// Webview drag-drop overlay + the preview-mode file routing.
 //
-// Subscribes to Tauri's webview-level drag-drop events. The
-// browser's HTML5 dragenter/drop API doesn't expose the OS file
+// The overlay subscribes to Tauri's webview-level drag-drop events.
+// The browser's HTML5 dragenter/drop API doesn't expose the OS file
 // path (only a `File` object), but Tauri's wrapper does — required
-// so we can hand the path straight to preview_load{,_gcode_3mf}
-// which read off disk inside the worker thread.
+// so callers can hand paths straight to backend commands that read
+// off disk inside the worker thread.
 //
 // Visual: invisible until a drag enters; on enter renders a
 // dashed-border overlay across the parent positioning context
-// with a "Drop here" prompt. Reset on drop OR leave.
+// with the caller's prompt. Reset on drop OR leave.
 //
-// Scope: PreviewWorkspace mounts this only in preview mode. The
-// 3D viewport's drag-drop flow (mesh import) is unrelated and
-// still uses the file-open dialog.
+// The drag-drop event is webview-global, not per-element, so mount
+// at most one DropZone per layout mode: PreviewWorkspace routes
+// gcode files via `handleDrop`; the prepare canvas mounts
+// ModelDropZone (mesh import) on the same shell.
 
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -34,18 +35,16 @@ export interface DroppedPreview {
 }
 
 export interface DropZoneProps {
-  onLoaded: (result: DroppedPreview) => void;
-  onError: (message: string) => void;
+  prompt: string;
+  onDrop: (paths: string[]) => void;
 }
 
-export function DropZone({ onLoaded, onError }: DropZoneProps) {
+export function DropZone({ prompt, onDrop }: DropZoneProps) {
   const [dragOver, setDragOver] = useState(false);
-  // Refs so the long-lived event listener doesn't capture stale
-  // callbacks on re-render.
-  const onLoadedRef = useRef(onLoaded);
-  const onErrorRef = useRef(onError);
-  onLoadedRef.current = onLoaded;
-  onErrorRef.current = onError;
+  // Ref so the long-lived event listener doesn't capture a stale
+  // callback on re-render.
+  const onDropRef = useRef(onDrop);
+  onDropRef.current = onDrop;
 
   useEffect(() => {
     let cancelled = false;
@@ -61,9 +60,9 @@ export function DropZone({ onLoaded, onError }: DropZoneProps) {
           setDragOver(false);
         } else if (payload.type === "drop") {
           setDragOver(false);
-          const path = payload.paths?.[0];
-          if (!path) return;
-          handleDrop(path, onLoadedRef.current, onErrorRef.current);
+          const paths = payload.paths ?? [];
+          if (paths.length === 0) return;
+          onDropRef.current(paths);
         }
       });
       if (cancelled) {
@@ -81,9 +80,7 @@ export function DropZone({ onLoaded, onError }: DropZoneProps) {
   if (!dragOver) return null;
   return (
     <div className="preview-dropzone-overlay" role="presentation">
-      <div className="preview-dropzone-prompt">
-        Drop .gcode or .gcode.3mf here
-      </div>
+      <div className="preview-dropzone-prompt">{prompt}</div>
     </div>
   );
 }
@@ -110,7 +107,7 @@ export function handleDrop(
   }
 }
 
-function formatError(e: unknown): string {
+export function formatError(e: unknown): string {
   if (typeof e === "string") return e;
   if (e instanceof Error) return e.message;
   return String(e);
