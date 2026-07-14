@@ -58,7 +58,7 @@ export interface BedRef {
 
 /** Per-driver connection settings, mirroring Rust's tagged-enum
  *  `ConnectionInfo`. The `kind` discriminator switches the field
- *  set — Bambu carries an 8-digit LAN access code; U1 carries a
+ *  set — Bambu carries an 8-hex-char LAN access code; U1 carries a
  *  Moonraker port (usually 80). Device serial is NOT stored here: the
  *  drivers probe it at connect time, so it's a runtime-only concern
  *  on `DriverConfig`, not part of the persisted connection. */

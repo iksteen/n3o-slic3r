@@ -183,17 +183,19 @@ describe("computeChanged / computeSectionDirty", () => {
 });
 
 describe("validateBambuConnection", () => {
-  it("accepts a non-empty host + 8-digit access code", () => {
+  it("accepts a non-empty host + 8-hex-char access code", () => {
     expect(validateBambuConnection("192.168.1.42", "12345678")).toBe(null);
+    expect(validateBambuConnection("192.168.1.42", "1a2b3c4d")).toBe(null);
+    expect(validateBambuConnection("192.168.1.42", "1A2B3C4D")).toBe(null);
   });
   it("rejects an empty / whitespace host", () => {
     expect(validateBambuConnection("", "12345678")?.field).toBe("host");
     expect(validateBambuConnection("   ", "12345678")?.field).toBe("host");
   });
-  it("rejects an access code that isn't exactly 8 digits", () => {
+  it("rejects an access code that isn't exactly 8 hex chars", () => {
     expect(validateBambuConnection("h", "1234567")?.field).toBe("accessCode");
     expect(validateBambuConnection("h", "123456789")?.field).toBe("accessCode");
-    expect(validateBambuConnection("h", "1234567a")?.field).toBe("accessCode");
+    expect(validateBambuConnection("h", "1234567g")?.field).toBe("accessCode");
     expect(validateBambuConnection("h", "")?.field).toBe("accessCode");
   });
   it("trims surrounding whitespace before regex-checking the access code", () => {

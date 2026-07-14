@@ -24,10 +24,11 @@ export function validateBambuConnection(
   if (host.trim().length === 0) {
     return { field: "host", message: "Host is required" };
   }
-  if (!/^[0-9]{8}$/.test(accessCode.trim())) {
+  if (!/^[0-9a-fA-F]{8}$/.test(accessCode.trim())) {
     return {
       field: "accessCode",
-      message: "Access code must be 8 digits (shown on the printer LCD)",
+      message:
+        "Access code must be 8 characters, 0-9 or a-f (shown on the printer LCD)",
     };
   }
   return null;

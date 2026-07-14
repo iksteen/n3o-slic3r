@@ -610,7 +610,7 @@ pub struct BedRef {
 
 /// Network connection details for sending prints. Driver-tagged so
 /// each kind only carries the fields it needs — Bambu needs an
-/// 8-digit LAN access code; U1 needs a Moonraker port (usually 80).
+/// 8-hex-char LAN access code; U1 needs a Moonraker port (usually 80).
 ///
 /// Device serial is intentionally NOT persisted here: the drivers
 /// resolve it at connect time (Bambu via mDNS, U1 via

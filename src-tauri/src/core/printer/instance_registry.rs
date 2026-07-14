@@ -162,7 +162,7 @@ pub enum InstanceMutError {
         got: &'static str,
     },
     /// A connection's field *content* is unusable — empty host, a
-    /// Bambu access code that isn't 8 digits, or a U1 port of 0. The
+    /// Bambu access code that isn't 8 hex chars, or a U1 port of 0. The
     /// settings form validates these in `connectionValidation.ts`,
     /// but the command boundary enforces them too so a hand-edited
     /// instance file or secondary caller can't persist a connection
@@ -755,7 +755,7 @@ fn validate_connection_kind(
 
 /// Reject a connection whose field *content* is unusable. Mirrors the
 /// frontend `connectionValidation.ts` rules (non-empty host; Bambu
-/// access code = 8 digits; U1 port in 1..=65535 — `u16` already caps
+/// access code = 8 hex chars; U1 port in 1..=65535 — `u16` already caps
 /// the upper bound, so only 0 is out of range) so the picker dot and
 /// this command boundary agree on what "valid" means.
 fn validate_connection_content(
@@ -774,8 +774,8 @@ fn validate_connection_content(
                 return Err(invalid("host is required"));
             }
             let code = access_code.trim();
-            if code.len() != 8 || !code.bytes().all(|b| b.is_ascii_digit()) {
-                return Err(invalid("access code must be 8 digits"));
+            if code.len() != 8 || !code.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(invalid("access code must be 8 characters, 0-9 or a-f"));
             }
         }
         ConnectionInfo::U1 { host, port, .. } => {
@@ -1692,10 +1692,10 @@ mod tests {
             matches!(err, InstanceMutError::InvalidConnection { .. }),
             "got {err:?}",
         );
-        // Right kind, but a non-8-digit access code.
+        // Right kind, but a non-8-hex-char access code.
         let bad_code = ConnectionInfo::Bambu {
             host: "192.168.1.42".to_string(),
-            access_code: "abc123".to_string(),
+            access_code: "abc12xyz".to_string(),
         };
         let err = set_instance_connection("bambi", Some(bad_code)).unwrap_err();
         assert!(
