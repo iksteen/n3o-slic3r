@@ -50,15 +50,24 @@ export { isConnectionUsable };
  *  which uses an outer-tagged `kind` discriminator with PascalCase
  *  variants). */
 export function configForConnection(conn: ConnectionInfo): DriverConfig {
-  // The driver resolves the device serial itself at connect time
-  // (Bambu peer-cert CN / U1 `/machine/system_info`), so the config
-  // carries no serial.
+  // The Bambu driver resolves the device serial itself at connect
+  // time (peer-cert CN); Moonraker printers have none. The config
+  // carries no serial either way.
   if (conn.kind === "bambu") {
     return {
       kind: "Bambu",
       data: {
         host: conn.host.trim(),
         access_code: conn.access_code.trim(),
+      },
+    };
+  }
+  if (conn.kind === "moonraker") {
+    return {
+      kind: "Moonraker",
+      data: {
+        host: conn.host.trim(),
+        port: conn.port,
       },
     };
   }
@@ -84,7 +93,7 @@ export function connectionSignature(conn: ConnectionInfo | null): string {
   if (conn.kind === "bambu") {
     return `bambu:${conn.host.trim()}|${conn.access_code.trim()}`;
   }
-  return `u1:${conn.host.trim()}|${conn.port}`;
+  return `${conn.kind}:${conn.host.trim()}|${conn.port}`;
 }
 
 /** One row in the live driver table — the driver id + the signature

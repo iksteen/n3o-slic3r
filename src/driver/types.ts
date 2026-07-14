@@ -16,7 +16,7 @@ export type DriverId = number;
  *  lowercase on the wire. NOTE: the separate `DriverConfig` /
  *  `DriverExtra` enums below stay PascalCase-tagged; only the
  *  driver-kind discriminator is lowercase. */
-export type DriverKind = "bambu" | "u1";
+export type DriverKind = "bambu" | "u1" | "moonraker";
 
 /** Mirror of `DriverConfig` (`#[serde(tag="kind", content="data")]`). */
 export type DriverConfig =
@@ -29,6 +29,16 @@ export type DriverConfig =
     }
   | {
       kind: "U1";
+      data: {
+        host: string;
+        port: number;
+      };
+    }
+  | {
+      /** Generic Klipper printer speaking vanilla Moonraker. No
+       *  printer profile declares it yet — the U1 keeps its own kind
+       *  for the vendor webcam stack. */
+      kind: "Moonraker";
       data: {
         host: string;
         port: number;

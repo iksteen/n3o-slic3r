@@ -31,7 +31,8 @@ export interface CameraPlaceholder {
 /** Pick the non-live camera placeholder, most-specific case first. Pure so
  *  the state logic is unit-testable without a DOM. */
 export function cameraPlaceholder(args: {
-  /** Backend has a wired camera (Bambu today). */
+  /** A driver config exists — every configured kind has a camera
+   *  source; only an unconfigured instance is unsupported. */
   supported: boolean;
   offline: boolean;
   /** Stream start error, if any. */
@@ -64,11 +65,13 @@ export function CameraPanel({
   config: DriverConfig | null;
   offline: boolean;
 }): React.JSX.Element {
-  // Bambu LAN and Snapmaker U1 cameras are wired. An unpaired U1 still
-  // counts as "supported" — camera_start rejects with pairing guidance,
-  // which surfaces as the error placeholder rather than a generic
-  // "not available".
-  const supported = config?.kind === "Bambu" || config?.kind === "U1";
+  // Every driver kind has a wired camera source (Bambu LAN push,
+  // U1 monitor poll, generic Moonraker webcam discovery). An
+  // unpaired U1 still counts as "supported" — camera_start rejects
+  // with pairing guidance, which surfaces as the error placeholder
+  // rather than a generic "not available"; a Moonraker printer with
+  // no webcam configured surfaces its discovery error the same way.
+  const supported = config != null;
   const active = supported && !offline;
   const { frameUrl, error } = useCameraStream(
     instanceId,

@@ -194,6 +194,7 @@ pub(super) fn apply_pre_send(
             driver_kind: match kind {
                 DriverKind::Bambu => "bambu".to_string(),
                 DriverKind::U1 => "u1".to_string(),
+                DriverKind::Moonraker => "moonraker".to_string(),
             },
             plate_id,
         },

@@ -28,13 +28,15 @@
 //! `JoinHandle::abort`) precisely so `teardown` can run its async release
 //! before the task exits.
 //!
-//! Two sources are wired: the Bambu LAN source ([`super::bambu::camera`],
-//! a push socket) and the U1 source ([`super::snapmaker::camera`], a
-//! Moonraker MJPEG poll behind the mTLS monitor-mode wake). `source_for`
-//! returns an error for backends without a camera so the frontend can fall
-//! back to its "camera unavailable" state. A new backend slots in as another
-//! [`CameraSource`] impl + `source_for` arm without touching the worker,
-//! manager, or commands.
+//! Three sources are wired: the Bambu LAN source ([`super::bambu::camera`],
+//! a push socket), the generic Moonraker source (webcams discovered via
+//! `/server/webcams/list`, snapshot-polled), and the U1 source
+//! ([`super::snapmaker::camera`] — the same Moonraker JPEG poll, behind the
+//! vendor mTLS monitor-mode wake). `source_for` returns an error for
+//! backends without a camera so the frontend can fall back to its "camera
+//! unavailable" state. A new backend slots in as another [`CameraSource`]
+//! impl + `source_for` arm without touching the worker, manager, or
+//! commands.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -45,6 +47,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::State;
 use tokio_util::sync::CancellationToken;
 
+use super::moonraker::webcam;
 use super::snapmaker::camera as u1_camera;
 use super::snapmaker::camera::SnapMonitorSession;
 use super::snapmaker::snap_token::{self, SnapToken};
@@ -131,25 +134,60 @@ impl CameraSource for U1CameraSource {
 
     async fn attempt(&self, sink: &FrameSink) -> Result<(), DriverError> {
         let url = u1_camera::monitor_url(&self.host, self.port);
-        let mut last_modified: Option<String> = None;
-        loop {
-            let outcome = u1_camera::poll_frame(&self.client, &url, last_modified.as_deref()).await?;
-            if let Some(value) = outcome.last_modified {
-                last_modified = Some(value);
-            }
-            if let Some(frame) = outcome.frame {
-                if !sink.send(frame) {
-                    return Ok(()); // consumer gone — clean stop
-                }
-            }
-            tokio::time::sleep(u1_camera::POLL_INTERVAL).await;
-        }
+        poll_jpeg_loop(&self.client, &url, sink).await
     }
 
     async fn teardown(&self) {
         if let Some(session) = self.session.lock().await.take() {
             session.release().await;
         }
+    }
+}
+
+/// The generic Moonraker webcam: discover configured webcams via
+/// `/server/webcams/list` and poll the first enabled one's snapshot
+/// URL. Discovery re-runs per attempt so a webcam configured after
+/// connect is picked up on the next retry. No wake/release.
+struct MoonrakerCameraSource {
+    host: String,
+    port: u16,
+    client: reqwest::Client,
+}
+
+#[async_trait]
+impl CameraSource for MoonrakerCameraSource {
+    async fn attempt(&self, sink: &FrameSink) -> Result<(), DriverError> {
+        let webcams = webcam::list_webcams(&self.client, &self.host, self.port).await?;
+        let Some(cam) = webcam::pick_webcam(&webcams) else {
+            return Err(DriverError::Other(
+                "no enabled webcam with a snapshot URL is configured on this printer".to_owned(),
+            ));
+        };
+        let url = webcam::resolve_url(&self.host, self.port, &cam.snapshot_url);
+        poll_jpeg_loop(&self.client, &url, sink).await
+    }
+}
+
+/// Shared JPEG poll loop: fetch, forward changed frames, sleep. Both
+/// Moonraker-served cameras (generic snapshot URL, U1 monitor file)
+/// drive this. Returns `Ok(())` when the consumer goes away.
+async fn poll_jpeg_loop(
+    client: &reqwest::Client,
+    url: &str,
+    sink: &FrameSink,
+) -> Result<(), DriverError> {
+    let mut last_modified: Option<String> = None;
+    loop {
+        let outcome = webcam::poll_frame(client, url, last_modified.as_deref()).await?;
+        if let Some(value) = outcome.last_modified {
+            last_modified = Some(value);
+        }
+        if let Some(frame) = outcome.frame {
+            if !sink.send(frame) {
+                return Ok(()); // consumer gone — clean stop
+            }
+        }
+        tokio::time::sleep(webcam::POLL_INTERVAL).await;
     }
 }
 
@@ -175,10 +213,15 @@ fn source_for(
                 host,
                 port,
                 token,
-                client: u1_camera::poll_client()?,
+                client: webcam::poll_client()?,
                 session: tokio::sync::Mutex::new(None),
             }))
         }
+        DriverConfig::Moonraker { host, port } => Ok(Box::new(MoonrakerCameraSource {
+            host,
+            port,
+            client: webcam::poll_client()?,
+        })),
     }
 }
 

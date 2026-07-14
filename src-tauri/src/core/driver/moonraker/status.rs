@@ -22,9 +22,9 @@ use std::time::SystemTime;
 
 use serde_json::{Map, Value};
 
-use super::moonraker::{extruders, get_f64, get_print_info_i64, get_string};
+use super::session::{extruders, get_f64, get_print_info_i64, get_string};
 #[cfg(test)]
-use super::moonraker::merge_status_into;
+use super::session::merge_status_into;
 use crate::core::driver::status::{
     ConnectionState, DriverExtra, JobProgress, JobState, PrinterStatus, TempReading, Temps,
     U1Extra, U1Filament,

@@ -1,9 +1,10 @@
 //! Printer-driver abstraction.
 //!
-//! The two MVP drivers (Bambu A1 mini over LAN MQTT, Snapmaker
-//! U1 over Moonraker WebSocket) share zero protocol but the
-//! same lifecycle, the same status surface, and the same
-//! command surface. The [`Driver`] trait pins that contract.
+//! Two protocol families ship: Bambu LAN MQTT ([`bambu`]) and
+//! Moonraker/Klipper ([`moonraker`], with the Snapmaker U1's vendor
+//! webcam stack layered on in [`snapmaker`]). They share zero wire
+//! protocol but the same lifecycle, the same status surface, and the
+//! same command surface. The [`Driver`] trait pins that contract.
 //!
 //! Design rationale:
 //!
@@ -25,6 +26,7 @@ pub mod backoff;
 pub mod bambu;
 pub mod camera;
 pub mod commands;
+pub mod moonraker;
 pub mod registry;
 pub mod send;
 pub mod snapmaker;

@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeChanged,
   computeSectionDirty,
+  draftToConnection,
   initialDraft,
   MACHINE_PAGE_ORDER,
   orderGroupsOtherLast,
@@ -21,7 +22,7 @@ import {
 } from "../printerSettingsHelpers";
 import {
   validateBambuConnection,
-  validateU1Connection,
+  validateMoonrakerConnection,
 } from "../connectionValidation";
 import type { ConnectionInfo, PrinterInstance } from "../printerInstance";
 import { categorize } from "../../settings/nav/categories";
@@ -107,6 +108,20 @@ describe("initialDraft", () => {
     expect(d.accessCode).toBe("");
     expect(d.port).toBe(80);
   });
+
+  it("hydrates a moonraker connection like a U1 one and round-trips the kind", () => {
+    const conn: ConnectionInfo = {
+      kind: "moonraker",
+      host: "ender.local",
+      port: 7125,
+    };
+    const d = initialDraft(fixture({ connection: conn }));
+    expect(d.host).toBe("ender.local");
+    expect(d.port).toBe(7125);
+    // draftToConnection must rebuild the SAME kind — a moonraker
+    // instance must never save back as a u1 connection.
+    expect(draftToConnection("moonraker", d)).toEqual(conn);
+  });
 });
 
 describe("computeChanged / computeSectionDirty", () => {
@@ -159,9 +174,11 @@ describe("computeChanged / computeSectionDirty", () => {
       .connection).toBe(false);
   });
 
-  it("rolls up host + port into the Connection section for U1", () => {
+  it("rolls up host + port into the Connection section for U1 and moonraker", () => {
     const portEdit = { ...baseline, port: 8080 };
     expect(computeSectionDirty(computeChanged(baseline, portEdit), "u1")
+      .connection).toBe(true);
+    expect(computeSectionDirty(computeChanged(baseline, portEdit), "moonraker")
       .connection).toBe(true);
 
     // Access-code edits never matter for U1 — there's no access-code field.
@@ -203,23 +220,23 @@ describe("validateBambuConnection", () => {
   });
 });
 
-describe("validateU1Connection", () => {
+describe("validateMoonrakerConnection", () => {
   it("accepts a non-empty host + port in 1..65535", () => {
-    expect(validateU1Connection("snappy.local", 80)).toBe(null);
-    expect(validateU1Connection("snappy.local", 1)).toBe(null);
-    expect(validateU1Connection("snappy.local", 65535)).toBe(null);
+    expect(validateMoonrakerConnection("snappy.local", 80)).toBe(null);
+    expect(validateMoonrakerConnection("snappy.local", 1)).toBe(null);
+    expect(validateMoonrakerConnection("snappy.local", 65535)).toBe(null);
   });
   it("rejects port 0 and out-of-range ports", () => {
-    expect(validateU1Connection("h", 0)?.field).toBe("port");
-    expect(validateU1Connection("h", 65536)?.field).toBe("port");
-    expect(validateU1Connection("h", -1)?.field).toBe("port");
+    expect(validateMoonrakerConnection("h", 0)?.field).toBe("port");
+    expect(validateMoonrakerConnection("h", 65536)?.field).toBe("port");
+    expect(validateMoonrakerConnection("h", -1)?.field).toBe("port");
   });
   it("rejects non-integer ports", () => {
-    expect(validateU1Connection("h", 80.5)?.field).toBe("port");
-    expect(validateU1Connection("h", Number.NaN)?.field).toBe("port");
+    expect(validateMoonrakerConnection("h", 80.5)?.field).toBe("port");
+    expect(validateMoonrakerConnection("h", Number.NaN)?.field).toBe("port");
   });
   it("rejects empty host", () => {
-    expect(validateU1Connection("", 80)?.field).toBe("host");
+    expect(validateMoonrakerConnection("", 80)?.field).toBe("host");
   });
 });
 

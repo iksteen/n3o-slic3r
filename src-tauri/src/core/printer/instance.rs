@@ -610,19 +610,22 @@ pub struct BedRef {
 
 /// Network connection details for sending prints. Driver-tagged so
 /// each kind only carries the fields it needs — Bambu needs an
-/// 8-hex-char LAN access code; U1 needs a Moonraker port (usually 80).
+/// 8-hex-char LAN access code; U1 and generic Moonraker printers need
+/// a Moonraker port (usually 80).
 ///
-/// Device serial is intentionally NOT persisted here: the drivers
-/// resolve it at connect time (Bambu via mDNS, U1 via
-/// `/machine/system_info`), and nothing in the UI ever authored it.
-/// Keeping it out of the stored connection avoids a dead round-tripped
-/// field and a stale-serial footgun. The runtime [`DriverConfig`] still
-/// carries an optional serial for the probe/trust path.
+/// Device serial is intentionally NOT persisted here: the Bambu
+/// driver resolves it at connect time (peer-cert CN), Moonraker
+/// printers have none, and nothing in the UI ever authored it.
+/// Keeping it out of the stored connection avoids a dead
+/// round-tripped field and a stale-serial footgun.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ConnectionInfo {
     Bambu { host: String, access_code: String },
     U1 { host: String, port: u16 },
+    /// Generic Klipper printer speaking vanilla Moonraker (same
+    /// fields as U1, which is Moonraker plus a vendor webcam stack).
+    Moonraker { host: String, port: u16 },
 }
 
 #[cfg(test)]

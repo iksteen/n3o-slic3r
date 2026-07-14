@@ -1,5 +1,4 @@
-//! Snapmaker U1 camera plumbing: the mTLS "monitor mode" wake plus the
-//! Moonraker JPEG poll.
+//! Snapmaker U1 camera plumbing: the mTLS "monitor mode" wake.
 //!
 //! The U1's camera daemon only writes fresh frames to
 //! `/server/files/camera/monitor.jpg` while monitor mode is active;
@@ -11,19 +10,18 @@
 //!    release with `camera.stop_monitor` on teardown. The session must
 //!    stay subscribed to `<sn>/response` the whole time — the daemon only
 //!    keeps emitting for a present, authorized client.
-//! 2. **Poll** — GET the monitor JPEG over plain HTTP ([`poll_frame`]),
-//!    cache-busting + `If-Modified-Since` so intermediaries don't replay
-//!    a stale frame.
+//! 2. **Poll** — the generic Moonraker JPEG poll
+//!    (`super::super::moonraker::webcam::poll_frame`) against
+//!    [`monitor_url`]; only the wake is Snapmaker-specific.
 //!
-//! Faithful port of `iksteen/machin3d-overlay`'s `video/{u1_camera,
-//! moonraker}.rs`. The driving of these from a [`CameraSource`] lives in
+//! Faithful port of `iksteen/machin3d-overlay`'s `video/u1_camera.rs`.
+//! The driving of these from a [`CameraSource`] lives in
 //! `driver/camera.rs`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use reqwest::header::{CONTENT_TYPE, IF_MODIFIED_SINCE, LAST_MODIFIED};
 use rumqttc::{AsyncClient, ConnectReturnCode, Event, EventLoop, MqttOptions, Packet, QoS};
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
@@ -41,11 +39,6 @@ const MQTT_CONNECT_BUDGET: Duration = Duration::from_secs(8);
 const MQTT_RESPONSE_BUDGET: Duration = Duration::from_secs(10);
 /// Tight budget for the stop_monitor cleanup so teardown never drags.
 const STOP_MONITOR_BUDGET: Duration = Duration::from_secs(3);
-
-const POLL_TIMEOUT: Duration = Duration::from_secs(8);
-/// How often to re-poll the monitor JPEG. The daemon refreshes the file a
-/// few times a second; this matches the reference's cadence.
-pub const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The HTTP URL the monitor frame is polled from. Despite the daemon
 /// returning a `url` field, the path Orca actually polls keeps the
@@ -192,73 +185,6 @@ pub async fn wake(token: &SnapToken) -> Option<SnapMonitorSession> {
         tracing::info!(sn = %token.sn, "U1 camera monitor started");
     }
     Some(session)
-}
-
-/// One JPEG poll. Returns the new frame (when the file changed) plus the
-/// `Last-Modified` to feed the next request's `If-Modified-Since`.
-pub struct PollOutcome {
-    pub frame: Option<Vec<u8>>,
-    pub last_modified: Option<String>,
-}
-
-pub async fn poll_frame(
-    client: &reqwest::Client,
-    url: &str,
-    last_modified: Option<&str>,
-) -> Result<PollOutcome, DriverError> {
-    // Cache-bust each request — intermediate caches otherwise replay the
-    // same JPEG even after the daemon writes a new one.
-    let nocache = unix_millis_id();
-    let mut request = client.get(format!("{url}?_nocache={nocache}"));
-    if let Some(value) = last_modified {
-        request = request.header(IF_MODIFIED_SINCE, value);
-    }
-    let response = request
-        .send()
-        .await
-        .map_err(|e| DriverError::Network(format!("U1 camera poll: {e}")))?;
-
-    if response.status() == reqwest::StatusCode::NOT_MODIFIED {
-        return Ok(PollOutcome {
-            frame: None,
-            last_modified: None,
-        });
-    }
-    let status = response.status();
-    let content_type = response
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-    let new_last_modified = response
-        .headers()
-        .get(LAST_MODIFIED)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| DriverError::Network(format!("read U1 camera body: {e}")))?;
-
-    if bytes.starts_with(&[0xff, 0xd8]) {
-        Ok(PollOutcome {
-            frame: Some(bytes.to_vec()),
-            last_modified: new_last_modified,
-        })
-    } else {
-        Err(DriverError::Protocol(format!(
-            "U1 camera response is not a JPEG: status={status} content_type={content_type:?} bytes={n}",
-            n = bytes.len()
-        )))
-    }
-}
-
-/// A reqwest client tuned for the poll loop.
-pub fn poll_client() -> Result<reqwest::Client, DriverError> {
-    reqwest::Client::builder()
-        .timeout(POLL_TIMEOUT)
-        .build()
-        .map_err(|e| DriverError::Other(format!("build U1 camera HTTP client: {e}")))
 }
 
 fn unix_millis_id() -> u64 {

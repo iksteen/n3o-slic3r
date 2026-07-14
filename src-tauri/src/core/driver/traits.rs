@@ -33,15 +33,19 @@ impl fmt::Display for DriverId {
 /// the registry to decide what `DriverConfig` variant to expect +
 /// by the frontend to pick the right credentials dialog.
 ///
-/// Serializes as lowercase (`"bambu"` / `"u1"`) — the project uses
-/// lowercase identifiers across the wire and in authored TOML
-/// (`model.toml::driver_kind`), matching `ConnectionInfo`'s
+/// Serializes as lowercase (`"bambu"` / `"u1"` / `"moonraker"`) — the
+/// project uses lowercase identifiers across the wire and in authored
+/// TOML (`model.toml::driver_kind`), matching `ConnectionInfo`'s
 /// `snake_case` tagging.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DriverKind {
     Bambu,
     U1,
+    /// Generic Klipper printer speaking vanilla Moonraker. The U1 is
+    /// Moonraker-backed too but keeps its own kind for its bespoke
+    /// webcam stack (pairing + mTLS monitor wake).
+    Moonraker,
 }
 
 /// Per-driver connection configuration. The variant must match
@@ -59,12 +63,19 @@ pub enum DriverConfig {
     },
     U1 {
         host: String,
-        #[serde(default = "default_u1_port")]
+        #[serde(default = "default_moonraker_port")]
+        port: u16,
+    },
+    /// Generic Moonraker endpoint — same fields as U1 (which is a
+    /// Moonraker printer with a vendor webcam stack on top).
+    Moonraker {
+        host: String,
+        #[serde(default = "default_moonraker_port")]
         port: u16,
     },
 }
 
-fn default_u1_port() -> u16 {
+fn default_moonraker_port() -> u16 {
     80
 }
 

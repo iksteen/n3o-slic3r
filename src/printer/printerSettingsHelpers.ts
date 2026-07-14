@@ -11,9 +11,14 @@ import {
   type ConnectionFieldError,
 } from "./connectionValidation";
 
-/** Bambu printers need a LAN access code; U1 needs a Moonraker port.
+/** Driver kinds the connection settings know how to edit — mirror of
+ *  the printer profile's `model.toml::driver_kind` values. */
+export type ConnectionDriverKind = "bambu" | "u1" | "moonraker";
+
+/** Bambu printers need a LAN access code; U1 and generic Moonraker
+ *  printers need a Moonraker port.
  *  Default Moonraker port matches the existing PrinterCredentialsDialog. */
-export const DEFAULT_U1_PORT = 80;
+export const DEFAULT_MOONRAKER_PORT = 80;
 
 /** OrcaSlicer's machine-settings page order for the front pages. NOT derivable
  *  from the display-order scrape: Motion ability / Multimaterial are built in
@@ -104,8 +109,8 @@ export function notesLast<T extends { id: string }>(groups: T[]): T[] {
  *  the printer's `model.toml`, carried through by the registry).
  *  Single source of truth — no inline string-prefix branches. */
 export function driverKindFromProfile(
-  profile: { driver_kind: "bambu" | "u1" | null } | null,
-): "bambu" | "u1" | null {
+  profile: { driver_kind: ConnectionDriverKind | null } | null,
+): ConnectionDriverKind | null {
   return profile?.driver_kind ?? null;
 }
 
@@ -114,11 +119,11 @@ export function driverKindFromProfile(
 export interface Draft {
   displayName: string;
   amsUnits: number;
-  /** Bambu + U1 shared. */
+  /** All kinds. */
   host: string;
   /** Bambu only. */
   accessCode: string;
-  /** U1 only. */
+  /** U1 + Moonraker. */
   port: number;
 }
 
@@ -149,12 +154,12 @@ export function computeChanged(initial: Draft, draft: Draft): DraftChanged {
  *  dirty" check (which gates the Save button + discard overlay). */
 export function computeSectionDirty(
   changed: DraftChanged,
-  driverKind: "bambu" | "u1" | null,
+  driverKind: ConnectionDriverKind | null,
 ): { general: boolean; connection: boolean } {
   const connection =
     driverKind === "bambu"
       ? changed.host || changed.accessCode
-      : driverKind === "u1"
+      : driverKind === "u1" || driverKind === "moonraker"
         ? changed.host || changed.port
         : false;
   return {
@@ -167,11 +172,11 @@ export function initialDraft(instance: PrinterInstance): Draft {
   const conn = instance.connection;
   let host = "";
   let accessCode = "";
-  let port = DEFAULT_U1_PORT;
+  let port = DEFAULT_MOONRAKER_PORT;
   if (conn?.kind === "bambu") {
     host = conn.host;
     accessCode = conn.access_code;
-  } else if (conn?.kind === "u1") {
+  } else if (conn?.kind === "u1" || conn?.kind === "moonraker") {
     host = conn.host;
     port = conn.port;
   }
@@ -190,7 +195,7 @@ export function initialDraft(instance: PrinterInstance): Draft {
  *  the patch) and `validateDraftConnection` (to validate) go through
  *  it, so adding a connection field is one edit, not four. */
 export function draftToConnection(
-  driverKind: "bambu" | "u1" | null,
+  driverKind: ConnectionDriverKind | null,
   draft: Draft,
 ): ConnectionInfo | null {
   if (driverKind === "bambu") {
@@ -200,9 +205,9 @@ export function draftToConnection(
       access_code: draft.accessCode.trim(),
     };
   }
-  if (driverKind === "u1") {
+  if (driverKind === "u1" || driverKind === "moonraker") {
     return {
-      kind: "u1",
+      kind: driverKind,
       host: draft.host.trim(),
       port: draft.port,
     };
@@ -211,7 +216,7 @@ export function draftToConnection(
 }
 
 export function validateDraftConnection(
-  driverKind: "bambu" | "u1" | null,
+  driverKind: ConnectionDriverKind | null,
   draft: Draft,
 ): ConnectionFieldError | null {
   const conn = draftToConnection(driverKind, draft);

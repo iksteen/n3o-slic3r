@@ -20,12 +20,12 @@ use tokio_util::sync::CancellationToken;
 
 use super::ams::css_to_hex8;
 use super::bambu::connection::{BambuConfig, BambuDriver};
+use super::moonraker::{MoonrakerConfig, MoonrakerDriver};
 use super::registry::DriverRegistry;
 use super::send::{
     apply_pre_send, collect_ams_bindings, collect_ams_mapping, derive_send_names,
     plate_printer_model, read_gcode_bytes, wrap_gcode_as_3mf,
 };
-use super::snapmaker::{U1Config, U1Driver};
 use super::status::PrinterStatus;
 use super::traits::{
     Driver, DriverConfig, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle,
@@ -209,7 +209,18 @@ fn build_driver(id: DriverId, config: DriverConfig) -> Box<dyn Driver> {
         DriverConfig::Bambu { host, access_code } => {
             Box::new(BambuDriver::new(id, BambuConfig { host, access_code }))
         }
-        DriverConfig::U1 { host, port } => Box::new(U1Driver::new(id, U1Config { host, port })),
+        // Both Moonraker-backed kinds run the same driver; the kind only
+        // distinguishes the vendor webcam stack (see `camera::source_for`).
+        DriverConfig::U1 { host, port } => Box::new(MoonrakerDriver::new(
+            id,
+            DriverKind::U1,
+            MoonrakerConfig { host, port },
+        )),
+        DriverConfig::Moonraker { host, port } => Box::new(MoonrakerDriver::new(
+            id,
+            DriverKind::Moonraker,
+            MoonrakerConfig { host, port },
+        )),
     }
 }
 
@@ -407,10 +418,10 @@ pub async fn driver_export_plate(
 ///   ship as [`SendPayload::Gcode3mf`] with the plate's AMS routing.
 ///   The bundle embeds the raw G-code, the project/plate `Title`
 ///   metadata, the per-AMS slot bindings, and the plate thumbnail.
-/// - **U1** — ship the raw G-code body as [`SendPayload::Gcode`].
-///   Moonraker stores it under the supplied file name and starts
-///   the print in the same multipart upload (see
-///   `core/driver/snapmaker/http.rs`).
+/// - **U1 / Moonraker** — ship the raw G-code body as
+///   [`SendPayload::Gcode`]. Moonraker stores it under the supplied
+///   file name and starts the print in the same multipart upload
+///   (see `core/driver/moonraker/http.rs`).
 #[tauri::command]
 #[tracing::instrument(skip(registry, project, plugin_host, app, sends))]
 pub async fn driver_send_plate(
@@ -460,7 +471,7 @@ pub async fn driver_send_plate(
                 ams_mapping2,
             }
         }
-        DriverKind::U1 => {
+        DriverKind::U1 | DriverKind::Moonraker => {
             let bytes = read_gcode_bytes(gcode_path).await.map_err(DriverError::Other)?;
             // Prepend the Klipper/Moonraker thumbnail block so Mainsail /
             // Fluidd show the preview; a bad PNG leaves the G-code untouched.
@@ -483,7 +494,7 @@ pub async fn driver_send_plate(
     let payload = apply_pre_send(plugin_host.inner(), payload, plate_id, kind, printer_model);
     let file_name = match kind {
         DriverKind::Bambu => format!("{basename}.gcode.3mf"),
-        DriverKind::U1 => format!("{basename}.gcode"),
+        DriverKind::U1 | DriverKind::Moonraker => format!("{basename}.gcode"),
     };
     let on_progress = upload_progress_emitter(app, id, file_name);
     // Arm a cancel token for this upload. `driver_send_cancel` fires it; the

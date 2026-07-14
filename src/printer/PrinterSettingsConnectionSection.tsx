@@ -11,6 +11,7 @@ import type { ConnectionFieldError } from "./connectionValidation";
 import {
   draftToConnection,
   validateDraftConnection,
+  type ConnectionDriverKind,
   type Draft,
 } from "./printerSettingsHelpers";
 
@@ -159,7 +160,7 @@ export function ConnectionSection({
   onForget,
   onEdit,
 }: {
-  driverKind: "bambu" | "u1";
+  driverKind: ConnectionDriverKind;
   instanceId: string;
   profileLabel: string;
   draft: Draft;
@@ -250,7 +251,7 @@ export function ConnectionSection({
         )}
       </div>
 
-      {driverKind === "u1" && (
+      {(driverKind === "u1" || driverKind === "moonraker") && (
         <div className={`psm-field${changed.port ? " changed" : ""}`}>
           <label htmlFor="psm-conn-port">Port</label>
           <div className={`apm-name-input${portError ? " error" : ""}`}>

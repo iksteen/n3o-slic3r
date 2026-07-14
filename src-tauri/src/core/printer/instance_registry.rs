@@ -704,6 +704,7 @@ fn connection_kind_token(conn: &ConnectionInfo) -> &'static str {
     match conn {
         ConnectionInfo::Bambu { .. } => "bambu",
         ConnectionInfo::U1 { .. } => "u1",
+        ConnectionInfo::Moonraker { .. } => "moonraker",
     }
 }
 
@@ -711,6 +712,7 @@ fn driver_kind_token(kind: Option<DriverKind>) -> &'static str {
     match kind {
         Some(DriverKind::Bambu) => "bambu",
         Some(DriverKind::U1) => "u1",
+        Some(DriverKind::Moonraker) => "moonraker",
         None => "none",
     }
 }
@@ -741,6 +743,7 @@ fn validate_connection_kind(
         (profile.driver_kind, conn),
         (Some(DriverKind::Bambu), ConnectionInfo::Bambu { .. })
             | (Some(DriverKind::U1), ConnectionInfo::U1 { .. })
+            | (Some(DriverKind::Moonraker), ConnectionInfo::Moonraker { .. })
     );
     if !ok {
         return Err(InstanceMutError::ConnectionDriverMismatch {
@@ -778,7 +781,8 @@ fn validate_connection_content(
                 return Err(invalid("access code must be 8 characters, 0-9 or a-f"));
             }
         }
-        ConnectionInfo::U1 { host, port, .. } => {
+        ConnectionInfo::U1 { host, port, .. }
+        | ConnectionInfo::Moonraker { host, port, .. } => {
             if host.trim().is_empty() {
                 return Err(invalid("host is required"));
             }

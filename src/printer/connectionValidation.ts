@@ -34,7 +34,9 @@ export function validateBambuConnection(
   return null;
 }
 
-export function validateU1Connection(
+/** Shared by the U1 and generic Moonraker kinds — both are a
+ *  Moonraker endpoint reached by host + port. */
+export function validateMoonrakerConnection(
   host: string,
   port: number,
 ): ConnectionFieldError | null {
@@ -60,7 +62,7 @@ export function validateConnectionInfo(
   if (conn.kind === "bambu") {
     return validateBambuConnection(conn.host, conn.access_code);
   }
-  return validateU1Connection(conn.host, conn.port);
+  return validateMoonrakerConnection(conn.host, conn.port);
 }
 
 /** A connection the reconciler will attempt to register + connect.

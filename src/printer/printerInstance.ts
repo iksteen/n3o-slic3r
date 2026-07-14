@@ -58,12 +58,14 @@ export interface BedRef {
 
 /** Per-driver connection settings, mirroring Rust's tagged-enum
  *  `ConnectionInfo`. The `kind` discriminator switches the field
- *  set — Bambu carries an 8-hex-char LAN access code; U1 carries a
- *  Moonraker port (usually 80). Device serial is NOT stored here: the
- *  drivers probe it at connect time, so it's a runtime-only concern
- *  on `DriverConfig`, not part of the persisted connection. */
+ *  set — Bambu carries an 8-hex-char LAN access code; U1 and generic
+ *  Moonraker printers carry a Moonraker port (usually 80). Device
+ *  serial is NOT stored here: the Bambu driver probes it at connect
+ *  time and Moonraker printers have none, so it never enters the
+ *  persisted connection. */
 export type ConnectionInfo =
   | { kind: "bambu"; host: string; access_code: string }
+  | { kind: "moonraker"; host: string; port: number }
   | { kind: "u1"; host: string; port: number };
 
 export interface PrinterInstance {
