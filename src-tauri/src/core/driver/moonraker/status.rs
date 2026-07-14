@@ -295,6 +295,32 @@ mod tests {
     }
 
     #[test]
+    fn phantom_subscribed_extruders_do_not_become_nozzles() {
+        // We subscribe extruder..extruder3 unconditionally; Moonraker
+        // answers for heaters the printer lacks with EMPTY objects,
+        // not omission. Body shape captured verbatim from a live
+        // single-extruder Ender-3 S1 (Klipper). It must decode as ONE
+        // nozzle, not four.
+        let p = decoded(json!({
+            "extruder": {
+                "temperature": 220.08,
+                "target": 220.0,
+                "power": 0.519,
+                "can_extrude": true,
+                "pressure_advance": 0.05,
+                "smooth_time": 0.04,
+                "motion_queue": null,
+            },
+            "extruder1": {},
+            "extruder2": {},
+            "extruder3": {},
+        }));
+        assert_eq!(p.temps.nozzles.len(), 1);
+        assert_eq!(p.temps.nozzles[0].current, 220.08);
+        assert_eq!(p.temps.nozzles[0].target, 220.0);
+    }
+
+    #[test]
     fn decode_surfaces_failure_message_on_error_state() {
         let p = decoded(json!({
             "print_stats": { "state": "error", "message": "thermal runaway" }

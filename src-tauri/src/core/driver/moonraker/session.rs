@@ -256,11 +256,21 @@ pub(super) fn get_print_info_i64(status: &Map<String, Value>, field: &str) -> Op
 /// Collect every `extruder`, `extruder1`, …, `extruderN` object
 /// in the status map, keyed by zero-based index. The U1 reports
 /// one entry per docked toolhead.
+///
+/// We subscribe to `extruder..extruder3` unconditionally, and
+/// Moonraker answers for objects the printer doesn't have with an
+/// EMPTY object (`"extruder1": {}` — verified against a
+/// single-extruder Ender-3 S1), not by omitting the key. A real
+/// heater always reports `temperature`, so entries without it are
+/// phantoms and are dropped — otherwise every Moonraker printer
+/// grows four nozzles in the Devices monitor.
 pub(super) fn extruders(status: &Map<String, Value>) -> HashMap<usize, &Value> {
     let mut extruders = HashMap::new();
     for (key, value) in status {
         if let Some(index) = extruder_index(key) {
-            extruders.insert(index, value);
+            if value.get("temperature").is_some() {
+                extruders.insert(index, value);
+            }
         }
     }
     extruders
