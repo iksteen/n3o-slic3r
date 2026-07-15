@@ -63,6 +63,11 @@ pub struct SliceObject {
     /// (`add_group` + one `add_volume` per member) by the slice worker — no
     /// temp `.3mf` needed.
     pub group: Option<GroupId>,
+    /// The group's own config overrides (object-scope settings shared by
+    /// every member — the group slices as one ModelObject). Same on every
+    /// member of a group; the worker applies the first member's copy at
+    /// `add_group` time. Empty for solos and groups without overrides.
+    pub group_overrides: Vec<(String, String)>,
     /// Cut-connector volumes (pegs/holes) on this object, in the same local
     /// frame as the part. Applied as extra libslic3r volumes (peg = MODEL_PART,
     /// hole = NEGATIVE_VOLUME) so an object with any becomes one multi-volume
@@ -460,6 +465,15 @@ pub fn build_plate_objects(
                     .into_iter()
                     .collect(),
                 group: obj.group,
+                group_overrides: obj
+                    .group
+                    .and_then(|g| plate.scene.groups.get(&g))
+                    .map(|g| {
+                        crate::core::schema::gate_object_overrides(&g.overrides, obj.id.0)
+                            .into_iter()
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 modifiers: plate
                     .scene
                     .object_modifiers
@@ -596,6 +610,34 @@ mod tests {
             input.material_layout[0].is_some(),
             "M1 auto-binds to an AMS slot"
         );
+    }
+
+    #[test]
+    fn group_overrides_ride_every_member_into_the_slice_input() {
+        let _ = slic3r_ffi::init(None, 3);
+        let _registry = RegistryGuard::acquire();
+        let mut project = one_plate_project_with_cube();
+        let mesh_id = project.register_mesh(triangle_mesh());
+        let b = project.register_object(NewSceneObject::at_origin(mesh_id, "cube-b"));
+        let a = project.plates[0].scene.objects.keys().copied().min().unwrap();
+        project.group_objects(&[a, b], "grp".into()).unwrap();
+        // Routes to the group map (object-scope key on a grouped member).
+        project
+            .object_override_set(PlateId(1), a, "enable_support".into(), "1".into())
+            .unwrap();
+
+        let input =
+            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        assert_eq!(input.objects.len(), 2);
+        for obj in &input.objects {
+            assert_eq!(
+                obj.group_overrides,
+                vec![("enable_support".to_string(), "1".to_string())],
+                "{} should carry the group's overrides",
+                obj.name,
+            );
+            assert!(obj.overrides.is_empty(), "nothing stored per-member");
+        }
     }
 
     #[test]

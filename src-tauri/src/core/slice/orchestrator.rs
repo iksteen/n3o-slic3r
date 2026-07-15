@@ -467,7 +467,7 @@ fn build_model_objects(
             }
         }
         let obj_idx = model
-            .add_group(&objects[unit[0]].name)
+            .add_group(&objects[unit[0]].name, &objects[unit[0]].group_overrides)
             .map_err(|e| format!("add_group({}) failed: {e}", objects[unit[0]].name))?;
         for &i in &unit {
             let o = &objects[i];
@@ -1005,6 +1005,7 @@ mod tests {
             extruder: 1,
             overrides: vec![],
             group,
+            group_overrides: vec![],
             modifiers: vec![],
         }
     }

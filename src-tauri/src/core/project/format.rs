@@ -530,6 +530,33 @@ mod tests {
     }
 
     #[test]
+    fn round_trip_group_overrides() {
+        let mut p = Project::default();
+        let mesh_id = p.register_mesh(triangle());
+        let a = p.register_object(NewSceneObject::at_origin(mesh_id, "lower"));
+        let b = p.register_object(NewSceneObject::at_origin(mesh_id, "upper"));
+        p.group_objects(&[a, b], "Bracket".into()).unwrap();
+        let gid = p.active_plate().scene.objects[&a].group.unwrap();
+        p.plates[0]
+            .scene
+            .groups
+            .get_mut(&gid)
+            .unwrap()
+            .overrides
+            .insert("enable_support".into(), "1".into());
+
+        let path = tmp();
+        write_project(&p, &path).expect("write");
+        let parsed = read_project(&path).expect("read");
+
+        assert_eq!(
+            parsed.plates[0].scene.groups[&gid].overrides["enable_support"],
+            "1",
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
     fn round_trip_visibility() {
         let mut p = Project::default();
         let m = p.register_mesh(triangle());

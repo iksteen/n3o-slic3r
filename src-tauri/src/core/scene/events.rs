@@ -101,6 +101,13 @@ pub enum SceneEvent {
         plate_id: PlateId,
         object_id: ObjectId,
     },
+    /// One or more cascade overrides on a group changed. Same contract
+    /// as `ObjectOverridesChanged` — no value payload, consumers re-read
+    /// the group's override map via the snapshot.
+    GroupOverridesChanged {
+        plate_id: PlateId,
+        group_id: super::state::GroupId,
+    },
     /// One or more project-tier overrides on a plate changed
     ///. Same shape as `ObjectOverridesChanged` minus the
     /// object id — the cascade re-resolves with the updated plate
@@ -160,6 +167,7 @@ impl SceneEvent {
             Self::PlateRemoved { .. } => "scene:plate_removed",
             Self::ActivePlateChanged { .. } => "scene:active_plate_changed",
             Self::ObjectOverridesChanged { .. } => "scene:object_overrides_changed",
+            Self::GroupOverridesChanged { .. } => "scene:group_overrides_changed",
             Self::ProjectOverridesChanged { .. } => "scene:project_overrides_changed",
             Self::UserOverridesChanged => "scene:user_overrides_changed",
             Self::PlateChanged { .. } => "scene:plate_changed",
@@ -184,6 +192,7 @@ impl SceneEvent {
             | Self::ObjectRemoved { .. }
             | Self::BedChanged { .. }
             | Self::ObjectOverridesChanged { .. }
+            | Self::GroupOverridesChanged { .. }
             | Self::ProjectOverridesChanged { .. }
             | Self::UserOverridesChanged
             | Self::PlateChanged { .. }

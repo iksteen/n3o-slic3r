@@ -150,6 +150,14 @@ pub fn is_object_overridable(key: &str) -> bool {
     schema_by_key(key).is_some_and(|s| s.scope.is_object() || s.scope.is_region())
 }
 
+/// Whether `key` is honored at *object* scope only (`PrintObjectConfig`,
+/// not `PrintRegionConfig`). On a multi-member group — one libslic3r
+/// ModelObject — such a key can only apply to the whole group, so the
+/// override write path stores it on the group rather than the member.
+pub fn is_object_scope_only(key: &str) -> bool {
+    schema_by_key(key).is_some_and(|s| s.scope.is_object() && !s.scope.is_region())
+}
+
 /// Filter a per-object override map down to the keys libslic3r honors per
 /// object (object/region scope), returned as a `BTreeMap` for deterministic
 /// downstream ordering. The single gate shared by the slice-time builder and

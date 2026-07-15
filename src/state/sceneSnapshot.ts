@@ -30,6 +30,7 @@ export const SCENE_SNAPSHOT_EVENTS = [
   "scene:object_updated",
   "scene:selection_changed",
   "scene:object_overrides_changed",
+  "scene:group_overrides_changed",
   "scene:project_overrides_changed",
   "scene:user_overrides_changed",
   "scene:bed_changed",

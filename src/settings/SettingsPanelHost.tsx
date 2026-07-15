@@ -140,16 +140,63 @@ export function activePlate(session: ProjectSession): PlateSnapshot | null {
   );
 }
 
-/** First selected object on the plate, projected to the
- * SettingsPanel's `SelectedObject` shape. `null` when nothing's
+/** Display name for a group: its authored name, else the same
+ * appearance-ordinal fallback the Objects panel shows ("Group 2"), so
+ * the two surfaces always agree on what a group is called. */
+function groupDisplayName(plate: PlateSnapshot, group: string): string {
+  const named = plate.groups[group]?.name;
+  if (named) return named;
+  const seen = new Set<string>();
+  for (const o of plate.objects) {
+    if (o.group != null && !seen.has(o.group)) {
+      seen.add(o.group);
+      if (o.group === group) return `Group ${seen.size}`;
+    }
+  }
+  return "Group";
+}
+
+/** The selection projected to the SettingsPanel's `SelectedObject`
+ * shape. A whole-group selection (the canvas's click-selects-the-group)
+ * presents as the group — object-scope edits apply to it as one print
+ * object, so the tab must say so. A partial selection (a member picked
+ * from the objects panel) presents as that object. `null` when nothing's
  * selected or the plate is empty. Exported for tests. */
 export function selectedObject(
   plate: PlateSnapshot | null,
-): { id: number; name: string } | null {
+): { id: number; name: string; kind: "object" | "group" } | null {
   if (!plate || plate.selection.length === 0) return null;
   const id = plate.selection[0];
   const obj = plate.objects.find((o) => o.id === id);
-  return obj ? { id: obj.id, name: obj.name } : null;
+  if (!obj) return null;
+  if (obj.group != null) {
+    const members = plate.objects.filter((o) => o.group === obj.group);
+    const selected = new Set(plate.selection);
+    if (
+      members.length >= 2 &&
+      plate.selection.length === members.length &&
+      members.every((m) => selected.has(m.id))
+    ) {
+      return { id, name: groupDisplayName(plate, obj.group), kind: "group" };
+    }
+  }
+  return { id: obj.id, name: obj.name, kind: "object" };
+}
+
+/** One object's effective override map: its own overrides plus its
+ * group's (a group slices as one object, so group-stored object-scope
+ * settings apply to every member; the group value wins over a stale
+ * member-stored copy). Exported for tests. */
+export function effectiveObjectOverrides(
+  plate: PlateSnapshot,
+  objectId: number,
+): Record<string, string> {
+  const obj = plate.objects.find((o) => o.id === objectId);
+  const group = obj?.group ? plate.groups[obj.group] : undefined;
+  return {
+    ...plate.object_overrides[objectId],
+    ...group?.overrides,
+  };
 }
 
 /** Project the plate's objects to the SettingsPanel's
@@ -163,7 +210,7 @@ export function allObjectsForPanel(
     id: o.id,
     name: o.name,
     color: null, // Filament-color dots arrive with filament sync.
-    overrides: plate.object_overrides[o.id] ?? {},
+    overrides: effectiveObjectOverrides(plate, o.id),
   }));
 }
 
@@ -207,8 +254,11 @@ export function SettingsPanelHost({
 
   const projectOverrides = plate?.project_overrides ?? {};
   const userOverrides = session.snapshot?.user_overrides ?? {};
+  // Member + group overrides merged — the backend routes object-scope
+  // writes on a grouped member to its group, so the panel reads both
+  // through one map (writes stay on the plain object commands).
   const objectOverrides =
-    plate && selected ? plate.object_overrides[selected.id] ?? {} : {};
+    plate && selected ? effectiveObjectOverrides(plate, selected.id) : {};
 
   const allObjects = useMemo(() => allObjectsForPanel(plate), [plate]);
 
@@ -266,6 +316,10 @@ export function SettingsPanelHost({
     projectOverrides,
   ]);
 
+  // Writes bind to the first selected member even under a group
+  // presentation: the backend routes object-scope keys to the group.
+  // ponytail: a region-scope edit while "Group: …" is shown lands on that
+  // one member only; fan region keys out group-wide if that ever bites.
   const objectCbs = useMemo(
     () => makeObjectOverrideCallbacks(plate?.plate_id ?? null, selected?.id ?? null),
     [plate?.plate_id, selected?.id],

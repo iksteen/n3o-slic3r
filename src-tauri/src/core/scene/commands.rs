@@ -107,8 +107,9 @@ pub struct PlateSnapshot {
     pub bed: Option<BedMesh>,
     pub object_overrides:
         std::collections::HashMap<ObjectId, std::collections::HashMap<String, String>>,
-    /// Per-group state keyed by [`GroupId`] (the display name today). A
-    /// group is a set of objects sharing a `SceneObject::group`.
+    /// Per-group state keyed by [`GroupId`] — display name + the group's
+    /// cascade overrides. A group is a set of objects sharing a
+    /// `SceneObject::group`.
     pub groups: std::collections::HashMap<GroupId, Group>,
 }
 

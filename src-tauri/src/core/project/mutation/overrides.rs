@@ -36,6 +36,13 @@ impl Project {
     }
 
     /// Upsert one override on a specific (plate, object).
+    ///
+    /// A grouped member routes *object-scope* keys to its group's
+    /// override map: the group slices as one libslic3r ModelObject, so
+    /// `enable_support`-class settings necessarily apply to every
+    /// member — storing them per-member would be a lie the engine
+    /// ignores. Region-scope keys (walls, infill, …) stay per-member;
+    /// libslic3r honors those per volume.
     pub fn object_override_set(
         &mut self,
         plate_id: PlateId,
@@ -47,8 +54,20 @@ impl Project {
             .plate_index(plate_id)
             .ok_or(SceneOpError::UnknownPlate(plate_id))?;
         let plate = &mut self.plates[idx].scene;
-        if !plate.objects.contains_key(&object_id) {
-            return Err(SceneOpError::UnknownObject(object_id));
+        let group = match plate.objects.get(&object_id) {
+            Some(obj) => obj.group,
+            None => return Err(SceneOpError::UnknownObject(object_id)),
+        };
+        if let Some(group_id) = group {
+            if crate::core::schema::is_object_scope_only(&key) {
+                plate
+                    .groups
+                    .entry(group_id)
+                    .or_default()
+                    .overrides
+                    .insert(key, value);
+                return Ok(vec![SceneEvent::GroupOverridesChanged { plate_id, group_id }]);
+            }
         }
         plate
             .object_overrides
@@ -131,6 +150,12 @@ impl Project {
     /// Silent no-op (no event) when the override wasn't present.
     /// When the last override on an object is cleared, the
     /// per-object map entry is removed entirely.
+    ///
+    /// On a grouped member the key is also cleared from the group's
+    /// override map — the counterpart of `object_override_set`'s
+    /// object-scope routing (and lazy cleanup for projects saved
+    /// before group overrides existed, where object-scope keys sit in
+    /// the member map).
     pub fn object_override_clear(
         &mut self,
         plate_id: PlateId,
@@ -141,22 +166,30 @@ impl Project {
             .plate_index(plate_id)
             .ok_or(SceneOpError::UnknownPlate(plate_id))?;
         let plate = &mut self.plates[idx].scene;
-        if !plate.objects.contains_key(&object_id) {
-            return Err(SceneOpError::UnknownObject(object_id));
-        }
-        let Some(map) = plate.object_overrides.get_mut(&object_id) else {
-            return Ok(Vec::new());
+        let group = match plate.objects.get(&object_id) {
+            Some(obj) => obj.group,
+            None => return Err(SceneOpError::UnknownObject(object_id)),
         };
-        if map.remove(key).is_none() {
-            return Ok(Vec::new());
+        let mut events = Vec::new();
+        if let Some(group_id) = group {
+            if let Some(g) = plate.groups.get_mut(&group_id) {
+                if g.overrides.remove(key).is_some() {
+                    events.push(SceneEvent::GroupOverridesChanged { plate_id, group_id });
+                }
+            }
         }
-        if map.is_empty() {
-            plate.object_overrides.remove(&object_id);
+        if let Some(map) = plate.object_overrides.get_mut(&object_id) {
+            if map.remove(key).is_some() {
+                if map.is_empty() {
+                    plate.object_overrides.remove(&object_id);
+                }
+                events.push(SceneEvent::ObjectOverridesChanged {
+                    plate_id,
+                    object_id,
+                });
+            }
         }
-        Ok(vec![SceneEvent::ObjectOverridesChanged {
-            plate_id,
-            object_id,
-        }])
+        Ok(events)
     }
 
 }
@@ -247,6 +280,80 @@ mod tests {
         p.object_override_clear(active_id, obj, "infill_density")
             .unwrap();
         assert!(!p.plates[0].scene.object_overrides.contains_key(&obj));
+    }
+
+    #[test]
+    fn grouped_member_routes_object_scope_key_to_group() {
+        let _ = slic3r_ffi::init(None, 3);
+        let mut p = Project::default();
+        let (_, a) = add_cube(&mut p);
+        let (_, b) = add_cube(&mut p);
+        p.group_objects(&[a, b], "grp".into()).unwrap();
+        let group_id = p.active_plate().scene.objects[&a].group.unwrap();
+        let plate_id = p.active_plate().id;
+
+        // Object-scope key → the group's map + GroupOverridesChanged.
+        let events = p
+            .object_override_set(plate_id, a, "enable_support".into(), "1".into())
+            .unwrap();
+        assert!(matches!(
+            events.as_slice(),
+            [SceneEvent::GroupOverridesChanged { group_id: g, .. }] if *g == group_id,
+        ));
+        assert_eq!(
+            p.active_plate().scene.groups[&group_id].overrides["enable_support"],
+            "1",
+        );
+        assert!(
+            !p.active_plate().scene.object_overrides.contains_key(&a),
+            "object-scope key must not be stored per-member",
+        );
+
+        // Region-scope key stays per-member.
+        let events = p
+            .object_override_set(plate_id, a, "wall_loops".into(), "4".into())
+            .unwrap();
+        assert!(matches!(
+            events.as_slice(),
+            [SceneEvent::ObjectOverridesChanged { object_id, .. }] if *object_id == a,
+        ));
+        assert_eq!(
+            p.active_plate().scene.object_overrides[&a]["wall_loops"],
+            "4",
+        );
+
+        // Clear removes the group-stored key through the member surface.
+        let events = p.object_override_clear(plate_id, a, "enable_support").unwrap();
+        assert!(matches!(
+            events.as_slice(),
+            [SceneEvent::GroupOverridesChanged { group_id: g, .. }] if *g == group_id,
+        ));
+        assert!(p.active_plate().scene.groups[&group_id]
+            .overrides
+            .is_empty());
+    }
+
+    #[test]
+    fn ungrouping_copies_group_overrides_to_members() {
+        let _ = slic3r_ffi::init(None, 3);
+        let mut p = Project::default();
+        let (_, a) = add_cube(&mut p);
+        let (_, b) = add_cube(&mut p);
+        p.group_objects(&[a, b], "grp".into()).unwrap();
+        let group_id = p.active_plate().scene.objects[&a].group.unwrap();
+        let plate_id = p.active_plate().id;
+        p.object_override_set(plate_id, a, "enable_support".into(), "1".into())
+            .unwrap();
+
+        p.ungroup_objects(group_id);
+        for id in [a, b] {
+            assert_eq!(
+                p.active_plate().scene.object_overrides[&id]["enable_support"],
+                "1",
+                "ex-member {id:?} keeps the group's setting",
+            );
+        }
+        assert!(!p.active_plate().scene.groups.contains_key(&group_id));
     }
 
     #[test]

@@ -727,6 +727,35 @@ static void apply_overrides(ModelConfigObject& config, const char* const* keys,
     }
 }
 
+// Volume-path overrides. libslic3r reads only region-scope keys off a
+// ModelVolume's config (PrintApply's region_config_from_model_volume);
+// object-scope keys (PrintObjectConfig — enable_support, layer_height, …) are
+// silently ignored there, so they must land on the parent ModelObject instead.
+// ponytail: when group members disagree on an object-scope key, the
+// last-added volume wins; surface a merge policy if that ever matters.
+static void apply_volume_overrides(ModelObject* obj, ModelVolume* vol,
+                                   const char* const* keys,
+                                   const char* const* vals, size_t count) {
+    if (count == 0) return;
+    static const std::unordered_set<std::string> object_keys = [] {
+        const t_config_option_keys v = PrintObjectConfig().keys();
+        return std::unordered_set<std::string>(v.begin(), v.end());
+    }();
+    ConfigSubstitutionContext ctx(ForwardCompatibilitySubstitutionRule::EnableSilent);
+    for (size_t i = 0; i < count; ++i) {
+        const char* key = keys[i];
+        const char* val = vals[i];
+        if (!key || !val || !print_config_def.has(key))
+            continue;
+        ModelConfigObject& target = object_keys.count(key) ? obj->config : vol->config;
+        try {
+            target.set_deserialize(key, val, ctx);
+        } catch (const std::exception&) {
+            // Skip a value the deserializer rejects rather than aborting.
+        }
+    }
+}
+
 // The Print currently running in slic3r_slice (serialized by SLICE_LOCK, so at
 // most one). `slic3r_cancel` flips its cancel flag from another thread; process()
 // then aborts at its next throw_if_canceled() checkpoint. The mutex makes the
@@ -1101,9 +1130,13 @@ slic3r_status slic3r_model_add_object(
 }
 
 slic3r_status slic3r_model_add_group(
-    slic3r_model_t* m, const char* name, size_t* out_index, char** out_err) {
+    slic3r_model_t* m, const char* name,
+    const char* const* ovr_keys, const char* const* ovr_vals, size_t ovr_count,
+    size_t* out_index, char** out_err) {
     if (out_err) *out_err = nullptr;
     if (!m) return SLIC3R_ERR_INVALID_ARG;
+    if (ovr_count != 0 && (!ovr_keys || !ovr_vals))
+        return SLIC3R_ERR_INVALID_ARG;
     try {
         ModelObject* obj = m->model.add_object();
         obj->name = name ? name : "";
@@ -1114,6 +1147,10 @@ slic3r_status slic3r_model_add_group(
         // component path (bbs_3mf.cpp), so buffer-load and temp-.3mf agree.
         ModelInstance* inst = obj->add_instance();
         inst->set_transformation(Geometry::Transformation(Transform3d::Identity()));
+        // Group overrides are the group's object-scope settings — one
+        // ModelObject shared by all members, so they land here rather than
+        // on any member's volume config.
+        apply_overrides(obj->config, ovr_keys, ovr_vals, ovr_count);
         if (out_index) *out_index = m->model.objects.size() - 1;
         return SLIC3R_OK;
     } catch (const std::exception& e) {
@@ -1180,7 +1217,7 @@ slic3r_status slic3r_model_add_volume(
             set_err(out_err, "malformed support paint string");
             return SLIC3R_ERR_INVALID_ARG;
         }
-        apply_overrides(vol->config, ovr_keys, ovr_vals, ovr_count);
+        apply_volume_overrides(obj, vol, ovr_keys, ovr_vals, ovr_count);
 
         return SLIC3R_OK;
     } catch (const std::exception& e) {

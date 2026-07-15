@@ -51,11 +51,19 @@ impl GroupId {
 }
 
 /// Per-group state. Members reference the group via
-/// [`SceneObject::group`]; this carries the display name (and is the
-/// natural home for future per-group state — print order, color, …).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// [`SceneObject::group`]; this carries the display name and the
+/// group's cascade overrides (and is the natural home for future
+/// per-group state — print order, color, …).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Group {
     pub name: String,
+    /// Object-scope cascade overrides for the whole group. A group
+    /// slices as one libslic3r ModelObject, so object-scope settings
+    /// (`enable_support`, `layer_height`, …) apply to all members at
+    /// once and live here; members keep only region-scope overrides
+    /// in `PlateSceneState::object_overrides`.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub overrides: HashMap<String, String>,
 }
 
 /// Loaded mesh data + provenance.
@@ -551,11 +559,12 @@ pub struct PlateSceneState {
     /// objects without authored overrides.
     #[serde(default)]
     pub object_overrides: HashMap<ObjectId, HashMap<String, String>>,
-    /// Per-group state keyed by [`GroupId`] — the display name today.
-    /// A group is a set of objects sharing a `SceneObject::group`; the
-    /// membership persists on the objects, this map carries the name
-    /// (and room for future per-group state). Empty for groups without
-    /// an explicit name (the UI shows a default).
+    /// Per-group state keyed by [`GroupId`] — display name + the group's
+    /// cascade overrides. A group is a set of objects sharing a
+    /// `SceneObject::group`; the membership persists on the objects, this
+    /// map carries the rest. An entry may be absent for groups imported
+    /// without an explicit name (the UI shows a default); the override
+    /// write path creates it on demand.
     #[serde(default)]
     pub groups: HashMap<GroupId, Group>,
     /// Per-object connector volumes (cut pegs/holes) keyed by object. Resolved

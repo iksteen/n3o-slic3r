@@ -43,6 +43,7 @@ fn stl_objects() -> Vec<SliceObject> {
         extruder: 1,
         overrides: vec![],
         group: None,
+        group_overrides: vec![],
         modifiers: vec![],
     }]
 }
@@ -411,6 +412,84 @@ fn user_tier_override_reaches_the_engine() {
     assert!(
         gcode.contains("M140 S53"),
         "user-tier override should reach the engine's bed-heat command",
+    );
+}
+
+/// A grouped member's *object-scope* override (`enable_support`) must reach
+/// the engine. Grouped objects collapse into one multi-volume ModelObject:
+/// the group's own overrides ride `add_group` onto the ModelObject config,
+/// and a *member*-stored object-scope key (legacy projects) is promoted off
+/// the volume config by the FFI — libslic3r only reads region-scope keys
+/// there. Before either path existed the override was silently ignored and
+/// a floating group sliced with no support at all.
+#[test]
+fn grouped_member_object_scope_override_reaches_the_engine() {
+    ensure_ffi_init();
+    let group = Some(n3o_slic3r_lib::core::scene::state::GroupId::fresh());
+    // One member on the plate (keeps the first layers non-empty, which
+    // libslic3r validates), one floated 10mm up — the floating twin's flat
+    // bottom is a full overhang: no support without the override,
+    // unmistakable support columns with it.
+    let floating = |member_overrides: Vec<(String, String)>,
+                    group_overrides: Vec<(String, String)>| {
+        let mut objs = stl_objects();
+        objs[0].overrides = member_overrides;
+        objs[0].group = group;
+        objs[0].group_overrides = group_overrides;
+        let mut twin = objs[0].clone();
+        twin.name = "20mmbox-twin".into();
+        twin.transform[12] = 30.0;
+        twin.transform[14] = 10.0;
+        twin.overrides = vec![];
+        objs.push(twin);
+        objs
+    };
+    let td = |name: &str| {
+        std::env::temp_dir()
+            .join(format!("n3o-grp-ovr-{name}-{}", std::process::id()))
+            .display()
+            .to_string()
+    };
+    // BBL-flavor gcode tags extrusion roles as `; FEATURE:`, other flavors
+    // as `;TYPE:` — match either.
+    let support_markers = |gcode: &str| {
+        gcode
+            .lines()
+            .filter(|l| {
+                (l.starts_with("; FEATURE:") || l.starts_with(";TYPE:"))
+                    && l.to_lowercase().contains("support")
+            })
+            .count()
+    };
+
+    let support = vec![("enable_support".to_string(), "1".to_string())];
+
+    let baseline = slice_to_gcode(
+        "grp-baseline",
+        bambi_input(floating(vec![], vec![]), td("off"), vec![1]),
+    );
+    assert_eq!(
+        support_markers(&baseline),
+        0,
+        "baseline floating group should slice without support",
+    );
+
+    let group_override = slice_to_gcode(
+        "grp-override",
+        bambi_input(floating(vec![], support.clone()), td("grp"), vec![1]),
+    );
+    assert!(
+        support_markers(&group_override) > 0,
+        "the group's enable_support override should produce support extrusions",
+    );
+
+    let member_override = slice_to_gcode(
+        "grp-member-legacy",
+        bambi_input(floating(support, vec![]), td("member"), vec![1]),
+    );
+    assert!(
+        support_markers(&member_override) > 0,
+        "a member-stored enable_support override (legacy project) should still produce support",
     );
 }
 

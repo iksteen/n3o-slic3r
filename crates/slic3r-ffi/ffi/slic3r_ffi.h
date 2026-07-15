@@ -270,9 +270,15 @@ slic3r_status slic3r_model_add_object(
  * for the slic3r_model_add_volume calls that follow. Use this + add_volume to
  * build a grouped object in-memory instead of round-tripping a .3mf — each
  * volume carries its own world transform (the group instance stays identity),
- * matching the .3mf writer's components shape. out_err may be NULL. */
+ * matching the .3mf writer's components shape.
+ *   ovr_keys / ovr_vals / ovr_count: the group's config overrides, applied to
+ *     the ModelObject config — the home for object-scope settings
+ *     (enable_support, layer_height, …) shared by every member.
+ * out_err may be NULL. */
 slic3r_status slic3r_model_add_group(
-    slic3r_model_t* m, const char* name, size_t* out_index, char** out_err);
+    slic3r_model_t* m, const char* name,
+    const char* const* ovr_keys, const char* const* ovr_vals, size_t ovr_count,
+    size_t* out_index, char** out_err);
 
 /* Append one ModelVolume (from raw buffers) to model->objects[object_index]
  * (created by slic3r_model_add_group). Buffers/paint/overrides as in

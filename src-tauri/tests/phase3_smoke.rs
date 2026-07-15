@@ -43,6 +43,7 @@ fn cube_objects() -> Vec<SliceObject> {
         extruder: 1,
         overrides: vec![],
         group: None,
+        group_overrides: vec![],
         modifiers: vec![],
     }]
 }

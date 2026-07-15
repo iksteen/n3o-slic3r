@@ -1198,15 +1198,34 @@ impl Model {
     /// instance) and return its index for the [`Model::add_volume`] calls that
     /// follow. Build a grouped object in-memory with `add_group` + one
     /// `add_volume` per member, instead of round-tripping a `.3mf`.
-    pub fn add_group(&mut self, name: &str) -> Result<usize> {
+    ///
+    /// `overrides` are the group's config overrides, applied to the
+    /// ModelObject config — the home for object-scope settings
+    /// (`enable_support`, `layer_height`, …) shared by every member.
+    pub fn add_group(&mut self, name: &str, overrides: &[(String, String)]) -> Result<usize> {
         let cname = cstring(name, "name")?;
+        let strs = ObjectStrings::marshal(&[], &[], overrides)?;
+        let key_ptrs = strs.key_ptrs();
+        let val_ptrs = strs.val_ptrs();
         let mut index: usize = 0;
         let mut err: *mut c_char = ptr::null_mut();
-        // SAFETY: self.raw is a live model handle; cname lives through the call;
-        // index + err are out-params we own on return.
-        let status =
-            unsafe { sys::slic3r_model_add_group(self.raw, cname.as_ptr(), &mut index, &mut err) };
-        unsafe { check_with_err(status, err) }?;
+        // SAFETY: self.raw is a live model handle; the CStrings + their pointer
+        // vecs outlive the call (the C side does not retain them); index + err
+        // are out-params we own on return.
+        let status = unsafe {
+            sys::slic3r_model_add_group(
+                self.raw,
+                cname.as_ptr(),
+                key_ptrs.as_ptr(),
+                val_ptrs.as_ptr(),
+                key_ptrs.len(),
+                &mut index,
+                &mut err,
+            )
+        };
+        let result = unsafe { check_with_err(status, err) };
+        drop(strs);
+        result?;
         Ok(index)
     }
 
@@ -2066,7 +2085,9 @@ mod tests {
         let verts: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let indices: [u32; 3] = [0, 1, 2];
 
-        let idx = model.add_group("grp").expect("add_group should succeed");
+        let idx = model
+            .add_group("grp", &[("enable_support".into(), "1".into())])
+            .expect("add_group should succeed");
         assert_eq!(idx, 0, "first object created → index 0");
         // Two volumes appended to the same group object, each its own extruder.
         model

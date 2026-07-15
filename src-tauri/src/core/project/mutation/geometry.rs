@@ -397,7 +397,7 @@ impl Project {
                 events.push(SceneEvent::ObjectAdded { plate_id, object });
                 new_ids.push(obj_id);
             }
-            // Carry the group display names onto the fresh group ids.
+            // Carry the group state (name + overrides) onto the fresh group ids.
             for (src_g, new_g) in &group_remap {
                 if let Some(g) = self.plates[active].scene.groups.get(src_g).cloned() {
                     self.plates[active].scene.groups.insert(*new_g, g);
@@ -546,14 +546,16 @@ impl Project {
         self.plates[active]
             .scene
             .groups
-            .insert(group, Group { name });
+            .insert(group, Group { name, ..Default::default() });
         events.extend(self.dissolve_orphan_groups_on_active());
         events.push(SceneEvent::PlateChanged { plate_id });
         Ok(events)
     }
 
     /// Ungroup: clear `group` from every member of `group` on the active
-    /// plate and drop its name.
+    /// plate and drop its name. The group's overrides are copied onto
+    /// each member — every ex-member becomes its own PrintObject, so the
+    /// settings that applied to the group keep applying to each.
     pub fn ungroup_objects(&mut self, group: GroupId) -> Vec<SceneEvent> {
         let active = self.active_plate;
         let plate_id = self.plates[active].id;
@@ -564,6 +566,12 @@ impl Project {
             .filter(|o| o.group == Some(group))
             .map(|o| o.id)
             .collect();
+        let group_overrides = self.plates[active]
+            .scene
+            .groups
+            .get(&group)
+            .map(|g| g.overrides.clone())
+            .unwrap_or_default();
         let mut events = Vec::new();
         for id in member_ids {
             if let Some(obj) = self.plates[active].scene.objects.get_mut(&id) {
@@ -573,20 +581,35 @@ impl Project {
                     object: obj.clone(),
                 });
             }
+            if !group_overrides.is_empty() {
+                self.plates[active]
+                    .scene
+                    .object_overrides
+                    .entry(id)
+                    .or_default()
+                    .extend(group_overrides.iter().map(|(k, v)| (k.clone(), v.clone())));
+                events.push(SceneEvent::ObjectOverridesChanged {
+                    plate_id,
+                    object_id: id,
+                });
+            }
         }
         self.plates[active].scene.groups.remove(&group);
         events.push(SceneEvent::PlateChanged { plate_id });
         events
     }
 
-    /// Rename a group on the active plate.
+    /// Rename a group on the active plate, keeping its other state
+    /// (overrides) intact.
     pub fn rename_group(&mut self, group: GroupId, name: String) -> Vec<SceneEvent> {
         let active = self.active_plate;
         let plate_id = self.plates[active].id;
         self.plates[active]
             .scene
             .groups
-            .insert(group, Group { name });
+            .entry(group)
+            .and_modify(|g| g.name.clone_from(&name))
+            .or_insert_with(|| Group { name, ..Default::default() });
         vec![SceneEvent::PlateChanged { plate_id }]
     }
 
@@ -843,18 +866,17 @@ impl Project {
                 new_ids.push(obj_id);
             }
         }
-        // Name each per-side group after its source group.
+        // Name each per-side group after its source group; carry the source
+        // group's overrides so a cut doesn't silently drop settings like
+        // enable_support.
         for ((src_g, side), new_g) in &group_remap {
-            let base = self.plates[active]
-                .scene
-                .groups
-                .get(src_g)
-                .map(|g| g.name.clone())
-                .unwrap_or_default();
-            self.plates[active]
-                .scene
-                .groups
-                .insert(*new_g, Group { name: format!("{base}{}", side.suffix()) });
+            let src = self.plates[active].scene.groups.get(src_g);
+            let base = src.map(|g| g.name.clone()).unwrap_or_default();
+            let overrides = src.map(|g| g.overrides.clone()).unwrap_or_default();
+            self.plates[active].scene.groups.insert(
+                *new_g,
+                Group { name: format!("{base}{}", side.suffix()), overrides },
+            );
         }
         // Remove the originals (prunes orphan meshes/material bindings + emits
         // ObjectRemoved/SelectionChanged).
@@ -2592,13 +2614,19 @@ mod tests {
 
     #[test]
     fn clone_objects_copies_geometry_overrides_and_group_structure() {
+        // The override-routing below consults the option schema.
+        let _ = slic3r_ffi::init(None, 3);
         let mut p = Project::default();
         let (mesh_a, a) = add_cube(&mut p);
         let (mesh_b, b) = add_cube(&mut p);
         let active_id = p.active_plate().id;
-        // Group the two cubes and give one of them a per-object override.
+        // Group the two cubes and set one override of each scope: the
+        // object-scope key routes to the group (a group slices as one
+        // object), the region-scope key stays on the member.
         p.group_objects(&[a, b], "duo".into()).unwrap();
         p.object_override_set(active_id, a, "layer_height".into(), "0.12".into())
+            .unwrap();
+        p.object_override_set(active_id, a, "wall_loops".into(), "4".into())
             .unwrap();
         let src_group = p.active_plate().scene.objects[&a].group.unwrap();
 
@@ -2639,11 +2667,19 @@ mod tests {
         assert_eq!(p.active_plate().scene.groups[&g0].name, "duo");
         assert_eq!(p.active_plate().scene.groups[&g1].name, "duo");
 
-        // The override on `a` rode along to each copy's clone-of-a; the
-        // clone-of-b carries none.
+        // The group-routed override rode along onto each copy's fresh group;
+        // the member-stored (region-scope) one rode each copy's clone-of-a.
+        assert_eq!(
+            p.active_plate().scene.groups[&g0].overrides["layer_height"],
+            "0.12",
+        );
+        assert_eq!(
+            p.active_plate().scene.groups[&g1].overrides["layer_height"],
+            "0.12",
+        );
         let ov = &p.active_plate().scene.object_overrides;
-        assert_eq!(ov[&c0a]["layer_height"], "0.12");
-        assert_eq!(ov[&c1a]["layer_height"], "0.12");
+        assert_eq!(ov[&c0a]["wall_loops"], "4");
+        assert_eq!(ov[&c1a]["wall_loops"], "4");
         assert!(!ov.contains_key(&c0b));
         assert!(!ov.contains_key(&c1b));
     }

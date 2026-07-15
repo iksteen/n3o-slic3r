@@ -23,6 +23,7 @@ export const PLATE_EDIT_EVENTS = [
   "scene:object_removed",
   "scene:material_slot_changed",
   "scene:object_overrides_changed",
+  "scene:group_overrides_changed",
   "scene:project_overrides_changed",
   "scene:plate_changed",
   "scene:bed_changed",

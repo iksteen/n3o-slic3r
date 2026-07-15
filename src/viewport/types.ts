@@ -23,9 +23,14 @@ export type PlateId = number;
 /** Stable group identity — a UUID string (Rust `GroupId(Uuid)`). */
 export type GroupId = string;
 
-/** Per-group state (the display name today). */
+/** Per-group state: display name + the group's cascade overrides.
+ *  A group slices as one libslic3r ModelObject, so object-scope
+ *  settings (`enable_support`, `layer_height`, …) live here and apply
+ *  to every member; members keep only region-scope overrides. The
+ *  backend omits `overrides` when empty. */
 export interface Group {
   name: string;
+  overrides?: Record<string, string>;
 }
 
 /** Column-major [f32; 16] matrix matching glam's `Mat4`.

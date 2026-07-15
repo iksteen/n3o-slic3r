@@ -95,10 +95,13 @@ export type PlateObject = {
 };
 
 /** Minimal selected-object shape the Object tab needs. Scene state
- *  carries more; the panel only reads name + id. */
+ *  carries more; the panel only reads name + id + kind. `kind` is
+ *  "group" when the selection is a whole group — the tab reads
+ *  "Group: name" because object-scope edits apply to every member. */
 export type SelectedObject = {
   id: number;
   name: string;
+  kind: "object" | "group";
 };
 
 /** Complexity-mode segments. Tiers come from libslic3r's per-option mode
@@ -314,11 +317,15 @@ export function SettingsPanel(props: SettingsPanelProps) {
             }
             title={
               objectTabAvailable
-                ? `Per-object overrides for ${selectedObject!.name}`
+                ? selectedObject!.kind === "group"
+                  ? `Overrides for every object in ${selectedObject!.name}`
+                  : `Per-object overrides for ${selectedObject!.name}`
                 : "Select an object on the plate to edit per-object overrides"
             }
           >
-            {objectTabAvailable ? `Object: ${selectedObject!.name}` : "Object"}
+            {objectTabAvailable
+              ? `${selectedObject!.kind === "group" ? "Group" : "Object"}: ${selectedObject!.name}`
+              : "Object"}
           </button>
           {pluginSurface && (
             <>
@@ -524,7 +531,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
           }
           objectTier={
             contextLayer === "object" && selectedObject != null
-              ? { label: `Object: ${selectedObject.name}` }
+              ? {
+                  label: `${selectedObject.kind === "group" ? "Group" : "Object"}: ${selectedObject.name}`,
+                }
               : null
           }
         />

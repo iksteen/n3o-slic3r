@@ -300,7 +300,9 @@ export function ObjectsPanel({
   };
 
   const renderGroup = (g: GroupId, members: SceneObject[]): ReactNode => {
-    const name = groups[g]?.name ?? `Group ${groupOrdinal.get(g) ?? "?"}`;
+    // `||`, not `??`: the override write path creates unnamed entries
+    // (name "") — an empty label would be an unclickable rename target.
+    const name = groups[g]?.name || `Group ${groupOrdinal.get(g) ?? "?"}`;
     const isCollapsed = collapsed.has(g);
     const swatches: string[] = [];
     for (const m of members) {
