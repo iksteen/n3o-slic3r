@@ -28,6 +28,7 @@ import {
   deleteObject,
   groupObjects,
   loadModelFromDialog,
+  loadModelWithSettingsFromDialog,
   moveObjectsToPlate,
   renameGroup,
   setObjectMaterial,
@@ -165,6 +166,12 @@ export function ObjectsPanel({
     setShowLibrary(false);
     void loadModelFromDialog().catch((err) =>
       console.error("[objects] loadModelFromDialog failed", err),
+    );
+  };
+  const onAddModelWithSettings = (): void => {
+    setShowLibrary(false);
+    void loadModelWithSettingsFromDialog().catch((err) =>
+      console.error("[objects] loadModelWithSettingsFromDialog failed", err),
     );
   };
   const onGroup = (): void => {
@@ -455,6 +462,14 @@ export function ObjectsPanel({
                   <div className="objects-add-sep" />
                   <button className="objects-add-item" role="menuitem" onClick={onAddModel}>
                     Add model…
+                  </button>
+                  <button
+                    className="objects-add-item"
+                    role="menuitem"
+                    onClick={onAddModelWithSettings}
+                    title="Load a 3MF's models with their print settings applied as object overrides"
+                  >
+                    Add model + settings…
                   </button>
                 </div>
               </>

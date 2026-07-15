@@ -38,8 +38,8 @@ export async function addPrimitive(kind: PrimitiveKind): Promise<ObjectId> {
 /** Load a model file's geometry onto the active plate. `.stl`/`.obj`
  *  load a single mesh (then select it); `.3mf` loads only the geometry
  *  (objects + transforms + per-part extruder hints) via
- *  `scene_load_3mf` — NOT the project settings (that's the separate
- *  "open project" import). */
+ *  `scene_load_3mf` — no settings (use `loadModelWithSettingsFromDialog`
+ *  for those, or "open project" for a full import). */
 export async function loadModelFromPath(path: string): Promise<void> {
   if (path.toLowerCase().endsWith(".3mf")) {
     // Geometry-only import — multiple objects, no single one to select.
@@ -61,6 +61,19 @@ export async function loadModelFromDialog(): Promise<void> {
   });
   if (path == null) return; // cancelled
   await loadModelFromPath(path);
+}
+
+/** Pick a `.3mf` and load its models WITH their settings: the source
+ *  project's config (diffed against the current plate, object-applicable
+ *  keys only) applies to every imported object, each object's own
+ *  settings merged over it. Filament/machine settings never come along —
+ *  n3o owns the printer and the filament. Cancelling is a no-op. */
+export async function loadModelWithSettingsFromDialog(): Promise<void> {
+  const path = await openFile({
+    filters: [{ name: "3MF project", extensions: ["3mf"] }],
+  });
+  if (path == null) return; // cancelled
+  await invoke("scene_load_3mf", { path, importSettings: true });
 }
 
 /** Remove one object from the active plate. */

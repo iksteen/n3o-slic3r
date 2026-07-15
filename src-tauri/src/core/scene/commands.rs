@@ -1238,10 +1238,20 @@ pub struct LoadedProject {
 /// becomes a scene object at its file-supplied transform with the
 /// per-part extruder assignment preserved; BBS/Orca metadata
 /// extensions are honored where present.
+///
+/// `import_settings` (the "Add model + settings…" path) additionally
+/// carries the file's settings onto the imported objects: the source
+/// project's config, diffed against the active plate's effective
+/// baseline and gated to object-applicable keys, applies to every
+/// object; each object's own `model_settings.config` entries merge over
+/// that. Filament/machine keys never come along — n3o owns the printer
+/// and the filament. Without the flag the import is geometry-only
+/// (objects, transforms, groups, paint, extruder hints — no settings).
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
 pub fn scene_load_3mf(
     path: String,
+    import_settings: Option<bool>,
     window: Window,
     state: State<Arc<Mutex<Project>>>,
 ) -> Result<LoadedProject, String> {
@@ -1249,8 +1259,56 @@ pub fn scene_load_3mf(
     use crate::core::threemf;
 
     let project = threemf::load_3mf(std::path::Path::new(&path)).map_err(|e| e.to_string())?;
+    let import_settings = import_settings.unwrap_or(false);
+
+    // Parse the source project's config up front (before the state lock
+    // moves `project`). A with-settings pick of a vanilla 3MF (no BBS
+    // config) degrades to a geometry-only load rather than failing.
+    let foreign_settings = if import_settings {
+        match &project.embedded_settings {
+            Some(raw) => match crate::core::orca_import::OrcaProjectSettings::parse(raw.as_bytes())
+            {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    tracing::warn!("add-model-with-settings: {e}; importing geometry only");
+                    None
+                }
+            },
+            None => {
+                tracing::warn!(
+                    "add-model-with-settings: no project_settings.config in {path}; importing geometry only",
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+
+    // The plate-level portion of the imported settings: the source
+    // config diffed against this plate's effective baseline, restricted
+    // to object-applicable keys. Computed once; applied to every
+    // imported object below, under its own per-object entries.
+    let plate_diff: std::collections::BTreeMap<String, String> = match &foreign_settings {
+        Some(settings) => {
+            let baseline = crate::core::project::resolve::plate_effective_baseline(
+                &s,
+                s.active_plate().id,
+            )?;
+            let outcome =
+                crate::core::orca_import::object_applicable_overrides(settings, &baseline);
+            tracing::info!(
+                applied = outcome.overrides.len(),
+                redundant = outcome.redundant.len(),
+                incompatible = outcome.incompatible.len(),
+                "add-model-with-settings: plate-level diff",
+            );
+            outcome.overrides
+        }
+        None => Default::default(),
+    };
 
     // Register every mesh first, capturing the allocated MeshIds in
     // the same order as Project3mf.meshes so ProjectObject.mesh_idx
@@ -1280,9 +1338,18 @@ pub fn scene_load_3mf(
             // remap needed.
             group: obj.group,
         });
-        // Carry any per-object setting overrides from the source 3MF
-        // (model_settings.config) into the scene, scope-gated.
-        s.apply_imported_object_overrides(object_id, &obj.overrides);
+        // Settings ride only the "Add model + settings…" path: the
+        // plate-level diff first, the object's own model_settings entries
+        // over it, routed group/member exactly like panel edits. The
+        // plain path imports geometry only.
+        if import_settings {
+            all_events.extend(s.apply_imported_object_settings(
+                active_plate_id,
+                object_id,
+                &plate_diff,
+                &obj.overrides,
+            ));
+        }
         let obj_clone = s
             .active_plate()
             .scene

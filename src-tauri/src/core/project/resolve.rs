@@ -208,6 +208,43 @@ fn compose_instance_cascade_and_ctx(
     Ok((cascade, ctx))
 }
 
+/// The plate's *effective* config as a flat `key → value` map: the bound
+/// instance's fragment cascade with the user + project override tiers
+/// folded in — what an object on this plate resolves against before its
+/// own overrides. The baseline "Add model + settings" diffs a foreign
+/// project's config against. Empty for an unbound plate (no baseline →
+/// every foreign key counts as a difference, the safe direction).
+pub fn plate_effective_baseline(
+    p: &Project,
+    plate_id: PlateId,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let plate = p
+        .plate(plate_id)
+        .ok_or_else(|| format!("unknown plate id {plate_id:?}"))?;
+    let Some(instance_id) = plate.printer_instance_id() else {
+        return Ok(std::collections::BTreeMap::new());
+    };
+    let instance = crate::core::printer::lookup_instance(instance_id)
+        .ok_or_else(|| format!("unknown printer instance `{instance_id}`"))?;
+    let (cascade, ctx) = compose_instance_cascade_and_ctx(&instance, plate.quality_profile.as_deref())?;
+    let user: std::collections::BTreeMap<String, String> =
+        p.user_overrides.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let project: std::collections::BTreeMap<String, String> = plate
+        .project_overrides
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let tiers = crate::core::cascade::OverrideTiers {
+        user: tier("<user-overrides>", &user),
+        project: tier("<project-overrides>", &project),
+        object: None,
+    };
+    let resolved = crate::core::cascade::to_resolved(
+        &crate::core::cascade::resolve_with_overrides(&cascade, &tiers, &ctx),
+    );
+    Ok(resolved.into_iter().map(|(k, v)| (k, v.value)).collect())
+}
+
 /// Wrap a flat override map as a single-source override tier labeled
 /// `label`, or an empty tier when there's nothing to override.
 fn tier(

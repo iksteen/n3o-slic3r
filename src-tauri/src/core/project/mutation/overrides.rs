@@ -35,6 +35,36 @@ impl Project {
             .insert(object_id, gated.into_iter().collect());
     }
 
+    /// Apply an imported object's full settings ("Add model + settings"):
+    /// `plate_diff` (the source project's config diffed against this
+    /// plate) under the object's own raw `model_settings.config` entries.
+    /// Gated to object-applicable keys, filament-index keys dropped (n3o
+    /// owns filament identity), and written through
+    /// [`Self::object_override_set`] so object-scope keys route to the
+    /// imported group and region keys to the member.
+    pub fn apply_imported_object_settings(
+        &mut self,
+        plate_id: PlateId,
+        object_id: ObjectId,
+        plate_diff: &std::collections::BTreeMap<String, String>,
+        own: &std::collections::BTreeMap<String, String>,
+    ) -> Vec<SceneEvent> {
+        let mut raw = plate_diff.clone();
+        raw.extend(own.iter().map(|(k, v)| (k.clone(), v.clone())));
+        let merged = crate::core::schema::gate_object_overrides(&raw, object_id.0);
+        let mut events = Vec::new();
+        for (key, value) in merged {
+            if crate::core::schema::is_filament_index_key(&key) {
+                continue;
+            }
+            match self.object_override_set(plate_id, object_id, key, value) {
+                Ok(evts) => events.extend(evts),
+                Err(e) => tracing::warn!("imported object settings: {e}"),
+            }
+        }
+        events
+    }
+
     /// Upsert one override on a specific (plate, object).
     ///
     /// A grouped member routes *object-scope* keys to its group's
@@ -331,6 +361,41 @@ mod tests {
         assert!(p.active_plate().scene.groups[&group_id]
             .overrides
             .is_empty());
+    }
+
+    #[test]
+    fn apply_imported_object_settings_merges_gates_and_routes() {
+        let _ = slic3r_ffi::init(None, 3);
+        let mut p = Project::default();
+        let (_, a) = add_cube(&mut p);
+        let (_, b) = add_cube(&mut p);
+        p.group_objects(&[a, b], "import".into()).unwrap();
+        let group_id = p.active_plate().scene.objects[&a].group.unwrap();
+        let plate_id = p.active_plate().id;
+
+        let plate_diff = std::collections::BTreeMap::from([
+            ("enable_support".to_string(), "1".to_string()), // object scope → group
+            ("wall_loops".to_string(), "3".to_string()),     // region scope → member
+        ]);
+        let own = std::collections::BTreeMap::from([
+            // Object's own entry wins over the plate diff.
+            ("wall_loops".to_string(), "5".to_string()),
+            // Print-scope + filament-index keys never land.
+            ("skirt_loops".to_string(), "2".to_string()),
+            ("support_filament".to_string(), "2".to_string()),
+        ]);
+        p.apply_imported_object_settings(plate_id, a, &plate_diff, &own);
+
+        let scene = &p.active_plate().scene;
+        assert_eq!(scene.groups[&group_id].overrides["enable_support"], "1");
+        let member = &scene.object_overrides[&a];
+        assert_eq!(member["wall_loops"], "5", "object's own value wins");
+        for key in ["skirt_loops", "support_filament"] {
+            assert!(
+                !member.contains_key(key) && !scene.groups[&group_id].overrides.contains_key(key),
+                "{key} must not be imported",
+            );
+        }
     }
 
     #[test]

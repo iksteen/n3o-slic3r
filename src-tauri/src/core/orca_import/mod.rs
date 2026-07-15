@@ -390,6 +390,65 @@ pub fn compute_overrides(
     out
 }
 
+/// Per-option validity from our engine's schema, used to drop foreign
+/// values our libslic3r would reject (fork-divergence): the enum value
+/// set (e.g. Bambu's `ironing_pattern = "zig-zag"`) and the set of numeric
+/// options that disallow negatives (`min >= 0`), to catch Bambu's `-1`
+/// "auto" sentinels (`tree_support_wall_count`, `raft_first_layer_expansion`).
+/// Built in one pass over `option_defs`.
+fn engine_validity_sets() -> (
+    BTreeMap<String, Vec<String>>,
+    std::collections::HashSet<String>,
+) {
+    let defs = slic3r_ffi::option_defs();
+    let enum_sets: BTreeMap<String, Vec<String>> = defs
+        .iter()
+        .filter(|d| !d.enum_values.is_empty())
+        .map(|d| (d.key.clone(), d.enum_values.clone()))
+        .collect();
+    let nonneg: std::collections::HashSet<String> = defs
+        .iter()
+        .filter(|d| {
+            matches!(
+                d.ty,
+                slic3r_ffi::OptType::Int
+                    | slic3r_ffi::OptType::Ints
+                    | slic3r_ffi::OptType::Float
+                    | slic3r_ffi::OptType::Floats
+            ) && d.min >= 0.0
+        })
+        .map(|d| d.key.clone())
+        .collect();
+    (enum_sets, nonneg)
+}
+
+/// The object-applicable override map for "Add model + settings": the
+/// foreign project's config restricted to keys libslic3r honors per
+/// object (object/region scope), minus filament-index-valued keys,
+/// diffed against `baseline` (the destination plate's effective config)
+/// with the same normalization + fork-divergence validation as the
+/// full project import. Keys equal to the baseline drop out — the
+/// imported object should pin only what actually differs from the
+/// plate it lands on.
+pub fn object_applicable_overrides(
+    settings: &OrcaProjectSettings,
+    baseline: &BTreeMap<String, String>,
+) -> OverrideOutcome {
+    let part = partition(settings);
+    let object_keys: Vec<String> = part
+        .process
+        .into_iter()
+        .filter(|k| crate::core::schema::is_object_overridable(k))
+        .filter(|k| !crate::core::schema::is_filament_index_key(k))
+        .collect();
+    let part = KeyPartition {
+        process: object_keys,
+        ..Default::default()
+    };
+    let (enum_sets, nonneg) = engine_validity_sets();
+    compute_overrides(settings, &part, baseline, &enum_sets, &nonneg, None)
+}
+
 /// Whether every element of a (possibly per-extruder, comma-joined) enum
 /// value is in our engine's value set. `valid = None` means the key isn't
 /// an enum we track — nothing to validate, so it passes.
@@ -819,31 +878,7 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
         Some((instance, _)) => resolve_baseline(instance, &settings, process_slug.as_deref()),
         None => BTreeMap::new(),
     };
-    // Per-option validity from our engine's schema, used to drop foreign
-    // values our libslic3r would reject (fork-divergence): the enum value
-    // set (e.g. Bambu's `ironing_pattern = "zig-zag"`) and the set of numeric
-    // options that disallow negatives (`min >= 0`), to catch Bambu's `-1`
-    // "auto" sentinels (`tree_support_wall_count`, `raft_first_layer_expansion`).
-    // Built in one pass over `option_defs`.
-    let defs = slic3r_ffi::option_defs();
-    let enum_sets: BTreeMap<String, Vec<String>> = defs
-        .iter()
-        .filter(|d| !d.enum_values.is_empty())
-        .map(|d| (d.key.clone(), d.enum_values.clone()))
-        .collect();
-    let nonneg: std::collections::HashSet<String> = defs
-        .iter()
-        .filter(|d| {
-            matches!(
-                d.ty,
-                slic3r_ffi::OptType::Int
-                    | slic3r_ffi::OptType::Ints
-                    | slic3r_ffi::OptType::Float
-                    | slic3r_ffi::OptType::Floats
-            ) && d.min >= 0.0
-        })
-        .map(|d| d.key.clone())
-        .collect();
+    let (enum_sets, nonneg) = engine_validity_sets();
     // Intent-based import: when the project declares which keys it changed
     // from its system preset, import only those (everything else resolves
     // from the adopted process). Absent/null → full delta.
@@ -1015,6 +1050,36 @@ mod tests {
             c.contains(';') && !c.contains(','),
             "filament_colour must be semicolon-joined: {c}"
         );
+    }
+
+    #[test]
+    fn object_applicable_overrides_gates_scope_filament_keys_and_diffs() {
+        // Scope gating + filament-index drop consult the FFI option table.
+        let _ = slic3r_ffi::init(None, 3);
+        let s = OrcaProjectSettings {
+            settings: BTreeMap::from([
+                // Object-scope, differs from baseline → kept.
+                ("enable_support".into(), serde_json::json!("1")),
+                // Region-scope, matches baseline → redundant, dropped.
+                ("wall_loops".into(), serde_json::json!("3")),
+                // Print-scope → not object-applicable, dropped.
+                ("skirt_loops".into(), serde_json::json!("2")),
+                // Object-scope but a filament index → dropped on principle.
+                ("support_filament".into(), serde_json::json!("2")),
+            ]),
+        };
+        let baseline = BTreeMap::from([
+            ("enable_support".to_string(), "0".to_string()),
+            ("wall_loops".to_string(), "3".to_string()),
+        ]);
+
+        let out = object_applicable_overrides(&s, &baseline);
+        assert_eq!(
+            out.overrides,
+            BTreeMap::from([("enable_support".to_string(), "1".to_string())]),
+            "only the differing object-applicable key survives",
+        );
+        assert!(out.redundant.contains(&"wall_loops".to_string()));
     }
 
     #[test]

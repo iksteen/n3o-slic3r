@@ -158,6 +158,17 @@ pub fn is_object_scope_only(key: &str) -> bool {
     schema_by_key(key).is_some_and(|s| s.scope.is_object() && !s.scope.is_region())
 }
 
+/// Whether `key`'s *value* is a 1-based filament index into its own
+/// project's filament table (`support_filament`, `outer_wall_filament_id`,
+/// …). Such values are meaningless outside the project that authored them
+/// — n3o owns filament identity via slot bindings — so cross-project
+/// imports drop these keys. ponytail: name-suffix heuristic; libslic3r
+/// declares these as plain ConfigOptionInt with no structural "filament
+/// reference" marker to read instead (exact against the current pin).
+pub fn is_filament_index_key(key: &str) -> bool {
+    key.ends_with("_filament") || key.ends_with("_filament_id")
+}
+
 /// Filter a per-object override map down to the keys libslic3r honors per
 /// object (object/region scope), returned as a `BTreeMap` for deterministic
 /// downstream ordering. The single gate shared by the slice-time builder and

@@ -263,6 +263,10 @@
     color: var(--text);
     font-size: 12px;
     cursor: pointer;
+    /* The menu shrink-wraps to min-content (its containing block is the
+       tiny add-button wrapper), so a multi-word label wraps unless it's
+       one unbreakable line. */
+    white-space: nowrap;
   }
   .objects-add-item:hover { background: var(--surface-2); }
   .objects-add-sep {
