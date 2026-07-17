@@ -205,6 +205,30 @@ pub(super) fn plate_nozzle_diameters(project: &Mutex<Project>, plate_id: u32) ->
     }
 }
 
+/// The firmware `extruder_map_table` for the plate's bound instance, as
+/// `(logical, physical)` pairs — one per logical slot. The table is
+/// sticky on the printer, so we always send the full width to overwrite
+/// whatever a prior session (or Snapmaker's own software) left behind —
+/// otherwise a stale non-identity table silently misroutes our print.
+///
+/// Identity (`logical == physical`) while the slice path still rewrites
+/// object extruders to physical toolhead indices: the G-code's `T<n>` is
+/// already physical, so the firmware must pass it through unchanged.
+/// Empty when the plate isn't bound / the instance is gone.
+pub(super) fn u1_map_table(project: &Mutex<Project>, plate_id: u32) -> Vec<(u8, u8)> {
+    let inst_id = {
+        let p = project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        p.plate(PlateId(plate_id))
+            .and_then(|pl| pl.printer_instance_id().map(str::to_owned))
+    };
+    let Some(inst) = inst_id.and_then(|id| crate::core::printer::lookup_instance(&id)) else {
+        return Vec::new();
+    };
+    (0..inst.extruders.len() as u8).map(|i| (i, i)).collect()
+}
+
 /// The U1's flow-calibration gating facts, read off the sliced G-code's
 /// own footer: per-extruder filament use in mm (index-aligned with the
 /// G-code's filament order — for a toolchanger those indices ARE the

@@ -141,6 +141,11 @@ pub struct U1StartOptions {
     /// it against the actual toolhead hardware for every used extruder
     /// (a missing list fails as `nozzle diameter mismatch: f_0 != e_…`).
     pub nozzle_diameters: Vec<f64>,
+    /// The firmware's `extruder_map_table` as `(logical, physical)` pairs,
+    /// one per logical slot. Sent as `MAP_TABLE`; the table is sticky on
+    /// the printer, so we always send the full table to overwrite any
+    /// stale mapping a prior session (or Snapmaker's own software) left.
+    pub map_table: Vec<(u8, u8)>,
 }
 
 /// What [`Driver::send`] returns on success. The id correlates
@@ -383,6 +388,7 @@ mod tests {
                 extruders_used: vec![0, 1],
                 filament_used_mm: vec![500.0, 600.0],
                 nozzle_diameters: vec![0.4, 0.4],
+                map_table: vec![(0, 0), (1, 1)],
             }),
         };
         let s = serde_json::to_string(&u1).unwrap();

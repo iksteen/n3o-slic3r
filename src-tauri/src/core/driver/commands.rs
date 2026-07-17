@@ -26,7 +26,7 @@ use super::snapmaker::{mqtt_status, snap_token};
 use super::send::{
     apply_pre_send, collect_ams_bindings, collect_ams_mapping, derive_send_names,
     plate_nozzle_diameters, plate_printer_model, plate_send_options, read_gcode_bytes,
-    u1_usage_from_gcode, wrap_gcode_as_3mf,
+    u1_map_table, u1_usage_from_gcode, wrap_gcode_as_3mf,
 };
 use super::status::PrinterStatus;
 use super::traits::{
@@ -512,6 +512,7 @@ pub async fn driver_send_plate(
                         extruders_used,
                         filament_used_mm,
                         nozzle_diameters: plate_nozzle_diameters(&project, plate_id),
+                        map_table: u1_map_table(&project, plate_id),
                     })
                 }
                 _ => None,

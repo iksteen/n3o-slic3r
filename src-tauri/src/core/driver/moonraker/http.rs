@@ -155,6 +155,15 @@ fn u1_start_script(file_name: &str, start: &U1StartOptions) -> String {
             .join(",");
         script.push_str(&format!(" NOZZLE_DIAMETER_LIST=\"[{list}]\""));
     }
+    if !start.map_table.is_empty() {
+        let pairs = start
+            .map_table
+            .iter()
+            .map(|(logical, physical)| format!("[{logical},{physical}]"))
+            .collect::<Vec<_>>()
+            .join(",");
+        script.push_str(&format!(" MAP_TABLE=\"[{pairs}]\""));
+    }
     script
 }
 
@@ -246,13 +255,32 @@ mod tests {
             extruders_used: vec![0, 1],
             filament_used_mm: vec![500.0, 600.6],
             nozzle_diameters: vec![0.4, 0.4, 0.6, 0.4],
+            map_table: vec![(0, 0), (1, 1), (2, 2), (3, 3)],
         };
         assert_eq!(
             u1_start_script("MyPrint_Lid.gcode", &start),
             "SDCARD_PRINT_FILE_WITH_PARAMETERS FILENAME=\"MyPrint_Lid.gcode\" \
              BED_LEVEL=1 FLOW_CALIBRATE=1 SHAPER_CALIBRATE=0 TIME_LAPSE_CAMERA=1 \
              FLOW_CALIBRATE_EXTRUDERS=\"[0,1]\" FILAMENT_USED_MM=\"[500.0,600.6]\" \
-             NOZZLE_DIAMETER_LIST=\"[0.4,0.4,0.6,0.4]\""
+             NOZZLE_DIAMETER_LIST=\"[0.4,0.4,0.6,0.4]\" \
+             MAP_TABLE=\"[[0,0],[1,1],[2,2],[3,3]]\""
+        );
+    }
+
+    #[test]
+    fn u1_start_script_encodes_a_cross_mapping() {
+        // Non-identity table: material 0 → toolhead 2, material 1 → 0.
+        let start = U1StartOptions {
+            options: Default::default(),
+            extruders_used: vec![],
+            filament_used_mm: vec![],
+            nozzle_diameters: vec![],
+            map_table: vec![(0, 2), (1, 0), (2, 2), (3, 3)],
+        };
+        let script = u1_start_script("x.gcode", &start);
+        assert!(
+            script.ends_with(" MAP_TABLE=\"[[0,2],[1,0],[2,2],[3,3]]\""),
+            "{script}"
         );
     }
 
@@ -266,6 +294,7 @@ mod tests {
             extruders_used: vec![],
             filament_used_mm: vec![],
             nozzle_diameters: vec![],
+            map_table: vec![],
         };
         let script = u1_start_script("x.gcode", &start);
         assert_eq!(
@@ -275,6 +304,7 @@ mod tests {
         );
         assert!(!script.contains("FLOW_CALIBRATE_EXTRUDERS"));
         assert!(!script.contains("FILAMENT_USED_MM"));
+        assert!(!script.contains("MAP_TABLE"));
     }
 
     // ---- upload + start ----
