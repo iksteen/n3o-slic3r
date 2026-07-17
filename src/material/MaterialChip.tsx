@@ -51,6 +51,11 @@ export interface MaterialChipProps {
   useCount: number;
   onPickSlot: (slot: SlotRef) => void;
   onClear: () => void;
+  /** Optional gate: when provided, slots for which it returns false are
+   *  shown disabled and can't be picked (the send dialog uses this to
+   *  restrict routing to slots holding a compatible filament type, à la
+   *  Bambu Studio). Omitted = every slot pickable (the settings panel). */
+  isSlotEnabled?: (slot: FlatSlotOption) => boolean;
 }
 
 export function MaterialChip({
@@ -61,6 +66,7 @@ export function MaterialChip({
   useCount,
   onPickSlot,
   onClear,
+  isSlotEnabled,
 }: MaterialChipProps): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -131,11 +137,14 @@ export function MaterialChip({
               !!current &&
               current.ref.extruder === s.ref.extruder &&
               current.ref.slot === s.ref.slot;
+            const enabled = isSlotEnabled ? isSlotEnabled(s) : true;
             return (
               <button
                 key={`${s.ref.extruder}-${s.ref.slot}`}
                 type="button"
-                className={`ptpm-item ptpm-row${isActive ? " active" : ""}`}
+                className={`ptpm-item ptpm-row${isActive ? " active" : ""}${enabled ? "" : " disabled"}`}
+                disabled={!enabled}
+                title={enabled ? undefined : "Filament type doesn't match this material"}
                 onClick={() => {
                   onPickSlot(s.ref);
                   setOpen(false);

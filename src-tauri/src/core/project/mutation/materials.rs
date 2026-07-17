@@ -175,7 +175,56 @@ impl Project {
         if prev == Some(slot) {
             return Ok(Vec::new());
         }
-        Ok(vec![SceneEvent::MaterialSlotChanged { plate_id }])
+        let filament_type_changed = self.rebind_changes_filament_type(plate_idx, prev, slot);
+        Ok(vec![SceneEvent::MaterialSlotChanged {
+            plate_id,
+            filament_type_changed,
+        }])
+    }
+
+    /// Whether swapping a material's bound slot from `prev` to `new`
+    /// changes the resolved filament **type** — which stales a slice's
+    /// baked temps — as opposed to a pure routing change (same type: the
+    /// firmware routes at print time, the G-code stays valid).
+    /// Conservatively `true` when a type can't be resolved (no bound
+    /// instance / unknown filament), so a real change never slips through
+    /// as routing-only. `prev == None` compares against the instance's
+    /// default fragment (what an unbound material sliced with).
+    fn rebind_changes_filament_type(
+        &self,
+        plate_idx: usize,
+        prev: Option<crate::core::printer::SlotRef>,
+        new: crate::core::printer::SlotRef,
+    ) -> bool {
+        let Some(instance) = self.plates[plate_idx]
+            .printer_instance_id()
+            .and_then(crate::core::printer::lookup_instance)
+        else {
+            return true;
+        };
+        let base_type = |ident: &str| crate::core::filament::lookup(ident).map(|f| f.base_type);
+        let slot_base_type = |sr: crate::core::printer::SlotRef| -> Option<String> {
+            let slot = instance
+                .extruders
+                .get(sr.extruder as usize)?
+                .slots
+                .get(sr.slot as usize)?;
+            let ident = slot
+                .filament_identity
+                .as_deref()
+                .unwrap_or(&instance.default_filament_fragment_slug);
+            base_type(ident)
+        };
+        let new_type = slot_base_type(new);
+        let prev_type = match prev {
+            Some(sr) => slot_base_type(sr),
+            None => base_type(&instance.default_filament_fragment_slug),
+        };
+        match (prev_type, new_type) {
+            (Some(a), Some(b)) => a != b,
+            // Couldn't resolve one side → be safe and invalidate.
+            _ => true,
+        }
     }
 
     /// Drop the mapping for `model_material`. Silent no-op when there
@@ -195,7 +244,12 @@ impl Project {
         {
             return Ok(Vec::new());
         }
-        Ok(vec![SceneEvent::MaterialSlotChanged { plate_id }])
+        // Unbinding reverts the material to the instance default fragment,
+        // which may differ from the slot it was sliced with.
+        Ok(vec![SceneEvent::MaterialSlotChanged {
+            plate_id,
+            filament_type_changed: true,
+        }])
     }
 
     /// Set an object's material — its 1-based `extruder_id` — on the
@@ -235,7 +289,12 @@ impl Project {
                 plate_id,
                 object: clone,
             },
-            SceneEvent::MaterialSlotChanged { plate_id },
+            // Accompanies ObjectUpdated (which invalidates the slice); the
+            // flag is moot but kept conservative.
+            SceneEvent::MaterialSlotChanged {
+                plate_id,
+                filament_type_changed: true,
+            },
         ])
     }
 
@@ -414,6 +473,67 @@ mod tests {
                 .any(|e| matches!(e, SceneEvent::MaterialSlotChanged { .. })),
             "delete that orphans a material must emit MaterialSlotChanged so the panel refreshes",
         );
+    }
+
+    /// The key behavior for the send-dialog allocation: rebinding a
+    /// material to a slot holding the SAME filament type is pure
+    /// print-time routing — `filament_type_changed` is false, so the
+    /// frontend leaves the sliced G-code valid.
+    #[test]
+    fn rebind_within_same_filament_type_is_routing_only() {
+        let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
+        let mut p = Project::default();
+        p.plates[0].set_printer(Some("snappy".into()), None);
+        add_cube_with_material(&mut p, 1); // auto-binds M1 to toolhead 0 (generic-pla)
+
+        // Toolhead 1 also carries generic-pla → same base type.
+        let events = p
+            .set_material_slot(PlateId(1), 1, SlotRef { extruder: 1, slot: 0 })
+            .expect("rebind");
+        match events.as_slice() {
+            [SceneEvent::MaterialSlotChanged {
+                filament_type_changed,
+                ..
+            }] => assert!(
+                !filament_type_changed,
+                "same-type rebind must be routing-only (no re-slice)"
+            ),
+            other => panic!("expected one MaterialSlotChanged, got {other:?}"),
+        }
+    }
+
+    /// A rebind that changes the bound filament TYPE stales the slice's
+    /// baked temps → `filament_type_changed` is true (the send dialog
+    /// blocks this via the same-type picker constraint, but the settings
+    /// panel can still do it).
+    #[test]
+    fn rebind_to_a_different_filament_type_stales_the_slice() {
+        let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
+        let mut p = Project::default();
+        p.plates[0].set_printer(Some("snappy".into()), None);
+        add_cube_with_material(&mut p, 1);
+
+        // Load toolhead 1 with ABS — a different base type from M1's
+        // PLA-default binding.
+        crate::core::printer::mutate_instance("snappy", |inst| {
+            inst.extruders[1].slots[0].filament_identity = Some("generic-abs".into());
+            Ok(())
+        })
+        .expect("load ABS on toolhead 1");
+
+        let events = p
+            .set_material_slot(PlateId(1), 1, SlotRef { extruder: 1, slot: 0 })
+            .expect("rebind");
+        match events.as_slice() {
+            [SceneEvent::MaterialSlotChanged {
+                filament_type_changed,
+                ..
+            }] => assert!(
+                filament_type_changed,
+                "PLA→ABS rebind must stale the slice"
+            ),
+            other => panic!("expected one MaterialSlotChanged, got {other:?}"),
+        }
     }
 
     #[test]

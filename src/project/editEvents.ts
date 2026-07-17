@@ -16,12 +16,17 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import { onEvents } from "../state/eventRouter";
 
 /** Plate-scoped content edits — each carries `data.plate_id` and invalidates
- *  just that plate. */
+ *  just that plate.
+ *
+ *  `scene:material_slot_changed` is deliberately NOT here: a material→slot
+ *  rebind is print-time routing (the firmware maps at print start), so it
+ *  only stales the slice when it changes the bound filament *type* — that
+ *  case is handled conditionally on the event's `filament_type_changed`
+ *  flag inside `listenPlateEdits`. */
 export const PLATE_EDIT_EVENTS = [
   "scene:object_added",
   "scene:object_updated",
   "scene:object_removed",
-  "scene:material_slot_changed",
   "scene:object_overrides_changed",
   "scene:group_overrides_changed",
   "scene:project_overrides_changed",
@@ -50,7 +55,7 @@ export const PROJECT_REPLACED_EVENTS = [
 ] as const;
 
 interface EditPayload {
-  data?: { plate_id?: number };
+  data?: { plate_id?: number; filament_type_changed?: boolean };
 }
 
 /** Subscribe to content edits via the shared event router. `onPlate(plateId)`
@@ -67,10 +72,17 @@ export function listenPlateEdits(
     const plateId = e.payload?.data?.plate_id;
     if (plateId != null) onPlate(plateId);
   });
+  // A material→slot rebind only stales the slice when it changes the bound
+  // filament *type*; a same-type rebind is pure print-time routing.
+  const offRebind = onEvents<EditPayload>(["scene:material_slot_changed"], (e) => {
+    const plateId = e.payload?.data?.plate_id;
+    if (plateId != null && e.payload?.data?.filament_type_changed) onPlate(plateId);
+  });
   const offAll = onEvents([PROJECT_WIDE_EDIT_EVENT], () => onAll());
   const offReplaced = onEvents(PROJECT_REPLACED_EVENTS, () => onAll());
   return () => {
     offPlate();
+    offRebind();
     offAll();
     offReplaced();
   };

@@ -122,10 +122,17 @@ pub enum SceneEvent {
     /// plate via the project snapshot to refresh the tab strip and the
     /// settings panel's resolved cascade.
     PlateChanged { plate_id: PlateId },
-    /// A plate's material → slot routing changed. The
-    /// frontend re-reads `plate.material_to_slot` via the snapshot
-    /// to refresh the slot binding panel.
-    MaterialSlotChanged { plate_id: PlateId },
+    /// A plate's material → slot routing changed. The frontend re-reads
+    /// `plate.material_to_slot` via the snapshot to refresh the binding
+    /// UI. `filament_type_changed` distinguishes a pure routing change
+    /// (same filament type — print-time route, the sliced G-code stays
+    /// valid) from one that changes the bound filament type (the slice's
+    /// baked temps are now stale → invalidate it). See the frontend's
+    /// `editEvents.ts`.
+    MaterialSlotChanged {
+        plate_id: PlateId,
+        filament_type_changed: bool,
+    },
     /// A project was written to disk. `path` is the
     /// container the writer just produced. UI updates the window
     /// title + recent-files list.
@@ -240,7 +247,10 @@ mod dirty_effect_tests {
         for e in [
             SceneEvent::UserOverridesChanged,
             SceneEvent::ProjectOverridesChanged { plate_id: P },
-            SceneEvent::MaterialSlotChanged { plate_id: P },
+            SceneEvent::MaterialSlotChanged {
+                plate_id: P,
+                filament_type_changed: true,
+            },
             SceneEvent::PlateChanged { plate_id: P },
             SceneEvent::BedChanged {
                 plate_id: P,

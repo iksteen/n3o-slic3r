@@ -25,15 +25,20 @@ import {
 import { onEvents } from "../state/eventRouter";
 import type { ConnectionSummary } from "./useDriverConnections";
 import type { DriverId, PrinterStatus, StatusUpdateEvent } from "./types";
+import type { PlateSnapshot } from "../viewport/types";
 
 export interface SendControlsProps {
   /** Cascade-side printer identity from the active plate's binding,
    *  or `null` if the plate isn't bound yet. */
   printerIdentity: string | null;
   /** The active plate's bound printer instance — supplies the driver
-   *  kind (which send options apply) and the sticky per-print options
-   *  the send dialog edits. `null` when the plate isn't bound. */
+   *  kind (which send options apply), the sticky per-print options, and
+   *  the target slots for the send dialog's material allocation. `null`
+   *  when the plate isn't bound. */
   instance: PrinterInstance | null;
+  /** Active plate snapshot — the send dialog's material→slot allocation
+   *  reads its materials + current routing from here. */
+  plate: PlateSnapshot | null;
   /** Auto-connection summary for the active plate's bound printer —
    *  supplies the live driver id and gates Send on a real connection. */
   connection: ConnectionSummary | null;
@@ -132,6 +137,7 @@ export function pendingSendDriverForTests(): DriverId | null {
 export function SendControls({
   printerIdentity,
   instance,
+  plate,
   connection,
   plateId,
   projectName,
@@ -270,6 +276,8 @@ export function SendControls({
         <SendOptionsDialog
           kind={optionsKind}
           initial={instance.send_options}
+          plate={plate}
+          instance={instance}
           onSend={(options) => void doSend(options)}
           onCancel={() => setOptionsOpen(false)}
         />

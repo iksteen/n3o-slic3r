@@ -1235,7 +1235,10 @@ impl Project {
             removed_materials.extend(self.mesh_painted_materials(*mid));
         }
         if self.prune_orphan_material_bindings(active, &removed_materials) {
-            events.push(SceneEvent::MaterialSlotChanged { plate_id });
+            events.push(SceneEvent::MaterialSlotChanged {
+                plate_id,
+                filament_type_changed: true,
+            });
         }
         self.prune_orphan_meshes(&removed_meshes);
         events
@@ -1380,6 +1383,7 @@ impl Project {
         if target_bindings_changed {
             events.push(SceneEvent::MaterialSlotChanged {
                 plate_id: to_plate,
+                filament_type_changed: true,
             });
         }
 
@@ -1395,6 +1399,7 @@ impl Project {
         if self.prune_orphan_material_bindings(from_idx, &moved_materials) {
             events.push(SceneEvent::MaterialSlotChanged {
                 plate_id: from_plate,
+                filament_type_changed: true,
             });
         }
         Ok(events)
@@ -2791,7 +2796,7 @@ mod tests {
         assert_eq!(p.plates[1].material_to_slot.get(&3), Some(&slot));
         assert!(events.iter().any(|e| matches!(
             e,
-            SceneEvent::MaterialSlotChanged { plate_id } if *plate_id == id_b
+            SceneEvent::MaterialSlotChanged { plate_id, .. } if *plate_id == id_b
         )));
     }
 
