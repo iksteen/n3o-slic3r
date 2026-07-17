@@ -34,6 +34,9 @@ use crate::core::driver::traits::DriverError;
 /// The `domain` the daemon recognizes for LAN monitor mode — the literal
 /// `"lan"`; other identifiers are rejected.
 const MONITOR_DOMAIN: &str = "lan";
+/// The daemon's capture watchdog hard-stops monitor mode at ~361s unless a
+/// fresh `start_monitor` resets it; re-send comfortably inside that window.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 const MQTT_KEEPALIVE: Duration = Duration::from_secs(30);
 const MQTT_CONNECT_BUDGET: Duration = Duration::from_secs(8);
 const MQTT_RESPONSE_BUDGET: Duration = Duration::from_secs(10);
@@ -57,6 +60,7 @@ pub struct SnapMonitorSession {
     client: AsyncClient,
     request_topic: String,
     driver: JoinHandle<()>,
+    heartbeat: JoinHandle<()>,
     pending: PendingResponses,
 }
 
@@ -84,14 +88,23 @@ impl SnapMonitorSession {
         let pending: PendingResponses = Arc::new(Mutex::new(HashMap::new()));
         let driver = tokio::spawn(drive_eventloop(
             eventloop,
+            client.clone(),
             response_topic,
+            Arc::clone(&pending),
+        ));
+
+        let request_topic = format!("{sn}/request");
+        let heartbeat = tokio::spawn(heartbeat_loop(
+            client.clone(),
+            request_topic.clone(),
             Arc::clone(&pending),
         ));
 
         Ok(Self {
             client,
-            request_topic: format!("{sn}/request"),
+            request_topic,
             driver,
+            heartbeat,
             pending,
         })
     }
@@ -116,6 +129,7 @@ impl SnapMonitorSession {
 
     /// Stop monitor mode and tear the session down within a tight budget.
     pub async fn release(self) {
+        self.heartbeat.abort();
         match tokio::time::timeout(STOP_MONITOR_BUDGET, self.stop_monitor()).await {
             Ok(Ok(())) => tracing::debug!("U1 camera monitor stopped"),
             Ok(Err(e)) => tracing::warn!(error = %e, "U1 camera stop_monitor failed"),
@@ -129,39 +143,63 @@ impl SnapMonitorSession {
     /// Publish `<method>` on `<sn>/request` and await the matching reply on
     /// `<sn>/response`.
     async fn invoke(&self, method: &str) -> Result<Value, DriverError> {
-        let req_id = unix_millis_id();
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().expect("pending lock").insert(req_id, tx);
+        invoke(&self.client, &self.request_topic, &self.pending, method).await
+    }
+}
 
-        let payload = serde_json::to_vec(&json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": {"domain": MONITOR_DOMAIN, "interval": 0, "expect_pw": true},
-            "id": req_id,
-        }))
-        .map_err(|e| DriverError::Other(format!("encode {method}: {e}")))?;
+/// Publish `<method>` on `<request_topic>` and await the matching reply,
+/// correlated by request id via `pending`. Shared by the session's own
+/// calls and the keep-alive heartbeat.
+async fn invoke(
+    client: &AsyncClient,
+    request_topic: &str,
+    pending: &PendingResponses,
+    method: &str,
+) -> Result<Value, DriverError> {
+    let req_id = unix_millis_id();
+    let (tx, rx) = oneshot::channel();
+    pending.lock().expect("pending lock").insert(req_id, tx);
 
-        if let Err(e) = self
-            .client
-            .publish(self.request_topic.clone(), QoS::AtLeastOnce, false, payload)
-            .await
-        {
-            self.pending.lock().expect("pending lock").remove(&req_id);
-            return Err(DriverError::Network(format!("publish {method}: {e}")));
+    let payload = serde_json::to_vec(&json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": {"domain": MONITOR_DOMAIN, "interval": 0, "expect_pw": true},
+        "id": req_id,
+    }))
+    .map_err(|e| DriverError::Other(format!("encode {method}: {e}")))?;
+
+    if let Err(e) = client
+        .publish(request_topic.to_owned(), QoS::AtLeastOnce, false, payload)
+        .await
+    {
+        pending.lock().expect("pending lock").remove(&req_id);
+        return Err(DriverError::Network(format!("publish {method}: {e}")));
+    }
+
+    match tokio::time::timeout(MQTT_RESPONSE_BUDGET, rx).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(_)) => Err(DriverError::Other(format!(
+            "response channel dropped for {method}"
+        ))),
+        Err(_) => {
+            pending.lock().expect("pending lock").remove(&req_id);
+            Err(DriverError::Network(format!(
+                "timed out after {}s waiting for {method}",
+                MQTT_RESPONSE_BUDGET.as_secs()
+            )))
         }
+    }
+}
 
-        match tokio::time::timeout(MQTT_RESPONSE_BUDGET, rx).await {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(_)) => Err(DriverError::Other(format!(
-                "response channel dropped for {method}"
-            ))),
-            Err(_) => {
-                self.pending.lock().expect("pending lock").remove(&req_id);
-                Err(DriverError::Network(format!(
-                    "timed out after {}s waiting for {method}",
-                    MQTT_RESPONSE_BUDGET.as_secs()
-                )))
-            }
+/// Keep monitor mode alive: re-send `camera.start_monitor` every
+/// [`HEARTBEAT_INTERVAL`] to reset the daemon's ~361s capture watchdog.
+/// Runs until aborted on session release.
+async fn heartbeat_loop(client: AsyncClient, request_topic: String, pending: PendingResponses) {
+    loop {
+        tokio::time::sleep(HEARTBEAT_INTERVAL).await;
+        match invoke(&client, &request_topic, &pending, "camera.start_monitor").await {
+            Ok(_) => tracing::trace!("U1 camera monitor heartbeat refreshed"),
+            Err(e) => tracing::warn!(error = %e, "U1 camera monitor heartbeat failed"),
         }
     }
 }
@@ -220,20 +258,40 @@ async fn wait_for_connack(eventloop: &mut EventLoop) -> Result<(), DriverError> 
     }
 }
 
+/// Drive the mTLS session's event loop for the whole view. Polling
+/// *through* errors is deliberate: rumqttc reconnects on the next poll
+/// after a drop, so a transient disconnect must not end this task — if it
+/// did, the client's request channel would break and every heartbeat
+/// publish would fail with "Failed to send mqtt requests to eventloop".
+/// `clean_session` drops subscriptions on reconnect, so we re-subscribe to
+/// `<sn>/response` on each ConnAck (the first ConnAck is consumed by
+/// `wait_for_connack`, so this only fires on reconnects). The task is
+/// aborted by [`SnapMonitorSession::release`] when the view closes.
 async fn drive_eventloop(
     mut eventloop: EventLoop,
+    client: AsyncClient,
     response_topic: String,
     pending: PendingResponses,
 ) {
     loop {
         match eventloop.poll().await {
+            Ok(Event::Incoming(Packet::ConnAck(ack))) if ack.code == ConnectReturnCode::Success => {
+                if let Err(e) = client
+                    .subscribe(response_topic.clone(), QoS::AtMostOnce)
+                    .await
+                {
+                    tracing::warn!(error = %e, "U1 camera: re-subscribe after reconnect failed");
+                }
+            }
             Ok(Event::Incoming(Packet::Publish(publish))) if publish.topic == response_topic => {
                 deliver_response(&publish.payload, &pending);
             }
             Ok(_) => {}
             Err(e) => {
-                tracing::debug!(error = %e, "U1 mTLS event loop ended");
-                return;
+                // Reconnect happens on the next poll; back off so a hard-down
+                // printer doesn't spin this into a hot loop.
+                tracing::debug!(error = %e, "U1 mTLS event loop error; will retry");
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
     }
