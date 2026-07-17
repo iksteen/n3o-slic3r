@@ -284,6 +284,15 @@ export function SendControls({
       )}
       <button
         type="button"
+        onClick={() => void handleExport()}
+        disabled={!exportEnabled}
+        className="tb-btn"
+        title="Save the .gcode.3mf bundle we'd send to disk (diagnostic)"
+      >
+        Export
+      </button>
+      <button
+        type="button"
         onClick={handleSendClick}
         disabled={!sendEnabled}
         className="tb-btn primary"
@@ -296,15 +305,6 @@ export function SendControls({
         }
       >
         Send
-      </button>
-      <button
-        type="button"
-        onClick={() => void handleExport()}
-        disabled={!exportEnabled}
-        className="tb-btn"
-        title="Save the .gcode.3mf bundle we'd send to disk (diagnostic)"
-      >
-        Export
       </button>
     </div>
   );
