@@ -53,6 +53,27 @@ fn resources_root<R: tauri::Runtime, M: tauri::Manager<R>>(mgr: &M) -> std::path
     }
 }
 
+/// Whether the current session is a tiling Wayland compositor that draws
+/// no titlebars — so GTK's client-side titlebar is dead weight (its
+/// buttons don't function). Hyprland exports its own IPC signature;
+/// the wlroots-family tilers identify via `XDG_CURRENT_DESKTOP`. The env
+/// vars are session-scoped, so this is independent of whether a given
+/// window is tiled or floated.
+#[cfg(target_os = "linux")]
+fn tiling_wm_without_titlebar() -> bool {
+    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
+        return true;
+    }
+    // wlroots tilers (+ niri) that draw borders, never titlebars.
+    const TILING_DESKTOPS: &[&str] = &["hyprland", "sway", "river", "wayfire", "niri"];
+    std::env::var("XDG_CURRENT_DESKTOP")
+        .map(|d| {
+            let d = d.to_ascii_lowercase();
+            TILING_DESKTOPS.iter().any(|wm| d.contains(wm))
+        })
+        .unwrap_or(false)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize the tracing subscriber before anything that might emit
@@ -73,6 +94,23 @@ pub fn run() {
         .manage(toolpath_render::ToolpathState::default())
         .setup(|app| {
             use tauri::Manager;
+
+            // Tiling Wayland compositors (Hyprland, sway, …) draw their own
+            // window borders and don't do titlebars — their min/max/close
+            // buttons no-op even on a floated window. GTK still draws its
+            // client-side titlebar (there's no way to hand decorations to
+            // the compositor: GTK on Wayland never speaks xdg-decoration),
+            // so it just sits there looking out of place. Drop it there;
+            // leave the native chrome everywhere else (KDE/GNOME, Windows,
+            // macOS) where the buttons actually work. Runtime, not the
+            // static `decorations` config flag, because that flag is global
+            // and would strip the chrome on those platforms too.
+            #[cfg(target_os = "linux")]
+            if tiling_wm_without_titlebar() {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.set_decorations(false);
+                }
+            }
 
             // Resolve the bundled-resources root before engine init: the
             // `engine/` subtree ships the files libslic3r reads off its
