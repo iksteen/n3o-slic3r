@@ -418,6 +418,42 @@ function App() {
     handleSaveProjectAs,
   } = useProjectFileMenu(sourcePath);
 
+  // Project file chords — Ctrl (Linux/Windows) or Cmd (macOS): S save
+  // (Shift+S save-as), O open, N new. App-global (any mode), and read
+  // through a ref so the listener stays stable across renders. We always
+  // preventDefault these chords to suppress the webview's own Ctrl+S /
+  // Ctrl+O behavior, but only act when the keyboard isn't owned by a
+  // modal or text field.
+  const fileMenuRef = useRef({
+    handleNewProject,
+    handleOpenProject,
+    handleSaveProject,
+    handleSaveProjectAs,
+  });
+  fileMenuRef.current = {
+    handleNewProject,
+    handleOpenProject,
+    handleSaveProject,
+    handleSaveProjectAs,
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const key = e.key.toLowerCase();
+      // Save-as is the only Shift chord; Shift+O / Shift+N aren't ours.
+      if ((key === "o" || key === "n") && e.shiftKey) return;
+      if (key !== "s" && key !== "o" && key !== "n") return;
+      e.preventDefault();
+      if (shouldIgnoreHotkey(e)) return;
+      const h = fileMenuRef.current;
+      if (key === "s") void (e.shiftKey ? h.handleSaveProjectAs() : h.handleSaveProject());
+      else if (key === "o") void h.handleOpenProject();
+      else void h.handleNewProject();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // No printers + bootstrap completed → onboarding takes over.
   const noPrinters =
     !printers.loading && printers.instances.length === 0;

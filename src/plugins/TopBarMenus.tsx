@@ -9,6 +9,16 @@ import { useRef, useState } from "react";
 import { type ThemeMode, useTheme } from "../theme/useTheme";
 import { usePopoverDismiss } from "../ui/usePopoverDismiss";
 
+/** Platform-appropriate accelerator label for a menu item (must match the
+ *  chords bound in App.tsx): `⌘S` / `⇧⌘S` on macOS, `Ctrl+S` /
+ *  `Ctrl+Shift+S` elsewhere. */
+const IS_MAC =
+  typeof navigator !== "undefined" && /mac/i.test(navigator.userAgent);
+function shortcut(key: string, shift = false): string {
+  if (IS_MAC) return `${shift ? "⇧" : ""}⌘${key}`;
+  return `Ctrl+${shift ? "Shift+" : ""}${key}`;
+}
+
 function useDropdown(): {
   open: boolean;
   setOpen: (v: boolean) => void;
@@ -156,15 +166,19 @@ export function ProjectMenu({
           <div className="tb-menu-section">Project</div>
           <button type="button" className="tb-menu-item" role="menuitem" onClick={act(onNewProject)}>
             <span>New project</span>
+            <span className="tb-menu-shortcut">{shortcut("N")}</span>
           </button>
           <button type="button" className="tb-menu-item" role="menuitem" onClick={act(onOpenProject)}>
             <span>Open project…</span>
+            <span className="tb-menu-shortcut">{shortcut("O")}</span>
           </button>
           <button type="button" className="tb-menu-item" role="menuitem" onClick={act(onSaveProject)}>
             <span>Save project</span>
+            <span className="tb-menu-shortcut">{shortcut("S")}</span>
           </button>
           <button type="button" className="tb-menu-item" role="menuitem" onClick={act(onSaveProjectAs)}>
             <span>Save project as…</span>
+            <span className="tb-menu-shortcut">{shortcut("S", true)}</span>
           </button>
           <button
             type="button"

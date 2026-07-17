@@ -727,6 +727,12 @@
   .tb-menu-item:hover {
     background: var(--surface-2);
   }
+  .tb-menu-shortcut {
+    color: var(--text-dim, #8a8f98);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
   .tb-menu-divider {
     height: 1px;
     background: var(--hairline);
