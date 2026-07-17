@@ -22,10 +22,16 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use futures_util::{SinkExt, StreamExt};
 use rumqttc::{AsyncClient, ConnectReturnCode, Event, EventLoop, MqttOptions, Packet, QoS};
 use serde_json::{json, Value};
+use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_util::sync::CancellationToken;
 
 use super::mtls;
 use super::snap_token::SnapToken;
@@ -223,6 +229,99 @@ pub async fn wake(token: &SnapToken) -> Option<SnapMonitorSession> {
         tracing::info!(sn = %token.sn, "U1 camera monitor started");
     }
     Some(session)
+}
+
+// ---- No-pairing LAN path (§0): wake over Moonraker's open WebSocket ----
+
+type WsSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// A WebSocket wake holding monitor mode open on the no-pairing LAN path.
+/// One task re-sends `camera.start_monitor` on the [`HEARTBEAT_INTERVAL`]
+/// and drains incoming frames (so tungstenite answers pings); [`release`]
+/// cancels it, which sends `camera.stop_monitor` before the socket drops.
+pub struct WsMonitorSession {
+    cancel: CancellationToken,
+    task: JoinHandle<()>,
+}
+
+impl WsMonitorSession {
+    /// Stop monitor mode and tear the session down.
+    pub async fn release(self) {
+        self.cancel.cancel();
+        let _ = self.task.await;
+    }
+}
+
+/// Wake the camera over Moonraker's open WebSocket JSON-RPC — the
+/// no-pairing LAN path. On the U1's stock config any LAN IP is a trusted
+/// client, so `camera.start_monitor` needs no cert and no API key. The
+/// call is fire-and-forget (Moonraker's repeater returns null); the frame
+/// URL is the fixed monitor path regardless. Best-effort like [`wake`].
+pub async fn wake_ws(host: &str, port: u16) -> Option<WsMonitorSession> {
+    let url = format!("ws://{host}:{port}/websocket");
+    let request = match url.as_str().into_client_request() {
+        Ok(request) => request,
+        Err(e) => {
+            tracing::warn!(error = %e, "U1 camera: bad WS URL; polling without waking");
+            return None;
+        }
+    };
+    let socket = match connect_async(request).await {
+        Ok((socket, _)) => socket,
+        Err(e) => {
+            tracing::warn!(error = %e, "U1 camera: WS connect failed; polling without waking");
+            return None;
+        }
+    };
+    tracing::info!(host, "U1 camera monitor started (WS)");
+    let cancel = CancellationToken::new();
+    let task = tokio::spawn(drive_ws_monitor(socket, cancel.clone()));
+    Some(WsMonitorSession { cancel, task })
+}
+
+async fn drive_ws_monitor(mut socket: WsSocket, cancel: CancellationToken) {
+    let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                let _ = send_ws_camera(&mut socket, "camera.stop_monitor").await;
+                break;
+            }
+            // interval's first tick fires immediately → the initial wake;
+            // every tick after resets the daemon's ~361s watchdog.
+            _ = heartbeat.tick() => {
+                if let Err(e) = send_ws_camera(&mut socket, "camera.start_monitor").await {
+                    tracing::warn!(error = %e, "U1 camera WS heartbeat failed");
+                }
+            }
+            message = socket.next() => match message {
+                Some(Ok(_)) => {}
+                Some(Err(e)) => {
+                    tracing::debug!(error = %e, "U1 camera WS read error; ending session");
+                    break;
+                }
+                None => break,
+            },
+        }
+    }
+}
+
+/// Send a `camera.*` JSON-RPC request over the WebSocket. The §0 path is
+/// fire-and-forget — the repeater returns null — so we don't await a reply.
+/// Uses the dotted method name (`camera/…` 404s as method-not-found).
+async fn send_ws_camera(socket: &mut WsSocket, method: &str) -> Result<(), DriverError> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": {"domain": MONITOR_DOMAIN, "interval": 1, "expect_pw": false},
+        "id": unix_millis_id(),
+    })
+    .to_string();
+    socket
+        .send(Message::Text(payload.into()))
+        .await
+        .map_err(|e| DriverError::Network(format!("WS send {method}: {e}")))
 }
 
 fn unix_millis_id() -> u64 {

@@ -32,11 +32,11 @@
 //! a push socket), the generic Moonraker source (webcams discovered via
 //! `/server/webcams/list`, snapshot-polled), and the U1 source
 //! ([`super::snapmaker::camera`] — the same Moonraker JPEG poll, behind the
-//! vendor mTLS monitor-mode wake). `source_for` returns an error for
-//! backends without a camera so the frontend can fall back to its "camera
-//! unavailable" state. A new backend slots in as another [`CameraSource`]
-//! impl + `source_for` arm without touching the worker, manager, or
-//! commands.
+//! vendor monitor-mode wake: mTLS MQTT when paired, the open LAN WebSocket
+//! when not). `source_for` returns an error for backends without a camera
+//! so the frontend can fall back to its "camera unavailable" state. A new
+//! backend slots in as another [`CameraSource`] impl + `source_for` arm
+//! without touching the worker, manager, or commands.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -49,7 +49,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::moonraker::webcam;
 use super::snapmaker::camera as u1_camera;
-use super::snapmaker::camera::SnapMonitorSession;
+use super::snapmaker::camera::{SnapMonitorSession, WsMonitorSession};
 use super::snapmaker::snap_token::{self, SnapToken};
 use super::backoff::reconnect_backoff_secs;
 use super::traits::{DriverConfig, DriverError};
@@ -109,26 +109,49 @@ impl CameraSource for BambuCameraSource {
     }
 }
 
+/// The active U1 monitor-mode wake, held for the view's lifetime. Paired
+/// printers use the mTLS MQTT control plane ([`SnapMonitorSession`]), which
+/// works remotely; unpaired ones use the no-pairing LAN WebSocket path
+/// ([`WsMonitorSession`], protocol §0). Both keep the daemon's watchdog
+/// reset with a heartbeat and are released on teardown.
+enum U1Monitor {
+    Mtls(SnapMonitorSession),
+    Ws(WsMonitorSession),
+}
+
+impl U1Monitor {
+    async fn release(self) {
+        match self {
+            U1Monitor::Mtls(session) => session.release().await,
+            U1Monitor::Ws(session) => session.release().await,
+        }
+    }
+}
+
 /// The Snapmaker U1 camera: a Moonraker JPEG poll kept alive by a
-/// session-long mTLS "monitor mode" wake. `setup` opens the mTLS session
-/// and starts monitor mode; `attempt` runs the poll loop; `teardown`
-/// releases monitor mode. The session is held across the whole view (the
-/// daemon only emits while an authorized client stays subscribed), so it
-/// lives in an async `Mutex` set by `setup` and taken by `teardown`.
+/// session-long "monitor mode" wake. `setup` opens the wake — mTLS MQTT
+/// when paired, the open WebSocket when not; `attempt` runs the poll loop;
+/// `teardown` releases monitor mode. The session is held across the whole
+/// view (the daemon only emits while a client stays present), so it lives
+/// in an async `Mutex` set by `setup` and taken by `teardown`.
 struct U1CameraSource {
     /// Moonraker HTTP host:port (the print/status endpoint, typically :80).
     host: String,
     port: u16,
-    /// Paired mTLS material — drives the wake and identifies the device.
-    token: SnapToken,
+    /// Paired mTLS material, when the printer is paired — selects the wake
+    /// path. `None` falls back to the no-pairing LAN WebSocket wake.
+    token: Option<SnapToken>,
     client: reqwest::Client,
-    session: tokio::sync::Mutex<Option<SnapMonitorSession>>,
+    session: tokio::sync::Mutex<Option<U1Monitor>>,
 }
 
 #[async_trait]
 impl CameraSource for U1CameraSource {
     async fn setup(&self) {
-        let session = u1_camera::wake(&self.token).await;
+        let session = match &self.token {
+            Some(token) => u1_camera::wake(token).await.map(U1Monitor::Mtls),
+            None => u1_camera::wake_ws(&self.host, self.port).await.map(U1Monitor::Ws),
+        };
         *self.session.lock().await = session;
     }
 
@@ -201,22 +224,14 @@ fn source_for(
         DriverConfig::Bambu { host, access_code } => {
             Ok(Box::new(BambuCameraSource { host, access_code }))
         }
-        DriverConfig::U1 { host, port } => {
-            let token = snap_token::load(instance_id).ok_or_else(|| {
-                DriverError::Other(
-                    "printer is not paired — pair it in the printer's Connection settings to \
-                     enable the camera"
-                        .to_owned(),
-                )
-            })?;
-            Ok(Box::new(U1CameraSource {
-                host,
-                port,
-                token,
-                client: webcam::poll_client()?,
-                session: tokio::sync::Mutex::new(None),
-            }))
-        }
+        DriverConfig::U1 { host, port } => Ok(Box::new(U1CameraSource {
+            host,
+            port,
+            // Paired → mTLS wake (works remote); unpaired → LAN WS wake.
+            token: snap_token::load(instance_id),
+            client: webcam::poll_client()?,
+            session: tokio::sync::Mutex::new(None),
+        })),
         DriverConfig::Moonraker { host, port } => Ok(Box::new(MoonrakerCameraSource {
             host,
             port,
@@ -489,19 +504,17 @@ mod tests {
     }
 
     #[test]
-    fn source_for_rejects_an_unpaired_u1() {
-        // No printers root is configured in unit tests, so the U1 has no
-        // pairing token — source_for must reject it with pairing guidance.
-        let err = source_for(
+    fn source_for_builds_an_unpaired_u1_source() {
+        // No pairing token in unit tests — source_for must still build a
+        // source (it falls back to the no-pairing LAN WebSocket wake).
+        assert!(source_for(
             "some-instance",
             DriverConfig::U1 {
                 host: "h".into(),
                 port: 80,
             },
         )
-        .err()
-        .expect("unpaired U1 has no camera source");
-        assert!(err.to_string().contains("not paired"));
+        .is_ok());
     }
 
     #[test]
