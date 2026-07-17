@@ -4011,6 +4011,29 @@
     align-items: center;
   }
 
+  /* Pre-send options dialog (reuses the discard-card shell) */
+  .send-options-card { width: min(320px, 100%); }
+  .send-opt-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 10px 0 16px;
+  }
+  .send-opt-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+  }
+  .send-opt-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
   /* Empty-state onboarding */
   .onboarding-stage {
     position: relative;

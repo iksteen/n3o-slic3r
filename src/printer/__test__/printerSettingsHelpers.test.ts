@@ -59,6 +59,12 @@ function fixture(overrides: Partial<PrinterInstance> = {}): PrinterInstance {
     ],
     bed: { identity: "Textured PEI Plate" },
     config_overrides: {},
+    send_options: {
+      bed_leveling: true,
+      flow_calibration: false,
+      vibration_calibration: false,
+      timelapse: false,
+    },
     // Backend-computed view fields (PrinterInstanceView). `slots` is
     // unused by these pure helpers; `ams_units` is what initialDraft reads.
     slots: [],

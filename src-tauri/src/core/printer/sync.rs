@@ -439,6 +439,7 @@ mod tests {
                 identity: "Bambu Cool Plate SuperTack".into(),
             },
             config_overrides: Default::default(),
+            send_options: Default::default(),
         }
     }
 
@@ -470,6 +471,7 @@ mod tests {
                 identity: "Snapmaker Textured PEI".into(),
             },
             config_overrides: Default::default(),
+            send_options: Default::default(),
         }
     }
 

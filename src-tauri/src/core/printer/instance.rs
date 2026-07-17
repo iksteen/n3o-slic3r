@@ -97,6 +97,42 @@ pub struct PrinterInstance {
     /// profile's printer cascade.
     #[serde(default)]
     pub config_overrides: std::collections::BTreeMap<String, String>,
+
+    /// Per-print send options (leveling/calibration/timelapse), sticky
+    /// per instance: the send dialog edits them, the send path applies
+    /// them (Bambu `project_file` fields; U1
+    /// `SDCARD_PRINT_FILE_WITH_PARAMETERS`). Generic Moonraker ignores
+    /// them — no per-print option protocol exists there.
+    #[serde(default)]
+    pub send_options: SendOptions,
+}
+
+/// The user-facing per-print toggles. One shape serves both vendors —
+/// the concepts line up (U1 "shaper calibrate" ⇔ Bambu "vibration
+/// calibration"); the drivers translate to their own wire fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub struct SendOptions {
+    pub bed_leveling: bool,
+    /// Dynamic flow / pressure-advance calibration before the print.
+    pub flow_calibration: bool,
+    /// Vibration compensation (Bambu) / input-shaper (U1) calibration.
+    pub vibration_calibration: bool,
+    pub timelapse: bool,
+}
+
+impl Default for SendOptions {
+    /// Matches the send path's historical hardcoded behavior (leveling
+    /// on, everything else off), so existing instances don't change
+    /// behavior until the user toggles.
+    fn default() -> Self {
+        Self {
+            bed_leveling: true,
+            flow_calibration: false,
+            vibration_calibration: false,
+            timelapse: false,
+        }
+    }
 }
 
 /// AMS slot topology: each installed AMS unit contributes exactly
@@ -393,6 +429,7 @@ mod label_tests {
                 identity: "b".into(),
             },
             config_overrides: Default::default(),
+            send_options: Default::default(),
         }
     }
 
@@ -658,6 +695,7 @@ mod tests {
                 identity: "Supertack Plate".into(),
             },
             config_overrides: Default::default(),
+            send_options: Default::default(),
         };
         let json = serde_json::to_string(&inst).expect("ser");
         let parsed: PrinterInstance = serde_json::from_str(&json).expect("de");

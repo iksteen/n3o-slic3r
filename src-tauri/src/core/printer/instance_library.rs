@@ -130,6 +130,7 @@ fn bambi() -> PrinterInstance {
             identity: "Supertack Plate".to_owned(),
         },
         config_overrides: Default::default(),
+        send_options: Default::default(),
     }
 }
 
@@ -168,6 +169,7 @@ fn snappy() -> PrinterInstance {
             identity: "Textured PEI Plate".to_owned(),
         },
         config_overrides: Default::default(),
+        send_options: Default::default(),
     }
 }
 

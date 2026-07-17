@@ -574,6 +574,7 @@ pub fn create_instance(
             identity: bed_identity,
         },
         config_overrides: Default::default(),
+        send_options: Default::default(),
     };
 
     {
@@ -1013,6 +1014,17 @@ pub fn set_instance_display_name(
     }
     mutate_instance(id, |inst| {
         inst.display_name = trimmed.clone();
+        Ok(())
+    })
+}
+
+/// Replace the instance's sticky per-print send options.
+pub fn set_instance_send_options(
+    id: &str,
+    options: super::instance::SendOptions,
+) -> Result<PrinterInstance, InstanceMutError> {
+    mutate_instance(id, |inst| {
+        inst.send_options = options;
         Ok(())
     })
 }

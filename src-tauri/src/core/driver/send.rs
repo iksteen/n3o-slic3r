@@ -155,6 +155,82 @@ pub(super) fn plate_printer_model(project: &Mutex<Project>, plate_id: u32) -> Op
     Some(profile.model.clone())
 }
 
+/// The sticky per-print send options of the instance bound to
+/// `plate_id`. Falls back to [`SendOptions::default`] (leveling on,
+/// calibrations/timelapse off) when the plate isn't bound or the
+/// instance can't be resolved.
+pub(super) fn plate_send_options(
+    project: &Mutex<Project>,
+    plate_id: u32,
+) -> crate::core::printer::instance::SendOptions {
+    let inst_id = {
+        let p = project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        p.plate(PlateId(plate_id))
+            .and_then(|pl| pl.printer_instance_id().map(str::to_owned))
+    };
+    inst_id
+        .and_then(|id| crate::core::printer::lookup_instance(&id))
+        .map(|inst| inst.send_options)
+        .unwrap_or_default()
+}
+
+/// Installed nozzle diameter per physical extruder of the instance
+/// bound to `plate_id`, parsed from the instance's per-toolhead nozzle
+/// SKUs. Empty when the plate isn't bound / the instance is gone / a
+/// diameter doesn't parse — the start script then omits
+/// `NOZZLE_DIAMETER_LIST` rather than sending a partial list the
+/// firmware would misalign.
+pub(super) fn plate_nozzle_diameters(project: &Mutex<Project>, plate_id: u32) -> Vec<f64> {
+    let inst_id = {
+        let p = project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        p.plate(PlateId(plate_id))
+            .and_then(|pl| pl.printer_instance_id().map(str::to_owned))
+    };
+    let Some(inst) = inst_id.and_then(|id| crate::core::printer::lookup_instance(&id)) else {
+        return Vec::new();
+    };
+    let diameters: Vec<f64> = inst
+        .extruders
+        .iter()
+        .filter_map(|e| e.installed_nozzle.diameter.parse::<f64>().ok())
+        .collect();
+    if diameters.len() == inst.extruders.len() {
+        diameters
+    } else {
+        Vec::new()
+    }
+}
+
+/// The U1's flow-calibration gating facts, read off the sliced G-code's
+/// own footer: per-extruder filament use in mm (index-aligned with the
+/// G-code's filament order — for a toolchanger those indices ARE the
+/// physical toolheads) and the extruders with nonzero use. Empty when
+/// the G-code carries no usage lines — the firmware then keeps its
+/// persisted values.
+pub(super) fn u1_usage_from_gcode(bytes: &[u8]) -> (Vec<u8>, Vec<f64>) {
+    let summary = crate::core::slice::summary::build_summary_from_bytes(
+        bytes,
+        std::path::Path::new("send-buffer.gcode"),
+    );
+    let Some(max_index) = summary.filament_used_mm.keys().max().copied() else {
+        return (Vec::new(), Vec::new());
+    };
+    let used_mm: Vec<f64> = (0..=max_index)
+        .map(|i| summary.filament_used_mm.get(&i).copied().unwrap_or(0.0))
+        .collect();
+    let extruders_used: Vec<u8> = summary
+        .filament_used_mm
+        .iter()
+        .filter(|(_, mm)| **mm > 0.0)
+        .map(|(i, _)| *i)
+        .collect();
+    (extruders_used, used_mm)
+}
+
 /// Run the pre-send hook over `payload`, swapping in any plugin-edited
 /// bytes. No-op when no plugin declares the hook; a panic in plugin Lua
 /// is caught and the original bytes are sent unchanged.
@@ -210,9 +286,12 @@ pub(super) fn apply_pre_send(
     };
 
     match payload {
-        SendPayload::Gcode { file_name, .. } => SendPayload::Gcode {
+        SendPayload::Gcode {
+            file_name, u1_start, ..
+        } => SendPayload::Gcode {
             bytes: edited,
             file_name,
+            u1_start,
         },
         SendPayload::Gcode3mf {
             plate_id,
@@ -220,6 +299,7 @@ pub(super) fn apply_pre_send(
             use_ams,
             ams_mapping,
             ams_mapping2,
+            options,
             ..
         } => SendPayload::Gcode3mf {
             bytes: edited,
@@ -228,6 +308,7 @@ pub(super) fn apply_pre_send(
             use_ams,
             ams_mapping,
             ams_mapping2,
+            options,
         },
     }
 }
@@ -236,6 +317,36 @@ pub(super) fn apply_pre_send(
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn u1_usage_from_gcode_reads_footer_and_gates_extruders() {
+        // libslic3r-style footer: per-filament usage, comma-separated.
+        // Extruder 1 is unused (0.0) — it must appear in the mm array
+        // (index-aligned) but not in the used-extruder list.
+        let gcode = b"G1 X0\n; filament used [mm] = 500.00,0.00,600.60\n";
+        let (used, mm) = u1_usage_from_gcode(gcode);
+        assert_eq!(used, vec![0, 2]);
+        assert_eq!(mm, vec![500.0, 0.0, 600.6]);
+
+        // No usage lines at all → both empty, so the start script omits
+        // the flow-gating params entirely.
+        let (used, mm) = u1_usage_from_gcode(b"G1 X0\n");
+        assert!(used.is_empty());
+        assert!(mm.is_empty());
+    }
+
+    #[test]
+    fn send_options_default_matches_legacy_hardcoded_behavior() {
+        // An instance .toml written before send_options existed must
+        // deserialize to the old hardcoded send behavior: leveling on,
+        // calibrations + timelapse off.
+        let options: crate::core::printer::instance::SendOptions =
+            toml::from_str("").expect("empty table deserializes via defaults");
+        assert!(options.bed_leveling);
+        assert!(!options.flow_calibration);
+        assert!(!options.vibration_calibration);
+        assert!(!options.timelapse);
+    }
 
     #[test]
     fn derive_send_names_combines_project_title_and_plate_name() {
@@ -303,6 +414,7 @@ mod tests {
         let mk = || SendPayload::Gcode {
             bytes: b"G1 X0".to_vec(),
             file_name: "p.gcode".into(),
+            u1_start: None,
         };
         // Wrong printer model → the U1-only plugin is skipped (gate
         // enforces printer_compatibility), payload unchanged.
@@ -335,9 +447,12 @@ mod tests {
         let payload = SendPayload::Gcode {
             bytes: b"G1 X0".to_vec(),
             file_name: "plate-7.gcode".into(),
+            u1_start: None,
         };
         match apply_pre_send(&host, payload, 7, DriverKind::U1, None) {
-            SendPayload::Gcode { bytes, file_name } => {
+            SendPayload::Gcode {
+                bytes, file_name, ..
+            } => {
                 assert_eq!(bytes, b"G1 X0\n; via u1".to_vec());
                 assert_eq!(file_name, "plate-7.gcode", "file_name preserved");
             }
@@ -357,6 +472,7 @@ mod tests {
             use_ams: true,
             ams_mapping: vec![],
             ams_mapping2: vec![],
+            options: Default::default(),
         };
         match apply_pre_send(&host, payload, 3, DriverKind::Bambu, None) {
             SendPayload::Gcode3mf {

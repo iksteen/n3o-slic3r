@@ -275,6 +275,7 @@ pub fn run() {
             core::printer::filament_profile_list,
             core::printer::process_fragment_list,
             core::printer::printer_instance_set_display_name,
+            core::printer::printer_instance_set_send_options,
             core::printer::printer_instance_set_ams_units,
             core::printer::printer_instance_set_connection,
             core::printer::printer_instance_update,

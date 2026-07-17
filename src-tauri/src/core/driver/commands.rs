@@ -25,12 +25,13 @@ use super::registry::DriverRegistry;
 use super::snapmaker::{mqtt_status, snap_token};
 use super::send::{
     apply_pre_send, collect_ams_bindings, collect_ams_mapping, derive_send_names,
-    plate_printer_model, read_gcode_bytes, wrap_gcode_as_3mf,
+    plate_nozzle_diameters, plate_printer_model, plate_send_options, read_gcode_bytes,
+    u1_usage_from_gcode, wrap_gcode_as_3mf,
 };
 use super::status::PrinterStatus;
 use super::traits::{
     Driver, DriverConfig, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle,
-    SendPayload, UploadProgressFn,
+    SendPayload, U1StartOptions, UploadProgressFn,
 };
 use crate::core::plugin::commands::PluginHostState;
 use crate::core::project::Project;
@@ -477,6 +478,9 @@ pub async fn driver_send_plate(
         }
     });
     let (basename, title) = derive_send_names(&project, plate_id);
+    // The bound instance's sticky per-print toggles (the send dialog
+    // edits them; the drivers translate to their wire fields).
+    let options = plate_send_options(&project, plate_id);
     let payload = match kind {
         DriverKind::Bambu => {
             let ams = collect_ams_bindings(&project, plate_id);
@@ -491,10 +495,27 @@ pub async fn driver_send_plate(
                 use_ams,
                 ams_mapping,
                 ams_mapping2,
+                options,
             }
         }
         DriverKind::U1 | DriverKind::Moonraker => {
             let bytes = read_gcode_bytes(gcode_path).await.map_err(DriverError::Other)?;
+            // The U1 starts via its parameterized vendor macro, which
+            // needs the print's per-extruder usage for the flow-cali
+            // gate — read it off the G-code footer before the thumbnail
+            // block goes in. Generic Moonraker has no option protocol.
+            let u1_start = match kind {
+                DriverKind::U1 => {
+                    let (extruders_used, filament_used_mm) = u1_usage_from_gcode(&bytes);
+                    Some(U1StartOptions {
+                        options,
+                        extruders_used,
+                        filament_used_mm,
+                        nozzle_diameters: plate_nozzle_diameters(&project, plate_id),
+                    })
+                }
+                _ => None,
+            };
             // Prepend the Klipper/Moonraker thumbnail block so Mainsail /
             // Fluidd show the preview; a bad PNG leaves the G-code untouched.
             let bytes = match &thumbnail_png {
@@ -504,6 +525,7 @@ pub async fn driver_send_plate(
             SendPayload::Gcode {
                 bytes,
                 file_name: format!("{basename}.gcode"),
+                u1_start,
             }
         }
     };

@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 pub use super::ams::AmsMappingV2;
+pub use crate::core::printer::instance::SendOptions;
 use tokio::sync::watch;
 
 use super::status::PrinterStatus;
@@ -105,10 +106,41 @@ pub enum SendPayload {
         use_ams: bool,
         ams_mapping: Vec<i8>,
         ams_mapping2: Vec<AmsMappingV2>,
+        /// Per-print toggles for the MQTT `project_file` command
+        /// (`bed_leveling` / `flow_cali` / `vibration_cali` / `timelapse`).
+        options: SendOptions,
     },
-    /// Snapmaker U1: raw G-code body + the filename the printer
-    /// should store it under (`<file_name>.gcode`).
-    Gcode { bytes: Vec<u8>, file_name: String },
+    /// Moonraker-served printers: raw G-code body + the filename the
+    /// printer should store it under (`<file_name>.gcode`).
+    Gcode {
+        bytes: Vec<u8>,
+        file_name: String,
+        /// `Some` for the Snapmaker U1: start via the vendor
+        /// `SDCARD_PRINT_FILE_WITH_PARAMETERS` macro carrying the
+        /// per-print toggles. `None` (generic Moonraker) starts the
+        /// print in the upload request itself — no per-print option
+        /// protocol exists there.
+        u1_start: Option<U1StartOptions>,
+    },
+}
+
+/// Per-print toggles + the print-usage facts the U1 firmware gates flow
+/// calibration on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct U1StartOptions {
+    pub options: SendOptions,
+    /// Physical extruders this print uses (0-based; the sliced G-code's
+    /// filament indices with nonzero usage — for a toolchanger those ARE
+    /// the toolhead numbers). Sent as `FLOW_CALIBRATE_EXTRUDERS`.
+    pub extruders_used: Vec<u8>,
+    /// Per-extruder filament use in mm, index-aligned with the G-code's
+    /// filament order. Sent as `FILAMENT_USED_MM`.
+    pub filament_used_mm: Vec<f64>,
+    /// Installed nozzle diameter per physical extruder, from the printer
+    /// instance. Sent as `NOZZLE_DIAMETER_LIST`; the firmware validates
+    /// it against the actual toolhead hardware for every used extruder
+    /// (a missing list fails as `nozzle diameter mismatch: f_0 != e_…`).
+    pub nozzle_diameters: Vec<f64>,
 }
 
 /// What [`Driver::send`] returns on success. The id correlates
@@ -306,6 +338,7 @@ mod tests {
                     slot_id: 0,
                 },
             ],
+            options: SendOptions::default(),
         };
         let s = serde_json::to_string(&bambu).unwrap();
         let back: SendPayload = serde_json::from_str(&s).unwrap();
@@ -317,6 +350,7 @@ mod tests {
                 use_ams,
                 ams_mapping,
                 ams_mapping2,
+                options,
             } => {
                 assert_eq!(plate_id, 1);
                 assert_eq!(bytes, vec![1, 2, 3]);
@@ -336,6 +370,7 @@ mod tests {
                         },
                     ]
                 );
+                assert_eq!(options, SendOptions::default());
             }
             _ => panic!("variant"),
         }
@@ -343,11 +378,22 @@ mod tests {
         let u1 = SendPayload::Gcode {
             bytes: vec![4, 5],
             file_name: "x.gcode".into(),
+            u1_start: Some(U1StartOptions {
+                options: SendOptions::default(),
+                extruders_used: vec![0, 1],
+                filament_used_mm: vec![500.0, 600.0],
+                nozzle_diameters: vec![0.4, 0.4],
+            }),
         };
         let s = serde_json::to_string(&u1).unwrap();
         let back: SendPayload = serde_json::from_str(&s).unwrap();
         match back {
-            SendPayload::Gcode { file_name, .. } => assert_eq!(file_name, "x.gcode"),
+            SendPayload::Gcode {
+                file_name, u1_start, ..
+            } => {
+                assert_eq!(file_name, "x.gcode");
+                assert_eq!(u1_start.unwrap().extruders_used, vec![0, 1]);
+            }
             _ => panic!("variant"),
         }
     }

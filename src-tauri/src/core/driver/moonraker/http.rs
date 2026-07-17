@@ -17,7 +17,9 @@ use std::time::Duration;
 
 use reqwest::multipart::{Form, Part};
 
-use crate::core::driver::traits::{PrinterCommand, SendHandle, UploadProgressFn};
+use crate::core::driver::traits::{
+    PrinterCommand, SendHandle, U1StartOptions, UploadProgressFn,
+};
 use crate::core::driver::DriverError;
 
 /// Stream the upload body in chunks this size, reporting progress per chunk —
@@ -37,15 +39,25 @@ fn client() -> Result<reqwest::Client, DriverError> {
         .map_err(|e| DriverError::Other(format!("HTTP client build failed: {e}")))
 }
 
-/// Upload the G-code body + start the print in a single request.
-/// Returns a [`SendHandle`] whose `id` is the printer-visible
-/// filename so subsequent status snapshots (`print_stats.filename`)
-/// correlate cleanly.
+/// Upload the G-code body + start the print. Returns a [`SendHandle`]
+/// whose `id` is the printer-visible filename so subsequent status
+/// snapshots (`print_stats.filename`) correlate cleanly.
+///
+/// The start depends on `u1_start`:
+/// - `None` (generic Moonraker) — `print=true` in the upload itself, so
+///   the file can't land on disk without a start.
+/// - `Some` (Snapmaker U1) — upload only, then start via the vendor
+///   `SDCARD_PRINT_FILE_WITH_PARAMETERS` macro so the per-print toggles
+///   (leveling / flow / shaper calibration, timelapse) ride the start.
+///   The plain `print=true` path would run the macro-less
+///   `SDCARD_PRINT_FILE`, which leaves the printer's persisted
+///   `print_task_config` untouched.
 pub(super) async fn upload_and_start(
     host: &str,
     port: u16,
     file_name: &str,
     bytes: Vec<u8>,
+    u1_start: Option<&U1StartOptions>,
     on_progress: UploadProgressFn,
 ) -> Result<SendHandle, DriverError> {
     let url = format!("http://{host}:{port}/server/files/upload");
@@ -71,12 +83,14 @@ pub(super) async fn upload_and_start(
         .file_name(file_name.to_owned())
         .mime_str("application/octet-stream")
         .map_err(|e| DriverError::Other(format!("multipart body build: {e}")))?;
-    let form = Form::new()
-        .part("file", file_part)
+    let mut form = Form::new().part("file", file_part);
+    if u1_start.is_none() {
         // `print=true` queues the print as soon as the file lands.
         // Without it the upload succeeds but the print never starts,
-        // which is exactly the surprise we want to avoid.
-        .text("print", "true");
+        // which is exactly the surprise we want to avoid. The U1 path
+        // starts via its parameterized macro right below instead.
+        form = form.text("print", "true");
+    }
     let response = client()?
         .post(&url)
         .multipart(form)
@@ -86,10 +100,92 @@ pub(super) async fn upload_and_start(
     response
         .error_for_status()
         .map_err(|e| DriverError::Protocol(format!("Moonraker upload at {url}: {e}")))?;
+
+    if let Some(start) = u1_start {
+        run_gcode_script(host, port, &u1_start_script(file_name, start)).await?;
+    }
+
     Ok(SendHandle {
         id: file_name.to_owned(),
         file_name: file_name.to_owned(),
     })
+}
+
+/// Build the U1's parameterized start command. `BED_LEVEL` /
+/// `FLOW_CALIBRATE` / `SHAPER_CALIBRATE` / `TIME_LAPSE_CAMERA` are 0/1
+/// toggles; flow calibration is additionally gated by
+/// `FLOW_CALIBRATE_EXTRUDERS` (the physical extruders to calibrate) and
+/// `FILAMENT_USED_MM` (per-extruder usage), which the firmware parses as
+/// bracketed lists. Verified against `Snapmaker/u1-klipper`'s
+/// `print_task_config.py::cmd_SET_PRINT_TASK_PARAMETERS`.
+fn u1_start_script(file_name: &str, start: &U1StartOptions) -> String {
+    let o = &start.options;
+    let mut script = format!(
+        "SDCARD_PRINT_FILE_WITH_PARAMETERS FILENAME=\"{file_name}\" \
+         BED_LEVEL={} FLOW_CALIBRATE={} SHAPER_CALIBRATE={} TIME_LAPSE_CAMERA={}",
+        u8::from(o.bed_leveling),
+        u8::from(o.flow_calibration),
+        u8::from(o.vibration_calibration),
+        u8::from(o.timelapse),
+    );
+    if !start.extruders_used.is_empty() {
+        let list = start
+            .extruders_used
+            .iter()
+            .map(u8::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        script.push_str(&format!(" FLOW_CALIBRATE_EXTRUDERS=\"[{list}]\""));
+    }
+    if !start.filament_used_mm.is_empty() {
+        let list = start
+            .filament_used_mm
+            .iter()
+            .map(|v| format!("{v:.1}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        script.push_str(&format!(" FILAMENT_USED_MM=\"[{list}]\""));
+    }
+    if !start.nozzle_diameters.is_empty() {
+        let list = start
+            .nozzle_diameters
+            .iter()
+            .map(|v| float_literal(*v))
+            .collect::<Vec<_>>()
+            .join(",");
+        script.push_str(&format!(" NOZZLE_DIAMETER_LIST=\"[{list}]\""));
+    }
+    script
+}
+
+/// Format a float so the firmware's list parser reads it back as a
+/// float: entries without a decimal point parse as ints and are
+/// rejected (`isinstance(x, float)` checks in `print_task_config.py`).
+fn float_literal(v: f64) -> String {
+    let s = v.to_string();
+    if s.contains('.') {
+        s
+    } else {
+        format!("{s}.0")
+    }
+}
+
+/// POST a G-code script to `/printer/gcode/script`. The U1 start macro
+/// rides this; Klipper errors (e.g. "SD busy", "not allow to set
+/// parameters during printing") come back as 4xx and surface as
+/// `DriverError::Protocol`.
+async fn run_gcode_script(host: &str, port: u16, script: &str) -> Result<(), DriverError> {
+    let url = format!("http://{host}:{port}/printer/gcode/script");
+    let response = client()?
+        .post(&url)
+        .json(&serde_json::json!({ "script": script }))
+        .send()
+        .await
+        .map_err(|e| DriverError::Network(format!("POST {url}: {e}")))?;
+    response
+        .error_for_status()
+        .map_err(|e| DriverError::Protocol(format!("Moonraker gcode script at {url}: {e}")))?;
+    Ok(())
 }
 
 /// POST `/printer/print/{action}`. Moonraker maps these directly to
@@ -135,6 +231,52 @@ mod tests {
         (host.to_owned(), port.parse().unwrap())
     }
 
+    // ---- U1 parameterized start ----
+
+    #[test]
+    fn u1_start_script_encodes_toggles_and_flow_gating() {
+        use crate::core::driver::traits::SendOptions;
+        let start = U1StartOptions {
+            options: SendOptions {
+                bed_leveling: true,
+                flow_calibration: true,
+                vibration_calibration: false,
+                timelapse: true,
+            },
+            extruders_used: vec![0, 1],
+            filament_used_mm: vec![500.0, 600.6],
+            nozzle_diameters: vec![0.4, 0.4, 0.6, 0.4],
+        };
+        assert_eq!(
+            u1_start_script("MyPrint_Lid.gcode", &start),
+            "SDCARD_PRINT_FILE_WITH_PARAMETERS FILENAME=\"MyPrint_Lid.gcode\" \
+             BED_LEVEL=1 FLOW_CALIBRATE=1 SHAPER_CALIBRATE=0 TIME_LAPSE_CAMERA=1 \
+             FLOW_CALIBRATE_EXTRUDERS=\"[0,1]\" FILAMENT_USED_MM=\"[500.0,600.6]\" \
+             NOZZLE_DIAMETER_LIST=\"[0.4,0.4,0.6,0.4]\""
+        );
+    }
+
+    #[test]
+    fn u1_start_script_omits_flow_arrays_without_usage_data() {
+        // A G-code without usage lines yields empty arrays — the script
+        // must omit the params so the firmware keeps its persisted values
+        // rather than erroring on an empty list.
+        let start = U1StartOptions {
+            options: Default::default(),
+            extruders_used: vec![],
+            filament_used_mm: vec![],
+            nozzle_diameters: vec![],
+        };
+        let script = u1_start_script("x.gcode", &start);
+        assert_eq!(
+            script,
+            "SDCARD_PRINT_FILE_WITH_PARAMETERS FILENAME=\"x.gcode\" \
+             BED_LEVEL=1 FLOW_CALIBRATE=0 SHAPER_CALIBRATE=0 TIME_LAPSE_CAMERA=0"
+        );
+        assert!(!script.contains("FLOW_CALIBRATE_EXTRUDERS"));
+        assert!(!script.contains("FILAMENT_USED_MM"));
+    }
+
     // ---- upload + start ----
 
     #[tokio::test]
@@ -164,6 +306,7 @@ mod tests {
             port,
             "Cube.gcode",
             b"G28\n".to_vec(),
+            None,
             std::sync::Arc::new(move |sent, total| seen_cb.lock().unwrap().push((sent, total))),
         )
         .await
@@ -194,6 +337,7 @@ mod tests {
             port,
             "x.gcode",
             b"G28\n".to_vec(),
+            None,
             std::sync::Arc::new(|_, _| {}),
         )
         .await
@@ -204,7 +348,7 @@ mod tests {
     #[tokio::test]
     async fn upload_unreachable_host_maps_to_network_error() {
         // Reserved port — nothing should be listening.
-        let err = upload_and_start("127.0.0.1", 1, "x.gcode", vec![], std::sync::Arc::new(|_, _| {}))
+        let err = upload_and_start("127.0.0.1", 1, "x.gcode", vec![], None, std::sync::Arc::new(|_, _| {}))
             .await
             .unwrap_err();
         assert!(matches!(err, DriverError::Network(_)), "{err:?}");

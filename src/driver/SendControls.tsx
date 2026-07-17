@@ -16,6 +16,12 @@ import { pushLog } from "../logging/logStore";
 import { useDriverStatus } from "./useDriverStatus";
 import { beginUpload, endUpload } from "./useUploadProgress";
 import { isJobIdle, sendDisabledReason } from "./sendGate";
+import { SendOptionsDialog } from "./SendOptionsDialog";
+import {
+  setInstanceSendOptions,
+  type PrinterInstance,
+  type SendOptions,
+} from "../printer/printerInstance";
 import type { ConnectionSummary } from "./useDriverConnections";
 import type { DriverId, PrinterStatus } from "./types";
 
@@ -23,6 +29,10 @@ export interface SendControlsProps {
   /** Cascade-side printer identity from the active plate's binding,
    *  or `null` if the plate isn't bound yet. */
   printerIdentity: string | null;
+  /** The active plate's bound printer instance — supplies the driver
+   *  kind (which send options apply) and the sticky per-print options
+   *  the send dialog edits. `null` when the plate isn't bound. */
+  instance: PrinterInstance | null;
   /** Auto-connection summary for the active plate's bound printer —
    *  supplies the live driver id and gates Send on a real connection. */
   connection: ConnectionSummary | null;
@@ -75,6 +85,7 @@ function jobToken(status: PrinterStatus | null): string {
 
 export function SendControls({
   printerIdentity,
+  instance,
   connection,
   plateId,
   projectName,
@@ -84,6 +95,7 @@ export function SendControls({
 }: SendControlsProps): React.JSX.Element | null {
   const driverId = connection?.driverId ?? null;
   const [actionPending, setActionPending] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   // Mirror the module-scoped latch into state (lazy-init from it so a
   // remount after a Devices round-trip restores it). The latch is
   // scoped to the driver we sent to, so switching the active plate to a
@@ -134,13 +146,37 @@ export function SendControls({
   // After this guard, `lastSliceOutputPath` is narrowed non-null.
   if (lastSliceOutputPath == null) return null;
 
-  const handleSend = async (): Promise<void> => {
+  // Which send-option protocol the bound printer speaks. Bambu and the
+  // U1 both take the four toggles; generic Moonraker has none, so Send
+  // skips the dialog there and behaves as before.
+  const optionsKind = ((): "bambu" | "u1" | null => {
+    const kind = instance?.connection?.kind;
+    return kind === "bambu" || kind === "u1" ? kind : null;
+  })();
+
+  const handleSendClick = (): void => {
     if (driverId == null || plateId == null) return;
+    if (optionsKind != null && instance != null) {
+      setOptionsOpen(true);
+    } else {
+      void doSend(null);
+    }
+  };
+
+  /** Persist edited options (sticky per instance), then upload. */
+  const doSend = async (options: SendOptions | null): Promise<void> => {
+    if (driverId == null || plateId == null) return;
+    setOptionsOpen(false);
     setActionPending(true);
     // Drives the floating SendProgressWindow (over the canvas); cleared in the
     // finally so a failed upload doesn't leave the window stuck.
     beginUpload(driverId);
     try {
+      if (options != null && instance != null) {
+        // Persist BEFORE the send — the backend reads the instance's
+        // options when it builds the print-start command.
+        await setInstanceSendOptions(instance.id, options);
+      }
       // Render the plate preview off the live viewport; null (empty plate or
       // no viewport) just sends without a thumbnail.
       const thumbnail = captureThumbnail();
@@ -208,9 +244,17 @@ export function SendControls({
 
   return (
     <div className="flex items-center gap-2 text-xs">
+      {optionsOpen && optionsKind != null && instance != null && (
+        <SendOptionsDialog
+          kind={optionsKind}
+          initial={instance.send_options}
+          onSend={(options) => void doSend(options)}
+          onCancel={() => setOptionsOpen(false)}
+        />
+      )}
       <button
         type="button"
-        onClick={() => void handleSend()}
+        onClick={handleSendClick}
         disabled={!sendEnabled}
         className="tb-btn primary"
         title={

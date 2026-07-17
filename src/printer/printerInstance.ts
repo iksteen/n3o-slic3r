@@ -68,6 +68,16 @@ export type ConnectionInfo =
   | { kind: "moonraker"; host: string; port: number }
   | { kind: "u1"; host: string; port: number };
 
+/** Sticky per-print toggles, mirroring Rust's `SendOptions`. One shape
+ *  serves both vendors (U1 "shaper calibrate" ⇔ Bambu "vibration
+ *  calibration"); the send dialog labels per kind. */
+export interface SendOptions {
+  bed_leveling: boolean;
+  flow_calibration: boolean;
+  vibration_calibration: boolean;
+  timelapse: boolean;
+}
+
 export interface PrinterInstance {
   id: string;
   display_name: string;
@@ -79,6 +89,8 @@ export interface PrinterInstance {
   extruders: ExtruderState[];
   bed: BedRef;
   config_overrides: Record<string, string>;
+  /** Sticky per-print send options; edited by the send dialog. */
+  send_options: SendOptions;
   /** Pre-labeled, flattened slots — the single source of truth for slot
    *  display, computed Rust-side from topology (`PrinterInstanceView`).
    *  Renderers read these; they don't re-derive labels. */
@@ -255,6 +267,18 @@ export async function setInstanceAmsUnits(
   return invoke<PrinterInstance>("printer_instance_set_ams_units", {
     id,
     amsUnits,
+  });
+}
+
+/** Replace the instance's sticky per-print send options. Persisted in
+ *  the user library; emits `printer:instance_changed`. */
+export async function setInstanceSendOptions(
+  id: string,
+  options: SendOptions,
+): Promise<PrinterInstance> {
+  return invoke<PrinterInstance>("printer_instance_set_send_options", {
+    id,
+    options,
   });
 }
 

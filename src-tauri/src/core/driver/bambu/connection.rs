@@ -233,15 +233,25 @@ impl Driver for BambuDriver {
         payload: SendPayload,
         on_progress: UploadProgressFn,
     ) -> Result<SendHandle, DriverError> {
-        let (bytes, plate_id, file_basename, use_ams, ams_mapping, ams_mapping2) = match payload {
-            SendPayload::Gcode3mf {
-                bytes,
-                plate_id,
-                file_basename,
-                use_ams,
-                ams_mapping,
-                ams_mapping2,
-            } => (bytes, plate_id, file_basename, use_ams, ams_mapping, ams_mapping2),
+        let (bytes, plate_id, file_basename, use_ams, ams_mapping, ams_mapping2, options) =
+            match payload {
+                SendPayload::Gcode3mf {
+                    bytes,
+                    plate_id,
+                    file_basename,
+                    use_ams,
+                    ams_mapping,
+                    ams_mapping2,
+                    options,
+                } => (
+                    bytes,
+                    plate_id,
+                    file_basename,
+                    use_ams,
+                    ams_mapping,
+                    ams_mapping2,
+                    options,
+                ),
             SendPayload::Gcode { .. } => {
                 return Err(DriverError::Other(
                     "BambuDriver only accepts SendPayload::Gcode3mf".into(),
@@ -302,10 +312,10 @@ impl Driver for BambuDriver {
                 // bambu/ftps.rs docs.
                 url: &format!("ftp://{remote_path}"),
                 bed_type: "auto",
-                timelapse: false,
-                bed_leveling: true,
-                flow_cali: false,
-                vibration_cali: false,
+                timelapse: options.timelapse,
+                bed_leveling: options.bed_leveling,
+                flow_cali: options.flow_calibration,
+                vibration_cali: options.vibration_calibration,
                 layer_inspect: false,
                 use_ams,
                 ams_mapping: &ams_mapping,

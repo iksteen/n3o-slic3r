@@ -523,6 +523,7 @@ function App() {
             />
             <SendControls
               printerIdentity={printerIdentity}
+              instance={activeInstance}
               connection={activeConnection}
               plateId={activePlateId}
               projectName={projectName}

@@ -185,12 +185,17 @@ impl Driver for MoonrakerDriver {
         on_progress: UploadProgressFn,
     ) -> Result<SendHandle, DriverError> {
         match payload {
-            SendPayload::Gcode { bytes, file_name } => {
+            SendPayload::Gcode {
+                bytes,
+                file_name,
+                u1_start,
+            } => {
                 http::upload_and_start(
                     &self.config.host,
                     self.config.port,
                     &file_name,
                     bytes,
+                    u1_start.as_ref(),
                     on_progress,
                 )
                 .await
@@ -567,6 +572,7 @@ mod tests {
             use_ams: false,
             ams_mapping: Vec::new(),
             ams_mapping2: Vec::new(),
+            options: Default::default(),
         };
         let err = driver
             .send(payload, std::sync::Arc::new(|_, _| {}))

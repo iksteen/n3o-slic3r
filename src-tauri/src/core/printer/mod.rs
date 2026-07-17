@@ -42,7 +42,7 @@ pub use instance_library::{
 pub use instance_registry::{
     create_instance, delete_instance, list_instances, lookup_instance, mutate_instance,
     set_extruder_nozzle_diameter, set_instance_ams_units, set_instance_bed,
-    set_instance_connection, set_instance_display_name,
+    set_instance_connection, set_instance_display_name, set_instance_send_options,
     set_config_override, set_plugin_override, set_slot_color, set_slot_filament, update_instance,
     InstanceMutError,
     InstancePatch,
@@ -272,6 +272,20 @@ pub fn printer_instance_set_display_name(
     window: tauri::Window,
 ) -> Result<PrinterInstanceView, String> {
     let updated = set_instance_display_name(&id, display_name).map_err(|e| e.to_string())?;
+    emit_instance_changed(&window, &updated.id);
+    Ok(PrinterInstanceView::of(updated))
+}
+
+/// Tauri command: replace the instance's sticky per-print send options
+/// (leveling/calibration/timelapse). Emits `printer:instance_changed`.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn printer_instance_set_send_options(
+    id: String,
+    options: crate::core::printer::instance::SendOptions,
+    window: tauri::Window,
+) -> Result<PrinterInstanceView, String> {
+    let updated = set_instance_send_options(&id, options).map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &updated.id);
     Ok(PrinterInstanceView::of(updated))
 }
