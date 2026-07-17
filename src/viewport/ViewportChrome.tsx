@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ViewportLegend } from "./ViewportLegend";
 import { setAxisView } from "./cameraControl";
+import { shouldIgnoreHotkey } from "../ui/hotkeyInhibit";
 import type { SceneObject } from "./types";
 
 /**
@@ -89,6 +90,87 @@ export function ViewportChrome({
     }
   };
 
+  // Tool hotkeys. This toolbar is mounted only in prepare mode, so a
+  // window listener here is naturally scoped to the scene view — no mode
+  // check needed. Each key routes through the same handler its button
+  // uses, so tool mutual-exclusion + the `hasObjects` gate stay defined in
+  // one place. Read through a ref to keep the listener stable across
+  // renders. Modifier chords (Ctrl/Cmd-S, Ctrl-Z, …) and typing into
+  // fields / modals are left alone (`shouldIgnoreHotkey`).
+  const hotkeys = {
+    gizmoMode,
+    hasObjects,
+    onGizmoMode,
+    onTool,
+    onArrange,
+    onClone,
+    onSplit,
+    onPaint,
+    runAlign,
+    runAutoOrient,
+  };
+  const hotkeysRef = useRef(hotkeys);
+  hotkeysRef.current = hotkeys;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (shouldIgnoreHotkey(e)) return;
+      const h = hotkeysRef.current;
+      let handled = true;
+      switch (e.key.toLowerCase()) {
+        // Gizmo — set (guarded so a repeated key never toggles off; Esc
+        // is the single "off").
+        case "m":
+          if (h.gizmoMode !== "move") h.onGizmoMode("move");
+          break;
+        case "r":
+          if (h.gizmoMode !== "rotate") h.onGizmoMode("rotate");
+          break;
+        case "s":
+          if (h.gizmoMode !== "scale") h.onGizmoMode("scale");
+          break;
+        case "escape":
+          if (h.gizmoMode !== "none") h.onGizmoMode("none");
+          // No active gizmo → leave Esc for the armed tool panels.
+          else handled = false;
+          break;
+        // Placing / plate tools — mirror each button (incl. hasObjects).
+        case "a":
+          if (h.hasObjects) h.onArrange();
+          break;
+        case "o":
+          void h.runAutoOrient();
+          break;
+        case "l":
+          if (h.hasObjects) h.onTool("layflat");
+          break;
+        case "x":
+          h.runAlign("alignX");
+          break;
+        case "y":
+          h.runAlign("alignY");
+          break;
+        case "f":
+          if (h.hasObjects) h.onTool("facematch");
+          break;
+        case "c":
+          if (h.hasObjects) h.onClone();
+          break;
+        case "z":
+          if (h.hasObjects) h.onSplit();
+          break;
+        case "u":
+          if (h.hasObjects) h.onPaint();
+          break;
+        default:
+          handled = false;
+      }
+      if (handled) e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const btn = (enabled: boolean, active = false) =>
     `px-2 py-1.5 ${
       active ? "bg-neutral-700" : enabled ? "hover:bg-neutral-700/60" : "opacity-40 cursor-not-allowed"
@@ -111,7 +193,7 @@ export function ViewportChrome({
             type="button"
             className={`px-2 py-1.5 ${gizmoMode === "move" ? "bg-neutral-700" : "hover:bg-neutral-700/60"}`}
             onClick={() => onGizmoMode("move")}
-            title="Move — drag the axis/plane handles"
+            title="Move (M) — drag the axis/plane handles"
             aria-label="Move gizmo"
             aria-pressed={gizmoMode === "move"}
           >
@@ -129,7 +211,7 @@ export function ViewportChrome({
             type="button"
             className={`px-2 py-1.5 ${gizmoMode === "rotate" ? "bg-neutral-700" : "hover:bg-neutral-700/60"}`}
             onClick={() => onGizmoMode("rotate")}
-            title="Rotate — drag the axis rings"
+            title="Rotate (R) — drag the axis rings"
             aria-label="Rotate gizmo"
             aria-pressed={gizmoMode === "rotate"}
           >
@@ -154,7 +236,7 @@ export function ViewportChrome({
             type="button"
             className={`px-2 py-1.5 ${gizmoMode === "scale" ? "bg-neutral-700" : "hover:bg-neutral-700/60"}`}
             onClick={() => onGizmoMode("scale")}
-            title="Scale — drag the axis/plane handles"
+            title="Scale (S) — drag the axis/plane handles"
             aria-label="Scale gizmo"
             aria-pressed={gizmoMode === "scale"}
           >
@@ -176,7 +258,7 @@ export function ViewportChrome({
             disabled={!hasObjects}
             className={btn(hasObjects, arrangeActive)}
             onClick={() => hasObjects && onArrange()}
-            title="Arrange — auto-pack the plate (opens options)"
+            title="Arrange (A) — auto-pack the plate (opens options)"
             aria-label="Auto-arrange the plate"
             aria-pressed={arrangeActive}
           >
@@ -192,7 +274,7 @@ export function ViewportChrome({
             disabled={!hasObjects}
             className={btn(hasObjects)}
             onClick={runAutoOrient}
-            title={selectedIds.length ? "Auto orient selection" : "Auto orient all objects"}
+            title={selectedIds.length ? "Auto orient (O) selection" : "Auto orient (O) all objects"}
             aria-label="Auto orient"
           >
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -210,7 +292,7 @@ export function ViewportChrome({
             disabled={!hasObjects}
             className={btn(hasObjects, tool === "layflat")}
             onClick={() => hasObjects && onTool("layflat")}
-            title="Lay flat — click a face to lay it on the plate"
+            title="Lay flat (L) — click a face to lay it on the plate"
             aria-label="Lay flat on face"
             aria-pressed={tool === "layflat"}
           >
@@ -225,7 +307,7 @@ export function ViewportChrome({
             disabled={!hasObjects}
             className={btn(hasObjects, tool === "alignY")}
             onClick={() => runAlign("alignY")}
-            title={selectedIds.length ? "Align selection to Y" : "Align — click an object to align to Y"}
+            title={selectedIds.length ? "Align selection to Y (Y)" : "Align (Y) — click an object to align to Y"}
             aria-label="Align to Y"
             aria-pressed={tool === "alignY"}
           >
@@ -239,7 +321,7 @@ export function ViewportChrome({
             disabled={!hasObjects}
             className={btn(hasObjects, tool === "alignX")}
             onClick={() => runAlign("alignX")}
-            title={selectedIds.length ? "Align selection to X" : "Align — click an object to align to X"}
+            title={selectedIds.length ? "Align selection to X (X)" : "Align (X) — click an object to align to X"}
             aria-label="Align to X"
             aria-pressed={tool === "alignX"}
           >
@@ -253,7 +335,7 @@ export function ViewportChrome({
             disabled={!hasObjects}
             className={btn(hasObjects, tool === "facematch")}
             onClick={() => hasObjects && onTool("facematch")}
-            title="Match face — click a reference face, then the face to align to it"
+            title="Match face (F) — click a reference face, then the face to align to it"
             aria-label="Match a face to a reference face on another object"
             aria-pressed={tool === "facematch"}
           >
@@ -269,7 +351,7 @@ export function ViewportChrome({
             disabled={!hasObjects}
             className={btn(hasObjects, tool === "clone")}
             onClick={() => hasObjects && onClone()}
-            title={selectedIds.length ? "Clone selection" : "Clone — click an object to clone"}
+            title={selectedIds.length ? "Clone selection (C)" : "Clone (C) — click an object to clone"}
             aria-label="Clone objects"
             aria-pressed={tool === "clone"}
           >
@@ -286,8 +368,8 @@ export function ViewportChrome({
             onClick={() => hasObjects && onSplit()}
             title={
               selectedIds.length
-                ? "Split — cut the selection with a plane"
-                : "Split — click an object to cut it with a plane"
+                ? "Split (Z) — cut the selection with a plane"
+                : "Split (Z) — click an object to cut it with a plane"
             }
             aria-label="Split objects by a plane"
             aria-pressed={splitActive || tool === "split"}
@@ -306,8 +388,8 @@ export function ViewportChrome({
             onClick={() => hasObjects && onPaint()}
             title={
               selectedIds.length
-                ? "Paint supports — brush enforcers on the selection"
-                : "Paint supports — click an object to paint it"
+                ? "Paint supports (U) — brush enforcers on the selection"
+                : "Paint supports (U) — click an object to paint it"
             }
             aria-label="Paint manual supports"
             aria-pressed={paintActive || tool === "paint"}
