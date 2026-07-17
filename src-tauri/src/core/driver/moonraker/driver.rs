@@ -22,6 +22,7 @@
 //! Shape mirrors `core/driver/bambu/connection.rs` so the trait
 //! surface stays consistent across drivers.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -29,13 +30,20 @@ use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 use tracing::warn;
 
-use super::{http, probe, session::MoonrakerSession, status as status_decode};
+use super::transport::StatusSessionFactory;
+use super::{http, probe, status as status_decode};
 use crate::core::driver::backoff::{reconnect_backoff_secs, CONNECT_TIMEOUT};
 use crate::core::driver::status::{ConnectionState, DriverExtra, PrinterStatus, U1Extra};
 use crate::core::driver::traits::{
-    Driver, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle, SendPayload,
-    UploadProgressFn,
+    ControlPlane, Driver, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle,
+    SendPayload, UploadProgressFn,
 };
+
+/// The driver's window onto its worker's live session: the worker stores
+/// the session's control handle here on each connect and clears it when
+/// the session ends, so [`Driver::control_plane`] always reflects the
+/// current connection (or `None` between them).
+type ControlSlot = Arc<std::sync::Mutex<Option<Arc<dyn ControlPlane>>>>;
 
 /// Per-driver connection config. Pulled out of the matching
 /// [`crate::core::driver::traits::DriverConfig`] variant at registry-
@@ -53,6 +61,13 @@ pub struct MoonrakerDriver {
     /// Snapmaker U1. Everything else about the driver is identical.
     kind: DriverKind,
     config: MoonrakerConfig,
+    /// Opens the status stream and reconnects it. Injected at
+    /// construction — the WebSocket transport for generic Moonraker and an
+    /// unpaired U1, the vendor mTLS MQTT transport for a paired U1 — so
+    /// this driver stays vendor-agnostic.
+    factory: Arc<dyn StatusSessionFactory>,
+    /// Live-session control handle, worker-maintained. See [`ControlSlot`].
+    control_slot: ControlSlot,
     /// Status publisher. Cloned across `subscribe_status` callers.
     status_tx: watch::Sender<PrinterStatus>,
     status_rx: watch::Receiver<PrinterStatus>,
@@ -66,7 +81,12 @@ pub struct MoonrakerDriver {
 }
 
 impl MoonrakerDriver {
-    pub fn new(id: DriverId, kind: DriverKind, config: MoonrakerConfig) -> Self {
+    pub fn new(
+        id: DriverId,
+        kind: DriverKind,
+        config: MoonrakerConfig,
+        factory: Arc<dyn StatusSessionFactory>,
+    ) -> Self {
         // The Moonraker status decoder emits its extras under the `U1`
         // wire tag for every kind (see `status::decode`) — renaming
         // that tag is a coordinated frontend+backend change, not this
@@ -77,6 +97,8 @@ impl MoonrakerDriver {
             id,
             kind,
             config,
+            factory,
+            control_slot: Arc::new(std::sync::Mutex::new(None)),
             status_tx,
             status_rx,
             tasks: Vec::new(),
@@ -117,10 +139,10 @@ impl Driver for MoonrakerDriver {
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
-        let host = self.config.host.clone();
-        let port = self.config.port;
+        let factory = Arc::clone(&self.factory);
+        let control_slot = Arc::clone(&self.control_slot);
         let status_tx = self.status_tx.clone();
-        let task = tokio::spawn(run_worker(host, port, status_tx, shutdown_rx));
+        let task = tokio::spawn(run_worker(factory, control_slot, status_tx, shutdown_rx));
         self.tasks.push(task);
         Ok(())
     }
@@ -140,6 +162,9 @@ impl Driver for MoonrakerDriver {
             // subscribers see the channel close.
             drop(task);
         }
+        // The aborted worker can't clear its slot — do it here so a
+        // disconnected driver doesn't hand out a dead control handle.
+        *self.control_slot.lock().expect("control slot") = None;
         self.publish_state(ConnectionState::Disconnected {
             reason: "disconnect() called".into(),
         });
@@ -180,14 +205,20 @@ impl Driver for MoonrakerDriver {
     async fn command(&self, cmd: PrinterCommand) -> Result<(), DriverError> {
         http::send_command(&self.config.host, self.config.port, cmd).await
     }
+
+    fn control_plane(&self) -> Option<Arc<dyn ControlPlane>> {
+        self.control_slot.lock().expect("control slot").clone()
+    }
 }
 
-/// Background task: hold one [`MoonrakerSession`] at a time, decode
+/// Background task: hold one [`StatusSession`] at a time, decode
 /// every incoming snapshot, publish through `status_tx`. Reconnects
 /// with exponential backoff on session failure or clean close.
+///
+/// [`StatusSession`]: super::transport::StatusSession
 async fn run_worker(
-    host: String,
-    port: u16,
+    factory: Arc<dyn StatusSessionFactory>,
+    control_slot: ControlSlot,
     status_tx: watch::Sender<PrinterStatus>,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
@@ -198,11 +229,11 @@ async fn run_worker(
             s.last_updated = std::time::SystemTime::now();
         });
 
-        // Bound the connect (WS handshake + initial subscribe) so an
+        // Bound the connect (handshake + initial subscribe) so an
         // unreachable host fails fast into backoff instead of stalling
         // on the OS TCP timeout.
         let session = tokio::select! {
-            r = tokio::time::timeout(CONNECT_TIMEOUT, MoonrakerSession::connect(&host, port)) => {
+            r = tokio::time::timeout(CONNECT_TIMEOUT, factory.connect()) => {
                 match r {
                     Ok(inner) => inner,
                     Err(_) => Err(DriverError::Network(format!(
@@ -223,6 +254,9 @@ async fn run_worker(
                 // healthy printer that disconnects briefly should
                 // come back fast on the next round.
                 attempt = 0;
+                // Expose this session's control handle (camera wake et al.)
+                // for the driver to hand out while the session lives.
+                *control_slot.lock().expect("control slot") = Some(session.control());
                 // Publish the initial subscribe response so the UI
                 // doesn't sit on a stale "Connecting…" snapshot.
                 let initial = status_decode::decode(&session.status(), ConnectionState::Connected);
@@ -244,7 +278,7 @@ async fn run_worker(
                             break "the printer closed the connection".to_string();
                         }
                         Err(e) => {
-                            warn!(?e, host = %host, port, "Moonraker session failed");
+                            warn!(?e, "Moonraker session failed");
                             // `e` is a DriverError whose Display already
                             // names the cause (network/auth/protocol) —
                             // surface it verbatim, matching the Bambu side
@@ -255,10 +289,13 @@ async fn run_worker(
                 }
             }
             Err(e) => {
-                warn!(?e, host = %host, port, "Moonraker connect failed");
+                warn!(?e, "Moonraker connect failed");
                 e.to_string()
             }
         };
+
+        // Whatever ended the session, its control handle is dead now.
+        *control_slot.lock().expect("control slot") = None;
 
         // Publish the upcoming reconnect window so the UI can show
         // a countdown rather than a generic "disconnected".
@@ -284,6 +321,7 @@ async fn run_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::driver::moonraker::WsSessionFactory;
     use crate::core::driver::status::JobState;
     use crate::core::driver::traits::DriverId;
     use futures_util::{SinkExt, StreamExt};
@@ -292,6 +330,14 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
     use tokio_tungstenite::tungstenite::Message;
+
+    /// A WS status-session factory pointed at a mock server.
+    fn ws_factory(host: &str, port: u16) -> Arc<dyn StatusSessionFactory> {
+        Arc::new(WsSessionFactory {
+            host: host.to_owned(),
+            port,
+        })
+    }
 
     /// Local mock Moonraker server. Serves two endpoints on the same
     /// port: the HTTP `GET /machine/system_info` probe (driven by
@@ -443,7 +489,9 @@ mod tests {
         });
         let (host, port, _stop) =
             start_mock_moonraker(initial, Some(update), Some("mock-serial")).await;
-        let mut driver = MoonrakerDriver::new(DriverId(99), DriverKind::U1, MoonrakerConfig { host, port });
+        let factory = ws_factory(&host, port);
+        let mut driver =
+            MoonrakerDriver::new(DriverId(99), DriverKind::U1, MoonrakerConfig { host, port }, factory);
         driver.connect().await.expect("connect");
 
         // Wait for the streamed update to land — implies both the
@@ -468,7 +516,9 @@ mod tests {
         // driver should surface that error cleanly without spawning a
         // worker.
         let (host, port, _stop) = start_mock_moonraker(json!({}), None, None).await;
-        let mut driver = MoonrakerDriver::new(DriverId(100), DriverKind::U1, MoonrakerConfig { host, port });
+        let factory = ws_factory(&host, port);
+        let mut driver =
+            MoonrakerDriver::new(DriverId(100), DriverKind::U1, MoonrakerConfig { host, port }, factory);
         let err = driver.connect().await.unwrap_err();
         assert!(
             matches!(err, DriverError::Network(_) | DriverError::Protocol(_)),
@@ -486,7 +536,9 @@ mod tests {
             Some("mock"),
         )
         .await;
-        let mut driver = MoonrakerDriver::new(DriverId(101), DriverKind::U1, MoonrakerConfig { host, port });
+        let factory = ws_factory(&host, port);
+        let mut driver =
+            MoonrakerDriver::new(DriverId(101), DriverKind::U1, MoonrakerConfig { host, port }, factory);
         driver.connect().await.unwrap();
         // First disconnect tears down.
         driver.disconnect().await.unwrap();
@@ -504,6 +556,7 @@ mod tests {
                 host: "127.0.0.1".into(),
                 port: 1,
             },
+            ws_factory("127.0.0.1", 1),
         );
         // Driver doesn't need to be connected for this — the variant
         // check is up-front. Use a placeholder Bambu payload.
@@ -534,10 +587,14 @@ mod tests {
             host: "h".into(),
             port: 80,
         };
-        let generic =
-            MoonrakerDriver::new(DriverId(1), DriverKind::Moonraker, config.clone());
+        let generic = MoonrakerDriver::new(
+            DriverId(1),
+            DriverKind::Moonraker,
+            config.clone(),
+            ws_factory("h", 80),
+        );
         assert_eq!(generic.kind(), DriverKind::Moonraker);
-        let u1 = MoonrakerDriver::new(DriverId(2), DriverKind::U1, config);
+        let u1 = MoonrakerDriver::new(DriverId(2), DriverKind::U1, config, ws_factory("h", 80));
         assert_eq!(u1.kind(), DriverKind::U1);
     }
 }

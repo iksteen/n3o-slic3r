@@ -22,10 +22,14 @@
 //! across modules.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use async_trait::async_trait;
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Map, Value};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{client::IntoClientRequest, Message},
@@ -33,13 +37,32 @@ use tokio_tungstenite::{
 };
 use tracing::debug;
 
+use super::transport::{StatusSession, StatusSessionFactory};
+use crate::core::driver::traits::ControlPlane;
 use crate::core::driver::DriverError;
+
+/// Opens a generic Moonraker status session over the open WebSocket. The
+/// transport a printer uses without vendor credentials — every Klipper
+/// printer, plus an unpaired U1 on its trusted LAN.
+pub struct WsSessionFactory {
+    pub host: String,
+    pub port: u16,
+}
+
+#[async_trait]
+impl StatusSessionFactory for WsSessionFactory {
+    async fn connect(&self) -> Result<Box<dyn StatusSession>, DriverError> {
+        MoonrakerSession::connect(&self.host, self.port)
+            .await
+            .map(|session| Box::new(session) as Box<dyn StatusSession>)
+    }
+}
 
 /// Printer objects we subscribe to. Every field [`super::status`]
 /// reads comes from one of these objects. Adding a new
 /// object here without a corresponding decoder is harmless — it
 /// just sits in the merged status map unused.
-const SUBSCRIBE_OBJECTS: &[&str] = &[
+pub(crate) const SUBSCRIBE_OBJECTS: &[&str] = &[
     "print_stats",
     "display_status",
     "extruder",
@@ -59,11 +82,17 @@ const SUBSCRIBE_OBJECTS: &[&str] = &[
 ];
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+/// The socket's send half, shared between the session's own subscribe
+/// and any [`WsControl`] handles handed out via [`StatusSession::control`].
+type SharedSink = Arc<Mutex<SplitSink<Socket, Message>>>;
 
 /// One MoonrakerSession owns one WebSocket. Reconnect is the
-/// driver's responsibility, not this type's.
+/// driver's responsibility, not this type's. The socket is split so the
+/// read half stays exclusively with `next_status` while the send half is
+/// shareable with control handles.
 pub(super) struct MoonrakerSession {
-    socket: Socket,
+    sink: SharedSink,
+    stream: SplitStream<Socket>,
     status: Map<String, Value>,
     next_request_id: u64,
 }
@@ -83,62 +112,16 @@ impl MoonrakerSession {
             .await
             .map_err(|e| DriverError::Network(format!("connect Moonraker at {url}: {e}")))?;
         debug!(host = %host, port = port, "moonraker connected");
+        let (sink, stream) = socket.split();
         let mut session = Self {
-            socket,
+            sink: Arc::new(Mutex::new(sink)),
+            stream,
             status: Map::new(),
             next_request_id: 1,
         };
         let initial = session.send_subscribe().await?;
         session.merge_status(&initial);
         Ok(session)
-    }
-
-    /// Current merged status map. Cloned because the status-decode
-    /// caller wants an owned snapshot it can pass around to
-    /// per-field helpers.
-    pub(super) fn status(&self) -> Map<String, Value> {
-        self.status.clone()
-    }
-
-    /// Block until the next `notify_status_update` arrives. Other
-    /// JSON-RPC traffic (responses we didn't initiate, ping/pong,
-    /// binary frames) is silently dropped. Returns `Ok(None)` on
-    /// clean server-side close so the caller can transition to
-    /// `ConnectionState::Disconnected` and reconnect.
-    pub(super) async fn next_status(&mut self) -> Result<Option<Map<String, Value>>, DriverError> {
-        loop {
-            let Some(message) = self.socket.next().await else {
-                return Ok(None);
-            };
-            let message = message
-                .map_err(|e| DriverError::Network(format!("Moonraker WS read failed: {e}")))?;
-            let text = match message {
-                Message::Text(text) => text,
-                Message::Close(_) => return Ok(None),
-                // Binary / control frames aren't part of Moonraker's
-                // protocol contract; tungstenite handles pong replies
-                // for us, we just skip the frames here.
-                Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
-                    continue
-                }
-            };
-            let value: Value = serde_json::from_str(&text)
-                .map_err(|e| DriverError::Protocol(format!("Moonraker WS sent non-JSON: {e}")))?;
-            if value.get("method").and_then(Value::as_str) != Some("notify_status_update") {
-                continue;
-            }
-            let Some(update) = value
-                .get("params")
-                .and_then(Value::as_array)
-                .and_then(|array| array.first())
-                .and_then(Value::as_object)
-                .cloned()
-            else {
-                continue;
-            };
-            self.merge_status(&update);
-            return Ok(Some(self.status.clone()));
-        }
     }
 
     /// JSON-RPC `printer.objects.subscribe` for every object in
@@ -158,12 +141,14 @@ impl MoonrakerSession {
             "params": { "objects": objects },
             "id": id,
         });
-        self.socket
+        self.sink
+            .lock()
+            .await
             .send(Message::Text(request.to_string().into()))
             .await
             .map_err(|e| DriverError::Network(format!("send subscribe request: {e}")))?;
 
-        while let Some(message) = self.socket.next().await {
+        while let Some(message) = self.stream.next().await {
             let message = message
                 .map_err(|e| DriverError::Network(format!("Moonraker WS read failed: {e}")))?;
             let text = match message {
@@ -207,6 +192,98 @@ impl MoonrakerSession {
     }
 }
 
+/// Fire-and-forget JSON-RPC sends over the session's shared socket sink.
+/// Outlives nothing: once the socket dies, sends fail and the holder
+/// re-fetches a handle from the driver.
+struct WsControl {
+    sink: SharedSink,
+}
+
+#[async_trait]
+impl ControlPlane for WsControl {
+    async fn send_jsonrpc(&self, method: &str, params: Value) -> Result<(), DriverError> {
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+            "id": jsonrpc_id(),
+        })
+        .to_string();
+        self.sink
+            .lock()
+            .await
+            .send(Message::Text(payload.into()))
+            .await
+            .map_err(|e| DriverError::Network(format!("WS send {method}: {e}")))
+    }
+}
+
+/// Request ids for fire-and-forget sends — unix millis, unique enough for
+/// requests whose replies we never read.
+fn jsonrpc_id() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[async_trait]
+impl StatusSession for MoonrakerSession {
+    /// Current merged status map. Cloned because the status-decode
+    /// caller wants an owned snapshot it can pass around to
+    /// per-field helpers.
+    fn status(&self) -> Map<String, Value> {
+        self.status.clone()
+    }
+
+    /// Block until the next `notify_status_update` arrives. Other
+    /// JSON-RPC traffic (responses we didn't initiate, ping/pong,
+    /// binary frames) is silently dropped. Returns `Ok(None)` on
+    /// clean server-side close so the caller can transition to
+    /// `ConnectionState::Disconnected` and reconnect.
+    async fn next_status(&mut self) -> Result<Option<Map<String, Value>>, DriverError> {
+        loop {
+            let Some(message) = self.stream.next().await else {
+                return Ok(None);
+            };
+            let message = message
+                .map_err(|e| DriverError::Network(format!("Moonraker WS read failed: {e}")))?;
+            let text = match message {
+                Message::Text(text) => text,
+                Message::Close(_) => return Ok(None),
+                // Binary / control frames aren't part of Moonraker's
+                // protocol contract; tungstenite handles pong replies
+                // for us, we just skip the frames here.
+                Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {
+                    continue
+                }
+            };
+            let value: Value = serde_json::from_str(&text)
+                .map_err(|e| DriverError::Protocol(format!("Moonraker WS sent non-JSON: {e}")))?;
+            if value.get("method").and_then(Value::as_str) != Some("notify_status_update") {
+                continue;
+            }
+            let Some(update) = value
+                .get("params")
+                .and_then(Value::as_array)
+                .and_then(|array| array.first())
+                .and_then(Value::as_object)
+                .cloned()
+            else {
+                continue;
+            };
+            self.merge_status(&update);
+            return Ok(Some(self.status.clone()));
+        }
+    }
+
+    fn control(&self) -> Arc<dyn ControlPlane> {
+        Arc::new(WsControl {
+            sink: Arc::clone(&self.sink),
+        })
+    }
+}
+
 // ---- Status-map readers (consumed by the status decoder) ----
 
 /// Per-object shallow merge of a Moonraker status patch into an accumulated
@@ -214,7 +291,7 @@ impl MoonrakerSession {
 /// merges field-wise, so a `{ temperature: 220.1 }` update doesn't wipe the
 /// `target_temperature` already there; anything that isn't a patch on an
 /// existing object is inserted verbatim.
-pub(super) fn merge_status_into(into: &mut Map<String, Value>, update: &Map<String, Value>) {
+pub(crate) fn merge_status_into(into: &mut Map<String, Value>, update: &Map<String, Value>) {
     for (key, value) in update {
         match (into.get_mut(key), value) {
             (Some(existing), Value::Object(patch)) if existing.is_object() => {

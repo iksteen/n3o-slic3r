@@ -214,7 +214,7 @@ export function ConnectionSection({
     const runId = (testRunRef.current += 1);
     setTest({ kind: "testing" });
     try {
-      await driverTestConnection(configForConnection(conn));
+      await driverTestConnection(configForConnection(conn), instanceId);
       if (testRunRef.current === runId) setTest({ kind: "ok" });
     } catch (e) {
       if (testRunRef.current === runId) {

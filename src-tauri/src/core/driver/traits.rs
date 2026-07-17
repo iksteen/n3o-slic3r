@@ -226,6 +226,28 @@ pub trait Driver: Send + Sync {
             "this printer has no writable AMS".into(),
         ))
     }
+
+    /// A handle for vendor JSON-RPC requests over this driver's live
+    /// status connection (the U1 camera wake rides it, over MQTT or WS
+    /// alike). `None` when the driver has no such control plane or isn't
+    /// currently connected. Default: no control plane.
+    fn control_plane(&self) -> Option<std::sync::Arc<dyn ControlPlane>> {
+        None
+    }
+}
+
+/// Fire-and-forget JSON-RPC over a driver's live connection. The
+/// transport frames it (MQTT publish on `<sn>/request`, WebSocket text
+/// message); responses are not surfaced — callers that need one don't fit
+/// this hatch. Handles go stale when their session drops: sends fail and
+/// the caller re-fetches via [`Driver::control_plane`].
+#[async_trait]
+pub trait ControlPlane: Send + Sync {
+    async fn send_jsonrpc(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<(), DriverError>;
 }
 
 /// Parameters for writing one filament identity back to a Bambu AMS

@@ -20,8 +20,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::ams::css_to_hex8;
 use super::bambu::connection::{BambuConfig, BambuDriver};
-use super::moonraker::{MoonrakerConfig, MoonrakerDriver};
+use super::moonraker::{MoonrakerConfig, MoonrakerDriver, StatusSessionFactory, WsSessionFactory};
 use super::registry::DriverRegistry;
+use super::snapmaker::{mqtt_status, snap_token};
 use super::send::{
     apply_pre_send, collect_ams_bindings, collect_ams_mapping, derive_send_names,
     plate_printer_model, read_gcode_bytes, wrap_gcode_as_3mf,
@@ -204,22 +205,39 @@ fn spawn_status_bridge(
 /// spawns the status bridge) and [`driver_test_connection`] (which
 /// drives a throwaway instance and discards it), so the per-kind
 /// construction lives in one place.
-fn build_driver(id: DriverId, config: DriverConfig) -> Box<dyn Driver> {
+fn build_driver(id: DriverId, instance_id: &str, config: DriverConfig) -> Box<dyn Driver> {
     match config {
         DriverConfig::Bambu { host, access_code } => {
             Box::new(BambuDriver::new(id, BambuConfig { host, access_code }))
         }
         // Both Moonraker-backed kinds run the same driver; the kind only
         // distinguishes the vendor webcam stack (see `camera::source_for`).
-        DriverConfig::U1 { host, port } => Box::new(MoonrakerDriver::new(
-            id,
-            DriverKind::U1,
-            MoonrakerConfig { host, port },
-        )),
+        // A paired U1 carries an mTLS token → status rides the vendor MQTT
+        // bus (remote-capable); unpaired/generic → the open WebSocket. The
+        // driver stays vendor-agnostic; we inject the transport here.
+        DriverConfig::U1 { host, port } => {
+            let factory: Arc<dyn StatusSessionFactory> = match snap_token::load(instance_id) {
+                Some(token) => Arc::new(mqtt_status::MqttSessionFactory { token }),
+                None => Arc::new(WsSessionFactory {
+                    host: host.clone(),
+                    port,
+                }),
+            };
+            Box::new(MoonrakerDriver::new(
+                id,
+                DriverKind::U1,
+                MoonrakerConfig { host, port },
+                factory,
+            ))
+        }
         DriverConfig::Moonraker { host, port } => Box::new(MoonrakerDriver::new(
             id,
             DriverKind::Moonraker,
-            MoonrakerConfig { host, port },
+            MoonrakerConfig {
+                host: host.clone(),
+                port,
+            },
+            Arc::new(WsSessionFactory { host, port }),
         )),
     }
 }
@@ -228,6 +246,7 @@ fn build_driver(id: DriverId, config: DriverConfig) -> Box<dyn Driver> {
 #[tracing::instrument(skip(registry, app))]
 pub async fn driver_register(
     config: DriverConfig,
+    instance_id: String,
     app: AppHandle,
     registry: State<'_, Arc<DriverRegistry>>,
 ) -> Result<DriverId, String> {
@@ -235,8 +254,8 @@ pub async fn driver_register(
     // driver's internal `id()` matches the registry's id (drivers use
     // it for log spans + outgoing protocol frames).
     let mut bridge_rx = None;
-    let id = registry.register_with(|id| {
-        let driver = build_driver(id, config);
+    let id = registry.register_with(&instance_id, |id| {
+        let driver = build_driver(id, &instance_id, config);
         bridge_rx = Some(driver.subscribe_status());
         driver
     });
@@ -258,7 +277,10 @@ pub async fn driver_register(
 /// auto-connection reconciler is not involved.
 #[tauri::command]
 #[tracing::instrument]
-pub async fn driver_test_connection(config: DriverConfig) -> Result<(), String> {
+pub async fn driver_test_connection(
+    config: DriverConfig,
+    instance_id: String,
+) -> Result<(), String> {
     use super::status::ConnectionState;
 
     // Generous cap covering Bambu's ~5-8s MQTT handshake; U1's HTTP
@@ -267,7 +289,7 @@ pub async fn driver_test_connection(config: DriverConfig) -> Result<(), String> 
 
     // Transient driver. DriverId(0) is fine — it's never inserted into
     // the registry; the id only tags log spans / outgoing frames.
-    let mut driver = build_driver(DriverId(0), config);
+    let mut driver = build_driver(DriverId(0), &instance_id, config);
 
     // Subscribe before connecting and mark the initial pre-connect
     // state seen, so the watch loop only reacts to transitions the
@@ -665,7 +687,9 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 1,
         };
-        let err = driver_test_connection(config).await.unwrap_err();
+        let err = driver_test_connection(config, "unpaired-instance".into())
+            .await
+            .unwrap_err();
         assert!(!err.is_empty(), "expected a non-empty failure reason");
     }
 

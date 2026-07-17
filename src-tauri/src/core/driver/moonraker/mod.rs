@@ -20,6 +20,9 @@ pub mod http;
 pub mod probe;
 pub mod session;
 pub mod status;
+pub mod transport;
 pub mod webcam;
 
 pub use driver::{MoonrakerConfig, MoonrakerDriver};
+pub use session::WsSessionFactory;
+pub use transport::{StatusSession, StatusSessionFactory};

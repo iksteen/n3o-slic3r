@@ -488,7 +488,7 @@ async function registerDriver(
   bumpAndNotify();
   let id: DriverId | null = null;
   try {
-    id = await driverRegister(configForConnection(conn));
+    id = await driverRegister(configForConnection(conn), identity);
     // Populate the reverse map BEFORE driverConnect so any status
     // events that fire during the connect window route correctly.
     DRIVER_TO_IDENTITY.set(id, identity);

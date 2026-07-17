@@ -31,26 +31,27 @@
 //! Three sources are wired: the Bambu LAN source ([`super::bambu::camera`],
 //! a push socket), the generic Moonraker source (webcams discovered via
 //! `/server/webcams/list`, snapshot-polled), and the U1 source
-//! ([`super::snapmaker::camera`] — the same Moonraker JPEG poll, behind the
-//! vendor monitor-mode wake: mTLS MQTT when paired, the open LAN WebSocket
-//! when not). `source_for` returns an error for backends without a camera
-//! so the frontend can fall back to its "camera unavailable" state. A new
-//! backend slots in as another [`CameraSource`] impl + `source_for` arm
-//! without touching the worker, manager, or commands.
+//! ([`super::snapmaker::camera`] — the same Moonraker JPEG poll, behind a
+//! vendor monitor-mode wake sent over the driver's own status connection
+//! via [`super::traits::ControlPlane`]). `source_for` returns an error for
+//! backends without a camera so the frontend can fall back to its "camera
+//! unavailable" state. A new backend slots in as another [`CameraSource`]
+//! impl + `source_for` arm without touching the worker, manager, or
+//! commands.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::State;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::moonraker::webcam;
+use super::registry::DriverRegistry;
 use super::snapmaker::camera as u1_camera;
-use super::snapmaker::camera::{SnapMonitorSession, WsMonitorSession};
-use super::snapmaker::snap_token::{self, SnapToken};
 use super::backoff::reconnect_backoff_secs;
 use super::traits::{DriverConfig, DriverError};
 
@@ -109,50 +110,32 @@ impl CameraSource for BambuCameraSource {
     }
 }
 
-/// The active U1 monitor-mode wake, held for the view's lifetime. Paired
-/// printers use the mTLS MQTT control plane ([`SnapMonitorSession`]), which
-/// works remotely; unpaired ones use the no-pairing LAN WebSocket path
-/// ([`WsMonitorSession`], protocol §0). Both keep the daemon's watchdog
-/// reset with a heartbeat and are released on teardown.
-enum U1Monitor {
-    Mtls(SnapMonitorSession),
-    Ws(WsMonitorSession),
-}
-
-impl U1Monitor {
-    async fn release(self) {
-        match self {
-            U1Monitor::Mtls(session) => session.release().await,
-            U1Monitor::Ws(session) => session.release().await,
-        }
-    }
-}
-
 /// The Snapmaker U1 camera: a Moonraker JPEG poll kept alive by a
-/// session-long "monitor mode" wake. `setup` opens the wake — mTLS MQTT
-/// when paired, the open WebSocket when not; `attempt` runs the poll loop;
-/// `teardown` releases monitor mode. The session is held across the whole
-/// view (the daemon only emits while a client stays present), so it lives
-/// in an async `Mutex` set by `setup` and taken by `teardown`.
+/// monitor-mode wake sent over the *driver's* status connection — the
+/// camera holds no printer link of its own. `setup` spawns the wake task
+/// (start + heartbeat through whatever control plane the driver's live
+/// session exposes: mTLS MQTT when paired, the LAN WebSocket when not);
+/// `attempt` runs the poll loop; `teardown` aborts the wake and releases
+/// monitor mode. Consequence: frames need the driver connected — which a
+/// visible camera panel implies.
 struct U1CameraSource {
-    /// Moonraker HTTP host:port (the print/status endpoint, typically :80).
+    /// Moonraker HTTP host:port (the frame fetch, typically :80).
     host: String,
     port: u16,
-    /// Paired mTLS material, when the printer is paired — selects the wake
-    /// path. `None` falls back to the no-pairing LAN WebSocket wake.
-    token: Option<SnapToken>,
+    instance_id: String,
+    registry: Arc<DriverRegistry>,
     client: reqwest::Client,
-    session: tokio::sync::Mutex<Option<U1Monitor>>,
+    wake: Mutex<Option<JoinHandle<()>>>,
 }
 
 #[async_trait]
 impl CameraSource for U1CameraSource {
     async fn setup(&self) {
-        let session = match &self.token {
-            Some(token) => u1_camera::wake(token).await.map(U1Monitor::Mtls),
-            None => u1_camera::wake_ws(&self.host, self.port).await.map(U1Monitor::Ws),
-        };
-        *self.session.lock().await = session;
+        let task = tokio::spawn(u1_camera::wake_task(
+            Arc::clone(&self.registry),
+            self.instance_id.clone(),
+        ));
+        *self.wake.lock().expect("wake lock") = Some(task);
     }
 
     async fn attempt(&self, sink: &FrameSink) -> Result<(), DriverError> {
@@ -161,9 +144,10 @@ impl CameraSource for U1CameraSource {
     }
 
     async fn teardown(&self) {
-        if let Some(session) = self.session.lock().await.take() {
-            session.release().await;
+        if let Some(task) = self.wake.lock().expect("wake lock").take() {
+            task.abort();
         }
+        u1_camera::release(&self.registry, &self.instance_id).await;
     }
 }
 
@@ -215,10 +199,11 @@ async fn poll_jpeg_loop(
 }
 
 /// Build the camera source for an instance + connection config, or an
-/// error if the backend has no camera support (a U1 that isn't paired).
+/// error if the backend has no camera support.
 fn source_for(
     instance_id: &str,
     config: DriverConfig,
+    registry: &Arc<DriverRegistry>,
 ) -> Result<Box<dyn CameraSource>, DriverError> {
     match config {
         DriverConfig::Bambu { host, access_code } => {
@@ -227,10 +212,10 @@ fn source_for(
         DriverConfig::U1 { host, port } => Ok(Box::new(U1CameraSource {
             host,
             port,
-            // Paired → mTLS wake (works remote); unpaired → LAN WS wake.
-            token: snap_token::load(instance_id),
+            instance_id: instance_id.to_owned(),
+            registry: Arc::clone(registry),
             client: webcam::poll_client()?,
-            session: tokio::sync::Mutex::new(None),
+            wake: Mutex::new(None),
         })),
         DriverConfig::Moonraker { host, port } => Ok(Box::new(MoonrakerCameraSource {
             host,
@@ -353,10 +338,11 @@ async fn run_worker(
 /// `channel` as raw-bytes messages (`ArrayBuffer` in JS). Returns an error
 /// for backends without camera support so the frontend can show its
 /// "camera unavailable" state.
-#[tracing::instrument(skip(manager, config, channel))]
+#[tracing::instrument(skip(manager, registry, config, channel))]
 #[tauri::command]
 pub fn camera_start(
     manager: State<'_, std::sync::Arc<CameraManager>>,
+    registry: State<'_, std::sync::Arc<DriverRegistry>>,
     instance_id: String,
     config: DriverConfig,
     channel: Channel<InvokeResponseBody>,
@@ -364,7 +350,7 @@ pub fn camera_start(
     // Errors cross the IPC boundary as their Display string (matching every
     // other driver command), so the frontend shows the message rather than
     // a serialized `DriverError` enum.
-    let source = source_for(&instance_id, config).map_err(|e| e.to_string())?;
+    let source = source_for(&instance_id, config, &registry).map_err(|e| e.to_string())?;
     manager.start(instance_id, source, channel);
     Ok(())
 }
@@ -504,27 +490,32 @@ mod tests {
     }
 
     #[test]
-    fn source_for_builds_an_unpaired_u1_source() {
-        // No pairing token in unit tests — source_for must still build a
-        // source (it falls back to the no-pairing LAN WebSocket wake).
+    fn source_for_builds_a_u1_source_regardless_of_pairing() {
+        // The wake rides the driver's status connection, so building the
+        // source needs no pairing token — just the registry to reach the
+        // driver through later.
+        let registry = Arc::new(DriverRegistry::new());
         assert!(source_for(
             "some-instance",
             DriverConfig::U1 {
                 host: "h".into(),
                 port: 80,
             },
+            &registry,
         )
         .is_ok());
     }
 
     #[test]
     fn source_for_builds_a_bambu_source() {
+        let registry = Arc::new(DriverRegistry::new());
         assert!(source_for(
             "some-instance",
             DriverConfig::Bambu {
                 host: "h".into(),
                 access_code: "12345678".into(),
             },
+            &registry,
         )
         .is_ok());
     }

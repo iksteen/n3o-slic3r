@@ -32,6 +32,10 @@ struct Inner {
 
 struct Entry {
     driver: Arc<RwLock<Box<dyn Driver>>>,
+    /// The printer-instance UUID this driver was registered for. Lets
+    /// instance-keyed subsystems (the camera) reach the live driver
+    /// without the frontend threading a `DriverId` around.
+    instance_id: String,
 }
 
 impl Default for DriverRegistry {
@@ -55,15 +59,16 @@ impl DriverRegistry {
     /// (constructor ran) but NOT for having called `connect()`
     /// yet — that's a separate Tauri command.
     pub fn register(&self, driver: Box<dyn Driver>) -> DriverId {
-        self.register_with(|_id| driver)
+        self.register_with("", |_id| driver)
     }
 
     /// Allocate the next id, hand it to `builder`, and insert the
     /// driver under that id atomically. Use this when the driver's
     /// own `id()` should match the registry's id (most cases —
     /// drivers carry the id into log spans + outgoing protocol
-    /// frames).
-    pub fn register_with<F>(&self, builder: F) -> DriverId
+    /// frames). `instance_id` is the printer-instance UUID the driver
+    /// serves, recorded for [`find_by_instance`](Self::find_by_instance).
+    pub fn register_with<F>(&self, instance_id: &str, builder: F) -> DriverId
     where
         F: FnOnce(DriverId) -> Box<dyn Driver>,
     {
@@ -75,6 +80,7 @@ impl DriverRegistry {
             id,
             Entry {
                 driver: Arc::new(RwLock::new(driver)),
+                instance_id: instance_id.to_owned(),
             },
         );
         id
@@ -96,6 +102,17 @@ impl DriverRegistry {
         inner.drivers.get(&id).map(|e| e.driver.clone())
     }
 
+    /// Grab the driver registered for a printer instance, if any.
+    // ponytail: O(n) scan — fine for a handful of printers; index by
+    // instance_id if fleets ever get large.
+    pub fn find_by_instance(&self, instance_id: &str) -> Option<Arc<RwLock<Box<dyn Driver>>>> {
+        let inner = self.inner.lock().expect("registry mutex");
+        inner
+            .drivers
+            .values()
+            .find(|e| e.instance_id == instance_id)
+            .map(|e| e.driver.clone())
+    }
 }
 
 #[cfg(test)]
