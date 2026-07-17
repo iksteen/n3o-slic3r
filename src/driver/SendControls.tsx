@@ -22,8 +22,9 @@ import {
   type PrinterInstance,
   type SendOptions,
 } from "../printer/printerInstance";
+import { onEvents } from "../state/eventRouter";
 import type { ConnectionSummary } from "./useDriverConnections";
-import type { DriverId, PrinterStatus } from "./types";
+import type { DriverId, PrinterStatus, StatusUpdateEvent } from "./types";
 
 export interface SendControlsProps {
   /** Cascade-side printer identity from the active plate's binding,
@@ -67,20 +68,65 @@ function sanitizeBasename(s: string): string {
   return collapsed === "" ? "untitled" : collapsed;
 }
 
-/** The "we just sent and the printer hasn't acted yet" latch lives at
- *  module scope, not in component state, because the whole topbar (and
- *  this component) is unmounted while the Devices view is open — a
- *  component-local latch would be lost on a tab round-trip and let a
- *  duplicate send through. There's only ever one SendControls (bound to
- *  the active plate's printer), so a single record suffices. `sinceJob`
- *  is the job-state token at send time, used to release on the first
- *  real change. */
+/** The "we just sent and the printer hasn't acted yet" latch. The whole
+ *  lifecycle — not just the record — lives at module scope, because the
+ *  topbar (and this component) is unmounted while the Devices view is
+ *  open, and Devices is exactly where prints get cancelled. A
+ *  component-scoped release listener misses transitions that complete
+ *  while unmounted (idle → printing → cancelled → idle lands back on the
+ *  send-time token and the compare never fires), wedging Send until the
+ *  backstop. So the release listener + backstop timer are armed at send
+ *  time on the app-wide `driver:status_update` stream and run regardless
+ *  of what view is mounted; mounted components just mirror the latch. */
 let pendingSend: { driverId: DriverId; sinceJob: string } | null = null;
+let pendingSendOff: (() => void) | null = null;
+let pendingSendBackstop: ReturnType<typeof setTimeout> | null = null;
+/** Mounted SendControls instances re-render off this on latch changes. */
+const latchWatchers = new Set<() => void>();
 
 /** Job-state token for the latch ("Idle" / "Printing" / … / "idle"
  *  when there's no job yet). */
 function jobToken(status: PrinterStatus | null): string {
   return status?.job?.state.state ?? "idle";
+}
+
+export function releasePendingSend(): void {
+  pendingSend = null;
+  pendingSendOff?.();
+  pendingSendOff = null;
+  if (pendingSendBackstop != null) clearTimeout(pendingSendBackstop);
+  pendingSendBackstop = null;
+  for (const notify of latchWatchers) notify();
+}
+
+/** Latch Send off for `driverId` until its job state moves off what it
+ *  was at send time (picked up, finished, cancelled…) or the link
+ *  drops. A 60s backstop keeps a silently-dropped job from wedging
+ *  Send forever. */
+export function armPendingSend(driverId: DriverId, sinceJob: string): void {
+  releasePendingSend();
+  pendingSend = { driverId, sinceJob };
+  pendingSendOff = onEvents<StatusUpdateEvent>(
+    ["driver:status_update"],
+    (e) => {
+      if (pendingSend == null) return;
+      if (e.payload.driver_id !== pendingSend.driverId) return;
+      const status = e.payload.status;
+      if (
+        jobToken(status) !== pendingSend.sinceJob ||
+        status.connection.state !== "Connected"
+      ) {
+        releasePendingSend();
+      }
+    },
+  );
+  pendingSendBackstop = setTimeout(releasePendingSend, 60000);
+  for (const notify of latchWatchers) notify();
+}
+
+/** Test seam: the driver id the latch is currently armed for. */
+export function pendingSendDriverForTests(): DriverId | null {
+  return pendingSend?.driverId ?? null;
 }
 
 export function SendControls({
@@ -96,49 +142,25 @@ export function SendControls({
   const driverId = connection?.driverId ?? null;
   const [actionPending, setActionPending] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
-  // Mirror the module-scoped latch into state (lazy-init from it so a
-  // remount after a Devices round-trip restores it). The latch is
-  // scoped to the driver we sent to, so switching the active plate to a
-  // different printer never inherits a stale "awaiting pickup".
+  // Mirror the module-scoped latch into state (lazy-init so a remount
+  // after a Devices round-trip restores it). Release logic lives at
+  // module scope — this component only re-renders when the latch flips.
   const [awaitingDriver, setAwaitingDriver] = useState<DriverId | null>(
     () => pendingSend?.driverId ?? null,
   );
   const { status } = useDriverStatus(driverId);
+  // The latch is scoped to the driver we sent to, so switching the
+  // active plate to a different printer never inherits "awaiting".
   const awaitingPickup = awaitingDriver != null && awaitingDriver === driverId;
 
-  const setAwaiting = (
-    next: { driverId: DriverId; sinceJob: string } | null,
-  ): void => {
-    pendingSend = next;
-    setAwaitingDriver(next?.driverId ?? null);
-  };
-
-  // Release the latch on the first real change for the driver we sent
-  // to: the job state moved off what it was at send time (picked up,
-  // finished, failed…), or the link dropped. Also drop it if the bound
-  // driver changed out from under us. Releasing on a transition — not a
-  // wall-clock timer — keeps a printer slow to start from re-enabling
-  // Send (and re-allowing a duplicate) before it has acted, while still
-  // clearing promptly the moment the job state actually changes.
   useEffect(() => {
-    if (awaitingDriver == null) return;
-    if (awaitingDriver !== driverId) {
-      setAwaiting(null);
-      return;
-    }
-    if (status == null) return;
-    const changed = jobToken(status) !== (pendingSend?.sinceJob ?? null);
-    if (changed || status.connection.state !== "Connected") {
-      setAwaiting(null);
-    }
-  }, [awaitingDriver, driverId, status]);
-  // Backstop: if the printer stays connected and its job state never
-  // changes (job silently dropped), don't wedge Send forever.
-  useEffect(() => {
-    if (awaitingDriver == null) return;
-    const t = setTimeout(() => setAwaiting(null), 60000);
-    return () => clearTimeout(t);
-  }, [awaitingDriver]);
+    const sync = (): void => setAwaitingDriver(pendingSend?.driverId ?? null);
+    latchWatchers.add(sync);
+    sync(); // catch a flip between lazy-init and subscribe
+    return () => {
+      latchWatchers.delete(sync);
+    };
+  }, []);
 
   // Send and Export both operate on a sliced bundle — with nothing
   // sliced for this plate yet, there's nothing to act on, so the
@@ -183,7 +205,7 @@ export function SendControls({
       await driverSendPlate(driverId, plateId, lastSliceOutputPath, thumbnail);
       // Accepted — latch Send off (for this driver) until the job state
       // changes from what it is now or the link drops.
-      setAwaiting({ driverId, sinceJob: jobToken(status) });
+      armPendingSend(driverId, jobToken(status));
       // Jump the user to the destination printer's live monitor (App decides
       // whether it's connected). Done after the latch so a throw above skips it.
       onSent?.();
