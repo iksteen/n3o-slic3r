@@ -75,6 +75,13 @@ machine Snapmaker "Snapmaker U1"      snapmaker-u1      resources/profiles/snapm
 machine Creality  "Creality Ender-3 S1" creality-ender-3-s1 resources/profiles/creality/printer
 machine Creality  "Creality Ender-3 V3 KE" creality-ender-3-v3-ke resources/profiles/creality/printer
 
+# --- Engine resources: files libslic3r reads off its own resources_dir()
+#     at runtime (nozzle-HRC table for the abrasive-filament check).
+#     Shipped under resources/engine/, passed to slic3r_init. ---
+echo "==> Copying engine resources"
+mkdir -p resources/engine/info
+cp "$ORCA_SUB/resources/info/nozzle_info.json" resources/engine/info/nozzle_info.json
+
 # --- Processes: auto-discovers the printers above from their machine.toml and
 #     folds every compatible upstream process leaf. Must run AFTER the machines. ---
 echo "==> Importing processes"

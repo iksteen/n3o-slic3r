@@ -33,7 +33,8 @@
     ],
     "resources": {
       "../resources/profiles": "profiles",
-      "../resources/plugins": "plugins"
+      "../resources/plugins": "plugins",
+      "../resources/engine": "engine"
     }
   }
 }

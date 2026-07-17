@@ -74,10 +74,15 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
 
-            // Resources dir is only needed for STEP / font embossing; STL
-            // and 3MF load without it. Log level 3 = warning, matching
-            // OrcaSlicer's CLI default.
-            init(None, 3).expect("libslic3r init failed");
+            // Resolve the bundled-resources root before engine init: the
+            // `engine/` subtree ships the files libslic3r reads off its
+            // own `resources_dir()` (currently `info/nozzle_info.json`,
+            // the nozzle-HRC table its abrasive-filament check loads —
+            // without a dir it logs a parse error on every fresh process
+            // and falls back to a built-in table missing the E3D entry).
+            // Log level 3 = warning, matching OrcaSlicer's CLI default.
+            let resources = resources_root(app);
+            init(Some(&resources.join("engine")), 3).expect("libslic3r init failed");
             // Forward libslic3r's own log records into `tracing` — otherwise the
             // shim's callback sink swallows them (it displaces boost.log's default
             // console sink). Level must map to a static macro; `event!` can't take
@@ -96,13 +101,12 @@ pub fn run() {
             });
             tracing::info!("libslic3r initialized");
 
-            // Resolve the bundled-resources root once: the shipped trees
-            // (`profiles/`, `plugins/`) live directly under it. See
+            // The shipped trees (`profiles/`, `plugins/`, `engine/`) live
+            // directly under the resources root resolved above. See
             // `resources_root` for why the dev override exists and how
             // relative paths resolve. (The stale-fragment failure mode it
             // guards against is profile_library's same-slug collision
             // warning.)
-            let resources = resources_root(app);
 
             // Load the bundled profile tree.
             core::profile_library::init_from(resources.join("profiles"));
