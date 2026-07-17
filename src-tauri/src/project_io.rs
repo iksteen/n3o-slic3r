@@ -60,6 +60,33 @@ pub fn project_load(
     Ok(())
 }
 
+/// Load a crash-recovery autosave from `autosave_path`, **replacing** the
+/// in-memory project wholesale (dropping the renderer cache). Unlike
+/// [`project_load`], the recovered project is left Untitled
+/// (`source_path = None`); its `recovery_origin` — persisted in the
+/// recovery file, pointing at wherever it was saved before the crash —
+/// survives the load and becomes the Save-As default, so Save writes back
+/// over the original rather than the stale on-disk copy or the recovery
+/// file. Emits `project:loaded`.
+#[tauri::command]
+#[tracing::instrument(skip(window, project, viewport))]
+pub fn project_recover(
+    autosave_path: String,
+    window: Window,
+    project: State<'_, Arc<Mutex<Project>>>,
+    viewport: State<'_, ViewportState>,
+) -> Result<(), String> {
+    let (mut loaded, _report) = load_or_import(Path::new(&autosave_path))?;
+    // `read_project` re-stamped source_path to the autosave file; clear it
+    // so the project reads as Untitled. recovery_origin came straight from
+    // the recovery file and stays as the Save-As hint.
+    loaded.source_path = None;
+    replace_project(viewport.inner(), project.inner(), loaded);
+    // Empty path → the UI shows Untitled (recovery isn't a saved file).
+    emit_all(&window, &[SceneEvent::ProjectLoaded { path: String::new() }]);
+    Ok(())
+}
+
 /// Reset the in-memory project to a fresh default, **replacing** the current
 /// one wholesale (and dropping the renderer cache). Emits `project:loaded` with
 /// an empty path; the new project is "Untitled" (`source_path = None`).

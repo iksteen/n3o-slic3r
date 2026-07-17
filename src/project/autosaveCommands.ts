@@ -47,3 +47,11 @@ export function autosaveDrop(uuid: string): Promise<void> {
 export function projectLoad(path: string): Promise<void> {
   return invoke("project_load", { path });
 }
+
+/** Recover a crashed session's autosave. Unlike `projectLoad`, the
+ * recovered project stays Untitled; its pre-crash origin (persisted in
+ * the recovery file) becomes the Save-As default, so Save writes back
+ * over the original instead of the recovery file. */
+export function projectRecover(autosavePath: string): Promise<void> {
+  return invoke("project_recover", { autosavePath });
+}

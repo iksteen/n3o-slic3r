@@ -103,6 +103,12 @@ struct ProjectFileRef<'a> {
     format_version: &'a str,
     app_name: &'a str,
     app_version: &'a str,
+    /// Where this file's project should be saved back to. Envelope
+    /// metadata (like `app_version`) — not part of the serialized
+    /// project, so it can't leak into a normal save. Only [`write_autosave`]
+    /// sets it; omitted (and absent) from regular saves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_origin: Option<&'a Path>,
     project: &'a Project,
 }
 
@@ -115,11 +121,35 @@ struct ProjectFile {
     #[serde(default)]
     #[allow(dead_code)]
     app_version: String,
+    #[serde(default)]
+    recovery_origin: Option<PathBuf>,
     project: Project,
 }
 
 /// Write `project` to `output` as a `.n3o` file (overwrites if it exists).
 pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoError> {
+    write_project_inner(project, output, None)
+}
+
+/// Write `project` as a crash-recovery autosave file: identical to
+/// [`write_project`] but embeds the pre-crash origin — the project's
+/// current save target, else the origin it was itself recovered from — so
+/// the recovery file is self-describing and [`read_project`] can restore
+/// the Save-As target. Derived here at write time, never held as project
+/// state, so a normal save can't carry it.
+pub fn write_autosave(project: &Project, output: &Path) -> Result<(), ProjectIoError> {
+    let origin = project
+        .source_path
+        .as_deref()
+        .or(project.recovery_origin.as_deref());
+    write_project_inner(project, output, origin)
+}
+
+fn write_project_inner(
+    project: &Project,
+    output: &Path,
+    recovery_origin: Option<&Path>,
+) -> Result<(), ProjectIoError> {
     let file = File::create(output).map_err(|e| ProjectIoError::Io {
         path: output.into(),
         source: e,
@@ -131,6 +161,7 @@ pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoEr
         format_version: FORMAT_VERSION,
         app_name: env!("CARGO_PKG_NAME"),
         app_version: env!("CARGO_PKG_VERSION"),
+        recovery_origin,
         project,
     })
     .map_err(|e| ProjectIoError::Json {
@@ -241,6 +272,9 @@ pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
     }
 
     project.source_path = Some(input.into());
+    // Envelope metadata → runtime field: set for autosave files, `None`
+    // for normal saves. `project_recover` uses it as the Save-As target.
+    project.recovery_origin = file.recovery_origin;
     Ok(project)
 }
 
@@ -373,6 +407,31 @@ mod tests {
     }
 
     #[test]
+    fn recovery_origin_persists_only_through_write_autosave() {
+        // write_autosave embeds the origin; write_project never does —
+        // even when the live project holds a recovery_origin. This is why
+        // no "eject on save" is needed: the field can't leak into a normal
+        // save regardless of runtime state.
+        let mut p = Project::default();
+        p.source_path = Some(PathBuf::from("/home/u/foo.n3o"));
+        p.recovery_origin = Some(PathBuf::from("/home/u/stale.n3o"));
+
+        let auto = tmp();
+        write_autosave(&p, &auto).expect("write autosave");
+        assert_eq!(
+            read_project(&auto).expect("read").recovery_origin,
+            Some(PathBuf::from("/home/u/foo.n3o")),
+        );
+
+        let normal = tmp();
+        write_project(&p, &normal).expect("write project");
+        assert_eq!(read_project(&normal).expect("read").recovery_origin, None);
+
+        std::fs::remove_file(&auto).ok();
+        std::fs::remove_file(&normal).ok();
+    }
+
+    #[test]
     fn round_trip_geometry_buffers_and_paint() {
         let mut p = Project::default();
         let mut nm = triangle();
@@ -432,6 +491,7 @@ mod tests {
                 format_version: "2",
                 app_name: "test",
                 app_version: "0",
+                recovery_origin: None,
                 project: &p,
             })
             .expect("json");

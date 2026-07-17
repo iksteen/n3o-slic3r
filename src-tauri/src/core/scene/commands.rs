@@ -49,6 +49,10 @@ pub struct SceneSnapshot {
     /// Filesystem path the project was loaded from (or `None`
     /// for an unsaved in-memory project).
     pub source_path: Option<String>,
+    /// For a crash-recovered project (`source_path` is `None`): the path
+    /// it was loaded from before the crash. The file menu uses it as the
+    /// Save-As default so Save writes back over the original.
+    pub recovery_origin: Option<String>,
     /// User-tier cascade overrides (apply across all plates).
     pub user_overrides: std::collections::HashMap<String, String>,
     /// File-level 3MF metadata (Title, Designer, License, …)
@@ -129,6 +133,10 @@ pub fn scene_snapshot(state: State<Arc<Mutex<Project>>>) -> Result<SceneSnapshot
         project_uuid: s.uuid.to_string(),
         source_path: s
             .source_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned()),
+        recovery_origin: s
+            .recovery_origin
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned()),
         user_overrides: s.user_overrides.clone(),

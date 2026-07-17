@@ -54,6 +54,7 @@ function snap(plates: PlateSnapshot[], activeId: number): SceneSnapshot {
   return {
     project_uuid: "test",
     source_path: null,
+    recovery_origin: null,
     user_overrides: {},
     file_metadata: {},
     meshes: [],

@@ -16,7 +16,13 @@ export interface ProjectFileMenu {
   handleSaveProjectAs: () => Promise<void>;
 }
 
-export function useProjectFileMenu(sourcePath: string | null): ProjectFileMenu {
+export function useProjectFileMenu(
+  sourcePath: string | null,
+  /** For a crash-recovered project (sourcePath null): the pre-crash
+   *  path. Save-As defaults here so Save writes back over the original
+   *  instead of the recovery file. */
+  recoveryOrigin: string | null = null,
+): ProjectFileMenu {
   // The menu label shows the source path's basename, or "Untitled.n3o"
   // for an unsaved project.
   const projectName = sourcePath
@@ -61,7 +67,11 @@ export function useProjectFileMenu(sourcePath: string | null): ProjectFileMenu {
     try {
       const picked = await saveFile({
         title: "Save project as",
-        defaultPath: projectName,
+        // Full path → the dialog opens in the right folder: the current
+        // save target, else a recovered project's pre-crash origin, else
+        // just the bare name for a never-saved project. (source_path and
+        // recovery_origin are mutually exclusive, so order is cosmetic.)
+        defaultPath: sourcePath ?? recoveryOrigin ?? projectName,
         filters: saveFilters,
       });
       if (picked == null) return; // cancelled

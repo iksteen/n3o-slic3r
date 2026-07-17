@@ -3,14 +3,15 @@
 // Mounts at the App root, gates the rest of the UI until the
 // user has decided what to do with each recoverable autosave.
 // Per the ticket's three-action surface:
-//   - **Recover**: load the autosave via `project_load`.
+//   - **Recover**: load the autosave via `project_recover` (stays
+//     Untitled; Save-As defaults to the pre-crash origin).
 //   - **Discard**: delete the file via `project_autosave_drop`.
 //   - **Keep**: dismiss the entry from this session without
 //     touching the file. Next launch will list it again.
 //
 // The dialog auto-dismisses (resolving the gate) when the user
 // has handled every entry. An entry is "handled" when it has
-// either been recovered (project_load + remove from list),
+// either been recovered (project_recover + remove from list),
 // discarded (drop + remove), or kept (just remove from local
 // state; file stays on disk).
 //
@@ -24,7 +25,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   autosaveDrop,
   autosaveList,
-  projectLoad,
+  projectRecover,
   type AutosaveEntry,
 } from "./autosaveCommands";
 
@@ -131,7 +132,7 @@ export function AutosaveRecoveryDialog({
   const handleRecover = (entry: AutosaveEntry): void => {
     setEntryPending(entry.uuid, true);
     setEntryError(entry.uuid, null);
-    void projectLoad(entry.path)
+    void projectRecover(entry.path)
       .then(() => removeEntry(entry.uuid))
       .catch((err) => {
         setEntryError(entry.uuid, String(err));

@@ -140,6 +140,9 @@ export interface PlateSnapshot {
 export interface SceneSnapshot {
   project_uuid: string;
   source_path: string | null;
+  /** For a crash-recovered project (source_path null): where it was
+   *  saved before the crash, used as the Save-As default. */
+  recovery_origin: string | null;
   user_overrides: Record<string, string>;
   file_metadata: Record<string, string>;
   /** Scene-wide mesh registry — headers only (geometry lives Rust-side and is

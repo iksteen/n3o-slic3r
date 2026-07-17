@@ -333,6 +333,7 @@ pub fn run() {
             core::project::commands::project_save,
             core::project::commands::project_save_as,
             project_io::project_load,
+            project_io::project_recover,
             project_io::project_new,
             core::project::commands::project_autosave_enable,
             core::project::commands::project_is_dirty,

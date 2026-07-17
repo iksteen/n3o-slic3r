@@ -93,6 +93,18 @@ pub struct Project {
     #[serde(skip)]
     pub source_path: Option<PathBuf>,
 
+    /// Where this project should be saved back to when it came from crash
+    /// recovery: the pre-crash `source_path`. **Runtime-only, like
+    /// `source_path`** — never serialized as project state. Persistence is
+    /// a recovery-file concern: `format::write_autosave` derives it into
+    /// the file *envelope* and `read_project` restores it here, so a normal
+    /// save can't carry it and there's nothing to clear on save. Set for a
+    /// project loaded via `project_recover`; a recovered project's Save
+    /// then prompts a Save-As defaulting here rather than overwriting the
+    /// stale original.
+    #[serde(skip)]
+    pub recovery_origin: Option<PathBuf>,
+
     /// Scene-wide mesh storage. Per-plate object references
     /// (`Plate.scene.objects[*].mesh`) resolve through this map.
     /// Living scene-wide means move-between-plates op
@@ -295,6 +307,7 @@ impl Project {
             user_overrides: HashMap::new(),
             file_metadata: BTreeMap::new(),
             source_path: None,
+            recovery_origin: None,
             meshes: HashMap::new(),
             primitive_cache: Vec::new(),
             next_mesh_id: 0,

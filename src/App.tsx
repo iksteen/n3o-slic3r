@@ -410,13 +410,14 @@ function App() {
   // The backend's source_path is the project's on-disk origin; null
   // until first save.
   const sourcePath = session.snapshot?.source_path ?? null;
+  const recoveryOrigin = session.snapshot?.recovery_origin ?? null;
   const {
     projectName,
     handleNewProject,
     handleOpenProject,
     handleSaveProject,
     handleSaveProjectAs,
-  } = useProjectFileMenu(sourcePath);
+  } = useProjectFileMenu(sourcePath, recoveryOrigin);
 
   // Project file chords — Ctrl (Linux/Windows) or Cmd (macOS): S save
   // (Shift+S save-as), O open, N new. App-global (any mode), and read
