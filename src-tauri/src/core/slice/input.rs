@@ -210,31 +210,36 @@ pub fn build_slice_input(
         return Err(SliceInputError::EmptyScene { plate_id });
     }
 
-    // ── Material layout — one filament position per material ─────
+    // ── Material layout ──────────────────────────────────────────
     //
-    // BBS convention for AMS-style printers (single physical
-    // extruder + AMS slots): the libslic3r cascade has one filament
-    // per material in the user's materials list, ordered by
-    // material index. Position `i` belongs to model material
-    // `i + 1`. The gcode emits `T<material - 1>` and the driver's
-    // `ams_mapping[material - 1]` routes the bound spool to it.
+    // Two cascade shapes:
     //
-    // Toolchangers (one physical extruder per toolhead) are
-    // different: libslic3r's tool-change template emits the
-    // filament index directly as the T number, and the firmware
-    // takes that as the physical toolhead selector — no AMS
-    // mapping in between. To keep "material N → T<bound>" working
-    // we keep the legacy "one filament per (extruder, slot)"
-    // cascade for toolchangers and remap each object's
-    // `extruder_id` to its bound extruder's flat-slot index at
-    // `.3mf` write time.
+    // - **Per-material** (AMS-style printers AND the firmware-routed U1):
+    //   one filament per material in the user's list, position `i` =
+    //   model material `i + 1`. The gcode emits `T<material - 1>` and
+    //   physical routing happens downstream — a Bambu AMS via
+    //   `ams_mapping`, the U1 via its firmware `MAP_TABLE` (see
+    //   `driver::send::u1_map_table`). The slice output is
+    //   routing-independent: the object keeps its material index, and
+    //   `filament_map` carries the bound extruder only for libslic3r's
+    //   own planning (nozzle diameter etc.).
     //
-    // `instance.extruders.len() > 1` is the marker — AMS-style
-    // printers always carry exactly one extruder regardless of
-    // AMS unit count.
+    // - **Slot-fanned** (legacy, for a firmware-less toolchanger): one
+    //   filament per (extruder, slot), and each object's `extruder_id`
+    //   is remapped to its bound flat-slot index at build time, so the
+    //   gcode's `T<n>` is the physical toolhead directly. Kept for
+    //   future toolchangers that can't route at print time.
+    //
+    // `is_toolchanger` (more than one physical extruder) selects the
+    // legacy path UNLESS the printer routes in firmware
+    // (`driver_kind == U1`), which takes the per-material path like an
+    // AMS printer.
     let is_toolchanger = instance.extruders.len() > 1;
+    let firmware_routed =
+        printer_profile.driver_kind == Some(crate::core::driver::traits::DriverKind::U1);
+    let slot_fanned = is_toolchanger && !firmware_routed;
     let material_count = plate.material_count() as usize;
-    let (material_layout, filaments) = if is_toolchanger {
+    let (material_layout, filaments) = if slot_fanned {
         // Legacy slot-fanned cascade — empty `material_layout`
         // makes `compose_cascade` fall back to `slot_layout`.
         // Per-slot filament profiles match the cascade's filament
@@ -297,36 +302,33 @@ pub fn build_slice_input(
 
     // ── Geometry ──────────────────────────────────────────────
     //
-    // Build the per-object geometry + extruder remap. libslic3r reads
-    // each object's `extruder` as the 1-based *filament index* the
-    // object prints with; the per-print `filament_map` then translates
-    // filament-idx → physical extruder for toolchanger gcode + every
-    // `nozzle_temperature[i]`-style template substitution (Snapmaker
+    // Build the per-object geometry. libslic3r reads each object's
+    // `extruder` as the 1-based *filament index* it prints with; the
+    // gcode emits `T<filament - 1>` and every `nozzle_temperature[i]`-
+    // style template substitution is filament-index space (Snapmaker
     // U1's machine_start_gcode is `M104 T{initial_extruder} …` where
-    // `{initial_extruder}` is the filament index — *not* the
-    // post-`filament_map` physical extruder). To route "material N →
-    // T<m>" via the binding the object's recorded extruder must become
-    // the flat slot index corresponding to its bound slot; identity
-    // `filament_map` then routes filament-idx-i to physical extruder i.
-    // [`build_plate_objects`] applies that remap into each object's
-    // `extruder`.
-    let objects = build_plate_objects(project, plate_id, &instance);
+    // `{initial_extruder}` is the filament index). On the per-material
+    // path (`!slot_fanned`) the filament index IS the material index, so
+    // the object's extruder is left untouched. On the slot-fanned path
+    // [`build_plate_objects`] remaps it to the bound flat-slot index.
+    let objects = build_plate_objects(project, plate_id, &instance, slot_fanned);
 
-    // ── MMU paint remap (toolchangers only) ───────────────────
-    // build_plate_objects rewrites each object's `extruder` to its flat-
-    // slot index on toolchangers. The face paint encodes the *original* model
-    // material indices, so it needs the same remap or painted faces route to
-    // the wrong toolhead. AMS printers remap identity, and an unpainted plate
-    // needs nothing → `None` for both (and the orchestrator skips the call).
+    // ── MMU paint remap (slot-fanned toolchangers only) ───────
+    // On the slot-fanned path build_plate_objects rewrites each object's
+    // `extruder` to its flat-slot index; the face paint encodes the
+    // *original* material indices, so it needs the same remap or painted
+    // faces route to the wrong toolhead. Per-material printers (AMS, the
+    // U1) keep material indices, and an unpainted plate needs nothing →
+    // `None` (the orchestrator skips the call).
     let plate_has_paint = project.plate_has_painted_object(plate);
-    let paint_filament_remap = if is_toolchanger && plate_has_paint {
+    let paint_filament_remap = if slot_fanned && plate_has_paint {
         // perm[state]: state 0 (the object's own extruder) maps to itself;
         // each painted material 1..=N maps to its flat-slot filament index,
         // matching the per-object `extruder_id` remap.
         let mut perm: Vec<i32> = (0..=material_count as i32).collect();
         for m in 1..=material_count as u8 {
             perm[m as usize] =
-                material_to_filament_idx(m, &instance, &plate.material_to_slot) as i32;
+                material_to_filament_idx(m, &instance, &plate.material_to_slot, slot_fanned) as i32;
         }
         Some(perm)
     } else {
@@ -360,26 +362,24 @@ pub fn build_slice_input(
     Ok(input)
 }
 
-/// Map a model-material number to the 1-based libslic3r filament
-/// index for a *toolchanger* instance, honouring
-/// `plate.material_to_slot`. AMS-style printers get identity
-/// (material N → filament N) because the per-material cascade
-/// makes `filament_index == material - 1`.
+/// Map a model-material number to the 1-based libslic3r filament index.
 ///
-/// On a toolchanger the legacy "one filament per (extruder, slot)"
-/// cascade is in effect, so the material's bound slot translates
-/// to a flat slot index that libslic3r reads as the filament index.
-/// `filament_map` stays identity downstream, so the gcode emits
-/// `T<filament_idx - 1>` for the right physical extruder. Without
-/// a binding, fall back to identity (material N → filament N) —
-/// the slicer treats unbound material 1 as filament 1.
+/// Only the **slot-fanned** path (`slot_fanned == true`, a firmware-less
+/// toolchanger) remaps: the material's bound slot translates to a flat
+/// slot index that libslic3r reads as the filament index, so the gcode
+/// emits `T<filament_idx - 1>` for the right physical extruder. Every
+/// other printer (AMS-style, the firmware-routed U1) is identity —
+/// `filament_index == material` because the per-material cascade already
+/// places material N's settings at that position. Without a binding, the
+/// slot-fanned path also falls back to identity.
 fn material_to_filament_idx(
     material: u8,
     instance: &PrinterInstance,
     material_to_slot: &std::collections::BTreeMap<u8, crate::core::printer::SlotRef>,
+    slot_fanned: bool,
 ) -> u8 {
-    if instance.extruders.len() <= 1 {
-        // AMS-style — per-material cascade owns the mapping.
+    if !slot_fanned {
+        // Per-material cascade owns the mapping.
         return material;
     }
     if let Some(slot_ref) = material_to_slot.get(&material) {
@@ -423,15 +423,16 @@ fn object_overrides_for_slice(
 /// stable order keeps the overlap region's filament stable between
 /// slices.
 ///
-/// `instance` is borrowed to remap each object's `extruder` on
-/// toolchanger printers (where the cascade is per-slot and the gcode
-/// emits the filament index directly). On AMS-style printers the remap
-/// is identity — the cascade is per-material and material number ⇔
-/// filament index already.
+/// `instance` + `slot_fanned` drive the object's `extruder` remap: on a
+/// slot-fanned toolchanger it becomes the bound slot's flat-slot index
+/// (the per-slot cascade puts each slot's settings there); everywhere
+/// else it stays the material index (per-material cascade — see
+/// [`material_to_filament_idx`]).
 pub fn build_plate_objects(
     project: &Project,
     plate_id: PlateId,
     instance: &PrinterInstance,
+    slot_fanned: bool,
 ) -> Vec<SliceObject> {
     let Some(plate) = project.plates.iter().find(|p| p.id == plate_id) else {
         return Vec::new();
@@ -443,16 +444,13 @@ pub fn build_plate_objects(
         .values()
         .map(|obj| {
             let mesh = &project.meshes[&obj.mesh];
-            // Remap material → libslic3r filament index. For
-            // toolchangers this routes via the bound slot's flat-slot
-            // index (the per-slot cascade puts each slot's filament
-            // settings at that position). For AMS-style printers this is
-            // identity (material N → filament N) because the per-material
-            // cascade already places M N's settings at filament index
-            // N - 1.
+            // Material → libslic3r filament index. Slot-fanned
+            // toolchangers route via the bound slot's flat-slot index;
+            // everyone else (AMS, firmware-routed U1) is identity.
             let material = obj.extruder_id.unwrap_or(1);
             let extruder =
-                material_to_filament_idx(material, instance, &plate.material_to_slot) as i32;
+                material_to_filament_idx(material, instance, &plate.material_to_slot, slot_fanned)
+                    as i32;
             SliceObject {
                 name: obj.name.clone(),
                 vertices: Arc::clone(&mesh.vertices),
@@ -671,11 +669,9 @@ mod tests {
         // Plate 2's single object only — plate 1's geometry isn't here.
         assert_eq!(input.objects.len(), 1);
         assert_eq!(input.objects[0].name, "cube-b");
-        // Snappy is a toolchanger (>1 extruder) → legacy per-slot
-        // cascade: 4 extruders × 1 slot = 4 filaments. AMS-style
-        // printers (single extruder) would use one filament per
-        // material instead.
-        assert_eq!(input.context.filaments.len(), 4);
+        // Snappy (U1) routes in firmware → per-material cascade, one
+        // filament per material like an AMS printer. Single object → 1.
+        assert_eq!(input.context.filaments.len(), 1);
         for f in &input.context.filaments {
             assert_eq!(f.identity, "generic-pla");
         }
@@ -715,13 +711,14 @@ mod tests {
     }
 
     #[test]
-    fn per_object_extruder_remaps_for_snappy_toolchanger() {
-        // Snappy = toolchanger → legacy "one filament per slot"
-        // cascade with the per-object remap reapplied. Bind M1 →
-        // T1's solo slot (extruder=1, slot=0): flat slot index 1,
-        // libslic3r filament index 2 (1-based). The SliceObject
-        // carries the remapped value so libslic3r's template
-        // substitution picks the right filament.
+    fn snappy_passes_material_through_and_records_binding() {
+        // Snappy (U1) routes in firmware → per-material cascade. The
+        // object's material index passes through verbatim (the G-code
+        // stays in logical tool space, `T<material - 1>`; MAP_TABLE
+        // routes it at the printer), and `material_layout` records the
+        // bound slot for the per-material filament profile + the map
+        // table. Bind M1 → T1's slot (extruder 1) — a NON-identity
+        // binding the legacy path would have remapped to `T2`.
         use crate::core::printer::SlotRef;
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
@@ -735,7 +732,6 @@ mod tests {
             extruder_id: Some(1),
             group: None,
         });
-        // Override the auto-bind with an explicit "M1 → T1" binding.
         project.plates[0].material_to_slot.insert(
             1,
             SlotRef {
@@ -748,11 +744,18 @@ mod tests {
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert_eq!(input.objects.len(), 1);
-        assert_eq!(input.objects[0].extruder, 2);
-        // Toolchangers fall back to the legacy slot-fanned cascade
-        // — `material_layout` stays empty so `compose_cascade` uses
-        // `slot_layout` (4 filaments for snappy).
-        assert!(input.material_layout.is_empty());
+        // Identity — NOT remapped to the bound toolhead's index.
+        assert_eq!(input.objects[0].extruder, 1);
+        // Per-material layout carries the binding for the composer +
+        // MAP_TABLE (one entry, the bound slot).
+        assert_eq!(input.material_layout.len(), 1);
+        assert_eq!(
+            input.material_layout[0],
+            Some(SlotRef {
+                extruder: 1,
+                slot: 0
+            })
+        );
     }
 
     #[test]
@@ -903,10 +906,30 @@ mod tests {
     }
 
     #[test]
-    fn snappy_emits_one_filament_per_extruder_slot() {
-        // Snappy is a toolchanger → legacy slot-fanned cascade
-        // (4 extruders × 1 slot). Each slot is seeded with the
-        // bundled `generic-pla` fragment.
+    fn material_to_filament_idx_remaps_only_when_slot_fanned() {
+        // The slot-fanned remap (for a firmware-less toolchanger) is
+        // preserved and gated on `slot_fanned`. Against snappy's real
+        // 4×1 topology: M1 bound to toolhead 1 → flat-slot index 1, +1
+        // for libslic3r's 1-based filament index = 2.
+        use crate::core::printer::SlotRef;
+        let _registry = RegistryGuard::acquire();
+        let snappy = crate::core::printer::lookup_instance("snappy").expect("snappy fixture");
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(1u8, SlotRef { extruder: 1, slot: 0 });
+
+        assert_eq!(material_to_filament_idx(1, &snappy, &map, true), 2);
+        // Firmware-routed / AMS: identity — the material passes through.
+        assert_eq!(material_to_filament_idx(1, &snappy, &map, false), 1);
+        // Unbound material on the slot-fanned path also falls to identity.
+        assert_eq!(material_to_filament_idx(3, &snappy, &map, true), 3);
+    }
+
+    #[test]
+    fn snappy_emits_one_filament_per_material() {
+        // Snappy (U1) routes in firmware → per-material cascade: one
+        // filament per material, not per physical slot. Single object →
+        // 1 filament (seeded with the bundled `generic-pla` fragment via
+        // the auto-bound slot's default).
         let _registry = RegistryGuard::acquire();
         let mut project = Project::default();
         project.plates[0].set_printer(Some("snappy".into()), None);
@@ -915,10 +938,8 @@ mod tests {
 
         let input =
             build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
-        assert_eq!(input.context.filaments.len(), 4);
-        for f in &input.context.filaments {
-            assert_eq!(f.identity, "generic-pla");
-        }
+        assert_eq!(input.context.filaments.len(), 1);
+        assert_eq!(input.context.filaments[0].identity, "generic-pla");
     }
 
     #[test]

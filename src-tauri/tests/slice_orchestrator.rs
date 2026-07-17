@@ -654,3 +654,64 @@ fn unknown_printer_instance_errors() {
         "got {err:?}",
     );
 }
+
+/// The U1 material-routing migration's contract, against the real engine:
+/// a per-material layout with a NON-identity binding (M1 → toolhead 2,
+/// M2 → toolhead 0) must slice to **logical** tool numbers (`T0`/`T1`),
+/// with `filament_map` carrying the physical toolheads for planning only.
+/// The legacy slot-fanned path would have rewritten the objects to
+/// filaments 3/1 and emitted `T2` — so `T2` absent + `T1` present is what
+/// distinguishes the two. (MAP_TABLE, sent at print start, does the
+/// physical routing the engine no longer bakes in.)
+#[test]
+fn u1_per_material_keeps_tool_numbers_logical() {
+    use n3o_slic3r_lib::core::printer::SlotRef;
+    ensure_ffi_init();
+
+    // Two materials, laid out apart so both slice; extruder = material
+    // index (identity, as build_slice_input emits for a firmware-routed
+    // U1). M2's object is translated +40mm in X (column-major elem 12).
+    let base = stl_objects().pop().unwrap();
+    let mut b_transform = IDENTITY16;
+    b_transform[12] = 40.0;
+    let objects = vec![
+        SliceObject {
+            extruder: 1,
+            ..base.clone()
+        },
+        SliceObject {
+            name: "box-m2".into(),
+            extruder: 2,
+            transform: b_transform,
+            ..base
+        },
+    ];
+
+    let td = std::env::temp_dir().join(format!("n3o-u1-logical-{}", std::process::id()));
+    let mut input = snappy_input(objects, td.display().to_string(), vec![1]);
+    // Per-material path: M1 → toolhead 2, M2 → toolhead 0; one filament
+    // per material.
+    input.material_layout = vec![
+        Some(SlotRef { extruder: 2, slot: 0 }),
+        Some(SlotRef { extruder: 0, slot: 0 }),
+    ];
+    input.context.filaments = vec![canonical_filament(), canonical_filament()];
+
+    let gcode = slice_to_gcode("u1-logical", input);
+
+    // filament_map = bound toolheads + 1 (planning only): [2,0] → "3,1".
+    assert_eq!(config_value(&gcode, "filament_map"), "3");
+    assert!(
+        gcode.contains("; filament_map = 3,1"),
+        "filament_map should carry both bound toolheads (3,1)",
+    );
+    // The emitted toolchanges are logical filament indices: T1 (the
+    // second filament) is present; the physical toolhead 2 (`T2`) — which
+    // the legacy remap would have emitted — never is.
+    let toolchange = |t: &str| gcode.lines().any(|l| l.trim() == t);
+    assert!(toolchange("T1"), "logical toolchange T1 expected");
+    assert!(
+        !toolchange("T2") && !toolchange("T3"),
+        "no physical-toolhead tool select — numbers stay logical",
+    );
+}

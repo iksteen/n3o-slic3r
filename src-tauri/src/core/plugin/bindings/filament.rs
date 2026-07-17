@@ -41,9 +41,11 @@ use crate::core::printer::{FeedKind, PrinterInstance};
 /// not live driver state.
 #[derive(Debug, Clone)]
 pub struct SlotInfo {
-    /// 1-based ordinal across all extruders, in flat slot order. Equals
-    /// the libslic3r-side filament index, so material `index` emits
-    /// `T<index - 1>`.
+    /// 1-based ordinal across all extruders, in flat slot order. On a
+    /// slot-fanned toolchanger this equals the libslic3r filament index
+    /// (so the slot emits `T<index - 1>`); on the per-material path (AMS
+    /// printers, the firmware-routed U1) the filament index tracks the
+    /// material, not this slot ordinal.
     pub index: usize,
     /// 0-based physical extruder this slot feeds.
     pub extruder: u8,

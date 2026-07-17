@@ -1043,6 +1043,67 @@ mod tests {
     }
 
     #[test]
+    fn per_material_layout_authors_filament_map_from_bound_toolhead() {
+        // A firmware-routed U1 slices per-material → compose_cascade takes
+        // the resolve_layout path. filament_map carries the bound physical
+        // toolhead (+1) for libslic3r's planning while the G-code's `T`
+        // stays logical; flush_volumes_matrix is N² × H (heads).
+        use crate::core::printer::SlotRef;
+        let _registry = RegistryGuard::acquire();
+        let snappy = lookup_instance("snappy").expect("snappy present");
+
+        // Two materials cross-bound: M1 → toolhead 2, M2 → toolhead 0.
+        let layout = vec![
+            Some(SlotRef { extruder: 2, slot: 0 }),
+            Some(SlotRef { extruder: 0, slot: 0 }),
+        ];
+        let cascade = compose_cascade(&snappy, &layout).expect("compose");
+
+        let topo = cascade
+            .rules
+            .iter()
+            .find(|r| r.source.path.to_string_lossy() == "<filament-topology>")
+            .expect("topology rule present");
+        assert_eq!(
+            topo.set.get("filament_map").map(String::as_str),
+            Some("3,1"),
+            "filament_map = bound toolhead + 1, per material",
+        );
+        assert_eq!(
+            topo.set.get("filament_map_mode").map(String::as_str),
+            Some("Manual"),
+        );
+
+        // N² × H = 2² × 4 = 16 entries.
+        let flush = cascade
+            .rules
+            .iter()
+            .find_map(|r| r.set.get("flush_volumes_matrix"))
+            .expect("flush matrix present");
+        assert_eq!(flush.split(',').count(), 16);
+    }
+
+    #[test]
+    fn per_material_layout_tolerates_two_materials_on_one_toolhead() {
+        // Both materials bound to toolhead 2 (same loaded filament) →
+        // filament_map "3,3". libslic3r accepts N filaments on one head.
+        use crate::core::printer::SlotRef;
+        let _registry = RegistryGuard::acquire();
+        let snappy = lookup_instance("snappy").expect("snappy present");
+        let layout = vec![
+            Some(SlotRef { extruder: 2, slot: 0 }),
+            Some(SlotRef { extruder: 2, slot: 0 }),
+        ];
+        let cascade = compose_cascade(&snappy, &layout).expect("compose");
+        let topo = cascade
+            .rules
+            .iter()
+            .find(|r| r.source.path.to_string_lossy() == "<filament-topology>")
+            .expect("topology rule present");
+        assert_eq!(topo.set.get("filament_map").map(String::as_str), Some("3,3"));
+    }
+
+    #[test]
     fn u1_filament_fragment_printer_rule_fires_at_compose_time() {
         // Regression for the U1 cold-bed bug. The snapmaker-pla fragment
         // carries its U1 overrides as a `[[rule]] when.printer.model =

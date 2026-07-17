@@ -205,36 +205,71 @@ pub(super) fn plate_nozzle_diameters(project: &Mutex<Project>, plate_id: u32) ->
     }
 }
 
-/// The firmware `extruder_map_table` for the plate's bound instance, as
-/// `(logical, physical)` pairs — one per logical slot. The table is
-/// sticky on the printer, so we always send the full width to overwrite
-/// whatever a prior session (or Snapmaker's own software) left behind —
-/// otherwise a stale non-identity table silently misroutes our print.
+/// The firmware `extruder_map_table` for the plate, as `(logical,
+/// physical)` pairs — one per material (logical slot `= material − 1`).
+/// The U1 slices in logical material space (`T<material − 1>`); this
+/// table is what routes each logical tool to its bound physical toolhead
+/// at print time. Sticky on the printer, so we always send the full set
+/// of referenced slots to overwrite whatever a prior session (or
+/// Snapmaker's own software) left — otherwise a stale table misroutes.
 ///
-/// Identity (`logical == physical`) while the slice path still rewrites
-/// object extruders to physical toolhead indices: the G-code's `T<n>` is
-/// already physical, so the firmware must pass it through unchanged.
-/// Empty when the plate isn't bound / the instance is gone.
+/// Physical target = the material's bound toolhead
+/// (`material_to_slot[m].extruder`); an unbound material falls back to
+/// toolhead 0 (`pre_slice_gate` binds every referenced material, so this
+/// only covers index gaps that the G-code never emits). Empty when the
+/// plate isn't found.
 pub(super) fn u1_map_table(project: &Mutex<Project>, plate_id: u32) -> Vec<(u8, u8)> {
-    let inst_id = {
-        let p = project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        p.plate(PlateId(plate_id))
-            .and_then(|pl| pl.printer_instance_id().map(str::to_owned))
-    };
-    let Some(inst) = inst_id.and_then(|id| crate::core::printer::lookup_instance(&id)) else {
+    let p = project
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(plate) = p.plate(PlateId(plate_id)) else {
         return Vec::new();
     };
-    (0..inst.extruders.len() as u8).map(|i| (i, i)).collect()
+    (1..=plate.material_count())
+        .map(|m| {
+            let physical = plate.material_to_slot.get(&m).map_or(0, |sr| sr.extruder);
+            (m - 1, physical)
+        })
+        .collect()
+}
+
+/// Translate the G-code's used *logical* slots to the *physical*
+/// toolheads they map to — `FLOW_CALIBRATE_EXTRUDERS` is per-physical.
+/// Deduped + sorted (two materials may share a toolhead). Logical slots
+/// with no map entry are dropped.
+pub(super) fn physical_extruders_used(used_logical: &[u8], map_table: &[(u8, u8)]) -> Vec<u8> {
+    let mut physical: Vec<u8> = used_logical
+        .iter()
+        .filter_map(|l| map_table.iter().find(|(lg, _)| lg == l).map(|(_, p)| *p))
+        .collect();
+    physical.sort_unstable();
+    physical.dedup();
+    physical
+}
+
+/// Per-logical nozzle diameters for `NOZZLE_DIAMETER_LIST` (which the
+/// firmware keys by logical slot): each map-table entry's physical
+/// toolhead's nozzle, in logical order. Empty when the physical nozzles
+/// couldn't be resolved — omit rather than send a zero-filled list the
+/// firmware would reject.
+pub(super) fn logical_nozzle_diameters(map_table: &[(u8, u8)], physical_nozzles: &[f64]) -> Vec<f64> {
+    if physical_nozzles.is_empty() {
+        return Vec::new();
+    }
+    map_table
+        .iter()
+        .map(|(_, physical)| physical_nozzles.get(*physical as usize).copied().unwrap_or(0.0))
+        .collect()
 }
 
 /// The U1's flow-calibration gating facts, read off the sliced G-code's
-/// own footer: per-extruder filament use in mm (index-aligned with the
-/// G-code's filament order — for a toolchanger those indices ARE the
-/// physical toolheads) and the extruders with nonzero use. Empty when
-/// the G-code carries no usage lines — the firmware then keeps its
-/// persisted values.
+/// own footer: per-slot filament use in mm and the slots with nonzero
+/// use. Indices are the G-code's filament order = **logical** slots
+/// (`material − 1`) on the firmware-routed path. `FILAMENT_USED_MM` wants
+/// exactly this (per-logical); the nonzero-use list is translated to
+/// physical toolheads by [`physical_extruders_used`] before it becomes
+/// `FLOW_CALIBRATE_EXTRUDERS`. Empty when the G-code carries no usage
+/// lines — the firmware then keeps its persisted values.
 pub(super) fn u1_usage_from_gcode(bytes: &[u8]) -> (Vec<u8>, Vec<f64>) {
     let summary = crate::core::slice::summary::build_summary_from_bytes(
         bytes,
@@ -341,6 +376,50 @@ pub(super) fn apply_pre_send(
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn u1_map_table_pairs_each_material_with_its_bound_toolhead() {
+        use crate::core::printer::SlotRef;
+        let mut project = Project::default();
+        let plate = &mut project.plates[0];
+        plate.material_to_slot.insert(1, SlotRef { extruder: 2, slot: 0 });
+        plate.material_to_slot.insert(2, SlotRef { extruder: 0, slot: 0 });
+        let mtx = Mutex::new(project);
+        // logical = material − 1; physical = the bound toolhead.
+        assert_eq!(u1_map_table(&mtx, 1), vec![(0, 2), (1, 0)]);
+    }
+
+    #[test]
+    fn u1_map_table_falls_back_to_toolhead_0_for_unbound_gaps() {
+        use crate::core::printer::SlotRef;
+        let mut project = Project::default();
+        // Only material 3 is bound; 1 and 2 are gaps (never emitted).
+        project.plates[0]
+            .material_to_slot
+            .insert(3, SlotRef { extruder: 1, slot: 0 });
+        let mtx = Mutex::new(project);
+        assert_eq!(u1_map_table(&mtx, 1), vec![(0, 0), (1, 0), (2, 1)]);
+    }
+
+    #[test]
+    fn physical_extruders_used_translates_and_dedupes() {
+        // logical 0 and 2 both map to physical toolhead 1 → deduped.
+        let map = vec![(0u8, 1u8), (1, 0), (2, 1)];
+        assert_eq!(physical_extruders_used(&[0, 2], &map), vec![1]);
+        assert_eq!(physical_extruders_used(&[1, 0], &map), vec![0, 1]);
+        // A logical slot with no map entry is dropped.
+        assert_eq!(physical_extruders_used(&[5], &map), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn logical_nozzle_diameters_indexes_by_mapped_toolhead() {
+        // logical 0 → toolhead 2 (0.6), logical 1 → toolhead 0 (0.4).
+        let map = vec![(0u8, 2u8), (1, 0)];
+        let physical = vec![0.4, 0.4, 0.6, 0.4];
+        assert_eq!(logical_nozzle_diameters(&map, &physical), vec![0.6, 0.4]);
+        // No physical data → empty (omit rather than send zeros).
+        assert_eq!(logical_nozzle_diameters(&map, &[]), Vec::<f64>::new());
+    }
 
     #[test]
     fn u1_usage_from_gcode_reads_footer_and_gates_extruders() {

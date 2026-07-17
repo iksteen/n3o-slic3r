@@ -25,8 +25,9 @@ use super::registry::DriverRegistry;
 use super::snapmaker::{mqtt_status, snap_token};
 use super::send::{
     apply_pre_send, collect_ams_bindings, collect_ams_mapping, derive_send_names,
-    plate_nozzle_diameters, plate_printer_model, plate_send_options, read_gcode_bytes,
-    u1_map_table, u1_usage_from_gcode, wrap_gcode_as_3mf,
+    logical_nozzle_diameters, physical_extruders_used, plate_nozzle_diameters,
+    plate_printer_model, plate_send_options, read_gcode_bytes, u1_map_table,
+    u1_usage_from_gcode, wrap_gcode_as_3mf,
 };
 use super::status::PrinterStatus;
 use super::traits::{
@@ -506,13 +507,20 @@ pub async fn driver_send_plate(
             // block goes in. Generic Moonraker has no option protocol.
             let u1_start = match kind {
                 DriverKind::U1 => {
-                    let (extruders_used, filament_used_mm) = u1_usage_from_gcode(&bytes);
+                    // Usage indices are logical (the G-code is now in
+                    // logical material space); MAP_TABLE routes logical →
+                    // physical at the printer. FILAMENT_USED_MM stays
+                    // logical; FLOW_CALIBRATE_EXTRUDERS + NOZZLE_DIAMETER
+                    // derive from the map table.
+                    let (used_logical, filament_used_mm) = u1_usage_from_gcode(&bytes);
+                    let map_table = u1_map_table(&project, plate_id);
+                    let physical_nozzles = plate_nozzle_diameters(&project, plate_id);
                     Some(U1StartOptions {
                         options,
-                        extruders_used,
+                        extruders_used: physical_extruders_used(&used_logical, &map_table),
                         filament_used_mm,
-                        nozzle_diameters: plate_nozzle_diameters(&project, plate_id),
-                        map_table: u1_map_table(&project, plate_id),
+                        nozzle_diameters: logical_nozzle_diameters(&map_table, &physical_nozzles),
+                        map_table,
                     })
                 }
                 _ => None,
