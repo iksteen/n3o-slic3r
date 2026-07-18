@@ -64,7 +64,10 @@ fn step_1_set_active_printer_emits_bed_changed() {
     );
     let plate_id = state.project.active_plate().id;
     assert!(
-        state.plate_runtime(plate_id).and_then(|r| r.bed.clone()).is_some(),
+        state
+            .plate_runtime(plate_id)
+            .and_then(|r| r.bed.clone())
+            .is_some(),
         "runtime has the bed cached"
     );
 }
@@ -76,6 +79,7 @@ fn step_2_library_primitive_lands_on_plate() {
     let (_mesh_id, obj_id, events) = state.add_from_primitive(
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
+        None,
     );
     let obj = state
         .project
@@ -152,9 +156,7 @@ fn step_4_stormtrooper_loads_under_budget_when_present() {
     // its CC-BY-NC license; the test gracefully skips if missing.
     let fixture = workspace_root().join("examples/perf-fixture/stormtrooper-helmet.3mf");
     if !fixture.exists() {
-        eprintln!(
-            "skipping: stormtrooper helmet fixture not staged at {fixture:?}"
-        );
+        eprintln!("skipping: stormtrooper helmet fixture not staged at {fixture:?}");
         return;
     }
     let start = Instant::now();
@@ -180,6 +182,7 @@ fn step_5_scene_snapshot_round_trips_after_full_setup() {
     let _ = state.add_from_primitive(
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
+        None,
     );
     // Snapshot via the same shape `scene_snapshot` would assemble.
     let meshes: Vec<_> = state.project.meshes.values().map(|m| m.header()).collect();
@@ -213,6 +216,7 @@ fn step_6_auto_arrange_then_oob_clear_under_active_printer() {
                 radius: 0.0,
                 radial_segments: 0,
             },
+            None,
         );
     }
     let bed = session.active_plate_runtime().bed.clone().unwrap();
@@ -222,8 +226,7 @@ fn step_6_auto_arrange_then_oob_clear_under_active_printer() {
         n3o_slic3r_lib::core::scene::arrange::ArrangeOptions::default(),
     );
     assert!(plan.un_placed.is_empty(), "6 small cubes should fit");
-    let (events, _) =
-        n3o_slic3r_lib::core::scene::arrange::apply_arrangement(&mut session, plan);
+    let (events, _) = n3o_slic3r_lib::core::scene::arrange::apply_arrangement(&mut session, plan);
     let oob = events
         .iter()
         .filter(|e| matches!(e, SceneEvent::ObjectOutOfBounds { .. }))
@@ -239,10 +242,12 @@ fn step_7_selection_and_delete_round_trip() {
     let (_, a, _) = state.add_from_primitive(
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
+        None,
     );
     let (_, b, _) = state.add_from_primitive(
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
+        None,
     );
     state.select(&[a, b], SelectMode::Replace);
     let events = state.delete_objects(&[a, b]);
@@ -269,6 +274,7 @@ fn step_8_scene_clone_for_reconnect_drops_buffers_from_snapshot() {
     let (mesh_id, _, _) = state.add_from_primitive(
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
+        None,
     );
     let original = state.project.meshes.get(&mesh_id).unwrap();
     assert!(!original.vertices.is_empty(), "live mesh has vertex data");

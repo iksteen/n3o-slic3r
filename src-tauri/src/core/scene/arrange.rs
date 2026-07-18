@@ -98,11 +98,7 @@ pub struct SpilledObject {
 /// Compute a packing without mutating the scene. Pure function so the
 /// caller can decide whether to apply the result (e.g., test code
 /// vs. a user-facing "preview" flow).
-pub fn plan_arrangement(
-    state: &Project,
-    bed: &BedMesh,
-    opts: ArrangeOptions,
-) -> ArrangeResult {
+pub fn plan_arrangement(state: &Project, bed: &BedMesh, opts: ArrangeOptions) -> ArrangeResult {
     let plate = &state.active_plate().scene;
 
     // Group visible objects into arrange units: one per group (kept rigid),
@@ -187,9 +183,7 @@ pub fn plan_arrangement(
     // `bed_count` arg), so this one rect protects every bed. `(x, y)` is the
     // lower-left corner; pad by the brim.
     let plate_id = state.active_plate().id;
-    if let Ok(Some(t)) =
-        crate::core::project::resolve::tower_geometry_for_plate(state, plate_id)
-    {
+    if let Ok(Some(t)) = crate::core::project::resolve::tower_geometry_for_plate(state, plate_id) {
         excludes.push([
             t.x - t.brim - bed_min.0,
             t.y - t.brim - bed_min.1,
@@ -240,7 +234,10 @@ pub fn plan_arrangement(
         let delta = if placement.rotation != 0.0 {
             let pivot = Vec3::new(bed_min.0 as f32, bed_min.1 as f32, 0.0);
             Transform::translation(pivot + t)
-                .compose(Transform::rotation_around(Vec3::Z, placement.rotation as f32))
+                .compose(Transform::rotation_around(
+                    Vec3::Z,
+                    placement.rotation as f32,
+                ))
                 .compose(Transform::translation(-pivot))
         } else {
             Transform::translation(t)
@@ -310,8 +307,7 @@ fn footprint_contour(points: &[[f64; 2]]) -> Option<Vec<[f64; 2]>> {
 fn convex_hull(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
     let mut pts = points.to_vec();
     pts.sort_by(|a, b| {
-        a[0]
-            .partial_cmp(&b[0])
+        a[0].partial_cmp(&b[0])
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(a[1].partial_cmp(&b[1]).unwrap_or(std::cmp::Ordering::Equal))
     });
@@ -382,7 +378,9 @@ pub fn apply_arrangement(
                 .map(|s| s.id)
                 .collect();
             if let Some(&target) = bed_plate.get(&k) {
-                match session.move_objects_to_plate(source, target, &ids) {
+                let target_instance = session.plate_instance(target);
+                match session.move_objects_to_plate(source, target, &ids, target_instance.as_ref())
+                {
                     Ok(evs) => events.extend(evs),
                     Err(e) => tracing::warn!(error = %e, "auto-arrange spill move failed"),
                 }
@@ -490,6 +488,7 @@ mod tests {
                     radius: 0.0,
                     radial_segments: 0,
                 },
+                None,
             );
         }
     }
@@ -579,12 +578,25 @@ mod tests {
         // avoidance keeps bed-0 placements clear (the surplus spills).
         add_n_cubes(&mut session, 16, 42.0);
         let active = session.project.active_plate;
-        let ids: Vec<ObjectId> = session.project.plates[active].scene.objects.keys().copied().collect();
+        let ids: Vec<ObjectId> = session.project.plates[active]
+            .scene
+            .objects
+            .keys()
+            .copied()
+            .collect();
         for id in ids.iter().take(8) {
-            session.project.plates[active].scene.objects.get_mut(id).unwrap().extruder_id = Some(2);
+            session.project.plates[active]
+                .scene
+                .objects
+                .get_mut(id)
+                .unwrap()
+                .extruder_id = Some(2);
         }
         let plate_id = session.project.active_plate().id;
-        let Some(tower) = tower_geometry_for_plate(&session.project, plate_id).ok().flatten() else {
+        let Some(tower) = tower_geometry_for_plate(&session.project, plate_id)
+            .ok()
+            .flatten()
+        else {
             return; // no tower resolvable in this env — nothing to assert
         };
         let bed = derive_bed(session.project.active_plate()).unwrap();
@@ -594,11 +606,22 @@ mod tests {
         // Crowding this many cubes overflows the bed, so the pack should spill —
         // letting us prove the tower is reserved on the extra beds too, not just
         // bed 0 (the tower sits at the same bed-local spot on every plate).
-        assert!(!plan.spilled.is_empty(), "16 cubes + a tower should overflow bed 0");
+        assert!(
+            !plan.spilled.is_empty(),
+            "16 cubes + a tower should overflow bed 0"
+        );
         let (tx0, ty0) = (tower.x as f32, tower.y as f32);
-        let (tx1, ty1) = ((tower.x + tower.width) as f32, (tower.y + tower.width) as f32);
+        let (tx1, ty1) = (
+            (tower.x + tower.width) as f32,
+            (tower.y + tower.width) as f32,
+        );
         let assert_clear = |id: &ObjectId, xform: &Transform, bed_label: &str| {
-            let mesh_id = session.project.plates[active].scene.objects.get(id).unwrap().mesh;
+            let mesh_id = session.project.plates[active]
+                .scene
+                .objects
+                .get(id)
+                .unwrap()
+                .mesh;
             let probe = SceneObject {
                 id: *id,
                 mesh: mesh_id,
@@ -608,10 +631,14 @@ mod tests {
                 extruder_id: None,
                 group: None,
             };
-            let fp = xy_footprint(&probe, &session.project.meshes.get(&mesh_id).unwrap().bounding_box);
+            let fp = xy_footprint(
+                &probe,
+                &session.project.meshes.get(&mesh_id).unwrap().bounding_box,
+            );
             let (x0, y0) = (fp.min.x, fp.min.y);
             let (x1, y1) = (fp.min.x + fp.size.x, fp.min.y + fp.size.y);
-            let clear = x1 <= tx0 + 1e-3 || x0 >= tx1 - 1e-3 || y1 <= ty0 + 1e-3 || y0 >= ty1 - 1e-3;
+            let clear =
+                x1 <= tx0 + 1e-3 || x0 >= tx1 - 1e-3 || y1 <= ty0 + 1e-3 || y0 >= ty1 - 1e-3;
             assert!(
                 clear,
                 "{bed_label} object overlaps the wipe tower: obj x[{x0},{x1}] y[{y0},{y1}] tower x[{tx0},{tx1}] y[{ty0},{ty1}]"
@@ -638,13 +665,20 @@ mod tests {
         assert!(un_placed.is_empty());
         // Spill created at least one extra plate, all bound to the same printer.
         assert!(session.project.plates.len() > 1, "spill should add plates");
-        let printer = session.project.plates[0].printer_instance_id().map(str::to_owned);
+        let printer = session.project.plates[0]
+            .printer_instance_id()
+            .map(str::to_owned);
         for p in &session.project.plates[1..] {
             assert_eq!(p.printer_instance_id().map(str::to_owned), printer);
             assert!(!p.scene.objects.is_empty(), "extra plate should hold spill");
         }
         // No object is lost or duplicated.
-        let total: usize = session.project.plates.iter().map(|p| p.scene.objects.len()).sum();
+        let total: usize = session
+            .project
+            .plates
+            .iter()
+            .map(|p| p.scene.objects.len())
+            .sum();
         assert_eq!(total, 100);
     }
 
@@ -679,7 +713,8 @@ mod tests {
         let plan1 = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
         let _ = apply_arrangement(&mut session, plan1);
         // Snapshot the placed transforms.
-        let after_first: Vec<(ObjectId, Transform)> = session.project
+        let after_first: Vec<(ObjectId, Transform)> = session
+            .project
             .active_plate()
             .scene
             .objects
@@ -689,7 +724,8 @@ mod tests {
 
         let plan2 = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
         let _ = apply_arrangement(&mut session, plan2);
-        let after_second: Vec<(ObjectId, Transform)> = session.project
+        let after_second: Vec<(ObjectId, Transform)> = session
+            .project
             .active_plate()
             .scene
             .objects
@@ -730,7 +766,14 @@ mod tests {
         for (id, xform) in &plan.placed {
             let obj_clone = SceneObject {
                 id: *id,
-                mesh: session.project.active_plate().scene.objects.get(id).unwrap().mesh,
+                mesh: session
+                    .project
+                    .active_plate()
+                    .scene
+                    .objects
+                    .get(id)
+                    .unwrap()
+                    .mesh,
                 transform: *xform,
                 name: String::new(),
                 visible: true,
@@ -761,13 +804,18 @@ mod tests {
         };
         let mut session = Session::new(Project::new());
         session.set_active_printer(Some(&a1_mini()));
-        let (_, a, _) =
-            session.add_from_primitive(PrimitiveKind::Cube, cube);
-        let (_, b, _) =
-            session.add_from_primitive(PrimitiveKind::Cube, cube);
+        let (_, a, _) = session.add_from_primitive(PrimitiveKind::Cube, cube, None);
+        let (_, b, _) = session.add_from_primitive(PrimitiveKind::Cube, cube, None);
         // Offset b so the group has internal structure, and add a loose cube so
         // the pack actually has to move the group.
-        let b_current = session.project.active_plate().scene.objects.get(&b).unwrap().transform;
+        let b_current = session
+            .project
+            .active_plate()
+            .scene
+            .objects
+            .get(&b)
+            .unwrap()
+            .transform;
         session
             .project
             .set_object_transform(
@@ -775,9 +823,11 @@ mod tests {
                 Transform::translation(Vec3::new(40.0, 5.0, 0.0)).compose(b_current),
             )
             .unwrap();
-        let (_, _c, _) =
-            session.add_from_primitive(PrimitiveKind::Cube, cube);
-        session.project.group_objects(&[a, b], "grp".into()).unwrap();
+        let (_, _c, _) = session.add_from_primitive(PrimitiveKind::Cube, cube, None);
+        session
+            .project
+            .group_objects(&[a, b], "grp".into())
+            .unwrap();
 
         let origin = |p: &Project, id| {
             p.active_plate()
@@ -817,9 +867,18 @@ mod tests {
         let plan = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
         let placed_ids: Vec<ObjectId> = plan.placed.iter().map(|(id, _)| *id).collect();
         let _ = apply_arrangement(&mut session, plan);
-        assert!(!placed_ids.is_empty(), "cubes should fit a centered 180mm bed");
+        assert!(
+            !placed_ids.is_empty(),
+            "cubes should fit a centered 180mm bed"
+        );
         for id in placed_ids {
-            let o = session.project.active_plate().scene.objects.get(&id).unwrap();
+            let o = session
+                .project
+                .active_plate()
+                .scene
+                .objects
+                .get(&id)
+                .unwrap();
             let mesh = session.project.meshes.get(&o.mesh).unwrap();
             let fp = xy_footprint(o, &mesh.bounding_box);
             let (lo_x, lo_y) = (fp.min.x, fp.min.y);

@@ -53,9 +53,10 @@ pub fn project_set_material_slot(
     state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut session = state.lock().map_err(|e| format!("session lock: {e}"))?;
+    let instance = session.plate_instance(plate_id);
     let events = session
         .project
-        .set_material_slot(plate_id, model_material, slot)
+        .set_material_slot(plate_id, model_material, slot, instance.as_ref())
         .map_err(|e| e.to_string())?;
     drop(session);
     emit_all(&window, &events);
@@ -113,9 +114,10 @@ pub fn project_set_plate_quality_profile(
     state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut session = state.lock().map_err(|e| format!("session lock: {e}"))?;
+    let instance = session.plate_instance(plate_id);
     let events = session
         .project
-        .set_plate_quality_profile(plate_id, quality_profile)
+        .set_plate_quality_profile(plate_id, quality_profile, instance.as_ref())
         .map_err(|e| e.to_string())?;
     drop(session);
     emit_all(&window, &events);
@@ -206,7 +208,8 @@ pub fn user_process_stamp(
     if clear {
         for key in stamped.keys() {
             events.extend(
-                session.project
+                session
+                    .project
                     .project_override_clear(plate_id, key)
                     .map_err(|e| e.to_string())?,
             );
@@ -274,12 +277,13 @@ pub fn user_process_duplicate(
     // Switch the plate onto the new profile.
     let mut events = session
         .project
-        .set_plate_quality_profile(plate_id, Some(created.id.clone()))
+        .set_plate_quality_profile(plate_id, Some(created.id.clone()), Some(&instance))
         .map_err(|e| e.to_string())?;
     if clear {
         for key in edits.keys() {
             events.extend(
-                session.project
+                session
+                    .project
                     .project_override_clear(plate_id, key)
                     .map_err(|e| e.to_string())?,
             );
@@ -386,12 +390,17 @@ pub fn user_process_delete(
     };
     crate::core::process::library::remove(&printer, &selected);
     // Back to the default profile (inherit the instance's).
+    let instance = session.plate_instance(plate_id);
     let mut events = session
         .project
-        .set_plate_quality_profile(plate_id, None)
+        .set_plate_quality_profile(plate_id, None, instance.as_ref())
         .map_err(|e| e.to_string())?;
     if apply {
-        events.extend(apply_overrides_to_plate(&mut session.project, plate_id, profile.overrides)?);
+        events.extend(apply_overrides_to_plate(
+            &mut session.project,
+            plate_id,
+            profile.overrides,
+        )?);
     }
     drop(session);
     emit_all(&window, &events);
@@ -634,9 +643,18 @@ mod tests {
         let s = stampable_process_overrides(&o);
         assert!(s.contains_key("layer_height"));
         assert!(s.contains_key("sparse_infill_density"));
-        assert!(!s.contains_key("wipe_tower_x"), "dragged tower must not stamp");
-        assert!(!s.contains_key("wipe_tower_y"), "dragged tower must not stamp");
-        assert!(!s.contains_key("nozzle_diameter"), "non-process key must not stamp");
+        assert!(
+            !s.contains_key("wipe_tower_x"),
+            "dragged tower must not stamp"
+        );
+        assert!(
+            !s.contains_key("wipe_tower_y"),
+            "dragged tower must not stamp"
+        );
+        assert!(
+            !s.contains_key("nozzle_diameter"),
+            "non-process key must not stamp"
+        );
     }
 
     #[test]
@@ -648,16 +666,21 @@ mod tests {
         let mut ov = std::collections::BTreeMap::new();
         ov.insert("layer_height".to_owned(), "0.28".to_owned());
         ov.insert("outer_wall_speed".to_owned(), "60".to_owned());
-        let events =
-            apply_overrides_to_plate(&mut project, plate_id, ov).expect("apply succeeds");
+        let events = apply_overrides_to_plate(&mut project, plate_id, ov).expect("apply succeeds");
         assert!(!events.is_empty(), "emits a ProjectOverridesChanged");
         let plate = project.plate(plate_id).expect("plate");
         assert_eq!(
-            plate.project_overrides.get("layer_height").map(String::as_str),
+            plate
+                .project_overrides
+                .get("layer_height")
+                .map(String::as_str),
             Some("0.28"),
         );
         assert_eq!(
-            plate.project_overrides.get("outer_wall_speed").map(String::as_str),
+            plate
+                .project_overrides
+                .get("outer_wall_speed")
+                .map(String::as_str),
             Some("60"),
         );
     }

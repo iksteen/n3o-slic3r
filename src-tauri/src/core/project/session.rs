@@ -162,6 +162,23 @@ impl Session {
     pub fn title(&self) -> String {
         self.project.title(self.runtime.source_path.as_deref())
     }
+
+    /// Resolve the active plate's bound `PrinterInstance` from the registry
+    /// (`None` when unbound or the id no longer resolves). The registry access
+    /// lives here at the command boundary so the mutation methods stay pure —
+    /// they take the resolved instance as a parameter (e.g. `add_from_primitive`,
+    /// `set_material_slot`).
+    pub fn active_plate_instance(&self) -> Option<crate::core::printer::PrinterInstance> {
+        self.plate_instance(self.project.active_plate().id)
+    }
+
+    /// Resolve plate `id`'s bound `PrinterInstance` from the registry.
+    pub fn plate_instance(&self, id: PlateId) -> Option<crate::core::printer::PrinterInstance> {
+        self.project
+            .plate(id)?
+            .printer_instance_id()
+            .and_then(crate::core::printer::lookup_instance)
+    }
 }
 
 #[cfg(test)]
@@ -209,13 +226,13 @@ mod tests {
     fn reconcile_preserves_selection_for_surviving_plates() {
         let mut session = Session::new(Project::default());
         let id = session.project.active_plate().id;
-        session
-            .plate_runtime_mut(id)
-            .selection
-            .insert(ObjectId(7));
+        session.plate_runtime_mut(id).selection.insert(ObjectId(7));
         session.reconcile();
         assert!(
-            session.active_plate_runtime().selection.contains(&ObjectId(7)),
+            session
+                .active_plate_runtime()
+                .selection
+                .contains(&ObjectId(7)),
             "a surviving plate keeps its selection across reconcile",
         );
     }

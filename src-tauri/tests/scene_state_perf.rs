@@ -37,10 +37,14 @@ fn build_scene_with_n_cubes(n: usize) -> (Session, Vec<ObjectId>) {
     // mesh registry beyond what a realistic project would have.
     let params = PrimitiveParams::defaults_for(PrimitiveKind::Cube);
     for _ in 0..n {
-        let (_mesh, obj, _events) = session.add_from_primitive(PrimitiveKind::Cube, params);
+        let (_mesh, obj, _events) = session.add_from_primitive(PrimitiveKind::Cube, params, None);
         ids.push(obj);
     }
-    assert_eq!(session.project.meshes.len(), 1, "primitive cache must dedup");
+    assert_eq!(
+        session.project.meshes.len(),
+        1,
+        "primitive cache must dedup"
+    );
     assert_eq!(session.project.active_plate().scene.objects.len(), n);
     (session, ids)
 }
@@ -74,8 +78,10 @@ fn translate_single_object_under_5ms_p99_on_1000_object_scene() {
         // Alternate +X / -X so the object stays near origin and the
         // operation cost doesn't drift up over many iterations.
         let dx = if i % 2 == 0 { 1.0 } else { -1.0 };
-        let _ =
-            state.project.set_object_transform(target, Transform::translation(glam::Vec3::new(dx, 0.0, 0.0)));
+        let _ = state.project.set_object_transform(
+            target,
+            Transform::translation(glam::Vec3::new(dx, 0.0, 0.0)),
+        );
     });
     println!("translate mean={:?} p99={:?}", mean, p99);
     assert!(
@@ -95,10 +101,9 @@ fn rotate_single_object_under_5ms_p99_on_1000_object_scene() {
     let (mean, p99) = measure(|i| {
         // ±10° around Z, alternating direction.
         let radians = if i % 2 == 0 { 0.17 } else { -0.17 };
-        let _ = state.project.set_object_transform(
-            target,
-            Transform::rotation_around(glam::Vec3::Z, radians),
-        );
+        let _ = state
+            .project
+            .set_object_transform(target, Transform::rotation_around(glam::Vec3::Z, radians));
     });
     println!("rotate mean={:?} p99={:?}", mean, p99);
     assert!(mean < Duration::from_millis(5), "rotate mean {mean:?}");
@@ -111,7 +116,9 @@ fn scale_single_object_under_5ms_p99_on_1000_object_scene() {
     let target = ids[OBJECT_COUNT / 2];
     let (mean, p99) = measure(|i| {
         let f = if i % 2 == 0 { 1.001 } else { 0.999 };
-        let _ = state.project.set_object_transform(target, Transform::scale(glam::Vec3::splat(f)));
+        let _ = state
+            .project
+            .set_object_transform(target, Transform::scale(glam::Vec3::splat(f)));
     });
     println!("scale mean={:?} p99={:?}", mean, p99);
     assert!(mean < Duration::from_millis(5), "scale mean {mean:?}");
@@ -180,7 +187,10 @@ fn snapshot_clone_under_50ms_on_1000_object_scene() {
 #[test]
 fn scene_has_expected_shape_for_perf_run() {
     let (state, ids) = build_scene_with_n_cubes(OBJECT_COUNT);
-    assert_eq!(state.project.active_plate().scene.objects.len(), OBJECT_COUNT);
+    assert_eq!(
+        state.project.active_plate().scene.objects.len(),
+        OBJECT_COUNT
+    );
     assert_eq!(ids.len(), OBJECT_COUNT);
     assert_eq!(state.project.meshes.len(), 1, "primitive dedup");
     let mesh = state.project.meshes.values().next().unwrap();

@@ -603,9 +603,7 @@ fn resolve_baseline(
         return BTreeMap::new();
     };
     let effective = crate::core::profile_library::with_quality_profile(instance, quality_profile);
-    let Ok(cascade) =
-        crate::core::profile_library::compose_cascade(&effective, &[])
-    else {
+    let Ok(cascade) = crate::core::profile_library::compose_cascade(&effective, &[]) else {
         return BTreeMap::new();
     };
     // The project's bed (its `when.plate.type` is the libslic3r bed
@@ -690,9 +688,22 @@ fn source_bed_size(settings: &OrcaProjectSettings) -> Option<(f64, f64)> {
     if xs.is_empty() {
         return None;
     }
-    let span = |v: &[f64]| v.iter().cloned().fold(f64::MIN, f64::max) - v.iter().cloned().fold(f64::MAX, f64::min);
+    let span = |v: &[f64]| {
+        v.iter().cloned().fold(f64::MIN, f64::max) - v.iter().cloned().fold(f64::MAX, f64::min)
+    };
     let (w, d) = (span(&xs), span(&ys));
     (w > 0.0 && d > 0.0).then_some((w, d))
+}
+
+/// Resolve the active plate's bound `PrinterInstance` from the registry, or
+/// `None` when unbound. The importer is a boundary builder (like the command
+/// layer), so it resolves the registry and passes the instance into the pure
+/// model mutations (`register_object`, `ensure_material_bound_on_active`).
+fn active_plate_instance(project: &Project) -> Option<crate::core::printer::PrinterInstance> {
+    project
+        .active_plate()
+        .printer_instance_id()
+        .and_then(crate::core::printer::lookup_instance)
 }
 
 fn register_obj(
@@ -700,6 +711,7 @@ fn register_obj(
     mesh_ids: &[MeshId],
     obj: &ProjectObject,
     plate_origin: (f64, f64),
+    instance: Option<&crate::core::printer::PrinterInstance>,
 ) {
     // Shift the object out of OrcaSlicer's multi-plate world frame into
     // its plate-local frame (no-op for plate 0, whose origin is (0,0)).
@@ -713,14 +725,17 @@ fn register_obj(
         ))
         .compose(obj.transform)
     };
-    let id = project.register_object(NewSceneObject {
-        mesh: mesh_ids[obj.mesh_idx],
-        transform,
-        name: obj.name.clone(),
-        visible: true,
-        extruder_id: obj.extruder_id,
-        group: obj.group,
-    });
+    let id = project.register_object(
+        NewSceneObject {
+            mesh: mesh_ids[obj.mesh_idx],
+            transform,
+            name: obj.name.clone(),
+            visible: true,
+            extruder_id: obj.extruder_id,
+            group: obj.group,
+        },
+        instance,
+    );
     // Per-object overrides from the imported project's model_settings.config.
     project.apply_imported_object_overrides(id, &obj.overrides);
 }
@@ -807,8 +822,9 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
     let cols = plate_columns(foreign_plate_ids.len().max(1));
     let mut object_count = 0usize;
     if foreign_plate_ids.is_empty() {
+        let instance = active_plate_instance(&project);
         for obj in &objects {
-            register_obj(&mut project, &mesh_ids, obj, (0.0, 0.0));
+            register_obj(&mut project, &mesh_ids, obj, (0.0, 0.0), instance.as_ref());
             object_count += 1;
         }
     } else {
@@ -816,12 +832,19 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
             project
                 .set_active_plate(plate_map[fid])
                 .map_err(|e| format!("set active plate: {e:?}"))?;
+            let instance = active_plate_instance(&project);
             // Plate index is the 1-based foreign id minus one.
             let origin = bed
                 .map(|(w, d)| plate_origin((*fid as usize).saturating_sub(1), cols, w, d))
                 .unwrap_or((0.0, 0.0));
             for &idx in &plate_assignments[fid] {
-                register_obj(&mut project, &mesh_ids, &objects[idx], origin);
+                register_obj(
+                    &mut project,
+                    &mesh_ids,
+                    &objects[idx],
+                    origin,
+                    instance.as_ref(),
+                );
                 object_count += 1;
             }
         }
@@ -849,8 +872,9 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
             .collect();
         for pid in painted_plates {
             let _ = project.set_active_plate(pid);
+            let instance = active_plate_instance(&project);
             for material in 1..=filament_count {
-                project.ensure_material_bound_on_active(material);
+                project.ensure_material_bound_on_active(material, instance.as_ref());
             }
         }
         let first = project.plates[0].id;
@@ -1387,7 +1411,10 @@ mod tests {
         // 180mm bed → stride 180·1.2 = 216. Plate 0 at the origin; plate 1
         // (col 1) shifts +216 in x; a second-row plate shifts −216 in y.
         let near = |a: (f64, f64), b: (f64, f64)| {
-            assert!((a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6, "{a:?} vs {b:?}");
+            assert!(
+                (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6,
+                "{a:?} vs {b:?}"
+            );
         };
         near(plate_origin(0, 2, 180.0, 180.0), (0.0, 0.0));
         near(plate_origin(1, 2, 180.0, 180.0), (216.0, 0.0));

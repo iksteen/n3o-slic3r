@@ -9,8 +9,8 @@
 use super::bed::BedMesh;
 use super::events::{SceneEvent, SceneOpError, SelectMode};
 use super::state::{
-    ExclusionZone, Group, GroupId, HoleMarker, MeshHeader, MeshId, ModifierKind,
-    ObjectId, SceneObject,
+    ExclusionZone, Group, GroupId, HoleMarker, MeshHeader, MeshId, ModifierKind, ObjectId,
+    SceneObject,
 };
 use super::transform::Transform;
 use crate::core::project::{PlateId, PlateRuntime, Session};
@@ -227,7 +227,10 @@ pub fn scene_remove_plate(
     state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.project.remove_plate(plate_id).map_err(|e| e.to_string())?;
+    let events = s
+        .project
+        .remove_plate(plate_id)
+        .map_err(|e| e.to_string())?;
     s.reconcile(); // drop the removed plate's runtime entry
     drop(s);
     emit_all(&window, &events);
@@ -244,7 +247,10 @@ pub fn scene_set_active_plate(
     state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.project.set_active_plate(plate_id).map_err(|e| e.to_string())?;
+    let events = s
+        .project
+        .set_active_plate(plate_id)
+        .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -354,9 +360,16 @@ pub fn scene_rebind_plate_printer(
         )
     })?;
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let previous = s.plate_instance(plate_id);
     let (report, events) = s
         .project
-        .rebind_plate_printer(plate_id, instance_id.clone(), &profile)
+        .rebind_plate_printer(
+            plate_id,
+            instance_id.clone(),
+            &profile,
+            previous.as_ref(),
+            Some(&instance),
+        )
         .map_err(|e| e.to_string())?;
     s.reconcile(); // rebind → re-derive the plate's bed
     drop(s);
@@ -406,8 +419,9 @@ pub fn scene_move_objects_to_plate(
     state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let target_instance = s.plate_instance(to_plate);
     let events = s
-        .move_objects_to_plate(from_plate, to_plate, &object_ids)
+        .move_objects_to_plate(from_plate, to_plate, &object_ids, target_instance.as_ref())
         .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
@@ -579,6 +593,7 @@ pub fn scene_object_clone(
         session.project.active_plate().scene.objects.in_order(&ids)
     };
     let bed = session.active_plate_runtime().bed.clone();
+    let instance = session.active_plate_instance();
     let mut events = Vec::new();
     let new_ids;
 
@@ -586,7 +601,7 @@ pub fn scene_object_clone(
         Some(n) => {
             // Clone in place — no arrange; the copies stack on their originals
             // and the user moves them where they want.
-            let (ids_new, evs) = session.project.clone_objects(&ids, n);
+            let (ids_new, evs) = session.project.clone_objects(&ids, n, instance.as_ref());
             new_ids = ids_new;
             events.extend(evs);
         }
@@ -610,7 +625,7 @@ pub fn scene_object_clone(
             let mut last_plan = None;
             let mut hit_cap = true;
             for _ in 0..MAX_COPIES {
-                let (batch, evs) = session.project.clone_objects(&ids, 1);
+                let (batch, evs) = session.project.clone_objects(&ids, 1, instance.as_ref());
                 let plan = super::arrange::plan_arrangement(&session.project, bed, opts);
                 if plan.spilled.is_empty() && plan.un_placed.is_empty() {
                     events.extend(evs);
@@ -656,7 +671,8 @@ pub fn scene_object_add_from_primitive(
 ) -> Result<(MeshId, ObjectId), String> {
     let params = params.unwrap_or_else(|| super::primitives::PrimitiveParams::defaults_for(kind));
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let (mesh_id, obj_id, events) = s.add_from_primitive(kind, params);
+    let instance = s.active_plate_instance();
+    let (mesh_id, obj_id, events) = s.add_from_primitive(kind, params, instance.as_ref());
     drop(s);
     emit_all(&window, &events);
     Ok((mesh_id, obj_id))
@@ -757,7 +773,9 @@ pub fn scene_object_auto_orient(
         if expand_groups.unwrap_or(false) {
             ids = s.project.group_expanded_ids(&ids).to_vec();
         }
-        s.project.objects_world_mesh(&ids).map_err(op_err_to_string)?
+        s.project
+            .objects_world_mesh(&ids)
+            .map_err(op_err_to_string)?
     };
     let quat = slic3r_ffi::orient_mesh(&vertices, &indices, None)
         .map_err(|e| format!("auto-orient failed: {e}"))?;
@@ -831,7 +849,6 @@ fn map_connector(c: &CutConnectorInput, pos: [f32; 3]) -> slic3r_ffi::Connector 
     }
 }
 
-
 #[tauri::command]
 #[tracing::instrument(skip(state, window, connectors))]
 pub async fn scene_cut_apply(
@@ -856,7 +873,11 @@ pub async fn scene_cut_apply(
     // In-plane basis (mirrors the renderer's up-pick) → each connector's WORLD
     // position from its plane-space (u, v). Dowel pins only make sense when both
     // halves are kept; otherwise drop them.
-    let up = if normal.x.abs() > 0.9 { glam::Vec3::Y } else { glam::Vec3::X };
+    let up = if normal.x.abs() > 0.9 {
+        glam::Vec3::Y
+    } else {
+        glam::Vec3::X
+    };
     let e1 = normal.cross(up).normalize();
     let e2 = normal.cross(e1).normalize();
     let conn_world: Vec<glam::Vec3> = connectors
@@ -905,7 +926,11 @@ pub async fn scene_cut_apply(
             // Route each connector volume to its half (0 = pos, 1 = neg).
             let (mut pos_mods, mut neg_mods) = (Vec::new(), Vec::new());
             for mv in res.modifiers {
-                let kind = if mv.negative { ModifierKind::Hole } else { ModifierKind::Peg };
+                let kind = if mv.negative {
+                    ModifierKind::Hole
+                } else {
+                    ModifierKind::Peg
+                };
                 let entry = (mv.vertices, mv.indices, kind);
                 if mv.half == 0 {
                     pos_mods.push(entry);
@@ -988,7 +1013,10 @@ pub async fn scene_cut_apply(
                 });
             }
             let dowels = if keep_dowels {
-                res.dowels.into_iter().map(|d| (d.vertices, d.indices)).collect()
+                res.dowels
+                    .into_iter()
+                    .map(|d| (d.vertices, d.indices))
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -1013,7 +1041,8 @@ pub async fn scene_cut_apply(
     // Phase 3: register the halves + remove the sources, under lock.
     let (new_ids, events) = {
         let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-        s.apply_cut(results)
+        let instance = s.active_plate_instance();
+        s.apply_cut(results, instance.as_ref())
     };
     emit_all(&window, &events);
     Ok(new_ids.into_iter().map(|id| id.0).collect())
@@ -1046,7 +1075,10 @@ pub fn scene_object_align_axis(
         if expand_groups.unwrap_or(false) {
             ids = s.project.group_expanded_ids(&ids).to_vec();
         }
-        let (vertices, indices) = s.project.objects_world_mesh(&ids).map_err(op_err_to_string)?;
+        let (vertices, indices) = s
+            .project
+            .objects_world_mesh(&ids)
+            .map_err(op_err_to_string)?;
         let Some(angle) = super::align::axis_alignment_rotation(&vertices, &indices, axis) else {
             return Ok(()); // no dominant direction — nothing to align
         };
@@ -1099,14 +1131,15 @@ pub fn scene_object_align_face(
         if expand_groups.unwrap_or(false) {
             ids = s.project.group_expanded_ids(&ids).to_vec();
         }
-        s.project.align_face_coplanar(
-            &ids,
-            glam::Quat::from_rotation_z(angle),
-            slide_dir,
-            target_coord,
-            track,
-        )
-        .map_err(op_err_to_string)?
+        s.project
+            .align_face_coplanar(
+                &ids,
+                glam::Quat::from_rotation_z(angle),
+                slide_dir,
+                target_coord,
+                track,
+            )
+            .map_err(op_err_to_string)?
     };
     emit_all(&window, &events);
     Ok(())
@@ -1172,9 +1205,10 @@ pub fn scene_set_object_material(
     state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let instance = s.active_plate_instance();
     let events = s
         .project
-        .set_object_material(id, material)
+        .set_object_material(id, material, instance.as_ref())
         .map_err(op_err_to_string)?;
     drop(s);
     emit_all(&window, &events);
@@ -1252,7 +1286,8 @@ pub fn scene_load_mesh_from_path(
     let new_mesh = super::loaders::load_mesh_from_path(std::path::Path::new(&path))
         .map_err(|e| e.to_string())?;
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let (mesh_id, obj_id, events) = s.project.load_mesh(new_mesh);
+    let instance = s.active_plate_instance();
+    let (mesh_id, obj_id, events) = s.project.load_mesh(new_mesh, instance.as_ref());
     drop(s);
     emit_all(&window, &events);
     Ok((mesh_id, obj_id))
@@ -1372,20 +1407,24 @@ pub fn scene_load_3mf(
     }
 
     let active_plate_id = s.project.active_plate().id;
+    let instance = s.active_plate_instance();
     let mut loaded = Vec::with_capacity(project.objects.len());
     for obj in project.objects {
         let mesh_id = mesh_ids[obj.mesh_idx];
-        let object_id = s.project.register_object(NewSceneObject {
-            mesh: mesh_id,
-            transform: obj.transform,
-            name: obj.name.clone(),
-            visible: true,
-            extruder_id: obj.extruder_id,
-            // GroupIds are globally unique, so merging a multi-part import
-            // into an existing project can't collide with its groups — no
-            // remap needed.
-            group: obj.group,
-        });
+        let object_id = s.project.register_object(
+            NewSceneObject {
+                mesh: mesh_id,
+                transform: obj.transform,
+                name: obj.name.clone(),
+                visible: true,
+                extruder_id: obj.extruder_id,
+                // GroupIds are globally unique, so merging a multi-part import
+                // into an existing project can't collide with its groups — no
+                // remap needed.
+                group: obj.group,
+            },
+            instance.as_ref(),
+        );
         // Settings ride only the "Add model + settings…" path: the
         // plate-level diff first, the object's own model_settings entries
         // over it, routed group/member exactly like panel edits. The
@@ -1458,14 +1497,17 @@ mod tests {
         p.plates[0].set_printer(Some("bambi".into()));
         p.plates[0].name = "My Plate".into();
         let mesh_id = p.register_mesh(unit_cube_mesh());
-        let obj_id = p.register_object(NewSceneObject {
-            mesh: mesh_id,
-            transform: Transform::IDENTITY,
-            name: "cube".into(),
-            visible: true,
-            extruder_id: Some(2),
-            group: None,
-        });
+        let obj_id = p.register_object(
+            NewSceneObject {
+                mesh: mesh_id,
+                transform: Transform::IDENTITY,
+                name: "cube".into(),
+                visible: true,
+                extruder_id: Some(2),
+                group: None,
+            },
+            None,
+        );
 
         let snap = plate_snapshot(&p.plates[0], None);
         assert_eq!(snap.plate_id, PlateId(1));
@@ -1481,9 +1523,9 @@ mod tests {
     fn plate_snapshot_selection_is_sorted() {
         let mut p = Project::default();
         let mesh_id = p.register_mesh(unit_cube_mesh());
-        let a = p.register_object(NewSceneObject::at_origin(mesh_id, "a"));
-        let b = p.register_object(NewSceneObject::at_origin(mesh_id, "b"));
-        let c = p.register_object(NewSceneObject::at_origin(mesh_id, "c"));
+        let a = p.register_object(NewSceneObject::at_origin(mesh_id, "a"), None);
+        let b = p.register_object(NewSceneObject::at_origin(mesh_id, "b"), None);
+        let c = p.register_object(NewSceneObject::at_origin(mesh_id, "c"), None);
         // Insert in non-sorted order into the plate's runtime selection.
         let mut rt = PlateRuntime::default();
         rt.selection.insert(b);

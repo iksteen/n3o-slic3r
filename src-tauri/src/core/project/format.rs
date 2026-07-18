@@ -179,7 +179,13 @@ fn write_project_inner(
             path: output.into(),
             message: format!("encode geometry for mesh {}: {e}", id.0),
         })?;
-        zip_write(&mut zip, &format!("geometry/{}.bin", id.0), &blob, opts, output)?;
+        zip_write(
+            &mut zip,
+            &format!("geometry/{}.bin", id.0),
+            &blob,
+            opts,
+            output,
+        )?;
     }
     zip.finish().map_err(|e| ProjectIoError::Json {
         path: output.into(),
@@ -200,9 +206,8 @@ pub fn read_project(input: &Path) -> Result<(Project, Option<PathBuf>), ProjectI
         path: input.into(),
         source: e,
     })?;
-    let mut zip = ZipArchive::new(file).map_err(|_| ProjectIoError::NotAProjectFile {
-        path: input.into(),
-    })?;
+    let mut zip = ZipArchive::new(file)
+        .map_err(|_| ProjectIoError::NotAProjectFile { path: input.into() })?;
 
     // Our container has project.json; a foreign 3MF has 3D/3dmodel.model.
     let raw = match read_zip_entry(&mut zip, PROJECT_ENTRY) {
@@ -233,12 +238,13 @@ pub fn read_project(input: &Path) -> Result<(Project, Option<PathBuf>), ProjectI
     // Fill each mesh's buffers from its geometry blob.
     let ids: Vec<MeshId> = project.meshes.keys().copied().collect();
     for id in ids {
-        let blob = read_zip_entry(&mut zip, &format!("geometry/{}.bin", id.0)).ok_or_else(|| {
-            ProjectIoError::Json {
-                path: input.into(),
-                message: format!("missing geometry for mesh {}", id.0),
-            }
-        })?;
+        let blob =
+            read_zip_entry(&mut zip, &format!("geometry/{}.bin", id.0)).ok_or_else(|| {
+                ProjectIoError::Json {
+                    path: input.into(),
+                    message: format!("missing geometry for mesh {}", id.0),
+                }
+            })?;
         let mesh = project.meshes.get_mut(&id).expect("id from keys");
         let decode_err = |e| ProjectIoError::Json {
             path: input.into(),
@@ -277,10 +283,11 @@ fn zip_write(
     opts: SimpleFileOptions,
     output: &Path,
 ) -> Result<(), ProjectIoError> {
-    zip.start_file(name, opts).map_err(|e| ProjectIoError::Json {
-        path: output.into(),
-        message: format!("start_file {name}: {e}"),
-    })?;
+    zip.start_file(name, opts)
+        .map_err(|e| ProjectIoError::Json {
+            path: output.into(),
+            message: format!("start_file {name}: {e}"),
+        })?;
     zip.write_all(body).map_err(|e| ProjectIoError::Io {
         path: output.into(),
         source: e,
@@ -379,7 +386,10 @@ mod tests {
         let g: GeometryBlob = postcard::from_bytes(&blob).expect("unpack");
         assert_eq!(g.vertices, *p.meshes[&id].vertices);
         assert_eq!(g.indices, *p.meshes[&id].indices);
-        assert_eq!(g.paint_colors, Some(vec!["".into(), "3".into(), "12".into()]));
+        assert_eq!(
+            g.paint_colors,
+            Some(vec!["".into(), "3".into(), "12".into()])
+        );
         // truncated blob is a clean error, not a panic.
         assert!(postcard::from_bytes::<GeometryBlob>(&blob[..3]).is_err());
     }
@@ -427,7 +437,7 @@ mod tests {
         let mut nm = triangle();
         nm.paint_colors = Some(vec!["4".into()]);
         let mesh_id = p.register_mesh(nm);
-        let obj = p.register_object(NewSceneObject::at_origin(mesh_id, "tri"));
+        let obj = p.register_object(NewSceneObject::at_origin(mesh_id, "tri"), None);
 
         let path = tmp();
         write_project(&p, &path).expect("write");
@@ -448,7 +458,7 @@ mod tests {
         let mut nm = triangle();
         nm.support_paint = Some(vec!["4".into()]); // enforcer leaf on the one tri
         let mesh_id = p.register_mesh(nm);
-        p.register_object(NewSceneObject::at_origin(mesh_id, "tri"));
+        p.register_object(NewSceneObject::at_origin(mesh_id, "tri"), None);
 
         let path = tmp();
         write_project(&p, &path).expect("write");
@@ -470,7 +480,7 @@ mod tests {
         let mut nm = triangle();
         nm.paint_colors = Some(vec!["7".into()]);
         let mesh_id = p.register_mesh(nm);
-        p.register_object(NewSceneObject::at_origin(mesh_id, "tri"));
+        p.register_object(NewSceneObject::at_origin(mesh_id, "tri"), None);
 
         let path = tmp();
         {
@@ -493,8 +503,14 @@ mod tests {
                     paint_colors: mesh.paint_colors.as_deref(),
                 })
                 .expect("pack v2");
-                zip_write(&mut zip, &format!("geometry/{}.bin", id.0), &blob, opts, &path)
-                    .expect("write geom");
+                zip_write(
+                    &mut zip,
+                    &format!("geometry/{}.bin", id.0),
+                    &blob,
+                    opts,
+                    &path,
+                )
+                .expect("write geom");
             }
             zip.finish().expect("finish");
         }
@@ -523,8 +539,8 @@ mod tests {
     fn round_trip_shared_mesh_stays_shared() {
         let mut p = Project::default();
         let mesh_id = p.register_mesh(marked_triangle(77.0));
-        let a = p.register_object(NewSceneObject::at_origin(mesh_id, "orig"));
-        let b = p.register_object(NewSceneObject::at_origin(mesh_id, "copy"));
+        let a = p.register_object(NewSceneObject::at_origin(mesh_id, "orig"), None);
+        let b = p.register_object(NewSceneObject::at_origin(mesh_id, "copy"), None);
 
         let path = tmp();
         write_project(&p, &path).expect("write");
@@ -543,7 +559,7 @@ mod tests {
         // no FFI, ids stable.
         let mut p = Project::default();
         let mesh_id = p.register_mesh(triangle());
-        let obj = p.register_object(NewSceneObject::at_origin(mesh_id, "tri"));
+        let obj = p.register_object(NewSceneObject::at_origin(mesh_id, "tri"), None);
         let plate = p.active_plate().id;
         p.object_override_set(plate, obj, "layer_height".into(), "0.10".into())
             .unwrap();
@@ -563,8 +579,8 @@ mod tests {
     fn round_trip_groups_and_names() {
         let mut p = Project::default();
         let mesh_id = p.register_mesh(triangle());
-        let a = p.register_object(NewSceneObject::at_origin(mesh_id, "lower"));
-        let b = p.register_object(NewSceneObject::at_origin(mesh_id, "upper"));
+        let a = p.register_object(NewSceneObject::at_origin(mesh_id, "lower"), None);
+        let b = p.register_object(NewSceneObject::at_origin(mesh_id, "upper"), None);
         p.group_objects(&[a, b], "Bracket".into()).unwrap();
         let gid = p.active_plate().scene.objects[&a].group.unwrap();
 
@@ -583,8 +599,8 @@ mod tests {
     fn round_trip_group_overrides() {
         let mut p = Project::default();
         let mesh_id = p.register_mesh(triangle());
-        let a = p.register_object(NewSceneObject::at_origin(mesh_id, "lower"));
-        let b = p.register_object(NewSceneObject::at_origin(mesh_id, "upper"));
+        let a = p.register_object(NewSceneObject::at_origin(mesh_id, "lower"), None);
+        let b = p.register_object(NewSceneObject::at_origin(mesh_id, "upper"), None);
         p.group_objects(&[a, b], "Bracket".into()).unwrap();
         let gid = p.active_plate().scene.objects[&a].group.unwrap();
         p.plates[0]
@@ -610,8 +626,8 @@ mod tests {
     fn round_trip_visibility() {
         let mut p = Project::default();
         let m = p.register_mesh(triangle());
-        let shown = p.register_object(NewSceneObject::at_origin(m, "shown"));
-        let hidden = p.register_object(NewSceneObject::at_origin(m, "hidden"));
+        let shown = p.register_object(NewSceneObject::at_origin(m, "shown"), None);
+        let hidden = p.register_object(NewSceneObject::at_origin(m, "hidden"), None);
         p.plates[0].scene.objects.get_mut(&hidden).unwrap().visible = false;
 
         let path = tmp();
@@ -633,10 +649,10 @@ mod tests {
             .project_overrides
             .insert("layer_height".into(), "0.12".into());
         let m = p.register_mesh(triangle());
-        p.register_object(NewSceneObject::at_origin(m, "on1"));
+        p.register_object(NewSceneObject::at_origin(m, "on1"), None);
         let (id2, _) = p.add_plate(None);
         p.set_active_plate(id2).unwrap();
-        p.register_object(NewSceneObject::at_origin(m, "on2"));
+        p.register_object(NewSceneObject::at_origin(m, "on2"), None);
         p.set_active_plate(p.plates[0].id).unwrap();
 
         let path = tmp();
@@ -663,7 +679,12 @@ mod tests {
         let mut zip = ZipArchive::new(file).unwrap();
         let raw = read_zip_entry(&mut zip, PROJECT_ENTRY).unwrap();
         let json = String::from_utf8(raw).unwrap();
-        for absent in ["\"bed\"", "\"exclusion_zones\"", "\"selection\"", "\"source_path\""] {
+        for absent in [
+            "\"bed\"",
+            "\"exclusion_zones\"",
+            "\"selection\"",
+            "\"source_path\"",
+        ] {
             assert!(!json.contains(absent), "{absent} must not be persisted");
         }
         assert!(json.contains("\"format_version\""));
@@ -679,7 +700,10 @@ mod tests {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/3mf/cube-plain.3mf");
         let err = read_project(&path).unwrap_err();
-        assert!(matches!(err, ProjectIoError::ForeignProject { .. }), "got {err:?}");
+        assert!(
+            matches!(err, ProjectIoError::ForeignProject { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -727,12 +751,15 @@ mod tests {
     fn load_keeps_object_ids_stable() {
         let mut p = Project::default();
         let m = p.register_mesh(triangle());
-        let a = p.register_object(NewSceneObject::at_origin(m, "a"));
+        let a = p.register_object(NewSceneObject::at_origin(m, "a"), None);
         let _ = ObjectId(0); // import sanity
         let path = tmp();
         write_project(&p, &path).expect("write");
         let (parsed, _) = read_project(&path).expect("read");
-        assert!(parsed.plates[0].scene.objects.contains_key(&a), "object id is stable");
+        assert!(
+            parsed.plates[0].scene.objects.contains_key(&a),
+            "object id is stable"
+        );
         std::fs::remove_file(&path).ok();
     }
 }

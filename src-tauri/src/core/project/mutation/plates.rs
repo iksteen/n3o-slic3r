@@ -2,9 +2,10 @@
 //! plates, rename, quality-profile selection, and per-plate printer
 //! binding (bed viz + the picker rebind/unbind flows).
 
+use crate::core::printer::profile::PrinterProfile;
+use crate::core::printer::PrinterInstance;
 use crate::core::project::model::{Plate, PlateId, Project};
 use crate::core::project::session::{derive_bed, Session};
-use crate::core::printer::profile::PrinterProfile;
 use crate::core::scene::bed;
 use crate::core::scene::events::{SceneEvent, SceneOpError};
 
@@ -159,37 +160,36 @@ impl Project {
         &mut self,
         plate_id: PlateId,
         quality_profile: Option<String>,
+        instance: Option<&PrinterInstance>,
     ) -> Result<Vec<SceneEvent>, SceneOpError> {
         let idx = self
             .plate_index(plate_id)
             .ok_or(SceneOpError::UnknownPlate(plate_id))?;
         // Validate a non-None slug against the plate's bound printer's
-        // bundled processes. An unbound plate can't validate, so it
-        // accepts the value (the slice path rejects an unbound plate
-        // separately).
+        // bundled processes (`instance` is the resolved binding for `plate_id`).
+        // An unbound plate can't validate, so it accepts the value (the slice
+        // path rejects an unbound plate separately).
         if let Some(slug) = &quality_profile {
-            if let Some(instance_id) = self.plates[idx].printer_instance_id().map(str::to_owned) {
-                if let Some(instance) = crate::core::printer::lookup_instance(&instance_id) {
-                    let known = crate::core::profile_library::bundled_process_slugs_for_printer(
+            if let Some(instance) = instance {
+                let known = crate::core::profile_library::bundled_process_slugs_for_printer(
+                    &instance.printer_fragment_slug,
+                )
+                .iter()
+                .any(|s| *s == slug)
+                    // A stamped custom profile (id != base) is also valid.
+                    || crate::core::process::library::lookup(
                         &instance.printer_fragment_slug,
+                        slug,
                     )
-                    .iter()
-                    .any(|s| *s == slug)
-                        // A stamped custom profile (id != base) is also valid.
-                        || crate::core::process::library::lookup(
-                            &instance.printer_fragment_slug,
-                            slug,
-                        )
-                        .is_some();
-                    if !known {
-                        return Err(SceneOpError::InvalidPlateAttribute {
-                            plate_id,
-                            message: format!(
-                                "`{slug}` is not a bundled process for `{}`",
-                                instance.printer_fragment_slug,
-                            ),
-                        });
-                    }
+                    .is_some();
+                if !known {
+                    return Err(SceneOpError::InvalidPlateAttribute {
+                        plate_id,
+                        message: format!(
+                            "`{slug}` is not a bundled process for `{}`",
+                            instance.printer_fragment_slug,
+                        ),
+                    });
                 }
             }
         }
@@ -218,6 +218,8 @@ impl Project {
         plate_id: PlateId,
         instance_id: String,
         profile: &PrinterProfile,
+        previous: Option<&PrinterInstance>,
+        new_instance: Option<&PrinterInstance>,
     ) -> Result<
         (
             crate::core::scene::events::PrinterChangeReport,
@@ -231,22 +233,16 @@ impl Project {
             .plate_index(plate_id)
             .ok_or(SceneOpError::UnknownPlate(plate_id))?;
 
-        let previous_printer = self.plates[idx]
-            .printer_instance_id()
-            .and_then(crate::core::printer::lookup_instance)
-            .map(|inst| inst.vendor_profile_ref);
-        // Resolve identity + bed off the new instance for the
-        // change-report. If the id doesn't resolve (caller passed a
-        // stale uuid from a deleted instance) we still bind it —
-        // the slice gate downstream will refuse the unresolved
-        // reference with a meaningful error.
-        let new_instance = crate::core::printer::lookup_instance(&instance_id);
+        let previous_printer = previous.map(|inst| inst.vendor_profile_ref.clone());
+        // `new_instance` is the resolved binding for `instance_id` (the caller
+        // looks it up). If the id doesn't resolve (caller passed a stale uuid
+        // from a deleted instance) it's `None` — we still bind it; the slice
+        // gate downstream refuses the unresolved reference with a meaningful
+        // error.
         let new_printer = new_instance
-            .as_ref()
             .map(|i| i.vendor_profile_ref.clone())
             .unwrap_or_else(|| instance_id.clone());
         let new_build_plate = new_instance
-            .as_ref()
             .map(|i| i.bed.identity.clone())
             .unwrap_or_default();
         // Bind the printer (persisted); the session reconciles the bed after.
@@ -266,7 +262,7 @@ impl Project {
         // plate inherits the new instance's default; a slug the new printer
         // also ships (rebind to the same model) is preserved.
         if let Some(slug) = self.plates[idx].quality_profile.clone() {
-            let still_valid = new_instance.as_ref().map_or(false, |i| {
+            let still_valid = new_instance.map_or(false, |i| {
                 crate::core::profile_library::bundled_process_slugs_for_printer(
                     &i.printer_fragment_slug,
                 )
@@ -284,7 +280,7 @@ impl Project {
         let prev_active = self.active_plate;
         self.active_plate = idx;
         for mat in referenced {
-            self.ensure_default_material_slot_on_active(mat);
+            self.ensure_default_material_slot_on_active(mat, new_instance);
         }
         self.active_plate = prev_active;
 
@@ -529,8 +525,16 @@ mod tests {
         // `rebind_plate_printer_records_previous_printer`.
         p.plates[0].set_printer(None);
         let profile = a1_mini_for_test();
+        let previous = active_instance(&p);
+        let new_inst = crate::core::printer::lookup_instance("bambi");
         let (report, events) = p
-            .rebind_plate_printer(PlateId(1), "bambi".into(), &profile)
+            .rebind_plate_printer(
+                PlateId(1),
+                "bambi".into(),
+                &profile,
+                previous.as_ref(),
+                new_inst.as_ref(),
+            )
             .unwrap();
         // printer_instance_id assigned to the chosen instance.
         assert_eq!(p.plates[0].printer_instance_id(), Some("bambi"));
@@ -572,8 +576,16 @@ mod tests {
         p.plates[0].quality_profile = Some("0.20mm-strength".into());
 
         // Same-model rebind: the A1 mini ships `0.20mm-strength` → kept.
-        p.rebind_plate_printer(PlateId(1), "bambi".into(), &profile)
-            .unwrap();
+        let previous = active_instance(&p);
+        let bambi = crate::core::printer::lookup_instance("bambi");
+        p.rebind_plate_printer(
+            PlateId(1),
+            "bambi".into(),
+            &profile,
+            previous.as_ref(),
+            bambi.as_ref(),
+        )
+        .unwrap();
         assert_eq!(
             p.plates[0].quality_profile.as_deref(),
             Some("0.20mm-strength"),
@@ -581,8 +593,16 @@ mod tests {
 
         // Cross-printer rebind to the U1 (its process slugs omit the
         // "mm", so `0.20mm-strength` isn't one of them) → cleared.
-        p.rebind_plate_printer(PlateId(1), "snappy".into(), &profile)
-            .unwrap();
+        let previous = active_instance(&p);
+        let snappy = crate::core::printer::lookup_instance("snappy");
+        p.rebind_plate_printer(
+            PlateId(1),
+            "snappy".into(),
+            &profile,
+            previous.as_ref(),
+            snappy.as_ref(),
+        )
+        .unwrap();
         assert_eq!(p.plates[0].quality_profile, None);
     }
 
@@ -595,9 +615,10 @@ mod tests {
         let mut mesh = unit_cube_mesh();
         mesh.paint_colors = Some(vec!["8".to_string(); 12]); // 12 triangles
         let mesh_id = p.register_mesh(mesh);
-        let _ = p.register_object(NewSceneObject::at_origin(mesh_id, "painted"));
+        let inst = active_instance(&p);
+        let _ = p.register_object(NewSceneObject::at_origin(mesh_id, "painted"), inst.as_ref());
         // The importer binds the painted material as a plate material.
-        p.ensure_material_bound_on_active(2);
+        p.ensure_material_bound_on_active(2, inst.as_ref());
         assert!(
             p.plates[0].material_to_slot.contains_key(&2),
             "painted material 2 bound before the switch",
@@ -606,8 +627,16 @@ mod tests {
         // Switch printers. The rebind clears + re-binds; before the fix it
         // re-bound only object materials ({1}) and dropped the painted 2.
         let profile = a1_mini_for_test();
-        p.rebind_plate_printer(PlateId(1), "snappy".into(), &profile)
-            .unwrap();
+        let previous = active_instance(&p);
+        let snappy = crate::core::printer::lookup_instance("snappy");
+        p.rebind_plate_printer(
+            PlateId(1),
+            "snappy".into(),
+            &profile,
+            previous.as_ref(),
+            snappy.as_ref(),
+        )
+        .unwrap();
         assert!(
             p.plates[0].material_to_slot.contains_key(&2),
             "painted material 2 must survive a printer switch",
@@ -619,8 +648,16 @@ mod tests {
         let mut p = Project::default();
         p.plates[0].set_printer(Some("snappy".into()));
         let profile = a1_mini_for_test();
+        let previous = active_instance(&p);
+        let bambi = crate::core::printer::lookup_instance("bambi");
         let (report, _) = p
-            .rebind_plate_printer(PlateId(1), "bambi".into(), &profile)
+            .rebind_plate_printer(
+                PlateId(1),
+                "bambi".into(),
+                &profile,
+                previous.as_ref(),
+                bambi.as_ref(),
+            )
             .unwrap();
         assert_eq!(report.previous_printer.as_deref(), Some("snapmaker-u1"));
         assert_eq!(report.new_printer, "bambu-lab-a1-mini");
@@ -630,8 +667,16 @@ mod tests {
     fn rebind_plate_printer_unknown_plate_errors() {
         let mut p = Project::default();
         let profile = a1_mini_for_test();
+        let previous = active_instance(&p);
+        let bambi = crate::core::printer::lookup_instance("bambi");
         let err = p
-            .rebind_plate_printer(PlateId(99), "bambi".into(), &profile)
+            .rebind_plate_printer(
+                PlateId(99),
+                "bambi".into(),
+                &profile,
+                previous.as_ref(),
+                bambi.as_ref(),
+            )
             .unwrap_err();
         assert_eq!(err, SceneOpError::UnknownPlate(PlateId(99)));
     }

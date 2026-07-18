@@ -238,14 +238,21 @@ mod tests {
 
     fn add_cube(p: &mut Project, material: u8) {
         let mesh = p.register_mesh(unit_cube());
-        p.register_object(NewSceneObject {
-            mesh,
-            transform: Transform::IDENTITY,
-            name: format!("cube-m{material}"),
-            visible: true,
-            extruder_id: Some(material),
-            group: None,
-        });
+        let inst = p
+            .active_plate()
+            .printer_instance_id()
+            .and_then(crate::core::printer::lookup_instance);
+        p.register_object(
+            NewSceneObject {
+                mesh,
+                transform: Transform::IDENTITY,
+                name: format!("cube-m{material}"),
+                visible: true,
+                extruder_id: Some(material),
+                group: None,
+            },
+            inst.as_ref(),
+        );
     }
 
     #[test]

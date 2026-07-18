@@ -177,6 +177,11 @@ impl Default for Project {
         // unbound when the registry is empty, firing the empty-state UI). The
         // command layer uses `with_preferred_printer` to honor the user's
         // last-selected printer instead.
+        //
+        // This is the one place the model resolves the printer registry: a
+        // constructor picking "the first installed printer," not a mutation.
+        // Every *mutation* method takes its `PrinterInstance` as a parameter
+        // (the caller resolves it) so the model stays a pure function of inputs.
         Self::with_preferred_printer(None)
     }
 }

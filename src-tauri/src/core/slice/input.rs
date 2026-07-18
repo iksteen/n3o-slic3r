@@ -563,6 +563,17 @@ mod tests {
         }
     }
 
+    /// Register an object on the active plate, resolving the plate's bound
+    /// instance so the material auto-binds to a slot (the pure `register_object`
+    /// takes the instance as a parameter; the command layer resolves it).
+    fn register_on_active(p: &mut Project, obj: NewSceneObject) -> ObjectId {
+        let inst = p
+            .active_plate()
+            .printer_instance_id()
+            .and_then(crate::core::printer::lookup_instance);
+        p.register_object(obj, inst.as_ref())
+    }
+
     fn one_plate_project_with_cube() -> Project {
         let mut p = Project::default();
         // Project::default() auto-binds the bootstrap plate to the
@@ -570,7 +581,11 @@ mod tests {
         // tests don't drift if the bundled-default identity changes.
         p.plates[0].set_printer(Some("bambi".into()));
         let mesh_id = p.register_mesh(triangle_mesh());
-        p.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
+        let inst = p
+            .active_plate()
+            .printer_instance_id()
+            .and_then(crate::core::printer::lookup_instance);
+        p.register_object(NewSceneObject::at_origin(mesh_id, "cube"), inst.as_ref());
         p
     }
 
@@ -578,8 +593,7 @@ mod tests {
     fn happy_path_builds_input_with_objects() {
         let _registry = RegistryGuard::acquire();
         let project = one_plate_project_with_cube();
-        let input =
-            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert_eq!(input.plate_ids, vec![1]);
         assert_eq!(input.context.printer.model, "Bambu Lab A1 mini");
@@ -616,16 +630,21 @@ mod tests {
         let _registry = RegistryGuard::acquire();
         let mut project = one_plate_project_with_cube();
         let mesh_id = project.register_mesh(triangle_mesh());
-        let b = project.register_object(NewSceneObject::at_origin(mesh_id, "cube-b"));
-        let a = project.plates[0].scene.objects.keys().copied().min().unwrap();
+        let b = project.register_object(NewSceneObject::at_origin(mesh_id, "cube-b"), None);
+        let a = project.plates[0]
+            .scene
+            .objects
+            .keys()
+            .copied()
+            .min()
+            .unwrap();
         project.group_objects(&[a, b], "grp".into()).unwrap();
         // Routes to the group map (object-scope key on a grouped member).
         project
             .object_override_set(PlateId(1), a, "enable_support".into(), "1".into())
             .unwrap();
 
-        let input =
-            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
         assert_eq!(input.objects.len(), 2);
         for obj in &input.objects {
             assert_eq!(
@@ -646,7 +665,7 @@ mod tests {
         // Plate 1: A1 mini with one cube.
         project.plates[0].set_printer(Some("bambi".into()));
         let mesh_a = project.register_mesh(triangle_mesh());
-        project.register_object(NewSceneObject::at_origin(mesh_a, "cube-a"));
+        register_on_active(&mut project, NewSceneObject::at_origin(mesh_a, "cube-a"));
 
         // Plate 2: Snapmaker U1 with one cube. Activate so
         // register_object lands on it.
@@ -654,11 +673,10 @@ mod tests {
         project.plates[1].set_printer(Some("snappy".into()));
         project.set_active_plate(id2).expect("activate plate 2");
         let mesh_b = project.register_mesh(triangle_mesh());
-        project.register_object(NewSceneObject::at_origin(mesh_b, "cube-b"));
+        register_on_active(&mut project, NewSceneObject::at_origin(mesh_b, "cube-b"));
 
         // Build for plate 2 explicitly.
-        let input =
-            build_slice_input(&project, id2, "/tmp/n3o-out".into()).expect("build plate 2");
+        let input = build_slice_input(&project, id2, "/tmp/n3o-out".into()).expect("build plate 2");
         assert_eq!(input.plate_ids, vec![2]);
         assert_eq!(input.context.printer.model, "Snapmaker U1");
         assert_eq!(input.context.plate.identity, "Textured PEI Plate");
@@ -690,17 +708,19 @@ mod tests {
         let mut project = Project::default();
         project.plates[0].set_printer(Some("bambi".into()));
         let mesh_id = project.register_mesh(triangle_mesh());
-        project.register_object(NewSceneObject {
-            mesh: mesh_id,
-            transform: Transform::IDENTITY,
-            name: "cube-m3".into(),
-            visible: true,
-            extruder_id: Some(3),
-            group: None,
-        });
+        register_on_active(
+            &mut project,
+            NewSceneObject {
+                mesh: mesh_id,
+                transform: Transform::IDENTITY,
+                name: "cube-m3".into(),
+                visible: true,
+                extruder_id: Some(3),
+                group: None,
+            },
+        );
 
-        let input =
-            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert_eq!(input.objects.len(), 1);
         assert_eq!(input.objects[0].extruder, 3);
@@ -724,14 +744,17 @@ mod tests {
         let mut project = Project::default();
         project.plates[0].set_printer(Some("snappy".into()));
         let mesh_id = project.register_mesh(triangle_mesh());
-        project.register_object(NewSceneObject {
-            mesh: mesh_id,
-            transform: Transform::IDENTITY,
-            name: "cube-m1".into(),
-            visible: true,
-            extruder_id: Some(1),
-            group: None,
-        });
+        project.register_object(
+            NewSceneObject {
+                mesh: mesh_id,
+                transform: Transform::IDENTITY,
+                name: "cube-m1".into(),
+                visible: true,
+                extruder_id: Some(1),
+                group: None,
+            },
+            None,
+        );
         project.plates[0].material_to_slot.insert(
             1,
             SlotRef {
@@ -740,8 +763,7 @@ mod tests {
             },
         );
 
-        let input =
-            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert_eq!(input.objects.len(), 1);
         // Identity — NOT remapped to the bound toolhead's index.
@@ -769,8 +791,7 @@ mod tests {
             .project_overrides
             .insert("layer_height".into(), "0.12".into());
 
-        let input =
-            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert_eq!(input.context.user_overrides.len(), 1);
         assert!(input.context.user_overrides[0]
@@ -786,8 +807,7 @@ mod tests {
     fn empty_override_maps_produce_empty_spec_lists() {
         let _registry = RegistryGuard::acquire();
         let project = one_plate_project_with_cube();
-        let input =
-            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
         assert!(input.context.user_overrides.is_empty());
         assert!(input.context.project_overrides.is_empty());
     }
@@ -805,25 +825,30 @@ mod tests {
         // Two objects sharing one group with distinct extruder hints —
         // same shape the cube-halves loader produces.
         let g = crate::core::scene::state::GroupId::fresh();
-        project.register_object(NewSceneObject {
-            mesh: mesh_id,
-            transform: Transform::IDENTITY,
-            name: "lower".into(),
-            visible: true,
-            extruder_id: Some(1),
-            group: Some(g),
-        });
-        project.register_object(NewSceneObject {
-            mesh: mesh_id,
-            transform: Transform::translation(glam::Vec3::new(0.0, 0.0, 10.0)),
-            name: "upper".into(),
-            visible: true,
-            extruder_id: Some(2),
-            group: Some(g),
-        });
+        project.register_object(
+            NewSceneObject {
+                mesh: mesh_id,
+                transform: Transform::IDENTITY,
+                name: "lower".into(),
+                visible: true,
+                extruder_id: Some(1),
+                group: Some(g),
+            },
+            None,
+        );
+        project.register_object(
+            NewSceneObject {
+                mesh: mesh_id,
+                transform: Transform::translation(glam::Vec3::new(0.0, 0.0, 10.0)),
+                name: "upper".into(),
+                visible: true,
+                extruder_id: Some(2),
+                group: Some(g),
+            },
+            None,
+        );
 
-        let input =
-            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert_eq!(input.objects.len(), 2);
         assert!(
@@ -850,7 +875,7 @@ mod tests {
         // pins the genuinely-unbound error path.
         project.plates[0].set_printer(None);
         let mesh_id = project.register_mesh(triangle_mesh());
-        project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
+        project.register_object(NewSceneObject::at_origin(mesh_id, "cube"), None);
         let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
             .expect_err("no printer bound");
         assert!(matches!(
@@ -888,7 +913,7 @@ mod tests {
         let mut project = Project::default();
         project.plates[0].set_printer(Some("bambi".into()));
         let mesh_id = project.register_mesh(triangle_mesh());
-        project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
+        project.register_object(NewSceneObject::at_origin(mesh_id, "cube"), None);
 
         printer::mutate_instance("bambi", |inst| {
             // A1 mini doesn't support U1's Magnetic plate.
@@ -914,7 +939,13 @@ mod tests {
         let _registry = RegistryGuard::acquire();
         let snappy = crate::core::printer::lookup_instance("snappy").expect("snappy fixture");
         let mut map = std::collections::BTreeMap::new();
-        map.insert(1u8, SlotRef { extruder: 1, slot: 0 });
+        map.insert(
+            1u8,
+            SlotRef {
+                extruder: 1,
+                slot: 0,
+            },
+        );
 
         assert_eq!(material_to_filament_idx(1, &snappy, &map, true), 2);
         // Firmware-routed / AMS: identity — the material passes through.
@@ -933,10 +964,9 @@ mod tests {
         let mut project = Project::default();
         project.plates[0].set_printer(Some("snappy".into()));
         let mesh_id = project.register_mesh(triangle_mesh());
-        project.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
+        register_on_active(&mut project, NewSceneObject::at_origin(mesh_id, "cube"));
 
-        let input =
-            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
         assert_eq!(input.context.filaments.len(), 1);
         assert_eq!(input.context.filaments[0].identity, "generic-pla");
     }
@@ -949,18 +979,17 @@ mod tests {
 
         // Mesh on plate 1.
         let mesh_a = project.register_mesh(triangle_mesh());
-        project.register_object(NewSceneObject::at_origin(mesh_a, "a"));
+        project.register_object(NewSceneObject::at_origin(mesh_a, "a"), None);
 
         // Plate 2 with its own mesh.
         let (id2, _) = project.add_plate(None);
         project.plates[1].set_printer(Some("bambi".into()));
         project.set_active_plate(id2).unwrap();
         let mesh_b = project.register_mesh(triangle_mesh());
-        project.register_object(NewSceneObject::at_origin(mesh_b, "b"));
+        project.register_object(NewSceneObject::at_origin(mesh_b, "b"), None);
 
         // Build for plate 1; only plate 1's object is carried.
-        let input =
-            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
         assert_eq!(input.objects.len(), 1);
         assert_eq!(input.objects[0].name, "a");
     }
@@ -976,11 +1005,10 @@ mod tests {
         project.plates[0].set_printer(Some("bambi".into()));
         let mesh = project.register_mesh(triangle_mesh());
         for i in 0..8 {
-            project.register_object(NewSceneObject::at_origin(mesh, format!("obj-{i}")));
+            project.register_object(NewSceneObject::at_origin(mesh, format!("obj-{i}")), None);
         }
 
-        let input =
-            build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
         let names: Vec<&str> = input.objects.iter().map(|o| o.name.as_str()).collect();
         assert_eq!(
             names,

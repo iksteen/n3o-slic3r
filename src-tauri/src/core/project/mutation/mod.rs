@@ -69,6 +69,17 @@ pub(crate) mod test_support {
             .unwrap_or_default()
     }
 
+    /// Test-only: resolve the active plate's bound `PrinterInstance` from the
+    /// registry (`None` when unbound). The pure mutation methods take the
+    /// instance as a parameter; auto-bind tests run under a `RegistryGuard` that
+    /// populates the printer, so this resolves the realistic slot topology to
+    /// pass in — the model itself never reaches for the registry.
+    pub(crate) fn active_instance(p: &Project) -> Option<crate::core::printer::PrinterInstance> {
+        p.active_plate()
+            .printer_instance_id()
+            .and_then(crate::core::printer::lookup_instance)
+    }
+
     pub(crate) fn unit_cube_mesh() -> NewMesh {
         // 8-corner cube — enough geometry for tests that don't care
         // about visual quality. Normals left zeroed since the
@@ -110,7 +121,8 @@ pub(crate) mod test_support {
     /// corner positions to assert against.
     pub(crate) fn add_cube(p: &mut Project) -> (MeshId, ObjectId) {
         let mesh_id = p.register_mesh(unit_cube_mesh());
-        let obj_id = p.register_object(NewSceneObject::at_origin(mesh_id, "cube"));
+        let inst = active_instance(p);
+        let obj_id = p.register_object(NewSceneObject::at_origin(mesh_id, "cube"), inst.as_ref());
         (mesh_id, obj_id)
     }
 
@@ -143,7 +155,11 @@ pub(crate) mod test_support {
             provenance: MeshProvenance::Primitive("octahedron".into()),
         };
         let mesh_id = p.register_mesh(mesh);
-        let obj_id = p.register_object(NewSceneObject::at_origin(mesh_id, "octahedron"));
+        let inst = active_instance(p);
+        let obj_id = p.register_object(
+            NewSceneObject::at_origin(mesh_id, "octahedron"),
+            inst.as_ref(),
+        );
         (mesh_id, obj_id)
     }
 
@@ -181,14 +197,18 @@ pub(crate) mod test_support {
 
     pub(crate) fn add_cube_with_material(p: &mut Project, mat: u8) -> ObjectId {
         let mesh_id = p.register_mesh(cube_mesh());
-        p.register_object(NewSceneObject {
-            mesh: mesh_id,
-            transform: Transform::IDENTITY,
-            name: format!("cube-m{mat}"),
-            visible: true,
-            extruder_id: Some(mat),
-            group: None,
-        })
+        let inst = active_instance(p);
+        p.register_object(
+            NewSceneObject {
+                mesh: mesh_id,
+                transform: Transform::IDENTITY,
+                name: format!("cube-m{mat}"),
+                visible: true,
+                extruder_id: Some(mat),
+                group: None,
+            },
+            inst.as_ref(),
+        )
     }
 
     /// A single base-material-1 object whose mesh is MMU-painted with filament
@@ -199,13 +219,17 @@ pub(crate) mod test_support {
             ..cube_mesh()
         };
         let mesh_id = p.register_mesh(mesh);
-        p.register_object(NewSceneObject {
-            mesh: mesh_id,
-            transform: Transform::IDENTITY,
-            name: "painted".into(),
-            visible: true,
-            extruder_id: Some(1),
-            group: None,
-        })
+        let inst = active_instance(p);
+        p.register_object(
+            NewSceneObject {
+                mesh: mesh_id,
+                transform: Transform::IDENTITY,
+                name: "painted".into(),
+                visible: true,
+                extruder_id: Some(1),
+                group: None,
+            },
+            inst.as_ref(),
+        )
     }
 }

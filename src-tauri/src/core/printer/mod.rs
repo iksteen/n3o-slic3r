@@ -26,11 +26,6 @@ pub mod snapmaker;
 pub mod sync;
 
 pub use capability::{capability_for_key, CapabilityPredicate};
-pub use options::{
-    engine_default_serialized, slicer_extruder_options_for_printer, slicer_filament_options,
-    slicer_machine_options_for_printer, slicer_options_for_printer, DefaultValue, OptMode,
-    OptScopeFlags, OptionSummary, PrinterAwareOptionSummary,
-};
 pub use instance::{
     flatten_slots, BedRef, ConnectionInfo, ExtruderState, FeedKind, NozzleMaterial, NozzleSku,
     PrinterInstance, PrinterInstanceView, SlotBinding, SlotRef, SlotView,
@@ -41,11 +36,15 @@ pub use instance_library::{
 };
 pub use instance_registry::{
     create_instance, delete_instance, list_instances, lookup_instance, mutate_instance,
-    set_extruder_nozzle_diameter, set_instance_ams_units, set_instance_bed,
+    set_config_override, set_extruder_nozzle_diameter, set_instance_ams_units, set_instance_bed,
     set_instance_connection, set_instance_display_name, set_instance_send_options,
-    set_config_override, set_plugin_override, set_slot_color, set_slot_filament, update_instance,
-    InstanceMutError,
+    set_plugin_override, set_slot_color, set_slot_filament, update_instance, InstanceMutError,
     InstancePatch,
+};
+pub use options::{
+    engine_default_serialized, slicer_extruder_options_for_printer, slicer_filament_options,
+    slicer_machine_options_for_printer, slicer_options_for_printer, DefaultValue, OptMode,
+    OptScopeFlags, OptionSummary, PrinterAwareOptionSummary,
 };
 pub use profile::{BoundingBox, PrinterProfile, Toolhead};
 pub use registry::{bundled_catalog, lookup, CatalogEntry};
@@ -152,8 +151,7 @@ pub fn printer_instance_set_config_override(
 pub fn printer_instance_resolved_config(
     id: String,
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    let inst =
-        lookup_instance(&id).ok_or_else(|| format!("unknown printer instance `{id}`"))?;
+    let inst = lookup_instance(&id).ok_or_else(|| format!("unknown printer instance `{id}`"))?;
     let resolved = crate::core::project::resolve::resolve_instance_cascade(
         &inst,
         None,
@@ -230,7 +228,7 @@ pub fn printer_instance_delete_with_reassign(
                 inst.vendor_profile_ref,
             )
         })?;
-        Some((fid.to_owned(), profile))
+        Some((fid.to_owned(), profile, inst))
     } else {
         None
     };
@@ -240,11 +238,20 @@ pub fn printer_instance_delete_with_reassign(
         let mut session = state.lock().map_err(|e| format!("scene lock: {e}"))?;
         for plate_id in plate_ids {
             let events = match &fallback {
-                Some((fid, profile)) => session
-                    .project
-                    .rebind_plate_printer(plate_id, fid.clone(), profile)
-                    .map(|(_report, events)| events)
-                    .map_err(|e| e.to_string())?,
+                Some((fid, profile, new_inst)) => {
+                    let previous = session.plate_instance(plate_id);
+                    session
+                        .project
+                        .rebind_plate_printer(
+                            plate_id,
+                            fid.clone(),
+                            profile,
+                            previous.as_ref(),
+                            Some(new_inst),
+                        )
+                        .map(|(_report, events)| events)
+                        .map_err(|e| e.to_string())?
+                }
                 None => session
                     .project
                     .unbind_plate_printer(plate_id)
