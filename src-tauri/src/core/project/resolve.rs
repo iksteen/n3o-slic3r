@@ -442,12 +442,8 @@ mod tests {
         let plate_id = project.plates[0].id;
         // Switch this plate to the Strength preset (60), leaving the
         // instance's default (Standard, 200) untouched.
-        let inst = project
-            .active_plate()
-            .printer_instance_id()
-            .and_then(crate::core::printer::lookup_instance);
         project
-            .set_plate_quality_profile(plate_id, Some("0.20mm-strength".into()), inst.as_ref())
+            .set_plate_quality_profile(plate_id, Some("0.20mm-strength".into()))
             .expect("set strength");
         let resolved = resolve_plate_cascade(&project, plate_id).expect("resolve");
         let ow = resolved.entries.get("outer_wall_speed").expect("present");

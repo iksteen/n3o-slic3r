@@ -114,10 +114,31 @@ pub fn project_set_plate_quality_profile(
     state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut session = state.lock().map_err(|e| format!("session lock: {e}"))?;
-    let instance = session.plate_instance(plate_id);
+    // Validate a user-picked slug against the plate's bound printer's bundled +
+    // custom (stamped) processes before mutating. An unbound plate can't
+    // validate, so it accepts the value (the slice path rejects unbound
+    // separately). The pure model setter doesn't do this — it can't reach the
+    // user-process library without depending on a global.
+    if let Some(slug) = &quality_profile {
+        if let Some(instance) = session.plate_instance(plate_id) {
+            let known = crate::core::profile_library::bundled_process_slugs_for_printer(
+                &instance.printer_fragment_slug,
+            )
+            .iter()
+            .any(|s| *s == slug)
+                || crate::core::process::library::lookup(&instance.printer_fragment_slug, slug)
+                    .is_some();
+            if !known {
+                return Err(format!(
+                    "`{slug}` is not a bundled process for `{}`",
+                    instance.printer_fragment_slug,
+                ));
+            }
+        }
+    }
     let events = session
         .project
-        .set_plate_quality_profile(plate_id, quality_profile, instance.as_ref())
+        .set_plate_quality_profile(plate_id, quality_profile)
         .map_err(|e| e.to_string())?;
     drop(session);
     emit_all(&window, &events);
@@ -274,10 +295,10 @@ pub fn user_process_duplicate(
 
     let created = crate::core::process::library::create_custom(&printer, &base, name, overrides);
 
-    // Switch the plate onto the new profile.
+    // Switch the plate onto the new profile (just created → known valid).
     let mut events = session
         .project
-        .set_plate_quality_profile(plate_id, Some(created.id.clone()), Some(&instance))
+        .set_plate_quality_profile(plate_id, Some(created.id.clone()))
         .map_err(|e| e.to_string())?;
     if clear {
         for key in edits.keys() {
@@ -389,11 +410,10 @@ pub fn user_process_delete(
         _ => return Ok(()), // not a custom profile — nothing to delete
     };
     crate::core::process::library::remove(&printer, &selected);
-    // Back to the default profile (inherit the instance's).
-    let instance = session.plate_instance(plate_id);
+    // Back to the default profile (inherit the instance's); `None` clears.
     let mut events = session
         .project
-        .set_plate_quality_profile(plate_id, None, instance.as_ref())
+        .set_plate_quality_profile(plate_id, None)
         .map_err(|e| e.to_string())?;
     if apply {
         events.extend(apply_overrides_to_plate(

@@ -150,49 +150,25 @@ impl Project {
     }
 
     /// Set (or clear, with `None`) this plate's process/quality profile.
-    /// `Some(slug)` is validated to be a bundled process fragment **or** a
-    /// stamped custom user-process profile for the plate's bound printer; an
-    /// unknown slug rejects with `InvalidPlateAttribute`. `None` clears the
-    /// override so the plate inherits the bound instance's profile again.
-    /// No-op (no event) when unchanged. Emits `PlateChanged` — the
-    /// same channel the frontend already re-fetches plate metadata on.
+    /// `Some(slug)` sets the plate's process-fragment slug; `None` clears the
+    /// override so the plate inherits the bound instance's profile again. No-op
+    /// (no event) when unchanged. Emits `PlateChanged` — the same channel the
+    /// frontend already re-fetches plate metadata on.
+    ///
+    /// Pure setter: it does **not** validate the slug against the bundled +
+    /// custom process libraries — that's the caller's job (the model can't reach
+    /// the user-process library without depending on a global). The
+    /// `project_set_plate_quality_profile` command validates user-picked slugs
+    /// before calling; the internal callers pass slugs they just created or
+    /// `None`.
     pub fn set_plate_quality_profile(
         &mut self,
         plate_id: PlateId,
         quality_profile: Option<String>,
-        instance: Option<&PrinterInstance>,
     ) -> Result<Vec<SceneEvent>, SceneOpError> {
         let idx = self
             .plate_index(plate_id)
             .ok_or(SceneOpError::UnknownPlate(plate_id))?;
-        // Validate a non-None slug against the plate's bound printer's
-        // bundled processes (`instance` is the resolved binding for `plate_id`).
-        // An unbound plate can't validate, so it accepts the value (the slice
-        // path rejects an unbound plate separately).
-        if let Some(slug) = &quality_profile {
-            if let Some(instance) = instance {
-                let known = crate::core::profile_library::bundled_process_slugs_for_printer(
-                    &instance.printer_fragment_slug,
-                )
-                .iter()
-                .any(|s| *s == slug)
-                    // A stamped custom profile (id != base) is also valid.
-                    || crate::core::process::library::lookup(
-                        &instance.printer_fragment_slug,
-                        slug,
-                    )
-                    .is_some();
-                if !known {
-                    return Err(SceneOpError::InvalidPlateAttribute {
-                        plate_id,
-                        message: format!(
-                            "`{slug}` is not a bundled process for `{}`",
-                            instance.printer_fragment_slug,
-                        ),
-                    });
-                }
-            }
-        }
         if self.plates[idx].quality_profile == quality_profile {
             return Ok(Vec::new());
         }
