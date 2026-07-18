@@ -80,6 +80,14 @@ pub(crate) mod test_support {
             .and_then(crate::core::printer::lookup_instance)
     }
 
+    /// Test-only: a default project whose bootstrap plate is bound to the first
+    /// registered instance (the bundled `bambi`). `Project::default()` is pure
+    /// and leaves the plate unbound; tests that need a bound plate (bed
+    /// derivation, material auto-bind, slice input) use this.
+    pub(crate) fn bound_default_project() -> Project {
+        Project::with_preferred_printer(None, &crate::core::printer::list_instances())
+    }
+
     pub(crate) fn unit_cube_mesh() -> NewMesh {
         // 8-corner cube — enough geometry for tests that don't care
         // about visual quality. Normals left zeroed since the

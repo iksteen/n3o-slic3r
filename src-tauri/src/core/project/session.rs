@@ -185,14 +185,15 @@ impl Session {
 mod tests {
     use super::*;
     use crate::core::printer::instance_registry::RegistryGuard;
+    use crate::core::project::mutation::test_support::bound_default_project;
     use crate::core::scene::state::ObjectId;
 
     #[test]
     fn reconcile_derives_bed_from_binding() {
         let _guard = RegistryGuard::acquire();
-        // `Project::default` binds the bootstrap plate to the first registered
-        // instance (the bundled a1-mini `bambi`); `Session::new` reconciles.
-        let session = Session::new(Project::default());
+        // A bound bootstrap plate (bambi) derives its bed on `Session::new`'s
+        // reconcile; `Project::default` itself is unbound now.
+        let session = Session::new(bound_default_project());
         assert!(
             session.active_plate_runtime().bed.is_some(),
             "a bound plate's bed derives on reconcile",
@@ -201,7 +202,7 @@ mod tests {
 
     #[test]
     fn reconcile_clears_bed_for_an_unbound_plate() {
-        let mut project = Project::default();
+        let mut project = bound_default_project();
         project.plates[0].set_printer(None); // unbind
         let session = Session::new(project);
         assert!(session.active_plate_runtime().bed.is_none());
@@ -209,7 +210,7 @@ mod tests {
 
     #[test]
     fn reconcile_drops_runtime_for_vanished_plates() {
-        let mut session = Session::new(Project::default());
+        let mut session = Session::new(bound_default_project());
         // A stale entry for a plate id that isn't in the project.
         let ghost = PlateId(999);
         session.runtime.plates.entry(ghost).or_default();
@@ -224,7 +225,7 @@ mod tests {
 
     #[test]
     fn reconcile_preserves_selection_for_surviving_plates() {
-        let mut session = Session::new(Project::default());
+        let mut session = Session::new(bound_default_project());
         let id = session.project.active_plate().id;
         session.plate_runtime_mut(id).selection.insert(ObjectId(7));
         session.reconcile();

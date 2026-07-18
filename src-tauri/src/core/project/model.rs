@@ -35,6 +35,7 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::core::printer::PrinterInstance;
 use crate::core::scene::state::{Mesh, MeshId, PlateSceneState};
 
 /// Opaque 1-based plate id. Stable across the plate list —
@@ -172,26 +173,24 @@ pub struct Plate {
 
 impl Default for Project {
     fn default() -> Self {
-        // Bootstrap plate binds the first registered instance (in tests, the
-        // bundled bambi fixture; in production, the user's first printer — or
-        // unbound when the registry is empty, firing the empty-state UI). The
-        // command layer uses `with_preferred_printer` to honor the user's
-        // last-selected printer instead.
-        //
-        // This is the one place the model resolves the printer registry: a
-        // constructor picking "the first installed printer," not a mutation.
-        // Every *mutation* method takes its `PrinterInstance` as a parameter
-        // (the caller resolves it) so the model stays a pure function of inputs.
-        Self::with_preferred_printer(None)
+        // Pure empty project: a single unbound plate, no registry access. The
+        // model never reaches for the printer registry — not even to bootstrap.
+        // The command layer resolves the registry and calls
+        // `with_preferred_printer` with the instance list to bind the user's
+        // preferred/first printer.
+        Self::with_preferred_printer(None, &[])
     }
 }
 
-/// Bind a `PrinterInstance` to `plate`: the registered instance matching
-/// `preferred` if any, otherwise the first registered instance. Silent no-op
-/// when the registry is empty (bootstrap plate stays unbound → the empty-state
-/// onboarding takes over) or neither is available.
-fn bind_preferred_else_first_in_place(plate: &mut Plate, preferred: Option<&str>) {
-    let instances = crate::core::printer::list_instances();
+/// Bind a `PrinterInstance` to `plate`: the instance from `instances` matching
+/// `preferred` if any, otherwise the first one. Silent no-op when `instances` is
+/// empty (bootstrap plate stays unbound → the empty-state onboarding takes over)
+/// or neither is available.
+fn bind_preferred_else_first_in_place(
+    plate: &mut Plate,
+    preferred: Option<&str>,
+    instances: &[PrinterInstance],
+) {
     let chosen = preferred
         .and_then(|p| instances.iter().find(|i| i.id == p))
         .or_else(|| instances.first());
@@ -229,12 +228,13 @@ impl Project {
     }
 
     /// Empty single-plate project whose bootstrap plate binds `preferred` if
-    /// it's a registered instance, else the first registered instance (else
-    /// stays unbound). The command layer passes the user's last-selected
-    /// printer (config `[defaults]`); [`Project::default`] passes `None`.
-    pub fn with_preferred_printer(preferred: Option<&str>) -> Self {
+    /// it's in `instances`, else the first of `instances` (else stays unbound).
+    /// The command layer resolves the registry and passes the user's
+    /// last-selected printer (config `[defaults]`) as `preferred`;
+    /// [`Project::default`] passes `None` + an empty list (pure, unbound).
+    pub fn with_preferred_printer(preferred: Option<&str>, instances: &[PrinterInstance]) -> Self {
         let mut plate = Plate::new(PlateId(1), 1);
-        bind_preferred_else_first_in_place(&mut plate, preferred);
+        bind_preferred_else_first_in_place(&mut plate, preferred, instances);
         Self {
             uuid: Uuid::new_v4(),
             plates: vec![plate],
@@ -418,11 +418,12 @@ mod tests {
         assert_eq!(p.plates.len(), 1);
         assert_eq!(p.plates[0].id, PlateId(1));
         assert_eq!(p.plates[0].name, "Plate 1");
-        // Project::default auto-binds the bootstrap plate to the
-        // bundled-default printer instance.
+        // Project::default is pure — an unbound bootstrap plate, no registry
+        // access. The command layer binds the preferred/first printer through
+        // `with_preferred_printer`.
         assert!(
-            p.plates[0].printer_instance_id().is_some(),
-            "auto-bound to bundled default",
+            p.plates[0].printer_instance_id().is_none(),
+            "default project is unbound; bootstrap binding is a command-layer concern",
         );
         assert_eq!(p.active_plate, 0);
         assert!(p.meshes.is_empty());
@@ -463,18 +464,19 @@ mod tests {
     fn with_preferred_printer_binds_named_else_first() {
         // Registry seeded with the bundled fixtures (bambi + snappy).
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
+        let instances = crate::core::printer::list_instances();
 
         // None → the first registered instance.
-        let none = Project::with_preferred_printer(None);
+        let none = Project::with_preferred_printer(None, &instances);
         let first = none.plates[0].printer_instance_id().map(str::to_owned);
         assert!(first.is_some(), "None binds the first registered instance");
 
         // A valid preferred id binds that instance.
-        let snappy = Project::with_preferred_printer(Some("snappy"));
+        let snappy = Project::with_preferred_printer(Some("snappy"), &instances);
         assert_eq!(snappy.plates[0].printer_instance_id(), Some("snappy"));
 
         // An unknown preferred id falls back to the first registered instance.
-        let unknown = Project::with_preferred_printer(Some("does-not-exist"));
+        let unknown = Project::with_preferred_printer(Some("does-not-exist"), &instances);
         assert_eq!(
             unknown.plates[0].printer_instance_id().map(str::to_owned),
             first,

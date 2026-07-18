@@ -374,6 +374,7 @@ pub fn tower_geometry_for_plate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::project::mutation::test_support::bound_default_project;
     use std::path::Path;
 
     #[test]
@@ -418,7 +419,7 @@ mod tests {
         let _ = slic3r_ffi::init(None, 3);
         // Default project: plate 0 bound to the bundled A1 mini (`bambi`,
         // quality_profile = "0.20mm-standard").
-        let project = Project::default();
+        let project = bound_default_project();
         let plate_id = project.plates[0].id;
         // Sanity: the test env actually bound an instance.
         assert!(project.plates[0].printer_instance_id().is_some());
@@ -437,7 +438,7 @@ mod tests {
     #[test]
     fn plate_resolve_follows_a_per_plate_quality_profile() {
         let _ = slic3r_ffi::init(None, 3);
-        let mut project = Project::default();
+        let mut project = bound_default_project();
         let plate_id = project.plates[0].id;
         // Switch this plate to the Strength preset (60), leaving the
         // instance's default (Standard, 200) untouched.
@@ -487,7 +488,7 @@ mod tests {
     #[test]
     fn tower_geometry_for_a1_mini_reads_pinned_position_and_footprint() {
         let _ = slic3r_ffi::init(None, 3);
-        let mut project = Project::default();
+        let mut project = bound_default_project();
         let plate_id = project.plates[0].id;
         // Multi-material plate → the tower is generated.
         add_cube(&mut project, 1);
@@ -553,7 +554,7 @@ mod tests {
     #[test]
     fn tower_geometry_tracks_a_project_override_position() {
         let _ = slic3r_ffi::init(None, 3);
-        let mut project = Project::default();
+        let mut project = bound_default_project();
         let plate_id = project.plates[0].id;
         add_cube(&mut project, 1);
         add_cube(&mut project, 2);
@@ -578,7 +579,7 @@ mod tests {
         // one (`retraction_length`, shown under Retraction) so the row is
         // demonstrably reachable from the UI.
         let _ = slic3r_ffi::init(None, 3);
-        let project = Project::default();
+        let project = bound_default_project();
         let plate_id = project.plates[0].id;
         let resolved = resolve_plate_cascade(&project, plate_id).expect("resolve");
         for key in ["nozzle_diameter", "retraction_length"] {

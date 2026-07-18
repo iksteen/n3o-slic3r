@@ -88,7 +88,9 @@ pub fn run() {
         .manage(Arc::new(core::preview::PreviewRegistry::new()))
         .manage(Arc::new(core::driver::DriverRegistry::new()))
         .manage(Arc::new(core::driver::camera::CameraManager::new()))
-        .manage(Arc::new(core::driver::commands::SendCancelRegistry::default()))
+        .manage(Arc::new(
+            core::driver::commands::SendCancelRegistry::default(),
+        ))
         .manage(viewport_render::ViewportState::default())
         .manage(paint_tool::PaintToolState::default())
         .manage(toolpath_render::ToolpathState::default())
@@ -210,11 +212,15 @@ pub fn run() {
             // user's last-selected printer (config `[defaults]`),
             // falling back to the first registered instance.
             let preferred = core::config::load().defaults.printer_instance;
-            let initial = core::project::Project::with_preferred_printer(preferred.as_deref());
+            let instances = core::printer::list_instances();
+            let initial =
+                core::project::Project::with_preferred_printer(preferred.as_deref(), &instances);
             let session = core::project::Session::new(initial);
-            app.manage(Arc::new(Mutex::new(core::project::history::UndoHistory::new(
-                core::project::history::UndoSnapshot::capture(&session),
-            ))));
+            app.manage(Arc::new(Mutex::new(
+                core::project::history::UndoHistory::new(
+                    core::project::history::UndoSnapshot::capture(&session),
+                ),
+            )));
             let project: Arc<Mutex<core::project::Session>> = Arc::new(Mutex::new(session));
             app.manage(project);
             app.manage(Arc::new(core::project::dirty::DirtyTracker::new()));

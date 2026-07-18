@@ -520,7 +520,8 @@ pub fn load_or_import(path: &std::path::Path) -> Result<Loaded, String> {
 /// project's autosave file is keyed by its own uuid and survives.
 pub fn fresh_project() -> Project {
     let preferred = crate::core::config::load().defaults.printer_instance;
-    Project::with_preferred_printer(preferred.as_deref())
+    let instances = crate::core::printer::list_instances();
+    Project::with_preferred_printer(preferred.as_deref(), &instances)
 }
 
 // ---- Autosave --------------------------------------------

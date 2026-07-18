@@ -218,6 +218,7 @@ mod tests {
     use super::*;
     use crate::core::printer::instance_registry::RegistryGuard;
     use crate::core::printer::profile::BoundingBox;
+    use crate::core::project::mutation::test_support::bound_default_project;
     use crate::core::project::Project;
     use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
     use crate::core::scene::transform::Transform;
@@ -270,7 +271,7 @@ mod tests {
         // material 1 lands on (0, 0) = AMS:1 → ams_slot=1 (first
         // AMS-feed slot under this extruder, 1-based).
         let _registry = RegistryGuard::acquire();
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         add_cube(&mut p, 1);
         let bindings = ams_bindings_for_plate(&p.plates[0]);
         assert_eq!(bindings.len(), 1);
@@ -286,7 +287,7 @@ mod tests {
         // as ams_slot=1). M4→5 doesn't exist on the AMS lite's
         // 4 slots; the firmware refused to load it.
         let _registry = RegistryGuard::acquire();
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         for mat in 1u8..=4 {
             add_cube(&mut p, mat);
         }
@@ -316,7 +317,7 @@ mod tests {
         // choose.
         use crate::core::printer::SlotRef;
         let _registry = RegistryGuard::acquire();
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         // Override the auto-bind: pin M1 to Ext.
         add_cube(&mut p, 1);
         p.plates[0].material_to_slot.insert(
@@ -343,7 +344,7 @@ mod tests {
         // material in the filament list; we size to the materials
         // actually present.)
         let _registry = RegistryGuard::acquire();
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         for mat in 1u8..=4 {
             add_cube(&mut p, mat);
         }
@@ -391,7 +392,7 @@ mod tests {
         // would be `{255, 255}`).
         use crate::core::printer::SlotRef;
         let _registry = RegistryGuard::acquire();
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         for mat in 1u8..=4 {
             add_cube(&mut p, mat);
         }
@@ -447,7 +448,7 @@ mod tests {
         // the Ext sentinel at filament index 0 where M1 lives.
         use crate::core::printer::SlotRef;
         let _registry = RegistryGuard::acquire();
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         for mat in 1u8..=2 {
             add_cube(&mut p, mat);
         }
@@ -496,7 +497,7 @@ mod tests {
         // no material lands on an AMS slot.
         use crate::core::printer::SlotRef;
         let _registry = RegistryGuard::acquire();
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         add_cube(&mut p, 1);
         p.plates[0].material_to_slot.insert(
             1,
@@ -526,7 +527,7 @@ mod tests {
         // the encoder should still produce a clean empty output
         // for hygiene).
         let _registry = RegistryGuard::acquire();
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         p.plates[0].set_printer(Some("snappy".into()));
         for mat in 1u8..=4 {
             add_cube(&mut p, mat);

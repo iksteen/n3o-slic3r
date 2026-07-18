@@ -361,7 +361,7 @@ mod tests {
         // A single object painted with filament 2 must surface *both* materials
         // (base 1 + painted 2) as slot bindings — the materials list reads
         // `material_to_slot`, and the preview already shows both.
-        let mut p = Project::default(); // boots bound to Bambi
+        let mut p = bound_default_project(); // boots bound to Bambi
         add_painted_cube(&mut p);
         assert!(p.plates[0].material_to_slot.contains_key(&1));
         assert!(
@@ -375,7 +375,7 @@ mod tests {
         // Deleting the painted object must clean up the painted material's
         // binding too — it's named by the mesh paint, not any extruder_id, so
         // the delete path has to consult the paint or the binding lingers.
-        let mut session = Session::new(Project::default());
+        let mut session = Session::new(bound_default_project());
         let id = add_painted_cube(&mut session.project);
         assert!(session.project.plates[0].material_to_slot.contains_key(&2));
         session.delete_objects(&[id]);
@@ -399,7 +399,7 @@ mod tests {
         // (modular over the 4 AMS slots) is AMS:1 (taken); the
         // first-free-from-preferred policy walks forward and lands
         // on AMS:3 (slot 2) instead of colliding with M1.
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         add_cube_with_material(&mut p, 1);
         add_cube_with_material(&mut p, 2);
         add_cube_with_material(&mut p, 5);
@@ -435,7 +435,7 @@ mod tests {
         // modular index (AMS:1). Users sharing one physical slot
         // across two materials is the expected outcome when the
         // model has more materials than the printer has slots.
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         for m in 1..=4 {
             add_cube_with_material(&mut p, m);
         }
@@ -721,7 +721,7 @@ mod tests {
 
     #[test]
     fn clear_material_slot_drops_entry_and_is_idempotent() {
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         add_cube_with_material(&mut p, 1);
         let events = p.clear_material_slot(PlateId(1), 1).unwrap();
         assert_eq!(events.len(), 1);
@@ -735,7 +735,7 @@ mod tests {
     fn material_to_slot_round_trips_through_project_serde() {
         // material_to_slot survives the JSON round-trip the project
         // save/load path uses.
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         add_cube_with_material(&mut p, 1);
         let json = serde_json::to_string(&p).unwrap();
         let parsed: Project = serde_json::from_str(&json).unwrap();

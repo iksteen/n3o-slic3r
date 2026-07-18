@@ -2225,7 +2225,7 @@ mod tests {
 
     #[test]
     fn auto_orient_clamps_overhanging_footprint_onto_bed() {
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         let (_, obj) = add_cube(&mut p);
         let bed_max_x = {
             let bed = derive_bed(p.active_plate()).unwrap();
@@ -2303,7 +2303,7 @@ mod tests {
 
     #[test]
     fn lay_flat_on_clamps_overhanging_footprint_back_onto_bed() {
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         let (_, obj) = add_cube(&mut p);
         let bed_max_x = derive_bed(p.active_plate()).unwrap().extents.max[0] as f32;
         // Unit cube hanging 0.5 off the +X edge. The post-rotation X/Y clamp must
@@ -2340,7 +2340,7 @@ mod tests {
     #[test]
     fn orient_settles_true_lowest_vertex_and_suppresses_false_below_plate() {
         use crate::core::scene::bed::{object_out_of_bounds, OutOfBoundsReason};
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         let r = 10.0_f32;
         let (mesh_id, obj) = add_octahedron(&mut p, r);
         // Center it well inside the bed and float it, so only Z is in play.
@@ -2402,7 +2402,7 @@ mod tests {
     #[test]
     fn orient_keeps_too_tall_warning_after_seating() {
         use crate::core::scene::bed::{BoundsAxis, OutOfBoundsReason};
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         let (_, obj) = add_cube(&mut p);
         // A column taller than the build volume. Seating drops it to z=0, so it's
         // not below-plate — but it pierces the Z ceiling, which must still warn:

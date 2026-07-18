@@ -165,6 +165,7 @@ mod tests {
     use crate::core::printer::profile::BoundingBox;
     use crate::core::printer::set_slot_filament;
     use crate::core::printer::SlotRef;
+    use crate::core::project::mutation::test_support::bound_default_project;
     use crate::core::scene::state::{MeshProvenance, NewMesh, NewSceneObject};
     use crate::core::scene::transform::Transform;
 
@@ -205,7 +206,7 @@ mod tests {
     fn plate_with_all_referenced_materials_mapped_and_filaments_bound_passes() {
         let _registry = RegistryGuard::acquire();
         set_slot_filament("bambi", 0, 0, Some("Generic PLA".into())).unwrap();
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         add_cube(&mut p, 1);
         assert!(validate_pre_slice(&p, &[1]).is_ok());
     }
@@ -213,7 +214,7 @@ mod tests {
     #[test]
     fn unbound_printer_blocks() {
         let _registry = RegistryGuard::acquire();
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         p.plates[0].set_printer(None);
         add_cube(&mut p, 1);
         let err = validate_pre_slice(&p, &[1]).unwrap_err();
@@ -232,7 +233,7 @@ mod tests {
         // slot's filament so the gate sees an unbound slot in the
         // material's path.
         set_slot_filament("bambi", 0, 0, None).unwrap();
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         add_cube(&mut p, 1);
         let err = validate_pre_slice(&p, &[1]).unwrap_err();
         assert!(err
@@ -245,7 +246,7 @@ mod tests {
     fn unmapped_material_blocks_when_object_references_it() {
         let _registry = RegistryGuard::acquire();
         set_slot_filament("bambi", 0, 0, Some("Generic PLA".into())).unwrap();
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         add_cube(&mut p, 1);
         // Wipe the auto-bound mapping so we recover the
         // "user-deleted entry" path.
@@ -261,7 +262,7 @@ mod tests {
     fn slot_extruder_out_of_range_blocks() {
         let _registry = RegistryGuard::acquire();
         set_slot_filament("bambi", 0, 0, Some("Generic PLA".into())).unwrap();
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         add_cube(&mut p, 1);
         // Plant a stale slot reference — pretend a project file
         // carries an extruder index that no longer exists.
@@ -282,7 +283,7 @@ mod tests {
     #[test]
     fn absent_plate_id_is_skipped() {
         let _registry = RegistryGuard::acquire();
-        let p = Project::default();
+        let p = bound_default_project();
         // No plate 99 → no error.
         assert!(validate_pre_slice(&p, &[99]).is_ok());
     }

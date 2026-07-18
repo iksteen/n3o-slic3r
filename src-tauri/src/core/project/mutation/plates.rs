@@ -367,7 +367,7 @@ mod tests {
 
     #[test]
     fn add_plate_appends_new_id_and_keeps_active() {
-        let mut p = Project::default();
+        let mut p = bound_default_project();
         let (new_id, events) = p.add_plate(None);
         assert_eq!(new_id, PlateId(2));
         assert_eq!(p.plates.len(), 2);
@@ -424,15 +424,23 @@ mod tests {
     }
 
     #[test]
-    fn project_default_bootstraps_with_bundled_printer() {
-        let p = Project::default();
+    fn bootstrap_binds_first_instance_and_derives_bed() {
+        // `Project::default` is pure/unbound; the command-layer bootstrap
+        // (`with_preferred_printer` with the registry's instances) binds the
+        // first instance, and that binding derives a bed.
+        let unbound = Project::default();
+        assert!(
+            unbound.plates[0].printer_instance_id().is_none(),
+            "default project is unbound",
+        );
+        let p = bound_default_project();
         assert!(
             p.plates[0].printer_instance_id().is_some(),
-            "default project's first plate is auto-bound",
+            "bootstrap binds the first registered instance",
         );
         assert!(
             derive_bed(&p.plates[0]).is_some(),
-            "auto-bind also populates the bed visualization",
+            "the bound plate's bed derives",
         );
     }
 
@@ -510,7 +518,7 @@ mod tests {
 
     #[test]
     fn set_active_printer_delegates_to_active_plate() {
-        let mut session = Session::new(Project::default());
+        let mut session = Session::new(bound_default_project());
         session.set_active_printer(Some(&a1_mini_for_test()));
         assert!(derive_bed(session.project.active_plate()).is_some());
     }
