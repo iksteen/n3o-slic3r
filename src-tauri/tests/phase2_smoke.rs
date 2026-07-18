@@ -1,3 +1,4 @@
+#![cfg(feature = "test-fixtures")]
 //! Phase 2 Rust-side smoke (PR-2-12).
 //!
 //! Drives the loader → scene → arrange path end-to-end without the

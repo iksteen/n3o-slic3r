@@ -312,9 +312,12 @@ impl Project {
 
 impl Session {
     /// Install the active plate's bed from a resolved `PrinterProfile`,
-    /// without touching the binding — a bed-viz-only path used by the arrange
-    /// helpers/tests. `None` clears it. (The picker flow that also updates the
-    /// binding is [`Project::rebind_plate_printer`] + `Session::reconcile`.)
+    /// without touching the binding. `None` clears it. Test-only: the prod
+    /// picker flow that also updates the binding is
+    /// [`Project::rebind_plate_printer`] + `Session::reconcile`. Gated so it
+    /// stays off the prod API surface while the arrange/scene tests (and the
+    /// `test-fixtures` integration smokes) can still stage a bed cheaply.
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub fn set_active_printer(&mut self, printer: Option<&PrinterProfile>) -> Vec<SceneEvent> {
         let plate_id = self.project.active_plate().id;
         let new_bed = printer.map(bed::bed_for_printer);

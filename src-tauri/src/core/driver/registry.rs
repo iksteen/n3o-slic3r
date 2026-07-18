@@ -54,14 +54,6 @@ impl DriverRegistry {
         }
     }
 
-    /// Allocate a fresh id + insert the driver. The caller is
-    /// responsible for the driver having been initialized
-    /// (constructor ran) but NOT for having called `connect()`
-    /// yet — that's a separate Tauri command.
-    pub fn register(&self, driver: Box<dyn Driver>) -> DriverId {
-        self.register_with("", |_id| driver)
-    }
-
     /// Allocate the next id, hand it to `builder`, and insert the
     /// driver under that id atomically. Use this when the driver's
     /// own `id()` should match the registry's id (most cases —
@@ -194,8 +186,8 @@ mod tests {
     #[test]
     fn register_assigns_monotonic_ids() {
         let reg = DriverRegistry::new();
-        let id1 = reg.register(Box::new(StubDriver::new(DriverKind::Bambu)));
-        let id2 = reg.register(Box::new(StubDriver::new(DriverKind::U1)));
+        let id1 = reg.register_with("", |_| Box::new(StubDriver::new(DriverKind::Bambu)));
+        let id2 = reg.register_with("", |_| Box::new(StubDriver::new(DriverKind::U1)));
         assert_ne!(id1, id2);
         assert!(id2.0 > id1.0);
     }
@@ -203,7 +195,7 @@ mod tests {
     #[test]
     fn get_returns_some_for_registered_some_for_unknown() {
         let reg = DriverRegistry::new();
-        let id = reg.register(Box::new(StubDriver::new(DriverKind::Bambu)));
+        let id = reg.register_with("", |_| Box::new(StubDriver::new(DriverKind::Bambu)));
         assert!(reg.get(id).is_some());
         assert!(reg.get(DriverId(9999)).is_none());
     }
@@ -211,7 +203,7 @@ mod tests {
     #[test]
     fn remove_returns_true_for_present_false_for_missing() {
         let reg = DriverRegistry::new();
-        let id = reg.register(Box::new(StubDriver::new(DriverKind::Bambu)));
+        let id = reg.register_with("", |_| Box::new(StubDriver::new(DriverKind::Bambu)));
         assert!(reg.remove(id));
         assert!(!reg.remove(id));
     }

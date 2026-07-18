@@ -31,9 +31,7 @@ pub use instance::{
     PrinterInstance, PrinterInstanceView, SlotBinding, SlotRef, SlotView,
 };
 #[cfg(any(test, feature = "test-fixtures"))]
-pub use instance_library::{
-    bundled_instances, instance_id_for_vendor_profile, BAMBI_ID, SNAPPY_ID,
-};
+pub use instance_library::{bundled_instances, BAMBI_ID, SNAPPY_ID};
 pub use instance_registry::{
     create_instance, delete_instance, list_instances, lookup_instance, mutate_instance,
     set_config_override, set_extruder_nozzle_diameter, set_instance_ams_units, set_instance_bed,

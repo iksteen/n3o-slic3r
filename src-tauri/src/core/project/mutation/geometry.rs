@@ -941,8 +941,8 @@ impl Project {
 
     // ---- Bounds / helpers ----------------------------------------
 
-    /// Compute the world-space bounding box of all visible objects
-    /// on the active plate. Used by `Frame All` in the renderer.
+    /// Compute the world-space bounding box of all visible objects on
+    /// the active plate; `None` when nothing is visible.
     pub fn visible_bounds(&self) -> Option<BoundingBox> {
         let mut min = Vec3::splat(f32::INFINITY);
         let mut max = Vec3::splat(f32::NEG_INFINITY);

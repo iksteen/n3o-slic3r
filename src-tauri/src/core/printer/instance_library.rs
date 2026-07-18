@@ -42,27 +42,6 @@ pub fn bundled_instances() -> Vec<PrinterInstance> {
     vec![bambi(), snappy(), bender()]
 }
 
-/// Reverse lookup: given a vendor profile ref (e.g.
-/// `"bambu-lab-a1-mini"`), return the id of the matching test-fixture
-/// `PrinterInstance` (`"bambi"`). `None` for vendor profiles with no
-/// fixture. Tests use this to bridge a `PrinterBinding`-shaped
-/// identity back to a fixture id without hardcoding the mapping at
-/// every call site.
-///
-/// Lives here because the fixture set is the authoritative mapping —
-/// instances reference vendor profiles by name, and this is the
-/// inverse.
-pub fn instance_id_for_vendor_profile(vendor_profile_ref: &str) -> Option<&'static str> {
-    bundled_instances()
-        .iter()
-        .find(|i| i.vendor_profile_ref == vendor_profile_ref)
-        .map(|i| match i.id.as_str() {
-            "bambi" => BAMBI_ID,
-            "snappy" => SNAPPY_ID,
-            "bender" => BENDER_ID,
-            _ => unreachable!(),
-        })
-}
 
 fn bambi() -> PrinterInstance {
     PrinterInstance {

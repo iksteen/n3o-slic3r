@@ -228,37 +228,6 @@ fn base_preset_name(name: &str) -> &str {
     name.split(" @").next().unwrap_or(name).trim()
 }
 
-/// The bundled printer an imported project binds to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PrinterMatch {
-    /// Catalog identity bound to (always set when the catalog is
-    /// non-empty — a fallback still picks one).
-    pub identity: String,
-    /// True when `printer_model` matched no bundled printer and we fell
-    /// back. Flagged in the report; machine settings are dropped
-    /// regardless, so a fallback bind is safe.
-    pub fallback: bool,
-}
-
-/// Map a BBS/Orca `printer_model` to a bundled printer: exact match on
-/// the model name, else the first catalog entry flagged as a fallback.
-/// `None` only when no printers are bundled.
-pub fn infer_printer(printer_model: Option<&str>) -> Option<PrinterMatch> {
-    let catalog = crate::core::profile_library::printer_catalog();
-    if let Some(model) = printer_model {
-        if let Some(e) = catalog.iter().find(|e| e.profile.model == model) {
-            return Some(PrinterMatch {
-                identity: e.identity.clone(),
-                fallback: false,
-            });
-        }
-    }
-    catalog.first().map(|e| PrinterMatch {
-        identity: e.identity.clone(),
-        fallback: true,
-    })
-}
-
 /// The bundled filament a project slot maps to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilamentMatch {
@@ -1003,20 +972,6 @@ mod tests {
             .filter(|k| !IDENTITY_KEYS.contains(&k.as_str()))
             .count();
         assert_eq!(total, non_identity);
-    }
-
-    #[test]
-    fn infers_a_bundled_printer_and_falls_back_for_unknown() {
-        // The fixture targets the A1 mini, which we ship → exact bind.
-        let m = infer_printer(Some("Bambu Lab A1 mini")).expect("catalog non-empty");
-        assert!(!m.fallback, "A1 mini should match exactly");
-        let entry = crate::core::profile_library::printer_catalog_lookup(&m.identity)
-            .expect("bound identity is in the catalog");
-        assert_eq!(entry.profile.model, "Bambu Lab A1 mini");
-
-        // An unknown model falls back (still binds something, flagged).
-        let f = infer_printer(Some("Frobozz MagiPrint 9000")).expect("catalog non-empty");
-        assert!(f.fallback, "unknown model must fall back");
     }
 
     #[test]

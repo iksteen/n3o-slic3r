@@ -162,6 +162,9 @@ impl AutosaveHandle {
         }
     }
 
+    /// Whether the autosave worker thread is live. Test-only observable
+    /// for the start/stop/idempotency tests — nothing in prod reads it.
+    #[cfg(test)]
     pub fn is_running(&self) -> bool {
         let inner = self.inner.lock().expect("autosave handle poisoned");
         inner.thread.is_some()

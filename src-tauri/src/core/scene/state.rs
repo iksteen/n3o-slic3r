@@ -467,20 +467,6 @@ impl ObjectList {
         Some(obj)
     }
 
-    /// Move `id` to `new_index` (clamped), shifting the rest — the primitive a
-    /// future "reorder in the panel" gesture drives. No-op if `id` is absent.
-    pub fn move_object(&mut self, id: &ObjectId, new_index: usize) {
-        let Some(from) = self.index.get(id).copied() else {
-            return;
-        };
-        let to = new_index.min(self.objects.len() - 1);
-        if from == to {
-            return;
-        }
-        let obj = self.objects.remove(from);
-        self.objects.insert(to, obj);
-        self.rebuild_index();
-    }
 }
 
 // `objects[&id]` panics on a missing key, mirroring `HashMap`'s indexing.
@@ -610,18 +596,6 @@ mod object_list_tests {
         assert!(list.remove(&ObjectId(2)).is_none());
     }
 
-    #[test]
-    fn move_object_reorders_and_keeps_index_valid() {
-        let mut list = ObjectList::default();
-        for id in [1, 2, 3, 4] {
-            list.push(obj(id));
-        }
-        list.move_object(&ObjectId(4), 0);
-        assert_eq!(ids(&list), [4, 1, 2, 3]);
-        list.move_object(&ObjectId(4), 99); // index clamps to the end
-        assert_eq!(ids(&list), [1, 2, 3, 4]);
-        assert_eq!(list.get(&ObjectId(1)).unwrap().name, "o1");
-    }
 
     #[test]
     fn serde_round_trips_as_ordered_array() {
