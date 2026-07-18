@@ -178,19 +178,6 @@ pub fn printer_instance_create(
     Ok(PrinterInstanceView::of(inst))
 }
 
-/// Tauri command: remove a `PrinterInstance`. The caller (frontend)
-/// is responsible for unbinding any plates that referenced this
-/// instance; the backend currently leaves them as dangling refs
-/// (the slice gate refuses to run, the picker surfaces "unbound").
-/// Emits `printer:instance_changed` so consumers re-list.
-#[tauri::command]
-#[tracing::instrument(skip(window))]
-pub fn printer_instance_delete(id: String, window: tauri::Window) -> Result<(), String> {
-    delete_instance(&id).map_err(|e| e.to_string())?;
-    emit_instance_changed(&window, &id);
-    Ok(())
-}
-
 /// Tauri command: atomically rebind or unbind a set of plates and
 /// then delete a `PrinterInstance`. Closes the partial-commit
 /// window the old frontend orchestration had: a sequential or
@@ -271,21 +258,6 @@ pub fn printer_instance_delete_with_reassign(
     Ok(())
 }
 
-/// Tauri command: rename the instance. Trims whitespace and rejects
-/// empty (mirrors `create_instance`'s validation). Emits
-/// `printer:instance_changed` so consumers re-list.
-#[tauri::command]
-#[tracing::instrument(skip(window))]
-pub fn printer_instance_set_display_name(
-    id: String,
-    display_name: String,
-    window: tauri::Window,
-) -> Result<PrinterInstanceView, String> {
-    let updated = set_instance_display_name(&id, display_name).map_err(|e| e.to_string())?;
-    emit_instance_changed(&window, &updated.id);
-    Ok(PrinterInstanceView::of(updated))
-}
-
 /// Tauri command: replace the instance's sticky per-print send options
 /// (leveling/calibration/timelapse). Emits `printer:instance_changed`.
 #[tauri::command]
@@ -330,24 +302,6 @@ pub fn printer_instance_update(
     window: tauri::Window,
 ) -> Result<PrinterInstanceView, String> {
     let updated = update_instance(&id, patch).map_err(|e| e.to_string())?;
-    emit_instance_changed(&window, &updated.id);
-    Ok(PrinterInstanceView::of(updated))
-}
-
-/// Tauri command: write (or clear) the instance's network connection
-/// settings. Persisted via `instance_storage`; the reactive driver
-/// manager (`useDriverConnections`) reconciles the live driver
-/// registry off the resulting `printer:instance_changed` event.
-/// Rejects a `ConnectionInfo` whose variant doesn't match the
-/// printer's `driver_kind`.
-#[tauri::command]
-#[tracing::instrument(skip(window))]
-pub fn printer_instance_set_connection(
-    id: String,
-    connection: Option<ConnectionInfo>,
-    window: tauri::Window,
-) -> Result<PrinterInstanceView, String> {
-    let updated = set_instance_connection(&id, connection).map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &updated.id);
     Ok(PrinterInstanceView::of(updated))
 }

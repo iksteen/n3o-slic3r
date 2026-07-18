@@ -380,29 +380,6 @@ pub fn scene_rebind_plate_printer(
     Ok(report)
 }
 
-/// Clear a plate's printer binding. Companion to
-/// `scene_rebind_plate_printer` for the case where there's no
-/// fallback printer to rebind to — e.g. the user deleted the last
-/// registered instance and the workspace is about to transition
-/// to the add-printer empty state.
-#[tauri::command]
-#[tracing::instrument(skip(state, window))]
-pub fn scene_unbind_plate_printer(
-    plate_id: PlateId,
-    window: Window,
-    state: State<Arc<Mutex<Session>>>,
-) -> Result<(), String> {
-    let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s
-        .project
-        .unbind_plate_printer(plate_id)
-        .map_err(|e| e.to_string())?;
-    s.reconcile(); // unbind → clear the plate's bed
-    drop(s);
-    emit_all(&window, &events);
-    Ok(())
-}
-
 /// Move a set of objects from one plate to another, preserving their
 /// world transforms (the "Send to plate" action — keeps each object's
 /// authored XYZ, unlike auto-arrange). Whole groups move together and
