@@ -678,27 +678,6 @@ pub fn set_instance_ams_units(
     mutate_instance(id, |inst| apply_ams_units(inst, id, ams_units, None))
 }
 
-/// Write the instance's network connection settings (or clear them
-/// with `None`). Persisted via `instance_storage` so the same
-/// physical printer's connection survives across app restarts.
-/// The reactive driver-registry manager
-/// (`src/driver/useDriverConnections.ts`) observes the resulting
-/// `printer:instance_changed` event and reconciles registered
-/// drivers against the new state — register/disconnect/replace
-/// happen automatically; no separate UI gesture needed.
-pub fn set_instance_connection(
-    id: &str,
-    connection: Option<ConnectionInfo>,
-) -> Result<PrinterInstance, InstanceMutError> {
-    mutate_instance(id, |inst| {
-        if let Some(conn) = &connection {
-            validate_connection(inst, conn)?;
-        }
-        inst.connection = connection.clone();
-        Ok(())
-    })
-}
-
 /// Variant of a `ConnectionInfo` as a lowercase wire token, matching
 /// the `DriverKind` serialization.
 fn connection_kind_token(conn: &ConnectionInfo) -> &'static str {
@@ -797,8 +776,8 @@ fn validate_connection_content(
 
 /// Full command-boundary connection validation: the variant must
 /// match the printer's `driver_kind` AND the field content must be
-/// usable. Both `set_instance_connection` and `update_instance` route
-/// every persisted connection through this.
+/// usable. `update_instance` routes every persisted connection
+/// through this.
 fn validate_connection(
     inst: &PrinterInstance,
     conn: &ConnectionInfo,
@@ -1002,22 +981,6 @@ fn apply_ams_units(
     Ok(())
 }
 
-/// Rename the instance. Mirrors `create_instance`'s validation:
-/// trims whitespace and rejects empty.
-pub fn set_instance_display_name(
-    id: &str,
-    display_name: String,
-) -> Result<PrinterInstance, InstanceMutError> {
-    let trimmed = display_name.trim().to_owned();
-    if trimmed.is_empty() {
-        return Err(InstanceMutError::EmptyDisplayName);
-    }
-    mutate_instance(id, |inst| {
-        inst.display_name = trimmed.clone();
-        Ok(())
-    })
-}
-
 /// Replace the instance's sticky per-print send options.
 pub fn set_instance_send_options(
     id: &str,
@@ -1143,6 +1106,35 @@ fn reset_to_bundled_inner() {
 mod tests {
     use super::super::instance::{FeedKind, SlotBinding};
     use super::*;
+
+    /// Test helper: rename via the live `update_instance` path (the granular
+    /// `set_instance_display_name` setter was removed; the settings modal
+    /// persists renames through `update_instance`'s patch).
+    fn set_name(id: &str, name: String) -> Result<PrinterInstance, InstanceMutError> {
+        update_instance(
+            id,
+            InstancePatch {
+                display_name: Some(name),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Test helper: set/clear the connection via `update_instance` — clearing
+    /// goes through the `clear_connection` flag, not a `None` connection.
+    fn set_conn(
+        id: &str,
+        connection: Option<super::super::instance::ConnectionInfo>,
+    ) -> Result<PrinterInstance, InstanceMutError> {
+        update_instance(
+            id,
+            InstancePatch {
+                clear_connection: connection.is_none(),
+                connection,
+                ..Default::default()
+            },
+        )
+    }
 
     #[test]
     fn list_returns_bundled_set() {
@@ -1515,16 +1507,16 @@ mod tests {
     }
 
     #[test]
-    fn set_instance_display_name_trims_and_rejects_empty() {
+    fn update_instance_trims_and_rejects_empty_name() {
         let _registry = RegistryGuard::acquire();
         let updated =
-            set_instance_display_name("bambi", "  Lab Mini  ".to_string()).expect("rename ok");
+            set_name("bambi", "  Lab Mini  ".to_string()).expect("rename ok");
         assert_eq!(updated.display_name, "Lab Mini");
         // Persistence round-trip via lookup.
         let again = lookup_instance("bambi").expect("bambi present");
         assert_eq!(again.display_name, "Lab Mini");
 
-        let err = set_instance_display_name("bambi", "   ".to_string()).unwrap_err();
+        let err = set_name("bambi", "   ".to_string()).unwrap_err();
         assert!(matches!(err, InstanceMutError::EmptyDisplayName));
     }
 
@@ -1610,26 +1602,26 @@ mod tests {
     }
 
     #[test]
-    fn set_instance_connection_round_trip_and_clear() {
+    fn update_instance_connection_round_trip_and_clear() {
         use super::super::instance::ConnectionInfo;
         let _registry = RegistryGuard::acquire();
         let bambu = ConnectionInfo::Bambu {
             host: "192.168.1.42".to_string(),
             access_code: "12345678".to_string(),
         };
-        let updated = set_instance_connection("bambi", Some(bambu)).expect("set bambu conn");
+        let updated = set_conn("bambi", Some(bambu)).expect("set bambu conn");
         assert!(matches!(
             updated.connection,
             Some(ConnectionInfo::Bambu { ref host, .. }) if host == "192.168.1.42",
         ));
-        let cleared = set_instance_connection("bambi", None).expect("clear");
+        let cleared = set_conn("bambi", None).expect("clear");
         assert!(cleared.connection.is_none());
 
         let u1 = ConnectionInfo::U1 {
             host: "snappy.local".to_string(),
             port: 8080,
         };
-        let updated = set_instance_connection("snappy", Some(u1)).expect("set u1 conn");
+        let updated = set_conn("snappy", Some(u1)).expect("set u1 conn");
         match updated.connection {
             Some(ConnectionInfo::U1 { host, port }) => {
                 assert_eq!(host, "snappy.local");
@@ -1640,7 +1632,7 @@ mod tests {
     }
 
     #[test]
-    fn set_instance_connection_rejects_mismatched_driver_kind() {
+    fn update_instance_connection_rejects_mismatched_driver_kind() {
         use super::super::instance::ConnectionInfo;
         let _registry = RegistryGuard::acquire();
         // bambi is an A1 mini (driver_kind = bambu); a U1 connection
@@ -1650,7 +1642,7 @@ mod tests {
             host: "snappy.local".to_string(),
             port: 80,
         };
-        let err = set_instance_connection("bambi", Some(wrong)).unwrap_err();
+        let err = set_conn("bambi", Some(wrong)).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -1695,7 +1687,7 @@ mod tests {
     }
 
     #[test]
-    fn set_instance_connection_rejects_invalid_content() {
+    fn update_instance_connection_rejects_invalid_content() {
         use super::super::instance::ConnectionInfo;
         let _registry = RegistryGuard::acquire();
         // Right kind, but empty host — must be refused on content.
@@ -1703,7 +1695,7 @@ mod tests {
             host: "   ".to_string(),
             access_code: "12345678".to_string(),
         };
-        let err = set_instance_connection("bambi", Some(empty_host)).unwrap_err();
+        let err = set_conn("bambi", Some(empty_host)).unwrap_err();
         assert!(
             matches!(err, InstanceMutError::InvalidConnection { .. }),
             "got {err:?}",
@@ -1713,7 +1705,7 @@ mod tests {
             host: "192.168.1.42".to_string(),
             access_code: "abc12xyz".to_string(),
         };
-        let err = set_instance_connection("bambi", Some(bad_code)).unwrap_err();
+        let err = set_conn("bambi", Some(bad_code)).unwrap_err();
         assert!(
             matches!(err, InstanceMutError::InvalidConnection { .. }),
             "got {err:?}",

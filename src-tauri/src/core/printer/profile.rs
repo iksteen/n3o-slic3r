@@ -109,9 +109,8 @@ pub struct PrinterProfile {
     /// `model.toml` (`driver_kind = "bambu" | "u1"`); the registry
     /// carries it through unchanged. `#[serde(default)]` so a
     /// printer that ships without a driver can omit the field and
-    /// resolve to `None`. The connection setters
-    /// (`set_instance_connection` / `update_instance`) enforce that a
-    /// saved `ConnectionInfo` variant matches this kind.
+    /// resolve to `None`. `update_instance` enforces that a saved
+    /// `ConnectionInfo` variant matches this kind.
     #[serde(default)]
     pub driver_kind: Option<crate::core::driver::traits::DriverKind>,
 

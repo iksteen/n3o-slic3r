@@ -37,8 +37,8 @@ pub use instance_library::{
 pub use instance_registry::{
     create_instance, delete_instance, list_instances, lookup_instance, mutate_instance,
     set_config_override, set_extruder_nozzle_diameter, set_instance_ams_units, set_instance_bed,
-    set_instance_connection, set_instance_display_name, set_instance_send_options,
-    set_plugin_override, set_slot_color, set_slot_filament, update_instance, InstanceMutError,
+    set_instance_send_options, set_plugin_override, set_slot_color, set_slot_filament,
+    update_instance, InstanceMutError,
     InstancePatch,
 };
 pub use options::{
