@@ -36,7 +36,7 @@ export function printerCatalog(): Promise<PrinterCatalogEntry[]> {
 
 /** Rebind a plate to a different `PrinterInstance` (by id). The
  *  bed currently loaded on the instance follows from the instance
- *  itself — change it via `printerInstanceSetBed`. */
+ *  itself — change it via `setInstanceBed` (`printerInstance.ts`). */
 export function rebindPlatePrinter(
   plateId: PlateId,
   instanceId: string,
@@ -58,13 +58,3 @@ export function unbindPlatePrinter(plateId: PlateId): Promise<void> {
   return invoke<void>("scene_unbind_plate_printer", { plateId });
 }
 
-/** Change the bed currently loaded on a `PrinterInstance`. The
- * backend validates the identity against the instance's bound
- * printer profile's `supported_build_plates` and emits
- * `printer:instance_changed`. */
-export function printerInstanceSetBed(
-  id: string,
-  bedIdentity: string,
-): Promise<void> {
-  return invoke("printer_instance_set_bed", { id, bedIdentity });
-}

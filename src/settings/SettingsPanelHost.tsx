@@ -332,7 +332,7 @@ export function SettingsPanelHost({
   // The bound PrinterInstance — drives the BuildPlateSelector +
   // NozzlePicker chips. Reads off the instance (not the binding)
   // per the post-build-plate-refactor source-of-truth: pickers
-  // write through `printerInstanceSetBed` /
+  // write through `setInstanceBed` /
   // `printerInstanceSetExtruderNozzleDiameter`, the slicer composer
   // reads off `instance.bed.identity` /
   // `instance.extruders[i].installed_nozzle`. The shared per-instance

@@ -77,26 +77,6 @@ export async function setPlateQualityProfile(
   });
 }
 
-/** A stamped user override profile over one bundled process, scoped to a
- *  printer. Mirror of `core::process::UserProcess`. */
-export interface UserProcess {
-  id: string;
-  printer: string;
-  base: string;
-  /** Display name for a named custom clone; null for a stamp-in-place edit. */
-  name: string | null;
-  overrides: Record<string, string>;
-}
-
-/** The stamped override profile for a printer's process, or `null` if
- *  pristine. Drives the picker's bold name + Revert affordance. */
-export async function getUserProcess(
-  printer: string,
-  base: string,
-): Promise<UserProcess | null> {
-  return invoke<UserProcess | null>("user_process_get", { printer, base });
-}
-
 /** Per-plate placement keys the viewport drag writes into project overrides
  *  (the wipe/prime-tower position). Stamping excludes them — a dragged tower
  *  must never bake into the shared quality profile. Mirrors the backend

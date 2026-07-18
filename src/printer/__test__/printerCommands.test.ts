@@ -7,11 +7,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import {
-  printerCatalog,
-  printerInstanceSetBed,
-  rebindPlatePrinter,
-} from "../printerCommands";
+import { printerCatalog, rebindPlatePrinter } from "../printerCommands";
 
 beforeEach(() => {
   invokeMock.mockReset();
@@ -59,23 +55,5 @@ describe("rebindPlatePrinter", () => {
       instanceId: "bambi",
     });
     expect(report.new_printer).toBe("bambu-lab-a1-mini");
-  });
-});
-
-describe("printerInstanceSetBed", () => {
-  it("invokes printer_instance_set_bed and propagates UnsupportedBuildPlate", async () => {
-    invokeMock.mockResolvedValueOnce(undefined);
-    await printerInstanceSetBed("bambi", "Cool Plate");
-    expect(invokeMock).toHaveBeenCalledWith("printer_instance_set_bed", {
-      id: "bambi",
-      bedIdentity: "Cool Plate",
-    });
-
-    invokeMock.mockRejectedValueOnce(
-      "instance `bambi` printer `bambu-lab-a1-mini` does not support build plate `Magnetic`",
-    );
-    await expect(
-      printerInstanceSetBed("bambi", "Magnetic"),
-    ).rejects.toMatch(/does not support build plate/);
   });
 });
