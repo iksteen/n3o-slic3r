@@ -14,7 +14,6 @@
 //! renderer's local mirror is a cache; the snapshot command rebuilds
 //! it from scratch on reconnect.
 
-use super::build_plate::BuildPlate;
 use super::transform::Transform;
 use crate::core::printer::profile::BoundingBox;
 use glam::Vec3;
@@ -302,18 +301,6 @@ fn default_visible() -> bool {
     true
 }
 
-/// The active build plate's identity + transform. MVP ships one;
-/// Phase 5 extends this to a `Vec<ActivePlate>`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActivePlate {
-    pub build_plate: BuildPlate,
-    /// Where the plate sits in world space. Defaults to identity
-    /// (plate origin = world origin). Multi-plate scenes (Phase 5)
-    /// translate plates apart.
-    #[serde(default)]
-    pub transform: Transform,
-}
-
 /// A printer's exclusion zone, as world-space coordinates after the
 /// active plate's transform. Cached in the scene state so the
 /// renderer + collision check don't recompute on every transform op.
@@ -523,34 +510,13 @@ impl<'de> Deserialize<'de> for ObjectList {
     }
 }
 
-/// Per-plate scene state — everything one plate owns: placed
-/// objects, selection, bed + exclusion zones,
-/// active-build-plate identity. Phase 5 turns the historically
-/// single-global scene into N of these.
+/// Per-plate **persisted** scene content — the objects one plate owns and
+/// their per-object/group overrides. Transient state (selection) and derived
+/// state (bed + exclusion zones) live in `SessionRuntime`, keyed by the
+/// plate's id, not here.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlateSceneState {
     pub objects: ObjectList,
-    /// Live selection — transient UI state, deliberately **not
-    /// persisted**. A reopened project starts with nothing selected.
-    #[serde(skip)]
-    pub selection: HashSet<ObjectId>,
-    /// Vestigial active-build-plate handle — never assigned (the active
-    /// build plate is a property of the bound `PrinterInstance`, not the
-    /// project), so **not persisted**.
-    #[serde(skip)]
-    pub plate: Option<ActivePlate>,
-    /// Derived from the bound printer profile alongside `bed`. **Not
-    /// persisted** — re-derived on load with `bed` (see below).
-    #[serde(skip)]
-    pub exclusion_zones: Vec<ExclusionZone>,
-    /// Active bed visualization + bounds. `None` when no printer is
-    /// selected yet for this plate — loading meshes still works, just
-    /// without the out-of-bounds check or grid. **Not persisted**: it's a
-    /// pure function of the bound printer profile, so `format::read_project`
-    /// re-derives it (and `exclusion_zones`) via `Plate::set_printer` on
-    /// load rather than storing a snapshot that could drift from the profile.
-    #[serde(skip)]
-    pub bed: Option<super::bed::BedMesh>,
     /// Per-object cascade overrides. Outer key: object; inner map:
     /// **logical** cascade key → serialized value. The resolver consumes
     /// this as the highest-priority tier when the panel resolves with the

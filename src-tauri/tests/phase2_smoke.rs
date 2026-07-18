@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
-use n3o_slic3r_lib::core::project::Project;
+use n3o_slic3r_lib::core::project::{Project, Session, SessionRuntime};
 use n3o_slic3r_lib::core::scene::events::SceneEvent;
 use n3o_slic3r_lib::core::scene::primitives::{PrimitiveKind, PrimitiveParams};
 use n3o_slic3r_lib::core::scene::state::NewSceneObject;
@@ -54,7 +54,8 @@ fn a1_mini() -> PrinterProfile {
 #[test]
 fn step_1_set_active_printer_emits_bed_changed() {
     let mut state = Project::default();
-    let events = state.set_active_printer(Some(&a1_mini()));
+    let mut rt = SessionRuntime::default();
+    let events = state.set_active_printer(&mut rt, Some(&a1_mini()));
     let bed_set = events
         .iter()
         .any(|e| matches!(e, SceneEvent::BedChanged { bed: Some(_), .. }));
@@ -62,17 +63,20 @@ fn step_1_set_active_printer_emits_bed_changed() {
         bed_set,
         "set_active_printer should emit a populated BedChanged"
     );
+    let plate_id = state.active_plate().id;
     assert!(
-        state.active_plate().scene.bed.is_some(),
-        "scene state has the bed cached"
+        rt.plates.get(&plate_id).and_then(|r| r.bed.clone()).is_some(),
+        "runtime has the bed cached"
     );
 }
 
 #[test]
 fn step_2_library_primitive_lands_on_plate() {
     let mut state = Project::default();
-    state.set_active_printer(Some(&a1_mini()));
+    let mut rt = SessionRuntime::default();
+    state.set_active_printer(&mut rt, Some(&a1_mini()));
     let (_mesh_id, obj_id, events) = state.add_from_primitive(
+        &mut rt,
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
     );
@@ -174,8 +178,10 @@ fn step_4_stormtrooper_loads_under_budget_when_present() {
 #[test]
 fn step_5_scene_snapshot_round_trips_after_full_setup() {
     let mut state = Project::default();
-    state.set_active_printer(Some(&a1_mini()));
+    let mut rt = SessionRuntime::default();
+    state.set_active_printer(&mut rt, Some(&a1_mini()));
     let _ = state.add_from_primitive(
+        &mut rt,
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
     );
@@ -198,10 +204,13 @@ fn step_5_scene_snapshot_round_trips_after_full_setup() {
 
 #[test]
 fn step_6_auto_arrange_then_oob_clear_under_active_printer() {
-    let mut state = Project::default();
-    state.set_active_printer(Some(&a1_mini()));
+    let mut session = Session::new(Project::default());
+    session
+        .project
+        .set_active_printer(&mut session.runtime, Some(&a1_mini()));
     for _ in 0..6 {
-        let _ = state.add_from_primitive(
+        let _ = session.project.add_from_primitive(
+            &mut session.runtime,
             PrimitiveKind::Cube,
             PrimitiveParams {
                 width: 20.0,
@@ -212,14 +221,15 @@ fn step_6_auto_arrange_then_oob_clear_under_active_printer() {
             },
         );
     }
-    let bed = state.active_plate().scene.bed.clone().unwrap();
+    let bed = session.active_plate_runtime().bed.clone().unwrap();
     let plan = n3o_slic3r_lib::core::scene::arrange::plan_arrangement(
-        &state,
+        &session.project,
         &bed,
         n3o_slic3r_lib::core::scene::arrange::ArrangeOptions::default(),
     );
     assert!(plan.un_placed.is_empty(), "6 small cubes should fit");
-    let (events, _) = n3o_slic3r_lib::core::scene::arrange::apply_arrangement(&mut state, plan);
+    let (events, _) =
+        n3o_slic3r_lib::core::scene::arrange::apply_arrangement(&mut session, plan);
     let oob = events
         .iter()
         .filter(|e| matches!(e, SceneEvent::ObjectOutOfBounds { .. }))
@@ -231,17 +241,20 @@ fn step_6_auto_arrange_then_oob_clear_under_active_printer() {
 fn step_7_selection_and_delete_round_trip() {
     use n3o_slic3r_lib::core::scene::events::SelectMode;
     let mut state = Project::default();
-    state.set_active_printer(Some(&a1_mini()));
+    let mut rt = SessionRuntime::default();
+    state.set_active_printer(&mut rt, Some(&a1_mini()));
     let (_, a, _) = state.add_from_primitive(
+        &mut rt,
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
     );
     let (_, b, _) = state.add_from_primitive(
+        &mut rt,
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
     );
-    state.select(&[a, b], SelectMode::Replace);
-    let events = state.delete_objects(&[a, b]);
+    state.select(&mut rt, &[a, b], SelectMode::Replace);
+    let events = state.delete_objects(&mut rt, &[a, b]);
     let removed = events
         .iter()
         .filter(|e| matches!(e, SceneEvent::ObjectRemoved { .. }))
@@ -261,8 +274,10 @@ fn step_8_scene_clone_for_reconnect_drops_buffers_from_snapshot() {
     // bloat the snapshot. The renderer fetches them per-mesh via
     // `scene_mesh_buffers`. Verify a JSON round-trip strips them.
     let mut state = Project::default();
-    state.set_active_printer(Some(&a1_mini()));
+    let mut rt = SessionRuntime::default();
+    state.set_active_printer(&mut rt, Some(&a1_mini()));
     let (mesh_id, _, _) = state.add_from_primitive(
+        &mut rt,
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
     );

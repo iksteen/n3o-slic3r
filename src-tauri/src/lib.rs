@@ -211,10 +211,11 @@ pub fn run() {
             // falling back to the first registered instance.
             let preferred = core::config::load().defaults.printer_instance;
             let initial = core::project::Project::with_preferred_printer(preferred.as_deref());
+            let session = core::project::Session::new(initial);
             app.manage(Arc::new(Mutex::new(core::project::history::UndoHistory::new(
-                initial.clone(),
+                core::project::history::UndoSnapshot::capture(&session),
             ))));
-            let project: Arc<Mutex<core::project::Project>> = Arc::new(Mutex::new(initial));
+            let project: Arc<Mutex<core::project::Session>> = Arc::new(Mutex::new(session));
             app.manage(project);
             app.manage(Arc::new(core::project::dirty::DirtyTracker::new()));
             app.manage(core::project::autosave::AutosaveHandle::new());

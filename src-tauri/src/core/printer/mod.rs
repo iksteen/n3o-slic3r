@@ -214,7 +214,7 @@ pub fn printer_instance_delete_with_reassign(
     id: String,
     fallback_instance_id: Option<String>,
     plate_ids: Vec<crate::core::project::PlateId>,
-    state: tauri::State<'_, std::sync::Arc<std::sync::Mutex<crate::core::project::Project>>>,
+    state: tauri::State<'_, std::sync::Arc<std::sync::Mutex<crate::core::project::Session>>>,
     window: tauri::Window,
 ) -> Result<(), String> {
     // Resolve the fallback's profile up-front so the per-plate
@@ -237,19 +237,22 @@ pub fn printer_instance_delete_with_reassign(
 
     let mut all_events = Vec::new();
     {
-        let mut project = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+        let mut session = state.lock().map_err(|e| format!("scene lock: {e}"))?;
         for plate_id in plate_ids {
             let events = match &fallback {
-                Some((fid, profile)) => project
+                Some((fid, profile)) => session
+                    .project
                     .rebind_plate_printer(plate_id, fid.clone(), profile)
                     .map(|(_report, events)| events)
                     .map_err(|e| e.to_string())?,
-                None => project
+                None => session
+                    .project
                     .unbind_plate_printer(plate_id)
                     .map_err(|e| e.to_string())?,
             };
             all_events.extend(events);
         }
+        session.reconcile(); // bindings changed → re-derive beds
     }
     // Emit the rebinds before the delete's `?`: the plates are already mutated
     // in the backing project, so the frontend mirror must reflect them even if

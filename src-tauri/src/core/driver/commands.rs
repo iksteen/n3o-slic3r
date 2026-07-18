@@ -35,7 +35,7 @@ use super::traits::{
     SendPayload, U1StartOptions, UploadProgressFn,
 };
 use crate::core::plugin::commands::PluginHostState;
-use crate::core::project::Project;
+use crate::core::project::Session;
 
 /// Wire-shape for the `driver:status_update` Tauri event the
 /// frontend's `useDriverStatus` hook subscribes to. Carries the
@@ -406,19 +406,19 @@ pub async fn driver_status(
 /// diff vs BBS / other slicer outputs without fishing the bundle
 /// out of the printer's /cache/ directory.
 #[tauri::command]
-#[tracing::instrument(skip(project))]
+#[tracing::instrument(skip(session))]
 pub async fn driver_export_plate(
     plate_id: u32,
     gcode_path: String,
     output_path: String,
     thumbnail_png_base64: Option<String>,
-    project: State<'_, Arc<Mutex<Project>>>,
+    session: State<'_, Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     // MQTT mapping isn't surfaced in the exported bundle, but pull it
     // anyway so the .gcode.3mf side stays consistent with what the
     // send path would emit.
-    let ams = collect_ams_bindings(&project, plate_id);
-    let (_basename, title) = derive_send_names(&project, plate_id);
+    let ams = collect_ams_bindings(&session, plate_id);
+    let (_basename, title) = derive_send_names(&session, plate_id);
     let thumbnail_png = thumbnail_png_base64.and_then(|b64| {
         base64::engine::general_purpose::STANDARD
             .decode(b64.as_bytes())
@@ -447,7 +447,7 @@ pub async fn driver_export_plate(
 ///   file name and starts the print in the same multipart upload
 ///   (see `core/driver/moonraker/http.rs`).
 #[tauri::command]
-#[tracing::instrument(skip(registry, project, plugin_host, app, sends))]
+#[tracing::instrument(skip(registry, session, plugin_host, app, sends))]
 pub async fn driver_send_plate(
     id: DriverId,
     plate_id: u32,
@@ -459,7 +459,7 @@ pub async fn driver_send_plate(
     // base64 comment block prepended to its raw G-code.
     thumbnail_png_base64: Option<String>,
     registry: State<'_, Arc<DriverRegistry>>,
-    project: State<'_, Arc<Mutex<Project>>>,
+    session: State<'_, Arc<Mutex<Session>>>,
     plugin_host: State<'_, PluginHostState>,
     sends: State<'_, Arc<SendCancelRegistry>>,
 ) -> Result<SendHandle, DriverError> {
@@ -478,14 +478,14 @@ pub async fn driver_send_plate(
             }
         }
     });
-    let (basename, title) = derive_send_names(&project, plate_id);
+    let (basename, title) = derive_send_names(&session, plate_id);
     // The bound instance's sticky per-print toggles (the send dialog
     // edits them; the drivers translate to their wire fields).
-    let options = plate_send_options(&project, plate_id);
+    let options = plate_send_options(&session, plate_id);
     let payload = match kind {
         DriverKind::Bambu => {
-            let ams = collect_ams_bindings(&project, plate_id);
-            let (use_ams, ams_mapping, ams_mapping2) = collect_ams_mapping(&project, plate_id);
+            let ams = collect_ams_bindings(&session, plate_id);
+            let (use_ams, ams_mapping, ams_mapping2) = collect_ams_mapping(&session, plate_id);
             let bytes = wrap_gcode_as_3mf(gcode_path, plate_id, title, ams, thumbnail_png)
                 .await
                 .map_err(DriverError::Other)?;
@@ -513,8 +513,8 @@ pub async fn driver_send_plate(
                     // logical; FLOW_CALIBRATE_EXTRUDERS + NOZZLE_DIAMETER
                     // derive from the map table.
                     let (used_logical, filament_used_mm) = u1_usage_from_gcode(&bytes);
-                    let map_table = u1_map_table(&project, plate_id);
-                    let physical_nozzles = plate_nozzle_diameters(&project, plate_id);
+                    let map_table = u1_map_table(&session, plate_id);
+                    let physical_nozzles = plate_nozzle_diameters(&session, plate_id);
                     Some(U1StartOptions {
                         options,
                         extruders_used: physical_extruders_used(&used_logical, &map_table),
@@ -543,7 +543,7 @@ pub async fn driver_send_plate(
     // Resolve the plate's printer model so the hook enforces
     // `printer_compatibility` (a plugin scoped to another model is
     // skipped even without a Lua self-guard).
-    let printer_model = plate_printer_model(&project, plate_id);
+    let printer_model = plate_printer_model(&session, plate_id);
     let payload = apply_pre_send(plugin_host.inner(), payload, plate_id, kind, printer_model);
     let file_name = match kind {
         DriverKind::Bambu => format!("{basename}.gcode.3mf"),

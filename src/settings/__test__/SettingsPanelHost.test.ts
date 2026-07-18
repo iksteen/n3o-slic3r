@@ -50,7 +50,6 @@ function plate(opts: {
     quality_profile: null,
     objects: opts.objects ?? [],
     selection: opts.selection ?? [],
-    build_plate: null,
     exclusion_zones: [],
     bed: null,
     object_overrides: opts.object_overrides ?? {},

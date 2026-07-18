@@ -19,7 +19,7 @@
 //! `#[test]` instead of criterion to keep the regression gate
 //! inside the normal `cargo test --release` invocation.
 
-use n3o_slic3r_lib::core::project::Project;
+use n3o_slic3r_lib::core::project::{Project, SessionRuntime};
 use n3o_slic3r_lib::core::scene::events::SelectMode;
 use n3o_slic3r_lib::core::scene::primitives::{PrimitiveKind, PrimitiveParams};
 use n3o_slic3r_lib::core::scene::state::ObjectId;
@@ -29,20 +29,21 @@ use std::time::{Duration, Instant};
 const OBJECT_COUNT: usize = 1000;
 const ITERATIONS: u32 = 100;
 
-fn build_scene_with_n_cubes(n: usize) -> (Project, Vec<ObjectId>) {
+fn build_scene_with_n_cubes(n: usize) -> (Project, SessionRuntime, Vec<ObjectId>) {
     let mut s = Project::default();
+    let mut rt = SessionRuntime::default();
     let mut ids = Vec::with_capacity(n);
     // All cubes share one mesh (PR-2-7's primitive cache). The 1000
     // objects exercise the per-object hot path without inflating the
     // mesh registry beyond what a realistic project would have.
     let params = PrimitiveParams::defaults_for(PrimitiveKind::Cube);
     for _ in 0..n {
-        let (_mesh, obj, _events) = s.add_from_primitive(PrimitiveKind::Cube, params);
+        let (_mesh, obj, _events) = s.add_from_primitive(&mut rt, PrimitiveKind::Cube, params);
         ids.push(obj);
     }
     assert_eq!(s.meshes.len(), 1, "primitive cache must dedup");
     assert_eq!(s.active_plate().scene.objects.len(), n);
-    (s, ids)
+    (s, rt, ids)
 }
 
 /// Run `op` N times. Returns (mean, p99) latency where p99 is the
@@ -68,7 +69,7 @@ fn measure<F: FnMut(u32)>(mut op: F) -> (Duration, Duration) {
 
 #[test]
 fn translate_single_object_under_5ms_p99_on_1000_object_scene() {
-    let (mut state, ids) = build_scene_with_n_cubes(OBJECT_COUNT);
+    let (mut state, _rt, ids) = build_scene_with_n_cubes(OBJECT_COUNT);
     let target = ids[OBJECT_COUNT / 2];
     let (mean, p99) = measure(|i| {
         // Alternate +X / -X so the object stays near origin and the
@@ -90,7 +91,7 @@ fn translate_single_object_under_5ms_p99_on_1000_object_scene() {
 
 #[test]
 fn rotate_single_object_under_5ms_p99_on_1000_object_scene() {
-    let (mut state, ids) = build_scene_with_n_cubes(OBJECT_COUNT);
+    let (mut state, _rt, ids) = build_scene_with_n_cubes(OBJECT_COUNT);
     let target = ids[OBJECT_COUNT / 2];
     let (mean, p99) = measure(|i| {
         // ±10° around Z, alternating direction.
@@ -107,7 +108,7 @@ fn rotate_single_object_under_5ms_p99_on_1000_object_scene() {
 
 #[test]
 fn scale_single_object_under_5ms_p99_on_1000_object_scene() {
-    let (mut state, ids) = build_scene_with_n_cubes(OBJECT_COUNT);
+    let (mut state, _rt, ids) = build_scene_with_n_cubes(OBJECT_COUNT);
     let target = ids[OBJECT_COUNT / 2];
     let (mean, p99) = measure(|i| {
         let f = if i % 2 == 0 { 1.001 } else { 0.999 };
@@ -120,7 +121,7 @@ fn scale_single_object_under_5ms_p99_on_1000_object_scene() {
 
 #[test]
 fn select_100_objects_under_5ms_p99() {
-    let (mut state, ids) = build_scene_with_n_cubes(OBJECT_COUNT);
+    let (mut state, mut rt, ids) = build_scene_with_n_cubes(OBJECT_COUNT);
     let batch: Vec<ObjectId> = ids.iter().step_by(10).copied().collect();
     assert_eq!(batch.len(), 100);
     let (mean, p99) = measure(|i| {
@@ -129,7 +130,7 @@ fn select_100_objects_under_5ms_p99() {
         } else {
             SelectMode::Toggle
         };
-        let _ = state.select(&batch, mode);
+        let _ = state.select(&mut rt, &batch, mode);
     });
     println!("select-100 mean={:?} p99={:?}", mean, p99);
     assert!(
@@ -148,7 +149,7 @@ fn select_100_objects_under_5ms_p99() {
 /// the JSON-serialization layer becoming O(n²) by accident.
 #[test]
 fn snapshot_clone_under_50ms_on_1000_object_scene() {
-    let (state, _) = build_scene_with_n_cubes(OBJECT_COUNT);
+    let (state, rt, _) = build_scene_with_n_cubes(OBJECT_COUNT);
     let (mean, p99) = measure(|_| {
         // Mirror what the `scene_snapshot` command does: clone the
         // pieces it returns. (We can't invoke the Tauri command
@@ -157,8 +158,11 @@ fn snapshot_clone_under_50ms_on_1000_object_scene() {
         let _meshes: Vec<_> = state.meshes.values().map(|m| m.header()).collect();
         let scene = &state.active_plate().scene;
         let _objects: Vec<_> = scene.objects.values().cloned().collect();
-        let _bed = scene.bed.clone();
-        let _selection: Vec<_> = scene.selection.iter().copied().collect();
+        let plate_rt = rt.plates.get(&state.active_plate().id);
+        let _bed = plate_rt.and_then(|r| r.bed.clone());
+        let _selection: Vec<_> = plate_rt
+            .map(|r| r.selection.iter().copied().collect())
+            .unwrap_or_default();
     });
     println!("snapshot mean={:?} p99={:?}", mean, p99);
     assert!(
@@ -176,7 +180,7 @@ fn snapshot_clone_under_50ms_on_1000_object_scene() {
 /// primitive cache de-dups *objects* by accident (not just meshes).
 #[test]
 fn scene_has_expected_shape_for_perf_run() {
-    let (state, ids) = build_scene_with_n_cubes(OBJECT_COUNT);
+    let (state, _rt, ids) = build_scene_with_n_cubes(OBJECT_COUNT);
     assert_eq!(state.active_plate().scene.objects.len(), OBJECT_COUNT);
     assert_eq!(ids.len(), OBJECT_COUNT);
     assert_eq!(state.meshes.len(), 1, "primitive dedup");

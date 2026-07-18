@@ -13,7 +13,7 @@ use super::traits::{DriverKind, SendPayload};
 use crate::core::plugin::commands::PluginHostState;
 use crate::core::plugin::{DispatchGate, HookKind, PayloadKind, PreSendHook, SendTarget};
 use crate::core::project::model::sanitize_basename;
-use crate::core::project::{PlateId, Project};
+use crate::core::project::{PlateId, Session};
 use crate::core::threemf::{fixture_input, write_sliced_3mf, AmsBinding};
 
 /// Wrap a raw G-code file on disk into a Bambu-flavored
@@ -86,12 +86,13 @@ pub(super) async fn read_gcode_bytes(gcode_path: String) -> Result<Vec<u8>, Stri
 /// Falls back to `untitled_Plate <n>` shape when the plate is unknown
 /// (the project still contributes its title), so the names are always
 /// well-formed.
-pub(super) fn derive_send_names(project: &Mutex<Project>, plate_id: u32) -> (String, String) {
-    let p = project
+pub(super) fn derive_send_names(session: &Mutex<Session>, plate_id: u32) -> (String, String) {
+    let s = session
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let project_title = p.title();
-    let plate_name = p
+    let project_title = s.title();
+    let plate_name = s
+        .project
         .plate(PlateId(plate_id))
         .map(|pl| pl.name.clone())
         .unwrap_or_else(|| format!("Plate {plate_id}"));
@@ -108,11 +109,11 @@ pub(super) fn derive_send_names(project: &Mutex<Project>, plate_id: u32) -> (Str
 /// the send/dry-send path. Returns an empty vec when the plate isn't
 /// found or has no mappings — both safe defaults the firmware
 /// tolerates on a single-slot, no-AMS print.
-pub(super) fn collect_ams_bindings(project: &Mutex<Project>, plate_id: u32) -> Vec<AmsBinding> {
-    let Ok(p) = project.lock() else {
+pub(super) fn collect_ams_bindings(session: &Mutex<Session>, plate_id: u32) -> Vec<AmsBinding> {
+    let Ok(s) = session.lock() else {
         return Vec::new();
     };
-    let Some(plate) = p.plate(PlateId(plate_id)) else {
+    let Some(plate) = s.project.plate(PlateId(plate_id)) else {
         return Vec::new();
     };
     ams_bindings_for_plate(plate)
@@ -124,14 +125,14 @@ pub(super) fn collect_ams_bindings(project: &Mutex<Project>, plate_id: u32) -> V
 /// plate is unknown, unbound, or carries no materials — the
 /// firmware falls back to the external spool in that case.
 pub(super) fn collect_ams_mapping(
-    project: &Mutex<Project>,
+    session: &Mutex<Session>,
     plate_id: u32,
 ) -> (bool, Vec<i8>, Vec<AmsMappingV2>) {
     let default = (false, Vec::new(), Vec::new());
-    let Ok(p) = project.lock() else {
+    let Ok(s) = session.lock() else {
         return default;
     };
-    let Some(plate) = p.plate(PlateId(plate_id)) else {
+    let Some(plate) = s.project.plate(PlateId(plate_id)) else {
         return default;
     };
     ams_mapping_for_plate(plate)
@@ -141,12 +142,12 @@ pub(super) fn collect_ams_mapping(
 /// `printer_compatibility` enforcement. `None` when the plate isn't
 /// bound or the instance/profile can't be resolved — the printer check
 /// is then simply skipped (the gate treats `None` as "any").
-pub(super) fn plate_printer_model(project: &Mutex<Project>, plate_id: u32) -> Option<String> {
+pub(super) fn plate_printer_model(session: &Mutex<Session>, plate_id: u32) -> Option<String> {
     let inst_id = {
-        let p = project
+        let s = session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        p.plate(PlateId(plate_id))?
+        s.project.plate(PlateId(plate_id))?
             .printer_instance_id()?
             .to_owned()
     };
@@ -160,14 +161,14 @@ pub(super) fn plate_printer_model(project: &Mutex<Project>, plate_id: u32) -> Op
 /// calibrations/timelapse off) when the plate isn't bound or the
 /// instance can't be resolved.
 pub(super) fn plate_send_options(
-    project: &Mutex<Project>,
+    session: &Mutex<Session>,
     plate_id: u32,
 ) -> crate::core::printer::instance::SendOptions {
     let inst_id = {
-        let p = project
+        let s = session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        p.plate(PlateId(plate_id))
+        s.project.plate(PlateId(plate_id))
             .and_then(|pl| pl.printer_instance_id().map(str::to_owned))
     };
     inst_id
@@ -182,12 +183,12 @@ pub(super) fn plate_send_options(
 /// diameter doesn't parse — the start script then omits
 /// `NOZZLE_DIAMETER_LIST` rather than sending a partial list the
 /// firmware would misalign.
-pub(super) fn plate_nozzle_diameters(project: &Mutex<Project>, plate_id: u32) -> Vec<f64> {
+pub(super) fn plate_nozzle_diameters(session: &Mutex<Session>, plate_id: u32) -> Vec<f64> {
     let inst_id = {
-        let p = project
+        let s = session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        p.plate(PlateId(plate_id))
+        s.project.plate(PlateId(plate_id))
             .and_then(|pl| pl.printer_instance_id().map(str::to_owned))
     };
     let Some(inst) = inst_id.and_then(|id| crate::core::printer::lookup_instance(&id)) else {
@@ -218,11 +219,11 @@ pub(super) fn plate_nozzle_diameters(project: &Mutex<Project>, plate_id: u32) ->
 /// toolhead 0 (`pre_slice_gate` binds every referenced material, so this
 /// only covers index gaps that the G-code never emits). Empty when the
 /// plate isn't found.
-pub(super) fn u1_map_table(project: &Mutex<Project>, plate_id: u32) -> Vec<(u8, u8)> {
-    let p = project
+pub(super) fn u1_map_table(session: &Mutex<Session>, plate_id: u32) -> Vec<(u8, u8)> {
+    let s = session
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some(plate) = p.plate(PlateId(plate_id)) else {
+    let Some(plate) = s.project.plate(PlateId(plate_id)) else {
         return Vec::new();
     };
     (1..=plate.material_count())
@@ -375,6 +376,7 @@ pub(super) fn apply_pre_send(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::project::Project;
     use std::sync::Arc;
 
     #[test]
@@ -384,7 +386,7 @@ mod tests {
         let plate = &mut project.plates[0];
         plate.material_to_slot.insert(1, SlotRef { extruder: 2, slot: 0 });
         plate.material_to_slot.insert(2, SlotRef { extruder: 0, slot: 0 });
-        let mtx = Mutex::new(project);
+        let mtx = Mutex::new(Session::new(project));
         // logical = material − 1; physical = the bound toolhead.
         assert_eq!(u1_map_table(&mtx, 1), vec![(0, 2), (1, 0)]);
     }
@@ -397,7 +399,7 @@ mod tests {
         project.plates[0]
             .material_to_slot
             .insert(3, SlotRef { extruder: 1, slot: 0 });
-        let mtx = Mutex::new(project);
+        let mtx = Mutex::new(Session::new(project));
         assert_eq!(u1_map_table(&mtx, 1), vec![(0, 0), (1, 0), (2, 1)]);
     }
 
@@ -456,22 +458,26 @@ mod tests {
         use std::path::PathBuf;
 
         // Unsaved, default-named plate → untitled_Plate 1.
-        let mut project = Project::default();
-        let (basename, title) = derive_send_names(&Mutex::new(project.clone()), 1);
+        let project = Project::default();
+        let (basename, title) =
+            derive_send_names(&Mutex::new(Session::new(project.clone())), 1);
         assert_eq!(basename, "Untitled_Plate_1");
         assert_eq!(title, "Untitled — Plate 1");
 
-        // Saved as MyPrint.3mf, plate renamed "Lid".
-        project.source_path = Some(PathBuf::from("/tmp/MyPrint.3mf"));
+        // Saved as MyPrint.3mf (source_path lives in SessionRuntime),
+        // plate renamed "Lid".
+        let mut project = project;
         if let Some(plate) = project.plates.first_mut() {
             plate.name = "Lid".into();
         }
-        let (basename, title) = derive_send_names(&Mutex::new(project.clone()), 1);
+        let mut session = Session::new(project);
+        session.runtime.source_path = Some(PathBuf::from("/tmp/MyPrint.3mf"));
+        let (basename, title) = derive_send_names(&Mutex::new(session.clone()), 1);
         assert_eq!(basename, "MyPrint_Lid");
         assert_eq!(title, "MyPrint — Lid");
 
         // Unknown plate id still produces a well-formed name from the project.
-        let (basename, title) = derive_send_names(&Mutex::new(project), 9);
+        let (basename, title) = derive_send_names(&Mutex::new(session), 9);
         assert_eq!(basename, "MyPrint_Plate_9");
         assert_eq!(title, "MyPrint — Plate 9");
     }

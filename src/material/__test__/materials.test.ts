@@ -36,7 +36,6 @@ function plate(
     quality_profile: null,
     objects,
     selection: [],
-    build_plate: null,
     exclusion_zones: [],
     bed: null,
     object_overrides: {},

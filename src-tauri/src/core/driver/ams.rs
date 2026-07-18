@@ -520,7 +520,7 @@ mod tests {
         // for hygiene).
         let _registry = RegistryGuard::acquire();
         let mut p = Project::default();
-        p.plates[0].set_printer(Some("snappy".into()), None);
+        p.plates[0].set_printer(Some("snappy".into()));
         for mat in 1u8..=4 {
             add_cube(&mut p, mat);
         }

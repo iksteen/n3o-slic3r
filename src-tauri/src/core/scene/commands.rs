@@ -1,6 +1,6 @@
 //! Tauri commands that drive the scene side of [`Project`].
 //!
-//! Each command takes a `Window` + `State<Arc<Mutex<Project>>>`, locks
+//! Each command takes a `Window` + `State<Arc<Mutex<Session>>>`, locks
 //! the state, calls a pure `Project` mutation method, emits the
 //! returned events via `Window::emit`, and returns the result. Tests
 //! for the *behavior* live in `core::project::mutation` against the
@@ -9,11 +9,11 @@
 use super::bed::BedMesh;
 use super::events::{SceneEvent, SceneOpError, SelectMode};
 use super::state::{
-    ActivePlate, ExclusionZone, Group, GroupId, HoleMarker, MeshHeader, MeshId, ModifierKind,
+    ExclusionZone, Group, GroupId, HoleMarker, MeshHeader, MeshId, ModifierKind,
     ObjectId, SceneObject,
 };
 use super::transform::Transform;
-use crate::core::project::{PlateId, Project};
+use crate::core::project::{PlateId, PlateRuntime, Session};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -103,10 +103,6 @@ pub struct PlateSnapshot {
     // ---- Per-plate scene contents -----------------------------
     pub objects: Vec<SceneObject>,
     pub selection: Vec<ObjectId>,
-    /// Active build plate identity + transform on this plate
-    /// (the bed surface selection — distinct from the
-    /// multi-plate `plate_id` field above).
-    pub build_plate: Option<ActivePlate>,
     pub exclusion_zones: Vec<ExclusionZone>,
     pub bed: Option<BedMesh>,
     pub object_overrides:
@@ -123,33 +119,51 @@ pub struct PlateSnapshot {
 /// the wgpu renderer uploads it straight to the GPU.
 #[tauri::command]
 #[tracing::instrument(skip(state))]
-pub fn scene_snapshot(state: State<Arc<Mutex<Project>>>) -> Result<SceneSnapshot, String> {
+pub fn scene_snapshot(state: State<Arc<Mutex<Session>>>) -> Result<SceneSnapshot, String> {
     let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let meshes = s.meshes.values().map(|m| m.header()).collect();
-    let plates: Vec<PlateSnapshot> = s.plates.iter().map(plate_snapshot).collect();
-    let active_plate_id = s.active_plate().id;
+    let meshes = s.project.meshes.values().map(|m| m.header()).collect();
+    let plates: Vec<PlateSnapshot> = s
+        .project
+        .plates
+        .iter()
+        .map(|p| plate_snapshot(p, s.plate_runtime(p.id)))
+        .collect();
+    let active_plate_id = s.project.active_plate().id;
     let _ = HashSet::<ObjectId>::new(); // silence unused-import on certain feature builds
     Ok(SceneSnapshot {
-        project_uuid: s.uuid.to_string(),
+        project_uuid: s.project.uuid.to_string(),
         source_path: s
+            .runtime
             .source_path
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned()),
         recovery_origin: s
+            .runtime
             .recovery_origin
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned()),
-        user_overrides: s.user_overrides.clone(),
-        file_metadata: s.file_metadata.clone(),
+        user_overrides: s.project.user_overrides.clone(),
+        file_metadata: s.project.file_metadata.clone(),
         meshes,
         plates,
         active_plate_id,
     })
 }
 
-fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
-    let mut selection: Vec<ObjectId> = plate.scene.selection.iter().copied().collect();
+fn plate_snapshot(
+    plate: &crate::core::project::Plate,
+    runtime: Option<&PlateRuntime>,
+) -> PlateSnapshot {
+    let mut selection: Vec<ObjectId> = runtime
+        .map(|rt| rt.selection.iter().copied().collect())
+        .unwrap_or_default();
     selection.sort();
+    // Exclusion zones are the bed's — the scene no longer mirrors them.
+    let bed = runtime.and_then(|rt| rt.bed.clone());
+    let exclusion_zones = bed
+        .as_ref()
+        .map(|b| b.exclusion_zones.clone())
+        .unwrap_or_default();
     let printer_identity = plate
         .printer_instance_id()
         .and_then(crate::core::printer::lookup_instance)
@@ -164,9 +178,8 @@ fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
         quality_profile: plate.quality_profile.clone(),
         objects: plate.scene.objects.values().cloned().collect(),
         selection,
-        build_plate: plate.scene.plate.clone(),
-        exclusion_zones: plate.scene.exclusion_zones.clone(),
-        bed: plate.scene.bed.clone(),
+        exclusion_zones,
+        bed,
         object_overrides: plate.scene.object_overrides.clone(),
         groups: plate.scene.groups.clone(),
     }
@@ -182,7 +195,7 @@ fn plate_snapshot(plate: &crate::core::project::Plate) -> PlateSnapshot {
 pub fn scene_add_plate(
     printer_identity: Option<String>,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<PlateId, String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     // Precedence: caller's choice → the active plate's printer (add_plate
@@ -190,14 +203,15 @@ pub fn scene_add_plate(
     // inject the last-selected when the active plate is unbound (otherwise
     // add_plate's own inheritance handles it).
     let printer_identity = printer_identity.or_else(|| {
-        if s.active_plate().printer_instance_id().is_some() {
+        if s.project.active_plate().printer_instance_id().is_some() {
             return None;
         }
         let pref = crate::core::config::load().defaults.printer_instance?;
         // Only use it if it's still a registered instance.
         crate::core::printer::lookup_instance(&pref).map(|_| pref)
     });
-    let (id, events) = s.add_plate(printer_identity);
+    let (id, events) = s.project.add_plate(printer_identity);
+    s.reconcile(); // new plate → derive its bed + selection entry
     drop(s);
     emit_all(&window, &events);
     Ok(id)
@@ -210,10 +224,11 @@ pub fn scene_add_plate(
 pub fn scene_remove_plate(
     plate_id: PlateId,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.remove_plate(plate_id).map_err(|e| e.to_string())?;
+    let events = s.project.remove_plate(plate_id).map_err(|e| e.to_string())?;
+    s.reconcile(); // drop the removed plate's runtime entry
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -226,10 +241,10 @@ pub fn scene_remove_plate(
 pub fn scene_set_active_plate(
     plate_id: PlateId,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.set_active_plate(plate_id).map_err(|e| e.to_string())?;
+    let events = s.project.set_active_plate(plate_id).map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -244,10 +259,11 @@ pub fn scene_rename_plate(
     plate_id: PlateId,
     name: String,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
+        .project
         .set_plate_name(plate_id, name)
         .map_err(|e| e.to_string())?;
     drop(s);
@@ -265,7 +281,7 @@ pub fn scene_object_override_set(
     key: String,
     value: String,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     // Backend backstop for the frontend's Object-tab gate: only object/
     // region-scoped settings are honored per object — the slice path drops
@@ -278,6 +294,7 @@ pub fn scene_object_override_set(
     }
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
+        .project
         .object_override_set(plate_id, object_id, key, value)
         .map_err(|e| e.to_string())?;
     drop(s);
@@ -294,10 +311,11 @@ pub fn scene_object_override_clear(
     object_id: ObjectId,
     key: String,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
+        .project
         .object_override_clear(plate_id, object_id, &key)
         .map_err(|e| e.to_string())?;
     drop(s);
@@ -325,7 +343,7 @@ pub fn scene_rebind_plate_printer(
     plate_id: PlateId,
     instance_id: String,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<crate::core::scene::events::PrinterChangeReport, String> {
     let instance = crate::core::printer::lookup_instance(&instance_id)
         .ok_or_else(|| format!("no printer instance with id `{instance_id}`"))?;
@@ -337,8 +355,10 @@ pub fn scene_rebind_plate_printer(
     })?;
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let (report, events) = s
+        .project
         .rebind_plate_printer(plate_id, instance_id.clone(), &profile)
         .map_err(|e| e.to_string())?;
+    s.reconcile(); // rebind → re-derive the plate's bed
     drop(s);
     // Remember the user's selection as the default for new plates + projects.
     // Best-effort — a config write failure must not fail the rebind.
@@ -359,12 +379,14 @@ pub fn scene_rebind_plate_printer(
 pub fn scene_unbind_plate_printer(
     plate_id: PlateId,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
+        .project
         .unbind_plate_printer(plate_id)
         .map_err(|e| e.to_string())?;
+    s.reconcile(); // unbind → clear the plate's bed
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -381,11 +403,13 @@ pub fn scene_move_objects_to_plate(
     to_plate: PlateId,
     object_ids: Vec<ObjectId>,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s
-        .move_objects_to_plate(from_plate, to_plate, &object_ids)
+    let session = &mut *s;
+    let events = session
+        .project
+        .move_objects_to_plate(&mut session.runtime, from_plate, to_plate, &object_ids)
         .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
@@ -402,10 +426,11 @@ pub fn scene_project_override_set(
     key: String,
     value: String,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
+        .project
         .project_override_set(plate_id, key, value)
         .map_err(|e| e.to_string())?;
     drop(s);
@@ -421,10 +446,11 @@ pub fn scene_project_override_clear(
     plate_id: PlateId,
     key: String,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
+        .project
         .project_override_clear(plate_id, &key)
         .map_err(|e| e.to_string())?;
     drop(s);
@@ -441,10 +467,13 @@ pub fn scene_user_override_set(
     key: String,
     value: String,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.user_override_set(key, value).map_err(|e| e.to_string())?;
+    let events = s
+        .project
+        .user_override_set(key, value)
+        .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -456,10 +485,13 @@ pub fn scene_user_override_set(
 pub fn scene_user_override_clear(
     key: String,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.user_override_clear(&key).map_err(|e| e.to_string())?;
+    let events = s
+        .project
+        .user_override_clear(&key)
+        .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -479,7 +511,7 @@ pub fn scene_auto_arrange(
     spacing_mm: f32,
     allow_rotations: bool,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<Vec<ObjectId>, String> {
     if !spacing_mm.is_finite() {
         return Err("spacing must be a number".into());
@@ -489,12 +521,13 @@ pub fn scene_auto_arrange(
         allow_rotations,
     };
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let Some(bed) = s.active_plate().scene.bed.clone() else {
+    let Some(bed) = s.active_plate_runtime().bed.clone() else {
         return Ok(vec![]);
     };
-    let plate_id = s.active_plate().id;
-    let plan = super::arrange::plan_arrangement(&s, &bed, opts);
+    let plate_id = s.project.active_plate().id;
+    let plan = super::arrange::plan_arrangement(&s.project, &bed, opts);
     let (mut events, un_placed) = super::arrange::apply_arrangement(&mut s, plan);
+    s.reconcile(); // spill may have added plates → derive their beds
     drop(s);
     if !un_placed.is_empty() {
         events.push(SceneEvent::AutoArrangeOverflow {
@@ -533,20 +566,21 @@ pub fn scene_object_clone(
     spacing_mm: Option<f32>,
     allow_rotations: Option<bool>,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<Vec<ObjectId>, String> {
     if ids.is_empty() {
         return Err("clone: no objects selected".into());
     }
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let session = &mut *s;
     // Order the selection through the active plate's object list — `clone_objects`
     // requires an `OrderedIds`, so the clones can't inherit the wire order.
     let ids = if expand_groups.unwrap_or(false) {
-        s.group_expanded_ids(&ids)
+        session.project.group_expanded_ids(&ids)
     } else {
-        s.active_plate().scene.objects.in_order(&ids)
+        session.project.active_plate().scene.objects.in_order(&ids)
     };
-    let bed = s.active_plate().scene.bed.clone();
+    let bed = session.active_plate_runtime().bed.clone();
     let mut events = Vec::new();
     let new_ids;
 
@@ -554,7 +588,7 @@ pub fn scene_object_clone(
         Some(n) => {
             // Clone in place — no arrange; the copies stack on their originals
             // and the user moves them where they want.
-            let (ids_new, evs) = s.clone_objects(&ids, n);
+            let (ids_new, evs) = session.project.clone_objects(&ids, n);
             new_ids = ids_new;
             events.extend(evs);
         }
@@ -578,8 +612,8 @@ pub fn scene_object_clone(
             let mut last_plan = None;
             let mut hit_cap = true;
             for _ in 0..MAX_COPIES {
-                let (batch, evs) = s.clone_objects(&ids, 1);
-                let plan = super::arrange::plan_arrangement(&s, bed, opts);
+                let (batch, evs) = session.project.clone_objects(&ids, 1);
+                let plan = super::arrange::plan_arrangement(&session.project, bed, opts);
                 if plan.spilled.is_empty() && plan.un_placed.is_empty() {
                     events.extend(evs);
                     kept_ids.extend(batch);
@@ -589,7 +623,9 @@ pub fn scene_object_clone(
                     // ObjectAdded events were never emitted, so the matching
                     // ObjectRemoved ones are dropped too: the copy never existed
                     // for the UI.
-                    let _ = s.delete_objects(&batch);
+                    let _ = session
+                        .project
+                        .delete_objects(&mut session.runtime, &batch);
                     hit_cap = false;
                     break;
                 }
@@ -600,7 +636,7 @@ pub fn scene_object_clone(
             // Apply the last packing that fit (repositions originals + all kept
             // copies on the single plate).
             if let Some(plan) = last_plan {
-                let (evs, _) = super::arrange::apply_arrangement(&mut s, plan);
+                let (evs, _) = super::arrange::apply_arrangement(session, plan);
                 events.extend(evs);
             }
             new_ids = kept_ids;
@@ -620,11 +656,13 @@ pub fn scene_object_add_from_primitive(
     // kind's sensible defaults. A future parameter dialog supplies them.
     params: Option<super::primitives::PrimitiveParams>,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(MeshId, ObjectId), String> {
     let params = params.unwrap_or_else(|| super::primitives::PrimitiveParams::defaults_for(kind));
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let (mesh_id, obj_id, events) = s.add_from_primitive(kind, params);
+    let session = &mut *s;
+    let (mesh_id, obj_id, events) =
+        session.project.add_from_primitive(&mut session.runtime, kind, params);
     drop(s);
     emit_all(&window, &events);
     Ok((mesh_id, obj_id))
@@ -641,15 +679,16 @@ pub fn scene_select(
     // it so parts stay individually selectable.
     expand_groups: Option<bool>,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
+    let session = &mut *s;
     let ids = if expand_groups.unwrap_or(false) {
-        s.group_expanded_ids(&ids).to_vec()
+        session.project.group_expanded_ids(&ids).to_vec()
     } else {
         ids
     };
-    let events = s.select(&ids, mode);
+    let events = session.project.select(&mut session.runtime, &ids, mode);
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -658,9 +697,10 @@ pub fn scene_select(
 /// Clear the selection.
 #[tauri::command]
 #[tracing::instrument(skip(state, window))]
-pub fn scene_deselect(window: Window, state: State<Arc<Mutex<Project>>>) -> Result<(), String> {
+pub fn scene_deselect(window: Window, state: State<Arc<Mutex<Session>>>) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.deselect_all();
+    let session = &mut *s;
+    let events = session.project.deselect_all(&mut session.runtime);
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -672,10 +712,11 @@ pub fn scene_object_set_transform(
     id: ObjectId,
     transform: Transform,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
+        .project
         .set_object_transform(id, transform)
         .map_err(op_err_to_string)?;
     drop(s);
@@ -688,10 +729,11 @@ pub fn scene_object_set_transform(
 pub fn scene_object_delete(
     ids: Vec<ObjectId>,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.delete_objects(&ids);
+    let session = &mut *s;
+    let events = session.project.delete_objects(&mut session.runtime, &ids);
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -714,7 +756,7 @@ pub fn scene_object_auto_orient(
     mut ids: Vec<ObjectId>,
     expand_groups: Option<bool>,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     if ids.is_empty() {
         return Ok(());
@@ -722,16 +764,17 @@ pub fn scene_object_auto_orient(
     let (vertices, indices) = {
         let s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
         if expand_groups.unwrap_or(false) {
-            ids = s.group_expanded_ids(&ids).to_vec();
+            ids = s.project.group_expanded_ids(&ids).to_vec();
         }
-        s.objects_world_mesh(&ids).map_err(op_err_to_string)?
+        s.project.objects_world_mesh(&ids).map_err(op_err_to_string)?
     };
     let quat = slic3r_ffi::orient_mesh(&vertices, &indices, None)
         .map_err(|e| format!("auto-orient failed: {e}"))?;
     let rotation = glam::Quat::from_xyzw(quat[0], quat[1], quat[2], quat[3]);
     let events = {
         let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-        s.orient_objects(&ids, rotation, None)
+        s.project
+            .orient_objects(&ids, rotation, None)
             .map_err(op_err_to_string)?
     };
     emit_all(&window, &events);
@@ -808,7 +851,7 @@ pub async fn scene_cut_apply(
     keep_negative: bool,
     connectors: Vec<CutConnectorInput>,
     window: Window,
-    state: State<'_, Arc<Mutex<Project>>>,
+    state: State<'_, Arc<Mutex<Session>>>,
 ) -> Result<Vec<u64>, String> {
     use crate::core::project::mutation::{CutHalfOut, CutResult, CutSide};
     if !keep_positive && !keep_negative {
@@ -838,8 +881,8 @@ pub async fn scene_cut_apply(
         // Phase 1: read the group-expanded targets under the lock, then release.
         let targets = {
             let s = project.lock().map_err(|e| format!("scene lock: {e}"))?;
-            let ids = s.group_expanded_ids(&ids).to_vec();
-            s.cut_targets(&ids).map_err(op_err_to_string)?
+            let ids = s.project.group_expanded_ids(&ids).to_vec();
+            s.project.cut_targets(&ids).map_err(op_err_to_string)?
         };
         // Phase 2: cut each target in its own local frame (FFI, unlocked). A
         // source is recorded even when fully discarded (no kept half) so it gets
@@ -979,7 +1022,8 @@ pub async fn scene_cut_apply(
     // Phase 3: register the halves + remove the sources, under lock.
     let (new_ids, events) = {
         let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-        s.apply_cut(results)
+        let session = &mut *s;
+        session.project.apply_cut(&mut session.runtime, results)
     };
     emit_all(&window, &events);
     Ok(new_ids.into_iter().map(|id| id.0).collect())
@@ -1002,7 +1046,7 @@ pub fn scene_object_align_axis(
     axis: super::align::AlignAxis,
     expand_groups: Option<bool>,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     if ids.is_empty() {
         return Ok(());
@@ -1010,14 +1054,15 @@ pub fn scene_object_align_axis(
     let events = {
         let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
         if expand_groups.unwrap_or(false) {
-            ids = s.group_expanded_ids(&ids).to_vec();
+            ids = s.project.group_expanded_ids(&ids).to_vec();
         }
-        let (vertices, indices) = s.objects_world_mesh(&ids).map_err(op_err_to_string)?;
+        let (vertices, indices) = s.project.objects_world_mesh(&ids).map_err(op_err_to_string)?;
         let Some(angle) = super::align::axis_alignment_rotation(&vertices, &indices, axis) else {
             return Ok(()); // no dominant direction — nothing to align
         };
         let rotation = glam::Quat::from_rotation_z(angle);
-        s.orient_objects(&ids, rotation, None)
+        s.project
+            .orient_objects(&ids, rotation, None)
             .map_err(op_err_to_string)?
     };
     emit_all(&window, &events);
@@ -1044,7 +1089,7 @@ pub fn scene_object_align_face(
     face_point: [f32; 3],
     expand_groups: Option<bool>,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     if ids.is_empty() {
         return Ok(());
@@ -1062,9 +1107,9 @@ pub fn scene_object_align_face(
     let events = {
         let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
         if expand_groups.unwrap_or(false) {
-            ids = s.group_expanded_ids(&ids).to_vec();
+            ids = s.project.group_expanded_ids(&ids).to_vec();
         }
-        s.align_face_coplanar(
+        s.project.align_face_coplanar(
             &ids,
             glam::Quat::from_rotation_z(angle),
             slide_dir,
@@ -1098,7 +1143,7 @@ pub fn scene_object_lay_flat_on(
     contact: [f32; 3],
     expand_groups: Option<bool>,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     if ids.is_empty() {
         return Ok(());
@@ -1113,11 +1158,12 @@ pub fn scene_object_lay_flat_on(
     let events = {
         let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
         let ids = if expand_groups.unwrap_or(false) {
-            s.group_expanded_ids(&ids).to_vec()
+            s.project.group_expanded_ids(&ids).to_vec()
         } else {
             ids
         };
-        s.orient_objects(&ids, q, Some(contact))
+        s.project
+            .orient_objects(&ids, q, Some(contact))
             .map_err(op_err_to_string)?
     };
     emit_all(&window, &events);
@@ -1133,10 +1179,11 @@ pub fn scene_set_object_material(
     id: ObjectId,
     material: u8,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
     let events = s
+        .project
         .set_object_material(id, material)
         .map_err(op_err_to_string)?;
     drop(s);
@@ -1153,10 +1200,13 @@ pub fn scene_group_objects(
     ids: Vec<ObjectId>,
     name: String,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.group_objects(&ids, name).map_err(op_err_to_string)?;
+    let events = s
+        .project
+        .group_objects(&ids, name)
+        .map_err(op_err_to_string)?;
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -1168,10 +1218,10 @@ pub fn scene_group_objects(
 pub fn scene_ungroup_objects(
     group: GroupId,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.ungroup_objects(group);
+    let events = s.project.ungroup_objects(group);
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -1184,10 +1234,10 @@ pub fn scene_rename_group(
     group: GroupId,
     name: String,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let events = s.rename_group(group, name);
+    let events = s.project.rename_group(group, name);
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -1207,12 +1257,12 @@ fn op_err_to_string(e: SceneOpError) -> String {
 pub fn scene_load_mesh_from_path(
     path: String,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(MeshId, ObjectId), String> {
     let new_mesh = super::loaders::load_mesh_from_path(std::path::Path::new(&path))
         .map_err(|e| e.to_string())?;
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let (mesh_id, obj_id, events) = s.load_mesh(new_mesh);
+    let (mesh_id, obj_id, events) = s.project.load_mesh(new_mesh);
     drop(s);
     emit_all(&window, &events);
     Ok((mesh_id, obj_id))
@@ -1261,7 +1311,7 @@ pub fn scene_load_3mf(
     path: String,
     import_settings: Option<bool>,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<LoadedProject, String> {
     use super::state::NewSceneObject;
     use crate::core::threemf;
@@ -1302,8 +1352,8 @@ pub fn scene_load_3mf(
     let plate_diff: std::collections::BTreeMap<String, String> = match &foreign_settings {
         Some(settings) => {
             let baseline = crate::core::project::resolve::plate_effective_baseline(
-                &s,
-                s.active_plate().id,
+                &s.project,
+                s.project.active_plate().id,
             )?;
             let outcome =
                 crate::core::orca_import::object_applicable_overrides(settings, &baseline);
@@ -1325,17 +1375,17 @@ pub fn scene_load_3mf(
     let mut all_events: Vec<SceneEvent> = Vec::new();
     let mut mesh_ids: Vec<MeshId> = Vec::with_capacity(project.meshes.len());
     for new_mesh in project.meshes {
-        let mesh_id = s.register_mesh(new_mesh);
-        let header = s.meshes.get(&mesh_id).unwrap().header();
+        let mesh_id = s.project.register_mesh(new_mesh);
+        let header = s.project.meshes.get(&mesh_id).unwrap().header();
         all_events.push(SceneEvent::MeshLoaded { mesh: header });
         mesh_ids.push(mesh_id);
     }
 
-    let active_plate_id = s.active_plate().id;
+    let active_plate_id = s.project.active_plate().id;
     let mut loaded = Vec::with_capacity(project.objects.len());
     for obj in project.objects {
         let mesh_id = mesh_ids[obj.mesh_idx];
-        let object_id = s.register_object(NewSceneObject {
+        let object_id = s.project.register_object(NewSceneObject {
             mesh: mesh_id,
             transform: obj.transform,
             name: obj.name.clone(),
@@ -1351,7 +1401,7 @@ pub fn scene_load_3mf(
         // over it, routed group/member exactly like panel edits. The
         // plain path imports geometry only.
         if import_settings {
-            all_events.extend(s.apply_imported_object_settings(
+            all_events.extend(s.project.apply_imported_object_settings(
                 active_plate_id,
                 object_id,
                 &plate_diff,
@@ -1359,6 +1409,7 @@ pub fn scene_load_3mf(
             ));
         }
         let obj_clone = s
+            .project
             .active_plate()
             .scene
             .objects
@@ -1414,7 +1465,7 @@ mod tests {
     #[test]
     fn plate_snapshot_carries_metadata_and_scene() {
         let mut p = Project::default();
-        p.plates[0].set_printer(Some("bambi".into()), None);
+        p.plates[0].set_printer(Some("bambi".into()));
         p.plates[0].name = "My Plate".into();
         let mesh_id = p.register_mesh(unit_cube_mesh());
         let obj_id = p.register_object(NewSceneObject {
@@ -1426,7 +1477,7 @@ mod tests {
             group: None,
         });
 
-        let snap = plate_snapshot(&p.plates[0]);
+        let snap = plate_snapshot(&p.plates[0], None);
         assert_eq!(snap.plate_id, PlateId(1));
         assert_eq!(snap.name, "My Plate");
         // printer_identity is derived from the bound instance.
@@ -1443,19 +1494,20 @@ mod tests {
         let a = p.register_object(NewSceneObject::at_origin(mesh_id, "a"));
         let b = p.register_object(NewSceneObject::at_origin(mesh_id, "b"));
         let c = p.register_object(NewSceneObject::at_origin(mesh_id, "c"));
-        // Insert in non-sorted order.
-        p.plates[0].scene.selection.insert(b);
-        p.plates[0].scene.selection.insert(a);
-        p.plates[0].scene.selection.insert(c);
+        // Insert in non-sorted order into the plate's runtime selection.
+        let mut rt = PlateRuntime::default();
+        rt.selection.insert(b);
+        rt.selection.insert(a);
+        rt.selection.insert(c);
 
-        let snap = plate_snapshot(&p.plates[0]);
+        let snap = plate_snapshot(&p.plates[0], Some(&rt));
         assert_eq!(snap.selection, vec![a, b, c]);
     }
 
     #[test]
     fn plate_snapshot_serializes_with_plate_id() {
         let p = Project::default();
-        let snap = plate_snapshot(&p.plates[0]);
+        let snap = plate_snapshot(&p.plates[0], None);
         let json = serde_json::to_value(&snap).unwrap();
         assert_eq!(json["plate_id"], 1);
         assert_eq!(json["name"], "Plate 1");

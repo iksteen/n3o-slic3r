@@ -123,10 +123,6 @@ export interface PlateSnapshot {
   // Per-plate scene contents
   objects: SceneObject[];
   selection: ObjectId[];
-  /** Active build plate identity + transform on this plate (the
-   * bed surface selection — distinct from the multi-plate
-   * `plate_id` field above). */
-  build_plate: unknown | null;
   exclusion_zones: ExclusionZone[];
   bed: BedMesh | null;
   object_overrides: Record<string, Record<string, string>>;

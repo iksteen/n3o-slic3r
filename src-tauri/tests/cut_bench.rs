@@ -21,7 +21,7 @@ fn bench_cut() {
     let p = PathBuf::from(path);
     // Native .n3o via read_project; foreign (Orca/BBS) .3mf via the import path.
     let proj = match read_project(&p) {
-        Ok(proj) => proj,
+        Ok((proj, _recovery_origin)) => proj,
         Err(_) => import(&p).expect("import model").0,
     };
     let mesh = proj

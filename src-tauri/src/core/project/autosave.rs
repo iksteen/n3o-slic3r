@@ -13,7 +13,7 @@
 //!
 //! - The worker is a plain `std::thread` (no tokio dep — keeps
 //!   the dependency graph thin while we're still pre-1.0).
-//! - The worker holds an `Arc<Mutex<Project>>` clone — the
+//! - The worker holds an `Arc<Mutex<Session>>` clone — the
 //!   same Mutex the Tauri command surface uses. On each tick it
 //!   acquires the lock, clones the project, drops the lock, and
 //!   writes the clone to disk. Disk I/O happens **outside** the
@@ -52,6 +52,7 @@ use serde::{Deserialize, Serialize};
 use super::dirty::DirtyTracker;
 use super::format::write_autosave;
 use super::model::Project;
+use super::session::Session;
 
 /// Default interval between autosave ticks. Lifted from PRD §6.2
 /// (FR-MP-4 implementation note).
@@ -126,7 +127,7 @@ impl AutosaveHandle {
     /// Returns `Err` if the autosave directory can't be created.
     pub fn start(
         &self,
-        project: Arc<Mutex<Project>>,
+        session: Arc<Mutex<Session>>,
         dirty: Arc<DirtyTracker>,
         config: AutosaveConfig,
     ) -> std::io::Result<()> {
@@ -139,7 +140,7 @@ impl AutosaveHandle {
         let stop_clone = stop.clone();
         let thread = std::thread::Builder::new()
             .name("n3o-autosave".into())
-            .spawn(move || autosave_loop(project, dirty, config, stop_clone))
+            .spawn(move || autosave_loop(session, dirty, config, stop_clone))
             .expect("spawn autosave thread");
         inner.stop = Some(stop);
         inner.thread = Some(thread);
@@ -176,7 +177,7 @@ impl Drop for AutosaveHandle {
 }
 
 fn autosave_loop(
-    project: Arc<Mutex<Project>>,
+    session: Arc<Mutex<Session>>,
     dirty: Arc<DirtyTracker>,
     config: AutosaveConfig,
     stop: Arc<AtomicBool>,
@@ -189,7 +190,7 @@ fn autosave_loop(
         // the worker exits. `write_one_tick` is gated on dirtiness, so a clean
         // project still writes nothing on the way out.
         let stopping = stop.load(Ordering::Acquire);
-        match write_one_tick(&project, &dirty, &config.dir, &mut last_written_seq) {
+        match write_one_tick(&session, &dirty, &config.dir, &mut last_written_seq) {
             Ok(WriteOutcome::Wrote(path)) => {
                 tracing::debug!(path = %path.display(), "autosave wrote");
             }
@@ -227,7 +228,7 @@ enum WriteOutcome {
 /// Pulled out so tests can drive it deterministically without spinning
 /// up the worker thread.
 fn write_one_tick(
-    project: &Arc<Mutex<Project>>,
+    session: &Arc<Mutex<Session>>,
     dirty: &DirtyTracker,
     dir: &Path,
     last_written_seq: &mut Option<u64>,
@@ -236,15 +237,14 @@ fn write_one_tick(
     if !dirty.is_dirty() || Some(seq) == *last_written_seq {
         return Ok(WriteOutcome::Unchanged);
     }
-    let snapshot = {
-        let p = project.lock().expect("project poisoned");
-        p.clone()
+    // Clone the persisted project + read the recovery origin under the lock,
+    // then write off-lock. The origin rides the recovery file's envelope.
+    let (snapshot, origin) = {
+        let s = session.lock().expect("session poisoned");
+        (s.project.clone(), s.runtime.autosave_origin().map(Path::to_path_buf))
     };
     let path = autosave_path_for(dir, &snapshot);
-    // write_autosave embeds the pre-crash origin (source_path, or a
-    // recovered project's carried origin) into the recovery file's
-    // envelope — see format::write_autosave.
-    write_autosave(&snapshot, &path)?;
+    write_autosave(&snapshot, &path, origin.as_deref())?;
     // Record only after a successful write, so a failed write retries next tick.
     *last_written_seq = Some(seq);
     Ok(WriteOutcome::Wrote(path))
@@ -346,7 +346,7 @@ mod tests {
         // A clean project (no edits since load/save) is never autosaved —
         // the load/first-tick spurious-write fix.
         let dir = tempdir();
-        let project = Arc::new(Mutex::new(Project::default()));
+        let project = Arc::new(Mutex::new(Session::new(Project::default())));
         let dirty = DirtyTracker::new();
         let mut last = None;
         let outcome = write_one_tick(&project, &dirty, dir.path(), &mut last).expect("ok");
@@ -357,19 +357,19 @@ mod tests {
     #[test]
     fn write_one_tick_writes_when_dirty() {
         let dir = tempdir();
-        let project = Arc::new(Mutex::new(Project::default()));
+        let project = Arc::new(Mutex::new(Session::new(Project::default())));
         let dirty = DirtyTracker::new();
         note_edit(&dirty);
         let outcome = write_one_tick(&project, &dirty, dir.path(), &mut None).expect("ok");
         assert!(matches!(outcome, WriteOutcome::Wrote(_)));
-        let expected = autosave_path_for(dir.path(), &project.lock().unwrap());
+        let expected = autosave_path_for(dir.path(), &project.lock().unwrap().project);
         assert!(expected.exists());
     }
 
     #[test]
     fn write_one_tick_skips_when_dirty_but_unchanged_since_last_write() {
         let dir = tempdir();
-        let project = Arc::new(Mutex::new(Project::default()));
+        let project = Arc::new(Mutex::new(Session::new(Project::default())));
         let dirty = DirtyTracker::new();
         note_edit(&dirty);
         let mut last = None;
@@ -382,7 +382,7 @@ mod tests {
     #[test]
     fn write_one_tick_writes_again_after_change() {
         let dir = tempdir();
-        let project = Arc::new(Mutex::new(Project::default()));
+        let project = Arc::new(Mutex::new(Session::new(Project::default())));
         let dirty = DirtyTracker::new();
         note_edit(&dirty);
         let mut last = None;
@@ -396,7 +396,7 @@ mod tests {
     #[test]
     fn write_one_tick_skips_after_save_clears_dirty() {
         let dir = tempdir();
-        let project = Arc::new(Mutex::new(Project::default()));
+        let project = Arc::new(Mutex::new(Session::new(Project::default())));
         let dirty = DirtyTracker::new();
         note_edit(&dirty);
         let mut last = None;
@@ -434,11 +434,11 @@ mod tests {
     fn scan_recoveries_lists_written_autosaves() {
         let dir = tempdir();
         // Write two projects via write_one_tick.
-        let p1 = Arc::new(Mutex::new(Project::default()));
+        let p1 = Arc::new(Mutex::new(Session::new(Project::default())));
         let d1 = DirtyTracker::new();
         note_edit(&d1);
         write_one_tick(&p1, &d1, dir.path(), &mut None).expect("ok");
-        let p2 = Arc::new(Mutex::new(Project::default()));
+        let p2 = Arc::new(Mutex::new(Session::new(Project::default())));
         let d2 = DirtyTracker::new();
         note_edit(&d2);
         write_one_tick(&p2, &d2, dir.path(), &mut None).expect("ok");
@@ -446,8 +446,8 @@ mod tests {
         let entries = scan_recoveries(dir.path()).expect("ok");
         assert_eq!(entries.len(), 2);
         // Each entry's uuid should match a real project.
-        let want1 = p1.lock().unwrap().uuid.to_string();
-        let want2 = p2.lock().unwrap().uuid.to_string();
+        let want1 = p1.lock().unwrap().project.uuid.to_string();
+        let want2 = p2.lock().unwrap().project.uuid.to_string();
         assert!(entries.iter().any(|e| e.uuid == want1));
         assert!(entries.iter().any(|e| e.uuid == want2));
     }
@@ -464,11 +464,11 @@ mod tests {
     #[test]
     fn drop_autosave_removes_file() {
         let dir = tempdir();
-        let project = Arc::new(Mutex::new(Project::default()));
+        let project = Arc::new(Mutex::new(Session::new(Project::default())));
         let dirty = DirtyTracker::new();
         note_edit(&dirty);
         write_one_tick(&project, &dirty, dir.path(), &mut None).expect("ok");
-        let uuid = project.lock().unwrap().uuid.to_string();
+        let uuid = project.lock().unwrap().project.uuid.to_string();
         drop_autosave(dir.path(), &uuid).expect("ok");
         let entries = scan_recoveries(dir.path()).expect("ok");
         assert!(entries.is_empty());
@@ -483,18 +483,18 @@ mod tests {
     #[test]
     fn autosave_stamps_recovery_origin_from_source_path() {
         let dir = tempdir();
-        let project = Arc::new(Mutex::new(Project::default()));
-        project.lock().unwrap().source_path = Some(PathBuf::from("/home/u/foo.n3o"));
+        let project = Arc::new(Mutex::new(Session::new(Project::default())));
+        project.lock().unwrap().runtime.source_path = Some(PathBuf::from("/home/u/foo.n3o"));
         let dirty = DirtyTracker::new();
         note_edit(&dirty);
         write_one_tick(&project, &dirty, dir.path(), &mut None).expect("ok");
 
         // The recovery file is self-describing: its persisted
         // recovery_origin holds the pre-crash source path.
-        let path = autosave_path_for(dir.path(), &project.lock().unwrap());
-        let recovered = super::super::format::read_project(&path).expect("read");
+        let path = autosave_path_for(dir.path(), &project.lock().unwrap().project);
+        let (_, recovery_origin) = super::super::format::read_project(&path).expect("read");
         assert_eq!(
-            recovered.recovery_origin,
+            recovery_origin,
             Some(PathBuf::from("/home/u/foo.n3o"))
         );
     }
@@ -503,14 +503,14 @@ mod tests {
     fn autosave_of_untitled_project_leaves_recovery_origin_none() {
         let dir = tempdir();
         // Project::default() is Untitled (source_path None).
-        let project = Arc::new(Mutex::new(Project::default()));
+        let project = Arc::new(Mutex::new(Session::new(Project::default())));
         let dirty = DirtyTracker::new();
         note_edit(&dirty);
         write_one_tick(&project, &dirty, dir.path(), &mut None).expect("ok");
 
-        let path = autosave_path_for(dir.path(), &project.lock().unwrap());
-        let recovered = super::super::format::read_project(&path).expect("read");
-        assert!(recovered.recovery_origin.is_none());
+        let path = autosave_path_for(dir.path(), &project.lock().unwrap().project);
+        let (_, recovery_origin) = super::super::format::read_project(&path).expect("read");
+        assert!(recovery_origin.is_none());
     }
 
     #[test]
@@ -519,20 +519,20 @@ mod tests {
         // recovery_origin already points at the pre-crash path. Re-autosave
         // must keep it, not overwrite with the (absent) source_path.
         let dir = tempdir();
-        let project = Arc::new(Mutex::new(Project::default()));
+        let project = Arc::new(Mutex::new(Session::new(Project::default())));
         {
             let mut p = project.lock().unwrap();
-            p.source_path = None;
-            p.recovery_origin = Some(PathBuf::from("/home/u/orig.n3o"));
+            p.runtime.source_path = None;
+            p.runtime.recovery_origin = Some(PathBuf::from("/home/u/orig.n3o"));
         }
         let dirty = DirtyTracker::new();
         note_edit(&dirty);
         write_one_tick(&project, &dirty, dir.path(), &mut None).expect("ok");
 
-        let path = autosave_path_for(dir.path(), &project.lock().unwrap());
-        let recovered = super::super::format::read_project(&path).expect("read");
+        let path = autosave_path_for(dir.path(), &project.lock().unwrap().project);
+        let (_, recovery_origin) = super::super::format::read_project(&path).expect("read");
         assert_eq!(
-            recovered.recovery_origin,
+            recovery_origin,
             Some(PathBuf::from("/home/u/orig.n3o"))
         );
     }
@@ -558,7 +558,7 @@ mod tests {
     #[test]
     fn handle_start_then_stop_round_trip() {
         let dir = tempdir();
-        let project = Arc::new(Mutex::new(Project::default()));
+        let project = Arc::new(Mutex::new(Session::new(Project::default())));
         let handle = AutosaveHandle::new();
         let config = AutosaveConfig::new(dir.path().to_path_buf());
         handle
@@ -575,7 +575,7 @@ mod tests {
         // which writes the dirty project before exiting (so a quit right after
         // an edit still leaves a recovery file).
         let dir = tempdir();
-        let project = Arc::new(Mutex::new(Project::default()));
+        let project = Arc::new(Mutex::new(Session::new(Project::default())));
         let dirty = Arc::new(DirtyTracker::new());
         note_edit(&dirty);
         let handle = AutosaveHandle::new();
@@ -591,7 +591,7 @@ mod tests {
     #[test]
     fn stop_flushes_nothing_when_clean() {
         let dir = tempdir();
-        let project = Arc::new(Mutex::new(Project::default()));
+        let project = Arc::new(Mutex::new(Session::new(Project::default())));
         let handle = AutosaveHandle::new();
         let config = AutosaveConfig::new(dir.path().to_path_buf());
         handle
@@ -605,7 +605,7 @@ mod tests {
     #[test]
     fn handle_start_is_idempotent() {
         let dir = tempdir();
-        let project = Arc::new(Mutex::new(Project::default()));
+        let project = Arc::new(Mutex::new(Session::new(Project::default())));
         let handle = AutosaveHandle::new();
         let config = AutosaveConfig::new(dir.path().to_path_buf());
         let dirty = Arc::new(DirtyTracker::new());
@@ -628,7 +628,7 @@ mod tests {
     #[test]
     fn handle_dropped_without_stop_joins_worker() {
         let dir = tempdir();
-        let project = Arc::new(Mutex::new(Project::default()));
+        let project = Arc::new(Mutex::new(Session::new(Project::default())));
         {
             let handle = AutosaveHandle::new();
             let config = AutosaveConfig::new(dir.path().to_path_buf());

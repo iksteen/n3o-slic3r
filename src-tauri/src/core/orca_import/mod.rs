@@ -772,21 +772,13 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
     // instance.
     let mut project = Project::new();
     project.file_metadata = file_metadata;
-    // Adopt the imported file as the project's source so the title bar shows
-    // its name (not "Untitled"). MVP: a plain Save writes n3o's format back
-    // to this path — a forceful in-place migration of the foreign file,
-    // which is acceptable for now (the Save-As-vs-convert UX is a later
-    // decision).
-    project.source_path = Some(path.to_path_buf());
+    // The save target (`.n3o` alongside the foreign file) is the caller's
+    // concern — `load_or_import` seeds it into `SessionRuntime.source_path`.
     if let Some(id) = &instance_id {
-        // `Project::new()` seeded plate 0's bed from the *default* instance;
-        // `set_printer` rebinds it to the matched (possibly non-default)
-        // printer AND recomputes the bed together, so the viewport renders the
-        // bound printer's build-plate geometry.
-        let profile = bind
-            .as_ref()
-            .and_then(|(i, _)| lookup(&i.vendor_profile_ref));
-        project.plates[0].set_printer(Some(id.clone()), profile.as_ref());
+        // Rebind plate 0 to the matched (possibly non-default) printer; the
+        // bed derives from the binding when this project is wrapped in a
+        // `Session` (`load_or_import` → `Session::new` reconciles).
+        project.plates[0].set_printer(Some(id.clone()));
     }
 
     // Plates: foreign plate ids in order; create the ones past plate 1.
@@ -1156,9 +1148,8 @@ mod tests {
             "report.objects must match placed objects"
         );
 
-        // The imported file becomes the project's source_path, so the title
-        // bar shows its name instead of "Untitled".
-        assert_eq!(project.source_path.as_deref(), Some(path.as_path()));
+        // (The save target — `.n3o` alongside the foreign file — is seeded
+        // into `SessionRuntime.source_path` by `load_or_import`, not here.)
 
         // Bound to an existing A1 mini instance (the bundled `bambi`
         // fixture) by exact model match — not a fallback, never created.
@@ -1453,10 +1444,7 @@ mod tests {
         // the fix it stayed at Project::new()'s default-instance bed seed.)
         let a1_profile = lookup(&a1.vendor_profile_ref).expect("A1 profile");
         let expected = bed_for_printer(&a1_profile);
-        let plate_bed = project.plates[0]
-            .scene
-            .bed
-            .as_ref()
+        let plate_bed = crate::core::project::session::derive_bed(&project.plates[0])
             .expect("plate 0 bed populated");
         assert_eq!(
             (plate_bed.extents.min, plate_bed.extents.max),

@@ -30,7 +30,7 @@ use super::orchestrator::{
 };
 use super::pre_slice_gate::validate_pre_slice;
 use crate::core::plugin::commands::PluginHostState;
-use crate::core::project::{PlateId, Project};
+use crate::core::project::{PlateId, Session};
 
 /// Flip the cancel flag on a running job AND abort the in-flight libslic3r
 /// `process()` (the long step) mid-flight. The flag covers between-plate
@@ -71,12 +71,12 @@ pub fn slice_status(job_id: JobId, jobs: State<Arc<JobRegistry>>) -> Result<JobS
 /// The frontend reads the resulting path off `slice:plate_finished`
 /// events when it wants to preview / send the result.
 #[tauri::command]
-#[tracing::instrument(skip(app_handle, jobs, project))]
+#[tracing::instrument(skip(app_handle, jobs, session))]
 pub async fn slice_active_plate(
     plate_id: Option<PlateId>,
     app_handle: AppHandle,
     jobs: State<'_, Arc<JobRegistry>>,
-    project: State<'_, Arc<Mutex<Project>>>,
+    session: State<'_, Arc<Mutex<Session>>>,
 ) -> Result<JobId, String> {
     // This command is `async` + the heavy prep runs on the blocking pool
     // ON PURPOSE: a *sync* Tauri command runs on the main (UI) thread, so the
@@ -85,24 +85,24 @@ pub async fn slice_active_plate(
     // main thread, the window stays responsive while it runs. The Arc-shared
     // mesh buffers keep both the under-lock snapshot and the SliceObject
     // assembly cheap so scene mutations aren't blocked either.
-    let project = Arc::clone(project.inner());
+    let session = Arc::clone(session.inner());
     let jobs = Arc::clone(jobs.inner());
     let input = tauri::async_runtime::spawn_blocking(move || {
         // Validate + resolve the plate + snapshot the project UNDER the lock,
         // then build the SliceJobInput OFF the lock (the snapshot is a cheap
         // Arc-bump of the geometry).
         let (snapshot, target_plate, output_dir) = {
-            let p = project.lock().map_err(|e| format!("project lock: {e}"))?;
+            let s = session.lock().map_err(|e| format!("session lock: {e}"))?;
             let target_plate = plate_id.unwrap_or_else(|| {
                 // Active plate; `Project::default()` invariant
                 // guarantees `plates[active_plate]` is valid.
-                p.plates[p.active_plate].id
+                s.project.plates[s.project.active_plate].id
             });
             // Pre-slice gate: refuse before any FS write if the
             // plate's material→slot map + bound PrinterInstance aren't
             // coherent. Returns the first failing plate's issue list as
             // a serialized SliceStartError::SliceBlocked.
-            validate_pre_slice(&p, &[target_plate.0])
+            validate_pre_slice(&s.project, &[target_plate.0])
                 .map_err(SliceStartError::SliceBlocked)
                 .map_err(|e| e.to_string())?;
             // Opaque unique temp scope for this slice's G-code output. Named
@@ -114,7 +114,7 @@ pub async fn slice_active_plate(
                 .join(format!("n3o-slice-{}-{seq}", std::process::id()))
                 .to_string_lossy()
                 .into_owned();
-            (p.clone(), target_plate, output_dir)
+            (s.project.clone(), target_plate, output_dir)
         };
         build_slice_input(&snapshot, target_plate, output_dir)
             .map_err(|e: SliceInputError| e.to_string())
@@ -154,9 +154,9 @@ fn emit_sink(app: AppHandle) -> EventSink {
             // Resolved under the project lock alone (released before the renderer
             // lock — no nested hold, so no lock-order coupling).
             let (material_count, printer) = {
-                let project = app.state::<Arc<Mutex<crate::core::project::Project>>>();
-                let p = project.lock().unwrap();
-                crate::core::project::resolve::tower_geometry_for_plate(&p, pid)
+                let session = app.state::<Arc<Mutex<crate::core::project::Session>>>();
+                let s = session.lock().unwrap();
+                crate::core::project::resolve::tower_geometry_for_plate(&s.project, pid)
                     .ok()
                     .flatten()
                     .map(|g| (g.material_count, g.printer_instance_id))

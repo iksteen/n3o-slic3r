@@ -28,8 +28,10 @@ pub mod format;
 pub mod model;
 pub mod mutation;
 pub mod resolve;
+pub mod session;
 
 pub use crate::core::scene::state::PlateSceneState;
 pub use context::SlicingContext;
 pub use model::{Plate, PlateId, Project};
 pub use mutation::PLATE_NAME_MAX;
+pub use session::{PlateRuntime, Session, SessionRuntime};

@@ -42,7 +42,6 @@ function plateSnap(opts: {
     quality_profile: null,
     objects: Array.from({ length: opts.objects ?? 0 }, (_, i) => obj(i + 1)),
     selection: [],
-    build_plate: null,
     exclusion_zones: [],
     bed: null,
     object_overrides: {},

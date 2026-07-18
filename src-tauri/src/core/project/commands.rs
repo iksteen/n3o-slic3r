@@ -20,6 +20,7 @@ use super::autosave::{self, AutosaveConfig, AutosaveEntry, AutosaveHandle};
 use super::format;
 use super::PlateId;
 use super::Project;
+use super::Session;
 use crate::core::scene::events::SceneEvent;
 
 /// Emit each event on the given window. Errors are dropped — a
@@ -49,13 +50,14 @@ pub fn project_set_material_slot(
     model_material: u8,
     slot: crate::core::printer::SlotRef,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
-    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    let events = p
+    let mut session = state.lock().map_err(|e| format!("session lock: {e}"))?;
+    let events = session
+        .project
         .set_material_slot(plate_id, model_material, slot)
         .map_err(|e| e.to_string())?;
-    drop(p);
+    drop(session);
     emit_all(&window, &events);
     Ok(())
 }
@@ -68,13 +70,14 @@ pub fn project_clear_material_slot(
     plate_id: PlateId,
     model_material: u8,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
-    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    let events = p
+    let mut session = state.lock().map_err(|e| format!("session lock: {e}"))?;
+    let events = session
+        .project
         .clear_material_slot(plate_id, model_material)
         .map_err(|e| e.to_string())?;
-    drop(p);
+    drop(session);
     emit_all(&window, &events);
     Ok(())
 }
@@ -91,10 +94,10 @@ pub fn project_clear_material_slot(
 #[tracing::instrument(skip(state))]
 pub fn plate_cascade_resolve(
     plate_id: PlateId,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<super::resolve::PlateResolvedJson, String> {
-    let p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    super::resolve::resolve_plate_cascade(&p, plate_id)
+    let session = state.lock().map_err(|e| format!("session lock: {e}"))?;
+    super::resolve::resolve_plate_cascade(&session.project, plate_id)
 }
 
 /// Set (or clear, with `None`) a plate's process/quality profile —
@@ -107,13 +110,14 @@ pub fn project_set_plate_quality_profile(
     plate_id: PlateId,
     quality_profile: Option<String>,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
-    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    let events = p
+    let mut session = state.lock().map_err(|e| format!("session lock: {e}"))?;
+    let events = session
+        .project
         .set_plate_quality_profile(plate_id, quality_profile)
         .map_err(|e| e.to_string())?;
-    drop(p);
+    drop(session);
     emit_all(&window, &events);
     Ok(())
 }
@@ -167,10 +171,11 @@ pub fn user_process_stamp(
     plate_id: PlateId,
     clear: bool,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
-    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    let plate = p
+    let mut session = state.lock().map_err(|e| format!("session lock: {e}"))?;
+    let plate = session
+        .project
         .plate(plate_id)
         .ok_or_else(|| format!("unknown plate id {plate_id:?}"))?;
     let Some(instance_id) = plate.printer_instance_id() else {
@@ -201,12 +206,13 @@ pub fn user_process_stamp(
     if clear {
         for key in stamped.keys() {
             events.extend(
-                p.project_override_clear(plate_id, key)
+                session.project
+                    .project_override_clear(plate_id, key)
                     .map_err(|e| e.to_string())?,
             );
         }
     }
-    drop(p);
+    drop(session);
     emit_all(&window, &events);
     Ok(())
 }
@@ -227,14 +233,15 @@ pub fn user_process_duplicate(
     name: String,
     clear: bool,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<String, String> {
     let name = name.trim().to_owned();
     if name.is_empty() {
         return Err("a profile name is required".into());
     }
-    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    let plate = p
+    let mut session = state.lock().map_err(|e| format!("session lock: {e}"))?;
+    let plate = session
+        .project
         .plate(plate_id)
         .ok_or_else(|| format!("unknown plate id {plate_id:?}"))?;
     let instance_id = plate
@@ -265,18 +272,20 @@ pub fn user_process_duplicate(
     let created = crate::core::process::library::create_custom(&printer, &base, name, overrides);
 
     // Switch the plate onto the new profile.
-    let mut events = p
+    let mut events = session
+        .project
         .set_plate_quality_profile(plate_id, Some(created.id.clone()))
         .map_err(|e| e.to_string())?;
     if clear {
         for key in edits.keys() {
             events.extend(
-                p.project_override_clear(plate_id, key)
+                session.project
+                    .project_override_clear(plate_id, key)
                     .map_err(|e| e.to_string())?,
             );
         }
     }
-    drop(p);
+    drop(session);
     emit_all(&window, &events);
     Ok(created.id)
 }
@@ -333,10 +342,10 @@ pub fn user_process_revert(
     plate_id: PlateId,
     apply: bool,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
-    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    let Some((printer, selected)) = plate_printer_and_process(&p, plate_id)? else {
+    let mut session = state.lock().map_err(|e| format!("session lock: {e}"))?;
+    let Some((printer, selected)) = plate_printer_and_process(&session.project, plate_id)? else {
         return Ok(());
     };
     let Some(profile) = crate::core::process::library::lookup(&printer, &selected) else {
@@ -345,9 +354,9 @@ pub fn user_process_revert(
     crate::core::process::library::remove(&printer, &selected);
     let mut events = Vec::new();
     if apply {
-        events = apply_overrides_to_plate(&mut p, plate_id, profile.overrides)?;
+        events = apply_overrides_to_plate(&mut session.project, plate_id, profile.overrides)?;
     }
-    drop(p);
+    drop(session);
     emit_all(&window, &events);
     Ok(())
 }
@@ -365,10 +374,10 @@ pub fn user_process_delete(
     plate_id: PlateId,
     apply: bool,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
-    let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-    let Some((printer, selected)) = plate_printer_and_process(&p, plate_id)? else {
+    let mut session = state.lock().map_err(|e| format!("session lock: {e}"))?;
+    let Some((printer, selected)) = plate_printer_and_process(&session.project, plate_id)? else {
         return Ok(());
     };
     let profile = match crate::core::process::library::lookup(&printer, &selected) {
@@ -377,13 +386,14 @@ pub fn user_process_delete(
     };
     crate::core::process::library::remove(&printer, &selected);
     // Back to the default profile (inherit the instance's).
-    let mut events = p
+    let mut events = session
+        .project
         .set_plate_quality_profile(plate_id, None)
         .map_err(|e| e.to_string())?;
     if apply {
-        events.extend(apply_overrides_to_plate(&mut p, plate_id, profile.overrides)?);
+        events.extend(apply_overrides_to_plate(&mut session.project, plate_id, profile.overrides)?);
     }
-    drop(p);
+    drop(session);
     emit_all(&window, &events);
     Ok(())
 }
@@ -402,13 +412,13 @@ pub fn user_process_delete(
 pub fn project_save(
     path: String,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     // Clone under the lock, then write off-lock: the zip-to-disk is slow
     // (geometry blobs) and must not block scene mutations. Mirrors autosave.
     let snapshot = {
-        let p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-        p.clone()
+        let session = state.lock().map_err(|e| format!("session lock: {e}"))?;
+        session.project.clone()
     };
     format::write_project(&snapshot, std::path::Path::new(&path)).map_err(|e| e.to_string())?;
     // Emit (clears the dirty flag, gating the autosave worker off) before
@@ -437,14 +447,14 @@ fn drop_recovery_after_save(uuid: &str) {
 pub fn project_save_as(
     path: String,
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     // Set source_path on the live project, clone under the lock, then write
     // off-lock (see project_save — the zip-to-disk must not hold the mutex).
     let snapshot = {
-        let mut p = state.lock().map_err(|e| format!("project lock: {e}"))?;
-        p.source_path = Some(PathBuf::from(&path));
-        p.clone()
+        let mut session = state.lock().map_err(|e| format!("session lock: {e}"))?;
+        session.runtime.source_path = Some(PathBuf::from(&path));
+        session.project.clone()
     };
     format::write_project(&snapshot, std::path::Path::new(&path)).map_err(|e| e.to_string())?;
     emit_all(&window, &[SceneEvent::ProjectSaved { path: path.clone() }]);
@@ -459,19 +469,37 @@ pub fn project_save_as(
 /// `project_io::project_load` command does the wholesale replace (which also
 /// drops the renderer's GPU mesh cache — a thing `core` deliberately can't do,
 /// per AD-8).
-pub fn load_or_import(
-    path: &std::path::Path,
-) -> Result<(Project, Option<crate::core::orca_import::ImportReport>), String> {
+/// A freshly loaded project + the `SessionRuntime` seed the caller wraps it
+/// with: where it saves to (`source_path`) and the crash-recovery Save-As
+/// hint (`recovery_origin`, from an autosave file's envelope). `report` is
+/// the import summary for a foreign `.3mf`.
+pub struct Loaded {
+    pub project: Project,
+    pub source_path: Option<PathBuf>,
+    pub recovery_origin: Option<PathBuf>,
+    pub report: Option<crate::core::orca_import::ImportReport>,
+}
+
+pub fn load_or_import(path: &std::path::Path) -> Result<Loaded, String> {
     match format::read_project(path) {
-        Ok(p) => Ok((p, None)),
+        Ok((project, recovery_origin)) => Ok(Loaded {
+            project,
+            source_path: Some(path.to_path_buf()),
+            recovery_origin,
+            report: None,
+        }),
         Err(format::ProjectIoError::ForeignProject { .. }) => {
-            let (mut project, report) =
+            let (project, report) =
                 crate::core::orca_import::import(path).map_err(|e| format!("import: {e}"))?;
             // A foreign .3mf import becomes a *native* project — point its save
             // target at the matching `.n3o` name so the app reflects that (the
             // user saves a native project, never back to the foreign 3mf).
-            project.source_path = Some(path.with_extension("n3o"));
-            Ok((project, Some(report)))
+            Ok(Loaded {
+                project,
+                source_path: Some(path.with_extension("n3o")),
+                recovery_origin: None,
+                report: Some(report),
+            })
         }
         Err(e) => Err(e.to_string()),
     }
@@ -496,7 +524,7 @@ pub fn fresh_project() -> Project {
 #[tauri::command]
 #[tracing::instrument(skip(state, dirty, handle))]
 pub fn project_autosave_enable(
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
     dirty: State<Arc<super::dirty::DirtyTracker>>,
     handle: State<AutosaveHandle>,
 ) -> Result<(), String> {
@@ -544,7 +572,7 @@ pub fn project_history_state(
 #[tauri::command]
 pub fn project_undo(
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
     history: State<Arc<Mutex<super::history::UndoHistory>>>,
 ) -> bool {
     super::history::apply_step(&window, &state, &history, false)
@@ -554,7 +582,7 @@ pub fn project_undo(
 #[tauri::command]
 pub fn project_redo(
     window: Window,
-    state: State<Arc<Mutex<Project>>>,
+    state: State<Arc<Mutex<Session>>>,
     history: State<Arc<Mutex<super::history::UndoHistory>>>,
 ) -> bool {
     super::history::apply_step(&window, &state, &history, true)

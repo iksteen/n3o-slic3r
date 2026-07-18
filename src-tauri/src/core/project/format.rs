@@ -17,11 +17,12 @@
 //! `.3mf` handed to it and returns [`ProjectIoError::ForeignProject`] so the
 //! "open project" surface routes it to the importer.
 //!
-//! Derived / transient state is not stored: the bed + exclusion zones (a pure
-//! function of the bound printer) are re-derived on load via
-//! `Plate::set_printer`; the live selection and `source_path` are
-//! `#[serde(skip)]`. Cascade overrides persist as **logical** keys (the adapter
-//! owns the libslic3r translation), so the file isn't coupled to option names.
+//! Derived / transient state is not stored — it lives in `SessionRuntime`, not
+//! the `Project`: the bed + exclusion zones (a pure function of the bound
+//! printer) are re-derived by `Session::reconcile`, and the live selection and
+//! `source_path` never touch the file. Cascade overrides persist as **logical**
+//! keys (the adapter owns the libslic3r translation), so the file isn't coupled
+//! to option names.
 
 use std::fs::File;
 use std::io::{self, Read, Seek, Write};
@@ -132,17 +133,18 @@ pub fn write_project(project: &Project, output: &Path) -> Result<(), ProjectIoEr
 }
 
 /// Write `project` as a crash-recovery autosave file: identical to
-/// [`write_project`] but embeds the pre-crash origin — the project's
-/// current save target, else the origin it was itself recovered from — so
-/// the recovery file is self-describing and [`read_project`] can restore
-/// the Save-As target. Derived here at write time, never held as project
-/// state, so a normal save can't carry it.
-pub fn write_autosave(project: &Project, output: &Path) -> Result<(), ProjectIoError> {
-    let origin = project
-        .source_path
-        .as_deref()
-        .or(project.recovery_origin.as_deref());
-    write_project_inner(project, output, origin)
+/// [`write_project`] but embeds `recovery_origin` — where the project should
+/// save back to after a crash (its `SessionRuntime.source_path`, else an
+/// origin it was itself recovered from) — into the envelope so the recovery
+/// file is self-describing and [`read_project`] can restore the Save-As
+/// target. The caller derives the origin from `SessionRuntime`; it's never
+/// project state, so a normal save can't carry it.
+pub fn write_autosave(
+    project: &Project,
+    output: &Path,
+    recovery_origin: Option<&Path>,
+) -> Result<(), ProjectIoError> {
+    write_project_inner(project, output, recovery_origin)
 }
 
 fn write_project_inner(
@@ -186,11 +188,14 @@ fn write_project_inner(
     Ok(())
 }
 
-/// Read a `.n3o` project at `input`.
+/// Read a `.n3o` project at `input`. Returns the pure persisted `Project`
+/// plus the recovery-file envelope's `recovery_origin` (`Some` only for an
+/// autosave file — where the project should save back to after a crash);
+/// the caller seeds `SessionRuntime` (source_path, bed) from these + `input`.
 ///
 /// A `.3mf` handed here returns [`ProjectIoError::ForeignProject`] (route to the
 /// importer); anything else without our `project.json` is `NotAProjectFile`.
-pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
+pub fn read_project(input: &Path) -> Result<(Project, Option<PathBuf>), ProjectIoError> {
     let file = File::open(input).map_err(|e| ProjectIoError::Io {
         path: input.into(),
         source: e,
@@ -255,27 +260,12 @@ pub fn read_project(input: &Path) -> Result<Project, ProjectIoError> {
         }
     }
 
-    // Re-derive the bed + exclusion zones we don't persist (pure function of the
-    // bound printer profile) through the one binding path. An instance/profile
-    // that no longer resolves leaves the plate bound-but-bedless.
-    for plate in &mut project.plates {
-        let Some(instance_id) = plate.printer_instance_id().map(str::to_owned) else {
-            continue;
-        };
-        let Some(instance) = crate::core::printer::lookup_instance(&instance_id) else {
-            continue;
-        };
-        let Some(profile) = crate::core::printer::lookup(&instance.vendor_profile_ref) else {
-            continue;
-        };
-        plate.set_printer(Some(instance_id), Some(&profile));
-    }
-
-    project.source_path = Some(input.into());
-    // Envelope metadata → runtime field: set for autosave files, `None`
-    // for normal saves. `project_recover` uses it as the Save-As target.
-    project.recovery_origin = file.recovery_origin;
-    Ok(project)
+    // The bed + exclusion zones aren't persisted (pure function of the bound
+    // printer profile); the caller wraps this in a `Session` whose
+    // `reconcile` derives them. `source_path` is likewise runtime — the
+    // caller sets it from `input`. We surface only the envelope's
+    // `recovery_origin` (present on autosave files) for the recovery path.
+    Ok((project, file.recovery_origin))
 }
 
 // ── zip helpers ────────────────────────────────────────────────
@@ -399,33 +389,33 @@ mod tests {
         let p = Project::default();
         let path = tmp();
         write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
+        let (parsed, recovery_origin) = read_project(&path).expect("read");
         assert_eq!(parsed.plates.len(), 1);
         assert_eq!(parsed.uuid, p.uuid);
-        assert_eq!(parsed.source_path, Some(path.clone()));
+        // read_project no longer stamps source_path (it's SessionRuntime now,
+        // set by the load path); a normal save carries no recovery origin.
+        assert_eq!(recovery_origin, None);
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
     fn recovery_origin_persists_only_through_write_autosave() {
-        // write_autosave embeds the origin; write_project never does —
-        // even when the live project holds a recovery_origin. This is why
-        // no "eject on save" is needed: the field can't leak into a normal
-        // save regardless of runtime state.
-        let mut p = Project::default();
-        p.source_path = Some(PathBuf::from("/home/u/foo.n3o"));
-        p.recovery_origin = Some(PathBuf::from("/home/u/stale.n3o"));
+        // write_autosave embeds the caller-supplied origin into the envelope;
+        // write_project never carries one. read_project surfaces it as the
+        // second tuple element.
+        let p = Project::default();
 
         let auto = tmp();
-        write_autosave(&p, &auto).expect("write autosave");
+        write_autosave(&p, &auto, Some(std::path::Path::new("/home/u/foo.n3o")))
+            .expect("write autosave");
         assert_eq!(
-            read_project(&auto).expect("read").recovery_origin,
+            read_project(&auto).expect("read").1,
             Some(PathBuf::from("/home/u/foo.n3o")),
         );
 
         let normal = tmp();
         write_project(&p, &normal).expect("write project");
-        assert_eq!(read_project(&normal).expect("read").recovery_origin, None);
+        assert_eq!(read_project(&normal).expect("read").1, None);
 
         std::fs::remove_file(&auto).ok();
         std::fs::remove_file(&normal).ok();
@@ -441,7 +431,7 @@ mod tests {
 
         let path = tmp();
         write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
+        let (parsed, _) = read_project(&path).expect("read");
 
         // Ids are stable across save/load — resolve directly.
         assert!(parsed.plates[0].scene.objects.contains_key(&obj));
@@ -462,7 +452,7 @@ mod tests {
 
         let path = tmp();
         write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
+        let (parsed, _) = read_project(&path).expect("read");
         assert_eq!(
             parsed.meshes[&mesh_id].support_paint.as_deref(),
             Some(&vec!["4".into()]),
@@ -509,7 +499,7 @@ mod tests {
             zip.finish().expect("finish");
         }
 
-        let parsed = read_project(&path).expect("read v2");
+        let (parsed, _) = read_project(&path).expect("read v2");
         let m = &parsed.meshes[&mesh_id];
         assert_eq!(*m.indices, vec![0, 1, 2], "geometry decodes");
         assert_eq!(m.paint_colors.as_deref(), Some(&vec!["7".into()]));
@@ -538,7 +528,7 @@ mod tests {
 
         let path = tmp();
         write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
+        let (parsed, _) = read_project(&path).expect("read");
 
         assert_eq!(parsed.meshes.len(), 1, "one distinct mesh, one blob");
         assert_eq!(parsed.plates[0].scene.objects[&a].mesh, mesh_id);
@@ -560,7 +550,7 @@ mod tests {
 
         let path = tmp();
         write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
+        let (parsed, _) = read_project(&path).expect("read");
 
         assert_eq!(
             parsed.plates[0].scene.object_overrides[&obj]["layer_height"],
@@ -580,7 +570,7 @@ mod tests {
 
         let path = tmp();
         write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
+        let (parsed, _) = read_project(&path).expect("read");
 
         let plate = &parsed.plates[0];
         assert_eq!(plate.scene.objects[&a].group, Some(gid));
@@ -607,7 +597,7 @@ mod tests {
 
         let path = tmp();
         write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
+        let (parsed, _) = read_project(&path).expect("read");
 
         assert_eq!(
             parsed.plates[0].scene.groups[&gid].overrides["enable_support"],
@@ -626,7 +616,7 @@ mod tests {
 
         let path = tmp();
         write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
+        let (parsed, _) = read_project(&path).expect("read");
 
         assert!(parsed.plates[0].scene.objects[&shown].visible);
         assert!(!parsed.plates[0].scene.objects[&hidden].visible);
@@ -638,7 +628,7 @@ mod tests {
         let mut p = Project::default();
         p.user_overrides.insert("travel_speed".into(), "300".into());
         p.file_metadata.insert("Title".into(), "Fixture".into());
-        p.plates[0].set_printer(Some("bambi".into()), None);
+        p.plates[0].set_printer(Some("bambi".into()));
         p.plates[0]
             .project_overrides
             .insert("layer_height".into(), "0.12".into());
@@ -651,7 +641,7 @@ mod tests {
 
         let path = tmp();
         write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
+        let (parsed, _) = read_project(&path).expect("read");
 
         assert_eq!(parsed.plates.len(), 2);
         assert_eq!(parsed.active_plate, 0);
@@ -741,7 +731,7 @@ mod tests {
         let _ = ObjectId(0); // import sanity
         let path = tmp();
         write_project(&p, &path).expect("write");
-        let parsed = read_project(&path).expect("read");
+        let (parsed, _) = read_project(&path).expect("read");
         assert!(parsed.plates[0].scene.objects.contains_key(&a), "object id is stable");
         std::fs::remove_file(&path).ok();
     }

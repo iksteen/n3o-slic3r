@@ -11,7 +11,7 @@
 
 use glam::{Mat4, Quat, Vec3};
 
-use crate::core::project::Project;
+use crate::core::project::Session;
 use crate::core::scene::state::mesh_bb_corners;
 use crate::viewport_gpu::ray_seg_dist;
 
@@ -37,14 +37,15 @@ pub enum GizmoMode {
 /// a part keeps its corners equidistant from the center), so the gizmo holds its
 /// size through a turn where a bounding-box extent would grow/shrink. Min 3mm;
 /// shared by the renderer and the hit-test command. `None` if nothing's selected.
-pub(crate) fn selection_gizmo(p: &Project) -> Option<(Vec3, f32)> {
-    let plate = p.active_plate();
+pub(crate) fn selection_gizmo(s: &Session) -> Option<(Vec3, f32)> {
+    let plate = s.project.active_plate();
+    let selection = &s.active_plate_runtime().selection;
     let mut corners: Vec<Vec3> = Vec::new();
     for (id, obj) in plate.scene.objects.iter() {
-        if !obj.visible || !plate.scene.selection.contains(id) {
+        if !obj.visible || !selection.contains(id) {
             continue;
         }
-        let Some(m) = p.meshes.get(&obj.mesh) else {
+        let Some(m) = s.project.meshes.get(&obj.mesh) else {
             continue;
         };
         let model = obj.transform.to_mat4();
@@ -66,16 +67,17 @@ pub(crate) fn selection_gizmo(p: &Project) -> Option<(Vec3, f32)> {
 
 /// World-space AABB enclosing the active plate's current selection, with `pre`
 /// applied to `drag_ids` (so brackets/gizmo follow a preview).
-pub(crate) fn selection_world_aabb(p: &Project, drag_ids: &[u64], pre: Mat4) -> Option<(Vec3, Vec3)> {
-    let plate = p.active_plate();
+pub(crate) fn selection_world_aabb(s: &Session, drag_ids: &[u64], pre: Mat4) -> Option<(Vec3, Vec3)> {
+    let plate = s.project.active_plate();
+    let selection = &s.active_plate_runtime().selection;
     let mut mn = Vec3::splat(f32::MAX);
     let mut mx = Vec3::splat(f32::MIN);
     let mut any = false;
     for (id, obj) in plate.scene.objects.iter() {
-        if !obj.visible || !plate.scene.selection.contains(id) {
+        if !obj.visible || !selection.contains(id) {
             continue;
         }
-        let Some(m) = p.meshes.get(&obj.mesh) else {
+        let Some(m) = s.project.meshes.get(&obj.mesh) else {
             continue;
         };
         let mut model = obj.transform.to_mat4();
@@ -172,14 +174,15 @@ fn signed_angle(v0: Vec3, v1: Vec3, axis: Vec3) -> f32 {
 
 /// Scale-gizmo basis: a single selected object scales along its own (rotated)
 /// axes; multi/none is world-aligned. Mirrors the frontend `computeBasis`.
-pub(crate) fn selection_basis(p: &Project) -> Quat {
-    let plate = p.active_plate();
-    if plate.scene.selection.len() == 1 {
+pub(crate) fn selection_basis(s: &Session) -> Quat {
+    let plate = s.project.active_plate();
+    let selection = &s.active_plate_runtime().selection;
+    if selection.len() == 1 {
         if let Some((_, o)) = plate
             .scene
             .objects
             .iter()
-            .find(|(id, _)| plate.scene.selection.contains(id))
+            .find(|(id, _)| selection.contains(id))
         {
             let (_, q, _) = o.transform.to_mat4().to_scale_rotation_translation();
             if q.is_finite() {
@@ -191,17 +194,18 @@ pub(crate) fn selection_basis(p: &Project) -> Quat {
 }
 
 /// Selection bounding-box size along the axes of `basis` (the scale-snap reference).
-fn selection_extent(p: &Project, basis: Quat) -> Vec3 {
-    let plate = p.active_plate();
+fn selection_extent(s: &Session, basis: Quat) -> Vec3 {
+    let plate = s.project.active_plate();
+    let selection = &s.active_plate_runtime().selection;
     let inv = basis.inverse();
     let mut mn = Vec3::splat(f32::MAX);
     let mut mx = Vec3::splat(f32::MIN);
     let mut any = false;
     for (id, obj) in plate.scene.objects.iter() {
-        if !obj.visible || !plate.scene.selection.contains(id) {
+        if !obj.visible || !selection.contains(id) {
             continue;
         }
-        let Some(m) = p.meshes.get(&obj.mesh) else { continue };
+        let Some(m) = s.project.meshes.get(&obj.mesh) else { continue };
         let model = obj.transform.to_mat4();
         for c in mesh_bb_corners(&m.bounding_box) {
             let w = inv * model.transform_point3(c);
@@ -266,10 +270,10 @@ pub(crate) fn pick_move_at(center: Vec3, arm: f32, ro: Vec3, rd: Vec3, eye: Vec3
 }
 
 /// Hit-test the active gizmo's handles for the cursor ray; nearest handle → grab.
-pub(crate) fn pick_gizmo(p: &Project, ro: Vec3, rd: Vec3, eye: Vec3, mode: GizmoMode) -> Option<GizmoGrab> {
-    let (center, arm) = selection_gizmo(p)?;
-    let basis_q = selection_basis(p);
-    let extent = selection_extent(p, basis_q);
+pub(crate) fn pick_gizmo(s: &Session, ro: Vec3, rd: Vec3, eye: Vec3, mode: GizmoMode) -> Option<GizmoGrab> {
+    let (center, arm) = selection_gizmo(s)?;
+    let basis_q = selection_basis(s);
+    let extent = selection_extent(s, basis_q);
     let thick = GIZMO_SCREEN_K * (eye - center).length();
     // Common grab builder: `start_hit` is the cursor's hit on the constraint plane.
     let mk = |idx: i32,

@@ -207,7 +207,7 @@ mod tests {
     fn unbound_printer_blocks() {
         let _registry = RegistryGuard::acquire();
         let mut p = Project::default();
-        p.plates[0].set_printer(None, None);
+        p.plates[0].set_printer(None);
         add_cube(&mut p, 1);
         let err = validate_pre_slice(&p, &[1]).unwrap_err();
         assert!(err

@@ -3,6 +3,7 @@
 //! binding (bed viz + the picker rebind/unbind flows).
 
 use crate::core::project::model::{Plate, PlateId, Project};
+use crate::core::project::session::{derive_bed, SessionRuntime};
 use crate::core::printer::profile::PrinterProfile;
 use crate::core::scene::bed;
 use crate::core::scene::events::{SceneEvent, SceneOpError};
@@ -40,26 +41,23 @@ impl Project {
         });
 
         let mut plate = Plate::new(id, position);
-        // Bind + derive the bed together (one path: set_printer) so the new
-        // plate renders immediately on plate switch.
+        // Bind the printer (persisted). The bed lives in `SessionRuntime`;
+        // the command layer calls `Session::reconcile` after add_plate so it
+        // derives — the BedChanged below is the canonical event for listeners.
         if let Some(iid) = instance_id {
-            let profile = crate::core::printer::lookup_instance(&iid)
-                .and_then(|inst| crate::core::printer::lookup(&inst.vendor_profile_ref));
-            plate.set_printer(Some(iid), profile.as_ref());
+            plate.set_printer(Some(iid));
         }
         self.plates.push(plate);
 
-        // PlateAdded triggers the frontend's snapshot refetch which
-        // pulls bed + binding back in one go. BedChanged is emitted
-        // for symmetry with the other bed-setting paths so any
-        // listener (e.g. the per-plate scene mirror) sees a single
-        // canonical "bed for plate N is X" event.
+        // PlateAdded triggers the frontend's snapshot refetch which pulls bed
+        // + binding back in one go. BedChanged is emitted for symmetry with
+        // the other bed-setting paths, its bed derived from the new binding.
         let mut events = vec![SceneEvent::PlateAdded { plate_id: id }];
         let new_plate = self.plates.last().expect("plate just pushed");
-        if let Some(bed) = &new_plate.scene.bed {
+        if let Some(bed) = derive_bed(new_plate) {
             events.push(SceneEvent::BedChanged {
                 plate_id: id,
-                bed: Some(bed.clone()),
+                bed: Some(bed),
             });
         }
         (id, events)
@@ -208,15 +206,14 @@ impl Project {
     /// bed-viz-only path used by `scene_set_active_printer` and the
     /// arrange helpers. The picker flow that also updates the binding
     /// is [`Self::rebind_plate_printer`].
-    pub fn set_active_printer(&mut self, printer: Option<&PrinterProfile>) -> Vec<SceneEvent> {
+    pub fn set_active_printer(
+        &mut self,
+        rt: &mut SessionRuntime,
+        printer: Option<&PrinterProfile>,
+    ) -> Vec<SceneEvent> {
         let plate_id = self.active_plate().id;
         let new_bed = printer.map(bed::bed_for_printer);
-        let plate = &mut self.plates[self.active_plate];
-        plate.scene.exclusion_zones = new_bed
-            .as_ref()
-            .map(|b| b.exclusion_zones.clone())
-            .unwrap_or_default();
-        plate.scene.bed = new_bed.clone();
+        rt.plates.entry(plate_id).or_default().bed = new_bed.clone();
         vec![SceneEvent::BedChanged {
             plate_id,
             bed: new_bed,
@@ -272,8 +269,8 @@ impl Project {
             .as_ref()
             .map(|i| i.bed.identity.clone())
             .unwrap_or_default();
-        // Bind + derive the bed together (the one binding path).
-        self.plates[idx].set_printer(Some(instance_id), Some(profile));
+        // Bind the printer (persisted); the session reconciles the bed after.
+        self.plates[idx].set_printer(Some(instance_id));
         // Slot refs are physical (extruder, slot) coordinates — they
         // don't survive a topology change. Wipe + re-auto-bind any
         // referenced material against the new printer so existing
@@ -311,12 +308,13 @@ impl Project {
         }
         self.active_plate = prev_active;
 
-        // `set_printer` above already updated the bed/exclusion zones; emit the
-        // canonical BedChanged + the metadata change the tab strip listens for.
+        // Emit the canonical BedChanged (bed derived from the new profile; the
+        // session reconciles the stored copy after) + the metadata change the
+        // tab strip listens for.
         let events = vec![
             SceneEvent::BedChanged {
                 plate_id,
-                bed: self.plates[idx].scene.bed.clone(),
+                bed: Some(bed::bed_for_printer(profile)),
             },
             SceneEvent::PlateChanged { plate_id },
         ];
@@ -346,8 +344,8 @@ impl Project {
         let idx = self
             .plate_index(plate_id)
             .ok_or(SceneOpError::UnknownPlate(plate_id))?;
-        // Unbind + clear the bed/exclusion zones together.
-        self.plates[idx].set_printer(None, None);
+        // Unbind (persisted); the session reconciles the bed away after.
+        self.plates[idx].set_printer(None);
         self.plates[idx].material_to_slot.clear();
         let events = vec![
             SceneEvent::BedChanged {
@@ -364,6 +362,8 @@ impl Project {
 mod tests {
     use super::*;
     use crate::core::project::mutation::test_support::*;
+    use crate::core::project::session::derive_bed;
+    use crate::core::project::SessionRuntime;
     use crate::core::scene::state::NewSceneObject;
 
     #[test]
@@ -398,7 +398,7 @@ mod tests {
         let mut p = Project::default();
         // Override the bootstrap plate's instance so we can tell the
         // inheritance apart from the bundled-default fallback.
-        p.plates[0].set_printer(Some("snappy".into()), None);
+        p.plates[0].set_printer(Some("snappy".into()));
         let (new_id, _) = p.add_plate(None);
         let new_plate = p.plate(new_id).unwrap();
         assert_eq!(
@@ -411,8 +411,7 @@ mod tests {
     #[test]
     fn add_plate_unbound_when_active_is_unbound() {
         let mut p = Project::default();
-        p.plates[0].set_printer(None, None);
-        p.plates[0].scene.bed = None;
+        p.plates[0].set_printer(None);
         let (new_id, _) = p.add_plate(None);
         let new_plate = p.plate(new_id).unwrap();
         assert!(
@@ -441,7 +440,7 @@ mod tests {
             "default project's first plate is auto-bound",
         );
         assert!(
-            p.plates[0].scene.bed.is_some(),
+            derive_bed(&p.plates[0]).is_some(),
             "auto-bind also populates the bed visualization",
         );
     }
@@ -521,8 +520,9 @@ mod tests {
     #[test]
     fn set_active_printer_delegates_to_active_plate() {
         let mut p = Project::default();
-        p.set_active_printer(Some(&a1_mini_for_test()));
-        assert!(p.active_plate().scene.bed.is_some());
+        let mut rt = SessionRuntime::default();
+        p.set_active_printer(&mut rt, Some(&a1_mini_for_test()));
+        assert!(derive_bed(p.active_plate()).is_some());
     }
 
     #[test]
@@ -533,8 +533,7 @@ mod tests {
         // rebinding-from-unbound case explicitly (previous_printer
         // = None). The rebind-from-bound case is covered by
         // `rebind_plate_printer_records_previous_printer`.
-        p.plates[0].set_printer(None, None);
-        p.plates[0].scene.bed = None;
+        p.plates[0].set_printer(None);
         let profile = a1_mini_for_test();
         let (report, events) = p
             .rebind_plate_printer(PlateId(1), "bambi".into(), &profile)
@@ -575,7 +574,7 @@ mod tests {
         // a1_mini_for_test() suffices for both legs.
         let profile = a1_mini_for_test();
         let mut p = Project::default();
-        p.plates[0].set_printer(Some("bambi".into()), None);
+        p.plates[0].set_printer(Some("bambi".into()));
         p.plates[0].quality_profile = Some("0.20mm-strength".into());
 
         // Same-model rebind: the A1 mini ships `0.20mm-strength` → kept.
@@ -596,7 +595,7 @@ mod tests {
     #[test]
     fn rebind_preserves_a_face_painted_material_binding() {
         let mut p = Project::default();
-        p.plates[0].set_printer(Some("bambi".into()), None);
+        p.plates[0].set_printer(Some("bambi".into()));
         // A painted object: base material 1, faces painted filament 2 ("8" →
         // EnforcerBlockerType state 2). No object carries extruder_id 2.
         let mut mesh = unit_cube_mesh();
@@ -624,7 +623,7 @@ mod tests {
     #[test]
     fn rebind_plate_printer_records_previous_identity() {
         let mut p = Project::default();
-        p.plates[0].set_printer(Some("snappy".into()), None);
+        p.plates[0].set_printer(Some("snappy".into()));
         let profile = a1_mini_for_test();
         let (report, _) = p
             .rebind_plate_printer(PlateId(1), "bambi".into(), &profile)

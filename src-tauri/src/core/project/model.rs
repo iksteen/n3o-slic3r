@@ -1,15 +1,16 @@
 //! Project + Plate types.
 //!
-//! [`Project`] is the root authoritative state. Tauri manages
-//! `Mutex<Project>` (one per app instance). The renderer is a
-//! read-only consumer that mirrors per-plate state via emitted
-//! events.
+//! [`Project`] is the **persisted** root state — pure serializable content.
+//! It's wrapped in a [`super::session::Session`] (the Tauri-managed
+//! `Mutex<Session>`) that pairs it with the runtime state (`source_path`,
+//! selection, derived beds) so nothing ephemeral lives in the project. The
+//! renderer is a read-only consumer that mirrors per-plate state via events.
 //!
 //! Project owns:
 //!   - the plate list + active plate (project navigation)
 //!   - cascade handle + project-wide override tier (cascade
 //!     resolution input)
-//!   - file metadata + source path (save/load)
+//!   - file metadata (save/load)
 //!   - scene-wide mesh storage + ID allocators (so cross-plate
 //!     references survive move-between-plates without a copy +
 //!     ids stay unique across plates)
@@ -20,8 +21,8 @@
 //!   - its material → slot bindings (FR-MP-8)
 //!   - its metadata (cycle count, composition order)
 //!   - its scene contents
-//!     (`core::scene::state::PlateSceneState` — objects, selection,
-//!     bed, exclusion zones, per-object overrides)
+//!     (`core::scene::state::PlateSceneState` — objects + per-object
+//!     overrides; selection + bed live in `SessionRuntime`)
 //!
 //! Mutation methods live in [`super::mutation`] to keep this file
 //! focused on the type shape. Project-level mutations
@@ -30,7 +31,6 @@
 //! `&mut Project` via the same impl block.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -48,10 +48,10 @@ use crate::core::scene::state::{Mesh, MeshId, PlateSceneState};
 #[serde(transparent)]
 pub struct PlateId(pub u32);
 
-/// Project-root state. Tauri manages `Arc<Mutex<Project>>` (one
+/// Project-root state. Tauri manages `Arc<Mutex<Session>>` (one
 /// per app instance, wrapped in an Arc so the autosave worker
 /// can hold a handle without going through Tauri state lookup);
-/// every Tauri command takes `State<Arc<Mutex<Project>>>`.
+/// every Tauri command takes `State<Arc<Mutex<Session>>>`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     /// Stable per-project identifier; baked at construction so the
@@ -83,47 +83,12 @@ pub struct Project {
     #[serde(default)]
     pub file_metadata: BTreeMap<String, String>,
 
-    /// Filesystem path the project came from / saves to. `None`
-    /// for in-memory projects that haven't been saved yet —
-    /// autosave still runs for those, using a `uuid`-derived
-    /// recovery path rather than `source_path`. **Not persisted**:
-    /// `format::read_project` re-stamps it with the actual file path
-    /// on load, so serializing it only carried dead data (and leaked
-    /// the author's absolute path into a shareable file).
-    #[serde(skip)]
-    pub source_path: Option<PathBuf>,
-
-    /// Where this project should be saved back to when it came from crash
-    /// recovery: the pre-crash `source_path`. **Runtime-only, like
-    /// `source_path`** — never serialized as project state. Persistence is
-    /// a recovery-file concern: `format::write_autosave` derives it into
-    /// the file *envelope* and `read_project` restores it here, so a normal
-    /// save can't carry it and there's nothing to clear on save. Set for a
-    /// project loaded via `project_recover`; a recovered project's Save
-    /// then prompts a Save-As defaulting here rather than overwriting the
-    /// stale original.
-    #[serde(skip)]
-    pub recovery_origin: Option<PathBuf>,
-
     /// Scene-wide mesh storage. Per-plate object references
     /// (`Plate.scene.objects[*].mesh`) resolve through this map.
     /// Living scene-wide means move-between-plates op
     /// doesn't have to copy mesh buffers across plates.
     #[serde(default)]
     pub meshes: HashMap<MeshId, Mesh>,
-
-    /// Primitive mesh cache. Each (kind, params) tuple
-    /// resolves to one MeshId so re-instancing the same procedural
-    /// primitive — across plates as well as within a plate — yields
-    /// multiple SceneObjects sharing geometry. Linear scan is fine
-    /// (the cache stays small: a handful of distinct shapes per
-    /// session).
-    #[serde(default, skip)]
-    pub(crate) primitive_cache: Vec<(
-        crate::core::scene::primitives::PrimitiveKind,
-        crate::core::scene::primitives::PrimitiveParams,
-        MeshId,
-    )>,
 
     /// Monotonic mesh-id allocator. Never reused even after a
     /// mesh is freed. Scene-wide (not per-plate) so cross-plate
@@ -164,9 +129,10 @@ pub struct Plate {
     /// `lookup_instance(id).vendor_profile_ref` rather than stored
     /// alongside.
     ///
-    /// **Private on purpose**: the binding and the derived `scene.bed` must
-    /// stay in sync, so the only way to set it is [`Plate::set_printer`],
-    /// which updates both together. Read via [`Plate::printer_instance_id`].
+    /// **Private on purpose**: set only via [`Plate::set_printer`]. The
+    /// derived bed visualization follows this binding but lives in
+    /// `SessionRuntime` (re-derived by `Session::reconcile`), not here.
+    /// Read via [`Plate::printer_instance_id`].
     #[serde(default)]
     printer_instance_id: Option<String>,
 
@@ -227,10 +193,9 @@ fn bind_preferred_else_first_in_place(plate: &mut Plate, preferred: Option<&str>
     let Some(inst) = chosen else {
         return;
     };
-    let Some(profile) = crate::core::printer::lookup(&inst.vendor_profile_ref) else {
-        return;
-    };
-    plate.set_printer(Some(inst.id.clone()), Some(&profile));
+    // Bind the id (persisted); the bed derives when the project is wrapped in
+    // a `Session` (`Session::new` reconciles).
+    plate.set_printer(Some(inst.id.clone()));
 }
 
 /// Filename-safe basename for sliced output: keep `[A-Za-z0-9._-]`, map any other
@@ -276,17 +241,17 @@ impl Project {
     }
 
     /// Human-readable project title for sliced-output naming + the `.gcode.3mf`
-    /// `Title` metadata: a loaded non-empty `Title`, else the project file's stem,
-    /// else "Untitled".
-    pub fn title(&self) -> String {
+    /// `Title` metadata: a loaded non-empty `Title`, else the project file's stem
+    /// (`source_path` lives in `SessionRuntime`, so the caller passes it), else
+    /// "Untitled".
+    pub fn title(&self, source_path: Option<&std::path::Path>) -> String {
         self.file_metadata
             .get("Title")
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
             .or_else(|| {
-                self.source_path
-                    .as_ref()
+                source_path
                     .and_then(|p| p.file_stem())
                     .map(|s| s.to_string_lossy().into_owned())
             })
@@ -306,10 +271,7 @@ impl Project {
             active_plate: 0,
             user_overrides: HashMap::new(),
             file_metadata: BTreeMap::new(),
-            source_path: None,
-            recovery_origin: None,
             meshes: HashMap::new(),
-            primitive_cache: Vec::new(),
             next_mesh_id: 0,
             next_object_id: 0,
         }
@@ -421,24 +383,12 @@ impl Plate {
         self.printer_instance_id.as_deref()
     }
 
-    /// The **one** way to (re)bind a plate's printer. Sets the instance id
-    /// *and* recomputes the derived bed visualization + exclusion zones
-    /// together, so the two can never desync — erasing the class of bug
-    /// where code set the binding but left a stale bed. The caller resolves
-    /// the bound instance's [`PrinterProfile`] from the registry (keeping the
-    /// lookup out of this pure model layer); `None` unbinds + clears the bed.
-    pub fn set_printer(
-        &mut self,
-        instance_id: Option<String>,
-        profile: Option<&crate::core::printer::profile::PrinterProfile>,
-    ) {
+    /// (Re)bind a plate's printer — sets the persisted instance id. The
+    /// derived bed visualization follows this binding but is owned by
+    /// `SessionRuntime`; callers reconcile the session (`Session::reconcile`)
+    /// after a rebind so the bed re-derives. `None` unbinds.
+    pub fn set_printer(&mut self, instance_id: Option<String>) {
         self.printer_instance_id = instance_id;
-        let bed = profile.map(crate::core::scene::bed::bed_for_printer);
-        self.scene.exclusion_zones = bed
-            .as_ref()
-            .map(|b| b.exclusion_zones.clone())
-            .unwrap_or_default();
-        self.scene.bed = bed;
     }
 
     /// Default name for a plate at the given 1-based position
@@ -494,6 +444,7 @@ impl Plate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     const BAMBI: &str = "bambi";
 
@@ -532,20 +483,21 @@ mod tests {
     fn title_prefers_metadata_then_stem_then_untitled() {
         // Bare project: no Title metadata, no source path.
         let mut p = Project::default();
-        assert_eq!(p.title(), "Untitled");
+        assert_eq!(p.title(None), "Untitled");
 
-        // A loaded source path contributes its file stem.
-        p.source_path = Some(PathBuf::from("/tmp/MyPrint.3mf"));
-        assert_eq!(p.title(), "MyPrint");
+        // A loaded source path (passed in — it lives in SessionRuntime now)
+        // contributes its file stem.
+        let src = PathBuf::from("/tmp/MyPrint.3mf");
+        assert_eq!(p.title(Some(&src)), "MyPrint");
 
         // A non-empty Title metadata wins over the stem.
         p.file_metadata
             .insert("Title".into(), "Authored Name".into());
-        assert_eq!(p.title(), "Authored Name");
+        assert_eq!(p.title(Some(&src)), "Authored Name");
 
         // A blank Title falls back to the stem (trimmed/empty is ignored).
         p.file_metadata.insert("Title".into(), "   ".into());
-        assert_eq!(p.title(), "MyPrint");
+        assert_eq!(p.title(Some(&src)), "MyPrint");
     }
 
     #[test]
@@ -582,7 +534,7 @@ mod tests {
     #[test]
     fn project_serde_round_trips() {
         let mut p = Project::default();
-        p.plates[0].set_printer(Some(BAMBI.into()), None);
+        p.plates[0].set_printer(Some(BAMBI.into()));
         p.plates[0]
             .project_overrides
             .insert("layer_height".into(), "0.12".into());

@@ -346,6 +346,7 @@ mod tests {
     use super::*;
     use crate::core::printer::SlotRef;
     use crate::core::project::mutation::test_support::*;
+    use crate::core::project::SessionRuntime;
 
     #[test]
     fn register_object_binds_painted_material() {
@@ -367,9 +368,10 @@ mod tests {
         // binding too — it's named by the mesh paint, not any extruder_id, so
         // the delete path has to consult the paint or the binding lingers.
         let mut p = Project::default();
+        let mut rt = SessionRuntime::default();
         let id = add_painted_cube(&mut p);
         assert!(p.plates[0].material_to_slot.contains_key(&2));
-        p.delete_objects(&[id]);
+        p.delete_objects(&mut rt, &[id]);
         assert!(
             !p.plates[0].material_to_slot.contains_key(&2),
             "painted material 2's binding should be pruned once its object is gone",
@@ -454,8 +456,9 @@ mod tests {
         // the slice-time cascade keeps emitting toolchanges to T2
         // for a material nothing references).
         let mut p = Project::default();
+        let mut rt = SessionRuntime::default();
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
-        p.plates[0].set_printer(Some("snappy".into()), None);
+        p.plates[0].set_printer(Some("snappy".into()));
         let cube = add_cube_with_material(&mut p, 1);
         // User manually pins M1 → T2 (instead of the auto-bind's T1).
         p.plates[0].material_to_slot.insert(
@@ -465,7 +468,7 @@ mod tests {
                 slot: 0,
             },
         );
-        let events = p.delete_objects(&[cube]);
+        let events = p.delete_objects(&mut rt, &[cube]);
         assert!(!p.plates[0].material_to_slot.contains_key(&1));
         assert!(
             events
@@ -483,7 +486,7 @@ mod tests {
     fn rebind_within_same_filament_type_is_routing_only() {
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
         let mut p = Project::default();
-        p.plates[0].set_printer(Some("snappy".into()), None);
+        p.plates[0].set_printer(Some("snappy".into()));
         add_cube_with_material(&mut p, 1); // auto-binds M1 to toolhead 0 (generic-pla)
 
         // Toolhead 1 also carries generic-pla → same base type.
@@ -510,7 +513,7 @@ mod tests {
     fn rebind_to_a_different_filament_type_stales_the_slice() {
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
         let mut p = Project::default();
-        p.plates[0].set_printer(Some("snappy".into()), None);
+        p.plates[0].set_printer(Some("snappy".into()));
         add_cube_with_material(&mut p, 1);
 
         // Load toolhead 1 with ABS — a different base type from M1's
@@ -541,13 +544,14 @@ mod tests {
         // Two cubes share material 1. Deleting one leaves M1 still in
         // use → binding survives, no MaterialSlotChanged event.
         let mut p = Project::default();
+        let mut rt = SessionRuntime::default();
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
-        p.plates[0].set_printer(Some("snappy".into()), None);
+        p.plates[0].set_printer(Some("snappy".into()));
         let cube_a = add_cube_with_material(&mut p, 1);
         let _cube_b = add_cube_with_material(&mut p, 1);
         let before = p.plates[0].material_to_slot.get(&1).copied();
         assert!(before.is_some(), "auto-bind populated M1");
-        let events = p.delete_objects(&[cube_a]);
+        let events = p.delete_objects(&mut rt, &[cube_a]);
         assert_eq!(p.plates[0].material_to_slot.get(&1).copied(), before);
         assert!(
             !events
@@ -566,7 +570,7 @@ mod tests {
         // material_to_slot keys) keeps listing the abandoned material.
         let mut p = Project::default();
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
-        p.plates[0].set_printer(Some("snappy".into()), None);
+        p.plates[0].set_printer(Some("snappy".into()));
         let cube = add_cube_with_material(&mut p, 2);
         assert!(
             p.plates[0].material_to_slot.contains_key(&2),
@@ -595,7 +599,7 @@ mod tests {
         // cube → its binding survives.
         let mut p = Project::default();
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
-        p.plates[0].set_printer(Some("snappy".into()), None);
+        p.plates[0].set_printer(Some("snappy".into()));
         let cube_a = add_cube_with_material(&mut p, 2);
         let _cube_b = add_cube_with_material(&mut p, 2);
         let before = p.plates[0].material_to_slot.get(&2).copied();
@@ -618,7 +622,7 @@ mod tests {
         // onto T2; with it, M2 advances to the next free slot (T3).
         let mut p = Project::default();
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
-        p.plates[0].set_printer(Some("snappy".into()), None);
+        p.plates[0].set_printer(Some("snappy".into()));
         // User pins M1 → T2 before adding any objects.
         p.plates[0].material_to_slot.insert(
             1,

@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use slic3r_ffi::{BrushKind, PaintSession, PaintState};
 use tauri::{State, Window};
 
-use crate::core::project::Project;
+use crate::core::project::Session;
 use crate::core::scene::commands::emit_all;
 use crate::core::scene::events::SceneEvent;
 use crate::core::scene::state::{MeshId, ObjectId};
@@ -163,11 +163,11 @@ fn world_soup(verts: &[f32], indices: &[u32], model: Mat4) -> Vec<f32> {
 /// Write the session's current paint onto the object's mesh in place (same
 /// `MeshId`, geometry untouched) so the slice path picks it up immediately — no
 /// separate apply step. Stores `None` when nothing is painted.
-fn commit_live(ap: &ActivePaint, project: &Mutex<Project>) -> Result<(), String> {
+fn commit_live(ap: &ActivePaint, session: &Mutex<Session>) -> Result<(), String> {
     let hex = ap.session.serialize().map_err(|e| e.to_string())?;
     let support = (!hex.iter().all(String::is_empty)).then(|| Arc::new(hex));
-    let mut p = project.lock().map_err(|e| format!("project lock: {e}"))?;
-    if let Some(m) = p.meshes.get_mut(&ap.mesh_id) {
+    let mut s = session.lock().map_err(|e| format!("session lock: {e}"))?;
+    if let Some(m) = s.project.meshes.get_mut(&ap.mesh_id) {
         m.support_paint = support;
     }
     Ok(())
@@ -191,18 +191,20 @@ fn rebuild_overlay(ap: &ActivePaint, viewport: &ViewportState) -> Result<(bool, 
 #[tauri::command]
 pub fn paint_open(
     object_id: u64,
-    project: State<'_, Arc<Mutex<Project>>>,
+    session: State<'_, Arc<Mutex<Session>>>,
     tool: State<'_, PaintToolState>,
     viewport: State<'_, ViewportState>,
 ) -> Result<PaintFlags, String> {
-    let p = project.lock().map_err(|e| format!("project lock: {e}"))?;
-    let obj = p
+    let s = session.lock().map_err(|e| format!("session lock: {e}"))?;
+    let obj = s
+        .project
         .active_plate()
         .scene
         .objects
         .get(&ObjectId(object_id))
         .ok_or("paint_open: unknown object")?;
-    let mesh = p
+    let mesh = s
+        .project
         .meshes
         .get(&obj.mesh)
         .ok_or("paint_open: object has no mesh")?;
@@ -225,7 +227,7 @@ pub fn paint_open(
         trafo16,
         session,
     };
-    drop(p);
+    drop(s);
     let (enforce, block) = rebuild_overlay(&ap, &viewport)?;
     *tool.0.lock().map_err(|e| format!("paint lock: {e}"))? = Some(ap);
     Ok(PaintFlags { enforce, block })
@@ -236,7 +238,7 @@ pub fn paint_open(
 #[tauri::command]
 pub fn paint_stroke(
     req: PaintStrokeRequest,
-    project: State<'_, Arc<Mutex<Project>>>,
+    session: State<'_, Arc<Mutex<Session>>>,
     tool: State<'_, PaintToolState>,
     viewport: State<'_, ViewportState>,
 ) -> Result<PaintOutcome, String> {
@@ -262,7 +264,7 @@ pub fn paint_stroke(
             req.new_stroke,
         )
         .map_err(|e| e.to_string())?;
-    commit_live(ap, project.inner())?;
+    commit_live(ap, session.inner())?;
     let (enforce, block) = rebuild_overlay(ap, &viewport)?;
     Ok(PaintOutcome { hit: true, enforce, block })
 }
@@ -272,7 +274,7 @@ pub fn paint_stroke(
 #[tauri::command]
 pub fn paint_fill(
     req: PaintFillRequest,
-    project: State<'_, Arc<Mutex<Project>>>,
+    session: State<'_, Arc<Mutex<Session>>>,
     tool: State<'_, PaintToolState>,
     viewport: State<'_, ViewportState>,
 ) -> Result<PaintOutcome, String> {
@@ -294,7 +296,7 @@ pub fn paint_fill(
             true,
         )
         .map_err(|e| e.to_string())?;
-    commit_live(ap, project.inner())?;
+    commit_live(ap, session.inner())?;
     let (enforce, block) = rebuild_overlay(ap, &viewport)?;
     Ok(PaintOutcome { hit: true, enforce, block })
 }
@@ -302,14 +304,14 @@ pub fn paint_fill(
 /// Undo the last stroke/fill, returning the resulting paint flags.
 #[tauri::command]
 pub fn paint_undo(
-    project: State<'_, Arc<Mutex<Project>>>,
+    session: State<'_, Arc<Mutex<Session>>>,
     tool: State<'_, PaintToolState>,
     viewport: State<'_, ViewportState>,
 ) -> Result<PaintFlags, String> {
     let mut guard = tool.0.lock().map_err(|e| format!("paint lock: {e}"))?;
     let ap = guard.as_mut().ok_or("paint_undo: no open session")?;
     if ap.session.undo() {
-        commit_live(ap, project.inner())?;
+        commit_live(ap, session.inner())?;
     }
     let (enforce, block) = rebuild_overlay(ap, &viewport)?;
     Ok(PaintFlags { enforce, block })
@@ -319,7 +321,7 @@ pub fn paint_undo(
 /// session over the same mesh and clears the committed support paint.
 #[tauri::command]
 pub fn paint_clear(
-    project: State<'_, Arc<Mutex<Project>>>,
+    session: State<'_, Arc<Mutex<Session>>>,
     tool: State<'_, PaintToolState>,
     viewport: State<'_, ViewportState>,
 ) -> Result<PaintFlags, String> {
@@ -328,7 +330,7 @@ pub fn paint_clear(
     let verts = Arc::clone(&ap.vertices);
     let idx = Arc::clone(&ap.indices);
     ap.session = PaintSession::new(&verts, &idx, &[]).map_err(|e| e.to_string())?;
-    commit_live(ap, project.inner())?;
+    commit_live(ap, session.inner())?;
     let (enforce, block) = rebuild_overlay(ap, &viewport)?;
     Ok(PaintFlags { enforce, block })
 }
@@ -338,7 +340,7 @@ pub fn paint_clear(
 /// the whole edit into a single undo step and marking the project dirty for save.
 #[tauri::command]
 pub fn paint_close(
-    project: State<'_, Arc<Mutex<Project>>>,
+    session: State<'_, Arc<Mutex<Session>>>,
     tool: State<'_, PaintToolState>,
     viewport: State<'_, ViewportState>,
     window: Window,
@@ -352,14 +354,14 @@ pub fn paint_close(
     let Some(ap) = ap else {
         return Ok(());
     };
-    let p = project.lock().map_err(|e| format!("project lock: {e}"))?;
-    let plate = p.active_plate();
+    let s = session.lock().map_err(|e| format!("session lock: {e}"))?;
+    let plate = s.project.active_plate();
     if let Some(obj) = plate.scene.objects.get(&ObjectId(ap.object)) {
         let event = SceneEvent::ObjectUpdated {
             plate_id: plate.id,
             object: obj.clone(),
         };
-        drop(p);
+        drop(s);
         emit_all(&window, &[event]);
     }
     Ok(())

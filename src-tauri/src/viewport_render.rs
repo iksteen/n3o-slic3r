@@ -17,7 +17,8 @@ use wgpu::util::DeviceExt;
 
 use crate::core::printer::{instance_registry, PrinterInstance, SlotRef};
 use crate::core::project::resolve::{tower_geometry_for_plate, TowerGeometry};
-use crate::core::project::{PlateId, Project};
+use crate::core::project::session::derive_bed;
+use crate::core::project::{PlateId, Project, Session};
 use crate::core::scene::state::{mesh_bb_corners, MeshId, ModifierKind, ObjectId};
 use crate::viewport_gizmo::{
     compute_pre, pick_gizmo, pick_move_at, ray_plane, selection_basis, selection_gizmo,
@@ -1309,7 +1310,8 @@ impl ViewportRenderer {
         p: &Project,
     ) -> Option<(PlateId, TowerGeometry, [f64; 3], [f64; 3], [f32; 4])> {
         let plate = p.active_plate();
-        let bed = plate.scene.bed.as_ref()?;
+        let bed = derive_bed(plate);
+        let bed = bed.as_ref()?;
         let (bed_min, bed_max) = (bed.extents.min, bed.extents.max);
         let id = plate.id;
         let geom = self.resolved_tower(p, id)?;
@@ -1380,24 +1382,25 @@ impl ViewportRenderer {
     }
 
     /// Render the live scene and read it back as tight RGBA8, top row first.
-    pub fn frame(&mut self, req: &FrameRequest, project: &Arc<Mutex<Project>>) -> Vec<u8> {
+    pub fn frame(&mut self, req: &FrameRequest, session: &Arc<Mutex<Session>>) -> Vec<u8> {
         let (w, h) = (req.width.max(1), req.height.max(1));
         self.resize(w, h);
 
         // --- gather under the project lock (cheap): bed + per-object models ---
         let (bmin, bmax, draws, boxes, gizmo, basis, drag_pre, active_plate_id, tower_geom) = {
-            let p = project.lock().unwrap();
+            let s = session.lock().unwrap();
             // Reconcile the GPU mesh cache with the Project's live registry.
             // Deleted objects, cut pieces, and re-cuts orphan their meshes (the
             // Project GCs them via prune_orphan_meshes), but this cache only ever
             // grew — leaking vertex+index buffers for the session. Every entry is
             // uploaded from `p.meshes`, so the registry keyset is the exact live
             // set; drop anything no longer in it. Once per frame, lock held.
-            self.meshes.retain(|id, _| p.meshes.contains_key(id));
-            let plate = p.active_plate();
+            self.meshes.retain(|id, _| s.project.meshes.contains_key(id));
+            let plate = s.project.active_plate();
+            let plate_rt = s.active_plate_runtime();
+            let selection = &plate_rt.selection;
             let active_plate_id = plate.id;
-            let (bmin, bmax) = plate
-                .scene
+            let (bmin, bmax) = plate_rt
                 .bed
                 .as_ref()
                 .map(|b| (b.extents.min, b.extents.max))
@@ -1414,7 +1417,7 @@ impl ViewportRenderer {
             // cap. Holes ride the object's mesh draws only, not its pegs.
             let mut draws: Vec<(MeshId, usize, Mat4, [f32; 3], bool, Vec<[f32; 12]>)> = Vec::new();
             // Scale-gizmo basis follows the object's orientation (world for multi).
-            let basis = selection_basis(&p);
+            let basis = selection_basis(&s);
             // Local drag preview: the active grab + cursor resolve (Rust-side) to a
             // world pre-multiply applied to the whole selection this frame only.
             let (drag_pre, drag_ids): (Mat4, Vec<u64>) = match &req.gizmo_drag {
@@ -1428,7 +1431,7 @@ impl ViewportRenderer {
                         .scene
                         .objects
                         .iter()
-                        .filter(|(id, o)| o.visible && plate.scene.selection.contains(id))
+                        .filter(|(id, o)| o.visible && selection.contains(id))
                         .map(|(id, _)| id.0)
                         .collect();
                     (pre, ids)
@@ -1441,7 +1444,7 @@ impl ViewportRenderer {
                     continue;
                 }
                 if !self.meshes.contains_key(&obj.mesh) {
-                    match p.meshes.get(&obj.mesh) {
+                    match s.project.meshes.get(&obj.mesh) {
                         Some(m) => {
                             self.meshes.insert(obj.mesh, upload_mesh(&self.device, m));
                         }
@@ -1459,7 +1462,7 @@ impl ViewportRenderer {
                 if dragging && drag_ids.contains(&id.0) {
                     model = drag_pre * model;
                 }
-                let selected = plate.scene.selection.contains(id);
+                let selected = selection.contains(id);
                 // Cut-hole decals for this object's cap (object-local), packed for
                 // the shader. Capped at MAX_HOLES; a fuller cut logs the overflow.
                 let markers = plate.scene.object_hole_markers.get(id);
@@ -1514,7 +1517,7 @@ impl ViewportRenderer {
                         continue;
                     }
                     if !self.meshes.contains_key(&m.mesh) {
-                        if let Some(mesh) = p.meshes.get(&m.mesh) {
+                        if let Some(mesh) = s.project.meshes.get(&m.mesh) {
                             self.meshes.insert(m.mesh, upload_mesh(&self.device, mesh));
                         }
                     }
@@ -1535,16 +1538,16 @@ impl ViewportRenderer {
             // the live (drag-previewed) bounds. They're the affordance for the
             // no-tool XY-plane move, so they're hidden once a gizmo is active.
             let boxes = (req.gizmo == GizmoMode::None && req.cut.is_none())
-                .then(|| selection_world_aabb(&p, &drag_ids, drag_pre))
+                .then(|| selection_world_aabb(&s, &drag_ids, drag_pre))
                 .flatten()
                 .map(|(mn, mx)| vec![(Mat4::IDENTITY, mn.to_array(), mx.to_array())])
                 .unwrap_or_default();
             // The gizmo is sized + placed from the *resting* selection (no drag
             // preview) so it holds a fixed size through a drag.
-            let gizmo = selection_gizmo(&p);
+            let gizmo = selection_gizmo(&s);
             // Resolve the active plate's tower placement here (cached) so it's
             // drawn this frame — no async frontend round-trip.
-            let tower_geom = self.resolved_tower(&p, active_plate_id);
+            let tower_geom = self.resolved_tower(&s.project, active_plate_id);
             (
                 bmin, bmax, draws, boxes, gizmo, basis, drag_pre, active_plate_id,
                 tower_geom,
@@ -2035,12 +2038,12 @@ impl ViewportRenderer {
     /// transparent background, no bed/grid/gizmo/tower — to `size`x`size` RGBA.
     /// Mirrors the previous `renderModelThumbnail` (the frontend encodes it to a
     /// PNG). Returns a transparent image when there's nothing to show.
-    pub fn thumbnail(&mut self, size: u32, project: &Arc<Mutex<Project>>) -> Vec<u8> {
+    pub fn thumbnail(&mut self, size: u32, session: &Arc<Mutex<Session>>) -> Vec<u8> {
         let size = size.max(1);
         let empty = || vec![0u8; (size * size * 4) as usize];
         let (draws, center, radius) = {
-            let p = project.lock().unwrap();
-            let plate = p.active_plate();
+            let s = session.lock().unwrap();
+            let plate = s.project.active_plate();
             let instance = plate.printer_instance_id().and_then(instance_registry::lookup_instance);
             let mut draws: Vec<(MeshId, usize, Mat4, [f32; 3])> = Vec::new();
             let mut mn = Vec3::splat(f32::MAX);
@@ -2050,7 +2053,7 @@ impl ViewportRenderer {
                     continue;
                 }
                 if !self.meshes.contains_key(&obj.mesh) {
-                    if let Some(m) = p.meshes.get(&obj.mesh) {
+                    if let Some(m) = s.project.meshes.get(&obj.mesh) {
                         self.meshes.insert(obj.mesh, upload_mesh(&self.device, m));
                     }
                 }
@@ -2058,7 +2061,7 @@ impl ViewportRenderer {
                     continue;
                 };
                 let model = obj.transform.to_mat4();
-                if let Some(m) = p.meshes.get(&obj.mesh) {
+                if let Some(m) = s.project.meshes.get(&obj.mesh) {
                     for c in mesh_bb_corners(&m.bounding_box) {
                         let w = model.transform_point3(c);
                         mn = mn.min(w);
@@ -2224,7 +2227,7 @@ pub struct ViewportState(pub Mutex<Option<ViewportRenderer>>);
 #[tauri::command]
 pub fn viewport_frame(
     state: tauri::State<'_, ViewportState>,
-    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    project: tauri::State<'_, Arc<Mutex<Session>>>,
     req: FrameRequest,
 ) -> tauri::ipc::Response {
     let mut guard = state.0.lock().unwrap();
@@ -2263,7 +2266,7 @@ pub fn store_plate_tower_mesh(
 #[tauri::command]
 pub fn viewport_move_tower(
     state: tauri::State<'_, ViewportState>,
-    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    project: tauri::State<'_, Arc<Mutex<Session>>>,
     x: f32,
     y: f32,
 ) -> Option<(f32, f32)> {
@@ -2272,7 +2275,7 @@ pub fn viewport_move_tower(
     let r = guard.as_mut()?;
     let (id, _geom, bed_min, bed_max, fp) = {
         let p = project.lock().unwrap();
-        r.tower_drag_ctx(&p)? // no tower / no bed → nothing to move
+        r.tower_drag_ctx(&p.project)? // no tower / no bed → nothing to move
     };
     let (cx, cy) = clamp_tower_corner(
         fp,
@@ -2292,7 +2295,7 @@ pub fn viewport_move_tower(
 #[tauri::command]
 pub fn viewport_tower_grab(
     state: tauri::State<'_, ViewportState>,
-    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    project: tauri::State<'_, Arc<Mutex<Session>>>,
     bx: f32,
     by: f32,
 ) -> Option<(f32, f32)> {
@@ -2301,7 +2304,7 @@ pub fn viewport_tower_grab(
     let r = guard.as_mut()?;
     let (id, geom, bed_min, bed_max, fp) = {
         let p = project.lock().unwrap();
-        r.tower_drag_ctx(&p)?
+        r.tower_drag_ctx(&p.project)?
     };
     // The same effective (drag-or-clamped) corner `frame` draws, so a click on
     // the visible tower hits even when its resolved origin is off-bed.
@@ -2330,7 +2333,7 @@ pub fn viewport_invalidate_tower(state: tauri::State<'_, ViewportState>) {
 #[tauri::command]
 pub fn viewport_thumbnail(
     state: tauri::State<'_, ViewportState>,
-    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    project: tauri::State<'_, Arc<Mutex<Session>>>,
     size: u32,
 ) -> tauri::ipc::Response {
     let mut guard = state.0.lock().unwrap();
@@ -2347,11 +2350,10 @@ pub struct SceneInfo {
 }
 
 #[tauri::command]
-pub fn viewport_scene_info(project: tauri::State<'_, Arc<Mutex<Project>>>) -> SceneInfo {
+pub fn viewport_scene_info(project: tauri::State<'_, Arc<Mutex<Session>>>) -> SceneInfo {
     let p = project.lock().unwrap();
     let (min, max) = p
-        .active_plate()
-        .scene
+        .active_plate_runtime()
         .bed
         .as_ref()
         .map(|b| (b.extents.min, b.extents.max))
@@ -2372,7 +2374,7 @@ pub struct GizmoInfo {
 }
 
 #[tauri::command]
-pub fn viewport_gizmo(project: tauri::State<'_, Arc<Mutex<Project>>>) -> Option<GizmoInfo> {
+pub fn viewport_gizmo(project: tauri::State<'_, Arc<Mutex<Session>>>) -> Option<GizmoInfo> {
     let p = project.lock().unwrap();
     let (c, l) = selection_gizmo(&p)?;
     Some(GizmoInfo { center: c.to_array(), length: l })
@@ -2400,7 +2402,7 @@ pub struct GrabRequest {
 /// the grab's handle `idx`).
 #[tauri::command]
 pub fn viewport_grab(
-    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    project: tauri::State<'_, Arc<Mutex<Session>>>,
     req: GrabRequest,
 ) -> GrabResult {
     let p = project.lock().unwrap();
@@ -2408,7 +2410,8 @@ pub fn viewport_grab(
     let center = Vec3::from(req.center);
     let (ro, rd) = cursor_ray(w, h, req.x, req.y, req.az, req.el, req.dist, center);
     let eye = cam_eye(req.az, req.el, req.dist, center);
-    let plate = p.active_plate();
+    let plate = p.project.active_plate();
+    let selection = &p.active_plate_runtime().selection;
 
     if req.gizmo != GizmoMode::None {
         if let Some(grab) = pick_gizmo(&p, ro, rd, eye, req.gizmo) {
@@ -2419,8 +2422,8 @@ pub fn viewport_grab(
         // returns `Empty` so the frontend can still drag the priming tower (the
         // tower is an overlay, not a scene object — it must be draggable in any
         // gizmo mode, same as with no gizmo).
-        return match nearest_hit(&p, ro, rd) {
-            Some((id, _, _)) if plate.scene.selection.contains(&id) => GrabResult::Inert,
+        return match nearest_hit(&p.project, ro, rd) {
+            Some((id, _, _)) if selection.contains(&id) => GrabResult::Inert,
             Some(_) => GrabResult::Orbit,
             None => GrabResult::Empty,
         };
@@ -2429,8 +2432,8 @@ pub fn viewport_grab(
     // No gizmo: pressing a selected object free-moves the selection on its XY
     // plane (a Move grab with no axis constraint); an unselected object orbits
     // (selection happens on click); empty space → frontend checks the tower.
-    match nearest_hit(&p, ro, rd) {
-        Some((id, _, _)) if plate.scene.selection.contains(&id) => {
+    match nearest_hit(&p.project, ro, rd) {
+        Some((id, _, _)) if selection.contains(&id) => {
             let plane_z = plate.scene.objects.get(&id).map_or(0.0, |o| o.transform.to_mat4().w_axis.z);
             let plane_n = Vec3::Z;
             let plane_p = Vec3::new(0.0, 0.0, plane_z);
@@ -2484,7 +2487,7 @@ pub struct TransformUpdate {
 /// mutation + events stay in the scene layer). Read-only on the project.
 #[tauri::command]
 pub fn viewport_gizmo_commit(
-    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    project: tauri::State<'_, Arc<Mutex<Session>>>,
     req: CommitRequest,
 ) -> Vec<TransformUpdate> {
     let p = project.lock().unwrap();
@@ -2495,12 +2498,13 @@ pub fn viewport_gizmo_commit(
     );
     let eye = cam_eye(req.az, req.el, req.dist, cam_center);
     let pre = compute_pre(&req.grab, ro, rd, eye, cam_center, req.shift);
-    let plate = p.active_plate();
+    let plate = p.project.active_plate();
+    let selection = &p.active_plate_runtime().selection;
     plate
         .scene
         .objects
         .iter()
-        .filter(|(id, o)| o.visible && plate.scene.selection.contains(id))
+        .filter(|(id, o)| o.visible && selection.contains(id))
         .map(|(id, o)| TransformUpdate {
             id: id.0,
             transform: (pre * o.transform.to_mat4()).to_cols_array(),
@@ -2619,7 +2623,7 @@ pub struct CutPlaceRequest {
 
 #[tauri::command]
 pub fn viewport_cut_place(
-    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    project: tauri::State<'_, Arc<Mutex<Session>>>,
     req: CutPlaceRequest,
 ) -> Option<[f32; 3]> {
     let p = project.lock().ok()?;
@@ -2638,13 +2642,13 @@ pub fn viewport_cut_place(
     // the cross-section don't place. The cut expands groups; match that target set.
     let want: Vec<ObjectId> = req.ids.iter().map(|i| ObjectId(*i)).collect();
     let ids: std::collections::HashSet<u64> =
-        p.group_expanded_ids(&want).iter().map(|i| i.0).collect();
-    let plate = p.active_plate();
+        p.project.group_expanded_ids(&want).iter().map(|i| i.0).collect();
+    let plate = p.project.active_plate();
     for (id, obj) in plate.scene.objects.iter() {
         if !obj.visible || !ids.contains(&id.0) {
             continue;
         }
-        let Some(m) = p.meshes.get(&obj.mesh) else { continue };
+        let Some(m) = p.project.meshes.get(&obj.mesh) else { continue };
         let model = obj.transform.to_mat4();
         let vert = |vi: u32| {
             let i = vi as usize * 3;
@@ -2727,7 +2731,7 @@ pub struct PickRequest {
 /// `scene_select`/`scene_deselect`.
 #[tauri::command]
 pub fn viewport_pick(
-    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    project: tauri::State<'_, Arc<Mutex<Session>>>,
     req: PickRequest,
 ) -> Option<u64> {
     viewport_pick_face(project, req).map(|f| f.id)
@@ -2746,13 +2750,13 @@ pub struct FacePick {
 
 #[tauri::command]
 pub fn viewport_pick_face(
-    project: tauri::State<'_, Arc<Mutex<Project>>>,
+    project: tauri::State<'_, Arc<Mutex<Session>>>,
     req: PickRequest,
 ) -> Option<FacePick> {
     let p = project.lock().unwrap();
     let (w, h) = (req.width.max(1) as f32, req.height.max(1) as f32);
     let (ro, rd) = cursor_ray(w, h, req.x, req.y, req.az, req.el, req.dist, Vec3::from(req.center));
-    nearest_hit(&p, ro, rd).map(|(id, normal, point)| FacePick {
+    nearest_hit(&p.project, ro, rd).map(|(id, normal, point)| FacePick {
         id: id.0,
         normal: normal.to_array(),
         point: point.to_array(),
