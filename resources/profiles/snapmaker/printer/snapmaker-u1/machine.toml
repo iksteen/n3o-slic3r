@@ -111,19 +111,19 @@ TIMELAPSE_STOP
 '''
 machine_load_filament_time = "0"
 machine_max_acceleration_e = "5000,5000"
-machine_max_acceleration_extruding = "25000,25000"
+machine_max_acceleration_extruding = "20000,20000"
 machine_max_acceleration_retracting = "5000,5000"
-machine_max_acceleration_travel = "25000,25000"
-machine_max_acceleration_x = "25000,25000"
-machine_max_acceleration_y = "25000,25000"
+machine_max_acceleration_travel = "20000,20000"
+machine_max_acceleration_x = "20000,20000"
+machine_max_acceleration_y = "20000,20000"
 machine_max_acceleration_z = "500,200"
 machine_max_jerk_e = "2.5,2.5"
 machine_max_jerk_x = "9,9"
 machine_max_jerk_y = "9,9"
 machine_max_jerk_z = "3,0.4"
 machine_max_speed_e = "30,25"
-machine_max_speed_x = "1000,200"
-machine_max_speed_y = "1000,200"
+machine_max_speed_x = "500,200"
+machine_max_speed_y = "500,200"
 machine_max_speed_z = "20,12"
 machine_min_extruding_rate = "0,0"
 machine_min_travel_rate = "0,0"
@@ -142,6 +142,7 @@ M104 T{initial_extruder} S140
 M204 S10000
 
 G28 X Y
+DEFECT_DETECT_NOODLE_FIRST
 ;===== 床面异物检测 ========
 T{initial_extruder}
 G90
@@ -221,7 +222,8 @@ G1 X110 E15 F360
 G1 Z1.5
 
 G90
-M106 S0'''
+M106 S0
+'''
 machine_tool_change_time = "5"
 machine_unload_filament_time = "0"
 max_resonance_avoidance_speed = "90"

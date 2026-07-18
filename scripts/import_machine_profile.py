@@ -52,6 +52,7 @@ import argparse
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -524,6 +525,41 @@ def _read_preserved_machine_scalars(
     return preserved
 
 
+def load_profile_overrides(path: Path) -> tuple[dict, dict]:
+    '''Read the optional `machine.override.toml` beside the generated
+    profile; return (machine_overrides, nozzle_overrides_by_sku).
+
+    The import rewrites machine.toml / nozzles/*.toml verbatim from the
+    upstream OrcaSlicer profiles on every re-pin, so any deliberate
+    divergence from upstream — a value upstream ships wrong, or a block
+    we customize — is otherwise clobbered. This file is the durable home
+    for those divergences: the caller splats its values over the freshly
+    built profile before writing.
+
+    Layout:
+        [machine]                     # -> machine.toml
+        machine_start_gcode = """..."""
+
+        [nozzles._all]                # -> every nozzles/<sku>.toml
+        nozzle_type = "hardened_steel"
+
+        [nozzles."0.4"]               # -> nozzles/0.4.toml only (wins over _all)
+        retraction_length = "1.5"
+
+    Values should be strings to match the emitted profile (which quotes
+    every scalar); `_all` is returned under that literal key for the
+    caller to merge per-sku.'''
+    if not path.exists():
+        return {}, {}
+    with path.open("rb") as f:
+        doc = tomllib.load(f)
+    machine = doc.get("machine", {})
+    nozzles = doc.get("nozzles", {})
+    if not isinstance(machine, dict) or not isinstance(nozzles, dict):
+        sys.exit(f"error: {path}: [machine] and [nozzles] must be tables")
+    return machine, nozzles
+
+
 def write_nozzle_profile(path: Path, kv: dict, *, sku: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # Upstream `default_filament_profile` carries an `@<printer>`
@@ -688,6 +724,26 @@ def main() -> None:
                     base_machine["default_bed_type"] = v
 
     nozzle_profiles = {sku: build_nozzle_profile(flat[sku]) for sku in flat}
+
+    # Splat deliberate divergences from upstream over the fresh import.
+    # See `load_profile_overrides` — this is what keeps our corrections
+    # (e.g. the U1 start gcode's pre-print noodle-detection baseline) from
+    # being clobbered on every re-pin.
+    ov_machine, ov_nozzles = load_profile_overrides(
+        args.toml_out / args.slug / "machine.override.toml"
+    )
+    if ov_machine:
+        base_machine.update(ov_machine)
+        print(f"override: {len(ov_machine)} machine key(s): {', '.join(sorted(ov_machine))}")
+    all_nozzle = ov_nozzles.get("_all", {})
+    unknown_sku = set(ov_nozzles) - set(nozzle_profiles) - {"_all"}
+    if unknown_sku:
+        sys.exit(f"error: machine.override.toml targets unknown nozzle(s): {sorted(unknown_sku)}")
+    for sku in nozzle_profiles:
+        merged = {**all_nozzle, **ov_nozzles.get(sku, {})}
+        if merged:
+            nozzle_profiles[sku].update(merged)
+            print(f"override: {len(merged)} key(s) on nozzle {sku}: {', '.join(sorted(merged))}")
 
     # Emit TOML.
     source_root = f"{args.root}/{args.vendor}/machine/"
