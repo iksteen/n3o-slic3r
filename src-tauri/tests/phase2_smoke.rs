@@ -224,6 +224,7 @@ fn step_6_auto_arrange_then_oob_clear_under_active_printer() {
         &session.project,
         &bed,
         n3o_slic3r_lib::core::scene::arrange::ArrangeOptions::default(),
+        session.active_plate_instance().as_ref(),
     );
     assert!(plan.un_placed.is_empty(), "6 small cubes should fit");
     let (events, _) = n3o_slic3r_lib::core::scene::arrange::apply_arrangement(&mut session, plan);

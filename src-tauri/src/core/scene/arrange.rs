@@ -19,6 +19,7 @@
 use super::bed::BedMesh;
 use super::state::{GroupId, ObjectId};
 use super::transform::Transform;
+use crate::core::printer::PrinterInstance;
 use crate::core::project::{PlateId, Project, Session};
 use glam::Vec3;
 use std::collections::HashMap;
@@ -50,28 +51,6 @@ impl Default for ArrangeOptions {
     }
 }
 
-/// Whether the plate's bound printer is an i3/bed-slinger structure —
-/// OrcaSlicer enables the nester's `align_to_y_axis` for those so long
-/// items line up with the moving bed's travel axis. Derived, not a
-/// user option (matching Orca, which sets it from `printer_structure`).
-fn plate_printer_is_i3(state: &Project) -> bool {
-    let Some(instance_id) = state.active_plate().printer_instance_id() else {
-        return false;
-    };
-    let Some(instance) = crate::core::printer::lookup_instance(instance_id) else {
-        return false;
-    };
-    crate::core::profile_library::load_printer_fragment(&instance.printer_fragment_slug)
-        .and_then(|cascade| {
-            cascade
-                .rules
-                .iter()
-                .find(|r| r.is_default())
-                .and_then(|r| r.set.get("printer_structure").cloned())
-        })
-        .is_some_and(|s| s == "i3")
-}
-
 /// Outcome of one auto-arrange pass.
 pub struct ArrangeResult {
     /// Objects that fit on the current plate, with their new transforms.
@@ -98,7 +77,12 @@ pub struct SpilledObject {
 /// Compute a packing without mutating the scene. Pure function so the
 /// caller can decide whether to apply the result (e.g., test code
 /// vs. a user-facing "preview" flow).
-pub fn plan_arrangement(state: &Project, bed: &BedMesh, opts: ArrangeOptions) -> ArrangeResult {
+pub fn plan_arrangement(
+    state: &Project,
+    bed: &BedMesh,
+    opts: ArrangeOptions,
+    instance: Option<&PrinterInstance>,
+) -> ArrangeResult {
     let plate = &state.active_plate().scene;
 
     // Group visible objects into arrange units: one per group (kept rigid),
@@ -201,7 +185,7 @@ pub fn plan_arrangement(state: &Project, bed: &BedMesh, opts: ArrangeOptions) ->
         bed_size,
         opts.spacing_mm as f64,
         opts.allow_rotations,
-        plate_printer_is_i3(state),
+        instance.is_some_and(PrinterInstance::is_i3),
     ) {
         Ok(p) => p,
         Err(e) => {
@@ -533,7 +517,12 @@ mod tests {
         session.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut session, 10, 20.0);
         let bed = session.active_plate_runtime().bed.clone().unwrap();
-        let plan = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
+        let plan = plan_arrangement(
+            &session.project,
+            &bed,
+            ArrangeOptions::default(),
+            session.active_plate_instance().as_ref(),
+        );
         assert_eq!(plan.placed.len(), 10);
         assert!(plan.un_placed.is_empty());
         assert!(
@@ -548,7 +537,12 @@ mod tests {
         session.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut session, 100, 30.0);
         let bed = session.active_plate_runtime().bed.clone().unwrap();
-        let plan = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
+        let plan = plan_arrangement(
+            &session.project,
+            &bed,
+            ArrangeOptions::default(),
+            session.active_plate_instance().as_ref(),
+        );
         assert!(!plan.placed.is_empty(), "some fit the first plate");
         assert!(!plan.spilled.is_empty(), "the rest spill to extra beds");
         // 30mm cubes all fit *some* bed, so nothing is truly un-placeable.
@@ -601,7 +595,12 @@ mod tests {
         };
         let bed = derive_bed(session.project.active_plate()).unwrap();
 
-        let plan = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
+        let plan = plan_arrangement(
+            &session.project,
+            &bed,
+            ArrangeOptions::default(),
+            session.active_plate_instance().as_ref(),
+        );
         assert!(!plan.placed.is_empty(), "cubes should pack onto the plate");
         // Crowding this many cubes overflows the bed, so the pack should spill —
         // letting us prove the tower is reserved on the extra beds too, not just
@@ -659,7 +658,12 @@ mod tests {
         add_n_cubes(&mut session, 100, 30.0);
         assert_eq!(session.project.plates.len(), 1);
         let bed = session.active_plate_runtime().bed.clone().unwrap();
-        let plan = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
+        let plan = plan_arrangement(
+            &session.project,
+            &bed,
+            ArrangeOptions::default(),
+            session.active_plate_instance().as_ref(),
+        );
         assert!(!plan.spilled.is_empty());
         let (_events, un_placed) = apply_arrangement(&mut session, plan);
         assert!(un_placed.is_empty());
@@ -688,7 +692,12 @@ mod tests {
         session.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut session, 6, 25.0);
         let bed = session.active_plate_runtime().bed.clone().unwrap();
-        let plan = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
+        let plan = plan_arrangement(
+            &session.project,
+            &bed,
+            ArrangeOptions::default(),
+            session.active_plate_instance().as_ref(),
+        );
         let (events, un_placed) = apply_arrangement(&mut session, plan);
         assert!(un_placed.is_empty());
         // No OOB events should have fired.
@@ -710,7 +719,12 @@ mod tests {
         session.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut session, 4, 30.0);
         let bed = session.active_plate_runtime().bed.clone().unwrap();
-        let plan1 = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
+        let plan1 = plan_arrangement(
+            &session.project,
+            &bed,
+            ArrangeOptions::default(),
+            session.active_plate_instance().as_ref(),
+        );
         let _ = apply_arrangement(&mut session, plan1);
         // Snapshot the placed transforms.
         let after_first: Vec<(ObjectId, Transform)> = session
@@ -722,7 +736,12 @@ mod tests {
             .map(|(id, o)| (*id, o.transform))
             .collect();
 
-        let plan2 = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
+        let plan2 = plan_arrangement(
+            &session.project,
+            &bed,
+            ArrangeOptions::default(),
+            session.active_plate_instance().as_ref(),
+        );
         let _ = apply_arrangement(&mut session, plan2);
         let after_second: Vec<(ObjectId, Transform)> = session
             .project
@@ -761,7 +780,12 @@ mod tests {
         session.set_active_printer(Some(&printer));
         add_n_cubes(&mut session, 3, 30.0);
         let bed = session.active_plate_runtime().bed.clone().unwrap();
-        let plan = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
+        let plan = plan_arrangement(
+            &session.project,
+            &bed,
+            ArrangeOptions::default(),
+            session.active_plate_instance().as_ref(),
+        );
         // Every placed cube's XY bbox should clear the zone.
         for (id, xform) in &plan.placed {
             let obj_clone = SceneObject {
@@ -841,7 +865,12 @@ mod tests {
         let rel_before = origin(&session.project, b) - origin(&session.project, a);
 
         let bed = session.active_plate_runtime().bed.clone().unwrap();
-        let plan = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
+        let plan = plan_arrangement(
+            &session.project,
+            &bed,
+            ArrangeOptions::default(),
+            session.active_plate_instance().as_ref(),
+        );
         let _ = apply_arrangement(&mut session, plan);
 
         let rel_after = origin(&session.project, b) - origin(&session.project, a);
@@ -864,7 +893,12 @@ mod tests {
         bed.extents.min = [-90.0, -90.0, 0.0];
         bed.extents.max = [90.0, 90.0, 180.0];
 
-        let plan = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
+        let plan = plan_arrangement(
+            &session.project,
+            &bed,
+            ArrangeOptions::default(),
+            session.active_plate_instance().as_ref(),
+        );
         let placed_ids: Vec<ObjectId> = plan.placed.iter().map(|(id, _)| *id).collect();
         let _ = apply_arrangement(&mut session, plan);
         assert!(

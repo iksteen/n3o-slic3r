@@ -160,6 +160,22 @@ impl PrinterInstance {
             .count();
         (ams_slots / AMS_SLOTS_PER_UNIT) as u32
     }
+
+    /// Whether this printer is an i3/bed-slinger structure, read from the
+    /// `printer_structure` machine setting on its bound fragment. The nester
+    /// aligns long items to the Y (bed-travel) axis for these — OrcaSlicer's
+    /// `align_to_y_axis`. A model/fragment property, not user config.
+    pub fn is_i3(&self) -> bool {
+        crate::core::profile_library::load_printer_fragment(&self.printer_fragment_slug)
+            .and_then(|cascade| {
+                cascade
+                    .rules
+                    .iter()
+                    .find(|r| r.is_default())
+                    .and_then(|r| r.set.get("printer_structure").cloned())
+            })
+            .is_some_and(|s| s == "i3")
+    }
 }
 
 /// Display label for an extruder, given its 0-based position and the

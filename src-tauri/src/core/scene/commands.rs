@@ -537,7 +537,8 @@ pub fn scene_auto_arrange(
         return Ok(vec![]);
     };
     let plate_id = s.project.active_plate().id;
-    let plan = super::arrange::plan_arrangement(&s.project, &bed, opts);
+    let plan =
+        super::arrange::plan_arrangement(&s.project, &bed, opts, s.active_plate_instance().as_ref());
     let (mut events, un_placed) = super::arrange::apply_arrangement(&mut s, plan);
     s.reconcile(); // spill may have added plates → derive their beds
     drop(s);
@@ -626,7 +627,12 @@ pub fn scene_object_clone(
             let mut hit_cap = true;
             for _ in 0..MAX_COPIES {
                 let (batch, evs) = session.project.clone_objects(&ids, 1, instance.as_ref());
-                let plan = super::arrange::plan_arrangement(&session.project, bed, opts);
+                let plan = super::arrange::plan_arrangement(
+                    &session.project,
+                    bed,
+                    opts,
+                    session.active_plate_instance().as_ref(),
+                );
                 if plan.spilled.is_empty() && plan.un_placed.is_empty() {
                     events.extend(evs);
                     kept_ids.extend(batch);
