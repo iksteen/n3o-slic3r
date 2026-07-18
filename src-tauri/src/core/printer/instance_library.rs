@@ -7,15 +7,20 @@
 //! `instance_registry` falls back to this in-memory set so the wide
 //! test surface doesn't need temp-library plumbing per test.
 //!
-//! Two fixtures, one per MVP printer family. Adding more would mean
-//! widening every consumer test that asserts on a specific shape
-//! (slot counts, AMS topology); the user-library path is the right
-//! place for a third printer in production.
+//! Three fixtures spanning the routing shapes a test might need. In
+//! production the user-library path adds printers; here they're just enough
+//! to exercise AMS, firmware-routed toolchanger, and plain single-extruder
+//! paths without temp-library plumbing.
 //!
 //! - **Bambi** — Bambu A1 mini, 0.4mm stainless steel nozzle, Cool Plate
 //!   SuperTack bed. Single extruder × 5 slots (4 AMS + 1 Ext).
 //! - **Snappy** — Snapmaker U1, 4 extruders × 1 slot each, 0.4mm
-//!   stainless steel nozzle per toolhead. Textured PEI bed.
+//!   stainless steel nozzle per toolhead. Textured PEI bed. Firmware-routed
+//!   (`driver_kind = U1`) → the per-material MAP_TABLE path, not slot-fan.
+//! - **Bender** — Creality Ender-3 S1 (Klipper): the plain baseline. One
+//!   extruder × one Direct slot, no AMS, not a toolchanger, not
+//!   firmware-routed. The "just needs a bound printer" fixture, free of
+//!   AMS / U1 routing special-casing.
 
 use super::instance::{
     BedRef, ExtruderState, FeedKind, NozzleMaterial, NozzleSku, PrinterInstance, SlotBinding,
@@ -27,12 +32,14 @@ use super::instance::{
 /// library happens to hold.
 pub const BAMBI_ID: &str = "bambi";
 pub const SNAPPY_ID: &str = "snappy";
+pub const BENDER_ID: &str = "bender";
 
 /// In-memory fixture set the registry falls back to when no storage
 /// root has been registered — i.e. in tests. Built fresh every call
-/// so test setups can produce a clean reset list.
+/// so test setups can produce a clean reset list. Bambi stays first so
+/// `with_preferred_printer(None)` keeps binding it as the default.
 pub fn bundled_instances() -> Vec<PrinterInstance> {
-    vec![bambi(), snappy()]
+    vec![bambi(), snappy(), bender()]
 }
 
 /// Reverse lookup: given a vendor profile ref (e.g.
@@ -52,6 +59,7 @@ pub fn instance_id_for_vendor_profile(vendor_profile_ref: &str) -> Option<&'stat
         .map(|i| match i.id.as_str() {
             "bambi" => BAMBI_ID,
             "snappy" => SNAPPY_ID,
+            "bender" => BENDER_ID,
             _ => unreachable!(),
         })
 }
@@ -173,6 +181,38 @@ fn snappy() -> PrinterInstance {
     }
 }
 
+fn bender() -> PrinterInstance {
+    // Ender-3 S1 Klipper: one Direct-fed extruder, no AMS. `driver_kind` is
+    // Moonraker (not U1), so it's neither firmware-routed nor a toolchanger —
+    // multi-material collapses onto the single toolhead (all `T0`).
+    PrinterInstance {
+        id: BENDER_ID.to_owned(),
+        display_name: "Bender".to_owned(),
+        vendor_profile_ref: "creality-ender-3-s1-klipper".to_owned(),
+        printer_fragment_slug: "creality-ender-3-s1-klipper".to_owned(),
+        default_filament_fragment_slug: "generic-pla".to_owned(),
+        quality_profile: "0.20mm-standard".to_owned(),
+        connection: None,
+        extruders: vec![ExtruderState {
+            installed_nozzle: NozzleSku {
+                diameter: "0.4".to_string(),
+                material: NozzleMaterial::Brass,
+            },
+            slots: vec![SlotBinding {
+                feed: FeedKind::Direct,
+                filament_identity: Some("generic-pla".to_owned()),
+                color: Some("#22c55e".to_owned()),
+                tag_uid: None,
+            }],
+        }],
+        bed: BedRef {
+            identity: "Textured PEI Plate".to_owned(),
+        },
+        config_overrides: Default::default(),
+        send_options: Default::default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,14 +220,29 @@ mod tests {
     use crate::core::printer::lookup_instance;
 
     #[test]
-    fn bundled_set_is_bambi_then_snappy() {
+    fn bundled_set_is_bambi_snappy_bender() {
         let _registry = RegistryGuard::acquire();
         let instances = bundled_instances();
-        assert_eq!(instances.len(), 2);
+        assert_eq!(instances.len(), 3);
         assert_eq!(instances[0].id, BAMBI_ID);
         assert_eq!(instances[0].display_name, "Bambi");
         assert_eq!(instances[1].id, SNAPPY_ID);
         assert_eq!(instances[1].display_name, "Snappy");
+        assert_eq!(instances[2].id, BENDER_ID);
+        assert_eq!(instances[2].display_name, "Bender");
+    }
+
+    #[test]
+    fn bender_is_single_extruder_no_ams_not_firmware_routed() {
+        use crate::core::printer::FeedKind;
+        let _registry = RegistryGuard::acquire();
+        let b = lookup_instance(BENDER_ID).expect("bender present");
+        assert_eq!(b.vendor_profile_ref, "creality-ender-3-s1-klipper");
+        // One extruder, one Direct slot — no AMS, not a toolchanger.
+        assert_eq!(b.extruders.len(), 1);
+        assert_eq!(b.extruders[0].slots.len(), 1);
+        assert_eq!(b.extruders[0].slots[0].feed, FeedKind::Direct);
+        assert_eq!(b.bed.identity, "Textured PEI Plate");
     }
 
     #[test]
