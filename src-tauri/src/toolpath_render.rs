@@ -282,23 +282,23 @@ impl ToolpathRenderer {
                 compilation_options: Default::default(),
                 buffers: &[
                     // 0: template (per-vertex)
-                    wgpu::VertexBufferLayout {
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<Tmpl>() as u64,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &wgpu::vertex_attr_array![0 => Float32x4],
-                    },
+                    }),
                     // 1: geometry (per-instance)
-                    wgpu::VertexBufferLayout {
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<Geo>() as u64,
                         step_mode: wgpu::VertexStepMode::Instance,
                         attributes: &wgpu::vertex_attr_array![1 => Float32x3, 2 => Float32x3, 3 => Float32x2, 4 => Float32],
-                    },
+                    }),
                     // 2: color (per-instance)
-                    wgpu::VertexBufferLayout {
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: (3 * std::mem::size_of::<f32>()) as u64,
                         step_mode: wgpu::VertexStepMode::Instance,
                         attributes: &wgpu::vertex_attr_array![5 => Float32x3],
-                    },
+                    }),
                 ],
             },
             fragment: Some(wgpu::FragmentState {
@@ -339,11 +339,11 @@ impl ToolpathRenderer {
                 module: &grid_shader,
                 entry_point: Some("vs"),
                 compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
+                buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: (3 * std::mem::size_of::<f32>()) as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                }],
+                })],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &grid_shader,

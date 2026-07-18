@@ -32,6 +32,7 @@ pub fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                ..Default::default()
             }))
             .expect("wgpu: no adapter");
             let info = adapter.get_info();
@@ -102,7 +103,9 @@ pub fn read_rgba(device: &wgpu::Device, readback: &wgpu::Buffer, padded_bpr: u32
     if !matches!(rx.try_recv(), Ok(Ok(()))) {
         return blank;
     }
-    let mapped = slice.get_mapped_range();
+    let Ok(mapped) = slice.get_mapped_range() else {
+        return blank;
+    };
     let mut out = vec![0u8; row * h as usize];
     for y in 0..h as usize {
         let src = y * padded_bpr as usize;
