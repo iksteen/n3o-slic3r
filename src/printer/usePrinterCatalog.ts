@@ -10,7 +10,7 @@ import { defineQuery, useQuery } from "../state/queryCache";
 /** Stable empty reference for the pre-first-fetch window. */
 const NO_ENTRIES: PrinterCatalogEntry[] = [];
 
-export const printerCatalogQuery = defineQuery<PrinterCatalogEntry[]>({
+const printerCatalogQuery = defineQuery<PrinterCatalogEntry[]>({
   key: "printer_catalog",
   fetch: () => printerCatalog(),
   invalidateOn: [],

@@ -9,7 +9,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 /** Per-slot feed kind — drives the per-extruder feed-mix gate.
  *  Mirrors `core::printer::instance::FeedKind`. */
-export type FeedKind = "direct" | "ams";
+type FeedKind = "direct" | "ams";
 
 /** Pointer into a PrinterInstance's `(extruder, slot)` grid.
  *  0-based indices. */
@@ -18,7 +18,7 @@ export interface SlotRef {
   slot: number;
 }
 
-export interface SlotBinding {
+interface SlotBinding {
   feed: FeedKind;
   /** `null` when no filament is loaded in this slot. */
   filament_identity: string | null;
@@ -32,7 +32,7 @@ export interface SlotBinding {
   tag_uid: string | null;
 }
 
-export interface NozzleSku {
+interface NozzleSku {
   /** Nozzle diameter as a **string symbol** ("0.4", "0.25",
    *  "0.4+0.6") — never a number. The cascade composer matches
    *  it to a `nozzles/<diameter>.toml` filename by exact-string
@@ -47,12 +47,12 @@ export interface NozzleSku {
     | "high_flow_stainless";
 }
 
-export interface ExtruderState {
+interface ExtruderState {
   installed_nozzle: NozzleSku;
   slots: SlotBinding[];
 }
 
-export interface BedRef {
+interface BedRef {
   identity: string;
 }
 

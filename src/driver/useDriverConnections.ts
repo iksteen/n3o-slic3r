@@ -99,7 +99,7 @@ export function connectionSignature(conn: ConnectionInfo | null): string {
 /** One row in the live driver table — the driver id + the signature
  *  of the connection it was registered with (so we can detect drift).
  *  Used by the test-seed helpers to stand up reconciler state. */
-export interface DriverEntry {
+interface DriverEntry {
   id: DriverId;
   signature: string;
 }
@@ -131,7 +131,7 @@ export interface DriverEntry {
 
 /** Tagged-union state machine for one identity's reconciler entry.
  *  Absence in `ENTRIES` = no driver registered for this identity. */
-export type ReconcilerEntry =
+type ReconcilerEntry =
   | { kind: "in_flight" }
   | {
       kind: "live";

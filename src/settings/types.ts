@@ -40,7 +40,7 @@ export function isObjectOverridable(scope: OptScopeFlags): boolean {
  *  `core::schema::capability::CapabilityPredicate`. `None` on the
  *  Rust side serializes as `null` in the parent's `capability`
  *  field, never as `{kind: "None"}`. */
-export type CapabilityPredicate =
+type CapabilityPredicate =
   | { kind: "RequiresMultiSlot" }
   | { kind: "RequiresToolchanger" }
   | { kind: "RequiresPurgeTower" }
@@ -53,7 +53,7 @@ export type CapabilityPredicate =
  *  (`escape_strings_cstyle` for coStrings, comma-joined for coFloats /
  *  coInts / coPercents, etc.). Use `defaultScalarFor(opt, slot)` to
  *  pick the right entry for the active slot. */
-export type DefaultValue =
+type DefaultValue =
   | { kind: "scalar"; value: string }
   | { kind: "vector"; values: string[] };
 

@@ -73,7 +73,7 @@ function subscribe(fn: () => void): () => void {
   };
 }
 
-export function setMode(mode: ThemeMode): void {
+function setMode(mode: ThemeMode): void {
   currentMode = mode;
   storeMode(mode);
   applyTheme(resolveTheme(mode));

@@ -16,7 +16,7 @@ import { defineQuery, useQuery } from "../state/queryCache";
  *  don't see a fresh `[]` every render while loading. */
 const NO_INSTANCES: PrinterInstance[] = [];
 
-export const printerInstancesQuery = defineQuery<PrinterInstance[]>({
+const printerInstancesQuery = defineQuery<PrinterInstance[]>({
   key: "printer_instances",
   fetch: () => listPrinterInstances(),
   invalidateOn: ["printer:instance_changed"],

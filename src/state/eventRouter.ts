@@ -65,15 +65,3 @@ export function onEvents<T = unknown>(
     for (const name of names) handlers.get(name)?.delete(handler as EventHandler);
   };
 }
-
-/** Like `onEvents`, but resolves only once every name's underlying Tauri
- *  `listen` is established — so a consumer that must not miss events between
- *  subscribing and an initial fetch can `await` this before fetching. */
-export async function onEventsReady<T = unknown>(
-  names: readonly string[],
-  handler: EventHandler<T>,
-): Promise<() => void> {
-  const off = onEvents(names, handler);
-  await Promise.all(names.map((name) => ensureListening(name)));
-  return off;
-}

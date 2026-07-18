@@ -9,7 +9,7 @@ import { onEvents } from "../state/eventRouter";
 
 /** Summary emitted by the backend after importing a foreign
  * (OrcaSlicer / Bambu Studio) project via Open project. */
-export interface ImportReport {
+interface ImportReport {
   objects: number;
   plates: number;
   printer_instance: string | null;
@@ -28,7 +28,7 @@ export interface ImportReport {
 }
 
 /** Build the multi-line body shown in the import-summary dialog. */
-export function formatImportReport(r: ImportReport): string {
+function formatImportReport(r: ImportReport): string {
   const lines = [
     `${r.objects} object(s) across ${r.plates} plate(s).`,
     `Printer: ${r.printer_model ?? "?"} → ${r.printer_instance_name ?? "(none)"}${

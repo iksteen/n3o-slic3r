@@ -15,8 +15,8 @@
 // DOM and stays the single source of truth for "where does each
 // chip land."
 
-export const NOZZLES_INLINE_THRESHOLD = 2;
-export const NOZZLES_PER_ROW = 4;
+const NOZZLES_INLINE_THRESHOLD = 2;
+const NOZZLES_PER_ROW = 4;
 
 /** Decide whether extruders ride inline with Printer + Bed or get
  *  their own rows. `extruderCount` is `PrinterInstance.extruders.length`. */

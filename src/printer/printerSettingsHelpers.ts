@@ -18,7 +18,7 @@ export type ConnectionDriverKind = "bambu" | "u1" | "moonraker";
 /** Bambu printers need a LAN access code; U1 and generic Moonraker
  *  printers need a Moonraker port.
  *  Default Moonraker port matches the existing PrinterCredentialsDialog. */
-export const DEFAULT_MOONRAKER_PORT = 80;
+const DEFAULT_MOONRAKER_PORT = 80;
 
 /** OrcaSlicer's machine-settings page order for the front pages. NOT derivable
  *  from the display-order scrape: Motion ability / Multimaterial are built in

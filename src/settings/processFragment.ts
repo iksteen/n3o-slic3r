@@ -8,7 +8,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { PlateId } from "../viewport/types";
 
-export interface ProcessAvailability {
+interface ProcessAvailability {
   printer: string;
   nozzle: string;
 }

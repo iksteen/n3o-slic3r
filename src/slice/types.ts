@@ -88,7 +88,7 @@ export type PlateWarningEvent = {
   data: { job_id: JobId; plate_id: number; message: string };
 };
 
-export type SliceStatus =
+type SliceStatus =
   | "idle"
   | "starting"
   | "running"

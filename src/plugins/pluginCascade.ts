@@ -84,7 +84,7 @@ export function settingKey(name: string, key: string): string {
 // ── Level participation ───────────────────────────────────────────
 
 /** The cascade levels a plugin participates in, in cascade order. */
-export function pluginLevels(plugin: PluginSummary): PluginLevel[] {
+function pluginLevels(plugin: PluginSummary): PluginLevel[] {
   return PLUGIN_LEVEL_ORDER.filter((l) => plugin.scopes.includes(l));
 }
 
@@ -279,25 +279,6 @@ export function countActiveAtLevel(
 
 export type TypedSettingValue = string | number | boolean;
 
-/** Map a setting's serialized string to a typed JS scalar per its
- *  `kind`. `enum` / `string` stay strings; `number` → number;
- *  `bool` → boolean. */
-export function typedSettingValue(
-  setting: SettingSummary,
-  raw: string,
-): TypedSettingValue {
-  switch (setting.kind) {
-    case "number": {
-      const n = Number(raw);
-      return Number.isFinite(n) ? n : 0;
-    }
-    case "bool":
-      return raw === "true" || raw === "1";
-    case "string":
-    case "enum":
-      return raw;
-  }
-}
 
 /** Serialize a typed scalar back to the string form stored in the
  *  override maps + passed to global-setting writes. Booleans become

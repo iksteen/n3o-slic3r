@@ -57,7 +57,7 @@ export type PrinterProfileJson = {
  *  cascade `CascadeLayer` id it won from (drives the ladder row it lands
  *  in), and `cascade_fallback` is unused by this path (always null —
  *  there's no override folded in to revert from). */
-export type ResolvedEntry = {
+type ResolvedEntry = {
   value: string;
   source_layer: string | null;
   cascade_fallback: string | null;

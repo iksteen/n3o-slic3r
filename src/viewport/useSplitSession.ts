@@ -34,7 +34,7 @@ export interface ConnectorParams {
 
 /** A connector placed on the cut plane: `(u, v)` in the plane's in-plane basis
  *  (mm) and its own params. */
-export interface PlacedConnector {
+interface PlacedConnector {
   u: number;
   v: number;
   params: ConnectorParams;

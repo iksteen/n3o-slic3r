@@ -12,12 +12,6 @@
 /** `#[serde(transparent)] pub struct DriverId(pub u64)` — bare integer on the wire. */
 export type DriverId = number;
 
-/** Mirror of `DriverKind` (`#[serde(rename_all = "snake_case")]`) —
- *  lowercase on the wire. NOTE: the separate `DriverConfig` /
- *  `DriverExtra` enums below stay PascalCase-tagged; only the
- *  driver-kind discriminator is lowercase. */
-export type DriverKind = "bambu" | "u1" | "moonraker";
-
 /** Mirror of `DriverConfig` (`#[serde(tag="kind", content="data")]`). */
 export type DriverConfig =
   | {
@@ -54,7 +48,7 @@ export type ConnectionState =
 
 /** Mirror of `JobState` (`#[serde(tag="state", content="reason")]`).
  * The `Failed` variant's `reason` is a bare string. */
-export type JobState =
+type JobState =
   | { state: "Idle" }
   | { state: "Preparing" }
   | { state: "Printing" }
@@ -71,12 +65,12 @@ export interface JobProgress {
   state: JobState;
 }
 
-export interface TempReading {
+interface TempReading {
   current: number;
   target: number;
 }
 
-export interface Temps {
+interface Temps {
   nozzles: TempReading[];
   bed: TempReading;
   chamber: TempReading | null;
@@ -99,17 +93,17 @@ export interface AmsTray {
   identity: AmsFilament | null;
 }
 
-export interface AmsUnit {
+interface AmsUnit {
   id: number;
   trays: AmsTray[];
 }
 
-export interface AmsState {
+interface AmsState {
   units: AmsUnit[];
   active_slot: number | null;
 }
 
-export interface BambuExtra {
+interface BambuExtra {
   mounted_plate: string | null;
   current_stage: string | null;
   print_error_code: number | null;
@@ -125,12 +119,12 @@ export interface BambuExtra {
   external_spool: AmsFilament | null;
 }
 
-export interface U1Filament {
+interface U1Filament {
   material_type: string;
   color: string;
 }
 
-export interface U1Extra {
+interface U1Extra {
   mounted_toolhead: number | null;
   toolhead_filaments: (U1Filament | null)[];
   current_stage: string | null;

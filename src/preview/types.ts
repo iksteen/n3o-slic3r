@@ -50,9 +50,9 @@ export interface HeaderMetadata {
   raw_settings: Record<string, string>;
 }
 
-export type SlicerOrigin = "Orca" | "PrusaSlicer" | "Cura" | "Unknown";
+type SlicerOrigin = "Orca" | "PrusaSlicer" | "Cura" | "Unknown";
 
-export interface FilamentUsage {
+interface FilamentUsage {
   unit: string;
   value: string;
 }
@@ -70,7 +70,7 @@ export interface FullJobStats {
   layer_heights: HeightStats;
 }
 
-export interface HeightStats {
+interface HeightStats {
   min: number;
   max: number;
   variable: boolean;
@@ -119,7 +119,7 @@ export type FeatureType =
 /** Bambu's per-plate `plate_<N>.json` shape, surfaced by the
  *  `.gcode.3mf` drop-loader. Mirror of Rust's
  *  `core::threemf::SlicedPlateMetadata`. */
-export interface SlicedPlateMetadata {
+interface SlicedPlateMetadata {
   plate_index: number;
   layer_count: number;
   object_count: number;
@@ -133,7 +133,7 @@ export interface SlicedPlateMetadata {
   emitter: string;
 }
 
-export interface AmsBinding {
+interface AmsBinding {
   model_material_index: number;
   ams_slot: number;
 }

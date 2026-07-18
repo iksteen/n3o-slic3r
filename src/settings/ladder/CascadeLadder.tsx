@@ -23,14 +23,6 @@ import {
   type CascadeLayer,
 } from "../layers";
 
-/** Per-layer value snapshot for the ladder. `value === null` =
- *  layer didn't define a value (rendered as em-dash). */
-export type LadderLayer = {
-  id: CascadeLayer;
-  label: string;
-  value: string | null;
-};
-
 /** The cascade layers in priority order (low → high), matching
  *  docs/dev/design/data.jsx. The `object` tier is appended only when the
  *  panel is in object scope (see `objectTier`); in project scope it stays
@@ -46,7 +38,7 @@ const LAYER_ORDER: ReadonlyArray<{ id: CascadeLayer; label: string }> = [
   { id: "project", label: "Project" },
 ];
 
-export interface ObjectOverrideEntry {
+interface ObjectOverrideEntry {
   /** Object id (or any stable identifier the host uses). */
   id: number | string;
   /** Display name shown next to the swatch. */

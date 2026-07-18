@@ -10,12 +10,12 @@ import { listPlugins, type PluginSummary } from "./pluginCommands";
 import { defineQuery, invalidateQuery, useQuery } from "../state/queryCache";
 
 /** Event the backend fires after any plugin store mutation. */
-export const PLUGIN_CHANGED_EVENT = "plugin:changed";
+const PLUGIN_CHANGED_EVENT = "plugin:changed";
 
 /** Stable empty reference for the pre-first-fetch window. */
 const NO_PLUGINS: PluginSummary[] = [];
 
-export const pluginsQuery = defineQuery<PluginSummary[]>({
+const pluginsQuery = defineQuery<PluginSummary[]>({
   key: "plugins",
   fetch: () => listPlugins(),
   invalidateOn: [PLUGIN_CHANGED_EVENT],

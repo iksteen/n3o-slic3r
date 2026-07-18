@@ -8,9 +8,9 @@ import { useEffect, useState } from "react";
 // and vice versa. The renderer-local tool *mode* is App-owned UI state
 // (it never enters core/scene); this hook is just where it lives.
 
-export type GizmoMode = "none" | "move" | "rotate" | "scale";
+type GizmoMode = "none" | "move" | "rotate" | "scale";
 
-export type ViewportToolMode =
+type ViewportToolMode =
   | "none"
   | "layflat"
   | "alignX"
@@ -22,7 +22,7 @@ export type ViewportToolMode =
 
 /** A pending clone-dialog request: the object ids to clone + whether to
  *  expand groups. `null` = no dialog open. */
-export interface CloneRequest {
+interface CloneRequest {
   ids: number[];
   expandGroups: boolean;
 }

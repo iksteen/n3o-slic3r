@@ -28,7 +28,7 @@ export type GroupId = string;
  *  settings (`enable_support`, `layer_height`, …) live here and apply
  *  to every member; members keep only region-scope overrides. The
  *  backend omits `overrides` when empty. */
-export interface Group {
+interface Group {
   name: string;
   overrides?: Record<string, string>;
 }
@@ -38,18 +38,18 @@ export interface Group {
  *  so the wire shape is a bare 16-element number array — *not* an
  *  object with a `matrix` field. Keep this typed as a tuple so any
  *  attempt to access `.matrix` is a TypeScript error. */
-export type Transform = readonly number[];
+type Transform = readonly number[];
 
-export interface BoundingBox {
+interface BoundingBox {
   min: [number, number, number];
   max: [number, number, number];
 }
 
-export type MeshProvenance =
+type MeshProvenance =
   | { kind: "File"; data: string }
   | { kind: "Primitive"; data: string };
 
-export interface MeshHeader {
+interface MeshHeader {
   id: MeshId;
   vertex_count: number;
   index_count: number;
@@ -71,21 +71,21 @@ export interface SceneObject {
 }
 
 
-export interface ExclusionZone {
+interface ExclusionZone {
   label: string;
   bounds: BoundingBox;
 }
 
-export interface BedMesh {
+interface BedMesh {
   extents: BoundingBox;
   grid_spacing: number;
   origin_marker: [number, number, number];
   exclusion_zones: ExclusionZone[];
 }
 
-export type BoundsAxis = "X" | "Y" | "Z";
+type BoundsAxis = "X" | "Y" | "Z";
 
-export type OutOfBoundsReason =
+type OutOfBoundsReason =
   | { kind: "OutOfBuildVolume"; data: { axis: BoundsAxis } }
   | { kind: "IntersectsExclusion"; data: { label: string } }
   | { kind: "BelowBuildPlate"; data: null };

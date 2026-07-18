@@ -23,7 +23,7 @@ import { onEvents } from "../state/eventRouter";
  *  only stales the slice when it changes the bound filament *type* — that
  *  case is handled conditionally on the event's `filament_type_changed`
  *  flag inside `listenPlateEdits`. */
-export const PLATE_EDIT_EVENTS = [
+const PLATE_EDIT_EVENTS = [
   "scene:object_added",
   "scene:object_updated",
   "scene:object_removed",
@@ -36,7 +36,7 @@ export const PLATE_EDIT_EVENTS = [
 
 /** Project-wide edit (user-tier overrides apply to every plate's slice), so
  *  it invalidates ALL plates. */
-export const PROJECT_WIDE_EDIT_EVENT = "scene:user_overrides_changed";
+const PROJECT_WIDE_EDIT_EVENT = "scene:user_overrides_changed";
 
 /** Wholesale project replacement — Open project (native load or transparent
  *  foreign import). Not an *edit* (the in-memory project is swapped out, not

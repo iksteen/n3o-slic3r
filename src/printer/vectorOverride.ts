@@ -15,7 +15,7 @@ export function resolvedVec(
 }
 
 /** The current vector for a key — the override if set, else resolved. */
-export function currentVec(
+function currentVec(
   overrides: Record<string, string>,
   resolved: Record<string, string>,
   key: string,

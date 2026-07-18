@@ -98,7 +98,7 @@ export type PlateObject = {
  *  carries more; the panel only reads name + id + kind. `kind` is
  *  "group" when the selection is a whole group — the tab reads
  *  "Group: name" because object-scope edits apply to every member. */
-export type SelectedObject = {
+type SelectedObject = {
   id: number;
   name: string;
   kind: "object" | "group";

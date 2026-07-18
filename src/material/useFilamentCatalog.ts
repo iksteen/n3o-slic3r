@@ -24,7 +24,7 @@ export interface FilamentCatalog {
 /** Stable empty reference for the pre-first-fetch window. */
 const NO_FILAMENTS: FilamentSummary[] = [];
 
-export const filamentCatalogQuery = defineQuery<FilamentSummary[]>({
+const filamentCatalogQuery = defineQuery<FilamentSummary[]>({
   key: "filament_catalog",
   fetch: () => invoke<FilamentSummary[]>("filament_profile_list"),
   // User-library edits (duplicate / delete / rename) emit `filament:changed`

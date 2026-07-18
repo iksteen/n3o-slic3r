@@ -37,8 +37,6 @@ import {
 import { isRfidDetected } from "./materials";
 import type { FilamentSummary } from "./filamentSummary";
 
-export type { FilamentSummary };
-
 const UNASSIGNED_SWATCH = "#9ca3af";
 
 export interface SlotChipStripProps {
