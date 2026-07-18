@@ -27,6 +27,22 @@ use n3o_slic3r_lib::core::slice::{
 use n3o_slic3r_lib::core::threemf::{fixture_input, write_sliced_3mf};
 use slic3r_ffi::init as ffi_init;
 
+/// Resolve the plate's bound instance (test-fixtures registry) and run the
+/// blocking slice — the pure orchestrator takes the instance as a parameter.
+fn run_blocking(
+    input: SliceJobInput,
+    registry: &JobRegistry,
+    sink: EventSink,
+) -> Result<
+    n3o_slic3r_lib::core::slice::JobId,
+    n3o_slic3r_lib::core::slice::orchestrator::SliceStartError,
+> {
+    let instance = n3o_slic3r_lib::core::printer::lookup_instance(&input.printer_instance_id)
+        .expect("test-fixtures: bound instance resolves");
+    run_slice_job_blocking(input, &instance, registry, sink)
+}
+
+
 /// The cube STL loaded into a single buffer-load [`SliceObject`].
 fn cube_objects() -> Vec<SliceObject> {
     let m = n3o_slic3r_lib::core::scene::loaders::load_mesh_from_path(&cube_stl())
@@ -139,7 +155,7 @@ fn slice_cube_to_gcode() -> (PathBuf, Vec<u8>) {
         paint_filament_remap: None,
     };
 
-    let _job_id = run_slice_job_blocking(input, &registry, sink).expect("slice start");
+    let _job_id = run_blocking(input, &registry, sink).expect("slice start");
 
     let events = events.lock().unwrap();
     let (output_path, summary) = events

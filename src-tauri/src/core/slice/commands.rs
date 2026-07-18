@@ -87,11 +87,13 @@ pub async fn slice_active_plate(
     // assembly cheap so scene mutations aren't blocked either.
     let session = Arc::clone(session.inner());
     let jobs = Arc::clone(jobs.inner());
-    let input = tauri::async_runtime::spawn_blocking(move || {
+    let (input, instance) = tauri::async_runtime::spawn_blocking(move || {
         // Validate + resolve the plate + snapshot the project UNDER the lock,
         // then build the SliceJobInput OFF the lock (the snapshot is a cheap
-        // Arc-bump of the geometry).
-        let (snapshot, target_plate, output_dir) = {
+        // Arc-bump of the geometry). The bound PrinterInstance is resolved here
+        // (the command boundary) and threaded into the pure slice builder +
+        // orchestrator, so neither reaches for the registry.
+        let (snapshot, target_plate, output_dir, instance) = {
             let s = session.lock().map_err(|e| format!("session lock: {e}"))?;
             let target_plate = plate_id.unwrap_or_else(|| {
                 // Active plate; `Project::default()` invariant
@@ -105,6 +107,7 @@ pub async fn slice_active_plate(
             validate_pre_slice(&s.project, &[target_plate.0])
                 .map_err(SliceStartError::SliceBlocked)
                 .map_err(|e| e.to_string())?;
+            let instance = s.plate_instance(target_plate);
             // Opaque unique temp scope for this slice's G-code output. Named
             // from pid + a process-local sequence so it doesn't burn a real
             // `JobId` (the orchestrator allocs that) and stays unique across
@@ -114,13 +117,17 @@ pub async fn slice_active_plate(
                 .join(format!("n3o-slice-{}-{seq}", std::process::id()))
                 .to_string_lossy()
                 .into_owned();
-            (s.project.clone(), target_plate, output_dir)
+            (s.project.clone(), target_plate, output_dir, instance)
         };
-        build_slice_input(&snapshot, target_plate, output_dir)
+        build_slice_input(&snapshot, target_plate, output_dir, instance.as_ref())
+            .map(|input| (input, instance))
             .map_err(|e: SliceInputError| e.to_string())
     })
     .await
     .map_err(|e| format!("slice prep task panicked: {e}"))??;
+    // build_slice_input returns UnboundPrinter (Err) when the instance is None,
+    // so a successful build guarantees Some here.
+    let instance = instance.expect("build_slice_input succeeded ⟹ bound instance");
 
     // Grab the plugin host (Arc clone) before app_handle moves into
     // the sink; `None` if it isn't managed (shouldn't happen in the
@@ -129,7 +136,7 @@ pub async fn slice_active_plate(
         .try_state::<PluginHostState>()
         .map(|s| s.inner().clone());
     let sink = emit_sink(app_handle);
-    start_slice_job_with_sink_and_plugins(input, &jobs, sink, host)
+    start_slice_job_with_sink_and_plugins(input, &instance, &jobs, sink, host)
         .map_err(|e: SliceStartError| e.to_string())
 }
 

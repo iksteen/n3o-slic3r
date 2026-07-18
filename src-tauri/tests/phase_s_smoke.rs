@@ -38,6 +38,36 @@ use n3o_slic3r_lib::core::slice::{
 };
 use slic3r_ffi::init as ffi_init;
 
+/// Resolve the plate's bound instance (test-fixtures registry) and run the
+/// blocking slice — the pure orchestrator takes the instance as a parameter.
+fn run_blocking(
+    input: SliceJobInput,
+    registry: &JobRegistry,
+    sink: EventSink,
+) -> Result<
+    n3o_slic3r_lib::core::slice::JobId,
+    n3o_slic3r_lib::core::slice::orchestrator::SliceStartError,
+> {
+    let instance = n3o_slic3r_lib::core::printer::lookup_instance(&input.printer_instance_id)
+        .expect("test-fixtures: bound instance resolves");
+    run_slice_job_blocking(input, &instance, registry, sink)
+}
+
+/// Build a slice input, resolving `plate_id`'s bound instance (the command
+/// boundary does this in prod).
+fn build_input(
+    project: &n3o_slic3r_lib::core::project::Project,
+    plate_id: n3o_slic3r_lib::core::project::PlateId,
+    output_dir: String,
+) -> Result<SliceJobInput, n3o_slic3r_lib::core::slice::input::SliceInputError> {
+    let inst = project
+        .plate(plate_id)
+        .and_then(|p| p.printer_instance_id())
+        .and_then(n3o_slic3r_lib::core::printer::lookup_instance);
+    n3o_slic3r_lib::core::slice::input::build_slice_input(project, plate_id, output_dir, inst.as_ref())
+}
+
+
 /// Load every object of a `.3mf` into buffer-load [`SliceObject`]s for a
 /// hand-built `SliceJobInput`, preserving per-object transform, extruder,
 /// paint, overrides, and group. Mirrors what `build_slice_input` does for
@@ -161,6 +191,24 @@ fn snappy_printer() -> PrinterProfile {
     }
 }
 
+fn bender_printer() -> PrinterProfile {
+    PrinterProfile {
+        model: "Creality Ender-3 S1".into(),
+        supported_build_plates: vec!["Textured PEI".into(), "PC Spring Steel".into()],
+        toolheads: vec![Toolhead {
+            default_nozzle_diameter: "0.4".into(),
+            hotend_type: "brass".into(),
+            max_temp: 260.0,
+        }],
+        build_volume: BoundingBox {
+            min: [0.0, 0.0, 0.0],
+            max: [220.0, 220.0, 270.0],
+        },
+        exclusion_zones: vec![],
+        ..Default::default()
+    }
+}
+
 fn collecting_sink() -> (EventSink, Arc<Mutex<Vec<SliceEvent>>>) {
     let bucket: Arc<Mutex<Vec<SliceEvent>>> = Arc::new(Mutex::new(Vec::new()));
     let bucket_for_cb = bucket.clone();
@@ -219,7 +267,7 @@ fn slice_fourcolor(
         paint_filament_remap: None,
     };
 
-    run_slice_job_blocking(input, &registry, sink)
+    run_blocking(input, &registry, sink)
         .unwrap_or_else(|e| panic!("{instance_id}: synchronous start failed: {e}"));
 
     let events = events.lock().unwrap();
@@ -341,104 +389,39 @@ fn snappy_multi_color_slices_with_toolhead_changes() {
     let _ = std::fs::remove_dir_all(gcode_path.parent().unwrap());
 }
 
-/// Material→slot binding routes a single-material print to the
-/// bound toolhead on a toolchanger.
-///
-/// Loads OrcaCube_v2 into a Project on snappy, binds model material
-/// 1 to T1's slot (extruder=1, slot=0), runs through
-/// `build_slice_input` (the production path), and verifies the
-/// emitted gcode contains `T1` toolchange markers.
-///
-/// Toolchangers use the legacy slot-fanned cascade and the
-/// per-object remap: material 1 → bound flat slot index 1 →
-/// libslic3r filament index 2. The temp `.3mf` carries the
-/// remapped value (`extruder_id = 2`) so libslic3r's gcode
-/// template emits the right `T<n>` for the firmware to select
-/// the right toolhead.
+/// A multi-material model on **Bender** (Ender-3 S1: single extruder, no AMS,
+/// not a toolchanger, not firmware-routed) flattens onto the one toolhead —
+/// the gcode never emits a bare `T<n>` for `n ≥ 1`. The four declared
+/// materials all auto-bind to Bender's single slot, so there's nowhere else
+/// to route. Contrast [`snappy_multi_color_slices_with_toolhead_changes`],
+/// where the U1's four toolheads produce real `T<n>` docks.
 #[test]
-fn snappy_binding_routes_single_material_to_bound_toolhead() {
-    use n3o_slic3r_lib::core::printer::SlotRef;
-    use n3o_slic3r_lib::core::project::{PlateId, Project};
-    use n3o_slic3r_lib::core::scene::state::NewSceneObject;
-    use n3o_slic3r_lib::core::slice::input::build_slice_input;
-    use n3o_slic3r_lib::core::threemf::load_3mf;
-
+fn bender_flattens_multi_material_to_single_toolhead() {
     ensure_ffi_init();
 
-    let cube_path = orca_cube_3mf();
+    let (gcode_path, _summary) = slice_fourcolor("bender", bender_printer(), 1);
 
-    // Build a Project the way the UI's scene_load_3mf does: load the
-    // 3mf, register every mesh + object on the active plate.
-    let project_3mf = load_3mf(&cube_path).expect("load OrcaCube");
-    let mut project = Project::default();
-    project.plates[0].set_printer(Some("snappy".into()), None);
-    let mesh_ids: Vec<_> = project_3mf
-        .meshes
-        .into_iter()
-        .map(|m| project.register_mesh(m))
-        .collect();
-    for obj in project_3mf.objects {
-        project.register_object(NewSceneObject {
-            mesh: mesh_ids[obj.mesh_idx],
-            transform: obj.transform,
-            name: obj.name,
-            visible: true,
-            extruder_id: obj.extruder_id,
-            group: obj.group,
-        });
-    }
-
-    // Force the M1 → T1 binding (override the auto-bound default).
-    project.plates[0].material_to_slot.insert(
-        1,
-        SlotRef {
-            extruder: 1,
-            slot: 0,
-        },
-    );
-
-    let temp_dir = std::env::temp_dir().join(format!("n3o-snappy-binding-{}", std::process::id(),));
-    let input = build_slice_input(&project, PlateId(1), temp_dir.display().to_string())
-        .expect("build_slice_input");
-
-    // The cube's SliceObject extruder must already be 2 (libslic3r
-    // 1-based filament index = bound flat slot 1 + 1 on snappy). Pin it
-    // here so a regression is caught even if the slice itself fails for
-    // unrelated reasons.
-    assert!(
-        input.objects.iter().any(|o| o.extruder == 2),
-        "expected ≥1 object with remapped extruder=2, got {:?}",
-        input.objects.iter().map(|o| o.extruder).collect::<Vec<_>>(),
-    );
-
-    let registry = JobRegistry::new();
-    let (sink, events) = collecting_sink();
-    run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
-
-    let events = events.lock().unwrap();
-    if let Some(SliceEvent::JobFailed { error, .. }) = events
-        .iter()
-        .find(|e| matches!(e, SliceEvent::JobFailed { .. }))
-    {
-        panic!("slice failed: {error:?}");
-    }
-    let gcode_path = events
-        .iter()
-        .find_map(|e| match e {
-            SliceEvent::PlateFinished { output_path, .. } => Some(PathBuf::from(output_path)),
-            _ => None,
+    // Bare `T<n>` lines are toolhead selections. On a single-extruder printer
+    // there is only T0, so any `T1`/`T2`/… means the multi-material model
+    // didn't collapse onto the one toolhead.
+    let gcode = std::fs::read_to_string(&gcode_path).expect("read bender gcode");
+    let higher_toolheads: Vec<String> = gcode
+        .lines()
+        .map(|l| l.trim().to_owned())
+        .filter(|l| {
+            l.len() >= 2
+                && l.len() <= 4
+                && l.starts_with('T')
+                && l[1..].chars().all(|c| c.is_ascii_digit())
+                && l != "T0"
         })
-        .expect("PlateFinished");
-
-    let gcode = std::fs::read_to_string(&gcode_path).expect("read gcode");
-    let t1_lines = gcode.lines().filter(|l| l.trim() == "T1").count();
-    let t0_bare = gcode.lines().filter(|l| l.trim() == "T0").count();
+        .collect();
     assert!(
-        t1_lines >= 1,
-        "expected ≥1 bare `T1` toolchange (M1 bound to T1), got {t1_lines} (T0 count: {t0_bare})",
+        higher_toolheads.is_empty(),
+        "single-extruder Bender must flatten multi-material to T0 only; got {higher_toolheads:?}",
     );
 
-    let _ = std::fs::remove_dir_all(temp_dir);
+    let _ = std::fs::remove_dir_all(gcode_path.parent().unwrap());
 }
 
 /// Multi-volume groups round-trip through the slice pipeline as one
@@ -461,7 +444,6 @@ fn snappy_binding_routes_single_material_to_bound_toolhead() {
 fn cube_halves_slices_as_one_multivolume_object_no_floating_warning() {
     use n3o_slic3r_lib::core::project::{PlateId, Project};
     use n3o_slic3r_lib::core::scene::state::NewSceneObject;
-    use n3o_slic3r_lib::core::slice::input::build_slice_input;
     use n3o_slic3r_lib::core::threemf::load_3mf;
 
     ensure_ffi_init();
@@ -470,7 +452,7 @@ fn cube_halves_slices_as_one_multivolume_object_no_floating_warning() {
     let project_3mf = load_3mf(&fixture).expect("load cube-halves fixture");
 
     let mut project = Project::default();
-    project.plates[0].set_printer(Some("bambi".into()), None);
+    project.plates[0].set_printer(Some("bambi".into()));
     let mesh_ids: Vec<_> = project_3mf
         .meshes
         .into_iter()
@@ -484,16 +466,16 @@ fn cube_halves_slices_as_one_multivolume_object_no_floating_warning() {
             visible: true,
             extruder_id: obj.extruder_id,
             group: obj.group,
-        });
+        }, n3o_slic3r_lib::core::printer::lookup_instance("bambi").as_ref());
     }
 
     let temp_dir = std::env::temp_dir().join(format!("n3o-cube-halves-{}", std::process::id(),));
-    let input = build_slice_input(&project, PlateId(1), temp_dir.display().to_string())
+    let input = build_input(&project, PlateId(1), temp_dir.display().to_string())
         .expect("build_slice_input");
 
     let registry = JobRegistry::new();
     let (sink, events) = collecting_sink();
-    run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
+    run_blocking(input, &registry, sink).expect("synchronous start");
 
     let events = events.lock().unwrap();
     if let Some(SliceEvent::JobFailed { error, .. }) = events
@@ -549,7 +531,6 @@ fn cube_halves_slices_as_one_multivolume_object_no_floating_warning() {
 fn object_layer_height_override_changes_sliced_layer_count() {
     use n3o_slic3r_lib::core::project::{PlateId, Project};
     use n3o_slic3r_lib::core::scene::state::NewSceneObject;
-    use n3o_slic3r_lib::core::slice::input::build_slice_input;
     use n3o_slic3r_lib::core::threemf::load_3mf;
 
     ensure_ffi_init();
@@ -559,7 +540,7 @@ fn object_layer_height_override_changes_sliced_layer_count() {
     let build = || {
         let project_3mf = load_3mf(&cube_path).expect("load OrcaCube");
         let mut project = Project::default();
-        project.plates[0].set_printer(Some("bambi".into()), None);
+        project.plates[0].set_printer(Some("bambi".into()));
         let mesh_ids: Vec<_> = project_3mf
             .meshes
             .into_iter()
@@ -576,7 +557,7 @@ fn object_layer_height_override_changes_sliced_layer_count() {
                     visible: true,
                     extruder_id: obj.extruder_id,
                     group: obj.group,
-                })
+                }, n3o_slic3r_lib::core::printer::lookup_instance("bambi").as_ref())
             })
             .collect();
         (project, obj_ids)
@@ -586,11 +567,11 @@ fn object_layer_height_override_changes_sliced_layer_count() {
         let temp_dir =
             std::env::temp_dir().join(format!("n3o-objovr-{tag}-{}", std::process::id()));
         let input =
-            build_slice_input(project, PlateId(1), temp_dir.display().to_string())
+            build_input(project, PlateId(1), temp_dir.display().to_string())
                 .expect("build_slice_input");
         let registry = JobRegistry::new();
         let (sink, events) = collecting_sink();
-        run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
+        run_blocking(input, &registry, sink).expect("synchronous start");
         let events = events.lock().unwrap();
         if let Some(SliceEvent::JobFailed { error, .. }) = events
             .iter()
@@ -648,7 +629,6 @@ fn object_layer_height_override_changes_sliced_layer_count() {
 fn imported_object_override_reaches_the_engine_end_to_end() {
     use n3o_slic3r_lib::core::project::{PlateId, Project};
     use n3o_slic3r_lib::core::scene::state::NewSceneObject;
-    use n3o_slic3r_lib::core::slice::input::build_slice_input;
     use n3o_slic3r_lib::core::threemf::load_3mf;
     use std::path::Path;
 
@@ -667,7 +647,7 @@ fn imported_object_override_reaches_the_engine_end_to_end() {
     let import = |path: &Path| -> Project {
         let p3mf = load_3mf(path).expect("load");
         let mut project = Project::default();
-        project.plates[0].set_printer(Some("bambi".into()), None);
+        project.plates[0].set_printer(Some("bambi".into()));
         let mesh_ids: Vec<_> = p3mf
             .meshes
             .into_iter()
@@ -681,7 +661,7 @@ fn imported_object_override_reaches_the_engine_end_to_end() {
                 visible: true,
                 extruder_id: obj.extruder_id,
                 group: obj.group,
-            });
+            }, n3o_slic3r_lib::core::printer::lookup_instance("bambi").as_ref());
             project.apply_imported_object_overrides(id, &obj.overrides);
         }
         project
@@ -689,11 +669,11 @@ fn imported_object_override_reaches_the_engine_end_to_end() {
 
     let slice_layers = |project: &Project, tag: &str| -> u32 {
         let out = tmp.join(format!("n3o-imp-slice-{tag}-{pid}"));
-        let input = build_slice_input(project, PlateId(1), out.display().to_string())
+        let input = build_input(project, PlateId(1), out.display().to_string())
             .expect("build_slice_input");
         let registry = JobRegistry::new();
         let (sink, events) = collecting_sink();
-        run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
+        run_blocking(input, &registry, sink).expect("synchronous start");
         let events = events.lock().unwrap();
         if let Some(SliceEvent::JobFailed { error, .. }) = events
             .iter()
@@ -772,7 +752,6 @@ fn grouped_member_rotation_composes_in_world_space() {
     use n3o_slic3r_lib::core::scene::primitives::{generate, PrimitiveKind, PrimitiveParams};
     use n3o_slic3r_lib::core::scene::state::{GroupId, NewMesh, NewSceneObject};
     use n3o_slic3r_lib::core::scene::transform::Transform;
-    use n3o_slic3r_lib::core::slice::input::build_slice_input;
     use glam::Vec3;
 
     ensure_ffi_init();
@@ -839,7 +818,7 @@ fn grouped_member_rotation_composes_in_world_space() {
     // Slice a 2-member group (anchor + `b`) and return the extruded XY bbox.
     let slice_bbox = |b_mesh: NewMesh, b_xform: Transform, tag: &str| -> ([f32; 2], [f32; 2]) {
         let mut project = Project::default();
-        project.plates[0].set_printer(Some("bambi".into()), None);
+        project.plates[0].set_printer(Some("bambi".into()));
         let g = GroupId::fresh();
         let m_anchor = project.register_mesh(mesh.clone());
         let m_b = project.register_mesh(b_mesh);
@@ -851,15 +830,15 @@ fn grouped_member_rotation_composes_in_world_space() {
             extruder_id: None,
             group: Some(g),
         };
-        project.register_object(new(m_anchor, anchor, "anchor"));
-        project.register_object(new(m_b, b_xform, "b"));
+        project.register_object(new(m_anchor, anchor, "anchor"), n3o_slic3r_lib::core::printer::lookup_instance("bambi").as_ref());
+        project.register_object(new(m_b, b_xform, "b"), n3o_slic3r_lib::core::printer::lookup_instance("bambi").as_ref());
 
         let out = std::env::temp_dir().join(format!("n3o-compose-{tag}-{}", std::process::id()));
-        let input = build_slice_input(&project, PlateId(1), out.display().to_string())
+        let input = build_input(&project, PlateId(1), out.display().to_string())
             .expect("build_slice_input");
         let registry = JobRegistry::new();
         let (sink, events) = collecting_sink();
-        run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
+        run_blocking(input, &registry, sink).expect("synchronous start");
         let events = events.lock().unwrap();
         if let Some(SliceEvent::JobFailed { error, .. }) =
             events.iter().find(|e| matches!(e, SliceEvent::JobFailed { .. }))
@@ -914,7 +893,6 @@ fn grouped_member_rotation_composes_in_world_space() {
 #[test]
 fn imported_painted_model_slices_as_multi_material() {
     use n3o_slic3r_lib::core::orca_import::import;
-    use n3o_slic3r_lib::core::slice::input::build_slice_input;
 
     ensure_ffi_init();
     let fixture = workspace_root().join("spinning-top.3mf");
@@ -929,12 +907,12 @@ fn imported_painted_model_slices_as_multi_material() {
     let (project, _report) = import(&fixture).expect("import painted project");
     let pid = project.plates[0].id;
     let temp_dir = std::env::temp_dir().join(format!("n3o-paint-mm-{}", std::process::id()));
-    let input = build_slice_input(&project, pid, temp_dir.display().to_string())
+    let input = build_input(&project, pid, temp_dir.display().to_string())
         .expect("build_slice_input");
 
     let registry = JobRegistry::new();
     let (sink, events) = collecting_sink();
-    run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
+    run_blocking(input, &registry, sink).expect("synchronous start");
     let events = events.lock().unwrap();
     if let Some(SliceEvent::JobFailed { error, .. }) = events
         .iter()
@@ -994,8 +972,7 @@ fn imported_painted_model_slices_as_multi_material() {
 #[test]
 fn imported_painted_model_routes_to_bound_toolhead_on_u1() {
     use n3o_slic3r_lib::core::orca_import::import;
-    use n3o_slic3r_lib::core::printer::{lookup, SlotRef};
-    use n3o_slic3r_lib::core::slice::input::build_slice_input;
+    use n3o_slic3r_lib::core::printer::SlotRef;
 
     ensure_ffi_init();
     let fixture = workspace_root().join("spinning-top.3mf");
@@ -1010,7 +987,7 @@ fn imported_painted_model_routes_to_bound_toolhead_on_u1() {
     let (mut project, _report) = import(&fixture).expect("import painted project");
     // Rebind to the U1 toolchanger; its bundled process differs, so clear the
     // imported A1-mini process and let the instance default resolve.
-    project.plates[0].set_printer(Some("snappy".into()), lookup("snapmaker-u1").as_ref());
+    project.plates[0].set_printer(Some("snappy".into()));
     project.plates[0].quality_profile = None;
     // Non-sequential: base material 1 → toolhead 1, painted material 2 →
     // toolhead 3. The remap must follow the binding, not assume identity.
@@ -1031,7 +1008,7 @@ fn imported_painted_model_routes_to_bound_toolhead_on_u1() {
 
     let pid = project.plates[0].id;
     let temp_dir = std::env::temp_dir().join(format!("n3o-paint-u1-{}", std::process::id()));
-    let input = build_slice_input(&project, pid, temp_dir.display().to_string())
+    let input = build_input(&project, pid, temp_dir.display().to_string())
         .expect("build_slice_input");
     // build_slice_input computes the toolchanger paint remap; for this binding
     // the painted state 2 must route to flat slot index 3.
@@ -1043,7 +1020,7 @@ fn imported_painted_model_routes_to_bound_toolhead_on_u1() {
 
     let registry = JobRegistry::new();
     let (sink, events) = collecting_sink();
-    run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
+    run_blocking(input, &registry, sink).expect("synchronous start");
     let events = events.lock().unwrap();
     if let Some(SliceEvent::JobFailed { error, .. }) = events
         .iter()
@@ -1245,7 +1222,7 @@ fn painted_enforcer_grows_manual_tree_support() {
             paint_filament_remap: None,
         };
 
-        run_slice_job_blocking(input, &registry, sink).expect("synchronous start");
+        run_blocking(input, &registry, sink).expect("synchronous start");
         let events = events.lock().unwrap();
         if let Some(SliceEvent::JobFailed { error, .. }) = events
             .iter()

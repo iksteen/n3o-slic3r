@@ -21,6 +21,22 @@ use n3o_slic3r_lib::core::slice::{
 };
 use slic3r_ffi::init as ffi_init;
 
+/// Resolve the plate's bound instance (test-fixtures registry) and run the
+/// blocking slice — the pure orchestrator takes the instance as a parameter.
+fn run_blocking(
+    input: SliceJobInput,
+    registry: &JobRegistry,
+    sink: EventSink,
+) -> Result<
+    n3o_slic3r_lib::core::slice::JobId,
+    n3o_slic3r_lib::core::slice::orchestrator::SliceStartError,
+> {
+    let instance = n3o_slic3r_lib::core::printer::lookup_instance(&input.printer_instance_id)
+        .expect("test-fixtures: bound instance resolves");
+    run_slice_job_blocking(input, &instance, registry, sink)
+}
+
+
 /// Column-major identity object→world transform.
 const IDENTITY16: [f64; 16] = [
     1.0, 0.0, 0.0, 0.0, //
@@ -197,7 +213,7 @@ fn bambi_slice_emits_started_progress_finished_with_summary() {
         vec![1],
     );
 
-    let job_id = run_slice_job_blocking(input, &registry, sink).expect("start");
+    let job_id = run_blocking(input, &registry, sink).expect("start");
     assert_eq!(job_id.0, 1);
 
     let events = events.lock().unwrap();
@@ -263,7 +279,7 @@ fn bambi_slice_emits_started_progress_finished_with_summary() {
 fn slice_to_gcode(label: &str, input: SliceJobInput) -> String {
     let registry = JobRegistry::new();
     let (sink, events) = collecting_sink();
-    run_slice_job_blocking(input, &registry, sink)
+    run_blocking(input, &registry, sink)
         .unwrap_or_else(|e| panic!("[{label}] start: {e:?}"));
     let path = events
         .lock()
@@ -517,7 +533,7 @@ fn snappy_slice_emits_started_progress_finished_with_summary() {
         vec![1],
     );
 
-    let job_id = run_slice_job_blocking(input, &registry, sink).expect("start");
+    let job_id = run_blocking(input, &registry, sink).expect("start");
     assert_eq!(job_id.0, 1);
 
     let events = events.lock().unwrap();
@@ -626,7 +642,7 @@ fn empty_plate_list_errors_synchronously() {
         vec![],
     );
 
-    let err = run_slice_job_blocking(input, &registry, sink).expect_err("ok");
+    let err = run_blocking(input, &registry, sink).expect_err("ok");
     use n3o_slic3r_lib::core::slice::SliceStartError;
     assert!(
         matches!(err, SliceStartError::NoPlatesRequested),
@@ -634,24 +650,19 @@ fn empty_plate_list_errors_synchronously() {
     );
 }
 
+/// The orchestrator takes a caller-resolved `PrinterInstance`, so an unknown
+/// `printer_instance_id` can no longer reach it — it's rejected earlier, at
+/// resolution: `lookup_instance` returns `None`, which the command /
+/// `build_slice_input` turn into an `UnboundPrinter` error before a job is ever
+/// started. (That boundary rejection is covered by the `build_slice_input`
+/// unbound-printer test.)
 #[test]
-fn unknown_printer_instance_errors() {
-    ensure_ffi_init();
-    let registry = JobRegistry::new();
-    let (sink, _events) = collecting_sink();
-
-    let mut input = bambi_input(
-        stl_objects(),
-        std::env::temp_dir().display().to_string(),
-        vec![1],
-    );
-    input.printer_instance_id = "ghost-printer".into();
-
-    let err = run_slice_job_blocking(input, &registry, sink).expect_err("ok");
-    use n3o_slic3r_lib::core::slice::SliceStartError;
+fn unknown_printer_instance_is_rejected_at_resolution() {
+    use n3o_slic3r_lib::core::printer::lookup_instance;
+    ensure_ffi_init(); // seeds the bundled fixture registry
     assert!(
-        matches!(err, SliceStartError::PrinterInstanceCompose(_)),
-        "got {err:?}",
+        lookup_instance("ghost-printer").is_none(),
+        "an unknown instance id must not resolve, so it can't reach the orchestrator",
     );
 }
 

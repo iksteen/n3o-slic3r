@@ -181,7 +181,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let registry = JobRegistry::new();
-    match run_slice_job_blocking(input, &registry, sink) {
+    match run_slice_job_blocking(input, &instance, &registry, sink) {
         Ok(job_id) => eprintln!("synchronous start ok (job_id={})", job_id.0),
         Err(e) => {
             eprintln!("SYNCHRONOUS START FAILED: {e}");

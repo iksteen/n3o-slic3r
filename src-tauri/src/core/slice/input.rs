@@ -27,7 +27,7 @@ use std::sync::Arc;
 use crate::core::cascade::commands::{ContextJson, OverrideFileSpec};
 use crate::core::filament;
 use crate::core::filament::FilamentProfile;
-use crate::core::printer::{self, lookup_instance, PrinterInstance};
+use crate::core::printer::{self, PrinterInstance};
 use crate::core::project::{PlateId, Project};
 use crate::core::scene::build_plate::{self, BuildPlate};
 use crate::core::scene::state::{GroupId, ModifierKind};
@@ -148,6 +148,7 @@ pub fn build_slice_input(
     project: &Project,
     plate_id: PlateId,
     output_dir: String,
+    instance: Option<&PrinterInstance>,
 ) -> Result<SliceJobInput, SliceInputError> {
     // ── Plate lookup ──────────────────────────────────────────
     let plate = project
@@ -159,16 +160,13 @@ pub fn build_slice_input(
     // ── Printer instance routing ──────────────────────────────
     // Cascade composition happens in the orchestrator from this
     // instance's per-bucket vendor fragments. The composer is the
-    // only slice path; an unbound plate (no printer_instance_id)
-    // can't slice. The printer profile is derived from the
-    // instance's `vendor_profile_ref` — the per-plate binding has
-    // no separate identity of its own.
-    let printer_instance_id = plate
-        .printer_instance_id()
-        .map(str::to_owned)
-        .ok_or(SliceInputError::UnboundPrinter { plate_id })?;
-    let instance = lookup_instance(&printer_instance_id)
-        .ok_or(SliceInputError::UnboundPrinter { plate_id })?;
+    // only slice path; an unbound plate (no bound instance) can't
+    // slice. The printer profile is derived from the instance's
+    // `vendor_profile_ref` — the per-plate binding has no separate
+    // identity of its own. `instance` is the caller-resolved binding
+    // for `plate_id` (the command boundary looks it up).
+    let instance = instance.ok_or(SliceInputError::UnboundPrinter { plate_id })?;
+    let printer_instance_id = instance.id.clone();
     let printer_profile = printer::lookup(&instance.vendor_profile_ref).ok_or_else(|| {
         SliceInputError::PrinterNotInRegistry {
             identity: instance.vendor_profile_ref.clone(),
@@ -563,6 +561,21 @@ mod tests {
         }
     }
 
+    /// Build a slice input, resolving `plate_id`'s bound instance from the
+    /// registry (the command boundary does this in prod). `None` for an unbound
+    /// / unknown plate — `build_slice_input` then returns the matching error.
+    fn build_input(
+        project: &Project,
+        plate_id: PlateId,
+        output_dir: String,
+    ) -> Result<SliceJobInput, SliceInputError> {
+        let inst = project
+            .plate(plate_id)
+            .and_then(|p| p.printer_instance_id())
+            .and_then(crate::core::printer::lookup_instance);
+        build_slice_input(project, plate_id, output_dir, inst.as_ref())
+    }
+
     /// Register an object on the active plate, resolving the plate's bound
     /// instance so the material auto-binds to a slot (the pure `register_object`
     /// takes the instance as a parameter; the command layer resolves it).
@@ -593,7 +606,7 @@ mod tests {
     fn happy_path_builds_input_with_objects() {
         let _registry = RegistryGuard::acquire();
         let project = one_plate_project_with_cube();
-        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert_eq!(input.plate_ids, vec![1]);
         assert_eq!(input.context.printer.model, "Bambu Lab A1 mini");
@@ -644,7 +657,7 @@ mod tests {
             .object_override_set(PlateId(1), a, "enable_support".into(), "1".into())
             .unwrap();
 
-        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
         assert_eq!(input.objects.len(), 2);
         for obj in &input.objects {
             assert_eq!(
@@ -676,7 +689,7 @@ mod tests {
         register_on_active(&mut project, NewSceneObject::at_origin(mesh_b, "cube-b"));
 
         // Build for plate 2 explicitly.
-        let input = build_slice_input(&project, id2, "/tmp/n3o-out".into()).expect("build plate 2");
+        let input = build_input(&project, id2, "/tmp/n3o-out".into()).expect("build plate 2");
         assert_eq!(input.plate_ids, vec![2]);
         assert_eq!(input.context.printer.model, "Snapmaker U1");
         assert_eq!(input.context.plate.identity, "Textured PEI Plate");
@@ -720,7 +733,7 @@ mod tests {
             },
         );
 
-        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert_eq!(input.objects.len(), 1);
         assert_eq!(input.objects[0].extruder, 3);
@@ -763,7 +776,7 @@ mod tests {
             },
         );
 
-        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert_eq!(input.objects.len(), 1);
         // Identity — NOT remapped to the bound toolhead's index.
@@ -791,7 +804,7 @@ mod tests {
             .project_overrides
             .insert("layer_height".into(), "0.12".into());
 
-        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert_eq!(input.context.user_overrides.len(), 1);
         assert!(input.context.user_overrides[0]
@@ -807,7 +820,7 @@ mod tests {
     fn empty_override_maps_produce_empty_spec_lists() {
         let _registry = RegistryGuard::acquire();
         let project = one_plate_project_with_cube();
-        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
         assert!(input.context.user_overrides.is_empty());
         assert!(input.context.project_overrides.is_empty());
     }
@@ -848,7 +861,7 @@ mod tests {
             None,
         );
 
-        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
 
         assert_eq!(input.objects.len(), 2);
         assert!(
@@ -862,7 +875,7 @@ mod tests {
     fn unknown_plate_id_errors() {
         let _registry = RegistryGuard::acquire();
         let project = one_plate_project_with_cube();
-        let err = build_slice_input(&project, PlateId(99), "/tmp/n3o-out".into())
+        let err = build_input(&project, PlateId(99), "/tmp/n3o-out".into())
             .expect_err("plate 99 not present");
         assert!(matches!(err, SliceInputError::UnknownPlate(PlateId(99))));
     }
@@ -876,7 +889,7 @@ mod tests {
         project.plates[0].set_printer(None);
         let mesh_id = project.register_mesh(triangle_mesh());
         project.register_object(NewSceneObject::at_origin(mesh_id, "cube"), None);
-        let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
+        let err = build_input(&project, PlateId(1), "/tmp/n3o-out".into())
             .expect_err("no printer bound");
         assert!(matches!(
             err,
@@ -892,7 +905,7 @@ mod tests {
         let mut project = Project::default();
         project.plates[0].set_printer(Some("bambi".into()));
         // No register_object call → no objects on the plate.
-        let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
+        let err = build_input(&project, PlateId(1), "/tmp/n3o-out".into())
             .expect_err("empty scene");
         assert!(matches!(
             err,
@@ -921,7 +934,7 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let err = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into())
+        let err = build_input(&project, PlateId(1), "/tmp/n3o-out".into())
             .expect_err("a1 mini doesn't support magnetic plate");
         // No manual restore: `RegistryGuard::Drop` resets to bundled
         // before the next test sees the registry, regardless of any
@@ -966,7 +979,7 @@ mod tests {
         let mesh_id = project.register_mesh(triangle_mesh());
         register_on_active(&mut project, NewSceneObject::at_origin(mesh_id, "cube"));
 
-        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
         assert_eq!(input.context.filaments.len(), 1);
         assert_eq!(input.context.filaments[0].identity, "generic-pla");
     }
@@ -989,7 +1002,7 @@ mod tests {
         project.register_object(NewSceneObject::at_origin(mesh_b, "b"), None);
 
         // Build for plate 1; only plate 1's object is carried.
-        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
         assert_eq!(input.objects.len(), 1);
         assert_eq!(input.objects[0].name, "a");
     }
@@ -1008,7 +1021,7 @@ mod tests {
             project.register_object(NewSceneObject::at_origin(mesh, format!("obj-{i}")), None);
         }
 
-        let input = build_slice_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
+        let input = build_input(&project, PlateId(1), "/tmp/n3o-out".into()).expect("build");
         let names: Vec<&str> = input.objects.iter().map(|o| o.name.as_str()).collect();
         assert_eq!(
             names,

@@ -22,6 +22,36 @@ use n3o_slic3r_lib::core::slice::{
 };
 use slic3r_ffi::init as ffi_init;
 
+/// Resolve the plate's bound instance (test-fixtures registry) and run the
+/// blocking slice — the pure orchestrator takes the instance as a parameter.
+fn run_blocking(
+    input: SliceJobInput,
+    registry: &JobRegistry,
+    sink: EventSink,
+) -> Result<
+    n3o_slic3r_lib::core::slice::JobId,
+    n3o_slic3r_lib::core::slice::orchestrator::SliceStartError,
+> {
+    let instance = n3o_slic3r_lib::core::printer::lookup_instance(&input.printer_instance_id)
+        .expect("test-fixtures: bound instance resolves");
+    run_slice_job_blocking(input, &instance, registry, sink)
+}
+
+fn run_blocking_with_plugins(
+    input: SliceJobInput,
+    registry: &JobRegistry,
+    sink: EventSink,
+    host: n3o_slic3r_lib::core::slice::orchestrator::PluginHostRef,
+) -> Result<
+    n3o_slic3r_lib::core::slice::JobId,
+    n3o_slic3r_lib::core::slice::orchestrator::SliceStartError,
+> {
+    let instance = n3o_slic3r_lib::core::printer::lookup_instance(&input.printer_instance_id)
+        .expect("test-fixtures: bound instance resolves");
+    run_slice_job_blocking_with_plugins(input, &instance, registry, sink, host)
+}
+
+
 /// The cube STL loaded into a single buffer-load [`SliceObject`].
 fn cube_objects() -> Vec<SliceObject> {
     let m = n3o_slic3r_lib::core::scene::loaders::load_mesh_from_path(&cube_stl())
@@ -170,7 +200,7 @@ fn post_slice_plugins_inject_into_real_gcode() {
     // Baseline: no plugins → libslic3r output has neither injection.
     let (input, registry, _out) = slice_input(vec![1]);
     let (sink, events) = collecting_sink();
-    run_slice_job_blocking(input, &registry, sink).expect("baseline slice");
+    run_blocking(input, &registry, sink).expect("baseline slice");
     let baseline = output_gcode(&events);
     // Negative control for BOTH plugins' exact injected strings.
     assert!(
@@ -212,7 +242,7 @@ fn post_slice_plugins_inject_into_real_gcode() {
     }
     let (input, registry, _out) = slice_input(vec![1]);
     let (sink, events) = collecting_sink();
-    run_slice_job_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
+    run_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
     let with_plugins = output_gcode(&events);
 
     assert!(
@@ -234,7 +264,7 @@ fn pre_slice_plugin_rewrites_bed_temp_in_real_gcode() {
 
     let (input, registry, _out) = slice_input(vec![1]);
     let (sink, events) = collecting_sink();
-    run_slice_job_blocking(input, &registry, sink).expect("baseline slice");
+    run_blocking(input, &registry, sink).expect("baseline slice");
     let baseline = output_gcode(&events);
     assert!(
         !baseline.contains("M140 S42") && !baseline.contains("M190 S42"),
@@ -261,7 +291,7 @@ fn pre_slice_plugin_rewrites_bed_temp_in_real_gcode() {
     host.lock().unwrap().set_global_enabled("force-bed", true);
     let (input, registry, _out) = slice_input(vec![1]);
     let (sink, events) = collecting_sink();
-    run_slice_job_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
+    run_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
     let with_plugin = output_gcode(&events);
 
     assert_ne!(
@@ -412,7 +442,7 @@ fn platecycler_eject_macro_in_real_slice() {
     let host = Arc::new(Mutex::new(host_for_example("platecycler")));
     let (input, registry, _out) = slice_input(vec![1]);
     let (sink, events) = collecting_sink();
-    run_slice_job_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
+    run_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
     let g = output_gcode(&events);
 
     assert!(g.contains("; n3o:platecycler"), "sentinel present");
@@ -444,7 +474,7 @@ fn platecycler_disabled_by_activation_override_in_real_slice() {
         content: "\"plugin.platecycler.enabled\" = false".into(),
     });
     let (sink, events) = collecting_sink();
-    run_slice_job_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
+    run_blocking_with_plugins(input, &registry, sink, host).expect("plugin slice");
     let g = output_gcode(&events);
     assert!(
         !g.contains("; n3o:platecycler"),
@@ -479,7 +509,7 @@ fn erroring_plugin_does_not_break_a_multi_plate_job() {
     host.lock().unwrap().set_global_enabled("boom", true);
     let (input, registry, _out) = slice_input(vec![1, 2]);
     let (sink, events) = collecting_sink();
-    run_slice_job_blocking_with_plugins(input, &registry, sink, host)
+    run_blocking_with_plugins(input, &registry, sink, host)
         .expect("multi-plate slice should start");
 
     // Both plates finished despite the plugin erroring on the first.
@@ -517,7 +547,7 @@ fn phase_8_exit_smoke() {
             });
         }
         let (sink, events) = collecting_sink();
-        run_slice_job_blocking_with_plugins(input, &registry, sink, host).expect("slice");
+        run_blocking_with_plugins(input, &registry, sink, host).expect("slice");
         output_gcode(&events)
     };
 

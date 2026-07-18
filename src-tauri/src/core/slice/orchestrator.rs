@@ -64,7 +64,7 @@ use crate::core::plugin::{
     DispatchGate, FilamentLoadout, HookKind, PlateMeta, PluginHost, PostSliceHook, PreSliceContext,
     PreSliceHook,
 };
-use crate::core::printer::lookup_instance;
+use crate::core::printer::PrinterInstance;
 use crate::core::profile_library::{compose_cascade, with_quality_profile};
 use crate::core::project::SlicingContext;
 use slic3r_ffi::{slice_outcome, Model};
@@ -120,25 +120,21 @@ pub type EventSink = Box<dyn Fn(SliceEvent) + Send + Sync + 'static>;
 
 /// Resolve the [`Cascade`] this job slices against.
 ///
-/// Looks the named PrinterInstance up in the bundled library and
-/// composes a fresh authored cascade from its per-bucket vendor fragments
-/// (plus the instance's own machine overrides). Composition happens per
-/// job, not against a shared registry; there's no caching.
+/// Composes a fresh authored cascade from the (caller-resolved) instance's
+/// per-bucket vendor fragments plus its own machine overrides. Composition
+/// happens per job, not against a shared registry; there's no caching.
 ///
 /// The user / project / object override tiers are NOT folded here — the
 /// worker applies them as the second phase via
 /// [`override_tiers_from_context`] + `cascade::resolve_with_overrides`.
-fn resolve_cascade(input: &SliceJobInput) -> Result<Cascade, SliceStartError> {
-    let instance = lookup_instance(&input.printer_instance_id).ok_or_else(|| {
-        SliceStartError::PrinterInstanceCompose(format!(
-            "unknown printer instance id `{}`",
-            input.printer_instance_id,
-        ))
-    })?;
+fn resolve_cascade(
+    input: &SliceJobInput,
+    instance: &PrinterInstance,
+) -> Result<Cascade, SliceStartError> {
     // The plate's process/quality profile overrides the instance's
     // (per-plate binding); `with_quality_profile` swaps it in only when
     // set, so the composer picks the plate's process fragment.
-    let effective = with_quality_profile(&instance, input.quality_profile.as_deref());
+    let effective = with_quality_profile(instance, input.quality_profile.as_deref());
     compose_cascade(&effective, &input.material_layout)
         .map_err(|e| SliceStartError::PrinterInstanceCompose(e.to_string()))
 }
@@ -197,12 +193,13 @@ fn flat_overrides_from_specs(specs: &[OverrideFileSpec]) -> Vec<FlatOverrides> {
 /// handle. Both the spawning and blocking entries build on this.
 fn prepare_job(
     input: SliceJobInput,
+    instance: &PrinterInstance,
     registry: &JobRegistry,
 ) -> Result<(JobId, ResolvedJob, Arc<JobHandle>), SliceStartError> {
     if input.plate_ids.is_empty() {
         return Err(SliceStartError::NoPlatesRequested);
     }
-    let cascade = resolve_cascade(&input)?;
+    let cascade = resolve_cascade(&input, instance)?;
     let context = SlicingContext {
         printer: Arc::new(input.context.printer.clone()),
         plate: Arc::new(input.context.plate.clone()),
@@ -216,19 +213,13 @@ fn prepare_job(
         active_slot: input.context.active_slot,
     };
     // Snapshot the bound filament loadout from the instance for the
-    // plugin hooks. `resolve_cascade` already proved the instance
-    // resolves; re-looking-up here is cheap (bundled-library read) and
-    // keeps the snapshot logic out of the cascade path. Empty on the
-    // (now-unreachable) miss so plugins still run with no slots.
-    let filament = lookup_instance(&input.printer_instance_id)
-        .map(|inst| {
-            FilamentLoadout::from_instance(
-                &inst,
-                input.context.printer.model.clone(),
-                input.context.printer.toolheads.len(),
-            )
-        })
-        .unwrap_or_default();
+    // plugin hooks — from the caller-resolved `instance`, same one the
+    // cascade composed against.
+    let filament = FilamentLoadout::from_instance(
+        instance,
+        input.context.printer.model.clone(),
+        input.context.printer.toolheads.len(),
+    );
     let output_dir = PathBuf::from(&input.output_dir);
     // Materialize the output directory now so the worker can write
     // its first file without dancing around `mkdir -p`. If the path
@@ -246,15 +237,12 @@ fn prepare_job(
     // user library), project = cascade *user* tier
     // (`Project.user_overrides`), plate = cascade *project* tier
     // (`Plate.project_overrides`). The object tier is not a plugin level.
-    let plugin_instance = lookup_instance(&input.printer_instance_id)
-        .map(|inst| {
-            inst.config_overrides
-                .iter()
-                .filter(|(k, _)| k.starts_with("plugin."))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let plugin_instance = instance
+        .config_overrides
+        .iter()
+        .filter(|(k, _)| k.starts_with("plugin."))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     let plugin_project = plugin_overrides_for_tier(&input.context.user_overrides);
     let plugin_plate = plugin_overrides_for_tier(&input.context.project_overrides);
     let override_tiers = override_tiers_from_context(&input.context);
@@ -282,11 +270,12 @@ fn prepare_job(
 /// runtime.
 pub fn start_slice_job_with_sink_and_plugins(
     input: SliceJobInput,
+    instance: &PrinterInstance,
     registry: &Arc<JobRegistry>,
     sink: EventSink,
     host: Option<PluginHostRef>,
 ) -> Result<JobId, SliceStartError> {
-    spawn_worker(input, registry, sink, host)
+    spawn_worker(input, instance, registry, sink, host)
 }
 
 /// How long a finished job's handle lingers in the registry before the
@@ -298,11 +287,12 @@ const JOB_RETENTION_AFTER_TERMINAL: Duration = Duration::from_secs(30);
 
 fn spawn_worker(
     input: SliceJobInput,
+    instance: &PrinterInstance,
     registry: &Arc<JobRegistry>,
     sink: EventSink,
     host: Option<PluginHostRef>,
 ) -> Result<JobId, SliceStartError> {
-    let (job_id, resolved, handle) = prepare_job(input, registry)?;
+    let (job_id, resolved, handle) = prepare_job(input, instance, registry)?;
     let sink = Arc::new(sink);
     let registry = Arc::clone(registry);
     thread::Builder::new()
@@ -322,10 +312,11 @@ fn spawn_worker(
 /// calling thread instead of spawning. No plugin host.
 pub fn run_slice_job_blocking(
     input: SliceJobInput,
+    instance: &PrinterInstance,
     registry: &JobRegistry,
     sink: EventSink,
 ) -> Result<JobId, SliceStartError> {
-    let (job_id, resolved, handle) = prepare_job(input, registry)?;
+    let (job_id, resolved, handle) = prepare_job(input, instance, registry)?;
     run_worker(job_id, resolved, Arc::new(sink), handle, None);
     Ok(job_id)
 }
@@ -334,11 +325,12 @@ pub fn run_slice_job_blocking(
 /// integration test to drive a real slice through a real plugin.
 pub fn run_slice_job_blocking_with_plugins(
     input: SliceJobInput,
+    instance: &PrinterInstance,
     registry: &JobRegistry,
     sink: EventSink,
     host: PluginHostRef,
 ) -> Result<JobId, SliceStartError> {
-    let (job_id, resolved, handle) = prepare_job(input, registry)?;
+    let (job_id, resolved, handle) = prepare_job(input, instance, registry)?;
     run_worker(job_id, resolved, Arc::new(sink), handle, Some(host));
     Ok(job_id)
 }

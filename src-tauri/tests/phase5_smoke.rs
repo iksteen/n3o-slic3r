@@ -34,7 +34,7 @@
 use std::path::PathBuf;
 
 use n3o_slic3r_lib::core::printer::profile::BoundingBox;
-use n3o_slic3r_lib::core::printer::{lookup, PrinterProfile};
+use n3o_slic3r_lib::core::printer::{lookup, lookup_instance, PrinterProfile};
 use n3o_slic3r_lib::core::project::{
     format::{read_project, write_project},
     PlateId, Project,
@@ -89,32 +89,59 @@ fn build_exit_fixture() -> Project {
     let mut p = Project::default();
 
     // ── Plate 1 (default plate, pre-existing) → A1 mini ──
-    p.rebind_plate_printer(PlateId(1), BAMBI_INSTANCE.into(), &a1_mini())
-        .expect("plate 1 rebind to a1 mini");
+    p.rebind_plate_printer(
+        PlateId(1),
+        BAMBI_INSTANCE.into(),
+        &a1_mini(),
+        None,
+        lookup_instance(BAMBI_INSTANCE).as_ref(),
+    )
+    .expect("plate 1 rebind to a1 mini");
     p.set_active_plate(PlateId(1)).expect("activate plate 1");
     let mesh_a = p.register_mesh(triangle_mesh());
-    let obj_a = p.register_object(NewSceneObject::at_origin(mesh_a, "plate1-cube"));
+    let obj_a = p.register_object(
+        NewSceneObject::at_origin(mesh_a, "plate1-cube"),
+        lookup_instance(BAMBI_INSTANCE).as_ref(),
+    );
     // Object-tier override the exit criterion calls out.
     p.object_override_set(PlateId(1), obj_a, "enable_support".into(), "1".into())
         .expect("plate 1 object-tier override");
 
     // ── Plate 2 → U1, with a project-tier override ──
     let (id2, _) = p.add_plate(None);
-    p.rebind_plate_printer(id2, SNAPPY_INSTANCE.into(), &snapmaker_u1())
-        .expect("plate 2 rebind to u1");
+    p.rebind_plate_printer(
+        id2,
+        SNAPPY_INSTANCE.into(),
+        &snapmaker_u1(),
+        None,
+        lookup_instance(SNAPPY_INSTANCE).as_ref(),
+    )
+    .expect("plate 2 rebind to u1");
     p.set_active_plate(id2).expect("activate plate 2");
     let mesh_b = p.register_mesh(triangle_mesh());
-    p.register_object(NewSceneObject::at_origin(mesh_b, "plate2-fourcolor-stub"));
+    p.register_object(
+        NewSceneObject::at_origin(mesh_b, "plate2-fourcolor-stub"),
+        lookup_instance(SNAPPY_INSTANCE).as_ref(),
+    );
     p.project_override_set(id2, "layer_height".into(), "0.12".into())
         .expect("plate 2 project-tier override");
 
     // ── Plate 3 → U1 ──
     let (id3, _) = p.add_plate(None);
-    p.rebind_plate_printer(id3, SNAPPY_INSTANCE.into(), &snapmaker_u1())
-        .expect("plate 3 rebind to u1");
+    p.rebind_plate_printer(
+        id3,
+        SNAPPY_INSTANCE.into(),
+        &snapmaker_u1(),
+        None,
+        lookup_instance(SNAPPY_INSTANCE).as_ref(),
+    )
+    .expect("plate 3 rebind to u1");
     p.set_active_plate(id3).expect("activate plate 3");
     let mesh_c = p.register_mesh(triangle_mesh());
-    p.register_object(NewSceneObject::at_origin(mesh_c, "plate3-20mmbox-stub"));
+    p.register_object(
+        NewSceneObject::at_origin(mesh_c, "plate3-20mmbox-stub"),
+        lookup_instance(SNAPPY_INSTANCE).as_ref(),
+    );
 
     // ── User-tier override (project-wide) ──
     p.user_overrides.insert("travel_speed".into(), "300".into());
@@ -139,7 +166,7 @@ fn phase5_smoke_3plate_save_reload_roundtrip() {
 
     // ─ Step 3: drop in-memory project, load saved file ─────
     drop(original);
-    let reloaded = read_project(&path).expect("step 3: read_project");
+    let (reloaded, _origin) = read_project(&path).expect("step 3: read_project");
 
     // ─ Step 4: per-field equality assertions ───────────────
 
