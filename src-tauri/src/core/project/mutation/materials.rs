@@ -346,7 +346,7 @@ mod tests {
     use super::*;
     use crate::core::printer::SlotRef;
     use crate::core::project::mutation::test_support::*;
-    use crate::core::project::SessionRuntime;
+    use crate::core::project::Session;
 
     #[test]
     fn register_object_binds_painted_material() {
@@ -367,13 +367,12 @@ mod tests {
         // Deleting the painted object must clean up the painted material's
         // binding too — it's named by the mesh paint, not any extruder_id, so
         // the delete path has to consult the paint or the binding lingers.
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let id = add_painted_cube(&mut p);
-        assert!(p.plates[0].material_to_slot.contains_key(&2));
-        p.delete_objects(&mut rt, &[id]);
+        let mut session = Session::new(Project::default());
+        let id = add_painted_cube(&mut session.project);
+        assert!(session.project.plates[0].material_to_slot.contains_key(&2));
+        session.delete_objects(&[id]);
         assert!(
-            !p.plates[0].material_to_slot.contains_key(&2),
+            !session.project.plates[0].material_to_slot.contains_key(&2),
             "painted material 2's binding should be pruned once its object is gone",
         );
     }
@@ -455,21 +454,20 @@ mod tests {
         // M1 → T2 with no object to justify it: confusing UX, and
         // the slice-time cascade keeps emitting toolchanges to T2
         // for a material nothing references).
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
+        let mut session = Session::new(Project::default());
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
-        p.plates[0].set_printer(Some("snappy".into()));
-        let cube = add_cube_with_material(&mut p, 1);
+        session.project.plates[0].set_printer(Some("snappy".into()));
+        let cube = add_cube_with_material(&mut session.project, 1);
         // User manually pins M1 → T2 (instead of the auto-bind's T1).
-        p.plates[0].material_to_slot.insert(
+        session.project.plates[0].material_to_slot.insert(
             1,
             SlotRef {
                 extruder: 1,
                 slot: 0,
             },
         );
-        let events = p.delete_objects(&mut rt, &[cube]);
-        assert!(!p.plates[0].material_to_slot.contains_key(&1));
+        let events = session.delete_objects(&[cube]);
+        assert!(!session.project.plates[0].material_to_slot.contains_key(&1));
         assert!(
             events
                 .iter()
@@ -543,16 +541,15 @@ mod tests {
     fn deleting_one_cube_keeps_binding_when_another_still_uses_the_material() {
         // Two cubes share material 1. Deleting one leaves M1 still in
         // use → binding survives, no MaterialSlotChanged event.
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
+        let mut session = Session::new(Project::default());
         let _guard = crate::core::printer::instance_registry::RegistryGuard::acquire();
-        p.plates[0].set_printer(Some("snappy".into()));
-        let cube_a = add_cube_with_material(&mut p, 1);
-        let _cube_b = add_cube_with_material(&mut p, 1);
-        let before = p.plates[0].material_to_slot.get(&1).copied();
+        session.project.plates[0].set_printer(Some("snappy".into()));
+        let cube_a = add_cube_with_material(&mut session.project, 1);
+        let _cube_b = add_cube_with_material(&mut session.project, 1);
+        let before = session.project.plates[0].material_to_slot.get(&1).copied();
         assert!(before.is_some(), "auto-bind populated M1");
-        let events = p.delete_objects(&mut rt, &[cube_a]);
-        assert_eq!(p.plates[0].material_to_slot.get(&1).copied(), before);
+        let events = session.delete_objects(&[cube_a]);
+        assert_eq!(session.project.plates[0].material_to_slot.get(&1).copied(), before);
         assert!(
             !events
                 .iter()

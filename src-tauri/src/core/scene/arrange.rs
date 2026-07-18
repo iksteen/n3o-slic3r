@@ -382,10 +382,7 @@ pub fn apply_arrangement(
                 .map(|s| s.id)
                 .collect();
             if let Some(&target) = bed_plate.get(&k) {
-                match session
-                    .project
-                    .move_objects_to_plate(&mut session.runtime, source, target, &ids)
-                {
+                match session.move_objects_to_plate(source, target, &ids) {
                     Ok(evs) => events.extend(evs),
                     Err(e) => tracing::warn!(error = %e, "auto-arrange spill move failed"),
                 }
@@ -484,8 +481,7 @@ mod tests {
 
     fn add_n_cubes(session: &mut Session, n: usize, edge: f32) {
         for _ in 0..n {
-            session.project.add_from_primitive(
-                &mut session.runtime,
+            session.add_from_primitive(
                 PrimitiveKind::Cube,
                 PrimitiveParams {
                     width: edge,
@@ -535,7 +531,7 @@ mod tests {
     #[test]
     fn ten_small_cubes_all_fit_on_a1_mini() {
         let mut session = Session::new(Project::new());
-        session.project.set_active_printer(&mut session.runtime, Some(&a1_mini()));
+        session.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut session, 10, 20.0);
         let bed = session.active_plate_runtime().bed.clone().unwrap();
         let plan = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
@@ -550,7 +546,7 @@ mod tests {
     #[test]
     fn one_hundred_cubes_overflow_spills_rather_than_un_placing() {
         let mut session = Session::new(Project::new());
-        session.project.set_active_printer(&mut session.runtime, Some(&a1_mini()));
+        session.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut session, 100, 30.0);
         let bed = session.active_plate_runtime().bed.clone().unwrap();
         let plan = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
@@ -632,7 +628,7 @@ mod tests {
     #[test]
     fn spill_creates_extra_plates_and_relocates_the_objects() {
         let mut session = Session::new(Project::new());
-        session.project.set_active_printer(&mut session.runtime, Some(&a1_mini()));
+        session.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut session, 100, 30.0);
         assert_eq!(session.project.plates.len(), 1);
         let bed = session.active_plate_runtime().bed.clone().unwrap();
@@ -655,7 +651,7 @@ mod tests {
     #[test]
     fn placed_objects_stay_inside_build_volume_after_apply() {
         let mut session = Session::new(Project::new());
-        session.project.set_active_printer(&mut session.runtime, Some(&a1_mini()));
+        session.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut session, 6, 25.0);
         let bed = session.active_plate_runtime().bed.clone().unwrap();
         let plan = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
@@ -677,7 +673,7 @@ mod tests {
     #[test]
     fn arrange_is_idempotent_on_no_overflow_scene() {
         let mut session = Session::new(Project::new());
-        session.project.set_active_printer(&mut session.runtime, Some(&a1_mini()));
+        session.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut session, 4, 30.0);
         let bed = session.active_plate_runtime().bed.clone().unwrap();
         let plan1 = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
@@ -726,7 +722,7 @@ mod tests {
             max: [50.0, 50.0, 1.0],
         });
         let mut session = Session::new(Project::new());
-        session.project.set_active_printer(&mut session.runtime, Some(&printer));
+        session.set_active_printer(Some(&printer));
         add_n_cubes(&mut session, 3, 30.0);
         let bed = session.active_plate_runtime().bed.clone().unwrap();
         let plan = plan_arrangement(&session.project, &bed, ArrangeOptions::default());
@@ -764,11 +760,11 @@ mod tests {
             radial_segments: 0,
         };
         let mut session = Session::new(Project::new());
-        session.project.set_active_printer(&mut session.runtime, Some(&a1_mini()));
+        session.set_active_printer(Some(&a1_mini()));
         let (_, a, _) =
-            session.project.add_from_primitive(&mut session.runtime, PrimitiveKind::Cube, cube);
+            session.add_from_primitive(PrimitiveKind::Cube, cube);
         let (_, b, _) =
-            session.project.add_from_primitive(&mut session.runtime, PrimitiveKind::Cube, cube);
+            session.add_from_primitive(PrimitiveKind::Cube, cube);
         // Offset b so the group has internal structure, and add a loose cube so
         // the pack actually has to move the group.
         let b_current = session.project.active_plate().scene.objects.get(&b).unwrap().transform;
@@ -780,7 +776,7 @@ mod tests {
             )
             .unwrap();
         let (_, _c, _) =
-            session.project.add_from_primitive(&mut session.runtime, PrimitiveKind::Cube, cube);
+            session.add_from_primitive(PrimitiveKind::Cube, cube);
         session.project.group_objects(&[a, b], "grp".into()).unwrap();
 
         let origin = |p: &Project, id| {
@@ -812,7 +808,7 @@ mod tests {
         // objects must still land within the centered extents — not offset by
         // bed_min.
         let mut session = Session::new(Project::new());
-        session.project.set_active_printer(&mut session.runtime, Some(&a1_mini()));
+        session.set_active_printer(Some(&a1_mini()));
         add_n_cubes(&mut session, 4, 25.0);
         let mut bed = session.active_plate_runtime().bed.clone().unwrap();
         bed.extents.min = [-90.0, -90.0, 0.0];

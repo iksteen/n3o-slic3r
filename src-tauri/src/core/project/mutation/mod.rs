@@ -50,21 +50,21 @@ pub(crate) mod test_support {
     //! file's tests glob-import these.
     use crate::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
     use crate::core::project::model::{PlateId, Project};
-    use crate::core::project::SessionRuntime;
+    use crate::core::project::Session;
     use crate::core::scene::state::{MeshId, MeshProvenance, NewMesh, NewSceneObject, ObjectId};
     use crate::core::scene::transform::Transform;
     use std::collections::HashSet;
 
-    /// Test-only: the active plate's selection from a runtime (empty when the
+    /// Test-only: the active plate's selection from a session (empty when the
     /// plate has no runtime entry yet). Owned clone — fine for assertions.
-    pub(crate) fn active_selection(p: &Project, rt: &SessionRuntime) -> HashSet<ObjectId> {
-        plate_selection(rt, p.active_plate().id)
+    pub(crate) fn active_selection(session: &Session) -> HashSet<ObjectId> {
+        plate_selection(session, session.project.active_plate().id)
     }
 
     /// Test-only: a plate's selection by id.
-    pub(crate) fn plate_selection(rt: &SessionRuntime, id: PlateId) -> HashSet<ObjectId> {
-        rt.plates
-            .get(&id)
+    pub(crate) fn plate_selection(session: &Session, id: PlateId) -> HashSet<ObjectId> {
+        session
+            .plate_runtime(id)
             .map(|r| r.selection.clone())
             .unwrap_or_default()
     }

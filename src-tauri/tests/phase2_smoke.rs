@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use n3o_slic3r_lib::core::printer::profile::{BoundingBox, PrinterProfile, Toolhead};
-use n3o_slic3r_lib::core::project::{Project, Session, SessionRuntime};
+use n3o_slic3r_lib::core::project::{Project, Session};
 use n3o_slic3r_lib::core::scene::events::SceneEvent;
 use n3o_slic3r_lib::core::scene::primitives::{PrimitiveKind, PrimitiveParams};
 use n3o_slic3r_lib::core::scene::state::NewSceneObject;
@@ -53,9 +53,8 @@ fn a1_mini() -> PrinterProfile {
 
 #[test]
 fn step_1_set_active_printer_emits_bed_changed() {
-    let mut state = Project::default();
-    let mut rt = SessionRuntime::default();
-    let events = state.set_active_printer(&mut rt, Some(&a1_mini()));
+    let mut state = Session::new(Project::default());
+    let events = state.set_active_printer(Some(&a1_mini()));
     let bed_set = events
         .iter()
         .any(|e| matches!(e, SceneEvent::BedChanged { bed: Some(_), .. }));
@@ -63,30 +62,29 @@ fn step_1_set_active_printer_emits_bed_changed() {
         bed_set,
         "set_active_printer should emit a populated BedChanged"
     );
-    let plate_id = state.active_plate().id;
+    let plate_id = state.project.active_plate().id;
     assert!(
-        rt.plates.get(&plate_id).and_then(|r| r.bed.clone()).is_some(),
+        state.plate_runtime(plate_id).and_then(|r| r.bed.clone()).is_some(),
         "runtime has the bed cached"
     );
 }
 
 #[test]
 fn step_2_library_primitive_lands_on_plate() {
-    let mut state = Project::default();
-    let mut rt = SessionRuntime::default();
-    state.set_active_printer(&mut rt, Some(&a1_mini()));
+    let mut state = Session::new(Project::default());
+    state.set_active_printer(Some(&a1_mini()));
     let (_mesh_id, obj_id, events) = state.add_from_primitive(
-        &mut rt,
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
     );
     let obj = state
+        .project
         .active_plate()
         .scene
         .objects
         .get(&obj_id)
         .expect("registered");
-    let mesh = state.meshes.get(&obj.mesh).expect("registered");
+    let mesh = state.project.meshes.get(&obj.mesh).expect("registered");
     // Cube primitive bbox is [-10, 10] cubed by default; after the
     // add_from_primitive auto-lift, the world-space min Z should be
     // 0 (rests on the plate).
@@ -177,17 +175,16 @@ fn step_4_stormtrooper_loads_under_budget_when_present() {
 
 #[test]
 fn step_5_scene_snapshot_round_trips_after_full_setup() {
-    let mut state = Project::default();
-    let mut rt = SessionRuntime::default();
-    state.set_active_printer(&mut rt, Some(&a1_mini()));
+    let mut state = Session::new(Project::default());
+    state.set_active_printer(Some(&a1_mini()));
     let _ = state.add_from_primitive(
-        &mut rt,
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
     );
     // Snapshot via the same shape `scene_snapshot` would assemble.
-    let meshes: Vec<_> = state.meshes.values().map(|m| m.header()).collect();
+    let meshes: Vec<_> = state.project.meshes.values().map(|m| m.header()).collect();
     let objects: Vec<_> = state
+        .project
         .active_plate()
         .scene
         .objects
@@ -205,12 +202,9 @@ fn step_5_scene_snapshot_round_trips_after_full_setup() {
 #[test]
 fn step_6_auto_arrange_then_oob_clear_under_active_printer() {
     let mut session = Session::new(Project::default());
-    session
-        .project
-        .set_active_printer(&mut session.runtime, Some(&a1_mini()));
+    session.set_active_printer(Some(&a1_mini()));
     for _ in 0..6 {
-        let _ = session.project.add_from_primitive(
-            &mut session.runtime,
+        let _ = session.add_from_primitive(
             PrimitiveKind::Cube,
             PrimitiveParams {
                 width: 20.0,
@@ -240,28 +234,25 @@ fn step_6_auto_arrange_then_oob_clear_under_active_printer() {
 #[test]
 fn step_7_selection_and_delete_round_trip() {
     use n3o_slic3r_lib::core::scene::events::SelectMode;
-    let mut state = Project::default();
-    let mut rt = SessionRuntime::default();
-    state.set_active_printer(&mut rt, Some(&a1_mini()));
+    let mut state = Session::new(Project::default());
+    state.set_active_printer(Some(&a1_mini()));
     let (_, a, _) = state.add_from_primitive(
-        &mut rt,
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
     );
     let (_, b, _) = state.add_from_primitive(
-        &mut rt,
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
     );
-    state.select(&mut rt, &[a, b], SelectMode::Replace);
-    let events = state.delete_objects(&mut rt, &[a, b]);
+    state.select(&[a, b], SelectMode::Replace);
+    let events = state.delete_objects(&[a, b]);
     let removed = events
         .iter()
         .filter(|e| matches!(e, SceneEvent::ObjectRemoved { .. }))
         .count();
     assert_eq!(removed, 2);
     assert_eq!(
-        state.active_plate().scene.objects.len(),
+        state.project.active_plate().scene.objects.len(),
         0,
         "both objects gone"
     );
@@ -273,18 +264,16 @@ fn step_8_scene_clone_for_reconnect_drops_buffers_from_snapshot() {
     // vertex/normal/index buffers are `#[serde(skip)]` so they don't
     // bloat the snapshot. The renderer fetches them per-mesh via
     // `scene_mesh_buffers`. Verify a JSON round-trip strips them.
-    let mut state = Project::default();
-    let mut rt = SessionRuntime::default();
-    state.set_active_printer(&mut rt, Some(&a1_mini()));
+    let mut state = Session::new(Project::default());
+    state.set_active_printer(Some(&a1_mini()));
     let (mesh_id, _, _) = state.add_from_primitive(
-        &mut rt,
         PrimitiveKind::Cube,
         PrimitiveParams::defaults_for(PrimitiveKind::Cube),
     );
-    let original = state.meshes.get(&mesh_id).unwrap();
+    let original = state.project.meshes.get(&mesh_id).unwrap();
     assert!(!original.vertices.is_empty(), "live mesh has vertex data");
 
-    let json = serde_json::to_string(&state).expect("ser");
+    let json = serde_json::to_string(&state.project).expect("ser");
     let reloaded: Project = serde_json::from_str(&json).expect("de");
     let restored = reloaded.meshes.get(&mesh_id).unwrap();
     assert!(

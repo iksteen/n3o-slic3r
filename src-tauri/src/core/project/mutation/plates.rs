@@ -3,7 +3,7 @@
 //! binding (bed viz + the picker rebind/unbind flows).
 
 use crate::core::project::model::{Plate, PlateId, Project};
-use crate::core::project::session::{derive_bed, SessionRuntime};
+use crate::core::project::session::{derive_bed, Session};
 use crate::core::printer::profile::PrinterProfile;
 use crate::core::scene::bed;
 use crate::core::scene::events::{SceneEvent, SceneOpError};
@@ -200,26 +200,6 @@ impl Project {
         Ok(vec![SceneEvent::PlateChanged { plate_id }])
     }
 
-    /// Install the active plate's bed by passing through a resolved
-    /// `PrinterProfile`. `None` clears the bed. The plate's
-    /// `printer_instance_id` binding is unchanged here — this is the
-    /// bed-viz-only path used by `scene_set_active_printer` and the
-    /// arrange helpers. The picker flow that also updates the binding
-    /// is [`Self::rebind_plate_printer`].
-    pub fn set_active_printer(
-        &mut self,
-        rt: &mut SessionRuntime,
-        printer: Option<&PrinterProfile>,
-    ) -> Vec<SceneEvent> {
-        let plate_id = self.active_plate().id;
-        let new_bed = printer.map(bed::bed_for_printer);
-        rt.plates.entry(plate_id).or_default().bed = new_bed.clone();
-        vec![SceneEvent::BedChanged {
-            plate_id,
-            bed: new_bed,
-        }]
-    }
-
     /// Rebind a plate to a different `PrinterInstance` (backs the
     /// printer picker flow). The caller is responsible for
     /// resolving the chosen instance's `PrinterProfile` via the
@@ -358,12 +338,27 @@ impl Project {
     }
 }
 
+impl Session {
+    /// Install the active plate's bed from a resolved `PrinterProfile`,
+    /// without touching the binding — a bed-viz-only path used by the arrange
+    /// helpers/tests. `None` clears it. (The picker flow that also updates the
+    /// binding is [`Project::rebind_plate_printer`] + `Session::reconcile`.)
+    pub fn set_active_printer(&mut self, printer: Option<&PrinterProfile>) -> Vec<SceneEvent> {
+        let plate_id = self.project.active_plate().id;
+        let new_bed = printer.map(bed::bed_for_printer);
+        self.runtime.plates.entry(plate_id).or_default().bed = new_bed.clone();
+        vec![SceneEvent::BedChanged {
+            plate_id,
+            bed: new_bed,
+        }]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::project::mutation::test_support::*;
     use crate::core::project::session::derive_bed;
-    use crate::core::project::SessionRuntime;
     use crate::core::scene::state::NewSceneObject;
 
     #[test]
@@ -519,10 +514,9 @@ mod tests {
 
     #[test]
     fn set_active_printer_delegates_to_active_plate() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        p.set_active_printer(&mut rt, Some(&a1_mini_for_test()));
-        assert!(derive_bed(p.active_plate()).is_some());
+        let mut session = Session::new(Project::default());
+        session.set_active_printer(Some(&a1_mini_for_test()));
+        assert!(derive_bed(session.project.active_plate()).is_some());
     }
 
     #[test]

@@ -406,10 +406,8 @@ pub fn scene_move_objects_to_plate(
     state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let session = &mut *s;
-    let events = session
-        .project
-        .move_objects_to_plate(&mut session.runtime, from_plate, to_plate, &object_ids)
+    let events = s
+        .move_objects_to_plate(from_plate, to_plate, &object_ids)
         .map_err(|e| e.to_string())?;
     drop(s);
     emit_all(&window, &events);
@@ -623,9 +621,7 @@ pub fn scene_object_clone(
                     // ObjectAdded events were never emitted, so the matching
                     // ObjectRemoved ones are dropped too: the copy never existed
                     // for the UI.
-                    let _ = session
-                        .project
-                        .delete_objects(&mut session.runtime, &batch);
+                    let _ = session.delete_objects(&batch);
                     hit_cap = false;
                     break;
                 }
@@ -660,9 +656,7 @@ pub fn scene_object_add_from_primitive(
 ) -> Result<(MeshId, ObjectId), String> {
     let params = params.unwrap_or_else(|| super::primitives::PrimitiveParams::defaults_for(kind));
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let session = &mut *s;
-    let (mesh_id, obj_id, events) =
-        session.project.add_from_primitive(&mut session.runtime, kind, params);
+    let (mesh_id, obj_id, events) = s.add_from_primitive(kind, params);
     drop(s);
     emit_all(&window, &events);
     Ok((mesh_id, obj_id))
@@ -682,13 +676,12 @@ pub fn scene_select(
     state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let session = &mut *s;
     let ids = if expand_groups.unwrap_or(false) {
-        session.project.group_expanded_ids(&ids).to_vec()
+        s.project.group_expanded_ids(&ids).to_vec()
     } else {
         ids
     };
-    let events = session.project.select(&mut session.runtime, &ids, mode);
+    let events = s.select(&ids, mode);
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -699,8 +692,7 @@ pub fn scene_select(
 #[tracing::instrument(skip(state, window))]
 pub fn scene_deselect(window: Window, state: State<Arc<Mutex<Session>>>) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let session = &mut *s;
-    let events = session.project.deselect_all(&mut session.runtime);
+    let events = s.deselect_all();
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -732,8 +724,7 @@ pub fn scene_object_delete(
     state: State<Arc<Mutex<Session>>>,
 ) -> Result<(), String> {
     let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-    let session = &mut *s;
-    let events = session.project.delete_objects(&mut session.runtime, &ids);
+    let events = s.delete_objects(&ids);
     drop(s);
     emit_all(&window, &events);
     Ok(())
@@ -1022,8 +1013,7 @@ pub async fn scene_cut_apply(
     // Phase 3: register the halves + remove the sources, under lock.
     let (new_ids, events) = {
         let mut s = state.lock().map_err(|e| format!("scene lock: {e}"))?;
-        let session = &mut *s;
-        session.project.apply_cut(&mut session.runtime, results)
+        s.apply_cut(results)
     };
     emit_all(&window, &events);
     Ok(new_ids.into_iter().map(|id| id.0).collect())

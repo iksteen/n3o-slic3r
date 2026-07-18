@@ -8,7 +8,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use glam::{Quat, Vec3};
 
 use crate::core::project::model::{PlateId, Project};
-use crate::core::project::session::{derive_bed, SessionRuntime};
+use crate::core::project::session::{derive_bed, Session};
 use crate::core::printer::profile::BoundingBox;
 use crate::core::scene::bed;
 use crate::core::scene::events::{SceneEvent, SceneOpError, SelectMode};
@@ -244,67 +244,6 @@ impl Project {
     /// origin so re-clicking "Add cube" in the library palette
     /// piles new objects on top rather than replacing the previous
     /// one.
-    pub fn add_from_primitive(
-        &mut self,
-        rt: &mut SessionRuntime,
-        kind: PrimitiveKind,
-        params: PrimitiveParams,
-    ) -> (MeshId, ObjectId, Vec<SceneEvent>) {
-        let mut events = Vec::new();
-        let mesh_id = match rt
-            .primitive_cache
-            .iter()
-            .find(|(k, p, _)| *k == kind && *p == params)
-            .map(|(_, _, id)| *id)
-        {
-            Some(id) => id,
-            None => {
-                let new_mesh = primitives::generate(kind, params);
-                let id = self.register_mesh(new_mesh);
-                rt.primitive_cache.push((kind, params, id));
-                let header = self.meshes.get(&id).unwrap().header();
-                events.push(SceneEvent::MeshLoaded { mesh: header });
-                id
-            }
-        };
-
-        let name = match kind {
-            PrimitiveKind::Cube => "Cube",
-            PrimitiveKind::Cylinder => "Cylinder",
-            PrimitiveKind::Sphere => "Sphere",
-            PrimitiveKind::Cone => "Cone",
-            PrimitiveKind::Torus => "Torus",
-        };
-        // Lift to z=0 + center on the bed via the shared helper —
-        // primitives like cube/sphere/torus are origin-centered
-        // geometrically, so a bare-origin placement would sink half
-        // the primitive below the plate AND straddle the back-left
-        // corner.
-        let transform = self.lift_and_center_transform(mesh_id);
-        let obj_id = self.register_object(NewSceneObject {
-            mesh: mesh_id,
-            transform,
-            name: name.to_string(),
-            visible: true,
-            extruder_id: None,
-            group: None,
-        });
-        let plate_id = self.active_plate().id;
-        let obj_clone = self
-            .active_plate()
-            .scene
-            .objects
-            .get(&obj_id)
-            .unwrap()
-            .clone();
-        events.push(SceneEvent::ObjectAdded {
-            plate_id,
-            object: obj_clone,
-        });
-        events.extend(self.out_of_bounds_event(obj_id));
-        (mesh_id, obj_id, events)
-    }
-
     /// Clone `ids` (objects on the active plate) `times` times back onto the
     /// active plate. Geometry is shared (same `MeshId`); each copy is placed at
     /// the source's transform — the caller auto-arranges to spread the copies
@@ -444,74 +383,6 @@ impl Project {
     /// individually selectable.
     pub fn group_expanded_ids(&self, ids: &[ObjectId]) -> OrderedIds {
         Self::expand_to_groups(&self.plates[self.active_plate].scene, ids)
-    }
-
-    pub fn select(
-        &mut self,
-        rt: &mut SessionRuntime,
-        ids: &[ObjectId],
-        mode: SelectMode,
-    ) -> Vec<SceneEvent> {
-        let active = self.active_plate;
-        let plate_id = self.plates[active].id;
-        let objects = &self.plates[active].scene.objects;
-        let selection = &mut rt.plates.entry(plate_id).or_default().selection;
-        let before: HashSet<ObjectId> = selection.iter().copied().collect();
-        // `ids` is taken as-is — the object list selects individuals.
-        // The canvas's select-the-whole-group behaviour is opt-in via
-        // `group_expanded_ids` at the command layer.
-        let present: Vec<ObjectId> = ids
-            .iter()
-            .copied()
-            .filter(|id| objects.contains_key(id))
-            .collect();
-        match mode {
-            SelectMode::Replace => {
-                *selection = present.into_iter().collect();
-            }
-            SelectMode::Add => {
-                for id in present {
-                    selection.insert(id);
-                }
-            }
-            SelectMode::Toggle => {
-                // Toggle the (possibly group-expanded) set as a unit:
-                // remove it if already fully selected, else add it all.
-                let all_selected =
-                    !present.is_empty() && present.iter().all(|id| selection.contains(id));
-                for id in present {
-                    if all_selected {
-                        selection.remove(&id);
-                    } else {
-                        selection.insert(id);
-                    }
-                }
-            }
-        }
-        if *selection == before {
-            return Vec::new();
-        }
-        let mut sorted: Vec<ObjectId> = selection.iter().copied().collect();
-        sorted.sort();
-        vec![SceneEvent::SelectionChanged {
-            plate_id,
-            selected: sorted,
-        }]
-    }
-
-    /// Clear the active plate's selection.
-    pub fn deselect_all(&mut self, rt: &mut SessionRuntime) -> Vec<SceneEvent> {
-        let active = self.active_plate;
-        let plate_id = self.plates[active].id;
-        let selection = &mut rt.plates.entry(plate_id).or_default().selection;
-        if selection.is_empty() {
-            return Vec::new();
-        }
-        selection.clear();
-        vec![SceneEvent::SelectionChanged {
-            plate_id,
-            selected: Vec::new(),
-        }]
     }
 
     // ---- Object grouping (active plate) ---------------------------
@@ -756,157 +627,6 @@ impl Project {
         Ok(out)
     }
 
-    /// Register each kept cut half as a new mesh + object on the active plate,
-    /// remove the source objects, and select the results. Grouping is preserved
-    /// per side: halves descending from one source group are re-grouped (one
-    /// fresh group per (source group, side)), so a group split in two yields two
-    /// coherent groups; halves of an ungrouped source stay ungrouped. Per-side
-    /// groups left with a single member dissolve. MMU paint rides along per half
-    /// (`CutHalfOut::paint`, re-projected by the FFI); dowel pins are fresh
-    /// geometry and stay unpainted.
-    pub fn apply_cut(
-        &mut self,
-        rt: &mut SessionRuntime,
-        results: Vec<CutResult>,
-    ) -> (Vec<ObjectId>, Vec<SceneEvent>) {
-        let active = self.active_plate;
-        let plate_id = self.plates[active].id;
-        let mut events = Vec::new();
-        let mut new_ids = Vec::new();
-        // (source group, side) → fresh group for that side's halves.
-        let mut group_remap: HashMap<(GroupId, CutSide), GroupId> = HashMap::new();
-
-        let source_ids: Vec<ObjectId> = results.iter().map(|r| r.source_id).collect();
-        for res in results {
-            let both = res.halves.len() > 1; // both sides kept → " (A)"/" (B)"
-            for half in res.halves {
-                let group = res
-                    .source_group
-                    .map(|g| *group_remap.entry((g, half.side)).or_insert_with(GroupId::fresh));
-                let suffix = if both { half.side.suffix() } else { " (cut)" };
-                let bbox = crate::core::scene::loaders::compute_bounding_box(&half.vertices);
-                let mesh = self.register_mesh(NewMesh {
-                    vertices: half.vertices,
-                    indices: half.indices,
-                    paint_colors: half.paint,
-                    // ponytail: cut drops support paint in v1 (the deferred-cut
-                    // FFI only carries MMU paint); repaint after cutting.
-                    support_paint: None,
-                    bounding_box: bbox,
-                    provenance: MeshProvenance::Primitive(format!("{} (cut)", res.base_name)),
-                });
-                let header = self.meshes.get(&mesh).expect("just registered").header();
-                events.push(SceneEvent::MeshLoaded { mesh: header });
-                let obj_id = self.register_object(NewSceneObject {
-                    mesh,
-                    transform: res.transform,
-                    name: format!("{}{}", res.base_name, suffix),
-                    visible: true,
-                    extruder_id: res.extruder_id,
-                    group,
-                });
-                let object = self.plates[active]
-                    .scene
-                    .objects
-                    .get(&obj_id)
-                    .expect("just registered")
-                    .clone();
-                events.push(SceneEvent::ObjectAdded { plate_id, object });
-                // Register this half's connector volumes as object modifiers
-                // (mesh pool + the per-object sidecar), resolved at slice time.
-                if !half.modifiers.is_empty() {
-                    let mut mods = Vec::with_capacity(half.modifiers.len());
-                    for (verts, idx, kind) in half.modifiers {
-                        let bbox = crate::core::scene::loaders::compute_bounding_box(&verts);
-                        let mmesh = self.register_mesh(NewMesh {
-                            vertices: verts,
-                            indices: idx,
-                            paint_colors: None,
-                            support_paint: None,
-                            bounding_box: bbox,
-                            provenance: MeshProvenance::Primitive(format!(
-                                "{} connector",
-                                res.base_name
-                            )),
-                        });
-                        let header = self.meshes.get(&mmesh).expect("just registered").header();
-                        events.push(SceneEvent::MeshLoaded { mesh: header });
-                        mods.push(Modifier { mesh: mmesh, kind });
-                    }
-                    self.plates[active].scene.object_modifiers.insert(obj_id, mods);
-                }
-                if !half.hole_markers.is_empty() {
-                    self.plates[active]
-                        .scene
-                        .object_hole_markers
-                        .insert(obj_id, half.hole_markers);
-                }
-                new_ids.push(obj_id);
-            }
-            // Free dowel pins → standalone ungrouped objects (same transform as
-            // the source; the user arranges them).
-            for (di, (verts, idx)) in res.dowels.into_iter().enumerate() {
-                if verts.is_empty() || idx.is_empty() {
-                    continue;
-                }
-                let bbox = crate::core::scene::loaders::compute_bounding_box(&verts);
-                let mesh = self.register_mesh(NewMesh {
-                    vertices: verts,
-                    indices: idx,
-                    paint_colors: None,
-                    support_paint: None,
-                    bounding_box: bbox,
-                    provenance: MeshProvenance::Primitive(format!("{} pin", res.base_name)),
-                });
-                let header = self.meshes.get(&mesh).expect("just registered").header();
-                events.push(SceneEvent::MeshLoaded { mesh: header });
-                let obj_id = self.register_object(NewSceneObject {
-                    mesh,
-                    transform: res.transform,
-                    name: format!("{} pin {}", res.base_name, di + 1),
-                    visible: true,
-                    extruder_id: res.extruder_id,
-                    group: None,
-                });
-                let object = self.plates[active]
-                    .scene
-                    .objects
-                    .get(&obj_id)
-                    .expect("just registered")
-                    .clone();
-                events.push(SceneEvent::ObjectAdded { plate_id, object });
-                new_ids.push(obj_id);
-            }
-        }
-        // Name each per-side group after its source group; carry the source
-        // group's overrides so a cut doesn't silently drop settings like
-        // enable_support.
-        for ((src_g, side), new_g) in &group_remap {
-            let src = self.plates[active].scene.groups.get(src_g);
-            let base = src.map(|g| g.name.clone()).unwrap_or_default();
-            let overrides = src.map(|g| g.overrides.clone()).unwrap_or_default();
-            self.plates[active].scene.groups.insert(
-                *new_g,
-                Group { name: format!("{base}{}", side.suffix()), overrides },
-            );
-        }
-        // Remove the originals (prunes orphan meshes/material bindings + emits
-        // ObjectRemoved/SelectionChanged).
-        events.extend(self.delete_objects(rt, &source_ids));
-        // A per-side group that ended with a single member isn't a group.
-        events.extend(self.dissolve_orphan_groups_on_active());
-        // Drop now-memberless group entries (the fully-consumed source groups).
-        let live: HashSet<GroupId> = self.plates[active]
-            .scene
-            .objects
-            .values()
-            .filter_map(|o| o.group)
-            .collect();
-        self.plates[active].scene.groups.retain(|g, _| live.contains(g));
-        // Select the freshly-created halves.
-        events.extend(self.select(rt, &new_ids, SelectMode::Replace));
-        (new_ids, events)
-    }
 
     /// Combined world-space AABB of a selection from each object's local
     /// bounding-box corners — the conservative bbox used for bounds + clamping
@@ -1193,238 +913,6 @@ impl Project {
         Ok(events)
     }
 
-    /// Delete one or more objects on the active plate. Removes
-    /// from selection if present. Returns one `ObjectRemoved` event
-    /// per id plus (if the selection changed) a `SelectionChanged`
-    /// event, plus (if a material's last user was removed) a
-    /// `MaterialSlotChanged` event.
-    pub fn delete_objects(&mut self, rt: &mut SessionRuntime, ids: &[ObjectId]) -> Vec<SceneEvent> {
-        let active = self.active_plate;
-        let plate_id = self.plates[active].id;
-        let mut events = Vec::new();
-        let mut selection_changed = false;
-        // Collect the materials the soon-to-be-removed objects use,
-        // *before* removal — otherwise we can't tell which bindings
-        // might now be orphaned.
-        let mut removed_materials: BTreeSet<u8> = BTreeSet::new();
-        let mut removed_meshes: BTreeSet<MeshId> = BTreeSet::new();
-        {
-            let plate = &mut self.plates[active].scene;
-            let selection = &mut rt.plates.entry(plate_id).or_default().selection;
-            for id in ids {
-                if let Some(obj) = plate.objects.remove(id) {
-                    removed_materials.insert(obj.extruder_id.unwrap_or(1));
-                    removed_meshes.insert(obj.mesh);
-                    // Drop the object's connector volumes too (sidecar + meshes).
-                    if let Some(mods) = plate.object_modifiers.remove(id) {
-                        removed_meshes.extend(mods.iter().map(|m| m.mesh));
-                    }
-                    // Hole markers are display-only (no mesh) but leave a stale
-                    // sidecar that bloats the saved project if not removed.
-                    plate.object_hole_markers.remove(id);
-                    events.push(SceneEvent::ObjectRemoved {
-                        plate_id,
-                        object_id: *id,
-                    });
-                    if selection.remove(id) {
-                        selection_changed = true;
-                    }
-                }
-            }
-            if selection_changed {
-                let mut sorted: Vec<ObjectId> = selection.iter().copied().collect();
-                sorted.sort();
-                events.push(SceneEvent::SelectionChanged {
-                    plate_id,
-                    selected: sorted,
-                });
-            }
-        }
-        // Painted (MMU) materials are named by the mesh's paint, not any
-        // object's extruder_id, so add the removed meshes' paint states to the
-        // orphan candidates — else a face-painted material's slot binding
-        // lingers after its object is gone. The prune itself re-checks
-        // `materials_on_plate`, so a state still painted elsewhere is kept.
-        for mid in &removed_meshes {
-            removed_materials.extend(self.mesh_painted_materials(*mid));
-        }
-        if self.prune_orphan_material_bindings(active, &removed_materials) {
-            events.push(SceneEvent::MaterialSlotChanged {
-                plate_id,
-                filament_type_changed: true,
-            });
-        }
-        self.prune_orphan_meshes(rt, &removed_meshes);
-        events
-    }
-
-    /// Drop meshes (and their primitive-cache entries) in `candidates` that no
-    /// object on *any* plate references any more. Meshes are global and can be
-    /// shared (primitive dedup, group volumes), so a mesh only goes once its last
-    /// referencing object is gone — otherwise a deleted import's geometry lingers
-    /// in `meshes` and bloats the next `.n3o` save (it's serialized per mesh).
-    fn prune_orphan_meshes(&mut self, rt: &mut SessionRuntime, candidates: &BTreeSet<MeshId>) {
-        if candidates.is_empty() {
-            return;
-        }
-        let mut referenced: HashSet<MeshId> = self
-            .plates
-            .iter()
-            .flat_map(|p| p.scene.objects.values())
-            .map(|o| o.mesh)
-            .collect();
-        // Connector volumes are referenced only via the modifier sidecar, not
-        // any object's `mesh` — count them or they'd be pruned right after a cut.
-        for p in &self.plates {
-            for mods in p.scene.object_modifiers.values() {
-                referenced.extend(mods.iter().map(|m| m.mesh));
-            }
-        }
-        for id in candidates {
-            if !referenced.contains(id) {
-                self.meshes.remove(id);
-                rt.primitive_cache.retain(|(_, _, mid)| mid != id);
-            }
-        }
-    }
-
-    /// Move a *set* of objects from one plate to another — the shared backend
-    /// for auto-arrange spill (#3 phase 2) and a manual "send to plate" (#4).
-    ///
-    /// The ids are expanded to whole-group membership so a group is never split
-    /// across plates, and each object's transform is **preserved**, so a moved
-    /// group keeps its arrangement (there's no per-object recentering — that
-    /// would scatter a group; anything
-    /// off the target bed surfaces through the normal bounds check when that
-    /// plate is viewed). Per-object overrides and each moved group's name travel
-    /// with the objects; the source plate's selection and now-orphaned material
-    /// bindings are pruned.
-    pub fn move_objects_to_plate(
-        &mut self,
-        rt: &mut SessionRuntime,
-        from_plate: PlateId,
-        to_plate: PlateId,
-        ids: &[ObjectId],
-    ) -> Result<Vec<SceneEvent>, SceneOpError> {
-        if from_plate == to_plate {
-            return Err(SceneOpError::SamePlate(from_plate));
-        }
-        let from_idx = self
-            .plate_index(from_plate)
-            .ok_or(SceneOpError::UnknownPlate(from_plate))?;
-        let to_idx = self
-            .plate_index(to_plate)
-            .ok_or(SceneOpError::UnknownPlate(to_plate))?;
-
-        // Whole groups move together (no split across plates). expand_to_groups
-        // returns an OrderedIds (authored order), so the objects keep their
-        // relative order on the target plate.
-        let ids = Self::expand_to_groups(&self.plates[from_idx].scene, ids);
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        for &id in ids.iter() {
-            if !self.plates[from_idx].scene.objects.contains_key(&id) {
-                return Err(SceneOpError::UnknownObject(id));
-            }
-        }
-
-        let mut events = Vec::with_capacity(ids.len() * 2 + 2);
-        let mut moved_materials: BTreeSet<u8> = BTreeSet::new();
-        let mut moving_groups: HashSet<GroupId> = HashSet::new();
-        let mut any_was_selected = false;
-        for &id in ids.iter() {
-            let obj = self.plates[from_idx].scene.objects.remove(&id).unwrap();
-            if let Some(g) = obj.group {
-                moving_groups.insert(g);
-            }
-            moved_materials.insert(obj.extruder_id.unwrap_or(1));
-            let overrides = self.plates[from_idx].scene.object_overrides.remove(&id);
-            // Cut-connector sidecars move with the object (same ObjectId), or the
-            // target plate slices without pegs/holes and the source keeps stale
-            // entries — a leaked `object_modifiers` pins its connector meshes
-            // forever, a leaked `object_hole_markers` (meshless) bloats the save.
-            let modifiers = self.plates[from_idx].scene.object_modifiers.remove(&id);
-            let hole_markers = self.plates[from_idx].scene.object_hole_markers.remove(&id);
-            if rt.plates.entry(from_plate).or_default().selection.remove(&id) {
-                any_was_selected = true;
-            }
-            self.plates[to_idx].scene.objects.push(obj.clone());
-            if let Some(map) = overrides {
-                self.plates[to_idx].scene.object_overrides.insert(id, map);
-            }
-            if let Some(mods) = modifiers {
-                self.plates[to_idx].scene.object_modifiers.insert(id, mods);
-            }
-            if let Some(markers) = hole_markers {
-                self.plates[to_idx].scene.object_hole_markers.insert(id, markers);
-            }
-            events.push(SceneEvent::ObjectRemoved {
-                plate_id: from_plate,
-                object_id: id,
-            });
-            events.push(SceneEvent::ObjectAdded {
-                plate_id: to_plate,
-                object: obj,
-            });
-        }
-
-        // Carry each fully-moved group's metadata (its name) to the target.
-        for g in moving_groups {
-            if let Some(group) = self.plates[from_idx].scene.groups.remove(&g) {
-                self.plates[to_idx].scene.groups.insert(g, group);
-            }
-        }
-
-        // Carry the moved materials' slot bindings to the target so the objects
-        // keep their material→slot assignment there (same-printer spill keeps it
-        // exact). Don't clobber a binding the target already has; if the source
-        // had none, let the target auto-bind. Done before the source prune below
-        // so the source bindings are still present to copy.
-        let mut target_bindings_changed = false;
-        for &mat in &moved_materials {
-            if self.plates[to_idx].material_to_slot.contains_key(&mat) {
-                continue;
-            }
-            if let Some(&slot) = self.plates[from_idx].material_to_slot.get(&mat) {
-                self.plates[to_idx].material_to_slot.insert(mat, slot);
-                target_bindings_changed = true;
-            } else {
-                let before = self.plates[to_idx].material_to_slot.len();
-                self.ensure_material_slot_on_plate(to_idx, mat);
-                target_bindings_changed |= self.plates[to_idx].material_to_slot.len() != before;
-            }
-        }
-        if target_bindings_changed {
-            events.push(SceneEvent::MaterialSlotChanged {
-                plate_id: to_plate,
-                filament_type_changed: true,
-            });
-        }
-
-        if any_was_selected {
-            let mut sel: Vec<ObjectId> = rt
-                .plates
-                .entry(from_plate)
-                .or_default()
-                .selection
-                .iter()
-                .copied()
-                .collect();
-            sel.sort();
-            events.push(SceneEvent::SelectionChanged {
-                plate_id: from_plate,
-                selected: sel,
-            });
-        }
-        if self.prune_orphan_material_bindings(from_idx, &moved_materials) {
-            events.push(SceneEvent::MaterialSlotChanged {
-                plate_id: from_plate,
-                filament_type_changed: true,
-            });
-        }
-        Ok(events)
-    }
 
     // ---- Bounds / helpers ----------------------------------------
 
@@ -1516,6 +1004,533 @@ impl Project {
     }
 }
 
+/// Scene mutations that span **persisted** content and **runtime** state
+/// (selection, the primitive-mesh cache). They live on `Session`, not
+/// `Project`, so the persisted model never depends on session runtime;
+/// the persisted sub-steps delegate down to `Project` methods.
+impl Session {
+    /// Replace / add / toggle the active plate's selection.
+    pub fn select(&mut self, ids: &[ObjectId], mode: SelectMode) -> Vec<SceneEvent> {
+        let active = self.project.active_plate;
+        let plate_id = self.project.plates[active].id;
+        let objects = &self.project.plates[active].scene.objects;
+        let selection = &mut self.runtime.plates.entry(plate_id).or_default().selection;
+        let before: HashSet<ObjectId> = selection.iter().copied().collect();
+        // `ids` is taken as-is — the object list selects individuals.
+        // The canvas's select-the-whole-group behaviour is opt-in via
+        // `group_expanded_ids` at the command layer.
+        let present: Vec<ObjectId> = ids
+            .iter()
+            .copied()
+            .filter(|id| objects.contains_key(id))
+            .collect();
+        match mode {
+            SelectMode::Replace => {
+                *selection = present.into_iter().collect();
+            }
+            SelectMode::Add => {
+                for id in present {
+                    selection.insert(id);
+                }
+            }
+            SelectMode::Toggle => {
+                // Toggle the (possibly group-expanded) set as a unit:
+                // remove it if already fully selected, else add it all.
+                let all_selected =
+                    !present.is_empty() && present.iter().all(|id| selection.contains(id));
+                for id in present {
+                    if all_selected {
+                        selection.remove(&id);
+                    } else {
+                        selection.insert(id);
+                    }
+                }
+            }
+        }
+        if *selection == before {
+            return Vec::new();
+        }
+        let mut sorted: Vec<ObjectId> = selection.iter().copied().collect();
+        sorted.sort();
+        vec![SceneEvent::SelectionChanged {
+            plate_id,
+            selected: sorted,
+        }]
+    }
+
+    /// Clear the active plate's selection.
+    pub fn deselect_all(&mut self) -> Vec<SceneEvent> {
+        let active = self.project.active_plate;
+        let plate_id = self.project.plates[active].id;
+        let selection = &mut self.runtime.plates.entry(plate_id).or_default().selection;
+        if selection.is_empty() {
+            return Vec::new();
+        }
+        selection.clear();
+        vec![SceneEvent::SelectionChanged {
+            plate_id,
+            selected: Vec::new(),
+        }]
+    }
+
+    /// Add (or re-instance) a procedural primitive on the active plate.
+    /// Dedups by `(kind, params)` through the runtime primitive cache; the
+    /// mesh, object registration, and placement are persisted-side.
+    pub fn add_from_primitive(
+        &mut self,
+        kind: PrimitiveKind,
+        params: PrimitiveParams,
+    ) -> (MeshId, ObjectId, Vec<SceneEvent>) {
+        let mut events = Vec::new();
+        let mesh_id = match self
+            .runtime
+            .primitive_cache
+            .iter()
+            .find(|(k, p, _)| *k == kind && *p == params)
+            .map(|(_, _, id)| *id)
+        {
+            Some(id) => id,
+            None => {
+                let new_mesh = primitives::generate(kind, params);
+                let id = self.project.register_mesh(new_mesh);
+                self.runtime.primitive_cache.push((kind, params, id));
+                let header = self.project.meshes.get(&id).unwrap().header();
+                events.push(SceneEvent::MeshLoaded { mesh: header });
+                id
+            }
+        };
+
+        let name = match kind {
+            PrimitiveKind::Cube => "Cube",
+            PrimitiveKind::Cylinder => "Cylinder",
+            PrimitiveKind::Sphere => "Sphere",
+            PrimitiveKind::Cone => "Cone",
+            PrimitiveKind::Torus => "Torus",
+        };
+        // Lift to z=0 + center on the bed via the shared helper —
+        // primitives like cube/sphere/torus are origin-centered
+        // geometrically, so a bare-origin placement would sink half
+        // the primitive below the plate AND straddle the back-left
+        // corner.
+        let transform = self.project.lift_and_center_transform(mesh_id);
+        let obj_id = self.project.register_object(NewSceneObject {
+            mesh: mesh_id,
+            transform,
+            name: name.to_string(),
+            visible: true,
+            extruder_id: None,
+            group: None,
+        });
+        let plate_id = self.project.active_plate().id;
+        let obj_clone = self
+            .project
+            .active_plate()
+            .scene
+            .objects
+            .get(&obj_id)
+            .unwrap()
+            .clone();
+        events.push(SceneEvent::ObjectAdded {
+            plate_id,
+            object: obj_clone,
+        });
+        events.extend(self.project.out_of_bounds_event(obj_id));
+        (mesh_id, obj_id, events)
+    }
+
+    /// Remove objects from the active plate: drops them + their connector
+    /// sidecars, clears them from the selection, prunes orphaned material
+    /// bindings + meshes.
+    pub fn delete_objects(&mut self, ids: &[ObjectId]) -> Vec<SceneEvent> {
+        let active = self.project.active_plate;
+        let plate_id = self.project.plates[active].id;
+        let mut events = Vec::new();
+        let mut selection_changed = false;
+        // Collect the materials the soon-to-be-removed objects use,
+        // *before* removal — otherwise we can't tell which bindings
+        // might now be orphaned.
+        let mut removed_materials: BTreeSet<u8> = BTreeSet::new();
+        let mut removed_meshes: BTreeSet<MeshId> = BTreeSet::new();
+        {
+            let plate = &mut self.project.plates[active].scene;
+            let selection = &mut self.runtime.plates.entry(plate_id).or_default().selection;
+            for id in ids {
+                if let Some(obj) = plate.objects.remove(id) {
+                    removed_materials.insert(obj.extruder_id.unwrap_or(1));
+                    removed_meshes.insert(obj.mesh);
+                    // Drop the object's connector volumes too (sidecar + meshes).
+                    if let Some(mods) = plate.object_modifiers.remove(id) {
+                        removed_meshes.extend(mods.iter().map(|m| m.mesh));
+                    }
+                    // Hole markers are display-only (no mesh) but leave a stale
+                    // sidecar that bloats the saved project if not removed.
+                    plate.object_hole_markers.remove(id);
+                    events.push(SceneEvent::ObjectRemoved {
+                        plate_id,
+                        object_id: *id,
+                    });
+                    if selection.remove(id) {
+                        selection_changed = true;
+                    }
+                }
+            }
+            if selection_changed {
+                let mut sorted: Vec<ObjectId> = selection.iter().copied().collect();
+                sorted.sort();
+                events.push(SceneEvent::SelectionChanged {
+                    plate_id,
+                    selected: sorted,
+                });
+            }
+        }
+        // Painted (MMU) materials are named by the mesh's paint, not any
+        // object's extruder_id, so add the removed meshes' paint states to the
+        // orphan candidates — else a face-painted material's slot binding
+        // lingers after its object is gone. The prune itself re-checks
+        // `materials_on_plate`, so a state still painted elsewhere is kept.
+        for mid in &removed_meshes {
+            removed_materials.extend(self.project.mesh_painted_materials(*mid));
+        }
+        if self
+            .project
+            .prune_orphan_material_bindings(active, &removed_materials)
+        {
+            events.push(SceneEvent::MaterialSlotChanged {
+                plate_id,
+                filament_type_changed: true,
+            });
+        }
+        self.prune_orphan_meshes(&removed_meshes);
+        events
+    }
+
+    /// Drop meshes (and their primitive-cache entries) in `candidates` that no
+    /// object on *any* plate references any more. Meshes are global and can be
+    /// shared (primitive dedup, group volumes), so a mesh only goes once its last
+    /// referencing object is gone — otherwise a deleted import's geometry lingers
+    /// in `meshes` and bloats the next `.n3o` save (it's serialized per mesh).
+    fn prune_orphan_meshes(&mut self, candidates: &BTreeSet<MeshId>) {
+        if candidates.is_empty() {
+            return;
+        }
+        let mut referenced: HashSet<MeshId> = self
+            .project
+            .plates
+            .iter()
+            .flat_map(|p| p.scene.objects.values())
+            .map(|o| o.mesh)
+            .collect();
+        // Connector volumes are referenced only via the modifier sidecar, not
+        // any object's `mesh` — count them or they'd be pruned right after a cut.
+        for p in &self.project.plates {
+            for mods in p.scene.object_modifiers.values() {
+                referenced.extend(mods.iter().map(|m| m.mesh));
+            }
+        }
+        for id in candidates {
+            if !referenced.contains(id) {
+                self.project.meshes.remove(id);
+                self.runtime.primitive_cache.retain(|(_, _, mid)| mid != id);
+            }
+        }
+    }
+
+    /// Register each kept cut half as a new mesh + object on the active plate,
+    /// remove the source objects, and select the results. Grouping is preserved
+    /// per side: halves descending from one source group are re-grouped (one
+    /// fresh group per (source group, side)), so a group split in two yields two
+    /// coherent groups; halves of an ungrouped source stay ungrouped. Per-side
+    /// groups left with a single member dissolve. MMU paint rides along per half
+    /// (`CutHalfOut::paint`, re-projected by the FFI); dowel pins are fresh
+    /// geometry and stay unpainted.
+    pub fn apply_cut(
+        &mut self,
+        results: Vec<CutResult>,
+    ) -> (Vec<ObjectId>, Vec<SceneEvent>) {
+        let active = self.project.active_plate;
+        let plate_id = self.project.plates[active].id;
+        let mut events = Vec::new();
+        let mut new_ids = Vec::new();
+        // (source group, side) → fresh group for that side's halves.
+        let mut group_remap: HashMap<(GroupId, CutSide), GroupId> = HashMap::new();
+
+        let source_ids: Vec<ObjectId> = results.iter().map(|r| r.source_id).collect();
+        for res in results {
+            let both = res.halves.len() > 1; // both sides kept → " (A)"/" (B)"
+            for half in res.halves {
+                let group = res
+                    .source_group
+                    .map(|g| *group_remap.entry((g, half.side)).or_insert_with(GroupId::fresh));
+                let suffix = if both { half.side.suffix() } else { " (cut)" };
+                let bbox = crate::core::scene::loaders::compute_bounding_box(&half.vertices);
+                let mesh = self.project.register_mesh(NewMesh {
+                    vertices: half.vertices,
+                    indices: half.indices,
+                    paint_colors: half.paint,
+                    // ponytail: cut drops support paint in v1 (the deferred-cut
+                    // FFI only carries MMU paint); repaint after cutting.
+                    support_paint: None,
+                    bounding_box: bbox,
+                    provenance: MeshProvenance::Primitive(format!("{} (cut)", res.base_name)),
+                });
+                let header = self.project.meshes.get(&mesh).expect("just registered").header();
+                events.push(SceneEvent::MeshLoaded { mesh: header });
+                let obj_id = self.project.register_object(NewSceneObject {
+                    mesh,
+                    transform: res.transform,
+                    name: format!("{}{}", res.base_name, suffix),
+                    visible: true,
+                    extruder_id: res.extruder_id,
+                    group,
+                });
+                let object = self.project.plates[active]
+                    .scene
+                    .objects
+                    .get(&obj_id)
+                    .expect("just registered")
+                    .clone();
+                events.push(SceneEvent::ObjectAdded { plate_id, object });
+                // Register this half's connector volumes as object modifiers
+                // (mesh pool + the per-object sidecar), resolved at slice time.
+                if !half.modifiers.is_empty() {
+                    let mut mods = Vec::with_capacity(half.modifiers.len());
+                    for (verts, idx, kind) in half.modifiers {
+                        let bbox = crate::core::scene::loaders::compute_bounding_box(&verts);
+                        let mmesh = self.project.register_mesh(NewMesh {
+                            vertices: verts,
+                            indices: idx,
+                            paint_colors: None,
+                            support_paint: None,
+                            bounding_box: bbox,
+                            provenance: MeshProvenance::Primitive(format!(
+                                "{} connector",
+                                res.base_name
+                            )),
+                        });
+                        let header = self.project.meshes.get(&mmesh).expect("just registered").header();
+                        events.push(SceneEvent::MeshLoaded { mesh: header });
+                        mods.push(Modifier { mesh: mmesh, kind });
+                    }
+                    self.project.plates[active].scene.object_modifiers.insert(obj_id, mods);
+                }
+                if !half.hole_markers.is_empty() {
+                    self.project.plates[active]
+                        .scene
+                        .object_hole_markers
+                        .insert(obj_id, half.hole_markers);
+                }
+                new_ids.push(obj_id);
+            }
+            // Free dowel pins → standalone ungrouped objects (same transform as
+            // the source; the user arranges them).
+            for (di, (verts, idx)) in res.dowels.into_iter().enumerate() {
+                if verts.is_empty() || idx.is_empty() {
+                    continue;
+                }
+                let bbox = crate::core::scene::loaders::compute_bounding_box(&verts);
+                let mesh = self.project.register_mesh(NewMesh {
+                    vertices: verts,
+                    indices: idx,
+                    paint_colors: None,
+                    support_paint: None,
+                    bounding_box: bbox,
+                    provenance: MeshProvenance::Primitive(format!("{} pin", res.base_name)),
+                });
+                let header = self.project.meshes.get(&mesh).expect("just registered").header();
+                events.push(SceneEvent::MeshLoaded { mesh: header });
+                let obj_id = self.project.register_object(NewSceneObject {
+                    mesh,
+                    transform: res.transform,
+                    name: format!("{} pin {}", res.base_name, di + 1),
+                    visible: true,
+                    extruder_id: res.extruder_id,
+                    group: None,
+                });
+                let object = self.project.plates[active]
+                    .scene
+                    .objects
+                    .get(&obj_id)
+                    .expect("just registered")
+                    .clone();
+                events.push(SceneEvent::ObjectAdded { plate_id, object });
+                new_ids.push(obj_id);
+            }
+        }
+        // Name each per-side group after its source group; carry the source
+        // group's overrides so a cut doesn't silently drop settings like
+        // enable_support.
+        for ((src_g, side), new_g) in &group_remap {
+            let src = self.project.plates[active].scene.groups.get(src_g);
+            let base = src.map(|g| g.name.clone()).unwrap_or_default();
+            let overrides = src.map(|g| g.overrides.clone()).unwrap_or_default();
+            self.project.plates[active].scene.groups.insert(
+                *new_g,
+                Group { name: format!("{base}{}", side.suffix()), overrides },
+            );
+        }
+        // Remove the originals (prunes orphan meshes/material bindings + emits
+        // ObjectRemoved/SelectionChanged).
+        events.extend(self.delete_objects(&source_ids));
+        // A per-side group that ended with a single member isn't a group.
+        events.extend(self.project.dissolve_orphan_groups_on_active());
+        // Drop now-memberless group entries (the fully-consumed source groups).
+        let live: HashSet<GroupId> = self.project.plates[active]
+            .scene
+            .objects
+            .values()
+            .filter_map(|o| o.group)
+            .collect();
+        self.project.plates[active].scene.groups.retain(|g, _| live.contains(g));
+        // Select the freshly-created halves.
+        events.extend(self.select(&new_ids, SelectMode::Replace));
+        (new_ids, events)
+    }
+
+    /// Delete one or more objects on the active plate. Removes
+    /// from selection if present. Returns one `ObjectRemoved` event
+    /// per id plus (if the selection changed) a `SelectionChanged`
+    /// event, plus (if a material's last user was removed) a
+    /// `MaterialSlotChanged` event.
+    /// Move a *set* of objects from one plate to another — the shared backend
+    /// for auto-arrange spill (#3 phase 2) and a manual "send to plate" (#4).
+    ///
+    /// The ids are expanded to whole-group membership so a group is never split
+    /// across plates, and each object's transform is **preserved**, so a moved
+    /// group keeps its arrangement (there's no per-object recentering — that
+    /// would scatter a group; anything
+    /// off the target bed surfaces through the normal bounds check when that
+    /// plate is viewed). Per-object overrides and each moved group's name travel
+    /// with the objects; the source plate's selection and now-orphaned material
+    /// bindings are pruned.
+    pub fn move_objects_to_plate(
+        &mut self,
+        from_plate: PlateId,
+        to_plate: PlateId,
+        ids: &[ObjectId],
+    ) -> Result<Vec<SceneEvent>, SceneOpError> {
+        if from_plate == to_plate {
+            return Err(SceneOpError::SamePlate(from_plate));
+        }
+        let from_idx = self
+            .project
+            .plate_index(from_plate)
+            .ok_or(SceneOpError::UnknownPlate(from_plate))?;
+        let to_idx = self
+            .project
+            .plate_index(to_plate)
+            .ok_or(SceneOpError::UnknownPlate(to_plate))?;
+
+        // Whole groups move together (no split across plates). expand_to_groups
+        // returns an OrderedIds (authored order), so the objects keep their
+        // relative order on the target plate.
+        let ids = Project::expand_to_groups(&self.project.plates[from_idx].scene, ids);
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        for &id in ids.iter() {
+            if !self.project.plates[from_idx].scene.objects.contains_key(&id) {
+                return Err(SceneOpError::UnknownObject(id));
+            }
+        }
+
+        let mut events = Vec::with_capacity(ids.len() * 2 + 2);
+        let mut moved_materials: BTreeSet<u8> = BTreeSet::new();
+        let mut moving_groups: HashSet<GroupId> = HashSet::new();
+        let mut any_was_selected = false;
+        for &id in ids.iter() {
+            let obj = self.project.plates[from_idx].scene.objects.remove(&id).unwrap();
+            if let Some(g) = obj.group {
+                moving_groups.insert(g);
+            }
+            moved_materials.insert(obj.extruder_id.unwrap_or(1));
+            let overrides = self.project.plates[from_idx].scene.object_overrides.remove(&id);
+            // Cut-connector sidecars move with the object (same ObjectId), or the
+            // target plate slices without pegs/holes and the source keeps stale
+            // entries — a leaked `object_modifiers` pins its connector meshes
+            // forever, a leaked `object_hole_markers` (meshless) bloats the save.
+            let modifiers = self.project.plates[from_idx].scene.object_modifiers.remove(&id);
+            let hole_markers = self.project.plates[from_idx].scene.object_hole_markers.remove(&id);
+            if self.runtime.plates.entry(from_plate).or_default().selection.remove(&id) {
+                any_was_selected = true;
+            }
+            self.project.plates[to_idx].scene.objects.push(obj.clone());
+            if let Some(map) = overrides {
+                self.project.plates[to_idx].scene.object_overrides.insert(id, map);
+            }
+            if let Some(mods) = modifiers {
+                self.project.plates[to_idx].scene.object_modifiers.insert(id, mods);
+            }
+            if let Some(markers) = hole_markers {
+                self.project.plates[to_idx].scene.object_hole_markers.insert(id, markers);
+            }
+            events.push(SceneEvent::ObjectRemoved {
+                plate_id: from_plate,
+                object_id: id,
+            });
+            events.push(SceneEvent::ObjectAdded {
+                plate_id: to_plate,
+                object: obj,
+            });
+        }
+
+        // Carry each fully-moved group's metadata (its name) to the target.
+        for g in moving_groups {
+            if let Some(group) = self.project.plates[from_idx].scene.groups.remove(&g) {
+                self.project.plates[to_idx].scene.groups.insert(g, group);
+            }
+        }
+
+        // Carry the moved materials' slot bindings to the target so the objects
+        // keep their material→slot assignment there (same-printer spill keeps it
+        // exact). Don't clobber a binding the target already has; if the source
+        // had none, let the target auto-bind. Done before the source prune below
+        // so the source bindings are still present to copy.
+        let mut target_bindings_changed = false;
+        for &mat in &moved_materials {
+            if self.project.plates[to_idx].material_to_slot.contains_key(&mat) {
+                continue;
+            }
+            if let Some(&slot) = self.project.plates[from_idx].material_to_slot.get(&mat) {
+                self.project.plates[to_idx].material_to_slot.insert(mat, slot);
+                target_bindings_changed = true;
+            } else {
+                let before = self.project.plates[to_idx].material_to_slot.len();
+                self.project.ensure_material_slot_on_plate(to_idx, mat);
+                target_bindings_changed |= self.project.plates[to_idx].material_to_slot.len() != before;
+            }
+        }
+        if target_bindings_changed {
+            events.push(SceneEvent::MaterialSlotChanged {
+                plate_id: to_plate,
+                filament_type_changed: true,
+            });
+        }
+
+        if any_was_selected {
+            let mut sel: Vec<ObjectId> = self.runtime
+                .plates
+                .entry(from_plate)
+                .or_default()
+                .selection
+                .iter()
+                .copied()
+                .collect();
+            sel.sort();
+            events.push(SceneEvent::SelectionChanged {
+                plate_id: from_plate,
+                selected: sel,
+            });
+        }
+        if self.project.prune_orphan_material_bindings(from_idx, &moved_materials) {
+            events.push(SceneEvent::MaterialSlotChanged {
+                plate_id: from_plate,
+                filament_type_changed: true,
+            });
+        }
+        Ok(events)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1578,10 +1593,9 @@ mod tests {
 
     #[test]
     fn apply_cut_single_object_both_sides_makes_two_ungrouped() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (mesh, a) = add_cube(&mut p);
-        let tf = p.active_plate().scene.objects[&a].transform;
+        let mut session = Session::new(Project::default());
+        let (mesh, a) = add_cube(&mut session.project);
+        let tf = session.project.active_plate().scene.objects[&a].transform;
         let res = CutResult {
             source_id: a,
             transform: tf,
@@ -1591,21 +1605,21 @@ mod tests {
             halves: vec![half(CutSide::Pos), half(CutSide::Neg)],
             dowels: vec![],
         };
-        let (new_ids, _events) = p.apply_cut(&mut rt, vec![res]);
+        let (new_ids, _events) = session.apply_cut(vec![res]);
         assert_eq!(new_ids.len(), 2, "both sides → two objects");
-        assert!(p.active_plate().scene.objects.get(&a).is_none(), "source removed");
-        assert!(p.meshes.get(&mesh).is_none(), "orphan source mesh pruned");
-        let plate = p.active_plate();
+        assert!(session.project.active_plate().scene.objects.get(&a).is_none(), "source removed");
+        assert!(session.project.meshes.get(&mesh).is_none(), "orphan source mesh pruned");
+        let plate = session.project.active_plate();
         let names: Vec<&str> =
             new_ids.iter().map(|id| plate.scene.objects[id].name.as_str()).collect();
         assert!(names.contains(&"cube (A)") && names.contains(&"cube (B)"));
         for id in &new_ids {
             let o = &plate.scene.objects[id];
             assert_eq!(o.group, None, "ungroduped source → ungrouped halves");
-            assert!(p.meshes[&o.mesh].paint_colors.is_none(), "unpainted source → unpainted halves");
+            assert!(session.project.meshes[&o.mesh].paint_colors.is_none(), "unpainted source → unpainted halves");
         }
         assert_eq!(
-            active_selection(&p, &rt),
+            active_selection(&session),
             new_ids.iter().copied().collect::<HashSet<_>>(),
             "halves selected",
         );
@@ -1613,10 +1627,9 @@ mod tests {
 
     #[test]
     fn apply_cut_single_kept_side_names_it_cut() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (_, a) = add_cube(&mut p);
-        let tf = p.active_plate().scene.objects[&a].transform;
+        let mut session = Session::new(Project::default());
+        let (_, a) = add_cube(&mut session.project);
+        let tf = session.project.active_plate().scene.objects[&a].transform;
         let res = CutResult {
             source_id: a,
             transform: tf,
@@ -1626,17 +1639,16 @@ mod tests {
             halves: vec![half(CutSide::Pos)],
             dowels: vec![],
         };
-        let (new_ids, _) = p.apply_cut(&mut rt, vec![res]);
+        let (new_ids, _) = session.apply_cut(vec![res]);
         assert_eq!(new_ids.len(), 1);
-        assert_eq!(p.active_plate().scene.objects[&new_ids[0]].name, "cube (cut)");
+        assert_eq!(session.project.active_plate().scene.objects[&new_ids[0]].name, "cube (cut)");
     }
 
     #[test]
     fn apply_cut_carries_paint_onto_the_half_mesh() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (_, a) = add_cube(&mut p);
-        let tf = p.active_plate().scene.objects[&a].transform;
+        let mut session = Session::new(Project::default());
+        let (_, a) = add_cube(&mut session.project);
+        let tf = session.project.active_plate().scene.objects[&a].transform;
         let painted = CutHalfOut {
             side: CutSide::Pos,
             vertices: vec![0.0; 9],
@@ -1654,10 +1666,10 @@ mod tests {
             halves: vec![painted],
             dowels: vec![],
         };
-        let (new_ids, _) = p.apply_cut(&mut rt, vec![res]);
-        let mesh = p.active_plate().scene.objects[&new_ids[0]].mesh;
+        let (new_ids, _) = session.apply_cut(vec![res]);
+        let mesh = session.project.active_plate().scene.objects[&new_ids[0]].mesh;
         assert_eq!(
-            p.meshes[&mesh].paint_colors.as_deref(),
+            session.project.meshes[&mesh].paint_colors.as_deref(),
             Some(&vec!["4".to_string()]),
             "the half's paint reaches the registered mesh",
         );
@@ -1699,10 +1711,9 @@ mod tests {
 
     #[test]
     fn apply_cut_registers_dowel_pins_as_objects() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (_, a) = add_cube(&mut p);
-        let tf = p.active_plate().scene.objects[&a].transform;
+        let mut session = Session::new(Project::default());
+        let (_, a) = add_cube(&mut session.project);
+        let tf = session.project.active_plate().scene.objects[&a].transform;
         let res = CutResult {
             source_id: a,
             transform: tf,
@@ -1712,9 +1723,9 @@ mod tests {
             halves: vec![half(CutSide::Pos), half(CutSide::Neg)],
             dowels: vec![(vec![0.0; 9], vec![0, 1, 2])],
         };
-        let (new_ids, _) = p.apply_cut(&mut rt, vec![res]);
+        let (new_ids, _) = session.apply_cut(vec![res]);
         assert_eq!(new_ids.len(), 3, "two halves + one pin");
-        let plate = p.active_plate();
+        let plate = session.project.active_plate();
         assert!(
             new_ids.iter().any(|id| plate.scene.objects[id].name == "cube pin 1"),
             "the dowel pin is registered as its own object",
@@ -1723,14 +1734,13 @@ mod tests {
 
     #[test]
     fn apply_cut_group_both_sides_makes_two_per_side_groups() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (_, a) = add_cube(&mut p);
-        let (_, b) = add_cube(&mut p);
-        p.group_objects(&[a, b], "Bracket".into()).unwrap();
-        let g = p.active_plate().scene.objects[&a].group.unwrap();
+        let mut session = Session::new(Project::default());
+        let (_, a) = add_cube(&mut session.project);
+        let (_, b) = add_cube(&mut session.project);
+        session.project.group_objects(&[a, b], "Bracket".into()).unwrap();
+        let g = session.project.active_plate().scene.objects[&a].group.unwrap();
         let (ta, tb) = {
-            let plate = p.active_plate();
+            let plate = session.project.active_plate();
             (plate.scene.objects[&a].transform, plate.scene.objects[&b].transform)
         };
         let results = vec![
@@ -1753,9 +1763,9 @@ mod tests {
                 dowels: vec![],
             },
         ];
-        let (new_ids, _) = p.apply_cut(&mut rt, results);
+        let (new_ids, _) = session.apply_cut(results);
         assert_eq!(new_ids.len(), 4);
-        let plate = p.active_plate();
+        let plate = session.project.active_plate();
         let mut by_group: HashMap<GroupId, usize> = HashMap::new();
         for id in &new_ids {
             let g = plate.scene.objects[id].group.expect("half is grouped");
@@ -1774,39 +1784,38 @@ mod tests {
 
     #[test]
     fn group_expansion_is_opt_in_select_stays_individual() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (_, a) = add_cube(&mut p);
-        let (_, b) = add_cube(&mut p);
-        let (_, c) = add_cube(&mut p);
-        p.group_objects(&[a, b], "G".into()).unwrap();
+        let mut session = Session::new(Project::default());
+        let (_, a) = add_cube(&mut session.project);
+        let (_, b) = add_cube(&mut session.project);
+        let (_, c) = add_cube(&mut session.project);
+        session.project.group_objects(&[a, b], "G".into()).unwrap();
 
         // The canvas's expansion helper pulls in the whole group, in authored
         // order (a, b registered before c).
         assert_eq!(
-            p.group_expanded_ids(&[a]).to_vec(),
+            session.project.group_expanded_ids(&[a]).to_vec(),
             vec![a, b],
             "grouped object expands to its group",
         );
         assert_eq!(
-            p.group_expanded_ids(&[c]).to_vec(),
+            session.project.group_expanded_ids(&[c]).to_vec(),
             vec![c],
             "ungrouped passes through"
         );
 
         // ...but `select` itself (the object-list path) stays individual.
-        p.select(&mut rt, &[a], SelectMode::Replace);
-        let sel = active_selection(&p, &rt);
+        session.select(&[a], SelectMode::Replace);
+        let sel = active_selection(&session);
         assert_eq!(sel.len(), 1, "select does not auto-expand");
         assert!(sel.contains(&a));
 
         // Toggle a multi-id set as a unit (the canvas group-toggle path):
         // a is selected, b is not → not all selected → add both.
-        p.select(&mut rt, &[a, b], SelectMode::Toggle);
-        assert!(active_selection(&p, &rt).contains(&b));
+        session.select(&[a, b], SelectMode::Toggle);
+        assert!(active_selection(&session).contains(&b));
         // Both selected now → toggle removes both.
-        p.select(&mut rt, &[a, b], SelectMode::Toggle);
-        assert!(active_selection(&p, &rt).is_empty());
+        session.select(&[a, b], SelectMode::Toggle);
+        assert!(active_selection(&session).is_empty());
     }
 
     #[test]
@@ -1863,20 +1872,18 @@ mod tests {
 
     #[test]
     fn select_no_op_emits_no_event() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (_mesh, obj) = add_cube(&mut p);
-        let _ = p.select(&mut rt, &[obj], SelectMode::Replace);
-        let events = p.select(&mut rt, &[obj], SelectMode::Replace);
+        let mut session = Session::new(Project::default());
+        let (_mesh, obj) = add_cube(&mut session.project);
+        let _ = session.select(&[obj], SelectMode::Replace);
+        let events = session.select(&[obj], SelectMode::Replace);
         assert!(events.is_empty(), "re-selecting same set is a no-op");
     }
 
     #[test]
     fn select_unknown_object_is_skipped() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (_mesh, obj) = add_cube(&mut p);
-        let events = p.select(&mut rt, &[obj, ObjectId(9999)], SelectMode::Replace);
+        let mut session = Session::new(Project::default());
+        let (_mesh, obj) = add_cube(&mut session.project);
+        let events = session.select(&[obj, ObjectId(9999)], SelectMode::Replace);
         match &events[0] {
             SceneEvent::SelectionChanged { selected, .. } => {
                 assert_eq!(selected, &vec![obj], "unknown id filtered out");
@@ -1887,51 +1894,47 @@ mod tests {
 
     #[test]
     fn deselect_all_emits_event_when_selection_was_nonempty() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (_mesh, obj) = add_cube(&mut p);
-        let _ = p.select(&mut rt, &[obj], SelectMode::Replace);
-        let events = p.deselect_all(&mut rt);
+        let mut session = Session::new(Project::default());
+        let (_mesh, obj) = add_cube(&mut session.project);
+        let _ = session.select(&[obj], SelectMode::Replace);
+        let events = session.deselect_all();
         match &events[0] {
             SceneEvent::SelectionChanged { selected, .. } => assert!(selected.is_empty()),
             _ => unreachable!(),
         }
         // Second deselect_all is a no-op.
-        let events = p.deselect_all(&mut rt);
+        let events = session.deselect_all();
         assert!(events.is_empty());
     }
 
     #[test]
     fn delete_objects_prunes_the_orphaned_mesh() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (mesh1, obj1) = add_cube(&mut p);
-        let (mesh2, _obj2) = add_cube(&mut p);
+        let mut session = Session::new(Project::default());
+        let (mesh1, obj1) = add_cube(&mut session.project);
+        let (mesh2, _obj2) = add_cube(&mut session.project);
         assert_ne!(mesh1, mesh2, "distinct meshes");
-        p.delete_objects(&mut rt, &[obj1]);
-        assert!(!p.meshes.contains_key(&mesh1), "deleted object's mesh is GC'd");
-        assert!(p.meshes.contains_key(&mesh2), "the surviving object's mesh stays");
+        session.delete_objects(&[obj1]);
+        assert!(!session.project.meshes.contains_key(&mesh1), "deleted object's mesh is GC'd");
+        assert!(session.project.meshes.contains_key(&mesh2), "the surviving object's mesh stays");
     }
 
     #[test]
     fn delete_objects_keeps_a_mesh_another_object_still_uses() {
-        let mut p = Project::default();
-        let mesh = p.register_mesh(unit_cube_mesh());
-        let obj1 = p.register_object(NewSceneObject::at_origin(mesh, "a"));
-        let _obj2 = p.register_object(NewSceneObject::at_origin(mesh, "b"));
-        let mut rt = SessionRuntime::default();
-        p.delete_objects(&mut rt, &[obj1]);
-        assert!(p.meshes.contains_key(&mesh), "shared mesh kept while obj2 uses it");
+        let mut session = Session::new(Project::default());
+        let mesh = session.project.register_mesh(unit_cube_mesh());
+        let obj1 = session.project.register_object(NewSceneObject::at_origin(mesh, "a"));
+        let _obj2 = session.project.register_object(NewSceneObject::at_origin(mesh, "b"));
+        session.delete_objects(&[obj1]);
+        assert!(session.project.meshes.contains_key(&mesh), "shared mesh kept while obj2 uses it");
     }
 
     #[test]
     fn delete_objects_clears_selection_for_deleted_ids() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (_mesh, obj1) = add_cube(&mut p);
-        let (_mesh2, obj2) = add_cube(&mut p);
-        let _ = p.select(&mut rt, &[obj1, obj2], SelectMode::Replace);
-        let events = p.delete_objects(&mut rt, &[obj1]);
+        let mut session = Session::new(Project::default());
+        let (_mesh, obj1) = add_cube(&mut session.project);
+        let (_mesh2, obj2) = add_cube(&mut session.project);
+        let _ = session.select(&[obj1, obj2], SelectMode::Replace);
+        let events = session.delete_objects(&[obj1]);
         assert_eq!(events.len(), 2);
         assert!(matches!(
             events[0],
@@ -1947,14 +1950,13 @@ mod tests {
 
     #[test]
     fn unknown_object_ops_return_error() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
+        let mut session = Session::new(Project::default());
         let bad = ObjectId(42);
         assert!(matches!(
-            p.set_object_transform(bad, Transform::IDENTITY),
+            session.project.set_object_transform(bad, Transform::IDENTITY),
             Err(SceneOpError::UnknownObject(_))
         ));
-        assert!(p.delete_objects(&mut rt, &[bad]).is_empty());
+        assert!(session.delete_objects(&[bad]).is_empty());
     }
 
     #[test]
@@ -2394,8 +2396,7 @@ mod tests {
 
     #[test]
     fn add_from_primitive_dedups_same_params_to_one_mesh() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
+        let mut session = Session::new(Project::default());
         let params = PrimitiveParams {
             width: 20.0,
             depth: 20.0,
@@ -2403,17 +2404,16 @@ mod tests {
             radius: 0.0,
             radial_segments: 0,
         };
-        let (m1, o1, _) = p.add_from_primitive(&mut rt, PrimitiveKind::Cube, params);
-        let (m2, o2, _) = p.add_from_primitive(&mut rt, PrimitiveKind::Cube, params);
+        let (m1, o1, _) = session.add_from_primitive(PrimitiveKind::Cube, params);
+        let (m2, o2, _) = session.add_from_primitive(PrimitiveKind::Cube, params);
         assert_eq!(m1, m2);
         assert_ne!(o1, o2);
-        assert_eq!(p.meshes.len(), 1);
+        assert_eq!(session.project.meshes.len(), 1);
     }
 
     #[test]
     fn add_from_primitive_with_different_params_creates_new_mesh() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
+        let mut session = Session::new(Project::default());
         let p1 = PrimitiveParams {
             width: 20.0,
             depth: 20.0,
@@ -2422,22 +2422,21 @@ mod tests {
             radial_segments: 0,
         };
         let p2 = PrimitiveParams { width: 30.0, ..p1 };
-        let (m1, _, _) = p.add_from_primitive(&mut rt, PrimitiveKind::Cube, p1);
-        let (m2, _, _) = p.add_from_primitive(&mut rt, PrimitiveKind::Cube, p2);
+        let (m1, _, _) = session.add_from_primitive(PrimitiveKind::Cube, p1);
+        let (m2, _, _) = session.add_from_primitive(PrimitiveKind::Cube, p2);
         assert_ne!(m1, m2);
-        assert_eq!(p.meshes.len(), 2);
+        assert_eq!(session.project.meshes.len(), 2);
     }
 
     #[test]
     fn add_from_primitive_emits_mesh_loaded_only_first_time() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
+        let mut session = Session::new(Project::default());
         let params = PrimitiveParams::defaults_for(PrimitiveKind::Cube);
-        let (_, _, events1) = p.add_from_primitive(&mut rt, PrimitiveKind::Cube, params);
+        let (_, _, events1) = session.add_from_primitive(PrimitiveKind::Cube, params);
         assert!(events1
             .iter()
             .any(|e| matches!(e, SceneEvent::MeshLoaded { .. })));
-        let (_, _, events2) = p.add_from_primitive(&mut rt, PrimitiveKind::Cube, params);
+        let (_, _, events2) = session.add_from_primitive(PrimitiveKind::Cube, params);
         assert!(!events2
             .iter()
             .any(|e| matches!(e, SceneEvent::MeshLoaded { .. })));
@@ -2603,37 +2602,35 @@ mod tests {
 
     #[test]
     fn selection_is_per_plate() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (id_b, _) = p.add_plate(None);
-        let (_, obj_a) = add_cube(&mut p);
-        p.set_active_plate(id_b).unwrap();
-        let (_, obj_b) = add_cube(&mut p);
+        let mut session = Session::new(Project::default());
+        let (id_b, _) = session.project.add_plate(None);
+        let (_, obj_a) = add_cube(&mut session.project);
+        session.project.set_active_plate(id_b).unwrap();
+        let (_, obj_b) = add_cube(&mut session.project);
 
-        p.set_active_plate(PlateId(1)).unwrap();
-        p.select(&mut rt, &[obj_a], SelectMode::Replace);
-        p.set_active_plate(id_b).unwrap();
-        p.select(&mut rt, &[obj_b], SelectMode::Replace);
+        session.project.set_active_plate(PlateId(1)).unwrap();
+        session.select(&[obj_a], SelectMode::Replace);
+        session.project.set_active_plate(id_b).unwrap();
+        session.select(&[obj_b], SelectMode::Replace);
 
-        let p0 = p.plates[0].id;
-        let p1 = p.plates[1].id;
-        assert!(plate_selection(&rt, p0).contains(&obj_a));
-        assert!(!plate_selection(&rt, p0).contains(&obj_b));
-        assert!(plate_selection(&rt, p1).contains(&obj_b));
-        assert!(!plate_selection(&rt, p1).contains(&obj_a));
+        let p0 = session.project.plates[0].id;
+        let p1 = session.project.plates[1].id;
+        assert!(plate_selection(&session, p0).contains(&obj_a));
+        assert!(!plate_selection(&session, p0).contains(&obj_b));
+        assert!(plate_selection(&session, p1).contains(&obj_b));
+        assert!(!plate_selection(&session, p1).contains(&obj_a));
     }
 
     #[test]
     fn primitive_cache_dedups_across_plates() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (id_b, _) = p.add_plate(None);
+        let mut session = Session::new(Project::default());
+        let (id_b, _) = session.project.add_plate(None);
         let params = PrimitiveParams::defaults_for(PrimitiveKind::Cube);
-        let (mesh_a, _, _) = p.add_from_primitive(&mut rt, PrimitiveKind::Cube, params);
-        p.set_active_plate(id_b).unwrap();
-        let (mesh_b, _, _) = p.add_from_primitive(&mut rt, PrimitiveKind::Cube, params);
+        let (mesh_a, _, _) = session.add_from_primitive(PrimitiveKind::Cube, params);
+        session.project.set_active_plate(id_b).unwrap();
+        let (mesh_b, _, _) = session.add_from_primitive(PrimitiveKind::Cube, params);
         assert_eq!(mesh_a, mesh_b);
-        assert_eq!(p.meshes.len(), 1);
+        assert_eq!(session.project.meshes.len(), 1);
     }
 
     #[test]
@@ -2752,25 +2749,24 @@ mod tests {
 
     #[test]
     fn move_objects_to_plate_relocates_a_set_preserving_transforms() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (id_b, _) = p.add_plate(None);
-        let (_, a) = add_cube(&mut p);
-        let (_, b) = add_cube(&mut p);
-        p.set_object_transform(a, Transform::translation(Vec3::new(20.0, 0.0, 0.0)))
+        let mut session = Session::new(Project::default());
+        let (id_b, _) = session.project.add_plate(None);
+        let (_, a) = add_cube(&mut session.project);
+        let (_, b) = add_cube(&mut session.project);
+        session.project.set_object_transform(a, Transform::translation(Vec3::new(20.0, 0.0, 0.0)))
             .unwrap();
-        p.set_object_transform(b, Transform::translation(Vec3::new(60.0, 0.0, 0.0)))
+        session.project.set_object_transform(b, Transform::translation(Vec3::new(60.0, 0.0, 0.0)))
             .unwrap();
         let (ta, tb) = (
-            p.plates[0].scene.objects.get(&a).unwrap().transform,
-            p.plates[0].scene.objects.get(&b).unwrap().transform,
+            session.project.plates[0].scene.objects.get(&a).unwrap().transform,
+            session.project.plates[0].scene.objects.get(&b).unwrap().transform,
         );
-        let events = p.move_objects_to_plate(&mut rt, PlateId(1), id_b, &[a, b]).unwrap();
-        assert!(!p.plates[0].scene.objects.contains_key(&a));
-        assert!(!p.plates[0].scene.objects.contains_key(&b));
+        let events = session.move_objects_to_plate(PlateId(1), id_b, &[a, b]).unwrap();
+        assert!(!session.project.plates[0].scene.objects.contains_key(&a));
+        assert!(!session.project.plates[0].scene.objects.contains_key(&b));
         // Transforms are preserved exactly (a pure relocation, no recentering).
-        assert_eq!(p.plates[1].scene.objects.get(&a).unwrap().transform.to_mat4(), ta.to_mat4());
-        assert_eq!(p.plates[1].scene.objects.get(&b).unwrap().transform.to_mat4(), tb.to_mat4());
+        assert_eq!(session.project.plates[1].scene.objects.get(&a).unwrap().transform.to_mat4(), ta.to_mat4());
+        assert_eq!(session.project.plates[1].scene.objects.get(&b).unwrap().transform.to_mat4(), tb.to_mat4());
         assert_eq!(
             events.iter().filter(|e| matches!(e, SceneEvent::ObjectRemoved { .. })).count(),
             2
@@ -2783,29 +2779,28 @@ mod tests {
 
     #[test]
     fn move_objects_to_plate_keeps_a_group_rigid_and_carries_its_name() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (id_b, _) = p.add_plate(None);
-        let (_, a) = add_cube(&mut p);
-        let (_, b) = add_cube(&mut p);
-        p.set_object_transform(b, Transform::translation(Vec3::new(40.0, 5.0, 0.0)))
+        let mut session = Session::new(Project::default());
+        let (id_b, _) = session.project.add_plate(None);
+        let (_, a) = add_cube(&mut session.project);
+        let (_, b) = add_cube(&mut session.project);
+        session.project.set_object_transform(b, Transform::translation(Vec3::new(40.0, 5.0, 0.0)))
             .unwrap();
-        p.group_objects(&[a, b], "duo".into()).unwrap();
-        let g = p.plates[0].scene.objects.get(&a).unwrap().group.unwrap();
+        session.project.group_objects(&[a, b], "duo".into()).unwrap();
+        let g = session.project.plates[0].scene.objects.get(&a).unwrap().group.unwrap();
         let origin = |p: &Project, plate: usize, id| {
             p.plates[plate].scene.objects.get(&id).unwrap().transform.apply_point(Vec3::ZERO)
         };
-        let rel_before = origin(&p, 0, b) - origin(&p, 0, a);
+        let rel_before = origin(&session.project, 0, b) - origin(&session.project, 0, a);
 
         // Moving one member moves the whole group (ids expand to the group).
-        p.move_objects_to_plate(&mut rt, PlateId(1), id_b, &[a]).unwrap();
-        assert!(p.plates[1].scene.objects.contains_key(&a));
-        assert!(p.plates[1].scene.objects.contains_key(&b));
-        let rel_after = origin(&p, 1, b) - origin(&p, 1, a);
+        session.move_objects_to_plate(PlateId(1), id_b, &[a]).unwrap();
+        assert!(session.project.plates[1].scene.objects.contains_key(&a));
+        assert!(session.project.plates[1].scene.objects.contains_key(&b));
+        let rel_after = origin(&session.project, 1, b) - origin(&session.project, 1, a);
         assert!((rel_after - rel_before).length() < 1e-6, "group not rigid through the move");
         // The group's name travels with it.
-        assert!(!p.plates[0].scene.groups.contains_key(&g));
-        assert_eq!(p.plates[1].scene.groups.get(&g).unwrap().name, "duo");
+        assert!(!session.project.plates[0].scene.groups.contains_key(&g));
+        assert_eq!(session.project.plates[1].scene.groups.get(&g).unwrap().name, "duo");
     }
 
     #[test]
@@ -2813,34 +2808,32 @@ mod tests {
         // Same class as the clone bug: moving a group routed its members through
         // expand_to_groups' HashSet, so they used to land on the target plate in
         // random relative order. They must arrive in authored order.
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (id_b, _) = p.add_plate(None);
-        let (_, a) = add_cube(&mut p);
-        let (_, b) = add_cube(&mut p);
-        let (_, c) = add_cube(&mut p);
-        p.group_objects(&[a, b, c], "trio".into()).unwrap();
+        let mut session = Session::new(Project::default());
+        let (id_b, _) = session.project.add_plate(None);
+        let (_, a) = add_cube(&mut session.project);
+        let (_, b) = add_cube(&mut session.project);
+        let (_, c) = add_cube(&mut session.project);
+        session.project.group_objects(&[a, b, c], "trio".into()).unwrap();
 
-        p.move_objects_to_plate(&mut rt, PlateId(1), id_b, &[a]).unwrap();
-        let order: Vec<ObjectId> = p.plates[1].scene.objects.values().map(|o| o.id).collect();
+        session.move_objects_to_plate(PlateId(1), id_b, &[a]).unwrap();
+        let order: Vec<ObjectId> = session.project.plates[1].scene.objects.values().map(|o| o.id).collect();
         assert_eq!(order, vec![a, b, c], "moved group keeps authored order on target");
     }
 
     #[test]
     fn move_objects_to_plate_carries_material_slot_bindings() {
         use crate::core::printer::SlotRef;
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (id_b, _) = p.add_plate(None);
-        let (_, obj) = add_cube(&mut p);
+        let mut session = Session::new(Project::default());
+        let (id_b, _) = session.project.add_plate(None);
+        let (_, obj) = add_cube(&mut session.project);
         // The object uses material 3, pinned to a specific slot on the source.
-        p.plates[0].scene.objects.get_mut(&obj).unwrap().extruder_id = Some(3);
+        session.project.plates[0].scene.objects.get_mut(&obj).unwrap().extruder_id = Some(3);
         let slot = SlotRef { extruder: 1, slot: 2 };
-        p.plates[0].material_to_slot.insert(3, slot);
+        session.project.plates[0].material_to_slot.insert(3, slot);
 
-        let events = p.move_objects_to_plate(&mut rt, PlateId(1), id_b, &[obj]).unwrap();
+        let events = session.move_objects_to_plate(PlateId(1), id_b, &[obj]).unwrap();
         // The binding travels with the object — exact, since same printer.
-        assert_eq!(p.plates[1].material_to_slot.get(&3), Some(&slot));
+        assert_eq!(session.project.plates[1].material_to_slot.get(&3), Some(&slot));
         assert!(events.iter().any(|e| matches!(
             e,
             SceneEvent::MaterialSlotChanged { plate_id, .. } if *plate_id == id_b
@@ -2849,34 +2842,32 @@ mod tests {
 
     #[test]
     fn move_objects_to_plate_rejects_same_and_unknown_plate() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (_, a) = add_cube(&mut p);
+        let mut session = Session::new(Project::default());
+        let (_, a) = add_cube(&mut session.project);
         assert!(matches!(
-            p.move_objects_to_plate(&mut rt, PlateId(1), PlateId(1), &[a]),
+            session.move_objects_to_plate(PlateId(1), PlateId(1), &[a]),
             Err(SceneOpError::SamePlate(_))
         ));
         assert!(matches!(
-            p.move_objects_to_plate(&mut rt, PlateId(1), PlateId(99), &[a]),
+            session.move_objects_to_plate(PlateId(1), PlateId(99), &[a]),
             Err(SceneOpError::UnknownPlate(_))
         ));
     }
 
     #[test]
     fn move_objects_to_plate_carries_cut_connectors() {
-        let mut p = Project::default();
-        let mut rt = SessionRuntime::default();
-        let (id_b, _) = p.add_plate(None);
-        let (_, a) = add_cube(&mut p);
-        attach_connectors(&mut p, a);
+        let mut session = Session::new(Project::default());
+        let (id_b, _) = session.project.add_plate(None);
+        let (_, a) = add_cube(&mut session.project);
+        attach_connectors(&mut session.project, a);
 
-        p.move_objects_to_plate(&mut rt, PlateId(1), id_b, &[a]).unwrap();
+        session.move_objects_to_plate(PlateId(1), id_b, &[a]).unwrap();
         // Sidecars moved with the object (same ObjectId) and the source is clean.
-        assert!(!p.plates[0].scene.object_modifiers.contains_key(&a));
-        assert!(!p.plates[0].scene.object_hole_markers.contains_key(&a));
-        assert_eq!(p.plates[1].scene.object_modifiers[&a].len(), 1, "peg followed the move");
+        assert!(!session.project.plates[0].scene.object_modifiers.contains_key(&a));
+        assert!(!session.project.plates[0].scene.object_hole_markers.contains_key(&a));
+        assert_eq!(session.project.plates[1].scene.object_modifiers[&a].len(), 1, "peg followed the move");
         assert_eq!(
-            p.plates[1].scene.object_hole_markers[&a].len(),
+            session.project.plates[1].scene.object_hole_markers[&a].len(),
             1,
             "hole marker followed the move",
         );

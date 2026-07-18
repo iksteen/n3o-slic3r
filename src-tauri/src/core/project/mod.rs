@@ -27,6 +27,7 @@ pub mod history;
 pub mod format;
 pub mod model;
 pub mod mutation;
+pub mod naming;
 pub mod resolve;
 pub mod session;
 

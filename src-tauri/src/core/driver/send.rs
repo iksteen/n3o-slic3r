@@ -12,7 +12,7 @@ use super::ams::{ams_bindings_for_plate, ams_mapping_for_plate, AmsMappingV2};
 use super::traits::{DriverKind, SendPayload};
 use crate::core::plugin::commands::PluginHostState;
 use crate::core::plugin::{DispatchGate, HookKind, PayloadKind, PreSendHook, SendTarget};
-use crate::core::project::model::sanitize_basename;
+use crate::core::project::naming::sanitize_basename;
 use crate::core::project::{PlateId, Session};
 use crate::core::threemf::{fixture_input, write_sliced_3mf, AmsBinding};
 
