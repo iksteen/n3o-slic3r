@@ -217,13 +217,6 @@ export async function createInstance(
   });
 }
 
-/** Remove a registered `PrinterInstance`. Plates bound to this
- *  instance become dangling; the slice gate refuses to run on
- *  them and the picker surfaces them as "unbound." */
-export async function deleteInstance(id: string): Promise<void> {
-  return invoke("printer_instance_delete", { id });
-}
-
 /** Atomic delete + rebind: hand the backend the plate IDs to
  *  rebind (with the fallback id) or unbind (when fallback is
  *  null), then the instance to delete. One registry+project
@@ -239,19 +232,6 @@ export async function deleteInstanceWithReassign(
     id,
     fallbackInstanceId,
     plateIds,
-  });
-}
-
-/** Rename an instance. Trims whitespace and rejects empty
- *  (backend-side; the modal validates locally too). Emits
- *  `printer:instance_changed`. */
-export async function setInstanceDisplayName(
-  id: string,
-  displayName: string,
-): Promise<PrinterInstance> {
-  return invoke<PrinterInstance>("printer_instance_set_display_name", {
-    id,
-    displayName,
   });
 }
 
@@ -279,20 +259,6 @@ export async function setInstanceSendOptions(
   return invoke<PrinterInstance>("printer_instance_set_send_options", {
     id,
     options,
-  });
-}
-
-/** Write (or clear, with `null`) the instance's network connection.
- *  The on-disk user library persists this so the same physical
- *  printer's connection survives across app restarts. Emits
- *  `printer:instance_changed`. */
-export async function setInstanceConnection(
-  id: string,
-  connection: ConnectionInfo | null,
-): Promise<PrinterInstance> {
-  return invoke<PrinterInstance>("printer_instance_set_connection", {
-    id,
-    connection,
   });
 }
 

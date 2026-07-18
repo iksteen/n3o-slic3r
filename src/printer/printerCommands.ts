@@ -47,14 +47,3 @@ export function rebindPlatePrinter(
   });
 }
 
-/** Clear a plate's printer binding. Used when the user deletes
- *  their last printer — there's no fallback to rebind to, so we
- *  null the binding before the workspace transitions to the
- *  add-printer empty state. Without this the stale UUID lingers
- *  on the plate and would route the next add's auto-bind only on
- *  the active plate (others would keep pointing at the deleted
- *  printer). */
-export function unbindPlatePrinter(plateId: PlateId): Promise<void> {
-  return invoke<void>("scene_unbind_plate_printer", { plateId });
-}
-
