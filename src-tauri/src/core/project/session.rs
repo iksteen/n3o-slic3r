@@ -86,12 +86,22 @@ pub struct PlateRuntime {
     pub bed: Option<BedMesh>,
 }
 
+/// Resolve a plate's bound `PrinterInstance` from the registry, or `None` when
+/// unbound / the id no longer resolves. The one place `plate binding → instance`
+/// resolution lives — the persisted model stays pure (it holds only the id), so
+/// every boundary that needs the live instance (bed derivation, the command
+/// resolvers, snapshot, import) routes through here.
+pub fn resolve_plate_instance(plate: &Plate) -> Option<crate::core::printer::PrinterInstance> {
+    plate
+        .printer_instance_id()
+        .and_then(crate::core::printer::lookup_instance)
+}
+
 /// Derive a plate's bed from its printer binding, resolving the profile
 /// through the registry. `None` when unbound or the profile no longer
 /// resolves. The one place bed derivation happens (was `Plate::set_printer`).
 pub fn derive_bed(plate: &Plate) -> Option<BedMesh> {
-    let instance_id = plate.printer_instance_id()?;
-    let instance = crate::core::printer::lookup_instance(instance_id)?;
+    let instance = resolve_plate_instance(plate)?;
     let profile = crate::core::printer::lookup(&instance.vendor_profile_ref)?;
     Some(crate::core::scene::bed::bed_for_printer(&profile))
 }
@@ -174,10 +184,7 @@ impl Session {
 
     /// Resolve plate `id`'s bound `PrinterInstance` from the registry.
     pub fn plate_instance(&self, id: PlateId) -> Option<crate::core::printer::PrinterInstance> {
-        self.project
-            .plate(id)?
-            .printer_instance_id()
-            .and_then(crate::core::printer::lookup_instance)
+        self.project.plate(id).and_then(resolve_plate_instance)
     }
 }
 

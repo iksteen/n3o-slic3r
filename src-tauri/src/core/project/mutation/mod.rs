@@ -75,9 +75,7 @@ pub(crate) mod test_support {
     /// populates the printer, so this resolves the realistic slot topology to
     /// pass in — the model itself never reaches for the registry.
     pub(crate) fn active_instance(p: &Project) -> Option<crate::core::printer::PrinterInstance> {
-        p.active_plate()
-            .printer_instance_id()
-            .and_then(crate::core::printer::lookup_instance)
+        crate::core::project::session::resolve_plate_instance(p.active_plate())
     }
 
     /// Test-only: a default project whose bootstrap plate is bound to the first

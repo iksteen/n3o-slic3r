@@ -700,10 +700,7 @@ fn source_bed_size(settings: &OrcaProjectSettings) -> Option<(f64, f64)> {
 /// layer), so it resolves the registry and passes the instance into the pure
 /// model mutations (`register_object`, `ensure_material_bound_on_active`).
 fn active_plate_instance(project: &Project) -> Option<crate::core::printer::PrinterInstance> {
-    project
-        .active_plate()
-        .printer_instance_id()
-        .and_then(crate::core::printer::lookup_instance)
+    crate::core::project::session::resolve_plate_instance(project.active_plate())
 }
 
 fn register_obj(

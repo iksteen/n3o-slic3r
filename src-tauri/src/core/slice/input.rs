@@ -571,8 +571,7 @@ mod tests {
     ) -> Result<SliceJobInput, SliceInputError> {
         let inst = project
             .plate(plate_id)
-            .and_then(|p| p.printer_instance_id())
-            .and_then(crate::core::printer::lookup_instance);
+            .and_then(crate::core::project::session::resolve_plate_instance);
         build_slice_input(project, plate_id, output_dir, inst.as_ref())
     }
 
@@ -580,10 +579,7 @@ mod tests {
     /// instance so the material auto-binds to a slot (the pure `register_object`
     /// takes the instance as a parameter; the command layer resolves it).
     fn register_on_active(p: &mut Project, obj: NewSceneObject) -> ObjectId {
-        let inst = p
-            .active_plate()
-            .printer_instance_id()
-            .and_then(crate::core::printer::lookup_instance);
+        let inst = crate::core::project::session::resolve_plate_instance(p.active_plate());
         p.register_object(obj, inst.as_ref())
     }
 
@@ -594,10 +590,7 @@ mod tests {
         // tests don't drift if the bundled-default identity changes.
         p.plates[0].set_printer(Some("bambi".into()));
         let mesh_id = p.register_mesh(triangle_mesh());
-        let inst = p
-            .active_plate()
-            .printer_instance_id()
-            .and_then(crate::core::printer::lookup_instance);
+        let inst = crate::core::project::session::resolve_plate_instance(p.active_plate());
         p.register_object(NewSceneObject::at_origin(mesh_id, "cube"), inst.as_ref());
         p
     }

@@ -239,10 +239,7 @@ mod tests {
 
     fn add_cube(p: &mut Project, material: u8) {
         let mesh = p.register_mesh(unit_cube());
-        let inst = p
-            .active_plate()
-            .printer_instance_id()
-            .and_then(crate::core::printer::lookup_instance);
+        let inst = crate::core::project::session::resolve_plate_instance(p.active_plate());
         p.register_object(
             NewSceneObject {
                 mesh,

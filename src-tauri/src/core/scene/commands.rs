@@ -164,9 +164,7 @@ fn plate_snapshot(
         .as_ref()
         .map(|b| b.exclusion_zones.clone())
         .unwrap_or_default();
-    let printer_identity = plate
-        .printer_instance_id()
-        .and_then(crate::core::printer::lookup_instance)
+    let printer_identity = crate::core::project::session::resolve_plate_instance(plate)
         .map(|inst| inst.vendor_profile_ref);
     PlateSnapshot {
         plate_id: plate.id,
