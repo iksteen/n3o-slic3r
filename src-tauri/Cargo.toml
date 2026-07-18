@@ -71,7 +71,7 @@ wgpu = { version = "30", default-features = false, features = [
     "webgpu",
 ] }
 bytemuck = { version = "1", features = ["derive"] }
-pollster = "0.4"
+pollster = "1"
 # Compact binary serde codec for the .n3o project's per-mesh geometry blobs.
 postcard = { version = "1", features = ["use-std"] }
 serde = { version = "1", features = ["derive"] }
