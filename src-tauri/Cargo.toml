@@ -85,7 +85,7 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 # IPC) back to bytes for the Bambu `.gcode.3mf`; the U1 G-code block
 # reuses the base64 directly.
 base64 = "0.22"
-quick-xml = "0.40"
+quick-xml = "0.41"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 uuid = { version = "1", features = ["serde", "v4"] }
