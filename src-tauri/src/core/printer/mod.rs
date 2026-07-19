@@ -591,9 +591,94 @@ pub async fn printer_instance_sync_from_driver(
     // mutation (single lock + persist). The topology/eligibility
     // policy lives in the sync module alongside the rest of the
     // driver-report translation.
-    let updated =
+    let mut updated =
         crate::core::printer::sync::apply_from_driver(&instance_id, &status.extra, &library)
             .map_err(|e| e.to_string())?;
+
+    // Bambu: seed any MISSING calibrated K from the printer's stored cali table
+    // (`extrusion_cali_get`, keyed by filament_id — color-blind, but the real
+    // measured value). Fill-only: never overwrites a local per-color value, so
+    // a proper per-color calibration always wins. The printer's tray `k` is the
+    // firmware default until a profile is *selected* (cali_idx = -1), so the
+    // table is the reliable source, not the tray state.
+    {
+        let d = handle.read().await;
+        // Single-extruder Bambu only (dual-nozzle H2D unsupported; matches the
+        // calibrate/push gate). Multi-AMS is fine — the seed keys K by
+        // (identity, color, nozzle), not by tray address.
+        let topology_ok = updated.extruders.len() == 1;
+        if topology_ok && matches!(d.kind(), crate::core::driver::traits::DriverKind::Bambu) {
+            // One table per distinct nozzle diameter across the extruders.
+            let mut tables: std::collections::HashMap<String, Vec<_>> =
+                std::collections::HashMap::new();
+            for ext in &updated.extruders {
+                let nozzle = ext.installed_nozzle.diameter.clone();
+                if let std::collections::hash_map::Entry::Vacant(e) = tables.entry(nozzle.clone()) {
+                    match d.get_extrusion_cali(nozzle).await {
+                        Ok(t) => {
+                            e.insert(t);
+                        }
+                        Err(err) => {
+                            tracing::warn!(error = %err, "extrusion_cali_get failed during sync")
+                        }
+                    }
+                }
+            }
+            drop(d);
+
+            let mut seeded = false;
+            for ext in &updated.extruders {
+                let nozzle = ext.installed_nozzle.diameter.clone();
+                let Some(table) = tables.get(&nozzle) else {
+                    continue;
+                };
+                for slot in &ext.slots {
+                    let Some(identity) = slot.filament_identity.clone() else {
+                        continue;
+                    };
+                    let color = slot.color.clone().unwrap_or_default();
+                    let have = updated
+                        .calibrated_pressure_advance
+                        .get(&identity)
+                        .and_then(|c| c.get(&color))
+                        .and_then(|n| n.get(&nozzle))
+                        .is_some();
+                    if have {
+                        continue;
+                    }
+                    let Some(fid) = library
+                        .iter()
+                        .find(|f| f.identity == identity)
+                        .and_then(|f| f.filament_id.as_deref())
+                    else {
+                        continue;
+                    };
+                    let k = table
+                        .iter()
+                        .filter(|p| p.filament_id == fid)
+                        .min_by_key(|p| u8::from(p.is_history))
+                        .and_then(|p| p.k_value.parse::<f64>().ok());
+                    if let Some(k) = k {
+                        if k > 0.0 {
+                            let _ = set_calibrated_pressure_advance(
+                                &instance_id,
+                                identity,
+                                color,
+                                nozzle.clone(),
+                                Some(k),
+                            );
+                            seeded = true;
+                        }
+                    }
+                }
+            }
+            if seeded {
+                if let Some(fresh) = lookup_instance(&instance_id) {
+                    updated = fresh;
+                }
+            }
+        }
+    }
 
     emit_instance_changed(&window, &updated.id);
     Ok(PrinterInstanceView::of(updated))

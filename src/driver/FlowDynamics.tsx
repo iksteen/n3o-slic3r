@@ -61,10 +61,14 @@ export function FlowDynamics({
     getInstanceCal(instanceId),
   );
 
-  // On-printer calibration is U1-only for now — it drives FLOW_CALIBRATE,
-  // which the Bambu (unverified) and Ender (no such routine) don't answer.
-  // Every printer still gets the view + manual K editing below.
-  const canCalibrate = instance.connection?.kind === "u1";
+  // On-printer calibration is supported for the U1 (FLOW_CALIBRATE) and Bambu
+  // (Flow-Dynamics auto-cali over MQTT). The Ender (plain Moonraker) has no such
+  // routine. Bambu is gated to single-extruder (dual-nozzle H2D unsupported);
+  // multi-AMS is allowed (addressed correctly, though only the A1 mini was
+  // hardware-tested). Every printer still gets the view + manual K editing.
+  const kind = instance.connection?.kind;
+  const isBambu = kind === "bambu" && instance.extruders.length === 1;
+  const canCalibrate = kind === "u1" || isBambu;
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -184,7 +188,7 @@ export function FlowDynamics({
       }));
     // Fire-and-forget: the store owns the loop so it survives a remount. The
     // busy → false effect refreshes stored K when it finishes.
-    void runCalibration(instanceId, driverId, targets);
+    void runCalibration(instanceId, driverId, targets, isBambu);
   };
 
   const calDone = Object.values(cal).filter(
@@ -242,7 +246,9 @@ export function FlowDynamics({
                 ? "Connect the printer to calibrate"
                 : !printerIdle
                   ? "Printer must be idle to calibrate"
-                  : "Run FLOW_CALIBRATE for the checked filaments, in sequence"
+                  : isBambu
+                    ? "Auto-calibrate the checked filaments (one printer job)"
+                    : "Run FLOW_CALIBRATE for the checked filaments, in sequence"
             }
           >
             {busy ? "Calibrating…" : `Calibrate selected (${checked.size})`}

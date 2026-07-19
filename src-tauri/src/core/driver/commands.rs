@@ -482,6 +482,10 @@ pub async fn driver_send_plate(
     // The bound instance's sticky per-print toggles (the send dialog
     // edits them; the drivers translate to their wire fields).
     let options = plate_send_options(&session, plate_id);
+    // Captured before `options` moves into the payload: whether the user asked
+    // the printer to run its own flow calibration this print. When they didn't,
+    // we push our stored per-color K instead (below, before send).
+    let flow_cali = options.flow_calibration;
     let payload = match kind {
         DriverKind::Bambu => {
             let ams = collect_ams_bindings(&session, plate_id);
@@ -564,6 +568,39 @@ pub async fn driver_send_plate(
         }
     };
     let d = handle.read().await;
+
+    // Pre-print: push our stored per-color K to the printer so it applies the
+    // right value per tray — UNLESS the user asked the printer to run its own
+    // flow calibration this print (which would ignore/overwrite a pushed K).
+    // Best-effort: a push failure logs and the print proceeds with the
+    // printer's own table, rather than blocking the job.
+    if matches!(kind, DriverKind::Bambu) && !flow_cali {
+        // filament_id per tray from the live AMS report (the loaded spool's id).
+        let loaded = bambu_loaded_filament_ids(&d.status());
+        let mut entries = collect_cali_trays(&session, plate_id, &loaded);
+        if !entries.is_empty() {
+            // Reuse our profile's cali_idx if the printer already has it (match
+            // on OUR setting_id, present after the first push) so we update in
+            // place instead of creating a duplicate; leave None to create.
+            match d.get_extrusion_cali(entries[0].nozzle_diameter.clone()).await {
+                Ok(table) => {
+                    for e in &mut entries {
+                        e.cali_idx = table
+                            .iter()
+                            .find(|p| p.setting_id == e.setting_id)
+                            .map(|p| p.cali_idx);
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "extrusion_cali_get before send failed; creating fresh profiles")
+                }
+            }
+            if let Err(err) = d.set_extrusion_cali(entries).await {
+                tracing::warn!(error = %err, "pre-print extrusion_cali_set failed; printing with the printer's own K");
+            }
+        }
+    }
+
     tokio::select! {
         r = d.send(payload, on_progress) => r,
         _ = cancel.token().cancelled() => Err(DriverError::Cancelled),
@@ -767,9 +804,354 @@ pub async fn driver_ams_set_filament(
     .map_err(|e| e.to_string())
 }
 
+/// Whether this instance's topology is supported for Bambu PA. We support
+/// single-extruder printers with any number of AMS units (slot ↔ physical AMS
+/// address is `ams_id = slot/4`, `tray_id = slot%4`, per sync.rs). **Dual-nozzle
+/// H2D is refused** — its `extruder_id`/per-nozzle handling isn't done. Multi-AMS
+/// addressing is correct but unverified on hardware (only the A1 mini was
+/// tested); the one soft spot is result-matching, which relies on the printer
+/// echoing `ams_id` in `extrusion_cali_get_result` (see the match below).
+fn bambu_pa_topology_ok(inst: &crate::core::printer::PrinterInstance) -> bool {
+    inst.extruders.len() == 1
+}
+
+/// Bambu composite nozzle id, e.g. `"HS00-0.4"` — mirrors Studio's
+/// `_generate_nozzle_id`: `"H"` + flow-type char (`HighFlow → "H"`, else
+/// `Standard → "S"`) + `"00-"` + diameter.
+fn bambu_nozzle_id(material: &crate::core::printer::NozzleMaterial, diameter: &str) -> String {
+    use crate::core::printer::NozzleMaterial::{HighFlowHardened, HighFlowStainless};
+    let flow = if matches!(material, HighFlowHardened | HighFlowStainless) {
+        "H"
+    } else {
+        "S"
+    };
+    format!("H{flow}00-{diameter}")
+}
+
+/// One measured K from a Bambu batched calibration, mapped back to its slot.
+#[derive(serde::Serialize)]
+pub struct BambuCaliSlotK {
+    pub extruder_index: usize,
+    pub slot_index: usize,
+    pub k_value: f64,
+    pub confidence: i32,
+}
+
+/// Run Bambu Flow-Dynamics calibration for a set of slots in one job, storing
+/// each measured K in the instance's color-keyed store (rounded to 0.001, like
+/// Studio) and returning it per slot. Resolves the Bambu `setting_id` per
+/// filament from the printer's own cali table (`extrusion_cali_get`).
+#[tauri::command]
+#[tracing::instrument(skip(registry))]
+pub async fn driver_calibrate_pa_bambu(
+    driver_id: DriverId,
+    instance_id: String,
+    slots: Vec<(usize, usize)>,
+    registry: State<'_, Arc<DriverRegistry>>,
+) -> Result<Vec<BambuCaliSlotK>, String> {
+    use crate::core::driver::traits::ExtrusionCaliTarget;
+    use crate::core::printer::instance_registry::{
+        lookup_instance, set_calibrated_pressure_advance,
+    };
+    use crate::core::profile_library::{list_filament_fragments, resolve_base_scalars};
+
+    let inst =
+        lookup_instance(&instance_id).ok_or_else(|| format!("unknown instance {instance_id}"))?;
+    // Single-extruder only (dual-nozzle H2D unsupported); multi-AMS is
+    // addressed correctly but unverified on hardware.
+    if !bambu_pa_topology_ok(&inst) {
+        return Err("Bambu PA calibration doesn't support dual-nozzle printers yet".into());
+    }
+    let library = list_filament_fragments();
+
+    struct Meta {
+        ext: usize,
+        slot: usize,
+        identity: String,
+        color: String,
+        nozzle: String,
+        filament_id: String,
+        ams_id: u8,
+        tray_id: u8,
+        nozzle_id: String,
+        nozzle_temp: i32,
+        bed_temp: i32,
+        max_vol: String,
+    }
+    let mut metas: Vec<Meta> = Vec::new();
+    for (ext_idx, slot_idx) in &slots {
+        let ext = inst
+            .extruders
+            .get(*ext_idx)
+            .ok_or_else(|| format!("extruder {ext_idx} out of range"))?;
+        let slot = ext
+            .slots
+            .get(*slot_idx)
+            .ok_or_else(|| format!("slot {ext_idx}/{slot_idx} out of range"))?;
+        let identity = slot
+            .filament_identity
+            .clone()
+            .ok_or("slot has no filament bound")?;
+        let frag = library
+            .iter()
+            .find(|f| f.identity == identity)
+            .ok_or_else(|| format!("filament '{identity}' not in library"))?;
+        let filament_id = frag
+            .filament_id
+            .clone()
+            .ok_or_else(|| format!("filament '{identity}' has no Bambu SKU"))?;
+        let nozzle = ext.installed_nozzle.diameter.clone();
+        let max_vol = resolve_base_scalars(&identity)
+            .get("filament_max_volumetric_speed")
+            .cloned()
+            .unwrap_or_else(|| "12".to_owned());
+        metas.push(Meta {
+            ext: *ext_idx,
+            slot: *slot_idx,
+            identity,
+            color: slot.color.clone().unwrap_or_default(),
+            nozzle: nozzle.clone(),
+            filament_id,
+            ams_id: (*slot_idx / 4) as u8,
+            tray_id: (*slot_idx % 4) as u8,
+            nozzle_id: bambu_nozzle_id(&ext.installed_nozzle.material, &nozzle),
+            nozzle_temp: frag.nozzle_temp as i32,
+            bed_temp: frag.bed_temp as i32,
+            max_vol,
+        });
+    }
+    if metas.is_empty() {
+        return Ok(Vec::new());
+    }
+    let nozzle_diameter = metas[0].nozzle.clone();
+
+    let handle = registry
+        .get(driver_id)
+        .ok_or_else(|| format!("unknown driver id {}", driver_id.0))?;
+    // Known limitation: the read guard is held across the multi-minute
+    // calibration job (like the U1 path). A mid-job disconnect would queue
+    // behind it; a lock-free long-op design is a broader follow-up.
+    let d = handle.read().await;
+
+    // Resolve setting_id per filament_id from the printer's stored table,
+    // preferring a current entry over a history one. Empty when the printer has
+    // never calibrated this filament — it then creates a fresh profile.
+    let table = d
+        .get_extrusion_cali(nozzle_diameter)
+        .await
+        .map_err(|e| e.to_string())?;
+    let setting_id_for = |fid: &str| -> String {
+        table
+            .iter()
+            .filter(|p| p.filament_id == fid)
+            .min_by_key(|p| u8::from(p.is_history))
+            .map(|p| p.setting_id.clone())
+            .unwrap_or_default()
+    };
+
+    let targets = metas
+        .iter()
+        .map(|m| ExtrusionCaliTarget {
+            ams_id: m.ams_id,
+            tray_id: m.tray_id,
+            slot_id: m.tray_id,
+            extruder_id: 0,
+            filament_id: m.filament_id.clone(),
+            setting_id: setting_id_for(&m.filament_id),
+            nozzle_id: m.nozzle_id.clone(),
+            nozzle_diameter: m.nozzle.clone(),
+            nozzle_temp: m.nozzle_temp,
+            bed_temp: m.bed_temp,
+            max_volumetric_speed: m.max_vol.clone(),
+        })
+        .collect();
+
+    let results = d
+        .calibrate_pressure_advance_bambu(targets)
+        .await
+        .map_err(|e| e.to_string())?;
+    drop(d);
+
+    // Match on (ams_id, tray_id). On single-AMS both sides are ams_id 0. On
+    // multi-AMS this relies on the printer echoing ams_id in the result; if it
+    // doesn't (defaults 0), only unit-0 trays match and the rest surface as "no
+    // result" rather than getting a wrong K — a safe degradation (untested).
+    let mut out = Vec::new();
+    for m in &metas {
+        let Some(r) = results
+            .iter()
+            .find(|r| r.ams_id as u8 == m.ams_id && r.tray_id as u8 == m.tray_id)
+        else {
+            continue;
+        };
+        let k = (r.k_value * 1000.0).round() / 1000.0;
+        // Only persist a SUCCESSFUL measurement (confidence 0 = ok, 1 =
+        // uncertain, 2 = failed). A failed/low-confidence K is returned to the
+        // UI (which marks the row failed) but never stored or pushed.
+        if r.confidence == 0 {
+            set_calibrated_pressure_advance(
+                &instance_id,
+                m.identity.clone(),
+                m.color.clone(),
+                m.nozzle.clone(),
+                Some(k),
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        out.push(BambuCaliSlotK {
+            extruder_index: m.ext,
+            slot_index: m.slot,
+            k_value: k,
+            confidence: r.confidence,
+        });
+    }
+    Ok(out)
+}
+
+/// Stable, self-owned Bambu preset id for one of our K profiles. Deterministic
+/// per `(identity, color, nozzle)` so we can find our own profile in the
+/// printer's table again (to reuse its `cali_idx` and avoid duplicates). `"PF"`
+/// mirrors Bambu's user-preset ids; the `"N3O"` tag avoids colliding with them.
+fn bambu_setting_id(identity: &str, color: &str, nozzle: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a
+    for b in format!("{identity}|{color}|{nozzle}").bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("PFN3O{h:016x}")
+}
+
+/// `(ams_id, tray_id) -> physically-loaded filament id` from the driver's live
+/// AMS report (`tray_info_idx`). The pushed profile should carry the spool's
+/// real id, not n3o's fragment SKU (which mismatches user filaments). Keyed by
+/// unit POSITION (not `unit.id`) to match sync's `slot = unit_pos*4 + tray.id`
+/// convention, so `(slot/4, slot%4)` looks up the right tray.
+fn bambu_loaded_filament_ids(status: &PrinterStatus) -> HashMap<(u8, u8), String> {
+    use crate::core::driver::status::DriverExtra;
+    let mut map = HashMap::new();
+    if let DriverExtra::Bambu(extra) = &status.extra {
+        if let Some(ams) = &extra.ams {
+            for (unit_pos, unit) in ams.units.iter().enumerate() {
+                for tray in &unit.trays {
+                    if let Some(fid) = tray.identity.as_ref().and_then(|f| f.filament_id.clone()) {
+                        map.insert((unit_pos as u8, tray.id), fid);
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
+/// Collect the per-tray K entries to push before a Bambu print: one
+/// [`ExtrusionCaliEntry`] per AMS-fed slot on the plate that has a stored
+/// calibrated K, targeting the physical `(ams_id, tray_id) = (slot/4, slot%4)`
+/// (sync's convention — correct for multi-AMS). `setting_id` is ours (stable);
+/// `filament_id` is the physically-loaded `tray_info_idx` (from `loaded`),
+/// falling back to n3o's fragment SKU. `cali_idx` is left `None`; the caller
+/// resolves it from the table by our `setting_id`.
+fn collect_cali_trays(
+    session: &Mutex<Session>,
+    plate_id: u32,
+    loaded: &HashMap<(u8, u8), String>,
+) -> Vec<crate::core::driver::traits::ExtrusionCaliEntry> {
+    use crate::core::driver::traits::ExtrusionCaliEntry;
+    use crate::core::printer::instance_registry::lookup_instance;
+    use crate::core::printer::FeedKind;
+    use crate::core::profile_library::list_filament_fragments;
+    use crate::core::project::model::PlateId;
+
+    let Ok(s) = session.lock() else {
+        return Vec::new();
+    };
+    let Some(plate) = s.project.plate(PlateId(plate_id)) else {
+        return Vec::new();
+    };
+    let Some(instance) = plate.printer_instance_id().and_then(lookup_instance) else {
+        return Vec::new();
+    };
+    // Single-extruder only (dual-nozzle H2D unsupported); others get no push.
+    if !bambu_pa_topology_ok(&instance) {
+        return Vec::new();
+    }
+    let library = list_filament_fragments();
+
+    let mut entries = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for slot_ref in plate.material_to_slot.values() {
+        let Some(ext) = instance.extruders.get(slot_ref.extruder as usize) else {
+            continue;
+        };
+        let Some(slot) = ext.slots.get(slot_ref.slot as usize) else {
+            continue;
+        };
+        if slot.feed != FeedKind::Ams {
+            continue;
+        }
+        let Some(identity) = slot.filament_identity.clone() else {
+            continue;
+        };
+        let color = slot.color.clone().unwrap_or_default();
+        let nozzle = ext.installed_nozzle.diameter.clone();
+        let Some(k) = instance
+            .calibrated_pressure_advance
+            .get(&identity)
+            .and_then(|c| c.get(&color))
+            .and_then(|n| n.get(&nozzle))
+            .copied()
+        else {
+            continue;
+        };
+        // Physical AMS address (sync's convention: slot = unit_pos*4 + tray.id).
+        let ams_id = (slot_ref.slot / 4) as u8;
+        let tray_id = (slot_ref.slot % 4) as u8;
+        if !seen.insert((ams_id, tray_id)) {
+            continue;
+        }
+        let frag = library.iter().find(|f| f.identity == identity);
+        // Loaded spool's id (what the printer keys its table on), else the
+        // fragment SKU. Skip if we have neither.
+        let Some(filament_id) = loaded
+            .get(&(ams_id, tray_id))
+            .cloned()
+            .or_else(|| frag.and_then(|f| f.filament_id.clone()))
+        else {
+            continue;
+        };
+        entries.push(ExtrusionCaliEntry {
+            ams_id,
+            tray_id,
+            slot_id: tray_id,
+            extruder_id: 0,
+            filament_id,
+            setting_id: bambu_setting_id(&identity, &color, &nozzle),
+            name: frag.map(|f| f.display_name.clone()).unwrap_or_default(),
+            nozzle_id: bambu_nozzle_id(&ext.installed_nozzle.material, &nozzle),
+            nozzle_diameter: nozzle,
+            k_value: k,
+            n_coef: 1.0,
+            cali_idx: None,
+        });
+    }
+    entries
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bambu_setting_id_is_stable_and_distinct() {
+        // Deterministic (same inputs → same id, across calls) so we can find
+        // our own profile in the printer's table again; distinct per profile
+        // key; carries the collision-avoiding prefix.
+        let a = bambu_setting_id("bambu-pla-silk", "#ec984c", "0.4");
+        assert_eq!(a, bambu_setting_id("bambu-pla-silk", "#ec984c", "0.4"));
+        assert!(a.starts_with("PFN3O"), "id={a}");
+        assert_ne!(a, bambu_setting_id("bambu-pla-silk", "#000000", "0.4"));
+        assert_ne!(a, bambu_setting_id("bambu-pla-silk", "#ec984c", "0.6"));
+        assert_ne!(a, bambu_setting_id("generic-pla", "#ec984c", "0.4"));
+    }
 
     /// End-to-end error path for the test-connection command: an
     /// unreachable U1 host makes the connect-time

@@ -92,6 +92,30 @@ export function driverParkExtruder(driverId: DriverId): Promise<void> {
   return invoke<void>("driver_park_extruder", { driverId });
 }
 
+/** One measured K from a Bambu batched calibration — mirrors Rust's
+ * `BambuCaliSlotK`. `confidence`: 0 = success, 1 = uncertain, 2 = failed. */
+export interface BambuCaliSlotK {
+  extruder_index: number;
+  slot_index: number;
+  k_value: number;
+  confidence: number;
+}
+
+/** Run Bambu Flow-Dynamics calibration for a batch of slots in ONE printer job
+ * (unlike the U1's per-toolhead loop), storing each measured K color-keyed and
+ * returning it per slot. `slots` is a list of `[extruderIdx, slotIdx]`. */
+export function driverCalibratePaBatch(
+  driverId: DriverId,
+  instanceId: string,
+  slots: [number, number][],
+): Promise<BambuCaliSlotK[]> {
+  return invoke<BambuCaliSlotK[]>("driver_calibrate_pa_bambu", {
+    driverId,
+    instanceId,
+    slots,
+  });
+}
+
 /** Send the plate's last-sliced raw G-code (at `gcodePath`) to
  * the driver as a `.gcode.3mf` bundle. Backend wraps the raw
  * gcode into the bundle. */

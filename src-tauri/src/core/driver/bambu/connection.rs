@@ -28,7 +28,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS, Transport};
 use serde::Serialize;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -37,8 +37,8 @@ use crate::core::driver::status::{
     BambuExtra, ConnectionState, DriverExtra, JobState, PrinterStatus,
 };
 use crate::core::driver::traits::{
-    Driver, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle, SendPayload,
-    UploadProgressFn,
+    CaliProfile, CaliResult, Driver, DriverError, DriverId, DriverKind, ExtrusionCaliEntry,
+    ExtrusionCaliTarget, PrinterCommand, SendHandle, SendPayload, UploadProgressFn,
 };
 
 const KEEPALIVE: Duration = Duration::from_secs(60);
@@ -74,6 +74,15 @@ pub struct BambuDriver {
     /// Bambu echoes the value back in status messages so we can
     /// correlate the printer's ack with the command we sent.
     sequence_counter: Arc<AtomicU64>,
+    /// Fresh `extrusion_cali_get_result` payloads, forwarded by the status
+    /// worker. A batched calibrate subscribes before requesting the result and
+    /// awaits it here — bypassing the rate-limited, accumulating status watch.
+    /// Carries `(echoed sequence_id, results)` so a waiter matches only the
+    /// response to its own request (co-connected Studio can emit stray frames).
+    cali_tx: broadcast::Sender<(String, Vec<CaliResult>)>,
+    /// Fresh `extrusion_cali_get` (stored table) payloads, same mechanism as
+    /// [`Self::cali_tx`]. Used to resolve `cali_idx` per filament.
+    table_tx: broadcast::Sender<(String, Vec<CaliProfile>)>,
 }
 
 impl BambuDriver {
@@ -90,6 +99,8 @@ impl BambuDriver {
             shutdown_tx: None,
             client: None,
             sequence_counter: Arc::new(AtomicU64::new(1)),
+            cali_tx: broadcast::channel(8).0,
+            table_tx: broadcast::channel(8).0,
         }
     }
 
@@ -100,6 +111,41 @@ impl BambuDriver {
         self.sequence_counter
             .fetch_add(1, Ordering::SeqCst)
             .to_string()
+    }
+
+    /// Wait for a calibration print job to run to completion: first observe an
+    /// active state (Preparing/Printing), then wait for Finished — so a stale
+    /// Finished left over from a previous print can't be mistaken for this
+    /// run's end. Fails on a Failed job or timeout.
+    async fn await_cali_job(&self, timeout: Duration) -> Result<(), DriverError> {
+        let mut rx = self.status_tx.subscribe();
+        let wait = async {
+            let mut started = false;
+            loop {
+                let state = rx
+                    .borrow_and_update()
+                    .job
+                    .as_ref()
+                    .map(|j| j.state.clone())
+                    .unwrap_or(JobState::Idle);
+                match state {
+                    JobState::Preparing | JobState::Printing => started = true,
+                    JobState::Finished if started => return Ok(()),
+                    JobState::Failed(reason) if started => {
+                        return Err(DriverError::Protocol(format!(
+                            "calibration job failed: {reason}"
+                        )));
+                    }
+                    _ => {}
+                }
+                if rx.changed().await.is_err() {
+                    return Err(DriverError::Other("status stream closed".into()));
+                }
+            }
+        };
+        tokio::time::timeout(timeout, wait)
+            .await
+            .map_err(|_| DriverError::Protocol("calibration job did not finish in time".into()))?
     }
 
     /// The serial-derived device id, available after a
@@ -169,7 +215,14 @@ impl Driver for BambuDriver {
         // Status worker task — owns the mpsc receiver; drains, parses,
         // and emits to the watch sender.
         let status_tx_for_worker = self.status_tx.clone();
-        let worker_task = tokio::spawn(super::status::run_worker(raw_rx, status_tx_for_worker));
+        let cali_tx_for_worker = self.cali_tx.clone();
+        let table_tx_for_worker = self.table_tx.clone();
+        let worker_task = tokio::spawn(super::status::run_worker(
+            raw_rx,
+            status_tx_for_worker,
+            cali_tx_for_worker,
+            table_tx_for_worker,
+        ));
         self.tasks.push(worker_task);
 
         // rumqttc event loop task.
@@ -479,6 +532,188 @@ impl Driver for BambuDriver {
             .map_err(|e| DriverError::Network(format!("publish ams_filament_setting: {e}")))?;
         Ok(())
     }
+
+    async fn calibrate_pressure_advance_bambu(
+        &self,
+        targets: Vec<ExtrusionCaliTarget>,
+    ) -> Result<Vec<CaliResult>, DriverError> {
+        if targets.is_empty() {
+            return Ok(Vec::new());
+        }
+        let client = self.client.clone().ok_or(DriverError::NotConnected)?;
+        let device_id = self.device_id.clone().ok_or(DriverError::NotConnected)?;
+        let topic = format!("device/{device_id}/request");
+        let nozzle_diameter = targets[0].nozzle_diameter.clone();
+
+        // Subscribe to results BEFORE triggering so we can't miss the reply.
+        let mut cali_rx = self.cali_tx.subscribe();
+
+        // 1. Trigger the auto calibration (one job measures all trays).
+        let filaments = targets
+            .into_iter()
+            .map(|t| ExtrusionCaliFilament {
+                ams_id: t.ams_id,
+                bed_temp: t.bed_temp,
+                extruder_id: t.extruder_id,
+                filament_id: t.filament_id,
+                max_volumetric_speed: t.max_volumetric_speed,
+                nozzle_diameter: t.nozzle_diameter,
+                nozzle_id: t.nozzle_id,
+                nozzle_temp: t.nozzle_temp,
+                setting_id: t.setting_id,
+                slot_id: t.slot_id,
+                tray_id: t.tray_id,
+            })
+            .collect();
+        let body = serde_json::to_vec(&ExtrusionCaliRequest {
+            print: ExtrusionCaliBody {
+                sequence_id: self.next_sequence_id(),
+                command: "extrusion_cali",
+                mode: 0,
+                nozzle_diameter: nozzle_diameter.clone(),
+                filaments,
+            },
+        })
+        .map_err(|e| DriverError::Other(format!("serialize extrusion_cali: {e}")))?;
+        tracing::debug!(
+            target: "mqtt", serial = %device_id, dir = "tx", topic = %topic,
+            payload = %String::from_utf8_lossy(&body), "extrusion_cali",
+        );
+        client
+            .publish(&topic, QoS::AtLeastOnce, false, body)
+            .await
+            .map_err(|e| DriverError::Network(format!("publish extrusion_cali: {e}")))?;
+
+        // 2. Wait for the auto_filament_cali print job to finish (minutes).
+        self.await_cali_job(Duration::from_secs(600)).await?;
+
+        // 3. Request the measured result and await the response to OUR request
+        //    (matched by sequence_id, so a co-connected Studio's frame can't be
+        //    mistaken for ours).
+        let seq = self.next_sequence_id();
+        let body = serde_json::to_vec(&ExtrusionCaliGetResultRequest {
+            print: ExtrusionCaliGetResultBody {
+                sequence_id: seq.clone(),
+                command: "extrusion_cali_get_result",
+                nozzle_diameter,
+            },
+        })
+        .map_err(|e| DriverError::Other(format!("serialize extrusion_cali_get_result: {e}")))?;
+        client
+            .publish(&topic, QoS::AtLeastOnce, false, body)
+            .await
+            .map_err(|e| DriverError::Network(format!("publish extrusion_cali_get_result: {e}")))?;
+
+        recv_for_seq(&mut cali_rx, &seq, Duration::from_secs(15)).await
+    }
+
+    async fn set_extrusion_cali(
+        &self,
+        entries: Vec<ExtrusionCaliEntry>,
+    ) -> Result<(), DriverError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let client = self.client.clone().ok_or(DriverError::NotConnected)?;
+        let device_id = self.device_id.clone().ok_or(DriverError::NotConnected)?;
+        let nozzle_diameter = entries[0].nozzle_diameter.clone();
+
+        let filaments = entries
+            .into_iter()
+            .map(|e| ExtrusionCaliSetFilament {
+                ams_id: e.ams_id,
+                extruder_id: e.extruder_id,
+                filament_id: e.filament_id,
+                k_value: format!("{:.6}", e.k_value),
+                n_coef: format!("{:.6}", e.n_coef),
+                name: e.name,
+                nozzle_diameter: e.nozzle_diameter,
+                nozzle_id: e.nozzle_id,
+                setting_id: e.setting_id,
+                slot_id: e.slot_id,
+                tray_id: e.tray_id,
+                cali_idx: e.cali_idx,
+            })
+            .collect();
+        let body = serde_json::to_vec(&ExtrusionCaliSetRequest {
+            print: ExtrusionCaliSetBody {
+                sequence_id: self.next_sequence_id(),
+                command: "extrusion_cali_set",
+                nozzle_diameter,
+                filaments,
+            },
+        })
+        .map_err(|e| DriverError::Other(format!("serialize extrusion_cali_set: {e}")))?;
+
+        let topic = format!("device/{device_id}/request");
+        tracing::debug!(
+            target: "mqtt", serial = %device_id, dir = "tx", topic = %topic,
+            payload = %String::from_utf8_lossy(&body), "extrusion_cali_set",
+        );
+        client
+            .publish(&topic, QoS::AtLeastOnce, false, body)
+            .await
+            .map_err(|e| DriverError::Network(format!("publish extrusion_cali_set: {e}")))?;
+        Ok(())
+    }
+
+    async fn get_extrusion_cali(
+        &self,
+        nozzle_diameter: String,
+    ) -> Result<Vec<CaliProfile>, DriverError> {
+        let client = self.client.clone().ok_or(DriverError::NotConnected)?;
+        let device_id = self.device_id.clone().ok_or(DriverError::NotConnected)?;
+        let topic = format!("device/{device_id}/request");
+
+        let mut table_rx = self.table_tx.subscribe();
+        let seq = self.next_sequence_id();
+        let body = serde_json::to_vec(&ExtrusionCaliGetRequest {
+            print: ExtrusionCaliGetBody {
+                sequence_id: seq.clone(),
+                command: "extrusion_cali_get",
+                filament_id: "",
+                nozzle_diameter,
+            },
+        })
+        .map_err(|e| DriverError::Other(format!("serialize extrusion_cali_get: {e}")))?;
+        tracing::debug!(
+            target: "mqtt", serial = %device_id, dir = "tx", topic = %topic,
+            payload = %String::from_utf8_lossy(&body), "extrusion_cali_get",
+        );
+        client
+            .publish(&topic, QoS::AtLeastOnce, false, body)
+            .await
+            .map_err(|e| DriverError::Network(format!("publish extrusion_cali_get: {e}")))?;
+
+        // 5s (was 10s): a table read is fast; bound the stall on an
+        // unresponsive printer, since callers hold the driver lock across this.
+        recv_for_seq(&mut table_rx, &seq, Duration::from_secs(5)).await
+    }
+}
+
+/// Await the broadcast message whose echoed `sequence_id` matches `seq`,
+/// skipping unrelated responses (e.g. a co-connected Studio's frames) and
+/// broadcast lag. Times out with a `Protocol` error.
+async fn recv_for_seq<T: Clone>(
+    rx: &mut broadcast::Receiver<(String, T)>,
+    seq: &str,
+    timeout: Duration,
+) -> Result<T, DriverError> {
+    let wait = async {
+        loop {
+            match rx.recv().await {
+                Ok((s, payload)) if s == seq => return Ok(payload),
+                Ok(_) => continue,
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => {
+                    return Err(DriverError::Other("cali response channel closed".into()))
+                }
+            }
+        }
+    };
+    tokio::time::timeout(timeout, wait)
+        .await
+        .map_err(|_| DriverError::Protocol(format!("no matching cali response for seq {seq}")))?
 }
 
 /// Loose state match — `Failed(_)` collapses to "any failed
@@ -598,6 +833,101 @@ struct ProjectFileBody<'a> {
     /// `{255, 0}` = bound to the external spool, `{255, 255}` =
     /// unbound.
     ams_mapping2: &'a [crate::core::driver::ams::AmsMappingV2],
+}
+
+/// `extrusion_cali` (mode 0) — trigger Bambu's Flow-Dynamics auto calibration.
+/// Field shape verified from a real A1 mini capture (see memory
+/// `reference_bambu_pa_calibration`). The printer runs its firmware
+/// `auto_filament_cali.gcode`, measures on-board, and reports the result.
+#[derive(Serialize)]
+struct ExtrusionCaliRequest {
+    print: ExtrusionCaliBody,
+}
+
+#[derive(Serialize)]
+struct ExtrusionCaliBody {
+    sequence_id: String,
+    command: &'static str,
+    mode: u8,
+    nozzle_diameter: String,
+    filaments: Vec<ExtrusionCaliFilament>,
+}
+
+#[derive(Serialize)]
+struct ExtrusionCaliFilament {
+    ams_id: u8,
+    bed_temp: i32,
+    extruder_id: u8,
+    filament_id: String,
+    max_volumetric_speed: String,
+    nozzle_diameter: String,
+    nozzle_id: String,
+    nozzle_temp: i32,
+    setting_id: String,
+    slot_id: u8,
+    tray_id: u8,
+}
+
+/// `extrusion_cali_get_result` request — poll the measured K after the job.
+#[derive(Serialize)]
+struct ExtrusionCaliGetResultRequest {
+    print: ExtrusionCaliGetResultBody,
+}
+
+#[derive(Serialize)]
+struct ExtrusionCaliGetResultBody {
+    sequence_id: String,
+    command: &'static str,
+    nozzle_diameter: String,
+}
+
+/// `extrusion_cali_get` request — read the printer's stored cali table for a
+/// nozzle diameter. Empty `filament_id` returns all profiles.
+#[derive(Serialize)]
+struct ExtrusionCaliGetRequest {
+    print: ExtrusionCaliGetBody,
+}
+
+#[derive(Serialize)]
+struct ExtrusionCaliGetBody {
+    sequence_id: String,
+    command: &'static str,
+    filament_id: &'static str,
+    nozzle_diameter: String,
+}
+
+/// `extrusion_cali_set` — write K values into the printer's cali table.
+/// `k_value`/`n_coef` are strings on the wire (Studio uses 6 decimals).
+#[derive(Serialize)]
+struct ExtrusionCaliSetRequest {
+    print: ExtrusionCaliSetBody,
+}
+
+#[derive(Serialize)]
+struct ExtrusionCaliSetBody {
+    sequence_id: String,
+    command: &'static str,
+    nozzle_diameter: String,
+    filaments: Vec<ExtrusionCaliSetFilament>,
+}
+
+#[derive(Serialize)]
+struct ExtrusionCaliSetFilament {
+    ams_id: u8,
+    extruder_id: u8,
+    filament_id: String,
+    k_value: String,
+    n_coef: String,
+    name: String,
+    nozzle_diameter: String,
+    nozzle_id: String,
+    setting_id: String,
+    slot_id: u8,
+    tray_id: u8,
+    /// Omitted (`None`) tells the printer to create a new profile and apply it
+    /// to the tray; `Some(idx)` updates that profile in place.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cali_idx: Option<i32>,
 }
 
 /// Background task: own the rumqttc event loop until shutdown.

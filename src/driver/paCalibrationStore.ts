@@ -11,6 +11,7 @@
 
 import {
   driverCalibratePa,
+  driverCalibratePaBatch,
   driverErrorMessage,
   driverParkExtruder,
 } from "./invokes";
@@ -81,6 +82,7 @@ export async function runCalibration(
   instanceId: string,
   driverId: DriverId,
   targets: CalTarget[],
+  bambu: boolean,
 ): Promise<void> {
   if (targets.length === 0) return;
   if ((store.get(instanceId) ?? EMPTY).busy) return;
@@ -88,6 +90,45 @@ export async function runCalibration(
   const queued: Record<string, CalState> = {};
   for (const t of targets) queued[t.key] = { phase: "queued" };
   write(instanceId, { busy: true, rows: queued });
+
+  // Bambu measures every selected tray in ONE firmware job, so there's no
+  // per-tray loop and no toolhead to park — one batched call, then map the
+  // returned K back to each row.
+  if (bambu) {
+    for (const t of targets) patchRow(instanceId, t.key, { phase: "running" });
+    try {
+      const results = await driverCalibratePaBatch(
+        driverId,
+        instanceId,
+        targets.map((t) => [t.extruderIndex, t.slotIndex] as [number, number]),
+      );
+      const byKey = new Map(
+        results.map((r) => [`${r.extruder_index}-${r.slot_index}`, r]),
+      );
+      for (const t of targets) {
+        const r = byKey.get(t.key);
+        if (!r)
+          patchRow(instanceId, t.key, {
+            phase: "error",
+            message: "no result returned",
+          });
+        // confidence: 0 = ok, 1 = uncertain, 2 = failed. Only 0 was stored
+        // backend-side; surface the rest as a failed row.
+        else if (r.confidence !== 0)
+          patchRow(instanceId, t.key, {
+            phase: "error",
+            message: `measurement failed (confidence ${r.confidence})`,
+          });
+        else patchRow(instanceId, t.key, { phase: "done", k: r.k_value });
+      }
+    } catch (e) {
+      const message = driverErrorMessage(e);
+      for (const t of targets) patchRow(instanceId, t.key, { phase: "error", message });
+    }
+    const done = store.get(instanceId) ?? EMPTY;
+    write(instanceId, { ...done, busy: false });
+    return;
+  }
 
   for (const t of targets) {
     patchRow(instanceId, t.key, { phase: "running" });

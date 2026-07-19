@@ -289,6 +289,45 @@ pub trait Driver: Send + Sync {
         Ok(())
     }
 
+    /// Run Bambu's Flow-Dynamics (pressure-advance) auto calibration for a
+    /// batch of trays in one job, returning the measured K per tray. The
+    /// printer runs its firmware `auto_filament_cali.gcode`, measures on-board,
+    /// and reports each result; nothing is baked into gcode. Only Bambu drivers
+    /// implement this. Long-running (a full cali print — minutes).
+    async fn calibrate_pressure_advance_bambu(
+        &self,
+        _targets: Vec<ExtrusionCaliTarget>,
+    ) -> Result<Vec<CaliResult>, DriverError> {
+        Err(DriverError::Other(
+            "this printer has no Bambu flow-dynamics calibration".into(),
+        ))
+    }
+
+    /// Push stored pressure-advance K values to the printer's own cali table
+    /// (Bambu `extrusion_cali_set`), so the printer applies our color-correct K
+    /// at print time instead of its own `filament_id`-keyed buffer. Sent right
+    /// before a print when the user hasn't asked the printer to re-calibrate.
+    /// Default no-op for printers that don't keep a printer-side K table.
+    async fn set_extrusion_cali(
+        &self,
+        _entries: Vec<ExtrusionCaliEntry>,
+    ) -> Result<(), DriverError> {
+        Ok(())
+    }
+
+    /// Read the printer's stored PA cali table for a nozzle diameter (Bambu
+    /// `extrusion_cali_get`). Used to resolve the Bambu preset `setting_id`
+    /// (and `cali_idx`) for a `filament_id` — those aren't in n3o's model or
+    /// the AMS tray state. Only Bambu drivers implement this.
+    async fn get_extrusion_cali(
+        &self,
+        _nozzle_diameter: String,
+    ) -> Result<Vec<CaliProfile>, DriverError> {
+        Err(DriverError::Other(
+            "this printer has no PA cali table".into(),
+        ))
+    }
+
     /// A handle for vendor JSON-RPC requests over this driver's live
     /// status connection (the U1 camera wake rides it, over MQTT or WS
     /// alike). `None` when the driver has no such control plane or isn't
@@ -335,6 +374,94 @@ pub struct AmsFilamentSetting {
     pub tray_color: String,
     pub nozzle_temp_min: i32,
     pub nozzle_temp_max: i32,
+}
+
+/// One tray to auto-calibrate via Bambu `extrusion_cali` (mode 0). Mirrors the
+/// per-filament entry in the captured trigger payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExtrusionCaliTarget {
+    pub ams_id: u8,
+    pub tray_id: u8,
+    pub slot_id: u8,
+    pub extruder_id: u8,
+    pub filament_id: String,
+    pub setting_id: String,
+    /// Composite nozzle id, e.g. `"HS00-0.4"` (volume-type + diameter).
+    pub nozzle_id: String,
+    pub nozzle_diameter: String,
+    pub nozzle_temp: i32,
+    pub bed_temp: i32,
+    pub max_volumetric_speed: String,
+}
+
+/// One K value to write to the printer's cali table via Bambu
+/// `extrusion_cali_set`. `k_value`/`n_coef` are formatted to strings on the
+/// wire (the driver does that); here they're plain floats. The tray identity
+/// (`ams_id`/`tray_id`/`slot_id`) is what binds the K to the tray. `setting_id`
+/// is one we own (stable per profile). `cali_idx` = `Some` to update an existing
+/// profile in place, `None` to create a new one (the printer also applies a
+/// newly-created profile to the tray).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExtrusionCaliEntry {
+    pub ams_id: u8,
+    pub tray_id: u8,
+    pub slot_id: u8,
+    pub extruder_id: u8,
+    pub filament_id: String,
+    pub setting_id: String,
+    pub name: String,
+    pub nozzle_id: String,
+    pub nozzle_diameter: String,
+    pub k_value: f64,
+    pub n_coef: f64,
+    pub cali_idx: Option<i32>,
+}
+
+/// A measured calibration result from Bambu `extrusion_cali_get_result`. Fields
+/// default so a partial/odd frame still decodes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CaliResult {
+    #[serde(default)]
+    pub tray_id: i32,
+    /// AMS unit id. Absent on single-AMS results (defaults 0); used to
+    /// disambiguate trays across units when the printer reports it (multi-AMS,
+    /// unverified). Match on `(ams_id, tray_id)`.
+    #[serde(default)]
+    pub ams_id: i32,
+    #[serde(default)]
+    pub filament_id: String,
+    #[serde(default)]
+    pub setting_id: String,
+    #[serde(default)]
+    pub k_value: f64,
+    #[serde(default)]
+    pub n_coef: f64,
+    /// 0 = success, 1 = uncertain, 2 = failed (Bambu convention).
+    #[serde(default)]
+    pub confidence: i32,
+}
+
+/// One stored profile in the printer's cali table (Bambu `extrusion_cali_get`).
+/// Carries the Bambu preset `setting_id`/`cali_idx` keyed by `filament_id` —
+/// the fields n3o can't derive locally — plus the stored K (used to seed
+/// missing local values on sync). `k_value`/`n_coef` arrive as strings on the
+/// wire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CaliProfile {
+    #[serde(default)]
+    pub filament_id: String,
+    #[serde(default)]
+    pub setting_id: String,
+    #[serde(default)]
+    pub name: String,
+    /// Stored K as a wire string (e.g. `"0.03900"`); parse at use.
+    #[serde(default)]
+    pub k_value: String,
+    #[serde(default)]
+    pub cali_idx: i32,
+    /// True for a superseded (history) profile; prefer the current entry.
+    #[serde(default, rename = "is_history_setting")]
+    pub is_history: bool,
 }
 
 #[cfg(test)]

@@ -13,10 +13,11 @@
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 
 #[cfg(test)]
 use crate::core::driver::status::BambuExtra;
+use crate::core::driver::traits::{CaliProfile, CaliResult};
 use crate::core::driver::status::{
     DriverExtra, JobProgress, JobState, PrinterStatus, TempReading,
 };
@@ -176,6 +177,20 @@ pub struct BambuReport {
         deserialize_with = "de::optional_f64"
     )]
     pub fan_speed: Option<f64>,
+    /// The command name every report carries (e.g. `"push_status"`,
+    /// `"extrusion_cali_get_result"`). Read fresh per-message to route
+    /// calibration responses; deliberately NOT merged into the accumulator.
+    #[serde(default, rename = "command", deserialize_with = "de::optional_string")]
+    pub command: Option<String>,
+    /// The echoed request sequence id. Used to correlate a calibration
+    /// response with the request WE sent — so a stray get-result frame from
+    /// another client (e.g. a co-connected Studio) isn't mistaken for ours.
+    #[serde(
+        default,
+        rename = "sequence_id",
+        deserialize_with = "de::optional_string"
+    )]
+    pub sequence_id: Option<String>,
 
     // --- AMS ---
     #[serde(default)]
@@ -529,6 +544,37 @@ pub fn parse_message(bytes: &[u8]) -> Result<BambuMessage, String> {
     serde_json::from_slice(bytes).map_err(|e| format!("bambu report parse: {e}"))
 }
 
+/// Targeted re-parse of an `extrusion_cali_get_result` frame. Kept separate
+/// from [`BambuReport`] because the sibling cali frames (`extrusion_cali`,
+/// `extrusion_cali_get`) carry a different `filaments[]` shape (string `k_value`,
+/// extra fields) that would fail this strict decode — so we only apply it to
+/// the get-result command, never to every report.
+#[derive(Deserialize)]
+struct CaliResultEnvelope {
+    print: CaliResultPrint,
+}
+
+#[derive(Deserialize)]
+struct CaliResultPrint {
+    #[serde(default)]
+    filaments: Vec<CaliResult>,
+}
+
+/// Targeted re-parse of an `extrusion_cali_get` (stored table) frame. Separate
+/// from the get-*result* shape because the table entries carry string
+/// `k_value`/`n_coef` + `cali_idx`/`is_history_setting`. [`CaliProfile`] ignores
+/// the (string) K fields, so this decodes leniently.
+#[derive(Deserialize)]
+struct CaliTableEnvelope {
+    print: CaliTablePrint,
+}
+
+#[derive(Deserialize)]
+struct CaliTablePrint {
+    #[serde(default)]
+    filaments: Vec<CaliProfile>,
+}
+
 /// Apply a `BambuReport` delta to the live `PrinterStatus`
 /// snapshot the watch sender holds. Scalar fields update by
 /// last-write-wins; `last_updated` always advances.
@@ -667,6 +713,8 @@ fn map_state(s: &str) -> JobState {
 pub async fn run_worker(
     mut raw_rx: mpsc::Receiver<Vec<u8>>,
     status_tx: watch::Sender<PrinterStatus>,
+    cali_tx: broadcast::Sender<(String, Vec<CaliResult>)>,
+    table_tx: broadcast::Sender<(String, Vec<CaliProfile>)>,
 ) {
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(1000));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -692,6 +740,26 @@ pub async fn run_worker(
                 tracing::trace!(len = bytes.len(), "bambu raw report");
                 match parse_message(&bytes) {
                     Ok(msg) => {
+                        // Route a fresh calibration result to waiting callers,
+                        // BEFORE it folds into the (sticky) accumulator. Only
+                        // the get-result command has the strict `filaments`
+                        // shape; re-parse just those bytes.
+                        let seq = msg.print.sequence_id.clone().unwrap_or_default();
+                        match msg.print.command.as_deref() {
+                            Some("extrusion_cali_get_result") => {
+                                if let Ok(env) = serde_json::from_slice::<CaliResultEnvelope>(&bytes) {
+                                    if !env.print.filaments.is_empty() {
+                                        let _ = cali_tx.send((seq, env.print.filaments));
+                                    }
+                                }
+                            }
+                            Some("extrusion_cali_get") => {
+                                if let Ok(env) = serde_json::from_slice::<CaliTableEnvelope>(&bytes) {
+                                    let _ = table_tx.send((seq, env.print.filaments));
+                                }
+                            }
+                            _ => {}
+                        }
                         // Initialize pending from current status if
                         // first message.
                         let snapshot = pending.get_or_insert_with(
