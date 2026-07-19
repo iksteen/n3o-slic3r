@@ -218,6 +218,10 @@ impl Driver for MoonrakerDriver {
         http::calibrate_pressure_advance(&self.config.host, self.config.port, extruder_idx).await
     }
 
+    async fn park_extruder(&self) -> Result<(), DriverError> {
+        http::park_extruder(&self.config.host, self.config.port).await
+    }
+
     fn control_plane(&self) -> Option<Arc<dyn ControlPlane>> {
         self.control_slot.lock().expect("control slot").clone()
     }

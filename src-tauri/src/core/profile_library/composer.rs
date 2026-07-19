@@ -745,6 +745,36 @@ fn resolve_process_ref(printer: &str, quality_profile: &str) -> (String, BTreeMa
 /// the unconditional + filament-typed base, which is what a per-filament
 /// override is authored against.
 pub fn resolve_base_scalars(slug: &str) -> BTreeMap<String, String> {
+    resolve_filament_scalars(slug, "", "")
+}
+
+/// Like [`resolve_base_scalars`], but with the printer's `printer.model` (from
+/// `printer_fragment_slug`, derived the same way [`compose_cascade`] does) and
+/// the given `plate.type` in context, so printer/plate-conditional fragment
+/// rules fire. Use this to show a filament's *actually-baked* scalars for a
+/// specific instance — e.g. the Flow Dynamics PA hint for a table-less printer
+/// — rather than the context-free base, which would ignore a
+/// `when.printer.model`-keyed `pressure_advance`.
+pub fn resolve_base_scalars_for_printer(
+    slug: &str,
+    printer_fragment_slug: &str,
+    plate_type: &str,
+) -> BTreeMap<String, String> {
+    let printer_model = load_printer_fragment(printer_fragment_slug)
+        .and_then(|p| {
+            p.rules
+                .iter()
+                .find_map(|r| r.set.get("printer_model").cloned())
+        })
+        .unwrap_or_default();
+    resolve_filament_scalars(slug, &printer_model, plate_type)
+}
+
+fn resolve_filament_scalars(
+    slug: &str,
+    printer_model: &str,
+    plate_type: &str,
+) -> BTreeMap<String, String> {
     // A custom filament composes from its base fragment; a bundled (or
     // edited-in-place) slug is its own base.
     let base = filament::library::lookup(slug)
@@ -753,7 +783,7 @@ pub fn resolve_base_scalars(slug: &str) -> BTreeMap<String, String> {
     let Some(cascade) = load_filament_fragment(&base) else {
         return BTreeMap::new();
     };
-    let ctx = slot_filament_context(&base, "", "");
+    let ctx = slot_filament_context(&base, printer_model, plate_type);
     resolve(&cascade, &ctx)
         .into_iter()
         .map(|(k, v)| (k, v.value))
@@ -1318,6 +1348,31 @@ mod tests {
             fil.set.get("pressure_advance").map(String::as_str),
             Some("0.05"),
             "no table for this printer → filament fragment's 0.05 is preserved",
+        );
+    }
+
+    #[test]
+    fn resolve_base_scalars_for_printer_applies_printer_model_rules() {
+        // The context-free base can't see `when.printer.model` rules; the
+        // printer-aware variant must, so the Flow Dynamics PA hint reflects the
+        // actually-baked value. generic-pla's A1 mini rule sets A1-specific
+        // values (fans, plate temps, gcode), so the two resolutions diverge —
+        // proving `printer.model` threads through. (For the A1 mini itself PA
+        // stays 0.05: that rule doesn't touch pressure_advance.)
+        let base = resolve_base_scalars("generic-pla");
+        let a1 = resolve_base_scalars_for_printer(
+            "generic-pla",
+            "bambu-lab-a1-mini",
+            "Textured PEI Plate",
+        );
+        assert_ne!(
+            base, a1,
+            "printer.model context must change the resolved scalars",
+        );
+        assert_eq!(
+            a1.get("fan_max_speed").map(String::as_str),
+            Some("80"),
+            "A1 mini rule pins fan_max_speed",
         );
     }
 

@@ -14,6 +14,7 @@ import { CameraPanel } from "./DeviceCamera";
 import { CurrentJobPanel } from "./DeviceJob";
 import { StatsColumn, type NozzleSwatch } from "./DeviceStats";
 import { LoadoutPanel, loadoutFromReport, type LoadoutSlot } from "./DeviceLoadout";
+import { FlowDynamics } from "./FlowDynamics";
 
 interface MonitorProps {
   instance: PrinterInstance | null;
@@ -32,6 +33,7 @@ export function DeviceMonitor({
   const { status } = useDriverStatus(driverId);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
+  const [tab, setTab] = useState<"status" | "flow">("status");
   // Transient action state belongs to the currently-bound driver.
   // DeviceMonitor stays mounted across printer selection (no key
   // remount), so when the driver changes — switched or deleted — reset
@@ -200,13 +202,36 @@ export function DeviceMonitor({
         </div>
       </div>
 
-      {actionError && (
+      {!notConfigured && (
+        <div className="device-monitor-tabs" role="tablist">
+          <button
+            className={`device-monitor-tab${tab === "status" ? " active" : ""}`}
+            role="tab"
+            aria-selected={tab === "status"}
+            onClick={() => setTab("status")}
+            type="button"
+          >
+            Status
+          </button>
+          <button
+            className={`device-monitor-tab${tab === "flow" ? " active" : ""}`}
+            role="tab"
+            aria-selected={tab === "flow"}
+            onClick={() => setTab("flow")}
+            type="button"
+          >
+            Flow dynamics
+          </button>
+        </div>
+      )}
+
+      {actionError && tab === "status" && (
         <div className="sp-error" role="alert" style={{ margin: "8px 22px 0" }}>
           {actionError}
         </div>
       )}
 
-      {!notConfigured && (
+      {!notConfigured && tab === "status" && (
         <div className="device-monitor-body">
           <div className="device-monitor-left">
             <CameraPanel
@@ -228,6 +253,25 @@ export function DeviceMonitor({
             />
             <LoadoutPanel offline={offline} slots={loadoutSlots} />
           </div>
+        </div>
+      )}
+
+      {/* Kept mounted across tab switches (visibility toggled, not
+          unmounted) so edits + an in-flight calibration survive a trip to
+          the Status tab. Keyed by instance id so switching printers
+          remounts it fresh — the previous printer's calibration state can't
+          bleed through. */}
+      {!notConfigured && (
+        <div
+          className="device-monitor-tabpane"
+          style={{ display: tab === "flow" ? "flex" : "none" }}
+        >
+          <FlowDynamics
+            key={instance.id}
+            instance={instance}
+            driverId={driverId}
+            printerIdle={derived.status === "idle"}
+          />
         </div>
       )}
     </div>

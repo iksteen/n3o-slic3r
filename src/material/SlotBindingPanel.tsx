@@ -12,9 +12,8 @@
 //      by an object on this plate with a slot picker. Writes via
 //      `project_set_material_slot`.
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { driverCalibratePa, driverErrorMessage } from "../driver/invokes";
 import type { PlateId, PlateSnapshot } from "../viewport/types";
 import {
   setSlotColor,
@@ -84,10 +83,6 @@ export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelP
     return counts;
   }, [plate]);
 
-  // Slot key (`extruder-slot`) currently running a PA calibration, so the
-  // chip can show its in-flight state. Only one at a time — the printer
-  // calibrates one toolhead per run.
-  const [calibratingKey, setCalibratingKey] = useState<string | null>(null);
 
   if (!plateId || !plate || !instance) {
     return null;
@@ -111,34 +106,6 @@ export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelP
       slotIdx: slot.slot,
     });
   };
-
-  // Calibrate pressure advance for a slot's filament on the live printer,
-  // then store the measured K (keyed by identity × color × nozzle) so future
-  // slices use it over the profile default. FLOW_CALIBRATE targets the
-  // printer's *active* toolhead — the slot's toolhead must be loaded — so this
-  // is gated to a connected driver and the button warns via its tooltip.
-  const onCalibratePa =
-    driverId == null
-      ? undefined
-      : async (slot: SlotRef): Promise<void> => {
-          const key = `${slot.extruder}-${slot.slot}`;
-          setCalibratingKey(key);
-          try {
-            await driverCalibratePa(
-              driverId,
-              instance.id,
-              slot.extruder,
-              slot.slot,
-            );
-          } catch (err) {
-            console.error(
-              "[slot-binding] calibrate PA failed",
-              driverErrorMessage(err),
-            );
-          } finally {
-            setCalibratingKey(null);
-          }
-        };
 
   const onApplyPick = (
     slot: SlotRef,
@@ -210,8 +177,6 @@ export function SlotBindingPanel({ plateId, plate, driverId }: SlotBindingPanelP
         filaments={filaments}
         onApplyPick={onApplyPick}
         onSync={onSyncSlots}
-        onCalibrate={onCalibratePa}
-        calibratingKey={calibratingKey}
       />
 
       {/* Section 2: per-plate material → slot pickers. NOZZLES-

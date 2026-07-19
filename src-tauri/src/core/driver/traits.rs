@@ -281,6 +281,14 @@ pub trait Driver: Send + Sync {
         ))
     }
 
+    /// Park the active toolhead back in its dock — called once after a
+    /// calibration cycle to stow the last-used toolhead. Only toolchangers
+    /// (the U1) act on it; the default is a no-op for printers with nothing
+    /// to park.
+    async fn park_extruder(&self) -> Result<(), DriverError> {
+        Ok(())
+    }
+
     /// A handle for vendor JSON-RPC requests over this driver's live
     /// status connection (the U1 camera wake rides it, over MQTT or WS
     /// alike). `None` when the driver has no such control plane or isn't

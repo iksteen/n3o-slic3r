@@ -229,6 +229,13 @@ pub(super) async fn calibrate_pressure_advance(
     super::probe::query_pressure_advance(host, port, extruder_idx).await
 }
 
+/// Park the active toolhead back in its dock via `PARK_EXTRUDER`. Used to
+/// stow the last toolhead after a calibration cycle so the machine is left
+/// idle, not holding a picked toolhead.
+pub(super) async fn park_extruder(host: &str, port: u16) -> Result<(), DriverError> {
+    run_gcode_script(host, port, "PARK_EXTRUDER").await
+}
+
 /// POST `/printer/print/{action}`. Moonraker maps these directly to
 /// Klipper's PAUSE / RESUME / CANCEL_PRINT g-code macros.
 ///

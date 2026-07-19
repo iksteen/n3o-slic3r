@@ -47,7 +47,8 @@ use crate::core::printer::profile::PrinterProfile;
 
 pub mod composer;
 pub use composer::{
-    compose_cascade, join_for_key, resolve_base_scalars, split_for_key, with_quality_profile,
+    compose_cascade, join_for_key, resolve_base_scalars, resolve_base_scalars_for_printer,
+    split_for_key, with_quality_profile,
     ComposeError,
 };
 

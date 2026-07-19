@@ -148,6 +148,47 @@ export async function setSlotColor(
   });
 }
 
+/** Pressure-advance state for one bound slot — mirrors Rust's
+ *  `FlowPaSlot`. `currentK` is the stored calibration (the editable
+ *  value; `null` when nothing is calibrated); `defaultK` is the
+ *  printer's table default for this material/nozzle, shown as the
+ *  empty-state hint. `color`/`nozzle` are the exact store keys, echoed
+ *  back to `setCalibratedPa` verbatim. */
+export interface FlowPaSlot {
+  extruder_index: number;
+  slot_index: number;
+  identity: string;
+  color: string;
+  nozzle: string;
+  current_k: number | null;
+  default_k: number | null;
+}
+
+/** Pressure-advance state for every bound slot on the instance. Drives
+ *  the device page's Flow Dynamics tab. Read-only. */
+export async function flowPaValues(id: string): Promise<FlowPaSlot[]> {
+  return invoke<FlowPaSlot[]>("printer_flow_pa", { id });
+}
+
+/** Manually set (or clear, with `k = null`) the calibrated pressure
+ *  advance for a (filament identity × color × nozzle) combination — the
+ *  same store `driverCalibratePa` writes. Emits `printer:instance_changed`. */
+export async function setCalibratedPa(
+  id: string,
+  identity: string,
+  color: string,
+  nozzle: string,
+  k: number | null,
+): Promise<void> {
+  return invoke<void>("printer_set_calibrated_pa", {
+    id,
+    identity,
+    color,
+    nozzle,
+    k,
+  });
+}
+
 /** Change the diameter of the nozzle currently installed on the
  *  named extruder. `diameter` is a string symbol ("0.4", "0.25")
  *  — see [NozzleSku.diameter] for why. Material is preserved.

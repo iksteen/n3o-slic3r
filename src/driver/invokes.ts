@@ -85,6 +85,13 @@ export function driverCalibratePa(
   });
 }
 
+/** Park the active toolhead back in its dock. Called once after a PA
+ * calibration cycle so the printer isn't left holding the last picked
+ * toolhead. No-op on non-toolchanger printers. */
+export function driverParkExtruder(driverId: DriverId): Promise<void> {
+  return invoke<void>("driver_park_extruder", { driverId });
+}
+
 /** Send the plate's last-sliced raw G-code (at `gcodePath`) to
  * the driver as a `.gcode.3mf` bundle. Backend wraps the raw
  * gcode into the bundle. */

@@ -34,10 +34,9 @@ pub use instance::{
 pub use instance_library::{bundled_instances, BAMBI_ID, SNAPPY_ID};
 pub use instance_registry::{
     create_instance, delete_instance, list_instances, lookup_instance, mutate_instance,
-    set_config_override, set_extruder_nozzle_diameter, set_instance_ams_units, set_instance_bed,
-    set_instance_send_options, set_plugin_override, set_slot_color, set_slot_filament,
-    update_instance, InstanceMutError,
-    InstancePatch,
+    set_calibrated_pressure_advance, set_config_override, set_extruder_nozzle_diameter,
+    set_instance_ams_units, set_instance_bed, set_instance_send_options, set_plugin_override,
+    set_slot_color, set_slot_filament, update_instance, InstanceMutError, InstancePatch,
 };
 pub use options::{
     engine_default_serialized, slicer_extruder_options_for_printer, slicer_filament_options,
@@ -97,6 +96,109 @@ pub fn printer_instance_set_slot_filament(
         .map_err(|e| e.to_string())?;
     emit_instance_changed(&window, &updated.id);
     Ok(PrinterInstanceView::of(updated))
+}
+
+/// Pressure-advance state for one bound slot, for the device page's Flow
+/// Dynamics tab. `current_k` is the instance's stored calibration for this
+/// (filament identity × spool color × nozzle) — the editable value; `default_k`
+/// is the printer's table default for the material/nozzle — the hint shown when
+/// nothing is calibrated. The `color`/`nozzle` strings are the exact keys the
+/// store uses, so the frontend echoes them straight back to
+/// `printer_set_calibrated_pa` / `driver_calibrate_pa` without reconstructing them.
+#[derive(serde::Serialize)]
+pub struct FlowPaSlot {
+    pub extruder_index: usize,
+    pub slot_index: usize,
+    pub identity: String,
+    pub color: String,
+    pub nozzle: String,
+    pub current_k: Option<f64>,
+    pub default_k: Option<f64>,
+}
+
+/// Tauri command: pressure-advance state for every bound slot on the instance.
+/// The filament fragment's resolved pressure advance for this instance — the
+/// value baked at slice for a printer with no PA table. Resolved *with* the
+/// printer's `printer.model` + plate type so a `when.printer.model`-keyed
+/// `pressure_advance` wins over the fragment's unconditional base. `None` when
+/// the fragment leaves PA disabled or unset.
+fn filament_fragment_pa(identity: &str, printer_fragment_slug: &str, plate_type: &str) -> Option<f64> {
+    use crate::core::profile_library::resolve_base_scalars_for_printer;
+    let scalars = resolve_base_scalars_for_printer(identity, printer_fragment_slug, plate_type);
+    if scalars.get("enable_pressure_advance").map(String::as_str) == Some("0") {
+        return None;
+    }
+    scalars.get("pressure_advance").and_then(|v| v.parse::<f64>().ok())
+}
+
+/// Empty slots are skipped. Drives the Flow Dynamics tab; read-only.
+#[tauri::command]
+#[tracing::instrument]
+pub fn printer_flow_pa(id: String) -> Result<Vec<FlowPaSlot>, String> {
+    use crate::core::profile_library::resolve_pressure_advance;
+    let inst = lookup_instance(&id).ok_or_else(|| format!("unknown instance {id}"))?;
+    let mut out = Vec::new();
+    for (ei, ext) in inst.extruders.iter().enumerate() {
+        let nozzle = ext.installed_nozzle.diameter.clone();
+        for (si, slot) in ext.slots.iter().enumerate() {
+            let Some(identity) = slot.filament_identity.clone() else {
+                continue;
+            };
+            let color = slot.color.clone().unwrap_or_default();
+            let base_type = crate::core::filament::lookup(&identity).map(|f| f.base_type);
+            let current_k = inst
+                .calibrated_pressure_advance
+                .get(&identity)
+                .and_then(|by_color| by_color.get(&color))
+                .and_then(|by_nozzle| by_nozzle.get(&nozzle))
+                .copied();
+            // Table default for printers with a K mapping (the U1), else fall
+            // back to the filament fragment's own resolved PA — the value that
+            // gets baked at slice for a table-less printer (Bambu, Ender).
+            let default_k = base_type
+                .as_deref()
+                .and_then(|bt| {
+                    resolve_pressure_advance(&inst.vendor_profile_ref, bt, &nozzle, None)
+                })
+                .or_else(|| {
+                    filament_fragment_pa(
+                        &identity,
+                        &inst.printer_fragment_slug,
+                        &inst.bed.identity,
+                    )
+                });
+            out.push(FlowPaSlot {
+                extruder_index: ei,
+                slot_index: si,
+                identity,
+                color,
+                nozzle: nozzle.clone(),
+                current_k,
+                default_k,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Tauri command: manually set (or clear, with `k = None`) the calibrated
+/// pressure advance for a (filament identity × color × nozzle) combination.
+/// Same store `driver_calibrate_pa` writes; used by the Flow Dynamics tab's
+/// editable K field. Emits `printer:instance_changed`.
+#[tauri::command]
+#[tracing::instrument(skip(window))]
+pub fn printer_set_calibrated_pa(
+    id: String,
+    identity: String,
+    color: String,
+    nozzle: String,
+    k: Option<f64>,
+    window: tauri::Window,
+) -> Result<(), String> {
+    let updated =
+        set_calibrated_pressure_advance(&id, identity, color, nozzle, k).map_err(|e| e.to_string())?;
+    emit_instance_changed(&window, &updated.id);
+    Ok(())
 }
 
 /// Tauri command: set (or clear, with `value = None`) a `plugin.<name>.*`

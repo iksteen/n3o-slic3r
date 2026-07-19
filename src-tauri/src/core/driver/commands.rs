@@ -649,6 +649,22 @@ pub async fn driver_calibrate_pa(
     Ok(k)
 }
 
+/// Park the active toolhead back in its dock. Called once after a calibration
+/// cycle finishes so the machine isn't left holding the last picked toolhead.
+/// No-op on printers that aren't toolchangers.
+#[tauri::command]
+#[tracing::instrument(skip(registry))]
+pub async fn driver_park_extruder(
+    driver_id: DriverId,
+    registry: State<'_, Arc<DriverRegistry>>,
+) -> Result<(), String> {
+    let handle = registry
+        .get(driver_id)
+        .ok_or_else(|| format!("unknown driver id {}", driver_id.0))?;
+    let d = handle.read().await;
+    d.park_extruder().await.map_err(|e| e.to_string())
+}
+
 /// Push a UI-edited AMS slot's filament identity back to the printer
 /// (Bambu AMS lite). Reads the slot's bound filament + color from the
 /// instance, resolves the Bambu SKU + material + nozzle range from the
