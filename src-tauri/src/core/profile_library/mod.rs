@@ -126,6 +126,14 @@ pub struct ProcessAvailability {
     pub nozzle: String,
 }
 
+/// Per-printer pressure-advance defaults, loaded from
+/// `<slug>/pressure_advance.toml`. Outer key = filament `base_type` (PLA,
+/// PETG, …); inner key = nozzle diameter string ("0.4"); value = K. Pressure
+/// advance is a printer/kinematics property that OrcaSlicer mis-stores on the
+/// filament, so it's authored here per printer and applied over the (generic,
+/// printer-agnostic) filament-fragment value at compose time.
+type PaTable = HashMap<String, HashMap<String, f64>>;
+
 /// Snapshot of every parseable profile fragment on disk, plus the
 /// printer catalog. Built once at startup; lookups borrow from this.
 pub struct ProfileLibrary {
@@ -134,6 +142,8 @@ pub struct ProfileLibrary {
     bed_fragments: HashMap<(String, String), CascadeAsset>,
     filament_fragments: HashMap<String, CascadeAsset>,
     process_fragments: HashMap<(String, String), CascadeAsset>,
+    /// Per-printer-slug PA default tables (optional `pressure_advance.toml`).
+    pa_tables: HashMap<String, PaTable>,
 
     /// Per-printer nozzle SKU declaration order (UI presentation).
     nozzle_order: BTreeMap<String, Vec<String>>,
@@ -209,6 +219,7 @@ impl ProfileLibrary {
             bed_fragments: HashMap::new(),
             filament_fragments: HashMap::new(),
             process_fragments: HashMap::new(),
+            pa_tables: HashMap::new(),
             nozzle_order: BTreeMap::new(),
             bed_order: BTreeMap::new(),
             process_order: BTreeMap::new(),
@@ -268,6 +279,16 @@ impl ProfileLibrary {
             if machine_path.is_file() {
                 let asset = read_cascade(root, &machine_path)?;
                 insert_fragment(&mut self.printer_fragments, slug.clone(), asset, "printer");
+            }
+            // pressure_advance.toml — optional per-(material, nozzle) PA
+            // defaults. See `PaTable` / `resolve_pressure_advance`.
+            let pa_path = printer_dir.join("pressure_advance.toml");
+            if pa_path.is_file() {
+                let raw = std::fs::read_to_string(&pa_path)
+                    .map_err(|e| LibraryError::Io(pa_path.clone(), e))?;
+                let table: PaTable =
+                    toml::from_str(&raw).map_err(|e| LibraryError::Toml(pa_path.clone(), e))?;
+                self.pa_tables.insert(slug.clone(), table);
             }
             // model.toml — catalog metadata. `model` is no longer
             // authored here; we hydrate it from the machine cascade's
@@ -483,6 +504,29 @@ pub fn load_bed_fragment(printer_slug: &str, identity: &str) -> Option<Cascade> 
         .bed_fragments
         .get(&(printer_slug.to_owned(), identity.to_owned()))
         .map(|a| a.cascade.clone())
+}
+
+/// Resolve the pressure advance (K) for a printer's filament on a given
+/// nozzle. Precedence: (a) `calibrated` — the instance's on-printer measured
+/// value for this (filament, nozzle), passed in by the caller; (b) the
+/// printer's `pressure_advance.toml` default for `(base_type, nozzle_diameter)`;
+/// (c) `None` — meaning "leave the filament fragment's own `pressure_advance`"
+/// (printers with no table, or unlisted material/nozzle, are unchanged).
+pub fn resolve_pressure_advance(
+    printer_slug: &str,
+    base_type: &str,
+    nozzle_diameter: &str,
+    calibrated: Option<f64>,
+) -> Option<f64> {
+    if calibrated.is_some() {
+        return calibrated;
+    }
+    library()
+        .pa_tables
+        .get(printer_slug)?
+        .get(base_type)?
+        .get(nozzle_diameter)
+        .copied()
 }
 
 /// Peek a single config key out of a printer fragment's cascade. The

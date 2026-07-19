@@ -29,7 +29,7 @@
 
 use super::{
     load_bed_fragment, load_filament_fragment, load_nozzle_fragment, load_printer_fragment,
-    load_process_fragment,
+    load_process_fragment, resolve_pressure_advance,
 };
 use crate::core::cascade::resolver::{resolve, MapContext};
 use crate::core::cascade::types::{Cascade, Predicate, Rule, SourceLocation};
@@ -549,6 +549,38 @@ fn assemble_filament_vectors(
             .collect();
         // User overrides win over the base fragment's resolved scalars.
         scalars.extend(overrides);
+
+        // Printer-owned pressure advance: PA is a printer/kinematics property
+        // that OrcaSlicer mis-stores on the filament, so a per-(material,
+        // nozzle) table on the printer (`pressure_advance.toml`) — or the
+        // user's on-printer calibration — overrides the filament fragment's
+        // (generic, printer-agnostic) value here. Keyed on this slot's
+        // filament base_type and its toolhead's nozzle diameter. `None` from
+        // the resolver leaves the fragment value untouched (printers with no
+        // table are unchanged). See `resolve_pressure_advance`.
+        if let (Some(base_type), Some(nozzle)) = (
+            filament::lookup(&slug).map(|p| p.base_type),
+            instance
+                .extruders
+                .get(entry.extruder_index as usize)
+                .map(|e| e.installed_nozzle.diameter.clone()),
+        ) {
+            // Tier (a) — the instance's on-printer calibrated value — is wired
+            // in Phase 3 (the `calibrated_pressure_advance` store); `None` here
+            // falls straight through to the table.
+            let calibrated: Option<f64> = None;
+            if let Some(pa) = resolve_pressure_advance(
+                &instance.vendor_profile_ref,
+                &base_type,
+                &nozzle,
+                calibrated,
+            ) {
+                // f64 `{}` is the shortest round-tripping repr — 0.02 → "0.02".
+                scalars.insert("pressure_advance".to_owned(), pa.to_string());
+                scalars.insert("enable_pressure_advance".to_owned(), "1".to_owned());
+            }
+        }
+
         per_filament.push(scalars);
     }
 
@@ -1150,6 +1182,57 @@ mod tests {
             Some("55,55,55,55"),
             "U1 rule should set textured_plate_temp (55) — the bed-temp fix; \
              curr_bed_type = Textured PEI Plate reads this key",
+        );
+    }
+
+    #[test]
+    fn u1_pressure_advance_table_overrides_generic_filament_pa() {
+        // The U1's pressure_advance.toml sets PLA @ 0.4 nozzle = 0.02. The
+        // consolidated generic-pla fragment ships 0.05 (a cross-printer
+        // baseline, ~2.5× too high for the U1). The composer must override
+        // it per slot from the printer table, and turn PA emission on.
+        // snappy defaults all 4 toolheads to generic-pla on 0.4 nozzles.
+        let _registry = RegistryGuard::acquire();
+        let snappy = lookup_instance("snappy").expect("snappy present");
+        assert_eq!(snappy.extruders[0].installed_nozzle.diameter, "0.4");
+
+        let cascade = compose_cascade(&snappy, &[]).expect("compose");
+        let fil = cascade
+            .rules
+            .iter()
+            .find(|r| r.source.path.to_string_lossy() == "<filament-vector-assembly>")
+            .expect("filament-vector rule present");
+
+        assert_eq!(
+            fil.set.get("pressure_advance").map(String::as_str),
+            Some("0.02,0.02,0.02,0.02"),
+            "U1 table (PLA/0.4 = 0.02) must override generic-pla's 0.05",
+        );
+        assert_eq!(
+            fil.set.get("enable_pressure_advance").map(String::as_str),
+            Some("1,1,1,1"),
+            "table override also enables PA emission",
+        );
+    }
+
+    #[test]
+    fn non_table_printer_keeps_filament_pressure_advance() {
+        // bender = Creality Ender 3 S1, which ships no pressure_advance.toml.
+        // The resolver returns None, so the filament fragment's own value
+        // (generic-pla = 0.05) is left untouched — no PA leakage across
+        // printers.
+        let _registry = RegistryGuard::acquire();
+        let bender = lookup_instance("bender").expect("bender present");
+        let cascade = compose_cascade(&bender, &[]).expect("compose");
+        let fil = cascade
+            .rules
+            .iter()
+            .find(|r| r.source.path.to_string_lossy() == "<filament-vector-assembly>")
+            .expect("filament-vector rule present");
+        assert_eq!(
+            fil.set.get("pressure_advance").map(String::as_str),
+            Some("0.05"),
+            "no table for this printer → filament fragment's 0.05 is preserved",
         );
     }
 

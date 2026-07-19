@@ -781,7 +781,20 @@ layers:
   set.hot_plate_temp = 60
   set.filament_max_volumetric_speed = 22
   set.slow_down_min_speed = 25
+  set.pressure_advance = 0.02
   ```
+
+  Pressure advance is a charter member of this class — it's set by the
+  extruder and kinematics, not the chemistry (the U1 wants ~0.02 for
+  every material; a bowden machine wants ~0.5), yet OrcaSlicer stores
+  `pressure_advance` as a *filament* key. That mismatch is what makes
+  the U1 print Generic PLA at 0.05 (the consolidated cross-printer
+  baseline) instead of its ~0.02, underextruding corners — see
+  `docs/dev/u1-pressure-advance.md`. A single per-printer rule fixes it
+  for all filaments at once, instead of editing PA into every
+  (printer × filament) leaf. It can even be flatter than temperature —
+  often one printer-wide value, with per-material-class deltas only for
+  flexibles — but it lives on the same layer.
 
 - **Per-filament profile** carries chemistry-only deltas relative
   to the generic material family:

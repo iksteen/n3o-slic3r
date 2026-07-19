@@ -1,0 +1,88 @@
+# Per-(material family × nozzle diameter) pressure-advance (K) defaults for the
+# Snapmaker U1. Seeded from the U1 firmware's own flow_k table
+# (klippy/extras/filament_parameters.py, generic-vendor/generic-sub values).
+#
+# Why this file exists: pressure advance is a printer/kinematics property, but
+# OrcaSlicer stores `pressure_advance` on the *filament*. n3o's consolidated
+# generic filament fragments carry a cross-printer default (~0.05) that is ~2.5×
+# too high for the U1 and causes underextruded corners. These values are the
+# authoritative per-printer defaults, applied in the composer over whatever the
+# filament fragment carries (the fragments themselves are never edited). K is
+# strongly nozzle-diameter dependent (up to ~25× across sizes), so every entry
+# is keyed by nozzle diameter. A user's on-printer calibration overrides these.
+# See docs/dev/u1-pressure-advance.md.
+#
+# Keys: [<filament base_type>] then "<nozzle diameter>" = K. Unmatched
+# (base_type, nozzle) falls back to the filament fragment's own value.
+
+[PLA]
+"0.2" = 0.20
+"0.4" = 0.02
+"0.6" = 0.012
+"0.8" = 0.008
+
+[PLA-CF]
+"0.2" = 0.20
+"0.4" = 0.02
+"0.6" = 0.012
+"0.8" = 0.008
+
+[PETG]
+"0.2" = 0.20
+"0.4" = 0.03
+"0.6" = 0.015
+"0.8" = 0.01
+
+[PETG-CF]
+"0.2" = 0.20
+"0.4" = 0.03
+"0.6" = 0.02
+"0.8" = 0.01
+
+[ABS]
+"0.2" = 0.20
+"0.4" = 0.02
+"0.6" = 0.012
+"0.8" = 0.008
+
+[ASA]
+"0.2" = 0.20
+"0.4" = 0.02
+"0.6" = 0.012
+"0.8" = 0.008
+
+[TPU]
+"0.2" = 0.30
+"0.4" = 0.25
+"0.6" = 0.20
+"0.8" = 0.12
+
+[PC]
+"0.2" = 0.20
+"0.4" = 0.02
+"0.6" = 0.012
+"0.8" = 0.008
+
+[PC-ABS]
+"0.2" = 0.20
+"0.4" = 0.02
+"0.6" = 0.012
+"0.8" = 0.008
+
+[PA]
+"0.2" = 0.20
+"0.4" = 0.02
+"0.6" = 0.012
+"0.8" = 0.008
+
+[PA-CF]
+"0.2" = 0.12
+"0.4" = 0.015
+"0.6" = 0.008
+"0.8" = 0.001
+
+[PVA]
+"0.2" = 0.20
+"0.4" = 0.03
+"0.6" = 0.02
+"0.8" = 0.01
