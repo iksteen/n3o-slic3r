@@ -264,13 +264,18 @@ pub trait Driver: Send + Sync {
         ))
     }
 
-    /// Run a standalone pressure-advance calibration on the active
-    /// toolhead and return the measured K. Only printers with a
-    /// firmware calibration routine (the U1's `FLOW_CALIBRATE`)
-    /// implement this; the default rejects it. The call is long-running
-    /// (heats + sweeps + purges — minutes), so callers should not block
-    /// UI on it.
-    async fn calibrate_pressure_advance(&self) -> Result<f64, DriverError> {
+    /// Run a standalone pressure-advance calibration on toolhead
+    /// `extruder_idx` and return the measured K. The driver first selects
+    /// that toolhead (the U1 boots with none active, and `FLOW_CALIBRATE`
+    /// calibrates whichever is loaded), then runs the routine. Only
+    /// printers with a firmware calibration (the U1's `FLOW_CALIBRATE`)
+    /// implement this; the default rejects it. Long-running (heats +
+    /// sweeps + purges — minutes), so callers should not block UI on it.
+    async fn calibrate_pressure_advance(
+        &self,
+        extruder_idx: usize,
+    ) -> Result<f64, DriverError> {
+        let _ = extruder_idx;
         Err(DriverError::Other(
             "this printer has no pressure-advance calibration".into(),
         ))

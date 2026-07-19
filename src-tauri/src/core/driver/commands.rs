@@ -602,9 +602,8 @@ pub async fn driver_command(
 /// Run a pressure-advance calibration for a slot's filament and store the
 /// measured K keyed by `(filament identity, spool color, nozzle)` so future
 /// slices use it over the profile default. Reads identity/color from the slot
-/// and nozzle diameter from its toolhead. Long-running (heats + sweeps —
-/// minutes). Calibrates the printer's *active* toolhead, so the slot's
-/// toolhead should be the one loaded/selected on the printer.
+/// and nozzle diameter from its toolhead. The driver selects the slot's
+/// toolhead before calibrating. Long-running (heats + sweeps — minutes).
 #[tauri::command]
 #[tracing::instrument(skip(registry))]
 pub async fn driver_calibrate_pa(
@@ -640,7 +639,7 @@ pub async fn driver_calibrate_pa(
             .get(driver_id)
             .ok_or_else(|| format!("unknown driver id {}", driver_id.0))?;
         let d = handle.read().await;
-        d.calibrate_pressure_advance()
+        d.calibrate_pressure_advance(extruder_idx)
             .await
             .map_err(|e| e.to_string())?
     };

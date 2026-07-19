@@ -361,8 +361,8 @@ function SlotChip({
           disabled={calibrating}
           title={
             "Calibrate pressure advance for this filament on the printer.\n" +
-            "Runs FLOW_CALIBRATE on the active toolhead (load this slot's " +
-            "toolhead first) and stores the measured K for future slices."
+            "Selects this slot's toolhead, runs FLOW_CALIBRATE, and stores " +
+            "the measured K for future slices. Takes a few minutes."
           }
         >
           {calibrating ? "…" : "PA"}

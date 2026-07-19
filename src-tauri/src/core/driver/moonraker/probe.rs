@@ -9,6 +9,7 @@
 //! it, and vanilla Moonraker (Mainsail OS, Fluidd) reports no
 //! `product_info` at all.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -48,14 +49,20 @@ pub async fn probe_system_info(host: &str, port: u16) -> Result<(), DriverError>
     Ok(())
 }
 
-/// Read the active extruder's applied `pressure_advance` via
-/// `GET /printer/objects/query?extruder`. Used after `FLOW_CALIBRATE`
-/// (which applies the measured K to the active toolhead) to read the
-/// result back — n3o doesn't capture gcode-response text, and the
-/// extruder object carries the live value. `Protocol` error if the
-/// response has no numeric `pressure_advance`.
-pub async fn query_pressure_advance(host: &str, port: u16) -> Result<f64, DriverError> {
-    let url = format!("http://{host}:{port}/printer/objects/query?extruder");
+/// Read toolhead `extruder_idx`'s applied `pressure_advance` via
+/// `GET /printer/objects/query?extruder{n}`. Used after `FLOW_CALIBRATE`
+/// (which applies the measured K to that toolhead) to read the result back —
+/// n3o doesn't capture gcode-response text, and the extruder object carries
+/// the live value. Klipper names the first extruder `extruder` and the rest
+/// `extruder1`/`extruder2`/… — this queries the matching object. `Protocol`
+/// error if the response has no numeric `pressure_advance`.
+pub async fn query_pressure_advance(
+    host: &str,
+    port: u16,
+    extruder_idx: usize,
+) -> Result<f64, DriverError> {
+    let obj = extruder_object_name(extruder_idx);
+    let url = format!("http://{host}:{port}/printer/objects/query?{obj}");
     let client = reqwest::Client::builder()
         .timeout(PROBE_TIMEOUT)
         .build()
@@ -72,9 +79,21 @@ pub async fn query_pressure_advance(host: &str, port: u16) -> Result<f64, Driver
         .map_err(|e| DriverError::Protocol(format!("Moonraker {url} returned non-JSON: {e}")))?;
     body.result
         .status
-        .extruder
-        .pressure_advance
-        .ok_or_else(|| DriverError::Protocol("extruder status carried no pressure_advance".into()))
+        .extruders
+        .get(&obj)
+        .and_then(|e| e.pressure_advance)
+        .ok_or_else(|| {
+            DriverError::Protocol(format!("{obj} status carried no pressure_advance"))
+        })
+}
+
+/// Klipper's extruder object naming: `extruder`, `extruder1`, `extruder2`, …
+fn extruder_object_name(idx: usize) -> String {
+    if idx == 0 {
+        "extruder".to_owned()
+    } else {
+        format!("extruder{idx}")
+    }
 }
 
 #[derive(Deserialize)]
@@ -89,7 +108,10 @@ struct ExtruderQueryResult {
 
 #[derive(Deserialize)]
 struct ExtruderQueryStatus {
-    extruder: ExtruderObj,
+    // Keyed by the queried object name (`extruder`, `extruder1`, …); a
+    // single-object query returns exactly one entry.
+    #[serde(flatten)]
+    extruders: HashMap<String, ExtruderObj>,
 }
 
 #[derive(Deserialize)]

@@ -96,8 +96,10 @@ object via `probe::query_pressure_advance`) and stores the value on the instance
 `calibrated_pressure_advance`, keyed `filament identity → spool color → nozzle → K`. Color is a
 real dimension — pigments/finishes change flow, so black PLA's K must not overwrite white's. The
 store round-trips through the per-instance TOML; the composer reads it as the resolver's
-`calibrated` argument. `FLOW_CALIBRATE` targets the printer's *active* toolhead, so the slot's
-toolhead must be the one loaded — surfaced in the button's tooltip, not enforced.
+`calibrated` argument. `FLOW_CALIBRATE` targets the printer's *active* toolhead and the U1
+boots with none selected, so the driver sends `T{n}` to select the slot's toolhead first
+(one synchronous script: `T{n}\nFLOW_CALIBRATE`), then reads the applied K back off that
+toolhead's `extruder{n}` object.
 
 It's done in Rust rather than as cascade `[[rule]]` blocks because PA/`enable_pressure_advance`
 are Filament-bucket *vector* keys — a printer-side scalar rule gets clobbered by the per-slot

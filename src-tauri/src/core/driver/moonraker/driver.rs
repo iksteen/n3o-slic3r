@@ -211,8 +211,11 @@ impl Driver for MoonrakerDriver {
         http::send_command(&self.config.host, self.config.port, cmd).await
     }
 
-    async fn calibrate_pressure_advance(&self) -> Result<f64, DriverError> {
-        http::calibrate_pressure_advance(&self.config.host, self.config.port).await
+    async fn calibrate_pressure_advance(
+        &self,
+        extruder_idx: usize,
+    ) -> Result<f64, DriverError> {
+        http::calibrate_pressure_advance(&self.config.host, self.config.port, extruder_idx).await
     }
 
     fn control_plane(&self) -> Option<Arc<dyn ControlPlane>> {
