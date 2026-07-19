@@ -1,0 +1,126 @@
+wipe-tower-pa: static pressure advance during prime-tower ramming (Snapmaker U1)
+
+Adds two GCodeConfig options — enable_change_pressure_when_wiping (Bool) and
+ramming_pressure_advance_value (Float) — and a WipeTower2 emission variant
+disable_linear_advance_value(). When enabled, prime-tower ramming sets
+SET_PRESSURE_ADVANCE=<value> instead of upstream's 0, so the nozzle isn't left
+unpressurized (which blobs the prime). Ports Snapmaker's own Orca fork change.
+Inert unless enable_change_pressure_when_wiping is set (default false).
+
+diff --git a/src/libslic3r/GCode/WipeTower2.cpp b/src/libslic3r/GCode/WipeTower2.cpp
+index c68a74f8b3..4be141922a 100644
+--- a/src/libslic3r/GCode/WipeTower2.cpp
++++ b/src/libslic3r/GCode/WipeTower2.cpp
+@@ -631,6 +631,19 @@ public:
+         return *this;
+     }
+ 
++    // Snapmaker U1: like disable_linear_advance() but set a specific pressure
++    // advance during ramming instead of zeroing it — zero leaves the nozzle
++    // pressurized and blobs the prime. Used when enable_change_pressure_when_wiping.
++    WipeTowerWriter2&            disable_linear_advance_value(float value) {
++        if (m_gcode_flavor == gcfRepRapSprinter || m_gcode_flavor == gcfRepRapFirmware)
++            m_gcode += (std::string("M572 D") + std::to_string(m_current_tool) + " S" + std::to_string(value) + "\n");
++        else if (m_gcode_flavor == gcfKlipper)
++            m_gcode += "SET_PRESSURE_ADVANCE ADVANCE=" + Slic3r::float_to_string_decimal_point(value, 4) + "\n";
++        else
++            m_gcode += "M900 K" + std::to_string(value) + "\n";
++        return *this;
++    }
++
+     WipeTowerWriter2& switch_filament_monitoring(bool enable) {
+         m_gcode += std::string("G4 S0\n") + "M591 " + (enable ? "R" : "S0") + "\n";
+         return *this;
+@@ -1248,6 +1261,8 @@ WipeTower::ToolChangeResult WipeTower2::construct_tcr(WipeTowerWriter2& writer,
+ WipeTower2::WipeTower2(const PrintConfig& config, const PrintRegionConfig& default_region_config,int plate_idx, Vec3d plate_origin, const std::vector<std::vector<float>>& wiping_matrix, size_t initial_tool) :
+     m_semm(config.single_extruder_multi_material.value),
+     m_enable_filament_ramming(config.enable_filament_ramming.value),
++    m_change_pressure(config.enable_change_pressure_when_wiping.value),
++    m_change_pressure_value(float(config.ramming_pressure_advance_value.value)),
+     m_wipe_tower_filament(config.wipe_tower_filament.value),
+     m_wipe_tower_pos(config.wipe_tower_x.get_at(plate_idx), config.wipe_tower_y.get_at(plate_idx)),
+     m_wipe_tower_width(float(config.prime_tower_width)),
+@@ -1659,8 +1674,12 @@ void WipeTower2::toolchange_Unload(
+ 
+     if (do_ramming) {
+         writer.travel(ramming_start_pos); // move to starting position
+-        if (! m_is_mk4mmu3)
+-            writer.disable_linear_advance();
++        if (! m_is_mk4mmu3) {
++            if (m_change_pressure)
++                writer.disable_linear_advance_value(m_change_pressure_value); // Snapmaker U1
++            else
++                writer.disable_linear_advance();
++        }
+         if (cold_ramming)
+             writer.set_extruder_temp(old_temperature - 20);
+     }
+@@ -1774,8 +1793,12 @@ void WipeTower2::toolchange_Unload(
+ 
+         float speed_inc = (final_speed - initial_speed) / (2.f * number_of_cooling_moves - 1.f);
+ 
+-        if (m_is_mk4mmu3)
+-            writer.disable_linear_advance();
++        if (m_is_mk4mmu3) {
++            if (m_change_pressure)
++                writer.disable_linear_advance_value(m_change_pressure_value); // Snapmaker U1
++            else
++                writer.disable_linear_advance();
++        }
+ 
+         writer.suppress_preview()
+               .travel(writer.x(), writer.y() + y_step);
+diff --git a/src/libslic3r/GCode/WipeTower2.hpp b/src/libslic3r/GCode/WipeTower2.hpp
+index 7060eefa4a..5861f53602 100644
+--- a/src/libslic3r/GCode/WipeTower2.hpp
++++ b/src/libslic3r/GCode/WipeTower2.hpp
+@@ -197,6 +197,8 @@ private:
+ 
+ 	bool   m_semm               = true; // Are we using a single extruder multimaterial printer?
+ 	bool   m_enable_filament_ramming = true;
++	bool   m_change_pressure    = false; // Snapmaker U1: set a fixed PA during ramming instead of zeroing it
++	float  m_change_pressure_value = 0.f;
+ 	bool   m_is_mk4mmu3         = false;
+     int    m_wipe_tower_filament = 0;   // 1-based config value, 0 means auto
+     Vec2f  m_wipe_tower_pos; 			// Left front corner of the wipe tower in mm.
+diff --git a/src/libslic3r/PrintConfig.cpp b/src/libslic3r/PrintConfig.cpp
+index 982953afa5..18c4f86651 100644
+--- a/src/libslic3r/PrintConfig.cpp
++++ b/src/libslic3r/PrintConfig.cpp
+@@ -5992,6 +5992,23 @@ void PrintConfigDef::init_fff_params()
+     def->mode = comAdvanced;
+     def->set_default_value(new ConfigOptionBool(true));
+ 
++    // Snapmaker U1: prime-tower ramming pressure advance. When enabled, ramming
++    // sets a fixed pressure advance (ramming_pressure_advance_value) instead of
++    // zeroing it — avoids blobbing from unrelieved nozzle pressure during priming.
++    def = this->add("enable_change_pressure_when_wiping", coBool);
++    def->label = L("Change pressure advance when wiping");
++    def->tooltip = L("Set a fixed pressure advance during prime-tower ramming "
++                     "(ramming_pressure_advance_value) instead of disabling it.");
++    def->mode = comDevelop;
++    def->set_default_value(new ConfigOptionBool(false));
++
++    def = this->add("ramming_pressure_advance_value", coFloat);
++    def->label = L("Ramming pressure advance value");
++    def->tooltip = L("Pressure advance applied during prime-tower ramming when "
++                     "\"Change pressure advance when wiping\" is enabled.");
++    def->mode = comDevelop;
++    def->set_default_value(new ConfigOptionFloat(0.0));
++
+     def = this->add("tool_change_on_wipe_tower", coBool);
+     def->label = L("Tool change on wipe tower");
+     def->tooltip = L("Force the toolhead to travel to the wipe tower before issuing the tool change command (Tx). "
+diff --git a/src/libslic3r/PrintConfig.hpp b/src/libslic3r/PrintConfig.hpp
+index 0a7b7ba36f..aabe13722c 100644
+--- a/src/libslic3r/PrintConfig.hpp
++++ b/src/libslic3r/PrintConfig.hpp
+@@ -1465,6 +1465,8 @@ PRINT_CONFIG_CLASS_DEFINE(
+     ((ConfigOptionEnum<WipeTowerType>, wipe_tower_type))
+     ((ConfigOptionBool,                purge_in_prime_tower))
+     ((ConfigOptionBool,                enable_filament_ramming))
++    ((ConfigOptionBool,                enable_change_pressure_when_wiping))
++    ((ConfigOptionFloat,               ramming_pressure_advance_value))
+     ((ConfigOptionBool,                tool_change_on_wipe_tower))
+     ((ConfigOptionBool,                support_multi_bed_types))
+     ((ConfigOptionBool,                use_3mf))

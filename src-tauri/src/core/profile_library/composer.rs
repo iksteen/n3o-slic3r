@@ -29,7 +29,7 @@
 
 use super::{
     load_bed_fragment, load_filament_fragment, load_nozzle_fragment, load_printer_fragment,
-    load_process_fragment, resolve_pressure_advance,
+    load_process_fragment, resolve_multitool_ramming, resolve_pressure_advance,
 };
 use crate::core::cascade::resolver::{resolve, MapContext};
 use crate::core::cascade::types::{Cascade, Predicate, Rule, SourceLocation};
@@ -578,6 +578,19 @@ fn assemble_filament_vectors(
                 // f64 `{}` is the shortest round-tripping repr — 0.02 → "0.02".
                 scalars.insert("pressure_advance".to_owned(), pa.to_string());
                 scalars.insert("enable_pressure_advance".to_owned(), "1".to_owned());
+            }
+
+            // Printer-owned multitool ramming: the U1 is a toolchanger that
+            // must ram the outgoing filament for a clean tip, but the generic
+            // filament fragments leave it off. Turn it on per slot with the
+            // printer's tuned volume/flow. `None` leaves the fragment's value
+            // (off) — non-toolchangers never get here. See `resolve_multitool_ramming`.
+            if let Some((vol, flow)) =
+                resolve_multitool_ramming(&instance.vendor_profile_ref, &base_type, &nozzle)
+            {
+                scalars.insert("filament_multitool_ramming".to_owned(), "1".to_owned());
+                scalars.insert("filament_multitool_ramming_volume".to_owned(), vol.to_string());
+                scalars.insert("filament_multitool_ramming_flow".to_owned(), flow.to_string());
             }
         }
 
@@ -1212,6 +1225,39 @@ mod tests {
             fil.set.get("enable_pressure_advance").map(String::as_str),
             Some("1,1,1,1"),
             "table override also enables PA emission",
+        );
+    }
+
+    #[test]
+    fn u1_multitool_ramming_table_enables_ramming() {
+        // The U1's multitool_ramming.toml sets PLA @ 0.4 = vol 0.5 / flow 20.
+        // Generic filament fragments ship ramming OFF (0), so the toolchanger
+        // never rams. The composer must turn it on per slot from the table.
+        let _registry = RegistryGuard::acquire();
+        let snappy = lookup_instance("snappy").expect("snappy present");
+        let cascade = compose_cascade(&snappy, &[]).expect("compose");
+        let fil = cascade
+            .rules
+            .iter()
+            .find(|r| r.source.path.to_string_lossy() == "<filament-vector-assembly>")
+            .expect("filament-vector rule present");
+
+        assert_eq!(
+            fil.set.get("filament_multitool_ramming").map(String::as_str),
+            Some("1,1,1,1"),
+            "table presence enables multitool ramming on all 4 U1 toolheads",
+        );
+        assert_eq!(
+            fil.set
+                .get("filament_multitool_ramming_volume")
+                .map(String::as_str),
+            Some("0.5,0.5,0.5,0.5"),
+        );
+        assert_eq!(
+            fil.set
+                .get("filament_multitool_ramming_flow")
+                .map(String::as_str),
+            Some("20,20,20,20"),
         );
     }
 

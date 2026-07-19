@@ -1,0 +1,63 @@
+# Per-(material family × nozzle diameter) multitool-ramming config for the
+# Snapmaker U1. Seeded from Snapmaker Orca's own "Generic <material> @U1
+# [<nozzle>]" filament leaves (vendor-validated priming).
+#
+# Why this file exists: the U1 is a toolchanger and forms a clean filament tip
+# by *ramming* the outgoing filament before each swap — that's what makes its
+# prime tower meter correctly. OrcaSlicer stores this on the filament
+# (`filament_multitool_ramming` + volume + flow), and n3o's consolidated
+# generic fragments leave it OFF (imported from upstream generics that never
+# ram), so n3o's U1 never rams. This table turns it on with per-(material,
+# nozzle) volume/flow, applied in the composer over the filament fragment —
+# same printer-owned pattern as pressure_advance.toml. Presence of an entry
+# sets `filament_multitool_ramming = 1`; absence leaves the filament untouched.
+#
+# Values are close to Snapmaker's; tune against a real multi-material print
+# (0.4 generic values in particular are approximate — the vendor's 0.4 default
+# leaf is tangled in inheritance). See docs/dev/u1-pressure-advance.md.
+#
+# Keys: [<material base_type>] then "<nozzle>" = { volume = mm3, flow = mm3/s }.
+
+[PLA]
+"0.2" = { volume = 1.0, flow = 2.0 }
+"0.4" = { volume = 0.5, flow = 20.0 }
+"0.6" = { volume = 1.0, flow = 18.0 }
+"0.8" = { volume = 1.0, flow = 18.0 }
+
+[PLA-CF]
+"0.4" = { volume = 0.5, flow = 20.0 }
+"0.6" = { volume = 1.0, flow = 18.0 }
+"0.8" = { volume = 1.0, flow = 18.0 }
+
+[PETG]
+"0.2" = { volume = 1.0, flow = 2.0 }
+"0.4" = { volume = 1.0, flow = 18.0 }
+"0.6" = { volume = 1.0, flow = 18.0 }
+"0.8" = { volume = 1.0, flow = 18.0 }
+
+[PETG-CF]
+"0.4" = { volume = 1.0, flow = 16.0 }
+"0.6" = { volume = 1.0, flow = 16.0 }
+"0.8" = { volume = 1.0, flow = 16.0 }
+
+[ABS]
+"0.2" = { volume = 0.5, flow = 15.0 }
+"0.4" = { volume = 0.5, flow = 15.0 }
+"0.6" = { volume = 0.5, flow = 15.0 }
+"0.8" = { volume = 0.5, flow = 15.0 }
+
+[ASA]
+"0.2" = { volume = 0.5, flow = 12.0 }
+"0.4" = { volume = 0.5, flow = 12.0 }
+"0.6" = { volume = 0.5, flow = 12.0 }
+"0.8" = { volume = 0.5, flow = 12.0 }
+
+[PC]
+"0.4" = { volume = 0.5, flow = 16.0 }
+"0.6" = { volume = 0.5, flow = 16.0 }
+"0.8" = { volume = 0.5, flow = 16.0 }
+
+[TPU]
+"0.4" = { volume = 0.1, flow = 3.2 }
+"0.6" = { volume = 0.1, flow = 3.2 }
+"0.8" = { volume = 0.1, flow = 3.2 }

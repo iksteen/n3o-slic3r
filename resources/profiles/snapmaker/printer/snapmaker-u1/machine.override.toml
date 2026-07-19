@@ -9,6 +9,12 @@
 # the upstream start gcode.
 
 [machine]
+# Prime-tower ramming pressure advance. `ramming_pressure_advance_value` is
+# already imported (0.02); this turns on the fork's behavior so ramming emits
+# SET_PRESSURE_ADVANCE=<value> instead of 0 (avoids blobbing the prime). Both
+# keys are added to libslic3r by crates/slic3r-ffi/patches/wipe-tower-pa.
+enable_change_pressure_when_wiping = "1"
+
 # Motion limits: adopt Snapmaker's own Orca fork values over upstream Orca's.
 # Upstream (our import source) ships higher generic figures; the vendor fork
 # tunes them down for the actual machine. Two-mode ("normal,silent").

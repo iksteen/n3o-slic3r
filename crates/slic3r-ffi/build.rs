@@ -148,6 +148,9 @@ fn main() {
     // the wave module that the scraped option tables already advertise.
     // Idempotent (reverse-apply --check skips an already-patched tree).
     apply_submodule_patches(&workspace_root, &manifest_dir.join("patches/wave-overhangs"));
+    // Prime-tower ramming pressure advance (Snapmaker U1). Applied after
+    // wave-overhangs; touches PrintConfig + WipeTower2, disjoint from it.
+    apply_submodule_patches(&workspace_root, &manifest_dir.join("patches/wipe-tower-pa"));
 
     if windows {
         // Cross: the clang-cl/LLD toolchain + the cross-deps prefix. Single-config
@@ -276,6 +279,10 @@ fn main() {
     println!(
         "cargo:rerun-if-changed={}",
         manifest_dir.join("patches/wave-overhangs/patches").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("patches/wipe-tower-pa/patches").display()
     );
     // Cross-build inputs: editing a toolchain file or a windows-cross patch must
     // re-run the build (re-configure / re-apply) so a stale toolchain or patch

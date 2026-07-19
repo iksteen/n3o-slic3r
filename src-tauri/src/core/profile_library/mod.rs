@@ -134,6 +134,20 @@ pub struct ProcessAvailability {
 /// printer-agnostic) filament-fragment value at compose time.
 type PaTable = HashMap<String, HashMap<String, f64>>;
 
+/// Multitool-ramming volume/flow for one (material, nozzle). Presence turns
+/// `filament_multitool_ramming` on for that slot at compose time.
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct RammingParams {
+    /// `filament_multitool_ramming_volume` (mm³).
+    volume: f64,
+    /// `filament_multitool_ramming_flow` (mm³/s).
+    flow: f64,
+}
+
+/// Per-printer multitool-ramming table, loaded from `<slug>/multitool_ramming.toml`.
+/// Outer key = filament `base_type`; inner key = nozzle diameter ("0.4").
+type RammingTable = HashMap<String, HashMap<String, RammingParams>>;
+
 /// Snapshot of every parseable profile fragment on disk, plus the
 /// printer catalog. Built once at startup; lookups borrow from this.
 pub struct ProfileLibrary {
@@ -144,6 +158,8 @@ pub struct ProfileLibrary {
     process_fragments: HashMap<(String, String), CascadeAsset>,
     /// Per-printer-slug PA default tables (optional `pressure_advance.toml`).
     pa_tables: HashMap<String, PaTable>,
+    /// Per-printer-slug multitool-ramming tables (optional `multitool_ramming.toml`).
+    ramming_tables: HashMap<String, RammingTable>,
 
     /// Per-printer nozzle SKU declaration order (UI presentation).
     nozzle_order: BTreeMap<String, Vec<String>>,
@@ -220,6 +236,7 @@ impl ProfileLibrary {
             filament_fragments: HashMap::new(),
             process_fragments: HashMap::new(),
             pa_tables: HashMap::new(),
+            ramming_tables: HashMap::new(),
             nozzle_order: BTreeMap::new(),
             bed_order: BTreeMap::new(),
             process_order: BTreeMap::new(),
@@ -289,6 +306,16 @@ impl ProfileLibrary {
                 let table: PaTable =
                     toml::from_str(&raw).map_err(|e| LibraryError::Toml(pa_path.clone(), e))?;
                 self.pa_tables.insert(slug.clone(), table);
+            }
+            // multitool_ramming.toml — optional per-(material, nozzle) ramming
+            // volume/flow. See `RammingTable` / `resolve_multitool_ramming`.
+            let ramming_path = printer_dir.join("multitool_ramming.toml");
+            if ramming_path.is_file() {
+                let raw = std::fs::read_to_string(&ramming_path)
+                    .map_err(|e| LibraryError::Io(ramming_path.clone(), e))?;
+                let table: RammingTable = toml::from_str(&raw)
+                    .map_err(|e| LibraryError::Toml(ramming_path.clone(), e))?;
+                self.ramming_tables.insert(slug.clone(), table);
             }
             // model.toml — catalog metadata. `model` is no longer
             // authored here; we hydrate it from the machine cascade's
@@ -527,6 +554,26 @@ pub fn resolve_pressure_advance(
         .get(base_type)?
         .get(nozzle_diameter)
         .copied()
+}
+
+/// Resolve multitool-ramming `(volume, flow)` for a printer's filament on a
+/// given nozzle. `Some` means the printer's `multitool_ramming.toml` lists
+/// this `(base_type, nozzle_diameter)` — the composer then turns
+/// `filament_multitool_ramming` on for the slot with these values. `None`
+/// leaves the filament fragment's own ramming config (off, for a
+/// consolidated generic) — printers with no table, or unlisted material/nozzle,
+/// don't ram.
+pub fn resolve_multitool_ramming(
+    printer_slug: &str,
+    base_type: &str,
+    nozzle_diameter: &str,
+) -> Option<(f64, f64)> {
+    let p = library()
+        .ramming_tables
+        .get(printer_slug)?
+        .get(base_type)?
+        .get(nozzle_diameter)?;
+    Some((p.volume, p.flow))
 }
 
 /// Peek a single config key out of a printer fragment's cascade. The

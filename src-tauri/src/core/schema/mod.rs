@@ -249,6 +249,24 @@ mod tests {
     }
 
     #[test]
+    fn wipe_tower_pa_patch_keys_are_registered() {
+        // Guard for the `crates/slic3r-ffi/patches/wipe-tower-pa` carry: the two
+        // GCodeConfig options it adds to libslic3r must reach the FFI schema. If
+        // this fails, the patch didn't apply (e.g. the submodule was reset
+        // without a rebuild) and the U1's `enable_change_pressure_when_wiping`
+        // would be silently dropped.
+        ensure_ffi();
+        assert!(
+            is_known_cascade_key("enable_change_pressure_when_wiping"),
+            "enable_change_pressure_when_wiping missing — wipe-tower-pa patch not applied",
+        );
+        assert!(
+            is_known_cascade_key("ramming_pressure_advance_value"),
+            "ramming_pressure_advance_value missing — wipe-tower-pa patch not applied",
+        );
+    }
+
+    #[test]
     fn curr_bed_type_is_enum_with_expected_variants() {
         ensure_ffi();
         let s = schema_by_key("curr_bed_type").expect("curr_bed_type in schema");
