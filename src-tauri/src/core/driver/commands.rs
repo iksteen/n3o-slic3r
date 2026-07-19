@@ -599,6 +599,57 @@ pub async fn driver_command(
     d.command(cmd).await.map_err(|e| e.to_string())
 }
 
+/// Run a pressure-advance calibration for a slot's filament and store the
+/// measured K keyed by `(filament identity, spool color, nozzle)` so future
+/// slices use it over the profile default. Reads identity/color from the slot
+/// and nozzle diameter from its toolhead. Long-running (heats + sweeps —
+/// minutes). Calibrates the printer's *active* toolhead, so the slot's
+/// toolhead should be the one loaded/selected on the printer.
+#[tauri::command]
+#[tracing::instrument(skip(registry))]
+pub async fn driver_calibrate_pa(
+    driver_id: DriverId,
+    instance_id: String,
+    extruder_idx: usize,
+    slot_idx: usize,
+    registry: State<'_, Arc<DriverRegistry>>,
+) -> Result<f64, String> {
+    use crate::core::printer::instance_registry::{
+        lookup_instance, set_calibrated_pressure_advance,
+    };
+
+    let inst =
+        lookup_instance(&instance_id).ok_or_else(|| format!("unknown instance {instance_id}"))?;
+    let extruder = inst
+        .extruders
+        .get(extruder_idx)
+        .ok_or_else(|| format!("extruder {extruder_idx} out of range"))?;
+    let slot = extruder
+        .slots
+        .get(slot_idx)
+        .ok_or_else(|| format!("slot {extruder_idx}/{slot_idx} out of range"))?;
+    let identity = slot
+        .filament_identity
+        .clone()
+        .ok_or("slot has no filament bound")?;
+    let color = slot.color.clone().unwrap_or_default();
+    let nozzle = extruder.installed_nozzle.diameter.clone();
+
+    let k = {
+        let handle = registry
+            .get(driver_id)
+            .ok_or_else(|| format!("unknown driver id {}", driver_id.0))?;
+        let d = handle.read().await;
+        d.calibrate_pressure_advance()
+            .await
+            .map_err(|e| e.to_string())?
+    };
+
+    set_calibrated_pressure_advance(&instance_id, identity, color, nozzle, Some(k))
+        .map_err(|e| e.to_string())?;
+    Ok(k)
+}
+
 /// Push a UI-edited AMS slot's filament identity back to the printer
 /// (Bambu AMS lite). Reads the slot's bound filament + color from the
 /// instance, resolves the Bambu SKU + material + nozzle range from the

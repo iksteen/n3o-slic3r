@@ -89,6 +89,16 @@ on-printer calibration → table → `None`) is applied per slot in `composer.rs
 `assemble_filament_vectors`, overriding `pressure_advance` + setting `enable_pressure_advance=1`.
 Nothing is edited in the filament fragments; printers with no table are unchanged.
 
+**On-printer calibration (tier a).** The highest-precedence tier is a measured K. The slot's
+"PA" button (`SlotChipStrip`) calls `driver_calibrate_pa`, which runs `FLOW_CALIBRATE` on the
+driver (Moonraker `http::calibrate_pressure_advance` → reads the result back from the extruder
+object via `probe::query_pressure_advance`) and stores the value on the instance in
+`calibrated_pressure_advance`, keyed `filament identity → spool color → nozzle → K`. Color is a
+real dimension — pigments/finishes change flow, so black PLA's K must not overwrite white's. The
+store round-trips through the per-instance TOML; the composer reads it as the resolver's
+`calibrated` argument. `FLOW_CALIBRATE` targets the printer's *active* toolhead, so the slot's
+toolhead must be the one loaded — surfaced in the button's tooltip, not enforced.
+
 It's done in Rust rather than as cascade `[[rule]]` blocks because PA/`enable_pressure_advance`
 are Filament-bucket *vector* keys — a printer-side scalar rule gets clobbered by the per-slot
 vector assembly or fails the vector-length check, and the clean `when.material.class` route

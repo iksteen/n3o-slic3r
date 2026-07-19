@@ -98,6 +98,20 @@ pub struct PrinterInstance {
     #[serde(default)]
     pub config_overrides: std::collections::BTreeMap<String, String>,
 
+    /// On-printer calibrated pressure advance (K), measured via the U1's
+    /// `FLOW_CALIBRATE`. Keyed `filament_identity → color → nozzle diameter → K`.
+    /// Color matters — pigments/additives change melt/flow, and a calibrated
+    /// value is measured off the actual spool, so black and white of one
+    /// brand+type keep separate entries. Overrides the printer's
+    /// `pressure_advance.toml` default for that (filament, color, nozzle) at
+    /// compose time (see `profile_library::resolve_pressure_advance`). Populated
+    /// by the calibrate flow.
+    #[serde(default)]
+    pub calibrated_pressure_advance: std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>>,
+    >,
+
     /// Per-print send options (leveling/calibration/timelapse), sticky
     /// per instance: the send dialog edits them, the send path applies
     /// them (Bambu `project_file` fields; U1
@@ -445,6 +459,7 @@ mod label_tests {
                 identity: "b".into(),
             },
             config_overrides: Default::default(),
+            calibrated_pressure_advance: Default::default(),
             send_options: Default::default(),
         }
     }
@@ -711,6 +726,7 @@ mod tests {
                 identity: "Supertack Plate".into(),
             },
             config_overrides: Default::default(),
+            calibrated_pressure_advance: Default::default(),
             send_options: Default::default(),
         };
         let json = serde_json::to_string(&inst).expect("ser");

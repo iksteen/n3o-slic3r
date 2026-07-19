@@ -253,6 +253,42 @@ pub fn set_config_override(
     })
 }
 
+/// Store (or clear, with `None`) an on-printer calibrated pressure advance
+/// (K) for a `(filament identity, spool color, nozzle diameter)`. Overrides
+/// the printer's `pressure_advance.toml` default at compose time
+/// (`resolve_pressure_advance` tier a). Color is part of the key because
+/// pigments/additives change flow. Auto-persists via `mutate_instance`.
+pub fn set_calibrated_pressure_advance(
+    id: &str,
+    filament_identity: String,
+    color: String,
+    nozzle_diameter: String,
+    k: Option<f64>,
+) -> Result<PrinterInstance, InstanceMutError> {
+    mutate_instance(id, move |inst| {
+        match k {
+            Some(v) => {
+                inst.calibrated_pressure_advance
+                    .entry(filament_identity)
+                    .or_default()
+                    .entry(color)
+                    .or_default()
+                    .insert(nozzle_diameter, v);
+            }
+            None => {
+                if let Some(by_color) =
+                    inst.calibrated_pressure_advance.get_mut(&filament_identity)
+                {
+                    if let Some(by_nozzle) = by_color.get_mut(&color) {
+                        by_nozzle.remove(&nozzle_diameter);
+                    }
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
 /// Set (or clear, with `None`) a slot's user-assigned spool color.
 /// Hex string like `"#ff8800"`; the backend does not validate the
 /// shape — the picker only ever writes well-formed values.
@@ -574,6 +610,7 @@ pub fn create_instance(
             identity: bed_identity,
         },
         config_overrides: Default::default(),
+        calibrated_pressure_advance: Default::default(),
         send_options: Default::default(),
     };
 

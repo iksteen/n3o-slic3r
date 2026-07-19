@@ -565,10 +565,16 @@ fn assemble_filament_vectors(
                 .get(entry.extruder_index as usize)
                 .map(|e| e.installed_nozzle.diameter.clone()),
         ) {
-            // Tier (a) — the instance's on-printer calibrated value — is wired
-            // in Phase 3 (the `calibrated_pressure_advance` store); `None` here
-            // falls straight through to the table.
-            let calibrated: Option<f64> = None;
+            // Tier (a): the instance's on-printer calibrated value for this
+            // (filament identity, spool color, nozzle). Wins over the table.
+            // Unbound/uncolored slots key on "" — they won't have an entry.
+            let color = entry.slot.and_then(|s| s.color.as_deref()).unwrap_or("");
+            let calibrated: Option<f64> = instance
+                .calibrated_pressure_advance
+                .get(identity)
+                .and_then(|by_color| by_color.get(color))
+                .and_then(|by_nozzle| by_nozzle.get(&nozzle))
+                .copied();
             if let Some(pa) = resolve_pressure_advance(
                 &instance.vendor_profile_ref,
                 &base_type,
@@ -1258,6 +1264,39 @@ mod tests {
                 .get("filament_multitool_ramming_flow")
                 .map(String::as_str),
             Some("20,20,20,20"),
+        );
+    }
+
+    #[test]
+    fn calibrated_pressure_advance_wins_over_table() {
+        // A stored on-printer calibration for (filament identity, color,
+        // nozzle) is tier (a) — it must beat the pressure_advance.toml default.
+        let _registry = RegistryGuard::acquire();
+        let mut snappy = lookup_instance("snappy").expect("snappy present");
+        // snappy's slots default to generic-pla with no color (key "").
+        for ext in snappy.extruders.iter_mut() {
+            for slot in ext.slots.iter_mut() {
+                slot.color = None;
+            }
+        }
+        snappy
+            .calibrated_pressure_advance
+            .entry("generic-pla".to_owned())
+            .or_default()
+            .entry(String::new())
+            .or_default()
+            .insert("0.4".to_owned(), 0.033);
+
+        let cascade = compose_cascade(&snappy, &[]).expect("compose");
+        let fil = cascade
+            .rules
+            .iter()
+            .find(|r| r.source.path.to_string_lossy() == "<filament-vector-assembly>")
+            .expect("filament-vector rule present");
+        assert_eq!(
+            fil.set.get("pressure_advance").map(String::as_str),
+            Some("0.033,0.033,0.033,0.033"),
+            "calibrated K (0.033) must override the table default (0.02)",
         );
     }
 

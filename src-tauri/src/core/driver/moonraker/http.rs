@@ -197,6 +197,30 @@ async fn run_gcode_script(host: &str, port: u16, script: &str) -> Result<(), Dri
     Ok(())
 }
 
+/// Standalone pressure-advance calibration: run `FLOW_CALIBRATE` (heats,
+/// sweeps, applies + persists the measured K to the active toolhead), then
+/// read the applied K back off the extruder object. Long-running — the heat +
+/// sweep + purge takes minutes, so it uses its own timeout, not the 60 s
+/// [`HTTP_TIMEOUT`]. Fails `Protocol` if Klipper rejects the routine (e.g.
+/// "not allow during printing").
+pub(super) async fn calibrate_pressure_advance(host: &str, port: u16) -> Result<f64, DriverError> {
+    const CALIBRATE_TIMEOUT: Duration = Duration::from_secs(300);
+    let url = format!("http://{host}:{port}/printer/gcode/script");
+    let client = reqwest::Client::builder()
+        .timeout(CALIBRATE_TIMEOUT)
+        .build()
+        .map_err(|e| DriverError::Other(format!("HTTP client build failed: {e}")))?;
+    client
+        .post(&url)
+        .json(&serde_json::json!({ "script": "FLOW_CALIBRATE" }))
+        .send()
+        .await
+        .map_err(|e| DriverError::Network(format!("POST {url}: {e}")))?
+        .error_for_status()
+        .map_err(|e| DriverError::Protocol(format!("FLOW_CALIBRATE at {url}: {e}")))?;
+    super::probe::query_pressure_advance(host, port).await
+}
+
 /// POST `/printer/print/{action}`. Moonraker maps these directly to
 /// Klipper's PAUSE / RESUME / CANCEL_PRINT g-code macros.
 ///

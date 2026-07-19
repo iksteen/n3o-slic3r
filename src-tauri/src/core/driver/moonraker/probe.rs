@@ -48,6 +48,55 @@ pub async fn probe_system_info(host: &str, port: u16) -> Result<(), DriverError>
     Ok(())
 }
 
+/// Read the active extruder's applied `pressure_advance` via
+/// `GET /printer/objects/query?extruder`. Used after `FLOW_CALIBRATE`
+/// (which applies the measured K to the active toolhead) to read the
+/// result back — n3o doesn't capture gcode-response text, and the
+/// extruder object carries the live value. `Protocol` error if the
+/// response has no numeric `pressure_advance`.
+pub async fn query_pressure_advance(host: &str, port: u16) -> Result<f64, DriverError> {
+    let url = format!("http://{host}:{port}/printer/objects/query?extruder");
+    let client = reqwest::Client::builder()
+        .timeout(PROBE_TIMEOUT)
+        .build()
+        .map_err(|e| DriverError::Other(format!("HTTP client build failed: {e}")))?;
+    let body: ExtruderQueryResponse = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| DriverError::Network(format!("GET {url}: {e}")))?
+        .error_for_status()
+        .map_err(|e| DriverError::Protocol(format!("Moonraker {url} returned an error: {e}")))?
+        .json()
+        .await
+        .map_err(|e| DriverError::Protocol(format!("Moonraker {url} returned non-JSON: {e}")))?;
+    body.result
+        .status
+        .extruder
+        .pressure_advance
+        .ok_or_else(|| DriverError::Protocol("extruder status carried no pressure_advance".into()))
+}
+
+#[derive(Deserialize)]
+struct ExtruderQueryResponse {
+    result: ExtruderQueryResult,
+}
+
+#[derive(Deserialize)]
+struct ExtruderQueryResult {
+    status: ExtruderQueryStatus,
+}
+
+#[derive(Deserialize)]
+struct ExtruderQueryStatus {
+    extruder: ExtruderObj,
+}
+
+#[derive(Deserialize)]
+struct ExtruderObj {
+    pressure_advance: Option<f64>,
+}
+
 #[derive(Deserialize)]
 struct SystemInfoResponse {
     #[allow(dead_code)]

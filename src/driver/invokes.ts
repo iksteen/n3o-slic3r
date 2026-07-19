@@ -67,6 +67,24 @@ export function driverCommand(
   return invoke<void>("driver_command", { id, cmd });
 }
 
+/** Run a pressure-advance calibration for a slot's filament and store the
+ * measured K (keyed by filament identity × color × nozzle) so future slices
+ * use it over the profile default. Long-running (heats + sweeps — minutes);
+ * resolves to the measured K. */
+export function driverCalibratePa(
+  driverId: DriverId,
+  instanceId: string,
+  extruderIdx: number,
+  slotIdx: number,
+): Promise<number> {
+  return invoke<number>("driver_calibrate_pa", {
+    driverId,
+    instanceId,
+    extruderIdx,
+    slotIdx,
+  });
+}
+
 /** Send the plate's last-sliced raw G-code (at `gcodePath`) to
  * the driver as a `.gcode.3mf` bundle. Backend wraps the raw
  * gcode into the bundle. */

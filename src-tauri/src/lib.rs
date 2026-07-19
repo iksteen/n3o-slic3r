@@ -370,6 +370,7 @@ pub fn run() {
             core::driver::commands::driver_export_plate,
             core::driver::commands::driver_command,
             core::driver::commands::driver_ams_set_filament,
+            core::driver::commands::driver_calibrate_pa,
             core::driver::camera::camera_start,
             core::driver::camera::camera_stop,
             core::driver::snapmaker::commands::u1_pair,

@@ -1463,6 +1463,30 @@
     color: var(--accent, var(--text-dim));
     flex-shrink: 0;
   }
+  /* Per-slot "calibrate pressure advance" button — sits beside its pill. */
+  .slot-pill-calibrate {
+    height: 22px;
+    padding: 0 7px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .slot-pill-calibrate:hover:not(:disabled) {
+    background: var(--surface-2);
+    border-color: var(--border-strong, var(--border));
+    color: var(--text);
+  }
+  .slot-pill-calibrate:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
 
   /* Slots row label doubles as the sync-from-printer button. Same
    * typography as `.config-row-label` but with a hover affordance

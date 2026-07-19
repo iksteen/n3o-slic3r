@@ -57,6 +57,13 @@ export interface SlotChipStripProps {
    *  shows it tried). Placeholder until 7c-2 lands the driver
    *  filament-event listener; today this resolves after ~400ms. */
   onSync: () => Promise<void>;
+  /** Calibrate pressure advance for a slot's filament on the live
+   *  printer and store the measured K. Omitted when no driver is
+   *  connected (the chip hides its Calibrate button). */
+  onCalibrate?: (ref: SlotRef) => void;
+  /** `extruder-slot` key of the slot currently calibrating, so its
+   *  chip can show the in-flight state. */
+  calibratingKey?: string | null;
 }
 
 export function SlotChipStrip({
@@ -65,6 +72,8 @@ export function SlotChipStrip({
   filaments,
   onApplyPick,
   onSync,
+  onCalibrate,
+  calibratingKey,
 }: SlotChipStripProps): React.JSX.Element {
   const filamentByIdentity = new Map(
     filaments.map((f) => [f.identity, f] as const),
@@ -107,6 +116,10 @@ export function SlotChipStrip({
               filamentLabel={filamentLabel}
               filaments={filaments}
               onApplyPick={(pick) => onApplyPick(s.ref, pick)}
+              onCalibrate={onCalibrate ? () => onCalibrate(s.ref) : undefined}
+              calibrating={
+                calibratingKey === `${s.ref.extruder}-${s.ref.slot}`
+              }
             />
           );
         })
@@ -267,6 +280,11 @@ interface SlotChipProps {
   filamentLabel: string | null;
   filaments: FilamentSummary[];
   onApplyPick: (pick: FilamentPickerPick) => void;
+  /** Calibrate PA for this slot on the live printer. Omitted when no
+   *  driver is connected. */
+  onCalibrate?: () => void;
+  /** This slot's PA calibration is in flight. */
+  calibrating?: boolean;
 }
 
 function SlotChip({
@@ -276,6 +294,8 @@ function SlotChip({
   filamentLabel,
   filaments,
   onApplyPick,
+  onCalibrate,
+  calibrating,
 }: SlotChipProps): React.JSX.Element {
   const [open, setOpen] = useState(false);
   // Which filament's settings editor is open (over the picker), by slug.
@@ -334,6 +354,20 @@ function SlotChip({
           </span>
         )}
       </button>
+      {onCalibrate && !empty && (
+        <button
+          className="slot-pill-calibrate"
+          onClick={onCalibrate}
+          disabled={calibrating}
+          title={
+            "Calibrate pressure advance for this filament on the printer.\n" +
+            "Runs FLOW_CALIBRATE on the active toolhead (load this slot's " +
+            "toolhead first) and stores the measured K for future slices."
+          }
+        >
+          {calibrating ? "…" : "PA"}
+        </button>
+      )}
       {open && (
         <FilamentPickerModal
           slotId={option.label}

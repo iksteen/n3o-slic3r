@@ -264,6 +264,18 @@ pub trait Driver: Send + Sync {
         ))
     }
 
+    /// Run a standalone pressure-advance calibration on the active
+    /// toolhead and return the measured K. Only printers with a
+    /// firmware calibration routine (the U1's `FLOW_CALIBRATE`)
+    /// implement this; the default rejects it. The call is long-running
+    /// (heats + sweeps + purges — minutes), so callers should not block
+    /// UI on it.
+    async fn calibrate_pressure_advance(&self) -> Result<f64, DriverError> {
+        Err(DriverError::Other(
+            "this printer has no pressure-advance calibration".into(),
+        ))
+    }
+
     /// A handle for vendor JSON-RPC requests over this driver's live
     /// status connection (the U1 camera wake rides it, over MQTT or WS
     /// alike). `None` when the driver has no such control plane or isn't
