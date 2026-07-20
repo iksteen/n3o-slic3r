@@ -60,6 +60,8 @@ export function loadoutFromReport(status: PrinterStatus | null): LoadoutSlot[] {
       active: extra.data.mounted_toolhead === i,
     }));
   }
+  // Generic Moonraker/Klipper reports no AMS/toolhead loadout.
+  if (extra.kind === "Moonraker") return [];
   const rows: LoadoutSlot[] = [];
   const { ams, external_spool } = extra.data;
   if (ams) {

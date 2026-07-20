@@ -26,22 +26,44 @@ use super::session::{extruders, get_f64, get_print_info_i64, get_string};
 #[cfg(test)]
 use super::session::merge_status_into;
 use crate::core::driver::status::{
-    ConnectionState, DriverExtra, JobProgress, JobState, PrinterStatus, TempReading, Temps,
-    U1Extra, U1Filament,
+    ConnectionState, DriverExtra, JobProgress, JobState, MoonrakerExtra, PrinterStatus, TempReading,
+    Temps, U1Extra, U1Filament,
 };
 
-/// Build the full [`PrinterStatus`] snapshot from a Moonraker
-/// status map. `connection` is passed in because the WS layer
-/// owns connection lifecycle — the decoder only knows about
-/// payload state.
+/// Generic Moonraker/Klipper decode → [`DriverExtra::Moonraker`]. `connection`
+/// is passed in because the transport layer owns connection lifecycle — the
+/// decoder only knows about payload state.
 pub(super) fn decode(status: &Map<String, Value>, connection: ConnectionState) -> PrinterStatus {
+    let mut s = decode_base(status, connection);
+    s.extra = DriverExtra::Moonraker(MoonrakerExtra {
+        fan_speed: fan_speed(status),
+    });
+    s
+}
+
+/// Snapmaker U1 decode → [`DriverExtra::U1`] (per-toolhead filaments + mounted
+/// toolhead from the Snapmaker Klipper `print_task_config`).
+pub(super) fn decode_u1(status: &Map<String, Value>, connection: ConnectionState) -> PrinterStatus {
+    let mut s = decode_base(status, connection);
+    s.extra = DriverExtra::U1(decode_extra(status));
+    s
+}
+
+/// Shared job + temps decode; the caller sets `extra`.
+fn decode_base(status: &Map<String, Value>, connection: ConnectionState) -> PrinterStatus {
     PrinterStatus {
         connection,
         job: decode_job(status),
         temps: decode_temps(status),
-        extra: DriverExtra::U1(decode_extra(status)),
+        // Placeholder — decode()/decode_u1() overwrite this.
+        extra: DriverExtra::Moonraker(MoonrakerExtra::default()),
         last_updated: SystemTime::now(),
     }
+}
+
+/// Klipper `fan.speed` (0..1) as a 0..100 percentage; shared by both flavours.
+fn fan_speed(status: &Map<String, Value>) -> Option<f32> {
+    get_f64(status, "fan", "speed").map(|f| (f * 100.0).clamp(0.0, 100.0) as f32)
 }
 
 fn decode_job(status: &Map<String, Value>) -> Option<JobProgress> {
@@ -167,7 +189,7 @@ fn decode_extra(status: &Map<String, Value>) -> U1Extra {
         mounted_toolhead: active_tool_index(status).and_then(|i| u8::try_from(i).ok()),
         toolhead_filaments: decode_toolhead_filaments(status),
         current_stage: None,
-        fan_speed: get_f64(status, "fan", "speed").map(|f| (f * 100.0).clamp(0.0, 100.0) as f32),
+        fan_speed: fan_speed(status),
     }
 }
 
@@ -258,6 +280,22 @@ mod tests {
 
     fn decoded(value: Value) -> PrinterStatus {
         decode(&status(value), ConnectionState::Connected)
+    }
+
+    fn decoded_u1(value: Value) -> PrinterStatus {
+        decode_u1(&status(value), ConnectionState::Connected)
+    }
+
+    #[test]
+    fn generic_decode_publishes_moonraker_extra_with_fan_speed() {
+        let p = decoded(json!({
+            "print_stats": { "state": "printing" },
+            "fan": { "speed": 0.6 }
+        }));
+        match p.extra {
+            DriverExtra::Moonraker(extra) => assert_eq!(extra.fan_speed, Some(60.0)),
+            other => panic!("generic Moonraker must publish Moonraker extra, got {other:?}"),
+        }
     }
 
     // ---- state mapping ----
@@ -517,7 +555,7 @@ mod tests {
 
     #[test]
     fn mounted_toolhead_indexes_from_zero() {
-        let p = decoded(json!({
+        let p = decoded_u1(json!({
             "print_stats": { "state": "printing" },
             "toolhead": { "extruder": "extruder2" },
         }));
@@ -529,7 +567,7 @@ mod tests {
 
     #[test]
     fn mounted_toolhead_handles_extruder_zero_name() {
-        let p = decoded(json!({
+        let p = decoded_u1(json!({
             "print_stats": { "state": "printing" },
             "toolhead": { "extruder": "extruder" },
         }));
@@ -541,7 +579,7 @@ mod tests {
 
     #[test]
     fn toolhead_filaments_decode_color_and_type_per_slot() {
-        let p = decoded(json!({
+        let p = decoded_u1(json!({
             "print_stats": { "state": "printing" },
             "print_task_config": {
                 "filament_color_rgba": ["E72F1DFF", "F4C032FF", "080A0DFF", "E2DEDBFF"],
@@ -567,7 +605,7 @@ mod tests {
 
     #[test]
     fn fully_transparent_slot_decodes_as_none() {
-        let p = decoded(json!({
+        let p = decoded_u1(json!({
             "print_stats": { "state": "printing" },
             "print_task_config": {
                 "filament_color_rgba": ["FF0000FF", "00000000"],
@@ -587,7 +625,7 @@ mod tests {
     fn toolhead_filaments_empty_without_print_task_config() {
         // No `print_task_config` (idle printer) → empty vec, not
         // a Vec<None>. UI reads `.is_empty()` to know "no info".
-        let p = decoded(json!({
+        let p = decoded_u1(json!({
             "print_stats": { "state": "standby" }
         }));
         match p.extra {
@@ -599,7 +637,7 @@ mod tests {
     #[test]
     fn filament_type_missing_defaults_to_generic_label() {
         // print_task_config exists but filament_type array absent.
-        let p = decoded(json!({
+        let p = decoded_u1(json!({
             "print_stats": { "state": "printing" },
             "print_task_config": {
                 "filament_color_rgba": ["E72F1DFF"]
@@ -616,7 +654,7 @@ mod tests {
 
     #[test]
     fn fan_speed_in_percent_clamped() {
-        let p = decoded(json!({
+        let p = decoded_u1(json!({
             "print_stats": { "state": "printing" },
             "fan": { "speed": 0.6 }
         }));
@@ -624,7 +662,7 @@ mod tests {
             DriverExtra::U1(extra) => assert_eq!(extra.fan_speed, Some(60.0)),
             _ => panic!(),
         }
-        let over = decoded(json!({
+        let over = decoded_u1(json!({
             "print_stats": { "state": "printing" },
             "fan": { "speed": 1.5 }
         }));
@@ -720,7 +758,7 @@ mod tests {
 
     #[test]
     fn fixture_subscribe_decodes_full_snapshot() {
-        let snap = decode(&subscribe_initial(), ConnectionState::Connected);
+        let snap = decode_u1(&subscribe_initial(), ConnectionState::Connected);
         // Capture happened immediately after a finished print, so state
         // is `complete` rather than `standby` — exercises the Finished
         // path, which the inline tests cover with a single-field json
@@ -769,7 +807,7 @@ mod tests {
         let mut baseline = subscribe_initial();
         let update = notify_update("notify_toolchange.json");
         merge_status_into(&mut baseline, &update);
-        let snap = decode(&baseline, ConnectionState::Connected);
+        let snap = decode_u1(&baseline, ConnectionState::Connected);
         match snap.extra {
             DriverExtra::U1(extra) => {
                 // The toolchange fixture flips toolhead.extruder to

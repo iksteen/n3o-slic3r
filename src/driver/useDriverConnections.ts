@@ -216,10 +216,14 @@ function maybeFullSync(
 ): boolean {
   if (!PENDING_FULL_SYNC.has(identity)) return false;
   const reported = reportedAmsUnits(status);
+  // Generic Moonraker reports no filament identity, so it never has an
+  // authoritative loadout to sync.
   const authoritative =
     status.extra.kind === "Bambu"
       ? reported != null
-      : status.extra.data.toolhead_filaments.length > 0;
+      : status.extra.kind === "U1"
+        ? status.extra.data.toolhead_filaments.length > 0
+        : false;
   if (!authoritative) return false;
   PENDING_FULL_SYNC.delete(identity);
   // The full sync reconciles the unit count too — record it so the

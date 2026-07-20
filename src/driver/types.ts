@@ -131,10 +131,16 @@ interface U1Extra {
   fan_speed: number | null;
 }
 
+/** Generic Moonraker/Klipper — no vendor AMS/toolhead state. */
+interface MoonrakerExtra {
+  fan_speed: number | null;
+}
+
 /** Mirror of `DriverExtra` (`#[serde(tag="kind", content="data")]`). */
 export type DriverExtra =
   | { kind: "Bambu"; data: BambuExtra }
-  | { kind: "U1"; data: U1Extra };
+  | { kind: "U1"; data: U1Extra }
+  | { kind: "Moonraker"; data: MoonrakerExtra };
 
 /** Mirror of `PrinterStatus`. `last_updated` is Unix millis. */
 export interface PrinterStatus {

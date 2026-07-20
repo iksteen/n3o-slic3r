@@ -7,13 +7,12 @@
 //! `/server/webcams/list` ([`webcam`]).
 //!
 //! [`MoonrakerDriver`] is the [`crate::core::driver::traits::Driver`]
-//! impl; it's constructed with the [`DriverKind`] it reports so
+//! impl; it reports `DriverKind::Moonraker` and takes its status
+//! flavour ([`driver::StatusCodec`]) as a constructor parameter, so
 //! vendor drivers built on Moonraker reuse it wholesale — the
-//! Snapmaker U1 registers one with `DriverKind::U1` and tacks on
-//! only its bespoke webcam stack (`super::snapmaker`: pairing,
-//! mTLS, monitor-mode wake).
-//!
-//! [`DriverKind`]: crate::core::driver::traits::DriverKind
+//! Snapmaker U1's `super::snapmaker::driver::U1Driver` wraps one with
+//! the U1 codec and tacks on its firmware macros + bespoke webcam
+//! stack (`super::snapmaker`: pairing, mTLS, monitor-mode wake).
 
 pub mod driver;
 pub mod http;

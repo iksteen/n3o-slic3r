@@ -18,6 +18,7 @@
 
 pub mod camera;
 pub mod commands;
+pub mod driver;
 pub mod mqtt_status;
 pub mod mtls;
 pub mod pairing;

@@ -131,7 +131,8 @@ mod tests {
         fn new(kind: DriverKind) -> Self {
             let initial = PrinterStatus::disconnected_for(match kind {
                 DriverKind::Bambu => DriverExtra::Bambu(BambuExtra::default()),
-                DriverKind::U1 | DriverKind::Moonraker => DriverExtra::U1(Default::default()),
+                DriverKind::U1 => DriverExtra::U1(Default::default()),
+                DriverKind::Moonraker => DriverExtra::Moonraker(Default::default()),
             });
             let (sender, receiver) = watch::channel(initial);
             Self {

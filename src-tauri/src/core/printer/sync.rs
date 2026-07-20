@@ -110,6 +110,8 @@ pub fn resolve_updates(
     match extra {
         DriverExtra::Bambu(b) => resolve_bambu(instance, b, library),
         DriverExtra::U1(u) => resolve_u1(instance, u, library),
+        // Generic Moonraker/Klipper reports no filament identity to sync.
+        DriverExtra::Moonraker(_) => Vec::new(),
     }
 }
 
@@ -127,7 +129,7 @@ pub fn resolve_updates(
 pub fn ams_units_reported(extra: &DriverExtra) -> Option<u32> {
     match extra {
         DriverExtra::Bambu(b) => b.ams.as_ref().map(|a| a.units.len() as u32),
-        DriverExtra::U1(_) => None,
+        DriverExtra::U1(_) | DriverExtra::Moonraker(_) => None,
     }
 }
 

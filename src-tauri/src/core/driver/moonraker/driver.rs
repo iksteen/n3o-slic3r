@@ -1,14 +1,15 @@
 //! [`MoonrakerDriver`] — the [`Driver`] trait impl that stitches
 //! together the WebSocket session, status decoder, and HTTP control
-//! plane. Vendor-neutral: the reported [`DriverKind`] is a
-//! constructor parameter, so Moonraker-based vendor drivers (the
-//! Snapmaker U1) are just this driver registered under their kind.
+//! plane. Vendor-neutral: it reports [`DriverKind::Moonraker`] and
+//! takes its status flavour ([`StatusCodec`]) as a constructor
+//! parameter, so a vendor driver (the Snapmaker U1's `U1Driver`)
+//! wraps this with the U1 codec and its own firmware macros.
 //!
 //! Architecture:
 //!
 //! - One background task per driver. The worker owns a
 //!   [`MoonrakerSession`] (rebuilt on every reconnect), decodes each
-//!   incoming status snapshot via [`super::status::decode`], and
+//!   incoming status snapshot via the injected [`StatusCodec`], and
 //!   publishes the result through a `watch::Sender<PrinterStatus>`.
 //! - Reconnect is the driver's concern (not the session's): on any
 //!   session failure / clean close, the worker waits with the shared
@@ -33,10 +34,44 @@ use tracing::warn;
 use super::transport::StatusSessionFactory;
 use super::{http, probe, status as status_decode};
 use crate::core::driver::backoff::{reconnect_backoff_secs, CONNECT_TIMEOUT};
-use crate::core::driver::status::{ConnectionState, DriverExtra, PrinterStatus, U1Extra};
+use crate::core::driver::status::{
+    ConnectionState, DriverExtra, MoonrakerExtra, PrinterStatus, U1Extra,
+};
 use crate::core::driver::traits::{
     ControlPlane, Driver, DriverError, DriverId, DriverKind, PrinterCommand, SendHandle,
     SendPayload, UploadProgressFn,
+};
+
+/// Status decoder signature — a Moonraker status map + connection state → a
+/// typed snapshot. Injected so the driver stays vendor-agnostic; the U1 uses a
+/// toolhead-aware decoder, generic Klipper a minimal one.
+type DecodeFn = fn(&serde_json::Map<String, serde_json::Value>, ConnectionState) -> PrinterStatus;
+
+/// A driver's status flavour: how to decode a live snapshot plus the extra to
+/// seed the disconnected state with. [`GENERIC`] for plain Klipper, [`U1`] for
+/// the Snapmaker U1 (which the vendor `U1Driver` wraps this driver with).
+#[derive(Clone, Copy)]
+pub struct StatusCodec {
+    decode: DecodeFn,
+    initial_extra: fn() -> DriverExtra,
+}
+
+fn initial_moonraker() -> DriverExtra {
+    DriverExtra::Moonraker(MoonrakerExtra::default())
+}
+fn initial_u1() -> DriverExtra {
+    DriverExtra::U1(U1Extra::default())
+}
+
+/// Generic Klipper flavour → [`DriverExtra::Moonraker`].
+pub const GENERIC: StatusCodec = StatusCodec {
+    decode: status_decode::decode,
+    initial_extra: initial_moonraker,
+};
+/// Snapmaker U1 flavour → [`DriverExtra::U1`] (toolhead filaments).
+pub const U1: StatusCodec = StatusCodec {
+    decode: status_decode::decode_u1,
+    initial_extra: initial_u1,
 };
 
 /// The driver's window onto its worker's live session: the worker stores
@@ -56,10 +91,10 @@ pub struct MoonrakerConfig {
 
 pub struct MoonrakerDriver {
     id: DriverId,
-    /// The kind this driver reports — [`DriverKind::Moonraker`] for a
-    /// generic Klipper printer, [`DriverKind::U1`] when it backs the
-    /// Snapmaker U1. Everything else about the driver is identical.
-    kind: DriverKind,
+    /// Status flavour — [`GENERIC`] for plain Klipper, [`U1`] when this backs
+    /// the Snapmaker U1 (via `U1Driver`). Drives status decoding only; the U1
+    /// firmware surface (FLOW_CALIBRATE, park) lives in `U1Driver`, not here.
+    codec: StatusCodec,
     config: MoonrakerConfig,
     /// Opens the status stream and reconnects it. Injected at
     /// construction — the WebSocket transport for generic Moonraker and an
@@ -83,19 +118,15 @@ pub struct MoonrakerDriver {
 impl MoonrakerDriver {
     pub fn new(
         id: DriverId,
-        kind: DriverKind,
         config: MoonrakerConfig,
         factory: Arc<dyn StatusSessionFactory>,
+        codec: StatusCodec,
     ) -> Self {
-        // The Moonraker status decoder emits its extras under the `U1`
-        // wire tag for every kind (see `status::decode`) — renaming
-        // that tag is a coordinated frontend+backend change, not this
-        // driver's concern.
-        let initial = PrinterStatus::disconnected_for(DriverExtra::U1(U1Extra::default()));
+        let initial = PrinterStatus::disconnected_for((codec.initial_extra)());
         let (status_tx, status_rx) = watch::channel(initial);
         Self {
             id,
-            kind,
+            codec,
             config,
             factory,
             control_slot: Arc::new(std::sync::Mutex::new(None)),
@@ -104,6 +135,11 @@ impl MoonrakerDriver {
             tasks: Vec::new(),
             shutdown_tx: None,
         }
+    }
+
+    /// Host/port — the vendor `U1Driver` needs it to issue FLOW_CALIBRATE.
+    pub fn config(&self) -> &MoonrakerConfig {
+        &self.config
     }
 
     fn publish_state(&self, state: ConnectionState) {
@@ -121,7 +157,7 @@ impl Driver for MoonrakerDriver {
     }
 
     fn kind(&self) -> DriverKind {
-        self.kind
+        DriverKind::Moonraker
     }
 
     async fn connect(&mut self) -> Result<(), DriverError> {
@@ -142,7 +178,14 @@ impl Driver for MoonrakerDriver {
         let factory = Arc::clone(&self.factory);
         let control_slot = Arc::clone(&self.control_slot);
         let status_tx = self.status_tx.clone();
-        let task = tokio::spawn(run_worker(factory, control_slot, status_tx, shutdown_rx));
+        let decode = self.codec.decode;
+        let task = tokio::spawn(run_worker(
+            factory,
+            control_slot,
+            status_tx,
+            shutdown_rx,
+            decode,
+        ));
         self.tasks.push(task);
         Ok(())
     }
@@ -211,16 +254,9 @@ impl Driver for MoonrakerDriver {
         http::send_command(&self.config.host, self.config.port, cmd).await
     }
 
-    async fn calibrate_pressure_advance(
-        &self,
-        extruder_idx: usize,
-    ) -> Result<f64, DriverError> {
-        http::calibrate_pressure_advance(&self.config.host, self.config.port, extruder_idx).await
-    }
-
-    async fn park_extruder(&self) -> Result<(), DriverError> {
-        http::park_extruder(&self.config.host, self.config.port).await
-    }
+    // FLOW_CALIBRATE (calibrate_pressure_advance) + PARK_EXTRUDER are U1
+    // firmware, not generic Klipper — they live in the vendor `U1Driver`, which
+    // wraps this driver. Generic Moonraker inherits the trait's "unsupported".
 
     fn control_plane(&self) -> Option<Arc<dyn ControlPlane>> {
         self.control_slot.lock().expect("control slot").clone()
@@ -237,6 +273,7 @@ async fn run_worker(
     control_slot: ControlSlot,
     status_tx: watch::Sender<PrinterStatus>,
     mut shutdown_rx: oneshot::Receiver<()>,
+    decode: DecodeFn,
 ) {
     let mut attempt = 0u32;
     loop {
@@ -275,7 +312,7 @@ async fn run_worker(
                 *control_slot.lock().expect("control slot") = Some(session.control());
                 // Publish the initial subscribe response so the UI
                 // doesn't sit on a stale "Connecting…" snapshot.
-                let initial = status_decode::decode(&session.status(), ConnectionState::Connected);
+                let initial = decode(&session.status(), ConnectionState::Connected);
                 let _ = status_tx.send_replace(initial);
 
                 loop {
@@ -286,7 +323,7 @@ async fn run_worker(
                     match next {
                         Ok(Some(snapshot)) => {
                             let decoded =
-                                status_decode::decode(&snapshot, ConnectionState::Connected);
+                                decode(&snapshot, ConnectionState::Connected);
                             let _ = status_tx.send_replace(decoded);
                         }
                         Ok(None) => {
@@ -507,7 +544,7 @@ mod tests {
             start_mock_moonraker(initial, Some(update), Some("mock-serial")).await;
         let factory = ws_factory(&host, port);
         let mut driver =
-            MoonrakerDriver::new(DriverId(99), DriverKind::U1, MoonrakerConfig { host, port }, factory);
+            MoonrakerDriver::new(DriverId(99), MoonrakerConfig { host, port }, factory, GENERIC);
         driver.connect().await.expect("connect");
 
         // Wait for the streamed update to land — implies both the
@@ -534,7 +571,7 @@ mod tests {
         let (host, port, _stop) = start_mock_moonraker(json!({}), None, None).await;
         let factory = ws_factory(&host, port);
         let mut driver =
-            MoonrakerDriver::new(DriverId(100), DriverKind::U1, MoonrakerConfig { host, port }, factory);
+            MoonrakerDriver::new(DriverId(100), MoonrakerConfig { host, port }, factory, GENERIC);
         let err = driver.connect().await.unwrap_err();
         assert!(
             matches!(err, DriverError::Network(_) | DriverError::Protocol(_)),
@@ -554,7 +591,7 @@ mod tests {
         .await;
         let factory = ws_factory(&host, port);
         let mut driver =
-            MoonrakerDriver::new(DriverId(101), DriverKind::U1, MoonrakerConfig { host, port }, factory);
+            MoonrakerDriver::new(DriverId(101), MoonrakerConfig { host, port }, factory, GENERIC);
         driver.connect().await.unwrap();
         // First disconnect tears down.
         driver.disconnect().await.unwrap();
@@ -567,12 +604,12 @@ mod tests {
     async fn send_rejects_gcode3mf_payload_with_clear_message() {
         let driver = MoonrakerDriver::new(
             DriverId(102),
-            DriverKind::Moonraker,
             MoonrakerConfig {
                 host: "127.0.0.1".into(),
                 port: 1,
             },
             ws_factory("127.0.0.1", 1),
+            GENERIC,
         );
         // Driver doesn't need to be connected for this — the variant
         // check is up-front. Use a placeholder Bambu payload.
@@ -599,19 +636,13 @@ mod tests {
     }
 
     #[test]
-    fn reports_the_kind_it_was_constructed_with() {
+    fn reports_moonraker_kind() {
         let config = MoonrakerConfig {
             host: "h".into(),
             port: 80,
         };
-        let generic = MoonrakerDriver::new(
-            DriverId(1),
-            DriverKind::Moonraker,
-            config.clone(),
-            ws_factory("h", 80),
-        );
+        let generic = MoonrakerDriver::new(DriverId(1), config, ws_factory("h", 80), GENERIC);
+        // The vendor U1 kind is reported by `U1Driver`, not this driver.
         assert_eq!(generic.kind(), DriverKind::Moonraker);
-        let u1 = MoonrakerDriver::new(DriverId(2), DriverKind::U1, config, ws_factory("h", 80));
-        assert_eq!(u1.kind(), DriverKind::U1);
     }
 }

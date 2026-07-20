@@ -105,6 +105,16 @@ pub struct TempReading {
 pub enum DriverExtra {
     Bambu(BambuExtra),
     U1(U1Extra),
+    /// Generic Moonraker/Klipper printer — no vendor toolhead/AMS state,
+    /// just the fields any Klipper reports. The U1 uses [`U1Extra`] instead.
+    Moonraker(MoonrakerExtra),
+}
+
+/// Extras for a generic Moonraker/Klipper printer. Minimal — Klipper exposes
+/// no AMS/toolchanger state; only `fan.speed` is broadly present and consumed.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MoonrakerExtra {
+    pub fan_speed: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

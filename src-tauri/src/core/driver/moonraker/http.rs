@@ -206,7 +206,7 @@ async fn run_gcode_script(host: &str, port: u16, script: &str) -> Result<(), Dri
 /// Long-running — the toolchange + heat + sweep + purge take minutes, so it
 /// uses its own timeout, not the 60 s [`HTTP_TIMEOUT`]. Fails `Protocol` if
 /// Klipper rejects it (e.g. not homed, or "not allow during printing").
-pub(super) async fn calibrate_pressure_advance(
+pub(crate) async fn calibrate_pressure_advance(
     host: &str,
     port: u16,
     extruder_idx: usize,
@@ -232,7 +232,7 @@ pub(super) async fn calibrate_pressure_advance(
 /// Park the active toolhead back in its dock via `PARK_EXTRUDER`. Used to
 /// stow the last toolhead after a calibration cycle so the machine is left
 /// idle, not holding a picked toolhead.
-pub(super) async fn park_extruder(host: &str, port: u16) -> Result<(), DriverError> {
+pub(crate) async fn park_extruder(host: &str, port: u16) -> Result<(), DriverError> {
     run_gcode_script(host, port, "PARK_EXTRUDER").await
 }
 

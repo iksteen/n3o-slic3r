@@ -20,7 +20,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::ams::css_to_hex8;
 use super::bambu::connection::{BambuConfig, BambuDriver};
+use super::moonraker::driver::GENERIC;
 use super::moonraker::{MoonrakerConfig, MoonrakerDriver, StatusSessionFactory, WsSessionFactory};
+use super::snapmaker::driver::U1Driver;
 use super::registry::DriverRegistry;
 use super::snapmaker::{mqtt_status, snap_token};
 use super::send::{
@@ -225,21 +227,16 @@ fn build_driver(id: DriverId, instance_id: &str, config: DriverConfig) -> Box<dy
                     port,
                 }),
             };
-            Box::new(MoonrakerDriver::new(
-                id,
-                DriverKind::U1,
-                MoonrakerConfig { host, port },
-                factory,
-            ))
+            Box::new(U1Driver::new(id, MoonrakerConfig { host, port }, factory))
         }
         DriverConfig::Moonraker { host, port } => Box::new(MoonrakerDriver::new(
             id,
-            DriverKind::Moonraker,
             MoonrakerConfig {
                 host: host.clone(),
                 port,
             },
             Arc::new(WsSessionFactory { host, port }),
+            GENERIC,
         )),
     }
 }
