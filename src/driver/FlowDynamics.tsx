@@ -95,6 +95,7 @@ export function FlowDynamics({
         }
         return next;
       });
+      setChecked(new Set());
       void load();
     }
     prevBusy.current = busy;
