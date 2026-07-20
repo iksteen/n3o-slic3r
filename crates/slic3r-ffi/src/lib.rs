@@ -1756,10 +1756,55 @@ pub struct SliceOutcome {
 /// state, so this isn't Rust UB, but re-slicing the same `Model` sees the
 /// normalized config from the prior call. Pass a fresh `Model` if that
 /// matters.
+/// A pressure-advance calibration sweep to arm on the slice (see
+/// [`slice_outcome_calib`]). Mirrors libslic3r's `Calib_Params` for the PA-Line
+/// mode: the slice emits a test print sweeping pressure advance from `start` to
+/// `end` in `step` increments, with inline K labels when `print_numbers`.
+#[derive(Debug, Clone, Copy)]
+pub struct CalibParams {
+    /// libslic3r `CalibMode` (1 = Calib_PA_Line — the only mode wired today).
+    pub mode: i32,
+    pub start: f64,
+    pub end: f64,
+    pub step: f64,
+    pub print_numbers: bool,
+}
+
+impl CalibParams {
+    /// A PA-Line sweep over `[start, end]` at `step`, with K labels drawn.
+    pub fn pa_line(start: f64, end: f64, step: f64) -> Self {
+        Self {
+            mode: 1, // CalibMode::Calib_PA_Line
+            start,
+            end,
+            step,
+            print_numbers: true,
+        }
+    }
+}
+
 pub fn slice_outcome<P, F>(
     model: &Model,
     config: &Config,
     out_gcode_path: P,
+    progress: F,
+) -> SliceOutcome
+where
+    P: AsRef<Path>,
+    F: FnMut(i32, &str),
+{
+    slice_outcome_calib(model, config, out_gcode_path, None, progress)
+}
+
+/// Like [`slice_outcome`], but arms libslic3r's calibration mode for this slice
+/// when `calib` is `Some` — the output is a swept-value calibration print
+/// instead of the model's own toolpaths. The arming is one-shot and happens
+/// under the same [`SLICE_LOCK`] as the slice, so it can't leak into another.
+pub fn slice_outcome_calib<P, F>(
+    model: &Model,
+    config: &Config,
+    out_gcode_path: P,
+    calib: Option<CalibParams>,
     mut progress: F,
 ) -> SliceOutcome
 where
@@ -1793,6 +1838,16 @@ where
     let mut tower_idx: *mut u32 = ptr::null_mut();
     let mut tower_icount: usize = 0;
     let mut warning: *mut c_char = ptr::null_mut();
+    // Arm calibration immediately before the slice, with nothing fallible in
+    // between — a failure after arming would leak the armed params into the next
+    // (unrelated) slice. Still under SLICE_LOCK, so no other slice interleaves;
+    // the shim takes-and-clears them at entry (one-shot).
+    if let Some(c) = calib {
+        // SAFETY: sets a process-global consumed by the slic3r_slice call below.
+        unsafe {
+            sys::slic3r_arm_calib(c.mode, c.start, c.end, c.step, c.print_numbers as i32);
+        }
+    }
     // SAFETY:
     // - handles are valid; p + user_data live through the call.
     // - err is an out-param we own on non-null return.

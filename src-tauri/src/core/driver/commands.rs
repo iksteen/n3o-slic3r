@@ -37,6 +37,7 @@ use super::traits::{
     SendPayload, U1StartOptions, UploadProgressFn,
 };
 use crate::core::plugin::commands::PluginHostState;
+use crate::core::printer::instance::SendOptions;
 use crate::core::project::Session;
 
 /// Wire-shape for the `driver:status_update` Tauri event the
@@ -601,6 +602,198 @@ pub async fn driver_send_plate(
     tokio::select! {
         r = d.send(payload, on_progress) => r,
         _ = cancel.token().cancelled() => Err(DriverError::Cancelled),
+    }
+}
+
+/// Slice a manual PA-Line calibration test print for one loaded slot's filament
+/// and send it to the printer. The user prints it, reads the best line's K by
+/// eye, and enters that in the Flow Dynamics tab (which applies it — baked into
+/// G-code for the U1, pushed via `extrusion_cali_set` for Bambu). Available for
+/// every printer, including a generic Klipper Ender with no on-printer auto
+/// calibration. No stored K is pushed here: this print *measures* K.
+#[tauri::command]
+#[tracing::instrument(skip(app, registry, sends))]
+pub async fn driver_send_pa_calibration(
+    id: DriverId,
+    instance_id: String,
+    extruder_index: u8,
+    slot_index: u8,
+    start: f64,
+    end: f64,
+    step: f64,
+    app: AppHandle,
+    registry: State<'_, Arc<DriverRegistry>>,
+    sends: State<'_, Arc<SendCancelRegistry>>,
+) -> Result<SendHandle, DriverError> {
+    let instance = crate::core::printer::lookup_instance(&instance_id)
+        .ok_or_else(|| DriverError::Other(format!("unknown printer instance '{instance_id}'")))?;
+    let slot = crate::core::printer::SlotRef {
+        extruder: extruder_index,
+        slot: slot_index,
+    };
+
+    // Slicing is CPU-heavy and holds the global slice lock — offload it.
+    let out_path = std::env::temp_dir().join(format!("n3o-pa-cali-{}.gcode", id.0));
+    {
+        let instance = instance.clone();
+        let out_path = out_path.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::core::slice::pa_calibration::slice_pa_calibration(
+                &instance, slot, start, end, step, &out_path,
+            )
+        })
+        .await
+        .map_err(|e| DriverError::Other(format!("slice task join: {e}")))?
+        .map_err(DriverError::Other)?;
+    }
+    let gcode_path = out_path.to_string_lossy().into_owned();
+
+    let handle = registry
+        .get(id)
+        .ok_or_else(|| DriverError::Other(format!("unknown driver id {}", id.0)))?;
+    let kind = handle.read().await.kind();
+
+    let base = "pa_calibration";
+    let payload = match kind {
+        DriverKind::Bambu => {
+            // Route the single calibration filament to the chosen tray — both
+            // the MQTT mapping and the 3MF `ams_bindings` (M620 load operands),
+            // exactly as the normal send path supplies both.
+            let (use_ams, ams_mapping, ams_mapping2, ams_bindings) =
+                calib_ams_routing(&instance, slot);
+            let bytes = wrap_gcode_as_3mf(gcode_path, 1, "PA Calibration".to_owned(), ams_bindings, None)
+                .await
+                .map_err(DriverError::Other)?;
+            SendPayload::Gcode3mf {
+                bytes,
+                plate_id: 1,
+                file_basename: base.to_owned(),
+                use_ams,
+                ams_mapping,
+                ams_mapping2,
+                options: SendOptions::default(),
+            }
+        }
+        DriverKind::U1 => {
+            let bytes = read_gcode_bytes(gcode_path).await.map_err(DriverError::Other)?;
+            // One logical slot (the calibration filament) routed to the chosen
+            // physical toolhead.
+            let map_table = vec![(0u8, slot.extruder)];
+            let (used_logical, filament_used_mm) = u1_usage_from_gcode(&bytes);
+            let physical_nozzles: Vec<f64> = instance
+                .extruders
+                .iter()
+                .filter_map(|e| e.installed_nozzle.diameter.parse::<f64>().ok())
+                .collect();
+            let physical_nozzles = if physical_nozzles.len() == instance.extruders.len() {
+                physical_nozzles
+            } else {
+                Vec::new()
+            };
+            let u1_start = U1StartOptions {
+                // Default toggles: no printer-side flow cali — the sliced PA
+                // line IS the calibration.
+                options: SendOptions::default(),
+                extruders_used: physical_extruders_used(&used_logical, &map_table),
+                filament_used_mm,
+                nozzle_diameters: logical_nozzle_diameters(&map_table, &physical_nozzles),
+                map_table,
+            };
+            SendPayload::Gcode {
+                bytes,
+                file_name: format!("{base}.gcode"),
+                u1_start: Some(u1_start),
+            }
+        }
+        DriverKind::Moonraker => {
+            let bytes = read_gcode_bytes(gcode_path).await.map_err(DriverError::Other)?;
+            SendPayload::Gcode {
+                bytes,
+                file_name: format!("{base}.gcode"),
+                u1_start: None,
+            }
+        }
+    };
+
+    // The gcode is now in the payload bytes; drop the temp file.
+    let _ = std::fs::remove_file(&out_path);
+
+    let file_name = match kind {
+        DriverKind::Bambu => format!("{base}.gcode.3mf"),
+        DriverKind::U1 | DriverKind::Moonraker => format!("{base}.gcode"),
+    };
+    let on_progress = upload_progress_emitter(app, id, file_name);
+    let cancel = match sends.inner().clone().arm(id) {
+        Some(g) => g,
+        None => {
+            return Err(DriverError::Other(
+                "a send is already in flight for this printer".into(),
+            ))
+        }
+    };
+    let d = handle.read().await;
+    tokio::select! {
+        r = d.send(payload, on_progress) => r,
+        _ = cancel.token().cancelled() => Err(DriverError::Cancelled),
+    }
+}
+
+/// Single-slot Bambu routing for a calibration print (one material bound to
+/// `slot`): `(use_ams, ams_mapping, ams_mapping2, ams_bindings)`. Mirrors the
+/// plate helpers [`super::ams::ams_mapping_for_plate`] +
+/// [`super::ams::ams_bindings_for_plate`] at `material_count` 1. Note the two
+/// AMS indices differ, exactly as those helpers do: the MQTT mapping is 0-based
+/// (exclusive prefix), the 3MF binding's `ams_slot` is 1-based (inclusive).
+/// Single-AMS-unit like those helpers (`ams_id = 0`); multi-AMS untested.
+fn calib_ams_routing(
+    instance: &crate::core::printer::PrinterInstance,
+    slot: crate::core::printer::SlotRef,
+) -> (
+    bool,
+    Vec<i8>,
+    Vec<super::ams::AmsMappingV2>,
+    Vec<crate::core::threemf::AmsBinding>,
+) {
+    use super::ams::AmsMappingV2;
+    use crate::core::printer::FeedKind;
+    let Some((ext, s)) = instance.extruders.get(slot.extruder as usize).and_then(|ext| {
+        ext.slots.get(slot.slot as usize).map(|s| (ext, s))
+    }) else {
+        return (false, vec![-1], vec![AmsMappingV2::UNUSED], Vec::new());
+    };
+    match s.feed {
+        FeedKind::Ams => {
+            // MQTT mapping index: 0-based among AMS slots (exclusive prefix).
+            let map_idx = ext.slots[..slot.slot as usize]
+                .iter()
+                .filter(|x| x.feed == FeedKind::Ams)
+                .count() as u8;
+            // M620 binding index: 1-based among AMS slots (inclusive prefix).
+            let bind_idx = ext.slots[..=slot.slot as usize]
+                .iter()
+                .filter(|x| x.feed == FeedKind::Ams)
+                .count() as u8;
+            (
+                true,
+                vec![map_idx as i8],
+                vec![AmsMappingV2 {
+                    ams_id: 0,
+                    slot_id: map_idx,
+                }],
+                vec![crate::core::threemf::AmsBinding {
+                    model_material_index: 1,
+                    ams_slot: bind_idx,
+                }],
+            )
+        }
+        // External spool: `-1` / `{255, 0}` MQTT sentinel; no M620 binding
+        // (Direct slots aren't AMS-addressable), same as the plate helpers.
+        FeedKind::Direct => (
+            false,
+            vec![-1],
+            vec![AmsMappingV2 { ams_id: 255, slot_id: 0 }],
+            Vec::new(),
+        ),
     }
 }
 

@@ -9,6 +9,7 @@
 #include <libslic3r/Model.hpp>
 #include <libslic3r/Print.hpp>
 #include <libslic3r/PrintBase.hpp>
+#include <libslic3r/calib.hpp>
 #include <libslic3r/Exception.hpp>
 #include <libslic3r/TriangleMesh.hpp>
 #include <libslic3r/TriangleMeshSlicer.hpp>
@@ -37,6 +38,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -777,6 +779,24 @@ struct ActivePrintGuard {
     }
 };
 
+// Calibration params armed by slic3r_arm_calib for the next slice. A slice
+// consumes-and-clears these (under the mutex) right after Print::apply, so an
+// unarmed slice runs plain. Same-process global: slicing is serialized by
+// SLICE_LOCK on the Rust side, and arm+slice happen back-to-back under it.
+static std::mutex g_calib_mtx;
+static bool g_calib_armed = false;
+static Calib_Params g_calib_params;
+
+// Atomically take the armed calibration params (clearing the global) so a slice
+// consumes them exactly once. Cleared unconditionally at slice entry — even if
+// the slice then throws before applying them, they can't leak into the next one.
+static std::optional<Calib_Params> take_armed_calib() {
+    std::lock_guard<std::mutex> lk(g_calib_mtx);
+    if (!g_calib_armed) return std::nullopt;
+    g_calib_armed = false;
+    return g_calib_params;
+}
+
 } // namespace
 
 extern "C" {
@@ -1505,6 +1525,10 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         *out_tower_index_count = 0;
     }
     try {
+        // Take any armed calibration params up front so they're cleared even if
+        // the setup below throws — they must never leak into a later slice.
+        const std::optional<Calib_Params> armed_calib = take_armed_calib();
+
         // Normalize filament_map / nozzle_volume_type to the printer's
         // geometry on a temporary copy so we don't mutate the caller's config.
         DynamicPrintConfig cfg = config->cfg;
@@ -1520,6 +1544,10 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
         Print print;
         pin_bbl_quirks(print, cfg, is_bbl);
         print.apply(model->model, cfg);
+
+        // Apply the calibration params taken above (if any): libslic3r then
+        // emits the PA-Line sweep in place of the model's toolpaths.
+        if (armed_calib) print.set_calib_params(*armed_calib);
 
         // Print::m_origin (the plate origin) is declared without an
         // initializer (Print.hpp) and is normally set by the GUI's
@@ -1688,6 +1716,19 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
 slic3r_status slic3r_cancel(void) {
     std::lock_guard<std::mutex> lk(g_active_print_mtx);
     if (g_active_print) g_active_print->cancel();
+    return SLIC3R_OK;
+}
+
+slic3r_status slic3r_arm_calib(int mode, double start, double end, double step,
+                               int print_numbers) {
+    std::lock_guard<std::mutex> lk(g_calib_mtx);
+    g_calib_params = Calib_Params{};
+    g_calib_params.mode = static_cast<CalibMode>(mode);
+    g_calib_params.start = start;
+    g_calib_params.end = end;
+    g_calib_params.step = step;
+    g_calib_params.print_numbers = print_numbers != 0;
+    g_calib_armed = true;
     return SLIC3R_OK;
 }
 

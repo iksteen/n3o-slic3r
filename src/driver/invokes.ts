@@ -133,6 +133,30 @@ export function driverSendPlate(
   });
 }
 
+/** Slice a manual PA-Line calibration test print for one loaded slot's filament
+ *  and send it to the printer. Works on any printer (slicer-side, not gated on
+ *  firmware auto-cali). The user prints it, reads the best line's K by eye, and
+ *  types it into the manual-K field. `start`/`end`/`step` bound the K sweep. */
+export function driverSendPaCalibration(
+  id: DriverId,
+  instanceId: string,
+  extruderIndex: number,
+  slotIndex: number,
+  start: number,
+  end: number,
+  step: number,
+): Promise<SendHandle> {
+  return invoke<SendHandle>("driver_send_pa_calibration", {
+    id,
+    instanceId,
+    extruderIndex,
+    slotIndex,
+    start,
+    end,
+    step,
+  });
+}
+
 /** Human-readable message from a rejected DriverError. serde serializes the
  *  enum externally-tagged: unit variants (e.g. "Cancelled") arrive as a bare
  *  string, the rest as `{ Variant: "message" }`. Callers branch on the variant

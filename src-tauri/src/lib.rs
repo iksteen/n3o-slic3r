@@ -368,6 +368,7 @@ pub fn run() {
             core::driver::commands::driver_disconnect,
             core::driver::commands::driver_status,
             core::driver::commands::driver_send_plate,
+            core::driver::commands::driver_send_pa_calibration,
             core::driver::commands::driver_send_cancel,
             core::driver::commands::driver_export_plate,
             core::driver::commands::driver_command,

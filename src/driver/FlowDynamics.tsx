@@ -23,6 +23,7 @@ import {
   runCalibration,
   subscribe as subscribeCal,
 } from "./paCalibrationStore";
+import { PaCalibrationDialog } from "./PaCalibrationDialog";
 import type { DriverId } from "./types";
 
 interface FlowDynamicsProps {
@@ -51,6 +52,7 @@ export function FlowDynamics({
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
+  const [showCalDialog, setShowCalDialog] = useState(false);
 
   const instanceId = instance.id;
 
@@ -234,6 +236,21 @@ export function FlowDynamics({
         >
           {saving ? "Saving…" : "Save"}
         </button>
+        <button
+          className="device-ctl"
+          onClick={() => setShowCalDialog(true)}
+          disabled={busy || driverId == null || !printerIdle}
+          type="button"
+          title={
+            driverId == null
+              ? "Connect the printer to print a test"
+              : !printerIdle
+                ? "Printer must be idle to print a test"
+                : "Slice + send a printed PA test to read K by eye"
+          }
+        >
+          Print test…
+        </button>
         {canCalibrate && (
           <button
             className="device-ctl primary"
@@ -349,6 +366,21 @@ export function FlowDynamics({
           })}
         </tbody>
       </table>
+
+      {showCalDialog && driverId != null && (
+        <PaCalibrationDialog
+          rows={rows}
+          rowLabel={(r) => {
+            const s = byIdentity.get(r.identity);
+            return `${s?.display_name ?? r.identity} · ${s?.base_type ?? "?"}`;
+          }}
+          instanceId={instanceId}
+          driverId={driverId}
+          kind={instance.connection?.kind}
+          initialKey={[...checked][0] ?? (rows[0] ? rowKey(rows[0]) : null)}
+          onClose={() => setShowCalDialog(false)}
+        />
+      )}
     </div>
   );
 }

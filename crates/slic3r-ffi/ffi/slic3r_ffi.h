@@ -445,6 +445,19 @@ slic3r_status slic3r_slice(slic3r_model_t* model,
  * No-op when no slice is running. Always SLIC3R_OK. */
 slic3r_status slic3r_cancel(void);
 
+/* Arm libslic3r's calibration mode for the NEXT slic3r_slice call on this
+ * process: the slice sets these Calib_Params on its Print (consumed and cleared
+ * between apply() and process()), so it emits a swept-value calibration print
+ * instead of the model's own toolpaths. `mode` is libslic3r's CalibMode enum
+ * (1 = Calib_PA_Line — the only mode wired today); start/end/step bound the
+ * pressure-advance sweep; print_numbers != 0 draws the inline K labels.
+ *
+ * One-shot: a slice consumes the armed params and clears them, so a subsequent
+ * plain slice is unaffected. Arm it immediately before slic3r_slice under the
+ * same serialization the caller already uses for slicing. Always SLIC3R_OK. */
+slic3r_status slic3r_arm_calib(int mode, double start, double end, double step,
+                               int print_numbers);
+
 /* Free the buffers returned in slic3r_slice's out_tower_* params. Safe to
  * call with NULL pointers (no-op). */
 void slic3r_tower_mesh_free(float* vertices, uint32_t* indices);

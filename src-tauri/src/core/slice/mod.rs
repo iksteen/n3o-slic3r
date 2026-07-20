@@ -18,6 +18,7 @@ pub mod events;
 pub mod input;
 pub mod job;
 pub mod orchestrator;
+pub mod pa_calibration;
 pub mod pre_slice_gate;
 pub mod summary;
 

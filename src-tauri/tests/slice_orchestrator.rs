@@ -726,3 +726,59 @@ fn u1_per_material_keeps_tool_numbers_logical() {
         "no physical-toolhead tool select — numbers stay logical",
     );
 }
+
+/// Manual PA calibration slices a swept-K test print. Snappy (U1, Klipper
+/// flavor) emits `SET_PRESSURE_ADVANCE ADVANCE=<k>` per line; the sweep must
+/// span the requested range. Proves the FFI calib-arming path end-to-end.
+#[test]
+fn pa_calibration_slices_klipper_pa_sweep() {
+    use n3o_slic3r_lib::core::printer::{lookup_instance, SlotRef};
+    use n3o_slic3r_lib::core::slice::pa_calibration::slice_pa_calibration;
+    ensure_ffi_init();
+    let instance = lookup_instance("snappy").expect("snappy fixture");
+    let out = std::env::temp_dir().join("n3o-test-pa-cali-snappy.gcode");
+    slice_pa_calibration(&instance, SlotRef { extruder: 0, slot: 0 }, 0.0, 0.08, 0.02, &out)
+        .expect("PA calibration slice succeeds");
+    let gcode = std::fs::read_to_string(&out).expect("read calib gcode");
+
+    let mut ks: Vec<f64> = gcode
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("SET_PRESSURE_ADVANCE ADVANCE="))
+        .filter_map(|v| v.split(';').next())
+        .filter_map(|v| v.trim().parse::<f64>().ok())
+        .collect();
+    assert!(
+        ks.len() >= 3,
+        "expected several SET_PRESSURE_ADVANCE lines, got {}: {ks:?}",
+        ks.len(),
+    );
+    ks.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    // The sweep brackets the requested range (libslic3r resets PA to 0 between
+    // lines, so 0 is present; the top line is at/below `end`).
+    assert!(*ks.last().unwrap() > 0.0, "sweep has a nonzero top K: {ks:?}");
+    assert!(
+        *ks.last().unwrap() <= 0.08 + 1e-9,
+        "top K within requested end: {ks:?}",
+    );
+    let _ = std::fs::remove_file(&out);
+}
+
+/// Bambi (Bambu flavor) emits the sweep as `M900 K<k>` instead — same
+/// generator, flavor-dispatched command.
+#[test]
+fn pa_calibration_slices_bambu_pa_sweep() {
+    use n3o_slic3r_lib::core::printer::{lookup_instance, SlotRef};
+    use n3o_slic3r_lib::core::slice::pa_calibration::slice_pa_calibration;
+    ensure_ffi_init();
+    let instance = lookup_instance("bambi").expect("bambi fixture");
+    let out = std::env::temp_dir().join("n3o-test-pa-cali-bambi.gcode");
+    slice_pa_calibration(&instance, SlotRef { extruder: 0, slot: 0 }, 0.0, 0.05, 0.01, &out)
+        .expect("PA calibration slice succeeds");
+    let gcode = std::fs::read_to_string(&out).expect("read calib gcode");
+    let k_lines = gcode
+        .lines()
+        .filter(|l| l.trim_start().starts_with("M900 K"))
+        .count();
+    assert!(k_lines >= 3, "expected several M900 K lines, got {k_lines}");
+    let _ = std::fs::remove_file(&out);
+}
