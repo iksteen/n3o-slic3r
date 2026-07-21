@@ -253,6 +253,32 @@ fn resolve_u1(
     out
 }
 
+/// The `(Bambu SKU, base material)` a currently-bound slug matches against
+/// when deciding whether the printer's report is consistent with the user's
+/// pick. A bundled fragment answers directly. A custom user filament isn't in
+/// the bundled `library` and carries no SKU of its own, so it resolves through
+/// its base fragment — the base's SKU plus the custom's (possibly overridden)
+/// material. This is what lets a "Sunlu PETG" cloned from Generic PETG survive
+/// a sync that reports Generic PETG, instead of the keep-current check missing
+/// it and reverting the slot to the bundled generic. `None` when the slug is
+/// neither a bundled fragment nor a resolvable custom filament.
+fn bound_match_keys(
+    slug: &str,
+    library: &[FilamentFragmentSummary],
+) -> Option<(Option<String>, String)> {
+    if let Some(f) = library.iter().find(|f| f.identity == slug) {
+        return Some((f.filament_id.clone(), f.base_type.clone()));
+    }
+    let uf = crate::core::filament::library::lookup(slug)?;
+    let base = library.iter().find(|f| f.identity == uf.base)?;
+    let base_type = uf
+        .overrides
+        .get("filament_type")
+        .cloned()
+        .unwrap_or_else(|| base.base_type.clone());
+    Some((base.filament_id.clone(), base_type))
+}
+
 fn resolve_bambu_identity(
     current: Option<&SlotBinding>,
     identity: &AmsFilament,
@@ -268,9 +294,9 @@ fn resolve_bambu_identity(
     // reports, the user's choice stands — only the color follows the
     // report. (Same rule the U1 path uses, see `resolve_u1_identity`.)
     if let Some(slug) = current.and_then(|c| c.filament_identity.as_deref()) {
-        if let Some(cur) = library.iter().find(|f| f.identity == slug) {
-            if cur.filament_id.as_deref() == identity.filament_id.as_deref()
-                && cur.base_type.eq_ignore_ascii_case(identity.tray_type.trim())
+        if let Some((cur_fid, cur_base_type)) = bound_match_keys(slug, library) {
+            if cur_fid.as_deref() == identity.filament_id.as_deref()
+                && cur_base_type.eq_ignore_ascii_case(identity.tray_type.trim())
             {
                 return Some(slug.to_owned());
             }
@@ -327,11 +353,11 @@ fn resolve_u1_identity(
     // Keep the current binding when its base_type already matches —
     // the user's manual pick of a specific brand+product stands.
     if let Some(slug) = current.filament_identity.as_deref() {
-        if let Some(entry) = library.iter().find(|f| f.identity == slug) {
-            if entry
-                .base_type
-                .eq_ignore_ascii_case(&filament.material_type)
-            {
+        // U1 has no SKU concept — match on material only. `bound_match_keys`
+        // resolves a custom filament through its base so a cloned filament
+        // survives a same-material sync instead of reverting to generic.
+        if let Some((_, cur_base_type)) = bound_match_keys(slug, library) {
+            if cur_base_type.eq_ignore_ascii_case(&filament.material_type) {
                 return Some(slug.to_owned());
             }
         }
@@ -729,6 +755,56 @@ mod tests {
             Some("generic-petg"),
             "a genuine material change re-resolves",
         );
+    }
+
+    #[test]
+    fn bambu_sync_keeps_a_custom_filament_via_its_base_sku() {
+        // A custom user filament (e.g. "Sunlu PETG" cloned from Generic PETG)
+        // isn't in the bundled fragment list and carries no SKU of its own. The
+        // keep-current check must still preserve it by matching the printer's
+        // report against its BASE fragment's SKU + material — otherwise it
+        // reverts the slot to the bundled generic on every sync.
+        use crate::core::filament::library as filib;
+        filib::init_root(
+            std::env::temp_dir().join(format!("n3o-sync-cf-{}", uuid::Uuid::new_v4())),
+        );
+        let custom = filib::clone_custom("generic-petg-basic", Some("Sunlu".into()), None)
+            .expect("clone generic-petg-basic into a custom filament");
+
+        // The fixture library must carry the base with a PETG SKU so the custom
+        // resolves through it (lib()'s plain generic-petg has no SKU).
+        let mut library = lib();
+        library.push(FilamentFragmentSummary {
+            identity: "generic-petg-basic".into(),
+            display_name: "Generic PETG".into(),
+            base_type: "PETG".into(),
+            vendor: "Generic".into(),
+            nozzle_temp: 240,
+            bed_temp: 80,
+            filament_id: Some("GFG99".into()),
+            edited: false,
+            custom: false,
+        });
+
+        let mut inst = bambi();
+        inst.extruders[0].slots[0].filament_identity = Some(custom.identity.clone());
+        // Printer reports Generic PETG (GFG99) — the closest it knows to Sunlu.
+        let ams = ams_with_trays(vec![tray_with(0, Some("GFG99"), "PETG", "1A1B1DFF")]);
+        let updates = resolve_updates(
+            &inst,
+            &DriverExtra::Bambu(BambuExtra {
+                ams: Some(ams),
+                ..Default::default()
+            }),
+            &library,
+        );
+        assert_eq!(
+            updates[0].filament_identity.as_deref(),
+            Some(custom.identity.as_str()),
+            "a custom filament must survive a sync that reports its base material",
+        );
+        assert_eq!(updates[0].color.as_deref(), Some("#1a1b1d"), "color still follows report");
+        filib::remove(&custom.identity);
     }
 
     #[test]

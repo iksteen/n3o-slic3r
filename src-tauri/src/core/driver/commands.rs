@@ -1043,7 +1043,9 @@ pub async fn driver_calibrate_pa_bambu(
     use crate::core::printer::instance_registry::{
         lookup_instance, set_calibrated_pressure_advance,
     };
-    use crate::core::profile_library::{list_filament_fragments, resolve_base_scalars};
+    use crate::core::profile_library::{
+        custom_filament_summary, filament_fragment_summary, resolve_base_scalars,
+    };
 
     let inst =
         lookup_instance(&instance_id).ok_or_else(|| format!("unknown instance {instance_id}"))?;
@@ -1052,7 +1054,21 @@ pub async fn driver_calibrate_pa_bambu(
     if !bambu_pa_topology_ok(&inst) {
         return Err("Bambu PA calibration doesn't support dual-nozzle printers yet".into());
     }
-    let library = list_filament_fragments();
+
+    let handle = registry
+        .get(driver_id)
+        .ok_or_else(|| format!("unknown driver id {}", driver_id.0))?;
+    // Known limitation: the read guard is held across the multi-minute
+    // calibration job (like the U1 path). A mid-job disconnect would queue
+    // behind it; a lock-free long-op design is a broader follow-up.
+    let d = handle.read().await;
+    // The firmware calibrates whatever spool is physically in the tray and keys
+    // the measured K by that tray's reported filament_id — NOT n3o's assigned
+    // filament. So the cali target's filament_id must be the loaded spool's
+    // (e.g. the Generic PETG the user selected on the printer for a Sunlu
+    // spool), even though we store the resulting K under our own filament
+    // identity below. `bambu_loaded_filament_ids` keys by (ams_id, tray_id).
+    let loaded = bambu_loaded_filament_ids(&d.status());
 
     struct Meta {
         ext: usize,
@@ -1082,14 +1098,29 @@ pub async fn driver_calibrate_pa_bambu(
             .filament_identity
             .clone()
             .ok_or("slot has no filament bound")?;
-        let frag = library
-            .iter()
-            .find(|f| f.identity == identity)
-            .ok_or_else(|| format!("filament '{identity}' not in library"))?;
-        let filament_id = frag
-            .filament_id
-            .clone()
-            .ok_or_else(|| format!("filament '{identity}' has no Bambu SKU"))?;
+        // Resolve the filament for its temps/max-flow — bundled OR a custom
+        // user filament (a clone), which `list_filament_fragments` omits (that
+        // omission is what made a custom filament fail "not in library").
+        let summary = crate::core::filament::library::lookup(&identity)
+            .and_then(|uf| custom_filament_summary(&uf))
+            .or_else(|| filament_fragment_summary(&identity))
+            .ok_or_else(|| format!("filament '{identity}' not found"))?;
+        let ams_id = (*slot_idx / 4) as u8;
+        let tray_id = (*slot_idx % 4) as u8;
+        // Prefer the physically-loaded spool's SKU (what the printer actually
+        // calibrates); fall back to a bundled filament's own SKU when the tray
+        // reports none. A custom filament has no SKU, so it REQUIRES the printer
+        // to report a loaded filament for that tray.
+        let filament_id = loaded
+            .get(&(ams_id, tray_id))
+            .cloned()
+            .or_else(|| summary.filament_id.clone())
+            .ok_or_else(|| {
+                format!(
+                    "AMS slot {ams_id}/{tray_id} reports no loaded filament — set the spool \
+                     on the printer (and Sync) before calibrating a custom filament"
+                )
+            })?;
         let nozzle = ext.installed_nozzle.diameter.clone();
         let max_vol = resolve_base_scalars(&identity)
             .get("filament_max_volumetric_speed")
@@ -1102,11 +1133,11 @@ pub async fn driver_calibrate_pa_bambu(
             color: slot.color.clone().unwrap_or_default(),
             nozzle: nozzle.clone(),
             filament_id,
-            ams_id: (*slot_idx / 4) as u8,
-            tray_id: (*slot_idx % 4) as u8,
+            ams_id,
+            tray_id,
             nozzle_id: bambu_nozzle_id(&ext.installed_nozzle.material, &nozzle),
-            nozzle_temp: frag.nozzle_temp as i32,
-            bed_temp: frag.bed_temp as i32,
+            nozzle_temp: summary.nozzle_temp as i32,
+            bed_temp: summary.bed_temp as i32,
             max_vol,
         });
     }
@@ -1114,14 +1145,6 @@ pub async fn driver_calibrate_pa_bambu(
         return Ok(Vec::new());
     }
     let nozzle_diameter = metas[0].nozzle.clone();
-
-    let handle = registry
-        .get(driver_id)
-        .ok_or_else(|| format!("unknown driver id {}", driver_id.0))?;
-    // Known limitation: the read guard is held across the multi-minute
-    // calibration job (like the U1 path). A mid-job disconnect would queue
-    // behind it; a lock-free long-op design is a broader follow-up.
-    let d = handle.read().await;
 
     // Resolve setting_id per filament_id from the printer's stored table,
     // preferring a current entry over a history one. Empty when the printer has
