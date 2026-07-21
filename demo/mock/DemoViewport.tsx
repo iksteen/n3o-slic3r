@@ -3,10 +3,19 @@
 // plate, orbitable, in the browser. Accepts WgpuViewport's props but ignores
 // the editing tools (inert in the demo).
 import { useEffect, useRef } from "react";
-import mesh from "../assets/mesh.json";
+import parts from "../assets/parts.json";
 import { attachOrbit, lookAt, mul, perspective, type Orbit } from "./glcam";
 
 const BED = 180; // A1 mini build plate (mm), 10 mm grid.
+
+// Per-material colours, keyed by extruder (1-based). Match the AMS slot colours
+// the material chips resolve to: body → slot 0 / A1 (OrangeCon orange), logo
+// insert → slot 3 / A4 (black). Any other extruder falls back to grey.
+const EXTRUDER_RGB: Record<number, [number, number, number]> = {
+  1: [0.93, 0.44, 0.16],
+  2: [0.06, 0.06, 0.07],
+};
+const FALLBACK_RGB: [number, number, number] = [0.6, 0.62, 0.66];
 
 const MESH_VS = `
 attribute vec3 aPos, aNormal;
@@ -62,8 +71,6 @@ export function WgpuViewport(_props: Record<string, unknown>): React.JSX.Element
   useEffect(() => {
     const canvas = ref.current!;
     const gl = canvas.getContext("webgl", { antialias: true })!;
-    const pos = mesh.positions as number[];
-    const idx = mesh.indices as number[];
     const link = (vs: string, fs: string) => {
       const p = gl.createProgram()!;
       const mk = (t: number, s: string) => { const sh = gl.createShader(t)!; gl.shaderSource(sh, s); gl.compileShader(sh); return sh; };
@@ -74,26 +81,39 @@ export function WgpuViewport(_props: Record<string, unknown>): React.JSX.Element
     const lineProg = link(LINE_VS, LINE_FS);
 
     const buf = (arr: BufferSource) => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW); return b; };
-    const posBuf = buf(new Float32Array(pos));
-    const nrmBuf = buf(computeNormals(pos, idx));
-    const idxBuf = gl.createBuffer()!;
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idx), gl.STATIC_DRAW);
     const idxType = gl.getExtension("OES_element_index_uint") ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+
+    // One buffer set per build part, coloured by its assigned material.
+    const meshes = parts.map((part) => {
+      const pos = part.positions as number[];
+      const idx = part.indices as number[];
+      const idxBuf = gl.createBuffer()!;
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idx), gl.STATIC_DRAW);
+      return {
+        posBuf: buf(new Float32Array(pos)),
+        nrmBuf: buf(computeNormals(pos, idx)),
+        idxBuf,
+        count: idx.length,
+        color: EXTRUDER_RGB[part.extruder] ?? FALLBACK_RGB,
+      };
+    });
 
     gl.enable(gl.DEPTH_TEST);
     gl.clearColor(0.055, 0.07, 0.09, 1);
 
-    // model bbox
+    // Combined model bbox across all parts, for framing.
     const lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
-    for (let i = 0; i < pos.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], pos[i + k]); hi[k] = Math.max(hi[k], pos[i + k]); }
+    for (const part of parts) for (let k = 0; k < 3; k++) {
+      lo[k] = Math.min(lo[k], part.bbox[k]); hi[k] = Math.max(hi[k], part.bbox[k + 3]);
+    }
     const cx = (lo[0] + hi[0]) / 2, cy = (lo[1] + hi[1]) / 2, cz = (lo[2] + hi[2]) / 2;
     const { grid, border } = bedLines(cx, cy);
     const gridBuf = buf(grid), borderBuf = buf(border);
 
     // Orbit around the model, framed to show the whole build plate around it.
-    const target = [cx, cy, cz];
-    const o: Orbit = { az: 0.6, el: 0.5, dist: BED * 1.15, autoRotate: false };
+    const base = [cx, cy, cz];
+    const o: Orbit = { az: 0.6, el: 0.5, dist: BED * 1.15, autoRotate: false, pan: [0, 0, 0] };
     const detach = attachOrbit(canvas, o, BED * 0.35, BED * 3);
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -112,6 +132,7 @@ export function WgpuViewport(_props: Record<string, unknown>): React.JSX.Element
 
     let raf = 0;
     const frame = () => {
+      const target = [base[0] + o.pan[0], base[1] + o.pan[1], base[2] + o.pan[2]];
       const eye = [
         target[0] + o.dist * Math.cos(o.el) * Math.sin(o.az),
         target[1] + o.dist * Math.cos(o.el) * Math.cos(o.az),
@@ -127,14 +148,17 @@ export function WgpuViewport(_props: Record<string, unknown>): React.JSX.Element
 
       gl.useProgram(meshProg);
       const pl = gl.getAttribLocation(meshProg, "aPos");
-      gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.enableVertexAttribArray(pl); gl.vertexAttribPointer(pl, 3, gl.FLOAT, false, 0, 0);
       const nl = gl.getAttribLocation(meshProg, "aNormal");
-      gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf); gl.enableVertexAttribArray(nl); gl.vertexAttribPointer(nl, 3, gl.FLOAT, false, 0, 0);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
       gl.uniformMatrix4fv(gl.getUniformLocation(meshProg, "uVP"), false, vp);
-      gl.uniform3f(gl.getUniformLocation(meshProg, "uColor"), 0.93, 0.44, 0.16); // OrangeCon orange
       gl.uniform3f(gl.getUniformLocation(meshProg, "uEye"), eye[0], eye[1], eye[2]);
-      gl.drawElements(gl.TRIANGLES, idx.length, idxType, 0);
+      const uColor = gl.getUniformLocation(meshProg, "uColor");
+      for (const m of meshes) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, m.posBuf); gl.enableVertexAttribArray(pl); gl.vertexAttribPointer(pl, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, m.nrmBuf); gl.enableVertexAttribArray(nl); gl.vertexAttribPointer(nl, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.idxBuf);
+        gl.uniform3f(uColor, m.color[0], m.color[1], m.color[2]);
+        gl.drawElements(gl.TRIANGLES, m.count, idxType, 0);
+      }
 
       raf = requestAnimationFrame(frame);
     };

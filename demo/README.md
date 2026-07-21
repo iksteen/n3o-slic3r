@@ -29,9 +29,10 @@ Outputs into `demo/dist/` (git-ignored):
 the demo — the regular app build is untouched:
 
 - A plugin redirects the two native (Rust wgpu) 3D surfaces to browser WebGL
-  renderers: `viewport/WgpuViewport` → `demo/mock/DemoViewport.tsx` (lit model
-  on a build plate), `GcodePreview` → `demo/mock/DemoPreview.tsx` (feature-
-  colored toolpath tubes, layer-window aware).
+  renderers: `viewport/WgpuViewport` → `demo/mock/DemoViewport.tsx` (the two
+  grouped case parts as a lit multi-material model on a build plate),
+  `GcodePreview` → `demo/mock/DemoPreview.tsx` (feature-colored toolpath tubes,
+  layer-window aware).
 - `@tauri-apps/api/{core,event,webview}` are aliased to shims in `demo/mock/`.
   `commands.ts` holds the canned `invoke` responses (scene snapshot, printer
   instance + AMS, real exported settings, and the simulated Slice → preview
@@ -49,8 +50,9 @@ but they're generated from the sample model + real n3o slices/introspection.
 libslic3r FFI — `N3O_SLIC3R_FFI_CMAKE_CONFIG=Release`):
 
 ```bash
-# mesh for the model viewer (from the source .3mf, through n3o's importer)
-cargo run -p n3o-slic3r --example dump_mesh -- demo/assets/model.3mf demo/assets/mesh.json
+# per-part meshes for the model viewer (body + logo insert, each its own
+# material). Pure Python — parses the .model directly, no libslic3r FFI needed.
+python3 demo/split_parts.py demo/assets/model.3mf demo/assets/parts.json
 
 # toolpaths for the preview: slice the model, then extract per-layer polylines
 cargo run -p n3o-slic3r --features test-fixtures --example slice_repro -- demo/assets/model.3mf

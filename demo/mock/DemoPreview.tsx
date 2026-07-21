@@ -71,9 +71,9 @@ export function GcodePreview(props: { layerWindow?: LayerWindow }): React.JSX.El
     gl.enable(gl.DEPTH_TEST); gl.clearColor(0.055, 0.07, 0.09, 1);
 
     const bb = data.bbox;
-    const center = [(bb[0] + bb[3]) / 2, (bb[1] + bb[4]) / 2, (bb[2] + bb[5]) / 2];
+    const baseCenter = [(bb[0] + bb[3]) / 2, (bb[1] + bb[4]) / 2, (bb[2] + bb[5]) / 2];
     const radius = Math.hypot(bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]) / 2;
-    const o: Orbit = { az: 0.7, el: 0.5, dist: radius * 2.7, autoRotate: false };
+    const o: Orbit = { az: 0.7, el: 0.5, dist: radius * 2.7, autoRotate: false, pan: [0, 0, 0] };
     const detach = attachOrbit(canvas, o, radius * 1.3, radius * 6);
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -92,6 +92,7 @@ export function GcodePreview(props: { layerWindow?: LayerWindow }): React.JSX.El
       if (lw?.mode === "single") { minLayer = lw.layer; maxLayer = lw.layer; }
       else if (lw?.mode === "up-to") { maxLayer = lw.max; }
       else if (lw?.mode === "range") { minLayer = lw.min; maxLayer = lw.max; }
+      const center = [baseCenter[0] + o.pan[0], baseCenter[1] + o.pan[1], baseCenter[2] + o.pan[2]];
       const eye = [center[0] + o.dist * Math.cos(o.el) * Math.sin(o.az), center[1] + o.dist * Math.cos(o.el) * Math.cos(o.az), center[2] + o.dist * Math.sin(o.el)];
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);

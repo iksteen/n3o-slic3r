@@ -36,29 +36,54 @@ export function program(gl: WebGLRenderingContext, vs: string, fs: string): WebG
   return p;
 }
 
-/** Drag-orbit + wheel-zoom + idle auto-rotate. `az/el/dist` are read by the
- *  caller's render loop; `autoRotate` flips off on first interaction. */
+/** Left-drag orbit + right-drag pan + wheel-zoom + idle auto-rotate. `az/el/dist`
+ *  and the `pan` center offset are read by the caller's render loop; `autoRotate`
+ *  flips off on first interaction. */
 export interface Orbit {
   az: number; el: number; dist: number; autoRotate: boolean;
+  pan: [number, number, number];
 }
 export function attachOrbit(canvas: HTMLCanvasElement, o: Orbit, minDist: number, maxDist: number): () => void {
-  let drag = false, px = 0, py = 0;
-  const down = (e: PointerEvent) => { drag = true; o.autoRotate = false; px = e.clientX; py = e.clientY; canvas.setPointerCapture(e.pointerId); };
+  let drag = false, panning = false, px = 0, py = 0;
+  const down = (e: PointerEvent) => {
+    if (e.button !== 0 && e.button !== 2) return;
+    if (e.button === 2) e.preventDefault();
+    drag = true; panning = e.button === 2; o.autoRotate = false;
+    px = e.clientX; py = e.clientY; canvas.setPointerCapture(e.pointerId);
+  };
   const up = () => { drag = false; };
   const move = (e: PointerEvent) => {
     if (!drag) return;
-    o.az += (e.clientX - px) * 0.008; o.el += (e.clientY - py) * 0.008;
-    o.el = Math.max(-1.4, Math.min(1.4, o.el)); px = e.clientX; py = e.clientY;
+    const dx = e.clientX - px, dy = e.clientY - py; px = e.clientX; py = e.clientY;
+    if (panning) {
+      // Shift the orbit center so the grabbed point tracks the cursor. Camera
+      // basis derived from az/el (same eye offset the renderers use).
+      const ce = Math.cos(o.el), se = Math.sin(o.el), sa = Math.sin(o.az), ca = Math.cos(o.az);
+      const fx = -ce * sa, fy = -ce * ca, fz = -se; // eye -> target
+      const rl = Math.hypot(fy, fx) || 1;
+      const rx = fy / rl, ry = -fx / rl;            // screen right (horizontal)
+      const ux = ry * fz, uy = -rx * fz, uz = rx * fy - ry * fx; // screen up
+      const k = (2 * o.dist * Math.tan(0.4)) / Math.max(1, canvas.clientHeight);
+      o.pan[0] += (-dx * rx + dy * ux) * k;
+      o.pan[1] += (-dx * ry + dy * uy) * k;
+      o.pan[2] += dy * uz * k;
+    } else {
+      o.az += dx * 0.008; o.el += dy * 0.008;
+      o.el = Math.max(-1.4, Math.min(1.4, o.el));
+    }
   };
   const wheel = (e: WheelEvent) => { e.preventDefault(); o.dist *= Math.exp(e.deltaY * 0.001); o.dist = Math.max(minDist, Math.min(maxDist, o.dist)); };
+  const ctxmenu = (e: Event) => e.preventDefault(); // right-drag pans, no menu
   canvas.addEventListener("pointerdown", down);
   canvas.addEventListener("pointerup", up);
   canvas.addEventListener("pointermove", move);
   canvas.addEventListener("wheel", wheel, { passive: false });
+  canvas.addEventListener("contextmenu", ctxmenu);
   return () => {
     canvas.removeEventListener("pointerdown", down);
     canvas.removeEventListener("pointerup", up);
     canvas.removeEventListener("pointermove", move);
     canvas.removeEventListener("wheel", wheel);
+    canvas.removeEventListener("contextmenu", ctxmenu);
   };
 }

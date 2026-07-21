@@ -26,6 +26,9 @@ function filtered(list: Opt[], args: Record<string, unknown>): Opt[] {
 
 const BBOX = { min: [142.11, 10.21, 0.2], max: [169.81, 71.01, 16.6] };
 
+// Group id for the two-part OrangeCon case (Rust GroupId(Uuid)).
+const GROUP_ID = "b1a7c0de-0000-4000-8000-000000000001";
+
 // Canned preview for the sample slice (values from the real n3o slice of the
 // M5 case). The demo GcodePreview draws the toolpaths itself; this feeds the
 // surrounding chrome (layer count, timeline, stats summary).
@@ -78,9 +81,61 @@ function runMockSlice(): string {
 
 const INSTANCE_ID = "inst-a1mini-1";
 const PLATE_ID = 1;
+const DRIVER_ID = 1;
 
-// AMS Lite spool colors (OrangeCon orange first).
-const AMS_COLORS = ["#f26722", "#2f7de1", "#35b36b", "#e8c341"];
+// AMS Lite spool colors (OrangeCon orange first; A4 = black, bound to M2).
+const AMS_COLORS = ["#f26722", "#2f7de1", "#35b36b", "#111111"];
+
+// A connected-but-idle Bambu status report. The header dot reads this (via the
+// driver:status_update event → ConnectionSummary.runtime) and the Devices
+// monitor seeds off driver_status; both show "Idle". The camera is faked
+// offline separately (camera_start rejects).
+const idleStatus = () => ({
+  connection: { state: "Connected" },
+  job: null,
+  temps: {
+    nozzles: [{ current: 27, target: 0 }],
+    bed: { current: 23, target: 0 },
+    chamber: null,
+  },
+  extra: {
+    kind: "Bambu",
+    data: {
+      mounted_plate: null,
+      current_stage: null,
+      print_error_code: null,
+      command_error_code: null,
+      fan_speed: 0,
+      ams: {
+        units: [
+          {
+            id: 0,
+            trays: AMS_COLORS.map((c, i) => ({
+              id: i,
+              // AmsFilament color is RRGGBBAA hex without the leading '#'.
+              identity: { tray_type: "PLA", color: c.slice(1) + "ff", sub_brand: null, multi_colors: [], filament_id: "GFA00" },
+            })),
+          },
+        ],
+        active_slot: null,
+      },
+      external_spool: null,
+    },
+  },
+  last_updated: Date.now(),
+});
+
+// Push the idle status so the picker dot flips green. One-shot at connect (the
+// dot needs a runtime event, not just a live registry entry) + a slow repush so
+// it stays fresh regardless of listener-install ordering.
+let statusFeed = false;
+function startStatusFeed(): void {
+  if (statusFeed) return;
+  statusFeed = true;
+  const push = () => emit("driver:status_update", { driver_id: DRIVER_ID, status: idleStatus() });
+  setTimeout(push, 300);
+  setInterval(push, 5000);
+}
 
 const A1_INSTANCE = {
   id: INSTANCE_ID,
@@ -89,16 +144,25 @@ const A1_INSTANCE = {
   printer_fragment_slug: "bambu-lab-a1-mini",
   default_filament_fragment_slug: "bambu-pla-basic",
   quality_profile: "0.20mm-standard",
-  connection: null,
+  // A usable (fake) LAN connection so the reconciler auto-registers on boot and
+  // the printer reads as connected. Nothing is actually reached — the driver
+  // lifecycle commands below are canned.
+  connection: { kind: "bambu", host: "192.168.1.42", access_code: "a1b2c3d4" },
   extruders: [
     {
       installed_nozzle: { diameter: "0.4", material: "stainless" },
-      slots: AMS_COLORS.map((color) => ({
-        feed: "ams" as const,
-        filament_identity: "bambu-pla-basic",
-        color,
-        tag_uid: null,
-      })),
+      // 4 AMS Lite slots + the always-present external ("Ext") spool slot,
+      // matching the real A1 mini topology (flatten_slots) and the Devices
+      // monitor loadout, which always shows the Ext row.
+      slots: [
+        ...AMS_COLORS.map((color) => ({
+          feed: "ams" as const,
+          filament_identity: "bambu-pla-basic",
+          color,
+          tag_uid: null,
+        })),
+        { feed: "direct" as const, filament_identity: null, color: null, tag_uid: null },
+      ],
     },
   ],
   bed: { identity: "bambu-textured-pei" },
@@ -109,16 +173,27 @@ const A1_INSTANCE = {
     vibration_calibration: false,
     timelapse: false,
   },
-  // AMS Lite: one unit, four slots.
-  slots: AMS_COLORS.map((color, i) => ({
-    ref: { extruder: 0, slot: i },
-    label: `AMS slot ${i + 1}`,
-    short_label: `A${i + 1}`,
-    feed: "ams" as const,
-    filament_identity: "bambu-pla-basic",
-    color,
-    tag_uid: null,
-  })),
+  // AMS Lite: one unit, four slots, plus the trailing external ("Ext") slot.
+  slots: [
+    ...AMS_COLORS.map((color, i) => ({
+      ref: { extruder: 0, slot: i },
+      label: `AMS slot ${i + 1}`,
+      short_label: `A${i + 1}`,
+      feed: "ams" as const,
+      filament_identity: "bambu-pla-basic",
+      color,
+      tag_uid: null,
+    })),
+    {
+      ref: { extruder: 0, slot: 4 },
+      label: "Ext",
+      short_label: "Ext",
+      feed: "direct" as const,
+      filament_identity: null,
+      color: null,
+      tag_uid: null,
+    },
+  ],
   ams_units: 1,
 };
 
@@ -136,8 +211,15 @@ const SNAPSHOT = {
       id: 1,
       vertex_count: 0,
       index_count: 0,
-      bounding_box: { min: [142.11, 10.21, 0.2], max: [169.81, 71.01, 16.6] },
-      provenance: { kind: "Imported", data: "m5sticks3_click_case" },
+      bounding_box: { min: [141.9, 10.0, 0.0], max: [169.2, 71.22, 16.63] },
+      provenance: { kind: "Imported", data: "ORANGECON_body" },
+    },
+    {
+      id: 2,
+      vertex_count: 0,
+      index_count: 0,
+      bounding_box: { min: [167.8, 25.4, 6.5], max: [170.0, 56.65, 10.14] },
+      provenance: { kind: "Imported", data: "ORANGECON_logo" },
     },
   ],
   plates: [
@@ -146,18 +228,30 @@ const SNAPSHOT = {
       name: "Plate 1",
       printer_identity: "bambu-lab-a1-mini",
       printer_instance_id: INSTANCE_ID,
-      material_to_slot: { "1": { extruder: 0, slot: 0 } },
+      // Two materials: body → slot 0 / A1 (orange), logo insert → slot 3 / A4 (black).
+      material_to_slot: { "1": { extruder: 0, slot: 0 }, "2": { extruder: 0, slot: 3 } },
       project_overrides: {},
       quality_profile: null,
+      // Two grouped parts of the OrangeCon case, each on its own material —
+      // demonstrates grouping + multi-material assignment.
       objects: [
         {
           id: 1,
           mesh: 1,
           transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
-          name: "M5 StickS3 case",
+          name: "Case body",
           visible: true,
           extruder_id: 1,
-          group: null,
+          group: GROUP_ID,
+        },
+        {
+          id: 2,
+          mesh: 2,
+          transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+          name: "ORANGECON logo insert",
+          visible: true,
+          extruder_id: 2,
+          group: GROUP_ID,
         },
       ],
       selection: [],
@@ -169,7 +263,7 @@ const SNAPSHOT = {
         exclusion_zones: [],
       },
       object_overrides: {},
-      groups: {},
+      groups: { [GROUP_ID]: { name: "M5 StickS3 case" } },
     },
   ],
   active_plate_id: PLATE_ID,
@@ -242,6 +336,27 @@ export const COMMANDS: Record<string, Handler> = {
   slicer_extruder_options_for_printer: (a) => filtered(extruderOptions as Opt[], a),
   slicer_filament_options: (a) => filtered(filamentOptions as Opt[], a),
   plate_cascade_resolve: () => ({ entries: resolvedEntries }),
+
+  // --- fake connected-but-idle driver (offline camera) ---
+  driver_register: () => DRIVER_ID,
+  driver_test_connection: () => null,
+  driver_connect: () => {
+    startStatusFeed();
+    return null;
+  },
+  driver_disconnect: () => null,
+  driver_unregister: () => null,
+  driver_status: () => idleStatus(),
+  // Reject so the camera panel shows its offline placeholder (String(e) is the
+  // detail line) instead of trying to open a stream.
+  camera_start: () => {
+    throw "No camera signal — printer webcam is off";
+  },
+  camera_stop: () => null,
+  // Status-driven sync no-ops (armed only by user action; safe to return the
+  // instance unchanged if they ever fire).
+  printer_instance_sync_from_driver: () => A1_INSTANCE,
+  printer_instance_set_ams_units: () => A1_INSTANCE,
 
   // --- slice -> preview flow ---
   slice_active_plate: () => runMockSlice(),
