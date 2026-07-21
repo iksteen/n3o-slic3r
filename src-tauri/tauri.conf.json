@@ -13,8 +13,11 @@
     "windows": [
       {
         "title": "n3o-slic3r",
-        "width": 800,
-        "height": 600
+        "width": 1600,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "center": true
       }
     ],
     "security": {

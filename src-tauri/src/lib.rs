@@ -74,12 +74,72 @@ fn tiling_wm_without_titlebar() -> bool {
         .unwrap_or(false)
 }
 
+/// Persisted window geometry. `w`/`h` are logical pixels (they feed the
+/// window config's width/height); `x`/`y` are physical (they feed
+/// `set_position`). Position restore is inert on Wayland — clients can't
+/// place themselves — but honored on X11/Windows/macOS.
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+struct WinGeom {
+    w: f64,
+    h: f64,
+    x: i32,
+    y: i32,
+}
+
+fn win_geom_path(identifier: &str) -> Option<std::path::PathBuf> {
+    // Matches Tauri's `app_config_dir` (`dirs::config_dir()` + identifier),
+    // hand-built because the size must be read before the app exists.
+    dirs::config_dir().map(|d| d.join(identifier).join("window.json"))
+}
+
+fn load_window_geometry(identifier: &str) -> Option<WinGeom> {
+    let txt = std::fs::read_to_string(win_geom_path(identifier)?).ok()?;
+    let g: WinGeom = serde_json::from_str(&txt).ok()?;
+    (g.w >= 1.0 && g.h >= 1.0).then_some(g)
+}
+
+fn save_window_geometry(identifier: &str, g: &WinGeom) {
+    if g.w < 1.0 || g.h < 1.0 {
+        return;
+    }
+    let Some(path) = win_geom_path(identifier) else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(txt) = serde_json::to_string(g) {
+        let _ = std::fs::write(&path, txt);
+    }
+}
+
+fn current_geometry(win: &tauri::WebviewWindow) -> WinGeom {
+    let sf = win.scale_factor().unwrap_or(1.0);
+    let sz = win
+        .inner_size()
+        .map(|s| s.to_logical::<f64>(sf))
+        .unwrap_or(tauri::LogicalSize::new(0.0, 0.0));
+    let pos = win.outer_position().unwrap_or(tauri::PhysicalPosition::new(0, 0));
+    WinGeom { w: sz.width, h: sz.height, x: pos.x, y: pos.y }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize the tracing subscriber before anything that might emit
     // events. Tauri's own init can hit info-level events during setup.
     core::logging::init();
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "n3o-slic3r starting");
+
+    // Apply the saved window size to the config *before* the window exists.
+    // A post-creation `set_size` loses the race with the compositor's initial
+    // configure on Wayland (and Hyprland treats the floating window as
+    // maximized, ignoring client resizes outright); the config size is what
+    // the surface is created with, honored everywhere.
+    let mut ctx = tauri::generate_context!();
+    if let Some(g) = load_window_geometry(&ctx.config().identifier) {
+        if let Some(win) = ctx.config_mut().app.windows.first_mut() {
+            win.width = g.w;
+            win.height = g.h;
+        }
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -112,6 +172,43 @@ pub fn run() {
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.set_decorations(false);
                 }
+            }
+
+            // Persist the window's size/position ourselves. The upstream
+            // window-state plugin refuses to save the size whenever the
+            // compositor reports the window maximized — and Hyprland reports a
+            // user-resized *floating* window as maximized, so it silently keeps
+            // the initial size. Persist on every resize/move rather than on
+            // close (CloseRequested/Exit isn't reliable under Hyprland); it's a
+            // 30-byte write. The saved *size* is applied to the window config
+            // before creation (see `run`); only position needs a post-hoc set.
+            if let Some(win) = app.get_webview_window("main") {
+                let identifier = app.config().identifier.clone();
+                if let Some(g) = load_window_geometry(&identifier) {
+                    let _ = win.set_position(tauri::PhysicalPosition::new(g.x, g.y));
+                }
+                let geom = std::sync::Arc::new(std::sync::Mutex::new(current_geometry(&win)));
+                let win2 = win.clone();
+                win.on_window_event(move |ev| {
+                    let g = match ev {
+                        tauri::WindowEvent::Resized(sz) => geom.lock().ok().map(|mut g| {
+                            let sf = win2.scale_factor().unwrap_or(1.0);
+                            let logical = sz.to_logical::<f64>(sf);
+                            g.w = logical.width;
+                            g.h = logical.height;
+                            *g
+                        }),
+                        tauri::WindowEvent::Moved(pos) => geom.lock().ok().map(|mut g| {
+                            g.x = pos.x;
+                            g.y = pos.y;
+                            *g
+                        }),
+                        _ => None,
+                    };
+                    if let Some(g) = g {
+                        save_window_geometry(&identifier, &g);
+                    }
+                });
             }
 
             // Resolve the bundled-resources root before engine init: the
@@ -388,7 +485,7 @@ pub fn run() {
             dialog::dialog_open_file,
             dialog::dialog_save_file,
         ])
-        .build(tauri::generate_context!())
+        .build(ctx)
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             // Flush autosave on exit: the worker writes a final recovery

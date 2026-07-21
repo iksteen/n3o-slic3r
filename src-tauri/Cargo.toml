@@ -140,6 +140,7 @@ mlua = { version = "0.12", features = ["lua54", "vendored", "send"] }
 # Plugin manifest version validation (Phase 8). Used only to confirm a
 # manifest's `version` parses as semver; the string is stored verbatim.
 semver = "1"
+dirs = "6"
 
 # File open/save dialogs. On Linux the flatpak sandbox's
 # xdg-desktop-portal is unreliable (fails when logind marks the

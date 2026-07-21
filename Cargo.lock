@@ -2743,6 +2743,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bytemuck",
+ "dirs",
  "futures-util",
  "glam",
  "gtk",
