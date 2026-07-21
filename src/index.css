@@ -2393,7 +2393,7 @@
     width: 100%;
     text-align: right;
     height: 26px;
-    padding: 0 28px 0 8px;
+    padding: 0 46px 0 8px;
     background: var(--surface);
     border: 1px solid transparent;
     border-radius: 5px;
@@ -2425,7 +2425,12 @@
   }
   .val-unit {
     position: absolute;
-    right: 8px;
+    /* Left-aligned in a fixed gutter so multi-char units ("mm/s²") fit and
+       sit just right of the value. `.val-input` reserves matching padding. */
+    right: 6px;
+    width: 38px;
+    text-align: left;
+    white-space: nowrap;
     top: 50%;
     transform: translateY(-50%);
     font-family: var(--font-mono);
@@ -3757,6 +3762,8 @@
     position: static;
     transform: none;
     white-space: nowrap;
+    /* Inline here — size to content, not the sidebar's fixed unit gutter. */
+    width: auto;
     flex-shrink: 0;
   }
   /* Reset button floats just left of the value column (6px pad + 300px
