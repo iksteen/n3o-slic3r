@@ -64,3 +64,8 @@ packaging/windows-cross/.build/
 # arch-namespaced external/OrcaSlicer/deps/build/<arch>/ prefix, already ignored
 # with the submodule). Run logs are caught by *.log above.
 packaging/macos-cross/.build/
+
+# Demo browser build output + slice intermediate (regenerated; see demo/README.md)
+demo/dist/
+demo/assets/sample.gcode
+demo/assets/sample.stl

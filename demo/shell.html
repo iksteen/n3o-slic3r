@@ -1,0 +1,165 @@
+<title>n3o — sliced toolpath preview</title>
+<style>
+  /* A slicer's toolpath preview is a dark technical surface by nature — this
+     page deliberately commits to that single world (no light theme). */
+  :root {
+    --ground: #0e1217;
+    --panel: rgba(22, 29, 37, 0.82);
+    --edge: rgba(120, 150, 175, 0.16);
+    --text: #c8d2dc;
+    --dim: #7a8794;
+    --accent: #35d0d6;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--ground);
+    color: var(--text);
+    font-family: var(--sans);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  #view {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;
+    cursor: grab;
+    background:
+      radial-gradient(120% 90% at 50% 0%, #141c25 0%, var(--ground) 60%);
+  }
+  #view:active { cursor: grabbing; }
+
+  .brand {
+    position: fixed;
+    top: 18px;
+    left: 20px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--dim);
+    user-select: none;
+  }
+  .brand b { color: var(--text); font-weight: 600; letter-spacing: 0.06em; }
+  .brand .accent { color: var(--accent); }
+
+  .legend {
+    position: fixed;
+    top: 16px;
+    right: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 14px;
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: 10px;
+    backdrop-filter: blur(8px);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--dim);
+    user-select: none;
+  }
+  .legend-title {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 2px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 8px; color: var(--text); }
+  .sw { width: 11px; height: 11px; border-radius: 3px; flex: none; box-shadow: 0 0 0 1px rgba(0,0,0,0.35) inset; }
+
+  .bar {
+    position: fixed;
+    left: 50%;
+    bottom: 26px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 18px;
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: 12px;
+    backdrop-filter: blur(8px);
+    width: min(560px, calc(100vw - 40px));
+  }
+  #layerlabel {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    min-width: 96px;
+  }
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    flex: 1;
+    height: 4px;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--accent), rgba(53,208,214,0.25));
+    outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 15px; height: 15px; border-radius: 50%;
+    background: #eaf6f7; border: 2px solid var(--accent); cursor: pointer;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 13px; height: 13px; border-radius: 50%;
+    background: #eaf6f7; border: 2px solid var(--accent); cursor: pointer;
+  }
+  input[type="range"]:focus-visible { box-shadow: 0 0 0 3px rgba(53,208,214,0.3); }
+  button {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text);
+    background: rgba(53,208,214,0.12);
+    border: 1px solid rgba(53,208,214,0.4);
+    border-radius: 8px;
+    padding: 7px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover { background: rgba(53,208,214,0.22); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .hint {
+    position: fixed;
+    left: 20px;
+    bottom: 28px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--dim);
+    user-select: none;
+  }
+  @media (max-width: 560px) { .hint { display: none; } .legend { font-size: 10.5px; } }
+</style>
+
+<canvas id="view"></canvas>
+
+<div class="brand"><b>n3o</b> <span class="accent">·</span> sliced toolpath preview</div>
+
+<div class="legend">
+  <div class="legend-title">Features</div>
+  <div id="legend"></div>
+</div>
+
+<div class="hint">drag to orbit · scroll to zoom</div>
+
+<div class="bar">
+  <span id="layerlabel">layer 0 / 0</span>
+  <input id="layer" type="range" min="0" max="1" value="0" aria-label="Layer" />
+  <button id="replay">Replay</button>
+</div>
+
+<script>window.DATA = __DATA__;</script>
+<script>__VIEWER__</script>

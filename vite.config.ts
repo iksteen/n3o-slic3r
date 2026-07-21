@@ -2,13 +2,47 @@ import { defineConfig } from "vite";
 import { configDefaults } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const dir = path.dirname(fileURLToPath(import.meta.url));
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
+// `vite build --mode demo` (or `vite --mode demo`) produces the browser-only
+// demo: the Tauri backend is replaced by a canned mock, and the two native
+// (Rust wgpu) 3D surfaces are swapped for browser WebGL renderers. None of this
+// touches the real app build.
+const demoMock = (rel: string) => path.resolve(dir, "demo/mock", rel);
+const demoPlugin = {
+  name: "n3o-demo-redirect",
+  enforce: "pre" as const,
+  resolveId(source: string) {
+    if (source.endsWith("/viewport/WgpuViewport")) return demoMock("DemoViewport.tsx");
+    if (source.endsWith("/GcodePreview")) return demoMock("DemoPreview.tsx");
+    return null;
+  },
+};
+
 // https://vite.dev/config/
-export default defineConfig(async () => ({
-  plugins: [react(), tailwindcss()],
+export default defineConfig(async ({ mode }) => ({
+  plugins: [...(mode === "demo" ? [demoPlugin] : []), react(), tailwindcss()],
+  ...(mode === "demo"
+    ? {
+        // Relative asset paths so the static bundle works from any subpath
+        // (their site) or file://.
+        base: "./",
+        resolve: {
+          alias: {
+            "@tauri-apps/api/core": demoMock("tauri-core.ts"),
+            "@tauri-apps/api/event": demoMock("tauri-event.ts"),
+            "@tauri-apps/api/webview": demoMock("tauri-webview.ts"),
+          },
+        },
+        build: { outDir: "demo/dist/app", emptyOutDir: true },
+      }
+    : {}),
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
