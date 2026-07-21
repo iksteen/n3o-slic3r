@@ -7,6 +7,7 @@
 
 import { Field, NumberInput } from "../settings/inputs";
 import type { PrinterAwareOptionSummary } from "../settings/types";
+import { shortUnit } from "../settings/units";
 
 export interface PairedInputRowProps {
   /** Shared row label — the Orca line label or the optgroup name. */
@@ -61,7 +62,9 @@ export function PairedInputRow({
           </label>
         ))}
         {members[0].sidetext && (
-          <span className="val-unit">{members[0].sidetext}</span>
+          <span className="val-unit" title={members[0].sidetext}>
+            {shortUnit(members[0].sidetext)}
+          </span>
         )}
       </div>
     </Field>

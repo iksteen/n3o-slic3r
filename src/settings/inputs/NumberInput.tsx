@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { commitNumber, formatNumber } from "./helpers";
 import { defaultScalarFor, type OptionSummary } from "../types";
+import { shortUnit } from "../units";
 
 export interface NumberInputProps {
   schema: OptionSummary;
@@ -83,7 +84,7 @@ export function NumberInput({
           }
         }}
       />
-      {unit && <span className="val-unit">{unit}</span>}
+      {unit && <span className="val-unit" title={unit}>{shortUnit(unit)}</span>}
     </div>
   );
 }

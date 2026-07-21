@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from "react";
 import type { OptionSummary } from "../types";
+import { shortUnit } from "../units";
 
 export interface PointInputProps {
   schema: OptionSummary;
@@ -66,7 +67,7 @@ export function PointInput({
           onChange={(e) => commit(x, e.target.value)}
         />
       </label>
-      {schema.sidetext && <span className="val-unit">{schema.sidetext}</span>}
+      {schema.sidetext && <span className="val-unit" title={schema.sidetext}>{shortUnit(schema.sidetext)}</span>}
     </div>
   );
 }
