@@ -19,8 +19,9 @@
 //!
 //! PrusaSlicer-flavor metadata (`Slic3r_PE_model.config`) uses a
 //! similar shape but with `volume` instead of `part` and a slightly
-//! different key set. Out of scope for MVP per the ticket — we
-//! detect the flavor and error early in [`super::mod`] when present.
+//! different key set. [`parse_prusa_object_names`] lifts its object
+//! display names for the geometry import; its per-volume config and
+//! source info aren't adopted.
 
 use std::collections::BTreeMap;
 
@@ -389,6 +390,125 @@ fn drain_to_end(
     }
 }
 
+/// PrusaSlicer / Slic3r PE `Slic3r_PE_model.config`: object display names keyed
+/// by `<object id>`. Prusa's shape is `<object id="N"><metadata type="object"
+/// key="name" value="…"/><volume …>…</volume></object>` — we lift only the
+/// object-level name for the geometry import (its per-`volume` config + source
+/// info are out of scope). `type="object"` filters out the sibling `<volume>`
+/// name metadata that shares `key="name"`.
+pub fn parse_prusa_object_names(
+    bytes: &[u8],
+    source: &std::path::Path,
+) -> Result<BTreeMap<u32, String>, LoadError> {
+    let mut reader = Reader::from_reader(bytes);
+    reader.config_mut().trim_text(true);
+
+    let mut names = BTreeMap::new();
+    let mut current: Option<u32> = None;
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) if e.name().as_ref() == b"object" => {
+                current = attr_u32(e, b"id");
+            }
+            Ok(Event::End(ref e)) if e.name().as_ref() == b"object" => {
+                current = None;
+            }
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e))
+                if e.name().as_ref() == b"metadata" =>
+            {
+                if let Some(id) = current {
+                    if attr_string(e, b"type").as_deref() == Some("object")
+                        && attr_string(e, b"key").as_deref() == Some("name")
+                    {
+                        if let Some(value) = attr_string(e, b"value") {
+                            names.insert(id, value);
+                        }
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(err) => {
+                return Err(LoadError::Parse {
+                    path: source.into(),
+                    message: format!("Slic3r_PE_model.config: {err}"),
+                });
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(names)
+}
+
+/// Lift the "geometry-intent" subset of a PrusaSlicer / Slic3r PE print config
+/// (`Metadata/Slic3r_PE.config`) — the keys that define how *this model* is
+/// meant to print (shells, walls, infill, raft/brim, seam) — translated to
+/// their OrcaSlicer names. Printer/filament/machine keys (bed shape, temps,
+/// speeds, gcode) are deliberately NOT adopted: this is a model import, not a
+/// profile adoption.
+///
+/// `Slic3r_PE.config` is Prusa's INI-style dump — each real line is
+/// `; key = value`. Only the keys below are read. All are **object- or
+/// region-scoped** in libslic3r, so they survive `gate_object_overrides` and
+/// ride in as per-object overrides — a shell-only model (`top_solid_layers=0`)
+/// then prints as designed without touching the user's own profile.
+///
+/// Values are carried verbatim: the FFI's override apply uses libslic3r's
+/// forward-compatibility substitution + skips any value the deserializer
+/// rejects, so a Prusa enum value with no Orca equivalent silently falls back
+/// to the profile default rather than breaking the slice — no validation here.
+///
+/// Not carried: skirt (`skirts`/`skirt_distance`/`skirt_height`) and
+/// `spiral_vase`. Those are **print-global** in OrcaSlicer (`PrintConfig`), not
+/// object-overridable, so they can't ride this per-object channel.
+pub fn parse_prusa_geometry_overrides(bytes: &[u8]) -> BTreeMap<String, String> {
+    // PrusaSlicer key → OrcaSlicer key. Renames verified against
+    // OrcaSlicer PrintConfig.cpp; every target is object/region-scoped.
+    const MAP: &[(&str, &str)] = &[
+        // Shells / walls / infill — the model's shape recipe.
+        ("top_solid_layers", "top_shell_layers"),
+        ("bottom_solid_layers", "bottom_shell_layers"),
+        ("perimeters", "wall_loops"),
+        ("fill_density", "sparse_infill_density"),
+        ("fill_pattern", "sparse_infill_pattern"),
+        ("top_fill_pattern", "top_surface_pattern"),
+        ("bottom_fill_pattern", "bottom_surface_pattern"),
+        ("fill_angle", "infill_direction"),
+        ("infill_overlap", "infill_wall_overlap"),
+        // Raft / brim (object-scoped) + seam.
+        ("raft_layers", "raft_layers"),
+        ("brim_width", "brim_width"),
+        ("seam_position", "seam_position"),
+    ];
+    let text = String::from_utf8_lossy(bytes);
+    let mut out = BTreeMap::new();
+    for line in text.lines() {
+        // Strip the leading `; ` comment marker Prusa writes on every line.
+        let line = line.trim_start().trim_start_matches(';').trim();
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if let Some((_, orca)) = MAP.iter().find(|(prusa, _)| *prusa == key.trim()) {
+            out.insert((*orca).to_owned(), value.trim().to_owned());
+        }
+    }
+    // Prusa has no auto-brim: `brim_width = 0` means NO brim, `> 0` an outer
+    // brim of that width. OrcaSlicer's `brim_type` defaults to `auto_brim`,
+    // which generates (and auto-sizes) a brim regardless of `brim_width` — so
+    // carry Prusa's intent explicitly, or `brim_width` alone is ignored.
+    if let Some(width) = out.get("brim_width") {
+        let has_brim = width.parse::<f64>().unwrap_or(0.0) > 0.0;
+        out.insert(
+            "brim_type".to_owned(),
+            if has_brim { "outer_only" } else { "no_brim" }.to_owned(),
+        );
+    }
+    out
+}
+
 fn attr_string(e: &BytesStart, key: &[u8]) -> Option<String> {
     for attr in e.attributes().flatten() {
         if attr.key.as_ref() == key {
@@ -406,6 +526,32 @@ fn attr_u32(e: &BytesStart, key: &[u8]) -> Option<u32> {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn prusa_geometry_overrides_translate_keys_and_brim_intent() {
+        // brim_width=0 → no_brim (Orca's auto_brim would otherwise ignore the 0).
+        let no_brim = parse_prusa_geometry_overrides(
+            b"; perimeters = 6\n; fill_pattern = honeycomb\n; brim_width = 0\n; nozzle_diameter = 0.4\n",
+        );
+        assert_eq!(no_brim.get("wall_loops").map(String::as_str), Some("6"));
+        assert_eq!(
+            no_brim.get("sparse_infill_pattern").map(String::as_str),
+            Some("honeycomb"),
+        );
+        assert_eq!(no_brim.get("brim_width").map(String::as_str), Some("0"));
+        assert_eq!(no_brim.get("brim_type").map(String::as_str), Some("no_brim"));
+        // Printer keys are not lifted.
+        assert!(!no_brim.contains_key("nozzle_diameter"));
+
+        // brim_width>0 → outer_only, so the explicit width is honored, not
+        // auto-sized by auto_brim.
+        let with_brim = parse_prusa_geometry_overrides(b"; brim_width = 8\n");
+        assert_eq!(with_brim.get("brim_width").map(String::as_str), Some("8"));
+        assert_eq!(
+            with_brim.get("brim_type").map(String::as_str),
+            Some("outer_only"),
+        );
+    }
 
     const FOURCOLOR_SAMPLE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <config>

@@ -33,11 +33,15 @@
 //! raw string for now — Phase 5 will parse it for cascade-suggestion
 //! UX).
 //!
-//! PrusaSlicer-flavor 3MF (`Slic3r_PE_model.config`) is detected and
-//! rejected with a guidance message; the migration path for those
-//! users is to re-export through OrcaSlicer. Worth noting that
-//! BBS/Orca already understand PrusaSlicer projects on import, so
-//! adopting that round-trip is one keystroke for the user.
+//! PrusaSlicer / Slic3r PE 3MF geometry imports too: its `3D/3dmodel.model`
+//! is standard 3MF core. Object display names are lifted from
+//! `Metadata/Slic3r_PE_model.config` ([`bbs_meta::parse_prusa_object_names`]),
+//! and a small geometry-intent subset of `Metadata/Slic3r_PE.config` (shell
+//! counts, walls, infill — [`bbs_meta::parse_prusa_geometry_overrides`]) rides
+//! in as per-object overrides so a shell-only model prints as designed. The
+//! rest of the foreign print profile isn't adopted — this is a model import,
+//! not a full project import (that path still wants a BBS/Orca
+//! `project_settings.config`).
 
 mod bbs_meta;
 mod container;
@@ -134,21 +138,6 @@ pub struct ProjectObject {
 pub fn load_3mf(path: &Path) -> Result<Project3mf, LoadError> {
     let mut container = container::Container::open(path)?;
 
-    // PrusaSlicer-flavor detection: presence of `Slic3r_PE_model.config`
-    // means we'd need to read different metadata. Out of scope for
-    // MVP — fail with a guidance message.
-    if container
-        .read_opt("Metadata/Slic3r_PE_model.config")?
-        .is_some()
-    {
-        return Err(LoadError::Parse {
-            path: path.into(),
-            message: "PrusaSlicer-flavor 3MF detected — re-save through OrcaSlicer for full \
-                project metadata support"
-                .into(),
-        });
-    }
-
     let main_bytes = container.read("3D/3dmodel.model")?;
     let main = core_spec::parse_model(&main_bytes, path)?;
 
@@ -195,6 +184,27 @@ pub fn load_3mf(path: &Path) -> Result<Project3mf, LoadError> {
     if let Some(ms_bytes) = container.read_opt("Metadata/model_settings.config")? {
         let settings = bbs_meta::parse_model_settings(&ms_bytes, path)?;
         apply_bbs_metadata(&settings, &mut objects);
+    } else if let Some(pe_bytes) = container.read_opt("Metadata/Slic3r_PE_model.config")? {
+        // PrusaSlicer / Slic3r PE. Lift object display names from the per-object
+        // metadata (applied by `source_object_id`, matching `<object id>`)...
+        let names = bbs_meta::parse_prusa_object_names(&pe_bytes, path)?;
+        // ...plus a small geometry-intent subset of the global print config
+        // (shell counts, walls, infill) as per-object overrides, so a model
+        // designed around e.g. 0 top/bottom shells prints as intended without
+        // adopting the whole foreign profile. Prusa's config is print-global, so
+        // the same values fan out onto every imported object.
+        let geom_overrides = container
+            .read_opt("Metadata/Slic3r_PE.config")?
+            .map(|b| bbs_meta::parse_prusa_geometry_overrides(&b))
+            .unwrap_or_default();
+        for obj in objects.iter_mut() {
+            if let Some(name) = names.get(&obj.source_object_id) {
+                obj.name = name.clone();
+            }
+            for (k, v) in &geom_overrides {
+                obj.overrides.insert(k.clone(), v.clone());
+            }
+        }
     }
 
     let embedded_settings = container
@@ -676,6 +686,65 @@ mod tests {
         assert_eq!(names, vec!["Cube A (T0)", "Cube B (T1)"]);
     }
 
+    fn prusa_cube_fixture() -> PathBuf {
+        let crate_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+        PathBuf::from(crate_dir).join("tests/fixtures/3mf/prusa-cube.3mf")
+    }
+
+    #[test]
+    fn prusa_pe_3mf_imports_geometry_and_object_name() {
+        // A Slic3r PE / PrusaSlicer 3MF: standard-core geometry + a
+        // `Slic3r_PE_model.config` (no BBS `model_settings.config`, no
+        // `project_settings.config`). We used to reject these outright; now the
+        // geometry imports and the object display name is lifted from the Prusa
+        // metadata — NOT the sibling `<volume>` name ("bookend.stl").
+        let project = load_3mf(&prusa_cube_fixture()).expect("load Prusa PE 3MF");
+        assert_eq!(project.objects.len(), 1, "single build item");
+        assert_eq!(project.objects[0].name, "Heart-shaped Bookend");
+        assert!(
+            project.embedded_settings.is_none(),
+            "a Prusa model 3MF carries no BBS project_settings.config",
+        );
+        // Geometry actually parsed (a 20mm cube → 24 verts / 12 tris).
+        let mesh = &project.meshes[project.objects[0].mesh_idx];
+        assert_eq!(mesh.vertices.len(), 24 * 3, "cube vertices");
+        assert_eq!(mesh.indices.len(), 12 * 3, "cube triangles");
+
+        // The geometry-intent subset of Slic3r_PE.config lands as per-object
+        // overrides (Prusa key → OrcaSlicer key); printer/filament keys and the
+        // print-global skirt/spiral keys are NOT adopted.
+        let ov = &project.objects[0].overrides;
+        let get = |k: &str| ov.get(k).map(String::as_str);
+        // Shells / walls / infill.
+        assert_eq!(get("top_shell_layers"), Some("0"));
+        assert_eq!(get("bottom_shell_layers"), Some("0"));
+        assert_eq!(get("wall_loops"), Some("6"));
+        assert_eq!(get("sparse_infill_density"), Some("15%"));
+        assert_eq!(get("sparse_infill_pattern"), Some("honeycomb"));
+        assert_eq!(get("top_surface_pattern"), Some("rectilinear"));
+        assert_eq!(get("bottom_surface_pattern"), Some("rectilinear"));
+        assert_eq!(get("infill_direction"), Some("45"));
+        assert_eq!(get("infill_wall_overlap"), Some("25%"));
+        // Raft / brim (object-scoped) + seam. Prusa's brim_width=0 → OrcaSlicer
+        // brim_type=no_brim, since Orca's default auto_brim ignores brim_width.
+        assert_eq!(get("raft_layers"), Some("0"));
+        assert_eq!(get("brim_width"), Some("0"));
+        assert_eq!(get("brim_type"), Some("no_brim"));
+        assert_eq!(get("seam_position"), Some("nearest"));
+        // NOT adopted: printer/filament, and print-global skirt/spiral (which
+        // can't be per-object overrides).
+        for absent in [
+            "bed_shape",
+            "nozzle_temperature",
+            "skirt_loops",
+            "skirts",
+            "spiral_mode",
+            "spiral_vase",
+        ] {
+            assert!(!ov.contains_key(absent), "{absent} must not be adopted");
+        }
+    }
+
     fn four_cubes_fixture() -> PathBuf {
         let crate_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
         PathBuf::from(crate_dir).join("tests/fixtures/3mf/four-cubes-4mat.3mf")
@@ -793,37 +862,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn prusaslicer_flavor_3mf_rejected_with_guidance() {
-        // Build a minimal zip with the Prusa metadata marker.
-        let path = tempfile::NamedTempFile::with_suffix(".3mf")
-            .expect("tempfile")
-            .into_temp_path();
-        {
-            let f = std::fs::File::create(&path).expect("create");
-            let mut zip = zip::ZipWriter::new(f);
-            let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
-            zip.start_file("Metadata/Slic3r_PE_model.config", opts)
-                .unwrap();
-            std::io::Write::write_all(&mut zip, b"<config/>").unwrap();
-            zip.start_file("3D/3dmodel.model", opts).unwrap();
-            std::io::Write::write_all(
-                &mut zip,
-                b"<model xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\"/>",
-            )
-            .unwrap();
-            zip.finish().unwrap();
-        }
-        let err = load_3mf(&path).expect_err("prusa flavor");
-        match err {
-            LoadError::Parse { message, .. } => {
-                assert!(
-                    message.contains("PrusaSlicer"),
-                    "expected guidance message, got: {message}"
-                );
-            }
-            other => panic!("expected Parse error, got {other:?}"),
-        }
-    }
+
+
+
 }
