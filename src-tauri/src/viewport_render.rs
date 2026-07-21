@@ -425,35 +425,109 @@ struct GpuMesh {
     groups: Vec<MeshGroup>,
 }
 
-/// Interleave positions with **recomputed** area-weighted smooth vertex normals
-/// (not the source `normals`): imported models often carry bad/flat per-vertex
-/// normals that shade as faceted "missing shapes" even though the geometry is
-/// fine (it slices smooth). The mesh is welded (shared vertices), so accumulating
-/// face normals per vertex yields the smooth shading the slice shows.
-fn smooth_verts(vertices: &[f32], indices: &[u32]) -> Vec<Vertex> {
+/// Recompute vertex normals with a **crease threshold** and return the rebuilt
+/// (vertex buffer, remapped index buffer). Not the source `normals`: imported
+/// models often carry bad/flat per-vertex normals that shade as faceted "missing
+/// shapes" though the geometry slices fine.
+///
+/// Plain area-weighted smoothing across *every* shared edge bleeds a fillet's
+/// slanted normal across an adjacent flat face — a coarse fan triangulation then
+/// interpolates it into radial triangular artifacts on the flat. So faces
+/// meeting steeper than `CREASE` are treated as a hard edge: the shared vertex
+/// is split so each smoothing group carries its own normal (flat stays flat,
+/// curves stay smooth). Vertices only multiply at hard edges.
+fn crease_verts(vertices: &[f32], indices: &[u32]) -> (Vec<Vertex>, Vec<u32>) {
+    const CREASE_COS: f32 = 0.866; // ~30°: below this angle between faces, smooth.
     let vcount = vertices.len() / 3;
     let pos: Vec<Vec3> = (0..vcount)
         .map(|i| Vec3::new(vertices[3 * i], vertices[3 * i + 1], vertices[3 * i + 2]))
         .collect();
-    let mut nrm = vec![Vec3::ZERO; vcount];
-    for tri in indices.chunks_exact(3) {
-        let (a, b, c) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
-        if a < vcount && b < vcount && c < vcount {
-            let face = (pos[b] - pos[a]).cross(pos[c] - pos[a]); // area-weighted
-            nrm[a] += face;
-            nrm[b] += face;
-            nrm[c] += face;
+    // Welded, in-range indices (the render path indexes vertices directly
+    // elsewhere too); keep every triangle so paint-state groups stay aligned.
+    let tris: Vec<[usize; 3]> = indices
+        .chunks_exact(3)
+        .map(|t| [t[0] as usize, t[1] as usize, t[2] as usize])
+        .collect();
+    // Area-weighted normal (for accumulation) + unit normal (for the angle test).
+    let face_aw: Vec<Vec3> = tris
+        .iter()
+        .map(|&[a, b, c]| (pos[b] - pos[a]).cross(pos[c] - pos[a]))
+        .collect();
+    let face_unit: Vec<Vec3> = face_aw.iter().map(|f| f.normalize_or_zero()).collect();
+
+    let mut incident: Vec<Vec<usize>> = vec![Vec::new(); vcount];
+    for (fi, tri) in tris.iter().enumerate() {
+        for &v in tri {
+            incident[v].push(fi);
         }
     }
-    (0..vcount)
-        .map(|i| Vertex { pos: pos[i].to_array(), nrm: nrm[i].normalize_or_zero().to_array() })
-        .collect()
+
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+
+    let mut out_verts: Vec<Vertex> = Vec::with_capacity(vcount);
+    let mut corner_out: Vec<[u32; 3]> = vec![[0u32; 3]; tris.len()];
+    for v in 0..vcount {
+        let faces = &incident[v];
+        let k = faces.len();
+        if k == 0 {
+            continue;
+        }
+        // Cluster this vertex's incident faces into smoothing groups: union any
+        // pair whose normals are within the crease angle (transitive, so a
+        // gradually curving fillet stays one group).
+        // ponytail: O(valence²) per vertex — negligible at typical valences;
+        // revisit only if a pathological high-valence fan stalls mesh upload.
+        let mut parent: Vec<usize> = (0..k).collect();
+        for i in 0..k {
+            for j in (i + 1)..k {
+                if face_unit[faces[i]].dot(face_unit[faces[j]]) >= CREASE_COS {
+                    let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+                    parent[ri] = rj;
+                }
+            }
+        }
+        // One output vertex per group, normal = area-weighted sum of its faces.
+        let mut roots: Vec<usize> = Vec::new();
+        let mut accum: Vec<Vec3> = Vec::new();
+        for li in 0..k {
+            let r = find(&mut parent, li);
+            let slot = roots.iter().position(|&x| x == r).unwrap_or_else(|| {
+                roots.push(r);
+                accum.push(Vec3::ZERO);
+                roots.len() - 1
+            });
+            accum[slot] += face_aw[faces[li]];
+        }
+        let base: Vec<u32> = accum
+            .iter()
+            .map(|n| {
+                let idx = out_verts.len() as u32;
+                out_verts.push(Vertex { pos: pos[v].to_array(), nrm: n.normalize_or_zero().to_array() });
+                idx
+            })
+            .collect();
+        for li in 0..k {
+            let slot = roots.iter().position(|&x| x == find(&mut parent, li)).unwrap();
+            let fi = faces[li];
+            let corner = tris[fi].iter().position(|&x| x == v).unwrap();
+            corner_out[fi][corner] = base[slot];
+        }
+    }
+
+    let remapped: Vec<u32> = corner_out.into_iter().flatten().collect();
+    (out_verts, remapped)
 }
 
 /// Build our interleaved vertex buffer for a `Mesh` (smooth normals) and upload
 /// it, partitioning triangles into per-paint-state index groups.
 fn upload_mesh(device: &wgpu::Device, m: &crate::core::scene::state::Mesh) -> GpuMesh {
-    let verts = smooth_verts(&m.vertices, &m.indices);
+    let (verts, indices) = crease_verts(&m.vertices, &m.indices);
     let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("viewport.mesh.vb"),
         contents: bytemuck::cast_slice(&verts),
@@ -479,12 +553,12 @@ fn upload_mesh(device: &wgpu::Device, m: &crate::core::scene::state::Mesh) -> Gp
     let groups = match states {
         Some(states) => {
             let mut by_state: BTreeMap<u8, Vec<u32>> = BTreeMap::new();
-            for (t, tri) in m.indices.chunks_exact(3).enumerate() {
+            for (t, tri) in indices.chunks_exact(3).enumerate() {
                 by_state.entry(states[t]).or_default().extend_from_slice(tri);
             }
             by_state.into_iter().map(|(s, idx)| make_ib(s, &idx)).collect()
         }
-        None => vec![make_ib(0, &m.indices)],
+        None => vec![make_ib(0, &indices)],
     };
     GpuMesh { vb, groups }
 }
@@ -1237,7 +1311,7 @@ impl ViewportRenderer {
     /// Store a plate's sliced tower mesh (GPU upload + footprint + the
     /// material-count/printer it sliced at, for staleness). Replaces any previous
     /// mesh for that plate; switching to it later re-uploads nothing. Mesh
-    /// normals are recomputed smooth, like `upload_mesh`.
+    /// normals are recomputed crease-aware, like `upload_mesh`.
     fn store_tower_mesh(
         &mut self,
         plate_id: PlateId,
@@ -1247,7 +1321,7 @@ impl ViewportRenderer {
         printer_instance_id: Option<String>,
     ) {
         let footprint = tower_footprint(vertices);
-        let verts = smooth_verts(vertices, indices);
+        let (verts, tri_indices) = crease_verts(vertices, indices);
         let gpu = TowerGpu {
             vb: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("viewport.tower.mesh.vb"),
@@ -1256,10 +1330,10 @@ impl ViewportRenderer {
             }),
             ib: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("viewport.tower.mesh.ib"),
-                contents: bytemuck::cast_slice(indices),
+                contents: bytemuck::cast_slice(&tri_indices),
                 usage: wgpu::BufferUsages::INDEX,
             }),
-            n_indices: indices.len() as u32,
+            n_indices: tri_indices.len() as u32,
         };
         self.tower_meshes.insert(
             plate_id,

@@ -38,20 +38,72 @@ void main() {
 const LINE_VS = `attribute vec3 aPos; uniform mat4 uVP; void main() { gl_Position = uVP * vec4(aPos, 1.0); }`;
 const LINE_FS = `precision mediump float; uniform vec3 uColor; void main() { gl_FragColor = vec4(uColor, 1.0); }`;
 
-function computeNormals(pos: number[], idx: number[]): Float32Array {
-  const n = new Float32Array(pos.length);
-  for (let i = 0; i < idx.length; i += 3) {
-    const a = idx[i] * 3, b = idx[i + 1] * 3, c = idx[i + 2] * 3;
+// Crease-aware vertex normals (mirrors the Rust viewport's crease_verts). Plain
+// smooth normals bleed a fillet's slant across an adjacent flat face, which a
+// coarse fan triangulation interpolates into radial triangular artifacts. Faces
+// meeting steeper than CREASE are a hard edge: split the shared vertex so each
+// smoothing group keeps its own normal (flat stays flat, curves stay smooth).
+// Returns split positions + normals + a remapped index buffer.
+const CREASE_COS = 0.866; // ~30°
+function creaseVerts(pos: number[], idx: number[]): {
+  positions: Float32Array; normals: Float32Array; indices: Uint32Array;
+} {
+  const vcount = pos.length / 3, tcount = idx.length / 3;
+  // Area-weighted (for accumulation) + unit (for the angle test) face normals.
+  const faceAw = new Float32Array(tcount * 3), faceUnit = new Float32Array(tcount * 3);
+  for (let t = 0; t < tcount; t++) {
+    const a = idx[3 * t] * 3, b = idx[3 * t + 1] * 3, c = idx[3 * t + 2] * 3;
     const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
     const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-    for (const o of [a, b, c]) { n[o] += nx; n[o + 1] += ny; n[o + 2] += nz; }
+    faceAw[3 * t] = nx; faceAw[3 * t + 1] = ny; faceAw[3 * t + 2] = nz;
+    const l = Math.hypot(nx, ny, nz) || 1;
+    faceUnit[3 * t] = nx / l; faceUnit[3 * t + 1] = ny / l; faceUnit[3 * t + 2] = nz / l;
   }
-  for (let i = 0; i < n.length; i += 3) {
-    const l = Math.hypot(n[i], n[i + 1], n[i + 2]) || 1;
-    n[i] /= l; n[i + 1] /= l; n[i + 2] /= l;
+  const incident: number[][] = Array.from({ length: vcount }, () => []);
+  for (let t = 0; t < tcount; t++)
+    for (let k = 0; k < 3; k++) incident[idx[3 * t + k]].push(t);
+
+  const find = (parent: number[], x: number): number => {
+    while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+    return x;
+  };
+  const outPos: number[] = [], outNrm: number[] = [];
+  const cornerOut = new Uint32Array(idx.length);
+  for (let v = 0; v < vcount; v++) {
+    const faces = incident[v], k = faces.length;
+    if (k === 0) continue;
+    // Union incident faces within the crease angle (transitive → one group per
+    // gradually-curving fillet). O(valence²); valences are small.
+    const parent = Array.from({ length: k }, (_, i) => i);
+    for (let i = 0; i < k; i++) for (let j = i + 1; j < k; j++) {
+      const fi = faces[i] * 3, fj = faces[j] * 3;
+      const d = faceUnit[fi] * faceUnit[fj] + faceUnit[fi + 1] * faceUnit[fj + 1] + faceUnit[fi + 2] * faceUnit[fj + 2];
+      if (d >= CREASE_COS) parent[find(parent, i)] = find(parent, j);
+    }
+    const roots: number[] = [], ax: number[] = [], ay: number[] = [], az: number[] = [];
+    for (let li = 0; li < k; li++) {
+      const r = find(parent, li);
+      let slot = roots.indexOf(r);
+      if (slot < 0) { slot = roots.length; roots.push(r); ax.push(0); ay.push(0); az.push(0); }
+      const f = faces[li] * 3;
+      ax[slot] += faceAw[f]; ay[slot] += faceAw[f + 1]; az[slot] += faceAw[f + 2];
+    }
+    const base: number[] = [];
+    for (let s = 0; s < roots.length; s++) {
+      const l = Math.hypot(ax[s], ay[s], az[s]) || 1;
+      base.push(outPos.length / 3);
+      outPos.push(pos[3 * v], pos[3 * v + 1], pos[3 * v + 2]);
+      outNrm.push(ax[s] / l, ay[s] / l, az[s] / l);
+    }
+    for (let li = 0; li < k; li++) {
+      const slot = roots.indexOf(find(parent, li));
+      const t = faces[li];
+      const corner = idx[3 * t] === v ? 0 : idx[3 * t + 1] === v ? 1 : 2;
+      cornerOut[3 * t + corner] = base[slot];
+    }
   }
-  return n;
+  return { positions: new Float32Array(outPos), normals: new Float32Array(outNrm), indices: cornerOut };
 }
 
 // Grid lines (inner) + border (outer square) on z=0, centered at (cx, cy).
@@ -85,16 +137,15 @@ export function WgpuViewport(_props: Record<string, unknown>): React.JSX.Element
 
     // One buffer set per build part, coloured by its assigned material.
     const meshes = parts.map((part) => {
-      const pos = part.positions as number[];
-      const idx = part.indices as number[];
+      const cv = creaseVerts(part.positions as number[], part.indices as number[]);
       const idxBuf = gl.createBuffer()!;
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idx), gl.STATIC_DRAW);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, cv.indices, gl.STATIC_DRAW);
       return {
-        posBuf: buf(new Float32Array(pos)),
-        nrmBuf: buf(computeNormals(pos, idx)),
+        posBuf: buf(cv.positions),
+        nrmBuf: buf(cv.normals),
         idxBuf,
-        count: idx.length,
+        count: cv.indices.length,
         color: EXTRUDER_RGB[part.extruder] ?? FALLBACK_RGB,
       };
     });
