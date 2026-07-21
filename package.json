@@ -21,12 +21,14 @@
     "clean:flatpak": "./packaging/flatpak/clean.sh",
     "clean:windows": "./packaging/windows-cross/clean.sh",
     "clean:mac": "./packaging/macos-cross/clean.sh",
+    "clean:demo": "./packaging/demo/clean.sh",
     "publish:flatpak": "dotenv ./packaging/flatpak/publish.sh",
     "publish:arch": "dotenv ./packaging/arch/publish.sh",
     "publish:windows": "dotenv ./packaging/windows-cross/publish.sh",
     "publish:mac-arm64": "dotenv ./packaging/macos-cross/publish.sh arm64",
     "publish:mac-x86_64": "dotenv ./packaging/macos-cross/publish.sh x86_64",
-    "publish:all": "npm run publish:flatpak && npm run publish:arch && npm run publish:windows && npm run publish:mac-arm64 && npm run publish:mac-x86_64"
+    "publish:demo": "dotenv ./packaging/demo/publish.sh",
+    "publish:all": "npm run publish:flatpak && npm run publish:arch && npm run publish:windows && npm run publish:mac-arm64 && npm run publish:mac-x86_64 && npm run publish:demo"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

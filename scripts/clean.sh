@@ -15,7 +15,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
 # Per-channel cleans (packaging scratch + each channel's arch-specific outputs).
-for c in arch flatpak windows-cross macos-cross; do
+for c in arch flatpak windows-cross macos-cross demo; do
   if [ -x "packaging/$c/clean.sh" ]; then
     echo "== packaging/$c =="; "packaging/$c/clean.sh"
   fi
