@@ -77,13 +77,17 @@ fn tiling_wm_without_titlebar() -> bool {
 /// Persisted window geometry. `w`/`h` are logical pixels (they feed the
 /// window config's width/height); `x`/`y` are physical (they feed
 /// `set_position`). Position restore is inert on Wayland — clients can't
-/// place themselves — but honored on X11/Windows/macOS.
+/// place themselves — but honored on X11/Windows/macOS. `w`/`h`/`x`/`y`
+/// always hold the *unmaximized* floor geometry; `max` says whether to
+/// restore maximized on top of it.
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct WinGeom {
     w: f64,
     h: f64,
     x: i32,
     y: i32,
+    #[serde(default)]
+    max: bool,
 }
 
 fn win_geom_path(identifier: &str) -> Option<std::path::PathBuf> {
@@ -118,7 +122,21 @@ fn current_geometry(win: &tauri::WebviewWindow) -> WinGeom {
         .map(|s| s.to_logical::<f64>(sf))
         .unwrap_or(tauri::LogicalSize::new(0.0, 0.0));
     let pos = win.outer_position().unwrap_or(tauri::PhysicalPosition::new(0, 0));
-    WinGeom { w: sz.width, h: sz.height, x: pos.x, y: pos.y }
+    // `max` starts false and is corrected by the first window event; the
+    // saved flag is only overwritten from events, never from this snapshot.
+    WinGeom { w: sz.width, h: sz.height, x: pos.x, y: pos.y, max: false }
+}
+
+/// Whether the point lands on any currently-connected monitor — guards
+/// position restore so a position saved on a since-unplugged monitor
+/// doesn't put the window off-screen.
+fn on_any_monitor(win: &tauri::WebviewWindow, x: i32, y: i32) -> bool {
+    win.available_monitors().map_or(false, |ms| {
+        ms.iter().any(|m| {
+            let (p, s) = (m.position(), m.size());
+            x >= p.x && y >= p.y && x < p.x + s.width as i32 && y < p.y + s.height as i32
+        })
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -138,6 +156,8 @@ pub fn run() {
         if let Some(win) = ctx.config_mut().app.windows.first_mut() {
             win.width = g.w;
             win.height = g.h;
+            // Floor size stays in width/height so unmaximizing lands there.
+            win.maximized = g.max;
         }
     }
 
@@ -185,29 +205,52 @@ pub fn run() {
             if let Some(win) = app.get_webview_window("main") {
                 let identifier = app.config().identifier.clone();
                 if let Some(g) = load_window_geometry(&identifier) {
-                    let _ = win.set_position(tauri::PhysicalPosition::new(g.x, g.y));
+                    // Skip when restoring maximized (positioning the floor
+                    // rect under a maximized window confuses some WMs) or
+                    // when the saved spot is on a monitor that's gone.
+                    if !g.max && on_any_monitor(&win, g.x, g.y) {
+                        let _ = win.set_position(tauri::PhysicalPosition::new(g.x, g.y));
+                    }
                 }
+                // Tiling compositors report a user-resized *floating* window
+                // as maximized (the plugin bug that pushed us off it), so
+                // `is_maximized` is meaningless there: ignore it and always
+                // track the live size.
+                #[cfg(target_os = "linux")]
+                let phantom_maximized = tiling_wm_without_titlebar();
+                #[cfg(not(target_os = "linux"))]
+                let phantom_maximized = false;
                 let geom = std::sync::Arc::new(std::sync::Mutex::new(current_geometry(&win)));
                 let win2 = win.clone();
                 win.on_window_event(move |ev| {
-                    let g = match ev {
-                        tauri::WindowEvent::Resized(sz) => geom.lock().ok().map(|mut g| {
-                            let sf = win2.scale_factor().unwrap_or(1.0);
-                            let logical = sz.to_logical::<f64>(sf);
-                            g.w = logical.width;
-                            g.h = logical.height;
-                            *g
-                        }),
-                        tauri::WindowEvent::Moved(pos) => geom.lock().ok().map(|mut g| {
-                            g.x = pos.x;
-                            g.y = pos.y;
-                            *g
-                        }),
-                        _ => None,
+                    let (sz, pos) = match ev {
+                        tauri::WindowEvent::Resized(sz) => (Some(*sz), None),
+                        tauri::WindowEvent::Moved(pos) => (None, Some(*pos)),
+                        _ => return,
                     };
-                    if let Some(g) = g {
-                        save_window_geometry(&identifier, &g);
-                    }
+                    // While maximized, record only the flag — the floor
+                    // geometry must survive for unmaximize/restore.
+                    let maximized =
+                        !phantom_maximized && win2.is_maximized().unwrap_or(false);
+                    let Some(g) = geom.lock().ok().map(|mut g| {
+                        g.max = maximized;
+                        if !maximized {
+                            if let Some(sz) = sz {
+                                let sf = win2.scale_factor().unwrap_or(1.0);
+                                let logical = sz.to_logical::<f64>(sf);
+                                g.w = logical.width;
+                                g.h = logical.height;
+                            }
+                            if let Some(pos) = pos {
+                                g.x = pos.x;
+                                g.y = pos.y;
+                            }
+                        }
+                        *g
+                    }) else {
+                        return;
+                    };
+                    save_window_geometry(&identifier, &g);
                 });
             }
 
