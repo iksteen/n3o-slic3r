@@ -10,6 +10,7 @@
 // collapsible blocks.
 
 import { useMemo, useState, type ReactNode } from "react";
+import { useSessionState } from "../ui/useSessionState";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   PlateSnapshot,
@@ -48,6 +49,10 @@ import {
 } from "../material/materials";
 import { MaterialPicker } from "./MaterialPicker";
 
+/** Shared empty initial for the collapsed-group set — never mutated in
+ *  place (`toggleCollapse` copies), so one instance is safe to reuse. */
+const NO_GROUPS_COLLAPSED: Set<GroupId> = new Set();
+
 export interface ObjectsPanelProps {
   plate: PlateSnapshot | null;
   instance: PrinterInstance | null;
@@ -81,7 +86,14 @@ export function ObjectsPanel({
     objId: ObjectId;
     rect: DOMRect;
   } | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<GroupId>>(() => new Set());
+  // Session-scoped: prepare↔preview reconciles this panel in place, but the
+  // Devices tab swaps the whole subtree out, and coming back to every group
+  // sprung open loses your place. GroupIds are UUIDs, so one flat set spans
+  // all plates without colliding.
+  const [collapsed, setCollapsed] = useSessionState<Set<GroupId>>(
+    "objects.collapsedGroups",
+    NO_GROUPS_COLLAPSED,
+  );
   const [editingGroup, setEditingGroup] = useState<GroupId | null>(null);
   const [sendPicker, setSendPicker] = useState<DOMRect | null>(null);
   const { byIdentity: filamentByIdentity } = useFilamentCatalog();

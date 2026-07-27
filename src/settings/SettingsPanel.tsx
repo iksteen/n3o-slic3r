@@ -16,7 +16,19 @@
 // mockup and is NOT shipped. The canonical "rule" surface (left-edge
 // inset rule + authored-tier background tint) lives in the row CSS.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  readSession,
+  useSessionState,
+  writeSession,
+} from "../ui/useSessionState";
 import {
   CategorySidebar,
   categorize,
@@ -144,10 +156,21 @@ export function SettingsPanel(props: SettingsPanelProps) {
   // Setting-complexity mode (Simple / Advanced / Expert), persisted.
   const [mode, setMode] = useStoredModeFilter();
   // "Show only modified settings" — the diff toggle. Modified = overridden
-  // at the active editing layer (project or object).
-  const [showModifiedOnly, setShowModifiedOnly] = useState(false);
-  const [search, setSearch] = useState("");
-  const [contextLayer, setContextLayer] = useState<ContextLayer>("project");
+  // at the active editing layer (project or object). Session-scoped along
+  // with the search text: top-level tab switches unmount the whole prepare
+  // layout, and losing the filter state on every devices-tab visit stings.
+  const [showModifiedOnly, setShowModifiedOnly] = useSessionState(
+    "settings.modifiedOnly",
+    false,
+  );
+  const [search, setSearch] = useSessionState("settings.search", "");
+  // Session-scoped like the filters. Restoring the Object tab is safe even
+  // if the selection changed while you were away — the fall-back effect
+  // below drops it to Project when there's no selected object.
+  const [contextLayer, setContextLayer] = useSessionState<ContextLayer>(
+    "settings.contextLayer",
+    "project",
+  );
   // Category rail collapse (icons-only), persisted across reloads like the
   // mode filter — reclaims horizontal space for the setting rows.
   const [railCollapsed, setRailCollapsed] = useState<boolean>(() => {
@@ -165,6 +188,16 @@ export function SettingsPanel(props: SettingsPanelProps) {
     }
   }, [railCollapsed]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Restore the settings-list scroll depth after a remount; capture it on
+  // unmount. Session-scoped for the same reason as the filters above.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el == null) return;
+    el.scrollTop = readSession("settings.scrollTop", 0);
+    return () => {
+      writeSession("settings.scrollTop", el.scrollTop);
+    };
+  }, []);
 
   // Object tab auto-fall-back: when the selected object disappears
   // while the Object tab is active, fall back to Project (mirrors

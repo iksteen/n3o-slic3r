@@ -3,6 +3,7 @@
 // selected printer.
 
 import { useEffect, useRef, useState } from "react";
+import { useSessionState } from "../ui/useSessionState";
 import { useDriverStatus } from "./useDriverStatus";
 import { driverCommand } from "./invokes";
 import { configForConnection } from "./useDriverConnections";
@@ -33,7 +34,12 @@ export function DeviceMonitor({
   const { status } = useDriverStatus(driverId);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
-  const [tab, setTab] = useState<"status" | "flow">("status");
+  // Per-printer and session-scoped: each printer remembers its own sub-tab,
+  // and the choice survives DevicesView unmounting on top-level tab switches.
+  const [tab, setTab] = useSessionState<"status" | "flow">(
+    `device.tab.${instance?.id ?? "none"}`,
+    "status",
+  );
   // Transient action state belongs to the currently-bound driver.
   // DeviceMonitor stays mounted across printer selection (no key
   // remount), so when the driver changes — switched or deleted — reset
