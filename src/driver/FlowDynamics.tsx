@@ -29,10 +29,11 @@ import type { DriverId } from "./types";
 interface FlowDynamicsProps {
   instance: PrinterInstance;
   driverId: DriverId | null;
-  /** Printer is idle — a precondition for calibration (FLOW_CALIBRATE heats,
-   *  purges and moves the toolhead; running it mid-print would wreck the job).
-   *  Manual K editing/saving is unaffected. */
-  printerIdle: boolean;
+  /** Printer has no active job — a precondition for calibration
+   *  (FLOW_CALIBRATE heats, purges and moves the toolhead; running it
+   *  mid-print would wreck the job). Manual K editing/saving is
+   *  unaffected. */
+  printerFree: boolean;
 }
 
 const rowKey = (s: { extruder_index: number; slot_index: number }): string =>
@@ -43,7 +44,7 @@ const fmtK = (k: number | null): string => (k == null ? "" : String(k));
 export function FlowDynamics({
   instance,
   driverId,
-  printerIdle,
+  printerFree,
 }: FlowDynamicsProps): React.JSX.Element {
   const { byIdentity } = useFilamentCatalog();
   const [rows, setRows] = useState<FlowPaSlot[] | null>(null);
@@ -181,7 +182,7 @@ export function FlowDynamics({
   };
 
   const onCalibrate = (): void => {
-    if (driverId == null || !printerIdle) return;
+    if (driverId == null || !printerFree) return;
     const targets = rows
       .filter((r) => checked.has(rowKey(r)))
       .map((r) => ({
@@ -239,12 +240,12 @@ export function FlowDynamics({
         <button
           className="device-ctl"
           onClick={() => setShowCalDialog(true)}
-          disabled={busy || driverId == null || !printerIdle}
+          disabled={busy || driverId == null || !printerFree}
           type="button"
           title={
             driverId == null
               ? "Connect the printer to print a test"
-              : !printerIdle
+              : !printerFree
                 ? "Printer must be idle to print a test"
                 : "Slice + send a printed PA test to read K by eye"
           }
@@ -256,13 +257,13 @@ export function FlowDynamics({
             className="device-ctl primary"
             onClick={onCalibrate}
             disabled={
-              busy || driverId == null || !printerIdle || checked.size === 0
+              busy || driverId == null || !printerFree || checked.size === 0
             }
             type="button"
             title={
               driverId == null
                 ? "Connect the printer to calibrate"
-                : !printerIdle
+                : !printerFree
                   ? "Printer must be idle to calibrate"
                   : isBambu
                     ? "Auto-calibrate the checked filaments (one printer job)"
@@ -282,7 +283,7 @@ export function FlowDynamics({
             printer offline — edit and save K manually, or connect to calibrate
           </span>
         )}
-        {canCalibrate && driverId != null && !printerIdle && !busy && (
+        {canCalibrate && driverId != null && !printerFree && !busy && (
           <span className="flow-dyn-progress dim">
             printer busy — calibration needs an idle printer; edit and save K
             manually meanwhile

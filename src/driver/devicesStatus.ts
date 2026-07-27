@@ -84,6 +84,15 @@ export function deriveStatus(
   }
 }
 
+/** True when the machine is stopped and available to take a new job.
+ *  "error" counts: a failed or cancelled print is a job outcome, not a
+ *  busy machine — the printer sits idle holding the reason, same as
+ *  after a finished print. Only an active job (preparing/printing/
+ *  paused) or a dead link blocks. */
+export function printerFree(status: DeviceStatus): boolean {
+  return status === "idle" || status === "error";
+}
+
 export function statusMeta(status: DeviceStatus): { label: string; cls: string } {
   switch (status) {
     case "preparing":

@@ -9,7 +9,7 @@ import { configForConnection } from "./useDriverConnections";
 import type { ConnectionSummary } from "./useDriverConnections";
 import { isConnectionUsable } from "../printer/connectionValidation";
 import type { PrinterInstance } from "../printer/printerInstance";
-import { deriveStatus, statusMeta } from "./devicesStatus";
+import { deriveStatus, printerFree, statusMeta } from "./devicesStatus";
 import { CameraPanel } from "./DeviceCamera";
 import { CurrentJobPanel } from "./DeviceJob";
 import { StatsColumn, type NozzleSwatch } from "./DeviceStats";
@@ -270,7 +270,7 @@ export function DeviceMonitor({
             key={instance.id}
             instance={instance}
             driverId={driverId}
-            printerIdle={derived.status === "idle"}
+            printerFree={printerFree(derived.status)}
           />
         </div>
       )}
