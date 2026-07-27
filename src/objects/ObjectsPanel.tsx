@@ -478,32 +478,67 @@ export function ObjectsPanel({
         )}
       </div>
 
-      {!readOnly && selection.size >= 1 && (
+      {!readOnly && objects.length > 0 && (
         <div className="objects-selbar">
-          <span className="objects-selbar-count">{selection.size} selected</span>
+          <span className="objects-selbar-count">
+            {selection.size > 0 ? `${selection.size} selected` : "No selection"}
+          </span>
           <div className="objects-selbar-actions">
-            {selection.size >= 2 && (
+            {selection.size === 0 ? (
               <button
-                className="objects-selbar-btn primary"
-                title="Group selected into one object"
-                onClick={onGroup}
+                className="objects-selbar-btn"
+                title="Select all objects"
+                aria-label="Select all objects"
+                onClick={() => sceneSelect(objects.map((o) => o.id))}
               >
-                Group
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+                  <rect x="1" y="1" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1.2" />
+                  <path d="M3.5 6.2l1.8 1.8 3.2-3.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
               </button>
+            ) : (
+              <>
+                {selection.size >= 2 && (
+                  <button
+                    className="objects-selbar-btn primary"
+                    title="Group selected into one object"
+                    aria-label="Group selected into one object"
+                    onClick={onGroup}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+                      <rect x="1" y="1" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.2" />
+                      <rect x="6" y="6" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.2" />
+                    </svg>
+                  </button>
+                )}
+                <button
+                  className={`objects-selbar-btn ${sendPicker ? "open" : ""}`}
+                  title="Send selected to another plate"
+                  aria-label="Send selected to another plate"
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setSendPicker((p) => (p ? null : rect));
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+                    <path d="M1.5 6h7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                    <path d="M6 3.5L8.5 6 6 8.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M10.5 1.5v9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  </svg>
+                  <span className="objects-selbar-caret">▾</span>
+                </button>
+                <button
+                  className="objects-selbar-btn"
+                  title="Clear selection"
+                  aria-label="Clear selection"
+                  onClick={clearSelection}
+                >
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+                    <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </>
             )}
-            <button
-              className={`objects-selbar-btn ${sendPicker ? "open" : ""}`}
-              title="Send selected to another plate"
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                setSendPicker((p) => (p ? null : rect));
-              }}
-            >
-              Send to ▾
-            </button>
-            <button className="objects-selbar-btn" onClick={clearSelection}>
-              Clear
-            </button>
           </div>
         </div>
       )}
