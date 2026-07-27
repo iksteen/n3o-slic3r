@@ -820,10 +820,34 @@ fn assemble_filament_colours(filaments: &[FilamentEntry<'_>]) -> BTreeMap<String
     out
 }
 
-/// Synthesize `filament_map` + `filament_map_mode` from the
-/// cascade's filament layout. Each entry contributes the 1-based
+/// Synthesize `filament_map` + `filament_map_mode` + `filament_self_index`
+/// from the cascade's filament layout. Each entry contributes the 1-based
 /// extruder index it should feed from. Empty when the layout is
 /// empty (the caller skips the rule in that case).
+///
+/// `filament_self_index` is the identity map `1..=N`, and it is
+/// load-bearing on any printer with more than one extruder.
+/// `Print::apply` runs `update_values_to_printer_extruders_for_multiple_
+/// filaments` over `filament_options_with_variant` (nozzle temperatures,
+/// flow ratio, max volumetric speed, the filament retraction overrides,
+/// …) and rewrites each filament's value to
+/// `value[get_index_for_extruder(filament, "filament_self_index",
+/// extruder_type, nozzle_volume_type, "filament_extruder_variant")]`.
+/// That lookup matches on the *variant string*, which is identical for
+/// every filament on a uniform toolchanger ("Direct Drive Standard" ×N),
+/// so without the id map to disambiguate it returns the first match — 0 —
+/// for all of them and every per-filament value collapses to filament 0's.
+///
+/// ponytail: the per-*extruder* option sets (`printer_options_with_variant_*`,
+/// `print_options_with_variant` — retraction length/speed, z-hop, nozzle
+/// volume) go through the same rewrite and collapse the same way, but their
+/// `update_values_to_printer_extruders` has no id-map fallback, so fixing
+/// them needs authored `printer_extruder_variant` / `print_extruder_variant`
+/// strings (and the per-toolhead `extruder_type` / `nozzle_volume_type` they
+/// derive from) — settings we don't model yet. Inert today: every shipped
+/// multi-toolhead printer has identical toolheads, so the collapsed value
+/// equals the correct one. Author the variant strings when a printer ships
+/// with mixed toolheads.
 fn assemble_filament_topology(filaments: &[FilamentEntry<'_>]) -> BTreeMap<String, String> {
     let mut filament_map: Vec<String> = Vec::new();
     for entry in filaments {
@@ -831,10 +855,17 @@ fn assemble_filament_topology(filaments: &[FilamentEntry<'_>]) -> BTreeMap<Strin
     }
     let mut out = BTreeMap::new();
     if !filament_map.is_empty() {
+        out.insert("filament_self_index".to_owned(), ordinals(filament_map.len()));
         out.insert("filament_map".to_owned(), filament_map.join(","));
         out.insert("filament_map_mode".to_owned(), "Manual".to_owned());
     }
     out
+}
+
+/// `"1,2,…,n"` — the 1-based identity index vector libslic3r's variant
+/// resolution keys on.
+fn ordinals(n: usize) -> String {
+    (1..=n).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
 }
 
 /// Join a list of per-extruder/per-slot scalar values into the

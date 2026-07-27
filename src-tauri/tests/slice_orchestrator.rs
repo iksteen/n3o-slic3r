@@ -277,9 +277,21 @@ fn bambi_slice_emits_started_progress_finished_with_summary() {
 
 /// Slice a plate and return the emitted G-code text.
 fn slice_to_gcode(label: &str, input: SliceJobInput) -> String {
+    let instance = n3o_slic3r_lib::core::printer::lookup_instance(&input.printer_instance_id)
+        .expect("test-fixtures: bound instance resolves");
+    slice_to_gcode_with(label, input, &instance)
+}
+
+/// [`slice_to_gcode`] against a caller-supplied instance — for tests that
+/// need slot bindings the bundled fixture doesn't carry.
+fn slice_to_gcode_with(
+    label: &str,
+    input: SliceJobInput,
+    instance: &n3o_slic3r_lib::core::printer::PrinterInstance,
+) -> String {
     let registry = JobRegistry::new();
     let (sink, events) = collecting_sink();
-    run_blocking(input, &registry, sink)
+    run_slice_job_blocking(input, instance, &registry, sink)
         .unwrap_or_else(|e| panic!("[{label}] start: {e:?}"));
     let path = events
         .lock()
@@ -299,14 +311,17 @@ fn slice_to_gcode(label: &str, input: SliceJobInput) -> String {
 /// First element of a comma-joined config-trailer scalar, e.g.
 /// `; textured_plate_temp = 65,65,65` → `"65"`.
 fn config_value<'a>(gcode: &'a str, key: &str) -> &'a str {
+    config_vector(gcode, key).split(',').next().unwrap().trim()
+}
+
+/// The whole comma-joined config-trailer value, e.g.
+/// `; nozzle_temperature = 220,255` → `"220,255"`.
+fn config_vector<'a>(gcode: &'a str, key: &str) -> &'a str {
     let needle = format!("; {key} = ");
     gcode
         .lines()
         .find_map(|l| l.strip_prefix(&needle))
         .unwrap_or_else(|| panic!("config trailer missing `{key}`"))
-        .split(',')
-        .next()
-        .unwrap()
         .trim()
 }
 
@@ -725,6 +740,85 @@ fn u1_per_material_keeps_tool_numbers_logical() {
         !toolchange("T2") && !toolchange("T3"),
         "no physical-toolhead tool select — numbers stay logical",
     );
+}
+
+/// Per-filament settings must survive `Print::apply`'s variant rewrite on a
+/// multi-extruder printer. For every key in libslic3r's
+/// `filament_options_with_variant` (nozzle temperatures, flow ratio, max
+/// volumetric speed, the filament retraction overrides) the engine replaces
+/// filament *f*'s value with `value[get_index_for_extruder(f,
+/// "filament_self_index", …, "filament_extruder_variant")]`. That lookup
+/// matches on the variant string, which is identical across a uniform
+/// toolchanger, so without `filament_self_index` to disambiguate it resolves
+/// every filament to index 0 and the whole vector collapses to filament 0's
+/// value — two filaments at different temperatures both printed at the first
+/// one's.
+///
+/// Composer-level assertions can't catch this: the composed cascade was
+/// always right — the loss happens inside the engine. Hence the real slice.
+#[test]
+fn u1_per_filament_settings_survive_the_engine_variant_rewrite() {
+    use n3o_slic3r_lib::core::printer::{lookup_instance, SlotRef};
+    ensure_ffi_init();
+
+    let base = stl_objects().pop().unwrap();
+    let mut b_transform = IDENTITY16;
+    b_transform[12] = 40.0;
+    let objects = vec![
+        SliceObject { extruder: 1, ..base.clone() },
+        SliceObject {
+            name: "box-m2".into(),
+            extruder: 2,
+            transform: b_transform,
+            ..base
+        },
+    ];
+
+    // Two toolheads carrying filaments whose profiles disagree on
+    // temperature (PLA 220 / PETG 255 as bundled today).
+    let mut instance = lookup_instance("snappy").expect("snappy fixture");
+    instance.extruders[0].slots[0].filament_identity = Some("generic-petg".into());
+    instance.extruders[1].slots[0].filament_identity = Some("generic-pla".into());
+
+    let td = std::env::temp_dir().join(format!("n3o-u1-variant-{}", std::process::id()));
+    let mut input = snappy_input(objects, td.display().to_string(), vec![1]);
+    // Filament 0 → toolhead 1 (PLA), filament 1 → toolhead 0 (PETG).
+    input.material_layout = vec![
+        Some(SlotRef { extruder: 1, slot: 0 }),
+        Some(SlotRef { extruder: 0, slot: 0 }),
+    ];
+    input.context.filaments = vec![canonical_filament(), canonical_filament()];
+
+    let gcode = slice_to_gcode_with("u1-variant", input, &instance);
+
+    // The id vector that makes the engine's per-filament variant lookup
+    // resolve to each filament's own index.
+    for key in ["nozzle_temperature", "nozzle_temperature_initial_layer"] {
+        let temps: Vec<&str> = config_vector(&gcode, key).split(',').collect();
+        assert_eq!(temps.len(), 2, "{key}: one entry per filament, got {temps:?}");
+        assert_ne!(
+            temps[0], temps[1],
+            "{key}: both filaments got filament 0's value ({temps:?}) — the engine's \
+             variant rewrite collapsed the vector",
+        );
+    }
+
+    // …and the collapse would also have been invisible in the body, so pin
+    // the actual heat command for the second filament.
+    let second = config_vector(&gcode, "nozzle_temperature")
+        .split(',')
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    assert!(
+        gcode.lines().any(|l| l.starts_with(&format!("M109 S{second} T1"))),
+        "expected the second filament's toolhead to heat to its own temperature ({second})",
+    );
+
+    // The id vector that makes the engine's lookup resolve each filament to
+    // its own index — asserted last so a regression reports the symptom
+    // above, not just the missing mechanism.
+    assert_eq!(config_vector(&gcode, "filament_self_index"), "1,2");
 }
 
 /// Manual PA calibration slices a swept-K test print. Snappy (U1, Klipper
