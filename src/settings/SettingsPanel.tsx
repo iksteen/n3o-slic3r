@@ -148,7 +148,6 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [showModifiedOnly, setShowModifiedOnly] = useState(false);
   const [search, setSearch] = useState("");
   const [contextLayer, setContextLayer] = useState<ContextLayer>("project");
-  const [activeCat, setActiveCat] = useState<string | null>(null);
   // Category rail collapse (icons-only), persisted across reloads like the
   // mode filter — reclaims horizontal space for the setting rows.
   const [railCollapsed, setRailCollapsed] = useState<boolean>(() => {
@@ -265,19 +264,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
   // cascade ladder so a single row hover surfaces both the
   // description and the layer breakdown.
 
-  // Keep the active category valid as the visible list changes.
-  useEffect(() => {
-    if (groups.length === 0) {
-      setActiveCat(null);
-      return;
-    }
-    if (activeCat == null || !groups.some((g) => g.id === activeCat)) {
-      setActiveCat(groups[0].id);
-    }
-  }, [groups, activeCat]);
-
   const jumpToCategory = (id: string) => {
-    setActiveCat(id);
     const el = scrollRef.current?.querySelector<HTMLElement>(
       `[data-cat-id="${CSS.escape(id)}"]`,
     );
@@ -457,7 +444,6 @@ export function SettingsPanel(props: SettingsPanelProps) {
           <CategorySidebar
             groups={groups}
             counts={counts}
-            activeId={activeCat}
             onActivate={jumpToCategory}
             collapsed={railCollapsed}
             onToggleCollapsed={() => setRailCollapsed((v) => !v)}

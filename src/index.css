@@ -2171,7 +2171,6 @@
     gap: 1px;
   }
   .cat-rail-item {
-    position: relative;
     display: grid;
     grid-template-columns: 20px 1fr auto;
     align-items: center;
@@ -2191,15 +2190,6 @@
     min-width: 0;
   }
   .cat-rail-item:hover { background: var(--surface-2); color: var(--text); }
-  .cat-rail-item.active { color: var(--text); background: var(--accent-soft); }
-  .cat-rail-item.active::before {
-    content: "";
-    position: absolute;
-    left: 0; top: 4px; bottom: 4px;
-    width: 2px;
-    background: var(--accent);
-    border-radius: 1px;
-  }
   .cat-rail-icon {
     width: 18px;
     height: 18px;
@@ -2211,10 +2201,6 @@
     color: var(--text-dim);
     border-radius: 3px;
     background: var(--surface-2);
-  }
-  .cat-rail-item.active .cat-rail-icon {
-    background: var(--surface);
-    color: var(--accent-text);
   }
   .cat-rail-count, .cat-rail-count-overrides {
     font-family: var(--font-mono);

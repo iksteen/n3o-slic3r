@@ -3,8 +3,10 @@
 // Mirrors the mockup's `.cat-rail` + `.cat-rail-item` layout
 // (docs/dev/design/SettingsPanel.jsx:633-654). Each item shows icon +
 // name + a count badge in `overrides/total` form, with the override
-// count from the cascade trace. Active item is highlighted; clicking
-// a category jumps the scroll body to its first row.
+// count from the cascade trace. Pure navigation: clicking a category
+// jumps the scroll body to its first row. There is no active-item
+// highlight — the sticky category header says where you are, and a rail
+// highlight that tracked it was more machinery than it was worth.
 
 import type { CategoryCounts, CategoryGroup } from "./categories";
 import type { OptionSummary } from "../types";
@@ -12,7 +14,6 @@ import type { OptionSummary } from "../types";
 export interface CategorySidebarProps {
   groups: readonly CategoryGroup<OptionSummary>[];
   counts: ReadonlyMap<string, CategoryCounts>;
-  activeId: string | null;
   onActivate: (id: string) => void;
   /** Collapsed = icons-only (labels hidden). Drives the toggle chevron and
    *  the per-item tooltip; the width change is CSS on `.settings-panel`. */
@@ -23,13 +24,12 @@ export interface CategorySidebarProps {
 export function CategorySidebar({
   groups,
   counts,
-  activeId,
   onActivate,
   collapsed,
   onToggleCollapsed,
 }: CategorySidebarProps) {
   return (
-    <nav className="cat-rail" role="tablist" aria-label="Setting categories">
+    <nav className="cat-rail" aria-label="Setting categories">
       <button
         type="button"
         className="cat-rail-toggle"
@@ -50,14 +50,11 @@ export function CategorySidebar({
       </button>
       {groups.map((g) => {
         const c = counts.get(g.id) ?? { total: g.settings.length, overrides: 0 };
-        const active = g.id === activeId;
         return (
           <button
             key={g.id}
             type="button"
-            role="tab"
-            aria-selected={active}
-            className={`cat-rail-item${active ? " active" : ""}`}
+            className="cat-rail-item"
             onClick={() => onActivate(g.id)}
             title={collapsed ? g.name : undefined}
           >
