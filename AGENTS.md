@@ -53,6 +53,11 @@ Read these before reasoning about scope, design, or behavior:
   post-`apply` workarounds the shim applies to compensate for
   libslic3r's headless-mode quirks. Required reading before bumping
   the OrcaSlicer submodule.
+- **`docs/dev/webview-memory.md`** — Why the web process used to get killed at
+  WebKit's 16 GB ceiling (GC is suspended while the page isn't painted, so any
+  producer that keeps allocating then is unbounded), what guards it now, and the
+  measurement recipe. Read it before adding anything that produces on a timer,
+  an event stream, or a Channel.
 
 If any of these contradicts something the conversation infers from
 code or upstream, the document wins until corrected — then update the
