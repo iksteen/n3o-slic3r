@@ -152,6 +152,26 @@ function bumpAndNotify(): void {
   for (const fn of SUBSCRIBERS) fn();
 }
 
+/** Whether two connection states are equivalent for the summary's purposes —
+ *  same variant, and same reason/countdown where the variant carries one.
+ *  Cheap structural compare; the shape has at most two payload fields. */
+export function sameConnectionState(
+  a: ConnectionState | null,
+  b: ConnectionState | null,
+): boolean {
+  if (a == null || b == null) return a === b;
+  if (a.state !== b.state) return false;
+  if (a.state === "Reconnecting" && b.state === "Reconnecting") {
+    return (
+      a.data.in_seconds === b.data.in_seconds && a.data.reason === b.data.reason
+    );
+  }
+  if (a.state === "Disconnected" && b.state === "Disconnected") {
+    return a.data.reason === b.data.reason;
+  }
+  return true;
+}
+
 // ── Automatic AMS-count sync ─────────────────────────────────────
 // The AMS-unit count chosen at add-printer time can diverge from the
 // physical loadout (no AMS attached, a unit added/removed later), and
@@ -275,13 +295,19 @@ function ensureGlobalStatusListener(): void {
       syncFromStatusReport(identity, e.payload.driver_id, e.payload.status);
       const entry = ENTRIES.get(identity);
       if (entry == null || entry.kind !== "live") return;
+      // Telemetry arrives continuously (Moonraker pushes several status
+      // notifications a second), but only the *connection* state feeds the
+      // summary. Bumping the version on every report invalidated the snapshot
+      // cache, so App's `useSyncExternalStore` re-rendered the whole tree at
+      // the telemetry rate — the garbage that fills the heap while the page is
+      // unpainted (WebKit suspends GC then, so it never comes back). Skip the
+      // notify when the connection state is unchanged.
+      const runtime = e.payload.status.connection;
+      if (sameConnectionState(entry.runtime, runtime)) return;
       // In-place mutation of the runtime field is OK: the entry object
       // identity is not part of the snapshot cache key — the version bump
       // below invalidates it.
-      ENTRIES.set(identity, {
-        ...entry,
-        runtime: e.payload.status.connection,
-      });
+      ENTRIES.set(identity, { ...entry, runtime });
       bumpAndNotify();
     },
   );

@@ -6,9 +6,9 @@
 //! `Driver` impl (Bambu or U1).
 //!
 //! Status updates emit on `driver:status_update` as a Tauri
-//! event with payload `{ driver_id, status }`. Driver workers
-//! hook the event emission into their rate-limited
-//! `watch::Sender<PrinterStatus>` pipelines.
+//! event with payload `{ driver_id, status }`, coalesced by
+//! [`spawn_status_bridge`] so a printer that pushes telemetry many times a
+//! second doesn't wake the frontend at that rate.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -156,13 +156,29 @@ fn upload_progress_emitter(
     })
 }
 
+/// Floor on the interval between *telemetry-only* `driver:status_update`
+/// events. Structural changes (connection state, job state) ignore it and emit
+/// at once; this only bounds the temperature/progress drip, which drivers
+/// receive at whatever rate the printer pushes (Moonraker: several per second).
+const TELEMETRY_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Spawn a tokio task that pumps a driver's internal
 /// `watch::Receiver<PrinterStatus>` to a Tauri event. Lives for
 /// the driver's lifetime — the watch channel closes when the
 /// driver is dropped (driver_unregister + registry remove),
-/// which ends the task naturally. Per-driver rate-limiting
-/// happens in the driver's own worker; this bridge just forwards
-/// every change without filtering.
+/// which ends the task naturally. Coalesces the telemetry drip to
+/// [`TELEMETRY_MIN_INTERVAL`]; connection/job-state changes pass straight
+/// through. Drivers publish at whatever rate the printer pushes, so this is
+/// where the UI's event rate is actually bounded.
+/// Whether two consecutive statuses differ in a way the UI reacts to
+/// structurally, as opposed to the telemetry drip (temperatures, progress
+/// percent). Structural changes bypass [`TELEMETRY_MIN_INTERVAL`] so a
+/// disconnect or a print finishing still surfaces immediately.
+fn structural_change(prev: &PrinterStatus, next: &PrinterStatus) -> bool {
+    prev.connection != next.connection
+        || prev.job.as_ref().map(|j| &j.state) != next.job.as_ref().map(|j| &j.state)
+}
+
 fn spawn_status_bridge(
     app: AppHandle,
     driver_id: DriverId,
@@ -174,6 +190,7 @@ fn spawn_status_bridge(
         // would show a stale empty state until the first reconnect
         // or status report.
         let initial = rx.borrow().clone();
+        let initial_for_cmp = initial.clone();
         let _ = app.emit(
             "driver:status_update",
             StatusUpdateEvent {
@@ -181,8 +198,22 @@ fn spawn_status_bridge(
                 status: initial,
             },
         );
+        let mut last_emit = std::time::Instant::now();
+        let mut last = initial_for_cmp;
         while rx.changed().await.is_ok() {
             let status = rx.borrow().clone();
+            // Coalesce telemetry churn. Klipper/Moonraker pushes a status
+            // notification several times a second (temps drifting by a tenth of
+            // a degree), and each event costs the frontend a store notify.
+            // State the UI reacts to structurally — connection, job state —
+            // goes out immediately; everything else is capped at
+            // TELEMETRY_MIN_INTERVAL, which is well under any rate a human
+            // reads a temperature at.
+            if !structural_change(&last, &status) && last_emit.elapsed() < TELEMETRY_MIN_INTERVAL {
+                continue;
+            }
+            last = status.clone();
+            last_emit = std::time::Instant::now();
             if app
                 .emit(
                     "driver:status_update",
@@ -1352,6 +1383,55 @@ fn collect_cali_trays(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The status bridge's telemetry filter. Moonraker pushes a status
+    /// notification several times a second; forwarding each one woke the
+    /// frontend at that rate, which cost ~4 MB/s of render garbage — fatal once
+    /// the page stops being painted, because WebKit suspends GC then. Only
+    /// structural changes may bypass the coalescing interval.
+    #[test]
+    fn telemetry_drip_is_not_a_structural_change() {
+        use super::super::status::{
+            ConnectionState, DriverExtra, JobProgress, JobState, MoonrakerExtra, PrinterStatus,
+            Temps,
+        };
+        let base = PrinterStatus {
+            connection: ConnectionState::Connected,
+            job: Some(JobProgress {
+                file_name: Some("plate_1.gcode".into()),
+                current_layer: Some(12),
+                total_layers: Some(40),
+                percent: Some(30.0),
+                eta_seconds: Some(600),
+                state: JobState::Printing,
+            }),
+            temps: Temps::default(),
+            extra: DriverExtra::Moonraker(MoonrakerExtra::default()),
+            last_updated: std::time::SystemTime::UNIX_EPOCH,
+        };
+
+        // Pure telemetry movement — a warmer nozzle, more layers done, a later
+        // timestamp — must NOT bypass the interval.
+        let mut drip = base.clone();
+        drip.last_updated = std::time::SystemTime::now();
+        drip.job.as_mut().unwrap().current_layer = Some(13);
+        drip.job.as_mut().unwrap().percent = Some(32.5);
+        assert!(!structural_change(&base, &drip));
+
+        // A job finishing, and a disconnect, must go out immediately.
+        let mut finished = base.clone();
+        finished.job.as_mut().unwrap().state = JobState::Idle;
+        assert!(structural_change(&base, &finished));
+
+        let mut dropped = base.clone();
+        dropped.connection = ConnectionState::Disconnected { reason: "lost".into() };
+        assert!(structural_change(&base, &dropped));
+
+        // Job appearing / vanishing counts too.
+        let mut no_job = base.clone();
+        no_job.job = None;
+        assert!(structural_change(&base, &no_job));
+    }
 
     #[test]
     fn bambu_setting_id_is_stable_and_distinct() {

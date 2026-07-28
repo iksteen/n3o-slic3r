@@ -20,6 +20,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { invoke } from "@tauri-apps/api/core";
 import {
   connectionSignature,
+  sameConnectionState,
   configForConnection,
   isConnectionUsable,
   maybeSyncAmsCount,
@@ -409,5 +410,37 @@ describe("summaryFor (picker-chip status derivation)", () => {
     expect(summaryForTests("a1m-uuid-1", conn1).status).toBe("connected");
     expect(summaryForTests("a1m-uuid-2", conn2).driverId).toBe(2);
     expect(summaryForTests("a1m-uuid-2", conn2).status).toBe("failed");
+  });
+});
+
+describe("sameConnectionState", () => {
+  // The guard that keeps telemetry off the app-wide notify path: Moonraker
+  // pushes status several times a second, and every notify re-rendered the
+  // whole tree (~4 MB of garbage a second, which never gets collected while
+  // the page is unpainted — the 16 GB WebKit kill).
+  it("treats a repeated Connected as unchanged, so telemetry doesn't notify", () => {
+    expect(sameConnectionState({ state: "Connected" }, { state: "Connected" })).toBe(true);
+  });
+
+  it("sees a real transition", () => {
+    expect(sameConnectionState({ state: "Connecting" }, { state: "Connected" })).toBe(false);
+    expect(sameConnectionState(null, { state: "Connected" })).toBe(false);
+    expect(sameConnectionState(null, null)).toBe(true);
+  });
+
+  it("still ticks a reconnect countdown — the UI renders in_seconds", () => {
+    const a = { state: "Reconnecting", data: { in_seconds: 4, reason: "lost" } } as const;
+    const b = { state: "Reconnecting", data: { in_seconds: 3, reason: "lost" } } as const;
+    expect(sameConnectionState(a, b)).toBe(false);
+    expect(sameConnectionState(a, { ...a })).toBe(true);
+  });
+
+  it("distinguishes disconnect reasons", () => {
+    expect(
+      sameConnectionState(
+        { state: "Disconnected", data: { reason: "timeout" } },
+        { state: "Disconnected", data: { reason: "refused" } },
+      ),
+    ).toBe(false);
   });
 });
