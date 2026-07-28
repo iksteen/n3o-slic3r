@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { cameraStart, cameraStop } from "./invokes";
 import { onEvents } from "../state/eventRouter";
+import { isPageActive } from "../state/pageActivity";
 import type { DriverConfig } from "./types";
 
 /** Fired by the backend when an instance's U1 pairing changes (paired /
@@ -74,6 +75,12 @@ export function useCameraStream(
     const channel = new Channel<ArrayBuffer>();
     channel.onmessage = (bytes) => {
       if (cancelled) return;
+      // Frames keep arriving at 4fps while the page is frozen, but a frozen
+      // page paints nothing and collects nothing — every Blob + object URL we
+      // minted would accumulate until it came back (or WebKit killed us). Drop
+      // them: a frame nobody can see has no value, and the next one after
+      // resume is only 250ms away.
+      if (!isPageActive()) return;
       const url = URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
       const previous = currentUrl;
       currentUrl = url;

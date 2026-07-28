@@ -18,6 +18,7 @@
 // handler for a name unsubscribes.
 
 import { listen, type Event as TauriEvent } from "@tauri-apps/api/event";
+import { isPageActive, onPageResume } from "./pageActivity";
 
 /** A router handler. Receives the raw Tauri event (name + payload). `T` is the
  *  payload type when a name-group is homogeneous (e.g. all `SliceEvent`);
@@ -25,6 +26,43 @@ import { listen, type Event as TauriEvent } from "@tauri-apps/api/event";
 export type EventHandler<T = unknown> = (event: TauriEvent<T>) => void;
 
 const handlers = new Map<string, Set<EventHandler>>();
+
+// ── Freeze gate ──────────────────────────────────────────────────
+// While the page isn't painted, WebKit stops collecting garbage but the backend
+// keeps emitting. Dispatching a stream of "here's the current temperature"
+// events into React in that state allocates render garbage that can never be
+// reclaimed until the page comes back — the mechanism behind the 16 GB kills.
+//
+// So while frozen, events whose *only* value is their latest payload are held
+// instead of dispatched, one per key, and replayed on resume. Everything else
+// dispatches normally: an event that carries a transition (a slice finished, an
+// object was added) is not something we may drop, and those don't arrive at
+// telemetry rates anyway.
+//
+// The key extractor keeps one pending event per logical subject — per driver
+// here, so a quiet printer's last status isn't clobbered by a busy one's.
+const COALESCE_WHILE_FROZEN: Record<string, (payload: unknown) => string> = {
+  "driver:status_update": (p) => String((p as { driver_id?: number })?.driver_id ?? ""),
+  "driver:upload_progress": (p) => String((p as { driver_id?: number })?.driver_id ?? ""),
+};
+
+/** Held events, keyed `name|subject`. At most one per subject, so memory is
+ *  bounded by the number of drivers no matter how long the freeze lasts. */
+const frozenPending = new Map<string, { name: string; event: TauriEvent<unknown> }>();
+
+function dispatch(name: string, event: TauriEvent<unknown>): void {
+  const set = handlers.get(name);
+  if (!set) return;
+  // Snapshot before iterating: a handler may unsubscribe mid-dispatch.
+  for (const h of [...set]) h(event);
+}
+
+onPageResume(() => {
+  if (frozenPending.size === 0) return;
+  const held = [...frozenPending.values()];
+  frozenPending.clear();
+  for (const { name, event } of held) dispatch(name, event);
+});
 /** Per-name `listen()` promise — one shared subscription per name, created on
  *  first interest. Awaited by `onEventsReady` so order-sensitive consumers
  *  (the scene-mirror bridge: subscribe before the initial snapshot) don't miss
@@ -39,10 +77,12 @@ function ensureListening(name: string): Promise<void> {
   // UnlistenFn and never tear the Tauri listener down — only per-handler
   // registration is ref-counted.
   const p = listen(name, (event) => {
-    const set = handlers.get(name);
-    if (!set) return;
-    // Snapshot before iterating: a handler may unsubscribe mid-dispatch.
-    for (const h of [...set]) h(event);
+    const coalesceKey = COALESCE_WHILE_FROZEN[name];
+    if (coalesceKey && !isPageActive()) {
+      frozenPending.set(`${name}|${coalesceKey(event.payload)}`, { name, event });
+      return;
+    }
+    dispatch(name, event);
   }).then(() => {});
   listenPromises.set(name, p);
   return p;
