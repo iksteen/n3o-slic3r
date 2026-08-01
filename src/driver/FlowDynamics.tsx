@@ -3,13 +3,16 @@
 // One row per bound slot: brand, name, spool color, material·nozzle, and an
 // editable K. K is keyed (filament identity × color × nozzle); an empty field
 // falls back to the printer's material/nozzle default, shown as the input's
-// placeholder. Two actions:
-//   - Save: persist manually-edited K values (blank clears back to default).
-//   - Calibrate selected: run FLOW_CALIBRATE on the printer for each checked
-//     row, in sequence (the printer calibrates one toolhead at a time), and
-//     store the measured K. Needs a connected driver; editing/saving doesn't.
+// placeholder. Calibration needs a connected driver; editing/saving doesn't.
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   flowPaValues,
   setCalibratedPa,
@@ -53,6 +56,8 @@ export function FlowDynamics({
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [showCalDialog, setShowCalDialog] = useState(false);
 
   const instanceId = instance.id;
@@ -116,15 +121,6 @@ export function FlowDynamics({
   if (rows == null) {
     return <div className="flow-dyn dim">Loading…</div>;
   }
-  if (rows.length === 0) {
-    return (
-      <div className="flow-dyn dim">
-        No filament loaded. Assign filaments to slots to tune their pressure
-        advance.
-      </div>
-    );
-  }
-
   const editValue = (row: FlowPaSlot): string => {
     const k = rowKey(row);
     if (k in edits) return edits[k];
@@ -148,6 +144,25 @@ export function FlowDynamics({
   };
   const dirtyRows = rows.filter(isDirty);
   const anyInvalid = rows.some(isInvalid);
+
+  const onSync = async (): Promise<void> => {
+    if (driverId == null || dirtyRows.length > 0) return;
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      await invoke("printer_instance_sync_from_driver", {
+        instanceId,
+        driverId,
+      });
+      setEdits({});
+      setChecked(new Set());
+      await load();
+    } catch (e) {
+      setSyncError(driverErrorMessage(e));
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const toggle = (k: string): void =>
     setChecked((prev) => {
@@ -230,8 +245,31 @@ export function FlowDynamics({
       <div className="flow-dyn-actions">
         <button
           className="device-ctl"
+          onClick={() => void onSync()}
+          disabled={
+            busy ||
+            saving ||
+            syncing ||
+            driverId == null ||
+            dirtyRows.length > 0
+          }
+          type="button"
+          title={
+            driverId == null
+              ? "Connect the printer to sync its filament loadout"
+              : dirtyRows.length > 0
+                ? "Save K edits before syncing the filament loadout"
+                : "Sync the filament loadout from the printer"
+          }
+        >
+          {syncing ? "Syncing…" : "Sync filaments"}
+        </button>
+        <button
+          className="device-ctl"
           onClick={() => void onSave()}
-          disabled={busy || saving || dirtyRows.length === 0 || anyInvalid}
+          disabled={
+            busy || syncing || saving || dirtyRows.length === 0 || anyInvalid
+          }
           type="button"
           title="Persist manually-edited K values"
         >
@@ -240,7 +278,7 @@ export function FlowDynamics({
         <button
           className="device-ctl"
           onClick={() => setShowCalDialog(true)}
-          disabled={busy || driverId == null || !printerFree}
+          disabled={busy || syncing || driverId == null || !printerFree}
           type="button"
           title={
             driverId == null
@@ -257,7 +295,11 @@ export function FlowDynamics({
             className="device-ctl primary"
             onClick={onCalibrate}
             disabled={
-              busy || driverId == null || !printerFree || checked.size === 0
+              busy ||
+              syncing ||
+              driverId == null ||
+              !printerFree ||
+              checked.size === 0
             }
             type="button"
             title={
@@ -291,82 +333,95 @@ export function FlowDynamics({
         )}
       </div>
 
-      <table className="flow-dyn-table">
-        <thead>
-          <tr>
-            {canCalibrate && <th />}
-            <th>Filament</th>
-            <th>Material</th>
-            <th>
-              K{" "}
-              <span className="dim" style={{ fontWeight: 400 }}>
-                (blank = default)
-              </span>
-            </th>
-            {canCalibrate && <th />}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const k = rowKey(row);
-            const summary = byIdentity.get(row.identity);
-            const brand = summary?.vendor ?? "";
-            const name = summary?.display_name ?? row.identity;
-            const material = summary?.base_type ?? "?";
-            return (
-              <tr key={k}>
-                {canCalibrate && (
+      {syncError && (
+        <div className="sp-error flow-dyn-sync-error" role="alert">
+          Filament sync failed: {syncError}
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <div className="dim">
+          No filament loaded. Sync from the printer or assign filaments to
+          slots to tune their pressure advance.
+        </div>
+      ) : (
+        <table className="flow-dyn-table">
+          <thead>
+            <tr>
+              {canCalibrate && <th />}
+              <th>Filament</th>
+              <th>Material</th>
+              <th>
+                K{" "}
+                <span className="dim" style={{ fontWeight: 400 }}>
+                  (blank = default)
+                </span>
+              </th>
+              {canCalibrate && <th />}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const k = rowKey(row);
+              const summary = byIdentity.get(row.identity);
+              const brand = summary?.vendor ?? "";
+              const name = summary?.display_name ?? row.identity;
+              const material = summary?.base_type ?? "?";
+              return (
+                <tr key={k}>
+                  {canCalibrate && (
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={checked.has(k)}
+                        onChange={() => toggle(k)}
+                        disabled={busy}
+                        aria-label={`Select ${name} for calibration`}
+                      />
+                    </td>
+                  )}
+                  <td>
+                    <div className="flow-dyn-fil">
+                      <span
+                        className="flow-dyn-swatch"
+                        style={
+                          row.color ? { background: row.color } : undefined
+                        }
+                        title={row.color || "no color set"}
+                      />
+                      <span className="flow-dyn-fil-names">
+                        <span className="flow-dyn-name">{name}</span>
+                        {brand && (
+                          <span className="flow-dyn-brand dim">{brand}</span>
+                        )}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="flow-dyn-mat">
+                    {material} · {row.nozzle}
+                  </td>
                   <td>
                     <input
-                      type="checkbox"
-                      checked={checked.has(k)}
-                      onChange={() => toggle(k)}
+                      className={`flow-dyn-k${isInvalid(row) ? " invalid" : ""}`}
+                      type="text"
+                      inputMode="decimal"
+                      value={editValue(row)}
+                      placeholder={
+                        row.default_k == null ? "—" : String(row.default_k)
+                      }
+                      onChange={(e) =>
+                        setEdits((prev) => ({ ...prev, [k]: e.target.value }))
+                      }
                       disabled={busy}
-                      aria-label={`Select ${name} for calibration`}
                     />
                   </td>
-                )}
-                <td>
-                  <div className="flow-dyn-fil">
-                    <span
-                      className="flow-dyn-swatch"
-                      style={
-                        row.color ? { background: row.color } : undefined
-                      }
-                      title={row.color || "no color set"}
-                    />
-                    <span className="flow-dyn-fil-names">
-                      <span className="flow-dyn-name">{name}</span>
-                      {brand && (
-                        <span className="flow-dyn-brand dim">{brand}</span>
-                      )}
-                    </span>
-                  </div>
-                </td>
-                <td className="flow-dyn-mat">
-                  {material} · {row.nozzle}
-                </td>
-                <td>
-                  <input
-                    className={`flow-dyn-k${isInvalid(row) ? " invalid" : ""}`}
-                    type="text"
-                    inputMode="decimal"
-                    value={editValue(row)}
-                    placeholder={
-                      row.default_k == null ? "—" : String(row.default_k)
-                    }
-                    onChange={(e) =>
-                      setEdits((prev) => ({ ...prev, [k]: e.target.value }))
-                    }
-                    disabled={busy}
-                  />
-                </td>
-                {canCalibrate && <td>{renderStatus(row)}</td>}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                  {canCalibrate && <td>{renderStatus(row)}</td>}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
 
       {showCalDialog && driverId != null && (
         <PaCalibrationDialog

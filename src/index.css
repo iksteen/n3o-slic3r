@@ -4914,6 +4914,7 @@
   /* ─── Flow dynamics tab ─── */
   .flow-dyn { flex: 1; padding: 16px 22px 20px; overflow: auto; min-height: 0; }
   .flow-dyn-actions { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+  .flow-dyn-sync-error { margin-bottom: 14px; }
   .flow-dyn-progress { font-size: 12px; }
   .flow-dyn-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   .flow-dyn-table th {

@@ -31,6 +31,8 @@ export function DeviceMonitor({
   onEditPrinter,
 }: MonitorProps): React.JSX.Element {
   const driverId = summary?.driverId ?? null;
+  const connectedDriverId =
+    summary?.status === "connected" ? driverId : null;
   const { status } = useDriverStatus(driverId);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
@@ -275,7 +277,7 @@ export function DeviceMonitor({
           <FlowDynamics
             key={instance.id}
             instance={instance}
-            driverId={driverId}
+            driverId={connectedDriverId}
             printerFree={printerFree(derived.status)}
           />
         </div>
